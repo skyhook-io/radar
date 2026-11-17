@@ -34,7 +34,7 @@ func TestVeleroContentsFormats(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := decodeVeleroContents(bytes.NewReader(body), restore, veleroContentsFilter{})
+		result, err := decodeVeleroContents(bytes.NewReader(body), restore, veleroContentsFilter{}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,7 +67,7 @@ func TestVeleroContentsFiltersBeforeCappingAndCountsTheWholeFile(t *testing.T) {
 	items[len(items)-1] = "app/late-failure(failed)"
 	body, _ := json.Marshal(map[string][]string{"v1/ConfigMap": items, "v1/Namespace": {"empty(created)"}})
 	for _, filter := range []veleroContentsFilter{{}, {action: "failed"}, {query: "late-failure"}, {namespace: "empty"}, {kind: "v1/Namespace"}} {
-		result, err := decodeVeleroContents(bytes.NewReader(body), true, filter)
+		result, err := decodeVeleroContents(bytes.NewReader(body), true, filter, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func TestVeleroContentsFiltersBeforeCappingAndCountsTheWholeFile(t *testing.T) {
 
 func TestVeleroContentsRejectsIncompleteFiles(t *testing.T) {
 	for _, body := range []string{`null`, `[]`, `{"v1/Pod":null}`, `{"v1/Pod":["ns/p"]`, `{} {}`} {
-		if _, err := decodeVeleroContents(strings.NewReader(body), false, veleroContentsFilter{}); err == nil {
+		if _, err := decodeVeleroContents(strings.NewReader(body), false, veleroContentsFilter{}, nil); err == nil {
 			t.Fatalf("accepted %s", body)
 		}
 	}
@@ -201,7 +201,7 @@ func TestVeleroContentsSizeLimitNeverReturnsPartialCounts(t *testing.T) {
 	body := `{"v1/ConfigMap":["app/` + strings.Repeat("x", 1024) + `"]}`
 	store := serveResults(t, gzipped(t, body))
 	for _, limits := range [][2]int64{{16, maxVeleroDecodedBytes}, {maxVeleroCompressedBytes, 64}} {
-		result, err := fetchVeleroArtifact(context.Background(), store.URL, localVeleroDownloadPolicy, limits[0], limits[1], func(r io.Reader) (any, error) { return decodeVeleroContents(r, false, veleroContentsFilter{}) })
+		result, err := fetchVeleroArtifact(context.Background(), store.URL, localVeleroDownloadPolicy, limits[0], limits[1], func(r io.Reader) (any, error) { return decodeVeleroContents(r, false, veleroContentsFilter{}, nil) })
 		if result != nil || !(errors.Is(err, errVeleroCompressedLimit) || errors.Is(err, errVeleroDecodedLimit)) {
 			t.Fatalf("partial counts returned: %+v, %v", result, err)
 		}
@@ -345,5 +345,104 @@ func TestVeleroArtifactsSharedListenerRejectsCrossSite(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Fatalf("%s: %d %s", artifact, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+func TestVeleroAlreadyExistsWarningNamesItsItem(t *testing.T) {
+	for _, tc := range []struct {
+		message VeleroMessage
+		want    veleroItemRef
+		ok      bool
+	}{
+		{VeleroMessage{Scope: "demo-copy", Message: "could not restore, ConfigMap:settings already exists. Warning: the in-cluster version is different than the backed-up version"}, veleroItemRef{"demo-copy", "ConfigMap", "settings"}, true},
+		{VeleroMessage{Scope: "demo-copy", Message: `could not restore, Deployment "web" already exists. Warning: the in-cluster version is different than the backed-up version`}, veleroItemRef{"demo-copy", "Deployment", "web"}, true},
+		{VeleroMessage{Scope: "cluster", Message: "could not restore, ClusterRole:system:demo already exists. Warning: the in-cluster version is different than the backed-up version"}, veleroItemRef{"", "ClusterRole", "system:demo"}, true},
+		{VeleroMessage{Scope: "velero", Message: "could not restore, ConfigMap:settings already exists."}, veleroItemRef{}, false},
+		{VeleroMessage{Scope: "demo-copy", Message: "error restoring configmaps/demo-copy/settings: timeout"}, veleroItemRef{}, false},
+	} {
+		got, ok := veleroAlreadyExistsRef(tc.message)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("%q: got %+v %v", tc.message.Message, got, ok)
+		}
+	}
+}
+
+func TestVeleroRestoreContentsReadsFailedEntriesFromTheRunsOutcome(t *testing.T) {
+	body := `{"v1/ConfigMap":["demo-copy/settings(failed)","demo-copy/fresh(created)"],"apps/v1/Deployment":["demo-copy/web(failed)"]}`
+	existed := &veleroRestoreOutcomes{existed: map[veleroItemRef]bool{{"demo-copy", "ConfigMap", "settings"}: true}}
+	for name, tc := range map[string]struct {
+		outcomes *veleroRestoreOutcomes
+		want     map[string]int
+	}{
+		"as Velero wrote it":               {nil, map[string]int{"failed": 2, "created": 1}},
+		"warnings only":                    {existed, map[string]int{"existed": 1, "warned": 1, "created": 1}},
+		"errors leave the rest as written": {&veleroRestoreOutcomes{errors: 1, existed: existed.existed}, map[string]int{"existed": 1, "failed": 1, "created": 1}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := decodeVeleroContents(strings.NewReader(body), true, veleroContentsFilter{}, tc.outcomes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := result.(veleroRunContents).Actions; !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("actions %v, want %v", got, tc.want)
+			}
+			filtered, err := decodeVeleroContents(strings.NewReader(body), true, veleroContentsFilter{action: "failed"}, tc.outcomes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := filtered.(veleroRunContents).Matched; got != tc.want["failed"] {
+				t.Fatalf("failed filter matched %d, want %d", got, tc.want["failed"])
+			}
+		})
+	}
+}
+
+// A Completed restore with warnings and no errors: the items Velero's list calls
+// failed read as already existed, from the run's own results file.
+func TestVeleroRestoreContentsRouteClassifiesAlreadyExisting(t *testing.T) {
+	files := map[string]string{
+		"RestoreResults":      `{"warnings":{"namespaces":{"demo-copy":["could not restore, ConfigMap:settings already exists. Warning: the in-cluster version is different than the backed-up version"]}},"errors":{}}`,
+		"RestoreResourceList": `{"v1/ConfigMap":["demo-copy/settings(failed)","demo-copy/fresh(created)"],"v1/Secret":["demo-copy/token(failed)"]}`,
+	}
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(gzipped(t, files[strings.TrimPrefix(r.URL.Path, "/")]))
+	}))
+	t.Cleanup(store.Close)
+	restore := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "velero.io/v1", "kind": "Restore",
+		"metadata": map[string]any{"name": "demo-copy", "namespace": "velero"},
+		"status":   map[string]any{"phase": "Completed", "warnings": int64(2), "errors": int64(0)},
+	}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{downloadRequestGVR: "DownloadRequestList", veleroRestoreGVR: "RestoreList"}, restore)
+	targets := map[string]string{}
+	dyn.PrependReactor("create", "downloadrequests", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		obj := a.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured)
+		target, _, _ := unstructured.NestedString(obj.Object, "spec", "target", "kind")
+		obj.SetName("dr-" + target)
+		targets[obj.GetName()] = target
+		return false, nil, nil
+	})
+	dyn.PrependReactor("get", "downloadrequests", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		target := targets[a.(k8stesting.GetAction).GetName()]
+		return true, &unstructured.Unstructured{Object: map[string]any{"apiVersion": "velero.io/v1", "kind": "DownloadRequest", "status": map[string]any{"downloadURL": store.URL + "/" + target}}}, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: veleroGroup, Version: "v1", Kind: "DownloadRequest", Name: "downloadrequests", Namespaced: true, IsCRD: true}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	t.Cleanup(k8s.SetTestLocalMode())
+	srv := New(Config{DevMode: true, ListenAddress: "localhost"})
+	t.Cleanup(srv.Stop)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "http://localhost/api/velero/restores/velero/demo-copy/contents", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var got veleroRunContents
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]int{"existed": 1, "warned": 1, "created": 1}; !reflect.DeepEqual(got.Actions, want) {
+		t.Fatalf("actions %v, want %v", got.Actions, want)
 	}
 }

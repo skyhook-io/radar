@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,7 +14,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 const (
@@ -80,28 +83,119 @@ type veleroRunContents struct {
 type veleroContentsFilter struct{ query, action, namespace, kind string }
 
 // POST creates a DownloadRequest; run access, namespace pin and caller identity
-// are enforced by handleVeleroRunArtifact, just as for messages.
+// are enforced by openVeleroRun, just as for messages.
 func (s *Server) handleVeleroRunContents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := veleroContentsFilter{query: strings.ToLower(q.Get("q")), action: q.Get("action"), namespace: q.Get("namespace"), kind: q.Get("resourceKind")}
 	if filter.action != "" && !veleroRestoreAction(filter.action) {
-		s.writeError(w, http.StatusBadRequest, "action must be created, updated, skipped or failed")
+		s.writeError(w, http.StatusBadRequest, "action must be created, updated, skipped, existed, warned or failed")
 		return
 	}
-	s.handleVeleroRunArtifact(w, r, "contents", "ResourceList", maxVeleroCompressedBytes, maxVeleroDecodedBytes, func(reader io.Reader) (any, error) {
-		return decodeVeleroContents(reader, strings.EqualFold(chi.URLParam(r, "kind"), "restores"), filter)
+	run, ok := s.openVeleroRun(w, r, "contents")
+	if !ok {
+		return
+	}
+	restore := run.kind == "Restore"
+	var outcomes *veleroRestoreOutcomes
+	if restore {
+		outcomes = s.veleroRestoreOutcomes(r.Context(), run)
+	}
+	result, failure := s.downloadVeleroRunArtifact(r.Context(), run, "contents", "ResourceList", maxVeleroCompressedBytes, maxVeleroDecodedBytes, func(reader io.Reader) (any, error) {
+		return decodeVeleroContents(reader, restore, filter, outcomes)
 	})
+	if failure != nil {
+		s.writeError(w, failure.status, failure.message)
+		return
+	}
+	s.writeJSON(w, result)
 }
 
+// The resource list's own vocabulary is created, updated, skipped and failed.
+// existed and warned are Radar's reading of a "failed" entry (see
+// veleroRestoreOutcomes).
 func veleroRestoreAction(action string) bool {
 	switch action {
-	case "created", "updated", "skipped", "failed":
+	case "created", "updated", "skipped", "failed", "existed", "warned":
 		return true
 	}
 	return false
 }
 
-func decodeVeleroContents(reader io.Reader, restore bool, filter veleroContentsFilter) (any, error) {
+var veleroRestoreGVR = schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: "restores"}
+
+type veleroItemRef struct{ namespace, kind, name string }
+
+// veleroRestoreOutcomes tells apart the items a restore's resource list calls
+// "failed". Velero records any item it did not explicitly create, update or
+// skip as failed once that item produced a warning or an error — so an object
+// that already existed and differs from the backup, which Velero reports only
+// as a warning, is listed as failed (pkg/restore/restore.go restoreItem's
+// deferred status, v1.18.2). The run's status counts and its results file say
+// which it was. Nil when nothing needs telling apart, or the Restore could not
+// be read: the list then stands as Velero wrote it.
+type veleroRestoreOutcomes struct {
+	// errors is status.errors. With none, no item failed with an error.
+	errors int64
+	// existed holds the items an "already exists" warning names.
+	existed map[veleroItemRef]bool
+}
+
+// Velero's two phrasings: without an existingResourcePolicy, and with "none".
+var veleroAlreadyExists = regexp.MustCompile(`^could not restore, ([A-Za-z0-9]+)(?::(\S+)| "([^"]*)") already exists\.`)
+
+func (s *Server) veleroRestoreOutcomes(ctx context.Context, run veleroRun) *veleroRestoreOutcomes {
+	restore, err := run.client.Resource(veleroRestoreGVR).Namespace(run.namespace).Get(ctx, run.name, metav1.GetOptions{})
+	if err != nil {
+		return nil
+	}
+	warnings, _, _ := unstructured.NestedInt64(restore.Object, "status", "warnings")
+	if warnings == 0 {
+		return nil
+	}
+	errs, _, _ := unstructured.NestedInt64(restore.Object, "status", "errors")
+	out := &veleroRestoreOutcomes{errors: errs, existed: map[veleroItemRef]bool{}}
+	result, failure := s.downloadVeleroRunArtifact(ctx, run, "messages", "Results", maxResultsBytes, maxResultsBytes, decodeVeleroMessages)
+	if failure != nil {
+		return out
+	}
+	for _, message := range result.(VeleroRunMessagesResponse).Warnings {
+		if ref, ok := veleroAlreadyExistsRef(message); ok {
+			out.existed[ref] = true
+		}
+	}
+	return out
+}
+
+func veleroAlreadyExistsRef(message VeleroMessage) (veleroItemRef, bool) {
+	match := veleroAlreadyExists.FindStringSubmatch(message.Message)
+	if match == nil || message.Scope == "velero" {
+		return veleroItemRef{}, false
+	}
+	namespace := message.Scope
+	if namespace == "cluster" {
+		namespace = ""
+	}
+	name := match[2]
+	if name == "" {
+		name = match[3]
+	}
+	return veleroItemRef{namespace: namespace, kind: match[1], name: name}, true
+}
+
+func (o *veleroRestoreOutcomes) classify(kind string, item veleroContentItem) string {
+	if o == nil || item.Action != "failed" {
+		return item.Action
+	}
+	if o.existed[veleroItemRef{namespace: item.Namespace, kind: kind[strings.LastIndex(kind, "/")+1:], name: item.Name}] {
+		return "existed"
+	}
+	if o.errors == 0 {
+		return "warned"
+	}
+	return item.Action
+}
+
+func decodeVeleroContents(reader io.Reader, restore bool, filter veleroContentsFilter, outcomes *veleroRestoreOutcomes) (any, error) {
 	out := veleroRunContents{Groups: []veleroContentGroup{}, Namespaces: []string{}, Actions: map[string]int{}}
 	namespaces := map[string]bool{}
 	dec := json.NewDecoder(reader)
@@ -157,6 +251,7 @@ func decodeVeleroContents(reader io.Reader, restore bool, filter veleroContentsF
 			if kind == "v1/Namespace" {
 				namespaces[item.Name] = true
 			}
+			item.Action = outcomes.classify(kind, item)
 			group.Count++
 			out.Total++
 			if item.Action != "" {

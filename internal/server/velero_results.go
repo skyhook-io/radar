@@ -133,8 +133,37 @@ func (s *Server) handleVeleroRunMessages(w http.ResponseWriter, r *http.Request)
 // All run artifacts use the same run-read gate and impersonated DownloadRequest
 // lifecycle, including on unauthenticated shared listeners.
 func (s *Server) handleVeleroRunArtifact(w http.ResponseWriter, r *http.Request, artifact, suffix string, compressedLimit, decodedLimit int64, decode func(io.Reader) (any, error)) {
-	if !s.requireConnected(w) {
+	run, ok := s.openVeleroRun(w, r, artifact)
+	if !ok {
 		return
+	}
+	result, failure := s.downloadVeleroRunArtifact(r.Context(), run, artifact, suffix, compressedLimit, decodedLimit, decode)
+	if failure != nil {
+		s.writeError(w, failure.status, failure.message)
+		return
+	}
+	s.writeJSON(w, result)
+}
+
+// veleroRun is a Backup or Restore the caller may read, with the caller's
+// client for the DownloadRequests that fetch its files.
+type veleroRun struct {
+	client    dynamic.Interface
+	kind      string
+	namespace string
+	name      string
+}
+
+type veleroArtifactFailure struct {
+	status  int
+	message string
+}
+
+// openVeleroRun applies the gates every run artifact shares, writing the
+// refusal itself when it refuses.
+func (s *Server) openVeleroRun(w http.ResponseWriter, r *http.Request, artifact string) (veleroRun, bool) {
+	if !s.requireConnected(w) {
+		return veleroRun{}, false
 	}
 	kindParam := strings.ToLower(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
@@ -143,14 +172,14 @@ func (s *Server) handleVeleroRunArtifact(w http.ResponseWriter, r *http.Request,
 	targetKind, ok := veleroRunKinds[kindParam]
 	if !ok {
 		s.writeError(w, http.StatusBadRequest, "only backups and restores have run "+artifact)
-		return
+		return veleroRun{}, false
 	}
 	if namespace == "" || name == "" {
 		s.writeError(w, http.StatusBadRequest, "namespace and name are required")
-		return
+		return veleroRun{}, false
 	}
 	if s.refuseOutsideVeleroPin(w, namespace) {
-		return
+		return veleroRun{}, false
 	}
 
 	// Creating a DownloadRequest is the mechanism, not the permission being
@@ -161,7 +190,7 @@ func (s *Server) handleVeleroRunArtifact(w http.ResponseWriter, r *http.Request,
 	// listing Backups.
 	if !s.canRead(r, veleroGroup, kindParam, namespace, "get") {
 		s.writeError(w, http.StatusForbidden, "no access to this Velero "+targetKind)
-		return
+		return veleroRun{}, false
 	}
 
 	// Only the Velero server answers a DownloadRequest. When the caller can see
@@ -171,7 +200,7 @@ func (s *Server) handleVeleroRunArtifact(w http.ResponseWriter, r *http.Request,
 			s.writeError(w, http.StatusServiceUnavailable,
 				fmt.Sprintf("The Velero server (Deployment %s in namespace %s) has no running replicas, and only it can serve the run %s. Start it, then try again.",
 					server.Deployment, namespace, artifact))
-			return
+			return veleroRun{}, false
 		}
 	}
 
@@ -181,9 +210,14 @@ func (s *Server) handleVeleroRunArtifact(w http.ResponseWriter, r *http.Request,
 		log.Printf("[velero] Dynamic client unavailable for %s %s %s/%s",
 			targetKind, artifact, sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
-		return
+		return veleroRun{}, false
 	}
+	return veleroRun{client: client, kind: targetKind, namespace: namespace, name: name}, true
+}
 
+// downloadVeleroRunArtifact asks Velero for one of the run's files and decodes it.
+func (s *Server) downloadVeleroRunArtifact(ctx context.Context, run veleroRun, artifact, suffix string, compressedLimit, decodedLimit int64, decode func(io.Reader) (any, error)) (any, *veleroArtifactFailure) {
+	client, targetKind, namespace, name := run.client, run.kind, run.namespace, run.name
 	req := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": veleroGroup + "/v1",
 		"kind":       "DownloadRequest",
@@ -199,34 +233,31 @@ func (s *Server) handleVeleroRunArtifact(w http.ResponseWriter, r *http.Request,
 	}}
 
 	created, err := client.Resource(downloadRequestGVR).Namespace(namespace).
-		Create(r.Context(), req, metav1.CreateOptions{})
+		Create(ctx, req, metav1.CreateOptions{})
 	switch {
 	case err == nil:
 	case apierrors.IsForbidden(err):
-		s.writeError(w, http.StatusForbidden, "no access to create Velero download requests")
-		return
+		return nil, &veleroArtifactFailure{http.StatusForbidden, "no access to create Velero download requests"}
 	case apierrors.IsNotFound(err):
 		// No DownloadRequest CRD — Velero is not installed, or predates it.
-		s.writeError(w, http.StatusNotFound, "this cluster has no Velero download requests")
-		return
+		return nil, &veleroArtifactFailure{http.StatusNotFound, "this cluster has no Velero download requests"}
 	default:
 		log.Printf("[velero] Failed to create DownloadRequest for %s %s/%s: %v",
 			targetKind, sanitizeForLog(namespace), sanitizeForLog(name), err)
-		s.writeError(w, http.StatusServiceUnavailable, "could not ask Velero for the "+artifact)
-		return
+		return nil, &veleroArtifactFailure{http.StatusServiceUnavailable, "could not ask Velero for the " + artifact}
 	}
 
 	// Best-effort cleanup. Velero garbage-collects processed DownloadRequests on
 	// its own TTL, so a leaked one is untidy rather than harmful — but only if
 	// the controller is running, which is exactly what is in doubt here.
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = client.Resource(downloadRequestGVR).Namespace(namespace).
-			Delete(ctx, created.GetName(), metav1.DeleteOptions{})
+			Delete(cleanup, created.GetName(), metav1.DeleteOptions{})
 	}()
 
-	downloadURL, err := awaitDownloadURL(r.Context(), client, namespace, created.GetName(), downloadRequestTimeout)
+	downloadURL, err := awaitDownloadURL(ctx, client, namespace, created.GetName(), downloadRequestTimeout)
 	if err != nil {
 		log.Printf("[velero] No download URL for %s %s/%s: %v",
 			targetKind, sanitizeForLog(namespace), sanitizeForLog(name), err)
@@ -235,8 +266,7 @@ func (s *Server) handleVeleroRunArtifact(w http.ResponseWriter, r *http.Request,
 		// them would otherwise be told Velero is down — sending them to look at
 		// a controller that is running fine.
 		if apierrors.IsForbidden(err) {
-			s.writeError(w, http.StatusForbidden, "no access to read Velero download requests")
-			return
+			return nil, &veleroArtifactFailure{http.StatusForbidden, "no access to read Velero download requests"}
 		}
 		// 503 rather than 500: nothing is wrong with the request, something in
 		// the cluster is not answering, and the message says which.
@@ -244,13 +274,12 @@ func (s *Server) handleVeleroRunArtifact(w http.ResponseWriter, r *http.Request,
 		// namespace is where Velero is installed, but the controller's name
 		// varies by distribution (OADP does not call it `velero`), so pointing
 		// at one would be a guess dressed as a fact.
-		s.writeError(w, http.StatusServiceUnavailable,
+		return nil, &veleroArtifactFailure{http.StatusServiceUnavailable,
 			fmt.Sprintf("Velero did not answer within %s. The Velero controller in namespace %s serves the run %s — check that it is running.",
-				downloadRequestTimeout, namespace, artifact))
-		return
+				downloadRequestTimeout, namespace, artifact)}
 	}
 
-	results, err := fetchVeleroArtifact(r.Context(), downloadURL, s.veleroDownloadPolicy(), compressedLimit, decodedLimit, decode)
+	results, err := fetchVeleroArtifact(ctx, downloadURL, s.veleroDownloadPolicy(), compressedLimit, decodedLimit, decode)
 	if err != nil {
 		log.Printf("[velero] Failed to fetch %s for %s %s/%s: %v",
 			artifact, targetKind, sanitizeForLog(namespace), sanitizeForLog(name), err)
@@ -260,13 +289,11 @@ func (s *Server) handleVeleroRunArtifact(w http.ResponseWriter, r *http.Request,
 		// for the results file, and a response body is not a place to publish
 		// one.
 		if errors.Is(err, errStorageMissing) {
-			s.writeError(w, http.StatusNotFound, "Velero has no "+artifact+" for this run")
-			return
+			return nil, &veleroArtifactFailure{http.StatusNotFound, "Velero has no " + artifact + " for this run"}
 		}
-		s.writeError(w, http.StatusServiceUnavailable, veleroArtifactFetchMessage(err, artifact))
-		return
+		return nil, &veleroArtifactFailure{http.StatusServiceUnavailable, veleroArtifactFetchMessage(err, artifact)}
 	}
-	s.writeJSON(w, results)
+	return results, nil
 }
 
 // veleroFetchMessage turns a results-fetch failure into what the reader should

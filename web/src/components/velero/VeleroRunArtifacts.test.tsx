@@ -136,6 +136,21 @@ describe('Contents rows and filters', () => {
     expect(lastParams().get('q')).toBe('late-failure')
   })
 
+  it('shows items Velero lists as failed but only warned about as already existed, never failed', async () => {
+    state.fetch.mockResolvedValue(contents({
+      total: 9, matched: 9, truncated: false, actions: { existed: 6, created: 3 },
+      groups: [{ kind: 'v1/ConfigMap', count: 9, matched: 9, items: [{ namespace: 'demo-copy', name: 'settings', action: 'existed' }, { namespace: 'demo-copy', name: 'fresh', action: 'created' }] }],
+    }))
+    await mount(<VeleroRunContents {...props} />)
+    await settle(() => host.textContent!.includes('settings'))
+    const tabs = [...host.querySelectorAll('[role="tablist"] button')].map((el) => el.textContent)
+    expect(tabs).toEqual(['All actions9', 'Failed0', 'Already existed6', 'Created3', 'Updated0', 'Skipped0'])
+    const row = [...host.querySelectorAll('tr')].find((tr) => tr.textContent!.includes('settings'))!
+    expect(row.textContent).toContain('Already existed')
+    expect(row.textContent).not.toContain('Failed')
+    expect(host.textContent).toContain('the restore’s warning count is Velero’s messages, and the Log counts log lines')
+  })
+
   it('counts in the singular when there is one', async () => {
     state.fetch.mockResolvedValue(contents({ total: 1, matched: 1, namespaces: ['app'], truncated: false, groups: [{ kind: 'v1/ConfigMap', count: 1, matched: 1, items: [{ namespace: 'app', name: 'first', action: 'created' }] }] }))
     await mount(<VeleroRunContents {...props} />)
