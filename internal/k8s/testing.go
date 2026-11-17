@@ -7,6 +7,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/policyreports"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
@@ -255,8 +256,12 @@ func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIRe
 
 	// Bootstrap discovery from a fake clientset so NewResourceDiscovery has a
 	// non-nil discovery client; AddAPIResource then registers the test-only
-	// GVRs (e.g. serving.knative.dev/Service) the test depends on.
-	fakeDisc := fakeclientset.NewSimpleClientset().Discovery()
+	// GVRs (e.g. serving.knative.dev/Service) the test depends on. The fake
+	// serves the same resources, so a later discovery refresh finds them
+	// again instead of dropping them.
+	fake := fakeclientset.NewSimpleClientset()
+	fake.Resources = servedAPIResources(resources)
+	fakeDisc := fake.Discovery()
 	core, err := k8score.NewResourceDiscovery(fakeDisc)
 	if err != nil {
 		clientMu.Lock()
@@ -278,6 +283,23 @@ func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIRe
 	discoveryMu.Unlock()
 
 	return InitDynamicResourceCache(nil)
+}
+
+// servedAPIResources is resources as a discovery endpoint lists them.
+func servedAPIResources(resources []APIResource) []*metav1.APIResourceList {
+	byGV := map[string]*metav1.APIResourceList{}
+	var lists []*metav1.APIResourceList
+	for _, r := range resources {
+		gv := schema.GroupVersion{Group: r.Group, Version: r.Version}.String()
+		list := byGV[gv]
+		if list == nil {
+			list = &metav1.APIResourceList{GroupVersion: gv}
+			byGV[gv] = list
+			lists = append(lists, list)
+		}
+		list.APIResources = append(list.APIResources, metav1.APIResource{Name: r.Name, Kind: r.Kind, Namespaced: r.Namespaced, Verbs: r.Verbs})
+	}
+	return lists
 }
 
 // SetTestDynamicSyncStallAfter sets how long a dynamic informer may stay
@@ -691,4 +713,19 @@ func SetTestContextOperationInProgress(active bool) func() {
 	}
 	previous := activeContextOperations.Swap(value)
 	return func() { activeContextOperations.Store(previous) }
+}
+
+// InitTestReplayClients retains the supplied discovery client so refreshes see
+// the frozen catalog, rather than reverting to an empty bootstrap catalog.
+func InitTestReplayClients(client dynamic.Interface, catalog discovery.DiscoveryInterface) error {
+	clientMu.Lock()
+	dynamicClient = client
+	clientMu.Unlock()
+	if _, err := SetTestResourceDiscovery(catalog); err != nil {
+		return err
+	}
+	discoveryMu.Lock()
+	resourceDiscoveryClient = GetDiscoveryClient()
+	discoveryMu.Unlock()
+	return InitDynamicResourceCache(nil)
 }

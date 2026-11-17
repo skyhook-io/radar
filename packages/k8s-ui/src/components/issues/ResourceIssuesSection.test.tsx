@@ -51,6 +51,34 @@ describe('ResourceIssuesSection', () => {
   })
 })
 
+// Under its own subject's drawer the header already names the resource, so
+// the collapsed row does not repeat it; under any other resource it must.
+describe('the collapsed row under the issue subject', () => {
+  const crashing: Issue = { ...issue, kind: 'Deployment', group: 'apps', namespace: 'gl-crash-config', name: 'api', reason: 'CrashLoopBackOff', affected: { pods: 2 } }
+  const row = (subjectResource: { kind: string; group?: string; namespace: string; name: string }) =>
+    renderToString(<ResourceIssuesSection issues={[crashing]} subjectResource={subjectResource} />)
+
+  it('leaves out the kind and name the drawer header shows', () => {
+    const html = row({ kind: 'deployments', group: 'apps', namespace: 'gl-crash-config', name: 'api' })
+    expect(html).not.toContain('gl-crash-config / ')
+    expect(html).not.toContain('>Deployment<')
+    expect(html).toContain('Affects 2 pods')
+  })
+
+  it('names the subject under another resource', () => {
+    const html = row({ kind: 'pods', namespace: 'gl-crash-config', name: 'api-7c6f9c7bb9-jnv72' })
+    expect(html).toContain('gl-crash-config / <!-- -->api')
+    expect(html).toContain('>Deployment<')
+    expect(html).not.toContain('Affects')
+  })
+
+  it('drops the line when nothing else is on it', () => {
+    const html = renderToString(<IssueRow issue={{ ...crashing, affected: undefined }} open={false} onToggle={() => {}} hideSubject />)
+    expect(html).not.toContain('>·<')
+    expect(html).not.toContain('gl-crash-config')
+  })
+})
+
 describe('sameResource', () => {
   const subject = { kind: 'PersistentVolumeClaim', namespace: 'demo', name: 'data' }
 
@@ -64,6 +92,16 @@ describe('sameResource', () => {
 
   it('does not match a different name', () => {
     expect(sameResource(subject, { kind: 'persistentvolumeclaims', namespace: 'demo', name: 'other' })).toBe(false)
+  })
+
+  it('requires the same API group, a missing one being core', () => {
+    const velero = { kind: 'Backup', group: 'velero.io', namespace: 'velero', name: 'nightly' }
+    expect(sameResource(velero, { kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly' })).toBe(true)
+    expect(sameResource(velero, { kind: 'backups', group: 'postgresql.cnpg.io', namespace: 'velero', name: 'nightly' })).toBe(false)
+    // A core Pod's feed can hold an issue about a same-named owner in another group.
+    expect(sameResource({ kind: 'Pod', group: 'example.com', namespace: 'demo', name: 'worker' }, { kind: 'pods', namespace: 'demo', name: 'worker' })).toBe(false)
+    // An issue with no group under a non-core drawer keeps its name rather than risk hiding another's.
+    expect(sameResource({ ...velero, group: undefined }, { kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly' })).toBe(false)
   })
 
   it('does not match a different kind', () => {
