@@ -17,8 +17,10 @@ const ArgoRolloutsGroup = "argoproj.io"
 // PersistentVolumeClaims and ServiceAccount an object declares for its Pods,
 // as it reads each: a Pod's spec, the pod template of a Deployment,
 // StatefulSet, DaemonSet, ReplicaSet, Job, CronJob or Argo Rollout, or an
-// Ingress's TLS Secrets. Repeated declarations are visited separately, each
-// with its path. ok is false for any other object. A Rollout whose template
+// Ingress's TLS Secrets. Objects are typed built-ins, except a Rollout, which
+// is read unstructured. Repeated declarations are visited separately, each
+// with its path. ok is false for any other object, including any other
+// unstructured one. A Rollout whose template
 // doesn't decode visits the declarations that can still be read and returns
 // the decoding error; one with no template declares nothing.
 func VisitObjectReferences(obj any, visit func(PodSpecReference)) (ok bool, err error) {

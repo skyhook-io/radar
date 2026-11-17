@@ -90,7 +90,7 @@ The families so far:
 
 | Family | Sources → targets | File |
 |---|---|---|
-| `ConfigReferences` | Pods, pod-template workloads (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Argo Rollout), Ingress TLS → ConfigMaps, Secrets, PersistentVolumeClaims, ServiceAccounts. ReplicaSets scaled explicitly to zero declare nothing: they are old revisions | `config_references.go` |
+| `ConfigReferences` | Pods, pod-template workloads (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Argo Rollout), Ingress TLS → ConfigMaps, Secrets, PersistentVolumeClaims, ServiceAccounts. ReplicaSets scaled explicitly to zero declare nothing, as the Topology screen draws none: usually they are a Deployment's old revisions, and a Deployment scaled to zero still declares through its own template | `config_references.go` |
 | `Autoscalers` | HorizontalPodAutoscalers and KEDA ScaledObjects → Deployments, StatefulSets, ReplicaSets, Rollouts; VerticalPodAutoscalers → those and DaemonSets | `families.go` |
 | `KEDAAuthentication` | ScaledObjects, ScaledJobs → TriggerAuthentications, ClusterTriggerAuthentications | `families.go` |
 | `IngressBackends` | Ingresses → their default and rule backend Services | `families.go` |

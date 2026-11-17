@@ -120,7 +120,7 @@ func (s scanSession) Indexed(gk resourceid.GroupKind, index string, keys []strin
 	switch {
 	case s.ambiguous(gk):
 		gap(gk, "", readreason.ReadError)
-	case !served && s.w.Partial:
+	case !served && !s.covers(gk.Group):
 		gap(gk, "", readreason.ReadError)
 	case served:
 		read, ok := s.readable(dependentKind{gk: gk, namespaced: namespaced}, scope, namespaces, gap)
