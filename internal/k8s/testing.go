@@ -419,6 +419,21 @@ func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
 	return prev
 }
 
+// ReconnectTestClient installs c as a new connection under the current context
+// name, as a reconnect does, and returns a func that restores the previous one.
+func ReconnectTestClient(c *kubernetes.Clientset) func() {
+	clientMu.Lock()
+	prevClient, prevGeneration := k8sClient, activeClientGeneration
+	k8sClient = c
+	activeClientGeneration = clientGenerationCounter.Add(1)
+	clientMu.Unlock()
+	return func() {
+		clientMu.Lock()
+		k8sClient, activeClientGeneration = prevClient, prevGeneration
+		clientMu.Unlock()
+	}
+}
+
 // SetTestPolicyReportIndex publishes a PolicyReport index directly, bypassing
 // CRD discovery and the informer warmup that normally build it.
 //
