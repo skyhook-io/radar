@@ -28,7 +28,7 @@ func projectionOwnedAnswer(t *testing.T, s *projectionSession, obj runtime.Objec
 		t.Fatal("capture failed")
 	}
 	ov := ownership.NewView(captured, access)
-	rel, _ := RelationsAnswer(captured, access, access, ov, projectionRef(obj), obj, "", nil, nil)
+	rel, _ := RelationsAnswer(captured, access, access, ov, projectionRef(obj), obj, nil, nil)
 	m, _ := apimeta.Accessor(obj)
 	ApplyOwnership(rel, ov, ownership.Observe(projectionRef(obj), m))
 	return rel
@@ -145,7 +145,7 @@ func TestRelationsAnswerSealedSecretConsumers(t *testing.T) {
 			for _, obj := range []runtime.Object{sealed, d} {
 				captured, _ := relations.CaptureSubject(s, projectionRef(obj), obj)
 				ov := ownership.NewView(captured, access)
-				rel, cov := RelationsAnswer(captured, access, traverse, ov, projectionRef(obj), obj, "", nil, nil)
+				rel, cov := RelationsAnswer(captured, access, traverse, ov, projectionRef(obj), obj, nil, nil)
 				m, _ := apimeta.Accessor(obj)
 				ApplyOwnership(rel, ov, ownership.Observe(projectionRef(obj), m))
 				if obj == sealed {
