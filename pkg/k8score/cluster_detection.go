@@ -118,6 +118,9 @@ func DetectByLabels(node corev1.Node) string {
 	if _, exists := node.Labels["eks.amazonaws.com/capacityType"]; exists {
 		return "eks"
 	}
+	if _, exists := node.Labels["eks.amazonaws.com/compute-type"]; exists {
+		return "eks"
+	}
 	for label := range node.Labels {
 		if strings.HasPrefix(label, "kubernetes.azure.com/") {
 			return "aks"
