@@ -384,6 +384,7 @@ function useActionsBarProps(
   const argoResumeMutation = useArgoResume()
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
   const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
+  const { support: cronJobJobNameSupport } = useRadarFeature('cronJobTriggerJobName')
 
   const {
     data: cascadePreview,
@@ -480,6 +481,7 @@ function useActionsBarProps(
     onTriggerCronJob: (params: Parameters<typeof triggerCronJobMutation.mutate>[0]) =>
       triggerCronJobMutation.mutate(params),
     isTriggeringCronJob: triggerCronJobMutation.isPending,
+    cronJobTriggerDialog: cronJobJobNameSupport === 'supported',
     onSuspendCronJob: (params: Parameters<typeof suspendCronJobMutation.mutate>[0]) =>
       suspendCronJobMutation.mutate(params),
     isSuspendingCronJob: suspendCronJobMutation.isPending,
