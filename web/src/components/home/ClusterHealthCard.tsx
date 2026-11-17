@@ -42,6 +42,7 @@ interface ClusterHealthCardProps {
   // cluster metadata so the overview carries a freshness signal without a band.
   freshness?: ReactNode
   radarVersion?: ReactNode
+  vulnerabilityTools?: boolean
 }
 
 function getMetricsInstallHint(platform: string): string {
@@ -145,6 +146,7 @@ export function ClusterHealthCard({
   onIssuesClick,
   freshness,
   radarVersion,
+  vulnerabilityTools,
 }: ClusterHealthCardProps) {
   void _topCRDs // Reserved for future CRD display
 
@@ -304,7 +306,7 @@ export function ClusterHealthCard({
                 (org-wide endpoint, PAT-authed) rather than per-cluster, so this
                 localhost/no-auth entry would mislead a Cloud user. */}
             {showLocalMcpCard && (
-              <HomeAgentBlock mcpUrl={mcpUrl} readOnly={caps.mcpReadOnly} execTools={caps.mcpExecTools} httpTools={caps.mcpHttpTools} helmTools={caps.mcpHelmTools} applicationEvidenceAvailable={caps.mcpApplicationEvidence} />
+              <HomeAgentBlock mcpUrl={mcpUrl} readOnly={caps.mcpReadOnly} execTools={caps.mcpExecTools} httpTools={caps.mcpHttpTools} helmTools={caps.mcpHelmTools} vulnerabilityTools={vulnerabilityTools} applicationEvidenceAvailable={caps.mcpApplicationEvidence} />
             )}
           </div>
 

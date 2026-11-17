@@ -304,7 +304,9 @@ func (v *View) candidates(found DependentCandidatesRead) (out []Observation, unr
 // gap that doesn't is withheld, as it would name what the caller may not
 // read. A gap on a namespaced kind without a namespace covers every
 // namespace of the scope, and counts if the caller may read the kind in any
-// of them.
+// of them. g must come from a search of scope: a gap naming a namespace is
+// not tested against scope. A check that couldn't be made counts as
+// readable, so the gap is kept.
 func GapCoversReadable(access Access, catalog *Catalog, g Gap, scope SearchScope) bool {
 	if g.Kind.Kind == "" {
 		return true

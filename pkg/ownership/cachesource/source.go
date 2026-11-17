@@ -3,6 +3,7 @@ package cachesource
 
 import (
 	"slices"
+	"sync"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
@@ -28,7 +29,11 @@ type Caches struct {
 // caches on a switch, the typed cache with them, so a new typed cache marks a
 // new connection.
 type Source struct {
-	current func() Caches
+	current           func() Caches
+	catalogMu         sync.Mutex
+	catalogDiscovery  *k8score.ResourceDiscovery
+	catalogGeneration uint64
+	catalog           *ownership.Catalog
 }
 
 // New returns a source reading the caches current returns.
@@ -44,18 +49,32 @@ func (s *Source) Begin() (ownership.ReadSession, error) {
 	if caches.Typed == nil {
 		return nil, ownership.ErrNotConnected
 	}
-	return &session{caches: caches, current: s.current, catalog: catalogOf(caches.Discovery)}, nil
+	return &session{caches: caches, current: s.current, catalog: s.catalogOf(caches.Discovery)}, nil
 }
 
-func catalogOf(discovery *k8score.ResourceDiscovery) *ownership.Catalog {
-	snapshot := discovery.Catalog()
+func (s *Source) catalogOf(discovery *k8score.ResourceDiscovery) *ownership.Catalog {
+	s.catalogMu.Lock()
+	defer s.catalogMu.Unlock()
+	var snapshot k8score.DiscoveryCatalog
+	if s.catalog != nil && s.catalogDiscovery == discovery {
+		var changed bool
+		snapshot, changed = discovery.CatalogIfChanged(s.catalogGeneration)
+		if !changed {
+			return s.catalog
+		}
+	} else {
+		snapshot = discovery.Catalog()
+	}
 	served := make([]ownership.ServedResource, 0, len(snapshot.Resources))
 	for _, r := range snapshot.Resources {
 		served = append(served, ownership.ServedResource{
 			Group: r.Group, Version: r.Version, Kind: r.Kind, Resource: r.Name, Namespaced: r.Namespaced, Verbs: r.Verbs,
 		})
 	}
-	return ownership.NewCatalog(served, snapshot.Complete)
+	s.catalog = ownership.NewCatalog(served, snapshot.Complete, snapshot.FailedGroups...)
+	s.catalogDiscovery = discovery
+	s.catalogGeneration = snapshot.Generation
+	return s.catalog
 }
 
 // typedKinds are the kinds the typed cache holds, keyed to the built-in that
@@ -194,7 +213,7 @@ func (s *session) dynamicObject(ref resourceid.Ref, borrow func(apiruntime.Objec
 	}
 	kind, known := s.catalog.Kind(ref.GroupKind())
 	if !known {
-		if !s.catalog.Complete() {
+		if !s.catalog.CoversGroup(ref.Group) {
 			// The group discovery missed may serve it.
 			return unavailable(ref, readreason.ReadError)
 		}

@@ -85,6 +85,31 @@ func TestAnswersAcrossNamespacesWithholdOnlyRelatedObjects(t *testing.T) {
 	}
 }
 
+// undecidedElsewhere may read namespace, and can't check any other.
+type undecidedElsewhere struct{ namespaceAccess }
+
+func (u undecidedElsewhere) CanRead(gk resourceid.GroupKind, namespace string) ownership.Decision {
+	if d := u.namespaceAccess.CanRead(gk, namespace); d != ownership.Denied {
+		return d
+	}
+	return ownership.Undecided
+}
+
+// Across namespaces, a related object whose access check couldn't be made
+// leaves a gap naming no namespace, rather than reading as withheld.
+func TestAnAcrossCheckThatCouldntBeMadeIsAGapNotADenial(t *testing.T) {
+	svc := labelled(typed(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "web"}}, "", "v1", "Service"), map[string]string{"metrics": "on"})
+	monitor := inNamespace(object("monitoring.coreos.com/v1", "ServiceMonitor", "web", map[string]any{
+		"selector":          map[string]any{"matchLabels": map[string]any{"metrics": "on"}},
+		"namespaceSelector": map[string]any{"any": true},
+	}), "monitoring")
+	got := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{svc, monitor}}}, undecidedElsewhere{namespaceAccess{namespace: "apps"}}).SelectedBy(Monitors, refOf(svc), nil)
+	want := ownership.Gap{Kind: refOf(monitor).GroupKind(), Reason: readreason.UserPermissionCheckFailed}
+	if got.Coverage.Narrowed || len(got.Matches) != 0 || len(got.Coverage.NotChecked) != 1 || got.Coverage.NotChecked[0] != want {
+		t.Errorf("got %+v; want no matches, not narrowed, gap %v", got, want)
+	}
+}
+
 // A kind Radar hasn't read yet where the caller may not read could hide a
 // related object, so the answer says it may have withheld one.
 func TestAnswersAcrossNamespacesNarrowOnUnreadableGaps(t *testing.T) {

@@ -202,6 +202,7 @@ export interface FeatureCapabilities {
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
+  vulnerabilities?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -219,7 +220,7 @@ export interface Deployment {
 //
 // When adding a new kind here, also update:
 // - ALL_NODE_KINDS in App.tsx
-// - resource-kind-colors.ts TOPOLOGY_RESOURCE_KINDS array
+// - TopologyFilterSidebar.tsx RESOURCE_KINDS array
 // - K8sResourceNode.tsx NODE_DIMENSIONS
 // - resource-icons.ts KIND_ICON_MAP
 // - kindToPlural in navigation.ts (if irregular plural)
@@ -1693,6 +1694,8 @@ export interface AggregatedFlow {
   protocol: string
   port: number
   flowCount: number
+  bytesByProtocol?: Record<string, { bytesSent: number; bytesRecv: number }>
+  /** Cross-protocol sums kept for compatibility; display the breakdown when present. */
   bytesSent: number
   bytesRecv: number
   connections: number

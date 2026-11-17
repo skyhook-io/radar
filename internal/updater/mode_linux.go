@@ -59,21 +59,3 @@ func packaged(exe string) bool {
 	}
 	return err == nil
 }
-
-// canCreateIn creates and removes a file in dir with this process's own
-// credentials, the first thing applyUpdate's swap needs (rename the binary,
-// create the new one beside it). Firefox and minio/selfupdate check
-// writability the same way. It does not prove the swap will succeed: an
-// immutable binary or a file mounted over it still fails at apply time.
-func canCreateIn(dir string) error {
-	f, err := os.CreateTemp(dir, ".radar-update-check-*")
-	if err != nil {
-		return err
-	}
-	name := f.Name()
-	closeErr := f.Close()
-	if err := os.Remove(name); err != nil {
-		return err
-	}
-	return closeErr
-}
