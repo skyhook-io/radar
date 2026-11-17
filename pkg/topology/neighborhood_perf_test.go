@@ -102,15 +102,17 @@ func BenchmarkWalkNeighborhood(b *testing.B) {
 		name    string
 		fixture func() *charFixture
 		root    ResourceRef
+		hops    int
 	}{
-		{"2000Pods", neighborhoodPodFixture, ResourceRef{Kind: "ReplicaSet", Group: "apps", Namespace: "shop", Name: "big-8f9"}},
-		{"MixedCRDs", charCluster, ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"}},
+		{"2000Pods", neighborhoodPodFixture, ResourceRef{Kind: "ReplicaSet", Group: "apps", Namespace: "shop", Name: "big-8f9"}, 1},
+		{"2000Pods2Hops", neighborhoodPodFixture, ResourceRef{Kind: "ReplicaSet", Group: "apps", Namespace: "shop", Name: "big-8f9"}, 2},
+		{"MixedCRDs", charCluster, ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"}, 1},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
 			f := tc.fixture()
 			addNeighborhoodDiscoveryLoad(f)
 			s := neighborhoodFixtureSession(b, f)
-			opts := NeighborhoodOptions{Hops: 1, Profile: ProfileAll}
+			opts := NeighborhoodOptions{Hops: tc.hops, Profile: ProfileAll}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
