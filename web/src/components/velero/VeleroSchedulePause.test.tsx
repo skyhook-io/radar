@@ -127,6 +127,17 @@ describe('Pause and resume', () => {
     expect(state.mutate).toHaveBeenCalledWith(expect.objectContaining({ paused: false, skipImmediately: null }), expect.anything())
   })
 
+  it('offers no skip on a cron with no future time, where skipping changes nothing', () => {
+    const summary = 'This schedule’s cron expression has no future time, so once resumed Velero submits runs immediately and repeatedly until the cron is fixed. Skipping does not prevent it.'
+    state.resume = { default: { outcome: 'runsRepeatedly', reason: 'noFutureTime', due: false, summary } }
+    render(<VeleroSchedulePause schedule={paused} />)
+    act(() => buttons('Resume')[0].click())
+    expect(text()).toContain(summary)
+    expect(checkbox('Skip the run')).toBeUndefined()
+    act(() => buttons('Resume schedule')[0].click())
+    expect(state.mutate).toHaveBeenCalledWith(expect.objectContaining({ paused: false, skipImmediately: null }), expect.anything())
+  })
+
   it('refuses to confirm once the schedule changed while open', () => {
     const root = render(<VeleroSchedulePause schedule={active} />)
     act(() => buttons('Pause')[0].click())

@@ -27,6 +27,10 @@ const (
 	// ResumeMayRunNow: Velero may submit a run at once; Reason says what Radar
 	// could not establish.
 	ResumeMayRunNow ResumeOutcome = "mayRunNow"
+	// ResumeRunsRepeatedly: the cron has no future time, so every pass finds
+	// a run due. A skip only moves lastSkipped, after which the next run is
+	// still due at once, so there is no skip to offer.
+	ResumeRunsRepeatedly ResumeOutcome = "runsRepeatedly"
 )
 
 // Reasons for ResumeWontRun and ResumeMayRunNow.
@@ -89,6 +93,10 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 		return ResumeOutlook{Outcome: ResumeWontRun, Reason: ResumeReasonRejected, Summary: "Velero rejects this schedule, so resuming runs nothing until it is fixed."}
 	case StateCannotRun:
 		return ResumeOutlook{Outcome: ResumeWontRun, Reason: ReasonNameTooLong, Summary: "This schedule's name is longer than 63 characters, so every run Velero submits fails."}
+	case StateAlwaysDue:
+		// Before any skip: Velero would consume it, find no next time and
+		// submit at once anyway.
+		return ResumeOutlook{Outcome: ResumeRunsRepeatedly, Reason: ReasonNoFutureTime, Summary: "This schedule's cron expression has no future time, so once resumed Velero submits runs immediately and repeatedly until the cron is fixed. Skipping does not prevent it."}
 	case StateOnSchedule:
 		if r.NextRunCertain {
 			return ResumeOutlook{Outcome: ResumeWaits, Summary: "No run is due, so Velero submits the next one at its scheduled time.", NextRun: r.NextRun, NextRunCertain: true}
@@ -96,7 +104,7 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 		// Due in the zone Radar assumed is not due in every zone the
 		// controller might use.
 		due, certain = true, false
-	case StateDue, StateLate, StateProbablyLate, StateLateOrHeld, StateHeld, StateAlwaysDue:
+	case StateDue, StateLate, StateProbablyLate, StateLateOrHeld, StateHeld:
 		due = true
 	default:
 		// StatePossiblyLate, and a cron Velero accepted that Radar cannot

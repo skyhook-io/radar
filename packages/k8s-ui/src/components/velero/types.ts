@@ -237,7 +237,7 @@ export interface VeleroScheduleActivityResponse {
 }
 
 /** pkg/velero ResumeOutcome */
-export type VeleroResumeOutcome = 'nothing' | 'wontRun' | 'waits' | 'skips' | 'held' | 'runsNow' | 'mayRunNow'
+export type VeleroResumeOutcome = 'nothing' | 'wontRun' | 'waits' | 'skips' | 'held' | 'runsNow' | 'mayRunNow' | 'runsRepeatedly'
 
 /** pkg/velero ResumeOutlook: what resuming a paused schedule does. */
 export interface VeleroResumeOutlook {

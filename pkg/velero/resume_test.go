@@ -125,6 +125,16 @@ func TestDescribeResume(t *testing.T) {
 		}
 	})
 
+	t.Run("a cron with no future time runs repeatedly, and skipping does not help", func(t *testing.T) {
+		never := schedule("never", "0 0 31 2 *", specField("paused", true))
+		for _, skip := range []*bool{nil, new(false), new(true)} {
+			got := DescribeResume(ScheduleInput{Schedule: never, BackupsRead: true, Server: utcServer, Now: at("12:10")}, skip)
+			if got.Outcome != ResumeRunsRepeatedly || got.Reason != ReasonNoFutureTime || got.Due || !strings.Contains(got.Summary, "repeatedly") {
+				t.Fatalf("skip=%v: got %+v", deref(skip), got)
+			}
+		}
+	})
+
 	t.Run("the schedule is not changed", func(t *testing.T) {
 		s := paused(phase(""))
 		DescribeResume(ScheduleInput{Schedule: s, BackupsRead: true, Server: utcServer, Now: at("12:10")}, nil)

@@ -261,6 +261,15 @@ func TestScheduleActivityResume(t *testing.T) {
 		t.Errorf("skipping %+v", resp.Resume.Skipping)
 	}
 
+	never := obj("Schedule", "velero", "never", nil,
+		map[string]any{"schedule": "0 0 31 2 *", "paused": true, "template": map[string]any{}},
+		map[string]any{"phase": "Enabled"})
+	r2 := fakeRead{objects: map[string][]*unstructured.Unstructured{"schedules": {never}}}.reader()
+	if resp, _, found := r2.ScheduleActivity(context.Background(), "velero", "never"); !found || resp.Resume == nil ||
+		resp.Resume.Default.Outcome != domain.ResumeRunsRepeatedly || resp.Resume.Default.Due || resp.Resume.Skipping != nil {
+		t.Errorf("a cron with no future time offers no skip: %+v", resp.Resume)
+	}
+
 	if active, _, _ := r.ScheduleActivity(context.Background(), "velero", "active"); active.Resume != nil {
 		t.Errorf("an active schedule has no resume outlook: %+v", active.Resume)
 	}
