@@ -136,19 +136,33 @@ describe('Contents rows and filters', () => {
     expect(lastParams().get('q')).toBe('late-failure')
   })
 
-  it('shows items Velero lists as failed but only warned about as already existed, never failed', async () => {
+  it('reads failed entries of a restore that settled without errors as with warnings, in their own segment', async () => {
     state.fetch.mockResolvedValue(contents({
-      total: 9, matched: 9, truncated: false, actions: { existed: 6, created: 3 },
-      groups: [{ kind: 'v1/ConfigMap', count: 9, matched: 9, items: [{ namespace: 'demo-copy', name: 'settings', action: 'existed' }, { namespace: 'demo-copy', name: 'fresh', action: 'created' }] }],
+      total: 9, matched: 9, truncated: false, actions: { warned: 6, created: 3 },
+      groups: [{ kind: 'v1/ConfigMap', count: 9, matched: 9, items: [{ namespace: 'demo-copy', name: 'settings', action: 'warned' }, { namespace: 'demo-copy', name: 'fresh', action: 'created' }] }],
     }))
     await mount(<VeleroRunContents {...props} />)
     await settle(() => host.textContent!.includes('settings'))
     const tabs = [...host.querySelectorAll('[role="tablist"] button')].map((el) => el.textContent)
-    expect(tabs).toEqual(['All actions9', 'Failed0', 'Already existed6', 'Created3', 'Updated0', 'Skipped0'])
+    expect(tabs).toEqual(['All actions9', 'Failed0', 'With warnings6', 'Created3', 'Updated0', 'Skipped0'])
     const row = [...host.querySelectorAll('tr')].find((tr) => tr.textContent!.includes('settings'))!
-    expect(row.textContent).toContain('Already existed')
+    expect(row.textContent).toContain('With warnings')
     expect(row.textContent).not.toContain('Failed')
+    expect(host.textContent).toContain('finished with no errors')
     expect(host.textContent).toContain('the restore’s warning count is Velero’s messages, and the Log counts log lines')
+  })
+
+  it('keeps Velero’s failed entries and explains its vocabulary otherwise', async () => {
+    state.fetch.mockResolvedValue(contents({
+      total: 2, matched: 2, truncated: false, actions: { failed: 1, created: 1 },
+      groups: [{ kind: 'v1/ConfigMap', count: 2, matched: 2, items: [{ namespace: 'demo-copy', name: 'settings', action: 'failed' }, { namespace: 'demo-copy', name: 'fresh', action: 'created' }] }],
+    }))
+    await mount(<VeleroRunContents {...props} />)
+    await settle(() => host.textContent!.includes('settings'))
+    const tabs = [...host.querySelectorAll('[role="tablist"] button')].map((el) => el.textContent)
+    expect(tabs).toEqual(['All actions2', 'Failed1', 'Created1', 'Updated0', 'Skipped0'])
+    expect(host.textContent).toContain('Velero records an item as failed when any warning or error was reported for it.')
+    expect(host.textContent).not.toContain('finished with no errors')
   })
 
   it('counts in the singular when there is one', async () => {

@@ -4,11 +4,11 @@ import { useVeleroRunContents, useVeleroRunLog, type VeleroLogLevel } from '../.
 import { Notice, SectionTable, Segments } from '../workspace/layout'
 
 type RunProps = { kind: 'backups' | 'restores'; namespace: string; name: string }
-const actions = ['failed', 'existed', 'warned', 'created', 'updated', 'skipped'] as const
-// existed and warned are entries Velero's list records as failed that the
-// restore reported only as warnings (classified by the server).
-const actionLabels: Record<string, string> = { failed: 'Failed', existed: 'Already existed', warned: 'With warnings', created: 'Created', updated: 'Updated', skipped: 'Skipped' }
-const actionSeverity = (action: string) => action === 'failed' ? 'error' : action === 'existed' || action === 'warned' ? 'warning' : 'neutral'
+const actions = ['failed', 'warned', 'created', 'updated', 'skipped'] as const
+// warned is a "failed" entry of a restore that settled with no errors
+// (classified by the server).
+const actionLabels: Record<string, string> = { failed: 'Failed', warned: 'With warnings', created: 'Created', updated: 'Updated', skipped: 'Skipped' }
+const actionSeverity = (action: string) => action === 'failed' ? 'error' : action === 'warned' ? 'warning' : 'neutral'
 const levels: VeleroLogLevel[] = ['error', 'warning', 'info', 'debug', 'other']
 const inputClass = 'rounded-lg border border-theme-border bg-theme-elevated px-3 py-1.5 text-sm text-theme-text-primary'
 
@@ -35,14 +35,14 @@ export function VeleroRunContents({ kind, namespace, name }: RunProps) {
     </form>
     {kind === 'restores' && <Segments label="Restore action" value={action} onChange={setAction} options={[
       { id: '', label: 'All actions', count: data?.total },
-      ...actions.filter((id) => (id !== 'existed' && id !== 'warned') || (data?.actions[id] ?? 0) > 0 || action === id).map((id) => ({ id, label: actionLabels[id], count: data ? data.actions[id] ?? 0 : undefined })),
+      ...actions.filter((id) => id !== 'warned' || (data?.actions[id] ?? 0) > 0 || action === id).map((id) => ({ id, label: actionLabels[id], count: data ? data.actions[id] ?? 0 : undefined })),
     ]} />}
     {query.error && <ArtifactError error={query.error} hasData={!!data} retry={() => void query.refetch()} />}
     {query.isPending && <p className="text-sm text-theme-text-secondary">Loading contents…</p>}
     {data && <>
       <p className="text-sm text-theme-text-secondary">{pluralize(data.total, 'item')} · {pluralize(data.namespaces.length, 'namespace')} · {pluralize(data.matched, 'matching item')}</p>
-      {kind === 'restores' && ((data.actions.existed ?? 0) > 0 || (data.actions.warned ?? 0) > 0) && <p className="text-xs text-theme-text-secondary">
-        Velero’s list calls an item failed when it reported any warning for it. {(data.actions.existed ?? 0) > 0 && 'Already existed: the object was in the cluster and differed from the backup, so Velero left it as it was and warned. '}{(data.actions.warned ?? 0) > 0 && 'With warnings: the restore reported no errors, only warnings. '}These counts are items; the restore’s warning count is Velero’s messages, and the Log counts log lines, so the three can differ.
+      {kind === 'restores' && ((data.actions.failed ?? 0) > 0 || (data.actions.warned ?? 0) > 0) && <p className="text-xs text-theme-text-secondary">
+        Velero records an item as failed when any warning or error was reported for it. {(data.actions.warned ?? 0) > 0 ? 'This restore finished with no errors, so those items read With warnings. ' : ''}These counts are items; the restore’s warning count is Velero’s messages, and the Log counts log lines, so the three can differ.
       </p>}
       {data.truncated && <Notice>Showing the first 5,000 matching items. Counts and filters cover the whole file.</Notice>}
       {data.matched === 0 && <Notice>{data.total === 0 ? 'Velero recorded no items in this run.' : 'No contents match these filters.'}</Notice>}
