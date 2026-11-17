@@ -101,17 +101,17 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 				}
 				for _, e := range v.Composed(f, r, obj).Edges {
 					if edge, ok := projectedEdge(f.Projection, e.Producer, e.Consumer); ok {
-						graph.edge(e.Producer, e.Consumer, edge, false)
+						graph.edge(e.Producer, e.Consumer, edge)
 					}
 				}
 			}
 			if allowed[EdgeManages] {
 				graph.management(session, ov, r)
 				for _, c := range ov.Children(r).Children {
-					graph.edge(r, c.Ref, relationEdge{edge: EdgeManages}, false)
+					graph.edge(r, c.Ref, relationEdge{edge: EdgeManages})
 				}
 				for _, m := range ov.Members(r).Members {
-					graph.edge(r, m.Ref, relationEdge{edge: EdgeManages}, false)
+					graph.edge(r, m.Ref, relationEdge{edge: EdgeManages})
 				}
 				graph.crossplane(session, ov, r, obj)
 			}
