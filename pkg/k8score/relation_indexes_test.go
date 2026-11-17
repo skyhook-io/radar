@@ -29,7 +29,8 @@ func TestReflectsIndexFilesMirrorsBySource(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rc.Stop()
-	if got, ok := rc.ReadableIndexedObjects(Secrets, nil, ReflectsIndex, ReflectsKey("platform", "registry")); !ok || !slices.Equal(objectNames(got), []string{"registry", "registry"}) {
+	index := relations.Reflections.ReferrersIndex
+	if got, ok := rc.ReadableIndexedObjects(Secrets, nil, index.Name, index.Key(resourceid.NewRef("", "Secret", "platform", "registry"))); !ok || !slices.Equal(objectNames(got), []string{"registry", "registry"}) {
 		t.Errorf("platform/registry's mirrors = %v, %v; want both", objectNames(got), ok)
 	}
 }
@@ -37,9 +38,6 @@ func TestReflectsIndexFilesMirrorsBySource(t *testing.T) {
 func TestRelationIndexRegistrationCoversEverySource(t *testing.T) {
 	for gr, indexes := range relations.ReferrerIndexers {
 		for name := range indexes {
-			if dynamicRelationIndexers[gr][name] == nil {
-				t.Errorf("dynamic %v lacks %s", gr, name)
-			}
 			if gr.Group == "" && relationIndexers[gr.Resource][name] == nil {
 				t.Errorf("typed %v lacks %s", gr, name)
 			}
@@ -69,20 +67,16 @@ func TestDynamicRouteIndexesOnEveryVersionAndScope(t *testing.T) {
 				waitUntil(t, 5*time.Second, "route informer", func() bool { return d.IsNamespaceSynced(gvr, namespace) })
 				f := relations.GatewayParents
 				target := resourceid.NewRef(gvr.Group, "Gateway", "shared", "gw")
-				hits, ok := d.ReadableIndexed(gvr, namespace, f.ReferrersIndex.Name, f.ReferrersIndex.Key(target, "alpha"))
-				if !ok || len(hits) != 1 || hits[0].GetNamespace() != "alpha" {
-					t.Fatalf("alpha bucket: %v %v", hits, ok)
-				}
-				hits, ok = d.ReadableIndexed(gvr, namespace, f.ReferrersIndex.Name, f.ReferrersIndex.Key(target, "*"))
+				hits, ok := d.ReadableIndexed(gvr, namespace, f.ReferrersIndex.Name, f.ReferrersIndex.Key(target))
 				want := 2
 				if namespace != "" {
 					want = 1
 				}
 				if !ok || len(hits) != want {
-					t.Fatalf("all buckets: %d %v; want %d", len(hits), ok, want)
+					t.Fatalf("referrers: %d %v; want %d", len(hits), ok, want)
 				}
-				if !d.DynamicIndexMissing(gvr, namespace, "missing") {
-					t.Fatal("missing index not distinguished")
+				if _, ok := d.ReadableIndexed(gvr, namespace, "missing", "key"); ok {
+					t.Fatal("a read by an index the store lacks succeeded")
 				}
 			})
 		}

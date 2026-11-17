@@ -22,7 +22,8 @@ import (
 // may read.
 type Family struct {
 	// Name keys the family's coverage on the wire.
-	Name string
+	Name       string
+	Projection Disposition
 	// Sources are the kinds that declare, in the order answers list them.
 	Sources []Source
 	// Targets are the kinds a declaration can name.
@@ -35,12 +36,13 @@ type Family struct {
 	// namespace, as a Gateway API route may name a Gateway.
 	CrossNamespace bool
 	// ReferrersIndex, when set, finds the sources that may name a target
-	// through a store index keyed by the target and referrer namespace, instead
-	// of reading every source in scope: for a family whose references cross
-	// namespaces and are sparse, as Reflector mirrors are. An index costs work
-	// on every update and relist of its source kind, so a busy kind such as
-	// Pods (whose Node lookups are rare) scans instead. What each source found
-	// declares is still evaluated.
+	// through a store index keyed by the target alone, instead of reading
+	// every source in scope. What each source found declares is still
+	// evaluated. An index costs work on every update and relist of its source
+	// kind, so a family whose reverse search reads every namespace has one
+	// only where that cost is within the admission bar
+	// (BenchmarkRelationIndexUpdate); otherwise ScanAccepted says why it
+	// scans.
 	ReferrersIndex *ReferrersIndex
 	// ScanAccepted explains why a reverse search deliberately reads every source.
 	ScanAccepted string
@@ -54,8 +56,7 @@ type Family struct {
 // it files them under for a target.
 type ReferrersIndex struct {
 	Name string
-	// Key uses namespace "*" only as a query for every namespace bucket.
-	Key func(target resourceid.Ref, namespace string) string
+	Key  func(target resourceid.Ref) string
 	// Candidates can index a superset when resolution depends on request-time state.
 	Candidates func(runtime.Object, func(Declaration)) error
 }
@@ -313,40 +314,31 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 	}
 	// A namespaced target's sources are in its namespace; a cluster-scoped
 	// one's, or a CrossNamespace family's, can be anywhere.
-	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace, &a.Coverage)
+	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace)
 	if f.ReferrersIndex != nil {
-		s.index, s.keys = f.ReferrersIndex.Name, []string{f.ReferrersIndex.Key(subject, "*")}
-		if !s.scope.AllNamespaces {
-			s.keys = nil
-			namespaces := slices.Clone(s.scope.Namespaces)
-			if s.scope.IncludeClusterScoped {
-				namespaces = append(namespaces, "")
-			}
-			for _, ns := range namespaces {
-				s.keys = append(s.keys, f.ReferrersIndex.Key(subject, ns))
-			}
-		}
+		s.index, s.keys = f.ReferrersIndex.Name, []string{f.ReferrersIndex.Key(subject)}
 	}
 	for _, source := range f.Sources {
 		if !source.declares(subject.GroupKind()) {
 			continue
 		}
-		s.each(source.Kind, &a.Coverage, func(o IndexedObject) {
+		s.each(source.Kind, &a.Coverage, func(o IndexedObject, own *Coverage) func() {
 			var paths []string
 			err := f.Declared(o.Object, func(d Declaration) {
 				if slices.Contains(paths, d.Path) || d.Target != subject && !slices.Contains(d.Or, subject) {
 					return
 				}
-				if len(d.Or) == 0 || v.resolvesTo(d.candidates(f, source), subject, &a.Coverage) {
+				if len(d.Or) == 0 || v.resolvesTo(d.candidates(f, source), subject, own) {
 					paths = append(paths, d.Path)
 				}
 			})
 			if err != nil {
-				a.Coverage.addGap(ownership.Gap{Kind: source.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
+				own.addGap(ownership.Gap{Kind: source.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
 			}
-			if len(paths) > 0 {
-				a.Referrers = append(a.Referrers, Referrer{Ref: o.Ref, Paths: paths})
+			if len(paths) == 0 {
+				return nil
 			}
+			return func() { a.Referrers = append(a.Referrers, Referrer{Ref: o.Ref, Paths: paths}) }
 		})
 	}
 	slices.SortStableFunc(a.Referrers, func(x, y Referrer) int {

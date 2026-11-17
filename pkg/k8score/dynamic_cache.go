@@ -16,13 +16,15 @@ import (
 	"time"
 
 	"golang.org/x/sync/singleflight"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/skyhook-io/radar/pkg/relations"
 )
 
 var ErrResourceNotFound = errors.New("resource not found")
@@ -656,7 +658,7 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 	}
 	maps.Copy(indexers, gitopsMembersIndexers[gvr.GroupResource()])
 	maps.Copy(indexers, kueueQueueIndexers[gvr.GroupResource()])
-	maps.Copy(indexers, dynamicRelationIndexers[gvr.GroupResource()])
+	maps.Copy(indexers, relations.ReferrerIndexers[gvr.GroupResource()])
 	for name := range informer.GetIndexer().GetIndexers() {
 		delete(indexers, name)
 	}

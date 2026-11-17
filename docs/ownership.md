@@ -85,15 +85,15 @@ with the path declaring it. The `View` answers every family the same way:
   may read (`ownership.GapCoversReadable`).
 - A declaration counts only if its kind is one of the family's targets and its source may declare that kind (an HPA
   doesn't scale a DaemonSet).
-- Every family whose reverse question crosses namespaces or can name a cluster-scoped target declares a
-  `ReferrersIndex` or a measured `ScanAccepted` reason. Index keys pair the referenced identity with the referrer
-  namespace. Restricted searches read only their namespace buckets; unrestricted searches enumerate the store's
-  namespace-index values, then read those target buckets together. Indexes contain every alternative API group,
-  and Istio host keys are a domain-independent superset: each candidate is still resolved with the current mesh
-  domain on ask. A loaded store missing its required index reports `index_missing`, never a complete empty answer.
-  Index registration is generated from the family registry for each source GroupResource and applies to every
-  served version. The existing [measurements](loadtest.md#relationship-cost-baselines) explain why busy kinds can
-  deliberately remain scans.
+- Every family whose reverse question reads every namespace (a `CrossNamespace` family, or a cluster-scoped target)
+  either keeps a store index keyed by the referenced object alone (`ReferrersIndex`), so a read costs the number of
+  referrers rather than the number of sources, or says in `ScanAccepted` why it scans: an index costs work on every
+  update and relist of its source kind, and one is kept only where that cost is within the per-update bar
+  (`BenchmarkRelationIndexUpdate`; [measurements](loadtest.md#relationship-cost-baselines)). An index files every
+  alternative API group a declaration can resolve to, and Istio host keys are a superset that doesn't depend on the
+  mesh domain; each referrer found is still evaluated as asked. Index registration is generated from the family
+  registry for each source GroupResource and applies to every served version; a store read by an index it lacks
+  reports `read_error`, never a complete empty answer.
 - A declaration may name alternatives (`Declaration.Or`): the same reference in another API group its controller also
   reads, in the order it tries them, as Traefik 2.10 tries `traefik.io` and then `traefik.containo.us`. `References`
   names the first that exists, and `Referrers` counts a declaration only for the target it resolves to. A candidate
@@ -131,11 +131,18 @@ The families so far:
 | `ContourBackends` | Contour HTTPProxies → the Services they send to and the HTTPProxies they include or their TCP proxy delegates to, in any namespace | `contour.go` |
 | `ContourSecrets` | Contour HTTPProxies → the Secrets they read for TLS and validation | `contour.go` |
 | `PodPlacement` | Pods → the Node they run on (a finished Pod runs nowhere); a Node's Pods are read from every Pod | `status_families.go` |
-| `Reflections` | Reflector mirrors (Secrets, ConfigMaps) → the source their `reflects` annotation names, in any namespace; a source's mirrors come from `ReflectsIndex` | `status_families.go` |
+| `Reflections` | Reflector mirrors (Secrets, ConfigMaps) → the source their `reflects` annotation names, in any namespace; a source's mirrors come from the family's index | `status_families.go` |
 | `Storage` | PersistentVolumeClaims → their PersistentVolume and StorageClass; PersistentVolumes → their claim and StorageClass | `status_families.go` |
 | `MachineNodes` | Karpenter NodeClaims and Cluster API Machines → the Node their status records | `status_families.go` |
 | `AnalysisRuns` | Argo Rollouts → the AnalysisRuns their status points at | `status_families.go` |
+| `FluxHelmOrigins` | Origin labels on Deployment, Service, StatefulSet, DaemonSet, Job, CronJob and Rollout → Flux HelmRelease; the dark projection uses these only for local releases with no readable inventory | `management_families.go` |
+| `ArgoWorkflowPods` | Pods → Argo Workflow through the workflow label, preserving the graph’s label-only management path | `management_families.go` |
+| `CronWorkflowRuns` | Argo Workflow → CronWorkflow, preferring the controller reference to the cron-workflow label fallback | `management_families.go` |
 | `SealedSecrets` | Bitnami SealedSecrets → the Secret of their own name they produce | `status_families.go` |
+
+`CertificateRoutes` (`compositions.go`) joins a Certificate’s declared output Secret coordinates to Traefik routes and Contour proxies declaring the same Secret. Both endpoints are checked under the caller’s access; the logical Secret is never read or required to exist. The dark projection feeds Certificate `Consumers` and route `ConfigRefs`.
+
+`SealedSecretConsumers` uses the same composition over the SealedSecret’s own namespace/name and `ConfigReferences` declarations, in both directions. It feeds SealedSecret `Consumers` and consumer `ConfigRefs` even when the Secret is absent, uncollected or denied. Ordinary `Referrers` still requires a held, readable target.
 
 A **selector family** (`selectors.go`, `selector_families.go`) is one way objects choose others by labels: the kinds
 that select and how each reads its selector, and the kinds that can be chosen and how a selector sees each (a
@@ -160,6 +167,10 @@ rather than reading as no match.
 
 Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
 families can't read a reference differently.
+
+Each declared, selector and composition family carries its Related Resources `Projection` disposition beside its extraction rule. It names the fields in both declaration directions and the graph encoding, or explains the direct read / intentional non-projection. `relations_answer.go` generates its edge maps from these declarations. `TestEveryFamilyProjectsExactlyItsDeclaredFields` projects one isolated synthetic edge for every supported kind pair and checks the exact fields after ownership; legacy `ManagedBy` and ownership coverage are checked separately.
+
+The independent 72-family cutover inventory is `pkg/topology/testdata/relationship-family-inventory.tsv`. Each direction names registered or direct producers, or a reason it does not project. Its notes preserve the remaining held-target differences for synthetic AnalysisRun and Secret/ConfigMap nodes; these are not parity claims. `TestRelationshipFamilyInventoryHasBothDirections` rejects an unaccounted family or unknown producer.
 
 Families are built here while Related Resources still reads the relationship graph; readers switch to the families in
 one change that also removes the graph.

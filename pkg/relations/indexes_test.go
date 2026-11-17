@@ -26,6 +26,8 @@ func TestWideReverseFamiliesDeclareIndexOrScanReason(t *testing.T) {
 	namespaced := map[resourceid.GroupKind]bool{
 		{Group: "argoproj.io", Kind: "Rollout"}:           true,
 		{Group: "argoproj.io", Kind: "WorkflowTemplate"}:  true,
+		{Group: "argoproj.io", Kind: "Workflow"}:          true,
+		{Group: "argoproj.io", Kind: "CronWorkflow"}:      true,
 		{Group: "argoproj.io", Kind: "AnalysisRun"}:       true,
 		{Group: "keda.sh", Kind: "TriggerAuthentication"}: true,
 		{Group: "cert-manager.io", Kind: "Issuer"}:        true,
@@ -106,14 +108,12 @@ func TestReferrerIndexIncludesAlternativesAndDeduplicatesKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(keys) != 2 {
-		t.Fatalf("keys = %q; want both groups in the referrer namespace", keys)
+		t.Fatalf("keys = %q; want one per API group", keys)
 	}
 	for _, group := range []string{"traefik.io", "traefik.containo.us"} {
 		target := resourceid.NewRef(group, "TraefikService", "shared", "app")
-		for _, ns := range []string{"shop"} {
-			if !slices.Contains(keys, ReferrerKey(target, ns)) {
-				t.Errorf("missing %s/%s", group, ns)
-			}
+		if !slices.Contains(keys, ReferrerKey(target)) {
+			t.Errorf("missing %s", group)
 		}
 	}
 }
@@ -129,7 +129,7 @@ func TestIstioIndexIsIndependentOfMeshDomain(t *testing.T) {
 		for _, domain := range []string{"", "cluster.local", "custom.internal"} {
 			f := IstioServiceHosts(domain)
 			keys, err := f.IndexFunc()(dr)
-			if err != nil || !slices.Contains(keys, ReferrerKey(target, "shop")) {
+			if err != nil || !slices.Contains(keys, ReferrerKey(target)) {
 				t.Errorf("host %s domain %s: %q, %v", host, domain, keys, err)
 			}
 		}
@@ -144,20 +144,23 @@ type referrerReads struct {
 
 func (s *referrerReads) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
 	if index == GatewayParents.ReferrersIndex.Name {
-		want := []string{ReferrerKey(s.target, "shop"), ReferrerKey(s.target, "")}
-		if !slices.Equal(keys, want) {
-			s.t.Errorf("restricted query reads other buckets: %q; want %q", keys, want)
+		if want := []string{ReferrerKey(s.target)}; !slices.Equal(keys, want) {
+			s.t.Errorf("referrers read %q; want only the subject's key, %q", keys, want)
 		}
 	}
 	return s.allNamespaces.Indexed(gk, index, keys, scope)
 }
 
-func TestRestrictedReferrersReadOnlyTheirNamespaceBuckets(t *testing.T) {
+// A restricted caller's query reads the subject's key in every namespace and
+// lists the referrers it may read; one it may not read is withheld and said
+// to be.
+func TestRestrictedReferrersReadTheSubjectsKeyAndWithholdTheRest(t *testing.T) {
 	route := object("gateway.networking.k8s.io/v1", "HTTPRoute", "route", map[string]any{"parentRefs": []any{map[string]any{"name": "gw"}}})
+	elsewhere := inNamespace(object("gateway.networking.k8s.io/v1", "HTTPRoute", "elsewhere", map[string]any{"parentRefs": []any{map[string]any{"name": "gw", "namespace": "shop"}}}), "team")
 	gw := object("gateway.networking.k8s.io/v1", "Gateway", "gw", nil)
-	s := &referrerReads{allNamespaces: allNamespaces{cluster: cluster{objects: []runtime.Object{route, gw}}}, t: t, target: refOf(gw)}
+	s := &referrerReads{allNamespaces: allNamespaces{cluster: cluster{objects: []runtime.Object{route, elsewhere, gw}}}, t: t, target: refOf(gw)}
 	got := NewView(s, namespaceAccess{"shop", nil}).Referrers(GatewayParents, refOf(gw), nil)
-	if len(got.Referrers) != 1 {
+	if len(got.Referrers) != 1 || got.Referrers[0].Ref != refOf(route) || !got.Coverage.Narrowed {
 		t.Fatalf("got %+v", got)
 	}
 }

@@ -150,7 +150,8 @@ func unstructuredSelection(u *unstructured.Unstructured, fields ...string) (Sele
 // chooses none. A Rollout's canary, stable, active and preview Services are
 // chosen by name (RolloutServices), not by selector.
 var ServiceSelectors = &SelectorFamily{
-	Name: "serviceSelectors",
+	Name:       "serviceSelectors",
+	Projection: project("exposes", false, "Backends", "Services"),
 	Selectors: []Selector{{Kind: kindService, Selection: func(obj runtime.Object) (Selection, bool, error) {
 		svc, ok := obj.(*corev1.Service)
 		if !ok || len(svc.Spec.Selector) == 0 || svc.Spec.Type == corev1.ServiceTypeExternalName {
@@ -164,7 +165,8 @@ var ServiceSelectors = &SelectorFamily{
 // DisruptionBudgets is the family of the workloads a PodDisruptionBudget
 // protects: those whose pod template its selector matches.
 var DisruptionBudgets = &SelectorFamily{
-	Name: "disruptionBudgets",
+	Name:       "disruptionBudgets",
+	Projection: project("protects", false, "Protects", "PDBs"),
 	Selectors: []Selector{{Kind: resourceid.GroupKind{Group: "policy", Kind: "PodDisruptionBudget"}, Selection: func(obj runtime.Object) (Selection, bool, error) {
 		pdb, ok := obj.(*policyv1.PodDisruptionBudget)
 		if !ok {
@@ -194,7 +196,8 @@ func ciliumSelection(obj runtime.Object) (Selection, bool, error) {
 // endpoint selectors match. An empty selector applies to every workload in
 // the policy's namespace, as a default-deny policy does.
 var NetworkPolicies = &SelectorFamily{
-	Name: "networkPolicies",
+	Name:       "networkPolicies",
+	Projection: project("protects", false, "Protects", "NetworkPolicies"),
 	Selectors: []Selector{
 		{Kind: resourceid.GroupKind{Group: "networking.k8s.io", Kind: "NetworkPolicy"}, Selection: func(obj runtime.Object) (Selection, bool, error) {
 			np, ok := obj.(*networkingv1.NetworkPolicy)
@@ -233,7 +236,8 @@ func monitorSelection(obj runtime.Object) (Selection, bool, error) {
 // workloads whose pod template a PodMonitor selects, in the namespaces its
 // namespaceSelector names.
 var Monitors = &SelectorFamily{
-	Name: "monitors",
+	Name:       "monitors",
+	Projection: project("configures", false, "MonitorTargets", "Monitors"),
 	Selectors: []Selector{
 		{Kind: resourceid.GroupKind{Group: "monitoring.coreos.com", Kind: "ServiceMonitor"}, Selects: []resourceid.GroupKind{kindService}, Selection: monitorSelection},
 		{Kind: resourceid.GroupKind{Group: "monitoring.coreos.com", Kind: "PodMonitor"}, Selects: []resourceid.GroupKind{kindDeployment, kindRollout, kindStatefulSet, kindDaemonSet, kindJob, kindCronJob}, Selection: monitorSelection},

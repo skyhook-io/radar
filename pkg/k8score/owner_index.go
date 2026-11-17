@@ -2,8 +2,8 @@ package k8score
 
 import (
 	"fmt"
+	"log"
 	"slices"
-	"strings"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -132,31 +132,19 @@ func (rc *ResourceCache) ReadableIndexedObjects(resource string, namespaces []st
 // sorted and distinct, each once; an empty index reads every object. One of k8score's own indexes answers every
 // key from one hold of the store's lock; any other is read key by key.
 func readIndex(indexer cache.Indexer, index string, keys []string) ([]any, error) {
-	if index == ReflectsIndex || strings.HasPrefix(index, "relations/") {
-		var expanded []string
-		for _, key := range keys {
-			if prefix, wildcard := strings.CutSuffix(key, "*"); wildcard {
-				for _, ns := range indexer.ListIndexFuncValues(cache.NamespaceIndex) {
-					expanded = append(expanded, prefix+ns)
-				}
-			} else {
-				expanded = append(expanded, key)
-			}
-		}
-		keys = expanded
-	}
-
 	switch {
 	case index == "":
 		return indexer.List(), nil
 	case len(keys) == 0:
-		if indexer.GetIndexers()[index] == nil {
-			return nil, fmt.Errorf("index %q is missing", index)
-		}
 		return nil, nil
+	case indexer.GetIndexers()[index] == nil:
+		// Index registration is generated and pinned by tests, so only a code
+		// bug reads a store by an index it lacks; the caller reports a read error.
+		log.Printf("[k8score] Store lacks index %q", index)
+		return nil, fmt.Errorf("index %q is missing", index)
 	case len(keys) == 1:
 		return indexer.ByIndex(index, keys[0])
-	case multiKeyIndexes[index] || index == ReflectsIndex || strings.HasPrefix(index, "relations/"):
+	case multiKeyIndexes[index]:
 		return indexer.Index(index, indexQuery(keys))
 	}
 	var items []any

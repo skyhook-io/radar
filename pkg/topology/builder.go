@@ -6872,12 +6872,7 @@ func cronWorkflowScheduleString(cwf *unstructured.Unstructured) string {
 }
 
 func argoWorkflowCronOwnerName(wf *unstructured.Unstructured) string {
-	for _, ref := range wf.GetOwnerReferences() {
-		if ref.Kind == "CronWorkflow" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "argoproj.io" && ref.Name != "" && ref.Controller != nil && *ref.Controller {
-			return ref.Name
-		}
-	}
-	return wf.GetLabels()["workflows.argoproj.io/cron-workflow"]
+	return configrefs.ArgoWorkflowCronOwnerName(wf)
 }
 
 type argoWorkflowTemplateRef struct {

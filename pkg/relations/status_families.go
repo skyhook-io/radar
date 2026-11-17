@@ -28,7 +28,8 @@ var (
 // than the rare question costs (docs/loadtest.md).
 var PodPlacement = &Family{
 	Name:         "podPlacement",
-	ScanAccepted: "Pod relist amplification outweighs rare Node reverse questions; see docs/loadtest.md relationship-cost-baselines.",
+	Projection:   Disposition{DirectRead: "getRelationshipsWithObject reads Pod.Node and Node.Pods through the access-aware relationDirectProvider"},
+	ScanAccepted: "An index of Pods by Node costs every Pod relist more than the rare Node question costs (docs/loadtest.md#relationship-cost-baselines).",
 	Sources:      []Source{{Kind: kindPod}},
 	Targets:      []resourceid.GroupKind{kindNode},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
@@ -47,18 +48,14 @@ var PodPlacement = &Family{
 // stores' index of that annotation.
 var Reflections = &Family{
 	Name:           "reflections",
+	Projection:     project("configures", true, "ConfigRefs,Reflection.Source", "Consumers,Reflection.Mirrors").labelled("Reflects to"),
 	CrossNamespace: true,
 	Sources: []Source{
 		{Kind: kindSecret, Targets: []resourceid.GroupKind{kindSecret}},
 		{Kind: kindConfigMap, Targets: []resourceid.GroupKind{kindConfigMap}},
 	},
-	Targets: []resourceid.GroupKind{kindSecret, kindConfigMap},
-	ReferrersIndex: &ReferrersIndex{
-		Name: "reflects",
-		Key: func(source resourceid.Ref, namespace string) string {
-			return source.Namespace + "/" + source.Name + "\x00" + namespace
-		},
-	},
+	Targets:        []resourceid.GroupKind{kindSecret, kindConfigMap},
+	ReferrersIndex: referrersIndex("reflections"),
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		var kind string
 		var m metav1.Object
@@ -81,8 +78,9 @@ var Reflections = &Family{
 // and class: a PersistentVolumeClaim's bound PersistentVolume and
 // StorageClass, and a PersistentVolume's claimRef and StorageClass.
 var Storage = &Family{
-	ScanAccepted: "Representative volume and class: PVC 1398 ns / 960 B, PV 1207 ns / 976 B per Indexer.Update exceed the 512 B bar.",
+	ScanAccepted: "Indexing a claim's or volume's binding and StorageClass exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
 	Name:         "storage",
+	Projection:   Disposition{DirectRead: "getRelationshipsWithObject reads the PVC/PV binding and StorageClass; relationDirectProvider authorizes reverse PV/PVC lists"},
 	Sources: []Source{
 		{Kind: kindPVC, Targets: []resourceid.GroupKind{kindPV, kindStorageClass}},
 		{Kind: kindPV, Targets: []resourceid.GroupKind{kindPVC, kindStorageClass}},
@@ -117,6 +115,7 @@ var Storage = &Family{
 var MachineNodes = &Family{
 	ReferrersIndex: referrersIndex("machineNodes"),
 	Name:           "machineNodes",
+	Projection:     project("manages", false, "Manages", "Managers"),
 	Sources:        []Source{{Kind: kindNodeClaim}, {Kind: kindMachine}},
 	Targets:        []resourceid.GroupKind{kindNode},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
@@ -137,9 +136,10 @@ var MachineNodes = &Family{
 // AnalysisRuns is the family of the AnalysisRuns an Argo Rollout's status
 // points at: the current ones, not its history.
 var AnalysisRuns = &Family{
-	Name:    "analysisRuns",
-	Sources: []Source{{Kind: kindRollout}},
-	Targets: []resourceid.GroupKind{{Group: configrefs.ArgoGroup, Kind: "AnalysisRun"}},
+	Name:       "analysisRuns",
+	Projection: project("manages", false, "Manages", "Managers"),
+	Sources:    []Source{{Kind: kindRollout}},
+	Targets:    []resourceid.GroupKind{{Group: configrefs.ArgoGroup, Kind: "AnalysisRun"}},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := unstructuredOf(obj, kindRollout); ok {
 			for _, r := range configrefs.RolloutAnalysisRuns(u) {
@@ -155,9 +155,10 @@ var AnalysisRuns = &Family{
 // spec.template.metadata.name says. The Secret's consumers are its
 // ConfigReferences referrers, also when the caller may not read the Secret.
 var SealedSecrets = &Family{
-	Name:    "sealedSecrets",
-	Sources: []Source{{Kind: resourceid.GroupKind{Group: "bitnami.com", Kind: "SealedSecret"}}},
-	Targets: []resourceid.GroupKind{kindSecret},
+	Name:       "sealedSecrets",
+	Projection: project("manages", false, "Manages", "Managers"),
+	Sources:    []Source{{Kind: resourceid.GroupKind{Group: "bitnami.com", Kind: "SealedSecret"}}},
+	Targets:    []resourceid.GroupKind{kindSecret},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := unstructuredOf(obj, resourceid.GroupKind{Group: "bitnami.com", Kind: "SealedSecret"}); ok {
 			visit(Declaration{Target: resourceid.NewRef("", "Secret", u.GetNamespace(), u.GetName()), Path: "metadata.name"})

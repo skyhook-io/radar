@@ -69,3 +69,13 @@ func ArgoWorkflowTemplateRefs(obj map[string]any, namespace string, fields ...st
 	}
 	return refs
 }
+
+// ArgoWorkflowCronOwnerName prefers the controller reference to Argo’s cron-workflow label.
+func ArgoWorkflowCronOwnerName(wf *unstructured.Unstructured) string {
+	for _, ref := range wf.GetOwnerReferences() {
+		if ref.Kind == "CronWorkflow" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "argoproj.io" && ref.Name != "" && ref.Controller != nil && *ref.Controller {
+			return ref.Name
+		}
+	}
+	return wf.GetLabels()["workflows.argoproj.io/cron-workflow"]
+}

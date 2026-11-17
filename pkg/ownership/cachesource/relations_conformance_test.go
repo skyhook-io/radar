@@ -345,7 +345,7 @@ func (betaUndecided) CanRead(_ resourceid.GroupKind, namespace string) ownership
 }
 func (betaUndecided) Namespaces() ([]string, bool) { return nil, true }
 
-func TestIndexedReadReportsMissingIndex(t *testing.T) {
+func TestIndexedReadByMissingIndexIsIncomplete(t *testing.T) {
 	f := newFixture(t, k8score.CacheConfig{}, nil)
 	f.watch(t, widgets)
 	read, err := f.source().Begin()
@@ -355,8 +355,8 @@ func TestIndexedReadReportsMissingIndex(t *testing.T) {
 	s := read.(relations.Session)
 	for _, gk := range []resourceid.GroupKind{{Kind: "Pod"}, {Group: "example.io", Kind: "Widget"}} {
 		got := s.Indexed(gk, "missing", []string{"key"}, ownership.InNamespace("alpha"))
-		if len(got.Objects) != 0 || !slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Reason == readreason.IndexMissing }) {
-			t.Errorf("%v: %+v; want index_missing", gk, got)
+		if len(got.Objects) != 0 || len(got.Gaps) == 0 {
+			t.Errorf("%v: %+v; want a gap, never a complete empty answer", gk, got)
 		}
 	}
 }

@@ -4,11 +4,11 @@ import (
 	"cmp"
 	"slices"
 
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	apiruntime "k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
@@ -228,11 +228,7 @@ func (s *session) typedCandidates(q *search, b resourceid.Builtin) {
 	}
 	objs, ok := s.caches.Typed.ReadableIndexedObjects(b.Resource, read, q.index, q.keys...)
 	if !ok {
-		reason := readreason.ReadError
-		if s.caches.Typed.TypedIndexMissing(b.Resource, q.index) {
-			reason = readreason.IndexMissing
-		}
-		q.gapEverywhere(gk, b.Namespaced, reason)
+		q.gapEverywhere(gk, b.Namespaced, readreason.ReadError)
 		return
 	}
 	for _, obj := range objs {
@@ -277,11 +273,9 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 			inScope[ns] = true
 		}
 	}
-	missing := false
 	for _, gvr := range versions {
 		objs, ok := s.caches.Dynamic.ReadableIndexed(gvr, "", index, keys...)
 		if !ok {
-			missing = missing || s.caches.Dynamic.DynamicIndexMissing(gvr, "", index)
 			continue
 		}
 		for _, u := range objs {
@@ -289,10 +283,6 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 				found(u)
 			}
 		}
-		return
-	}
-	if missing {
-		q.gapEverywhere(gk, kind.Namespaced, readreason.IndexMissing)
 		return
 	}
 	if !kind.Namespaced {
@@ -345,7 +335,6 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 // readNamespace reads namespace from the most stable version that answers
 // there, or records why none did.
 func (s *session) readNamespace(q *search, gk resourceid.GroupKind, versions []schema.GroupVersionResource, namespace, index string, keys []string, obs observer, found func(*unstructured.Unstructured)) {
-	missing := false
 	for _, gvr := range versions {
 		if objs, ok := s.caches.Dynamic.ReadableIndexed(gvr, namespace, index, keys...); ok {
 			for _, u := range objs {
@@ -353,11 +342,6 @@ func (s *session) readNamespace(q *search, gk resourceid.GroupKind, versions []s
 			}
 			return
 		}
-		missing = missing || s.caches.Dynamic.DynamicIndexMissing(gvr, namespace, index)
-	}
-	if missing {
-		q.gap(gk, namespace, readreason.IndexMissing)
-		return
 	}
 	q.gap(gk, namespace, unansweredReason(obs, versions, namespace))
 }

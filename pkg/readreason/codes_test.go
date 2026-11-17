@@ -35,7 +35,6 @@ func TestCodeWireValues(t *testing.T) {
 		ClusterDisconnected:        "cluster_disconnected",
 		ConnectionChanged:          "connection_changed",
 		ReadError:                  "read_error",
-		IndexMissing:               "index_missing",
 	}
 	for code, spelling := range want {
 		if string(code) != spelling {
