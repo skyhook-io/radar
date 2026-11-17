@@ -21,7 +21,7 @@ const state = vi.hoisted(() => ({
 vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: state.support }) }))
 vi.mock('../../api/velero', () => ({
   useVeleroDeleteBackup: () => ({ mutate: state.mutate, reset: vi.fn(), isPending: false, error: state.error, data: state.mutationData }),
-  useVeleroBackupDeletion: (_ns: string, _name: string, _uid: unknown) => ({
+  useVeleroBackupDeletion: () => ({
     data: state.deletion,
     error: state.deletionError,
     isFetching: state.fetching,
