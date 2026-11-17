@@ -292,3 +292,31 @@ func TestRelationsMappingsAgainstTheOldGraph(t *testing.T) {
 		})
 	}
 }
+
+type indexCountingSession struct {
+	*projectionSession
+	indexed map[resourceid.GroupKind]int
+}
+
+func (s indexCountingSession) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
+	s.indexed[gk]++
+	return s.projectionSession.Indexed(gk, index, keys, scope)
+}
+
+func TestRelationsAnswerSkipsHelmOriginsAnInventorySupersedes(t *testing.T) {
+	release := projectionCR("helm.toolkit.fluxcd.io", "HelmRelease", "flux", "release", map[string]any{"status": map[string]any{"inventory": map[string]any{"entries": []any{}}}})
+	d := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "app", Labels: map[string]string{"helm.toolkit.fluxcd.io/name": "release", "helm.toolkit.fluxcd.io/namespace": "flux"}}}, "apps", "Deployment")
+	s := indexCountingSession{projectionSession: newProjectionSession(t, release, d), indexed: map[resourceid.GroupKind]int{}}
+	a := projectionAccess{denied: []string{"Deployment"}}
+	captured, ok := relations.CaptureSubject(s, projectionRef(release), release)
+	if !ok {
+		t.Fatal("capture failed")
+	}
+	_, coverage := RelationsAnswer(captured, a, a, ownership.NewView(captured, a), projectionRef(release), release, nil, nil)
+	if n := s.indexed[resourceid.GroupKind{Group: "apps", Kind: "Deployment"}]; n != 0 {
+		t.Fatalf("a release whose inventory names its members searched Deployments %d times", n)
+	}
+	if c, ok := coverage[relations.FluxHelmOrigins.Name]; ok {
+		t.Fatalf("a search whose answers aren't shown narrowed the answer: %+v", c)
+	}
+}

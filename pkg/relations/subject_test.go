@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -52,5 +53,27 @@ func TestCaptureSubject(t *testing.T) {
 	fetched.UID = "replacement"
 	if _, ok := CaptureSubject(c, subject, fetched); ok {
 		t.Fatal("different UID accepted")
+	}
+}
+
+func TestCaptureKeepsAMissingSubjectsGap(t *testing.T) {
+	cm := configMap("settings")
+	subject := refOf(cm)
+	pods := []runtime.Object{pod("web-1", mounts("settings"))}
+	for name, c := range map[string]cluster{
+		"absent":      {objects: pods},
+		"unavailable": {objects: pods, unread: map[resourceid.GroupKind]readreason.Code{subject.GroupKind(): readreason.RadarForbidden}},
+	} {
+		s, ok := CaptureSubject(c, subject, cm)
+		if !ok {
+			t.Fatalf("%s: capture refused", name)
+		}
+		if s.Object(subject).State == ownership.Present {
+			t.Fatalf("%s: a subject the cache lacks reads as present", name)
+		}
+		got := NewView(s, ownership.Unrestricted()).Referrers(ConfigReferences, subject, cm)
+		if got.Coverage.Complete() {
+			t.Fatalf("%s: consumers of a subject the cache lacks read as complete: %+v", name, got)
+		}
 	}
 }
