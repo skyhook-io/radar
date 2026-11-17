@@ -29,6 +29,10 @@ type appRelationBatch struct {
 	// namespace's Services went unread.
 	exposureIncomplete bool
 	exposureGaps       map[string]bool
+	// exposureUndecided are the objects whose Service selection couldn't be
+	// decided: a lookup their candidate or a selector needed couldn't be
+	// read, or the selector couldn't be evaluated against them.
+	exposureUndecided map[resourceid.Ref]bool
 	// exposureUnread answers for a namespace the Services read didn't name: a
 	// collector holding only some namespaces reports all the others as one gap.
 	exposureUnread func(namespace string) bool
@@ -36,6 +40,13 @@ type appRelationBatch struct {
 
 func (b *appRelationBatch) exposureUnknown(namespace string) bool {
 	return b.exposureIncomplete || b.exposureGaps[namespace] || b.exposureUnread != nil && b.exposureUnread(namespace)
+}
+
+func (b *appRelationBatch) undecided(ref resourceid.Ref) {
+	if b.exposureUndecided == nil {
+		b.exposureUndecided = map[resourceid.Ref]bool{}
+	}
+	b.exposureUndecided[ref] = true
 }
 
 func (b *appRelationBatch) noteServiceGaps(session relations.Session, kind resourceid.GroupKind, gaps []ownership.Gap) {
@@ -123,9 +134,23 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 		reads[kind] = r
 		return r
 	}
+	// lookupFor reads what selecting subject needs; for a Service selection,
+	// a read that fails leaves subject's exposure unknown.
 	lookup := func(ref resourceid.Ref) (runtime.Object, bool) {
 		o, r := session.Borrow(ref)
 		return o, r.State == ownership.Present
+	}
+	lookupFor := func(subject resourceid.Ref, exposure bool) relations.Lookup {
+		if !exposure {
+			return lookup
+		}
+		return func(ref resourceid.Ref) (runtime.Object, bool) {
+			o, r := session.Borrow(ref)
+			if r.State == ownership.Unavailable {
+				b.undecided(subject)
+			}
+			return o, r.State == ownership.Present
+		}
 	}
 	view := relations.NewView(session, ownership.Unrestricted()).WithLimit(0)
 	declarations := map[*relations.Family]map[resourceid.Ref][]resourceid.Ref{}
@@ -208,7 +233,7 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 		candidates := map[resourceid.GroupKind]map[string]*candidateBucket{}
 		for _, selectable := range f.Selectables {
 			for _, o := range objects(selectable.Kind).Objects {
-				c, ok := selectable.Candidate(o.Object, lookup)
+				c, ok := selectable.Candidate(o.Object, lookupFor(o.Ref, f == relations.ServiceSelectors))
 				if ok {
 					c.Ref = o.Ref
 					byNamespace := candidates[o.Ref.GroupKind()]
@@ -267,7 +292,12 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 							return
 						}
 						project := func(c relations.Candidate) {
-							if yes, _ := selection.Matches(c, lookup); yes {
+							exposure := f == relations.ServiceSelectors
+							yes, decided := selection.Matches(c, lookupFor(c.Ref, exposure))
+							if exposure && !decided {
+								b.undecided(c.Ref)
+							}
+							if yes && decided {
 								b.project(f.Projection, o.Ref, c.Ref)
 							}
 						}
@@ -316,7 +346,7 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 func (b *appRelationBatch) relationshipsForRef(group, kind, ns, name string) *appRelationships {
 	subject := resourceid.NewRef(group, kind, ns, name)
 	field := func(name string) map[string]topology.ResourceRef { return refsByKey(b.fields[name][subject]) }
-	out := &appRelationships{serviceRefs: field("Services"), ingressRefs: field("Ingresses"), routeRefs: field("Routes"), configRefs: field("ConfigRefs"), scalerRefs: field("Scalers"), storageRefs: field("StorageRefs"), pdbRefs: field("PDBs"), networkPolicyRefs: field("NetworkPolicies"), exposureIncomplete: b.exposureUnknown(ns)}
+	out := &appRelationships{serviceRefs: field("Services"), ingressRefs: field("Ingresses"), routeRefs: field("Routes"), configRefs: field("ConfigRefs"), scalerRefs: field("Scalers"), storageRefs: field("StorageRefs"), pdbRefs: field("PDBs"), networkPolicyRefs: field("NetworkPolicies"), exposureIncomplete: b.exposureUnknown(ns) || b.exposureUndecided[subject]}
 	out.Configs, out.Scalers, out.Storage, out.PDBs, out.NetworkPolicies = len(out.configRefs), len(out.scalerRefs), len(out.storageRefs), len(out.pdbRefs), len(out.networkPolicyRefs)
 	out.Services = refNames(sortedRefs(out.serviceRefs, 20), 20)
 	out.Ingresses = refNames(sortedRefs(out.ingressRefs, 20), 20)

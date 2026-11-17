@@ -210,6 +210,36 @@ func TestRelationsAnswerDirectAccess(t *testing.T) {
 	}
 }
 
+// podChecks counts the namespaces whose Pods access is asked about.
+type podChecks struct {
+	projectionAccess
+	asked map[string]int
+}
+
+func (a *podChecks) CanRead(gk resourceid.GroupKind, ns string) ownership.Decision {
+	if gk == (resourceid.GroupKind{Kind: "Pod"}) {
+		a.asked[ns]++
+	}
+	return a.projectionAccess.CanRead(gk, ns)
+}
+
+// A Node's Pods are authorized once they match the Node, so a Pod on another
+// node costs no access check, which with exact checks is a review per
+// namespace.
+func TestRelationsAnswerChecksOnlyTheNodesPods(t *testing.T) {
+	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node"}}, "", "Node")
+	here := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "here"}, Spec: corev1.PodSpec{NodeName: "node"}}, "", "Pod")
+	elsewhere := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "far", Name: "elsewhere"}, Spec: corev1.PodSpec{NodeName: "other"}}, "", "Pod")
+	access := &podChecks{projectionAccess: projectionAccess{namespaces: []string{"shop", "far"}}, asked: map[string]int{}}
+	rel := projectionAnswer(t, newProjectionSession(t, node, here, elsewhere), node, access, ownership.Unrestricted())
+	if len(rel.Pods) != 1 || rel.Pods[0].Name != "here" {
+		t.Fatalf("node Pods: %+v", rel.Pods)
+	}
+	if access.asked["far"] > 0 {
+		t.Errorf("checked access to Pods in far, which holds none on the node: %v", access.asked)
+	}
+}
+
 func TestRelationsAnswerSpecialAccess(t *testing.T) {
 	ksvc := projectionCR("serving.knative.dev", "Service", "shop", "web", map[string]any{"status": map[string]any{"traffic": []any{map[string]any{"revisionName": "web-1"}}}})
 	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web-1-private"}}, "", "Service")

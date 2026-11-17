@@ -71,13 +71,13 @@ describe('confirmed missing resources', () => {
     }
     // Argo calling it Synced means the cluster view is stale: refresh, whatever the context.
     expect(missingResourceMessage('Synced', { hazard: 'Resolve shared tracking.', rolledBack: true })).toContain('Refresh the application')
-    expect(missingResourceMessage('OutOfSync', {})).toContain('Sync the application')
+    expect(missingResourceMessage('OutOfSync', {})).toContain('Review the desired changes and sync policy before deciding whether to sync.')
   })
 
   it('asks for a refresh when Argo still reports Synced', () => {
     expect(missingResourceMessage('Synced')).toContain('Refresh')
-    expect(missingResourceMessage('Synced')).not.toContain('Sync the application')
-    expect(missingResourceMessage('OutOfSync')).toContain('Sync the application')
+    expect(missingResourceMessage('Synced')).not.toContain('Review the desired changes and sync policy before deciding whether to sync.')
+    expect(missingResourceMessage('OutOfSync')).toContain('Review the desired changes and sync policy before deciding whether to sync.')
   })
 })
 

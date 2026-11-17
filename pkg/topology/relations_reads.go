@@ -43,6 +43,10 @@ type relationDirectProvider struct {
 	n       *neighborhood
 }
 
+// objects reads gk in the caller's namespaces without authorizing each
+// object: the relationship code checks only what it emits (its allow
+// function), so a Node's Pods are checked once they match the Node, not
+// every Pod in every namespace first.
 func (p *relationDirectProvider) objects(gk resourceid.GroupKind) ([]runtime.Object, error) {
 	namespaces, all := p.n.access.Namespaces()
 	scope := ownership.SearchScope{Namespaces: namespaces, AllNamespaces: all, IncludeClusterScoped: true}
@@ -56,9 +60,7 @@ func (p *relationDirectProvider) objects(gk resourceid.GroupKind) ([]runtime.Obj
 	read := p.session.Indexed(gk, index, keys, scope)
 	var out []runtime.Object
 	for _, o := range read.Objects {
-		if p.n.allowed(o.Ref) {
-			out = append(out, o.Object)
-		}
+		out = append(out, o.Object)
 	}
 	for _, gap := range read.Gaps {
 		if ownership.GapCoversReadable(p.n.access, p.session.Catalog(), gap, scope) {

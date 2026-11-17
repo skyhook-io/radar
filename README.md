@@ -299,6 +299,7 @@ Table-based resource browser with smart columns per resource kind.
 - Search by name, filter by status or problems (CrashLoopBackOff, ImagePullBackOff, etc.)
 - Add custom columns from any label or annotation — sortable, filterable, and resizable
 - Click any resource for YAML manifest, related resources, logs, and events
+- Pod logs list init containers, marked `(init)`, and open on the init container a Pod is stuck on, so a Pod that never starts still shows why
 - Set regular or init-container images on Deployments, StatefulSets, DaemonSets, and Argo Rollouts, with live rollout progress in tables, drawers, workload views, and Applications
 
 ### Image Filesystem Viewer
@@ -405,10 +406,10 @@ Track Kubernetes spending from OpenCost metrics in a PromQL-compatible backend o
 
 ### Cluster Audit
 
-Proactive best-practices scanner with 44 checks across security, reliability, and efficiency — inspired by Polaris, Kubescape, Trivy, and NSA/CISA guidelines. Runs instantly against cached data with zero cluster-side installation.
+Proactive best-practices scanner with 48 checks across security, reliability, and efficiency — inspired by Polaris, Kubescape, Trivy, and NSA/CISA guidelines. Runs instantly against cached data with zero cluster-side installation.
 
 - Security: privileged containers, privilege escalation, host namespaces, runtime socket mounts, secrets in ConfigMaps, and more
-- Reliability: missing probes, image tag `latest`, single-replica deployments, missing PDB/topology spread, deprecated API versions
+- Reliability: missing probes, image tag `latest`, single-replica deployments, missing PDB/topology spread, deprecated API versions, CloudNativePG clusters with no backup destination, no WAL archiving, a single instance or the deprecated in-tree Barman backup
 - Efficiency: missing requests and limits, orphan ConfigMaps/Secrets, PVCs with no consumer observed, long-Pending PVCs, and Released or Failed PVs
 - Remediation guidance per finding, NSA/CISA and CIS framework labels, and per-resource opt-out via the `radarhq.io/ignore-checks` annotation
 
@@ -423,6 +424,15 @@ Hop-ordered diagnosis for Service, Ingress, HTTPRoute, GRPCRoute, and Gateway �
 Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action — APIs removed in the target release, kubelet and kube-proxy skew, overlapping PodDisruptionBudgets, removed feature gates — using live resources, Helm release manifests, last-applied configuration, and API server metrics.
 
 See the [Kubernetes upgrade impact guide](https://radarhq.io/docs/features/upgrade-impact) for the check catalog, coverage semantics, and RBAC notes.
+
+### Vulnerabilities in Deployed Images
+
+With [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) installed, **Checks → Vulnerabilities** rolls its VulnerabilityReports up to the images that run now: which images carry Critical and High CVEs, which have a fix, and which workloads and namespaces run them, by image, by CVE or by workload. **By fix** turns the fixable findings into a list of package upgrades: each row says what to upgrade to and every CVE that clears. Reports about older revisions are left out, an image used by many workloads is one row, and running images without a report are listed as not scanned rather than clean. The tab appears only when the cluster serves Trivy's VulnerabilityReport kind. See [Trivy Operator](docs/integrations.md#trivy-operator).
+
+<p align="center">
+  <img src="docs/screenshots/vulnerabilities-view.png" alt="Checks → Vulnerabilities by image: 62 images with Critical CVEs of 99 scanned and 16 not scanned yet, a severity bar, and one row per running image with its findings, how many have a fix, and the workloads that run it" width="800">
+  <br><em>Vulnerabilities — Critical and High CVEs in the images that run now</em>
+</p>
 
 ### Access Control (RBAC visibility)
 

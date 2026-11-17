@@ -37,8 +37,11 @@ jobs:
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
+      # The CLI generates the app's native shell, so it must match the Wails
+      # library in go.mod.
       - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        shell: bash
+        run: go install "github.com/wailsapp/wails/v2/cmd/wails@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)"
 
       - name: Build frontend
         run: make frontend embed
@@ -68,6 +71,12 @@ jobs:
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      # Wails writes this into the exe's file properties and the app's
+      # Info.plist; the repo keeps a placeholder.
+      - name: Stamp version into wails.json
+        shell: bash
+        run: node -e 'const fs=require("fs"),f="cmd/desktop/wails.json",j=JSON.parse(fs.readFileSync(f));j.info.productVersion=process.argv[1];fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")' "${GITHUB_REF_NAME#v}"
 
       - name: Build macOS .app (universal)
         run: cd cmd/desktop && wails build -platform darwin/universal -ldflags "-X main.version=${GITHUB_REF_NAME#v}"
@@ -161,8 +170,11 @@ jobs:
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
+      # The CLI generates the app's native shell, so it must match the Wails
+      # library in go.mod.
       - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        shell: bash
+        run: go install "github.com/wailsapp/wails/v2/cmd/wails@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)"
 
       - name: Build frontend
         run: make frontend embed
@@ -187,6 +199,12 @@ jobs:
           - name: dummy
             user:
               token: dummy' > ~/.kube/config
+
+      # Wails writes this into the exe's file properties and the app's
+      # Info.plist; the repo keeps a placeholder.
+      - name: Stamp version into wails.json
+        shell: bash
+        run: node -e 'const fs=require("fs"),f="cmd/desktop/wails.json",j=JSON.parse(fs.readFileSync(f));j.info.productVersion=process.argv[1];fs.writeFileSync(f,JSON.stringify(j,null,2)+"\n")' "${GITHUB_REF_NAME#v}"
 
       - name: Build Windows exe
         shell: bash
@@ -263,8 +281,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev imagemagick
 
+      # The CLI generates the app's native shell, so it must match the Wails
+      # library in go.mod.
       - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        shell: bash
+        run: go install "github.com/wailsapp/wails/v2/cmd/wails@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2)"
 
       - name: Install nfpm
         env:
