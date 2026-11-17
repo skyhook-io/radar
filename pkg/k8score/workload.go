@@ -791,6 +791,9 @@ func (m *WorkloadManager) TriggerCronJobNamed(ctx context.Context, namespace, na
 	if indexRoom > 0 && strings.Contains(jobName, ".") {
 		return nil, fmt.Errorf("%w %q: an Indexed Job's name becomes its Pods' hostnames, which cannot contain '.'", ErrInvalidJobName, jobName)
 	}
+	if maxLen := validation.LabelValueMaxLength - indexRoom; indexRoom > 0 && len(jobName) > maxLen {
+		return nil, fmt.Errorf("%w %q: must be no more than %d characters, so the Pods' hostnames <job>-<index> fit 63", ErrInvalidJobName, jobName, maxLen)
+	}
 
 	job := &unstructured.Unstructured{
 		Object: map[string]any{

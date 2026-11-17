@@ -17,14 +17,16 @@ export function manualJobIndexRoom(jobSpec: { completionMode?: string; completio
 }
 
 /**
- * Why `name` can't name a Job, or null when it can. `indexed`: the template is
- * Indexed, so the name becomes Pod hostnames, which are DNS labels.
+ * Why `name` can't name a Job, or null when it can. `indexRoom` (see
+ * manualJobIndexRoom) is set for an Indexed template, whose name becomes the
+ * Pod hostnames `<job>-<index>`: DNS labels of at most 63 characters.
  */
-export function jobNameError(name: string, indexed = false): string | null {
+export function jobNameError(name: string, indexRoom = 0): string | null {
   if (!name) return 'Enter a Job name.'
   if (name.length > MAX_JOB_NAME) return `At most ${MAX_JOB_NAME} characters: the name becomes the job-name label on the Job's Pods.`
   if (!DNS1123_SUBDOMAIN.test(name)) return "Use lowercase letters, digits, '-' and '.', starting and ending with a letter or digit."
-  if (indexed && name.includes('.')) return "An Indexed Job's name becomes its Pods' hostnames, which cannot contain '.'."
+  if (indexRoom > 0 && name.includes('.')) return "An Indexed Job's name becomes its Pods' hostnames, which cannot contain '.'."
+  if (name.length > MAX_JOB_NAME - indexRoom) return `At most ${MAX_JOB_NAME - indexRoom} characters, so the Pods' hostnames <job>-<index> fit ${MAX_JOB_NAME}.`
   return null
 }
 

@@ -61,11 +61,18 @@ describe('Indexed templates', () => {
     const hostname = `${name}-${completions - 1}`
     expect(hostname.length).toBeLessThanOrEqual(63)
     expect(hostname).toMatch(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/)
-    expect(jobNameError(name, true)).toBeNull()
+    expect(jobNameError(name, manualJobIndexRoom({ completionMode: 'Indexed', completions }))).toBeNull()
   })
 
   it('rejects dots', () => {
-    expect(jobNameError('report.rerun', true)).toContain("'.'")
+    expect(jobNameError('report.rerun', 2)).toContain("'.'")
     expect(jobNameError('report.rerun')).toBeNull()
+  })
+
+  it('leaves room for the widest index in a given name', () => {
+    const room = manualJobIndexRoom({ completionMode: 'Indexed', completions: 10 })
+    expect(jobNameError('a'.repeat(61), room)).toBeNull()
+    expect(jobNameError('a'.repeat(62), room)).toContain('At most 61 characters')
+    expect(jobNameError('a'.repeat(63), room)).toContain('At most 61 characters')
   })
 })

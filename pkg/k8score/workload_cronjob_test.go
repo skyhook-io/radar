@@ -204,3 +204,23 @@ func TestTriggerCronJobBlankNameGeneratesOne(t *testing.T) {
 		t.Errorf("generateName = %q, want report-manual-", got)
 	}
 }
+
+// The Pods' hostname is <job>-<index>, so a given name also leaves room for
+// the widest index: with 10 completions that is "-9".
+func TestTriggerIndexedCronJobGivenNameLeavesRoomForTheIndex(t *testing.T) {
+	for _, tc := range []struct {
+		length  int
+		wantErr bool
+	}{{61, false}, {62, true}, {63, true}} {
+		t.Run(fmt.Sprint(tc.length), func(t *testing.T) {
+			client := newBatchClientWithJobSpec("report", map[string]any{"completionMode": "Indexed", "completions": int64(10)})
+			_, err := NewWorkloadManager(client, batchDiscovery()).TriggerCronJobNamed(context.Background(), "prod", "report", strings.Repeat("a", tc.length))
+			if got := errors.Is(err, ErrInvalidJobName); got != tc.wantErr {
+				t.Fatalf("err = %v, want invalid=%v", err, tc.wantErr)
+			}
+			if tc.wantErr && !strings.Contains(err.Error(), "61") {
+				t.Errorf("err = %v, want it to name the 61-character limit", err)
+			}
+		})
+	}
+}

@@ -282,7 +282,7 @@ export function ResourceActionsBar({
   const triggerJobNameId = useId()
   const cronJobIndexRoom = manualJobIndexRoom(data?.spec?.jobTemplate?.spec)
   const trimmedTriggerJobName = triggerJobName?.trim() ?? ''
-  const triggerJobNameError = triggerJobName === null ? null : jobNameError(trimmedTriggerJobName, cronJobIndexRoom > 0)
+  const triggerJobNameError = triggerJobName === null ? null : jobNameError(trimmedTriggerJobName, cronJobIndexRoom)
   const confirmTrigger = () => {
     if (!onTriggerCronJob || triggerJobNameError || triggerPending) return
     setTriggerPending(true)
