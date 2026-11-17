@@ -37,7 +37,7 @@ import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import { ActionConfirmDialog } from './ActionConfirmDialog'
 import { Input } from '../ui/Input'
-import { jobNameError, suggestManualJobName } from '../../utils/job-name'
+import { jobNameError, manualJobIndexRoom, suggestManualJobName } from '../../utils/job-name'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
 import { getGitOpsTool } from '../gitops/detail-helpers'
 import { apiVersionToGroup } from '../../utils/navigation'
@@ -123,7 +123,9 @@ interface ResourceActionsBarProps {
   onRolloutPromoteFull?: (params: { namespace: string; name: string }) => void | Promise<unknown>
 
   // CronJob actions
-  onTriggerCronJob?: (params: { namespace: string; name: string; jobName?: string }) => void
+  // May return a promise that settles with the request: the Job name dialog
+  // then closes only once it resolves, and stays open with the name on failure.
+  onTriggerCronJob?: (params: { namespace: string; name: string; jobName?: string }) => void | Promise<unknown>
   isTriggeringCronJob?: boolean
   // Set when the Radar accepts a Job name (cronJobTriggerJobName): Trigger
   // then opens a dialog to review it. Without it Trigger runs at once.
@@ -276,7 +278,19 @@ export function ResourceActionsBar({
   const [showSetImage, setShowSetImage] = useState(false)
   // null while the Trigger dialog is closed.
   const [triggerJobName, setTriggerJobName] = useState<string | null>(null)
-  const triggerJobNameError = triggerJobName === null ? null : jobNameError(triggerJobName)
+  const [triggerPending, setTriggerPending] = useState(false)
+  const triggerJobNameId = useId()
+  const cronJobIndexRoom = manualJobIndexRoom(data?.spec?.jobTemplate?.spec)
+  const trimmedTriggerJobName = triggerJobName?.trim() ?? ''
+  const triggerJobNameError = triggerJobName === null ? null : jobNameError(trimmedTriggerJobName, cronJobIndexRoom > 0)
+  const confirmTrigger = () => {
+    if (!onTriggerCronJob || triggerJobNameError || triggerPending) return
+    setTriggerPending(true)
+    // A rejection keeps the dialog; the host's mutation meta reports the error.
+    Promise.resolve(onTriggerCronJob({ namespace: resource.namespace, name: resource.name, jobName: trimmedTriggerJobName }))
+      .then(() => setTriggerJobName(null), () => {})
+      .finally(() => setTriggerPending(false))
+  }
   const isRollbackKind = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
   const hasMultipleRevisions = (revisionsList?.length ?? 0) > 1
 
@@ -536,8 +550,8 @@ export function ResourceActionsBar({
           {onTriggerCronJob && (
             <button
               onClick={() => cronJobTriggerDialog
-                ? setTriggerJobName(suggestManualJobName(resource.name))
-                : onTriggerCronJob({ namespace: resource.namespace, name: resource.name })}
+                ? setTriggerJobName(suggestManualJobName(resource.name, cronJobIndexRoom))
+                : void Promise.resolve(onTriggerCronJob({ namespace: resource.namespace, name: resource.name })).catch(() => {})}
               disabled={isTriggeringCronJob}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
             >
@@ -780,15 +794,13 @@ export function ResourceActionsBar({
         <ActionConfirmDialog
           open={triggerJobName !== null}
           onClose={() => setTriggerJobName(null)}
-          onConfirm={() => {
-            onTriggerCronJob({ namespace: resource.namespace, name: resource.name, jobName: triggerJobName ?? undefined })
-            setTriggerJobName(null)
-          }}
+          onConfirm={confirmTrigger}
+          isLoading={triggerPending}
           title="Trigger CronJob"
           subject={{ kind: 'CronJob', namespace: resource.namespace, name: resource.name }}
           effect="Creates a Job from the CronJob's template now, outside its schedule."
           confirmLabel="Trigger"
-          incompleteReason={triggerJobNameError ?? undefined}
+          incompleteReason={triggerJobNameError ? (trimmedTriggerJobName ? 'Use a valid Job name' : 'Enter a Job name') : undefined}
         >
           <label className="block">
             <span className="text-xs text-theme-text-secondary">Job name</span>
@@ -796,11 +808,20 @@ export function ResourceActionsBar({
               aria-label="Job name"
               value={triggerJobName ?? ''}
               onChange={(e) => setTriggerJobName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  confirmTrigger()
+                }
+              }}
+              autoFocus
               spellCheck={false}
               aria-invalid={triggerJobNameError !== null}
+              aria-describedby={triggerJobNameError ? triggerJobNameId : undefined}
               className="mt-1 w-full rounded-lg border border-theme-border bg-theme-base px-3 py-1.5 font-mono text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-skyhook-500"
             />
           </label>
+          {triggerJobNameError && <p id={triggerJobNameId} className="text-xs text-warning-text">{triggerJobNameError}</p>}
         </ActionConfirmDialog>
       )}
 
