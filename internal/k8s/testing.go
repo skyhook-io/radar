@@ -714,3 +714,18 @@ func SetTestContextOperationInProgress(active bool) func() {
 	previous := activeContextOperations.Swap(value)
 	return func() { activeContextOperations.Store(previous) }
 }
+
+// InitTestReplayClients retains the supplied discovery client so refreshes see
+// the frozen catalog, rather than reverting to an empty bootstrap catalog.
+func InitTestReplayClients(client dynamic.Interface, catalog discovery.DiscoveryInterface) error {
+	clientMu.Lock()
+	dynamicClient = client
+	clientMu.Unlock()
+	if _, err := SetTestResourceDiscovery(catalog); err != nil {
+		return err
+	}
+	discoveryMu.Lock()
+	resourceDiscoveryClient = GetDiscoveryClient()
+	discoveryMu.Unlock()
+	return InitDynamicResourceCache(nil)
+}
