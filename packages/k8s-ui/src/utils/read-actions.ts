@@ -20,6 +20,7 @@ export const READ_ACTIONS: Record<string, ReadAction> = {
   kind_sync_pending: 'retry',
   kind_sync_timed_out: 'wait',
   kind_unknown: 'change_request',
+  legacy_group_only: 'none',
   list_too_large: 'change_request',
   namespace_not_found: 'change_request',
   namespace_required: 'change_request',
@@ -78,6 +79,8 @@ export function gapReasonText(reason: string): string {
       return "Radar's API discovery doesn't list its kind or version"
     case 'object_not_found':
       return "Radar doesn't have it yet"
+    case 'legacy_group_only':
+      return 'it exists only in an older API group, which newer controllers ignore'
     case 'cluster_connecting':
       return 'Radar is still connecting'
     case 'cluster_disconnected':

@@ -40,6 +40,7 @@ var readStatus = map[readreason.Code]int{
 	readreason.NamespaceNotFound:          http.StatusNotFound,
 	readreason.NamespaceRequired:          http.StatusBadRequest,
 	readreason.ObjectNotFound:             http.StatusNotFound,
+	readreason.LegacyGroupOnly:            http.StatusConflict,
 	readreason.ListTooLarge:               http.StatusBadRequest,
 	readreason.FilterEvalFailed:           http.StatusBadRequest,
 	readreason.FindingsScanIncomplete:     http.StatusBadRequest,
