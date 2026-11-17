@@ -174,7 +174,8 @@ interface WorkloadViewProps {
   hideKindBadge?: boolean
   /**
    * With inlineBadges: keep the title on one line, cutting a long name (whole
-   * on hover) rather than wrapping the badges and actions below it.
+   * on hover) rather than wrapping the badges and actions below it. The name
+   * keeps a readable width; past that the badges wrap among themselves.
    */
   truncateName?: boolean
   /** Suppress the standalone back arrow — for embeddings where "back" has no
@@ -1343,8 +1344,8 @@ export function WorkloadView({
             <>
               <div className={clsx('flex items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary', !truncateName && 'flex-wrap')}>
                 {titlePrefix}
-                <div className="flex min-w-0 max-w-full items-center gap-2">{nameAndCopy}</div>
-                {truncateName ? <span className="flex shrink-0 items-center gap-x-3">{coreBadges}</span> : coreBadges}
+                <div className={clsx('flex max-w-full items-center gap-2', truncateName ? 'min-w-[min(12rem,100%)]' : 'min-w-0')}>{nameAndCopy}</div>
+                {truncateName ? <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">{coreBadges}</span> : coreBadges}
               </div>
               {extraChips.length > 0 && (
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">{extraChips}</div>

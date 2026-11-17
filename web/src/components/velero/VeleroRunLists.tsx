@@ -9,8 +9,9 @@ import { Expires, RunCounts, RunOutcome, RunReason, RunsReadNotice, When, durati
 
 // Rows rendered at once; the rest are a click away, and search narrows first.
 const PAGE = 200
-// Below this width Took and Items fold into Started, so the columns that
-// answer "is it usable" (errors, where it is, when it goes) stay in view.
+// Below this width Took, Items and Stored in fold into Started, so the
+// columns that answer "is it usable" (errors, when it goes) stay in view and
+// nothing is clipped.
 const WIDE = '(min-width: 1280px)'
 
 function SearchBox({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
@@ -90,16 +91,24 @@ export function RestoreIntoCell({ run }: { run: VeleroRunRow }) {
   )
 }
 
-/** Started, and on a narrow screen how long it took and the items it processed. */
-function StartedCell({ run, folded, items }: { run: VeleroRunRow; folded: boolean; items?: boolean }) {
+/** Started, and on a narrow screen how long it took, the items it processed and where it is stored. */
+function StartedCell({ run, folded, items, storedIn }: { run: VeleroRunRow; folded: boolean; items?: boolean; storedIn?: ReactNode }) {
   const took = durationText(run.started, run.completed)
   const extra = folded ? [took && `took ${took}`, items && run.itemsTotal ? `${run.itemsDone ?? 0} / ${run.itemsTotal} items` : ''].filter(Boolean) : []
   return (
     <>
       <When iso={run.started} fallback="not started" />
       {extra.length > 0 && <Sub>{extra.join(' · ')}</Sub>}
+      {folded && storedIn && <Sub>{storedIn}</Sub>}
     </>
   )
+}
+
+/** Where a backup is stored, and whether that location is not available. */
+function storedInText(r: VeleroRunRow, locations: VeleroScreenProps['data']['locations']): { name?: string; state?: string } {
+  if (!r.storageLocation) return { state: 'not assigned yet' }
+  const loc = locations.find((l) => l.namespace === r.namespace && l.name === r.storageLocation)
+  return { name: r.storageLocation, state: loc && loc.phase !== 'Available' ? (loc.phase ? loc.phase.toLowerCase() : 'not validated') : undefined }
 }
 
 /**
@@ -121,13 +130,20 @@ export function VeleroBackups({ data, installation, onInstallation, onInspect, i
       header: 'Backup',
       cell: (r) => (
         <>
-          <VeleroName name={r.name} />
+          <VeleroName name={r.name} middle />
           <Sub>{r.schedule ? `schedule ${r.schedule}` : 'On demand'}</Sub>
         </>
       ),
     },
     { header: 'Outcome', width: '170px', cell: (r) => <OutcomeCell kind="Backup" run={r} /> },
-    { header: 'Started', width: wide ? '100px' : '150px', cell: (r) => <StartedCell run={r} folded={!wide} items /> },
+    {
+      header: 'Started',
+      width: wide ? '100px' : '170px',
+      cell: (r) => {
+        const stored = storedInText(r, locations)
+        return <StartedCell run={r} folded={!wide} items storedIn={stored.name ? `in ${stored.name}${stored.state ? ` · ${stored.state}` : ''}` : stored.state} />
+      },
+    },
     ...(wide
       ? [
           { header: 'Took', width: '75px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' },
@@ -135,20 +151,24 @@ export function VeleroBackups({ data, installation, onInstallation, onInspect, i
         ]
       : []),
     { header: 'Errors · warnings', width: '130px', cell: (r) => <RunCounts errors={r.errors} warnings={r.warnings} /> },
-    {
-      header: 'Stored in',
-      width: '140px',
-      cell: (r) => {
-        if (!r.storageLocation) return <span className="text-theme-text-tertiary">not assigned yet</span>
-        const loc = locations.find((l) => l.namespace === r.namespace && l.name === r.storageLocation)
-        return (
-          <>
-            <VeleroName name={r.storageLocation} />
-            {loc && loc.phase !== 'Available' && <Sub>{loc.phase ? loc.phase.toLowerCase() : 'not validated'}</Sub>}
-          </>
-        )
-      },
-    },
+    ...(wide
+      ? [
+          {
+            header: 'Stored in',
+            width: '140px',
+            cell: (r: VeleroRunRow) => {
+              const stored = storedInText(r, locations)
+              if (!stored.name) return <span className="text-theme-text-tertiary">{stored.state}</span>
+              return (
+                <>
+                  <VeleroName name={stored.name} />
+                  {stored.state && <Sub>{stored.state}</Sub>}
+                </>
+              )
+            },
+          },
+        ]
+      : []),
     { header: 'Expires', width: '90px', cell: (r) => <Expires iso={r.expiration} /> },
   ]
   return (
@@ -167,7 +187,7 @@ export function VeleroBackups({ data, installation, onInstallation, onInspect, i
           kind="Backup"
           onInspect={onInspect}
           inspected={inspected}
-          minWidth={wide ? 1000 : 820}
+          minWidth={wide ? 1000 : 720}
           empty={runsEmpty(query, 'backups', view === 'failed' ? 'No failed backups' : 'No backups match')}
           footer="Failed counts runs that failed, partly failed or were rejected. Velero deletes each backup at the first garbage collection after its retention."
         />
@@ -187,7 +207,7 @@ export function VeleroRestores({ data, installation, onInstallation, onInspect, 
   )
   const { failed, view, setView, shown } = useRunView(rows)
   const columns: TableColumn<VeleroRunRow>[] = [
-    { header: 'Restore', cell: (r) => <VeleroName name={r.name} /> },
+    { header: 'Restore', cell: (r) => <VeleroName name={r.name} middle /> },
     { header: 'Outcome', width: '170px', cell: (r) => <OutcomeCell kind="Restore" run={r} /> },
     {
       header: 'From backup',
@@ -201,7 +221,7 @@ export function VeleroRestores({ data, installation, onInstallation, onInspect, 
             }}
             className="block max-w-full text-left text-accent-text hover:underline"
           >
-            <VeleroName name={r.backupName} />
+            <VeleroName name={r.backupName} middle />
           </button>
         ) : r.scheduleName ? (
           `newest of ${r.scheduleName}`

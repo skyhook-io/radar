@@ -141,8 +141,25 @@ export function restoredIntoText(spec: RestoreSelection | undefined): string {
   return excluded.length ? `${base}, except ${excluded.join(', ')}` : base
 }
 
-/** An object's name in a table: mono, one line, cut with an ellipsis and whole on hover. */
-export function VeleroName({ name }: { name: string }) {
+// Characters a run's name keeps after the cut: the end of its timestamp, which tells runs apart.
+const RUN_NAME_TAIL = 6
+
+/**
+ * An object's name in a table: mono, one line, cut with an ellipsis and whole
+ * on hover. `middle` cuts a run's name in the middle, keeping its end
+ * (`nightly-2026…41210`), since runs of one schedule differ only there.
+ */
+export function VeleroName({ name, middle }: { name: string; middle?: boolean }) {
+  if (middle && name.length > RUN_NAME_TAIL * 2) {
+    return (
+      <Tooltip content={name} wrapperClassName="min-w-0">
+        <span className="flex min-w-0 font-mono text-sm">
+          <span className="min-w-0 truncate">{name.slice(0, -RUN_NAME_TAIL)}</span>
+          <span className="shrink-0">{name.slice(-RUN_NAME_TAIL)}</span>
+        </span>
+      </Tooltip>
+    )
+  }
   return (
     <Tooltip content={name}>
       <span className="block min-w-0 truncate font-mono text-sm">{name}</span>

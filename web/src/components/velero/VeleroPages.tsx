@@ -364,7 +364,7 @@ export function VeleroBackupRestores({ namespace, name, onNavigate }: { namespac
         title="Restores from this backup"
         subtitle="every Restore Velero keeps whose backup is this one"
         columns={[
-          { header: 'Restore', cell: (r: VeleroRunRow) => <VeleroName name={r.name} /> },
+          { header: 'Restore', cell: (r: VeleroRunRow) => <VeleroName name={r.name} middle /> },
           { header: 'Outcome', width: '170px', cell: (r: VeleroRunRow) => <><RunOutcome kind="Restore" phase={r.phase} /><RunReason run={r} /></> },
           { header: 'Into', width: '200px', cell: (r: VeleroRunRow) => <RestoreIntoCell run={r} /> },
           { header: 'Started', width: '120px', cell: (r: VeleroRunRow) => <When iso={r.started} fallback="not started" /> },
@@ -668,7 +668,7 @@ export function VeleroScheduleRuns({ namespace, name, onNavigate }: { namespace:
       <RunsReadNotice query={query} noun="backups" />
       <SectionTable
         columns={[
-          { header: 'Run', cell: (r: VeleroRunRow) => <VeleroName name={r.name} /> },
+          { header: 'Run', cell: (r: VeleroRunRow) => <VeleroName name={r.name} middle /> },
           { header: 'Outcome', width: '170px', cell: (r: VeleroRunRow) => <><RunOutcome kind="Backup" phase={r.phase} /><RunReason run={r} /></> },
           { header: 'Started', width: '110px', cell: (r: VeleroRunRow) => <When iso={r.started} fallback="not started" /> },
           { header: 'Took', width: '80px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' },
@@ -878,7 +878,7 @@ export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespa
             : undefined
         }
         columns={[
-          { header: 'Backup', cell: (b) => <VeleroName name={b.name} /> },
+          { header: 'Backup', cell: (b) => <VeleroName name={b.name} middle /> },
           { header: 'Outcome', width: '160px', cell: (b) => <RunOutcome kind="Backup" phase={b.phase} /> },
           { header: 'Completed', width: '140px', cell: (b) => <When iso={b.completed} fallback="—" /> },
           { header: 'Expires', width: '130px', cell: (b) => <Expires iso={b.expiration} /> },

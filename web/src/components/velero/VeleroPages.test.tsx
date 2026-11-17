@@ -313,6 +313,14 @@ describe('The Backups list', () => {
     expect(html).toContain('Search backups')
   })
 
+  it('on a narrow screen folds where a backup is stored into Started, and cuts run names in the middle', () => {
+    state.runs = response([{ ...run('nightly-20261117041210', 'Completed', 'nightly'), storageLocation: 'default' }])
+    const html = text(render('/resources/backups?apiGroup=velero.io'))
+    expect(html).not.toContain('>Stored in<')
+    expect(html).toContain('in default')
+    expect(html).toContain('<span class="min-w-0 truncate">nightly-20261117</span><span class="shrink-0">041210</span>')
+  })
+
   it('takes no label filter from a link: a schedule’s runs are on its page', () => {
     state.runs = response([run('a-1', 'Completed', 'a'), run('b-1', 'Completed', 'b')])
     const html = render('/resources/backups?apiGroup=velero.io&labels=velero.io/schedule-name%3Da')
