@@ -130,7 +130,13 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 	view := relations.NewView(session, ownership.Unrestricted()).WithLimit(0)
 	declarations := map[*relations.Family]map[resourceid.Ref][]resourceid.Ref{}
 	compositions := relations.Compositions()
-	deployments := objects(resourceid.GroupKind{Group: "apps", Kind: "Deployment"})
+	// The mesh domain is istiod's, wherever it runs, whatever namespaces the
+	// request names.
+	deploymentKind := resourceid.GroupKind{Group: "apps", Kind: "Deployment"}
+	deployments := objects(deploymentKind)
+	if !scope.AllNamespaces {
+		deployments = session.Indexed(deploymentKind, "", nil, ownership.SearchScope{AllNamespaces: true})
+	}
 	var controllerDeployments []*appsv1.Deployment
 	for _, o := range deployments.Objects {
 		if d, ok := o.Object.(*appsv1.Deployment); ok {
