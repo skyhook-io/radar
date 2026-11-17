@@ -41,9 +41,10 @@ function LastRunCell({ s, onInspect }: { s: VeleroScheduleReading; onInspect: Ve
   }
   const run = s.runs.newest
   if (!run) {
+    if (!submitted) return <span className="text-theme-text-tertiary">Never</span>
     return (
       <>
-        {submitted ?? <span className="text-theme-text-tertiary">Never</span>}
+        {submitted}
         <Sub><NoneKept /></Sub>
       </>
     )

@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from 'react'
+import { Fragment, createContext, useContext, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import type { HealthLevel } from '../resources/resource-utils'
 import type { ResourceRef } from '../../types/core'
@@ -36,6 +36,28 @@ export interface ProblemDetails<C extends string = string> {
   shortTitle?: string
   /** Other objects the same problem is about, e.g. earlier runs that failed the same way. */
   alsoAbout?: Pick<ResourceRef, 'kind' | 'name'>[]
+  /** Objects the detail goes on to name, each a link: "Velero rejected 2 runs because of it: a and b." */
+  related?: { lead: string; refs: (ResourceRef & { group: string })[] }
+}
+
+// Links listed before "and N more".
+const RELATED_SHOWN = 3
+
+function RelatedRefs({ related, onNavigate, className }: { related: NonNullable<ProblemDetails['related']>; onNavigate?: NavigateToRef; className?: string }) {
+  const shown = related.refs.slice(0, RELATED_SHOWN)
+  const rest = related.refs.length - shown.length
+  return (
+    <div className={clsx('break-words text-xs', className)}>
+      {related.lead}{' '}
+      {shown.map((ref, i) => (
+        <Fragment key={`${ref.kind}/${ref.namespace}/${ref.name}`}>
+          {i > 0 && (i === shown.length - 1 && rest === 0 ? ' and ' : ', ')}
+          <RefLink refTo={ref} onNavigate={onNavigate} mono />
+        </Fragment>
+      ))}
+      {rest > 0 && ` and ${rest} more`}.
+    </div>
+  )
 }
 
 export type ProblemProvenance =
@@ -72,6 +94,7 @@ export function ProblemMeta({
   onNavigate,
   subjectIsSelf,
   hideOrigin,
+  className = 'mt-1.5',
   children,
 }: {
   problem: WorkspaceProblem
@@ -81,13 +104,15 @@ export function ProblemMeta({
   subjectIsSelf?: boolean
   /** Leave out where the problem came from: when every row on a screen comes from the same place, the label says nothing. */
   hideOrigin?: boolean
+  /** Spacing above the line. */
+  className?: string
   children?: ReactNode
 }) {
   const openIssue = useContext(OpenIssueContext)
   const origin = problemOriginLabel(problem)
   const aboutChild = !subjectIsSelf && problem.subject.kind !== rootKind
   return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
+    <div className={clsx(className, 'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary')}>
       {aboutChild && (
         <span>
           {problem.subject.kind}{' '}
@@ -145,6 +170,7 @@ export function WorkspaceProblemCallout({
   const variant = severity === 'neutral' ? 'unknown' : severity
   return (
     <AlertBanner variant={variant} title={problem.title} message={problem.detail}>
+      {problem.related && <RelatedRefs related={problem.related} onNavigate={onNavigate} className="mt-1 text-theme-text-secondary" />}
       {problem.nextStep && (
         <div className="mt-1 break-words text-xs text-theme-text-primary">
           <span className="font-medium">Next step: </span>
@@ -160,18 +186,27 @@ export function WorkspaceProblemCallout({
   )
 }
 
-/** The problems a callout does not show, as a compact list with the callout's tone, title and source. */
-export function ProblemList({ problems, rootKind, onNavigate, hideOrigin }: { problems: WorkspaceProblem[]; rootKind: string; onNavigate?: NavigateToRef; hideOrigin?: boolean }) {
+/**
+ * The problems a callout does not show, as a compact list with the callout's
+ * tone, title and source. `subjectFirst` names each row's subject under its
+ * title, before the detail, for a list whose rows are about many objects.
+ */
+export function ProblemList({ problems, rootKind, onNavigate, hideOrigin, subjectFirst }: { problems: WorkspaceProblem[]; rootKind: string; onNavigate?: NavigateToRef; hideOrigin?: boolean; subjectFirst?: boolean }) {
   return (
     <ul className="space-y-2">
-      {problems.map((p) => (
-        <li key={p.id} className="min-w-0 text-sm">
-          <div className={clsx('font-medium break-words', toneTextClass(p.tone))}>{p.title}</div>
-          {p.detail && <div className="text-xs text-theme-text-secondary break-words">{p.detail}</div>}
-          {p.rawDetail && <FoldSection title={p.rawDetailLabel ?? "Original evidence"} summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{p.rawDetail}</div></FoldSection>}
-          <ProblemMeta problem={p} rootKind={rootKind} onNavigate={onNavigate} hideOrigin={hideOrigin} />
-        </li>
-      ))}
+      {problems.map((p) => {
+        const meta = <ProblemMeta problem={p} rootKind={rootKind} onNavigate={onNavigate} hideOrigin={hideOrigin} className={subjectFirst ? 'mt-0.5' : undefined} />
+        return (
+          <li key={p.id} className="min-w-0 text-sm">
+            <div className={clsx('font-medium break-words', toneTextClass(p.tone))}>{p.title}</div>
+            {subjectFirst && meta}
+            {p.detail && <div className="text-xs text-theme-text-secondary break-words">{p.detail}</div>}
+            {p.related && <RelatedRefs related={p.related} onNavigate={onNavigate} className="text-theme-text-secondary" />}
+            {p.rawDetail && <FoldSection title={p.rawDetailLabel ?? "Original evidence"} summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{p.rawDetail}</div></FoldSection>}
+            {!subjectFirst && meta}
+          </li>
+        )
+      })}
     </ul>
   )
 }

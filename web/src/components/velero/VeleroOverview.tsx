@@ -10,6 +10,7 @@ import {
   VeleroScheduleStateBadge,
   formatRelativeAgeTime,
   veleroRetentionText,
+  veleroScheduleNeverRan,
   veleroScheduleTone,
   veleroLocalTime,
   type ResourceRef,
@@ -197,12 +198,12 @@ function AttentionGroup({ id, title, problems, visible, onNavigate }: { id: stri
       <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
         {title} <span className="font-normal">· {problems.length}</span>
       </h3>
-      <ProblemList problems={shown} rootKind="" onNavigate={onNavigate} hideOrigin />
+      <ProblemList problems={shown} rootKind="" onNavigate={onNavigate} hideOrigin subjectFirst />
       {folded.length > 0 && (
         <>
           <Collapse open={showAll} id={foldId}>
             <div className="pt-2">
-              <ProblemList problems={folded} rootKind="" onNavigate={onNavigate} hideOrigin />
+              <ProblemList problems={folded} rootKind="" onNavigate={onNavigate} hideOrigin subjectFirst />
             </div>
           </Collapse>
           <button
@@ -234,7 +235,7 @@ function KeptForCell({ s }: { s: VeleroScheduleReading }) {
 function LastSuccessCell({ s }: { s: VeleroScheduleReading }) {
   if (s.runs.read === 'unknown') return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
   const run = s.runs.newestCompleted
-  if (!run) return <span className="text-theme-text-tertiary">{VELERO_NONE_KEPT_SHORT}</span>
+  if (!run) return <span className="text-theme-text-tertiary">{veleroScheduleNeverRan(s) ? 'Never' : VELERO_NONE_KEPT_SHORT}</span>
   const at = run.completed ?? run.ranAt
   return (
     <Tooltip content={`${run.name} · ${veleroLocalTime(at)}`}>

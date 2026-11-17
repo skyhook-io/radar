@@ -207,11 +207,19 @@ describe('Delete backup', () => {
     expect(buttons('Delete backup')).toHaveLength(1)
   })
 
-  it('says on the page when Velero refused, how long ago, and why in plain words', () => {
+  it('says when Velero refused, how long ago, and why as it was at the time of the request', () => {
     state.deletion = { state: 'refused', request: 'older-request', created: new Date(Date.now() - 2 * 3_600_000).toISOString(), errors: ['backup storage location nowhere not found'] }
     render(<VeleroBackupDeletionRow backup={backup()} />)
     expect(document.body.textContent).toContain('Deletion')
-    expect(document.body.textContent).toContain('Refused 2h ago — its storage location nowhere doesn’t exist; nothing was deleted')
+    expect(document.body.textContent).toContain('Refused 2h ago — at the time, storage location nowhere didn’t exist; nothing was deleted')
+    // The name reads as a name.
+    expect(document.body.querySelector('.font-mono')?.textContent).toBe('nowhere')
+  })
+
+  it('says a refusal it does not recognise in Velero’s words', () => {
+    state.deletion = { state: 'refused', request: 'r', errors: ['backup is still in progress'] }
+    render(<VeleroBackupDeletionRow backup={backup()} />)
+    expect(document.body.textContent).toContain('Refused — the backup was still running; nothing was deleted')
   })
 
   it('says on the page when a deletion failed partway', () => {

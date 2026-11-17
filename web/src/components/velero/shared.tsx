@@ -243,10 +243,14 @@ function sentence(text: string | undefined): string {
   return trimmed && !/[.!?…)]$/.test(trimmed) ? `${trimmed}.` : trimmed
 }
 
-function rejectedRuns(issue: VeleroIssue): string | undefined {
+/** The runs Velero rejected because of the issue's fault, each a link. */
+function rejectedRuns(issue: VeleroIssue): WorkspaceProblem['related'] {
   const runs = issue.affected ?? []
   if (runs.length === 0) return undefined
-  return `Velero rejected ${runs.length === 1 ? '1 run' : `${runs.length} runs`} because of it: ${namesAndMore(runs.map((r) => r.name))}.`
+  return {
+    lead: `Velero rejected ${runs.length === 1 ? '1 run' : `${runs.length} runs`} because of it:`,
+    refs: runs.map((r) => ({ kind: r.kind, group: VELERO_GROUP, namespace: r.namespace ?? issue.namespace ?? '', name: r.name })),
+  }
 }
 
 export const VELERO_START_SERVER = 'Start the Velero server Deployment, or find out why its pods don’t run'
@@ -301,7 +305,8 @@ export function veleroIssueProblem(issue: VeleroIssue, opts?: { withNextStep?: b
     category: issue.category,
     // The title the Issues page gives the same row.
     title: issueTitle(issue),
-    detail: [plain ?? message, issue.cause?.trim(), rejectedRuns(issue)].filter(Boolean).map(sentence).join(' ') || undefined,
+    detail: [plain ?? message, issue.cause?.trim()].filter(Boolean).map(sentence).join(' ') || undefined,
+    related: rejectedRuns(issue),
     rawDetail: plain ? message : undefined,
     rawDetailLabel: plain ? VELERO_MESSAGE_LABEL : undefined,
     nextStep: opts?.withNextStep ? veleroIssueNextStep(issue) : undefined,

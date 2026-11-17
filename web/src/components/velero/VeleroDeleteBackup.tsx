@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, Trash2 } from 'lucide-react'
-import { ActionConfirmDialog, Badge, FactRow, Tooltip, formatRelativeAgeTime, toneTextClass, veleroLocalTime, veleroPlainReason } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, Badge, FactRow, Tooltip, formatRelativeAgeTime, toneTextClass, veleroLocalTime, veleroLocationRefusal, veleroPlainReason, type VeleroLocationRefusal } from '@skyhook-io/k8s-ui'
 import { showApiError } from '../ui/Toast'
 import { useRadarFeature } from '../../api/client'
 import { getApiBase } from '../../api/config'
@@ -207,12 +207,24 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
   )
 }
 
+// A refusal is about the request: the location may have changed since.
+const LOCATION_THEN: Record<VeleroLocationRefusal['problem'], string> = {
+  missing: 'didn’t exist',
+  unavailable: 'was unavailable',
+  readOnly: 'was read-only',
+}
+
+function MonoName({ name }: { name: string }) {
+  return <span className="whitespace-nowrap font-mono text-[0.95em]">{name}</span>
+}
+
 /**
- * The page's At a glance row for a deletion Velero settled without deleting:
+ * The At a glance row for a deletion Velero settled without deleting:
  * refused, failed, or ended where Radar can't tell. Velero keeps a processed
- * request for a day, so the row says how long ago it was asked.
+ * request for a day, so the row says how long ago it was asked. `renderName`
+ * shows a storage location's name the way the rest of the page does.
  */
-export function VeleroBackupDeletionRow({ backup }: { backup: any }) {
+export function VeleroBackupDeletionRow({ backup, renderName = (n) => <MonoName name={n} /> }: { backup: any; renderName?: (name: string) => ReactNode }) {
   const { support } = useRadarFeature('veleroDeleteBackup')
   const namespace: string = backup?.metadata?.namespace ?? ''
   const name: string = backup?.metadata?.name ?? ''
@@ -224,12 +236,18 @@ export function VeleroBackupDeletionRow({ backup }: { backup: any }) {
   const ago = requestedAgo(d)
   const reason = plainErrors(d.errors)
   const raw = (d.errors ?? []).join('; ')
-  const detail =
-    d.state === 'refused'
-      ? `${reason ? lowerFirst(reason) : 'Velero gave no reason'}; nothing was deleted`
-      : d.state === 'failed'
-        ? `${PARTLY} ${reason}`.trim()
-        : 'Velero no longer has the request and the backup is still here; check the backup, or delete it again'
+  const refusal = d.state === 'refused' && d.errors?.length === 1 ? veleroLocationRefusal(d.errors[0]) : undefined
+  const detail: ReactNode = refusal ? (
+    <>
+      at the time, storage location {renderName(refusal.name)} {LOCATION_THEN[refusal.problem]}; nothing was deleted
+    </>
+  ) : d.state === 'refused' ? (
+    `${reason ? lowerFirst(reason) : 'Velero gave no reason'}; nothing was deleted`
+  ) : d.state === 'failed' ? (
+    `${PARTLY} ${reason}`.trim()
+  ) : (
+    'Velero no longer has the request and the backup is still here; check the backup, or delete it again'
+  )
   return (
     <FactRow label="Deletion">
       <span className={toneTextClass(d.state === 'unknown' ? 'degraded' : 'unhealthy')}>{label}</span>
@@ -242,7 +260,7 @@ export function VeleroBackupDeletionRow({ backup }: { backup: any }) {
         </>
       )}
       {' — '}
-      <Tooltip content={`Velero’s message: ${raw}`} disabled={!raw || raw === reason}>
+      <Tooltip content={`Velero’s message: ${raw}`} disabled={!raw || (raw === reason && !refusal)}>
         <span>{detail}</span>
       </Tooltip>
     </FactRow>

@@ -34,6 +34,7 @@ import {
   veleroPlainReason,
   veleroRetentionText,
   veleroScheduleBadge,
+  veleroScheduleNeverRan,
   veleroScheduleReasonText,
   VELERO_NONE_KEPT_SHORT,
   VELERO_RUNS_UNKNOWN,
@@ -295,7 +296,14 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
             )}
             <RunMessages kind="backups" resource={resource} />
           </FactRow>
-          <VeleroBackupDeletionRow backup={resource} />
+          <VeleroBackupDeletionRow
+            backup={resource}
+            renderName={(n) => {
+              const mono = <span className="whitespace-nowrap font-mono text-[0.95em]">{n}</span>
+              const exists = workspace.data?.locations.some((l) => l.namespace === namespace && l.name === n)
+              return exists ? <Link onClick={() => onNavigate?.(veleroResource('BackupStorageLocation', namespace, n))}>{mono}</Link> : mono
+            }}
+          />
           {nothing && (
             <FactRow label="Backed up">
               <span className={toneTextClass('unhealthy')}>Nothing</span>
@@ -511,6 +519,7 @@ function LastSuccess({ reading }: { reading: VeleroScheduleReading }) {
   if (runs.read === 'unknown') return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
   const success = runs.newestCompleted
   if (!success) {
+    if (veleroScheduleNeverRan(reading)) return <span className="text-theme-text-secondary">Never</span>
     return (
       <span className="inline-flex items-center gap-2">
         <StatusDot tone="unknown" />
@@ -545,13 +554,13 @@ function RecentRunDots({ runs, namespace, onNavigate }: { runs: VeleroRun[]; nam
   )
 }
 
-/** Counts by outcome: "all completed", or "40 completed · 6 failed or partly failed". */
+/** Counts by outcome: "all completed", or "40 completed · 6 failed or partially failed". */
 function outcomeCounts(runs: VeleroRunRow[]): string {
   const completed = runs.filter((r) => r.phase === 'Completed').length
   const failed = runs.filter((r) => FAILED.has(r.phase ?? '')).length
   const other = runs.length - completed - failed
   if (runs.length > 0 && completed === runs.length) return 'all completed'
-  return [`${completed} completed`, failed ? `${failed} failed or partly failed` : '', other ? `${other} other` : ''].filter(Boolean).join(' · ')
+  return [`${completed} completed`, failed ? `${failed} failed or partially failed` : '', other ? `${other} other` : ''].filter(Boolean).join(' · ')
 }
 
 function readInPart(query: { data?: VeleroRunsResponse }): boolean {
@@ -575,6 +584,8 @@ function VeleroScheduleOverview({ resource, onNavigate }: { resource: any; onNav
   const dueNow = reading?.state === 'due' && reading.reason !== 'serverDown'
   const cron: string = reading?.cron ?? resource?.spec?.schedule ?? ''
   const cadence = veleroCadenceText(cron)
+  // The banner above already says why it needs attention; the rows don't repeat it.
+  const inBanner = !!workspace.data?.schedules.find((s) => s.namespace === namespace && s.name === name)?.attention
   return (
     <>
       <RefreshFailedNotice queries={[activity]} />
@@ -607,13 +618,13 @@ function VeleroScheduleOverview({ resource, onNavigate }: { resource: any; onNav
                 ) : (
                   <span className="text-theme-text-tertiary">None</span>
                 )}
-                {!dueNow && reading.state !== 'onSchedule' && <Note>{veleroScheduleReasonText(reading, { created: resource?.metadata?.creationTimestamp })}</Note>}
+                {!dueNow && reading.state !== 'onSchedule' && !inBanner && <Note>{veleroScheduleReasonText(reading, { created: resource?.metadata?.creationTimestamp })}</Note>}
               </FactRow>
               <FactRow label="Recent runs">
                 {reading.runs.read === 'unknown' ? (
                   <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
                 ) : (reading.runs.recent ?? []).length === 0 ? (
-                  <span className="text-theme-text-secondary">{VELERO_NONE_KEPT_SHORT}</span>
+                  <span className="text-theme-text-secondary">{veleroScheduleNeverRan(reading) ? 'None' : VELERO_NONE_KEPT_SHORT}</span>
                 ) : (
                   <span className="inline-flex flex-wrap items-center gap-x-3">
                     <RecentRunDots runs={reading.runs.recent ?? []} namespace={namespace} onNavigate={onNavigate} />
@@ -901,7 +912,7 @@ export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespa
         columns={[
           { header: 'Backup', cell: (b) => <VeleroName name={b.name} middle /> },
           { header: 'Outcome', width: '160px', cell: (b) => <RunOutcome kind="Backup" phase={b.phase} /> },
-          { header: 'Completed', width: '140px', cell: (b) => <When iso={b.completed} fallback="—" /> },
+          { header: 'Finished', width: '140px', cell: (b) => <When iso={b.completed} fallback="—" /> },
           { header: 'Expires', width: '130px', cell: (b) => <Expires iso={b.expiration} /> },
         ]}
         rows={shown}

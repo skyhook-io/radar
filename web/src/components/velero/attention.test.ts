@@ -63,12 +63,18 @@ describe('a stopped Velero server on the Overview', () => {
 })
 
 describe('an unavailable storage location on the Overview', () => {
-  it('names the runs Velero rejected because of it', () => {
+  it('names the runs Velero rejected because of it, each one a link', () => {
     const data = workspace({
       issues: [{ ...issue('BackupStorageLocation', 'dr'), message: 'bucket not found', affected: [{ kind: 'Backup', name: 'a-1' }, { kind: 'Backup', name: 'b-1' }] }],
       issueTotals: { velero: 1 },
     })
-    expect(veleroAttention(data, null)[0].detail).toBe('bucket not found. Velero rejected 2 runs because of it: a-1 and b-1.')
+    const [row] = veleroAttention(data, null)
+    expect(row.detail).toBe('bucket not found.')
+    expect(row.related?.lead).toBe('Velero rejected 2 runs because of it:')
+    expect(row.related?.refs).toEqual([
+      { kind: 'Backup', group: 'velero.io', namespace: 'velero', name: 'a-1' },
+      { kind: 'Backup', group: 'velero.io', namespace: 'velero', name: 'b-1' },
+    ])
   })
 })
 

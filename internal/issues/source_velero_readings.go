@@ -166,7 +166,7 @@ func veleroScheduleIssueFor(r veleropkg.ScheduleReading, server veleropkg.Server
 	switch r.State {
 	case veleropkg.StateCannotRun:
 		return ReasonVeleroScheduleCannotRun, SeverityCritical,
-			"This schedule's name is longer than 63 characters, so Velero cannot label its backups and every run fails. Recreate it with a shorter name.", true
+			"This schedule's name is longer than 63 characters, too long for the label Velero puts on its backups, so Velero submits no runs. Recreate it with a shorter name.", true
 	case veleropkg.StateAlwaysDue:
 		return ReasonVeleroScheduleCannotRun, SeverityCritical,
 			"This cron expression has no future time, so Velero treats the schedule as always due and submits a new backup whenever the previous one has started.", true

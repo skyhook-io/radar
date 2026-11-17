@@ -92,7 +92,7 @@ export function veleroScheduleBadge(
   if (!onSchedule) return { label: veleroScheduleStateLabel(reading.state), tone: veleroScheduleTone(reading) }
   const newest = reading.runs?.newest
   if (newest && VELERO_FAILED_PHASES.has(newest.phase ?? '')) {
-    return { label: 'Last run failed', tone: 'alert', detail: `Its newest run, ${newest.name}, ${newest.phase === 'FailedValidation' ? 'was rejected' : newest.phase === 'Failed' ? 'failed' : 'partly failed'}.` }
+    return { label: 'Last run failed', tone: 'alert', detail: `Its newest run, ${newest.name}, ${newest.phase === 'FailedValidation' ? 'was rejected' : newest.phase === 'Failed' ? 'failed' : 'partially failed'}.` }
   }
   return { label: STATE_LABEL.onSchedule, tone: reading.zone && !veleroZoneConfirmed(reading.zone) ? 'unknown' : 'healthy' }
 }
@@ -144,7 +144,7 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
         ? `Velero rejected this schedule: ${reading.validationErrors.join('; ')}`
         : 'Velero rejected this schedule, so it does not run.'
     case 'cannotRun':
-      return 'This schedule’s name is longer than 63 characters, so Velero cannot label its backups and every run fails.'
+      return 'This schedule’s name is longer than 63 characters, too long for the label Velero puts on its backups, so Velero submits no runs.'
     case 'notValidated': {
       if (!reading.attention) return 'Waiting for Velero to validate this schedule.'
       if (serverDown !== null) return `Velero hasn’t validated this schedule.${serverDown}`
@@ -219,12 +219,13 @@ export function veleroCadenceText(cron: string | undefined): string | undefined 
   return human === fields || human === '-' ? undefined : human
 }
 
+// Said after the zone's name: "UTC — the Velero server’s time zone".
 const ZONE_SOURCE_LABEL: Record<VeleroZoneSource, string> = {
-  cron: 'from cron',
-  server: 'server TZ',
-  serverDefault: 'server default',
-  inferred: 'inferred',
-  unknown: 'zone unknown',
+  cron: 'set in the cron expression',
+  server: 'the Velero server’s time zone',
+  serverDefault: 'the Velero server’s time zone',
+  inferred: 'inferred from a backup’s name',
+  unknown: 'assumed: the Velero server’s zone is unknown',
 }
 
 const ZONE_SOURCE_DETAIL: Record<VeleroZoneSource, string> = {
@@ -265,6 +266,14 @@ export const VELERO_RUNS_UNKNOWN = 'Unknown — no access to backups'
 export const VELERO_NONE_KEPT = 'None kept: Velero deletes backups once their retention ends'
 /** VELERO_NONE_KEPT for a table cell; the full sentence goes in its tooltip. */
 export const VELERO_NONE_KEPT_SHORT = 'None kept'
+
+/**
+ * Velero never submitted a run of this schedule and keeps none: "Never" is
+ * certain there, where "None kept" would suggest runs that were deleted.
+ */
+export function veleroScheduleNeverRan(reading: Pick<VeleroScheduleReading, 'lastSubmitted' | 'runs'>): boolean {
+  return reading.runs.read !== 'unknown' && !reading.lastSubmitted && !reading.runs.newest
+}
 
 /** The newest Completed run, or why there is none to show. */
 export function veleroNewestSuccessfulText(runs: VeleroScheduleRuns): { text: string; run?: VeleroRun } {
@@ -329,6 +338,14 @@ export function veleroDefaultText(loc: Pick<VeleroLocationReading, 'default' | '
 interface Reading {
   plain: string
   step: string
+  /** For a refusal about a storage location: which one, and what was wrong with it. */
+  location?: VeleroLocationRefusal
+}
+
+/** A Velero refusal that names a storage location, read into its parts. */
+export interface VeleroLocationRefusal {
+  name: string
+  problem: 'missing' | 'unavailable' | 'readOnly'
 }
 const LOCATION_NAME = '"?([a-z0-9][a-z0-9.-]*)"?'
 const LOCATION = `(?:BackupStorageLocation|backup storage location|BSL) ${LOCATION_NAME}`
@@ -344,9 +361,18 @@ const REASONS: [RegExp, (m: RegExpExecArray) => Reading][] = [
   [new RegExp(`${LOCATION} (?:is in Unavailable status|is currently in Unavailable state)|The BSL ${LOCATION_NAME} is unavailable`, 'i'), (m) => ({
     plain: `Its storage location ${m[1] ?? m[2]} is unavailable`,
     step: `Make storage location ${m[1] ?? m[2]} available, then try again`,
+    location: { name: m[1] ?? m[2], problem: 'unavailable' },
   })],
-  [new RegExp(`${LOCATION} is currently in read-only mode`, 'i'), (m) => ({ plain: `Its storage location ${m[1]} is read-only`, step: `Set storage location ${m[1]} to read-write, or use another location` })],
-  [new RegExp(`${LOCATION} not found`, 'i'), (m) => ({ plain: `Its storage location ${m[1]} doesn’t exist`, step: `Create storage location ${m[1]}, or use one that exists` })],
+  [new RegExp(`${LOCATION} is currently in read-only mode`, 'i'), (m) => ({
+    plain: `Its storage location ${m[1]} is read-only`,
+    step: `Set storage location ${m[1]} to read-write, or use another location`,
+    location: { name: m[1], problem: 'readOnly' },
+  })],
+  [new RegExp(`${LOCATION} not found`, 'i'), (m) => ({
+    plain: `Its storage location ${m[1]} doesn’t exist`,
+    step: `Create storage location ${m[1]}, or use one that exists`,
+    location: { name: m[1], problem: 'missing' },
+  })],
   [new RegExp(`not specified at backup creation time and the (?:server )?default ${LOCATION_NAME} (?:does not exist|was not found)`, 'i'), (m) => ({
     plain: `It names no storage location, and the default, ${m[1]}, doesn’t exist`,
     step: 'Name an existing storage location, or create the default, then create the backup again',
@@ -372,6 +398,15 @@ function readReason(message: string | undefined): Reading | undefined {
  */
 export function veleroPlainReason(message: string | undefined): string | undefined {
   return readReason(message)?.plain
+}
+
+/**
+ * The storage location a Velero refusal names and what was wrong with it, for
+ * a caller that says it in its own words (a past refusal, with the name shown
+ * as a name); undefined for any other message.
+ */
+export function veleroLocationRefusal(message: string | undefined): VeleroLocationRefusal | undefined {
+  return readReason(message)?.location
 }
 
 /** What to do about a raw Velero or object-store message Radar recognises, as one plain line. */

@@ -205,7 +205,7 @@ describe('The composed Overview', () => {
   })
 
   it('leads a schedule that cannot run with its Velero reading, not the generic issue row', () => {
-    const reading = schedule({ name: 'very-long', state: 'cannotRun', attention: true, runs: { read: 'full', kept: 0 } })
+    const reading = schedule({ name: 'very-long', state: 'cannotRun', attention: true, lastSubmitted: undefined, nextRun: undefined, runs: { read: 'full', kept: 0 } })
     state.workspace = workspace({ schedules: [reading] })
     state.activity = { reading }
     state.runsBy = { 'backups:very-long': runsOf([]) }
@@ -214,6 +214,11 @@ describe('The composed Overview', () => {
     expect(html).toContain('Schedule cannot run')
     expect(html).toContain('longer than 63 characters')
     expect(html).toContain('Next step: </span>Recreate the schedule with a name of 63 characters or fewer')
+    // Said once, in the banner; the rows say what they are.
+    expect(html.match(/longer than 63 characters/g)).toHaveLength(1)
+    expect(html).toMatch(/Last success<\/dt><dd[^>]*><span[^>]*>Never</)
+    expect(html).toMatch(/Next run<\/dt><dd[^>]*><span[^>]*>None</)
+    expect(html).not.toContain('None kept')
     state.runsBy = {}
   })
 
@@ -275,7 +280,7 @@ describe('The composed Overview', () => {
     expect(html).toContain('the newest run since then failed')
     expect(html).toContain('Open backup nightly-2')
     expect(html).toContain('All 46 runs →')
-    expect(html).toContain('46 kept · 1 completed · 1 failed or partly failed')
+    expect(html).toContain('46 kept · 1 completed · 1 failed or partially failed')
     expect(html).not.toContain('Schedule activity')
     expect(renderToStaticMarkup(<VeleroScheduleStateBadge reading={reading} />)).toContain('Last run failed')
   })

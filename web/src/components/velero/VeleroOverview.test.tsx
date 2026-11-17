@@ -89,7 +89,7 @@ describe('Velero overview', () => {
     expect(attention).toContain('3 scheduled times passed. Velero does not catch up on missed runs.')
     expect(attention).toContain('No backup submitted since')
     expect(attention).toContain('Looks late, but Radar couldn’t confirm the Velero server’s time zone.')
-    expect(attention).toContain('This schedule’s name is longer than 63 characters, so Velero cannot label its backups and every run fails.')
+    expect(attention).toContain('This schedule’s name is longer than 63 characters, too long for the label Velero puts on its backups, so Velero submits no runs.')
     // possiblyLate stays in the table, not in Needs attention.
     expect(attention).not.toContain('quiet')
     expect(attention).not.toContain(VELERO_NOTHING_NEEDS_ATTENTION)

@@ -59,7 +59,7 @@ describe('veleroScheduleBadge', () => {
     const b = veleroScheduleBadge({ ...base, state: 'onSchedule', runs: { ...base.runs, newest: run('PartiallyFailed') } })
     expect(b.label).toBe('Last run failed')
     expect(b.tone).toBe('alert')
-    expect(b.detail).toContain('partly failed')
+    expect(b.detail).toContain('partially failed')
     // A worse state keeps its own name.
     expect(veleroScheduleBadge({ ...base, state: 'late', attention: true, runs: { ...base.runs, newest: run('Failed') } }).label).toBe('Late')
   })
@@ -68,7 +68,7 @@ describe('veleroScheduleBadge', () => {
     for (const state of ['onSchedule', 'due'] as const) {
       const b = veleroScheduleBadge({ ...base, state, runs: { ...base.runs, newest: run(phase) } })
       expect(b).toMatchObject({ label: 'Last run failed', tone: 'alert' })
-      expect(b.detail).toContain(phase === 'Failed' ? 'failed' : phase === 'FailedValidation' ? 'was rejected' : 'partly failed')
+      expect(b.detail).toContain(phase === 'Failed' ? 'failed' : phase === 'FailedValidation' ? 'was rejected' : 'partially failed')
     }
   })
 

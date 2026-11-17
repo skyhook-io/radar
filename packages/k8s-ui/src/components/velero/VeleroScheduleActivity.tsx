@@ -47,7 +47,7 @@ export function VeleroZoneValue({ zone }: { zone: VeleroZone }) {
   return (
     <Tooltip content={veleroZoneDetail(zone)}>
       <span className="text-theme-text-secondary">
-        {zone.name} · {veleroZoneSourceLabel(zone.source)}
+        {zone.name} — {veleroZoneSourceLabel(zone.source)}
       </span>
     </Tooltip>
   )
