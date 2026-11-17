@@ -44,27 +44,29 @@ func traefikDeclared(extract func(*unstructured.Unstructured) []configrefs.PathR
 
 // TraefikBackends is the family of the Services and TraefikServices a
 // Traefik route sends traffic to, or a TraefikService balances or mirrors
-// to, which may be in another namespace.
+// to, which may be in another namespace. TCP and UDP routes send only to
+// Services: their CRDs have no backend kind.
 var TraefikBackends = &Family{
-	Name:           "traefikBackends",
-	Projection:     project("exposes", false, "Backends", "Routes").whenSource(resourceid.GroupKind{Group: configrefs.TraefikGroup, Kind: "TraefikService"}, "exposes", false, "Backends", "RoutedFrom").whenSource(resourceid.GroupKind{Group: configrefs.TraefikLegacyGroup, Kind: "TraefikService"}, "exposes", false, "Backends", "RoutedFrom"),
-	Sources:        traefikSources(append([]resourceid.GroupKind{kindService}, traefikKinds("TraefikService")...), "IngressRoute", "IngressRouteTCP", "IngressRouteUDP", "TraefikService"),
+	Name:       "traefikBackends",
+	Projection: project("exposes", false, "Backends", "Routes").whenSource(resourceid.GroupKind{Group: configrefs.TraefikGroup, Kind: "TraefikService"}, "exposes", false, "Backends", "RoutedFrom").whenSource(resourceid.GroupKind{Group: configrefs.TraefikLegacyGroup, Kind: "TraefikService"}, "exposes", false, "Backends", "RoutedFrom"),
+	Sources: append(
+		traefikSources(append([]resourceid.GroupKind{kindService}, traefikKinds("TraefikService")...), "IngressRoute", "TraefikService"),
+		traefikSources([]resourceid.GroupKind{kindService}, "IngressRouteTCP", "IngressRouteUDP")...),
 	Targets:        append([]resourceid.GroupKind{kindService}, traefikKinds("TraefikService")...),
 	CrossNamespace: true,
 	Declared:       traefikDeclared(configrefs.TraefikBackendReferences),
 }
 
-// TraefikRouteConfig is the family of what configures a Traefik route: its
-// Middlewares, the ServersTransport each backend dials through and its
-// TLSOption, and the Middlewares a chain Middleware runs. Each may be in
-// another namespace.
+// TraefikRouteConfig is the family of what configures an HTTP or TCP
+// Traefik route: its Middlewares, the ServersTransport each backend dials
+// through and its TLSOption, and the Middlewares a chain Middleware runs.
+// Each may be in another namespace. A UDP route has none of these.
 var TraefikRouteConfig = &Family{
 	Name:       "traefikRouteConfig",
 	Projection: project("configures", true, "ConfigRefs", "Consumers"),
-	Sources: append(append(append(append([]Source{},
+	Sources: append(append(append([]Source{},
 		traefikSources(traefikKinds("Middleware", "ServersTransport", "TLSOption"), "IngressRoute")...),
 		traefikSources(traefikKinds("MiddlewareTCP", "ServersTransportTCP", "TLSOption"), "IngressRouteTCP")...),
-		traefikSources(traefikKinds("Middleware", "ServersTransport"), "IngressRouteUDP")...),
 		traefikSources(traefikKinds("Middleware"), "Middleware")...),
 	Targets:        traefikKinds("Middleware", "MiddlewareTCP", "TLSOption", "ServersTransport", "ServersTransportTCP"),
 	CrossNamespace: true,
