@@ -125,8 +125,12 @@ describe('Delete backup', () => {
 
   it('reports Velero refusing, and offers the action again', () => {
     state.mutate.mockImplementation((_vars: unknown, opts: { onSuccess: (r: unknown) => void }) => opts.onSuccess({ request: 'nightly-1-abc', uid: 'uid-1' }))
+    const root = render(<VeleroDeleteBackup backup={backup()} />)
+    act(() => buttons('Delete backup')[0].click())
+    typeName('nightly-1')
+    act(() => buttons('Delete backup').at(-1)!.click())
     state.deletion = { state: 'refused', request: 'nightly-1-abc', errors: ['backup storage location primary not found'] }
-    render(<VeleroDeleteBackup backup={backup()} />)
+    act(() => root.render(<QueryClientProvider client={client}><VeleroDeleteBackup backup={{ ...backup() }} /></QueryClientProvider>))
     expect(document.body.textContent).toContain('Velero refused')
     expect(state.failure).toHaveBeenCalledWith('Velero refused to delete backup nightly-1', 'backup storage location primary not found')
     expect(buttons('Delete backup')[0].disabled).toBe(false)
@@ -134,8 +138,12 @@ describe('Delete backup', () => {
 
   it('reports a deletion that failed partway, and that data may be gone', () => {
     state.mutate.mockImplementation((_vars: unknown, opts: { onSuccess: (r: unknown) => void }) => opts.onSuccess({ request: 'nightly-1-abc', uid: 'uid-1' }))
+    const root = render(<VeleroDeleteBackup backup={backup()} />)
+    act(() => buttons('Delete backup')[0].click())
+    typeName('nightly-1')
+    act(() => buttons('Delete backup').at(-1)!.click())
     state.deletion = { state: 'failed', request: 'nightly-1-abc', errors: ['backup storage location primary not found'] }
-    render(<VeleroDeleteBackup backup={backup()} />)
+    act(() => root.render(<QueryClientProvider client={client}><VeleroDeleteBackup backup={{ ...backup() }} /></QueryClientProvider>))
     expect(document.body.textContent).toContain('Deletion failed')
     expect(state.failure).toHaveBeenCalledWith('Deleting backup nightly-1 failed', 'Some of its data may already have been removed. backup storage location primary not found')
     expect(buttons('Delete backup')[0].disabled).toBe(false)
@@ -176,13 +184,28 @@ describe('Delete backup', () => {
     expect(document.body.textContent).not.toContain('Deletion requested')
   })
 
-  it('announces a failed request only once across remounts', () => {
+  it('announces the outcome of a request sent here once, across remounts', () => {
+    state.workspace = workspace({ accessMode: 'ReadWrite', phase: 'Available' })
+    state.mutate.mockImplementation((_vars: unknown, opts: { onSuccess: (sent: { request: string }) => void }) => opts.onSuccess({ request: 'failed-request' }))
+    const first = render(<VeleroDeleteBackup backup={backup()} />)
+    act(() => buttons('Delete backup')[0].click())
+    typeName('nightly-1')
+    act(() => buttons('Delete backup').at(-1)!.click())
+    act(() => first.unmount())
+    roots.splice(roots.indexOf(first), 1)
     state.deletion = { state: 'failed', request: 'failed-request', errors: ['snapshot failed'] }
-    const root = render(<VeleroDeleteBackup backup={backup()} />)
-    act(() => root.unmount())
-    roots.splice(roots.indexOf(root), 1)
+    const second = render(<VeleroDeleteBackup backup={backup()} />)
+    act(() => second.unmount())
+    roots.splice(roots.indexOf(second), 1)
     render(<VeleroDeleteBackup backup={backup()} />)
     expect(state.failure).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a refusal found on opening the page without announcing it', () => {
+    state.deletion = { state: 'refused', request: 'older-request', errors: ['backup storage location nowhere not found'] }
+    render(<VeleroDeleteBackup backup={backup()} />)
+    expect(document.body.textContent).toContain('Velero refused')
+    expect(state.failure).not.toHaveBeenCalled()
   })
 
   it('is absent on a Radar without the action', () => {

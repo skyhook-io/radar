@@ -47,6 +47,8 @@ function stateText(d: VeleroDeletion): string {
   }
 }
 
+const deletionNoticeKey = (namespace: string, request: string) => ['velero', 'deletion-notice', getApiBase(), namespace, request]
+
 /**
  * "Delete backup…" for a Velero Backup, in the drawer's header. Velero deletes
  * a backup through a DeleteBackupRequest: its files in the bucket, its volume
@@ -69,12 +71,13 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
   const started = !!request || backup?.status?.phase === 'Deleting'
 
   const state = deletion.data?.state
+  // Announced once, and only for a request sent from this browser session: a
+  // refusal found on opening the page is the header's badge, not news.
   useEffect(() => {
     if (!request || (state !== 'failed' && state !== 'refused')) return
-    const key = ['velero', 'deletion-announced', getApiBase(), namespace, request]
-    if (queryClient.getQueryData(key)) return
-    queryClient.setQueryDefaults(key, { gcTime: Infinity })
-    queryClient.setQueryData(key, true)
+    const key = deletionNoticeKey(namespace, request)
+    if (queryClient.getQueryData(key) !== 'sent') return
+    queryClient.setQueryData(key, 'announced')
     if (state === 'refused') showApiError(`Velero refused to delete backup ${name}`, (deletion.data?.errors ?? []).join('; '))
     if (state === 'failed') showApiError(`Deleting backup ${name} failed`, `${PARTLY} ${(deletion.data?.errors ?? []).join('; ')}`)
   }, [queryClient, request, state, name, namespace, deletion.data?.errors])
@@ -154,7 +157,10 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
           deleteBackup.mutate(
             { namespace, name, uid: reviewing },
             {
-              onSuccess: () => {
+              onSuccess: (sent) => {
+                const key = deletionNoticeKey(namespace, sent.request)
+                queryClient.setQueryDefaults(key, { gcTime: Infinity })
+                queryClient.setQueryData(key, 'sent')
                 void queryClient.invalidateQueries({ queryKey: ['velero', 'deletion'] })
                 setReviewing(null)
               },
