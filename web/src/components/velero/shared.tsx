@@ -102,8 +102,9 @@ export function selectionText(spec: any, emptyMeans: string, kind: 'backup' | 'r
   const text = excluded.length ? `${base}, except ${excluded.join(', ')}` : base
   const injected = (field: string): readonly string[] =>
     kind === 'restore' ? (field === 'excludedResources' ? VELERO_NON_RESTORABLE : []) : (VELERO_BACKUP_EXCLUSIONS[field] ?? [])
+  // `*` in an include list is everything; in an exclude list it drops the whole scope, which narrows.
   const narrowed =
-    RESOURCE_FILTERS.some((field) => list(spec?.[field]).some((v) => v !== '*' && !injected(field).includes(v))) ||
+    RESOURCE_FILTERS.some((field) => list(spec?.[field]).some((v) => (field.startsWith('included') ? v !== '*' : !injected(field).includes(v)))) ||
     !!spec?.labelSelector ||
     list(spec?.orLabelSelectors).length > 0
   return { text, narrowed }

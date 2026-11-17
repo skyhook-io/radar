@@ -45,6 +45,14 @@ describe('a Velero selection', () => {
     expect(selectionText({ ...processedRestore, labelSelector: { matchLabels: { app: 'x' } } }, '', 'restore').narrowed).toBe(true)
   })
 
+  it('is narrowed by a wildcard exclusion, which drops a whole scope', () => {
+    expect(selectionText({ ...processedBackup, excludedNamespaceScopedResources: ['*'] }, '').narrowed).toBe(true)
+    expect(selectionText({ ...processedBackup, excludedClusterScopedResources: ['*'] }, '').narrowed).toBe(true)
+    expect(selectionText({ excludedResources: ['*'] }, '').narrowed).toBe(true)
+    // In an include list it means everything.
+    expect(selectionText({ ...processedBackup, includedNamespaceScopedResources: ['*'], includedClusterScopedResources: ['*'] }, '').narrowed).toBe(false)
+  })
+
   it('counts a restore exclusion on a backup, where Velero does not add it', () => {
     expect(selectionText({ excludedResources: ['nodes'] }, '').narrowed).toBe(true)
   })
