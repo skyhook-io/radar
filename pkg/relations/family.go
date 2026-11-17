@@ -58,7 +58,8 @@ type ReferrersIndex struct {
 
 // Source is a kind that declares. Targets narrows the family's Targets to
 // the ones it can declare, when it can't declare them all, so an answer
-// about another kind neither reads nor reports it.
+// about another kind neither reads nor reports it. Empty Targets means every
+// target of the family.
 type Source struct {
 	Kind    resourceid.GroupKind
 	Targets []resourceid.GroupKind
@@ -79,7 +80,10 @@ func (f *Family) source(gk resourceid.GroupKind) int {
 	return slices.IndexFunc(f.Sources, func(s Source) bool { return s.Kind == gk })
 }
 
-// Declaration is one target a source declares, and where.
+// Declaration is one target a source declares, and where. Path is the
+// declaring field from the object's root, with [] for each list it passes
+// through, such as spec.template.spec.volumes[].configMap.name; readers
+// compare these spellings, so they are part of the contract.
 type Declaration struct {
 	Target resourceid.Ref
 	Path   string
@@ -260,21 +264,20 @@ func legacyGroupOnly(r resourceid.Ref) ownership.Gap {
 
 // served are the candidates whose kind the cluster serves, so an API group
 // a cluster doesn't have, such as traefik.io before Traefik 2.10, shadows
-// nothing. It drops one only when discovery is complete and another is
-// served; otherwise every candidate is tried, and an unserved one says why.
+// nothing. It drops one only when discovery covered its group and another
+// is served; otherwise every candidate is tried, and an unserved one says
+// why.
 func (v *View) served(candidates []resourceid.Ref) []resourceid.Ref {
 	if len(candidates) < 2 {
 		return candidates
 	}
 	catalog := v.session.Catalog()
-	if !catalog.Complete() {
-		return candidates
-	}
 	var out []resourceid.Ref
 	for _, r := range candidates {
 		// An ambiguous kind is served, just not readable: it stays, so its
-		// read stops the resolution.
-		if _, known := catalog.Kind(r.GroupKind()); known || catalog.Ambiguous(r.GroupKind()) {
+		// read stops the resolution. So does one whose group discovery
+		// missed.
+		if _, known := catalog.Kind(r.GroupKind()); known || catalog.Ambiguous(r.GroupKind()) || !catalog.CoversGroup(r.Group) {
 			out = append(out, r)
 		}
 	}

@@ -64,6 +64,23 @@ func TestEvidencePOSTAndSizeLimit(t *testing.T) {
 	}
 }
 
+// QueryPost is Query sent in a POST body: same result, annotations included.
+func TestQueryPostSendsTheQueryInTheBody(t *testing.T) {
+	tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.RawQuery != "" || r.FormValue("query") != `sum(up{job="a+b"})` {
+			t.Errorf("query not sent in POST body: %s %s %v", r.Method, r.URL, r.PostForm)
+		}
+		_, _ = w.Write([]byte(`{"status":"success","warnings":["shard unavailable"],"data":{"resultType":"vector","result":[{"metric":{"job":"a"},"value":[1,"2"]}]}}`))
+	})
+	result, err := NewClient(tr).QueryPost(context.Background(), `sum(up{job="a+b"})`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Series) != 1 || result.Series[0].DataPoints[0].Value != 2 || len(result.Annotations.Warnings) != 1 {
+		t.Errorf("unexpected result: %+v", result)
+	}
+}
+
 // fakeProm returns an HTTPTransport pointed at a test server with a scripted
 // response for /api/v1/query and /api/v1/query_range.
 func fakeProm(t *testing.T, handler http.HandlerFunc) *HTTPTransport {

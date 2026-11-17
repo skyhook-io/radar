@@ -267,7 +267,14 @@ func Generate(seed uint64) World {
 		}
 	}
 	w := b.world()
-	w.Partial = r.IntN(8) == 0
+	if r.IntN(8) == 0 {
+		switch r.IntN(6) {
+		case 0:
+			w.Partial = true
+		default:
+			w.FailedGroups = []string{pick("", "apps", "argoproj.io", "example.io", "metrics.k8s.io")}
+		}
+	}
 	for _, k := range Kinds {
 		if !k.HasGCVerbs {
 			continue

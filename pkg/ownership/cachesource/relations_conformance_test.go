@@ -343,3 +343,31 @@ func (betaUndecided) CanRead(_ resourceid.GroupKind, namespace string) ownership
 	return ownership.Allowed
 }
 func (betaUndecided) Namespaces() ([]string, bool) { return nil, true }
+
+// A kind discovery doesn't serve reads as empty when discovery covered its
+// group, even with another group failing, and as a gap when its own group
+// failed; the scan oracle agrees.
+func TestIndexedJudgesAnUnservedKindByItsGroup(t *testing.T) {
+	w := ownershiptest.Fixture()
+	w.FailedGroups = []string{"metrics.k8s.io"}
+	got := begin(t, render(t, w).source()).(relations.Session)
+	scanned, err := ownershiptest.Scan(w).Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan := scanned.(relations.Session)
+	for _, tc := range []struct {
+		gk      resourceid.GroupKind
+		wantGap bool
+	}{
+		{resourceid.GroupKind{Group: "keda.sh", Kind: "ScaledObject"}, false},
+		{resourceid.GroupKind{Group: "metrics.k8s.io", Kind: "PodMetrics"}, true},
+	} {
+		for name, s := range map[string]relations.Session{"cache": got, "scan": scan} {
+			read := s.Indexed(tc.gk, "", nil, ownership.InNamespace("alpha"))
+			if hasGap := len(read.Gaps) > 0; hasGap != tc.wantGap || len(read.Objects) != 0 {
+				t.Errorf("%s: Indexed(%v) = %v; want gap %v and no objects", name, tc.gk, read, tc.wantGap)
+			}
+		}
+	}
+}
