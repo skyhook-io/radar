@@ -295,6 +295,7 @@ interface WorkloadViewProps {
   statusNote?: ReactNode
   onRefresh?: () => Promise<unknown>
   hideKindBadge?: boolean
+  truncateName?: boolean
 }
 
 interface ImageTargetOwnershipContext {
