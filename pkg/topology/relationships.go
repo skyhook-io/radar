@@ -675,7 +675,7 @@ func getRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		case "storageclass", "storageclasses", "sc":
 			pvs, _ := provider.PersistentVolumes()
 			for _, pv := range pvs {
-				if pv.Spec.StorageClassName == name {
+				if pv.Spec.StorageClassName == name && readable(ResourceRef{Kind: "PersistentVolume", Name: pv.Name}) {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
 					enrichRef(&pvRef, dp)
 					rel.Consumers = append(rel.Consumers, pvRef)
@@ -685,7 +685,7 @@ func getRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			// no volume yet, so only the claim shows which class it waits on.
 			pvcs, _ := provider.PersistentVolumeClaims()
 			for _, pvc := range pvcs {
-				if pvc != nil && pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == name {
+				if pvc != nil && pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == name && readable(ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pvc.Namespace, Name: pvc.Name}) {
 					claimRef := ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pvc.Namespace, Name: pvc.Name}
 					enrichRef(&claimRef, dp)
 					rel.Consumers = append(rel.Consumers, claimRef)
