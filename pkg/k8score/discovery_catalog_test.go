@@ -2,7 +2,9 @@ package k8score
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -19,6 +21,106 @@ type scriptedDiscovery struct {
 	lists []*metav1.APIResourceList
 	err   error
 	calls atomic.Int32
+}
+
+func TestCatalogGenerationTracksAllMutations(t *testing.T) {
+	client := &scriptedDiscovery{lists: widgetLists()}
+	d, err := NewResourceDiscovery(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := d.Catalog()
+	if previous.Generation == 0 {
+		t.Fatal("initial discovery did not advance its generation")
+	}
+	check := func() {
+		t.Helper()
+		current, changed := d.CatalogIfChanged(previous.Generation)
+		if !changed || current.Generation <= previous.Generation {
+			t.Fatalf("mutation: generation %d, changed %v; previous %d", current.Generation, changed, previous.Generation)
+		}
+		if current.Generation != d.Catalog().Generation {
+			t.Fatal("conditional snapshot has a different generation from Catalog")
+		}
+		if same, changed := d.CatalogIfChanged(current.Generation); changed || same.Resources != nil || same.FailedGroups != nil {
+			t.Fatal("unchanged generation copied a snapshot")
+		}
+		previous = current
+	}
+	r := APIResource{Group: "example.io", Version: "v1", Kind: "Gadget", Name: "gadgets", Namespaced: true}
+	d.AddAPIResource(r)
+	check()
+	r.Kind, r.Namespaced = "Changed", false
+	d.AddAPIResource(r)
+	check()
+	for _, failure := range []error{
+		&discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{{Group: "failed.io", Version: "v1"}: errors.New("unavailable")}},
+		&discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{{Group: "other.io", Version: "v1"}: errors.New("unavailable")}},
+		errors.New("unclassified"), nil,
+	} {
+		client.err = failure
+		if err := d.Refresh(); err != nil {
+			t.Fatal(err)
+		}
+		check()
+	}
+	client.lists, client.err = nil, errors.New("unavailable")
+	if err := d.Refresh(); err == nil {
+		t.Fatal("expected failed refresh")
+	}
+	// A failed refresh keeps the last catalog, so its generation doesn't move.
+	if _, changed := d.CatalogIfChanged(previous.Generation); changed {
+		t.Fatal("a failed refresh advanced the generation of an unchanged catalog")
+	}
+	if !previous.Complete || len(previous.Resources) != 2 {
+		t.Fatal("generation tracking changed the failed-refresh catalog contract")
+	}
+	client.err = nil
+	if err := d.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	check()
+	if len(previous.Resources) != 0 || !previous.Complete {
+		t.Fatal("empty successful refresh did not remove resources")
+	}
+}
+
+func TestCatalogGenerationAndResourcesAreOneSnapshot(t *testing.T) {
+	d, err := NewResourceDiscovery(&scriptedDiscovery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := d.Catalog().Generation
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for i := range 100 {
+			d.AddAPIResource(APIResource{Group: "example.io", Version: "v1", Kind: "Thing", Name: fmt.Sprint("things", i)})
+		}
+	})
+	for range 100 {
+		c := d.Catalog()
+		if c.Generation-initial != uint64(len(c.Resources)) {
+			t.Fatalf("snapshot generation %d contains %d resources (initial %d)", c.Generation, len(c.Resources), initial)
+		}
+		if next, changed := d.CatalogIfChanged(c.Generation); changed && next.Generation-initial != uint64(len(next.Resources)) {
+			t.Fatalf("conditional snapshot generation %d contains %d resources", next.Generation, len(next.Resources))
+		}
+	}
+	wg.Wait()
+	if c := d.Catalog(); c.Generation-initial != 100 || len(c.Resources) != 100 {
+		t.Fatalf("final snapshot = generation %d, resources %d", c.Generation, len(c.Resources))
+	}
+}
+
+func TestCatalogIfChangedOnNilAndUninitializedDiscovery(t *testing.T) {
+	var missing *ResourceDiscovery
+	if c, changed := missing.CatalogIfChanged(0); changed || c.Resources != nil {
+		t.Fatal("nil discovery returned a changed catalog")
+	}
+	d := &ResourceDiscovery{}
+	if c, changed := d.CatalogIfChanged(0); changed || c.Resources != nil {
+		t.Fatal("unchanged zero generation returned a snapshot")
+	}
 }
 
 func (d *scriptedDiscovery) ServerGroupsAndResources() ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
