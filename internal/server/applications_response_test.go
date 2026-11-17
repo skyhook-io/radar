@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -60,5 +62,52 @@ func TestApplicationsRetainAttachmentsAboveTopologyDisplayLimit(t *testing.T) {
 				t.Fatalf("exposure classification=%s/%s", row.WorkloadClass, row.Workloads[0].WorkloadClass)
 			}
 		}
+	}
+}
+
+func queuedApplicationsBuildFixture(t *testing.T) {
+	t.Helper()
+	objects := append(testNamespaces("prod"), &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api"}})
+	useTestResourceCache(t, fake.NewClientset(objects...))
+	restore, err := k8s.SetTestResourceDiscovery(fake.NewClientset().Discovery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	addApplicationTypedDiscovery()
+	clearApplicationsCache()
+	t.Cleanup(clearApplicationsCache)
+}
+
+// A cold build queued behind a slow one gets its whole budget once admitted.
+func TestApplicationsQueuedBuildGetsFullBudget(t *testing.T) {
+	queuedApplicationsBuildFixture(t)
+	prev := applicationsBuildBudget
+	applicationsBuildBudget = 300 * time.Millisecond
+	t.Cleanup(func() { applicationsBuildBudget = prev })
+
+	applicationsBuildSlot <- struct{}{} // a slow build holds the slot
+	done := make(chan error, 1)
+	go func() {
+		_, err := listApplicationsForRequest(context.Background(), []string{"prod"}, false)
+		done <- err
+	}()
+	time.Sleep(2 * applicationsBuildBudget)
+	<-applicationsBuildSlot
+	if err := <-done; err != nil {
+		t.Fatalf("queued build failed: %v", err)
+	}
+}
+
+// A request that ends while its build is still queued reads as a busy
+// build, not an internal error.
+func TestApplicationsQueuedBuildRequestEnds(t *testing.T) {
+	queuedApplicationsBuildFixture(t)
+	applicationsBuildSlot <- struct{}{}
+	t.Cleanup(func() { <-applicationsBuildSlot })
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := listApplicationsForRequest(ctx, []string{"prod"}, false); !errors.Is(err, errResourceCacheUnavailable) {
+		t.Fatalf("err = %v, want errResourceCacheUnavailable", err)
 	}
 }
