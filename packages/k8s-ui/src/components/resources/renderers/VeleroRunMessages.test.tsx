@@ -197,7 +197,41 @@ it('keeps quoted failure reasons separate but folds structured object identities
   expect(rows('cannot read name=x', 'cannot read name=y')).toHaveLength(1)
   expect(rows('cannot read ns/first', 'cannot read ns/second')).toHaveLength(1)
   expect(rows('cannot read persistentvolumeclaims/first', 'cannot read persistentvolumeclaims/second')).toHaveLength(1)
-  expect(rows('cannot read "data-pg-0"', 'cannot read "data-pg-1"')).toHaveLength(1)
+  // A bare word, quoted or not, has no syntax saying it names an object.
+  expect(rows('cannot read "data-pg-0"', 'cannot read "data-pg-1"')).toHaveLength(2)
+})
+
+it('keeps lowercase and hyphenated quoted reasons, and digit-bearing error codes, apart', () => {
+  const rows = (a: string, b: string) => veleroMessageRows({ errors: [a, b].map((message) => ({ scope: 'velero', message })), warnings: [] })
+  expect(rows('request failed: "access-denied"', 'request failed: "quota-exceeded"')).toHaveLength(2)
+  expect(rows('request failed: access-denied', 'request failed: quota-exceeded')).toHaveLength(2)
+  expect(rows('request failed: "E1001"', 'request failed: "E1002"')).toHaveLength(2)
+  expect(rows('upload failed: err-404', 'upload failed: err-500')).toHaveLength(2)
+  // The same reason on two objects still folds, by the object.
+  const folded = rows('request failed for name=a: "access-denied"', 'request failed for name=b: "access-denied"')
+  expect(folded).toHaveLength(1)
+  expect(folded[0].variants).toEqual(['a', 'b'])
+})
+
+it('bounds the folding index for many distinct messages just under the cutoffs', () => {
+  // Each message is distinct, just under the per-message cutoffs, with more identities than are indexed.
+  const words = (n: number) => Array.from({ length: 380 }, (_, i) => `w${(n * 7 + i) % 97}`).join(' ')
+  const messages = Array.from({ length: 100 }, (_, n) => `${words(n)} name=a${n} name=b${n} ns/c${n} ns/d${n} ns/e${n} ns/f${n}`.slice(0, 4000))
+  const stats = { keys: 0, chars: 0 }
+  const rows = veleroMessageRows({ errors: messages.map((message) => ({ scope: 'velero', message })), warnings: [] }, stats)
+  expect(rows).toHaveLength(100)
+  expect(rows.map((r) => r.text)).toEqual(messages)
+  // At most four positions a message, and never past the index budget.
+  expect(stats.keys).toBeLessThanOrEqual(4 * messages.length)
+  expect(stats.chars).toBeLessThanOrEqual(512 * 1024 + 4096)
+})
+
+it('folds exact repeats of any length', () => {
+  const long = 'word '.repeat(10000)
+  const rows = veleroMessageRows({ errors: [long, long, 'other'].map((message) => ({ scope: 'velero', message })), warnings: [] })
+  expect(rows).toHaveLength(2)
+  expect(rows[0]).toMatchObject({ text: long })
+  expect(rows[0].variants).toHaveLength(2)
 })
 
 it('bounds folding work for long messages, keeping their text verbatim', () => {

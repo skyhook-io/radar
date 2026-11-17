@@ -72,13 +72,29 @@ export interface VeleroMessageRow {
   variants: string[]
 }
 
-// A word that names an object: data-pg-0, name=x, "app-config", ns/pod. A
-// plain word (Unauthorized, Forbidden) is a different reason, never folded.
+// A word that names an object by explicit syntax: name=x, or a slash-joined
+// reference (persistentvolumeclaims/data-0, ns/pod). Only these fold: a bare
+// word, quoted or not ("access-denied", E1001, Forbidden), may be a reason, and
+// two reasons are two rows.
 const OBJECT_IDENTITY_PATTERNS = [
-  /^name=["']?[a-z0-9][a-z0-9_.-]*["']?[,;:)]*$/,
+  /^\(?name=["']?[a-z0-9][a-z0-9_.-]*["']?[,;:)]*$/,
   /^["']?(?:[a-z0-9][a-z0-9_.-]*\/)+[a-z0-9][a-z0-9_.-]*["']?[,;:)]*$/,
-  /^["']?(?:[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+|[a-z][a-z0-9]*\d[a-z0-9]*)["']?[,;:)]*$/,
 ]
+
+// Folding bounds. A message longer than these is shown as written (exact
+// repeats still fold); at most this many identity positions per message are
+// indexed, and once the index holds this many characters the remaining
+// messages fold only exact repeats.
+const MAX_FOLD_TOKENS = 400
+const MAX_FOLD_BYTES = 4096
+const MAX_IDENTITIES_PER_MESSAGE = 4
+const MAX_INDEX_CHARS = 512 * 1024
+
+/** What folding indexed, for tests that hold it to its bounds. */
+export interface VeleroMessageFoldStats {
+  keys: number
+  chars: number
+}
 
 function commonAffixes(values: string[]): [number, number] {
   let pre = 0
@@ -88,100 +104,87 @@ function commonAffixes(values: string[]): [number, number] {
   return [pre, suf]
 }
 
+const encoder = new TextEncoder()
+
+function foldable(message: string, tokens: string[]): boolean {
+  return tokens.length <= MAX_FOLD_TOKENS && message.length <= MAX_FOLD_BYTES && encoder.encode(message).byteLength <= MAX_FOLD_BYTES
+}
+
+/** The positions of the words that name an object, at most MAX_IDENTITIES_PER_MESSAGE. */
+function identityPositions(tokens: string[]): number[] {
+  const out: number[] = []
+  for (let i = 0; i < tokens.length && out.length < MAX_IDENTITIES_PER_MESSAGE; i++) {
+    if (OBJECT_IDENTITY_PATTERNS.some((pattern) => pattern.test(tokens[i]))) out.push(i)
+  }
+  return out
+}
+
+const templateKey = (tokens: string[], at: number) => `${at}\u0000${tokens.slice(0, at).join(' ')}\u0000${tokens.slice(at + 1).join(' ')}`
+
 /**
- * Groups by scope, errors first, and folds messages that differ only in one
- * word: Velero records one error per item that failed, so a failed volume
- * step across forty PVCs is forty lines that say the same thing.
+ * Groups by scope, errors first. The same message repeated is one row with a
+ * count, and messages that differ only in one object's identity fold into one
+ * row naming them: Velero records one error per item that failed, so a failed
+ * volume step across forty PVCs is forty lines that say the same thing.
  */
-export function veleroMessageRows(messages: { errors: VeleroMessage[]; warnings: VeleroMessage[] }): VeleroMessageRow[] {
+export function veleroMessageRows(messages: { errors: VeleroMessage[]; warnings: VeleroMessage[] }, stats?: VeleroMessageFoldStats): VeleroMessageRow[] {
   const entries = [
     ...messages.errors.map((m) => ({ ...m, severity: 'error' as Severity })),
     ...messages.warnings.map((m) => ({ ...m, severity: 'warning' as Severity })),
   ]
   const scopes = [...new Set(entries.map((e) => e.scope))]
   const rows: VeleroMessageRow[] = []
+  const budget = stats ?? { keys: 0, chars: 0 }
   for (const scope of scopes) {
     for (const severity of ['error', 'warning'] as Severity[]) {
-      const messages = entries.filter((e) => e.scope === scope && e.severity === severity)
-      if (messages.length === 1) {
-        rows.push({ severity, scope, text: messages[0].message, variants: [] })
-        continue
-      }
-      const here = messages.map((e) => e.message.split(' '))
-      const bounded = (tokens: string[]) => {
-        if (tokens.length > 400) return false
-        const text = tokens.join(' ')
-        return text.length <= 4096 && new TextEncoder().encode(text).byteLength <= 4096
-      }
-      // A key per word position, with that word left out: messages sharing a
-      // key differ at most there.
-      const keyOf = (tokens: string[], i: number) => `${tokens.length}\u0000${i}\u0000${tokens.map((t, j) => (j === i ? '' : t)).join(' ')}`
+      const here = entries.filter((e) => e.scope === scope && e.severity === severity).map((e) => ({ text: e.message, tokens: e.message.split(' ') }))
+      // Pass 1: index each message's identity positions, within the budget.
+      const indexed = here.map((m) => {
+        if (!foldable(m.text, m.tokens)) return []
+        const keys: { at: number; key: string }[] = []
+        for (const at of identityPositions(m.tokens)) {
+          if (budget.chars + m.text.length > MAX_INDEX_CHARS) break
+          const key = templateKey(m.tokens, at)
+          budget.chars += key.length
+          budget.keys++
+          keys.push({ at, key })
+        }
+        return keys
+      })
       const counts = new Map<string, number>()
-      const variantsAt = new Map<string, string[]>()
-      for (const tokens of here) {
-        if (!bounded(tokens)) continue
-        tokens.forEach((t, i) => {
-          const key = keyOf(tokens, i)
-          counts.set(key, (counts.get(key) ?? 0) + 1)
-          const variants = variantsAt.get(key) ?? []
-          variants.push(t)
-          variantsAt.set(key, variants)
-        })
-      }
-      // Only a position where every variant names an object folds; the same
-      // message repeated always does.
-      const foldable = (key: string) => {
-        const vs = variantsAt.get(key) ?? []
-        return vs.every((v) => v === vs[0]) || vs.every((v) => OBJECT_IDENTITY_PATTERNS.some((pattern) => pattern.test(v)))
-      }
+      for (const keys of indexed) for (const { key } of keys) counts.set(key, (counts.get(key) ?? 0) + 1)
+      // Pass 2: each message joins the template most messages share, else its exact repeats.
       const groups = new Map<string, { tokens: string[]; at: number; variants: string[] }>()
-      const order: (string | string[])[] = []
-      for (const tokens of here) {
-        if (!bounded(tokens)) {
-          order.push(tokens)
-          continue
-        }
-        let best = -1
-        let bestCount = 1
-        tokens.forEach((_, i) => {
-          if (!foldable(keyOf(tokens, i))) return
-          const n = counts.get(keyOf(tokens, i)) ?? 0
-          if (n > bestCount) {
-            best = i
-            bestCount = n
-          }
-        })
-        if (best < 0) {
-          order.push(tokens)
-          continue
-        }
-        const key = keyOf(tokens, best)
+      const order: string[] = []
+      here.forEach((m, n) => {
+        let best: { at: number; key: string } | undefined
+        for (const k of indexed[n]) if ((counts.get(k.key) ?? 0) > (best ? counts.get(best.key)! : 1)) best = k
+        const key = best ? `t\u0000${best.key}` : `x\u0000${m.text}`
         const g = groups.get(key)
-        if (g) g.variants.push(tokens[best])
+        if (g) g.variants.push(best ? m.tokens[best.at] : '')
         else {
-          groups.set(key, { tokens, at: best, variants: [tokens[best]] })
+          groups.set(key, { tokens: m.tokens, at: best ? best.at : -1, variants: [best ? m.tokens[best.at] : ''] })
           order.push(key)
         }
-      }
-      for (const item of order) {
-        if (Array.isArray(item)) {
-          rows.push({ severity, scope, text: item.join(' '), variants: [] })
-          continue
-        }
-        const g = groups.get(item)!
-        const distinct = [...new Set(g.variants)]
+      })
+      for (const key of order) {
+        const g = groups.get(key)!
         if (g.variants.length === 1) {
           rows.push({ severity, scope, text: g.tokens.join(' '), variants: [] })
           continue
         }
-        const [pre, suf] = distinct.length > 1 ? commonAffixes(distinct) : [0, 0]
+        const distinct = [...new Set(g.variants)]
+        if (g.at < 0 || distinct.length === 1) {
+          rows.push({ severity, scope, text: g.tokens.join(' '), variants: g.variants })
+          continue
+        }
+        const [pre, suf] = commonAffixes(distinct)
         const word = g.tokens[g.at]
-        const masked = distinct.length > 1 ? `${word.slice(0, pre)}…${word.slice(word.length - suf)}` : word
         rows.push({
           severity,
           scope,
-          text: g.tokens.map((t, j) => (j === g.at ? masked : t)).join(' '),
-          variants: g.variants.map((v) => (distinct.length > 1 ? v.slice(pre, v.length - suf) : v)),
+          text: g.tokens.map((t, j) => (j === g.at ? `${word.slice(0, pre)}…${word.slice(word.length - suf)}` : t)).join(' '),
+          variants: g.variants.map((v) => v.slice(pre, v.length - suf)),
         })
       }
     }
