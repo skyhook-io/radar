@@ -23,6 +23,11 @@ func referrersIndex(name string) *ReferrersIndex {
 	return &ReferrersIndex{Name: "relations/" + name, Key: ReferrerKey}
 }
 
+// unreadReferrerKey files a source whose declarations couldn't all be read.
+// Every reverse search reads it too, so the read error reaches the answer as a
+// gap: returning it from the index function would panic the store instead.
+const unreadReferrerKey = "\x00unread"
+
 // IndexFunc files every alternative a declaration can resolve to. Discovery,
 // access and controller resolution are deliberately deferred to Referrers.
 func (f *Family) IndexFunc() cache.IndexFunc {
@@ -51,7 +56,10 @@ func (f *Family) IndexFunc() cache.IndexFunc {
 				add(r)
 			}
 		})
-		return keys, err
+		if err != nil {
+			keys = append(keys, unreadReferrerKey)
+		}
+		return keys, nil
 	}
 }
 

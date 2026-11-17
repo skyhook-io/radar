@@ -1,6 +1,7 @@
 package relations
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -144,8 +145,8 @@ type referrerReads struct {
 
 func (s *referrerReads) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
 	if index == GatewayParents.ReferrersIndex.Name {
-		if want := []string{ReferrerKey(s.target)}; !slices.Equal(keys, want) {
-			s.t.Errorf("referrers read %q; want only the subject's key, %q", keys, want)
+		if want := []string{ReferrerKey(s.target), unreadReferrerKey}; !slices.Equal(keys, want) {
+			s.t.Errorf("referrers read %q; want only the subject's key and unread sources, %q", keys, want)
 		}
 	}
 	return s.allNamespaces.Indexed(gk, index, keys, scope)
@@ -226,4 +227,31 @@ func (s *localIndexReads) Indexed(gk resourceid.GroupKind, index string, keys []
 		s.t.Errorf("local auth search widened: %+v", scope)
 	}
 	return s.allNamespaces.Indexed(gk, index, keys, scope)
+}
+
+// A source whose declarations can't all be read is filed where every reverse
+// search reads it, rather than failing the index function, which would panic
+// the store.
+func TestAPartlyUnreadSourceIsIndexedForEverySearch(t *testing.T) {
+	target := resourceid.NewRef("", "Secret", "shop", "tls")
+	f := &Family{
+		Name:           "partlyUnread",
+		ReferrersIndex: referrersIndex("partlyUnread"),
+		Sources:        []Source{{Kind: kindConfigMap}},
+		Targets:        []resourceid.GroupKind{kindSecret},
+		Declared: func(_ runtime.Object, visit func(Declaration)) error {
+			visit(Declaration{Path: "data", Target: target})
+			return errors.New("part unreadable")
+		},
+	}
+	store := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{f.ReferrersIndex.Name: f.IndexFunc()})
+	cm := configMap("settings")
+	if err := store.Add(cm); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{ReferrerKey(target), unreadReferrerKey} {
+		if got, _ := store.ByIndex(f.ReferrersIndex.Name, key); len(got) != 1 {
+			t.Errorf("%q holds %d objects; want the partly read source", key, len(got))
+		}
+	}
 }

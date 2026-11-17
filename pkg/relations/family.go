@@ -318,7 +318,7 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 	// one's, or a CrossNamespace family's, can be anywhere.
 	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace)
 	if f.ReferrersIndex != nil {
-		s.index, s.keys = f.ReferrersIndex.Name, []string{f.ReferrersIndex.Key(subject)}
+		s.index, s.keys = f.ReferrersIndex.Name, []string{f.ReferrersIndex.Key(subject), unreadReferrerKey}
 	}
 	for _, source := range f.Sources {
 		if !source.declares(subject.GroupKind()) {
