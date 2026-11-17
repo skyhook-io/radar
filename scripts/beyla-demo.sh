@@ -19,6 +19,8 @@
 #   attrs         Beyla config B: same, plus attributes.select adding dst.port and
 #                 transport. Watch the series count explode via ephemeral ports.
 #   no-network    Beyla config C: application only. The network flow metric disappears.
+#   nodes         Beyla config D: config B plus k8s.src.node.name and k8s.dst.node.name,
+#                 which let a consumer count a flow reported by two nodes' agents once.
 #   port-forward  Port-forward Prometheus to localhost:$PROM_LOCAL_PORT (foreground).
 #   help          Show this message.
 #
@@ -29,6 +31,8 @@
 #   - curl, python3
 #
 # Set CLUSTER_NAME=foo to use a different cluster (default: radar-beyla-demo).
+# Set BEYLA_DEMO_NODES=2 on `up` for a control plane plus a worker, with client on
+# the control plane and web/db on the worker, so their flows cross nodes.
 #
 # NOTES, learned the hard way:
 #   - Beyla's network flow metric exports `dst_port` and `transport` ONLY when they are
@@ -49,6 +53,7 @@
 set -euo pipefail
 
 CLUSTER_NAME="${CLUSTER_NAME:-radar-beyla-demo}"
+BEYLA_DEMO_NODES="${BEYLA_DEMO_NODES:-1}"
 KUBECTL_CTX="kind-${CLUSTER_NAME}"
 
 # Versions pinned so the demo behaves consistently across runs. Bump deliberately.
@@ -146,9 +151,10 @@ config:
 YAML
 }
 
+# $1: extra attributes.select entries, one YAML list line each.
 beyla_values_attrs() {
   beyla_values_common
-  cat <<'YAML'
+  cat <<YAML
 env:
   OTEL_EBPF_METRICS_FEATURES: "application,network"
   OTEL_EBPF_LOG_LEVEL: "info"
@@ -173,6 +179,7 @@ config:
             - dst.port
             - transport
             - direction
+${1:-}
     network:
       enable: true
     discovery:
@@ -212,6 +219,10 @@ apply_beyla() {
   case "$mode" in
     default)    beyla_values_default    > "$values" ;;
     attrs)      beyla_values_attrs      > "$values" ;;
+    # Both nodes' agents report a cross-node flow; the node names are what tell
+    # that duplicate apart from two replicas of one owner on different nodes.
+    nodes)      beyla_values_attrs "            - k8s.src.node.name
+            - k8s.dst.node.name" > "$values" ;;
     no-network) beyla_values_no_network > "$values" ;;
     *) fail "unknown Beyla mode: $mode" ;;
   esac
@@ -406,6 +417,20 @@ YAML
   ok "web (2 replicas, :80 and :8080, each with a failing route), db (:6379), and two callers applied"
 }
 
+# client on the control plane, web and db on the worker: every client flow crosses
+# nodes, so both agents report it.
+pin_across_nodes() {
+  step "Pinning client to ${CLUSTER_NAME}-control-plane, web and db to ${CLUSTER_NAME}-worker"
+  kctl -n "${DEMO_NS}" patch deploy client --type merge -p "{\"spec\":{\"template\":{\"spec\":{
+    \"nodeSelector\":{\"kubernetes.io/hostname\":\"${CLUSTER_NAME}-control-plane\"},
+    \"tolerations\":[{\"key\":\"node-role.kubernetes.io/control-plane\",\"operator\":\"Exists\",\"effect\":\"NoSchedule\"}]}}}}" >/dev/null
+  for d in web db; do
+    kctl -n "${DEMO_NS}" patch deploy "$d" --type merge -p "{\"spec\":{\"template\":{\"spec\":{
+      \"nodeSelector\":{\"kubernetes.io/hostname\":\"${CLUSTER_NAME}-worker\"}}}}}" >/dev/null
+  done
+  ok "client and web/db on different nodes"
+}
+
 apply_prometheus() {
   step "Deploying Prometheus in namespace '${MONITORING_NS}'"
   # Deliberately minimal: one Deployment, pod service discovery, 2h retention. All we
@@ -592,7 +617,12 @@ cmd_up() {
     step "Cluster '${CLUSTER_NAME}' already exists — reusing"
   else
     step "Creating kind cluster '${CLUSTER_NAME}'"
-    kind create cluster --name "${CLUSTER_NAME}" --wait 90s
+    if [ "${BEYLA_DEMO_NODES}" = "2" ]; then
+      printf 'kind: Cluster\napiVersion: kind.x-k8s.io/v1alpha4\nnodes:\n  - role: control-plane\n  - role: worker\n' |
+        kind create cluster --name "${CLUSTER_NAME}" --config - --wait 90s
+    else
+      kind create cluster --name "${CLUSTER_NAME}" --wait 90s
+    fi
     ok "Cluster created"
   fi
 
@@ -603,6 +633,7 @@ cmd_up() {
   fi
 
   apply_workloads
+  if [ "${BEYLA_DEMO_NODES}" = "2" ]; then pin_across_nodes; fi
   apply_prometheus
   apply_beyla default
 
@@ -729,6 +760,7 @@ cmd_query() {
 
 cmd_default()    { require_cluster; apply_beyla default;    warn "Wait ~6 min for the 5m rate window to refill before querying."; }
 cmd_attrs()      { require_cluster; apply_beyla attrs;      warn "Wait ~6 min. Expect a large series count: response-direction series carry ephemeral ports."; }
+cmd_nodes()      { require_cluster; apply_beyla nodes;      warn "Wait ~6 min. Meaningful only on a two-node cluster (BEYLA_DEMO_NODES=2 up)."; }
 cmd_no_network() { require_cluster; apply_beyla no-network; warn "beyla_network_flow_bytes_total will disappear once the 5m staleness window passes."; }
 
 cmd_port_forward() {
@@ -750,6 +782,7 @@ case "${1:-help}" in
   default)      cmd_default ;;
   attrs)        cmd_attrs ;;
   no-network)   cmd_no_network ;;
+  nodes)        cmd_nodes ;;
   port-forward) cmd_port_forward ;;
   help|-h|--help) cmd_help ;;
   *) fail "Unknown subcommand '$1'. Run '$0 help'." ;;
