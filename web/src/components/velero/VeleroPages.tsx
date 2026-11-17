@@ -53,7 +53,7 @@ import { useVeleroStoredBackups } from '../../api/policy'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { currentPageLabel, issuesPathForSubject } from '../../utils/page-links'
 import { Notice, RefreshFailedNotice, Segments, SectionTable } from '../workspace/layout'
-import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
+import { INCOMPLETE_COVERAGE_STATES, coverageLabel } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { RunMessages } from './VeleroRunMessagesHost'
 import { VeleroBackupDeletionRow } from './VeleroDeleteBackup'
@@ -575,6 +575,16 @@ function readInPart(query: { data?: VeleroRunsResponse }): boolean {
   return !!query.data && (INCOMPLETE_COVERAGE_STATES.has(query.data.coverage.state) || !!query.data.truncated)
 }
 
+/**
+ * A read that returned no inventory at all (no access, not cached, still
+ * loading, failed): its empty list says nothing, so no count or lower bound
+ * is drawn from it. A partial read still bounds the count from below.
+ */
+function readNothing(query: { data?: VeleroRunsResponse }): boolean {
+  const state = query.data?.coverage.state
+  return !!state && state !== 'full' && state !== 'partial'
+}
+
 function VeleroScheduleOverview({ resource, onNavigate }: { resource: any; onNavigate?: NavigateToResource }) {
   const namespace: string = resource?.metadata?.namespace ?? ''
   const name: string = resource?.metadata?.name ?? ''
@@ -596,7 +606,7 @@ function VeleroScheduleOverview({ resource, onNavigate }: { resource: any; onNav
   const inBanner = !!workspace.data?.schedules.find((s) => s.namespace === namespace && s.name === name)?.attention
   return (
     <>
-      <RefreshFailedNotice queries={[activity]} />
+      <RefreshFailedNotice queries={[activity, query]} />
       {activity.error && !reading && <LookupFailureNote errors={[activity.error]} what="this schedule’s activity" />}
       <Card title="At a glance">
         <FactGrid>
@@ -662,6 +672,8 @@ function VeleroScheduleOverview({ resource, onNavigate }: { resource: any; onNav
               'Loading…'
             ) : !query.data ? (
               <span className="text-theme-text-secondary">Not read: {(query.error as Error | null)?.message}</span>
+            ) : readNothing(query) ? (
+              <span className="text-theme-text-tertiary">Unknown — {coverageLabel(query.data.coverage)}</span>
             ) : kept === 0 && runs.length === 0 && !partial ? (
               'None'
             ) : (

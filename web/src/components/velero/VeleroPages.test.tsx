@@ -204,6 +204,36 @@ describe('The composed Overview', () => {
     expect(html).toContain('Next step: </span>Create the bucket, or point the storage location at an existing one')
   })
 
+  it('says the runs Velero keeps are unknown when the backups were not read, never "at least 0"', () => {
+    const reading = schedule({ runs: { read: 'unknown', kept: 0 } })
+    state.workspace = workspace({ schedules: [reading] })
+    state.activity = { reading }
+    for (const [coverage, says] of [
+      [{ state: 'denied', deniedNamespaces: ['velero'] }, 'Unknown — no access in velero'],
+      [{ state: 'uncached', uncachedNamespaces: ['velero'] }, 'Unknown — not cached by Radar in velero'],
+    ] as const) {
+      state.runsBy = { 'backups:nightly': { observedAt: '', coverage, runs: [], total: 0 } }
+      const html = page('schedules', { metadata: { namespace: 'velero', name: 'nightly' }, spec: { template: {} } })
+      expect(html).toContain(says)
+      expect(html).not.toContain('At least 0')
+      expect(html).not.toContain('0 completed')
+    }
+    // A partial read still bounds the count from below.
+    state.runsBy = { 'backups:nightly': { observedAt: '', coverage: { state: 'partial' }, runs: [{ namespace: 'velero', name: 'nightly-1', uid: '1', phase: 'Completed', errors: 0, warnings: 0 }], total: 1 } }
+    expect(page('schedules', { metadata: { namespace: 'velero', name: 'nightly' }, spec: { template: {} } })).toContain('At least 1 kept')
+    state.runsBy = {}
+  })
+
+  it('reads a zero retention as the server default', () => {
+    state.workspace = workspace()
+    state.activity = { reading: schedule() }
+    state.runsBy = { 'backups:nightly': runsOf([]) }
+    const html = page('schedules', { metadata: { namespace: 'velero', name: 'nightly' }, spec: { template: { ttl: '0h0m0s' } } })
+    expect(html).toContain('The Velero server’s default (30 days unless it was changed)')
+    expect(html).not.toContain('0 hours')
+    state.runsBy = {}
+  })
+
   it('leads a schedule that cannot run with its Velero reading, not the generic issue row', () => {
     const reading = schedule({ name: 'very-long', state: 'cannotRun', attention: true, lastSubmitted: undefined, nextRun: undefined, runs: { read: 'full', kept: 0 } })
     state.workspace = workspace({ schedules: [reading] })
