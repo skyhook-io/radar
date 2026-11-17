@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { veleroPlainReason, veleroScheduleBadge } from './reading'
+import { VELERO_FAILED_PHASES, veleroPlainReason, veleroScheduleBadge } from './reading'
 
 describe('veleroPlainReason', () => {
   it('says what the common object-store failures mean', () => {
@@ -15,6 +15,20 @@ describe('veleroPlainReason', () => {
   it('names a run Velero failed because it restarted', () => {
     expect(veleroPlainReason('found a backup with status "InProgress" during the server starting, mark it as "Failed"')).toBe('Velero restarted while this backup ran, so it was marked Failed — run it again')
     expect(veleroPlainReason('found a restore with status "InProgress" during the server starting, mark it as "Failed"')).toBe('Velero restarted while this restore ran, so it was marked Failed — run it again')
+  })
+
+  it('names the storage location Velero refused a run or a deletion over, without its kind name', () => {
+    expect(veleroPlainReason('backup can\'t be created because BackupStorageLocation dr-replica is in Unavailable status.')).toBe('Its storage location dr-replica is unavailable')
+    expect(veleroPlainReason('The BSL dr-replica is unavailable, cannot retrieve the backup')).toBe('Its storage location dr-replica is unavailable')
+    expect(veleroPlainReason('cannot delete backup because backup storage location dr is currently in Unavailable state')).toBe('Its storage location dr is unavailable')
+    expect(veleroPlainReason('cannot delete backup because backup storage location dr is currently in read-only mode')).toBe('Its storage location dr is read-only')
+    expect(veleroPlainReason('backup can\'t be created because backup storage location dr is currently in read-only mode')).toBe('Its storage location dr is read-only')
+    expect(veleroPlainReason('backup storage location nowhere not found')).toBe('Its storage location nowhere doesn’t exist')
+    expect(veleroPlainReason('an existing backup storage location was not specified at backup creation time and the default default was not found. Please address this issue')).toBe('It names no storage location, and the default, default, doesn’t exist')
+    expect(veleroPlainReason('backup is still in progress')).toBe('The backup was still running')
+    expect(veleroPlainReason('backup not found')).toBe('Velero couldn’t find the backup')
+    // Radar's own Issue message for an unavailable location keeps the store's reason.
+    expect(veleroPlainReason('BackupStorageLocation "dr" is unavailable: some error Radar does not know')).toBeUndefined()
   })
 
   it('leaves a message it does not recognise alone', () => {
@@ -40,6 +54,18 @@ describe('veleroScheduleBadge', () => {
     expect(b.detail).toContain('partly failed')
     // A worse state keeps its own name.
     expect(veleroScheduleBadge({ ...base, state: 'late', attention: true, runs: { ...base.runs, newest: run('Failed') } }).label).toBe('Late')
+  })
+
+  it.each([...VELERO_FAILED_PHASES])('reads %s as the last run failing, on schedule or due', (phase) => {
+    for (const state of ['onSchedule', 'due'] as const) {
+      const b = veleroScheduleBadge({ ...base, state, runs: { ...base.runs, newest: run(phase) } })
+      expect(b).toMatchObject({ label: 'Last run failed', tone: 'alert' })
+      expect(b.detail).toContain(phase === 'Failed' ? 'failed' : phase === 'FailedValidation' ? 'was rejected' : 'partly failed')
+    }
+  })
+
+  it('counts every partial phase as failed', () => {
+    expect([...VELERO_FAILED_PHASES]).toEqual(expect.arrayContaining(['FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed']))
   })
 
   it('keeps a healthy state out of green when the zone is not confirmed', () => {

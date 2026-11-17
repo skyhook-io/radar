@@ -61,8 +61,18 @@ export function veleroScheduleTone(reading: Pick<VeleroScheduleReading, 'state' 
   return STATE_TONE[reading.state] ?? 'unknown'
 }
 
-// The newest run's outcomes that make an otherwise healthy schedule read "Last run failed".
-const LAST_RUN_FAILED = new Set(['Failed', 'PartiallyFailed', 'FailedValidation'])
+/**
+ * The run phases the Velero views count as failed: failed, rejected, or partly
+ * failed, including the partial phases Velero is still finishing. One
+ * definition for the run lists, the tabs' marks and the schedule badge.
+ */
+export const VELERO_FAILED_PHASES: ReadonlySet<string> = new Set([
+  'Failed',
+  'FailedValidation',
+  'PartiallyFailed',
+  'FinalizingPartiallyFailed',
+  'WaitingForPluginOperationsPartiallyFailed',
+])
 
 /** Whether Radar is sure of the zone the schedule's cron is read in. */
 export function veleroZoneConfirmed(zone: VeleroZone): boolean {
@@ -81,7 +91,7 @@ export function veleroScheduleBadge(
   const onSchedule = reading.state === 'onSchedule' || (reading.state === 'due' && reading.reason !== 'serverDown')
   if (!onSchedule) return { label: veleroScheduleStateLabel(reading.state), tone: veleroScheduleTone(reading) }
   const newest = reading.runs?.newest
-  if (newest && LAST_RUN_FAILED.has(newest.phase ?? '')) {
+  if (newest && VELERO_FAILED_PHASES.has(newest.phase ?? '')) {
     return { label: 'Last run failed', tone: 'alert', detail: `Its newest run, ${newest.name}, ${newest.phase === 'FailedValidation' ? 'was rejected' : newest.phase === 'Failed' ? 'failed' : 'partly failed'}.` }
   }
   return { label: STATE_LABEL.onSchedule, tone: reading.zone && !veleroZoneConfirmed(reading.zone) ? 'unknown' : 'healthy' }
@@ -291,6 +301,22 @@ const PLAIN_REASONS: [RegExp, string][] = [
   [/no such host|i\/o timeout|TLS handshake timeout|connection refused|network is unreachable/i, 'Velero can’t reach the object store'],
 ]
 
+// Velero's own refusals that name a storage location (v1.18.2 backup, restore
+// and deletion controllers), said without its kind name or "BSL". Checked after
+// the object store's errors, which say why a location is unavailable.
+const LOCATION_NAME = '"?([a-z0-9][a-z0-9.-]*)"?'
+const LOCATION = `(?:BackupStorageLocation|backup storage location|BSL) ${LOCATION_NAME}`
+const LOCATION_REASONS: [RegExp, (name: string) => string][] = [
+  [new RegExp(`${LOCATION} (?:is in Unavailable status|is currently in Unavailable state)|The BSL ${LOCATION_NAME} is unavailable`, 'i'), (n) => `Its storage location ${n} is unavailable`],
+  [new RegExp(`${LOCATION} is currently in read-only mode`, 'i'), (n) => `Its storage location ${n} is read-only`],
+  [new RegExp(`${LOCATION} not found`, 'i'), (n) => `Its storage location ${n} doesn’t exist`],
+  [new RegExp(`not specified at backup creation time and the (?:server )?default ${LOCATION_NAME} (?:does not exist|was not found)`, 'i'), (n) => `It names no storage location, and the default, ${n}, doesn’t exist`],
+]
+const FIXED_REASONS: [RegExp, string][] = [
+  [/^backup is still in progress$/i, 'The backup was still running'],
+  [/^backup not found$/i, 'Velero couldn’t find the backup'],
+]
+
 /**
  * One plain line for a raw Velero or object-store message, or undefined when
  * the message is not one Radar recognises. The raw text stays the evidence;
@@ -300,5 +326,11 @@ export function veleroPlainReason(message: string | undefined): string | undefin
   if (!message) return undefined
   const restarted = /found an? (backup|restore) with status "?InProgress"? during the server starting/i.exec(message)
   if (restarted) return `Velero restarted while this ${restarted[1].toLowerCase()} ran, so it was marked Failed — run it again`
-  return PLAIN_REASONS.find(([pattern]) => pattern.test(message))?.[1]
+  const store = PLAIN_REASONS.find(([pattern]) => pattern.test(message))?.[1]
+  if (store) return store
+  for (const [pattern, text] of LOCATION_REASONS) {
+    const m = pattern.exec(message)
+    if (m) return text(m[1] ?? m[2])
+  }
+  return FIXED_REASONS.find(([pattern]) => pattern.test(message.trim()))?.[1]
 }

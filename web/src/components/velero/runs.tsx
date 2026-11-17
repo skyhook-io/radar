@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Tooltip, formatDuration, formatRelativeAgeTime, getBackupStatus, getRestoreStatus, toneTextClass, veleroLocalTime, veleroMomentText, veleroPlainReason } from '@skyhook-io/k8s-ui'
+import { Tooltip, formatDuration, formatRelativeAgeTime, getBackupStatus, getRestoreStatus, toneTextClass, veleroLocalTime, veleroMomentText, veleroPlainReason, VELERO_FAILED_PHASES } from '@skyhook-io/k8s-ui'
 import type { VeleroRunRow, VeleroRunsResponse } from '../../api/velero'
 import { Notice } from '../workspace/layout'
 import { INCOMPLETE_COVERAGE_STATES, coverageEmpty, coverageLabel } from '../workspace/coverage'
@@ -24,7 +24,7 @@ export function RunOutcome({ kind, phase }: { kind: 'Backup' | 'Restore'; phase?
   return <Outcome badge={kind === 'Backup' ? getBackupStatus(resource) : getRestoreStatus(resource)} />
 }
 
-export const FAILED = new Set(['Failed', 'PartiallyFailed', 'FailedValidation', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed'])
+export const FAILED = VELERO_FAILED_PHASES
 // Velero refused the run or it failed outright; the rest of FAILED partly failed.
 const FAILED_OUTRIGHT = new Set(['Failed', 'FailedValidation'])
 
