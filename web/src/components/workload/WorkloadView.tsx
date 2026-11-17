@@ -107,7 +107,7 @@ import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
 import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
-import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
+import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName, getLogContainerNames, getInitContainerNames } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
@@ -628,6 +628,9 @@ export function WorkloadView({
   // of itself. Fall back to the group derived from the fetched resource, then
   // to undefined (which the gate treats as "group unknown → allow").
   const effectiveGroup = rest.group || resourceGroup || undefined
+  // The fetched resource's own group, once it has loaded: the route's group is
+  // '' whenever a link left ?apiGroup out.
+  const identityGroup = resource?.apiVersion ? resourceGroup : effectiveGroup
   const batchKind = pluralToKind(apiKind)
   const batchExecution = supportsBatchExecution(batchKind, apiKind, effectiveGroup, resource?.apiVersion)
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
@@ -1286,7 +1289,7 @@ export function WorkloadView({
             viewNamespaces={viewNamespaces}
           />
         )}
-        {...resourceDetailSlots({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, rest.extraTabs)}
+        {...resourceDetailSlots({ kind: apiKind, group: identityGroup, namespace, name }, rest.extraTabs)}
         onSelectTopologyMember={batchExecution && batchKind === 'JobSet' ? handleSelectTopologyMember : undefined}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res, leadContent }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
@@ -1399,7 +1402,7 @@ export function WorkloadView({
               return null
             }}
             compact={!expanded}
-            subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
+            subjectResource={{ kind: apiKind, namespace, name, group: identityGroup }}
             onResourceClick={openIssueResource}
           />
           </div>
@@ -1687,12 +1690,8 @@ function PodLogsTab({
   initialContainer?: string | null
   onConsumeInitialContainer?: () => void
 }) {
-  const containers = useMemo(() => {
-    const names: string[] = []
-    for (const c of resource?.spec?.initContainers || []) if (c.name) names.push(c.name)
-    for (const c of resource?.spec?.containers || []) if (c.name) names.push(c.name)
-    return names
-  }, [resource])
+  const containers = useMemo(() => getLogContainerNames(resource), [resource])
+  const initContainers = useMemo(() => getInitContainerNames(resource), [resource])
 
   // A terminated pod has nothing to follow — only stream live ones. Wait for
   // the phase to be known so a completed pod isn't briefly streamed while the
@@ -1712,7 +1711,8 @@ function PodLogsTab({
         namespace={namespace}
         podName={name}
         containers={containers}
-        initialContainer={initialContainer || undefined}
+        initialContainer={initialContainer || getDefaultLogContainerName(resource)}
+        initContainers={initContainers}
         autoStream={autoStream}
       />
     </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useId } from 'react'
+import { useState, useEffect, useId, type ReactNode } from 'react'
 import { Server, ExternalLink, Scale, Minus, Plus, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
@@ -56,6 +56,9 @@ interface WorkloadRendererProps {
   policyData?: PolicyResourceResponse | null
   policyLoading?: boolean
   policyError?: Error | null
+  /** A host-rendered section shown after Policy (Radar: the workload's
+   *  vulnerabilities). Omitted when the host passes nothing. */
+  vulnerabilitySection?: ReactNode
   /** Names of the LimitRanges in this workload's namespace. Absent while the
    *  lookup is pending or unreadable, which leaves the link unrendered. */
   namespaceLimitRangeNames?: string[] | null
@@ -130,7 +133,7 @@ function compactHPASummary(diagnosis: HPADiagnosis): string {
   return diagnosis.summary
 }
 
-export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, isScalePending, scaleBlockedBy, scalerDiagnostics, workloadPods, onRequestRefresh, rbacData, rbacLoading, rbacError, policyData, policyLoading, policyError, namespaceLimitRangeNames }: WorkloadRendererProps) {
+export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, isScalePending, scaleBlockedBy, scalerDiagnostics, workloadPods, onRequestRefresh, rbacData, rbacLoading, rbacError, policyData, policyLoading, policyError, namespaceLimitRangeNames, vulnerabilitySection }: WorkloadRendererProps) {
   const titleId = useId()
   const status = data.status || {}
   const spec = data.spec || {}
@@ -354,6 +357,7 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
       {policyData !== undefined && (
         <PolicySection data={policyData} loading={policyLoading} error={policyError} />
       )}
+      {vulnerabilitySection}
 
       <Section title="Strategy">
         <PropertyList>

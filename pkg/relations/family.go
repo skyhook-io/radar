@@ -43,7 +43,8 @@ type Family struct {
 
 // Source is a kind that declares. Targets narrows the family's Targets to
 // the ones it can declare, when it can't declare them all, so an answer
-// about another kind neither reads nor reports it.
+// about another kind neither reads nor reports it. Empty Targets means every
+// target of the family.
 type Source struct {
 	Kind    resourceid.GroupKind
 	Targets []resourceid.GroupKind
@@ -64,7 +65,10 @@ func (f *Family) source(gk resourceid.GroupKind) int {
 	return slices.IndexFunc(f.Sources, func(s Source) bool { return s.Kind == gk })
 }
 
-// Declaration is one target a source declares, and where.
+// Declaration is one target a source declares, and where. Path is the
+// declaring field from the object's root, with [] for each list it passes
+// through, such as spec.template.spec.volumes[].configMap.name; readers
+// compare these spellings, so they are part of the contract.
 type Declaration struct {
 	Target resourceid.Ref
 	Path   string
