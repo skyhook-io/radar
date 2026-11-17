@@ -107,5 +107,15 @@ describe('a declared retention', () => {
     expect(veleroDeclaredRetention('720h0m0s')).toBe('30 days')
     expect(veleroDeclaredTtl('1h30m')).toBe('1h30m')
     expect(veleroDeclaredTtl('soon')).toBe('soon')
+    expect(veleroDeclaredTtl('0h1ms')).toBe('0h1ms')
+    expect(veleroDeclaredTtl('0h0')).toBe('0h0')
+  })
+
+  // A crafted ttl is read in linear time.
+  it('reads a long run of zero terms without backtracking', () => {
+    const long = '0h'.repeat(50_000) + '!'
+    const started = performance.now()
+    expect(veleroDeclaredTtl(long)).toBe(long)
+    expect(performance.now() - started).toBeLessThan(1000)
   })
 })
