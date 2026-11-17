@@ -417,7 +417,10 @@ func BuildIssueIndex(p issues.Provider, filters issues.Filters) *IssueIndex {
 	return idx
 }
 
-var specGeneratorGate = NewBudgetGate(1)
+// Rows of one page already read one at a time; this bounds the lookups left
+// running past their callers' deadlines without letting one of them stall
+// every other caller's page, as preparationGate does for preparations.
+var specGeneratorGate = NewBudgetGate(8)
 
 type specGenerators struct {
 	refs       []topology.ResourceRef

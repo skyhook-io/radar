@@ -141,4 +141,22 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 			}
 		})
 	}
+	// One caller's residual lookup outliving its deadline doesn't keep
+	// another caller from its own.
+	t.Run("another caller's lookup still running", func(t *testing.T) {
+		release := make(chan struct{})
+		defer close(release)
+		stuck, stopStuck := context.WithCancel(context.Background())
+		started := make(chan struct{})
+		go WithinContext(stuck, specGeneratorGate, func() bool { close(started); <-release; return true })
+		<-started
+		stopStuck()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		owners := k8s.NewAgentOwnership(func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
+		got := BuilderFromIndexes(ctx, nil, nil, nil, owners)(secret, nil, "", "Secret", "shop", "tls")
+		if got == nil || got.ManagedBy == nil || got.ManagedBy.Kind != "Certificate" || len(got.Omitted) != 0 {
+			t.Fatalf("waited on another caller's lookup: %+v", got)
+		}
+	})
 }
