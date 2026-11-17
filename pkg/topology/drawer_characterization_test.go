@@ -13,7 +13,6 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/skyhook-io/radar/pkg/configrefs"
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
@@ -108,7 +107,6 @@ func charDrawer(t *testing.T, f *charFixture) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deployments, _ := f.provider.Deployments()
 	rs := s.(relations.Session)
 	type record struct {
 		Root          string         `json:"root"`
@@ -125,7 +123,7 @@ func charDrawer(t *testing.T, f *charFixture) []byte {
 			t.Fatalf("capture %s", o.key())
 		}
 		v := ownership.NewView(captured, ownership.Unrestricted())
-		rel, _ := RelationsAnswer(captured, ownership.Unrestricted(), ownership.Unrestricted(), v, subject, obj, configrefs.IstioServiceDomain(deployments), f.provider, f.dynamic)
+		rel, _ := RelationsAnswer(captured, ownership.Unrestricted(), ownership.Unrestricted(), v, subject, obj, f.provider, f.dynamic)
 		ApplyOwnership(rel, v, ownership.Observe(subject, o.obj))
 		typed, _ := cachesource.TypedCache(s)
 		SplitOlderRevisions(rel, subject.GroupKind(), o.obj.GetAnnotations(), func(namespace, name string) (*appsv1.ReplicaSet, bool, bool) {

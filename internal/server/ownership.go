@@ -168,6 +168,6 @@ func (s *Server) relationshipsFor(r *http.Request, resource any) *topology.Relat
 		return nil
 	}
 	access := func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }
-	rel, _, _ := k8s.AnswerRelationships(k8s.GetResourceCache(), obj, access, access, "")
+	rel, _, _ := k8s.AnswerRelationships(k8s.GetResourceCache(), obj, access, access)
 	return rel
 }

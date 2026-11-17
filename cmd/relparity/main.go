@@ -28,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/relations"
@@ -42,20 +41,13 @@ type subject struct {
 }
 
 type timing struct {
-	Count                               int       `json:"count"`
-	Before                              []int64   `json:"-"`
-	After                               []int64   `json:"-"`
-	BeforeUS                            []float64 `json:"beforeP50P95P99Micros"`
-	AfterUS                             []float64 `json:"afterP50P95P99Micros"`
-	BeforeMedianUS                      float64   `json:"beforeMedianMicros"`
-	AfterMedianUS                       float64   `json:"afterMedianMicros"`
-	BeforeAllocsPerAnswer               float64   `json:"beforeAllocsPerAnswer"`
-	AfterAllocsPerAnswer                float64   `json:"afterAllocsPerAnswer"`
-	BeforeBytesPerAnswer                float64   `json:"beforeBytesPerAnswer"`
-	AfterBytesPerAnswer                 float64   `json:"afterBytesPerAnswer"`
-	beforeAllocations, afterAllocations uint64
-	beforeBytes, afterBytes             uint64
-	beforeSamples, afterSamples         int
+	Count          int       `json:"count"`
+	Before         []int64   `json:"-"`
+	After          []int64   `json:"-"`
+	BeforeUS       []float64 `json:"beforeP50P95P99Micros"`
+	AfterUS        []float64 `json:"afterP50P95P99Micros"`
+	BeforeMedianUS float64   `json:"beforeMedianMicros"`
+	AfterMedianUS  float64   `json:"afterMedianMicros"`
 }
 
 type diffKey struct {
@@ -110,7 +102,6 @@ type report struct {
 	RestrictedManagedByExamples    map[string][]string `json:"restrictedManagedByExamples"`
 	RestrictedManagedByUnexplained int                 `json:"restrictedManagedByUnexplained"`
 	TimingMethod                   string              `json:"timingMethod"`
-	AllocationMethod               string              `json:"allocationMethod"`
 }
 
 // namespacesAccess may read the namespaces it lists and anything
@@ -195,7 +186,6 @@ func main() {
 	rep.RestrictedManagedBy = map[string]int{}
 	rep.RestrictedManagedByExamples = map[string][]string{}
 	rep.TimingMethod = "Per-kind: median of per-subject medians; pooled: all repeated samples, nearest-rank p50/p95/p99; separate passes with GC between them"
-	rep.AllocationMethod = "Process-wide MemStats Mallocs and TotalAlloc deltas per answer, averaged over repeats; includes concurrent informer/background allocations"
 
 	preferred, err := k8s.ResolveContextSource(k8s.InitOptions{}, *contextName)
 	if err != nil {
@@ -287,10 +277,6 @@ func main() {
 		})
 	}
 	rep.Objects = len(subjects)
-	istioDomain := ""
-	if deployments, err := provider.Deployments(); err == nil {
-		istioDomain = configrefs.IstioServiceDomain(deployments)
-	}
 	unrestricted := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
 
 	allNamespaces, reason := comparisonNamespaces(provider.(topology.NamespaceProvider))
@@ -335,7 +321,7 @@ func main() {
 	}
 	afterAnswer := func(access func(*ownership.Catalog) ownership.Access) func(subject) measuredAnswer {
 		return func(s subject) measuredAnswer {
-			rel, coverage, _ := k8s.AnswerRelationships(cache, s.obj, access, access, istioDomain)
+			rel, coverage, _ := k8s.AnswerRelationships(cache, s.obj, access, access)
 			if rel == nil {
 				log.Fatalf("family answer unavailable for %s", s.ref.Key())
 			}
@@ -575,24 +561,9 @@ func measurePass(subjects []subject, repeats int, timings map[string]*timing, po
 		}
 		durations := make([]int64, 0, repeats)
 		for range repeats {
-			var beforeMem, afterMem runtime.MemStats
-			runtime.ReadMemStats(&beforeMem)
 			start := time.Now()
 			out[i] = answer(s)
-			elapsed := time.Since(start).Nanoseconds()
-			runtime.ReadMemStats(&afterMem)
-			durations = append(durations, elapsed)
-			for _, dst := range []*timing{t, pooled} {
-				if after {
-					dst.afterAllocations += afterMem.Mallocs - beforeMem.Mallocs
-					dst.afterBytes += afterMem.TotalAlloc - beforeMem.TotalAlloc
-					dst.afterSamples++
-				} else {
-					dst.beforeAllocations += afterMem.Mallocs - beforeMem.Mallocs
-					dst.beforeBytes += afterMem.TotalAlloc - beforeMem.TotalAlloc
-					dst.beforeSamples++
-				}
-			}
+			durations = append(durations, time.Since(start).Nanoseconds())
 		}
 		if after {
 			t.After = append(t.After, median(durations))
@@ -613,14 +584,6 @@ func measurePass(subjects []subject, repeats int, timings map[string]*timing, po
 func (t *timing) finish() {
 	t.BeforeUS, t.AfterUS = percentiles(t.Before), percentiles(t.After)
 	t.BeforeMedianUS, t.AfterMedianUS = float64(median(t.Before))/1000, float64(median(t.After))/1000
-	if t.beforeSamples > 0 {
-		t.BeforeAllocsPerAnswer = float64(t.beforeAllocations) / float64(t.beforeSamples)
-		t.BeforeBytesPerAnswer = float64(t.beforeBytes) / float64(t.beforeSamples)
-	}
-	if t.afterSamples > 0 {
-		t.AfterAllocsPerAnswer = float64(t.afterAllocations) / float64(t.afterSamples)
-		t.AfterBytesPerAnswer = float64(t.afterBytes) / float64(t.afterSamples)
-	}
 }
 
 func median(ns []int64) int64 {

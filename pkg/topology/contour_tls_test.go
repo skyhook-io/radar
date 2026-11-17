@@ -110,3 +110,26 @@ func TestHTTPProxyDelegatedSecretRespectsNamespaceFilter(t *testing.T) {
 		}
 	}
 }
+
+func TestHTTPProxyTCPProxyIncludeIsDrawnAsDelegation(t *testing.T) {
+	hpGVR := schema.GroupVersionResource{Group: "projectcontour.io", Version: "v1", Resource: "httpproxies"}
+	parent := genericIdentityObject(hpGVR, "HTTPProxy", "shop", "parent")
+	parent.Object["spec"] = map[string]any{"tcpproxy": map[string]any{"include": map[string]any{"name": "child", "namespace": "apps"}}}
+	child := genericIdentityObject(hpGVR, "HTTPProxy", "apps", "child")
+	dynamic := &genericIdentityDynamic{
+		watched:   []schema.GroupVersionResource{hpGVR},
+		kinds:     map[schema.GroupVersionResource]string{hpGVR: "HTTPProxy"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{hpGVR: {parent, child}},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	topo, err := NewBuilder(&mockProvider{}).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, edge := range topo.Edges {
+		if edge.Source == "httpproxy/shop/parent" && edge.Target == "httpproxy/apps/child" && edge.Type == EdgeExposes {
+			return
+		}
+	}
+	t.Errorf("no httpproxy/shop/parent -> httpproxy/apps/child delegation edge; edges: %+v", topo.Edges)
+}

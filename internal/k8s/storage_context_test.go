@@ -65,7 +65,7 @@ func TestStorageClassClaimsOutsideCollectedNamespaces(t *testing.T) {
 			ownershipSource = cachesource.New(func() cachesource.Caches { return cachesource.Caches{Typed: core, Discovery: discovery} })
 			t.Cleanup(func() { ownershipSource = previous })
 			access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
-			rel, _, extras := AnswerResourceContextRelationships(cache, classObject, access, access, "")
+			rel, _, extras := AnswerResourceContextRelationships(cache, classObject, access, access)
 			rc := resourcecontext.Build(context.Background(), classObject, resourcecontext.Options{Relationships: rel, RelationshipExtras: extras})
 			if len(rc.Dependents) != 2 {
 				t.Fatalf("class dependents = %+v", rc.Dependents)

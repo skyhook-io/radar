@@ -6,7 +6,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
@@ -166,17 +165,17 @@ func answerOwnership(source ownership.Source, apply func(*topology.Relationships
 // relationship graph's edges are (topology.RelationsAnswer), then ownership,
 // with one ownership view whose searches both share. It answers nil when the
 // caches aren't ready or are replaced mid-answer.
-func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access, istioDomain string) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
-	return answerRelationships(cache, obj, access, traverse, istioDomain, false)
+func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
+	return answerRelationships(cache, obj, access, traverse, false)
 }
 
 // AnswerResourceContextRelationships shares the relation session and access
 // policy with drawer answers, but only asks ownership for owner/manager facts.
-func AnswerResourceContextRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access, istioDomain string) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
-	return answerRelationships(cache, obj, access, traverse, istioDomain, true)
+func AnswerResourceContextRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
+	return answerRelationships(cache, obj, access, traverse, true)
 }
 
-func answerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access, istioDomain string, contextOnly bool) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
+func answerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access, contextOnly bool) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
 	session, err := BeginOwnershipRead(cache)
 	if err != nil || len(session.Catalog().DependentKinds()) == 0 {
 		return nil, nil, nil
@@ -190,10 +189,6 @@ func answerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 		return nil, nil, nil
 	}
 	provider := NewTopologyResourceProvider(&ResourceCache{ResourceCache: caches.Typed})
-	if istioDomain == "" {
-		deployments, _ := provider.Deployments()
-		istioDomain = configrefs.IstioServiceDomain(deployments)
-	}
 	var dp topology.DynamicProvider
 	if caches.Dynamic != nil && caches.Discovery != nil {
 		dp = NewTopologyDynamicProvider(&DynamicResourceCache{DynamicResourceCache: caches.Dynamic}, &ResourceDiscovery{ResourceDiscovery: caches.Discovery})
@@ -225,7 +220,7 @@ func answerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 	if contextOnly {
 		answer = topology.RelationsContextAnswer
 	}
-	rel, extras := answer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, istioDomain, provider, dp)
+	rel, extras := answer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, provider, dp)
 	if rel == nil {
 		rel = &topology.Relationships{}
 	}

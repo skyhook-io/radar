@@ -2881,7 +2881,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				},
 			})
 			edges = addArgoWorkflowTemplateEdges(edges, wfID, ns, argoWorkflowTemplateRefsFromWorkflowSpec(wf.Object, "spec"), workflowTemplateIDs, clusterWorkflowTemplateIDs)
-			if owner := argoWorkflowCronOwnerName(wf); owner != "" {
+			if owner := configrefs.ArgoWorkflowCronOwnerName(wf); owner != "" {
 				if cwfID, ok := cronWorkflowIDs[ns+"/"+owner]; ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", cwfID, wfID),
@@ -5434,32 +5434,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		if !opts.MatchesNamespaceFilter(vsNs) {
 			continue
 		}
-		spec, _, _ := unstructured.NestedMap(vs.Object, "spec")
-		if spec == nil {
-			continue
-		}
-		for _, routeKey := range []string{"http", "tcp", "tls"} {
-			routes, _, _ := unstructured.NestedSlice(spec, routeKey)
-			for _, route := range routes {
-				routeMap, ok := route.(map[string]any)
-				if !ok {
-					continue
-				}
-				routeDests, _, _ := unstructured.NestedSlice(routeMap, "route")
-				for _, rd := range routeDests {
-					rdMap, ok := rd.(map[string]any)
-					if !ok {
-						continue
-					}
-					destHost, _, _ := unstructured.NestedString(rdMap, "destination", "host")
-					if destHost == "" {
-						continue
-					}
-					svcName, svcNs := parseIstioHost(destHost, vsNs, istioDomain)
-					svcKey := svcNs + "/" + svcName
-					servicesFromIstio[svcKey] = true
-				}
-			}
+		for _, dest := range configrefs.IstioVirtualServiceDestinations(vs, istioDomain) {
+			servicesFromIstio[dest.Ref.Namespace+"/"+dest.Ref.Name] = true
 		}
 	}
 
@@ -5843,17 +5819,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// IstioGateway → VirtualService edges
-		for _, gwRef := range gateways {
-			if gwRef == "mesh" {
-				continue
-			}
-			gwNs := vsNs
-			gwName := gwRef
-			if parts := strings.SplitN(gwRef, "/", 2); len(parts) == 2 {
-				gwNs = parts[0]
-				gwName = parts[1]
-			}
-			if igwID, ok := trafficIstioGwIDMap[gwNs+"/"+gwName]; ok {
+		for _, gw := range configrefs.IstioVirtualServiceGateways(vs) {
+			if igwID, ok := trafficIstioGwIDMap[gw.Ref.Namespace+"/"+gw.Ref.Name]; ok {
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", igwID, vsID),
 					Source: igwID,
@@ -5864,43 +5831,24 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 
 		// VirtualService → Service edges (deduped)
-		for _, routeKey := range []string{"http", "tcp", "tls"} {
-			routes, _, _ := unstructured.NestedSlice(spec, routeKey)
-			for _, route := range routes {
-				routeMap, ok := route.(map[string]any)
-				if !ok {
-					continue
-				}
-				routeDests, _, _ := unstructured.NestedSlice(routeMap, "route")
-				for _, rd := range routeDests {
-					rdMap, ok := rd.(map[string]any)
-					if !ok {
-						continue
-					}
-					destHost, _, _ := unstructured.NestedString(rdMap, "destination", "host")
-					if destHost == "" {
-						continue
-					}
-					svcName, svcNs := parseIstioHost(destHost, vsNs, istioDomain)
-					svcKey := svcNs + "/" + svcName
-					if _, ok := servicesToInclude[svcKey]; !ok {
-						continue
-					}
-					svcID := fmt.Sprintf("service/%s/%s", svcNs, svcName)
-					serviceIDs[svcKey] = svcID
-					dedupeKey := vsID + "|" + svcID
-					if trafficVsToSvcSeen[dedupeKey] {
-						continue
-					}
-					trafficVsToSvcSeen[dedupeKey] = true
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", vsID, svcID),
-						Source: vsID,
-						Target: svcID,
-						Type:   EdgeExposes,
-					})
-				}
+		for _, dest := range configrefs.IstioVirtualServiceDestinations(vs, istioDomain) {
+			svcKey := dest.Ref.Namespace + "/" + dest.Ref.Name
+			if _, ok := servicesToInclude[svcKey]; !ok {
+				continue
 			}
+			svcID := fmt.Sprintf("service/%s/%s", dest.Ref.Namespace, dest.Ref.Name)
+			serviceIDs[svcKey] = svcID
+			dedupeKey := vsID + "|" + svcID
+			if trafficVsToSvcSeen[dedupeKey] {
+				continue
+			}
+			trafficVsToSvcSeen[dedupeKey] = true
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", vsID, svcID),
+				Source: vsID,
+				Target: svcID,
+				Type:   EdgeExposes,
+			})
 		}
 	}
 
@@ -6869,10 +6817,6 @@ func cronWorkflowScheduleString(cwf *unstructured.Unstructured) string {
 	}
 	schedule, _, _ := unstructured.NestedString(cwf.Object, "spec", "schedule")
 	return schedule
-}
-
-func argoWorkflowCronOwnerName(wf *unstructured.Unstructured) string {
-	return configrefs.ArgoWorkflowCronOwnerName(wf)
 }
 
 type argoWorkflowTemplateRef struct {

@@ -30,7 +30,7 @@ func RelationSpecGenerators(session relations.Session, access ownership.Access, 
 				for _, declared := range answer.Declared {
 					if declared.State == relations.TargetPresent {
 						if rule.Matches(subject.GroupKind(), declared.Ref.GroupKind()) {
-							n.edge(subject, declared.Ref, edge, false)
+							n.edge(subject, declared.Ref, edge)
 						}
 					}
 				}
@@ -39,7 +39,7 @@ func RelationSpecGenerators(session relations.Session, access ownership.Access, 
 				incomplete = incomplete || !answer.Coverage.Complete()
 				for _, referrer := range answer.Referrers {
 					if rule.Matches(referrer.Ref.GroupKind(), subject.GroupKind()) {
-						n.edge(referrer.Ref, subject, edge, false)
+						n.edge(referrer.Ref, subject, edge)
 					}
 				}
 			}
@@ -47,7 +47,7 @@ func RelationSpecGenerators(session relations.Session, access ownership.Access, 
 	}
 	n.crossplane(session, v, subject, obj)
 	if pool, ok := n.nodePool(session, subject); ok {
-		n.edge(pool, subject, relationEdge{edge: EdgeManages}, false)
+		n.edge(pool, subject, relationEdge{edge: EdgeManages})
 	}
 	var sources []ResourceRef
 	for _, edge := range n.topo.Edges {

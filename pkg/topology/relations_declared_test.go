@@ -42,7 +42,7 @@ func declaredAnswer(t *testing.T, access ownership.Access, withSecret bool) (*Re
 	if !ok {
 		t.Fatal("capture failed")
 	}
-	rel, extras := RelationsAnswerWithExtras(captured, access, access, ownership.NewView(captured, access), projectionRef(subject), subject, "", nil, nil)
+	rel, extras := RelationsAnswerWithExtras(captured, access, access, ownership.NewView(captured, access), projectionRef(subject), subject, nil, nil)
 	return rel, extras, s
 }
 

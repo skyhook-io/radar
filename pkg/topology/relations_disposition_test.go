@@ -38,7 +38,7 @@ func TestEveryFamilyProjectsExactlyItsDeclaredFields(t *testing.T) {
 					if len(src.Targets) > 0 && !slices.Contains(src.Targets, dst) {
 						continue
 					}
-					checkDispositionPair(t, f.Name, f.Projection, src.Kind, dst, false, hits, func(s, d resourceid.Ref) (relationEdge, bool) { return edgeFor(f.Name, s, d) })
+					checkDispositionPair(t, f.Name, f.Projection, src.Kind, dst, hits, func(s, d resourceid.Ref) (relationEdge, bool) { return edgeFor(f.Name, s, d) })
 				}
 			}
 			requireRuleHits(t, hits)
@@ -53,7 +53,7 @@ func TestEveryFamilyProjectsExactlyItsDeclaredFields(t *testing.T) {
 					if len(src.Selects) > 0 && !slices.Contains(src.Selects, dst.Kind) {
 						continue
 					}
-					checkDispositionPair(t, f.Name, f.Projection, src.Kind, dst.Kind, false, hits, func(s, d resourceid.Ref) (relationEdge, bool) { return projectedEdge(selectorEdges[f.Name], s, d) })
+					checkDispositionPair(t, f.Name, f.Projection, src.Kind, dst.Kind, hits, func(s, d resourceid.Ref) (relationEdge, bool) { return projectedEdge(selectorEdges[f.Name], s, d) })
 				}
 			}
 			requireRuleHits(t, hits)
@@ -69,7 +69,7 @@ func TestEveryFamilyProjectsExactlyItsDeclaredFields(t *testing.T) {
 						if len(f.ConsumerKinds) > 0 && !slices.Contains(f.ConsumerKinds, dst.Kind) {
 							continue
 						}
-						checkDispositionPair(t, f.Name, f.Projection, src.Kind, dst.Kind, false, hits, func(s, d resourceid.Ref) (relationEdge, bool) { return projectedEdge(f.Projection, s, d) })
+						checkDispositionPair(t, f.Name, f.Projection, src.Kind, dst.Kind, hits, func(s, d resourceid.Ref) (relationEdge, bool) { return projectedEdge(f.Projection, s, d) })
 					}
 				}
 			}
@@ -84,9 +84,6 @@ func validateDisposition(t *testing.T, d relations.Disposition) {
 		modes++
 	}
 	if d.DirectRead != "" {
-		modes++
-	}
-	if d.NotProjected != "" {
 		modes++
 	}
 	if modes != 1 {
@@ -111,7 +108,7 @@ func requireRuleHits(t *testing.T, hits []bool) {
 		}
 	}
 }
-func checkDispositionPair(t *testing.T, name string, d relations.Disposition, source, target resourceid.GroupKind, partial bool, hits []bool, edgeFor func(resourceid.Ref, resourceid.Ref) (relationEdge, bool)) {
+func checkDispositionPair(t *testing.T, name string, d relations.Disposition, source, target resourceid.GroupKind, hits []bool, edgeFor func(resourceid.Ref, resourceid.Ref) (relationEdge, bool)) {
 	t.Helper()
 	if len(d.Rules) == 0 {
 		return
@@ -141,7 +138,7 @@ func checkDispositionPair(t *testing.T, name string, d relations.Disposition, so
 	if !ok {
 		t.Fatal("no generated edge")
 	}
-	n.edge(projectionRef(src), projectionRef(dst), edge, partial)
+	n.edge(projectionRef(src), projectionRef(dst), edge)
 	for i, obj := range []runtime.Object{src, dst} {
 		rel := GetRelationshipsWithObject(projectionRef(obj).Kind, "shop", projectionRef(obj).Name, obj, &n.topo, nil, nil, nil)
 		ov := ownership.NewView(s, ownership.Unrestricted())

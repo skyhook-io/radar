@@ -153,6 +153,6 @@ func serviceAccountSecretContext(t *testing.T, cache *ResourceCache, namespace s
 		ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: namespace},
 	}
 	access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
-	rel, _, extras := AnswerResourceContextRelationships(cache, secret, access, access, "")
+	rel, _, extras := AnswerResourceContextRelationships(cache, secret, access, access)
 	return resourcecontext.Build(context.Background(), secret, resourcecontext.Options{Relationships: rel, RelationshipExtras: extras})
 }

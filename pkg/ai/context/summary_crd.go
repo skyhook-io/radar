@@ -350,12 +350,8 @@ func rolloutBlockReason(obj *unstructured.Unstructured) string {
 		}
 	}
 
-	for _, path := range [][]string{
-		{"status", "canary", "currentStepAnalysisRunStatus"},
-		{"status", "canary", "currentBackgroundAnalysisRunStatus"},
-		{"status", "blueGreen", "prePromotionAnalysisRunStatus"},
-		{"status", "blueGreen", "postPromotionAnalysisRunStatus"},
-	} {
+	for _, run := range configrefs.RolloutAnalysisRunStatuses {
+		path := append([]string{"status"}, run.Path...)
 		phase, _, _ := unstructured.NestedString(obj.Object, append(path, "status")...)
 		switch phase {
 		case "Failed", "Error", "Inconclusive":

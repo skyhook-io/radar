@@ -26,7 +26,7 @@ func TestRelationsExtrasConsumerPathsAndNoWireData(t *testing.T) {
 	ingress := projectionObject(&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "ingress", Namespace: "shop"}, Spec: networkingv1.IngressSpec{TLS: []networkingv1.IngressTLS{{SecretName: "shared"}}}}, "networking.k8s.io", "Ingress")
 	s := newProjectionSession(t, secret, pod, sa, ingress)
 	access := ownership.Unrestricted()
-	_, extras := RelationsContextAnswer(s, access, access, ownership.NewView(s, access), projectionRef(secret), secret, "", nil, nil)
+	_, extras := RelationsContextAnswer(s, access, access, ownership.NewView(s, access), projectionRef(secret), secret, nil, nil)
 	paths := map[string][]string{}
 	for _, consumer := range extras.Consumers {
 		paths[consumer.Ref.Kind] = consumer.Paths
@@ -50,7 +50,7 @@ func TestRelationsExtrasScalerAttributionUsesEmit(t *testing.T) {
 		if deny {
 			access.denied = []string{"ScaledObject"}
 		}
-		_, extras := RelationsContextAnswer(s, access, ownership.Unrestricted(), ownership.NewView(s, access), projectionRef(dep), dep, "", nil, nil)
+		_, extras := RelationsContextAnswer(s, access, ownership.Unrestricted(), ownership.NewView(s, access), projectionRef(dep), dep, nil, nil)
 		manager, ok := extras.ScalerManagers[projectionRef(hpa)]
 		if deny && (ok || !extras.Fields["ScalerManagers"].Narrowed) || !deny && (!ok || manager.Name != "autoscale") {
 			t.Fatalf("deny=%v: %+v", deny, extras)
@@ -77,12 +77,12 @@ func TestRelationsExtrasEmptyInventoriesKeepReadinessAndNarrowing(t *testing.T) 
 	for _, obj := range []runtime.Object{node, secret} {
 		s := inventoryGapSession{newProjectionSession(t, obj), resourceid.GroupKind{Kind: "Pod"}, readreason.KindSyncPending}
 		access := ownership.Unrestricted()
-		_, extras := RelationsContextAnswer(s, access, access, ownership.NewView(s, access), projectionRef(obj), obj, "", nil, nil)
+		_, extras := RelationsContextAnswer(s, access, access, ownership.NewView(s, access), projectionRef(obj), obj, nil, nil)
 		if len(extras.Fields["Consumers"].NotChecked) == 0 {
 			t.Fatalf("empty cold source lost for %s: %+v", projectionRef(obj).Kind, extras)
 		}
 		denied := projectionAccess{denied: []string{"Pod"}}
-		_, extras = RelationsContextAnswer(s, denied, access, ownership.NewView(s, denied), projectionRef(obj), obj, "", nil, nil)
+		_, extras = RelationsContextAnswer(s, denied, access, ownership.NewView(s, denied), projectionRef(obj), obj, nil, nil)
 		if !extras.Fields["Consumers"].Narrowed || len(extras.Consumers) > 0 {
 			t.Fatalf("empty denied source lost: %+v", extras)
 		}
@@ -110,14 +110,14 @@ func TestRelationsContextWithholdsOnlyWhatIsThere(t *testing.T) {
 
 	s := newProjectionSession(t, dep)
 	empty := countingProjectionAccess{projectionAccess{denied: []string{"Service"}}, map[resourceid.Ref]int{}}
-	RelationsContextAnswer(s, empty, ownership.Unrestricted(), ownership.NewView(s, empty), projectionRef(dep), dep, "", nil, nil)
+	RelationsContextAnswer(s, empty, ownership.Unrestricted(), ownership.NewView(s, empty), projectionRef(dep), dep, nil, nil)
 	if empty.asked[inShop] != 0 {
 		t.Fatalf("no Service in shop should cost no check: %v", empty.asked)
 	}
 
 	s = newProjectionSession(t, dep, svc)
 	there := countingProjectionAccess{projectionAccess{denied: []string{"Service"}}, map[resourceid.Ref]int{}}
-	rel, extras := RelationsContextAnswer(s, there, ownership.Unrestricted(), ownership.NewView(s, there), projectionRef(dep), dep, "", nil, nil)
+	rel, extras := RelationsContextAnswer(s, there, ownership.Unrestricted(), ownership.NewView(s, there), projectionRef(dep), dep, nil, nil)
 	if there.asked[inShop] == 0 || len(rel.Services) != 0 {
 		t.Fatalf("a Service the caller may not read must be checked and withheld: asked=%v services=%v", there.asked, rel.Services)
 	}
@@ -136,7 +136,7 @@ func TestRelationsContextDeclaredUnreadableTargetIsNamed(t *testing.T) {
 	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "shop"}, Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "creds", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "credential"}}}}}}, "", "Pod")
 	s := newProjectionSession(t, pod)
 	denied := projectionAccess{denied: []string{"Secret"}}
-	_, extras := RelationsContextAnswer(s, denied, ownership.Unrestricted(), ownership.NewView(s, denied), projectionRef(pod), pod, "", nil, nil)
+	_, extras := RelationsContextAnswer(s, denied, ownership.Unrestricted(), ownership.NewView(s, denied), projectionRef(pod), pod, nil, nil)
 	for field, c := range extras.Fields {
 		if c.Narrowed {
 			t.Fatalf("field %q narrowed although its Secret is named: %+v", field, extras.Fields)
@@ -152,7 +152,7 @@ func TestRelationsContextDeclaredUnreadableTargetIsNamed(t *testing.T) {
 	}
 
 	undecided := undecidedKinds{"Secret"}
-	_, extras = RelationsContextAnswer(s, undecided, ownership.Unrestricted(), ownership.NewView(s, undecided), projectionRef(pod), pod, "", nil, nil)
+	_, extras = RelationsContextAnswer(s, undecided, ownership.Unrestricted(), ownership.NewView(s, undecided), projectionRef(pod), pod, nil, nil)
 	if !slices.ContainsFunc(extras.Declarations, func(d relations.Declared) bool {
 		return d.Ref.Kind == "Secret" && DeclaredAccess(d) == ResourceAccessUnverified
 	}) {
@@ -196,9 +196,9 @@ func TestDrawerAnswerSkipsContextOnlyInventories(t *testing.T) {
 		related runtime.Object
 		kind    string
 	}{{node, pod, "Pod"}, {class, pv, "PersistentVolume"}} {
-		reads := func(answer func(relations.Session, ownership.Access, ownership.Access, *ownership.View, resourceid.Ref, runtime.Object, string, ResourceProvider, DynamicProvider) (*Relationships, *RelationshipExtras)) int {
+		reads := func(answer func(relations.Session, ownership.Access, ownership.Access, *ownership.View, resourceid.Ref, runtime.Object, ResourceProvider, DynamicProvider) (*Relationships, *RelationshipExtras)) int {
 			s := countingIndexedSession{newProjectionSession(t, tc.subject, tc.related), map[string]int{}}
-			answer(s, access, access, ownership.NewView(s, access), projectionRef(tc.subject), tc.subject, "", nil, nil)
+			answer(s, access, access, ownership.NewView(s, access), projectionRef(tc.subject), tc.subject, nil, nil)
 			return s.reads[tc.kind]
 		}
 		if drawer, context := reads(RelationsAnswerWithExtras), reads(RelationsContextAnswer); drawer >= context {
@@ -215,7 +215,7 @@ func TestVolumeStorageCoverageMarksOnlyTheWithheldTarget(t *testing.T) {
 	class := projectionObject(&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fast"}}, "storage.k8s.io", "StorageClass")
 	s := newProjectionSession(t, pv, pvc, class)
 	denied := projectionAccess{denied: []string{"StorageClass"}}
-	rel, extras := RelationsContextAnswer(s, denied, ownership.Unrestricted(), ownership.NewView(s, denied), projectionRef(pv), pv, "", nil, nil)
+	rel, extras := RelationsContextAnswer(s, denied, ownership.Unrestricted(), ownership.NewView(s, denied), projectionRef(pv), pv, nil, nil)
 	if !extras.Fields["Dependencies"].Narrowed || extras.Fields["Dependents"].Narrowed {
 		t.Fatalf("fields = %+v", extras.Fields)
 	}

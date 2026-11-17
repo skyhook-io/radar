@@ -635,7 +635,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 
 	access := func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }
 	traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
-	opts.Relationships, _, opts.RelationshipExtras = k8s.AnswerResourceContextRelationships(cache, obj, access, traverse, "")
+	opts.Relationships, _, opts.RelationshipExtras = k8s.AnswerResourceContextRelationships(cache, obj, access, traverse)
 	if cache != nil {
 		opts.Provider = k8s.NewTopologyResourceProvider(cache)
 		opts.DynamicProv = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
