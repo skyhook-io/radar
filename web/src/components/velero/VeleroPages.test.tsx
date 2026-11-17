@@ -67,6 +67,16 @@ describe('A backup’s storage location', () => {
 
 // renderToStaticMarkup escapes apostrophes; compare against the text a reader sees.
 const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+// The rendered text of static markup, as a reader sees it.
+const plainText = (html: string) => new DOMParser().parseFromString(html, 'text/html').body.textContent ?? ''
+// The same, with each element's text apart, as table cells read.
+function plainWords(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT)
+  const words: string[] = []
+  while (walker.nextNode()) words.push(walker.currentNode.textContent ?? '')
+  return words.join(' ').replace(/\s+/g, ' ')
+}
 
 function page(apiKind: string, resource: unknown, leadContent?: React.ReactNode) {
   return text(
@@ -142,7 +152,7 @@ describe('The composed Overview', () => {
     const backup = { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default' }, status: done }
     const restore = (name: string, phase: string, completed?: string) => ({ namespace: 'velero', name, uid: name, phase, completed, errors: 0, warnings: 0 })
     state.runsBy = { 'restores:b': runsOf([restore('r-failed', 'Failed', hoursAgo(1)), restore('r-ok', 'PartiallyFailed', hoursAgo(2)), restore('r-old', 'Completed', hoursAgo(3))]) }
-    const html = page('backups', backup).replace(/<[^>]*>/g, '')
+    const html = plainText(page('backups', backup))
     expect(html).toContain('Restored before: r-ok · partially failed · 2h ago')
     expect(html).not.toContain('Not verified')
     state.runsBy = { 'restores:b': runsOf([restore('r-failed', 'Failed', hoursAgo(1))]) }
@@ -268,7 +278,7 @@ describe('The composed Overview', () => {
       status: { phase: 'PartiallyFailed', startTimestamp: hoursAgo(1), completionTimestamp: hoursAgo(1), progress: { itemsRestored: 10, totalItems: 12 }, warnings: 3, errors: 0 },
     })
     expect(html.indexOf('Restored into')).toBeLessThan(html.indexOf('Outcome'))
-    expect(html.replace(/<[^>]*>/g, '')).toContain('demo → demo-copy, shop')
+    expect(plainText(html)).toContain('demo → demo-copy, shop')
     expect(html).toMatch(/<button[^>]*>demo-copy<\/button>/)
     expect(html).toMatch(/<button[^>]*>shop<\/button>/)
     expect(html).toContain('unmapped namespaces keep their names')
@@ -301,7 +311,7 @@ describe('The composed Overview', () => {
     state.runsBy = { 'restores:b': runsOf([{ namespace: 'velero', name: 'r1', uid: 'r1', phase: 'Completed', errors: 0, warnings: 0, includedNamespaces: ['demo', 'shop'], excludedNamespaces: [], namespaceMapping: { demo: 'demo-copy' } }]) }
     const html = text(renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter><VeleroBackupRestores namespace="velero" name="b" /></MemoryRouter></QueryClientProvider>))
     expect(html).toContain('>Into<')
-    expect(html.replace(/<[^>]*>/g, '')).toContain('demo → demo-copy, shop')
+    expect(plainText(html)).toContain('demo → demo-copy, shop')
     expect(html).not.toContain('Nothing — rejected')
     // A name never breaks at its hyphen.
     expect(html).toMatch(/<span class="inline-block max-w-full truncate[^"]*">demo-copy,<\/span>/)
@@ -337,7 +347,7 @@ describe('The composed Overview', () => {
     expect(html).toContain('Velero’s credentials can’t access the bucket')
     expect(html).toContain('Velero’s message')
     expect(html).toContain('last sync attempt 3m ago')
-    const plain = html.replace(/<[^>]*>/g, '')
+    const plain = plainText(html)
     expect(plain).toContain('No — default is the default location')
     expect(html).toContain('aws · s3://radar-dr/velero')
     expect(plain).toContain('2 backups · 1 completed · 0 expired · 1 failed')
@@ -349,7 +359,7 @@ describe('The composed Overview', () => {
 
   it('lists a location’s backups with the failed ones a segment away', () => {
     state.stored = { backups: [{ namespace: 'velero', name: 'x', phase: 'Failed' }, { namespace: 'velero', name: 'y', phase: 'Completed' }, { namespace: 'velero', name: 'z', phase: 'PartiallyFailed' }], restorable: 1, expired: 0, stored: 3 }
-    const html = text(renderToStaticMarkup(<MemoryRouter><VeleroLocationBackups namespace="velero" name="dr" /></MemoryRouter>)).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
+    const html = plainWords(renderToStaticMarkup(<MemoryRouter><VeleroLocationBackups namespace="velero" name="dr" /></MemoryRouter>))
     expect(html).toContain('3 · 1 completed · 0 expired · 2 failed')
     expect(html).toMatch(/Failed 2/)
   })
