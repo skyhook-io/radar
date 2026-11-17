@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,9 +10,11 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 
@@ -64,6 +67,14 @@ func createdTriggerJob(dyn *dynamicfake.FakeDynamicClient) *unstructured.Unstruc
 
 func TestTriggerCronJobWithoutABodyGeneratesTheName(t *testing.T) {
 	dyn, router := setupTriggerCronJobTest(t)
+	// The fake client ignores generateName; the API server fills the name in.
+	dyn.PrependReactor("create", "jobs", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		obj := action.(clienttesting.CreateAction).GetObject().(*unstructured.Unstructured).DeepCopy()
+		if obj.GetName() == "" {
+			obj.SetName(obj.GetGenerateName() + "x7k2p")
+		}
+		return true, obj, nil
+	})
 
 	w := triggerCronJob(router, nil)
 
@@ -73,6 +84,40 @@ func TestTriggerCronJobWithoutABodyGeneratesTheName(t *testing.T) {
 	job := createdTriggerJob(dyn)
 	if job == nil || job.GetGenerateName() != "report-manual-" {
 		t.Fatalf("created Job = %v, want generateName report-manual-", job)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response not JSON: %v", err)
+	}
+	if body["jobName"] != "report-manual-x7k2p" {
+		t.Errorf("jobName = %q, want the server-assigned report-manual-x7k2p", body["jobName"])
+	}
+}
+
+func TestTriggerCronJobMapsAPIServerErrors(t *testing.T) {
+	jobs := schema.GroupResource{Group: "batch", Resource: "jobs"}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"invalid (422) is 400", apierrors.NewInvalid(schema.GroupKind{Group: "batch", Kind: "Job"}, "report-rerun", field.ErrorList{field.Invalid(field.NewPath("spec"), "x", "bad")}), http.StatusBadRequest},
+		{"bad request is 400", apierrors.NewBadRequest("bad"), http.StatusBadRequest},
+		{"forbidden is 403", apierrors.NewForbidden(jobs, "report-rerun", errors.New("nope")), http.StatusForbidden},
+		{"anything else is 500", errors.New("boom"), http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dyn, router := setupTriggerCronJobTest(t)
+			dyn.PrependReactor("create", "jobs", func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, tc.err
+			})
+
+			w := triggerCronJob(router, strings.NewReader(`{"jobName":"report-rerun"}`))
+
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body %s)", w.Code, tc.want, w.Body.String())
+			}
+		})
 	}
 }
 

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -13,7 +14,8 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
-func TestManageCronJobTriggerPassesTheJobName(t *testing.T) {
+func setupCronJobMCP(t *testing.T) (*dynamicfake.FakeDynamicClient, schema.GroupVersionResource) {
+	t.Helper()
 	cronJobs := schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}
 	jobs := schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
@@ -30,6 +32,11 @@ func TestManageCronJobTriggerPassesTheJobName(t *testing.T) {
 		t.Fatalf("InitTestDynamicResourceCache: %v", err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
+	return dyn, jobs
+}
+
+func TestManageCronJobTriggerPassesTheJobName(t *testing.T) {
+	dyn, jobs := setupCronJobMCP(t)
 
 	res, _, err := handleManageCronJob(context.Background(), nil, manageCronJobInput{
 		Action: "trigger", Namespace: "prod", Name: "report", JobName: "report-rerun",
@@ -48,5 +55,22 @@ func TestManageCronJobTriggerPassesTheJobName(t *testing.T) {
 	}
 	if created != "report-rerun" {
 		t.Errorf("created Job name = %q, want report-rerun", created)
+	}
+}
+
+func TestManageCronJobRejectsJobNameOutsideTrigger(t *testing.T) {
+	for _, action := range []string{"suspend", "resume"} {
+		t.Run(action, func(t *testing.T) {
+			dyn, _ := setupCronJobMCP(t)
+			_, _, err := handleManageCronJob(context.Background(), nil, manageCronJobInput{
+				Action: action, Namespace: "prod", Name: "report", JobName: "report-rerun",
+			})
+			if err == nil || !strings.Contains(err.Error(), "job_name") {
+				t.Fatalf("err = %v, want one naming job_name", err)
+			}
+			if n := len(dyn.Actions()); n != 0 {
+				t.Errorf("issued %d API calls", n)
+			}
+		})
 	}
 }

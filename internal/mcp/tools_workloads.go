@@ -270,7 +270,12 @@ func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input ma
 		return nil, nil, errNotConnected()
 	}
 
-	switch strings.ToLower(input.Action) {
+	action := strings.ToLower(input.Action)
+	if input.JobName != "" && action != "trigger" {
+		return nil, nil, fmt.Errorf("job_name applies only to action=trigger, not %q", input.Action)
+	}
+
+	switch action {
 	case "trigger":
 		job, err := k8s.TriggerCronJobWithClient(ctx, input.Namespace, input.Name, input.JobName, dynClient)
 		if err != nil {
