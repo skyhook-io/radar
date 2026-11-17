@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/cache"
@@ -103,7 +104,7 @@ func (n *neighborhood) node(r resourceid.Ref) string {
 	return id
 }
 
-func (n *neighborhood) edge(from, to resourceid.Ref, e relationEdge, partial bool) {
+func (n *neighborhood) edge(from, to resourceid.Ref, e relationEdge) {
 	if !n.allowed(from) || !n.allowed(to) {
 		return
 	}
@@ -117,7 +118,7 @@ func (n *neighborhood) edge(from, to resourceid.Ref, e relationEdge, partial boo
 		return
 	}
 	n.edges[id] = true
-	n.topo.Edges = append(n.topo.Edges, Edge{ID: id, Source: s, Target: t, Type: e.edge, Label: e.label, Partial: partial || e.partial})
+	n.topo.Edges = append(n.topo.Edges, Edge{ID: id, Source: s, Target: t, Type: e.edge, Label: e.label, Partial: e.partial})
 }
 
 func (n *neighborhood) cover(name string, c relations.Coverage) {
@@ -148,7 +149,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 			if d.State == relations.TargetPresent {
 				if e, ok := edgeFor(f.Name, subject, d.Ref); ok {
 					if n.projectFamily(session, f.Name, d.Ref) {
-						n.edge(subject, d.Ref, e, false)
+						n.edge(subject, d.Ref, e)
 					}
 				}
 			}
@@ -158,7 +159,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		for _, r := range referrers.Referrers {
 			if e, ok := edgeFor(f.Name, r.Ref, subject); ok {
 				if n.projectFamily(session, f.Name, subject) {
-					n.edge(r.Ref, subject, e, false)
+					n.edge(r.Ref, subject, e)
 				}
 			}
 		}
@@ -172,14 +173,14 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		n.cover(f.Name, chosen.Coverage)
 		for _, m := range chosen.Matches {
 			if e, ok := projectedEdge(disposition, subject, m); ok {
-				n.edge(subject, m, e, false)
+				n.edge(subject, m, e)
 			}
 		}
 		by := v.SelectedBy(f, subject, obj)
 		n.cover(f.Name, by.Coverage)
 		for _, m := range by.Matches {
 			if e, ok := projectedEdge(disposition, m, subject); ok {
-				n.edge(m, subject, e, false)
+				n.edge(m, subject, e)
 			}
 		}
 	}
@@ -188,10 +189,15 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 // RelationsAnswer projects caller-readable family and ownership answers onto
 // Related Resources. Traverse is used only for intermediate networking hops;
 // all emitted references, including ownership, use access. Coverage is keyed
-// by family and includes only incomplete answers.
-func RelationsAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, istioDomain string, provider ResourceProvider, dp DynamicProvider) (*Relationships, map[string]relations.Coverage) {
+// by family and includes only incomplete answers. Istio's service domain is
+// read from provider's istiod Deployments, as the graph builder reads it.
+func RelationsAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, provider ResourceProvider, dp DynamicProvider) (*Relationships, map[string]relations.Coverage) {
 	if obj == nil || access.CanRead(subject.GroupKind(), subject.Namespace) != ownership.Allowed {
 		return &Relationships{}, nil
+	}
+	istioDomain := ""
+	if provider != nil {
+		istioDomain = NewBuilder(provider).istioServiceDomain()
 	}
 	v := relations.NewView(session, access)
 	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access}
@@ -203,7 +209,7 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 		n.cover(f.Name, joined.Coverage)
 		for _, edge := range joined.Edges {
 			if e, ok := projectedEdge(f.Projection, edge.Producer, edge.Consumer); ok {
-				n.edge(edge.Producer, edge.Consumer, e, false)
+				n.edge(edge.Producer, edge.Consumer, e)
 			}
 		}
 	}
@@ -211,7 +217,7 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 	n.management(session, ov, subject)
 	children := ov.Children(subject)
 	for _, c := range children.Children {
-		n.edge(subject, c.Ref, relationEdge{edge: EdgeManages}, false)
+		n.edge(subject, c.Ref, relationEdge{edge: EdgeManages})
 	}
 	n.healthChecks(ov, subject, children)
 	n.crossplane(session, ov, subject, obj)
@@ -245,10 +251,11 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 			}
 			for _, pod := range ov.Children(rs.Ref).Children {
 				if pod.Ref.Kind == "Pod" && pod.Ref.Group == "" {
-					rel.Pods = appendResourceRef(rel.Pods, refOf(pod.Ref))
+					rel.Pods = append(rel.Pods, refOf(pod.Ref))
 				}
 			}
 		}
+		rel.Pods = uniqueResourceRefs(rel.Pods)
 	}
 	if m, err := apimeta.Accessor(obj); err == nil {
 		if meta := ManagedByFromMeta(m); meta != nil {
@@ -266,8 +273,8 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 }
 
 // topManager climbs from subject while something readable is above it: the
-// top of its controller chain, else an owner reference that isn't a
-// controller's (a CiliumEndpoint's Pod, a CiliumNode's Node), else a
+// top of its controller chain; for an object with no controller reference, an
+// owner reference (a CiliumEndpoint's Pod, a CiliumNode's Node) or a
 // NodeClaim's NodePool. It stops below GitOps managers: what manages a
 // workload's Application is ownership.manager's answer, not this one.
 func (n *neighborhood) topManager(session relations.Session, ov *ownership.View, subject resourceid.Ref) *ResourceRef {
@@ -293,7 +300,15 @@ func (n *neighborhood) above(session relations.Session, ov *ownership.View, r re
 			return id, true
 		}
 	}
-	_, owners := ov.References(r)
+	subject, owners := ov.References(r)
+	if subject.Present() {
+		// As ownership.Owner: a controller reference that doesn't resolve to a
+		// readable owner never gives way to a weaker owner. One that resolves
+		// but isn't climbed (a Node) is the answer itself.
+		if i := slices.IndexFunc(subject.Read.Object.OwnerReferences, func(o metav1.OwnerReference) bool { return o.Controller != nil && *o.Controller }); i >= 0 {
+			return owners[i].Ref, owners[i].State == ownership.OwnerFound && owners[i].Ref != r
+		}
+	}
 	var found []resourceid.Ref
 	for _, owner := range owners {
 		if owner.State == ownership.OwnerFound {
@@ -335,14 +350,14 @@ func (n *neighborhood) management(session relations.Session, ov *ownership.View,
 	_, owners := ov.References(r)
 	for _, owner := range owners {
 		if owner.State == ownership.OwnerFound {
-			n.edge(owner.Ref, r, manages, false)
+			n.edge(owner.Ref, r, manages)
 		}
 	}
 	for _, manager := range ov.RecordingManagers(r).Managers {
-		n.edge(manager.Ref, r, manages, false)
+		n.edge(manager.Ref, r, manages)
 	}
 	if pool, ok := n.nodePool(session, r); ok {
-		n.edge(pool, r, manages, false)
+		n.edge(pool, r, manages)
 	}
 	if r.GroupKind() == (resourceid.GroupKind{Group: karpenter.Group, Kind: "NodePool"}) {
 		provider := relationDirectProvider{session: session, n: n}
@@ -354,7 +369,7 @@ func (n *neighborhood) management(session relations.Session, ov *ownership.View,
 			}
 			claim := resourceid.NewRef(karpenter.Group, "NodeClaim", "", m.GetName())
 			if pool, ok := n.nodePool(session, claim); ok && pool == r {
-				n.edge(r, claim, manages, false)
+				n.edge(r, claim, manages)
 			}
 		}
 	}
@@ -401,14 +416,14 @@ func (n *neighborhood) healthChecks(ov *ownership.View, subject resourceid.Ref, 
 	case resourceid.GroupKind{Group: capi, Kind: "Cluster"}:
 		for _, c := range children.Children {
 			if c.Ref.GroupKind() == mhc {
-				n.edge(c.Ref, subject, relationEdge{edge: EdgeProtects}, false)
+				n.edge(c.Ref, subject, relationEdge{edge: EdgeProtects})
 			}
 		}
 	case mhc:
 		_, owners := ov.References(subject)
 		for _, o := range owners {
 			if o.State == ownership.OwnerFound && o.Ref.GroupKind() == (resourceid.GroupKind{Group: capi, Kind: "Cluster"}) {
-				n.edge(subject, o.Ref, relationEdge{edge: EdgeProtects}, false)
+				n.edge(subject, o.Ref, relationEdge{edge: EdgeProtects})
 			}
 		}
 	}
@@ -458,12 +473,12 @@ func (n *neighborhood) crossplane(session relations.Session, ov *ownership.View,
 	if isCrossplaneComposite(u) {
 		if ref, ok := getBoundXRRef(u); ok {
 			if r, ok := resolve(u.GetNamespace(), ref); ok {
-				n.edge(subject, r, manages, false)
+				n.edge(subject, r, manages)
 			}
 		}
 		for _, ref := range getCrossplaneResourceRefs(u) {
 			if r, ok := resolve(u.GetNamespace(), ref); ok {
-				n.edge(subject, r, manages, false)
+				n.edge(subject, r, manages)
 			}
 		}
 	}
@@ -490,7 +505,7 @@ func (n *neighborhood) crossplane(session relations.Session, ov *ownership.View,
 			continue
 		}
 		if referrer, ok := borrowed.(*unstructured.Unstructured); ok && names(referrer, subject) {
-			n.edge(r, subject, manages, false)
+			n.edge(r, subject, manages)
 		}
 	}
 }
@@ -548,17 +563,17 @@ func (n *neighborhood) knativeServing(session relations.Session, subject resourc
 			}
 		}
 		if svc := resourceid.NewRef("", "Service", subject.Namespace, subject.Name); frontDoor(svc) {
-			n.edge(svc, subject, exposes, false)
+			n.edge(svc, subject, exposes)
 		}
 		for _, rev := range privateRevisions(ksvc) {
 			if svc := resourceid.NewRef("", "Service", subject.Namespace, rev+"-private"); n.present(session, svc) {
-				n.edge(subject, svc, exposes, false)
+				n.edge(subject, svc, exposes)
 			}
 		}
 	case resourceid.GroupKind{Kind: "Service"}:
 		ksvcRef := resourceid.NewRef(serving, "Service", subject.Namespace, subject.Name)
 		if frontDoor(subject) && n.present(session, ksvcRef) {
-			n.edge(subject, ksvcRef, exposes, false)
+			n.edge(subject, ksvcRef, exposes)
 		}
 		rev, private := strings.CutSuffix(subject.Name, "-private")
 		if !private {
@@ -572,7 +587,7 @@ func (n *neighborhood) knativeServing(session relations.Session, subject resourc
 		n.cover("KnativeServing", relations.Coverage{NotChecked: services.Gaps})
 		for _, service := range services.Objects {
 			if ksvc, ok := service.Object.(*unstructured.Unstructured); ok && slices.Contains(privateRevisions(ksvc), rev) {
-				n.edge(service.Ref, subject, exposes, false)
+				n.edge(service.Ref, subject, exposes)
 			}
 		}
 	}

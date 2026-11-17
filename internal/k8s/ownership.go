@@ -165,7 +165,7 @@ func answerOwnership(source ownership.Source, apply func(*topology.Relationships
 // relationship graph's edges are (topology.RelationsAnswer), then ownership,
 // with one ownership view whose searches both share. It answers nil when the
 // caches aren't ready or are replaced mid-answer.
-func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access, istioDomain string) (*topology.Relationships, map[string]relations.Coverage) {
+func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access) (*topology.Relationships, map[string]relations.Coverage) {
 	session, err := BeginOwnershipRead(cache)
 	if err != nil || len(session.Catalog().DependentKinds()) == 0 {
 		return nil, nil
@@ -206,7 +206,7 @@ func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 	}
 	rs = captured
 	ov := ownership.NewView(rs, acc)
-	rel, coverage := topology.RelationsAnswer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, istioDomain, provider, dp)
+	rel, coverage := topology.RelationsAnswer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, provider, dp)
 	if rel == nil {
 		rel = &topology.Relationships{}
 	}
