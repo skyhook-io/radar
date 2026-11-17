@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/yaml"
@@ -700,8 +701,48 @@ func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts Del
 	return ObserveResourceDeletion(ctx, client, opts.Name, uid), nil
 }
 
-// TriggerCronJob creates a Job from a CronJob.
+// ErrInvalidJobName is returned by TriggerCronJobNamed for a Job name the API
+// server would reject; it is checked before any API call.
+var ErrInvalidJobName = errors.New("invalid job name")
+
+// TriggerCronJob creates a Job from a CronJob, letting the API server pick its
+// name from "<cronjob>-manual-".
 func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name string) (*unstructured.Unstructured, error) {
+	return m.TriggerCronJobNamed(ctx, namespace, name, "")
+}
+
+// ValidateJobName reports why a Job name is unusable, or nil. Beyond the API
+// server's DNS-1123 subdomain rule, the name is copied into the job-name label
+// on the Job's Pods, which caps it at 63 characters.
+func ValidateJobName(jobName string) error {
+	if len(jobName) > validation.LabelValueMaxLength {
+		return fmt.Errorf("%w %q: must be no more than %d characters", ErrInvalidJobName, jobName, validation.LabelValueMaxLength)
+	}
+	if errs := validation.IsDNS1123Subdomain(jobName); len(errs) > 0 {
+		return fmt.Errorf("%w %q: %s", ErrInvalidJobName, jobName, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// manualJobGenerateName keeps "-manual-" whole within the 58 characters the
+// API server keeps of a generateName before appending its 5 random ones.
+func manualJobGenerateName(cronJobName string) string {
+	const suffix = "-manual-"
+	const maxBase = validation.LabelValueMaxLength - 5
+	if len(cronJobName)+len(suffix) > maxBase {
+		cronJobName = strings.TrimRight(cronJobName[:maxBase-len(suffix)], "-.")
+	}
+	return cronJobName + suffix
+}
+
+// TriggerCronJobNamed creates a Job from a CronJob. An empty jobName lets the
+// API server generate one from "<cronjob>-manual-".
+func (m *WorkloadManager) TriggerCronJobNamed(ctx context.Context, namespace, name, jobName string) (*unstructured.Unstructured, error) {
+	if jobName != "" {
+		if err := ValidateJobName(jobName); err != nil {
+			return nil, err
+		}
+	}
 	if m.dynClient == nil {
 		return nil, fmt.Errorf("dynamic client not initialized")
 	}
@@ -727,13 +768,11 @@ func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name st
 		return nil, fmt.Errorf("cronjob %s/%s has no spec.jobTemplate", namespace, name)
 	}
 
-	jobName := fmt.Sprintf("%s-manual-%d", name, time.Now().Unix())
 	job := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "batch/v1",
 			"kind":       "Job",
 			"metadata": map[string]any{
-				"name":      jobName,
 				"namespace": namespace,
 				"annotations": map[string]any{
 					"cronjob.kubernetes.io/instantiate": "manual",
@@ -750,6 +789,12 @@ func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name st
 				},
 			},
 		},
+	}
+
+	if jobName != "" {
+		job.SetName(jobName)
+	} else {
+		job.SetGenerateName(manualJobGenerateName(name))
 	}
 
 	if spec, found, _ := unstructured.NestedMap(jobTemplate, "spec"); found {
