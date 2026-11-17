@@ -85,7 +85,9 @@ type neighborhood struct {
 	edges    map[string]bool
 	coverage map[string]relations.Coverage
 	access   ownership.Access
-	extras   *RelationshipExtras
+	// extras is nil for a walk that doesn't collect them, such as the
+	// neighborhood's; everything that records into it tolerates that.
+	extras *RelationshipExtras
 	// unreadable are the subject's declared references the caller may not
 	// read, listed by name.
 	unreadable []ResourceRef
@@ -208,7 +210,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 			continue
 		}
 		refs := v.References(f, subject, obj)
-		if f == relations.ConfigReferences && subject == n.extras.Subject {
+		if f == relations.ConfigReferences && n.extras != nil && subject == n.extras.Subject {
 			// The subject's own spec names these, and the caller reads the
 			// subject, so the names are shown, marked unreadable, rather
 			// than withheld. Nothing is read about the targets themselves.
@@ -229,7 +231,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		referrers := v.Referrers(f, subject, obj)
 		n.cover(f.Name, referrers.Coverage)
 		n.extras.projectCoverage(disposition, gk, false, referrers.Coverage)
-		if f == relations.ConfigReferences && subject == n.extras.Subject {
+		if f == relations.ConfigReferences && n.extras != nil && subject == n.extras.Subject {
 			n.extras.Consumers = append(n.extras.Consumers, referrers.Referrers...)
 		}
 		for _, r := range referrers.Referrers {

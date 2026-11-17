@@ -223,3 +223,19 @@ func TestVolumeStorageCoverageMarksOnlyTheWithheldTarget(t *testing.T) {
 		t.Fatalf("readable claim not listed: %+v", rel)
 	}
 }
+
+// The family answers are shared with walks that collect no extras, such as
+// the neighborhood's, so answering without them must not fail.
+func TestFamilyAnswersWithoutExtras(t *testing.T) {
+	cm := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "shop"}}, "", "ConfigMap")
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "shop"}, Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "c", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "config"}}}}}}}, "", "Pod")
+	s := newProjectionSession(t, cm, pod)
+	access := ownership.Unrestricted()
+	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access}
+	for _, subject := range []runtime.Object{pod, cm} {
+		n.answer(s, relations.NewView(s, access), relations.Families(""), relations.SelectorFamilies(), projectionRef(subject), subject, false)
+	}
+	if len(n.edges) == 0 {
+		t.Fatal("no edge between the Pod and the ConfigMap it mounts")
+	}
+}

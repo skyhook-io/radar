@@ -51,6 +51,9 @@ func (e *RelationshipExtras) cover(field string, c relations.Coverage) {
 // fills. A withheld target narrows only the field its kind fills, not every
 // field the family fills.
 func (e *RelationshipExtras) projectReferences(d relations.Disposition, subject resourceid.GroupKind, a relations.ReferencesAnswer) {
+	if e == nil {
+		return
+	}
 	var withheld []resourceid.GroupKind
 	for _, t := range a.Declared {
 		if t.State == relations.TargetWithheld && !slices.Contains(withheld, t.Ref.GroupKind()) {
@@ -85,6 +88,9 @@ func (e *RelationshipExtras) projectReferences(d relations.Disposition, subject 
 }
 
 func (e *RelationshipExtras) projectCoverage(d relations.Disposition, subject resourceid.GroupKind, forward bool, c relations.Coverage) {
+	if e == nil {
+		return
+	}
 	for _, rule := range d.Rules {
 		fields, kind := rule.Referrers, rule.Target
 		if forward {
