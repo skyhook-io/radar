@@ -150,6 +150,7 @@ func TestTriggerCronJobRejectsBadRequests(t *testing.T) {
 		{"invalid name", `{"jobName":"Report_1"}`, http.StatusBadRequest, "invalid job name"},
 		{"name over 63 characters", `{"jobName":"` + strings.Repeat("a", 64) + `"}`, http.StatusBadRequest, "no more than 63"},
 		{"unknown field", `{"name":"x"}`, http.StatusBadRequest, "invalid request body"},
+		{"JSON null", `null`, http.StatusBadRequest, "must be a JSON object"},
 		{"oversized body", `{"jobName":"` + strings.Repeat("a", 8192) + `"}`, http.StatusRequestEntityTooLarge, "too large"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -4650,9 +4650,10 @@ func (s *Server) handleTriggerCronJob(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	var req struct {
+	// A pointer so a JSON null, which decodes without error, can be refused.
+	req := &struct {
 		JobName string `json:"jobName"`
-	}
+	}{}
 	if err := decodeBoundedJSONBody(w, r, 4096, &req); err != nil && !errors.Is(err, io.EOF) {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
@@ -4660,6 +4661,10 @@ func (s *Server) handleTriggerCronJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req == nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body: the body must be a JSON object")
 		return
 	}
 
