@@ -282,8 +282,20 @@ export function veleroNewestSuccessfulText(runs: VeleroScheduleRuns): { text: st
   return { text: formatRelativeAgeTime(runs.newestCompleted.completed ?? runs.newestCompleted.ranAt), run: runs.newestCompleted }
 }
 
-// A Go duration, the form Velero's spec.ttl takes.
-const GO_DURATION = /^(?:(?:\d+\.?\d*|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/
+// One number-and-unit term of a Go duration, the form Velero's spec.ttl takes.
+const GO_DURATION_TERM = /(\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h)/y
+
+/** Whether s is a Go duration whose every term is zero ("0s", "0h0m0s"). */
+function isZeroGoDuration(s: string): boolean {
+  let at = 0
+  while (at < s.length) {
+    GO_DURATION_TERM.lastIndex = at
+    const term = GO_DURATION_TERM.exec(s)
+    if (!term || Number(term[1]) !== 0) return false
+    at = GO_DURATION_TERM.lastIndex
+  }
+  return at > 0
+}
 
 /**
  * A spec.ttl as Velero applies it: undefined when the server's
@@ -293,7 +305,7 @@ const GO_DURATION = /^(?:(?:\d+\.?\d*|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/
  */
 export function veleroDeclaredTtl(ttl: unknown): string | undefined {
   if (typeof ttl !== 'string' || ttl === '' || ttl === '0') return undefined
-  if (GO_DURATION.test(ttl) && (ttl.match(/\d*\.?\d+/g) ?? []).every((n) => Number(n) === 0)) return undefined
+  if (isZeroGoDuration(ttl)) return undefined
   return ttl
 }
 
