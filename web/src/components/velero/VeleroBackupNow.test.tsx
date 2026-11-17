@@ -6,11 +6,12 @@ import { schedule as reading } from './velero.fixtures'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const state = vi.hoisted(() => ({ support: 'supported', mutate: vi.fn(), reading: undefined as unknown, serverStopped: false, toast: vi.fn() }))
+const state = vi.hoisted(() => ({ support: 'supported', mutate: vi.fn(), reading: undefined as unknown, serverStopped: false, backupsDisabled: false, toast: vi.fn() }))
 vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: state.support }) }))
 vi.mock('../../api/velero', () => ({
   useVeleroBackupNow: () => ({ mutate: state.mutate, reset: vi.fn(), isPending: false }),
   useVeleroScheduleActivity: () => ({ data: state.reading ? { reading: state.reading, serverStopped: state.serverStopped } : undefined }),
+  useVeleroWorkspace: () => ({ data: { installations: [{ namespace: 'velero', server: { source: 'deployment', backupsDisabled: state.backupsDisabled } }] } }),
 }))
 vi.mock('../ui/Toast', () => ({ showApiSuccess: state.toast }))
 
@@ -38,6 +39,7 @@ afterEach(() => {
   state.support = 'supported'
   state.reading = undefined
   state.serverStopped = false
+  state.backupsDisabled = false
   state.toast.mockReset()
   state.mutate.mockReset()
 })
@@ -96,6 +98,21 @@ describe('Back up now', () => {
   it('is unavailable while the Velero server is stopped, whatever the schedule reads', () => {
     state.reading = reading({ name: 'nightly', state: 'due' })
     state.serverStopped = true
+    render(<VeleroBackupNow schedule={nightly} />)
+    expect(buttonNamed('Back up now')!.disabled).toBe(true)
+  })
+
+  it('says when resource or label filters narrow what it backs up', () => {
+    const filtered = { ...nightly, spec: { ...nightly.spec, template: { ...nightly.spec.template, excludedNamespaces: ['kube-system'], labelSelector: { matchLabels: { app: 'api' } } } } }
+    render(<VeleroBackupNow schedule={filtered} />)
+    act(() => buttonNamed('Back up now')!.click())
+    const dialog = document.body.textContent ?? ''
+    expect(dialog).toContain('payments, except kube-system')
+    expect(dialog).toContain('narrowed by resource or label filters')
+  })
+
+  it('is unavailable when Velero runs restore-only', () => {
+    state.backupsDisabled = true
     render(<VeleroBackupNow schedule={nightly} />)
     expect(buttonNamed('Back up now')!.disabled).toBe(true)
   })

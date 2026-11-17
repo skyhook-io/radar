@@ -3,8 +3,9 @@ import { Play } from 'lucide-react'
 import { ConfirmDialog, Tooltip, veleroRetentionText, veleroScheduleReasonText, type ResourceRef } from '@skyhook-io/k8s-ui'
 import { showApiSuccess } from '../ui/Toast'
 import { useRadarFeature } from '../../api/client'
-import { useVeleroBackupNow, useVeleroScheduleActivity } from '../../api/velero'
+import { useVeleroBackupNow, useVeleroScheduleActivity, useVeleroWorkspace } from '../../api/velero'
 import { VELERO_GROUP } from './routes'
+import { selectionText } from './shared'
 
 // Velero writes the schedule's name into a label on every backup it makes.
 const MAX_LABEL_VALUE = 63
@@ -17,17 +18,13 @@ function backupNameAt(schedule: string, at: Date): string {
   return `${schedule}-${at.toISOString().replace(/[-:T]/g, '').slice(0, 14)}`
 }
 
-function list(values: unknown): string[] {
-  return Array.isArray(values) ? values.filter((v): v is string => typeof v === 'string') : []
-}
-
 /**
  * "Back up now" for a Velero Schedule, in the drawer's header with the other
  * actions: creates a Backup from the schedule's template, as `velero backup
  * create --from-schedule` does. The confirmation shows what will be backed up,
  * and the request is bound to that version of the schedule. It is unavailable
- * when the backup could not happen now: a schedule Velero can't run, or a
- * stopped Velero server, which would only queue it.
+ * when the backup could not happen now: a schedule Velero can't run, a
+ * restore-only server, or a stopped Velero server, which would only queue it.
  */
 export function VeleroBackupNow({ schedule, onNavigate }: {
   schedule: any
@@ -41,6 +38,9 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
   // Shares the drawer's request for the schedule's activity.
   const activity = useVeleroScheduleActivity(namespace, name, { enabled: workspace.support === 'supported' && !!namespace && !!name })
   const reading = activity.data?.reading
+  // Shares the page's and the Overview's request for the installation's server configuration.
+  const installations = useVeleroWorkspace({ enabled: workspace.support === 'supported' }).data?.installations
+  const server = installations?.find((i) => i.namespace === namespace)?.server
   // What the confirmation shows, frozen when it opens: a refresh while it is
   // open must not swap in a schedule the user did not review.
   const [reviewed, setReviewed] = useState<{ resourceVersion: string; template: any; backupName: string } | null>(null)
@@ -50,20 +50,20 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
   const open = reviewed !== null
   const changed = open && resourceVersion !== reviewed.resourceVersion
   const template = (open ? reviewed.template : schedule?.spec?.template) ?? {}
-  const included = list(template.includedNamespaces)
-  const excluded = list(template.excludedNamespaces)
-  const namespaces = included.length === 0 || included.includes('*') ? 'All namespaces' : included.join(', ')
+  const selection = selectionText(template, 'All namespaces')
   const location: string = template.storageLocation || reading?.location?.name || ''
   const unavailable =
     name.length > MAX_LABEL_VALUE
       ? 'This schedule’s name is longer than 63 characters, so Velero cannot label a backup from it and the backup would fail.'
       : reading?.state === 'cannotRun'
         ? veleroScheduleReasonText(reading)
-        : activity.data?.serverStopped || reading?.reason === 'serverDown'
-          ? 'The Velero server isn’t running, so nothing would be backed up now. Start it first.'
-          : !resourceVersion
-            ? 'The schedule hasn’t loaded yet.'
-            : null
+        : server?.backupsDisabled
+          ? 'Velero runs with backups disabled (restore-only), so it would not run this backup.'
+          : activity.data?.serverStopped || reading?.reason === 'serverDown'
+            ? 'The Velero server isn’t running, so nothing would be backed up now. Start it first.'
+            : !resourceVersion
+              ? 'The schedule hasn’t loaded yet.'
+              : null
 
   const button = (
     <button
@@ -117,7 +117,10 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
         <div className="space-y-3 px-4 pb-1 text-sm">
           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
             <dt className="text-theme-text-tertiary">Backs up</dt>
-            <dd className="break-words">{namespaces}{excluded.length > 0 ? ` (except ${excluded.join(', ')})` : ''}</dd>
+            <dd className="break-words">
+              {selection.text}
+              {selection.narrowed && <div className="text-xs text-theme-text-tertiary">narrowed by resource or label filters</div>}
+            </dd>
             <dt className="text-theme-text-tertiary">Stored in</dt>
             <dd className="break-words">{location ? location : 'The default storage location'}</dd>
             <dt className="text-theme-text-tertiary">Kept for</dt>
