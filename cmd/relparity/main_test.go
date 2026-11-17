@@ -13,6 +13,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 
@@ -76,7 +77,7 @@ func TestCollectIncludesEveryCachedClusterScopedTypedKind(t *testing.T) {
 		expected = append(expected, resourceid.NewRef(gvk.Group, gvk.Kind, "", m.GetName()))
 	}
 	provider := k8s.NewTopologyResourceProvider(&k8s.ResourceCache{ResourceCache: typed})
-	got := collect(provider, typed, nil, nil, nil, 0)
+	got, _ := collect(provider, typed, nil, nil, nil, 0)
 	var refs []resourceid.Ref
 	for _, subject := range got {
 		refs = append(refs, subject.ref)
@@ -93,5 +94,15 @@ func TestCollectIncludesEveryCachedClusterScopedTypedKind(t *testing.T) {
 		if !obj.GetObjectKind().GroupVersionKind().Empty() {
 			t.Fatal("collect mutated a fixture's type metadata")
 		}
+	}
+}
+
+func TestCollectNamesTheCRDKindsItCouldNotList(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	typed := &k8score.ResourceCache{}
+	provider := k8s.NewTopologyResourceProvider(&k8s.ResourceCache{ResourceCache: typed})
+	_, unlisted := collect(provider, typed, &k8s.DynamicResourceCache{}, []schema.GroupVersionResource{gvr}, map[schema.GroupVersionResource]string{gvr: "Widget"}, 0)
+	if _, ok := unlisted[gvr.String()]; !ok {
+		t.Fatalf("a CRD kind that failed to list is not reported: %v", unlisted)
 	}
 }

@@ -102,6 +102,10 @@ type report struct {
 	RestrictedManagedByExamples    map[string][]string `json:"restrictedManagedByExamples"`
 	RestrictedManagedByUnexplained int                 `json:"restrictedManagedByUnexplained"`
 	TimingMethod                   string              `json:"timingMethod"`
+
+	// LeftOutCRDs are CRD kinds whose objects aren't all compared, and why:
+	// the counts cover only what was read.
+	LeftOutCRDs map[string]string `json:"leftOutCRDKinds,omitempty"`
 }
 
 // namespacesAccess may read the namespaces it lists and anything
@@ -214,6 +218,7 @@ func main() {
 	}
 	var crds []schema.GroupVersionResource
 	crdKind := map[schema.GroupVersionResource]string{}
+	rep.LeftOutCRDs = map[string]string{}
 	for _, r := range resources {
 		if !r.IsCRD || !slices.Contains(r.Verbs, "list") || !slices.Contains(r.Verbs, "watch") {
 			continue
@@ -221,6 +226,7 @@ func main() {
 		gvr := schema.GroupVersionResource{Group: r.Group, Version: r.Version, Resource: r.Name}
 		if err := dc.EnsureWatching(gvr); err != nil {
 			log.Printf("watch %v: %v", gvr, err)
+			rep.LeftOutCRDs[gvr.String()] = "watch: " + err.Error()
 			continue
 		}
 		crds = append(crds, gvr)
@@ -229,6 +235,7 @@ func main() {
 	for _, gvr := range crds {
 		if !dc.WaitForSync(gvr, 2*time.Minute) {
 			log.Printf("%v didn't sync; its objects are left out", gvr)
+			rep.LeftOutCRDs[gvr.String()] = "not synced"
 		}
 	}
 	rep.WatchedCRDs = len(crds)
@@ -265,7 +272,11 @@ func main() {
 	rep.GraphNodes, rep.GraphEdges = len(topo.Nodes), len(topo.Edges)
 	log.Printf("graph: %d nodes, %d edges, built in %v ms, holds %.1f MiB", rep.GraphNodes, rep.GraphEdges, rep.GraphBuildMS, rep.GraphHeldMiB)
 
-	subjects := collect(provider, cache.ResourceCache, dc, crds, crdKind, *perKind)
+	subjects, unlisted := collect(provider, cache.ResourceCache, dc, crds, crdKind, *perKind)
+	for gvr, err := range unlisted {
+		log.Printf("list %s: %v; its objects are left out", gvr, err)
+		rep.LeftOutCRDs[gvr] = err
+	}
 	if *only != "" {
 		kinds := strings.Split(*only, ",")
 		subjects = slices.DeleteFunc(subjects, func(s subject) bool {
@@ -412,6 +423,9 @@ func main() {
 	}
 	if rep.RestrictedSkippedReason != "" {
 		fmt.Printf("restricted comparison skipped: %s\n", rep.RestrictedSkippedReason)
+	}
+	if len(rep.LeftOutCRDs) > 0 {
+		fmt.Printf("INCOMPLETE: %d CRD kinds left out of the comparison: %v\n", len(rep.LeftOutCRDs), rep.LeftOutCRDs)
 	}
 	fmt.Printf("%s: %d objects, %d equal, %d differ, %d diff groups; restricted user (%d of %d namespaces): %d equal, %d differ, %d groups\n", rep.Context, rep.Objects, rep.SubjectsEqual, rep.SubjectsDiffer, len(rep.Diffs), len(half), len(allNamespaces), rep.RestrictedEqual, rep.RestrictedDiffer, len(rep.RestrictedDiffs))
 	fmt.Printf("pooled p50/p95/p99 (µs): before %v, after %v; unexplained ManagedBy losses: %d unrestricted, %d restricted\n", rep.Pooled.BeforeUS, rep.Pooled.AfterUS, rep.ManagedByUnexplained, rep.RestrictedManagedByUnexplained)
@@ -701,9 +715,9 @@ func refSet(v reflect.Value) sets.Set[string] {
 }
 
 // collect lists every cached object: the typed kinds the provider serves and
-// every watched CRD kind.
-func collect(p topology.ResourceProvider, typed *k8score.ResourceCache, dc *k8s.DynamicResourceCache, crds []schema.GroupVersionResource, crdKind map[schema.GroupVersionResource]string, perKind int) []subject {
-	var out []subject
+// every watched CRD kind. unlisted names each CRD kind it couldn't list, with
+// the error.
+func collect(p topology.ResourceProvider, typed *k8score.ResourceCache, dc *k8s.DynamicResourceCache, crds []schema.GroupVersionResource, crdKind map[schema.GroupVersionResource]string, perKind int) (out []subject, unlisted map[string]string) {
 	add := func(group, kind string, objs []any) {
 		if perKind > 0 && len(objs) > perKind {
 			objs = objs[:perKind]
@@ -768,9 +782,13 @@ func collect(p topology.ResourceProvider, typed *k8score.ResourceCache, dc *k8s.
 	for _, gvr := range crds {
 		objs, err := dc.List(gvr, "")
 		if err != nil {
+			if unlisted == nil {
+				unlisted = map[string]string{}
+			}
+			unlisted[gvr.String()] = err.Error()
 			continue
 		}
 		add(gvr.Group, crdKind[gvr], anys(objs, nil))
 	}
-	return out
+	return out, unlisted
 }

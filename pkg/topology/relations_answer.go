@@ -69,7 +69,7 @@ func routingDisposition(d relations.Disposition) bool {
 }
 
 func (n *neighborhood) projectFamily(session relations.Session, name string, target resourceid.Ref) bool {
-	if name != relations.FluxHelmOrigins.Name {
+	if name != relations.FluxHelmOrigins.Name || !slices.Contains(relations.FluxHelmOrigins.Targets, target.GroupKind()) {
 		return true
 	}
 	obj, read := n.borrow(session, target)
@@ -228,6 +228,12 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 				}
 			}
 		}
+		// Whether referrers project depends only on subject, so a family
+		// that won't project them isn't searched: for a HelmRelease that
+		// records its inventory, that search reads every workload.
+		if !n.projectFamily(session, f.Name, subject) {
+			continue
+		}
 		referrers := v.Referrers(f, subject, obj)
 		n.cover(f.Name, referrers.Coverage)
 		n.extras.projectCoverage(disposition, gk, false, referrers.Coverage)
@@ -236,9 +242,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		}
 		for _, r := range referrers.Referrers {
 			if e, ok := edgeFor(f.Name, r.Ref, subject); ok {
-				if n.projectFamily(session, f.Name, subject) {
-					n.edge(r.Ref, subject, e)
-				}
+				n.edge(r.Ref, subject, e)
 			}
 		}
 	}
