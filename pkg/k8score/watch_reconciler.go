@@ -52,7 +52,7 @@ func (d *DynamicResourceCache) requestWatch(gvr schema.GroupVersionResource) {
 	d.mu.Unlock()
 	go func() {
 		defer func() { d.mu.Lock(); delete(d.watchRequests, gvr); d.mu.Unlock() }()
-		_ = d.EnsureWatchingContext(d.probeCtx, gvr, "")
+		_ = d.ensureWatchingContext(d.probeCtx, gvr, "", true)
 	}()
 }
 

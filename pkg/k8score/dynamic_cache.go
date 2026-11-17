@@ -460,6 +460,14 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 // discovery and for Radar's access check; the check and any watches it starts
 // belong to the cache and outlive ctx.
 func (d *DynamicResourceCache) EnsureWatchingContext(ctx context.Context, gvr schema.GroupVersionResource, preferredNS string) error {
+	return d.ensureWatchingContext(ctx, gvr, preferredNS, false)
+}
+
+// ensureWatchingContext is EnsureWatchingContext; keepNamespaceWatches stops
+// a cluster-wide check that failed, rather than passed, from replacing the
+// namespace watches gvr already has. Background activation sets it: it runs
+// without a reader, so it must not trade working watches for a guess.
+func (d *DynamicResourceCache) ensureWatchingContext(ctx context.Context, gvr schema.GroupVersionResource, preferredNS string, keepNamespaceWatches bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -505,7 +513,11 @@ func (d *DynamicResourceCache) EnsureWatchingContext(ctx context.Context, gvr sc
 	// cache's own budget, never a caller's context: every caller that joined
 	// it would otherwise inherit the deadline and cancellation of whichever
 	// request started it. ctx bounds only this caller's wait.
-	result := d.watchStarts.DoChan(gvr.String()+"|"+preferredNS, func() (any, error) {
+	key := gvr.String() + "|" + preferredNS
+	if keepNamespaceWatches {
+		key += "|keep"
+	}
+	result := d.watchStarts.DoChan(key, func() (any, error) {
 		if d.hasCoveringInformer(gvr, preferredNS) {
 			return nil, nil
 		}
@@ -539,9 +551,7 @@ func (d *DynamicResourceCache) EnsureWatchingContext(ctx context.Context, gvr sc
 			return nil, noAccessError(gvr, err)
 		}
 		for _, scopeNS := range scopes {
-			// A cluster-wide check that failed, rather than passed, is no
-			// reason to replace namespace watches that work.
-			if err := d.startWatchingScope(gvr, scopeNS, o.failedOpen); errors.Is(err, errNamespaceWatchesKept) {
+			if err := d.startWatchingScope(gvr, scopeNS, keepNamespaceWatches && o.failedOpen); errors.Is(err, errNamespaceWatchesKept) {
 				kept = true
 				return nil, noAccessError(gvr, errScopeProbeIncomplete)
 			} else if err != nil {

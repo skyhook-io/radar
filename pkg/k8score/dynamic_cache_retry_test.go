@@ -1148,15 +1148,18 @@ func TestFailedOpenWatchKeepsNamespaceWatches(t *testing.T) {
 	}
 }
 
-// An all-namespaces request whose cluster-wide check fails rather than
-// passes keeps the namespace watches a namespace read started.
-func TestEnsureWatchingKeepsNamespaceWatchesOnAFailedCheck(t *testing.T) {
+// Background activation whose cluster-wide check fails rather than passes
+// keeps the namespace watches a namespace read started; a reader asking for
+// every namespace still fails open to a cluster-wide watch.
+func TestBackgroundActivationKeepsNamespaceWatchesOnAFailedCheck(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	var clusterChecks atomic.Int64
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
 	dyn.PrependReactor("list", "widgets", func(action ktesting.Action) (bool, runtime.Object, error) {
 		if action.GetNamespace() != "" {
 			return false, nil, nil
 		}
+		clusterChecks.Add(1)
 		return true, nil, apierrors.NewServiceUnavailable("proxy unavailable")
 	})
 	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn})
@@ -1167,15 +1170,26 @@ func TestEnsureWatchingKeepsNamespaceWatchesOnAFailedCheck(t *testing.T) {
 	if err := d.startWatching(gvr, "a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.EnsureWatching(gvr); err == nil {
-		t.Fatal("an all-namespaces request reported success without a cluster-wide watch")
+	clusterWide := func() (bool, bool) {
+		d.mu.RLock()
+		defer d.mu.RUnlock()
+		_, ok := d.informers[informerKey{gvr: gvr}]
+		return ok, d.fallbackResolved[gvr]
 	}
-	d.mu.RLock()
-	_, clusterWide := d.informers[informerKey{gvr: gvr}]
-	resolved := d.fallbackResolved[gvr]
-	d.mu.RUnlock()
-	if clusterWide || resolved || !d.HasCoveringInformer(gvr, "a") {
-		t.Fatalf("a failed cluster-wide check replaced the namespace watch: clusterWide=%v resolved=%v", clusterWide, resolved)
+	d.requestWatch(gvr)
+	waitUntilTrue(t, "background activation", func() bool {
+		d.mu.RLock()
+		defer d.mu.RUnlock()
+		return clusterChecks.Load() > 0 && !d.watchRequests[gvr]
+	})
+	if cw, resolved := clusterWide(); cw || resolved || !d.HasCoveringInformer(gvr, "a") {
+		t.Fatalf("a failed cluster-wide check replaced the namespace watch: clusterWide=%v resolved=%v", cw, resolved)
+	}
+	if err := d.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if cw, _ := clusterWide(); !cw {
+		t.Fatal("a reader's all-namespaces request no longer fails open")
 	}
 }
 
