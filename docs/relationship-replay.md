@@ -12,9 +12,11 @@ go run ./cmd/clustercapture -context YOUR_CONTEXT -out /tmp/cluster.ndjson.gz
 
 Discovery covers every served group/version, including CRDs. Lists use a limit
 of 500 across all namespaces. Events, coordination leases and subresources are
-excluded. A discovery or list error fails the capture; an incomplete capture is
-never published. The destination must not already exist. Capture uses list and
-discovery reads only, with a 30-second timeout per network request.
+excluded. A resource whose list fails is skipped and recorded in the capture
+header (see below); a discovery failure or an interrupt fails the capture, and
+an incomplete capture is never published. The destination must not already
+exist. Capture uses list and discovery reads only, with a 30-second timeout per
+network request.
 
 The gzip contains a header with `captured_at`, SHA-256 `context_hash`, and
 `discovery.groups` / `discovery.resources`, followed by Kubernetes objects.
@@ -25,31 +27,16 @@ This is a frozen **recording**, not an atomic cross-resource apiserver snapshot:
 objects may change while capture lists different kinds/versions. Both replays
 nevertheless receive exactly the same recorded inputs.
 
-## Build old and new with the same harness
+## Build old and new
 
-Unmodified main has no `-replay` flag. Apply this harness to both code revisions;
-do not copy the new relationship implementation onto the old side. For example,
-from the harness worktree while changes are uncommitted:
+Build the testserver of both revisions from commits that contain this harness,
+plus `reldiff` from either:
 
 ```sh
-HARNESS_ROOT=$PWD
-git diff HEAD -- cmd/testserver/main.go internal/k8s/testing.go > /tmp/replay-harness.patch
-git worktree add --detach /tmp/radar-old origin/main
-git worktree add --detach /tmp/radar-new YOUR_NEW_REVISION
-for tree in /tmp/radar-old /tmp/radar-new; do
-  git -C "$tree" apply /tmp/replay-harness.patch
-  cp "$HARNESS_ROOT/cmd/testserver/replay.go" "$tree/cmd/testserver/"
-  cp -R "$HARNESS_ROOT/internal/clusterreplay" "$tree/internal/"
-done
-(cd /tmp/radar-old && go build -o /tmp/radar-old-testserver ./cmd/testserver)
-(cd /tmp/radar-new && go build -o /tmp/radar-new-testserver ./cmd/testserver)
+(cd OLD_TREE && go build -o /tmp/radar-old-testserver ./cmd/testserver)
+(cd NEW_TREE && go build -o /tmp/radar-new-testserver ./cmd/testserver)
 go build -o /tmp/reldiff ./cmd/reldiff
 ```
-
-Resolve overlay conflicts manually, preserving each revision's product code.
-The overlay touches only testserver, the test hook, and the capture-file package.
-If the harness has been committed, generate the patch against its pre-harness
-base instead of `HEAD`. Never remove worktrees through symlink paths.
 
 ## Replay and compare
 
@@ -65,10 +52,14 @@ kill "$OLD_PID" "$NEW_PID"
 
 Readiness is `GET /loadtest/status` on the admin listener (default main port+1).
 Reldiff polls it for up to 30 seconds. Override custom admin locations with
-`-ready-a URL -ready-b URL`. Readiness includes unsupported resources. All
-watchable captured kinds are eagerly synced so request order does not determine
-ownership coverage. Non-watchable kinds remain in discovery/the fake tracker,
-and are explicitly reported as unsupported by the informer-backed readers.
+`-ready-a URL -ready-b URL`. Readiness includes unsupported resources. Built-in
+kinds with a typed informer are served by it, as in Radar. Custom resources and
+`resource.k8s.io` are synced before the server reports ready; a captured kind
+without a watch verb stays in discovery and the fake tracker and is reported as
+unsupported. Other built-in kinds (CustomResourceDefinitions, for example)
+start watching when first requested, as in Radar, and until then ownership
+reports them as not collected. Start both servers fresh for every comparison,
+so both sides see the same request sequence.
 
 Each subject exercises resource GET `relationships`, REST
 `/api/ai/neighborhood`, REST AI resource context, and MCP `get_resource` /
@@ -139,7 +130,9 @@ Some readers vary between two runs of the *same* build (today: the GitOps tree a
 neighborhood around CiliumEndpoints, and the order Applications joins its add-on
 reasons). Measure that first and pass it as a baseline, so a comparison of two
 builds reports those fields as `noise`, not as deltas. Baseline matches are scoped
-to the same reader and kind, with array positions and element keys generalized:
+to the same reader and subject kind. Array positions are generalized, and so are
+elements of one kind: noise on one CiliumEndpoint node covers the same field on
+every CiliumEndpoint node, not on a Service node.
 
 ```sh
 # two servers from the same build, then
