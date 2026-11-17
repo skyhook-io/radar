@@ -47,11 +47,11 @@ function stateText(d: VeleroDeletion): string {
   }
 }
 
-// A settled deletion's state, for the page's row and the drawer's chip.
-const SETTLED_LABEL: Partial<Record<VeleroDeletion['state'], { page: string; chip: string }>> = {
-  refused: { page: 'Refused', chip: 'Delete refused' },
-  failed: { page: 'Failed', chip: 'Delete failed' },
-  unknown: { page: 'Outcome unknown', chip: 'Deletion outcome unknown' },
+// A settled deletion's state, for the At a glance's Deletion row.
+const SETTLED_LABEL: Partial<Record<VeleroDeletion['state'], string>> = {
+  refused: 'Refused',
+  failed: 'Failed',
+  unknown: 'Outcome unknown',
 }
 
 /** Velero's reasons in plain words where Radar recognises them, as written otherwise. */
@@ -71,13 +71,14 @@ function requestedAgo(d: VeleroDeletion): string | undefined {
 const deletionNoticeKey = (namespace: string, request: string) => ['velero', 'deletion-notice', getApiBase(), namespace, request]
 
 /**
- * "Delete backup…" for a Velero Backup, in the drawer's header. Velero deletes
+ * "Delete backup…" for a Velero Backup, in the header. A deletion Velero
+ * settled without deleting is said in the At a glance's Deletion row. Velero deletes
  * a backup through a DeleteBackupRequest: its files in the bucket, its volume
  * snapshots and uploaded data, and the restores made from it. Deleting the
  * Backup object instead removes none of that, and Velero recreates the object
  * from the bucket, so the generic Delete is not offered for these.
  */
-export function VeleroDeleteBackup({ backup, context = 'drawer' }: { backup: any; context?: 'drawer' | 'expanded' }) {
+export function VeleroDeleteBackup({ backup }: { backup: any }) {
   const { support } = useRadarFeature('veleroDeleteBackup')
   const workspaceSupport = useRadarFeature('veleroWorkspace').support
   const namespace: string = backup?.metadata?.namespace ?? ''
@@ -156,14 +157,6 @@ export function VeleroDeleteBackup({ backup, context = 'drawer' }: { backup: any
 
   return (
     <>
-      {/* The page says this in its At a glance; a chip there would read as the backup's status. */}
-      {context === 'drawer' && started && deletion.data && state && SETTLED_LABEL[state] && (
-        <Tooltip content={[requestedAgo(deletion.data) && `Requested ${requestedAgo(deletion.data)}.`, stateText(deletion.data)].filter(Boolean).join(' ')} position="bottom">
-          <span>
-            <Badge severity="warning">{SETTLED_LABEL[state].chip}</Badge>
-          </span>
-        </Tooltip>
-      )}
       {unavailable ? (
         <Tooltip content={unavailable} position="bottom">
           <span>{button}</span>
@@ -239,7 +232,7 @@ export function VeleroBackupDeletionRow({ backup }: { backup: any }) {
         : 'Velero no longer has the request and the backup is still here; check the backup, or delete it again'
   return (
     <FactRow label="Deletion">
-      <span className={toneTextClass(d.state === 'unknown' ? 'degraded' : 'unhealthy')}>{label.page}</span>
+      <span className={toneTextClass(d.state === 'unknown' ? 'degraded' : 'unhealthy')}>{label}</span>
       {ago && (
         <>
           {' '}

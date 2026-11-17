@@ -357,7 +357,7 @@ interface WorkloadViewProps {
     resource: any
     context: 'drawer' | 'expanded'
     onNavigate?: NavigateToResource
-    /** The resource's operational issues, for a summary that shows them itself (expanded only). */
+    /** The resource's operational issues, for a summary that shows them itself. */
     leadContent?: ReactNode
   }) => ReactNode
   /** Extra tabs for the expanded view (e.g. a domain's own sections). */
@@ -983,12 +983,11 @@ export function WorkloadView({
   const podEvidenceLoading = resourceLoading || workloadPodsLoading || eventsLoading
   const logsFallbackReady = !renderLogsTab || (!logsTabVisible && !podEvidenceLoading)
   const requestedTab: TabType = activeTab
-  const summaryContext = { kind, apiKind, namespace, name, group, resource, onNavigate: onNavigateToResource }
-  const expandedSummary = expanded && resource ? renderSummaryForState?.({
-    ...summaryContext,
-    context: 'expanded',
-    leadContent: (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState ? renderOverviewLeadForState({ kind, namespace, name }) : undefined,
-  }) ?? null : null
+  const summaryContext = {
+    kind, apiKind, namespace, name, group, resource, onNavigate: onNavigateToResource,
+    leadContent: renderSummaryForState && (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState ? renderOverviewLeadForState({ kind, namespace, name }) : undefined,
+  }
+  const expandedSummary = expanded && resource ? renderSummaryForState?.({ ...summaryContext, context: 'expanded' }) ?? null : null
   const drawerSummary = !expanded && resource ? renderSummaryForState?.({ ...summaryContext, context: 'drawer' }) ?? null : null
   const tabs: DetailShellTab<TabType>[] = [
     { id: 'overview', label: 'Overview', icon: <Layers className="w-4 h-4" /> },

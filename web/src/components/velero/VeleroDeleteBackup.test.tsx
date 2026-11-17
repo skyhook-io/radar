@@ -131,7 +131,6 @@ describe('Delete backup', () => {
     act(() => buttons('Delete backup').at(-1)!.click())
     state.deletion = { state: 'refused', request: 'nightly-1-abc', errors: ['backup storage location primary not found'] }
     act(() => root.render(<QueryClientProvider client={client}><VeleroDeleteBackup backup={{ ...backup() }} /></QueryClientProvider>))
-    expect(document.body.textContent).toContain('Delete refused')
     expect(state.failure).toHaveBeenCalledWith('Velero refused to delete backup nightly-1', 'backup storage location primary not found')
     expect(buttons('Delete backup')[0].disabled).toBe(false)
   })
@@ -144,7 +143,6 @@ describe('Delete backup', () => {
     act(() => buttons('Delete backup').at(-1)!.click())
     state.deletion = { state: 'failed', request: 'nightly-1-abc', errors: ['backup storage location primary not found'] }
     act(() => root.render(<QueryClientProvider client={client}><VeleroDeleteBackup backup={{ ...backup() }} /></QueryClientProvider>))
-    expect(document.body.textContent).toContain('Delete failed')
     expect(state.failure).toHaveBeenCalledWith('Deleting backup nightly-1 failed', 'Some of its data may already have been removed. backup storage location primary not found')
     expect(buttons('Delete backup')[0].disabled).toBe(false)
   })
@@ -201,17 +199,11 @@ describe('Delete backup', () => {
     expect(state.failure).toHaveBeenCalledTimes(1)
   })
 
-  it('shows a refusal found on opening the drawer without announcing it', () => {
-    state.deletion = { state: 'refused', request: 'older-request', errors: ['backup storage location nowhere not found'] }
-    render(<VeleroDeleteBackup backup={backup()} />)
-    expect(document.body.textContent).toContain('Delete refused')
-    expect(state.failure).not.toHaveBeenCalled()
-  })
-
-  it('leaves a settled deletion to the page’s At a glance, not a header chip', () => {
+  it('leaves a settled deletion found on opening to the At a glance, neither a header chip nor news', () => {
     state.deletion = { state: 'refused', request: 'older-request', created: new Date(Date.now() - 2 * 3_600_000).toISOString(), errors: ['backup storage location nowhere not found'] }
-    render(<VeleroDeleteBackup backup={backup()} context="expanded" />)
+    render(<VeleroDeleteBackup backup={backup()} />)
     expect(document.body.textContent).not.toContain('refused')
+    expect(state.failure).not.toHaveBeenCalled()
     expect(buttons('Delete backup')).toHaveLength(1)
   })
 

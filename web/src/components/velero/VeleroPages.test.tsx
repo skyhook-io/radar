@@ -81,9 +81,30 @@ function page(apiKind: string, resource: unknown, leadContent?: React.ReactNode)
 const runsOf = (runs: unknown[], extra: Record<string, unknown> = {}) => ({ observedAt: '', coverage: { state: 'full' }, runs, total: runs.length, ...extra })
 
 describe('The composed Overview', () => {
-  it('belongs to the page; the drawer keeps the renderer', () => {
-    expect(renderVeleroSummary({ apiKind: 'backups', resource: { metadata: {} }, context: 'drawer' })).toBeNull()
+  it('leads the page and the drawer alike, for the kinds that have a page', () => {
+    expect(renderVeleroSummary({ apiKind: 'backups', resource: { metadata: {} }, context: 'drawer' })).not.toBeNull()
     expect(renderVeleroSummary({ apiKind: 'podvolumebackups', resource: { metadata: {} }, context: 'expanded' })).toBeNull()
+  })
+
+  it('in the drawer, reads as the page does, unframed, with a tab link that opens the page', () => {
+    state.workspace = workspace()
+    const html = text(
+      renderToStaticMarkup(
+        <QueryClientProvider client={new QueryClient()}>
+          <MemoryRouter>
+            {renderVeleroSummary({
+              apiKind: 'backups',
+              context: 'drawer',
+              resource: { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default', ttl: '24h0m0s' }, status: { phase: 'Completed', expiration: new Date(Date.now() + 3_600_000).toISOString() } },
+            })}
+          </MemoryRouter>
+        </QueryClientProvider>,
+      ),
+    )
+    expect(html).toContain('At a glance')
+    expect(html).toContain('Kept until')
+    expect(html).toContain('Restores →')
+    expect(html).not.toContain('rounded-xl border')
   })
 
   it('reads a completed backup: when it finished, its counts, and a restore Velero never tested', () => {

@@ -4,7 +4,6 @@ import { DrawerTrailBack } from '../workspace/DrawerTrailBack'
 import { VeleroBSLRenderer } from '../resources/renderers/VeleroBSLRenderer'
 import { VeleroBackupRenderer } from '../resources/renderers/VeleroBackupRenderer'
 import { VeleroRestoreRenderer } from '../resources/renderers/VeleroRestoreRenderer'
-import { VeleroScheduleRenderer } from '../resources/renderers/VeleroScheduleRenderer'
 import { VELERO_DETAIL_KINDS, VELERO_GROUP as VELERO_GROUP_NAME, VELERO_BACKUP_KIND, VELERO_LOCATION_KIND, VELERO_RESTORE_KIND, VELERO_SCHEDULE_KIND, veleroDetailKindFor, veleroDetailPath, veleroKindListMode } from './routes'
 import { renderVeleroSummary } from './VeleroPages'
 import { VeleroBackupsKindList, VeleroLocationsKindList, VeleroRestoresKindList, VeleroSchedulesKindList } from './VeleroKindLists'
@@ -35,7 +34,7 @@ function detailKind(resource: HostResource): string | null {
 export const veleroResourceHost: ResourceHost = {
   id: 'velero',
   feature: 'veleroWorkspace',
-  renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer, VeleroScheduleRenderer },
+  renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer },
   drawerNavigation: {
     ownsPath: (pathname) => pathname === '/velero' || pathname.startsWith('/velero/'),
     Component: VeleroDrawerTrailBack,
@@ -57,14 +56,15 @@ export const veleroResourceHost: ResourceHost = {
     return qs ? `${base}?${qs}` : base
   },
   detailOwnership: ['summary', 'destination'],
-  // The page's composed Overview (the drawer keeps the renderer); and a
-  // schedule's header: its reading as the status chip, and Back up now in the
-  // action row with every resource's actions.
+  // The composed Overview, on the page and in the drawer (the renderer is
+  // Spec & status); a backup's Delete backup; and a schedule's header: its
+  // reading as the status chip, and Back up now in the action row with every
+  // resource's actions.
   detailSlots: (resource): DetailSlots => {
     const summary: DetailSlots = { renderSummary: (props) => renderVeleroSummary(props) }
     if (detailKind(resource) === VELERO_BACKUP_KIND.name) return {
       ...summary,
-      renderHeaderActions: ({ resource: data, context }) => isApiGroup(data?.apiVersion, VELERO_GROUP_NAME) ? <VeleroDeleteBackup backup={data} context={context} /> : null,
+      renderHeaderActions: ({ resource: data }) => isApiGroup(data?.apiVersion, VELERO_GROUP_NAME) ? <VeleroDeleteBackup backup={data} /> : null,
     }
     if (kindToPluralWithGroup(resource.kind, resource.group ?? VELERO_GROUP_NAME) !== VELERO_SCHEDULE_KIND.name) return summary
     return {

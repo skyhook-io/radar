@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, createContext, useContext, useState, type ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import {
   Disclosure,
@@ -49,14 +49,14 @@ import { useRadarFeature } from '../../api/client'
 import { useVeleroRuns, useVeleroScheduleActivity, useVeleroWorkspace, type VeleroRunRow, type VeleroRunsResponse } from '../../api/velero'
 import { useVeleroStoredBackups } from '../../api/policy'
 import { useNavCustomization } from '../../context/NavCustomization'
-import { issuesPathForSubject } from '../../utils/page-links'
+import { currentPageLabel, issuesPathForSubject } from '../../utils/page-links'
 import { Notice, RefreshFailedNotice, Segments, SectionTable } from '../workspace/layout'
 import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { RunMessages } from './VeleroRunMessagesHost'
 import { VeleroBackupDeletionRow } from './VeleroDeleteBackup'
 import { Expires, FAILED, Outcome, RunCounts, RunOutcome, RunReason, RunsReadNotice, When, durationText, expired, runViewOptions, runsEmpty, useRunView } from './runs'
-import { VELERO_DETAIL_KINDS } from './routes'
+import { VELERO_DETAIL_KINDS, veleroDetailPath } from './routes'
 import { VELERO_MESSAGE_LABEL, VeleroName, restoreTargets, selectionText, veleroResource, type RestoreSelection } from './shared'
 import { RestoreIntoCell } from './VeleroRunLists'
 import { veleroObjectProblems } from './attention'
@@ -69,9 +69,20 @@ import { veleroObjectProblems } from './attention'
 
 const CARD = 'rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm'
 
+/** Where an Overview is shown: on the object's page, or in the drawer over a list. */
+interface SummaryPlace {
+  drawer: boolean
+  plural: string
+  namespace: string
+  name: string
+}
+const SummaryPlaceContext = createContext<SummaryPlace | null>(null)
+
+// The drawer is already a panel, so its sections are not framed again.
 function Card({ title, children }: { title?: string; children: ReactNode }) {
+  const drawer = !!useContext(SummaryPlaceContext)?.drawer
   return (
-    <section className={CARD}>
+    <section className={drawer ? undefined : CARD}>
       {title && <SectionHeading>{title}</SectionHeading>}
       {children}
     </section>
@@ -91,11 +102,21 @@ function Link({ children, onClick }: { children: ReactNode; onClick?: () => void
   )
 }
 
-/** "Restores →": opens another of the page's tabs, as a tab click does. */
+/**
+ * "Restores →": on the page, opens another of its tabs as a tab click does;
+ * in the drawer, opens that tab on the object's page.
+ */
 function TabLink({ tab, children }: { tab: string; children: ReactNode }) {
   const [params, setParams] = useSearchParams()
   const location = useLocation()
+  const place = useContext(SummaryPlaceContext)
+  const navigate = useWorkspaceNavigate()
   const open = () => {
+    // The page pins its context itself.
+    if (place?.drawer) {
+      navigate(veleroDetailPath({ plural: place.plural, namespace: place.namespace, name: place.name }, undefined, tab), { state: { returnLabel: currentPageLabel() } })
+      return
+    }
     const next = new URLSearchParams(params)
     next.set('tab', tab)
     setParams(next, { state: location.state })
@@ -903,11 +924,11 @@ export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespa
 }
 
 /**
- * The composed Overview of a Velero object's page, led by Velero's issues
- * for it; null in the drawer, which keeps the renderer.
+ * The composed Overview of a Velero object, led by Velero's issues for it: on
+ * its page, and in the drawer beside Spec & status, as CloudNativePG's is.
  */
 export function renderVeleroSummary({ apiKind, resource, context, onNavigate, leadContent }: { apiKind: string; resource: any; context: 'drawer' | 'expanded'; onNavigate?: NavigateToResource; leadContent?: ReactNode }) {
-  if (context !== 'expanded' || !resource) return null
+  if (!resource) return null
   const body = (() => {
     switch (apiKind) {
       case 'backups':
@@ -923,16 +944,14 @@ export function renderVeleroSummary({ apiKind, resource, context, onNavigate, le
     }
   })()
   if (!body) return null
+  const namespace: string = resource?.metadata?.namespace ?? ''
+  const name: string = resource?.metadata?.name ?? ''
   return (
-    <div className="space-y-4 p-4">
-      <PageLead
-        kind={VELERO_DETAIL_KINDS[apiKind].kind}
-        namespace={resource?.metadata?.namespace ?? ''}
-        name={resource?.metadata?.name ?? ''}
-        leadContent={leadContent}
-        onNavigate={onNavigate}
-      />
-      {body}
-    </div>
+    <SummaryPlaceContext.Provider value={{ drawer: context === 'drawer', plural: apiKind, namespace, name }}>
+      <div className="space-y-4 p-4">
+        <PageLead kind={VELERO_DETAIL_KINDS[apiKind].kind} namespace={namespace} name={name} leadContent={leadContent} onNavigate={onNavigate} />
+        {body}
+      </div>
+    </SummaryPlaceContext.Provider>
   )
 }
