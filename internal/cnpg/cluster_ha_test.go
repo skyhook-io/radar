@@ -13,7 +13,6 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	metadatafake "k8s.io/client-go/metadata/fake"
 
-	auth "github.com/skyhook-io/radar/internal/auth"
 	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -104,15 +103,14 @@ func TestCNPGHAPrimaryBudgetProtection(t *testing.T) {
 		name       string
 		instances  int
 		mutate     func(*k8s.CNPGPDBTestFixture)
-		denyNodes  bool
 		protection string
 		reason     string
 	}{
-		{"healthy HA", 2, nil, false, "expected", ""},
-		{"single instance", 1, nil, false, "singleInstance", ""},
-		{"primary node cordoned", 2, func(f *k8s.CNPGPDBTestFixture) { f.Nodes["node-1"].Spec.Unschedulable = true }, false, "blocking", "the primary's node is cordoned, draining or not ready"},
-		{"standby left on a cordoned node", 2, func(f *k8s.CNPGPDBTestFixture) { f.Nodes["node-2"].Spec.Unschedulable = true }, false, "blocking", "until that node is uncordoned"},
-		{"nodes unreadable", 2, nil, true, "", ""},
+		{"healthy HA", 2, nil, "expected", ""},
+		{"single instance", 1, nil, "singleInstance", ""},
+		{"primary node cordoned", 2, func(f *k8s.CNPGPDBTestFixture) { f.Nodes["node-1"].Spec.Unschedulable = true }, "blocking", "the primary's node is cordoned, draining or not ready"},
+		{"standby left on a cordoned node", 2, func(f *k8s.CNPGPDBTestFixture) { f.Nodes["node-2"].Spec.Unschedulable = true }, "blocking", "until that node is uncordoned"},
+		{"a Node missing from the cache leaves it unknown", 2, func(f *k8s.CNPGPDBTestFixture) { delete(f.Nodes, "node-2") }, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(k8s.ResetTestState)
@@ -124,11 +122,7 @@ func TestCNPGHAPrimaryBudgetProtection(t *testing.T) {
 			if err := f.Install(""); err != nil {
 				t.Fatal(err)
 			}
-			ok := integration.ReadSource{State: cnpgHAStateOK}
-			resp := CNPGClusterHAResponse{Pods: ok, Nodes: ok, PDBs: activityReader().hAPDBs(context.Background(), k8s.GetResourceCache(), f.Cluster)}
-			if tc.denyNodes {
-				resp.Nodes = cnpgHAClusterDenied(auth.Grant{Verb: "get", Resource: "nodes"})
-			}
+			resp := CNPGClusterHAResponse{Pods: integration.ReadSource{State: cnpgHAStateOK}, PDBs: activityReader().hAPDBs(context.Background(), k8s.GetResourceCache(), f.Cluster)}
 			cnpgHAPrimaryProtection(&resp, k8s.GetResourceCache(), f.Cluster, f.Pods)
 			got := resp
 			var primary *CNPGHAPDB
@@ -150,8 +144,12 @@ func TestCNPGHAPrimaryBudgetProtection(t *testing.T) {
 // Through ClusterHA: the reading needs the same list nodes Issues checks,
 // not only the get nodes the zones need.
 func TestCNPGClusterHAPrimaryProtectionNeedsListNodes(t *testing.T) {
-	for _, denyList := range []bool{false, true} {
-		t.Run(map[bool]string{false: "list allowed", true: "list denied"}[denyList], func(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		denyList, denyGet bool
+	}{{"list allowed", false, false}, {"list denied", true, false}, {"list allowed, get denied", false, true}} {
+		denyList, denyGet := tc.denyList, tc.denyGet
+		t.Run(tc.name, func(t *testing.T) {
 			t.Cleanup(k8s.ResetTestState)
 			t.Cleanup(k8s.ResetTestDynamicState)
 			f := k8s.NewCNPGPDBTestFixture(2)
@@ -160,7 +158,7 @@ func TestCNPGClusterHAPrimaryProtectionNeedsListNodes(t *testing.T) {
 			}
 			reader := &Reader{
 				Access: Access{CanRead: func(_ context.Context, _, resource, _, verb string) bool {
-					return !(denyList && resource == "nodes" && verb == "list")
+					return !(resource == "nodes" && ((denyList && verb == "list") || (denyGet && verb == "get")))
 				}},
 				Observations: Observations{
 					OperatorScope: func(context.Context) []string { return nil },
@@ -171,8 +169,8 @@ func TestCNPGClusterHAPrimaryProtectionNeedsListNodes(t *testing.T) {
 			}
 			clients := HAClients{Typed: fake.NewClientset(), Dynamic: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), Metadata: metadatafake.NewSimpleMetadataClient(metadatafake.NewTestScheme())}
 			got := reader.ClusterHA(context.Background(), clients, k8s.GetResourceCache(), f.Cluster, time.Now())
-			if got.Nodes.State != cnpgHAStateOK {
-				t.Fatalf("get nodes stays allowed: %+v", got.Nodes)
+			if (got.Nodes.State == cnpgHAStateOK) == denyGet {
+				t.Fatalf("zones follow get nodes: %+v", got.Nodes)
 			}
 			want := "expected"
 			if denyList {

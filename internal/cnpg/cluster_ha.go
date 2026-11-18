@@ -789,7 +789,10 @@ func (s *Reader) hACertificates(ctx context.Context, callerCtx context.Context, 
 // Issues uses, from what this response read as the caller. Without the
 // caller's Pods and Nodes the answer is unknown and the field stays empty.
 func cnpgHAPrimaryProtection(resp *CNPGClusterHAResponse, cache *k8s.ResourceCache, cluster *unstructured.Unstructured, pods []*corev1.Pod) {
-	if resp.Pods.State != cnpgHAStateOK || resp.Nodes.State != cnpgHAStateOK || resp.PDBs.State != cnpgHAStateOK {
+	// Nodes as Issues reads them: the cache, behind the caller's list nodes
+	// (checked by ClusterHA), not the get nodes the zones need.
+	if resp.Pods.State != cnpgHAStateOK || resp.PDBs.State != cnpgHAStateOK || cache.Nodes() == nil ||
+		cnpgUncachedReason("Nodes", "Nodes", "", cache.AssessKindRead("nodes", nil)) != "" {
 		return
 	}
 	// Every budget in the namespace: another one selecting the primary matters.
@@ -797,9 +800,11 @@ func cnpgHAPrimaryProtection(resp *CNPGClusterHAResponse, cache *k8s.ResourceCac
 	if !ok {
 		return
 	}
+	missed := false
 	node := func(name string) *corev1.Node {
 		n, err := cache.Nodes().Get(name)
 		if err != nil {
+			missed = true
 			return nil
 		}
 		return n
@@ -812,6 +817,10 @@ func cnpgHAPrimaryProtection(resp *CNPGClusterHAResponse, cache *k8s.ResourceCac
 		for _, p := range all {
 			if p.Name == item.Name {
 				item.Protection, item.ProtectionReason = k8s.ClassifyCNPGPrimaryPDB(p, cluster, pods, all, node)
+				// As in Issues: a reason drawn from a Node Radar doesn't hold is a guess.
+				if missed && item.Protection == "blocking" {
+					item.Protection, item.ProtectionReason = "", ""
+				}
 			}
 		}
 	}
