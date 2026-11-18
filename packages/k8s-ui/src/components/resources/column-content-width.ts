@@ -65,6 +65,21 @@ const PROBLEM_ICON_PX = 8 + 14
 
 export const NAME_MIN_PX = 200
 export const NAME_MAX_PX = 480
+// When the table is short of room, Name gives way last, down to the width that
+// keeps NAME_YIELD_PERCENTILE of its names whole, and never holds on to more
+// than NAME_PROTECTED_MAX_PX. The trade: sideways scrolling hides whole
+// columns, a cut name keeps its start and shows in full on hover, so the
+// table may cut the longest quarter of the names to scroll less. It goes on
+// to the width half its names need (NAME_FIT_PERCENTILE), with the other
+// columns at their headings, only when that ends the scrolling altogether:
+// cutting half the names is worth a table with every column in view, not one
+// that still scrolls. Below that a Name column cuts most names and no longer
+// does its job, so the table scrolls instead. The cap
+// keeps a list of long names (PVCs, generated names) from scrolling to save a
+// few of them.
+export const NAME_YIELD_PERCENTILE = 0.75
+export const NAME_FIT_PERCENTILE = 0.5
+export const NAME_PROTECTED_MAX_PX = 320
 const NAMESPACE_MAX_PX = 320
 const NODE_MAX_PX = 400
 // Grow columns stop at their longest value or this, whichever is less. Past it a
@@ -142,7 +157,7 @@ export interface ColumnSizingSpec {
   weight?: number
   max?: number
   /** Name: sized to its longest value (not its 95th percentile); when room is short it
-   *  gives way last, and only down to the 90th percentile of its names. */
+   *  gives way last, and only down to NAME_YIELD_PERCENTILE of its names. */
   keep?: boolean
   /** When room is short, lower ranks give way first (see ColumnLayoutInput). */
   yieldRank?: number
@@ -153,12 +168,17 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   if (col.sizing === 'exact') return { mode: 'exact' }
   // Name is what a reader scans for, so it fits its longest name (up to the
   // cap) and is the last column to give way when room is short — and then
-  // only down to the 90th percentile of its names, so just the longest are
-  // cut before the table scrolls sideways. Other fit columns size to their 95th
+  // only down to the width most of its names need (NAME_YIELD_PERCENTILE, at
+  // most NAME_PROTECTED_MAX_PX), so only names wider than that are cut before
+  // the table scrolls sideways. Other fit columns size to their 95th
   // percentile, so a few outliers (one long namespace) don't set the width,
   // and reach for their longest value from the room left over.
   switch (col.key) {
-    case 'name': return { mode: 'fit', max: NAME_MAX_PX, keep: true, yieldRank: 4 }
+    case 'name':
+      // A kind can mark its Name `sizing: 'fit'` to give it no protection: it
+      // sizes like any fit column and gives way first (see Events' columns).
+      if (col.sizing === 'fit') return { mode: 'fit', max: NAME_MAX_PX, weight: 1, yieldRank: 1 }
+      return { mode: 'fit', max: NAME_MAX_PX, keep: true, yieldRank: 4 }
     case 'namespace': return { mode: 'fit', max: NAMESPACE_MAX_PX, weight: 1 }
     // Node is worth showing but is the first to give way when room is short.
     case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1, yieldRank: 1 }
@@ -321,8 +341,10 @@ export interface MeasuredContent {
   content: number
   /** fit only: its longest value, which it may grow to from the room left over. */
   stretch?: number
-  /** Name only: the 90th percentile of its names, the narrowest it gives way to. */
+  /** Name only: the width NAME_YIELD_PERCENTILE of its names need, the narrowest it gives way to. */
   yieldTo?: number
+  /** Name only: the width NAME_FIT_PERCENTILE of its names need, which it gives way to only if the table then fits. */
+  fitTo?: number
 }
 
 /**
@@ -360,7 +382,8 @@ export function measureColumnContent(
       }
       result[col.key] = {
         content: Math.ceil(longest) + CELL_PADDING_PX,
-        yieldTo: Math.ceil(percentile(widths, 0.9)) + CELL_PADDING_PX,
+        yieldTo: Math.ceil(percentile(widths, NAME_YIELD_PERCENTILE)) + CELL_PADDING_PX,
+        fitTo: Math.ceil(percentile(widths, NAME_FIT_PERCENTILE)) + CELL_PADDING_PX,
       }
     } else if (spec.mode === 'fit') {
       const widths = new Array<number>(items.length)

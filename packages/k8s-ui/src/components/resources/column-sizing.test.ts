@@ -104,7 +104,7 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout(cols, 766)).toEqual({ name: 300, namespace: 180, status: 110, node: 176 })
   })
 
-  it('takes room from Name last, and only down to its 90th percentile, before the table scrolls', () => {
+  it('takes room from Name last, and only down to its yield width, before the table scrolls', () => {
     const cols: ColumnLayoutInput[] = [
       name(480, 360),
       { key: 'namespace', mode: 'fit', floor: 192, max: 320, content: 181, min: 145 },
@@ -115,8 +115,53 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout(cols, 841)).toEqual({ name: 480, namespace: 145, status: 130, node: 86 })
     // 60 more short: only now Name gives, down to 420.
     expect(computeColumnLayout(cols, 781)).toEqual({ name: 420, namespace: 145, status: 130, node: 86 })
-    // Past its 90th percentile Name holds and the table scrolls.
+    // Past its yield width Name holds and the table scrolls.
     expect(computeColumnLayout(cols, 500)).toEqual({ name: 360, namespace: 145, status: 130, node: 86 })
+  })
+
+  it('takes columns on to their headings, and Name to its median, only when that ends the scrolling', () => {
+    const cols: ColumnLayoutInput[] = [
+      { ...name(400, 300), fitMin: 240, hardMin: 200 },
+      { ...exact('status', 160), min: 150, hardMin: 90 },
+      { ...grow('message', 256, 900), hardMin: 120 },
+    ]
+    // 816 wanted; the first pass gives 110 (Status 10, Name 100): 706.
+    expect(computeColumnLayout(cols, 706)).toEqual({ name: 300, status: 150, message: 256 })
+    // Status and Message to their headings (196) end the scrolling at 510...
+    expect(computeColumnLayout(cols, 510)).toEqual({ name: 300, status: 90, message: 120 })
+    // ...and Name to its median at 450.
+    expect(computeColumnLayout(cols, 450)).toEqual({ name: 240, status: 90, message: 120 })
+    // Short of that the table scrolls, with the first pass's widths.
+    expect(computeColumnLayout(cols, 449)).toEqual({ name: 300, status: 150, message: 256 })
+  })
+
+  it('takes Name on to its median only when that ends the scrolling', () => {
+    const cols: ColumnLayoutInput[] = [{ ...name(400, 300), fitMin: 240 }, exact('status', 160)]
+    // 560 wanted; Name gives 100 to its yield width, the table fits at 460.
+    expect(computeColumnLayout(cols, 460)).toEqual({ name: 300, status: 160 })
+    // 20 short of 460: the median ends the scrolling, so Name goes on.
+    expect(computeColumnLayout(cols, 440)).toEqual({ name: 280, status: 160 })
+    expect(computeColumnLayout(cols, 400)).toEqual({ name: 240, status: 160 })
+    // Past the median it would still scroll, so Name stays at its yield width.
+    expect(computeColumnLayout(cols, 399)).toEqual({ name: 300, status: 160 })
+  })
+
+  it('where the table must fit, takes every column on to its hard minimum before scrolling, Name last', () => {
+    const cols: ColumnLayoutInput[] = [
+      { ...name(400, 300), hardMin: 200 },
+      { ...exact('status', 160), min: 178, hardMin: 90 },
+      { ...grow('message', 256, 900, 1), hardMin: 120 },
+      { ...grow('object', 256, 900, 1), hardMin: 110 },
+    ]
+    // 400 + 160 + 256 + 256 = 1072. Without mustFit, where every hard minimum
+    // still doesn't fit, Name gives 100 and the rest scrolls.
+    expect(computeColumnLayout(cols, 400)).toEqual({ name: 300, status: 160, message: 256, object: 256 })
+    // With it: Status and the grow columns give the other 172 first, in proportion to how far
+    // each is above its heading (70 : 136 : 146); Name stays at 300.
+    expect(computeColumnLayout(cols, 800, { mustFit: true })).toEqual({ name: 300, status: 125, message: 189, object: 184 })
+    expect(computeColumnLayout(cols, 600, { mustFit: true })).toEqual({ name: 280, status: 90, message: 120, object: 110 })
+    // Past every hard minimum it still scrolls.
+    expect(computeColumnLayout(cols, 400, { mustFit: true })).toEqual({ name: 200, status: 90, message: 120, object: 110 })
   })
 
   it('never shrinks an exact column below its normal width when its content is wider', () => {
