@@ -25,7 +25,7 @@ const SHARED_PRINCIPAL_FALLBACK = 'system:serviceaccount:ate-system:ate-client'
  */
 export function SubstrateTierBanner({ tier }: { tier: SubstrateAPITier }) {
   if (tier.state === 'connected' || tier.state === 'notConfigured' || tier.state === 'connecting') return null
-  if (tier.code === 'sharedRadar' || tier.code === 'targetChanged') return null
+  if (tier.code === 'sharedRadar' || tier.code === 'targetChanged' || tier.code === 'ownersOnly') return null
   const r = tierReading(tier)
   return (
     <div role="status">
@@ -34,6 +34,7 @@ export function SubstrateTierBanner({ tier }: { tier: SubstrateAPITier }) {
           <div className="mt-1 break-words text-xs text-theme-text-primary">
             <span className="font-medium">Next step: </span>
             {r.nextStep}
+            {r.command && <CommandChip command={r.command} />}
           </div>
         )}
       </AlertBanner>
@@ -340,6 +341,12 @@ export function SubstrateConnectPanel({ status, tier }: { status: SubstrateStatu
 }
 
 /** Whether the screen offers the Connect panel: whenever the API tier is not connected. */
+/**
+ * Whether a screen offers the Connect panel. Not in Radar Hub: an owner's
+ * Radar reads as the shared client identity on its own, and everyone else
+ * reads a note instead (ownersOnly).
+ */
 export function showsConnectPanel(tier: SubstrateAPITier): boolean {
+  if (tier.code === 'ownersOnly' || tier.code === 'mintDenied' || tier.identity?.mode === 'sharedAsCaller') return false
   return tier.state !== 'connected' && tier.state !== 'connecting'
 }

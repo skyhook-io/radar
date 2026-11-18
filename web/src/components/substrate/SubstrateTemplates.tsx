@@ -18,7 +18,7 @@ import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import type { OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectPanel, SubstrateTierBanner, showsConnectPanel } from './SubstrateConnect'
 import { SubstrateStateBar } from './SubstrateStateBar'
-import { templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, templateFilterValue, tierReading } from './readings'
+import { OWNERS_ONLY_NOTE, templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, templateFilterValue, tierReading } from './readings'
 import { SUBSTRATE_PATH, SUBSTRATE_SCREENS, substrateActorsPath, substrateTemplatePath } from './routes'
 import { CommandChip, Name, SUBSTRATE_WIDE, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
@@ -229,10 +229,12 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
   }
   if (!t && query.isLoading) return <PaneLoader label={`Loading ${template.name}…`} className="flex-1" />
   if (!t) {
-    const title = code === 'notFound' ? `Substrate has no template ${template.name}` : code === 'denied' ? `Substrate denied reading ${template.name}` : `${template.name} couldn’t be read`
-    const detail = code === 'notFound'
-      ? `There is no template ${template.name} in atespace ${template.atespace}. It may have been deleted since this link was made.`
-      : query.error instanceof Error ? query.error.message : 'Radar could not read the template.'
+    const title = code === 'ownersOnly' ? 'Templates are for org owners' : code === 'notFound' ? `Substrate has no template ${template.name}` : code === 'denied' ? `Substrate denied reading ${template.name}` : `${template.name} couldn’t be read`
+    const detail = code === 'ownersOnly'
+      ? OWNERS_ONLY_NOTE
+      : code === 'notFound'
+        ? `There is no template ${template.name} in atespace ${template.atespace}. It may have been deleted since this link was made.`
+        : query.error instanceof Error ? query.error.message : 'Radar could not read the template.'
     return (
       <ScreenEmptyState
         icon={Bot}

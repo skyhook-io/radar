@@ -659,8 +659,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/rbac/role/{kind}/{namespace}/{name}", s.handleRBACRole)
 			r.Get("/rbac/namespace/{namespace}", s.handleRBACNamespace)
 			r.Get("/rbac/whoami", s.handleRBACWhoami)
-			// Agent Substrate workspace. The API-tier routes serve only a
-			// local Radar on a private listener; see substrateAPIAllowed.
+			// Agent Substrate workspace. The API-tier routes serve a local
+			// Radar on a private listener and, in Radar Hub, org owners;
+			// see substrateGate. /connection is local-only.
 			r.Get("/substrate/status", s.handleSubstrateStatus)
 			r.Get("/substrate/connection", s.handleGetSubstrateConnection)
 			r.Put("/substrate/connection", s.handlePutSubstrateConnection)

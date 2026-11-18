@@ -261,3 +261,43 @@ describe('one fact once, and a worker that says what happened to its actors', ()
     expect(workerPodText({ podReady: false })).toBe('Pod not ready')
   })
 })
+
+describe('tier readings for a Radar Hub owner, who has no form', () => {
+  const owner = { mode: 'sharedAsCaller' as const, principal: 'system:serviceaccount:ate-system:ate-client' }
+  const noForm = /Advanced|another identity|this machine|Change connection|choose|save/i
+
+  it('says the shared identity is missing, with a kubectl check', () => {
+    const r = tierReading({ state: 'failed', code: 'notInstalled', identity: owner, reason: 'ServiceAccount ate-system/ate-client does not exist.' })
+    expect(r).toMatchObject({ detail: 'Substrate’s shared client identity (ate-system/ate-client) doesn’t exist here.', nextStep: 'Check that Substrate is installed in ate-system.', command: 'kubectl -n ate-system get sa ate-client' })
+    expect(`${r.detail} ${r.nextStep}`).not.toMatch(noForm)
+  })
+
+  it('says Radar couldn’t reach or verify the API server from inside the cluster, with the server’s reason', () => {
+    const tls = tierReading({ state: 'failed', code: 'tls', identity: owner, reason: 'x509: certificate signed by unknown authority' })
+    expect(tls.detail).toBe('Radar couldn’t verify api.ate-system.svc:443 from inside the cluster. x509: certificate signed by unknown authority')
+    expect(tls.command).toBe('kubectl -n ate-system get svc api')
+    const down = tierReading({ state: 'failed', code: 'unreachable', identity: owner, reason: 'dial tcp: connection refused' })
+    expect(down.detail).toBe('Radar couldn’t reach api.ate-system.svc:443 from inside the cluster. dial tcp: connection refused')
+    expect(down.command).toBe('kubectl -n ate-system get pods')
+    for (const r of [tls, down]) expect(`${r.detail} ${r.nextStep}`).not.toMatch(noForm)
+  })
+
+  it('says Substrate refused the shared identity and that an operator must grant it', () => {
+    for (const code of ['unauthenticated', 'denied'] as const) {
+      const r = tierReading({ state: 'failed', code, identity: owner })
+      expect(r.title).toBe('Substrate refused the shared identity')
+      expect(r.detail).toContain('it isn’t granted in this install')
+      expect(r.nextStep).toContain('Substrate operator to grant it')
+      expect(r.nextStep).toContain('this Radar can’t read Substrate as it stands')
+      expect(`${r.detail} ${r.nextStep}`).not.toMatch(noForm)
+    }
+  })
+
+  it('leaves a local Radar’s readings, which point at its form, exactly as they were', () => {
+    expect(tierReading({ state: 'failed', code: 'notInstalled' })).toEqual({ title: 'API server not found', tone: 'unknown', detail: 'Radar has not read Substrate’s API.', nextStep: 'Check that Substrate’s API server runs as Service ate-system/api, or set its endpoint under Advanced.' })
+    expect(tierReading({ state: 'failed', code: 'tls' }).nextStep).toBe('Check the CA file and server name under Advanced, or that the cluster’s trust bundle for Substrate exists.')
+    expect(tierReading({ state: 'failed', code: 'unreachable', reason: 'dial tcp' })).toMatchObject({ title: 'API server unreachable', detail: 'dial tcp' })
+    expect(tierReading({ state: 'failed', code: 'unauthenticated' }).nextStep).toBe('Check that the token is current, or choose another identity.')
+    expect(tierReading({ state: 'failed', code: 'denied' }).nextStep).toBe('Ask a Substrate owner to grant this identity the viewer role, or choose another identity.')
+  })
+})

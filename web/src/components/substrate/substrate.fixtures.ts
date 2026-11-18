@@ -34,6 +34,20 @@ export const sharedTier: SubstrateAPITier = {
   reason: "This Radar is shared, so it does not read Substrate's API: Substrate authorizes by its own roles, and every user would see what Radar's one identity sees. Use a local Radar (CLI or Desktop) to see actors, templates and workers.",
 }
 
+/** Radar Hub, a user who isn't an org owner: Substrate's API tier is off for them. */
+export const ownersOnlyTier: SubstrateAPITier = {
+  state: 'disabled',
+  code: 'ownersOnly',
+  reason: 'In Radar Hub only org owners read Substrate’s API.',
+}
+
+/** Radar Hub, an org owner: the shared client identity, minted with the owner's Kubernetes access. */
+export const ownerTier: SubstrateAPITier = {
+  ...connectedTier,
+  endpoint: 'api.ate-system.svc:443',
+  identity: { mode: 'sharedAsCaller', principal: 'system:serviceaccount:ate-system:ate-client' },
+}
+
 export function counts(byState: Partial<SubstrateStateCounts['byState']>): SubstrateStateCounts {
   const full = { running: 0, suspended: 0, resuming: 0, suspending: 0, reverting: 0, crashed: 0, deleting: 0, unknown: 0, ...byState }
   return { total: Object.values(full).reduce((a, b) => a + b, 0), byState: full }

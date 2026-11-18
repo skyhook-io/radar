@@ -3,10 +3,10 @@ import { Badge, CertaintyGlyph, Collapse, CollapseChevron, StatusDot, Tooltip, t
 import type { SubstrateAtespaceRead, SubstratePoolRow, SubstrateStatus, SubstrateWorkspace } from '../../api/substrateWorkspace'
 import type { SelectedResource } from '../../types'
 import { refToSelectedResource } from '../../utils/navigation'
-import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
+import { Notice, ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { INCOMPLETE_COVERAGE_STATES, coverageEmpty, coverageLabel } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
-import { coverageInPart, countText, poolReading, poolReadyPods } from './readings'
+import { OWNERS_ONLY_NOTE, coverageInPart, countText, poolReading, poolReadyPods } from './readings'
 import { SUBSTRATE_GROUP, substrateActorsPath } from './routes'
 import { SubstrateAttentionList, type OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectPanel, SubstrateTierBanner, showsConnectPanel } from './SubstrateConnect'
@@ -452,7 +452,7 @@ export function SubstrateOverview({ data, status, onInspect, inspected, onOpenSu
       <ScreenBody>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <SubstrateSourceLine tier={tier} status={status} />
-          {connected && status?.canConfigure && (
+          {connected && status?.canConfigure && tier.identity?.mode !== 'sharedAsCaller' && (
             <button type="button" onClick={() => setChanging((v) => !v)} className="text-xs font-medium text-accent-text hover:underline">
               {changing ? 'Close' : 'Change connection'}
             </button>
@@ -462,6 +462,7 @@ export function SubstrateOverview({ data, status, onInspect, inspected, onOpenSu
         <SubstrateTierBanner tier={tier} />
         <StatusLine facts={overviewFacts(data)} />
         {status && (showsConnectPanel(tier) || (connected && changing)) && <SubstrateConnectPanel status={status} tier={tier} />}
+        {tier.code === 'ownersOnly' && <Notice>{OWNERS_ONLY_NOTE}</Notice>}
         {data.actorStates && (
           <section aria-labelledby="substrate-states">
             <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5">
