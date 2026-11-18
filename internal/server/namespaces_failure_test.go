@@ -27,10 +27,7 @@ func decodeNamespacesResponse(t *testing.T, resp *http.Response) (int, any) {
 // A caller whose namespace access couldn't be determined is told to retry,
 // not handed an empty list that reads as "no namespaces".
 func TestNamespacesReportsFailedAccessCheck(t *testing.T) {
-	cache := k8s.GetResourceCache()
 	fakeNamespaceAPIServer(t, http.StatusOK, http.StatusInternalServerError, "default")
-	// The helper drops the cache; without one the handler never reaches the access check.
-	t.Cleanup(k8s.SwapResourceCacheForTest(cache))
 	env := newAuthTestServer(t)
 	status, body := decodeNamespacesResponse(t, env.authGet(t, "/api/namespaces", "alice", ""))
 	if m, _ := body.(map[string]any); status != http.StatusServiceUnavailable || m["error_code"] != string(readreason.UserPermissionCheckFailed) {
@@ -57,8 +54,7 @@ func TestNamespacesWithoutInformerReportsFailedList(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	cache := k8s.GetResourceCache()
-	if cache.Namespaces() != nil {
+	if k8s.GetResourceCache().Namespaces() != nil {
 		t.Fatal("fixture must have no Namespaces informer")
 	}
 	prevNs := k8s.SetTestContextNamespace("default")
@@ -82,8 +78,6 @@ func TestNamespacesWithoutInformerReportsFailedList(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeNamespaceAPIServer(t, tc.listStatus, http.StatusForbidden)
-			// The helper drops the cache; this case is a cache without a Namespaces informer.
-			t.Cleanup(k8s.SwapResourceCacheForTest(cache))
 			resp, err := http.Get(ts.URL + "/api/namespaces")
 			if err != nil {
 				t.Fatal(err)
