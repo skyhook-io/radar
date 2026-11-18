@@ -82,6 +82,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 		recordClusterContext := ActiveClusterContext()
 
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
+			RequiredWatchKinds:          relationshipWatchKinds(),
 			DynamicClient:               client,
 			Discovery:                   sharedDiscovery,
 			Changes:                     changeCh,
@@ -182,6 +183,12 @@ type supportedCRDResource struct {
 // drift checks. Only installed catalog entries are warmed, so watch identities
 // stay bounded even when discovery exposes an unbounded CRD set.
 var supportedCRDFallbacks = []supportedCRDResource{
+	{Group: "cilium.io", Versions: []string{"v2"}, Resource: "ciliumclusterwidenetworkpolicies", Kind: "CiliumClusterwideNetworkPolicy", Namespaced: false},
+	{Group: "policy.networking.k8s.io", Versions: []string{"v1beta1", "v1alpha2"}, Resource: "clusternetworkpolicies", Kind: "ClusterNetworkPolicy", Namespaced: false},
+	{Group: "", Versions: []string{"v1"}, Resource: "podtemplates", Kind: "PodTemplate", Namespaced: true},
+	{Group: "cilium.io", Versions: []string{"v2"}, Resource: "ciliumnetworkpolicies", Kind: "CiliumNetworkPolicy", Namespaced: true},
+	{Group: "eks.amazonaws.com", Versions: []string{"v1"}, Resource: "nodeclasses", Kind: "NodeClass", Namespaced: false},
+	{Group: "sinks.knative.dev", Versions: []string{"v1alpha1"}, Resource: "jobsinks", Kind: "JobSink", Namespaced: true},
 	{Group: "opentelemetry.io", Versions: []string{"v1beta1", "v1alpha1"}, Resource: "opentelemetrycollectors", Kind: "OpenTelemetryCollector", Namespaced: true},
 	{Group: "opentelemetry.io", Versions: []string{"v1alpha1"}, Resource: "instrumentations", Kind: "Instrumentation", Namespaced: true},
 	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "canaries", Kind: "Canary", Namespaced: true},

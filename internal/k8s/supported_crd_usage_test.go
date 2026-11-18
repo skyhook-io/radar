@@ -21,6 +21,10 @@ var supportedGroupsNotReported = map[string]string{
 	"snapshot.storage.k8s.io":      "CSI snapshot CRDs with no single owner; managed clusters often preinstall them",
 	"helm.crossplane.io":           "a Crossplane provider package; Crossplane's own groups already report it",
 	"kubernetes.crossplane.io":     "a Crossplane provider package; Crossplane's own groups already report it",
+	"":                             "core PodTemplate, built into Kubernetes",
+	"policy.networking.k8s.io":     "AdminNetworkPolicy, a Kubernetes SIG Network API several CNIs serve",
+	"eks.amazonaws.com":            "EKS Auto Mode's NodeClass, managed by AWS rather than installed as a package",
+	"sinks.knative.dev":            "Knative Eventing's JobSink; eventing.knative.dev already reports Knative Eventing",
 }
 
 func TestSupportedCRDGroupsAreReportedOrExcluded(t *testing.T) {
