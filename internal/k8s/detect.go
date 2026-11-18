@@ -953,13 +953,13 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 	// but it blocks node drains and upgrades; name the policy footgun from
 	// status instead of leaving agents to infer it during a failed drain.
 	if pdbLister := cache.PodDisruptionBudgets(); pdbLister != nil {
+		cnpgContext := collectCNPGPDBContext(cache, namespace)
 		var pdbs []*policyv1.PodDisruptionBudget
 		if namespace != "" {
 			pdbs, _ = pdbLister.PodDisruptionBudgets(namespace).List(labels.Everything())
 		} else {
 			pdbs, _ = pdbLister.List(labels.Everything())
 		}
-		cnpgContext := collectCNPGPDBContext(cache, pdbs)
 		for _, pdb := range pdbs {
 			if det, ok := terminatingProblem("PodDisruptionBudget", "policy", pdb, now); ok {
 				problems = append(problems, det)
@@ -990,8 +990,8 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: pdb.CreationTimestamp.Time,
 			}
-			setDetectionOnset(&detection, now, onsetAt)
 			applyCNPGPrimaryPDBVerdict(&detection, cnpgContext.classify(pdb))
+			setDetectionOnset(&detection, now, onsetAt)
 			problems = append(problems, detection)
 		}
 	}

@@ -20,7 +20,7 @@ const CNPGPDBTestNamespace = "db"
 
 // CNPGPDBTestFixture mirrors what CloudNativePG v1.30.1 creates for a healthy
 // Cluster "pg": pods pg-1 (primary) .. pg-N, each Ready on its own Ready node
-// node-<i>. For tests only.
+// node-<i>. For tests only: production code never calls it.
 type CNPGPDBTestFixture struct {
 	Cluster *unstructured.Unstructured
 	PDB     *policyv1.PodDisruptionBudget

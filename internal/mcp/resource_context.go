@@ -279,18 +279,22 @@ func issueSubjectAccess(ctx context.Context) func(issues.Ref) bool {
 
 // issueEvidenceAccess authorizes an inventory a finding was derived from at
 // the granularity Radar reads it: a namespaced read needs namespace access
-// (and a Secret or Exact read its exact check); a cluster-wide read needs the SAR.
+// (and a Secret read a Secrets check); a cluster-wide read needs the SAR.
 func issueEvidenceAccess(ctx context.Context) func(issues.EvidenceRead) bool {
 	inNamespace := callerNamespaces(ctx)
 	return func(read issues.EvidenceRead) bool {
 		if read.Namespace == "" {
 			return canReadInNamespace(ctx, read.Group, read.Resource, "", read.Verb)
 		}
+		// A read marked Exact gets its exact check, never namespace access alone.
+		if read.Exact {
+			return inNamespace(read.Namespace) && canReadInNamespace(ctx, read.Group, read.Resource, read.Namespace, read.Verb)
+		}
 		if !inNamespace(read.Namespace) {
 			return false
 		}
-		if read.Exact || (read.Group == "" && read.Resource == "secrets") {
-			return canReadInNamespace(ctx, read.Group, read.Resource, read.Namespace, read.Verb)
+		if read.Group == "" && read.Resource == "secrets" {
+			return canReadInNamespace(ctx, "", "secrets", read.Namespace, read.Verb)
 		}
 		return true
 	}

@@ -49,14 +49,6 @@ func ForEvidence(issue Issue, canRead func(EvidenceRead) bool, allowUnfiltered b
 	return shown, view == EvidenceFull || view == EvidenceDegraded
 }
 
-func forEvidence(issue Issue, canRead func(EvidenceRead) bool, allowUnfiltered bool) (Issue, EvidenceView) {
-	view := ViewEvidence(issue.RequiredReads, issue.Degraded, issue.ExpectedWhenVerified, canRead, allowUnfiltered)
-	if view == EvidenceDegraded {
-		return degradeIssue(issue), view
-	}
-	return issue, view
-}
-
 // degradeIssue tells the finding without its evidence. Evidence-derived onset
 // goes too; a detector can retain timing owned by the readable subject itself.
 func degradeIssue(issue Issue) Issue {
@@ -71,7 +63,7 @@ func degradeIssue(issue Issue) Issue {
 		issue.FirstSeen, issue.OnsetUnknown, issue.OnsetCoverage = time.Time{}, true, nil
 		issue.IssueTiming, issue.IssueTimingBasis = "", ""
 	}
-	issue.RequiredReads, issue.Degraded, issue.ExpectedWhenVerified = nil, nil, false
+	issue.RequiredReads, issue.Degraded = nil, nil
 	return issue
 }
 
@@ -88,4 +80,13 @@ func applyEvidenceAccess(list []Issue, canRead func(EvidenceRead) bool, allowUnf
 		}
 	}
 	return out
+}
+
+func forEvidence(issue Issue, canRead func(EvidenceRead) bool, allowUnfiltered bool) (Issue, EvidenceView) {
+	view := ViewEvidence(issue.RequiredReads, issue.Degraded, issue.ExpectedWhenVerified, canRead, allowUnfiltered)
+	if view == EvidenceDegraded {
+		issue = degradeIssue(issue)
+		issue.ExpectedWhenVerified = false
+	}
+	return issue, view
 }

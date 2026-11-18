@@ -132,10 +132,11 @@ func TestDetectCNPGPrimaryPDBExpectedIsMarked(t *testing.T) {
 	if !got.ExpectedWhenVerified {
 		t.Fatalf("healthy HA primary budget not marked expected: %+v", got)
 	}
+	// Nodes first: a restricted caller fails on one cluster-wide check.
 	wantReads := []issuesapi.EvidenceRead{
+		{Resource: "nodes", Verb: "list", Exact: true},
 		{Group: "postgresql.cnpg.io", Resource: "clusters", Namespace: cnpgTestNS, Verb: "list", Exact: true},
 		{Resource: "pods", Namespace: cnpgTestNS, Verb: "list", Exact: true},
-		{Resource: "nodes", Verb: "list", Exact: true},
 	}
 	if !reflect.DeepEqual(got.RequiredReads, wantReads) {
 		t.Fatalf("reads = %+v", got.RequiredReads)

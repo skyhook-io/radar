@@ -196,11 +196,18 @@ type cnpgPDBContext struct {
 	node     func(string) *corev1.Node
 }
 
-func collectCNPGPDBContext(cache *ResourceCache, pdbs []*policyv1.PodDisruptionBudget) cnpgPDBContext {
+// collectCNPGPDBContext reads the budgets in namespace ("" for all) itself.
+func collectCNPGPDBContext(cache *ResourceCache, namespace string) cnpgPDBContext {
 	ctx := cnpgPDBContext{clusters: map[string]*unstructured.Unstructured{}, pods: map[string][]*corev1.Pod{}, pdbs: map[string][]*policyv1.PodDisruptionBudget{}, node: func(string) *corev1.Node { return nil }}
 	dynamic := GetDynamicResourceCache()
-	if dynamic == nil || cache == nil {
+	if dynamic == nil || cache == nil || cache.PodDisruptionBudgets() == nil {
 		return ctx
+	}
+	var pdbs []*policyv1.PodDisruptionBudget
+	if namespace != "" {
+		pdbs, _ = cache.PodDisruptionBudgets().PodDisruptionBudgets(namespace).List(labels.Everything())
+	} else {
+		pdbs, _ = cache.PodDisruptionBudgets().List(labels.Everything())
 	}
 	for _, pdb := range pdbs {
 		ctx.pdbs[pdb.Namespace] = append(ctx.pdbs[pdb.Namespace], pdb)
@@ -271,9 +278,9 @@ func applyCNPGPrimaryPDBVerdict(d *Detection, verdict cnpgPDBVerdict) {
 	case cnpgPDBExpected:
 		d.ExpectedWhenVerified = true
 		d.Degraded = generic
-		d.RequiredReads = []issuesapi.EvidenceRead{clusters,
-			{Resource: "pods", Namespace: d.Namespace, Verb: "list", Exact: true},
-			{Resource: "nodes", Verb: "list", Exact: true}}
+		// Nodes first: a restricted caller fails on one cluster-wide check.
+		d.RequiredReads = []issuesapi.EvidenceRead{{Resource: "nodes", Verb: "list", Exact: true}, clusters,
+			{Resource: "pods", Namespace: d.Namespace, Verb: "list", Exact: true}}
 	case cnpgPDBSingleInstance:
 		d.Degraded = generic
 		d.RequiredReads = []issuesapi.EvidenceRead{clusters}
