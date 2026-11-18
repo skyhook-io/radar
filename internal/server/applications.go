@@ -2397,21 +2397,23 @@ func classifyWorkload(kind string, rels *appRelationships) string {
 	}
 }
 
+// appWorkloadKinds are the kinds Applications lists as workloads.
+var appWorkloadKinds = []resourceid.GroupKind{
+	{Group: "apps", Kind: "Deployment"}, {Group: "apps", Kind: "DaemonSet"}, {Group: "apps", Kind: "StatefulSet"},
+	{Group: "batch", Kind: "Job"}, {Group: "batch", Kind: "CronJob"},
+	{Group: "argoproj.io", Kind: "Workflow"}, {Group: "argoproj.io", Kind: "CronWorkflow"}, {Group: "argoproj.io", Kind: "WorkflowTemplate"},
+	{Group: "argoproj.io", Kind: "ClusterWorkflowTemplate"}, {Group: "argoproj.io", Kind: "Rollout"},
+	{Group: jobset.Group, Kind: jobset.Kind},
+	{Group: "keda.sh", Kind: "ScaledJob"},
+}
+
 func appWorkloadAPIGroup(kind string) string {
-	switch kind {
-	case "Deployment", "DaemonSet", "StatefulSet":
-		return "apps"
-	case "Job", "CronJob":
-		return "batch"
-	case "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "Rollout":
-		return "argoproj.io"
-	case "JobSet":
-		return jobset.Group
-	case "ScaledJob":
-		return "keda.sh"
-	default:
-		return ""
+	for _, gk := range appWorkloadKinds {
+		if gk.Kind == kind {
+			return gk.Group
+		}
 	}
+	return ""
 }
 
 // classifyAppWorkloads folds the workloads' classes into the row's. An
