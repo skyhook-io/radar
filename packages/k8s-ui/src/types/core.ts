@@ -193,6 +193,8 @@ export interface FeatureCapabilities {
   workloadImages?: boolean
   deploymentPause?: boolean
   substrateHealthMetrics?: boolean
+  /** GET /api/substrate/* and PUT /api/substrate/connection. */
+  substrateWorkspace?: boolean
   resourceIssues?: boolean
   resourceIssueCoverage?: boolean
   // GET /api/issues/resource/... with ?correlate=<issueID>

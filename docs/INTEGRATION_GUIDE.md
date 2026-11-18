@@ -286,7 +286,10 @@ A workspace is a set of screens for several related kinds (CloudNativePG at
 spans objects: fleet health, a chain such as Backup → ObjectStore → Cluster, or
 actions that need facts from more than one object. With fewer kinds, or no
 cross-object question, a renderer plus Issues plus the detail slots is enough.
-The batch kinds, for example, use only the detail seams.
+The batch kinds, for example, use only the detail seams. Agent Substrate
+(`/substrate`, [substrate.md](substrate.md)) is the example of a workspace whose
+main objects live outside Kubernetes: it reads them from the project's own API,
+only in a local Radar, and labels which source each value came from.
 
 The pieces below are shared and should be imported, not copied. Read
 [DESIGN.md](../DESIGN.md#unknown-partial-and-denied-values) for the rules on

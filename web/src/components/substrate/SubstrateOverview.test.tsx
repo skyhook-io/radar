@@ -1,0 +1,208 @@
+import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router-dom'
+import { describe, expect, it, vi } from 'vitest'
+import type { SubstrateStatus, SubstrateWorkspace } from '../../api/substrateWorkspace'
+import { SUBSTRATE_NO_PROBLEMS, SubstrateOverview } from './SubstrateOverview'
+import { connectedTier, connection, counts, notConnectedWorkspace, sharedTier, status, workspace } from './substrate.fixtures'
+
+const state = vi.hoisted(() => ({ connection: undefined as unknown }))
+
+vi.mock('../../api/client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/client')>()),
+  usePrometheusStatus: () => ({ data: { connected: true } }),
+}))
+vi.mock('../../api/substrateWorkspace', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/substrateWorkspace')>()),
+  useSubstrateConnection: () => ({ data: state.connection, isError: false }),
+  useUpdateSubstrateConnection: () => ({ mutate: vi.fn(), isPending: false }),
+}))
+
+// renderToStaticMarkup escapes apostrophes; compare against the text a reader sees.
+const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+// Names wrap only after a hyphen, so each segment is its own span; read them as the reader does.
+const plain = (html: string) => html.replace(/<\/?span[^>]*>/g, '')
+
+function render(data: SubstrateWorkspace, st: SubstrateStatus | undefined = status({ apiTier: data.apiTier })) {
+  return text(renderToStaticMarkup(
+    <MemoryRouter>
+      <SubstrateOverview data={data} status={st} onInspect={() => {}} inspected={null} onOpenSubject={() => {}} />
+    </MemoryRouter>,
+  ))
+}
+
+describe('Agent Substrate overview, connected', () => {
+  it('says where its values come from: the API, who Radar reads as, Prometheus', () => {
+    const html = render(workspace(), status({ apiTier: connectedTier }))
+    expect(html).toContain('ate-system/api:443')
+    expect(html).toContain('system:serviceaccount:ate-system:ate-client')
+    expect(html).toMatch(/Prometheus<\/span><span[^>]*>connected/)
+    expect(html).toContain('Change connection')
+  })
+
+  it('reads the status line from Substrate’s counts', () => {
+    const html = render(workspace())
+    expect(html).toContain('3, 1 short of workers, 1 full')
+    expect(html).toContain('18 active, 1 draining, 1 unavailable')
+    expect(html).toContain('212 of 236 used (24 free, 21 of them on batch-pool)')
+    expect(html).toContain('1,284, 14 crashed')
+    expect(html).toContain('6, 1 golden snapshot failed')
+  })
+
+  it('draws the state bar with accessible counts, and lists Needs attention in the server’s order, each row labelled', () => {
+    const html = render(workspace())
+    expect(html).toMatch(/role="img" aria-label="1,284 actors: Crashed 14, Resuming 6, Suspending 9, Reverting 2, Running 212, Suspended 1,041"/)
+    const attention = html.slice(html.indexOf('Needs attention'))
+    // The fixture's order is the server's ranking: crash, pool, golden snapshot. No category regrouping.
+    const crash = attention.indexOf('14 actors are crashed')
+    const pool = attention.indexOf('is short of workers')
+    const golden = attention.indexOf('has no golden snapshot')
+    expect(crash).toBeLessThan(pool)
+    expect(pool).toBeLessThan(golden)
+    // Each row names its kind on the subject line, as Velero's and Agent Sandbox's rows do.
+    expect(attention).toMatch(/<span>Pool <span[^>]*><span><button[^>]*><span[^>]*>agent-pool</)
+    expect(attention).toContain('14 actors are crashed, 11 of them from one template')
+    expect(attention).toContain('Show the 14 actors →')
+    expect(attention).toContain('research / langgraph-research')
+    expect(attention).toContain('Substrate’s messages')
+    expect(attention).toContain('By template')
+    expect(attention).toContain('Next step: ')
+  })
+
+  it('shows the evidence of a healthy installation, not only the absence of problems', () => {
+    const html = render(workspace({ needsAttention: [] }))
+    // An empty list names what was checked and what no check reads, not "healthy".
+    expect(html).toContain(SUBSTRATE_NO_PROBLEMS)
+    expect(html).toContain('Crashed actors')
+    expect(html).toContain('Not assessed by any check')
+    expect(html).toContain('Request routing and egress')
+    expect(html).toContain('Worker pools')
+    expect(plain(html)).toContain('agent-pool')
+    expect(html).toContain('37 of 40 used')
+    // Slots count active workers only; the rest of a pool's actors are said to be elsewhere, not left to contradict.
+    const ws = workspace()
+    ws.pools[0] = { ...ws.pools[0], actors: 40 }
+    expect(render(ws)).toContain('+3 actors on workers that take nothing new')
+    expect(html).toContain('Free actor slots')
+    expect(plain(html)).toContain('support-bots')
+  })
+
+  it('says an atespace Substrate denied is unread, never empty', () => {
+    const html = render(workspace())
+    const row = html.slice(html.indexOf('restricted'))
+    expect(row).toContain('No access')
+  })
+
+  it('gives an atespace read in part a lower bound, and one not read no number', () => {
+    const html = render(workspace({
+      atespaces: [
+        { name: 'budgetcut', actorsRead: 'partial', actors: counts({ running: 3 }), templatesRead: 'full', templates: 1 },
+        { name: 'outofscope', actorsRead: 'unread', templatesRead: 'unread' },
+      ],
+    }))
+    const partial = html.slice(html.indexOf('budgetcut'), html.indexOf('outofscope'))
+    expect(partial).toContain('aria-label="At least: Radar read only part of this atespace’s actors"')
+    const unread = html.slice(html.indexOf('outofscope'))
+    expect(unread).toContain('not read')
+    expect(unread).not.toMatch(/>0</)
+  })
+
+  it('raises no coverage notice for kinds not read because the API tier is down', () => {
+    expect(render(notConnectedWorkspace())).not.toContain('Radar couldn’t read all of what this screen shows')
+  })
+
+  it('makes counts over a partial read lower bounds, and says what it could not read', () => {
+    const base = workspace()
+    const html = render(workspace({ needsAttention: [], coverage: { ...base.coverage!, actors: { state: 'partial', deniedAtespaces: ['restricted'] } } }))
+    expect(html).toContain('Radar couldn’t read all of what this screen shows')
+    expect(html).toContain('Substrate denied atespace restricted')
+    expect(html).toContain('aria-label="At least: some of it could not be read"')
+    expect(html).toContain(SUBSTRATE_NO_PROBLEMS)
+  })
+})
+
+describe('Agent Substrate overview, not connected', () => {
+  it('keeps what Kubernetes shows, and says actor values are not connected rather than 0', () => {
+    state.connection = connection()
+    const html = render(notConnectedWorkspace())
+    expect(html).toMatch(/Worker Pods:<\/dt><dd[^>]*>(<span[^>]*>)*6 ready of 6/)
+    expect(html).toMatch(/Actors<\/span><\/span>:<\/dt><dd[^>]*>(?:<[^>]+>)*Not connected/)
+    expect(html).toMatch(/Templates<\/span><\/span>:<\/dt><dd[^>]*>(?:<[^>]+>)*Not connected/)
+    expect(html).not.toMatch(/Actors<\/span><\/span>:<\/dt><dd[^>]*>0/)
+    expect(plain(html)).toContain('agent-pool')
+    expect(html).toContain('Not checked on this read')
+    expect(html).toContain('Crashed actors: actors were not read')
+    // Delivery from Prometheus is unknown, with why, never zero.
+    expect(html).toMatch(/Delivery \(1h\):<\/dt><dd[^>]*>(?:<[^>]+>)*unknown \(no Substrate metrics\)/)
+  })
+
+  it('offers the Connect panel: the API server found, and the shared identity named as not you', () => {
+    state.connection = connection()
+    const html = render(notConnectedWorkspace())
+    expect(html).toContain('See actors, templates and workers')
+    expect(html).toContain('Radar found Substrate’s API server')
+    expect(html).toContain('Substrate’s shared client identity')
+    expect(html).toContain('what kubectl ate uses without')
+    expect(html).toContain('It is not you')
+    expect(html).toContain('Your own viewer token')
+    expect(html).toContain('Recommended')
+    expect(html).toContain('This identity may be a global owner')
+    expect(html).toContain('never returns it to the browser or stores it in its settings')
+    expect(html).toContain('Advanced: API server address and TLS')
+    expect(html).toContain('>Connect</button>')
+  })
+
+  it('says the API server was not found, or that Radar can’t check', () => {
+    const missing = render(notConnectedWorkspace(), status({ apiTier: notConnectedWorkspace().apiTier, apiService: { namespace: 'ate-system', name: 'api', port: 443, found: false } }))
+    expect(missing).toContain('Substrate’s API server wasn’t found')
+    const unknown = render(notConnectedWorkspace(), status({ apiTier: notConnectedWorkspace().apiTier, apiService: { namespace: 'ate-system', name: 'api', port: 443 } }))
+    expect(unknown).toContain('can’t check it is there')
+  })
+
+  it('explains why a shared Radar does not read the API, instead of a form', () => {
+    const data = notConnectedWorkspace(sharedTier)
+    const html = render(data, status({ apiTier: sharedTier, canConfigure: false }))
+    expect(html).toContain('This Radar is shared')
+    expect(html).not.toContain('Substrate’s shared client identity')
+    expect(html).not.toContain('>Connect</button>')
+  })
+
+  it('reads each failure plainly with a next step', () => {
+    const tier = { state: 'failed' as const, code: 'unreachable' as const, reason: 'dial tcp 127.0.0.1:443: connection refused' }
+    const html = render(notConnectedWorkspace(tier))
+    expect(html).toContain('Substrate API: api server unreachable')
+    expect(html).toContain('connection refused')
+    expect(html).toContain('Next step: </span>Check that the API server’s Pods are running')
+    const denied = render(notConnectedWorkspace({ state: 'failed', code: 'denied', reason: 'permission denied' }))
+    expect(denied).toContain('viewer role')
+  })
+})
+
+describe('Agent Substrate status line beside the inventory', () => {
+  it('never reads a missing Prometheus count as calm, and lets crashed actors and unstored snapshots set the colour', async () => {
+    const { serviceFacts } = await import('./SubstrateOverview')
+    const upload = { id: 'uploadOverdue', rule: 'uploadOverdue' as const, severity: 'critical' as const, title: 't', reading: 'r', nextStep: 'n', subject: { kind: 'Actors' as const }, count: 24 }
+    // Prometheus was read but counted no crashes and no overdue node, while the API lists 15 crashed and 24 unstored.
+    const facts = serviceFacts({
+      service: { read: true, slowestResume: { pool: { namespace: 'n', name: 'agent-pool' }, value: 4.8 }, poolsUnknown: 2, nodesOverdue: 0, nodesUnknown: 0 },
+      summary: { pools: { total: 1, short: 0, full: 0 }, actors: { total: 100, crashed: 15 } },
+      needsAttention: [upload],
+    })
+    const crashes = facts.find((f) => String(f.label).startsWith('Crashes'))!
+    expect(crashes.tone).toBe('unhealthy')
+    expect(crashes.lowerBound).toBeFalsy()
+    expect(renderToStaticMarkup(<>{crashes.value}</>)).toContain('unknown')
+    const uploads = facts.find((f) => f.label === 'Uploads')!
+    expect(uploads.value).toBe('24 snapshots not stored yet')
+    expect(uploads.tone).toBe('unhealthy')
+    expect(uploads.lowerBound).toBeFalsy()
+    // Nothing healthy-green that the inventory contradicts, and no "≥" before an unknown or zero.
+    expect(facts.filter((f) => f.tone === 'healthy').map((f) => f.label)).toEqual(['Resumes (1h)'])
+  })
+
+  it('folds an unmeasured Prometheus into one unknown fact', async () => {
+    const { serviceFacts } = await import('./SubstrateOverview')
+    const facts = serviceFacts({ service: { read: true, poolsUnknown: 3, nodesOverdue: 0, nodesUnknown: 2 }, summary: { pools: { total: 3, short: 0, full: 0 } }, needsAttention: [] })
+    expect(facts).toHaveLength(1)
+    expect(facts[0]).toMatchObject({ label: 'Delivery (1h)', tone: 'unknown' })
+  })
+})

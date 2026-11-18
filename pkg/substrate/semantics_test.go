@@ -273,14 +273,14 @@ func TestMemoryStepFollowsTheRecoverySnapshot(t *testing.T) {
 	}{
 		{nil, "it has no stored snapshot, so it boots fresh."},
 		{[]Snapshot{snap(FidelityMemory, "old", DurablePending)}, "it has no stored snapshot, so it boots fresh."},
-		{[]Snapshot{snap(FidelityMemory, "old", DurableCompleted)}, "there it resumes from volumes only; its memory and files belong to the old template."},
-		{[]Snapshot{snap(FidelityRootFS, "old", DurableCompleted)}, "there it resumes from volumes only; its saved files belong to the old template."},
-		{[]Snapshot{snap(FidelityRootFS, "", DurableCompleted)}, "there it resumes from its saved files."},
-		{[]Snapshot{snap(FidelityVolumes, "old", DurableCompleted)}, "there it resumes from its volumes."},
+		{[]Snapshot{snap(FidelityMemory, "old", DurableCompleted)}, "on the new template it resumes from volumes, without memory or files."},
+		{[]Snapshot{snap(FidelityRootFS, "old", DurableCompleted)}, "on the new template it resumes from volumes, without its saved files."},
+		{[]Snapshot{snap(FidelityRootFS, "", DurableCompleted)}, "on the new template it resumes from its saved files."},
+		{[]Snapshot{snap(FidelityVolumes, "old", DurableCompleted)}, "on the new template it resumes from its volumes."},
 	}
 	for _, tc := range tests {
 		a := Actor{State: StateCrashed, Crash: &Crash{Message: memoryLimitMessage}, Snapshots: tc.snaps}
-		if got := CrashedMemoryActorStep(a); !strings.HasSuffix(got, tc.says) || !strings.HasPrefix(got, "Move this actor to a higher-memory template, then revert it; ") {
+		if got := CrashedMemoryActorStep(a); !strings.HasSuffix(got, tc.says) || !strings.HasPrefix(got, "Move this actor to a template with more memory, then revert it; ") {
 			t.Errorf("%+v: %s", tc.snaps, got)
 		}
 	}
