@@ -1,11 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,5 +194,31 @@ func TestNeighborhoodCancelledRequestWritesNothing(t *testing.T) {
 	s.handleAINeighborhood(rec, req.WithContext(ctx))
 	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
 		t.Fatalf("cancelled request answered %d: %s", rec.Code, rec.Body)
+	}
+}
+
+// A walk that runs out of the request's time is a timeout that says how to
+// narrow the request, not a logged internal error.
+func TestNeighborhoodPastDeadlineIsATimeout(t *testing.T) {
+	withOwnershipDiscovery(t)
+	useTestResourceCache(t, clusterWithDeployment("web"))
+	s := newMemoTestServer(t)
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	req := httptest.NewRequest(http.MethodGet, "/api/ai/neighborhood/Deployment/demo/web", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("kind", "Deployment")
+	rctx.URLParams.Add("namespace", "demo")
+	rctx.URLParams.Add("name", "web")
+	ctx, cancel := context.WithDeadline(context.WithValue(req.Context(), chi.RouteCtxKey, rctx), time.Now().Add(-time.Second))
+	defer cancel()
+	rec := httptest.NewRecorder()
+	s.handleAINeighborhood(rec, req.WithContext(ctx))
+	if rec.Code != http.StatusGatewayTimeout || !strings.Contains(rec.Body.String(), "hops=1") {
+		t.Fatalf("past-deadline walk answered %d: %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(logged.String(), "[neighborhood]") {
+		t.Errorf("a timeout was logged as a failure: %s", logged.String())
 	}
 }

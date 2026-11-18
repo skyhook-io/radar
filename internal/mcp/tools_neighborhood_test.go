@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -704,5 +705,16 @@ func TestNeighborhoodMCP_UncollectedRootAnswersWithItsReadCode(t *testing.T) {
 		case !grant && (coded || err == nil || !strings.Contains(err.Error(), "not found")):
 			t.Errorf("may not get secrets: %v, want not found", err)
 		}
+	}
+}
+
+// A walk that runs out of time says so and how to narrow the request.
+func TestNeighborhoodMCP_PastDeadlineSaysHowToNarrow(t *testing.T) {
+	setupSecretRefCacheMCP(t)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "deployment", Namespace: "default", Name: "nginx", Hops: 2})
+	if err == nil || !strings.Contains(err.Error(), "deadline") || !strings.Contains(err.Error(), "reduce hops (current 2)") {
+		t.Fatalf("past-deadline walk: %v", err)
 	}
 }

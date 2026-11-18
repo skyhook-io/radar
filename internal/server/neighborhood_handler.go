@@ -127,6 +127,9 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, context.Canceled):
 		// The client left mid-walk; there is no one to answer.
 		return
+	case errors.Is(err, context.DeadlineExceeded):
+		s.writeError(w, http.StatusGatewayTimeout, "The neighborhood didn't finish within the request deadline; narrow it with hops=1, a smaller max_nodes, or profile=auto.")
+		return
 	case errors.Is(err, ownership.ErrCachesReplaced), errors.Is(err, ownership.ErrNotConnected):
 		s.writeError(w, http.StatusServiceUnavailable, "Cluster connection changed or is not ready; retry the neighborhood.")
 		return
