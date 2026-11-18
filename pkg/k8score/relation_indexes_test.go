@@ -40,7 +40,7 @@ func TestReflectsIndexFilesMirrorsBySource(t *testing.T) {
 func TestTypedRelationIndexesOnEverySourceStore(t *testing.T) {
 	enabled := map[string]bool{}
 	for _, s := range buildInformerSetups() {
-		if b, ok := resourceid.BuiltinForKind(s.kind); ok && relations.ReferrerIndexers[b.GroupKind()] != nil {
+		if b, ok := resourceid.BuiltinForKind(s.kind); ok && relations.ReferrerIndexers[schema.GroupResource{Group: b.Group, Resource: b.Resource}] != nil {
 			enabled[s.key] = true
 		}
 	}
@@ -61,7 +61,7 @@ func TestTypedRelationIndexesOnEverySourceStore(t *testing.T) {
 			t.Errorf("%s has no store", s.key)
 		}
 		for _, st := range rc.kindStores[s.key] {
-			for name := range relations.ReferrerIndexers[b.GroupKind()] {
+			for name := range relations.ReferrerIndexers[schema.GroupResource{Group: b.Group, Resource: b.Resource}] {
 				if st.indexer.GetIndexers()[name] == nil {
 					t.Errorf("%s store lacks %s", s.key, name)
 				}
@@ -70,29 +70,29 @@ func TestTypedRelationIndexesOnEverySourceStore(t *testing.T) {
 	}
 }
 
-// A dynamic informer takes the indexes of the kind discovery says it serves,
-// on every version and scope, whatever its resource is called; a store read
+// A dynamic informer takes its resource's indexes on every version and
+// scope, whether or not discovery names its kind when it starts; a store read
 // by an index it lacks fails and says why.
 func TestDynamicRouteIndexesOnEveryVersionAndScope(t *testing.T) {
-	for _, resource := range []string{"httproutes", "gatewayroutes"} {
+	for _, discovery := range []string{"none", "without the kind", "complete"} {
 		for _, version := range []string{"v1", "v1beta1"} {
 			for _, namespace := range []string{"", "alpha"} {
-				t.Run(resource+"/"+version+"/"+namespace, func(t *testing.T) {
-					gvr := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: version, Resource: resource}
+				t.Run(discovery+"/"+version+"/"+namespace, func(t *testing.T) {
+					gvr := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: version, Resource: "httproutes"}
 					route := func(ns string) *unstructured.Unstructured {
 						return &unstructured.Unstructured{Object: map[string]any{
 							"apiVersion": gvr.GroupVersion().String(), "kind": "HTTPRoute", "metadata": map[string]any{"namespace": ns, "name": "route"}, "spec": map[string]any{"parentRefs": []any{map[string]any{"name": "gw", "namespace": "shared"}}},
 						}}
 					}
-					dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "HTTPRouteList"})
-					for _, ns := range []string{"alpha", "beta"} {
-						// Filed under gvr itself: the fake would guess the resource from the kind.
-						if err := dyn.Tracker().Create(gvr, route(ns), ns); err != nil {
-							t.Fatal(err)
-						}
+					dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "HTTPRouteList"}, route("alpha"), route("beta"))
+					cfg := DynamicCacheConfig{DynamicClient: dyn}
+					switch discovery {
+					case "without the kind":
+						cfg.Discovery = newDiscoveryWith(t, APIResource{Group: gvr.Group, Version: version, Kind: "Gateway", Name: "gateways", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}})
+					case "complete":
+						cfg.Discovery = newDiscoveryWith(t, APIResource{Group: gvr.Group, Version: version, Kind: "HTTPRoute", Name: "httproutes", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}})
 					}
-					discovery := newDiscoveryWith(t, APIResource{Group: gvr.Group, Version: version, Kind: "HTTPRoute", Name: resource, Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}})
-					d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn, Discovery: discovery})
+					d, err := NewDynamicResourceCache(cfg)
 					if err != nil {
 						t.Fatal(err)
 					}

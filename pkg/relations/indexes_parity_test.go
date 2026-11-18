@@ -7,13 +7,13 @@ import (
 	"maps"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
@@ -38,7 +38,7 @@ func newRegisteredStores(t testing.TB, objects []runtime.Object) registeredStore
 		gk := refOf(obj).GroupKind()
 		if s.byKind[gk] == nil {
 			indexers := cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}
-			maps.Copy(indexers, ReferrerIndexers[gk])
+			maps.Copy(indexers, ReferrerIndexers[schema.GroupResource{Group: gk.Group, Resource: sourceResources[gk.Kind]}])
 			s.byKind[gk] = cache.NewIndexer(cache.MetaNamespaceKeyFunc, indexers)
 		}
 		if err := s.byKind[gk].Add(obj); err != nil {
@@ -226,10 +226,10 @@ func TestReferrerIndexesAnswerAsTheScan(t *testing.T) {
 			}
 		}
 	}
-	for gk, indexers := range ReferrerIndexers {
-		for name := range indexers {
-			if family := strings.TrimPrefix(name, "relations/"); !found[fmt.Sprint(family, gk)] {
-				t.Errorf("no %v in the examples is found by %s", gk, name)
+	for _, f := range indexedFamilies() {
+		for _, source := range f.Sources {
+			if !found[fmt.Sprint(f.Name, source.Kind)] {
+				t.Errorf("no %v in the examples is found by %s", source.Kind, f.ReferrersIndex.Name)
 			}
 		}
 	}

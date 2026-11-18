@@ -6,6 +6,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
@@ -60,24 +61,41 @@ func (f *Family) IndexFunc() cache.IndexFunc {
 	}
 }
 
-// ReferrerIndexers are the families' indexes by source kind, so every served
-// version and namespace informer of a kind receives the same ones, whatever
-// its resource is called.
-var ReferrerIndexers = func() map[resourceid.GroupKind]cache.Indexers {
-	out := map[resourceid.GroupKind]cache.Indexers{}
+// ReferrerIndexers registers by GroupResource, which needs no discovery, so
+// every served version and namespace informer receives the same indexes
+// whenever it starts.
+var ReferrerIndexers = func() map[schema.GroupResource]cache.Indexers {
+	out := map[schema.GroupResource]cache.Indexers{}
 	for _, f := range Families("") {
 		if f.ReferrersIndex == nil {
 			continue
 		}
 		for _, source := range f.Sources {
-			if out[source.Kind] == nil {
-				out[source.Kind] = cache.Indexers{}
+			gr := schema.GroupResource{Group: source.Kind.Group, Resource: sourceResources[source.Kind.Kind]}
+			if gr.Resource == "" {
+				panic("missing relation source resource: " + source.Kind.Kind)
 			}
-			out[source.Kind][f.ReferrersIndex.Name] = f.IndexFunc()
+			if out[gr] == nil {
+				out[gr] = cache.Indexers{}
+			}
+			out[gr][f.ReferrersIndex.Name] = f.IndexFunc()
 		}
 	}
 	return out
 }()
+
+// sourceResources names the resource of each indexed family's source kinds.
+// TestRelationIndexResourcesMatchTheCatalogs (internal/k8s) pins each to the
+// built-in table or the CRD fallback catalog.
+var sourceResources = map[string]string{
+	"Secret": "secrets", "ConfigMap": "configmaps",
+	"HTTPRoute": "httproutes", "GRPCRoute": "grpcroutes", "TCPRoute": "tcproutes", "TLSRoute": "tlsroutes", "UDPRoute": "udproutes", "Gateway": "gateways",
+	"VirtualService": "virtualservices", "DestinationRule": "destinationrules",
+	"Trigger": "triggers", "Channel": "channels", "InMemoryChannel": "inmemorychannels",
+	"ApiServerSource": "apiserversources", "PingSource": "pingsources", "ContainerSource": "containersources", "SinkBinding": "sinkbindings",
+	"Certificate": "certificates", "CertificateRequest": "certificaterequests", "Order": "orders", "Challenge": "challenges",
+	"Cluster": "clusters", "ScaledObject": "scaledobjects", "ScaledJob": "scaledjobs", "NodePool": "nodepools", "NodeClaim": "nodeclaims", "Machine": "machines",
+}
 
 func istioHostCandidates(obj runtime.Object, visit func(Declaration)) error {
 	u, ok := obj.(*unstructured.Unstructured)
