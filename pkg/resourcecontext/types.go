@@ -381,8 +381,9 @@ type StaleSecretEnvReference struct {
 	Message            string     `json:"message,omitempty"`
 }
 
-// ReferencedBy lists workload specs that directly reference the subject
-// resource. It is intentionally factual: dynamic API reads and app-specific
+// ReferencedBy lists the objects whose own spec, status or labels name the
+// subject, such as workloads, Ingresses and custom resources, with the paths
+// that name it. Total counts what the caller may read; Items is capped. It is intentionally factual: dynamic API reads and app-specific
 // naming conventions are not inferred.
 type ReferencedBy struct {
 	Total     int            `json:"total"`

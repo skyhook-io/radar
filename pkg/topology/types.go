@@ -171,14 +171,16 @@ type Node struct {
 
 // Edge represents a connection between two nodes
 type Edge struct {
-	ID                string   `json:"id"`
-	Source            string   `json:"source"`
-	Target            string   `json:"target"`
-	Type              EdgeType `json:"type"`
-	Label             string   `json:"label,omitempty"`
-	Partial           bool     `json:"partial,omitempty"`
-	SkipIfKindVisible string   `json:"skipIfKindVisible,omitempty"` // Hide this edge if this kind is visible (for shortcut edges)
-	PolicyEffect      string   `json:"policyEffect,omitempty"`      // "allowed", "blocked", or "unprotected" — set when ShowPolicyEffect is true
+	ID     string   `json:"id"`
+	Source string   `json:"source"`
+	Target string   `json:"target"`
+	Type   EdgeType `json:"type"`
+	Label  string   `json:"label,omitempty"`
+	// Partial marks a protects edge from a staged policy, which previews
+	// what it would select and enforces nothing.
+	Partial           bool   `json:"partial,omitempty"`
+	SkipIfKindVisible string `json:"skipIfKindVisible,omitempty"` // Hide this edge if this kind is visible (for shortcut edges)
+	PolicyEffect      string `json:"policyEffect,omitempty"`      // "allowed", "blocked", or "unprotected" — set when ShowPolicyEffect is true
 }
 
 // PolicyEffect constants for edge annotation
@@ -513,12 +515,19 @@ type Relationships struct {
 	// management and display shortcuts.
 	manageSources, manageTargets []ResourceRef
 
-	Services        []ResourceRef `json:"services,omitempty"`   // Core Services selecting/exposing this
-	Ingresses       []ResourceRef `json:"ingresses,omitempty"`  // Ingresses routing to this
-	Gateways        []ResourceRef `json:"gateways,omitempty"`   // Gateway API Gateways routing to this
-	Routes          []ResourceRef `json:"routes,omitempty"`     // Recognized upstream routes routing to this
-	ConfigRefs      []ResourceRef `json:"configRefs,omitempty"` // ConfigMaps/Secrets used by this
-	Consumers       []ResourceRef `json:"consumers,omitempty"`  // For ConfigMap/Secret: workloads that reference this
+	Services  []ResourceRef `json:"services,omitempty"`  // Core Services selecting this, or a Rollout's traffic Services
+	Ingresses []ResourceRef `json:"ingresses,omitempty"` // Ingresses routing to this
+	Gateways  []ResourceRef `json:"gateways,omitempty"`  // Gateway API Gateways routing to this
+	Routes    []ResourceRef `json:"routes,omitempty"`    // Recognized upstream routes routing to this
+	// ConfigRefs are what configures this: ConfigMaps, Secrets and the
+	// ServiceAccount it names, and the templates, classes, issuers, sources
+	// and middlewares a custom resource names. Consumers are the reverse.
+	ConfigRefs []ResourceRef `json:"configRefs,omitempty"`
+	Consumers  []ResourceRef `json:"consumers,omitempty"`
+	// Dependencies are what this needs to reconcile, such as a Flux source,
+	// a cert-manager Issuer or a KEDA TriggerAuthentication; Dependents are
+	// the reverse. A relation can fill these and ConfigRefs/Consumers at
+	// once, so clients that show both drop the overlap.
 	Dependencies    []ResourceRef `json:"dependencies,omitempty"`
 	Dependents      []ResourceRef `json:"dependents,omitempty"`
 	Scalers         []ResourceRef `json:"scalers,omitempty"`         // HPA/ScaledObject/ScaledJob scaling this
@@ -557,10 +566,10 @@ type Relationships struct {
 	// field). Direct claims come from pod.Spec.ResourceClaims; template-generated
 	// claim names resolve via pod.Status.ResourceClaimStatuses.
 	ResourceClaims []ResourceRef `json:"resourceClaims,omitempty"`
-	// ManagedBy walks the owner-ref chain up to the topmost meaningful manager
-	// — ArgoCD Application > Flux Kustomization/HelmRelease > Helm release >
-	// topmost K8s owner (Deployment > ReplicaSet > Pod). Empty when no
-	// meaningful manager is detectable.
+	// ManagedBy is a navigation hint, not the weighed answer (that is
+	// Ownership.Manager): the GitOps or Helm manager the object's own labels
+	// and annotations name, else its topmost readable controller (Deployment
+	// > ReplicaSet > Pod), else its other managers. Empty when none is found.
 	ManagedBy []ResourceRef `json:"managedBy,omitempty"`
 }
 
