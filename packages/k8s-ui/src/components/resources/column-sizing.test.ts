@@ -119,6 +119,23 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout(cols, 500)).toEqual({ name: 360, namespace: 145, status: 130, node: 86 })
   })
 
+  it('where the table must fit, takes every column on to its hard minimum before scrolling, Name last', () => {
+    const cols: ColumnLayoutInput[] = [
+      { ...name(400, 300), hardMin: 200 },
+      { key: 'status', mode: 'exact', floor: 160, min: 178, hardMin: 90 },
+      grow('message', 256, 900, 1),
+      { ...grow('message', 256, 900, 1), key: 'object', hardMin: 110 },
+    ].map(c => c.key === 'message' ? { ...c, hardMin: 120 } : c)
+    // 400 + 160 + 256 + 256 = 1072. Without mustFit Name gives 100 and the rest scrolls.
+    expect(computeColumnLayout(cols, 800)).toEqual({ name: 300, status: 160, message: 256, object: 256 })
+    // With it: Status and the grow columns give the other 172 first, in proportion to how far
+    // each is above its heading (70 : 136 : 146); Name stays at 300.
+    expect(computeColumnLayout(cols, 800, { mustFit: true })).toEqual({ name: 300, status: 125, message: 189, object: 184 })
+    expect(computeColumnLayout(cols, 600, { mustFit: true })).toEqual({ name: 280, status: 90, message: 120, object: 110 })
+    // Past every hard minimum it still scrolls.
+    expect(computeColumnLayout(cols, 400, { mustFit: true })).toEqual({ name: 200, status: 90, message: 120, object: 110 })
+  })
+
   it('never shrinks an exact column below its normal width when its content is wider', () => {
     const w = computeColumnLayout([name(200), { key: 'reason', mode: 'exact', floor: 128, min: 200 }], 250)
     expect(w.reason).toBe(128)

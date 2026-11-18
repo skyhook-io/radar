@@ -384,6 +384,11 @@ const PHONE_NAME_MAX_VW = 45
 const NAME_VIEWPORT_SHARE = 0.5
 // Room a column shrunk to its heading keeps beyond the measured heading.
 const HEADER_SHRINK_SLACK_PX = 6
+// From a 1080p window up (maximized, Radar's default sidebars), a table never
+// scrolls sideways: columns give way to their headings and Name to
+// NAME_MIN_PX before it would. Narrower windows keep the gentler rules and may
+// scroll rather than cut most names.
+export const MUST_FIT_WINDOW_PX = 1920
 function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean | undefined, column: 'compare' | 'checkbox' | 'name'): React.CSSProperties {
   const compare = compareMode ? COMPARE_COLUMN_WIDTH : 0
   const checkbox = showCheckbox ? CHECKBOX_COLUMN_WIDTH : 0
@@ -6263,6 +6268,7 @@ export function ResourcesView({
             // An unprotected Name (Events) yields to its floor, NAME_MIN_PX.
             : spec.mode === 'fit' && !isName ? headerShrinkWidth(col) : undefined,
         yieldRank: spec.yieldRank,
+        hardMin: isName ? NAME_MIN_PX : headerShrinkWidth(col),
         userWidth: columnWidths[col.key] || frozen?.[col.key],
         content,
         stretch: contentWidths?.[`${col.key}\u0000stretch`],
@@ -6271,7 +6277,9 @@ export function ResourcesView({
         hold: held?.[col.key],
       }
     })
-    const widths = computeColumnLayout(inputs, availableWidth)
+    const widths = computeColumnLayout(inputs, availableWidth, {
+      mustFit: typeof window !== 'undefined' && window.innerWidth >= MUST_FIT_WINDOW_PX,
+    })
     const first = columns[0]
     if (first?.key === 'name' && phoneNameCap !== Infinity) widths.name = Math.min(widths.name, phoneNameCap)
     return widths

@@ -34,7 +34,9 @@
 // only names wider than that are cut, and only when the alternative is
 // scrolling; a kind can opt its Name out, as Events does). Grow columns are
 // already at their floor and user widths never shrink. Past that the table scrolls
-// sideways.
+// sideways — except where the table must fit (a window 1920px wide or more):
+// there a second pass takes every column on to its heading and Name to
+// NAME_MIN_PX, in the same order, before the table scrolls.
 
 export type ColumnSizingMode = 'exact' | 'fit' | 'grow'
 
@@ -47,8 +49,11 @@ export interface ColumnLayoutInput {
    *  header or content; Namespace and Node, to their header; Name, to the 75th
    *  percentile of its names. A min above its width means it doesn't shrink. */
   min?: number
-  /** When room is short, lower ranks give way first (default: exact 2, fit 3). */
+  /** When room is short, lower ranks give way first (default: exact and grow 2, fit 3). */
   yieldRank?: number
+  /** When the table must fit (`mustFit`), how far it may shrink past `min`:
+   *  its heading, or for Name NAME_MIN_PX. */
+  hardMin?: number
   /** Width the user dragged or double-click fitted. Overrides everything else. */
   userWidth?: number
   /** Measured content width, cell padding included. fit: the target; grow: the cap. */
@@ -63,7 +68,12 @@ export interface ColumnLayoutInput {
   hold?: number
 }
 
-export function computeColumnLayout(columns: ColumnLayoutInput[], available: number): Record<string, number> {
+export interface ColumnLayoutOptions {
+  /** The table must not scroll sideways if the columns' hard minimums allow it. */
+  mustFit?: boolean
+}
+
+export function computeColumnLayout(columns: ColumnLayoutInput[], available: number, options: ColumnLayoutOptions = {}): Record<string, number> {
   const widths: Record<string, number> = {}
   const cap = (c: ColumnLayoutInput, v: number) => Math.max(c.floor, Math.min(v, c.max ?? Infinity))
   for (const c of columns) {
@@ -79,9 +89,19 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
   if (used > available) {
     let short = used - available
     const yielding = columns.filter(c => !c.userWidth && (c.mode === 'exact' || c.mode === 'fit'))
-    const rank = (c: ColumnLayoutInput) => c.yieldRank ?? (c.mode === 'exact' ? 2 : 3)
-    for (const r of [...new Set(yielding.map(rank))].sort((x, y) => x - y)) {
+    const rank = (c: ColumnLayoutInput) => c.yieldRank ?? (c.mode === 'fit' ? 3 : 2)
+    const ranks = (cols: ColumnLayoutInput[]) => [...new Set(cols.map(rank))].sort((x, y) => x - y)
+    for (const r of ranks(yielding)) {
       short = giveBack(widths, yielding.filter(c => rank(c) === r), lowerBound, short)
+    }
+    // Where the table must fit, a second pass in the same order takes every
+    // column on past its usual bound to its hard minimum (headings; Name to
+    // NAME_MIN_PX), grow columns included. Only past that does it scroll.
+    if (options.mustFit && short > 0.5) {
+      const hard = columns.filter(c => !c.userWidth && c.hardMin !== undefined)
+      for (const r of ranks(hard)) {
+        short = giveBack(widths, hard.filter(c => rank(c) === r), c => c.hardMin!, short)
+      }
     }
     return roundWidths(widths)
   }
