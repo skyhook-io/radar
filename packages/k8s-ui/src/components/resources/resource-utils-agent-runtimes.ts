@@ -42,9 +42,14 @@ function sandboxPodName(resource: any): string {
   return typeof annotated === 'string' && annotated ? annotated : resource?.metadata?.name ?? ''
 }
 
+// Mirrors pkg/health PodOwnersCommand.
+function podOwnersCommand(namespace: string, name: string): string {
+  return `kubectl get pod ${name}${namespace ? ` -n ${namespace}` : ''} -o jsonpath='{.metadata.ownerReferences}'`
+}
+
 // Mirrors pkg/health suspensionRefusedMessage.
-function suspensionRefusedMessage(name: string, controllerMessage: unknown): string {
-  const next = `The conflicting Pod is "${name}". Remove it, or recreate the Sandbox under another name, to allow suspension.`
+function suspensionRefusedMessage(namespace: string, name: string, controllerMessage: unknown): string {
+  const next = `The conflicting Pod is "${name}". Check who owns it (${podOwnersCommand(namespace, name)}) before removing it, or recreate the Sandbox under another name.`
   return typeof controllerMessage === 'string' && controllerMessage
     ? `${controllerMessage.replace(/\.$/, '')}. ${next}`
     : next
@@ -331,7 +336,7 @@ export function getAgentRuntimeStatus(resource: any): (StatusBadge & { message?:
     // Ready keeps its ordinary suspension message when the suspension is refused.
     // The badge decides: an edit or a deletion outranks a refused suspension.
     message = status.text === SUSPENSION_BLOCKED
-      ? suspensionRefusedMessage(sandboxPodName(resource), findCondition(resource?.status?.conditions, 'Suspended')?.message)
+      ? suspensionRefusedMessage(resource?.metadata?.namespace ?? '', sandboxPodName(resource), findCondition(resource?.status?.conditions, 'Suspended')?.message)
       : findCondition(resource?.status?.conditions, 'Ready')?.message
   } else if (kind === 'SandboxClaim' && isAgentSandboxExtensionResource(resource)) {
     status = getSandboxClaimStatus(resource)

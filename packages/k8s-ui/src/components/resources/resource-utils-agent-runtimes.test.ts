@@ -66,7 +66,7 @@ describe('Agent Sandbox refused suspension', () => {
     expect(getAgentRuntimeStatus(sandbox)).toMatchObject({
       text: 'Suspension blocked',
       level: 'alert',
-      message: 'Refused to delete pod because it is not owned by this sandbox. The conflicting Pod is "a". Remove it, or recreate the Sandbox under another name, to allow suspension.',
+      message: 'Refused to delete pod because it is not owned by this sandbox. The conflicting Pod is "a". Check who owns it (kubectl get pod a -o jsonpath=\'{.metadata.ownerReferences}\') before removing it, or recreate the Sandbox under another name.',
     })
   })
 
@@ -80,6 +80,12 @@ describe('Agent Sandbox refused suspension', () => {
 
   it('names the Pod the controller looks for, which an annotation can record', () => {
     expect(getAgentRuntimeStatus(refused({ annotations: { 'agents.x-k8s.io/pod-name': 'a-pod-7f2' } }))?.message).toContain('The conflicting Pod is "a-pod-7f2".')
+  })
+
+  it('has the owner checked in the Sandbox’s namespace before the Pod is removed, as pkg/health says it', () => {
+    const message = getAgentRuntimeStatus(refused({ namespace: 'agents', annotations: { 'agents.x-k8s.io/pod-name': 'a-pod-7f2' } }))?.message
+    expect(message).toContain('Check who owns it (kubectl get pod a-pod-7f2 -n agents -o jsonpath=\'{.metadata.ownerReferences}\') before removing it')
+    expect(message).not.toMatch(/\bRemove it\b/)
   })
 
   it('gives no unblocking advice once an edit outranks the refusal', () => {

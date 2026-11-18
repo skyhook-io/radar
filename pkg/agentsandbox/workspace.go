@@ -130,16 +130,31 @@ type Attention struct {
 	// Title carries no elapsed time; Since does.
 	Title   string `json:"title"`
 	Reading string `json:"reading,omitempty"`
+	// Caveat is what limits or contradicts the row in Radar's own reads ("the
+	// controller's report may predate it", "Radar couldn't read its
+	// sandboxes"). Unlike Reading it is never folded away.
+	Caveat string `json:"caveat,omitempty"`
 	// RawDetail is the controller's or scheduler's own message, folded under the reading.
 	RawDetail       string       `json:"rawDetail,omitempty"`
 	RawDetailLabel  string       `json:"rawDetailLabel,omitempty"`
 	RawDetailSource DetailSource `json:"rawDetailSource,omitempty"`
 	NextStep        string       `json:"nextStep"`
-	Subject         Ref          `json:"subject"`
-	Related         *Related     `json:"related,omitempty"`
-	Relations       []Relation   `json:"relations,omitempty"`
+	// Command is the one shell command NextStep names, verbatim and in
+	// parentheses there, for a client to offer as a copyable chip.
+	Command   string     `json:"command,omitempty"`
+	Subject   Ref        `json:"subject"`
+	Related   *Related   `json:"related,omitempty"`
+	Relations []Relation `json:"relations,omitempty"`
 	// Since is when the state began, where that is known.
 	Since *time.Time `json:"since,omitempty"`
+	// WaitingClaims, on a warm pool's reserve row when no sandbox in it is
+	// ready: its unbound claims still in progress, which can't take a warm
+	// sandbox. A lower bound where the namespace's claims were read in part;
+	// absent when none were read.
+	WaitingClaims *Count `json:"waitingClaims,omitempty"`
+	// EmptyPool, on an unbound claim's row: the warm pool it names, read, with
+	// no sandbox ready, so the claim can't take a warm one.
+	EmptyPool *Ref `json:"emptyPool,omitempty"`
 	// Issue: Radar's Issues list the subject for the same state. It is the
 	// authoritative parity bit; no rule implies it.
 	Issue bool `json:"issue"`
@@ -450,7 +465,8 @@ func (b *builder) sandboxRow(u *unstructured.Unstructured) (a *Attention, progre
 		row.Title = "Suspension blocked"
 		row.Reading = "The controller refuses to delete a Pod this Sandbox doesn’t own, so the suspension waits."
 		row.RawDetail, row.RawDetailLabel, row.RawDetailSource = suspended.message, controllerLabel, DetailController
-		row.NextStep = fmt.Sprintf("Remove Pod %s, which this Sandbox doesn’t own, or recreate the Sandbox under another name", name)
+		row.Command = health.PodOwnersCommand(u.GetNamespace(), name)
+		row.NextStep = fmt.Sprintf("Check who owns Pod %s (%s) before removing it, or recreate the Sandbox under another name", name, row.Command)
 		row.Related = &Related{Lead: "The Pod it won’t delete:", Refs: []Ref{podRef(u)}}
 		return &row, false
 	case ready.status == "False" && ready.reason == "ReconcilerError":
@@ -573,7 +589,7 @@ func (b *builder) claimRow(u *unstructured.Unstructured) *Attention {
 				row.NextStep = "Point the claim at an existing warm pool"
 			}
 			if poolPresence == Present {
-				row.Reading = fmt.Sprintf("Radar finds SandboxWarmPool %s in %s, so the controller’s report may predate it.", pool, ns)
+				row.Caveat = fmt.Sprintf("Radar finds SandboxWarmPool %s in %s, so the controller’s report may predate it.", pool, ns)
 			}
 		case "TemplateNotFound":
 			row.NextStep = "Create the SandboxTemplate the warm pool names, or fix the pool’s template reference"
@@ -581,7 +597,7 @@ func (b *builder) claimRow(u *unstructured.Unstructured) *Attention {
 				row.Related = &Related{Lead: "The warm pool:", Refs: []Ref{poolRef(ns, pool)}}
 			}
 			if templatePresence == Present {
-				row.Reading = "Radar finds the template the warm pool names, so the controller’s report may predate it."
+				row.Caveat = "Radar finds the template the warm pool names, so the controller’s report may predate it."
 			}
 		case "SandboxMissing":
 			row.NextStep = "Its Sandbox was deleted; delete the claim and create it again"
@@ -615,7 +631,41 @@ func (b *builder) claimRow(u *unstructured.Unstructured) *Attention {
 	row.Rule, row.Severity = progressRule(p)
 	row.Since = since(r)
 	progressDetail(&row, u, r, "SandboxClaim")
+	if pool := ClaimWarmPool(u); bound == "" && poolPresence == Present && b.reserveEmpty(ns, pool) {
+		ref := poolRef(ns, pool)
+		row.EmptyPool = &ref
+	}
 	return &row
+}
+
+// reserveEmpty: the warm pool, read, reports no ready sandbox.
+func (b *builder) reserveEmpty(namespace, name string) bool {
+	p, ok := b.pools[namespace+"/"+name]
+	if !ok {
+		return false
+	}
+	ready, _ := nestedCount(p.Object, "status", "readyReplicas")
+	return ready == 0
+}
+
+// waitingClaims counts a pool's unbound claims still in progress: with no
+// sandbox ready they can't take a warm one. Nil when the namespace's claims
+// were read in part and none of them waits: zero would claim too much.
+func (b *builder) waitingClaims(namespace, pool string) *Count {
+	n := 0
+	for _, c := range b.in.Claims.Items {
+		if c.GetNamespace() != namespace || ClaimWarmPool(c) != pool || ClaimSandbox(c) != "" {
+			continue
+		}
+		if r := health.ReadAgentSandbox(c); r.InProgress && c.GetDeletionTimestamp() == nil {
+			n++
+		}
+	}
+	lowerBound := !b.in.Claims.read(namespace)
+	if lowerBound && n == 0 {
+		return nil
+	}
+	return &Count{Count: &n, LowerBound: lowerBound}
 }
 
 // poolRow is a warm pool's row and the members it names, which get no row of
@@ -721,7 +771,7 @@ func (b *builder) poolRow(u *unstructured.Unstructured) (*Attention, []string) {
 		parts = append(parts, "Not ready: "+strings.Join(text, ", ")+".")
 	}
 	if !membersRead {
-		parts = append(parts, "Radar couldn’t read its sandboxes.")
+		row.Caveat = "Radar couldn’t read its sandboxes, so it can’t say why they aren’t ready."
 	} else if int64(len(members)) < desired {
 		parts = append(parts, fmt.Sprintf("It has %d of %d sandboxes.", len(members), desired))
 	}
@@ -729,6 +779,7 @@ func (b *builder) poolRow(u *unstructured.Unstructured) (*Attention, []string) {
 	// ready, the next claim can still take a warm one.
 	if ready == 0 {
 		parts = append(parts, "No sandbox is ready in reserve, so a new claim can’t take a warm one and waits for a sandbox to start.")
+		row.WaitingClaims = b.waitingClaims(ns, u.GetName())
 	}
 	row.Reading = strings.Join(parts, " ")
 	switch {

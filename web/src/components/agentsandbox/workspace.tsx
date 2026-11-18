@@ -81,13 +81,17 @@ export function attentionDetail(a: AgentSandboxAttention): string | undefined {
   return parts.length ? parts.join(' ') : undefined
 }
 
-/** The row as a WorkspaceProblem, so ProblemMeta names its subject and offers "See in Issues" for `issue` rows. */
+/**
+ * The row as a WorkspaceProblem, for a drawer's callout and "See in Issues".
+ * A callout has no place of its own for the caveat, so it leads the detail.
+ */
 export function attentionProblem(a: AgentSandboxAttention): WorkspaceProblem {
+  const detail = [a.caveat, attentionDetail(a)].filter(Boolean).join(' ')
   return {
     id: a.id,
     category: a.category,
     title: attentionTitle(a),
-    detail: attentionDetail(a),
+    detail: detail || undefined,
     rawDetail: a.rawDetail,
     rawDetailLabel: a.rawDetailLabel,
     nextStep: a.nextStep,

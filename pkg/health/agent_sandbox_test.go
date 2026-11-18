@@ -99,4 +99,9 @@ func TestAgentSandboxRefusedSuspensionNamesTheTrackedPod(t *testing.T) {
 			t.Errorf("%s: got %+v, want a refusal naming %s", name, r, tc.want)
 		}
 	}
+	// The Pod may belong to something else: its owner is checked before anyone removes it.
+	r := ReadAgentSandbox(sandbox(map[string]any{"agents.x-k8s.io/pod-name": "a-pod-7f2"}))
+	if want := `Check who owns it (kubectl get pod a-pod-7f2 -n agents -o jsonpath='{.metadata.ownerReferences}') before removing it, or recreate the Sandbox under another name.`; !strings.HasSuffix(r.Verdict.Message, want) {
+		t.Errorf("message %q, want it to end %q", r.Verdict.Message, want)
+	}
 }
