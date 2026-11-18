@@ -55,8 +55,8 @@ type admissionBlockerEvidence struct {
 	// outputCapped means a fetch had more qualifying rows than its limit.
 	outputCapped bool
 	// complete means nothing was missed: the object was resolved, the fetch
-	// was not saturated, and RBAC hid nothing. Only then may an empty list be
-	// stated as "no recorded change".
+	// was not saturated, and the caller may read every policy kind involved.
+	// Only then may an empty list be stated as "no recorded change".
 	complete bool
 	history  issuesapi.HistoryCoverage
 }
@@ -190,17 +190,28 @@ func (c *run) admissionBlocker() (*admissionBlockerEvidence, *admissionReadError
 		ev.unchanged = func(window string) string {
 			return fmt.Sprintf("the configuration of webhook %q has no recorded change %s", blocker.WebhookName, window)
 		}
-		configs := meaningfulchanges.WebhookConfigurationsDeclaring(blocker.WebhookName)
-		if c.opts.CheckCoverage {
-			for _, kind := range []string{"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"} {
+		// Both configuration kinds are checked before the cache is searched
+		// for the one declaring the webhook: which configuration declares it
+		// is cluster-scoped data a caller who can't list that kind may not
+		// learn, so a denied kind leaves the policy side unknown either way.
+		readable := map[string]bool{}
+		for _, kind := range []string{"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"} {
+			readable[kind] = c.allowed(kind, webhookConfigurationGroup, "")
+			if !readable[kind] {
+				ev.complete = false
+			} else if c.opts.CheckCoverage {
 				c.checkCollected(kind, webhookConfigurationGroup, "")
 			}
 		}
+		configs := meaningfulchanges.WebhookConfigurationsDeclaring(blocker.WebhookName)
 		if len(configs) == 0 {
 			// Not cached, or no longer declared: whether it changed is unknown.
 			ev.complete = false
 		}
 		for _, cfg := range configs {
+			if !readable[cfg.Kind] {
+				continue
+			}
 			if !fetch(cfg.Kind, webhookConfigurationGroup, "", cfg.Name) {
 				return nil, &admissionReadError{kind: cfg.Kind}
 			}
@@ -208,8 +219,7 @@ func (c *run) admissionBlocker() (*admissionBlockerEvidence, *admissionReadError
 	default:
 		return nil, nil
 	}
-	visible, hidden := c.visible(changes)
-	ev.complete = ev.complete && !hidden
+	visible := c.visible(changes)
 	sortChangesNewestFirst(visible)
 	rankReason := AdmissionBlockerRankReason
 	if blocker.Kind == "LimitRange" {

@@ -505,3 +505,65 @@ func TestIssueCorrelation_WorstCasePayloadBounded(t *testing.T) {
 	}
 	t.Logf("worst-case correlation payload: %d bytes", len(data))
 }
+
+// What the tool says about a source the caller can't list must not depend on
+// whether that source changed: a Service they can't list, or a ConfigMap a
+// workload they can read references, gets the same answer either way, and
+// never no_recent_changes.
+func TestAttachIssueChangeCorrelation_DeniedSourceSameAnswerEitherWay(t *testing.T) {
+	client := k8sfake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "flagd", Namespace: "shop"},
+		Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			Volumes: []corev1.Volume{{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "flagd-config"},
+			}}}},
+			Containers: []corev1.Container{{Name: "flagd", Image: "flagd:v1"}},
+		}}},
+	})
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	ctx := withClusterAdmin(t, "deploy-reader")
+	t.Cleanup(getPermCache().Invalidate)
+	perms := getPermCache().Get("deploy-reader", nil)
+	perms.SetCanI("list", "apps", "deployments", "shop", true)
+	perms.SetCanI("list", "", "services", "shop", false)
+	perms.SetCanI("list", "", "configmaps", "shop", false)
+
+	answer := func(changed bool) string {
+		store := initCorrelationStore(t)
+		if changed {
+			for _, e := range []timeline.TimelineEvent{
+				{ID: "svc", Kind: "Service", APIVersion: "v1", Name: "cart",
+					Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.selector.app", OldValue: "cart", NewValue: "cartt"}}}},
+				{ID: "cm", Kind: "ConfigMap", APIVersion: "v1", Name: "flagd-config",
+					Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.flags", OldValue: "off", NewValue: "on"}}}},
+			} {
+				e.Timestamp, e.Namespace, e.EventType = time.Now().Add(-5*time.Minute), "shop", timeline.EventTypeUpdate
+				e.Source, e.ClusterContext = timeline.SourceInformer, k8s.ActiveClusterContext()
+				if err := store.Append(context.Background(), e); err != nil {
+					t.Fatalf("append: %v", err)
+				}
+			}
+		}
+		svc := warningIssue("Service", "cart")
+		deploy := criticalIssue("Deployment", "flagd")
+		deploy.Group = "apps"
+		resp := issues.ListResponse{Issues: []issuesapi.Issue{deploy, svc}}
+		attachIssueChangeCorrelation(ctx, &resp)
+		for _, iss := range resp.Issues {
+			if iss.NoRecentChanges != nil || len(iss.CorrelatedChanges) > 0 {
+				t.Fatalf("changed=%v: denied source produced an answer: %+v", changed, iss)
+			}
+		}
+		data, err := json.Marshal(resp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	if quiet, changed := answer(false), answer(true); quiet != changed {
+		t.Fatalf("answer depends on hidden changes:\nquiet:   %s\nchanged: %s", quiet, changed)
+	}
+}

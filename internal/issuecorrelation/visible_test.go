@@ -1,53 +1,37 @@
 package issuecorrelation
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
-// When the row filter hides a relevant correlated change, the run must say
-// so, so "empty because hidden" is never read as no changes: an issue whose
-// consumed ConfigMap rotated must not be stamped with an affirmative
-// no_recent_changes claim just because the caller can't read ConfigMaps.
-func TestVisible_RBACHiddenIsNotNoChanges(t *testing.T) {
+// The row filter is a second line behind the permission check: a row it
+// drops leaves the same rows as no row at all, and status churn never counts
+// as evidence.
+func TestVisible_HiddenRowIsTheSameAsNoRow(t *testing.T) {
 	specConfig := func(kind, apiVersion, ns, name string) issuesapi.RecentChange {
 		return issuesapi.RecentChange{Kind: kind, APIVersion: apiVersion, Namespace: ns, Name: name, ChangeCategory: issuesapi.ChangeCategorySpecConfig}
 	}
 	deploymentsOnly := Access{RowFilter: func(c issuesapi.RecentChange) bool { return c.Kind == "Deployment" }}
+	web := specConfig("Deployment", "apps/v1", "shop", "web")
+	status := issuesapi.RecentChange{Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web", ChangeCategory: issuesapi.ChangeCategoryRuntimeStatus}
 
-	// The only relevant change is an unreadable ConfigMap → empty AND hidden.
-	visible, hidden := lookbackRun(issuesapi.Issue{}, deploymentsOnly).visible([]issuesapi.RecentChange{
-		specConfig("ConfigMap", "v1", "shop", "app-cfg"),
-	})
-	if len(visible) != 0 || !hidden {
-		t.Fatalf("unreadable ConfigMap: want (0 visible, hidden=true), got (%d, %v)", len(visible), hidden)
-	}
-
-	// A readable Deployment change survives, and a status-churn row dropped by
-	// the category filter does NOT count as hidden — a genuinely quiet subject
-	// must still earn its no_recent_changes marker.
-	visible, hidden = lookbackRun(issuesapi.Issue{}, deploymentsOnly).visible([]issuesapi.RecentChange{
-		specConfig("Deployment", "apps/v1", "shop", "web"),
-		{Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web", ChangeCategory: issuesapi.ChangeCategoryRuntimeStatus},
-	})
-	if len(visible) != 1 || hidden {
-		t.Fatalf("readable Deployment: want (1 visible, hidden=false), got (%d, %v)", len(visible), hidden)
+	withHidden := lookbackRun(issuesapi.Issue{}, deploymentsOnly).visible([]issuesapi.RecentChange{web, specConfig("ConfigMap", "v1", "shop", "app-cfg"), status})
+	without := lookbackRun(issuesapi.Issue{}, deploymentsOnly).visible([]issuesapi.RecentChange{web, status})
+	if len(withHidden) != 1 || len(without) != 1 || !reflect.DeepEqual(withHidden, without) {
+		t.Fatalf("hidden row changed the answer: with=%+v without=%+v", withHidden, without)
 	}
 
 	// Helm rows are read as the caller already: the row filter skips them.
-	visible, hidden = lookbackRun(issuesapi.Issue{}, deploymentsOnly).visible([]issuesapi.RecentChange{
-		{Kind: "HelmRelease", Source: HelmChangeSource, Namespace: "shop", Name: "app", ChangeCategory: issuesapi.ChangeCategorySpecConfig},
-	})
-	if len(visible) != 1 || hidden {
-		t.Fatalf("helm row: want (1 visible, hidden=false), got (%d, %v)", len(visible), hidden)
+	helm := issuesapi.RecentChange{Kind: "HelmRelease", Source: HelmChangeSource, Namespace: "shop", Name: "app", ChangeCategory: issuesapi.ChangeCategorySpecConfig}
+	if got := lookbackRun(issuesapi.Issue{}, deploymentsOnly).visible([]issuesapi.RecentChange{helm}); len(got) != 1 {
+		t.Fatalf("helm row dropped: %+v", got)
 	}
 
-	// Auth off (no row filter): passthrough, never hidden.
-	visible, hidden = lookbackRun(issuesapi.Issue{}, Access{}).visible([]issuesapi.RecentChange{
-		specConfig("ConfigMap", "v1", "shop", "app-cfg"),
-	})
-	if len(visible) != 1 || hidden {
-		t.Fatalf("auth off: want (1 visible, hidden=false), got (%d, %v)", len(visible), hidden)
+	// Auth off (no row filter): passthrough.
+	if got := lookbackRun(issuesapi.Issue{}, Access{}).visible([]issuesapi.RecentChange{specConfig("ConfigMap", "v1", "shop", "app-cfg")}); len(got) != 1 {
+		t.Fatalf("auth off dropped a row: %+v", got)
 	}
 }

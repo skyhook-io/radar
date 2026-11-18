@@ -186,7 +186,7 @@ func (c *run) correlate() Result {
 	var result meaningfulchanges.RecentResult
 	var obj any
 	var changes []issuesapi.RecentChange
-	sourcesKnown, rowsHidden := true, false
+	subjectAllowed, sourcesKnown := true, true
 	if subjectTracked {
 		switch {
 		case nativeHelm:
@@ -203,6 +203,11 @@ func (c *run) correlate() Result {
 				return res
 			}
 			result.Changes = rows
+		case !c.allowed(iss.Kind, iss.Group, iss.Namespace):
+			// A subject the caller can't list is not read: neither its own
+			// changes nor the sources its spec names, since the names
+			// themselves come from an object the caller can't see.
+			subjectAllowed = false
 		default:
 			var err error
 			result, obj, sourcesKnown, err = c.subjectChanges()
@@ -212,7 +217,7 @@ func (c *run) correlate() Result {
 				return res
 			}
 		}
-		changes, rowsHidden = c.visible(result.Changes)
+		changes = c.visible(result.Changes)
 		res.History = result.History
 	}
 	// A saturated read may have missed older changes, a source the caller
@@ -222,7 +227,7 @@ func (c *run) correlate() Result {
 	if subjectTracked && !historyComplete {
 		c.addHistoryUnknown(iss)
 	}
-	subjectComplete := subjectTracked && sourcesKnown && !rowsHidden && !result.FetchSaturated && historyComplete
+	subjectComplete := subjectTracked && subjectAllowed && sourcesKnown && !result.FetchSaturated && historyComplete
 	absenceKnown := c.opts.Window.length() >= c.opts.MinWindow
 
 	blocker, blockerErr := c.admissionBlocker()
@@ -337,22 +342,22 @@ func (c *run) query(limit int) meaningfulchanges.Query {
 
 // visible reduces candidate changes to the evidence this caller may see. The
 // contract is non-status evidence: status churn on a failing workload is the
-// symptom, not a change that could explain it. Helm rows are read as the
-// caller already, so the per-kind row filter skips them. hidden reports that
-// the row filter dropped evidence.
-func (c *run) visible(changes []issuesapi.RecentChange) (out []issuesapi.RecentChange, hidden bool) {
-	out = make([]issuesapi.RecentChange, 0, len(changes))
+// symptom, not a change that could explain it. Every source was checked
+// before it was read, so the row filter is a second line only: a row it drops
+// leaves the same answer as no row, and never makes the answer unknown.
+// Helm rows are read as the caller already, so the row filter skips them.
+func (c *run) visible(changes []issuesapi.RecentChange) []issuesapi.RecentChange {
+	out := make([]issuesapi.RecentChange, 0, len(changes))
 	for _, change := range changes {
 		if !isEvidence(change) {
 			continue
 		}
 		if change.Source != HelmChangeSource && c.access.RowFilter != nil && !c.access.RowFilter(change) {
-			hidden = true
 			continue
 		}
 		out = append(out, change)
 	}
-	return out, hidden
+	return out
 }
 
 func isEvidence(change issuesapi.RecentChange) bool {

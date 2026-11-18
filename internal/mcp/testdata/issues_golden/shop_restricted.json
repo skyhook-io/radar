@@ -338,9 +338,6 @@
             "message": "Selector matches no pods"
           }
         ]
-      },
-      "no_recent_changes": {
-        "window_seconds": 3600
       }
     }
   ],
