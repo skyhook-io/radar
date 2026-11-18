@@ -1,6 +1,7 @@
 import { CRDVersionsCell } from './renderers/crd-cells'
 import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
+import { getVolumeSnapshotColumnValue, getVolumeSnapshotSortValue } from './resource-utils-volumesnapshot'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import { UPGRADE_PLAN_GROUP, getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
@@ -382,6 +383,7 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
   'connectCluster', 'connectorClass', 'connectorTasks',
   'kafkaVersion', 'kafkaWarnings', 'kafkaPools', 'kafkaListeners', 'poolKafka', 'poolRoles', 'poolReplicas',
+  'snapshotSource', 'restoreSize', 'snapshotClass', 'snapshotContent', 'snapshotTaken', 'snapshotRef', 'snapshotDriver', 'deletionPolicy', 'defaultClass',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -629,6 +631,34 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'poolKafka', label: 'Kafka', width: 'min-w-32' },
     { key: 'poolRoles', label: 'Roles', width: 'w-40 shrink-0' },
     { key: 'poolReplicas', label: 'Replicas', width: 'w-28 shrink-0', tooltip: 'Node IDs Strimzi assigned / desired replicas. Not a count of running Pods.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  volumesnapshots: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-36 shrink-0', tooltip: 'Readiness the CSI driver reports. Ready to use does not establish application consistency or a tested restore.' },
+    { key: 'snapshotSource', label: 'Source', width: 'min-w-40', tooltip: 'The PVC to snapshot, or the content a pre-provisioned snapshot names.' },
+    { key: 'restoreSize', label: 'Restore Size', width: 'w-28 shrink-0', tooltip: 'Minimum size of a volume restored from this snapshot. Empty when the driver did not report it.' },
+    { key: 'snapshotClass', label: 'Class', width: 'w-44 shrink-0' },
+    { key: 'snapshotContent', label: 'Bound Content', width: 'min-w-40', tooltip: 'The VolumeSnapshotContent the controller bound. Empty until binding succeeds.' },
+    { key: 'snapshotTaken', label: 'Taken', width: 'w-24 shrink-0', tooltip: 'When the storage system cut the snapshot, as the driver reports it.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  volumesnapshotcontents: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'status', label: 'Status', width: 'w-36 shrink-0', tooltip: 'Readiness the CSI driver reports for the snapshot on the storage system.' },
+    { key: 'snapshotRef', label: 'Volume Snapshot', width: 'min-w-40' },
+    { key: 'snapshotDriver', label: 'Driver', width: 'w-48 shrink-0' },
+    { key: 'deletionPolicy', label: 'Deletion Policy', width: 'w-32 shrink-0', tooltip: 'Delete removes the storage snapshot with its VolumeSnapshot; Retain keeps it.' },
+    { key: 'restoreSize', label: 'Restore Size', width: 'w-28 shrink-0' },
+    { key: 'snapshotClass', label: 'Class', width: 'w-44 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  volumesnapshotclasses: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'snapshotDriver', label: 'Driver', width: 'w-56 shrink-0' },
+    { key: 'deletionPolicy', label: 'Deletion Policy', width: 'w-32 shrink-0', tooltip: 'Policy for contents created from this class: Delete removes the storage snapshot with its VolumeSnapshot; Retain keeps it.' },
+    { key: 'defaultClass', label: 'Default', width: 'w-24 shrink-0', tooltip: 'Used for snapshots of this driver that name no class.' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   opentelemetrycollectors: [
@@ -2994,6 +3024,9 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   kafkaconnectors: ['kafka.strimzi.io'],
   kafkas: ['kafka.strimzi.io'],
   kafkanodepools: ['kafka.strimzi.io'],
+  volumesnapshots: ['snapshot.storage.k8s.io'],
+  volumesnapshotcontents: ['snapshot.storage.k8s.io'],
+  volumesnapshotclasses: ['snapshot.storage.k8s.io'],
   opentelemetrycollectors: ['opentelemetry.io'],
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
@@ -5606,6 +5639,8 @@ export function ResourcesView({
       if (column === 'poolReplicas') return Number.isInteger(resource.status?.replicas) ? resource.status.replicas : -1
       return strimziClusterValue
     }
+    const volumeSnapshotValue = getVolumeSnapshotSortValue(resource, column)
+    if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
     const otelValue = getOpenTelemetryColumnValue(resource, column)
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
@@ -7834,6 +7869,11 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (strimziClusterValue !== undefined) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{strimziClusterValue || '-'}</span>
+  }
+  const volumeSnapshotValue = getVolumeSnapshotColumnValue(resource, column)
+  if (volumeSnapshotValue !== undefined) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{volumeSnapshotValue || '-'}</span>
   }
   if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
