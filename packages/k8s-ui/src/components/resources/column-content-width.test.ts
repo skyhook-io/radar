@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { CELL_PADDING_PX, type MeasureText, GROW_MAX_PX, columnSizingSpec, hasCuratedCellWidth, measureColumnContent, workloadImagesText } from './column-content-width'
+import { CELL_PADDING_PX, type MeasureText, GROW_MAX_PX, columnSizingSpec, hasCuratedCellWidth, measureCellText, measureColumnContent, workloadImagesText } from './column-content-width'
 
 // The curated grow flags, parsed from the source as curated-column-ownership.test.ts does.
 function curatedGrowColumns(): string[] {
@@ -103,6 +103,21 @@ describe('measureColumnContent', () => {
     const elapsed = performance.now() - start
     // Typically ~40-80ms on a laptop; the bound only catches an accidental O(n²) or per-string canvas call.
     expect(elapsed).toBeLessThan(1500)
+  })
+})
+
+describe('measureCellText', () => {
+  // No canvas here, so every glyph counts at the fallback width: the test is
+  // about which glyphs are counted.
+  const glyphs = (text: string) => measureCellText(text, 'body') / measureCellText('a', 'body')
+
+  it('collapses whitespace the way a one-line cell renders it', () => {
+    expect(glyphs('a\n\n   b\t c ')).toBe(glyphs('a b c'))
+    expect(glyphs('plain text')).toBe(10)
+  })
+
+  it('counts an emoji as one glyph, not two halves', () => {
+    expect(glyphs('ok 🚀')).toBe(4)
   })
 })
 

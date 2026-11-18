@@ -82,14 +82,20 @@ export const measureCellText: MeasureText = (text, font, limit = Infinity) => {
     cache = new Map()
     charWidths[font] = cache
   }
+  // The cell renders on one line, where runs of whitespace (newlines in an
+  // Event message, say) collapse to a single space.
+  const shown = /\s\s|[\t\n\r\f]|^\s|\s$/.test(text) ? text.replace(/\s+/g, ' ').trim() : text
   let width = 0
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i)
+  for (let i = 0; i < shown.length; i++) {
+    // By code point, so an emoji or other astral character is one glyph.
+    const code = shown.codePointAt(i)!
+    const glyph = code > 0xffff ? String.fromCodePoint(code) : shown[i]
+    if (code > 0xffff) i++
     let w = cache.get(code)
     if (w === undefined) {
       if (measureCtx) {
         measureCtx.font = CELL_FONTS[font]
-        w = measureCtx.measureText(text[i]).width
+        w = measureCtx.measureText(glyph).width
       } else {
         w = FALLBACK_CHAR_PX[font]
       }
