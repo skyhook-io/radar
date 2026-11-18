@@ -292,6 +292,20 @@ func OwnershipUnavailable(rel *Relationships, reason string) {
 	}
 }
 
+// RefusedRelationships is the answer for a subject the caller's access
+// refuses by decision, which isn't Allowed: no relationships, and ownership
+// unavailable because the caller may not read the subject's kind there, or
+// because that couldn't be checked.
+func RefusedRelationships(decision ownership.Decision) *Relationships {
+	rel := &Relationships{}
+	reason := readreason.UserForbidden
+	if decision == ownership.Undecided {
+		reason = readreason.UserPermissionCheckFailed
+	}
+	OwnershipUnavailable(rel, string(reason))
+	return rel
+}
+
 func clearOwnership(rel *Relationships) *OwnershipCoverage {
 	rel.Owner, rel.Owners, rel.Deployment, rel.Children, rel.OlderRevisions, rel.Managers, rel.Manages = nil, nil, nil, nil, nil, nil, nil
 	rel.ControllerChain = nil

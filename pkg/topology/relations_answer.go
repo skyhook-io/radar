@@ -290,7 +290,9 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 // Related Resources. Traverse is used only for intermediate networking hops;
 // all emitted references, including ownership, use access. Coverage is keyed
 // by family and includes only incomplete answers. Istio's service domain is
-// read from provider's istiod Deployments, as the graph builder reads it.
+// read from provider's istiod Deployments, as the graph builder reads it. A
+// subject access refuses is answered by RefusedRelationships, with no
+// coverage.
 func RelationsAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, provider ResourceProvider, dp DynamicProvider) (*Relationships, map[string]relations.Coverage) {
 	rel, extras := RelationsAnswerWithExtras(session, access, traverse, ov, subject, obj, provider, dp)
 	if extras == nil {
@@ -312,8 +314,11 @@ func RelationsContextAnswer(session relations.Session, access, traverse ownershi
 }
 
 func relationsAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, provider ResourceProvider, dp DynamicProvider, contextOnly bool) (*Relationships, *RelationshipExtras) {
-	if obj == nil || access.CanRead(subject.GroupKind(), subject.Namespace) != ownership.Allowed {
+	if obj == nil {
 		return &Relationships{}, nil
+	}
+	if decision := access.CanRead(subject.GroupKind(), subject.Namespace); decision != ownership.Allowed {
+		return RefusedRelationships(decision), nil
 	}
 	istioDomain := ""
 	if provider != nil {

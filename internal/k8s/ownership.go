@@ -199,11 +199,11 @@ func answerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 	}
 	owner, _ := apimeta.Accessor(obj)
 	acc := access(session.Catalog())
-	if acc.CanRead(fetched.Ref.GroupKind(), fetched.Ref.Namespace) != ownership.Allowed {
+	if decision := acc.CanRead(fetched.Ref.GroupKind(), fetched.Ref.Namespace); decision != ownership.Allowed {
 		if session.ValidateCaches() != nil {
 			return nil, nil, nil
 		}
-		return &topology.Relationships{}, nil, nil
+		return topology.RefusedRelationships(decision), nil, nil
 	}
 	captured, current := relations.CaptureSubject(rs, fetched.Ref, obj)
 	if !current {
@@ -226,11 +226,11 @@ func answerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 	rel, extras := answer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, provider, dp)
 	if extras == nil {
 		// The answer checks the caller's access to obj again; a decision
-		// that changed since the check above denies it there.
+		// that changed since the check above refuses it there, and says why.
 		if session.ValidateCaches() != nil {
 			return nil, nil, nil
 		}
-		return &topology.Relationships{}, nil, nil
+		return rel, nil, nil
 	}
 	if rel == nil {
 		rel = &topology.Relationships{}

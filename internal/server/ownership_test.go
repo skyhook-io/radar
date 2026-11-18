@@ -541,6 +541,38 @@ func TestDrawerFamiliesUseRequestAccess(t *testing.T) {
 	}
 }
 
+// A user who may open an object but not list its kind there gets no related
+// resources, and the drawer says why: the list was denied, or couldn't be
+// checked.
+func TestDrawerSaysWhyAGetOnlySubjectHasNoRelationships(t *testing.T) {
+	withOwnershipDiscovery(t)
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "tls"}}
+	useTestResourceCache(t, fake.NewClientset(secret))
+	env := newAuthTestServer(t)
+	k8s.SetTypeMeta(secret)
+	for _, tc := range []struct {
+		user    string
+		decided bool
+		reason  readreason.Code
+	}{
+		{"list-denied", true, readreason.UserForbidden},
+		{"list-unchecked", false, readreason.UserPermissionCheckFailed},
+	} {
+		perms := &auth.UserPermissions{AllowedNamespaces: []string{"alpha"}}
+		perms.SetCanI("get", "", "secrets", "alpha", true)
+		if tc.decided {
+			perms.SetCanI("list", "", "secrets", "alpha", false)
+		}
+		env.srv.permCache.Set(tc.user, nil, perms)
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: tc.user}))
+		rel := env.srv.relationshipsFor(r, secret)
+		if rel == nil || rel.Ownership == nil || rel.Ownership.UnavailableReason != string(tc.reason) {
+			t.Fatalf("%s: relationships = %+v, want ownership unavailable for %s", tc.user, rel, tc.reason)
+		}
+	}
+}
+
 // A resource read gates Roles and RoleBindings per namespace, so Related
 // Resources does too: namespace access alone doesn't show a Role a resource
 // owns.

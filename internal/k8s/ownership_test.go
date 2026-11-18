@@ -507,12 +507,14 @@ func TestRelationshipRevisionSplitRequiresReadablePods(t *testing.T) {
 	}
 }
 
-// flippingAccess allows the subject's kind on its first check only, as a
-// permission cache entry expiring between two checks would.
+// flippingAccess allows the subject's kind on its first check only, and
+// decides later checks as then, as a permission cache entry expiring between
+// two checks would.
 type flippingAccess struct {
 	ownership.Access
 	kind   resourceid.GroupKind
 	checks *int
+	then   ownership.Decision
 }
 
 func (a flippingAccess) CanRead(gk resourceid.GroupKind, namespace string) ownership.Decision {
@@ -523,12 +525,24 @@ func (a flippingAccess) CanRead(gk resourceid.GroupKind, namespace string) owner
 	if *a.checks == 1 {
 		return ownership.Allowed
 	}
-	return ownership.Denied
+	return a.then
 }
 
+// A subject the answer's own check refuses is answered with no relationships,
+// and its ownership says why, as that check decided.
 func TestRelationshipAnswerSurvivesAccessChangingMidAnswer(t *testing.T) {
-	for _, contextOnly := range []bool{false, true} {
-		t.Run(fmt.Sprintf("context=%v", contextOnly), func(t *testing.T) {
+	for _, tc := range []struct {
+		contextOnly bool
+		then        ownership.Decision
+		reason      readreason.Code
+	}{
+		{false, ownership.Denied, readreason.UserForbidden},
+		{true, ownership.Denied, readreason.UserForbidden},
+		{false, ownership.Undecided, readreason.UserPermissionCheckFailed},
+		{true, ownership.Undecided, readreason.UserPermissionCheckFailed},
+	} {
+		contextOnly := tc.contextOnly
+		t.Run(fmt.Sprintf("context=%v/%v", contextOnly, tc.then), func(t *testing.T) {
 			_, typed, source, deployment := historyFixture(t)
 			previous := ownershipSource
 			ownershipSource = source.(*cachesource.Source)
@@ -537,7 +551,7 @@ func TestRelationshipAnswerSurvivesAccessChangingMidAnswer(t *testing.T) {
 			obj.APIVersion, obj.Kind = "apps/v1", "Deployment"
 			checks := 0
 			access := func(*ownership.Catalog) ownership.Access {
-				return flippingAccess{Access: ownership.Unrestricted(), kind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}, checks: &checks}
+				return flippingAccess{Access: ownership.Unrestricted(), kind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}, checks: &checks, then: tc.then}
 			}
 			traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
 			answer := AnswerRelationships
@@ -549,7 +563,10 @@ func TestRelationshipAnswerSurvivesAccessChangingMidAnswer(t *testing.T) {
 				t.Fatalf("subject checked %d times; the test needs the answer's own check", checks)
 			}
 			if rel == nil || len(rel.Children)+len(rel.OlderRevisions) > 0 || rel.Owner != nil || coverage != nil || extras != nil {
-				t.Fatalf("denied subject answered: %+v %+v %+v", rel, coverage, extras)
+				t.Fatalf("refused subject answered: %+v %+v %+v", rel, coverage, extras)
+			}
+			if rel.Ownership == nil || rel.Ownership.UnavailableReason != string(tc.reason) {
+				t.Fatalf("refused subject's ownership = %+v, want %s", rel.Ownership, tc.reason)
 			}
 		})
 	}
