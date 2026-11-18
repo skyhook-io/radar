@@ -36,6 +36,14 @@ type appRelationBatch struct {
 	// exposureUnread answers for a namespace the Services read didn't name: a
 	// collector holding only some namespaces reports all the others as one gap.
 	exposureUnread func(namespace string) bool
+	// loading: a kind the attachments join was still loading.
+	loading bool
+}
+
+// appStillLoading reports whether any gap is a kind still loading: rows built
+// over it are answered but not cached, so the next request regroups them.
+func appStillLoading(gaps ...ownership.Gap) bool {
+	return slices.ContainsFunc(gaps, func(g ownership.Gap) bool { return g.Reason == readreason.KindSyncPending })
 }
 
 func (b *appRelationBatch) exposureUnknown(namespace string) bool {
@@ -91,15 +99,129 @@ func appNeedsDisposition(d relations.Disposition) bool {
 	return false
 }
 
-func (b *appRelationBatch) add(field string, subject, other resourceid.Ref) {
+// appBatchField is the field an entry projected onto a subject from other
+// fills, and false when the batch drops it: Gateways and Backends count only
+// from routes, as Routes.
+func appBatchField(field string, other resourceid.GroupKind) (string, bool) {
 	if !appAttachmentField(field) {
-		return
-	}
-	if (field == "Gateways" || field == "Backends") && !isAppRouteKind(other.Kind) {
-		return
+		return "", false
 	}
 	if field == "Gateways" || field == "Backends" {
-		field = "Routes"
+		return "Routes", isAppRouteKind(other.Kind)
+	}
+	return field, true
+}
+
+var appServiceKind = resourceid.GroupKind{Kind: "Service"}
+
+// appFieldRead reports whether rows read field on an object of kind subject:
+// a workload's own fields, and the Ingresses and routes of a Service, which
+// linkEntrypoints carries to the workloads it selects.
+func appFieldRead(field string, subject resourceid.GroupKind) bool {
+	return slices.Contains(appWorkloadKinds, subject) || subject == appServiceKind && (field == "Ingresses" || field == "Routes")
+}
+
+// appProjectionRead reports whether d, projecting a declaration of a target
+// kind by a source kind, fills a field rows read.
+func appProjectionRead(d relations.Disposition, source, target resourceid.GroupKind) bool {
+	for _, rule := range d.Rules {
+		if !rule.Matches(source, target) {
+			continue
+		}
+		for _, f := range rule.ReferenceFields {
+			if field, ok := appBatchField(f, target); ok && appFieldRead(field, source) {
+				return true
+			}
+		}
+		for _, f := range rule.ReferrerFields {
+			if field, ok := appBatchField(f, source); ok && appFieldRead(field, target) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// appSourceRead reports whether what a source of f declares can fill a field
+// rows read. When f's targets are open-ended, a source rows read anything on
+// is evaluated, and any other only for a target rows read.
+func appSourceRead(f *relations.Family, source relations.Source) bool {
+	targets := source.Targets
+	if len(targets) == 0 {
+		targets = f.Targets
+	}
+	if f.IsTarget != nil && len(source.Targets) == 0 {
+		subjects := append(slices.Clone(appWorkloadKinds), appServiceKind)
+		if slices.Contains(subjects, source.Kind) {
+			return true
+		}
+		targets = nil
+		for _, gk := range subjects {
+			if f.IsTarget(gk) {
+				targets = append(targets, gk)
+			}
+		}
+	}
+	for _, target := range targets {
+		if appProjectionRead(f.Projection, source.Kind, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// appEvaluation is which sources a batch evaluates, by family, and which
+// compositions it joins.
+type appEvaluation struct {
+	sources      map[*relations.Family]map[resourceid.GroupKind]bool
+	compositions []*relations.Composition
+}
+
+func (e appEvaluation) evaluate(f *relations.Family, source resourceid.GroupKind) {
+	if e.sources[f] == nil {
+		e.sources[f] = map[resourceid.GroupKind]bool{}
+	}
+	e.sources[f][source] = true
+}
+
+// appRowEvaluation evaluates only the sources whose declarations can reach a
+// row: their own projection fills a field rows read, or a composition joins
+// them to an object whose field rows read. Every target stays readable.
+func appRowEvaluation(families []*relations.Family, compositions []*relations.Composition) appEvaluation {
+	e := appEvaluation{sources: map[*relations.Family]map[resourceid.GroupKind]bool{}}
+	for _, f := range families {
+		for _, source := range f.Sources {
+			if appSourceRead(f, source) {
+				e.evaluate(f, source.Kind)
+			}
+		}
+	}
+	for _, c := range compositions {
+		joined := false
+		for _, producer := range c.Producer.Sources {
+			for _, family := range c.Consumers {
+				for _, consumer := range family.Sources {
+					if len(c.ConsumerKinds) > 0 && !slices.Contains(c.ConsumerKinds, consumer.Kind) || !appProjectionRead(c.Projection, producer.Kind, consumer.Kind) {
+						continue
+					}
+					e.evaluate(c.Producer, producer.Kind)
+					e.evaluate(family, consumer.Kind)
+					joined = true
+				}
+			}
+		}
+		if joined {
+			e.compositions = append(e.compositions, c)
+		}
+	}
+	return e
+}
+
+func (b *appRelationBatch) add(field string, subject, other resourceid.Ref) {
+	field, ok := appBatchField(field, other.GroupKind())
+	if !ok {
+		return
 	}
 	if b.fields[field] == nil {
 		b.fields[field] = map[resourceid.Ref][]topology.ResourceRef{}
@@ -123,6 +245,10 @@ func (b *appRelationBatch) project(d relations.Disposition, source, target resou
 }
 
 func buildAppRelationBatch(ctx context.Context, session relations.Session, namespaces []string) *appRelationBatch {
+	return buildPlannedAppRelationBatch(ctx, session, namespaces, appRowEvaluation)
+}
+
+func buildPlannedAppRelationBatch(ctx context.Context, session relations.Session, namespaces []string, plan func([]*relations.Family, []*relations.Composition) appEvaluation) *appRelationBatch {
 	b := &appRelationBatch{fields: map[string]map[resourceid.Ref][]topology.ResourceRef{}}
 	scope := ownership.SearchScope{AllNamespaces: namespaces == nil, Namespaces: namespaces, IncludeClusterScoped: true}
 	reads := map[resourceid.GroupKind]relations.IndexedRead{}
@@ -132,21 +258,20 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 		}
 		r := session.Indexed(kind, "", nil, scope)
 		reads[kind] = r
+		b.loading = b.loading || appStillLoading(r.Gaps...)
 		return r
 	}
 	// lookupFor reads what selecting subject needs; for a Service selection,
 	// a read that fails leaves subject's exposure unknown.
-	lookup := func(ref resourceid.Ref) (runtime.Object, bool) {
+	lookup := func(ref resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
 		o, r := session.Borrow(ref)
-		return o, r.State == ownership.Present
+		b.loading = b.loading || r.State == ownership.Unavailable && appStillLoading(r.Gap)
+		return o, r
 	}
 	lookupFor := func(subject resourceid.Ref, exposure bool) relations.Lookup {
-		if !exposure {
-			return lookup
-		}
 		return func(ref resourceid.Ref) (runtime.Object, bool) {
-			o, r := session.Borrow(ref)
-			if r.State == ownership.Unavailable {
+			o, r := lookup(ref)
+			if exposure && r.State == ownership.Unavailable {
 				b.undecided(subject)
 			}
 			return o, r.State == ownership.Present
@@ -154,13 +279,13 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 	}
 	view := relations.NewView(session, ownership.Unrestricted()).WithLimit(0)
 	declarations := map[*relations.Family]map[resourceid.Ref][]resourceid.Ref{}
-	compositions := relations.Compositions()
 	// The mesh domain is istiod's, wherever it runs, whatever namespaces the
 	// request names.
 	deploymentKind := resourceid.GroupKind{Group: "apps", Kind: "Deployment"}
 	deployments := objects(deploymentKind)
 	if !scope.AllNamespaces {
 		deployments = session.Indexed(deploymentKind, "", nil, ownership.SearchScope{AllNamespaces: true})
+		b.loading = b.loading || appStillLoading(deployments.Gaps...)
 	}
 	var controllerDeployments []*appsv1.Deployment
 	for _, o := range deployments.Objects {
@@ -169,19 +294,19 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 		}
 	}
 	domain := configrefs.IstioServiceDomain(controllerDeployments)
-	for _, f := range relations.Families(domain) {
-		needed := appNeedsDisposition(f.Projection)
-		for _, composition := range compositions {
-			needed = needed || f == composition.Producer || slices.Contains(composition.Consumers, f)
-		}
-		if !needed {
+	families := relations.Families(domain)
+	evaluation := plan(families, relations.Compositions())
+	for _, f := range families {
+		if len(evaluation.sources[f]) == 0 {
 			continue
 		}
 		declarations[f] = map[resourceid.Ref][]resourceid.Ref{}
 		for _, source := range f.Sources {
+			if !evaluation.sources[f][source.Kind] {
+				continue
+			}
 			for _, o := range objects(source.Kind).Objects {
 				if ctx.Err() != nil {
-					b.exposureIncomplete = true
 					return b
 				}
 				refs := view.References(f, o.Ref, o.Object)
@@ -199,7 +324,11 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 						}
 					}
 					declarations[f][d.Ref] = append(declarations[f][d.Ref], o.Ref)
-					if d.State != relations.TargetPresent || f == relations.ConfigReferences && (d.Ref.Kind == "Secret" || d.Ref.Kind == "ServiceAccount") {
+					if f == relations.ConfigReferences && (d.Ref.Kind == "Secret" || d.Ref.Kind == "ServiceAccount") {
+						continue
+					}
+					if d.State != relations.TargetPresent {
+						b.loading = b.loading || d.State == relations.TargetUnread && appStillLoading(d.Gap)
 						continue
 					}
 					b.project(f.Projection, o.Ref, d.Ref)
@@ -207,7 +336,7 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 			}
 		}
 	}
-	for _, composition := range compositions {
+	for _, composition := range evaluation.compositions {
 		for target, producers := range declarations[composition.Producer] {
 			for _, consumerFamily := range composition.Consumers {
 				for _, consumer := range declarations[consumerFamily][target] {
@@ -267,7 +396,6 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 			}
 			for _, o := range read.Objects {
 				if ctx.Err() != nil {
-					b.exposureIncomplete = true
 					return b
 				}
 				id := o.Ref
@@ -357,13 +485,16 @@ func (b *appRelationBatch) relationshipsForRef(group, kind, ns, name string) *ap
 	return out
 }
 
-func applicationStructuralRoot(session relations.Session, view *ownership.View, start resourceid.Ref) resourceid.Ref {
+// applicationStructuralRoot is the object start's application is rooted at,
+// and whether a manager kind it read was still loading, which can move it.
+func applicationStructuralRoot(session relations.Session, view *ownership.View, start resourceid.Ref) (resourceid.Ref, bool) {
 	cur := start
+	loading := false
 	seen := map[resourceid.Ref]bool{}
 	for !seen[cur] {
 		seen[cur] = true
 		if isGitOpsManagerKind(topology.NodeKind(cur.Kind), cur.Group) {
-			return cur
+			return cur, loading
 		}
 		if next, ok := topology.OwnerAbove(view, cur); ok && !seen[next] {
 			cur = next
@@ -373,27 +504,30 @@ func applicationStructuralRoot(session relations.Session, view *ownership.View, 
 			answer := relations.NewView(session, ownership.Unrestricted()).References(relations.FluxHelmOrigins, cur, nil)
 			for _, d := range answer.Declared {
 				obj, read := session.Borrow(d.Ref)
+				loading = loading || d.State == relations.TargetUnread && appStillLoading(d.Gap) || read.State == ownership.Unavailable && appStillLoading(read.Gap)
 				if u, ok := obj.(*unstructured.Unstructured); ok && d.State == relations.TargetPresent && read.State == ownership.Present && gitops.FluxTargetsLocalCluster(u) && !gitops.FluxMembersReadable(u) {
-					return d.Ref
+					return d.Ref, loading
 				}
 			}
 		}
+		recording := view.RecordingManagers(cur)
+		loading = loading || appStillLoading(recording.Gaps...)
 		// Inventory edges are emitted Argo, Kustomization, then HelmRelease.
 		for _, gk := range []resourceid.GroupKind{{Group: "argoproj.io", Kind: "Application"}, {Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}, {Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}} {
 			var refs []resourceid.Ref
-			for _, m := range view.RecordingManagers(cur).Managers {
+			for _, m := range recording.Managers {
 				if m.Ref.GroupKind() == gk {
 					refs = append(refs, m.Ref)
 				}
 			}
 			if len(refs) > 0 {
-				return pickRecordingManager(session, cur, refs)
+				return pickRecordingManager(session, cur, refs), loading
 			}
 		}
 
 		break
 	}
-	return cur
+	return cur, loading
 }
 
 // pickRecordingManager chooses among managers of one kind that all record
@@ -426,10 +560,19 @@ type applicationInventory struct {
 	batch   *appRelationBatch
 	session relations.Session
 	owners  *ownership.View
+	// loading: a manager kind a root was resolved from was still loading.
+	loading bool
+}
+
+// cacheable reports whether every manager and attachment kind the rows were
+// joined from had loaded.
+func (a *applicationInventory) cacheable() bool {
+	return !a.loading && !a.batch.loading
 }
 
 func (a *applicationInventory) rootOf(group, kind, ns, name string) (string, string, string, string) {
-	r := applicationStructuralRoot(a.session, a.owners, resourceid.NewRef(group, kind, ns, name))
+	r, loading := applicationStructuralRoot(a.session, a.owners, resourceid.NewRef(group, kind, ns, name))
+	a.loading = a.loading || loading
 	displayKind := topology.NodeKindForGVK(r.Kind, r.Group)
 	return r.Namespace + "/" + displayKind + "/" + r.Name, displayKind, r.Group, r.Key()
 }

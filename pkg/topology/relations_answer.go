@@ -323,9 +323,10 @@ func (n *neighborhood) above(session relations.Session, ov *ownership.View, r re
 	return n.nodePool(session, r)
 }
 
-// OwnerAbove returns the highest readable controller ancestor, else the
-// sorted-first readable owner reference. Display and application climbs share
-// this choice so non-controller ownership follows the same deterministic rule.
+// OwnerAbove returns the highest readable controller ancestor; an object with
+// no controller reference climbs only to a sole owner reference that
+// resolves. Display and application climbs share this choice so
+// non-controller ownership follows the same rule.
 func OwnerAbove(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
 	if top := ChainOf(ov.ControllerChain(r)).Top(); top != nil {
 		if id := refIdentity(*top); id != r {

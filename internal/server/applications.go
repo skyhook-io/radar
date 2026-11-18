@@ -96,6 +96,10 @@ const applicationsCacheTTL = 10 * time.Second
 
 var applicationsBuildBudget = 30 * time.Second
 
+// applicationsBuildQueueWait bounds a build's wait for its slot; no request
+// waits on it longer than the router's request timeout.
+var applicationsBuildQueueWait = 60 * time.Second
+
 var applicationsCacheMaxEntries = 256
 
 var (
@@ -597,7 +601,10 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		return &applicationsResponse{Applications: entry.rows, ArgoClaims: entry.claims}, nil
 	}
 
-	value, err, _ := applicationsBuildSF.Do(cacheKey, func() (any, error) {
+	// The build is shared by every caller with this key, so no caller's
+	// request bounds it: each caller waits on its own context, and the build
+	// waits for its slot and runs under budgets of its own.
+	flight := applicationsBuildSF.DoChan(cacheKey, func() (any, error) {
 		applicationsCacheMu.Lock()
 		entry, hit := applicationsCache[cacheKey]
 		applicationsCacheMu.Unlock()
@@ -605,13 +612,14 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 			return &applicationsResponse{Applications: entry.rows, ArgoClaims: entry.claims}, nil
 		}
 
-		// The wait for the slot ends with the request; the build's own budget
-		// starts once it is admitted, so a build queued behind others isn't
-		// left with what the wait didn't use.
+		// The build's budget starts once it is admitted, so a build queued
+		// behind others isn't left with what the wait didn't use.
+		queued, stopWaiting := context.WithTimeout(context.WithoutCancel(ctx), applicationsBuildQueueWait)
+		defer stopWaiting()
 		select {
 		case applicationsBuildSlot <- struct{}{}:
-		case <-ctx.Done():
-			return nil, fmt.Errorf("%w: waiting for another Applications build: %v", errResourceCacheUnavailable, ctx.Err())
+		case <-queued.Done():
+			return nil, fmt.Errorf("%w: waiting for another Applications build: %v", errResourceCacheUnavailable, queued.Err())
 		}
 		defer func() { <-applicationsBuildSlot }()
 		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), applicationsBuildBudget)
@@ -627,12 +635,21 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		managers := ownership.NewView(session, ownership.Unrestricted())
 		batch := buildAppRelationBatch(buildCtx, session.(relations.Session), namespaces)
 		read := &applicationInventory{batch: batch, session: session.(relations.Session), owners: managers}
-		wls := collectAppWorkloads(buildCtx, cache, namespaces, read, managers, canListClusterWorkflowTemplates)
-		if err := buildCtx.Err(); err != nil {
-			return nil, err
+		// A build that ran out of time has lost workloads and attachments, and
+		// one that read across a context switch mixes two clusters: neither is
+		// answered or cached, and the caller retries.
+		settled := func() error {
+			if err := buildCtx.Err(); err != nil {
+				return fmt.Errorf("%w: the Applications build ran out of time: %v", errResourceCacheUnavailable, err)
+			}
+			if err := session.ValidateCaches(); err != nil {
+				return fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
+			}
+			return nil
 		}
-		if err := session.ValidateCaches(); err != nil {
-			return nil, fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
+		wls := collectAppWorkloads(buildCtx, cache, namespaces, read, managers, canListClusterWorkflowTemplates)
+		if err := settled(); err != nil {
+			return nil, err
 		}
 		rows := groupApplications(wls)
 		sourcePaths, appSetChildren, argoItems := argoApplicationFacts(buildCtx, cache)
@@ -642,18 +659,28 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(buildCtx, cache))
 		foldJobSetApplicationWorkloads(rows)
 		claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
-		applicationsCacheMu.Lock()
-		if len(applicationsCache) >= applicationsCacheMaxEntries {
-			evictOldestApplicationsCacheEntry()
+		if err := settled(); err != nil {
+			return nil, err
 		}
-		applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows, claims: claims}
-		applicationsCacheMu.Unlock()
+		if read.cacheable() {
+			applicationsCacheMu.Lock()
+			if len(applicationsCache) >= applicationsCacheMaxEntries {
+				evictOldestApplicationsCacheEntry()
+			}
+			applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows, claims: claims}
+			applicationsCacheMu.Unlock()
+		}
 		return &applicationsResponse{Applications: rows, ArgoClaims: claims}, nil
 	})
-	if err != nil {
-		return nil, err
+	select {
+	case res := <-flight:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*applicationsResponse), nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: waiting for the Applications build: %v", errResourceCacheUnavailable, ctx.Err())
 	}
-	return value.(*applicationsResponse), nil
 }
 
 func evictOldestApplicationsCacheEntry() {
@@ -1267,7 +1294,7 @@ func foldJobSetApplicationWorkloads(rows []appRow) {
 			}
 			visible = append(visible, workload)
 			totalHealth = packages.WorseHealth(totalHealth, packages.Health(workload.Health))
-			if workload.WorkloadClass == "service" || workload.WorkloadClass == "worker" {
+			if longRunningWorkloadClass(workload.WorkloadClass) {
 				servingHealth = packages.WorseHealth(servingHealth, packages.Health(workload.Health))
 			}
 		}
@@ -1826,7 +1853,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			r.Workloads = append(r.Workloads, in.wl)
 			r.Events = append(r.Events, in.events...)
 			r.Health = string(packages.WorseHealth(packages.Health(r.Health), packages.Health(in.wl.Health)))
-			if in.wl.WorkloadClass == "service" || in.wl.WorkloadClass == "worker" {
+			if longRunningWorkloadClass(in.wl.WorkloadClass) {
 				servingHealth = packages.WorseHealth(servingHealth, packages.Health(in.wl.Health))
 			}
 			if v := in.wl.Version; v != "" && !slices.Contains(r.Versions, v) {
@@ -2372,49 +2399,75 @@ func classifyWorkload(kind string, rels *appRelationships) string {
 	}
 }
 
-func appWorkloadAPIGroup(kind string) string {
-	switch kind {
-	case "Deployment", "DaemonSet", "StatefulSet":
-		return "apps"
-	case "Job", "CronJob":
-		return "batch"
-	case "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "Rollout":
-		return "argoproj.io"
-	case "JobSet":
-		return jobset.Group
-	case "ScaledJob":
-		return "keda.sh"
-	default:
-		return ""
-	}
+// appWorkloadKinds are the kinds Applications lists as workloads.
+var appWorkloadKinds = []resourceid.GroupKind{
+	{Group: "apps", Kind: "Deployment"}, {Group: "apps", Kind: "DaemonSet"}, {Group: "apps", Kind: "StatefulSet"},
+	{Group: "batch", Kind: "Job"}, {Group: "batch", Kind: "CronJob"},
+	{Group: "argoproj.io", Kind: "Workflow"}, {Group: "argoproj.io", Kind: "CronWorkflow"}, {Group: "argoproj.io", Kind: "WorkflowTemplate"},
+	{Group: "argoproj.io", Kind: "ClusterWorkflowTemplate"}, {Group: "argoproj.io", Kind: "Rollout"},
+	{Group: jobset.Group, Kind: jobset.Kind},
+	{Group: "keda.sh", Kind: "ScaledJob"},
 }
 
+func appWorkloadAPIGroup(kind string) string {
+	for _, gk := range appWorkloadKinds {
+		if gk.Kind == kind {
+			return gk.Group
+		}
+	}
+	return ""
+}
+
+// classifyAppWorkloads folds the workloads' classes into the row's. An
+// `unknown` workload is long-running with undecided exposure, so it is a
+// service or a worker: the row takes the class both readings agree on, and is
+// `unknown` when they disagree.
 func classifyAppWorkloads(ins []appWorkloadInput) string {
-	classes := map[string]bool{}
+	var service, worker, job, undecided bool
 	for _, in := range ins {
 		switch in.wl.WorkloadClass {
-		case "service", "worker", "job":
-			classes[in.wl.WorkloadClass] = true
+		case "service":
+			service = true
+		case "worker":
+			worker = true
+		case "job":
+			job = true
+		case "unknown":
+			undecided = true
 		}
-		// Unclassifiable members (e.g. a bare Pod) don't poison a known class.
 	}
-	if len(classes) == 0 {
-		return "unknown"
+	if !undecided {
+		return foldWorkloadClasses(service, worker, job)
 	}
-	if classes["service"] && !classes["job"] {
+	if c := foldWorkloadClasses(true, worker, job); c == foldWorkloadClasses(service, true, job) {
+		return c
+	}
+	return "unknown"
+}
+
+// longRunningWorkloadClass reports whether a workload's health is part of a
+// mixed row's serving health: an `unknown` one is long-running too.
+func longRunningWorkloadClass(class string) bool {
+	return class == "service" || class == "worker" || class == "unknown"
+}
+
+func foldWorkloadClasses(service, worker, job bool) string {
+	switch {
+	case job && (service || worker):
+		// A real composition (e.g. a service plus its scheduled jobs). The UI
+		// derives the breakdown from the per-workload classes.
+		return "mixed"
+	case job:
+		return "job"
+	case service:
 		// A deployable unit with an API Deployment and a background worker is
 		// still operated primarily as a service.
 		return "service"
+	case worker:
+		return "worker"
+	default:
+		return "unknown"
 	}
-	if len(classes) == 1 {
-		for c := range classes {
-			return c
-		}
-	}
-	// A real composition (e.g. a service plus its scheduled jobs). The UI
-	// derives the breakdown from the per-workload classes; "unknown" would
-	// throw away what classifyWorkload confidently determined.
-	return "mixed"
 }
 
 func classifyAppCategory(ins []appWorkloadInput) (category, reason string) {

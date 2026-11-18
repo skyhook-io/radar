@@ -33,7 +33,9 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
   // per-user RBAC filter on a shared install, where neither applies.
   const canConfigureNamespaces = capabilities?.deployment?.mode === 'local' && authMe?.authEnabled === false
 
-  const limitedListHelp = canConfigureNamespaces ? (
+  // A failed list is a transient read error, retried by the scope query; it
+  // says nothing about which namespaces the user can configure.
+  const limitedListHelp = canConfigureNamespaces && !scope?.listFailed ? (
     <a href={NAMESPACES_HELP_URL} target="_blank" rel="noreferrer" className="text-accent-text hover:underline">
       How to add namespaces
     </a>
