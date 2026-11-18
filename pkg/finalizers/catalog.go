@@ -87,6 +87,20 @@ func ResolveOwner(finalizer string, root *unstructured.Unstructured) *Owner {
 			AllowConditionalCleanup: true,
 		}
 
+	// Agent Substrate's controller holds this on a SandboxConfig while any
+	// WorkerPool's status names it, and drops it once none does. Images are
+	// ko-built per install, so the pod label is the identity.
+	case "sandboxconfig.ate.dev/workerpool-protection":
+		if resourceid.GroupFromAPIVersion(root.GetAPIVersion()) != "ate.dev" {
+			return nil
+		}
+		return &Owner{
+			Controller:    "ate-controller",
+			Namespace:     "ate-system",
+			SelectorKey:   "app",
+			SelectorValue: "ate-controller",
+		}
+
 	// Argo CD: a single Application controller owns all Argo-side
 	// finalizers, including the deprecated "foreground-cascade" key
 	// retained for installs that pre-date the rename.
