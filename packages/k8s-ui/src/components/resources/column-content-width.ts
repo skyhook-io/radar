@@ -12,42 +12,22 @@ import {
   getConfigMapKeys,
   getConfigMapSize,
   getFluxHelmReleaseMessage,
-  getGatewayClass,
   getGatewayClassDescription,
   getHPATarget,
   getIngressHosts,
   getIngressRules,
-  getNetworkPolicyTypes,
-  getNodeVersion,
   getPodProblems,
   getPodRestarts,
   getPodStatus,
   getReplicaSetOwner,
-  getServiceEndpointsStatus,
-  getServicePorts,
   getServiceSelector,
-  getServiceStatus,
-  getStorageClassBindingMode,
   getWorkloadImages,
 } from './resource-utils'
-import { getArgoApplicationHealth, getArgoApplicationSync } from './resource-utils-argo'
-import { getClusterIssuerType } from './resource-utils-certmanager'
+import { getArgoApplicationSync } from './resource-utils-argo'
 import { getResourceSlicePool } from './resource-utils-dra'
-import { getGitRepositoryUrl, getHelmRepositoryUrl, getKustomizationSource, getOCIRepositoryUrl } from './resource-utils-flux'
-import {
-  getEC2NodeClassStatus,
-  getNodeClaimNodeName,
-  getNodeClaimNodePoolRef,
-  getNodePoolDisruptionPolicy,
-  getNodePoolLimits,
-  getNodePoolNodeClassRef,
-  getNodePoolStatus,
-} from './resource-utils-karpenter'
-import { getKnativeServiceLatestRevision } from './resource-utils-knative'
-import { getClusterQueueCohort, getKueueWorkloadAdmittedBy, getKueueWorkloadQueueName, getLocalQueueClusterQueue } from './resource-utils-kueue'
-import { getTraefikServiceType } from './resource-utils-traefik'
-import { getConfigAuditReportSummary, getSbomReportStatus, getVulnerabilityReportContainer, getVulnerabilityReportSummary } from './resource-utils-trivy'
-import { getBackupExpiry } from './resource-utils-velero'
+import { getGitRepositoryUrl, getHelmRepositoryUrl, getOCIRepositoryUrl } from './resource-utils-flux'
+import { getEC2NodeClassStatus, getNodeClaimNodeName, getNodePoolDisruptionPolicy, getNodePoolLimits, getNodePoolStatus } from './resource-utils-karpenter'
+import { getClusterQueueCohort } from './resource-utils-kueue'
 import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
 import { getPodGpuCount } from '../../utils/extended-resources'
 
@@ -190,7 +170,7 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   return { mode: 'exact' }
 }
 
-type CellWidth = (resource: any, measure: MeasureText, limit: number, ctx: ContentContext) => number
+type CellWidth = (resource: any, measure: MeasureText, limit: number) => number
 const text = (read: (resource: any) => string | null | undefined, font: CellFont = 'body'): CellWidth =>
   (resource, measure, limit) => measure(read(resource) || '-', font, limit)
 // A cell that is one .badge holding the label.
@@ -198,16 +178,6 @@ const badge = (label: (resource: any) => string | null | undefined): CellWidth =
   (resource, measure, limit) => badgeWidth(label(resource), measure, limit)
 function badgeWidth(label: string | null | undefined, measure: MeasureText, limit = Infinity): number {
   return measure(label || '-', 'badge', limit) + BADGE_CHROME_PX
-}
-// The status badge of a kind whose cell shows getCellFilterValue's status text.
-const statusBadge = (plural: string): CellWidth => badge(r => getCellFilterValue(r, 'status', plural))
-// Trivy's C/H/M/L count cells, in text-sm font-medium.
-function trivySeverityCounts(plural: string, summary: (report: any) => Record<'critical' | 'high' | 'medium' | 'low', number>): Record<string, CellWidth> {
-  const out: Record<string, CellWidth> = {}
-  for (const severity of ['critical', 'high', 'medium', 'low'] as const) {
-    out[`${plural}:${severity}`] = text(r => String(summary(r)[severity]), 'medium')
-  }
-  return out
 }
 
 // What the cells a curated kind flags as grow or fit show, where it differs
@@ -243,57 +213,16 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'priorityclasses:description': text(r => r.description),
 
   // fit
-  'services:type': badge(r => getServiceStatus(r).text),
-  // An audit finding replaces the badge with "No endpoints", as the cell does.
-  'services:endpoints': (r, measure, limit, ctx) => {
-    const audit = ctx.auditBadges?.[`${r?.metadata?.namespace || ''}/${r?.metadata?.name}`]
-    return badgeWidth(audit && audit.danger + audit.warning > 0 ? 'No endpoints' : getServiceEndpointsStatus(r).status, measure, limit)
-  },
-  'services:ports': text(getServicePorts),
-  // A skewed version renders medium weight; measure every one that way.
-  'nodes:version': text(getNodeVersion, 'medium'),
   'events:reason': text(r => r.reason, 'medium'),
   'nodepools:status': badge(r => getNodePoolStatus(r).text),
-  'nodepools:nodeClass': text(getNodePoolNodeClassRef),
   'nodepools:limits': text(getNodePoolLimits),
   'nodepools:disruption': text(getNodePoolDisruptionPolicy),
-  'nodeclaims:nodePool': text(getNodeClaimNodePoolRef),
   'nodeclaims:nodeName': text(getNodeClaimNodeName),
   'ec2nodeclasses:status': badge(r => getEC2NodeClassStatus(r).text),
-  'applications:sync': badge(r => getArgoApplicationSync(r).status),
-  'applications:health': badge(r => getArgoApplicationHealth(r).status),
-  'backups:expiry': text(getBackupExpiry),
-  'clusterqueues:status': statusBadge('clusterqueues'),
-  'clusterqueues:cohort': text(getClusterQueueCohort),
-  'localqueues:status': statusBadge('localqueues'),
-  'localqueues:clusterQueue': text(getLocalQueueClusterQueue),
-  'workloads:status': statusBadge('workloads'),
-  'workloads:queueName': text(getKueueWorkloadQueueName),
-  'workloads:admittedBy': text(getKueueWorkloadAdmittedBy),
-  'admissionchecks:status': statusBadge('admissionchecks'),
-  'provisioningrequests:status': statusBadge('provisioningrequests'),
-  'jobsets:status': statusBadge('jobsets'),
-  'storageclasses:bindingMode': text(getStorageClassBindingMode),
-  'networkpolicies:policyTypes': text(getNetworkPolicyTypes),
-  'issuers:issuerType': text(getClusterIssuerType),
-  'clusterissuers:issuerType': text(getClusterIssuerType),
-  'gateways:class': text(getGatewayClass),
   'resourceslices:pool': text(getResourceSlicePool),
-  'kustomizations:source': text(getKustomizationSource),
-  'knativeservices:latestRevision': text(getKnativeServiceLatestRevision),
-  'traefikservices:type': text(getTraefikServiceType),
-  'sbomreports:status': badge(r => getSbomReportStatus(r).text),
-  'clustersbomreports:status': badge(r => getSbomReportStatus(r).text),
-  'sbomreports:container': text(getVulnerabilityReportContainer),
-  'vulnerabilityreports:container': text(getVulnerabilityReportContainer),
-  'exposedsecretreports:container': text(getVulnerabilityReportContainer),
-  ...trivySeverityCounts('vulnerabilityreports', getVulnerabilityReportSummary),
-  ...trivySeverityCounts('exposedsecretreports', getVulnerabilityReportSummary),
-  ...trivySeverityCounts('configauditreports', getConfigAuditReportSummary),
-  ...trivySeverityCounts('rbacassessmentreports', getConfigAuditReportSummary),
-  ...trivySeverityCounts('clusterrbacassessmentreports', getConfigAuditReportSummary),
-  ...trivySeverityCounts('infraassessmentreports', getConfigAuditReportSummary),
-  ...trivySeverityCounts('clusterinfraassessmentreports', getConfigAuditReportSummary),
+  'clusterqueues:status': badge(r => getCellFilterValue(r, 'status', 'clusterqueues')),
+  'clusterqueues:cohort': text(getClusterQueueCohort),
+  'applications:sync': badge(r => getArgoApplicationSync(r).status),
 }
 
 // What an exact column's cells show, for the kinds whose tables most often run
@@ -387,7 +316,7 @@ function nameCellWidth(resource: any, measure: MeasureText, limit: number, ctx: 
 }
 
 function cellWidthReader(col: ContentColumn, ctx: ContentContext): CellWidth {
-  if (col.key === 'name') return nameCellWidth
+  if (col.key === 'name') return (r, m, limit) => nameCellWidth(r, m, limit, ctx)
   if (col.key === 'namespace') return text(r => r?.metadata?.namespace)
   if (col.getFilterValue) return text(col.getFilterValue)
   return CURATED_CELL_WIDTHS[`${ctx.plural}:${col.key}`]
@@ -426,7 +355,7 @@ export function measureColumnContent(
       const read = col.getFilterValue ? undefined : exactContentReader(ctx.plural, col.key)
       if (!read) continue
       let longest = 0
-      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, Infinity, ctx))
+      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, Infinity))
       result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
       continue
     }
@@ -434,13 +363,13 @@ export function measureColumnContent(
     const limit = (spec.max ?? Infinity) - CELL_PADDING_PX
     if (spec.mode === 'fit' && (spec.keep || spec.longest)) {
       let longest = 0
-      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, limit, ctx))
+      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, limit))
       result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
     } else if (spec.mode === 'fit') {
       const widths = new Array<number>(items.length)
       let longest = 0
       for (let i = 0; i < items.length; i++) {
-        widths[i] = safeWidth(read, items[i], measure, limit, ctx)
+        widths[i] = safeWidth(read, items[i], measure, limit)
         if (widths[i] > longest) longest = widths[i]
       }
       result[col.key] = {
@@ -450,7 +379,7 @@ export function measureColumnContent(
     } else {
       let longest = 0
       for (const item of items) {
-        const w = safeWidth(read, item, measure, limit, ctx)
+        const w = safeWidth(read, item, measure, limit)
         if (w > longest) longest = w
       }
       result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
@@ -461,9 +390,9 @@ export function measureColumnContent(
 
 // A reader that throws on an odd object must not take the table down; that
 // cell just doesn't count toward the width.
-function safeWidth(read: CellWidth, item: any, measure: MeasureText, limit: number, ctx: ContentContext): number {
+function safeWidth(read: CellWidth, item: any, measure: MeasureText, limit: number): number {
   try {
-    return read(item, measure, limit, ctx)
+    return read(item, measure, limit)
   } catch {
     return 0
   }

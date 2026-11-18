@@ -99,21 +99,20 @@ describe('measureColumnContent', () => {
   })
 
   it('sizes a fit column to its longest value, with a badge\'s padding around it', () => {
-    const svc = (type: string) => ({ metadata: { name: 's', namespace: 'default' }, spec: { type, selector: { app: 'x' } } })
-    const items = [...Array(99)].map(() => svc('ClusterIP'))
-    items.push(svc('ExternalName'))
-    const m = measureColumnContent(items, [{ key: 'type', sizing: 'fit' }], { plural: 'services', cellFilterKind: 'services' }, measure)
-    // One ExternalName among a hundred still sets the width, badge padding included.
-    expect(m.type).toEqual({ content: 120 + 18 + CELL_PADDING_PX })
+    const pool = (ready: string, reason?: string) => ({ metadata: { name: 'p' }, status: { conditions: [{ type: 'Ready', status: ready, reason }] } })
+    const items = [...Array(99)].map(() => pool('True'))
+    items.push(pool('False', 'UnhealthyDependents'))
+    const m = measureColumnContent(items, [{ key: 'status', sizing: 'fit' }], { plural: 'nodepools', cellFilterKind: 'nodepools' }, measure)
+    // One failing pool among a hundred ready ones still sets the width, badge padding included.
+    expect(m.status).toEqual({ content: 'UnhealthyDependents'.length * 10 + 18 + CELL_PADDING_PX })
   })
 
-  it('measures the Endpoints badge the audit puts in place of the guess', () => {
-    const svc = { metadata: { name: 's', namespace: 'default' }, spec: { selector: { app: 'x' } } }
-    const cols = [{ key: 'endpoints', sizing: 'fit' as const }]
-    const plain = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services' }, measure)
-    expect(plain.endpoints.content).toBe('Active'.length * 10 + 18 + CELL_PADDING_PX)
-    const flagged = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services', auditBadges: { 'default/s': { danger: 0, warning: 1 } } }, measure)
-    expect(flagged.endpoints.content).toBe('No endpoints'.length * 10 + 18 + CELL_PADDING_PX)
+  it('measures an Event reason in the medium weight its cell renders', () => {
+    const fonts: string[] = []
+    const spy: MeasureText = (t, font, limit) => { fonts.push(font); return measure(t, font, limit) }
+    const m = measureColumnContent([{ metadata: { name: 'e' }, reason: 'FailedScheduling' }], [{ key: 'reason', sizing: 'fit' }], ctx, spy)
+    expect(m.reason.content).toBe(160 + CELL_PADDING_PX)
+    expect(fonts).toEqual(['medium'])
   })
 
   it('skips a value whose reader throws rather than failing the table', () => {
