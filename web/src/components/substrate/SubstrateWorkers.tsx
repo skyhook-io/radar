@@ -203,7 +203,7 @@ function WorkerActors({ w, onOpenSubject }: { w: SubstrateWorkerRow; onOpenSubje
       <ul className="grid grid-cols-[repeat(auto-fill,minmax(22rem,1fr))] gap-x-4 gap-y-1">
         {w.actors.map((a) => (
           <li key={`${a.atespace}/${a.name}`} className="flex min-w-0 items-center gap-2 text-xs">
-            <span className="shrink-0 whitespace-nowrap"><ActorStateBadge state={a.state} impact={a.workerImpact} /></span>
+            <span className="shrink-0 whitespace-nowrap"><ActorStateBadge state={a.state} impact={a.workerImpact} updateTime={a.updateTime} /></span>
             <button type="button" onClick={() => onOpenSubject({ kind: 'Actor', atespace: a.atespace, name: a.name })} className="min-w-0 truncate font-mono text-accent-text hover:underline">{a.name}</button>
             <span className="min-w-0 truncate text-theme-text-tertiary">{a.atespace}</span>
           </li>

@@ -720,6 +720,8 @@ export interface SubstrateAssignedActor {
   name: string
   state: SubstrateActorState
   template: SubstrateRef
+  /** The actor's last change: tells a stuck transition from one within its budget. */
+  updateTime?: string
   /** What this worker's state means for the actor; absent when it means nothing. */
   workerImpact?: SubstrateWorkerImpact
 }
