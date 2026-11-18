@@ -6,7 +6,7 @@ import { useCNPGWorkspace } from '../../api/cnpg'
 import { useRadarFeature } from '../../api/client'
 import { useCNPGFleetDisk } from '../../api/cnpg-storage'
 import { useCNPGFleetMetrics } from '../../api/cnpg-history'
-import { CNPG_SCREENS, type CNPGScreen } from './routes'
+import { CNPG_CLUSTER_KIND, CNPG_SCREENS, cnpgClusterKindListMode, type CNPGScreen } from './routes'
 import { useCNPGNavigate } from './useCNPGNavigate'
 
 export const CNPG_SIDEBAR_CATEGORY = 'CloudNativePG'
@@ -109,6 +109,11 @@ export function useCNPGSidebarWorkspace({
   const navigate = useCNPGNavigate()
   const available = cnpgDiscovered(apiResources)
   const { fleet } = useCNPGFleet(namespaces, available, withMetrics)
+  const { support } = useRadarFeature('cnpgWorkspace')
+  // Clusters is the Cluster kind's list only where its Resources route renders
+  // the Clusters view; elsewhere, and until capabilities load, the kind keeps
+  // its generic table under Other kinds.
+  const clustersIsKindList = cnpgClusterKindListMode(CNPG_CLUSTER_KIND, support, false) === 'view'
   const nsKey = namespaces.join(',')
 
   return useMemo(() => {
@@ -119,6 +124,7 @@ export function useCNPGSidebarWorkspace({
         id: s.id,
         label: s.label,
         icon: ICONS[s.id],
+        kind: s.id === 'overview' && clustersIsKindList ? CNPG_CLUSTER_KIND : undefined,
         count,
         countLowerBound: lowerBound,
         countTitle: title,
@@ -140,5 +146,5 @@ export function useCNPGSidebarWorkspace({
         scopeNote: nsKey ? `Counts for namespace ${nsKey.split(',').join(', ')}` : undefined,
       },
     }
-  }, [available, fleet, withMetrics, active?.screen, active?.child?.label, active?.child?.title, navigate, nsKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [available, fleet, withMetrics, clustersIsKindList, active?.screen, active?.child?.label, active?.child?.title, navigate, nsKey]) // eslint-disable-line react-hooks/exhaustive-deps
 }
