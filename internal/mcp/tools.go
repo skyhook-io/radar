@@ -2743,6 +2743,7 @@ type mcpProblem struct {
 	// degraded is what a caller who can't make them sees instead.
 	requiredReads []issues.EvidenceRead
 	degraded      *issues.DegradedFinding
+	expected      bool
 }
 
 // problemSeverityRank maps the Problem.Severity vocabulary onto sort order.
@@ -2995,6 +2996,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			ageSeconds:           p.AgeSeconds,
 			requiredReads:        p.RequiredReads,
 			degraded:             p.Degraded,
+			expected:             p.ExpectedWhenVerified,
 		})
 	}
 
@@ -3055,6 +3057,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			ageSeconds:    p.AgeSeconds,
 			requiredReads: p.RequiredReads,
 			degraded:      p.Degraded,
+			expected:      p.ExpectedWhenVerified,
 		})
 	}
 
@@ -3090,8 +3093,8 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		if p.Namespace != "" && !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) {
 			continue
 		}
-		switch issues.ViewEvidence(p.requiredReads, p.degraded, canReadEvidence, false) {
-		case issues.EvidenceWithheld:
+		switch issues.ViewEvidence(p.requiredReads, p.degraded, p.expected, canReadEvidence, false) {
+		case issues.EvidenceWithheld, issues.EvidenceExpected:
 			continue
 		case issues.EvidenceDegraded:
 			p.Message = p.degraded.Message

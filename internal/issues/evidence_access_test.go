@@ -38,18 +38,23 @@ func TestViewEvidence(t *testing.T) {
 		canRead         func(EvidenceRead) bool
 		allowUnfiltered bool
 		want            EvidenceView
+		expected        bool
 	}{
-		{"no dependencies, no authorizer", nil, nil, nil, false, EvidenceFull},
-		{"dependencies, no authorizer", []EvidenceRead{podList}, nil, nil, false, EvidenceWithheld},
-		{"dependencies, no authorizer, degraded form", []EvidenceRead{podList}, degraded, nil, false, EvidenceDegraded},
-		{"dependencies, internal composition", []EvidenceRead{podList}, nil, nil, true, EvidenceFull},
-		{"every read allowed", []EvidenceRead{podList, widgetList}, degraded, allow, false, EvidenceFull},
-		{"one read denied, no degraded form", []EvidenceRead{podList, widgetList}, nil, denyPods, false, EvidenceWithheld},
-		{"one read denied, degraded form", []EvidenceRead{podList, widgetList}, degraded, denyPods, false, EvidenceDegraded},
-		{"an authorizer overrides internal composition", []EvidenceRead{podList}, nil, denyPods, true, EvidenceWithheld},
+		{"expected, every read allowed", []EvidenceRead{podList}, degraded, allow, false, EvidenceExpected, true},
+		{"expected, a read denied", []EvidenceRead{podList, widgetList}, degraded, denyPods, false, EvidenceDegraded, true},
+		{"expected, internal composition keeps it unprojected", []EvidenceRead{podList}, degraded, nil, true, EvidenceFull, true},
+		{"expected, no authorizer", []EvidenceRead{podList}, degraded, nil, false, EvidenceDegraded, true},
+		{"no dependencies, no authorizer", nil, nil, nil, false, EvidenceFull, false},
+		{"dependencies, no authorizer", []EvidenceRead{podList}, nil, nil, false, EvidenceWithheld, false},
+		{"dependencies, no authorizer, degraded form", []EvidenceRead{podList}, degraded, nil, false, EvidenceDegraded, false},
+		{"dependencies, internal composition", []EvidenceRead{podList}, nil, nil, true, EvidenceFull, false},
+		{"every read allowed", []EvidenceRead{podList, widgetList}, degraded, allow, false, EvidenceFull, false},
+		{"one read denied, no degraded form", []EvidenceRead{podList, widgetList}, nil, denyPods, false, EvidenceWithheld, false},
+		{"one read denied, degraded form", []EvidenceRead{podList, widgetList}, degraded, denyPods, false, EvidenceDegraded, false},
+		{"an authorizer overrides internal composition", []EvidenceRead{podList}, nil, denyPods, true, EvidenceWithheld, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ViewEvidence(tc.reads, tc.degraded, tc.canRead, tc.allowUnfiltered); got != tc.want {
+			if got := ViewEvidence(tc.reads, tc.degraded, tc.expected, tc.canRead, tc.allowUnfiltered); got != tc.want {
 				t.Fatalf("ViewEvidence = %v, want %v", got, tc.want)
 			}
 		})
@@ -119,6 +124,46 @@ func TestApplyEvidenceAccessDegradesOrWithholds(t *testing.T) {
 	}
 	if len(withheld) != 1 || withheld[0] != "bare" {
 		t.Fatalf("withheld %v, want only the finding without a degraded form", withheld)
+	}
+}
+
+func expectedIssue(id string) Issue {
+	i := degradedIssue(id)
+	i.ExpectedWhenVerified = true
+	i.Degraded.KeepSubjectOnset = true
+	return i
+}
+
+func TestApplyEvidenceAccessDropsVerifiedExpectedFindings(t *testing.T) {
+	var withheld []string
+	onWithheld := func(i Issue) { withheld = append(withheld, i.ID) }
+	if out := applyEvidenceAccess([]Issue{expectedIssue("expected")}, func(EvidenceRead) bool { return true }, false, onWithheld); len(out) != 0 || len(withheld) != 0 {
+		t.Fatalf("verified expected finding shown or counted as withheld: %+v %v", out, withheld)
+	}
+	out := applyEvidenceAccess([]Issue{expectedIssue("expected")}, func(EvidenceRead) bool { return false }, false, onWithheld)
+	if len(out) != 1 || out[0].Message != "A container may hold stale values" || out[0].FirstSeen.IsZero() || out[0].ExpectedWhenVerified || len(withheld) != 0 {
+		t.Fatalf("unverifiable expected finding must read as the degraded warning with its onset: %+v %v", out, withheld)
+	}
+	out = applyEvidenceAccess([]Issue{expectedIssue("expected")}, nil, true, onWithheld)
+	if len(out) != 1 || !out[0].ExpectedWhenVerified || len(out[0].RequiredReads) == 0 || out[0].Degraded == nil {
+		t.Fatalf("an internal memo must keep the finding unprojected: %+v", out)
+	}
+}
+
+func TestExpectedFindingSurvivesGroupingAndMemoReauthorization(t *testing.T) {
+	flat := []Issue{expectedIssue("expected")}
+	grouped := GroupIssues(flat)
+	if len(grouped) != 1 || !grouped[0].ExpectedWhenVerified {
+		t.Fatalf("grouped row lost the flag: %+v", grouped)
+	}
+	var withheld int
+	opts := RelatedIssueOptions{CanReadEvidence: func(EvidenceRead) bool { return true }, OnEvidenceWithheld: func(Issue) { withheld++ }}
+	if got := RelatedIssuesFrom(flat, grouped, opts, "example.com", "Widget", "team-a", "w"); len(got) != 0 || withheld != 0 {
+		t.Fatalf("full caller got the expected finding from a memo: %+v (withheld %d)", got, withheld)
+	}
+	opts.CanReadEvidence = func(EvidenceRead) bool { return false }
+	if got := RelatedIssuesFrom(flat, grouped, opts, "example.com", "Widget", "team-a", "w"); len(got) != 1 || got[0].Message != "A container may hold stale values" {
+		t.Fatalf("restricted caller lost the warning: %+v", got)
 	}
 }
 
