@@ -114,7 +114,9 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
         }
       }
     }
-    return roundWidths(widths)
+    // A table that fits fills its room exactly; one that scrolls keeps its
+    // rounded widths, so rounding never adds to the scrolling.
+    return short > 0.5 ? roundWidths(widths) : roundToRoom(widths, columns.filter(c => !c.userWidth).at(-1), available)
   }
 
   let left = available - used
@@ -141,11 +143,14 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
   left = waterFill(widths, sharing, left)
   const spread = columns.filter(c => !c.userWidth)
   placeLeftover(widths, spread, left)
+  return roundToRoom(widths, spread.at(-1), available)
+}
+
+// Rounds each width down; the pixels that leaves go to `last` (a column the
+// user didn't size), so the columns add up to exactly the room.
+function roundToRoom(widths: Record<string, number>, last: ColumnLayoutInput | undefined, available: number): Record<string, number> {
   roundWidths(widths)
-  // Rounding each width down leaves a few pixels; the last column takes them,
-  // so the columns add up to exactly the room.
-  const last = spread.at(-1)
-  if (left > 0 && last) widths[last.key] += Math.max(0, Math.floor(available) - sum(Object.values(widths)))
+  if (last) widths[last.key] += Math.max(0, Math.floor(available) - sum(Object.values(widths)))
   return widths
 }
 
