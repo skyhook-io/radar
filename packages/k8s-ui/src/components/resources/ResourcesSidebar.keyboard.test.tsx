@@ -70,13 +70,21 @@ it('reads and reports display settings through the parent when it holds them', (
 })
 
 // One open at a time: it stays open while the user looks at other kinds, and opening another folds it.
-it('keeps the last integration open after leaving it, across a remount, until another opens', () => {
+it('keeps the last integration open after leaving it, across a remount, until another opens, and opens it after mounting so it animates', async () => {
+  // Fresh module state: this is the first sidebar of the page load.
+  vi.resetModules()
+  const { ResourcesSidebar } = await import('./ResourcesSidebar')
   const kinds = [
     { group: 'apps', version: 'v1', kind: 'Deployment', name: 'deployments', namespaced: true, isCrd: false, verbs: ['list'] },
     { group: 'postgresql.cnpg.io', version: 'v1', kind: 'Cluster', name: 'clusters', namespaced: true, isCrd: true, verbs: ['list'] },
     { group: 'velero.io', version: 'v1', kind: 'Backup', name: 'backups', namespaced: true, isCrd: true, verbs: ['list'] },
   ]
-  const show = (active: 'velero' | 'cnpg' | null) => {
+  const state = () => {
+    const open = (label: string) => host.querySelector(`button[aria-label$=" ${label}"]`)!.getAttribute('aria-expanded') === 'true'
+    return { backups: open('Backups'), databases: open('Databases') }
+  }
+  const frames = () => act(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+  const mount = (active: 'velero' | 'cnpg' | null) => {
     act(() => root?.unmount())
     host?.remove()
     host = document.createElement('div'); document.body.append(host); root = createRoot(host)
@@ -90,11 +98,16 @@ it('keeps the last integration open after leaving it, across a remount, until an
         CloudNativePG: { label: 'Databases', destinations: [{ id: 'c', label: 'Clusters view', active: active === 'cnpg', onSelect: () => {} }] },
       }}
     />))
-    const open = (label: string) => host.querySelector(`button[aria-label$=" ${label}"]`)!.getAttribute('aria-expanded') === 'true'
-    return { backups: open('Backups'), databases: open('Databases') }
   }
-  expect(show('velero')).toEqual({ backups: true, databases: false })
-  expect(show(null)).toEqual({ backups: true, databases: false })
-  expect(show('cnpg')).toEqual({ backups: false, databases: true })
-  expect(show(null)).toEqual({ backups: false, databases: true })
+  const show = async (active: 'velero' | 'cnpg' | null) => { mount(active); await frames(); return state() }
+  // The first mount in a page load opens what is on screen at once.
+  mount('velero')
+  expect(state()).toEqual({ backups: true, databases: false })
+  expect(await show(null)).toEqual({ backups: true, databases: false })
+  // A later mount starts as the last one was left, then opens the one on screen.
+  mount('cnpg')
+  expect(state()).toEqual({ backups: true, databases: false })
+  await frames()
+  expect(state()).toEqual({ backups: false, databases: true })
+  expect(await show(null)).toEqual({ backups: false, databases: true })
 })

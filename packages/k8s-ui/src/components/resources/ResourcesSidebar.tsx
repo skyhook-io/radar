@@ -110,8 +110,9 @@ export interface SidebarDisplayState {
 // Persisted across remounts so collapsed categories survive tab switches
 let persistedExpandedCategories: Set<string> | null = null
 // One integration is open at a time. Opening another folds it; leaving for
-// other kinds does not, so the way back is one click.
-let persistedOpenIntegration: string | null = null
+// other kinds does not, so the way back is one click. Undefined until the
+// sidebar first mounts in this page load.
+let persistedOpenIntegration: string | null | undefined
 
 // Per-integration "Other kinds" disclosure, once the user has toggled it.
 const persistedKindsOpen = new Map<string, boolean>()
@@ -374,11 +375,16 @@ export function ResourcesSidebar({
     }
     return null
   }, [categoryWorkspaces, categories, activeDestinationCategory, effectiveSelectedKind.name, effectiveSelectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
-  const [openIntegration, setOpenIntegration] = useState<string | null>(() => activeIntegration ?? persistedOpenIntegration)
-  // Survives the remount between a workspace's own pages and Resources.
+  // Moving between a workspace's pages and Resources remounts the sidebar. It
+  // starts as the previous one was left and opens the integration now on screen
+  // two frames later: a panel mounted open has no closed style to animate from.
+  const [openIntegration, setOpenIntegration] = useState<string | null>(() =>
+    persistedOpenIntegration === undefined ? activeIntegration : persistedOpenIntegration)
   useEffect(() => { persistedOpenIntegration = openIntegration }, [openIntegration])
   useEffect(() => {
-    if (activeIntegration) setOpenIntegration(activeIntegration)
+    if (!activeIntegration) return
+    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => setOpenIntegration(activeIntegration)) })
+    return () => cancelAnimationFrame(frame)
   }, [activeIntegration])
 
   // Auto-expand the sidebar category containing the selected kind
@@ -742,8 +748,11 @@ export function ResourcesSidebar({
                       </button>
                       <button
                         onClick={() => {
-                          setOpenIntegration(category.name)
-                          workspace.destinations[0]?.onSelect()
+                          const first = workspace.destinations[0]
+                          // Opening waits for the page: set here, it would be the
+                          // state the remounted sidebar starts from, already open.
+                          if (!first || destinationActive(first)) setOpenIntegration(category.name)
+                          else first.onSelect()
                         }}
                         title={rawCRDGroupTitle(category.resources)}
                         className="flex-1 flex items-center gap-2 pl-1 pr-2 xl:pr-3 py-1.5 rounded-lg text-sm min-w-0 font-medium text-theme-text-primary hover:bg-theme-elevated"
