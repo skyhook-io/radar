@@ -104,7 +104,7 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout(cols, 766)).toEqual({ name: 300, namespace: 180, status: 110, node: 176 })
   })
 
-  it('takes room from Name last, and only down to its 90th percentile, before the table scrolls', () => {
+  it('takes room from Name last, and only down to its yield width, before the table scrolls', () => {
     const cols: ColumnLayoutInput[] = [
       name(480, 360),
       { key: 'namespace', mode: 'fit', floor: 192, max: 320, content: 181, min: 145 },
@@ -115,7 +115,7 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout(cols, 841)).toEqual({ name: 480, namespace: 145, status: 130, node: 86 })
     // 60 more short: only now Name gives, down to 420.
     expect(computeColumnLayout(cols, 781)).toEqual({ name: 420, namespace: 145, status: 130, node: 86 })
-    // Past its 90th percentile Name holds and the table scrolls.
+    // Past its yield width Name holds and the table scrolls.
     expect(computeColumnLayout(cols, 500)).toEqual({ name: 360, namespace: 145, status: 130, node: 86 })
   })
 

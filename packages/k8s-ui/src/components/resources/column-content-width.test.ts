@@ -43,7 +43,7 @@ describe('measureColumnContent', () => {
     for (let i = 0; i < 5; i++) items.push(pod('x'.repeat(40)))
     const m = measureColumnContent(items, [{ key: 'name' }], ctx, measure)
     // 400px of text + 22px copy button + padding
-    // ...and yields, when room is short, no further than its 90th percentile.
+    // ...and yields, when room is short, no further than its 75th percentile.
     expect(m.name).toEqual({ content: 400 + 22 + CELL_PADDING_PX, yieldTo: 100 + 22 + CELL_PADDING_PX })
   })
 

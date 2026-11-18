@@ -6252,7 +6252,7 @@ export function ResourcesView({
         // When room is short: exact columns may shrink to their content
         // (never below their heading), but only where the content is known;
         // Node and Namespace to their heading, cutting values; Name, last, to
-        // the 90th percentile of its names (never below NAME_MIN_PX, never
+        // the 75th percentile of its names (never below NAME_MIN_PX, never
         // above the width it holds or NAME_PROTECTED_MAX_PX).
         min: spec.mode === 'exact'
           ? content !== undefined ? Math.max(headerShrinkWidth(col), content) : undefined

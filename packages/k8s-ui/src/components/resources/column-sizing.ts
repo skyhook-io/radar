@@ -15,7 +15,7 @@
 //           don't set the width, then take part in sharing the room left
 //           (below) up to their longest value. Name is sized to its longest
 //           name (capped by max) and gives way last, and only down to the
-//           90th percentile of its names.
+//           width most of its names need (NAME_YIELD_PERCENTILE).
 //   grow  — starts at its floor and shares whatever room is left, by weight,
 //           each up to its longest value. Long free text: Event messages,
 //           selectors, image lists, uncurated CRD printer columns.
@@ -30,7 +30,7 @@
 // When the room is short it is taken back in rank order (yieldRank), each
 // column down to its `min`: Node first (to its header), then exact columns (to
 // the larger of their header and their content), then Namespace (to its
-// header), then Name (to its 90th percentile, at most NAME_PROTECTED_MAX_PX:
+// header), then Name (to its 75th percentile, at most NAME_PROTECTED_MAX_PX:
 // only names wider than that are cut, and only when the alternative is
 // scrolling; a kind can opt its Name out, as Events does). Grow columns are
 // already at their floor and user widths never shrink. Past that the table scrolls
@@ -44,7 +44,7 @@ export interface ColumnLayoutInput {
   /** The narrowest it starts at; a fit column may be wider, an exact column is exactly this. */
   floor: number
   /** How far it may shrink when room is short (default: floor): exact, to its
-   *  header or content; Namespace and Node, to their header; Name, to the 90th
+   *  header or content; Namespace and Node, to their header; Name, to the 75th
    *  percentile of its names. A min above its width means it doesn't shrink. */
   min?: number
   /** When room is short, lower ranks give way first (default: exact 2, fit 3). */

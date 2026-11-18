@@ -65,9 +65,15 @@ const PROBLEM_ICON_PX = 8 + 14
 
 export const NAME_MIN_PX = 200
 export const NAME_MAX_PX = 480
-// The most Name holds on to when the table is short of room: it gives way to
-// its 90th percentile, but never keeps more than this, so a list of long
-// names (Events, PVCs) doesn't scroll sideways to save a handful of them.
+// When the table is short of room, Name gives way last, down to the width that
+// keeps NAME_YIELD_PERCENTILE of its names whole, and never holds on to more
+// than NAME_PROTECTED_MAX_PX. The trade: sideways scrolling hides whole
+// columns, a cut name keeps its start and shows in full on hover, so the
+// table may cut the longest quarter of the names to fit — but no more, since
+// a Name column that cuts most names no longer does its job; past that the
+// table scrolls. The cap keeps a list of long names (PVCs, generated names)
+// from scrolling to save a few of them.
+export const NAME_YIELD_PERCENTILE = 0.75
 export const NAME_PROTECTED_MAX_PX = 320
 const NAMESPACE_MAX_PX = 320
 const NODE_MAX_PX = 400
@@ -146,7 +152,7 @@ export interface ColumnSizingSpec {
   weight?: number
   max?: number
   /** Name: sized to its longest value (not its 95th percentile); when room is short it
-   *  gives way last, and only down to the 90th percentile of its names. */
+   *  gives way last, and only down to NAME_YIELD_PERCENTILE of its names. */
   keep?: boolean
   /** When room is short, lower ranks give way first (see ColumnLayoutInput). */
   yieldRank?: number
@@ -157,9 +163,9 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   if (col.sizing === 'exact') return { mode: 'exact' }
   // Name is what a reader scans for, so it fits its longest name (up to the
   // cap) and is the last column to give way when room is short — and then
-  // only down to the 90th percentile of its names (at most
-  // NAME_PROTECTED_MAX_PX), so only names wider than that are cut before the
-  // table scrolls sideways. Other fit columns size to their 95th
+  // only down to the width most of its names need (NAME_YIELD_PERCENTILE, at
+  // most NAME_PROTECTED_MAX_PX), so only names wider than that are cut before
+  // the table scrolls sideways. Other fit columns size to their 95th
   // percentile, so a few outliers (one long namespace) don't set the width,
   // and reach for their longest value from the room left over.
   switch (col.key) {
@@ -330,7 +336,7 @@ export interface MeasuredContent {
   content: number
   /** fit only: its longest value, which it may grow to from the room left over. */
   stretch?: number
-  /** Name only: the 90th percentile of its names, the narrowest it gives way to. */
+  /** Name only: the width NAME_YIELD_PERCENTILE of its names need, the narrowest it gives way to. */
   yieldTo?: number
 }
 
@@ -369,7 +375,7 @@ export function measureColumnContent(
       }
       result[col.key] = {
         content: Math.ceil(longest) + CELL_PADDING_PX,
-        yieldTo: Math.ceil(percentile(widths, 0.9)) + CELL_PADDING_PX,
+        yieldTo: Math.ceil(percentile(widths, NAME_YIELD_PERCENTILE)) + CELL_PADDING_PX,
       }
     } else if (spec.mode === 'fit') {
       const widths = new Array<number>(items.length)
