@@ -80,7 +80,7 @@ export function gapReasonText(reason: string): string {
     case 'object_not_found':
       return "Radar doesn't have it yet"
     case 'legacy_group_only':
-      return 'it exists only in an older API group, which newer controllers ignore'
+      return 'it exists only in an older API group, which newer versions of its controller may not read'
     case 'cluster_connecting':
       return 'Radar is still connecting'
     case 'cluster_disconnected':

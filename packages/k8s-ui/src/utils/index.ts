@@ -40,3 +40,4 @@ export * from './resource-coverage'
 export * from './read-actions'
 
 export * from './grant'
+export * from './label-selector'
