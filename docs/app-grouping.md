@@ -77,9 +77,10 @@ app keyed `<ns>/JobSet/<name>`; the JobSet is its workload, with lifecycle healt
 from `pkg/jobset`. Member Jobs stay in its graph and open the selected member
 in the JobSet overview.
 
-The climb first follows the controller chain's top, then readable owner
-references (including non-controller references), ordered by group, kind,
-namespace and name. Recording managers stop the climb in this order: Argo CD
+The climb first follows the controller chain's top. An object with no
+controller reference climbs to its owner only when it has exactly one owner
+reference and that owner is readable: several owner references are
+garbage-collection dependencies with no primary. Recording managers stop the climb in this order: Argo CD
 Application, Flux Kustomization, Flux HelmRelease. Within one kind, the recording
 manager the workload's own metadata names wins (an Argo CD tracking ID or instance
 label, or Flux labels; a copied tracking ID names nothing), and otherwise the
