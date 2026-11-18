@@ -126,9 +126,6 @@ type DynamicResourceCache struct {
 	watchRequests          map[schema.GroupVersionResource]bool
 	watchReconcilerOnce    sync.Once
 	watchReconcilerStarted atomic.Bool
-	// watchReconcileKick coalesces CRD events into one reconcile on the
-	// reconciler's goroutine; informer handlers must not do discovery lookups.
-	watchReconcileKick chan struct{}
 
 	// CRD discovery completion callbacks
 	crdCallbacks   []func()
@@ -168,24 +165,23 @@ func NewDynamicResourceCache(cfg DynamicCacheConfig) (*DynamicResourceCache, err
 
 	stopCtx, cancelStop := context.WithCancel(context.Background())
 	d := &DynamicResourceCache{
-		factory:            factory,
-		nsFactories:        make(map[string]dynamicinformer.DynamicSharedInformerFactory),
-		fallbackResolved:   make(map[schema.GroupVersionResource]bool),
-		observations:       make(map[schema.GroupVersionResource]retainedObservation),
-		deniedScopes:       make(map[informerKey]scopeDenial),
-		fanoutIncomplete:   make(map[schema.GroupVersionResource]bool),
-		probeRetries:       make(map[schema.GroupVersionResource]*probeRetry),
-		stopCtx:            stopCtx,
-		probeSlots:         make(chan struct{}, 50),
-		cancelStop:         cancelStop,
-		informers:          make(map[informerKey]*informerEntry),
-		config:             cfg,
-		discoveryStatus:    CRDDiscoveryIdle,
-		discoveryDone:      make(chan struct{}),
-		gvrHandlers:        make(map[schema.GroupVersionResource][]cache.ResourceEventHandler),
-		seenCRDs:           make(map[string]struct{}),
-		pendingCRDs:        make(map[string]struct{}),
-		watchReconcileKick: make(chan struct{}, 1),
+		factory:          factory,
+		nsFactories:      make(map[string]dynamicinformer.DynamicSharedInformerFactory),
+		fallbackResolved: make(map[schema.GroupVersionResource]bool),
+		observations:     make(map[schema.GroupVersionResource]retainedObservation),
+		deniedScopes:     make(map[informerKey]scopeDenial),
+		fanoutIncomplete: make(map[schema.GroupVersionResource]bool),
+		probeRetries:     make(map[schema.GroupVersionResource]*probeRetry),
+		stopCtx:          stopCtx,
+		probeSlots:       make(chan struct{}, 50),
+		cancelStop:       cancelStop,
+		informers:        make(map[informerKey]*informerEntry),
+		config:           cfg,
+		discoveryStatus:  CRDDiscoveryIdle,
+		discoveryDone:    make(chan struct{}),
+		gvrHandlers:      make(map[schema.GroupVersionResource][]cache.ResourceEventHandler),
+		seenCRDs:         make(map[string]struct{}),
+		pendingCRDs:      make(map[string]struct{}),
 	}
 
 	log.Println("Dynamic resource cache initialized")
@@ -2913,7 +2909,6 @@ func (d *DynamicResourceCache) onCRDEvent(old, obj any) {
 	if !ok {
 		return
 	}
-	d.kickWatchReconciler()
 	d.lateCRDMu.Lock()
 	defer d.lateCRDMu.Unlock()
 	if _, seen := d.seenCRDs[key]; seen {

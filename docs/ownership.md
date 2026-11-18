@@ -66,12 +66,12 @@ The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, wi
 
 `relations.Kinds()` declares the bounded source, target, lookup and projection dependencies. Radar removes the kinds
 served by typed informers using `k8score.AllKindListers()` and gives the rest to each new dynamic cache's watch reconciler.
-It starts before the deferred-informer warmup gate, reacts to discovery refreshes and CRD add/update events, and retries
-every 75 seconds (after the 60-second denial memory expires). CRD events only signal the reconciler's goroutine; an
-update refreshes discovery only when it changes a required CRD's served versions, and CRDs seen before startup discovery
-finishes wait for it, then get the usual small-CRD decision. A context switch, reconnect or namespace rescope creates
+It starts before the deferred-informer warmup gate, reconciles after every discovery refresh, and retries every 75
+seconds (after the 60-second denial memory expires). A new CRD, or an update that changes a required CRD's served
+versions, schedules a scan whose discovery refresh triggers the reconcile; other CRD updates (cert-manager's CA-bundle
+rewrites) cost nothing. CRDs seen before startup discovery finishes wait for it, then get the usual small-CRD decision. A context switch, reconnect or namespace rescope creates
 and starts a new reconciler; stopping a cache cancels its requests and unregisters its discovery subscription.
-Activation is non-blocking and singleflight per resource, so a burst of discovery and CRD events starts each watch once.
+Activation is non-blocking and singleflight per resource, so a burst of discovery refreshes starts each watch once.
 
 Both Calico groups and both Traefik groups are activated because families read both. Open-ended Knative destinations
 use named Serving, Broker, Channel, flow and JobSink targets, and NodeClasses use the four supported providers; discovery
