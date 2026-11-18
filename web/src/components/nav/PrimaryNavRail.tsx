@@ -1,5 +1,5 @@
-import type { ComponentType } from "react";
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode, RefObject } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   Home,
   Network,
@@ -119,8 +119,17 @@ export function PrimaryNavRail({
   productHunt,
   communityUrl,
 }: PrimaryNavRailProps) {
+  const asideRef = useRef<HTMLElement>(null);
+  const communityRef = useRef<HTMLDivElement>(null);
+  const communityFits = useSlimRailRoomFor(
+    asideRef,
+    communityRef,
+    !pinned && !!communityUrl,
+    [showPinToggle],
+  );
   return (
     <aside
+      ref={asideRef}
       aria-label="Primary navigation"
       className={clsx(
         // Dedicated sidebar token = the DEEPEST layer of the elevation scale, so
@@ -161,7 +170,7 @@ export function PrimaryNavRail({
         ))}
       </nav>
 
-      {!pinned && <div className="flex-1" />}
+      {!pinned && <div data-rail-spacer className="flex-1" />}
 
       {/* "Me & my tools" — account + settings, the conventional rail-bottom
           cluster (VS Code / Discord / ArgoCD / Radar Cloud's own UserOrgMenu).
@@ -188,13 +197,10 @@ export function PrimaryNavRail({
             unread={whatsNew.unread}
           />
         )}
-        {/* The slim rail can't scroll (see above) and is ~683px tall with this
-            row, so on short windows it yields first rather than push Settings
-            and the pin toggle off-screen. ⌘K and Diagnostics still link it. */}
+        {/* Yields first on a short slim rail (useSlimRailRoomFor); ⌘K and
+            Diagnostics still link the community. */}
         {communityUrl && (
-          <div
-            className={clsx(!pinned && "[@media(max-height:700px)]:hidden")}
-          >
+          <div ref={communityRef} hidden={!pinned && !communityFits}>
             <RailActionRow
               icon={SlackIcon}
               label="Community"
@@ -252,6 +258,49 @@ export function PrimaryNavRail({
       )}
     </aside>
   );
+}
+
+// What the optional row adds to the bottom group: its h-9 plus the group's gap-0.5.
+const OPTIONAL_ROW_PX = 38;
+
+// The slim rail can't scroll (see the nav comment), so an optional row renders
+// only while everything else still fits with it; otherwise it would push
+// Settings and the pin toggle off-screen. It measures the rail as rendered,
+// because the rows vary (the account row only with auth, launch-window rows)
+// and so does the room (the Windows desktop title bar sits inside the page).
+// The row's own height is left out of the measurement so hiding it can't flip
+// the answer back.
+function useSlimRailRoomFor(
+  asideRef: RefObject<HTMLElement | null>,
+  rowRef: RefObject<HTMLElement | null>,
+  active: boolean,
+  deps: unknown[],
+): boolean {
+  const [fits, setFits] = useState(true);
+  useLayoutEffect(() => {
+    const aside = asideRef.current;
+    if (!active || !aside || typeof ResizeObserver === "undefined") {
+      setFits(true);
+      return;
+    }
+    const measure = () => {
+      let used = 0;
+      for (const child of Array.from(aside.children)) {
+        if (child instanceof HTMLElement && "railSpacer" in child.dataset)
+          continue;
+        used += child.getBoundingClientRect().height;
+      }
+      if (rowRef.current && !rowRef.current.hidden) used -= OPTIONAL_ROW_PX;
+      setFits(used + OPTIONAL_ROW_PX <= aside.clientHeight);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(aside);
+    for (const child of Array.from(aside.children)) observer.observe(child);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, ...deps]);
+  return fits;
 }
 
 function BrandRow({
