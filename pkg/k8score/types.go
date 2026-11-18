@@ -347,6 +347,13 @@ type DynamicCacheConfig struct {
 	// DynamicClient is the dynamic Kubernetes client used to create informers.
 	DynamicClient dynamic.Interface
 
+	// DirectClient serves the reads that bypass the informers (ListDirect,
+	// ListDirectSelected, ListDirectBounded, GetDirect, CountDirectProbe).
+	// Giving it a client with its own rate limiter keeps request-triggered
+	// reads from queuing behind informer LIST/WATCH traffic. Nil means
+	// DynamicClient.
+	DirectClient dynamic.Interface
+
 	// Discovery is used for GVR→Kind resolution and watch-verb checks.
 	// May be nil; when nil the cache falls back to heuristic kind names.
 	Discovery *ResourceDiscovery
