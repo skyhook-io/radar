@@ -110,6 +110,15 @@ describe('measureColumnContent', () => {
     expect(m.status).toEqual({ content: 'UnhealthyDependents'.length * 10 + 18 + CELL_PADDING_PX })
   })
 
+  it('measures the Endpoints badge the audit puts in place of the guess', () => {
+    const svc = { metadata: { name: 's', namespace: 'default' }, spec: { selector: { app: 'x' } } }
+    const cols = [{ key: 'endpoints', sizing: 'fit' as const }]
+    const plain = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services' }, measure)
+    expect(plain.endpoints.content).toBe('Active'.length * 10 + 18 + CELL_PADDING_PX)
+    const flagged = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services', auditBadges: { 'default/s': { danger: 0, warning: 1 } } }, measure)
+    expect(flagged.endpoints.content).toBe('No endpoints'.length * 10 + 18 + CELL_PADDING_PX)
+  })
+
   it('measures an Event reason in the medium weight its cell renders', () => {
     const fonts: string[] = []
     const spy: MeasureText = (t, font, limit) => { fonts.push(font); return measure(t, font, limit) }

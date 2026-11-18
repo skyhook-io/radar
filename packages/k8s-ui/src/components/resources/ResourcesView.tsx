@@ -712,10 +712,10 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   services: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'type', label: 'Type', width: 'w-28' },
+    { key: 'type', label: 'Type', width: 'w-28', sizing: 'fit' },
     { key: 'selector', label: 'Selector', width: 'w-48', sizing: 'grow', growWeight: 2 },
-    { key: 'endpoints', label: 'Endpoints', width: 'w-24' },
-    { key: 'ports', label: 'Ports', width: 'w-40' },
+    { key: 'endpoints', label: 'Endpoints', width: 'w-24', sizing: 'fit' },
+    { key: 'ports', label: 'Ports', width: 'w-40', sizing: 'fit' },
     { key: 'externalIP', label: 'External', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -749,7 +749,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'gpu', label: 'GPUs', width: 'w-20', tooltip: 'Allocatable GPUs', defaultVisible: false },
     { key: 'conditions', label: 'Conditions', width: 'w-40' },
     { key: 'taints', label: 'Taints', width: 'w-24' },
-    { key: 'version', label: 'Version', width: 'w-28' },
+    { key: 'version', label: 'Version', width: 'w-28', sizing: 'fit' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   configmaps: [

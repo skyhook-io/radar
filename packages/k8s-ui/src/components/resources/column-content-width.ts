@@ -21,7 +21,11 @@ import {
   getPodRestarts,
   getPodStatus,
   getReplicaSetOwner,
+  getNodeVersion,
+  getServiceEndpointsStatus,
+  getServicePorts,
   getServiceSelector,
+  getServiceStatus,
   getWorkloadImages,
 } from './resource-utils'
 import { getArgoApplicationHealth, getArgoApplicationSync } from './resource-utils-argo'
@@ -186,7 +190,7 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   return { mode: 'exact' }
 }
 
-export type CellWidth = (resource: any, measure: MeasureText, limit: number) => number
+export type CellWidth = (resource: any, measure: MeasureText, limit: number, ctx?: ContentContext) => number
 const text = (read: (resource: any) => string | null | undefined, font: CellFont = 'body'): CellWidth =>
   (resource, measure, limit) => measure(read(resource) || '-', font, limit)
 // A cell that is one .badge holding the label.
@@ -226,6 +230,16 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'priorityclasses:description': text(r => r.description),
 
   // fit
+  'services:type': badge(r => getServiceStatus(r).text),
+  // An audit finding replaces the badge with "No endpoints", as the cell does.
+  'services:endpoints': (r, measure, limit, ctx) => {
+    const audit = ctx?.auditBadges?.[`${r?.metadata?.namespace || ''}/${r?.metadata?.name}`]
+    const label = audit && audit.danger + audit.warning > 0 ? 'No endpoints' : getServiceEndpointsStatus(r).status
+    return measure(label, 'badge', limit) + BADGE_CHROME_PX
+  },
+  'services:ports': text(getServicePorts),
+  // A skewed version renders medium weight; measure every one that way.
+  'nodes:version': text(getNodeVersion, 'medium'),
   'events:reason': text(r => r.reason, 'medium'),
   'nodepools:status': badge(r => getNodePoolStatus(r).text),
   'nodepools:nodeClass': text(getNodePoolNodeClassRef),
@@ -379,7 +393,7 @@ export function measureColumnContent(
       const read = col.getFilterValue ? undefined : ctx.hostCellWidths?.[col.key] ?? exactContentReader(ctx.plural, col.key)
       if (!read) continue
       let longest = 0
-      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, Infinity))
+      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, Infinity, ctx))
       result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
       continue
     }
@@ -387,13 +401,13 @@ export function measureColumnContent(
     const limit = (spec.max ?? Infinity) - CELL_PADDING_PX
     if (spec.mode === 'fit' && (spec.keep || spec.longest)) {
       let longest = 0
-      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, limit))
+      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, limit, ctx))
       result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
     } else if (spec.mode === 'fit') {
       const widths = new Array<number>(items.length)
       let longest = 0
       for (let i = 0; i < items.length; i++) {
-        widths[i] = safeWidth(read, items[i], measure, limit)
+        widths[i] = safeWidth(read, items[i], measure, limit, ctx)
         if (widths[i] > longest) longest = widths[i]
       }
       result[col.key] = {
@@ -403,7 +417,7 @@ export function measureColumnContent(
     } else {
       let longest = 0
       for (const item of items) {
-        const w = safeWidth(read, item, measure, limit)
+        const w = safeWidth(read, item, measure, limit, ctx)
         if (w > longest) longest = w
       }
       result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
@@ -414,9 +428,9 @@ export function measureColumnContent(
 
 // A reader that throws on an odd object must not take the table down; that
 // cell just doesn't count toward the width.
-function safeWidth(read: CellWidth, item: any, measure: MeasureText, limit: number): number {
+function safeWidth(read: CellWidth, item: any, measure: MeasureText, limit: number, ctx: ContentContext): number {
   try {
-    return read(item, measure, limit)
+    return read(item, measure, limit, ctx)
   } catch {
     return 0
   }
