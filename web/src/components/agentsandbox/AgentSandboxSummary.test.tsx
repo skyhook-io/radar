@@ -12,6 +12,8 @@ const state = vi.hoisted(() => ({
   workspaceLoading: false,
   relationships: undefined as Relationships | undefined,
   relationshipsLoading: false,
+  pod: undefined as any,
+  podRequests: [] as { name: string; enabled: boolean }[],
 }))
 
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'kind-demo' } }) }))
@@ -19,6 +21,10 @@ vi.mock('../../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/client')>()),
   useRadarFeature: () => ({ support: state.support }),
   useResourceWithRelationships: () => ({ data: state.relationships ? { resource: {}, relationships: state.relationships } : undefined, isLoading: state.relationshipsLoading }),
+  useResource: (_kind: string, _ns: string, name: string, _group?: string, opts?: { enabled?: boolean }) => {
+    state.podRequests.push({ name, enabled: !!opts?.enabled })
+    return { data: opts?.enabled && state.pod?.metadata?.name === name ? state.pod : undefined }
+  },
 }))
 vi.mock('../../api/agentSandbox', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/agentSandbox')>()),
@@ -51,6 +57,8 @@ beforeEach(() => {
   state.workspaceLoading = false
   state.relationships = undefined
   state.relationshipsLoading = false
+  state.pod = undefined
+  state.podRequests = []
 })
 
 describe('Agent Sandbox drawer reading', () => {
@@ -99,7 +107,8 @@ describe('Agent Sandbox drawer reading', () => {
     expect(html).toContain('Suspension blocked')
     expect(words(html)).toContain('The Pod it won’t delete: foreign')
     expect(html).toMatch(/<button[^>]*>foreign<\/button>/)
-    expect(words(html)).toContain('Next step: Remove Pod foreign')
+    // The Pod may belong to something else: its owner is checked before it is removed.
+    expect(words(html)).toContain('Next step: Check who owns Pod foreign (kubectl get pod foreign -n radar-agents-live -o jsonpath=\'{.metadata.ownerReferences}\') before removing it')
     expect(html).not.toContain('>Pod</dt>')
     expect(html).not.toContain('no Pod Radar can read names this Sandbox')
     // The same without the server's reading: the plain state, and still no owner-reference "none".
@@ -153,8 +162,9 @@ describe('Agent Sandbox drawer reading', () => {
     expect(words(html)).toContain('Next step: Create SandboxWarmPool no-such-pool in radar-agents-live, or point the claim at an existing pool')
     expect(html.match(/not found/gi)).toHaveLength(2) // the title, and the controller's folded sentence
     expect(html).toMatch(/Warm pool<\/dt><dd[^>]*><span class="font-mono">no-such-pool</)
-    // Not bound: a dash, never "never bound".
-    expect(html).toMatch(/Sandbox<\/dt><dd[^>]*><span[^>]*>–</)
+    // Not bound now, in words; never "never bound", which the status can't say.
+    expect(html).toMatch(/Sandbox<\/dt><dd[^>]*>(<[^>]+>)*not bound</)
+    expect(html).not.toContain('never bound')
   })
 
   it('gives a warm pool its reading, with the scheduler’s own message folded and the sandboxes it holds back linked', () => {
@@ -163,6 +173,73 @@ describe('Agent Sandbox drawer reading', () => {
     expect(html).toContain('Scheduler’s message')
     expect(html).toContain('0/4 nodes are available: 4 Too many pods.')
     expect(html).toMatch(/Not ready:.*?warm-nd2zw.*?warm-4xmkm/)
+  })
+})
+
+describe('Agent Sandbox drawer facts', () => {
+  const withTemplate = (name: string, containers: any[], initContainers?: any[]) => {
+    const s = byName(name)!
+    return { ...s, spec: { ...s.spec, podTemplate: { spec: { containers, ...(initContainers ? { initContainers } : {}) } } } }
+  }
+  const podOf = (name: string, statuses: any[], phase = 'Pending') => ({ metadata: { name, namespace: NS }, status: { phase, containerStatuses: statuses } })
+
+  it('shows the image the Pod template asks for, and the waiting reason and message from the Pod Radar read', () => {
+    state.relationships = podChild('bad-image-pod')
+    state.pod = podOf('bad-image-pod', [{ name: 'agent', state: { waiting: { reason: 'ImagePullBackOff', message: 'Back-off pulling image "ghcr.io/acme/agent:v9"' } } }])
+    const html = drawer('Sandbox', withTemplate('bad-image', [{ name: 'agent', image: 'ghcr.io/acme/agent:v9' }]))
+    expect(html).toMatch(/>Image<\/dt><dd[^>]*>.*?ghcr\.io\/acme\/agent:v9/)
+    expect(html).toContain('Waiting: ImagePullBackOff')
+    expect(html).toContain('Back-off pulling image "ghcr.io/acme/agent:v9"')
+    // The Pod's phase beside its link.
+    expect(words(html)).toContain('bad-image-pod · Pending')
+    // Only the Pod its owner references name was asked for.
+    expect(state.podRequests.filter((r) => r.enabled).map((r) => r.name)).toEqual(['bad-image-pod'])
+  })
+
+  it('shows only the template where Radar didn’t read the Pod, and never reads a Pod it would have to guess', () => {
+    const tmpl = withTemplate('bad-image', [{ name: 'agent', image: 'ghcr.io/acme/agent:v9' }, { name: 'sidecar', image: 'envoy:1.30' }], [{ name: 'init', image: 'busybox' }])
+    state.relationships = { children: [], ownership: { children: { complete: false } } }
+    let html = drawer('Sandbox', tmpl)
+    expect(html).toContain('>Images<')
+    for (const image of ['ghcr.io/acme/agent:v9', 'envoy:1.30', 'busybox']) expect(html).toContain(image)
+    expect(words(html)).toContain('init (init)')
+    expect(html).not.toContain('Waiting:')
+    expect(state.podRequests.some((r) => r.enabled)).toBe(false)
+    // Two Pods name it as their owner: none is picked.
+    state.podRequests = []
+    state.relationships = { children: [{ kind: 'Pod', namespace: NS, name: 'p1' }, { kind: 'Pod', namespace: NS, name: 'p2' }], ownership: { children: { complete: true } } }
+    html = drawer('Sandbox', tmpl)
+    expect(state.podRequests.some((r) => r.enabled)).toBe(false)
+    expect(html).not.toContain('Waiting:')
+    // No Pod template in the spec: no image row rather than a padded one.
+    expect(drawer('Sandbox', byName('bad-image'))).not.toMatch(/>Images?<\/dt>/)
+  })
+
+  it('says what an exited container reports', () => {
+    state.relationships = podChild('failed')
+    state.pod = podOf('failed', [{ name: 'agent', state: { terminated: { exitCode: 137, reason: 'OOMKilled' } } }], 'Failed')
+    const html = drawer('Sandbox', withTemplate('failed', [{ name: 'agent', image: 'agent:1' }]))
+    expect(html).toContain('Exited with code 137 (OOMKilled)')
+  })
+
+  it('says a Sandbox nothing owns has no owner and no expiry, in words', () => {
+    state.relationships = podChild('bad-image')
+    const html = drawer('Sandbox', byName('bad-image'))
+    expect(html).toMatch(/>Owner<\/dt><dd[^>]*>.*?none: no warm pool or claim owns it/)
+    expect(html).toMatch(/>Expiry<\/dt><dd[^>]*>.*?no expiry/)
+    expect(words(html)).not.toContain('–')
+    // A claimed Sandbox may still end with its claim.
+    const claimed = { ...byName('bad-image'), metadata: { ...byName('bad-image').metadata, ownerReferences: [{ kind: 'SandboxClaim', name: 'c', controller: true }] } }
+    expect(drawer('Sandbox', claimed)).toMatch(/>Expiry<\/dt><dd[^>]*>.*?none of its own/)
+  })
+
+  it('says a claim names no warm pool and a pool names no template, in words', () => {
+    const noPool = claim('direct')
+    delete noPool.spec.warmPoolRef
+    expect(drawer('SandboxClaim', noPool)).toMatch(/>Warm pool<\/dt><dd[^>]*>.*?no warm pool/)
+    const bare = warmPool('bare')
+    delete bare.spec.sandboxTemplateRef
+    expect(drawer('SandboxWarmPool', bare)).toMatch(/>Template<\/dt><dd[^>]*>.*?no template/)
   })
 })
 
