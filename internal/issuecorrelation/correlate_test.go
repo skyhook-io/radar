@@ -312,7 +312,10 @@ func TestSelectAroundFirstSeen(t *testing.T) {
 		{"within the slop counts as before", issuesapi.Issue{FirstSeen: firstSeen},
 			[]issuesapi.RecentChange{at(20 * time.Second), at(5 * m)},
 			[]time.Duration{20 * time.Second, 5 * m}, false},
-		{"onset unknown keeps the three newest", issuesapi.Issue{FirstSeen: firstSeen, OnsetUnknown: true},
+		{"onset unknown still picks around first seen", issuesapi.Issue{FirstSeen: firstSeen, OnsetUnknown: true},
+			[]issuesapi.RecentChange{at(-50 * m), at(-2 * m), at(10 * m), at(20 * m), at(40 * m)},
+			[]time.Duration{-2 * m, -50 * m, 40 * m, 20 * m}, true},
+		{"no first seen keeps the three newest", issuesapi.Issue{OnsetUnknown: true},
 			[]issuesapi.RecentChange{at(-50 * m), at(-2 * m), at(10 * m), at(40 * m)},
 			[]time.Duration{40 * m, 10 * m, -2 * m}, true},
 		{"mixed grouped onset keeps the three newest", issuesapi.Issue{FirstSeen: firstSeen, OnsetCoverage: &issuesapi.OnsetCoverage{Known: 1, Unknown: 1}},
@@ -439,11 +442,16 @@ func TestCorrelate_HelmHistoryReadAsCaller(t *testing.T) {
 
 func TestWindowAroundFirstSeen(t *testing.T) {
 	now := time.Now()
-	known := issuesapi.Issue{FirstSeen: now.Add(-3 * time.Hour)}
-	if w := WindowAroundFirstSeen(known, now); !w.From.Equal(now.Add(-4*time.Hour)) || !w.To.Equal(now) || w.OpenEnded {
-		t.Fatalf("known onset window = %+v", w)
+	for _, iss := range []issuesapi.Issue{
+		{FirstSeen: now.Add(-3 * time.Hour)},
+		{FirstSeen: now.Add(-3 * time.Hour), OnsetUnknown: true},
+		{FirstSeen: now.Add(-3 * time.Hour), OnsetCoverage: &issuesapi.OnsetCoverage{Known: 1, Unknown: 1}},
+	} {
+		if w := WindowAroundFirstSeen(iss, now); !w.From.Equal(now.Add(-4*time.Hour)) || !w.To.Equal(now) || w.OpenEnded {
+			t.Fatalf("issue %+v: window = %+v, want from an hour before first seen", iss, w)
+		}
 	}
-	for _, iss := range []issuesapi.Issue{{}, {FirstSeen: now.Add(-3 * time.Hour), OnsetUnknown: true}, {FirstSeen: now.Add(time.Hour)}} {
+	for _, iss := range []issuesapi.Issue{{}, {OnsetUnknown: true}, {FirstSeen: now.Add(time.Hour)}} {
 		if w := WindowAroundFirstSeen(iss, now); !w.From.Equal(now.Add(-time.Hour)) {
 			t.Fatalf("issue %+v: window = %+v, want the hour before now", iss, w)
 		}
@@ -802,5 +810,59 @@ func TestCorrelate_AdmissionOrderSeesRowsNotShown(t *testing.T) {
 	wantRows := []string{"ResourceQuota@" + utc(quotaAt), "ConfigMap@" + utc(firstSeen.Add(15*time.Minute)), "ConfigMap@" + utc(firstSeen.Add(10*time.Minute))}
 	if !slices.Equal(kinds, wantRows) || !got.MoreNotShown {
 		t.Fatalf("rows shown %v (more %v), want %v with more not shown", kinds, got.MoreNotShown, wantRows)
+	}
+}
+
+// An issue whose onset is unknown but which has a first-seen time keeps its
+// window there: an hour after first seen, the image change just before it is
+// still listed, and nothing claims there were no changes.
+func TestCorrelate_UnknownOnsetStillAnchorsOnFirstSeen(t *testing.T) {
+	initCache(t, webDeployment())
+	store := initStore(t)
+	now := time.Now().Truncate(time.Second)
+	timeline.SetObservationStartForTest(now.Add(-3 * time.Hour))
+	firstSeen := now.Add(-61 * time.Minute)
+	imageAt := firstSeen.Add(-time.Minute)
+	appendChange(t, store, specUpdate("Deployment", "web", imageAt, "web:bad"))
+	iss := webIssue(firstSeen)
+	iss.OnsetUnknown = true
+	opts := Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, CheckCoverage: true}
+	got := Correlate(context.Background(), iss, opts, Access{})
+	if got.NoChanges || len(got.Changes) != 1 || !changeTime(got.Changes[0]).Equal(imageAt) {
+		t.Fatalf("image change before first seen: no_changes=%v changes=%+v window=%+v", got.NoChanges, got.Changes, opts.Window)
+	}
+
+	// Later changes don't push it out: the rows are picked around first seen.
+	var repairs []time.Time
+	for i := range 4 {
+		at := firstSeen.Add(time.Duration(10*(i+1)) * time.Minute)
+		repairs = append(repairs, at)
+		appendChange(t, store, specUpdate("Deployment", "web", at, fmt.Sprintf("web:fix%d", i)))
+	}
+	got = Correlate(context.Background(), iss, opts, Access{})
+	var times []time.Time
+	for _, c := range got.Changes {
+		times = append(times, changeTime(c))
+	}
+	want := []time.Time{imageAt, repairs[3], repairs[2]}
+	if !slices.EqualFunc(times, want, time.Time.Equal) || !got.MoreNotShown {
+		t.Fatalf("onset-unknown selection = %v (more %v), want %v", times, got.MoreNotShown, want)
+	}
+}
+
+// First seen at the moment Radar started recording puts the window's start
+// an hour before Radar was watching: history is incomplete, not "no changes".
+func TestCorrelate_FirstSeenAtObservationStartIsIncomplete(t *testing.T) {
+	initCache(t, webDeployment())
+	initStore(t)
+	now := time.Now().Truncate(time.Second)
+	start := now.Add(-20 * time.Minute)
+	timeline.SetObservationStartForTest(start)
+	iss := webIssue(start)
+	iss.OnsetUnknown = true
+	got := Correlate(context.Background(), iss, Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, CheckCoverage: true}, Access{})
+	if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete ||
+		!slices.Contains(got.History.Reasons, issuesapi.HistoryObservationStartedLate) {
+		t.Fatalf("first seen at observation start: %+v", got)
 	}
 }

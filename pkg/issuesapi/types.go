@@ -704,8 +704,8 @@ type Issue struct {
 // ChangeCorrelation is the scope of one issue's change correlation.
 type ChangeCorrelation struct {
 	// WindowFrom and WindowTo bound the changes read: an hour before the
-	// issue was first seen (or before now when its onset is unknown) until
-	// the read.
+	// issue was first seen, whether or not its onset is known, until the
+	// read; an hour before the read when the issue has no first-seen time.
 	WindowFrom time.Time `json:"window_from"`
 	WindowTo   time.Time `json:"window_to"`
 	// ObservedSince is when this Radar process started recording changes.

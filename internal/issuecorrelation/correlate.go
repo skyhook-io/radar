@@ -361,7 +361,7 @@ func (c *run) query(limit int) meaningfulchanges.Query {
 		q.Select = func(changes []issuesapi.RecentChange) ([]issuesapi.RecentChange, bool) {
 			return changes, false
 		}
-		if anchorKnown(c.iss) {
+		if !c.iss.FirstSeen.IsZero() {
 			q.SplitAt = c.iss.FirstSeen.Add(anchorSlop)
 		}
 	}
@@ -476,19 +476,20 @@ func (c *run) selectChanges(changes []issuesapi.RecentChange) ([]issuesapi.Recen
 	return changes, false
 }
 
-// anchorKnown reports whether the issue has one onset to select around: a
-// first-seen time that is not unknown, and for a grouped issue, known for
-// every member.
+// anchorKnown reports whether the shown changes are picked around first
+// seen: the issue has a first-seen time, even when its onset is unknown,
+// unless it is a grouped issue whose members' onsets are mixed, which the UI
+// shows as one list.
 func anchorKnown(iss issuesapi.Issue) bool {
-	if iss.FirstSeen.IsZero() || iss.OnsetUnknown {
+	if iss.FirstSeen.IsZero() {
 		return false
 	}
-	return iss.OnsetCoverage == nil || iss.OnsetCoverage.Unknown == 0
+	return iss.OnsetCoverage == nil || iss.OnsetCoverage.Known == 0 || iss.OnsetCoverage.Unknown == 0
 }
 
 // selectAroundFirstSeen keeps up to three changes at or before first seen,
-// closest first, then up to two after it, newest first. Without a known
-// onset it keeps the three newest.
+// closest first, then up to two after it, newest first. Without a first-seen
+// time, or for a grouped issue with mixed onsets, it keeps the three newest.
 func selectAroundFirstSeen(changes []issuesapi.RecentChange, iss issuesapi.Issue) ([]issuesapi.RecentChange, bool) {
 	sorted := slices.Clone(changes)
 	sortChangesNewestFirst(sorted)
@@ -513,10 +514,13 @@ func selectAroundFirstSeen(changes []issuesapi.RecentChange, iss issuesapi.Issue
 }
 
 // WindowAroundFirstSeen is the anchored window: from an hour before the issue
-// was first seen (or before now when its onset is unknown) until now.
+// was first seen until now. It anchors on first seen whenever the issue has
+// one, even when the onset itself is unknown or a grouped issue's onsets are
+// mixed, so the window doesn't slide past the changes before it; only an
+// issue with no first-seen time falls back to the hour before now.
 func WindowAroundFirstSeen(iss issuesapi.Issue, now time.Time) Window {
 	anchor := now
-	if anchorKnown(iss) && iss.FirstSeen.Before(now) {
+	if !iss.FirstSeen.IsZero() && iss.FirstSeen.Before(now) {
 		anchor = iss.FirstSeen
 	}
 	return Window{From: anchor.Add(-meaningfulchanges.DefaultSince), To: now}
