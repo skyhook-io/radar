@@ -18,7 +18,6 @@ import type { SelectedResource } from '../../types'
 import { FilterChips, Notice, RefreshFailedNotice, ScreenBody, Segments, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import {
   ACTOR_SEGMENTS,
-  stuckInTransition,
   ACTOR_STATE_LABEL,
   IN_PROGRESS_STATES,
   coverageInPart,
@@ -64,6 +63,9 @@ export function sourcesNote(sources: ('snapshot' | 'atespace' | 'actor')[]): str
   if (sources.includes('atespace')) return 'Read directly from this atespace: the shared read does not hold all of it.'
   return ''
 }
+
+/** The URL filters that narrow the Actors list to a subset; the state segment and sort are not among them. */
+const SCOPING_PARAMS = ['atespace', 'template', 'pool', 'q', 'worker', 'impact', 'node', 'nodeHas'] as const
 
 /** An actor as the workspace tables' row identity. Actors are not Kubernetes objects; the drawer this opens is Substrate's own. */
 export const ACTOR_ROW_KIND = 'SubstrateActor'
@@ -121,22 +123,21 @@ const WAITING_SHORT: Record<NonNullable<SubstrateActorRow['waitingOn']>['on'], s
 function StateCell({ row }: { row: SubstrateActorRow }) {
   // A pending upload shows in the snapshot column; the state cell doesn't say it twice.
   const raw = stateExtra(row.state, row.reason)
-  const stuck = stuckInTransition(row.state, row.updateTime)
-  // A duration past Substrate's stuck threshold is judged, not just shown.
-  const extra = row.state === 'suspended' && raw?.startsWith('upload pending') ? undefined : stuck && raw?.startsWith('for ') ? `stuck ${raw}` : raw
+  // The badge says "stuck" past Substrate's threshold; this line says only how long.
+  const extra = row.state === 'suspended' && raw?.startsWith('upload pending') ? undefined : raw
   const waiting = row.waitingOn ? WAITING_SHORT[row.waitingOn.on] : undefined
   // Where it waits is what the In progress tab is for, so it comes before how long.
   const text = [waiting, extra].filter(Boolean).join(' · ')
   const hover = [row.reason, row.waitingOn?.reading].filter(Boolean).join(' ')
   // The one cell that may take a second line: a crash message or a wait reads whole at 1440.
   // The badge is a crash's one red signal; its message reads neutral, so a different cause stands out by its words.
-  // A stuck transition keeps its amber: the badge alone doesn't say it is stuck.
-  const line = text ? <span className={clsx('line-clamp-2 min-w-0 text-xs leading-4', row.state === 'crashed' ? 'text-theme-text-secondary' : stuck ? toneTextClass('degraded') : 'text-theme-text-tertiary')}>{text}</span> : null
+  // A stuck transition's amber is on its badge, which says "stuck"; the line stays quiet.
+  const line = text ? <span className={clsx('line-clamp-2 min-w-0 text-xs leading-4', row.state === 'crashed' ? 'text-theme-text-secondary' : 'text-theme-text-tertiary')}>{text}</span> : null
   // Beside the chip while there is room for a few words, under it when there isn't.
   const place = 'min-w-[8rem] flex-1 pt-0.5'
   return (
     <span className="flex min-w-0 flex-wrap items-start gap-x-1.5 gap-y-0.5">
-      <span className="shrink-0"><ActorStateBadge state={row.state} impact={row.workerImpact} /></span>
+      <span className="shrink-0"><ActorStateBadge state={row.state} impact={row.workerImpact} updateTime={row.updateTime} /></span>
       {line && (hover ? <Tooltip content={hover} wrapperClassName={place}>{line}</Tooltip> : <span className={place}>{line}</span>)}
     </span>
   )
@@ -202,15 +203,18 @@ function actorColumns(wide: boolean): TableColumn<SubstrateActorRow>[] {
 /**
  * What the Actors badge in the sidebar counts, said on the page it opens:
  * "N need attention: C crashed · S stuck", from the same read and the same
- * count. Each part opens its segment.
+ * count. Each part opens its segment. The count is always over every actor:
+ * while a filter narrows the list it says so ("across all actors"), and its
+ * parts open their segment with the filters cleared, so a link never lands on
+ * a tab that counts zero.
  */
-export function ActorAttentionSummary({ workspace, onCrashed, onStuck }: { workspace: SubstrateWorkspace; onCrashed: () => void; onStuck: () => void }) {
+export function ActorAttentionSummary({ workspace, filtered, onCrashed, onStuck }: { workspace: SubstrateWorkspace; filtered?: boolean; onCrashed: () => void; onStuck: () => void }) {
   const c = substrateScreenCounts(workspace).actors
   const { crashed, stuck } = actorAttentionParts(workspace)
   if (c.count === null) {
     return (
       <p className="text-sm text-theme-text-secondary">
-        <Tooltip content={c.title}><span tabIndex={0} className="font-medium text-theme-text-primary">Needing attention: unknown</span></Tooltip>
+        <Tooltip content={c.title}><span tabIndex={0} className="font-medium text-theme-text-primary">Needing attention{filtered ? ' across all actors' : ''}: unknown</span></Tooltip>
       </p>
     )
   }
@@ -229,7 +233,7 @@ export function ActorAttentionSummary({ workspace, onCrashed, onStuck }: { works
     <p className="text-sm text-theme-text-secondary">
       <Tooltip content={c.title}>
         <span tabIndex={0} className="font-medium text-theme-text-primary">
-          {c.lowerBound ? 'At least ' : ''}{c.count.toLocaleString('en-US')} {c.count === 1 ? 'needs' : 'need'} attention
+          {c.lowerBound ? 'At least ' : ''}{c.count.toLocaleString('en-US')} {c.count === 1 ? 'needs' : 'need'} attention{filtered ? ' across all actors' : ''}
         </span>
       </Tooltip>
       {parts.length > 0 && <>: {parts.map((p, i) => <span key={i}>{i > 0 && ' · '}{p}</span>)}</>}
@@ -306,6 +310,17 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     p.delete('page')
     setParams(p, { replace: true })
   }
+  // Every filter but the state segment: the attention count covers all actors, so with any of these set it says so.
+  const filtered = !!(atespace || template || pool || q || worker || impact || node)
+  // Opens the summary's segment over every actor, the set its count is over. Needs attention first puts the stuck ones on top.
+  const openAttention = (state: 'crashed' | 'inProgress') => {
+    const p = new URLSearchParams(params)
+    for (const k of SCOPING_PARAMS) p.delete(k)
+    p.set('state', state)
+    if (state === 'inProgress') p.delete('sort')
+    p.delete('page')
+    setParams(p, { replace: true })
+  }
   const setPage = (n: number) => {
     const p = new URLSearchParams(params)
     if (n > 0) p.set('page', String(n))
@@ -365,15 +380,9 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
         {workspace && workspace.apiTier.state === 'connected' && !notConnected && (
           <ActorAttentionSummary
             workspace={workspace}
-            onCrashed={() => setSegment('crashed')}
-            onStuck={() => {
-              const p = new URLSearchParams(params)
-              p.set('state', 'inProgress')
-              // Needs attention first puts the stuck ones on top.
-              p.delete('sort')
-              p.delete('page')
-              setParams(p, { replace: true })
-            }}
+            filtered={filtered}
+            onCrashed={() => openAttention('crashed')}
+            onStuck={() => openAttention('inProgress')}
           />
         )}
         {node && !notConnected && (

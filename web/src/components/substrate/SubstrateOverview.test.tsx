@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateStatus, SubstrateWorkspace } from '../../api/substrateWorkspace'
 import { SUBSTRATE_NO_PROBLEMS, SubstrateOverview } from './SubstrateOverview'
-import { connectedTier, connection, counts, notConnectedWorkspace, ownerTier, ownersOnlyTier, sharedTier, status, workspace } from './substrate.fixtures'
+import { connectedTier, connection, counts, notConnectedWorkspace, ownerTier, ownersOnlyTier, poolShortRow, sharedTier, status, workspace } from './substrate.fixtures'
 
 const state = vi.hoisted(() => ({ connection: undefined as unknown }))
 
@@ -143,8 +143,10 @@ describe('Agent Substrate overview, not connected', () => {
     expect(html).toContain('See actors, templates and workers')
     expect(html).toContain('Radar found Substrate’s API server')
     expect(html).toContain('Substrate’s shared client identity')
-    expect(html).toContain('what kubectl ate uses without')
-    expect(html).toContain('It is not you')
+    expect(html).toContain('the one kubectl ate uses without')
+    // Whose access each option grants, and whose name Substrate records, said plainly.
+    expect(html).toContain('Substrate records the reads as that identity, not you')
+    expect(html).toContain('Radar sees what your access lets you see.')
     expect(html).toContain('Your own viewer token')
     expect(html).toContain('Recommended')
     expect(html).toContain('This identity may be a global owner')
@@ -153,9 +155,28 @@ describe('Agent Substrate overview, not connected', () => {
     expect(html).toContain('How Radar handles the token')
     expect(html).toContain('Why a separate identity?')
     expect(html).toContain('How to get a viewer token')
-    expect(html).toContain('Radar saves only the path.')
+    expect(html).toContain('Radar saves only its path.')
     expect(html).toContain('Advanced: API server address and TLS')
     expect(html).toContain('>Connect</button>')
+    // The identity choice leads; where Radar connects and its Advanced settings follow it.
+    expect(html.indexOf('Who Radar reads Substrate as')).toBeLessThan(html.indexOf('Radar found Substrate’s API server'))
+    expect(html.indexOf('Radar found Substrate’s API server')).toBeLessThan(html.indexOf('Advanced: API server address and TLS'))
+    // Nothing saved, nothing to disconnect.
+    expect(html).not.toContain('Disconnect')
+  })
+
+  it('keeps Disconnect apart from saving, in the destructive tone, behind a confirmation', async () => {
+    const { toneTextClass } = await import('@skyhook-io/k8s-ui')
+    state.connection = connection({ saved: true, settings: { identity: 'tokenFile', tokenFile: '/Users/me/.radar/substrate/viewer.token', caFile: '/Users/me/.radar/substrate/a-long-ca-bundle.pem' } })
+    const html = render(notConnectedWorkspace())
+    expect(html).toContain('>Save and reconnect</button>')
+    const button = html.slice(html.lastIndexOf('<button', html.indexOf('>Disconnect</button>')), html.indexOf('>Disconnect</button>'))
+    expect(button).toContain('ml-auto')
+    expect(button).toContain(toneTextClass('unhealthy'))
+    expect(button).not.toContain('btn-brand')
+    // A long path is inspectable whole, on hover.
+    expect(html).toContain('title="/Users/me/.radar/substrate/a-long-ca-bundle.pem"')
+    state.connection = connection()
   })
 
   it('shows the shared identity’s warning, unfolded, once that identity is chosen', () => {
@@ -202,7 +223,7 @@ describe('Agent Substrate in Radar Hub', () => {
     expect(html).toContain('ate-system/ate-client</span>), minted with your Kubernetes access')
     expect(html).toContain('aria-label="About this identity"')
     expect(html).not.toContain('Change connection')
-    expect(html).not.toContain('Choose who Radar reads as')
+    expect(html).not.toContain('Who Radar reads Substrate as')
     // An owner's Radar reads Substrate: the actors are there.
     expect(html).toContain('Actor states')
   })
@@ -211,7 +232,7 @@ describe('Agent Substrate in Radar Hub', () => {
     const data = notConnectedWorkspace(ownersOnlyTier)
     const html = render(data, status({ apiTier: ownersOnlyTier, canConfigure: false }))
     expect(html).toContain('In Radar Hub, only org owners can see Substrate’s actors, templates and workers for now. Ask an org owner.')
-    expect(html).not.toContain('Choose who Radar reads as')
+    expect(html).not.toContain('Who Radar reads Substrate as')
     expect(html).not.toContain('See actors, templates and workers')
     expect(html).not.toContain('Substrate API: ')
     expect(html).toContain('Worker pools')
@@ -223,7 +244,7 @@ describe('Agent Substrate in Radar Hub', () => {
     const html = render(notConnectedWorkspace(tier), status({ apiTier: tier, canConfigure: false }))
     expect(html).toContain('Substrate API: your access can’t mint the shared identity’s token')
     expect(html).toContain('serviceaccounts/token for ate-system/ate-client')
-    expect(html).not.toContain('Choose who Radar reads as')
+    expect(html).not.toContain('Who Radar reads Substrate as')
   })
 
   it('gives an owner whose install lacks the shared identity a kubectl check, not a form', () => {
@@ -232,12 +253,12 @@ describe('Agent Substrate in Radar Hub', () => {
     expect(html).toContain('Substrate’s shared client identity (ate-system/ate-client) doesn’t exist here.')
     expect(html).toContain('kubectl -n ate-system get sa ate-client'.split(' ').pop()!)
     expect(html).not.toContain('Advanced')
-    expect(html).not.toContain('Choose who Radar reads as')
+    expect(html).not.toContain('Who Radar reads Substrate as')
   })
 
   it('leaves a local Radar and a shared in-cluster Radar as they were', () => {
     const local = render(notConnectedWorkspace())
-    expect(local).toContain('Choose who Radar reads as')
+    expect(local).toContain('Who Radar reads Substrate as')
     expect(local).not.toContain('only org owners')
     const shared = render(notConnectedWorkspace(sharedTier), status({ apiTier: sharedTier, canConfigure: false }))
     expect(shared).toContain('This Radar is shared')
@@ -265,6 +286,30 @@ describe('Agent Substrate status line beside the inventory', () => {
     expect(uploads.lowerBound).toBeFalsy()
     // Nothing healthy-green that the inventory contradicts, and no "≥" before an unknown or zero.
     expect(facts.filter((f) => f.tone === 'healthy').map((f) => f.label)).toEqual(['Resumes (1h)'])
+  })
+
+  it('reads a condition in its row’s tone: an unavailable worker, a template no pool matches, an overdue upload are alerts', async () => {
+    const { overviewFacts, serviceFacts } = await import('./SubstrateOverview')
+    const base = workspace()
+    const unavailable = { ...poolShortRow, id: 'workerUnavailable:w', rule: 'workerUnavailable' as const, severity: 'alert' as const, subject: { kind: 'Worker' as const, namespace: 'ns', name: 'w' } }
+    const tones = (data: ReturnType<typeof workspace>) => Object.fromEntries(overviewFacts(data).map((f) => [renderToStaticMarkup(<>{f.label}</>).replace(/<[^>]+>/g, ''), f.tone]))
+    // Workers: 1 unavailable in the fixture is at risk, orange, with or without its row yet.
+    expect(tones(base).Workers).toBe('alert')
+    expect(tones({ ...base, needsAttention: [...base.needsAttention, unavailable] }).Workers).toBe('alert')
+    // A lost sandbox on a worker is critical: the fact takes the worst row's tone.
+    const lost = { ...unavailable, id: 'workerRestarting:w', rule: 'workerRestarting' as const, severity: 'critical' as const }
+    expect(tones({ ...base, needsAttention: [...base.needsAttention, lost] }).Workers).toBe('unhealthy')
+    // An info row (a drain within its deadline) does not colour it.
+    const draining = { ...unavailable, id: 'workerDraining:w', rule: 'workerDraining' as const, severity: 'info' as const }
+    const calm = { ...base, summary: { ...base.summary, workers: { ...base.summary.workers!, unavailable: 0 } }, needsAttention: [draining] }
+    expect(tones(calm).Workers).toBe('healthy')
+    // Templates: one no pool matches is an alert; a failed golden snapshot alone stays a warning.
+    const t = base.summary.templates!
+    expect(tones({ ...base, summary: { ...base.summary, templates: { ...t, noMatchingPool: 1 } } }).Templates).toBe('alert')
+    expect(tones({ ...base, summary: { ...base.summary, templates: { ...t, noMatchingPool: 0, goldenFailed: 1 } }, needsAttention: [] }).Templates).toBe('degraded')
+    // Uploads: an alert row while the nodes are up.
+    const upload = { ...poolShortRow, id: 'uploadOverdue', rule: 'uploadOverdue' as const, severity: 'alert' as const, count: 3 }
+    expect(serviceFacts({ service: base.service, summary: base.summary, needsAttention: [upload] }).find((f) => f.label === 'Uploads')!.tone).toBe('alert')
   })
 
   it('folds an unmeasured Prometheus into one unknown fact', async () => {

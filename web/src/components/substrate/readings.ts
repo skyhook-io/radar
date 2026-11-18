@@ -1,4 +1,4 @@
-import { formatDuration, type BadgeSeverity, type StatusTone } from '@skyhook-io/k8s-ui'
+import { formatDuration, toneFillClass, type BadgeSeverity, type StatusTone } from '@skyhook-io/k8s-ui'
 import type {
   SubstrateAPITier,
   SubstrateActorState,
@@ -37,21 +37,43 @@ export const IN_PROGRESS_STATES: readonly SubstrateActorState[] = ['resuming', '
 /** Display order, the state bar's and the legend's. */
 export const ACTOR_STATE_ORDER: readonly SubstrateActorState[] = ['crashed', 'resuming', 'suspending', 'reverting', 'deleting', 'running', 'suspended', 'unknown']
 
-// Suspended is where most actors rest, so it reads calm, not amber; the
-// transitions read as pending, a crash as a failure.
+// One tone per state, the same on badges, state bars and the placement grid.
+// Suspended is where most actors rest, so it reads quietest. A resume,
+// suspend, revert or delete in flight is routine: one quiet in-flight tone.
+// Amber is kept for a transition that is stuck (actorStateReading), a crash
+// reads as a failure.
 const STATE_TONE: Record<SubstrateActorState, StatusTone> = {
   running: 'healthy',
-  suspended: 'neutral',
-  resuming: 'degraded',
-  suspending: 'degraded',
-  reverting: 'degraded',
-  deleting: 'degraded',
+  suspended: 'unknown',
+  resuming: 'neutral',
+  suspending: 'neutral',
+  reverting: 'neutral',
+  deleting: 'neutral',
   crashed: 'unhealthy',
   unknown: 'unknown',
 }
 
 export function actorStateTone(state: SubstrateActorState): StatusTone {
   return STATE_TONE[state] ?? 'unknown'
+}
+
+/**
+ * A state's fill on a bar or a legend dot. Suspended and Unknown share a grey
+ * chip, whose word tells them apart; a bar has no words, so Suspended, a
+ * settled state, takes the quiet resting fill, and Unknown keeps Radar's
+ * unknown slate: an actor Radar can't place must never read as one at rest.
+ */
+export function actorStateFill(state: SubstrateActorState): string {
+  return state === 'suspended' ? 'bg-theme-border-light' : toneFillClass(actorStateTone(state))
+}
+
+/**
+ * The tone of an actor whose worker is in trouble: a lost sandbox is lost; an
+ * unavailable worker puts it at risk, as the worker's own chip and row say; a
+ * draining one is a warning.
+ */
+export function workerImpactTone(kind: SubstrateWorkerImpact['kind']): StatusTone {
+  return kind === 'restarted' ? 'unhealthy' : kind === 'unavailable' ? 'alert' : 'degraded'
 }
 
 const TONE_SEVERITY: Record<StatusTone, BadgeSeverity> = {
@@ -65,6 +87,37 @@ const TONE_SEVERITY: Record<StatusTone, BadgeSeverity> = {
 
 export function toneSeverity(tone: StatusTone): BadgeSeverity {
   return TONE_SEVERITY[tone]
+}
+
+export interface ActorStateReading {
+  label: string
+  severity: BadgeSeverity
+  /** Why the chip reads as it does, when the state alone doesn't say. */
+  title?: string
+}
+
+/**
+ * An actor's state chip: Substrate's state, qualified when its worker is in
+ * trouble ("Running · worker unavailable") or when a transition has held past
+ * the stuck threshold ("Resuming · stuck"). Only a stuck transition is amber;
+ * one in flight reads in the quiet in-flight tone.
+ */
+export function actorStateReading(
+  state: SubstrateActorState,
+  opts: { impact?: Pick<SubstrateWorkerImpact, 'kind' | 'reading'>; updateTime?: string; now?: number } = {},
+): ActorStateReading {
+  const label = ACTOR_STATE_LABEL[state] ?? state
+  if (opts.impact) return { label: `${label} · ${IMPACT_LABEL[opts.impact.kind]}`, severity: toneSeverity(workerImpactTone(opts.impact.kind)), title: opts.impact.reading }
+  if (stuckInTransition(state, opts.updateTime, opts.now)) {
+    return { label: `${label} · stuck`, severity: 'warning', title: `${label} for longer than ${formatDuration(STUCK_AFTER_MS)}, past Radar’s stuck threshold.` }
+  }
+  return { label, severity: toneSeverity(actorStateTone(state)) }
+}
+
+export const IMPACT_LABEL: Record<SubstrateWorkerImpact['kind'], string> = {
+  unavailable: 'worker unavailable',
+  draining: 'worker draining',
+  restarted: 'sandbox lost',
 }
 
 /** The Actors screen's segments: one per state an operator acts on, with the transitions together. */
@@ -231,9 +284,37 @@ export function refText(ref: SubstrateRef): string {
   return `${ref.atespace} / ${ref.name}`
 }
 
+const ATTENTION_TONE: Record<SubstrateAttention['severity'], Exclude<StatusTone, 'healthy'>> = {
+  critical: 'unhealthy',
+  alert: 'alert',
+  warning: 'degraded',
+  // Expected and still within its budget, such as a drain before its Pod's deadline.
+  info: 'neutral',
+}
+
+/** A row's tone, by the house's four steps: critical red, alert orange, warning amber, info blue. */
 export function attentionTone(a: Pick<SubstrateAttention, 'severity'>): Exclude<StatusTone, 'healthy'> {
-  // info: expected and still within its budget, such as a drain before its Pod's deadline.
-  return a.severity === 'critical' ? 'unhealthy' : a.severity === 'info' ? 'neutral' : 'degraded'
+  return ATTENTION_TONE[a.severity] ?? 'degraded'
+}
+
+const BANNER_VARIANT: Record<Exclude<StatusTone, 'healthy'>, 'error' | 'alert' | 'warning' | 'info' | 'unknown'> = {
+  unhealthy: 'error',
+  alert: 'alert',
+  degraded: 'warning',
+  neutral: 'info',
+  unknown: 'unknown',
+}
+
+/** The AlertBanner variant of a row, so a banner reads the tone its row does. */
+export function attentionBannerVariant(a: Pick<SubstrateAttention, 'severity'>): 'error' | 'alert' | 'warning' | 'info' | 'unknown' {
+  return BANNER_VARIANT[attentionTone(a)]
+}
+
+/** The worst tone among rows, or undefined when there are none. */
+export function worstAttentionTone(rows: Pick<SubstrateAttention, 'severity'>[]): Exclude<StatusTone, 'healthy'> | undefined {
+  const order: SubstrateAttention['severity'][] = ['critical', 'alert', 'warning', 'info']
+  const worst = order.find((s) => rows.some((r) => r.severity === s))
+  return worst ? ATTENTION_TONE[worst] : undefined
 }
 
 export type AttentionArea = 'actors' | 'templates' | 'workers' | 'pools' | 'nodes'
@@ -481,12 +562,14 @@ export function goldenReading(t: Pick<SubstrateTemplateRow, 'golden' | 'matching
     case 'ready':
       return { label: 'Ready', severity: 'success', meaning: 'New actors start from the golden snapshot.' }
     case 'failed':
-      return { label: 'Failed', severity: 'error', meaning: 'The build failed and Substrate does not retry it: new actors using the template’s default boot cold. Templates can’t be edited: recreate it to build again.' }
+      // New actors boot cold; nothing is lost: the warning of its Needs attention row.
+      return { label: 'Failed', severity: 'warning', meaning: 'The build failed and Substrate does not retry it: new actors using the template’s default boot cold. Templates can’t be edited: recreate it to build again.' }
     case 'disabled':
       return { label: 'Disabled', severity: 'neutral', meaning: 'The template turns golden snapshots off: every new actor boots cold.' }
   }
+  // At risk, not lost: the alert of its Needs attention row.
   if (t.golden.blocked === 'noMatchingPool') {
-    return { label: 'Can’t build: no pool can run it', severity: 'error', meaning: 'The build runs as an actor on a worker, and no pool’s labels match the template’s worker selector, so it retries without end. New actors can’t run either.' }
+    return { label: 'Can’t build: no pool can run it', severity: 'alert', meaning: 'The build runs as an actor on a worker, and no pool’s labels match the template’s worker selector, so it retries without end. New actors can’t run either.' }
   }
   return { label: 'Building', severity: 'warning', meaning: 'Substrate is warming the template up; new actors boot cold until it is ready.' }
 }
@@ -627,35 +710,32 @@ export function withoutRepeats(reading: string | undefined, nextStep: string | u
   return kept.length ? kept.join(' ') : undefined
 }
 
-/** The tone of an actor's cell in the placement grid: worker impact and transitions apart, by the badge vocabulary. */
+/** The tone of an actor's cell in the placement grid: its badge's, worker impact first. */
 export function placementTone(state: SubstrateActorState, impact: SubstrateWorkerImpact['kind'] | undefined): StatusTone {
-  if (impact === 'restarted') return 'unhealthy'
-  if (impact) return 'degraded'
-  if (state === 'crashed') return 'unhealthy'
-  if (state === 'running') return 'healthy'
-  if (state === 'suspended') return 'unknown'
-  return 'neutral'
+  return impact ? workerImpactTone(impact) : actorStateTone(state)
 }
 
 const WORKER_STATE_LABEL: Record<SubstrateWorkerRow['state'], { label: string; severity: BadgeSeverity }> = {
   active: { label: 'Active', severity: 'success' },
   draining: { label: 'Draining', severity: 'warning' },
-  unavailable: { label: 'Unavailable', severity: 'error' },
+  // At risk, nothing lost yet: the tone of its Needs attention row.
+  unavailable: { label: 'Unavailable', severity: 'alert' },
   unknown: { label: 'Unknown', severity: 'neutral' },
 }
 
 /**
  * A worker's chip. A registration ahead of what Substrate reconciled is part
- * of it, with the actors that lost their sandboxes: a green "Active" over lost
- * actors would say the opposite of the actors' own rows.
+ * of it, and lost sandboxes turn it red: a green "Active" over lost actors
+ * would say the opposite of the actors' own rows. The chip stays one line; the
+ * screens say how many were lost beside it (workerState.lost).
  */
 export function workerStateReading(w: Pick<SubstrateWorkerRow, 'state' | 'workerState'>): { label: string; severity: BadgeSeverity; title: string } {
   const base = WORKER_STATE_LABEL[w.state]
   const ws = w.workerState
   const title = ws?.reading ?? 'Substrate’s state for the worker. Only active workers take new actors.'
   if (ws?.kind !== 'reconciling') return { ...base, title }
-  const lost = ws.lost ? ` (${ws.lost} ${ws.lost === 1 ? 'actor' : 'actors'} lost)` : ''
-  return { label: `${base.label} · reconciling${lost}`, severity: w.state === 'unavailable' ? 'error' : 'warning', title }
+  // Lost sandboxes are lost (critical); otherwise the worker's own state sets it.
+  return { label: `${base.label} · reconciling`, severity: ws.lost ? 'error' : w.state === 'unavailable' ? 'alert' : 'warning', title }
 }
 
 /** What Kubernetes says about a worker's Pod, in one phrase; terminating comes first, since a Ready Pod being deleted is not counted ready. */
@@ -688,7 +768,7 @@ export function poolReadyPods(k: Pick<SubstrateK8sPool, 'ready' | 'pods'>): numb
   return k.pods?.ready ?? k.ready
 }
 
-// Substrate's own stuck rule (pkg/substrate StuckAfter): a transition held longer than this is stuck.
+// Radar's stuck rule (pkg/substrate StuckAfter): a transition held longer than this is stuck.
 export const STUCK_AFTER_MS = 5 * 60_000
 
 /** A resume, suspend, revert or delete that has held past Substrate's stuck threshold. */

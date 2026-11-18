@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { CheckCircle2, CircleHelp, XCircle } from 'lucide-react'
-import { AlertBanner, Badge, Collapse, CollapseChevron, Input, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
+import { AlertBanner, Badge, Collapse, CollapseChevron, ConfirmDialog, Input, toneTextClass } from '@skyhook-io/k8s-ui'
 import {
   substrateErrorCode,
   useSubstrateConnection,
@@ -44,25 +44,21 @@ export function SubstrateTierBanner({ tier }: { tier: SubstrateAPITier }) {
 
 function Step({ mark, title, children }: { mark: ReactNode; title: ReactNode; children: ReactNode }) {
   return (
-    <li className="flex gap-3">
+    <div className="flex gap-2">
       <span className="mt-0.5 shrink-0">{mark}</span>
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium text-theme-text-primary">{title}</div>
-        <div className="mt-0.5 text-sm text-theme-text-secondary">{children}</div>
+        <div className="mt-0.5 text-xs text-theme-text-secondary">{children}</div>
       </div>
-    </li>
+    </div>
   )
-}
-
-function StepNumber({ n }: { n: number }) {
-  return <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-theme-elevated text-xs font-medium text-theme-text-secondary">{n}</span>
 }
 
 function ServiceStep({ status, endpoint }: { status: SubstrateStatus; endpoint?: string }) {
   const { namespace, name, port, found } = status.apiService
   if (endpoint) {
     return (
-      <Step mark={<CheckCircle2 className={clsx('h-5 w-5', toneTextClass('healthy'))} />} title="Substrate’s API server">
+      <Step mark={<CheckCircle2 className={clsx('h-4 w-4', toneTextClass('healthy'))} />} title="Substrate’s API server">
         Radar dials the endpoint set under Advanced, <span className="font-mono">{endpoint}</span>, instead of port-forwarding to Service <span className="font-mono">{namespace}/{name}</span>.
       </Step>
     )
@@ -70,20 +66,20 @@ function ServiceStep({ status, endpoint }: { status: SubstrateStatus; endpoint?:
   const service = <span className="font-mono">{namespace}/{name}</span>
   if (found === true) {
     return (
-      <Step mark={<CheckCircle2 className={clsx('h-5 w-5', toneTextClass('healthy'))} />} title="Radar found Substrate’s API server">
+      <Step mark={<CheckCircle2 className={clsx('h-4 w-4', toneTextClass('healthy'))} />} title="Radar found Substrate’s API server">
         Service {service}, port {port}. Radar reaches it by port-forward, as kubectl ate does.
       </Step>
     )
   }
   if (found === false) {
     return (
-      <Step mark={<XCircle className={clsx('h-5 w-5', toneTextClass('degraded'))} />} title="Substrate’s API server wasn’t found">
+      <Step mark={<XCircle className={clsx('h-4 w-4', toneTextClass('degraded'))} />} title="Substrate’s API server wasn’t found">
         There is no Service {service}. If the API server runs elsewhere, set its address under Advanced.
       </Step>
     )
   }
   return (
-    <Step mark={<CircleHelp className="h-5 w-5 text-theme-text-tertiary" />} title="Substrate’s API server">
+    <Step mark={<CircleHelp className="h-4 w-4 text-theme-text-tertiary" />} title="Substrate’s API server">
       Radar reaches Service {service}, port {port}, by port-forward, as kubectl ate does. You can’t read Services in {namespace}, so Radar can’t check it is there.
     </Step>
   )
@@ -132,6 +128,22 @@ export function connectionUpdate(d: Draft, target: SubstrateConnectionTarget): S
   }
 }
 
+/** A path input: shown whole on hover, and scrolled to its end, the part that names the file. */
+function PathInput({ id, value, onChange, placeholder }: { id: string; value: string; onChange: (v: string) => void; placeholder: string }) {
+  return (
+    <Input
+      id={id}
+      className={INPUT}
+      value={value}
+      title={value || undefined}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={(e) => { e.currentTarget.scrollLeft = e.currentTarget.scrollWidth }}
+      placeholder={placeholder}
+      spellCheck={false}
+    />
+  )
+}
+
 function Field({ label, hint, id, children }: { label: string; hint?: string; id: string; children: ReactNode }) {
   return (
     <div>
@@ -142,10 +154,11 @@ function Field({ label, hint, id, children }: { label: string; hint?: string; id
   )
 }
 
-function ConnectForm({ connection }: { connection: SubstrateConnection | undefined }) {
+function ConnectForm({ connection, server }: { connection: SubstrateConnection | undefined; server: ReactNode }) {
   const id = useId()
   const [draft, setDraft] = useState<Draft>(() => draftOf(connection))
   const [advanced, setAdvanced] = useState(() => !!(connection?.settings?.endpoint || connection?.settings?.caFile || connection?.settings?.serverName))
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const save = useUpdateSubstrateConnection()
   // The saved settings arrive after the first render; adopt them until the user edits.
   const [touched, setTouched] = useState(false)
@@ -165,33 +178,32 @@ function ConnectForm({ connection }: { connection: SubstrateConnection | undefin
         e.preventDefault()
         if (!missingToken && connection) save.mutate(connectionUpdate(draft, connection.target))
       }}
-      className="space-y-3"
+      className="space-y-4"
     >
+      {/* Who Radar reads as comes first: it decides what Radar may see and whose name Substrate records. */}
       <fieldset className="space-y-2">
-        <legend className="sr-only">Who Radar reads Substrate as</legend>
+        <legend className="mb-1 text-sm font-semibold text-theme-text-primary">Who Radar reads Substrate as</legend>
         <label className="flex items-start gap-2 text-sm">
           <input type="radio" name={`${id}-identity`} className="mt-1" checked={draft.identity === 'tokenFile'} onChange={() => edit({ identity: 'tokenFile' })} />
           <span className="min-w-0">
             <span className="font-medium text-theme-text-primary">Your own viewer token</span>{' '}
-            <Badge tone="note" size="sm">Recommended</Badge>
+            <Badge severity="neutral" size="sm">Recommended</Badge>
             <span className="block text-theme-text-secondary">
-              A token a Substrate owner has made a viewer, in a file on this machine. Radar saves only the path.
+              Radar sees what your access lets you see. The token is a viewer grant from a Substrate owner, in a file on this machine; Radar saves only its path.
             </span>
           </span>
         </label>
         <Collapse open={draft.identity === 'tokenFile'}>
           <div className="space-y-3 pl-6">
+            <Field id={`${id}-token`} label="Token file path">
+              <PathInput id={`${id}-token`} value={draft.tokenFile} onChange={(v) => edit({ tokenFile: v })} placeholder="~/ate.token" />
+            </Field>
+            <Field id={`${id}-atespaces`} label="Atespaces (optional)" hint="If your token can’t list atespaces, name the ones to read. The rest stay unknown.">
+              <Input id={`${id}-atespaces`} className={INPUT} value={draft.atespaces} onChange={(e) => edit({ atespaces: e.target.value })} placeholder="research, support-bots" spellCheck={false} />
+            </Field>
             <Disclosure label="How Radar handles the token">
               Radar reads the file each time it connects, sends the token only to the selected Substrate API over verified TLS, and never returns it to the browser or stores it in its settings.
             </Disclosure>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field id={`${id}-token`} label="Token file path">
-                <Input id={`${id}-token`} className={INPUT} value={draft.tokenFile} onChange={(e) => edit({ tokenFile: e.target.value })} placeholder="~/ate.token" spellCheck={false} />
-              </Field>
-              <Field id={`${id}-atespaces`} label="Atespaces (optional)" hint="Only for a token that may read some atespaces but not list them: Radar reads these, and the rest stay unknown.">
-                <Input id={`${id}-atespaces`} className={INPUT} value={draft.atespaces} onChange={(e) => edit({ atespaces: e.target.value })} placeholder="research, support-bots" spellCheck={false} />
-              </Field>
-            </div>
             <TokenSetup />
           </div>
         </Collapse>
@@ -200,8 +212,9 @@ function ConnectForm({ connection }: { connection: SubstrateConnection | undefin
           <span className="min-w-0">
             <span className="font-medium text-theme-text-primary">Substrate’s shared client identity</span>
             <span className="block text-theme-text-secondary">
-              <span className="font-mono text-[12.5px]">{principal}</span>, what kubectl ate uses without <span className="font-mono text-[12.5px]">--token-file</span>. It is not you.
+              Radar sees what that identity may see, and Substrate records the reads as that identity, not you. It is the one kubectl ate uses without <span className="font-mono text-[12.5px]">--token-file</span>:
             </span>
+            <span className="block break-all font-mono text-[12.5px] text-theme-text-secondary">{principal}</span>
           </span>
         </label>
         <Collapse open={draft.identity === 'shared'}>
@@ -214,39 +227,58 @@ function ConnectForm({ connection }: { connection: SubstrateConnection | undefin
           </div>
         </Collapse>
       </fieldset>
-      <div>
+      <div className="space-y-2 border-t border-theme-border pt-3">
+        {server}
         <button type="button" aria-expanded={advanced} aria-controls={advancedId} onClick={() => setAdvanced((v) => !v)} className="inline-flex items-center gap-1 text-xs font-medium text-accent-text hover:underline">
           <CollapseChevron open={advanced} />
           Advanced: API server address and TLS
         </button>
         <Collapse open={advanced} id={advancedId}>
-          <div className="grid gap-3 pt-2 sm:grid-cols-3">
+          <div className="grid gap-3 pt-1 sm:grid-cols-2">
             <Field id={`${id}-endpoint`} label="Endpoint" hint="host:port. Dials it directly instead of port-forwarding.">
               <Input id={`${id}-endpoint`} className={INPUT} value={draft.endpoint} onChange={(e) => edit({ endpoint: e.target.value })} placeholder="api.example.com:443" spellCheck={false} />
-            </Field>
-            <Field id={`${id}-ca`} label="CA file" hint="PEM. Defaults to the cluster’s trust bundle for Substrate.">
-              <Input id={`${id}-ca`} className={INPUT} value={draft.caFile} onChange={(e) => edit({ caFile: e.target.value })} placeholder="/path/to/ca.pem" spellCheck={false} />
             </Field>
             <Field id={`${id}-sni`} label="Server name" hint="Defaults to api.ate-system.svc.">
               <Input id={`${id}-sni`} className={INPUT} value={draft.serverName} onChange={(e) => edit({ serverName: e.target.value })} placeholder="api.ate-system.svc" spellCheck={false} />
             </Field>
+            <div className="sm:col-span-2">
+              <Field id={`${id}-ca`} label="CA file" hint="PEM. Defaults to the cluster’s trust bundle for Substrate.">
+                <PathInput id={`${id}-ca`} value={draft.caFile} onChange={(v) => edit({ caFile: v })} placeholder="/path/to/ca.pem" />
+              </Field>
+            </div>
           </div>
         </Collapse>
       </div>
-      <div className="flex flex-wrap items-center gap-2 pt-1">
+      <div className="flex flex-wrap items-center gap-2 border-t border-theme-border pt-3">
         <button type="submit" disabled={missingToken || save.isPending || !connection} className="btn-brand px-3 py-1.5 text-sm font-medium">
           {save.isPending ? 'Checking the connection…' : connection?.saved ? 'Save and reconnect' : 'Connect'}
         </button>
-        {connection?.saved && (
-          <Tooltip content="Radar stops using this identity and forgets the path. It doesn’t revoke the token.">
-            <button type="button" disabled={save.isPending} onClick={() => connection && save.mutate({ target: connection.target, settings: { identity: 'none' } })} className="btn-secondary px-3 py-1.5 text-sm">
-              Disconnect
-            </button>
-          </Tooltip>
-        )}
         {missingToken && <span className="text-xs text-theme-text-tertiary">Enter the token file’s path.</span>}
+        {/* Apart from saving, at the far end: it ends Radar's reads of Substrate. */}
+        {connection?.saved && (
+          <button
+            type="button"
+            disabled={save.isPending}
+            onClick={() => setConfirmDisconnect(true)}
+            className={clsx('btn-secondary ml-auto px-3 py-1.5 text-sm', toneTextClass('unhealthy'))}
+          >
+            Disconnect
+          </button>
+        )}
       </div>
       {save.error ? <SaveFailure error={save.error} /> : null}
+      <ConfirmDialog
+        open={confirmDisconnect}
+        onClose={() => setConfirmDisconnect(false)}
+        onConfirm={() => {
+          setConfirmDisconnect(false)
+          if (connection) save.mutate({ target: connection.target, settings: { identity: 'none' } })
+        }}
+        title="Disconnect from Substrate’s API?"
+        message="Radar stops reading actors, templates and workers, and forgets the saved settings. It doesn’t revoke the token."
+        confirmLabel="Disconnect"
+        variant="danger"
+      />
     </form>
   )
 }
@@ -341,16 +373,13 @@ export function SubstrateConnectPanel({ status, tier }: { status: SubstrateStatu
               {reading.detail} {reading.nextStep}
             </p>
           )}
-          <ol className="mt-3 space-y-3">
-            <ServiceStep status={status} endpoint={connection.data?.settings?.endpoint} />
-            <Step mark={<StepNumber n={2} />} title="Choose who Radar reads as">
-              {connection.isError ? (
-                <span>Radar couldn’t read the saved connection: {connection.error instanceof Error ? connection.error.message : 'unknown error'}.</span>
-              ) : (
-                <div className="mt-2"><ConnectForm key={connection.data?.target.context ?? ''} connection={connection.data} /></div>
-              )}
-            </Step>
-          </ol>
+          <div className="mt-4">
+            {connection.isError ? (
+              <p className="text-sm text-theme-text-secondary">Radar couldn’t read the saved connection: {connection.error instanceof Error ? connection.error.message : 'unknown error'}.</p>
+            ) : (
+              <ConnectForm key={connection.data?.target.context ?? ''} connection={connection.data} server={<ServiceStep status={status} endpoint={connection.data?.settings?.endpoint} />} />
+            )}
+          </div>
         </>
       )}
     </section>

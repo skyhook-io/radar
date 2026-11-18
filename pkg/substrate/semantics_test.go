@@ -130,6 +130,11 @@ func TestDrainingIsInformationalUntilThePodDeadline(t *testing.T) {
 	if r.Severity != SeverityInfo || !strings.Contains(r.Reading, "does not suspend or move") || strings.Contains(r.NextStep, "why") {
 		t.Errorf("within the deadline: %+v", r)
 	}
+	// The first sentence, all a row shows, says when the Pod goes and what
+	// happens to the actors then.
+	if !strings.HasPrefix(r.Reading, "Its Pod's termination deadline is in 40m; once the Pod is gone, Substrate marks any actor still assigned crashed. ") {
+		t.Errorf("the deadline and its consequence lead: %q", r.Reading)
+	}
 	in.WorkerPods = WorkerPods{"agents/d-pod": {Ready: true, HasIP: true, Deadline: now.Add(-time.Minute)}}
 	if r := find(t, NeedsAttention(in), "workerDraining:d"); r.Severity != SeverityWarning {
 		t.Errorf("past the deadline is stalled: %+v", r)
@@ -179,8 +184,14 @@ func TestServiceVerdictsAddRowsWhereDefinite(t *testing.T) {
 	if slices.Contains(rules(rows), "poolFull:ns/fine") || slices.Contains(rules(rows), "poolShort:ns/fine") {
 		t.Error("an unknown verdict adds nothing")
 	}
-	if r := find(t, rows, "nodeUploadsOverdue:node-a"); r.Count != 3 || !strings.Contains(r.Reading, "over 15m") {
+	if r := find(t, rows, "nodeUploadsOverdue:node-a"); r.Count != 3 || !strings.Contains(r.Reading, "over 15m") || r.Severity != SeverityAlert {
 		t.Errorf("node row = %+v", r)
+	}
+	// A node that is down may have taken what it held: critical, said first.
+	down := in
+	down.NodeReady = map[string]bool{"node-a": false}
+	if r := find(t, NeedsAttention(down), "nodeUploadsOverdue:node-a"); r.Severity != SeverityCritical || !strings.HasPrefix(r.Reading, "The node is NotReady, so the actor state not yet stored there may be lost. ") {
+		t.Errorf("node row on a NotReady node = %+v", r)
 	}
 	for _, c := range Checks(in) {
 		if c.Rule == "poolService" && !c.Ran {
@@ -271,17 +282,26 @@ func TestMemoryStepFollowsTheRecoverySnapshot(t *testing.T) {
 		snaps []Snapshot
 		says  string
 	}{
-		{nil, "it has no stored snapshot, so it boots fresh."},
-		{[]Snapshot{snap(FidelityMemory, "old", DurablePending)}, "it has no stored snapshot, so it boots fresh."},
-		{[]Snapshot{snap(FidelityMemory, "old", DurableCompleted)}, "on the new template it resumes from volumes, without memory or files."},
-		{[]Snapshot{snap(FidelityRootFS, "old", DurableCompleted)}, "on the new template it resumes from volumes, without its saved files."},
-		{[]Snapshot{snap(FidelityRootFS, "", DurableCompleted)}, "on the new template it resumes from its saved files."},
-		{[]Snapshot{snap(FidelityVolumes, "old", DurableCompleted)}, "on the new template it resumes from its volumes."},
+		{nil, "; it has no stored snapshot, so it boots fresh."},
+		{[]Snapshot{snap(FidelityMemory, "old", DurablePending)}, "; it has no stored snapshot, so it boots fresh."},
+		// What the page says the snapshot holds stays true: the move is what drops it.
+		{[]Snapshot{snap(FidelityMemory, "old", DurableCompleted)}, ". The move drops its snapshot's memory and files: it restarts from volumes."},
+		{[]Snapshot{snap(FidelityRootFS, "old", DurableCompleted)}, ". The move drops its snapshot's saved files: it restarts from volumes."},
+		{[]Snapshot{snap("", "old", DurableCompleted)}, ". The move drops all but its snapshot's volumes: it restarts from them."},
+		{[]Snapshot{snap(FidelityRootFS, "", DurableCompleted)}, "; on the new template it resumes from its saved files."},
+		{[]Snapshot{snap(FidelityMemory, "", DurableCompleted)}, "; on the new template it still resumes from memory on a compatible runtime."},
+		{[]Snapshot{snap("", "", DurableCompleted)}, "; what it restores then is unknown: Substrate names no fidelity for its snapshot."},
+		{[]Snapshot{snap(FidelityVolumes, "old", DurableCompleted)}, "; on the new template it resumes from its volumes."},
 	}
 	for _, tc := range tests {
 		a := Actor{State: StateCrashed, Crash: &Crash{Message: memoryLimitMessage}, Snapshots: tc.snaps}
-		if got := CrashedMemoryActorStep(a); !strings.HasSuffix(got, tc.says) || !strings.HasPrefix(got, "Move this actor to a template with more memory, then revert it; ") {
+		got := CrashedMemoryActorStep(a)
+		if got != "Move this actor to a template with more memory, then revert it"+tc.says {
 			t.Errorf("%+v: %s", tc.snaps, got)
+		}
+		// Never a bare "resumes from volumes, without memory" beside the page's "holds memory".
+		if strings.Contains(got, "without memory") {
+			t.Errorf("%+v: says what the snapshot lacks, not that the move drops it: %s", tc.snaps, got)
 		}
 	}
 }
@@ -292,7 +312,10 @@ func TestNextStepsAreShort(t *testing.T) {
 	stamped := func(f string) Actor {
 		return Actor{State: StateCrashed, Snapshots: []Snapshot{{Generation: 1, Fidelity: f, Durable: DurableCompleted, ActorTemplateUID: "old"}}}
 	}
-	for _, a := range []Actor{{State: StateCrashed}, stamped(FidelityMemory), stamped(FidelityRootFS), stamped(FidelityVolumes)} {
+	unstamped := func(f string) Actor {
+		return Actor{State: StateCrashed, Snapshots: []Snapshot{{Generation: 1, Fidelity: f, Durable: DurableCompleted}}}
+	}
+	for _, a := range []Actor{{State: StateCrashed}, stamped(FidelityMemory), stamped(FidelityRootFS), stamped(FidelityVolumes), stamped(""), unstamped(FidelityMemory), unstamped(FidelityRootFS), unstamped("")} {
 		steps = append(steps, CrashedMemoryActorStep(a))
 	}
 	for _, step := range steps {

@@ -19,7 +19,7 @@ import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import type { OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectPanel, SubstrateTierBanner, showsConnectPanel } from './SubstrateConnect'
 import { SubstrateStateBar } from './SubstrateStateBar'
-import { OWNERS_ONLY_NOTE, templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, splitReading, templateFilterValue, tierReading } from './readings'
+import { OWNERS_ONLY_NOTE, attentionBannerVariant, templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, splitReading, templateFilterValue, tierReading } from './readings'
 import { SUBSTRATE_PATH, SUBSTRATE_SCREENS, substrateActorsPath, substrateTemplatePath } from './routes'
 import { CommandChip, Name, SUBSTRATE_WIDE, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
@@ -215,7 +215,8 @@ function GoldenFailedBanner({ error, row }: { error?: string; row?: SubstrateAtt
   // The row's reading leads with Substrate's message when it names no cause; then the message is the lead.
   const cause = lead && !lead.startsWith('Substrate') ? lead : undefined
   return (
-    <AlertBanner variant="error" title="No golden snapshot: new actors from the template’s default boot cold" className="">
+    // The tone of its Needs attention row: new actors boot cold, nothing is lost.
+    <AlertBanner variant={row ? attentionBannerVariant(row) : 'warning'} title="No golden snapshot: new actors from the template’s default boot cold" className="">
       <div className="mt-1 break-words text-xs text-theme-text-secondary">
         {cause ?? <>Substrate’s message: <span className="font-medium text-theme-text-primary">{message}</span>.</>}
       </div>
@@ -299,27 +300,25 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
         {t.golden.state === 'failed' && <GoldenFailedBanner error={t.golden.error} row={goldenRow} />}
         {crashes && crashes.count > 0 && (
           <AlertBanner variant="error" title={`${crashes.count} of its actors ${crashes.count === 1 ? 'is' : 'are'} crashed`} className="">
-            {crashes.cause === 'memoryLimit' && (
-              <div className="mt-1 text-xs text-theme-text-secondary">
-                {t.memoryBytes ? `Killed over the ${bytesText(t.memoryBytes)} memory limit it sets per actor.` : 'Killed over their memory limit.'}
-              </div>
-            )}
-            {crashes.nextStep && (
-              <div className="mt-1 text-xs text-theme-text-primary">
-                <span className="font-medium">Next step: </span>
-                {crashes.nextStep}
-                {crashes.command && <CommandChip command={crashes.command} />}
-              </div>
-            )}
-            <div className="mt-1.5 text-xs">
+            {/* One line: the cause Substrate's messages name, and the way to the actors. */}
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-3 text-xs text-theme-text-secondary">
+              {crashes.cause === 'memoryLimit' && <span>{t.memoryBytes ? `Killed over the ${bytesText(t.memoryBytes)} memory limit it sets per actor.` : 'Killed over their memory limit.'}</span>}
               <button type="button" onClick={() => onOpenSubject({ kind: 'Actors', filter: { state: 'crashed', template: templateFilterValue(t) } })} className="text-accent-text hover:underline">
                 {crashes.count === 1 ? 'The crashed actor →' : `The ${crashes.count} crashed actors →`}
               </button>
             </div>
+            {crashes.nextStep && (
+              <div className="mt-1 text-xs text-theme-text-primary">
+                <span className="font-medium">Next step: </span>
+                {crashes.nextStep}
+                {crashes.command && <> <CommandChip command={crashes.command} inline /></>}
+              </div>
+            )}
           </AlertBanner>
         )}
+        {/* At risk, nothing lost yet: the alert of its Needs attention row and its golden-snapshot chip. */}
         {pools.none && (
-          <AlertBanner variant="error" title="No pool can run it" message={`No pool’s labels match its worker selector, so no worker can run its actors${t.golden.state === 'building' ? ', and its golden snapshot can’t be built' : ''}.`} className="">
+          <AlertBanner variant="alert" title="No pool can run it" message={`No pool’s labels match its worker selector, so no worker can run its actors${t.golden.state === 'building' ? ', and its golden snapshot can’t be built' : ''}.`} className="">
             <div className="mt-1 text-xs text-theme-text-primary"><span className="font-medium">Next step: </span>Label a pool to match the template’s worker selector, or recreate the template with a selector a pool matches.</div>
           </AlertBanner>
         )}
