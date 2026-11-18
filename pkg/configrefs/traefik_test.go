@@ -87,3 +87,21 @@ func TestTraefikTransportsRequireANamedServiceBackend(t *testing.T) {
 		}
 	}
 }
+
+// A provider-qualified name is a Traefik identifier, never an object name.
+func TestTraefikProviderQualifiedNamesNameNoObject(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "traefik.io/v1alpha1", "kind": "IngressRoute", "metadata": map[string]any{"namespace": "routes"},
+		"spec": map[string]any{"routes": []any{map[string]any{
+			"services":    []any{map[string]any{"kind": "TraefikService", "name": "weighted@file"}, map[string]any{"name": "web", "serversTransport": "transport@file"}},
+			"middlewares": []any{map[string]any{"name": "auth@file"}, map[string]any{"name": "shared-strip@kubernetescrd"}, map[string]any{"name": "strip"}},
+		}}},
+	}}
+	var got []string
+	for _, r := range append(TraefikBackendReferences(obj), TraefikRouteConfigReferences(obj)...) {
+		got = append(got, r.Ref.Kind+"/"+r.Ref.Name)
+	}
+	if fmt.Sprint(got) != "[Service/web Middleware/strip]" {
+		t.Errorf("references = %v, want only the plain names", got)
+	}
+}

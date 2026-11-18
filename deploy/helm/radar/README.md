@@ -706,7 +706,7 @@ It creates a namespace-scoped Role (not a ClusterRole) with `get` + `patch` on t
 
 ### CRD Access
 
-Radar discovers CRDs in your cluster. Common CRD groups are enabled by default; Flagger is explicitly opt-in. Granting RBAC for CRDs that don't exist has no effect.
+Radar discovers CRDs in your cluster. Common CRD groups are enabled by default; Flagger and system-upgrade-controller are explicitly opt-in. Granting RBAC for CRDs that don't exist has no effect.
 
 **Wildcard option:** Grant the collector service account read access to every API group and resource:
 ```bash
@@ -760,6 +760,7 @@ retain their finite grants.
 | `sealedSecrets` | `bitnami.com` |
 | `secretsStoreCsi` | `secrets-store.csi.x-k8s.io` (`secretproviderclasses`, `secretproviderclasspodstatuses` only) |
 | `strimzi` | `strimzi.io`, `kafka.strimzi.io`, `core.strimzi.io` (`strimzipodsets` only) |
+| `systemUpgrade` | `upgrade.cattle.io` (`plans` only); **off by default**, because Plan env can carry values. Enable `rbac.crdGroups.systemUpgrade=true` on Rancher/k3s/RKE2 for the Plan drawer and per-node upgrade progress. |
 | `tekton` | `tekton.dev` |
 | `traefik` | `traefik.io`, `traefik.containo.us` |
 | `trivy` | `aquasecurity.github.io` |

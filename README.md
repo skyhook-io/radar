@@ -3,7 +3,7 @@
 **The missing open-source Kubernetes UI, with a built-in MCP server for your AI agent.**
 <br>Single binary. No account required. Free forever.
 
-🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Benchmarks](https://radarhq.io/benchmark) · [Releases](https://github.com/skyhook-io/radar/releases)
+🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Benchmarks](https://radarhq.io/benchmark) · [Releases](https://github.com/skyhook-io/radar/releases) · [Slack](https://radarhq.io/slack)
 
 Radar shows you what's broken in a Kubernetes cluster, why, and what changed: issues, topology, a timeline of events and resource changes, Helm, GitOps, traffic, audit, and upgrade impact. Your AI agent reads the same cluster data and relationships through Radar's MCP server, and Radar can run an AI investigation for you with the agent CLI you already use. It runs on your laptop as a `kubectl` plugin or desktop app, or in-cluster with Helm.
 
@@ -14,7 +14,7 @@ Radar shows you what's broken in a Kubernetes cluster, why, and what changed: is
 [![Release](https://img.shields.io/github/v/release/skyhook-io/radar?logo=github)](https://github.com/skyhook-io/radar/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/skyhook-io/radar/total?logo=github)](https://github.com/skyhook-io/radar/releases)
 [![Helm repo downloads](https://img.shields.io/github/downloads/skyhook-io/helm-charts/total?logo=helm&label=Helm%20repo%20downloads)](https://artifacthub.io/packages/helm/skyhook/radar)
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://radarhq.io/community/chat)
+[![Slack](https://img.shields.io/badge/Slack-Join%20the%20community-4A154B?logo=slack&logoColor=white)](https://radarhq.io/slack)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 <details>
@@ -28,6 +28,7 @@ Radar shows you what's broken in a Kubernetes cluster, why, and what changed: is
 - [Supported Resources & Integrations](#supported-resources--integrations)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Security](#security)
+- [Community and support](#community-and-support)
 - [Development](#development) · [Contributing](#contributing)
 
 </details>
@@ -421,7 +422,7 @@ Hop-ordered diagnosis for Service, Ingress, HTTPRoute, GRPCRoute, and Gateway �
 
 ### Kubernetes Upgrade Impact
 
-Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action — APIs removed in the target release, kubelet and kube-proxy skew, overlapping PodDisruptionBudgets, removed feature gates — using live resources, Helm release manifests, last-applied configuration, and API server metrics.
+Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action — APIs removed in the target release, kubelet and kube-proxy skew, overlapping PodDisruptionBudgets, removed feature gates — using live resources, Helm release manifests, last-applied configuration, and API server metrics. On k3s and RKE2 it also lists the system-upgrade-controller Plans that upgrade the distribution, with their version and state.
 
 See the [Kubernetes upgrade impact guide](https://radarhq.io/docs/features/upgrade-impact) for the check catalog, coverage semantics, and RBAC notes.
 
@@ -489,6 +490,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Knative Networking** | Ingress, Certificate, ServerlessService |
 | **Karpenter** | NodePool, NodeClaim (+ provider-specific NodeClasses via auto-discovery) |
 | **OpenTelemetry Operator** | [OpenTelemetryCollector and Instrumentation](docs/integrations.md#opentelemetry-operator): reconciliation, configured pipelines and injection settings |
+| **System Upgrade Controller** | [Plan](docs/integrations.md#system-upgrade-controller): per-node upgrade progress, an Issue for an invalid Plan, and k3s/RKE2 upgrade Plans on the Upgrade impact page |
 | **Flagger** | [Canary and MetricTemplate](docs/integrations.md#flagger): recorded rollout state, target/autoscaler/template links and failed-rollout Issues |
 | **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication, ClusterTriggerAuthentication |
 | **Prometheus Operator** | ServiceMonitor, PodMonitor, PrometheusRule, Alertmanager |
@@ -538,6 +540,14 @@ Radar reads your cluster through your own credentials and keeps cluster data loc
 
 ---
 
+## Community and support
+
+- **[Slack](https://radarhq.io/slack)** is the fastest way to get help. Ask in `#radar-help`, share feedback, and talk Kubernetes with the Radar team and other users.
+- **[GitHub Discussions](https://github.com/skyhook-io/radar/discussions)** for ideas and longer questions you want others to find later.
+- **[GitHub Issues](https://github.com/skyhook-io/radar/issues)** for bugs and feature requests.
+
+---
+
 ## Development
 
 See the **[Development Guide](DEVELOPMENT.md)** for building from source and contributing. For automation and integrations, see the [HTTP API reference](https://radarhq.io/docs/reference/api).
@@ -561,7 +571,7 @@ make watch-backend
 
 Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details on the development workflow, pull request process, and coding standards.
 
-Questions or ideas? [GitHub Discussions](https://github.com/skyhook-io/radar/discussions) is the place — or come say hi at [radarhq.io/community](https://radarhq.io/community).
+Questions about a change? Ask in [Slack](https://radarhq.io/slack) before you start, or open a [Discussion](https://github.com/skyhook-io/radar/discussions).
 
 ---
 
