@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { CELL_PADDING_PX, type MeasureText, GROW_MAX_PX, columnSizingSpec, hasCuratedCellWidth, measureCellText, measureColumnContent, workloadImagesText } from './column-content-width'
+import { CELL_PADDING_PX, type MeasureText, GROW_MAX_PX, columnSizingSpec, containerSquaresWidth, hasCuratedCellWidth, measureCellText, measureColumnContent, usageLabelWidth, workloadImagesText } from './column-content-width'
 
 // The curated grow flags, parsed from the source as curated-column-ownership.test.ts does.
 function curatedGrowColumns(): string[] {
@@ -50,8 +50,11 @@ describe('measureColumnContent', () => {
     expect(m.age.content).toBe('3d'.length * 10 + CELL_PADDING_PX)
     expect(m.restarts.content).toBe('12'.length * 10 + CELL_PADDING_PX)
     expect(m.status.content).toBeGreaterThan('Running'.length * 10 + CELL_PADDING_PX) // badge chrome
-    expect(m.cpu.content).toBe(120) // a picture: a fixed minimum
-    expect(m.containers).toBeUndefined()
+    expect(m.containers.content).toBe(10 + CELL_PADDING_PX) // one square
+    // Usage bars draw metrics, not resource data: unmeasured unless the host supplies a reader.
+    expect(m.cpu).toBeUndefined()
+    const withMetrics = measureColumnContent([p], [{ key: 'cpu' }], { plural: 'pods', cellFilterKind: 'pods', hostCellWidths: { cpu: (_r, mt) => usageLabelWidth({ used: '3m', total: '1000m', percent: '0%' }, mt) } }, measure)
+    expect(withMetrics.cpu.content).toBe('3m / 1000m'.length * 10 + 4 + '0%'.length * 10 + CELL_PADDING_PX)
   })
 
   it('trims outliers the same way for Namespace', () => {
@@ -127,6 +130,22 @@ describe('measureCellText', () => {
 
   it('counts an emoji as one glyph, not two halves', () => {
     expect(glyphs('ok 🚀')).toBe(4)
+  })
+})
+
+describe('containerSquaresWidth', () => {
+  it('counts a square per container, the gaps, and a divider between init and regular containers', () => {
+    expect(containerSquaresWidth([])).toBe(0)
+    expect(containerSquaresWidth([{}, {}, {}])).toBe(3 * 10 + 2 * 4)
+    expect(containerSquaresWidth([{ isInit: true }, {}, {}])).toBe(3 * 10 + 2 * 4 + 9)
+  })
+})
+
+describe('usageLabelWidth', () => {
+  it('measures "used / limit" and the percentage, or a bare usage and its tag', () => {
+    expect(usageLabelWidth({ used: '1', total: '2', percent: '3%' }, measure)).toBe('1 / 2'.length * 10 + 4 + 20)
+    expect(usageLabelWidth({ usage: '5m', tag: 'no limit' }, measure)).toBe(20 + 6 + 80)
+    expect(usageLabelWidth(null, measure)).toBe(10)
   })
 })
 

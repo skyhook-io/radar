@@ -182,7 +182,7 @@ import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessContr
 import { Tooltip } from '../ui/Tooltip'
 import { TruncatedText } from '../ui/TruncatedText'
 import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, rememberWidths } from './column-sizing'
-import { NAME_MAX_PX, NAME_MIN_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, workloadImagesText } from './column-content-width'
+import { type CellWidth, type UsageLabel, NAME_MAX_PX, NAME_MIN_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, usageLabelWidth, workloadImagesText } from './column-content-width'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import type { Issue } from '../issues/types'
 import { issueTitle } from '../issues/severity'
@@ -6144,6 +6144,20 @@ export function ResourcesView({
     plural: normalizeKindToPlural(selectedKind.name, selectedKind.group),
     cellFilterKind: getCellFilterKind(selectedKind.name, selectedKind.group),
   }), [selectedKind.name, selectedKind.group])
+  // The CPU and Memory bars show metrics, not resource data: their labels are
+  // measured from the metrics the cells read, so the columns shrink no further
+  // than the "used / limit" label.
+  const usageCellWidths = useMemo(() => {
+    const kindLower = selectedKind.name.toLowerCase()
+    if (kindLower !== 'pods' && kindLower !== 'nodes') return undefined
+    const reader = (kind: 'cpu' | 'memory'): CellWidth => (resource, measure) => usageLabelWidth(
+      kindLower === 'pods'
+        ? podUsageLabel(resource, metricsLookup.pods.get(`${resource.metadata?.namespace}/${resource.metadata?.name}`), kind)
+        : nodeUsageLabel(metricsLookup.nodes.get(resource.metadata?.name), kind),
+      measure,
+    )
+    return { cpu: reader('cpu'), memory: reader('memory') }
+  }, [selectedKind.name, metricsLookup])
   // Measured in a deferred render: a pass over a very large list must not hold
   // up the render that shows a streamed update. Only a pass over the list on
   // screen is remembered (see contentWidths), so a stale one never sticks.
@@ -6151,14 +6165,14 @@ export function ResourcesView({
   const measuredContent = useMemo(() => {
     if (!tableActive || !measureSource?.length) return null
     const sized = columns.map(col => ({ key: col.key, sizing: col.sizing, growWeight: col.growWeight, getFilterValue: extraColumnsByKey.get(col.key)?.getFilterValue }))
-    const measured = measureColumnContent(measureSource, sized, { ...sizingKind, auditBadges })
+    const measured = measureColumnContent(measureSource, sized, { ...sizingKind, auditBadges, hostCellWidths: usageCellWidths })
     const flat: Record<string, number> = {}
     for (const [key, m] of Object.entries(measured)) {
       flat[key] = m.content
       if (m.stretch !== undefined) flat[`${key}\u0000stretch`] = m.stretch
     }
     return flat
-  }, [tableActive, measureSource, columns, extraColumnsByKey, sizingKind, auditBadges, headerFontEpoch])
+  }, [tableActive, measureSource, columns, extraColumnsByKey, sizingKind, auditBadges, usageCellWidths, headerFontEpoch])
 
   // Grow-only while the table shows the same data set — the same kind and
   // namespace selection, without a reload in between — so rows streaming in or
@@ -6219,11 +6233,12 @@ export function ResourcesView({
         key: col.key,
         mode: spec.mode,
         floor,
-        // Exact columns may shrink to their content (never below their
-        // heading) when room is short, but only where the content is known.
-        min: spec.mode === 'exact' && content !== undefined
-          ? Math.max(getColumnHeaderWidth(col, extraColumnsByKey), content)
-          : undefined,
+        // When room is short: exact columns may shrink to their content
+        // (never below their heading), but only where the content is known;
+        // fit columns (Node, Namespace) to their heading, cutting values.
+        min: spec.mode === 'exact'
+          ? content !== undefined ? Math.max(getColumnHeaderWidth(col, extraColumnsByKey), content) : undefined
+          : spec.mode === 'fit' && !spec.keep ? getColumnHeaderWidth(col, extraColumnsByKey) : undefined,
         keep: spec.keep,
         yieldRank: spec.yieldRank,
         userWidth: columnWidths[col.key] || frozen?.[col.key],
@@ -8745,27 +8760,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       if (!m) return <span className="text-sm text-theme-text-tertiary">-</span>
       const label = isCPU ? 'CPU' : 'Memory'
       const format = isCPU ? formatCPU : formatMemoryShort
-
-      // Multi-container pods (and any pod with a pod-level budget) carry a
-      // per-container breakdown; other single-container pods fall back to the
-      // pod-level fields as one synthetic container so the logic is uniform.
-      const list: ContainerResourceMetrics[] = (m.containers && m.containers.length > 0)
-        ? m.containers
-        : [{
-            name: resource.spec?.containers?.[0]?.name ?? resource.metadata?.name ?? '',
-            cpu: m.cpu, cpuRequest: m.cpuRequest, cpuLimit: m.cpuLimit,
-            memory: m.memory, memoryRequest: m.memoryRequest, memoryLimit: m.memoryLimit,
-          }]
-
-      // The pod totals already carry any pod-level value (overlaid server-side
-      // with exact quantity parsing); spec.resources only says whether one is set.
-      const podLevel = resource.spec?.resources
-      const podRequest = podLevel?.requests?.[kind] ? (isCPU ? m.cpuRequest : m.memoryRequest) : undefined
-      const podLimit = podLevel?.limits?.[kind] ? (isCPU ? m.cpuLimit : m.memoryLimit) : undefined
-      const { mode, totalUsage, denom, markerPct, unlimitedCount } = podAggregate(list, kind, {
-        request: podRequest,
-        limit: podLimit,
-      })
+      const { list, podRequest, podLimit, mode, totalUsage, denom, markerPct, unlimitedCount } = podUsage(resource, m, kind)
       if (totalUsage === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
 
       // Pod-vs-node context: how full the pod's node is (the risk signal) and
@@ -9377,6 +9372,47 @@ export function readContainer(c: ContainerResourceMetrics, kind: 'cpu' | 'memory
   }
   const pct = denom > 0 ? (usage / denom) * 100 : -1
   return { usage, limit, request, yardstick, denom, pct }
+}
+
+// A pod's usage of one resource as its cell shows it (see podAggregate).
+function podUsage(resource: any, m: TopPodMetrics, kind: 'cpu' | 'memory') {
+  const isCPU = kind === 'cpu'
+  // Multi-container pods (and any pod with a pod-level budget) carry a
+  // per-container breakdown; other single-container pods fall back to the
+  // pod-level fields as one synthetic container so the logic is uniform.
+  const list: ContainerResourceMetrics[] = (m.containers && m.containers.length > 0)
+    ? m.containers
+    : [{
+        name: resource.spec?.containers?.[0]?.name ?? resource.metadata?.name ?? '',
+        cpu: m.cpu, cpuRequest: m.cpuRequest, cpuLimit: m.cpuLimit,
+        memory: m.memory, memoryRequest: m.memoryRequest, memoryLimit: m.memoryLimit,
+      }]
+  // The pod totals already carry any pod-level value (overlaid server-side
+  // with exact quantity parsing); spec.resources only says whether one is set.
+  const podLevel = resource.spec?.resources
+  const podRequest = podLevel?.requests?.[kind] ? (isCPU ? m.cpuRequest : m.memoryRequest) : undefined
+  const podLimit = podLevel?.limits?.[kind] ? (isCPU ? m.cpuLimit : m.memoryLimit) : undefined
+  return { list, podRequest, podLimit, ...podAggregate(list, kind, { request: podRequest, limit: podLimit }) }
+}
+
+// The text a usage cell shows, for measuring its column (column-content-width).
+function podUsageLabel(resource: any, m: TopPodMetrics | undefined, kind: 'cpu' | 'memory'): UsageLabel | null {
+  if (!m) return null
+  const { mode, totalUsage, denom, unlimitedCount } = podUsage(resource, m, kind)
+  if (totalUsage === 0) return null
+  const format = kind === 'cpu' ? formatCPU : formatMemoryShort
+  if (mode === 'limit' || mode === 'request') {
+    return { used: format(totalUsage), total: format(denom), percent: `${Math.round(denom > 0 ? (totalUsage / denom) * 100 : 0)}%` }
+  }
+  return { usage: format(totalUsage), tag: mode === 'partial' ? `${unlimitedCount} unbounded` : 'no limit' }
+}
+
+function nodeUsageLabel(m: TopNodeMetrics | undefined, kind: 'cpu' | 'memory'): UsageLabel | null {
+  const used = kind === 'cpu' ? m?.cpu : m?.memory
+  const total = kind === 'cpu' ? m?.cpuAllocatable : m?.memoryAllocatable
+  if (!m || !used) return null
+  const format = kind === 'cpu' ? formatCPU : formatMemoryShort
+  return { used: format(used), total: format(total ?? 0), percent: `${Math.round(total ? (used / total) * 100 : 0)}%` }
 }
 
 interface PodAggregate {

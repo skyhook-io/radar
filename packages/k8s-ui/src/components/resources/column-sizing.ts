@@ -8,8 +8,8 @@
 // Each column is one of:
 //   exact — the curated width (getColumnMinWidth). Status, Age, Ready, counts.
 //           When the room is short it may give back down to `min`: the larger
-//           of its header and its measured content (or, for a picture such as
-//           the CPU and Memory bars, the narrowest it still reads at).
+//           of its header and its measured content (for the CPU and Memory
+//           bars, their "used / limit" label).
 //   fit   — sized to its content within [floor, max]: Namespace, Node. Sized
 //           to the 95th percentile of its values, so a few outliers don't set
 //           the width, then it takes part in sharing the room left (below) up
@@ -29,9 +29,10 @@
 // then whatever is still left is spread over every column in proportion to its
 // width, so the table fills its room and keeps its proportions (placeLeftover).
 //
-// When the room is short it is taken back in rank order (yieldRank): Node to
-// its floor first, then exact columns toward their `min`, then the other fit
-// columns (Namespace) toward their floor. Grow columns are already at their
+// When the room is short it is taken back in rank order (yieldRank): Node
+// first, then exact columns, then the other fit columns (Namespace), each down
+// to its `min` (its header, or for an exact column the larger of its header
+// and its content). Grow columns are already at their
 // floor, and Name and user widths never shrink. Past that the table scrolls
 // sideways.
 
@@ -42,7 +43,8 @@ export interface ColumnLayoutInput {
   mode: ColumnSizingMode
   /** Its normal width; never rendered narrower than this, except an exact column down to `min` when room is short. */
   floor: number
-  /** exact only: how far it may shrink when room is short (default: floor). */
+  /** How far it may shrink when room is short (default: floor): exact, to its
+   *  header or content; fit, to its header. */
   min?: number
   /** fit only: never give width back when room is short (Name). */
   keep?: boolean
@@ -117,9 +119,10 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
   return widths
 }
 
-// How far a column may shrink when room is short.
+// How far a column may shrink when room is short: its `min` where it has one,
+// never more than its normal width.
 function lowerBound(c: ColumnLayoutInput): number {
-  return c.mode === 'exact' ? Math.min(c.floor, c.min ?? c.floor) : c.floor
+  return Math.min(c.floor, c.min ?? c.floor)
 }
 
 // Where room goes once every column has its content: spread over the columns
