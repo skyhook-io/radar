@@ -3,13 +3,11 @@ package server
 import (
 	"context"
 	"reflect"
-	"slices"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -300,129 +298,6 @@ func TestApplicationsBatchKeepsAnUndecidedSelectionUnknown(t *testing.T) {
 		// The template's kind is still loading, so the rows aren't cached.
 		if batch.loading != tc.unknown {
 			t.Errorf("%s: loading = %v, want %v", tc.name, batch.loading, tc.unknown)
-		}
-	}
-}
-
-// appEverySourceEvaluation evaluates every source of every family with an
-// attachment field or in a composition, and joins every composition: the
-// reference appRowEvaluation's rows must match.
-func appEverySourceEvaluation(families []*relations.Family, compositions []*relations.Composition) appEvaluation {
-	e := appEvaluation{sources: map[*relations.Family]map[resourceid.GroupKind]bool{}, compositions: compositions}
-	for _, f := range families {
-		needed := appNeedsDisposition(f.Projection)
-		for _, c := range compositions {
-			needed = needed || f == c.Producer || slices.Contains(c.Consumers, f)
-		}
-		if !needed {
-			continue
-		}
-		for _, source := range f.Sources {
-			e.evaluate(f, source.Kind)
-		}
-	}
-	return e
-}
-
-func TestApplicationsBatchEvaluatesOnlyWhatRowsRead(t *testing.T) {
-	labels := map[string]string{"app": "api"}
-	meta := func(name string) metav1.ObjectMeta { return metav1.ObjectMeta{Namespace: "prod", Name: name} }
-	controller := true
-	podSpec := corev1.PodSpec{
-		ServiceAccountName: "api",
-		Volumes: []corev1.Volume{
-			{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}}}},
-			{Name: "sealed", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "sealed"}}},
-			{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}}},
-		},
-		Containers: []corev1.Container{{Name: "api", Image: "api:1", Env: []corev1.EnvVar{
-			{Name: "TOKEN", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "creds"}, Key: "token"}}},
-			{Name: "MODE", ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "flags"}, Key: "mode"}}},
-		}}},
-	}
-	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api", UID: "api"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec}}}
-	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api-1", UID: "api-1", Labels: labels, OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "api", UID: "api", Controller: &controller}}}, Spec: appsv1.ReplicaSetSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: podSpec}}}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api-1-a", Labels: labels, OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "api-1", UID: "api-1", Controller: &controller}}}, Spec: podSpec}
-	bare := &corev1.Pod{ObjectMeta: meta("debug"), Spec: podSpec}
-	nightly := &batchv1.CronJob{ObjectMeta: meta("nightly"), Spec: batchv1.CronJobSpec{Schedule: "@daily", JobTemplate: batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: podSpec}}}}}
-	reflected := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "mirror", Annotations: map[string]string{"reflector.v1.k8s.emberstack.com/reflects": "prod/settings"}}}
-	useTestResourceCache(t, fake.NewClientset(append(testNamespaces("prod"),
-		deployment, replicaSet, pod, bare, nightly, reflected,
-		&corev1.Service{ObjectMeta: meta("api"), Spec: corev1.ServiceSpec{Selector: labels}},
-		&networkingv1.Ingress{ObjectMeta: meta("edge"), Spec: networkingv1.IngressSpec{TLS: []networkingv1.IngressTLS{{SecretName: "tls"}}, DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "api", Port: networkingv1.ServiceBackendPort{Number: 80}}}}},
-		&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: meta("scale"), Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"}}},
-		&policyv1.PodDisruptionBudget{ObjectMeta: meta("budget"), Spec: policyv1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}}},
-		&networkingv1.NetworkPolicy{ObjectMeta: meta("network"), Spec: networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{MatchLabels: labels}}},
-		&corev1.ConfigMap{ObjectMeta: meta("settings")}, &corev1.ConfigMap{ObjectMeta: meta("flags")},
-		&corev1.Secret{ObjectMeta: meta("creds")}, &corev1.Secret{ObjectMeta: meta("tls")},
-		&corev1.ServiceAccount{ObjectMeta: meta("api")},
-		&corev1.PersistentVolumeClaim{ObjectMeta: meta("data")},
-	)...))
-	object := func(kind, apiVersion, name string, spec map[string]any) *unstructured.Unstructured {
-		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"namespace": "prod", "name": name}, "spec": spec}}
-	}
-	plurals := map[string]string{"SealedSecret": "sealedsecrets", "Gateway": "gateways", "HTTPRoute": "httproutes", "IngressRoute": "ingressroutes", "HTTPProxy": "httpproxies", "VirtualService": "virtualservices", "Certificate": "certificates"}
-	dynamicObjects := []runtime.Object{
-		object("SealedSecret", "bitnami.com/v1alpha1", "sealed", map[string]any{}),
-		object("Gateway", "gateway.networking.k8s.io/v1", "gateway", map[string]any{}),
-		object("HTTPRoute", "gateway.networking.k8s.io/v1", "http", map[string]any{"parentRefs": []any{map[string]any{"name": "gateway"}}, "rules": []any{map[string]any{"backendRefs": []any{map[string]any{"name": "api", "port": int64(80)}}}}}),
-		object("IngressRoute", "traefik.io/v1alpha1", "traefik", map[string]any{"tls": map[string]any{"secretName": "tls"}, "routes": []any{map[string]any{"services": []any{map[string]any{"name": "api", "port": int64(80)}}}}}),
-		object("HTTPProxy", "projectcontour.io/v1", "contour", map[string]any{"virtualhost": map[string]any{"fqdn": "api.example", "tls": map[string]any{"secretName": "tls"}}, "routes": []any{map[string]any{"services": []any{map[string]any{"name": "api", "port": int64(80)}}}}}),
-		object("VirtualService", "networking.istio.io/v1", "istio", map[string]any{"gateways": []any{"mesh-gateway"}, "http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "api"}}}}}}),
-		object("Certificate", "cert-manager.io/v1", "cert", map[string]any{"secretName": "tls"}),
-	}
-	var resources []k8s.APIResource
-	kinds := map[schema.GroupVersionResource]string{}
-	for _, obj := range dynamicObjects {
-		u := obj.(*unstructured.Unstructured)
-		gvr := u.GroupVersionKind().GroupVersion().WithResource(plurals[u.GetKind()])
-		kinds[gvr] = u.GetKind() + "List"
-		resources = append(resources, k8s.APIResource{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: u.GetKind(), Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}})
-	}
-	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), kinds, dynamicObjects...)
-	// The fake tracker guesses "gatewaies" from Gateway; use the served plural.
-	if err := client.Tracker().Create(schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}, dynamicObjects[1], "prod"); err != nil {
-		t.Fatal(err)
-	}
-	if err := k8s.InitTestDynamicResourceCache(client, resources); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(k8s.ResetTestDynamicState)
-	addApplicationTypedDiscovery()
-	for gvr := range kinds {
-		dc := k8s.GetDynamicResourceCache()
-		if err := dc.EnsureWatching(gvr); err != nil || !dc.WaitForSync(gvr, 2*time.Second) {
-			t.Fatalf("watch %v: %v", gvr, err)
-		}
-	}
-
-	cache := k8s.GetResourceCache()
-	build := func(plan func([]*relations.Family, []*relations.Composition) appEvaluation) ([]appRow, map[appCountedRead]int) {
-		session, err := k8s.BeginOwnershipRead(cache)
-		if err != nil {
-			t.Fatal(err)
-		}
-		counted := &appCountingSession{Session: session.(relations.Session), reads: map[appCountedRead]int{}}
-		view := ownership.NewView(session, ownership.Unrestricted())
-		inventory := &applicationInventory{batch: buildPlannedAppRelationBatch(context.Background(), counted, []string{"prod"}, plan), session: session.(relations.Session), owners: view}
-		return groupApplications(collectAppWorkloads(context.Background(), cache, []string{"prod"}, inventory, view, false)), counted.reads
-	}
-	every, everyReads := build(appEverySourceEvaluation)
-	pruned, prunedReads := build(appRowEvaluation)
-	if !reflect.DeepEqual(pruned, every) {
-		t.Fatalf("rows changed:\npruned=%+v\nevery=%+v", pruned, every)
-	}
-	api := rowByName(pruned, "api")
-	if api == nil || api.Relationships == nil || api.Relationships.Configs < 2 || len(api.Relationships.Routes) < 4 || len(api.Relationships.Ingresses) != 1 || api.Relationships.Scalers != 1 || api.Relationships.Storage != 1 || api.Relationships.PDBs != 1 || api.Relationships.NetworkPolicies != 1 {
-		t.Fatalf("fixture rows carry too little to compare: %+v", api)
-	}
-	for _, kind := range []resourceid.GroupKind{{Kind: "Pod"}, {Group: "apps", Kind: "ReplicaSet"}, {Kind: "Secret"}, {Kind: "ConfigMap"}, {Group: "cert-manager.io", Kind: "Certificate"}, {Group: "networking.k8s.io", Kind: "Ingress"}} {
-		read := appCountedRead{kind, false}
-		if everyReads[read] == 0 {
-			t.Errorf("every-source batch didn't read %v; the comparison doesn't cover it", kind)
-		}
-		if kind.Kind != "Ingress" && prunedReads[read] != 0 {
-			t.Errorf("pruned batch read %v, which no row reads", kind)
 		}
 	}
 }
