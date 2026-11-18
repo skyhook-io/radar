@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/prune"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // minifyDetail strips metadata noise and per-type status noise, but keeps full spec
@@ -44,6 +45,7 @@ func minifyDetailUnstructured(obj map[string]any) map[string]any {
 // the only value-level pass that reaches arbitrary CRD specs (e.g. a Traefik
 // Middleware basicAuth user) before they go to an LLM.
 func redactUnstructuredSecrets(obj map[string]any) {
+	redactUpgradePlanEnvs(obj)
 	if spec, ok := obj["spec"]; ok {
 		RedactInlineSecrets(spec)
 	}
@@ -51,6 +53,29 @@ func redactUnstructuredSecrets(obj map[string]any) {
 		RedactInlineSecrets(status)
 	}
 	redactSecretFindings(obj)
+}
+
+// redactUpgradePlanEnvs blanks every env value of a system-upgrade-controller
+// Plan (spec.upgrade.envs, spec.prepare.envs): they are passed to upgrade Jobs
+// and can be credentials under any name, so pattern redaction is not enough.
+// Names stay, so the model still sees what is configured.
+func redactUpgradePlanEnvs(obj map[string]any) {
+	apiVersion, _ := obj["apiVersion"].(string)
+	if resourceid.GroupFromAPIVersion(apiVersion) != "upgrade.cattle.io" {
+		return
+	}
+	spec, _ := obj["spec"].(map[string]any)
+	for _, container := range []string{"upgrade", "prepare"} {
+		c, _ := spec[container].(map[string]any)
+		envs, _ := c["envs"].([]any)
+		for _, e := range envs {
+			if env, ok := e.(map[string]any); ok {
+				if _, has := env["value"]; has {
+					env["value"] = "[REDACTED]"
+				}
+			}
+		}
+	}
 }
 
 // redactSecretFindings blanks the matched text of secret-scan findings (Trivy

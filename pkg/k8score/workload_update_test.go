@@ -41,21 +41,13 @@ func newFakeDynamicWithClusterPolicy(t *testing.T) (*dynamicfake.FakeDynamicClie
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds), gvr
 }
 
-// stubDiscovery installs a single Kind→GVR mapping so UpdateResource skips the
-// real discovery client. ResourceDiscovery's exported API doesn't allow direct
-// seeding, but the unexported maps are package-internal — fine for tests.
 func stubDiscovery(t *testing.T, kind string, gvr schema.GroupVersionResource) *ResourceDiscovery {
 	t.Helper()
 	rd := &ResourceDiscovery{
-		resourceMap: map[string]APIResource{
-			strings.ToLower(kind): {Kind: kind, Name: gvr.Resource, Group: gvr.Group, Version: gvr.Version, Namespaced: false},
-			gvr.Resource:          {Kind: kind, Name: gvr.Resource, Group: gvr.Group, Version: gvr.Version, Namespaced: false},
-		},
-		gvrMap: map[string]schema.GroupVersionResource{
-			strings.ToLower(kind): gvr,
-			gvr.Resource:          gvr,
-		},
+		resourceMap: map[string]APIResource{},
+		gvrMap:      map[string]schema.GroupVersionResource{},
 	}
+	rd.AddAPIResource(APIResource{Kind: kind, Name: gvr.Resource, Group: gvr.Group, Version: gvr.Version, Namespaced: false})
 	return rd
 }
 
@@ -293,12 +285,12 @@ func TestApplyResource_RejectsStaleReviewedVersionBeforePatch(t *testing.T) {
 		return true, nil, nil
 	})
 	discovery := &ResourceDiscovery{
-		resources: []APIResource{{
-			Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
-		}},
 		resourceMap: map[string]APIResource{},
 		gvrMap:      map[string]schema.GroupVersionResource{},
 	}
+	discovery.AddAPIResource(APIResource{
+		Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
+	})
 	mgr := NewWorkloadManager(dyn, discovery)
 
 	_, err := mgr.ApplyResource(context.Background(), ApplyResourceOptions{
@@ -333,12 +325,12 @@ func TestApplyResource_RejectsResourceCreatedAfterReview(t *testing.T) {
 		return true, nil, nil
 	})
 	discovery := &ResourceDiscovery{
-		resources: []APIResource{{
-			Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
-		}},
 		resourceMap: map[string]APIResource{},
 		gvrMap:      map[string]schema.GroupVersionResource{},
 	}
+	discovery.AddAPIResource(APIResource{
+		Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
+	})
 	mgr := NewWorkloadManager(dyn, discovery)
 
 	_, err := mgr.ApplyResource(context.Background(), ApplyResourceOptions{
@@ -383,12 +375,12 @@ func TestApplyResource_ReviewedCreateIsAtomic(t *testing.T) {
 		return true, nil, nil
 	})
 	discovery := &ResourceDiscovery{
-		resources: []APIResource{{
-			Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
-		}},
 		resourceMap: map[string]APIResource{},
 		gvrMap:      map[string]schema.GroupVersionResource{},
 	}
+	discovery.AddAPIResource(APIResource{
+		Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
+	})
 	mgr := NewWorkloadManager(dyn, discovery)
 
 	_, err := mgr.ApplyResource(context.Background(), ApplyResourceOptions{
@@ -415,12 +407,12 @@ func TestApplyResource_ReviewedCreateReportsCreated(t *testing.T) {
 		map[schema.GroupVersionResource]string{gvr: "DeploymentList"},
 	)
 	discovery := &ResourceDiscovery{
-		resources: []APIResource{{
-			Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
-		}},
 		resourceMap: map[string]APIResource{},
 		gvrMap:      map[string]schema.GroupVersionResource{},
 	}
+	discovery.AddAPIResource(APIResource{
+		Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
+	})
 	mgr := NewWorkloadManager(dyn, discovery)
 
 	result, err := mgr.ApplyResource(context.Background(), ApplyResourceOptions{
@@ -463,12 +455,12 @@ func TestApplyResource_PreviewUsesCreateForAbsentResource(t *testing.T) {
 		return true, nil, nil
 	})
 	discovery := &ResourceDiscovery{
-		resources: []APIResource{{
-			Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
-		}},
 		resourceMap: map[string]APIResource{},
 		gvrMap:      map[string]schema.GroupVersionResource{},
 	}
+	discovery.AddAPIResource(APIResource{
+		Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
+	})
 	mgr := NewWorkloadManager(dyn, discovery)
 
 	result, err := mgr.ApplyResource(context.Background(), ApplyResourceOptions{
@@ -536,12 +528,12 @@ func TestApplyResource_RetriesOnlyRadarOwnershipConflictWithForce(t *testing.T) 
 		return true, existing.DeepCopy(), nil
 	})
 	discovery := &ResourceDiscovery{
-		resources: []APIResource{{
-			Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
-		}},
 		resourceMap: map[string]APIResource{},
 		gvrMap:      map[string]schema.GroupVersionResource{},
 	}
+	discovery.AddAPIResource(APIResource{
+		Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
+	})
 	mgr := NewWorkloadManager(dyn, discovery)
 
 	result, err := mgr.ApplyResource(context.Background(), ApplyResourceOptions{
@@ -620,12 +612,12 @@ func TestApplyResource_DoesNotReclaimWhenExternalConflictAppears(t *testing.T) {
 		}}
 	})
 	discovery := &ResourceDiscovery{
-		resources: []APIResource{{
-			Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
-		}},
 		resourceMap: map[string]APIResource{},
 		gvrMap:      map[string]schema.GroupVersionResource{},
 	}
+	discovery.AddAPIResource(APIResource{
+		Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
+	})
 	mgr := NewWorkloadManager(dyn, discovery)
 
 	_, err := mgr.ApplyResource(context.Background(), ApplyResourceOptions{
@@ -679,12 +671,12 @@ func TestPreviewUpdateResource_ReclaimsRadarOwnershipWithWarning(t *testing.T) {
 		return true, existing.DeepCopy(), nil
 	})
 	discovery := &ResourceDiscovery{
-		resources: []APIResource{{
-			Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
-		}},
 		resourceMap: map[string]APIResource{},
 		gvrMap:      map[string]schema.GroupVersionResource{},
 	}
+	discovery.AddAPIResource(APIResource{
+		Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
+	})
 	mgr := NewWorkloadManager(dyn, discovery)
 
 	result, err := mgr.PreviewUpdateResource(context.Background(), UpdateResourceOptions{
@@ -762,12 +754,12 @@ func TestApplyResource_DryRunWarningsUseAdmittedObject(t *testing.T) {
 		return true, pre.DeepCopy(), nil
 	})
 	discovery := &ResourceDiscovery{
-		resources: []APIResource{{
-			Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
-		}},
 		resourceMap: map[string]APIResource{},
 		gvrMap:      map[string]schema.GroupVersionResource{},
 	}
+	discovery.AddAPIResource(APIResource{
+		Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true,
+	})
 	mgr := NewWorkloadManager(dyn, discovery)
 
 	result, err := mgr.ApplyResource(context.Background(), ApplyResourceOptions{

@@ -3,6 +3,7 @@ import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { UPGRADE_PLAN_GROUP, getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 import type { ResourceCoverage } from '../../types/resource-coverage'
 import { resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from '../../utils/resource-coverage'
 import React, { useState, useMemo, useEffect, useLayoutEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
@@ -658,6 +659,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'target', label: 'Canary Target', width: 'min-w-40' },
     { key: 'canaryWeight', label: 'Reported Weight', width: 'w-36 shrink-0', tooltip: 'Last reported canary routing weight, not measured traffic. Blue/green and A/B strategies are not weighted.' },
     { key: 'suspended', label: 'Suspend Requested', width: 'w-36 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  plans: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'version', label: 'Version', width: 'min-w-40' },
+    { key: 'concurrency', label: 'Concurrency', width: 'w-28 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-32 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   metrictemplates: [
@@ -2989,6 +2998,7 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
   metrictemplates: ['flagger.app'],
+  plans: ['upgrade.cattle.io'],
   challenges: ['acme.cert-manager.io'],
   orders: ['acme.cert-manager.io'],
   compositeresourcedefinitions: ['apiextensions.crossplane.io'],
@@ -5600,6 +5610,8 @@ export function ResourcesView({
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
     if (flaggerValue !== undefined) return flaggerValue
+    const planValue = getUpgradePlanColumnValue(resource, column)
+    if (planValue !== undefined) return planValue
 
     switch (column) {
       case 'name':
@@ -7831,6 +7843,10 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{getFlaggerColumnValue(resource, column) || '-'}</span>
   }
+  if (isApiGroup(resource.apiVersion, UPGRADE_PLAN_GROUP) && kindLower === 'plans') {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{getUpgradePlanColumnValue(resource, column) || '-'}</span>
+  }
   switch (kindLower) {
     case 'pods':
       return <PodCell resource={resource} column={column} />
@@ -8430,7 +8446,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
             const bgClass =
               sq.status === 'ready' ? 'bg-green-500' :
               sq.status === 'completed' ? 'bg-theme-text-tertiary/30 border border-theme-text-tertiary' :
-              sq.status === 'running' ? 'bg-yellow-500' :
+              sq.status === 'running' || sq.status === 'starting' ? 'bg-yellow-500' :
               sq.status === 'waiting' ? 'bg-red-500' :
               sq.status === 'terminated' ? 'bg-red-500' :
               'bg-theme-text-tertiary/30 border border-dashed border-theme-text-tertiary'
@@ -8438,7 +8454,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
             const dotColor =
               sq.status === 'ready' ? 'bg-green-500' :
               sq.status === 'completed' ? 'bg-theme-text-tertiary' :
-              sq.status === 'running' ? 'bg-yellow-500' :
+              sq.status === 'running' || sq.status === 'starting' ? 'bg-yellow-500' :
               sq.status === 'waiting' || sq.status === 'terminated' ? 'bg-red-500' :
               'bg-theme-text-tertiary'
             // Relative time helper
@@ -8458,7 +8474,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
               sq.status === 'ready' ? 'Running' :
               sq.status === 'completed' ? 'Completed' :
               sq.status === 'running' ? 'Running (not ready)' :
-              sq.status === 'waiting' ? 'Waiting' :
+              sq.status === 'starting' || sq.status === 'waiting' ? 'Waiting' :
               sq.status === 'terminated' ? 'Terminated' : 'Unknown'
             const uptime = sq.status === 'ready' || sq.status === 'running' ? timeAgo(sq.startedAt) : null
             const duration = (sq.status === 'completed' || sq.status === 'terminated') ? runDuration(sq.startedAt, sq.finishedAt) : null

@@ -421,9 +421,18 @@ Hop-ordered diagnosis for Service, Ingress, HTTPRoute, GRPCRoute, and Gateway �
 
 ### Kubernetes Upgrade Impact
 
-Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action — APIs removed in the target release, kubelet and kube-proxy skew, overlapping PodDisruptionBudgets, removed feature gates — using live resources, Helm release manifests, last-applied configuration, and API server metrics.
+Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action — APIs removed in the target release, kubelet and kube-proxy skew, overlapping PodDisruptionBudgets, removed feature gates — using live resources, Helm release manifests, last-applied configuration, and API server metrics. On k3s and RKE2 it also lists the system-upgrade-controller Plans that upgrade the distribution, with their version and state.
 
 See the [Kubernetes upgrade impact guide](https://radarhq.io/docs/features/upgrade-impact) for the check catalog, coverage semantics, and RBAC notes.
+
+### Vulnerabilities in Deployed Images
+
+With [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) installed, **Checks → Vulnerabilities** rolls its VulnerabilityReports up to the images that run now: which images carry Critical and High CVEs, which have a fix, and which workloads and namespaces run them, by image, by CVE or by workload. **By fix** turns the fixable findings into a list of package upgrades: each row says what to upgrade to and every CVE that clears. Reports about older revisions are left out, an image used by many workloads is one row, and running images without a report are listed as not scanned rather than clean. The tab appears only when the cluster serves Trivy's VulnerabilityReport kind. See [Trivy Operator](docs/integrations.md#trivy-operator).
+
+<p align="center">
+  <img src="docs/screenshots/vulnerabilities-view.png" alt="Checks → Vulnerabilities by image: 62 images with Critical CVEs of 99 scanned and 16 not scanned yet, a severity bar, and one row per running image with its findings, how many have a fix, and the workloads that run it" width="800">
+  <br><em>Vulnerabilities — Critical and High CVEs in the images that run now</em>
+</p>
 
 ### Access Control (RBAC visibility)
 
@@ -480,6 +489,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Knative Networking** | Ingress, Certificate, ServerlessService |
 | **Karpenter** | NodePool, NodeClaim (+ provider-specific NodeClasses via auto-discovery) |
 | **OpenTelemetry Operator** | [OpenTelemetryCollector and Instrumentation](docs/integrations.md#opentelemetry-operator): reconciliation, configured pipelines and injection settings |
+| **System Upgrade Controller** | [Plan](docs/integrations.md#system-upgrade-controller): per-node upgrade progress, an Issue for an invalid Plan, and k3s/RKE2 upgrade Plans on the Upgrade impact page |
 | **Flagger** | [Canary and MetricTemplate](docs/integrations.md#flagger): recorded rollout state, target/autoscaler/template links and failed-rollout Issues |
 | **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication, ClusterTriggerAuthentication |
 | **Prometheus Operator** | ServiceMonitor, PodMonitor, PrometheusRule, Alertmanager |

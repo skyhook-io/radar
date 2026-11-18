@@ -2143,12 +2143,13 @@ func (d *DynamicResourceCache) readOnlyItems(gvr schema.GroupVersionResource, na
 // ListWatched returns every cached object for gvr across all currently-watched
 // scopes (cluster-wide and/or per-namespace), unioned. It does NOT start or
 // re-probe informers — it reads whatever is already watched. This is for
-// internal "scan what's already cached" callers (Crossplane audit, Kyverno
-// PolicyReport indexing) that iterate WatchedGVRs(): unlike List(gvr, ""),
+// internal "scan what's already cached" callers that iterate WatchedGVRs()
+// and hand the objects on: unlike List(gvr, ""),
 // which is cluster-wide-only, it surfaces namespace-scoped contents so those
 // scanners don't silently drop them in a namespace-restricted install.
-// Request-facing reads must stay on List / ListNamespaces with explicit
-// namespaces.
+// Each object is deep-copied; a scan that only inspects the objects should use
+// ListWatchedReadOnly. Request-facing reads must stay on List / ListNamespaces
+// with explicit namespaces.
 func (d *DynamicResourceCache) ListWatched(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
 	items, err := d.ListWatchedReadOnly(gvr)
 	if err != nil {

@@ -753,6 +753,15 @@ func GetClientInterface() kubernetes.Interface {
 	return c
 }
 
+// GetClientWithGeneration returns the clientset together with the generation
+// of the connection it belongs to. A reconnect under the same context name can
+// reach a different cluster; the generation still changes.
+func GetClientWithGeneration() (*kubernetes.Clientset, uint64) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return k8sClient, activeClientGeneration
+}
+
 func GetClientSafetySnapshot() (*kubernetes.Clientset, string) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
