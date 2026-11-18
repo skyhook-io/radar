@@ -282,6 +282,8 @@ export function veleroScheduleNeverRan(reading: Pick<VeleroScheduleReading, 'las
 /** The word beside a run Radar's Back up now created; it still counts as one of the schedule's runs. */
 export const VELERO_MANUAL_RUN = 'manual'
 export const VELERO_MANUAL_RUN_TITLE = 'Created with Back up now, not by the schedule'
+/** pkg/velero SubmissionAnnotation: on a Backup Radar's Back up now created. */
+export const VELERO_SUBMISSION_ANNOTATION = 'radar.skyhook.io/submission'
 
 /** The newest Completed run, or why there is none to show. */
 export function veleroNewestSuccessfulText(runs: VeleroScheduleRuns): { text: string; run?: VeleroRun } {

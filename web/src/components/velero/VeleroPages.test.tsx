@@ -174,6 +174,31 @@ describe('The composed Overview', () => {
     expect(html).not.toContain('No: it is being deleted')
   })
 
+  it('says a backup on an unavailable location can’t be restored, even while it is being deleted', () => {
+    state.workspace = workspace({ locations: [location({ name: 'default', phase: 'Unavailable' })] })
+    const backup = { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default' }, status: { phase: 'Deleting', startTimestamp: hoursAgo(5) } }
+    const html = plainText(page('backups', backup))
+    expect(html).toContain('No: its storage location is unavailable')
+    expect(html).not.toContain('Uncertain')
+  })
+
+  it('says a Back up now run was made by hand from its schedule', () => {
+    state.workspace = workspace()
+    const backup = {
+      metadata: { namespace: 'velero', name: 'nightly-20261118120000', labels: { 'velero.io/schedule-name': 'nightly' }, annotations: { 'radar.skyhook.io/submission': 'confirmation-1' } },
+      spec: { storageLocation: 'default' },
+      status: { phase: 'Completed', startTimestamp: hoursAgo(2), completionTimestamp: hoursAgo(2) },
+    }
+    expect(plainText(page('backups', backup))).toContain('Back up now, from schedule nightly')
+  })
+
+  it('says GC asks for an expired backup’s deletion, which nothing processes while deletion is disabled', () => {
+    const ws = workspace()
+    state.workspace = { ...ws, installations: [{ ...ws.installations[0], server: { ...ws.installations[0].server, gcDisabled: false, deletionDisabled: true } }] }
+    const backup = { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default' }, status: { phase: 'Completed', startTimestamp: hoursAgo(50), completionTimestamp: hoursAgo(49), expiration: hoursAgo(1) } }
+    expect(plainText(page('backups', backup))).toContain('Past its retention: Velero’s garbage collection then requests its deletion, but nothing processes the request while the backup-deletion controller is disabled')
+  })
+
   it('says expired backups stay while Velero’s garbage collection is disabled', () => {
     const ws = workspace()
     state.workspace = { ...ws, installations: [{ ...ws.installations[0], server: { ...ws.installations[0].server, gcDisabled: true } }] }
@@ -372,6 +397,12 @@ describe('The composed Overview', () => {
     expect(plain).toMatch(/Last checked \d+s ago — failed/)
     expect(plain).not.toContain('Last validated')
     expect(plain).toMatch(/Every 1m · last sync attempt/)
+  })
+
+  it('marks a Back up now run among a location’s backups', () => {
+    state.stored = { backups: [{ namespace: 'velero', name: 'nightly-1', phase: 'Completed', manual: true }, { namespace: 'velero', name: 'nightly-0', phase: 'Completed' }], restorable: 2, expired: 0, stored: 2 }
+    const html = renderToStaticMarkup(<MemoryRouter><VeleroLocationBackups namespace="velero" name="dr" /></MemoryRouter>)
+    expect(html.match(/>manual</g)).toHaveLength(1)
   })
 
   it('lists a location’s backups with the failed ones a segment away', () => {

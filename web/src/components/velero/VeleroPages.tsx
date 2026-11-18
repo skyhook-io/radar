@@ -39,6 +39,7 @@ import {
   veleroScheduleReasonText,
   VELERO_MANUAL_RUN,
   VELERO_MANUAL_RUN_TITLE,
+  VELERO_SUBMISSION_ANNOTATION,
   VELERO_NONE_KEPT_SHORT,
   VELERO_RUNS_UNKNOWN,
   type NavigateToResource,
@@ -247,12 +248,13 @@ const RESTORABLE_PHASES = new Set(['Completed', 'PartiallyFailed'])
 /** Whether a restore from this backup can work: "No" with the reason where certain, an uncertain answer where Velero would try, else not verified. */
 function restoreAnswer(resource: any, location: ReturnType<typeof locationState> | null): { text: string; uncertain?: boolean } | null {
   const phase: string = resource?.status?.phase ?? ''
-  if (phase === 'Deleting' || resource?.metadata?.deletionTimestamp)
-    return { text: 'Uncertain: it is being deleted, so its contents may already be gone from storage', uncertain: true }
   if (phase === 'Failed') return { text: 'No: it did not complete' }
-  if (!RESTORABLE_PHASES.has(phase)) return { text: 'No: it hasn’t finished' }
+  // Velero refuses these whatever the backup's phase.
   if (location?.missing) return { text: 'No: its storage location doesn’t exist' }
   if (location?.loc?.phase === 'Unavailable') return { text: 'No: its storage location is unavailable, and Velero refuses a restore from an unavailable location' }
+  if (phase === 'Deleting' || resource?.metadata?.deletionTimestamp)
+    return { text: 'Uncertain: it is being deleted, so its contents may already be gone from storage', uncertain: true }
+  if (!RESTORABLE_PHASES.has(phase)) return { text: 'No: it hasn’t finished' }
   return null
 }
 
@@ -280,7 +282,10 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
   const when = whenText(status)
   const location = locationName ? locationState(locationName, namespace, workspace.data) : null
   const restore = restoreAnswer(resource, location)
-  const gcOff = workspace.data?.installations.find((i) => i.namespace === namespace)?.server.gcDisabled === true
+  const server = workspace.data?.installations.find((i) => i.namespace === namespace)?.server
+  const gcOff = server?.gcDisabled === true
+  const deletionOff = server?.deletionDisabled === true
+  const manual = resource?.metadata?.annotations?.[VELERO_SUBMISSION_ANNOTATION] !== undefined
   const errors = getBackupErrors(resource)
   const warnings = getBackupWarnings(resource)
   const restores = useVeleroRuns('restores', namespace, { backup: resource?.metadata?.name ?? '' })
@@ -337,9 +342,11 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
                   <Note>
                     {gcOff
                       ? `${expired(status.expiration) ? 'Past its retention' : veleroMomentText(status.expiration)}, but Velero’s garbage collection is disabled (--restore-only or --disable-controllers=gc), so it is not deleted then`
-                      : expired(status.expiration)
-                        ? 'Past its retention: Velero deletes it at its next garbage collection'
-                        : veleroMomentText(status.expiration)}
+                      : deletionOff
+                        ? `${expired(status.expiration) ? 'Past its retention' : veleroMomentText(status.expiration)}: Velero’s garbage collection then requests its deletion, but nothing processes the request while the backup-deletion controller is disabled`
+                        : expired(status.expiration)
+                          ? 'Past its retention: Velero deletes it at its next garbage collection'
+                          : veleroMomentText(status.expiration)}
                     {veleroDeclaredRetention(spec.ttl) ? ` · retention ${veleroDeclaredRetention(spec.ttl)}` : ''}
                   </Note>
                 </>
@@ -351,7 +358,8 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
           <FactRow label="Made by">
             {scheduleName ? (
               <>
-                <Link onClick={() => onNavigate?.(veleroResource('Schedule', namespace, scheduleName))}>Schedule {scheduleName}</Link>
+                {manual && 'Back up now, from '}
+                <Link onClick={() => onNavigate?.(veleroResource('Schedule', namespace, scheduleName))}>{manual ? 'schedule' : 'Schedule'} {scheduleName}</Link>
                 {sched && <span className="ml-2 text-xs text-theme-text-secondary">{veleroScheduleBadge(sched).label}</span>}
               </>
             ) : (
@@ -967,7 +975,19 @@ export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespa
             : undefined
         }
         columns={[
-          { header: 'Backup', cell: (b) => <VeleroName name={b.name} middle /> },
+          {
+            header: 'Backup',
+            cell: (b) => (
+              <>
+                <VeleroName name={b.name} middle />
+                {b.manual && (
+                  <Tooltip content={VELERO_MANUAL_RUN_TITLE}>
+                    <span className="block text-xs text-theme-text-secondary">{VELERO_MANUAL_RUN}</span>
+                  </Tooltip>
+                )}
+              </>
+            ),
+          },
           { header: 'Outcome', width: '160px', cell: (b) => <RunOutcome kind="Backup" phase={b.phase} /> },
           { header: 'Finished', width: '140px', cell: (b) => <When iso={b.completed} fallback="—" /> },
           { header: 'Expires', width: '130px', cell: (b) => <Expires iso={b.expiration} /> },

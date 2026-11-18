@@ -17,6 +17,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
 
 // A caller who may not list Backups is told so. An empty list would read as "this
@@ -175,9 +176,12 @@ func TestVeleroStoredBackupsCountsWhatCanActuallyBeRestored(t *testing.T) {
 		}}
 	}
 
+	manual := backup("nightly-manual", "primary", "Completed", future, "2026-08-14T01:00:00Z")
+	manual.SetAnnotations(map[string]string{veleropkg.SubmissionAnnotation: "confirmation-1"})
 	seedVeleroDynamic(t,
 		location("primary", true),
 		location("dr-replica", false),
+		manual,
 		backup("nightly-fresh", "primary", "Completed", future, "2026-08-16T01:00:00Z"),
 		backup("nightly-aged", "primary", "Completed", past, "2026-06-01T01:00:00Z"),
 		backup("nightly-broke", "primary", "Failed", future, "2026-08-15T01:00:00Z"),
@@ -200,11 +204,16 @@ func TestVeleroStoredBackupsCountsWhatCanActuallyBeRestored(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	if got.Stored != 3 {
-		t.Errorf("Stored = %d, want 3 — the unprocessed backup has no location yet: %+v", got.Stored, got.Backups)
+	if got.Stored != 4 {
+		t.Errorf("Stored = %d, want 4 — the unprocessed backup has no location yet: %+v", got.Stored, got.Backups)
 	}
-	if got.Restorable != 1 {
-		t.Errorf("Restorable = %d, want 1 — only nightly-fresh is Completed and still inside its TTL", got.Restorable)
+	if got.Restorable != 2 {
+		t.Errorf("Restorable = %d, want 2 — only nightly-fresh and nightly-manual are Completed and still inside their TTL", got.Restorable)
+	}
+	for _, b := range got.Backups {
+		if b.Manual != (b.Name == "nightly-manual") {
+			t.Errorf("only the Back up now run is manual: %+v", b)
+		}
 	}
 	// Both counts are the location's, not the page's. The panel prints them
 	// beside Stored, so one derived from a capped list would disagree with the

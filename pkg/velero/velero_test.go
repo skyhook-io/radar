@@ -505,6 +505,9 @@ func TestServerReadyReplicasAndBackupControllerFlags(t *testing.T) {
 		{[]string{"--restore-only"}, true, true, true, true},
 		{[]string{"--restore-only=false"}, false, false, false, false},
 		{[]string{"--restore-only=1"}, true, true, true, true},
+		{[]string{"--restore-only=true", "--restore-only=false"}, false, false, false, false},
+		{[]string{"--restore-only=false", "--restore-only"}, true, true, true, true},
+		{[]string{"--disable-controllers=gc", "--disable-controllers=backup"}, true, false, false, true},
 		{[]string{"--disable-controllers=backup,gc"}, true, false, false, true},
 		{[]string{"--disable-controllers", "schedule"}, false, true, false, false},
 		{[]string{"--disable-controllers=backup-queue,backup-deletion"}, true, false, true, false},
@@ -620,5 +623,15 @@ func TestBackUpNowRunsAreMarkedManual(t *testing.T) {
 	}
 	if len(r.Runs.Recent) != 2 || r.Runs.Recent[1].Manual {
 		t.Fatalf("only Back up now runs are manual: %+v", r.Runs.Recent)
+	}
+}
+
+func TestServerRepeatedFlagsAndEnvTakeTheLastValue(t *testing.T) {
+	cfg := ServerConfigFromDeployments([]*appsv1.Deployment{veleroDeployment(
+		[]corev1.EnvVar{{Name: "TZ", Value: "Asia/Tokyo"}, {Name: "TZ", Value: "Europe/Berlin"}},
+		[]string{"--default-backup-storage-location=a", "--default-backup-storage-location=b", "--store-validation-frequency=1m", "--store-validation-frequency=5m"},
+	)}, true)
+	if cfg.TimeZone != "Europe/Berlin" || cfg.DefaultLocation != "b" || cfg.ValidationFrequencySeconds == nil || *cfg.ValidationFrequencySeconds != 300 {
+		t.Fatalf("cfg %+v", cfg)
 	}
 }

@@ -6,6 +6,7 @@ import { showApiError } from '../ui/Toast'
 import { useRadarFeature } from '../../api/client'
 import { getApiBase } from '../../api/config'
 import { actionDialogResult } from '../../api/actions'
+import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
 import { useVeleroBackupDeletion, useVeleroDeleteBackup, useVeleroRuns, useVeleroWorkspace, type VeleroDeletion } from '../../api/velero'
 
 // The generic Delete's hover treatment, on a labelled button like the other header actions.
@@ -117,6 +118,17 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
   const serverStopped = installation?.server.replicas === 0
   const unavailable = deleteRefusal(backup, location, serverStopped, installation?.server.deletionDisabled === true)
   const restoring = (restores.data?.runs ?? []).filter((r) => RESTORING.has(r.phase ?? ''))
+  // The warning must not arrive after the confirmation, nor its absence read as "none".
+  const checkingRestores = reviewing !== null && restores.isPending
+  const restoresUnchecked =
+    !checkingRestores &&
+    (!restores.data
+      ? restores.error
+        ? `Radar couldn’t check the restores of this backup (${restores.error.message}), so one may still be reading from it.`
+        : undefined
+      : INCOMPLETE_COVERAGE_STATES.has(restores.data.coverage.state) || restores.data.truncated
+        ? 'Radar couldn’t check every restore of this backup, so one may still be reading from it.'
+        : undefined)
 
   if (state === 'deleted') {
     return null
@@ -205,7 +217,9 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
                 `${restoring.length === 1 ? `Restore ${restoring[0].name} is` : `Restores ${restoring.map((r) => r.name).join(', ')} are`} still restoring from this backup. Deleting it removes the data ${restoring.length === 1 ? 'it reads' : 'they read'}, so ${restoring.length === 1 ? 'it' : 'they'} may fail.`,
               ]
             : []),
+          ...(restoresUnchecked ? [restoresUnchecked] : []),
         ]}
+        incompleteReason={checkingRestores ? 'Checking restores of this backup…' : undefined}
         writes={[{ summary: `create DeleteBackupRequest in namespace ${namespace}`, detail: `spec.backupName: ${name}` }]}
         typedConfirmation={name}
         confirmLabel="Delete backup"

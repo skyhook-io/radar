@@ -16,6 +16,9 @@ const state = vi.hoisted(() => ({
   mutationData: undefined as { request: string } | undefined,
   fetching: false,
   restores: [] as { name: string; phase?: string }[],
+  restoresPending: false,
+  restoresCoverage: 'full',
+  restoresError: null as Error | null,
   success: vi.fn(),
   failure: vi.fn(),
 }))
@@ -28,7 +31,14 @@ vi.mock('../../api/velero', () => ({
     isFetching: state.fetching,
   }),
   useVeleroWorkspace: () => ({ data: state.workspace }),
-  useVeleroRuns: (_kind: string, _ns: string, _filter: unknown, options?: { enabled?: boolean }) => ({ data: options?.enabled ? { runs: state.restores } : undefined }),
+  useVeleroRuns: (_kind: string, _ns: string, _filter: unknown, options?: { enabled?: boolean }) => {
+    const settled = options?.enabled && !state.restoresPending && !state.restoresError
+    return {
+      data: settled ? { runs: state.restores, coverage: { state: state.restoresCoverage } } : undefined,
+      isPending: !settled && !state.restoresError,
+      error: options?.enabled ? state.restoresError : null,
+    }
+  },
 }))
 vi.mock('../ui/Toast', () => ({ showApiSuccess: state.success, showApiError: state.failure }))
 
@@ -57,7 +67,7 @@ function render(node: React.ReactNode) {
 afterEach(() => {
   act(() => roots.splice(0).forEach((r) => r.unmount()))
   document.body.innerHTML = ''
-  Object.assign(state, { support: 'supported', error: null, workspace: undefined, deletion: undefined, deletionError: null, mutationData: undefined, fetching: false, restores: [] })
+  Object.assign(state, { support: 'supported', error: null, workspace: undefined, deletion: undefined, deletionError: null, mutationData: undefined, fetching: false, restores: [], restoresPending: false, restoresCoverage: 'full', restoresError: null })
   client = new QueryClient()
   state.mutate.mockReset()
   state.success.mockReset()
@@ -124,6 +134,35 @@ describe('Delete backup', () => {
     const text = document.body.textContent ?? ''
     expect(text).toContain('Restore restore-a is still restoring from this backup')
     expect(text).not.toContain('restore-b')
+  })
+
+  it('holds the confirmation until the restores are read, then warns', () => {
+    state.workspace = workspace({ accessMode: 'ReadWrite', phase: 'Available' })
+    state.restoresPending = true
+    const root = render(<VeleroDeleteBackup backup={backup()} />)
+    act(() => buttons('Delete backup')[0].click())
+    typeName('nightly-1')
+    expect(document.body.textContent).toContain('Checking restores of this backup…')
+    expect(buttons('Delete backup').at(-1)!.disabled).toBe(true)
+    state.restoresPending = false
+    state.restores = [{ name: 'restore-a', phase: 'New' }]
+    act(() => root.render(<QueryClientProvider client={client}><VeleroDeleteBackup backup={{ ...backup() }} /></QueryClientProvider>))
+    expect(document.body.textContent).toContain('Restore restore-a is still restoring from this backup')
+    expect(document.body.textContent).not.toContain('Checking restores')
+    expect(buttons('Delete backup').at(-1)!.disabled).toBe(false)
+  })
+
+  it.each([
+    ['denied', { restoresCoverage: 'denied' }],
+    ['failed', { restoresError: new Error('HTTP 500') }],
+  ])('says the restores could not be checked when their read was %s', (_case, read) => {
+    state.workspace = workspace({ accessMode: 'ReadWrite', phase: 'Available' })
+    Object.assign(state, read)
+    render(<VeleroDeleteBackup backup={backup()} />)
+    act(() => buttons('Delete backup')[0].click())
+    expect(document.body.textContent).toMatch(/Radar couldn’t check (every restore|the restores) of this backup/)
+    typeName('nightly-1')
+    expect(buttons('Delete backup').at(-1)!.disabled).toBe(false)
   })
 
   it('leaves the refusal to Velero when the location can’t be read', () => {

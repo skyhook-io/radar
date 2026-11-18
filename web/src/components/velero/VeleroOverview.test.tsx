@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import type { VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
-import { VELERO_NOTHING_NEEDS_ATTENTION, VeleroOverview, type VeleroNamespaceList } from './VeleroOverview'
+import { VELERO_NOTHING_IN_WHAT_WAS_READ, VELERO_NOTHING_NEEDS_ATTENTION, VeleroOverview, type VeleroNamespaceList } from './VeleroOverview'
 import { VeleroSchedules } from './VeleroSchedules'
 import { hoursAgo, location, schedule, workspace } from './velero.fixtures'
 
@@ -287,6 +287,19 @@ describe('Velero overview coverage', () => {
     const html = text(renderOverview(data, ['shop', 'payments']))
     expect(html).toMatch(/Selects nothing:<\/span> <span[^>]*><span><button[^>]*>mixed<\/button>: it includes “\*” beside other namespaces<\/span> — Velero refuses this namespace selection, so it backs up nothing/)
     expect(html).toMatch(/Namespaces not in any schedule<\/span><\/span>:<\/span> <span[^>]*>payments</)
+  })
+
+  it('marks the newest successful backup when Back up now made it', () => {
+    const manual = { name: 'nightly-2', phase: 'Completed', created: hoursAgo(1), ranAt: hoursAgo(1), completed: hoursAgo(1), manual: true }
+    const data = workspace({ schedules: [schedule({ runs: { read: 'full', kept: 2, newest: manual, newestCompleted: manual } })] })
+    expect(text(renderOverview(data, ['shop']))).toMatch(/1h ago(<!-- -->)?, (<!-- -->)?manual/)
+  })
+
+  it('does not say nothing needs attention while the server Deployment is unread', () => {
+    const unread = workspace({ installations: [{ ...workspace().installations[0], server: { source: 'unread' } }] })
+    const html = text(renderOverview(unread, ['shop']))
+    expect(html).toContain(VELERO_NOTHING_IN_WHAT_WAS_READ)
+    expect(html).not.toContain(VELERO_NOTHING_NEEDS_ATTENTION)
   })
 
   it('lists paused schedules as information, outside Needs attention', () => {

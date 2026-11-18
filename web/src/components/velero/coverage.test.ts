@@ -73,12 +73,15 @@ describe('veleroSelectionProblem', () => {
     [['shop'], ['shop'], 'it both includes and excludes shop'],
     [['Shop'], [], 'Shop is not a namespace name or pattern Velero accepts'],
     [['shop-{a,b}'], [], 'shop-{a,b} is not a namespace name or pattern Velero accepts'],
+    [['prod-**'], [], 'prod-** is not a namespace name or pattern Velero accepts'],
+    [['db-[]'], [], 'db-[] is not a namespace name or pattern Velero accepts'],
+    [['db-a]'], [], 'db-a] is not a namespace name or pattern Velero accepts'],
   ])('refuses %j excluding %j', (inc, exc, problem) => {
     expect(veleroSelectionProblem(sel(inc, exc))).toBe(problem)
     expect(scheduleIncludes(sel(inc, exc), 'shop')).toBe(false)
   })
 
-  it.each([[[], []], [['*'], ['kube-*']], [['shop-*', 'db-[ab]'], ['']]])('accepts %j excluding %j', (inc, exc) => {
+  it.each([[[], []], [['*'], ['kube-*']], [['shop-*', 'db-[ab]'], ['']], [['*', '*'], []], [['shop', 'shop'], ['db']]])('accepts %j excluding %j', (inc, exc) => {
     expect(veleroSelectionProblem(sel(inc, exc))).toBeUndefined()
   })
 })

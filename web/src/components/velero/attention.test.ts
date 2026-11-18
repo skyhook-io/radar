@@ -41,6 +41,19 @@ describe('the Velero Overview badge', () => {
     expect(veleroAttentionCount(unread)).toMatchObject({ count: null, lowerBound: true })
   })
 
+  // A stopped server would fold the late ones into one row, disabled backups the held ones.
+  it('keeps its lower bound under what the rows become once the server is read', () => {
+    const held = (name: string) => schedule({ name, state: 'held', reason: 'unstartedBlocker', attention: true })
+    const unread = workspace({
+      installations: [{ ...workspace().installations[0], server: { source: 'unread' } }],
+      schedules: [held('a'), held('b'), held('c'), schedule({ name: 'late', state: 'late', attention: true })],
+    })
+    expect(veleroAttention(unread, null)).toHaveLength(4)
+    expect(veleroAttentionCount(unread)).toMatchObject({ count: 2, lowerBound: true })
+    const disabled = workspace({ installations: [{ ...workspace().installations[0], server: { source: 'deployment', backupsDisabled: true } }], schedules: unread.schedules })
+    expect(veleroAttention(disabled, null).length).toBeGreaterThanOrEqual(2)
+  })
+
   it('reads zero as none only when everything was read', () => {
     expect(veleroAttentionCount(workspace())).toMatchObject({ count: 0, lowerBound: false })
     const partial = workspace({ coverage: { ...workspace().coverage, backups: { state: 'partial' } as any } })

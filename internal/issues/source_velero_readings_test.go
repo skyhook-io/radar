@@ -253,6 +253,15 @@ func TestVeleroScheduleWritingToAReadOnlyLocation(t *testing.T) {
 	if len(got) != 1 {
 		t.Errorf("the read-only location raises nothing of its own: %v", got)
 	}
+	// It names the location and its access mode, so a caller who can't list
+	// storage locations doesn't get it, not even in a degraded form.
+	noLocations := func(read EvidenceRead) bool { return !ExactEvidenceRead(read) }
+	if _, shown := ForEvidence(iss, noLocations, false); shown {
+		t.Error("the read-only finding reached a caller who can't read storage locations")
+	}
+	if _, shown := ForEvidence(iss, func(EvidenceRead) bool { return true }, false); !shown {
+		t.Error("a caller who can read every input must get the finding")
+	}
 }
 
 func TestVeleroValidationOverdueWhileTheServerRuns(t *testing.T) {

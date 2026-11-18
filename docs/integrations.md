@@ -1006,7 +1006,7 @@ Velero reports every outcome through `status.phase` and has no `status.condition
 | `BackupRepositoryMaintenanceFailed` | the newest entry in a usable (not NotReady) `BackupRepository`'s `status.recentMaintenance` has `result: Failed`. Its maintenance Jobs crash-loop in Velero's namespace with nothing else naming the repository | warning |
 | `VeleroServerNotRunning` | the Velero server Deployment (the one running `velero server`) is readable and has no pods. Filed on the Deployment | critical |
 | `VeleroScheduleLate` | the Velero views' **Late** reading: past the next run by 5 minutes with the zone certain and the namespace's Backups read, while the server runs. Critical from three missed scheduled times | warning / critical |
-| `VeleroScheduleCannotRun` | **Cannot run** (name over 63 characters, or its storage location is `ReadOnly`, so Velero rejects every backup) or **Always due** (a cron with no future time) | critical |
+| `VeleroScheduleCannotRun` | **Cannot run** (name over 63 characters, or its storage location is `ReadOnly`, so Velero rejects every backup; that finding reaches only a caller who may list storage locations there, since namespace access does not authorize them) or **Always due** (a cron with no future time) | critical |
 | `VeleroScheduleHeld` | **Held** by a run Velero has not started for 10 minutes, unless the server is down | warning |
 | `VeleroScheduleNotValidated` | not validated 5 minutes after creation, unless the server is down | warning |
 | `VeleroLocationValidationOverdue` | a location's validation is overdue or never happened, unless the server is down | warning |

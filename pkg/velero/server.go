@@ -168,7 +168,9 @@ func rolloutComplete(d *appsv1.Deployment) bool {
 }
 
 func (cfg *ServerConfig) readZone(c corev1.Container) {
-	for _, e := range c.Env {
+	// A name repeated in env takes its last entry, as the kubelet does.
+	for i := len(c.Env) - 1; i >= 0; i-- {
+		e := c.Env[i]
 		if e.Name != "TZ" {
 			continue
 		}
@@ -200,7 +202,9 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 			return
 		}
 	}
+	// A repeated flag takes its last value, as pflag does.
 	freq := defaultValidationFrequency
+	restoreOnly := false
 	cfg.DefaultLocation = defaultLocationName
 	for i := 0; i < len(tokens); i++ {
 		name, value, hasValue := strings.Cut(strings.TrimLeft(tokens[i], "-"), "=")
@@ -245,11 +249,9 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 				}
 				on = b
 			}
-			if on {
-				cfg.SchedulingDisabled, cfg.BackupsDisabled = true, true
-				cfg.DeletionDisabled, cfg.GCDisabled = true, true
-			}
+			restoreOnly = on
 		case "disable-controllers":
+			// A repeated slice flag adds to the list, as pflag's StringSlice does.
 			if v, ok := takeValue(); ok {
 				for ctl := range strings.SplitSeq(v, ",") {
 					switch strings.TrimSpace(ctl) {
@@ -267,6 +269,10 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 				}
 			}
 		}
+	}
+	if restoreOnly {
+		cfg.SchedulingDisabled, cfg.BackupsDisabled = true, true
+		cfg.DeletionDisabled, cfg.GCDisabled = true, true
 	}
 	secs := int64(freq / time.Second)
 	cfg.ValidationFrequencySeconds = &secs

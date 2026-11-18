@@ -182,10 +182,34 @@ const OVERVIEW_KINDS: readonly VeleroWorkspaceKey[] = ['schedules', 'backups', '
  * the server capped still count: it sends their total. A count over data read
  * only in part is a lower bound, and its zero is unknown.
  */
+/**
+ * Whether Needs attention may be missing rows: a kind read in part, or a
+ * server Deployment Radar could not read, which hides a stopped server and
+ * disabled backups. `installation` narrows it as veleroAttention does.
+ */
+export function veleroAttentionPartial(data: VeleroWorkspaceResponse, installation: string | null): boolean {
+  return OVERVIEW_KINDS.some((k) => readInPart(data.coverage[k])) || inInstallation(data.installations, installation).some((i) => i.server.source === 'unread')
+}
+
+/**
+ * Rows that may fold into one where a server Deployment is unread: a stopped
+ * server takes the late schedules into its row, disabled backups the held
+ * ones. Subtracted, the count stays a lower bound whichever is true.
+ */
+function foldableWhileServerUnread(data: VeleroWorkspaceResponse): number {
+  return data.installations
+    .filter((i) => i.server.source === 'unread')
+    .reduce((n, i) => {
+      const rows = data.schedules.filter((s) => s.namespace === i.namespace && s.attention)
+      const late = rows.filter((s) => s.state === 'late').length
+      const held = rows.filter((s) => s.state === 'held').length
+      return n + Math.max(late - 1, held - 1, 0)
+    }, 0)
+}
+
 export function veleroAttentionCount(data: VeleroWorkspaceResponse): VeleroAttentionCount {
-  const count = veleroAttention(data, null).length + cappedIssues(data)
-  // An unread server Deployment hides a stopped server and disabled backups.
-  const partial = OVERVIEW_KINDS.some((k) => readInPart(data.coverage[k])) || data.installations.some((i) => i.server.source === 'unread')
+  const count = veleroAttention(data, null).length + cappedIssues(data) - foldableWhileServerUnread(data)
+  const partial = veleroAttentionPartial(data, null)
   if (partial && count === 0) {
     return { count: null, lowerBound: true, title: 'Unknown: some Velero data could not be read, so nothing found does not mean nothing needs attention.' }
   }

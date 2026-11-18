@@ -34,6 +34,8 @@ export interface VeleroStoredBackup {
   phase?: string
   expiration?: string
   completed?: string
+  /** Created by Radar's Back up now from a schedule. */
+  manual?: boolean
 }
 
 interface VeleroBSLRendererProps {

@@ -30,6 +30,8 @@ type VeleroStoredBackup struct {
 	// Objects are captured throughout the run, so it is not one point in time
 	// a restore returns to.
 	Completed string `json:"completed,omitempty"`
+	// Manual: created by Radar's Back up now from a schedule.
+	Manual bool `json:"manual,omitempty"`
 }
 
 // maxStoredBackupsListed bounds the list, not the counts. Velero keeps every
@@ -134,6 +136,7 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		b.Phase, _, _ = unstructured.NestedString(u.Object, "status", "phase")
 		b.Expiration, _, _ = unstructured.NestedString(u.Object, "status", "expiration")
 		b.Completed, _, _ = unstructured.NestedString(u.Object, "status", "completionTimestamp")
+		_, b.Manual = u.GetAnnotations()[veleropkg.SubmissionAnnotation]
 		if b.Phase == "Completed" {
 			if veleroExpired(b.Expiration) {
 				resp.Expired++

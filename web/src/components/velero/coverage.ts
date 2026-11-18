@@ -82,15 +82,27 @@ export function veleroGlobMatch(pattern: string, name: string): boolean {
   return tokens ? matchTokens(tokens, name) : pattern === name
 }
 
-// A pattern's wildcards read as letters must leave a namespace name (Velero's
-// validateNamespaceName); "" is allowed, Velero's "no namespace".
+// Velero v1.18.2 wildcard.validateBracePatterns: every [ closes, with something
+// between, and no ] stands alone.
+function bracketsValid(pattern: string): boolean {
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern[i] === '[') {
+      const end = pattern.indexOf(']', i + 1)
+      if (end < 0 || end === i + 1) return false
+      i = end
+    } else if (pattern[i] === ']') return false
+  }
+  return true
+}
+
+// Velero v1.18.2 collections.validateNamespaceName: "" is allowed (Velero's "no
+// namespace"); wildcard.ValidateNamespaceName refuses |()!{}, and consecutive
+// asterisks; then each of * ? [ ] read as a letter must leave a namespace name.
 function validNamespacePattern(pattern: string): boolean {
   if (pattern === '') return true
-  if (pattern.length > VELERO_PATTERN_MAX || VELERO_PATTERN_REFUSED.test(pattern)) return false
-  const tokens = parseGlob(pattern)
-  if (!tokens) return false
-  const asName = tokens.map((t) => (t.t === 'lit' ? t.c : 'x')).join('')
-  return /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(asName)
+  if (/[|()!{},]/.test(pattern) || pattern.includes('**') || !bracketsValid(pattern)) return false
+  const asName = pattern.replace(/[*?[\]]/g, 'x')
+  return asName.length <= VELERO_PATTERN_MAX && /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(asName)
 }
 
 /**
@@ -99,13 +111,14 @@ function validNamespacePattern(pattern: string): boolean {
  * then rejects the schedule, which backs up nothing.
  */
 export function veleroSelectionProblem(s: Pick<VeleroScheduleReading, 'includedNamespaces' | 'excludedNamespaces'>): string | undefined {
-  const inc = s.includedNamespaces
-  const exc = s.excludedNamespaces
+  // Velero reads both lists as sets, so a repeated entry is one entry.
+  const inc = [...new Set(s.includedNamespaces)].sort()
+  const exc = [...new Set(s.excludedNamespaces)].sort()
   if (inc.includes('*') && inc.length > 1) return 'it includes “*” beside other namespaces'
   if (exc.includes('*')) return 'it excludes “*”'
   const both = exc.find((ns) => inc.includes(ns))
   if (both !== undefined) return `it both includes and excludes ${both}`
-  const bad = [...inc.filter((p) => p !== '*'), ...exc].find((p) => !validNamespacePattern(p))
+  const bad = [...inc, ...exc].find((p) => !validNamespacePattern(p))
   if (bad !== undefined) return `${bad} is not a namespace name or pattern Velero accepts`
   return undefined
 }
