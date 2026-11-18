@@ -31,10 +31,10 @@ func TestUsesMarksUnreadableDeclaredTargets(t *testing.T) {
 		},
 	}
 	uses := buildUses(resourceIdentity{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}, extras, newOmittedTracker())
-	if uses == nil || len(uses.ConfigMaps) != 1 || uses.ConfigMaps[0].Access != "" {
+	if uses == nil || len(uses.ConfigMaps) != 1 || uses.ConfigMaps[0].State != "" {
 		t.Fatalf("configMaps = %+v", uses)
 	}
-	want := []ContextRef{{Kind: "Secret", Namespace: "shop", Name: "web-tls", Access: "denied"}, {Kind: "Secret", Namespace: "shop", Name: "web-db", Access: "unverified"}}
+	want := []ContextRef{{Kind: "Secret", Namespace: "shop", Name: "web-tls", State: "denied"}, {Kind: "Secret", Namespace: "shop", Name: "web-db", State: "unverified"}}
 	if len(uses.Secrets) != 2 || uses.Secrets[0] != want[0] || uses.Secrets[1] != want[1] {
 		t.Fatalf("secrets = %+v, want %+v", uses.Secrets, want)
 	}

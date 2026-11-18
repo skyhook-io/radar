@@ -449,9 +449,9 @@ func attachedRefs(rel *topology.Relationships, namespace string) []resourceid.Re
 	} {
 		for _, ref := range list {
 			// A reference named only because the workload's spec declares it
-			// carries Access; its target's history is the caller's to read
+			// carries a State; its target's history is the caller's to read
 			// only if they may read the target.
-			if ref.Namespace != namespace || ref.Kind == "" || ref.Name == "" || ref.Access != "" {
+			if ref.Namespace != namespace || ref.Kind == "" || ref.Name == "" || ref.State != "" {
 				continue
 			}
 			group := ref.Group

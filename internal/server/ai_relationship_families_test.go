@@ -50,7 +50,7 @@ func TestAIContextFamiliesExactGetAndHiddenExistence(t *testing.T) {
 		raw, _ := json.Marshal(rc)
 		// The Deployment's own spec names hidden-secret, so it is listed, marked
 		// denied; the Service it doesn't name stays hidden.
-		named := `{"kind":"Secret","namespace":"app","name":"hidden-secret","access":"denied"}`
+		named := `{"kind":"Secret","namespace":"app","name":"hidden-secret","state":"denied"}`
 		if strings.Contains(string(raw), "hidden-service") || strings.Count(string(raw), "hidden-secret") != strings.Count(string(raw), named) || !strings.Contains(string(raw), named) {
 			t.Fatalf("hidden identity leaked, or the declared Secret not named: %s", raw)
 		}
@@ -58,7 +58,7 @@ func TestAIContextFamiliesExactGetAndHiddenExistence(t *testing.T) {
 		perms.SetCanI("get", "networking.k8s.io", "ingresses", "app", false)
 		rc = env.srv.buildAIResourceContext(req, dep, "Deployment", "app", "web")
 		raw, _ = json.Marshal(rc)
-		if !hasContextOmission(rc, "exposedBy", resourcecontext.OmittedRBACDenied) || hasContextOmission(rc, "uses.secrets", resourcecontext.OmittedRBACDenied) || !strings.Contains(string(raw), `"access":"denied"`) {
+		if !hasContextOmission(rc, "exposedBy", resourcecontext.OmittedRBACDenied) || hasContextOmission(rc, "uses.secrets", resourcecontext.OmittedRBACDenied) || !strings.Contains(string(raw), `"state":"denied"`) {
 			t.Fatalf("want exposedBy narrowed and the declared Secret named, not withheld: %s", raw)
 		}
 		if before != nil && string(before) != string(raw) {

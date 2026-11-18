@@ -452,16 +452,19 @@ type ResourceRef struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	Group     string `json:"group,omitempty"` // API group for CRDs (e.g., "cert-manager.io")
-	// Access is set on a reference the subject's own spec declares when the
-	// caller may not read its target: ResourceAccessDenied, or
-	// ResourceAccessUnverified when the check couldn't be made. Only the name
-	// is known then, not whether the target exists or its state.
-	Access string `json:"access,omitempty"`
+	// State says what Radar knows about a reference the subject's own spec
+	// declares, when that isn't simply that the target is readable:
+	// ResourceStateDenied when the caller may not read it, or
+	// ResourceStateUnverified when the check couldn't be made. Only the name
+	// is known then, not whether the target exists or its state. Empty means
+	// no qualifier was recorded, which is not proof the target exists.
+	State string `json:"state,omitempty"`
 }
 
+// The values of ResourceRef.State.
 const (
-	ResourceAccessDenied     = "denied"
-	ResourceAccessUnverified = "unverified"
+	ResourceStateDenied     = "denied"
+	ResourceStateUnverified = "unverified"
 )
 
 type ReflectionRelationships struct {

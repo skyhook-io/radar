@@ -1315,10 +1315,10 @@ export function ResourceRefBadge({ resourceRef, onClick, wrapAtSeparator }: Reso
     : 'badge'
   const tooltip = `${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`
 
-  if (resourceRef.access) {
+  if (resourceRef.state) {
     // Named by this resource's spec, but not readable by the viewer: show the
     // name without implying it exists or can be opened.
-    const why = resourceRef.access === 'denied'
+    const why = resourceRef.state === 'denied'
       ? `You can't view this ${resourceRef.kind}.`
       : `Radar couldn't check whether you can view this ${resourceRef.kind}.`
     return (

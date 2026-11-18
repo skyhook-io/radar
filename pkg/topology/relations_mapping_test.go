@@ -36,7 +36,7 @@ func projectionOwnedAnswer(t *testing.T, s *projectionSession, obj runtime.Objec
 
 // readableRefs leaves out references listed by name only, marked unreadable.
 func readableRefs(refs []ResourceRef) []ResourceRef {
-	return slices.DeleteFunc(slices.Clone(refs), func(r ResourceRef) bool { return r.Access != "" })
+	return slices.DeleteFunc(slices.Clone(refs), func(r ResourceRef) bool { return r.State != "" })
 }
 
 func requireProjectionRefs(t *testing.T, got []ResourceRef, want ...runtime.Object) {
@@ -158,7 +158,7 @@ func TestRelationsAnswerSealedSecretConsumers(t *testing.T) {
 					requireProjectionRefs(t, rel.Consumers, d)
 				} else {
 					requireProjectionRefs(t, readableRefs(rel.ConfigRefs), sealed)
-					if !slices.Contains(rel.ConfigRefs, ResourceRef{Kind: "Secret", Namespace: "shop", Name: "db", Access: ResourceAccessDenied}) {
+					if !slices.Contains(rel.ConfigRefs, ResourceRef{Kind: "Secret", Namespace: "shop", Name: "db", State: ResourceStateDenied}) {
 						t.Fatalf("the mounted Secret isn't named: %+v", rel.ConfigRefs)
 					}
 				}

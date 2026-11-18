@@ -51,7 +51,7 @@ func declaredAnswer(t *testing.T, access ownership.Access, withSecret bool) (*Re
 func TestDeclaredReferencesNameWhatTheCallerMayNotRead(t *testing.T) {
 	access := projectionAccess{denied: []string{"Secret"}}
 	rel, extras, s := declaredAnswer(t, access, true)
-	want := ResourceRef{Kind: "Secret", Namespace: "shop", Name: "web-tls", Access: ResourceAccessDenied}
+	want := ResourceRef{Kind: "Secret", Namespace: "shop", Name: "web-tls", State: ResourceStateDenied}
 	if !slices.Contains(rel.ConfigRefs, want) {
 		t.Fatalf("configRefs = %+v, want %+v listed", rel.ConfigRefs, want)
 	}
@@ -80,14 +80,14 @@ func TestDeclaredReferencesNameWhatTheCallerMayNotRead(t *testing.T) {
 // permission check reads as unverified rather than as a gap.
 func TestDeclaredReferencesMarkEachKindAndAFailedCheck(t *testing.T) {
 	rel, _, _ := declaredAnswer(t, projectionAccess{denied: []string{"ServiceAccount", "PersistentVolumeClaim"}}, true)
-	if rel.ServiceAccount == nil || *rel.ServiceAccount != (ResourceRef{Kind: "ServiceAccount", Namespace: "shop", Name: "web-sa", Access: ResourceAccessDenied}) {
+	if rel.ServiceAccount == nil || *rel.ServiceAccount != (ResourceRef{Kind: "ServiceAccount", Namespace: "shop", Name: "web-sa", State: ResourceStateDenied}) {
 		t.Fatalf("serviceAccount = %+v", rel.ServiceAccount)
 	}
-	if !slices.Contains(rel.StorageRefs, ResourceRef{Kind: "PersistentVolumeClaim", Namespace: "shop", Name: "web-data", Access: ResourceAccessDenied}) {
+	if !slices.Contains(rel.StorageRefs, ResourceRef{Kind: "PersistentVolumeClaim", Namespace: "shop", Name: "web-data", State: ResourceStateDenied}) {
 		t.Fatalf("storageRefs = %+v", rel.StorageRefs)
 	}
 	rel, extras, _ := declaredAnswer(t, undecidedKinds{"Secret"}, true)
-	if !slices.Contains(rel.ConfigRefs, ResourceRef{Kind: "Secret", Namespace: "shop", Name: "web-tls", Access: ResourceAccessUnverified}) {
+	if !slices.Contains(rel.ConfigRefs, ResourceRef{Kind: "Secret", Namespace: "shop", Name: "web-tls", State: ResourceStateUnverified}) {
 		t.Fatalf("configRefs = %+v, want the Secret unverified", rel.ConfigRefs)
 	}
 	for field, c := range extras.Fields {

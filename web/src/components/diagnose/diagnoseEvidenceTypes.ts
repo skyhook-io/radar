@@ -54,7 +54,7 @@ export interface DiagnosisResourceRef {
   namespace?: string;
   name: string;
   /** Set on a declared reference the caller may not read; never followed. */
-  access?: "denied" | "unverified";
+  state?: "denied" | "unverified";
 }
 
 /** The HPA diagnosis Radar computes for the scaler itself, attached to the workload it scales. */

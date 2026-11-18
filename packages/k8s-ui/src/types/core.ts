@@ -673,9 +673,10 @@ export interface ResourceRef {
   /**
    * Set when the subject's own spec names this object but the viewer may not
    * read it ('denied'), or Radar couldn't check ('unverified'). Only the name
-   * is known: not whether it exists, nor its state.
+   * is known: not whether it exists, nor its state. Absent means no qualifier
+   * was recorded, not that the object exists.
    */
-  access?: 'denied' | 'unverified'
+  state?: 'denied' | 'unverified'
 }
 
 // Computed relationships for a resource

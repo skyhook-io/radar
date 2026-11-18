@@ -506,7 +506,7 @@ func TestDrawerFamiliesUseRequestAccess(t *testing.T) {
 		}
 		// hidden-secret is named by the subject's own spec, so it appears only
 		// marked denied.
-		named := `{"kind":"Secret","namespace":"alpha","name":"hidden-secret","access":"denied"}`
+		named := `{"kind":"Secret","namespace":"alpha","name":"hidden-secret","state":"denied"}`
 		if strings.Count(string(data), "hidden-secret") != strings.Count(string(data), named) {
 			t.Fatalf("hidden-secret appears unmarked in %s", data)
 		}

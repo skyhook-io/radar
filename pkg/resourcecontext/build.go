@@ -527,7 +527,7 @@ func buildUses(ident resourceIdentity, extras *topology.RelationshipExtras, omit
 	}
 	uses := &UsesBlock{}
 	for _, d := range extras.Declarations {
-		r := ContextRef{Kind: d.Ref.Kind, Group: d.Ref.Group, Namespace: d.Ref.Namespace, Name: d.Ref.Name, Access: topology.DeclaredAccess(d)}
+		r := ContextRef{Kind: d.Ref.Kind, Group: d.Ref.Group, Namespace: d.Ref.Namespace, Name: d.Ref.Name, State: topology.DeclaredState(d)}
 		switch d.Ref.Kind {
 		case "ConfigMap":
 			uses.ConfigMaps = append(uses.ConfigMaps, r)

@@ -112,15 +112,15 @@ func (n *neighborhood) node(r resourceid.Ref) string {
 	return id
 }
 
-// DeclaredAccess is how a declared reference reads when the caller may not
-// read its target: ResourceAccessDenied, or ResourceAccessUnverified when the
+// DeclaredState is how a declared reference reads when the caller may not
+// read its target: ResourceStateDenied, or ResourceStateUnverified when the
 // check couldn't be made; empty otherwise.
-func DeclaredAccess(d relations.Declared) string {
+func DeclaredState(d relations.Declared) string {
 	switch {
 	case d.State == relations.TargetWithheld:
-		return ResourceAccessDenied
+		return ResourceStateDenied
 	case d.State == relations.TargetUnread && d.Gap.Reason == readreason.UserPermissionCheckFailed:
-		return ResourceAccessUnverified
+		return ResourceStateUnverified
 	}
 	return ""
 }
@@ -134,13 +134,13 @@ func (n *neighborhood) nameUnreadable(a relations.ReferencesAnswer) relations.Re
 	out.Coverage.NotChecked, out.Coverage.Narrowed = nil, false
 	var named []ownership.Gap
 	for _, d := range a.Declared {
-		access := DeclaredAccess(d)
-		if access == "" {
+		state := DeclaredState(d)
+		if state == "" {
 			out.Declared = append(out.Declared, d)
 			continue
 		}
-		n.unreadable = append(n.unreadable, ResourceRef{Kind: d.Ref.Kind, Group: d.Ref.Group, Namespace: d.Ref.Namespace, Name: d.Ref.Name, Access: access})
-		if access == ResourceAccessUnverified {
+		n.unreadable = append(n.unreadable, ResourceRef{Kind: d.Ref.Kind, Group: d.Ref.Group, Namespace: d.Ref.Namespace, Name: d.Ref.Name, State: state})
+		if state == ResourceStateUnverified {
 			named = append(named, d.Gap)
 		}
 	}

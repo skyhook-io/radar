@@ -44,7 +44,7 @@ own metadata stays as a `withheld` claim, and the answer says it is `narrowed`. 
 
 Related Resources, the AI resource context and MCP `get_resource` name the ConfigMaps, Secrets, PVCs and ServiceAccount
 a readable object's pod template references, an Ingress's TLS Secrets and a ServiceAccount's Secrets, even when you
-can't read them, since the object's own YAML already shows those names. Such a reference carries `access: "denied"` (or `"unverified"` when Radar couldn't check your access), says
+can't read them, since the object's own YAML already shows those names. Such a reference carries `state: "denied"` (or `"unverified"` when Radar couldn't check your access), says
 nothing about whether the object exists or its state, and opens nothing. Workload history never follows it. Objects
 Radar finds by searching, such as a policy or monitor elsewhere that selects the object, are still withheld when you
 can't read them; the answer says only that something related was withheld.

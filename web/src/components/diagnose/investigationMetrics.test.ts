@@ -311,19 +311,19 @@ describe("metricsChangeMarkers", () => {
 
   it("never follows a referenced Secret the caller may not read", () => {
     const secretChange = change("Secret", "api-secret", "2026-09-06T07:40:00Z");
-    const bundle = (access?: "denied" | "unverified") => ({
+    const bundle = (state?: "denied" | "unverified") => ({
       ...diagnoseBundle,
       resourceContext: {
         ...diagnoseBundle.resourceContext,
         uses: {
           ...diagnoseBundle.resourceContext.uses,
-          secrets: [{ kind: "Secret", namespace: "shop", name: "api-secret", ...(access ? { access } : {}) }],
+          secrets: [{ kind: "Secret", namespace: "shop", name: "api-secret", ...(state ? { state } : {}) }],
         },
       },
       recentChanges: [...diagnoseBundle.recentChanges, secretChange],
     });
-    const labels = (access?: "denied" | "unverified") =>
-      markersFor([[tool("diag", "diagnose", bundle(access)), tool("prom", "query_prometheus", rangeResult(targetSelectors))]], "prom").map((m) => m.label);
+    const labels = (state?: "denied" | "unverified") =>
+      markersFor([[tool("diag", "diagnose", bundle(state)), tool("prom", "query_prometheus", rangeResult(targetSelectors))]], "prom").map((m) => m.label);
     expect(labels()).toContain("Secret api-secret");
     expect(labels("denied")).not.toContain("Secret api-secret");
     expect(labels("unverified")).not.toContain("Secret api-secret");

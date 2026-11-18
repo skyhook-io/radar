@@ -543,7 +543,7 @@ describe('PodTemplateSection pod-level resources', () => {
 describe('references the viewer may not read', () => {
   it('lists a referenced Secret by name without a link', () => {
     const configMap = { kind: 'ConfigMap', namespace: 'shop', name: 'web-config' }
-    const secret = { kind: 'Secret', namespace: 'shop', name: 'web-tls', access: 'denied' as const }
+    const secret = { kind: 'Secret', namespace: 'shop', name: 'web-tls', state: 'denied' as const }
     const html = renderToString(<RelatedResourcesSection relationships={{ configRefs: [configMap, secret] }} onNavigate={() => {}} />)
     const buttons = html.match(/<button[\s\S]*?<\/button>/g) ?? []
     expect(html).toContain('web-tls')
