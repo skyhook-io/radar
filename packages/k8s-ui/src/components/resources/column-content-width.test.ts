@@ -70,6 +70,10 @@ describe('measureColumnContent', () => {
     })
     measureColumnContent([pod(3), pod(9, '2')], [{ key: 'restarts' }, { key: 'gpu' }], { plural: 'pods', cellFilterKind: 'pods' }, spy)
     expect(fonts).toEqual(expect.arrayContaining(['3:body', '9:medium', '-:body', '2:monoSm']))
+    fonts.length = 0
+    const event = (count: number) => ({ metadata: { name: 'e', namespace: 'x' }, count })
+    measureColumnContent([event(1), event(2)], [{ key: 'count' }], ctx, spy)
+    expect(fonts).toEqual(['1:body', '2:medium'])
   })
 
   it('measures the exact columns whose cells it knows, and leaves the rest unmeasured', () => {
