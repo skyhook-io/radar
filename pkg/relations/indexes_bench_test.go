@@ -79,6 +79,30 @@ func BenchmarkRelationIndexKeys(b *testing.B) {
 	}
 }
 
+// wideVirtualService routes to distinct Services, each named twice.
+func wideVirtualService(distinct int) *unstructured.Unstructured {
+	var routes []any
+	for i := range 2 * distinct {
+		routes = append(routes, map[string]any{"destination": map[string]any{"host": fmt.Sprintf("service-%d.shared.svc.cluster.local", i%distinct)}})
+	}
+	return object("networking.istio.io/v1", "VirtualService", "edge", map[string]any{"http": []any{map[string]any{"route": routes}}})
+}
+
+func BenchmarkRelationIndexKeysWideVirtualService(b *testing.B) {
+	fn := IstioServiceHosts("cluster.local").IndexFunc()
+	for _, distinct := range []int{16, 256, 1000} {
+		vs := wideVirtualService(distinct)
+		b.Run(fmt.Sprintf("distinct=%d", distinct), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if keys, err := fn(vs); err != nil || len(keys) != distinct {
+					b.Fatalf("%d keys, %v; want %d", len(keys), err, distinct)
+				}
+			}
+		})
+	}
+}
+
 func routeFixture(indexed bool) (stores, []any, []any) {
 	s := stores{byKind: map[resourceid.GroupKind]cache.Indexer{}}
 	for _, gk := range []resourceid.GroupKind{gatewayRoutes[0].Kind, kindVirtualService} {

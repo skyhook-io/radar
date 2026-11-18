@@ -45,10 +45,7 @@ func (f *Family) IndexFunc() cache.IndexFunc {
 				if !f.target(r.GroupKind()) {
 					return
 				}
-				k := f.ReferrersIndex.Key(r)
-				if !slices.Contains(keys, k) {
-					keys = append(keys, k)
-				}
+				keys = append(keys, f.ReferrersIndex.Key(r))
 			}
 			add(d.Target)
 			for _, r := range d.Or {
@@ -58,7 +55,8 @@ func (f *Family) IndexFunc() cache.IndexFunc {
 		if err != nil {
 			keys = append(keys, unreadReferrerKey)
 		}
-		return keys, nil
+		slices.Sort(keys)
+		return slices.Compact(keys), nil
 	}
 }
 

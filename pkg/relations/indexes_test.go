@@ -2,6 +2,7 @@ package relations
 
 import (
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -115,6 +116,21 @@ func TestReferrerIndexIncludesAlternativesAndDeduplicatesKeys(t *testing.T) {
 		target := resourceid.NewRef(group, "TraefikService", "shared", "app")
 		if !slices.Contains(keys, ReferrerKey(target)) {
 			t.Errorf("missing %s", group)
+		}
+	}
+}
+
+func TestReferrerIndexDeduplicatesManyKeys(t *testing.T) {
+	keys, err := IstioServiceHosts("cluster.local").IndexFunc()(wideVirtualService(500))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 500 || len(slices.Compact(slices.Sorted(slices.Values(keys)))) != 500 {
+		t.Fatalf("%d keys; want each of the 500 Services once", len(keys))
+	}
+	for i := range 500 {
+		if !slices.Contains(keys, ReferrerKey(resourceid.NewRef("", "Service", "shared", fmt.Sprintf("service-%d", i)))) {
+			t.Fatalf("missing service-%d", i)
 		}
 	}
 }
