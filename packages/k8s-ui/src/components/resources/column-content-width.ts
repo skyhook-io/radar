@@ -67,7 +67,7 @@ const NODE_MAX_PX = 400
 // line is easier to read in the drawer, and the room is worth more to the
 // columns after it, which a very wide column would push under the drawer.
 export const GROW_MAX_PX = 960
-// A short value — a badge, an enum, a version, an object's name — is useless
+// A short value — a status badge, an enum, a referenced object's name — is useless
 // cut, so a column flagged fit sizes to its longest one. Past this it is not
 // short any more, and the cell cuts it like any other.
 const SHORT_VALUE_MAX_PX = 400
@@ -163,8 +163,8 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
     case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1, yieldRank: 1 }
   }
   // A column flagged fit holds short values (see SHORT_VALUE_MAX_PX), which
-  // have no outliers worth trimming: one ExternalName among a hundred
-  // ClusterIPs still needs its whole badge. When room is short it gives way
+  // have no outliers worth trimming: one failing NodePool among a hundred
+  // Ready ones still needs its whole badge. When room is short it gives way
   // after the exact columns, down to its curated width.
   if (col.sizing === 'fit') return { mode: 'fit', max: SHORT_VALUE_MAX_PX, longest: true }
   return { mode: 'exact' }

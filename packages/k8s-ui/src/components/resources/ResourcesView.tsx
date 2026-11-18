@@ -291,7 +291,7 @@ export interface Column {
   minWidth?: number // minimum width in px
   /** How the column is sized automatically (see column-sizing.ts). Name,
    *  Namespace and Node fit their content; anything else keeps its width
-   *  unless it says 'fit' — short values (badges, enums, versions) that are
+   *  unless it says 'fit' — short values (status badges, enums, names) that are
    *  useless cut, sized to the longest — or 'grow' — long free text that
    *  takes the room left over. Either needs a reader of what its cell shows
    *  in column-content-width.ts. */
