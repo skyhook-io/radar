@@ -13,8 +13,10 @@
 //   fit   — sized to its content within [floor, max]: Namespace, Node. Sized
 //           to the 95th percentile of its values, so a few outliers don't set
 //           the width, then it takes part in sharing the room left (below) up
-//           to its longest value.
-//   kept  — a fit column marked `keep` (Name): sized to its longest value
+//           to its longest value. A column flagged `sizing: 'fit'` (short
+//           values: badges, enums, versions) is measured at its longest value
+//           instead, so it has nothing to share.
+//   kept — a fit column marked `keep` (Name): sized to its longest value
 //           within [floor, max] — its protected width — and never given back.
 //           Only a value longer than max is cut; the table scrolls sideways
 //           before a shorter one is.
