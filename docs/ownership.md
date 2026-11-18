@@ -56,11 +56,54 @@ The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, wi
 - **`pkg/k8score`: the indexes.** Every informer except Events' indexes objects by owner UID (`owner_index.go`), and
   every Argo CD Application, Flux Kustomization and HelmRelease informer indexes its recorded members
   (`gitops_members_index.go`). Both are always on. Reads answer only from stores loaded in full
-  (`ReadableDependents` for typed kinds, `ReadableIndexed` for dynamic ones).
+  (`ReadableIndexedObjects` for typed kinds, `ReadableIndexed` for dynamic ones).
 - **`pkg/ownership/cachesource`: the cache source.** One traversal (`dynamicIndexed`) reads either index for custom
   resources. It reads a resource watched at several versions from one version, pins the namespaces a version is watched
   in at the session's first look, and turns every unread kind or namespace into a gap. Dependent searches reuse the
   session's unwatched-kind gaps; watched stores are still read each time, so a loading store can become available.
+
+## Beyond ownership: other relations
+
+`pkg/relations` answers the relations that aren't ownership or management from the same caches, through the same
+session, `Access` and gaps: a `relations.Session` is an ownership session that also reads index lookups (`Indexed`)
+and lends cached objects (`Borrow`), which the cache source implements.
+
+A **family** (`family.go`) is one way objects name others: the kinds that declare (each optionally narrowed to the
+target kinds it can declare), the kinds a declaration can name, and a function that visits what an object declares
+with the path declaring it. The `View` answers every family the same way:
+
+- `References(family, subject)`: each target the subject declares, every path declaring it, and what reading it
+  found: present, absent, unread (with its gap) or withheld from the caller.
+- `Referrers(family, subject)`: what declares the subject, as the caller may read it, up to 500 with a total. A
+  family's namespaced targets are always in the declarer's namespace, so the answer reads that namespace's objects of
+  each declaring kind through the namespace index and evaluates what each declares. A cluster-scoped target is answered
+  as `Children` answers a cluster-scoped owner: the namespaces the caller may read something in are searched, each
+  declarer is checked where it is, and a gap is kept only if it covers what the caller may read
+  (`ownership.GapCoversReadable`). An index of every declaration cost about 1.4 KB per Pod
+  and made a Pod relist about five times as long ([measurements](loadtest.md#relationship-cost-baselines)).
+- A declaration counts only if its kind is one of the family's targets and its source may declare that kind (an HPA
+  doesn't scale a DaemonSet).
+- Both answer nothing for a subject the caller may not read; a permission check that couldn't be made is a gap, not a
+  denial; a subject the host read that the cache doesn't hold yet leaves the answer incomplete.
+
+The families so far:
+
+| Family | Sources → targets | File |
+|---|---|---|
+| `ConfigReferences` | Pods, pod-template workloads (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Argo Rollout), Ingress TLS → ConfigMaps, Secrets, PersistentVolumeClaims, ServiceAccounts. ReplicaSets scaled explicitly to zero declare nothing, as the Topology screen draws none: usually they are a Deployment's old revisions, and a Deployment scaled to zero still declares through its own template | `config_references.go` |
+| `Autoscalers` | HorizontalPodAutoscalers and KEDA ScaledObjects → Deployments, StatefulSets, ReplicaSets, Rollouts; VerticalPodAutoscalers → those and DaemonSets | `families.go` |
+| `KEDAAuthentication` | ScaledObjects, ScaledJobs → TriggerAuthentications, ClusterTriggerAuthentications | `families.go` |
+| `IngressBackends` | Ingresses → their default and rule backend Services | `families.go` |
+| `RolloutServices` | Argo Rollouts → the canary, stable, active and preview Services their strategy names | `families.go` |
+| `CertificateSecrets` | cert-manager Certificates → the Secret they write | `families.go` |
+
+Extractors live in `pkg/configrefs`, which the topology builder also uses.
+
+Families are built here while Related Resources still reads the relationship graph; readers switch to the families in
+one change that also removes the graph.
+
+The cache-source conformance tests check `Indexed` and both answers against the brute-force `Scan` of generated
+worlds whose objects declare references (`ownershiptest.Object.Declares`), and through histories of changes.
 
 ## What manages an object
 

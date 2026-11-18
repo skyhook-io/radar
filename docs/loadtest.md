@@ -118,6 +118,9 @@ What each benchmark reports:
   the list, runs outside the store's lock, so the total is an upper bound on how long readers wait; an index
   adds only to the locked part, so the difference is its cost. Pods follow the census: one owner each.
 - `BenchmarkIndexedStoreChurn`: update cost while eight readers list a namespace, with and without an index.
+- `BenchmarkConfigConsumers` (`pkg/relations`): what references a ConfigMap, and a Secret every Pod pulls with,
+  answered from the cache by reading the namespace's Pods, ReplicaSets and Deployments. `typical` is the census's
+  average namespace (68 Pods); `dense` holds 5,000 Pods, 5,000 ReplicaSets and 2,500 Deployments.
 
 Baseline (Apple M1 Pro, 8 cores, Go 1.26, November 2026):
 
@@ -133,6 +136,8 @@ Baseline (Apple M1 Pro, 8 cores, Go 1.26, November 2026):
 | Pod relist, plus the owner-UID index | 33 ms | 129 ms |
 | Pod update, alone, without / with the owner-UID index | 180 ns / 245 ns | |
 | Pod update with eight concurrent readers, without / with | 18.0 µs / 18.8 µs | |
+| Config consumers from the cache, typical namespace (ConfigMap / Secret) | 33 µs / 76 µs | |
+| Config consumers from the cache, dense namespace (ConfigMap / Secret, 500 listed) | 6 ms / 14 ms | |
 
 The synthetic fixtures carry more references per Pod than most clusters, so the graph is larger than in a
 real process of the same shape. For a process-level number, run `go run ./cmd/testserver -census large-eks`,
