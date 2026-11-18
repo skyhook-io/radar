@@ -38,13 +38,14 @@ func (c *run) collected(kind, group, namespace string) bool {
 	return true
 }
 
-// watchedSince is when Radar started watching kind in namespace, when that
-// can be later than the store's own start: a deferred typed informer
-// (ConfigMaps, Secrets, ResourceQuotas, LimitRanges among them) starts only
-// after the critical ones have synced, and a kind collected through the
-// dynamic cache (custom resources, webhook configurations) starts when first
-// needed. Critical typed informers start at once after the timeline, so ok is
-// false for them and the store's observation start stands in.
+// watchedSince is when Radar's change history for kind in namespace becomes
+// complete, when that can be later than the store's own start: a deferred
+// typed informer (ConfigMaps, Secrets, ResourceQuotas, LimitRanges among
+// them) counts from when its first list and the change handlers' pass over
+// it were done, and a kind collected through the dynamic cache (custom
+// resources, webhook configurations) from when it was first watched. Critical
+// typed informers start at once after the timeline, so ok is false for them
+// and the store's observation start stands in.
 func watchedSince(kind, group, namespace string) (time.Time, bool) {
 	if b, builtin := resourceid.BuiltinForKind(kind); builtin && (group == "" || b.Group == group) {
 		if cache := k8s.GetResourceCache(); cache != nil {

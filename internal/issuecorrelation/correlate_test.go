@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
@@ -1183,5 +1185,60 @@ func TestCorrelate_RolloutTargetGainsSourceDuringRead(t *testing.T) {
 	}
 	if d, _ := k8s.GetResourceCache().Deployments().Deployments("shop").Get("api"); len(d.Spec.Template.Spec.Containers[0].Env) == 0 {
 		t.Fatal("the race wasn't set up: the template never gained the Secret")
+	}
+	// The answer is the one the checked sources give: a quiet Rollout and
+	// ConfigMap. A second resolution would find the Secret and leave the
+	// answer unknown instead.
+	if !got.NoChanges || got.Unknown != nil || len(got.Changes) != 0 {
+		t.Fatalf("answer = %+v, want no changes from the checked sources", got)
+	}
+}
+
+// Radar's change history for a kind is complete only from when its informer
+// had listed everything and its change handlers had processed that list: an
+// edit made while the first list was in flight shows up as initial state,
+// with no diff. A window that starts after the watch began but before that
+// point can't claim nothing changed.
+func TestCorrelate_WindowStartsBeforeFirstSyncCompleted(t *testing.T) {
+	client := k8sfake.NewSimpleClientset(webDeployment())
+	var listMu sync.Mutex
+	var listReturned time.Time
+	client.PrependReactor("list", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
+		time.Sleep(300 * time.Millisecond)
+		listMu.Lock()
+		listReturned = time.Now()
+		listMu.Unlock()
+		return false, nil, nil
+	})
+	if err := k8s.InitTestResourceCacheFromConfig(k8score.CacheConfig{
+		Client:        client,
+		ResourceTypes: map[string]bool{k8score.Deployments: true, k8score.ConfigMaps: true, k8score.Secrets: true},
+		DeferredTypes: map[string]bool{k8score.ConfigMaps: true, k8score.Secrets: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, _, ok := k8s.GetResourceCache().InformerWatchedSince(k8score.ConfigMaps); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the ConfigMap informer never caught up")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitSynced(t, k8score.Secrets)
+	initStore(t)
+	// The list took 300ms, so a start 100ms before it returned is after the
+	// watch began and before the history became complete.
+	listMu.Lock()
+	from := listReturned.Add(-100 * time.Millisecond)
+	listMu.Unlock()
+	iss := webIssue(time.Time{})
+	opts := Options{Window: Window{From: from, To: time.Now()}, Selection: SelectAroundFirstSeen, CheckCoverage: true}
+	got := Correlate(context.Background(), iss, opts, Access{})
+	if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
+		t.Fatalf("window inside the first list: no_changes=%v unknown=%+v history=%+v", got.NoChanges, got.Unknown, got.History)
 	}
 }
