@@ -976,7 +976,7 @@ const TimelineRow = memo(function TimelineRow({ row, first, context }: { row: Li
         <FoldReveal phase={context.foldMotion.get(row.foldKey)}>
           <div className="pl-3">
             <div className={clsx('border-l-2 border-theme-border pl-3', !row.lastInFold && 'pb-2')}>
-              <div data-event-id={row.eventId} data-ts-from={row.fromMs} data-ts-to={row.toMs}>
+              <div data-event-id={row.eventId}>
                 {card(row.event)}
               </div>
             </div>
@@ -989,7 +989,7 @@ const TimelineRow = memo(function TimelineRow({ row, first, context }: { row: Li
   return (
     <div className="px-4">
       <div className={clsx('ml-6 border-l-2 border-theme-border pl-4', !row.lastInGroup && !row.foldRowsShown && 'pb-2')}>
-        <div data-event-id={row.eventId} data-ts-from={row.fromMs} data-ts-to={row.toMs}>
+        <div data-event-id={row.eventId}>
           {aggItem.type === 'folded' ? (
             <>
               {card(aggItem.latest)}

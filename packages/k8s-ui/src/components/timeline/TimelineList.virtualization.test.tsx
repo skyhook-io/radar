@@ -162,13 +162,11 @@ it('selects a previously folded event as its own highlighted card', async () => 
   expect(container.querySelector('[data-event-id="event-2"] .ring-2')).not.toBeNull()
 })
 
-it('keeps the full aggregate span in row attributes and the visible lens', async () => {
+it('keeps the full aggregate span in the visible lens', async () => {
   const warnings = events.slice(0, 3).map(event => ({ ...event, name: 'api-1', eventType: 'Warning' as const, reason: 'BackOff' }))
   const onVisibleWindowChange = vi.fn()
   await render({ events: warnings, onVisibleWindowChange })
-  const row = container.querySelector('[data-event-id="event-2"]')!
-  expect(row.getAttribute('data-ts-from')).toBe(String(now - 2))
-  expect(row.getAttribute('data-ts-to')).toBe(String(now))
+  expect(container.querySelector('[data-event-id="event-2"]')).not.toBeNull()
   expect(container.querySelector('[aria-label="Expand occurrences"]')).not.toBeNull()
   expect(onVisibleWindowChange).toHaveBeenLastCalledWith({ fromMs: now - 2, toMs: now })
 })
@@ -267,7 +265,6 @@ it('jumps to a timestamp inside an open fold and mounts only nearby fold rows', 
   expect(scroller().scrollTop).toBe(301 * 100)
   const target = container.querySelector('[data-event-id="event-300"]')
   expect(target).not.toBeNull()
-  expect(target?.getAttribute('data-ts-from')).toBe(String(now - 300))
 })
 
 it('closes a fold after its rows animate shut', async () => {
