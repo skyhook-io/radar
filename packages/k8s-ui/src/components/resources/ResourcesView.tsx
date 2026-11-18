@@ -6317,11 +6317,12 @@ export function ResourcesView({
       })
       : inputs
     const widths = computeColumnLayout(laidOut, availableWidth, {
-      mustFit: typeof window !== 'undefined' && window.innerWidth >= MUST_FIT_WINDOW_PX,
+      // Under an open drawer the table may scroll until its last column clears it.
+      mustFit: tableCover === 0 && typeof window !== 'undefined' && window.innerWidth >= MUST_FIT_WINDOW_PX,
     })
     if (capName) widths.name = Math.min(widths.name, phoneNameCap)
     return widths
-  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, tableViewportWidth, leadingPinWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap])
+  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, tableViewportWidth, tableCover, leadingPinWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap])
   useLayoutEffect(() => {
     columnLayoutWidthsRef.current = columnLayoutWidths
     if (!resizeFrozenWidths) lastLayout.current = { signature: layoutSignature, widths: columnLayoutWidths }
