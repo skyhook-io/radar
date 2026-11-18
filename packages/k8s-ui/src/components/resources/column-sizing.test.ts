@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { type ColumnLayoutInput, computeColumnLayout, percentile, rememberWidths } from './column-sizing'
 
-const name = (content: number): ColumnLayoutInput => ({ key: 'name', mode: 'fit', floor: 200, max: 480, content })
+const name = (content: number, stretch?: number): ColumnLayoutInput => ({ key: 'name', mode: 'fit', floor: 200, max: 480, content, stretch, weight: 2 })
 const exact = (key: string, floor: number): ColumnLayoutInput => ({ key, mode: 'exact', floor })
 const grow = (key: string, floor: number, content: number, weight = 1, max = 960): ColumnLayoutInput => ({ key, mode: 'grow', floor, content, weight, max })
 const total = (widths: Record<string, number>) => Object.values(widths).reduce((a, b) => a + b, 0)
@@ -34,7 +34,13 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout([grow('message', 256, 3000)], 5000).message).toBe(960)
   })
 
-  it('does not widen Name past its content, even with room to spare', () => {
+  it('lets Name reach for its longest name from the room left, sharing it with grow columns by weight', () => {
+    // 900 - 250 - 192 = 458 left; Name (weight 2) and selector (1) share it: Name +305 capped at +150.
+    const w = computeColumnLayout([name(250, 400), grow('selector', 192, 1000)], 900)
+    expect(w.name).toBe(400)
+    expect(w.selector).toBe(500)
+    expect(computeColumnLayout([name(250, 300), grow('selector', 192, 500)], 2000)).toEqual({ name: 300, selector: 500 })
+    // Without a stretch it stays at its content.
     expect(computeColumnLayout([name(250), grow('selector', 192, 500)], 2000)).toEqual({ name: 250, selector: 500 })
   })
 

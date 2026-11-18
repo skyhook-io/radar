@@ -149,7 +149,6 @@ import {
   getRoleRuleCount,
   formatAge,
   formatDuration,
-  truncate,
   getCellFilterValue,
   parseColumnFilters,
   serializeColumnFilters,
@@ -6091,7 +6090,12 @@ export function ResourcesView({
     if (!tableActive || !resources?.length) return null
     const sized = columns.map(col => ({ key: col.key, sizing: col.sizing, growWeight: col.growWeight, getFilterValue: extraColumnsByKey.get(col.key)?.getFilterValue }))
     const measured = measureColumnContent(resources, sized, { ...sizingKind, auditBadges })
-    return Object.fromEntries(Object.entries(measured).map(([key, m]) => [key, m.content]))
+    const flat: Record<string, number> = {}
+    for (const [key, m] of Object.entries(measured)) {
+      flat[key] = m.content
+      if (m.stretch !== undefined) flat[`${key}\u0000stretch`] = m.stretch
+    }
+    return flat
   }, [tableActive, resources, columns, extraColumnsByKey, sizingKind, auditBadges, headerFontEpoch])
 
   // Grow-only while the table shows the same data set — the same kind and
@@ -6145,6 +6149,7 @@ export function ResourcesView({
         floor,
         userWidth: columnWidths[col.key] || frozen?.[col.key],
         content: contentWidths?.[col.key],
+        stretch: contentWidths?.[`${col.key}\u0000stretch`],
         max: spec.max,
         weight: spec.weight,
         hold: held?.[col.key],
@@ -9089,7 +9094,7 @@ function ConfigMapCell({ resource, column }: { resource: any; column: string }) 
       return (
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm text-theme-text-secondary shrink-0">{count}</span>
-          {count > 0 && <TruncatedText text={`(${preview})`} tooltip={preview} className="text-xs text-theme-text-tertiary" />}
+          {count > 0 && <TruncatedText text={`(${preview})`} className="text-xs text-theme-text-tertiary" />}
         </div>
       )
     }
@@ -9599,11 +9604,12 @@ function RolloutCell({ resource, column }: { resource: any; column: string }) {
     case 'images': {
       const images = getWorkloadImages(resource)
       if (images.length === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const display = images.length === 1 ? truncate(images[0], 40) : `${truncate(images[0], 30)} +${images.length - 1}`
       return (
-        <Tooltip content={images.join('\n')}>
-          <span className="text-sm text-theme-text-secondary truncate">{display}</span>
-        </Tooltip>
+        <TruncatedText
+          text={workloadImagesText(images)}
+          tooltip={images.length > 1 ? images.join('\n') : undefined}
+          className="text-sm text-theme-text-secondary"
+        />
       )
     }
     default:

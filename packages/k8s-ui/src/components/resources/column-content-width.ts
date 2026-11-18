@@ -112,7 +112,7 @@ export interface ColumnSizingSpec {
   mode: ColumnSizingMode
   weight?: number
   max?: number
-  /** Name only: size to the 95th percentile; longer names are cut, with a tooltip. */
+  /** Name only: size to the 95th percentile, and reach for the longest name from the room left over. */
   trimOutliers?: boolean
 }
 
@@ -120,7 +120,9 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   if (col.sizing === 'grow') return { mode: 'grow', weight: col.growWeight ?? 1, max: GROW_MAX_PX }
   if (col.sizing === 'exact') return { mode: 'exact' }
   switch (col.key) {
-    case 'name': return { mode: 'fit', max: NAME_MAX_PX, trimOutliers: true }
+    // Weighted like a grow column when room is shared: a cut name costs more
+    // than a cut message, so it takes twice the share.
+    case 'name': return { mode: 'fit', max: NAME_MAX_PX, trimOutliers: true, weight: 2 }
     case 'namespace': return { mode: 'fit', max: NAMESPACE_MAX_PX }
     case 'node': return { mode: 'fit', max: NODE_MAX_PX }
   }
@@ -208,6 +210,8 @@ function cellWidthReader(col: ContentColumn, ctx: ContentContext): CellWidth {
 export interface MeasuredContent {
   /** What the column sizes to: the longest value, or for Name its 95th percentile. Padding included. */
   content: number
+  /** Name only: its longest name, which it may grow to from the room left over. */
+  stretch?: number
 }
 
 /**
@@ -230,8 +234,15 @@ export function measureColumnContent(
     const limit = (spec.max ?? Infinity) - CELL_PADDING_PX
     if (spec.trimOutliers) {
       const widths = new Array<number>(items.length)
-      for (let i = 0; i < items.length; i++) widths[i] = safeWidth(read, items[i], measure, limit)
-      result[col.key] = { content: Math.ceil(percentile(widths, 0.95)) + CELL_PADDING_PX }
+      let longest = 0
+      for (let i = 0; i < items.length; i++) {
+        widths[i] = safeWidth(read, items[i], measure, limit)
+        if (widths[i] > longest) longest = widths[i]
+      }
+      result[col.key] = {
+        content: Math.ceil(percentile(widths, 0.95)) + CELL_PADDING_PX,
+        stretch: Math.ceil(longest) + CELL_PADDING_PX,
+      }
     } else {
       let longest = 0
       for (const item of items) {

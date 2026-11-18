@@ -8,20 +8,23 @@
 // Each column is one of:
 //   exact — the curated width (getColumnMinWidth). Status, Age, Ready, counts.
 //   fit   — sized to its content within [floor, max]: Name, Namespace, Node.
+//           Name sizes to its 95th percentile, so a few outliers don't set the
+//           width, and takes part in sharing the room left (below) up to its
+//           longest name.
 //   grow  — starts at its floor and shares whatever room is left, by weight,
 //           each up to its longest value. Long free text: Event messages,
 //           selectors, image lists, uncurated CRD printer columns.
 //   user  — a width the user dragged; kept as is.
 //
 // Room is handed out in a fixed order — user and exact widths, then fit columns
-// at their content, then grow columns — and whatever remains goes to the
-// table's trailing spacer column rather than to any one column (not even to
-// Name's longest values past its 95th percentile): a stretched column pushes
-// the columns after it under the resource drawer, which overlays the right of
-// the list. When the room is
-// short, grow columns are the first to give it back (they are already at their
-// floor before they get any), then fit columns shrink toward their floor; below
-// the sum of floors the table scrolls sideways.
+// at their content, then the grow columns and Name's longest names share what
+// is left by weight — and whatever remains goes to the table's trailing spacer
+// column rather than stretching any column past its content: a stretched
+// column pushes the columns after it under the resource drawer, which overlays
+// the right of the list. When the room is short, the shared room is the first
+// to go (those columns are at their floor or content before they get any),
+// then fit columns shrink toward their floor; below the sum of floors the table
+// scrolls sideways.
 
 export type ColumnSizingMode = 'exact' | 'fit' | 'grow'
 
@@ -34,11 +37,13 @@ export interface ColumnLayoutInput {
   userWidth?: number
   /** Measured content width, cell padding included. fit: the target; grow: the cap. */
   content?: number
+  /** fit only: a wider target it may grow to from the room left over (Name's longest name). */
+  stretch?: number
   /** Upper bound for fit and grow columns. */
   max?: number
-  /** grow only: share of the room left over. */
+  /** Share of the room left over (grow, and fit with a stretch). */
   weight?: number
-  /** grow only: the width it rendered at last time, kept while room allows (see below). */
+  /** The width it rendered at last time, kept while room allows (see below). */
   hold?: number
 }
 
@@ -66,22 +71,27 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
   }
 
   let left = available - used
-  const grows = columns
-    .filter(c => !c.userWidth && c.mode === 'grow')
-    .map(c => ({ key: c.key, weight: c.weight && c.weight > 0 ? c.weight : 1, target: cap(c, c.content ?? 0), hold: c.hold }))
+  const sharing = columns
+    .filter(c => !c.userWidth && (c.mode === 'grow' || (c.mode === 'fit' && c.stretch !== undefined)))
+    .map(c => ({
+      key: c.key,
+      weight: c.weight && c.weight > 0 ? c.weight : 1,
+      target: cap(c, (c.mode === 'grow' ? c.content : c.stretch) ?? 0),
+      hold: c.hold,
+    }))
   // Sharing by weight alone would let one column's longer new value take room
   // another was already showing, so a column could narrow while every
   // measurement only grew. Each first gets back the width it had (up to its
   // target) — scaled down evenly when they no longer all fit, so a shortfall
   // costs each only its share — and only the rest is shared.
-  const held = grows.map(g => Math.max(0, Math.min(g.hold ?? 0, g.target) - widths[g.key]))
+  const held = sharing.map(g => Math.max(0, Math.min(g.hold ?? 0, g.target) - widths[g.key]))
   const heldTotal = sum(held)
   if (heldTotal > 0) {
     const scale = Math.min(1, left / heldTotal)
-    grows.forEach((g, i) => { widths[g.key] += held[i] * scale })
+    sharing.forEach((g, i) => { widths[g.key] += held[i] * scale })
     left -= heldTotal * scale
   }
-  waterFill(widths, grows, left)
+  waterFill(widths, sharing, left)
   return roundWidths(widths)
 }
 
