@@ -249,12 +249,6 @@ type FlowsResponse struct {
 	// the map to this cluster in a metrics store shared by several, so a client
 	// can link to how that works and how to set this cluster's label.
 	WarningClusterScope bool `json:"warningClusterScope,omitempty"`
-	// DataNote qualifies how the flows' byte (Data) figures were measured, for
-	// example two reports that may cover the same calls. It is not a warning:
-	// the figures are what the source reports. Clients show it quietly beside
-	// the map and never retry for it. Like a partial warning, it describes the
-	// flows it came with and goes when they are all filtered away.
-	DataNote string `json:"dataNote,omitempty"`
 	// CoveredSince is when Flows start being complete, set when a source read
 	// only its newest records and some of the window did not fit: Hubble
 	// returns at most NodeFlowLimit flows per node. Before it, traffic may be
@@ -291,13 +285,21 @@ const (
 	WarningCluster = "cluster"
 )
 
+type ProtocolBytes struct {
+	BytesSent int64 `json:"bytesSent"`
+	BytesRecv int64 `json:"bytesRecv"`
+}
+
 // AggregatedFlow represents flows aggregated by service pair.
 type AggregatedFlow struct {
-	Source      Endpoint  `json:"source"`
-	Destination Endpoint  `json:"destination"`
-	Protocol    string    `json:"protocol"`
-	Port        int       `json:"port"`
-	FlowCount   int64     `json:"flowCount"`
+	Source          Endpoint                 `json:"source"`
+	Destination     Endpoint                 `json:"destination"`
+	Protocol        string                   `json:"protocol"`
+	Port            int                      `json:"port"`
+	FlowCount       int64                    `json:"flowCount"`
+	BytesByProtocol map[string]ProtocolBytes `json:"bytesByProtocol,omitempty"`
+	// BytesSent and BytesRecv are the cross-protocol sums kept for compatibility.
+	// Display BytesByProtocol instead when more than one protocol is present.
 	BytesSent   int64     `json:"bytesSent"`
 	BytesRecv   int64     `json:"bytesRecv"`
 	Connections int64     `json:"connections"`

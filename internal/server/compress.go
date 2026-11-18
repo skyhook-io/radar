@@ -66,6 +66,11 @@ func compressMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		compressed := compress(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Declared on every response, compressed or not, before any bypass.
+			// The compressor adds Vary only to what it compresses, so a shared
+			// cache that first stored an uncompressed copy could hand it to every
+			// browser. Compressed responses then list it twice, which is valid.
+			w.Header().Add("Vary", "Accept-Encoding")
 			// Skip the compressor for streaming + upgrade requests. chi acquires
 			// a pooled gzip encoder per request *before* the handler sets its
 			// Content-Type, releasing it only when the handler returns — so a

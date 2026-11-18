@@ -140,6 +140,26 @@ Issues reports missing declared Flagger targets, analysis MetricTemplates and pr
 Absence is reported only from an already watched, synced inventory covering the referenced namespace. Unwatched, unsynced or unreadable dependencies produce no missing-reference finding; the scan starts no watches and makes no provider requests. Secret checks use metadata existence, never values. Findings depending on another namespace or Secret inventory are withheld unless the caller may read that evidence. Generated primary workloads and Services are not declared prerequisites.
 
 
+## System Upgrade Controller
+
+Rancher, k3s and RKE2 upgrade nodes with [system-upgrade-controller](https://github.com/rancher/system-upgrade-controller): a `Plan` (`upgrade.cattle.io/v1`) selects Nodes with `spec.nodeSelector` and runs one upgrade Job per Node, `spec.concurrency` at a time.
+
+**Plan drawer.** Status reads `Not valid` when the controller rejected the Plan (`Validated=False`); `Failed` when it reports a failed upgrade Job, a node selection or job validation error (`Complete=False` with `JobFailed`, `SelectNodesFailed` or `ValidationFailed`); `Version not resolved` when `LatestResolved=False` (the controller sets it when the Plan has neither `spec.version` nor `spec.channel`, which passes `Validated`, so Radar raises no Issue for it; a channel it fails to poll leaves the condition as it was); `Waiting for window` outside `spec.window`; `Not ready` when the controller holds the Plan back with neither of those conditions False (`Complete=False` with `NotReady`: it could not poll the channel before it ever resolved a version); `In progress` while it is applying to a Node or otherwise `Complete=False`; `Complete` when `Complete=True`; and `Not reported` otherwise. Target shows the version (or channel), the upgrade image, concurrency, service account, cordon and drain settings, the Secret names it mounts, and how many env variables and env sources the upgrade and prepare containers get (never their values). Progress lists the Nodes the controller would select (it also requires a `kubernetes.io/hostname` label and skips Nodes whose `plan.upgrade.cattle.io/<plan>` label is `disabled`), each **upgraded** (that label equals the Plan's `status.latestHash`), **upgrading** (its hostname is in `status.applying`, which holds hostnames, not Node names) or **pending**, with an "N of M nodes upgraded" bar, capped at 50 rows. Progress needs the Node list: when Radar can't read every Node it says progress is unknown instead of showing "0 of 0", and a selector with an operator Radar doesn't evaluate is named rather than guessed. A null `nodeSelector` selects no Node, an empty one every Node, as the controller reads it.
+
+**Issues.** A Plan the controller rejected raises a warning Issue (`UpgradePlanInvalid`) with the controller's message. A failed upgrade Job is already reported by the Job checks.
+
+**Upgrade impact.** When Plans that upgrade the distribution itself exist (an upgrade image ending in `k3s-upgrade` or `rke2-upgrade`), the Upgrade impact page lists them with their version and state, linking to each, even when its own scan fails; when the caller could list Plans in only some namespaces the count reads "at least". Other Plans, such as Rancher's system-agent upgrader, appear only in their own list.
+
+**Values.** Env values (`spec.upgrade.envs`, `spec.prepare.envs`) are shown in no drawer section and are redacted from AI context. The YAML tab shows the object as stored to whoever can read it.
+
+**In-cluster.** The chart toggle `rbac.crdGroups.systemUpgrade` is **off by default** (read-baseline decision `withhold`: Plan env can carry values, and `spec.secrets` names Secrets mounted into upgrade Jobs). Local runs use your own kubeconfig.
+
+| Resource | Group | Topology | Detail View | AI Summary |
+|----------|-------|----------|-------------|------------|
+| Plan | `upgrade.cattle.io/v1` | — | Yes | Env values redacted |
+
+---
+
 ## ConfigMap and Secret reflection (Reflector)
 
 [EmberStack Reflector](https://github.com/emberstack/kubernetes-reflector) copies
@@ -696,6 +716,28 @@ resource, including core Secrets and these excluded kinds. See the
 
 [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) continuously scans your cluster for vulnerabilities, misconfigurations, exposed secrets, and license compliance issues.
 
+### Checks › Vulnerabilities
+
+**Checks → Vulnerabilities** (REST `/api/vulnerabilities`, MCP `list_vulnerabilities`) rolls the VulnerabilityReports up to the images that run now: which images carry Critical and High CVEs, which of those have a fix, and which workloads and namespaces run them. Radar doesn't scan images itself. The tab, its line on Home's Checks card and the workload drawer's Vulnerabilities section appear only where the cluster serves the VulnerabilityReport kind. The rollup is not part of Issues or of the Best practices queue and score.
+
+- **By image** (default): one row per running image, however many workloads run it, with its findings by severity, how many have a fix, and the workloads that run it.
+- **By CVE**: each CVE with the images and workloads that carry it, and how many of its images have a fixed release.
+- **By workload**: each workload's containers and what their images carry.
+- **By fix**: the fixable findings as a list of package upgrades (below).
+
+Severity and has-a-fix filters apply to every view. A finding Trivy left unrated (common for Go modules) is rated from its CVSS score. A CVE counts once per package version in an image, so totals can be lower than the summaries in Trivy Operator's own reports.
+
+**By fix** groups an image's fixable findings by package and installed version into one upgrade, and says every CVE it clears. The target is the lowest listed release that fixes every one of those CVEs, read with the package's own versioning (Debian, Alpine, RPM, PEP 440, RubyGems, Maven, or semver for npm, Go, Cargo, NuGet and the like), and images needing the same upgrade of the same package share a row. A scanner lists one fix per maintained branch, so for `6.11.4` with `8.0.1, 7.5.5, 6.11.6` the target is `6.11.6`; a release above one CVE's fix that sits on a branch lacking another's (with `7.5.5, 6.11.6` listed, `7.5.4`) moves up to that branch's fix. The ecosystem comes from the finding's package type when Trivy Operator is configured to write it (`trivy.additionalVulnerabilityReportFields`), else from its package URL, which it writes by default. Where Radar can't order the versions (no ecosystem, one it doesn't know, or a version that doesn't parse) the row shows the scanner's listed releases and picks none.
+
+**Which reports count.** A report counts when the object it scanned (a Deployment's ReplicaSet, a CronJob, a StatefulSet, a DaemonSet, a Job, or a Pod whose controller Trivy doesn't scan through) still runs that container and image: Pods that aren't finished, and CronJobs that aren't suspended. Reports about older revisions or removed workloads are left out and counted, unless the build they scanned still runs.
+
+- Images are matched by the digest Kubernetes reports for each running container (by the reference its spec names until it starts), so a tag pushed again, such as `:latest`, doesn't carry the older build's scan, and every workload running a scanned build shares its findings. A started container whose image has no registry digest, such as a locally loaded one, reads as not scanned.
+- Of several reports about one image, every finding any of them lists counts once for every workload running it, so an ignore policy scoped to one workload doesn't clear another's CVEs. A CVE the vulnerability database later withdrew stays until the older report is rescanned.
+- One multi-platform image digest is credited with the platform Trivy scanned.
+- An image without findings reads as having no reported CVEs: Trivy Operator's own filters (`trivy.ignoreUnfixed`, `trivy.severity`, ignore policies) decide what a report lists.
+
+**Unknown is never clean.** A running image with no report is listed as not scanned yet, never as clean. While any running image is unscanned or some reports aren't readable, the totals read as lower bounds (`≥`); with nothing scanned they read as unknown. Reports are read only where the caller may list them, as everywhere else, and withheld namespaces are named.
+
 ### What Radar Shows
 
 **VulnerabilityReport Detail View:** Severity breakdown (Critical/High/Medium/Low), affected images, and CVE counts.
@@ -852,10 +894,10 @@ permits the reference or has produced an artifact.
 
 Service links accept short names in the rule's namespace or full `name.namespace.svc.<domain>` names. Radar reads a unique registry domain from standard observed Istiod Deployments' `--domain` argument, using Istio's `cluster.local` default when no override is observed. Conflicting or unresolved control-plane arguments leave FQDN links unresolved. External control planes and nonstandard launch configurations may therefore need additional domain discovery; arbitrary dotted hosts are not treated as local Services.
 
-**Live Traffic:** the Traffic view reads Istio's standard Prometheus metrics: `istio_requests_total` (with its 5xx rate and request/response bytes) for HTTP and gRPC edges, and `istio_tcp_received_bytes_total` / `istio_tcp_sent_bytes_total` for TCP edges, as rates over the view's time range (5 minutes when it is under a minute). A rate needs two samples per series, so a range shorter than two scrape intervals shows no traffic; the map then says to choose a longer range. TCP edges appear whenever bytes move in the view's range, including on long-lived connections, and show data volume (byte rates × the window) with no request rate. Radar reads the receiving side's report: the destination sidecar (`reporter="destination"`) or, in ambient mode, the destination's waypoint proxy (`reporter="waypoint"`). It never adds the receiving and calling sides' reports together. In ambient mode:
+**Live Traffic:** the Traffic view reads Istio's standard Prometheus metrics: `istio_requests_total` (with its 5xx rate and request/response bytes) for HTTP and gRPC edges, and `istio_tcp_received_bytes_total` / `istio_tcp_sent_bytes_total` for TCP edges, as rates over the view's time range (5 minutes when it is under a minute). A rate needs two samples per series, so a range shorter than two scrape intervals shows no traffic; the map then says to choose a longer range. TCP edges appear whenever bytes move in the view's range, including on long-lived connections, and show data volume (byte rates × the window) with no request rate; on the map, an edge with no request rate is labelled with its throughput per protocol (for example `TCP · 2.4 KB/s`); against an older Radar that sends no per-protocol breakdown those labels stay empty. Radar reads the receiving side's report: the destination sidecar (`reporter="destination"`) or, in ambient mode, the destination's waypoint proxy (`reporter="waypoint"`). It never adds the receiving and calling sides' reports together. In ambient mode:
 - Workloads behind a waypoint get HTTP and gRPC edges from the waypoint's metrics. ztunnel also reports the hops into and out of the waypoint. Radar recognizes waypoint Deployments by their labels, as Kiali does (`gateway.istio.io/managed=istio.io-mesh-controller`, or, without that label, a `gateway.networking.k8s.io/gateway-name` containing "waypoint"), and leaves those hops out, so the map draws client → server without the proxy in between. If Radar cannot list Deployments, it cannot recognize waypoints and the hops stay on the map.
 - A request into an ambient namespace (labeled `istio.io/dataplane-mode=ambient`) that no waypoint reported, such as an ingress gateway or sidecar calling a workload with no waypoint, is read from the calling proxy's report (`reporter="source"`), as Kiali does. Those figures are used only when the receiving side counted none of that client's requests to the same workload, Service and protocol in the view's time range. When it counted some, its figures are used, so requests that skipped the waypoint are not counted. Radar finds ambient namespaces from its Namespace cache; without it, these reports are not read and the ztunnel check below is off. The query names every ambient namespace and is sent in a POST body; when the namespaces are too many to fit Radar's 16 KB query limit (several hundred, depending on name length), Radar skips these reports and the map says so.
-- Traffic between ambient workloads without a waypoint has no L7 metrics. It appears as TCP edges from ztunnel. When a call's HTTP figures come from the calling proxy (no waypoint or sidecar received it) and ztunnel reports TCP between the same workloads, Data includes both the HTTP bytes and ztunnel's TCP bytes, and the map notes that these may count the same calls twice.
+- Traffic between ambient workloads without a waypoint has no L7 metrics. It appears as TCP edges from ztunnel. When a call's HTTP figures come from the calling proxy (no waypoint or sidecar received it) and ztunnel reports TCP between the same workloads, Data shows HTTP payload bytes and ztunnel TCP connection bytes side by side by protocol. These measurements can describe the same calls and are never added together.
 - Prometheus has to scrape ztunnel and the waypoint proxies. When the view includes ambient traffic but Radar finds no ztunnel metrics (no `istio_build{component="ztunnel"}` series and no ztunnel TCP reports into an ambient namespace), the map says so, because TCP traffic into ambient workloads without a waypoint is then missing rather than idle.
 
 The volume filter uses request rate: setting it above zero hides TCP-only edges. Edge sizing, sorting and the busiest-edge highlight also use request rate. Radar Hub connected to an older Radar retains its connection-open rate behavior until that Radar is upgraded.
@@ -1069,6 +1111,49 @@ Provider `parameters` are not summarized. This is presentation only, not a redac
 Collection is on by default in the Helm chart (`rbac.crdGroups.secretsStoreCsi`) and reads only these two kinds. For Radar Cloud callers, SecretProviderClass is withheld from the default integration-read grants (its `parameters` are free-form) and SecretProviderClassPodStatus is granted; see [the default read policy](cloud-rbac-baseline.md).
 
 Tested with driver 1.6.1 and the HashiCorp Vault provider (chart 0.34.1) on kind.
+
+---
+
+## CSI Volume Snapshots
+
+[CSI volume snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/) (`snapshot.storage.k8s.io`) are served by the external-snapshotter CRDs and its snapshot controller, and taken by each CSI driver's `csi-snapshotter` sidecar. A VolumeSnapshot (namespaced) is bound to a VolumeSnapshotContent (cluster-scoped), which records the snapshot on the storage system; a VolumeSnapshotClass (cluster-scoped) names the driver and deletion policy.
+
+### What Radar Shows
+
+**VolumeSnapshot:** status, ready to use, the source PVC or, for a pre-provisioned snapshot, the content it names, the snapshot class, the bound content (`status.boundVolumeSnapshotContentName`, the observed binding rather than the requested source), restore size, when the snapshot was taken, and the controller's error. Source PVC, class and content are links.
+
+**VolumeSnapshotContent:** status, the VolumeSnapshot it names (marked "not bound yet" until the controller records the snapshot's UID), driver, deletion policy and what it means, class, the source volume handle or pre-provisioned snapshot handle, the reported snapshot handle, restore size (reported in bytes), creation time (reported in nanoseconds) and the error.
+
+**VolumeSnapshotClass:** driver, deletion policy, whether it is the default class for its driver (`snapshot.storage.kubernetes.io/is-default-class`) and its parameters. CSI parameters name credential Secrets; they do not hold their values.
+
+All three kinds have curated table columns. Status reads:
+
+| Status | Source |
+|---|---|
+| Ready | `status.readyToUse: true` |
+| Error | `status.error` while not ready. The snapshot controller keeps retrying and clears the error once the snapshot is ready, so an error never outranks `readyToUse` |
+| Not ready | `status.readyToUse: false` with no error, for example while the driver uploads the snapshot |
+| Pending | A VolumeSnapshot not yet bound to a content, or a content with no status (its driver's sidecar has not processed it) |
+| Readiness unknown | Bound, but no `readyToUse` reported |
+| Terminating | `metadata.deletionTimestamp` is set |
+
+A missing restore size or creation time reads "Not reported", never zero. Ready means the CSI driver can restore a volume from the snapshot; it does not establish application consistency or that a restore was ever tested. Not every snapshot has a source PVC: a pre-provisioned snapshot names an existing content instead.
+
+A VolumeSnapshot with `status.error` that is not ready to use produces one warning in Issues (including the API and MCP), `VolumeSnapshotError`, quoting the controller's message, which the API says should not contain sensitive information. Its onset is the error's own time. A VolumeSnapshotContent produces no separate Issue: the controller copies its error onto the bound snapshot, and the content drawer shows it. MCP list summaries carry the same status, readiness, source, driver, deletion policy and restore size.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| VolumeSnapshot | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+| VolumeSnapshotContent | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+| VolumeSnapshotClass | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+
+Collection is on by default in the Helm chart (`rbac.crdGroups.volumeSnapshots`) and reads only these three kinds. Radar Cloud's default integration-read role grants all three, as the cluster read already grants PersistentVolumes and StorageClasses; see [the default read policy](cloud-rbac-baseline.md).
+
+Checked against snapshot-controller v8.6.0 and the csi-hostpath driver on kind: ready dynamic snapshots with Delete and Retain classes, a missing class, a missing PVC, an unbound PVC, and pre-provisioned contents with a valid and an unknown snapshot handle.
+
+Not covered: topology and Related Resources edges, VolumeGroupSnapshots, PVCs restored from a snapshot (`dataSource`), and snapshot creation, deletion or restore actions.
 
 ---
 

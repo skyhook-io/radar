@@ -219,6 +219,7 @@ export function formatGroupName(group: string): string {
     'jaegertracing.io': 'Jaeger',
     'opentelemetry.io': 'OpenTelemetry',
     'flagger.app': 'Flagger',
+    'upgrade.cattle.io': 'System Upgrade',
     'secrets-store.csi.x-k8s.io': 'Secrets Store CSI',
     'projectcalico.org': 'Calico',
     'crd.projectcalico.org': 'Calico',

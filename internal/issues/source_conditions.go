@@ -164,6 +164,10 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 				out = append(out, StrimziKafkaIssues(gvr, u)...)
 				continue
 			}
+			if gvr.Group == VolumeSnapshotGroup && kind == "VolumeSnapshot" {
+				out = append(out, VolumeSnapshotIssues(gvr, u)...)
+				continue
+			}
 			if ownedSubjects[resourceKey(gvr.Group, kind, u.GetNamespace(), u.GetName())] {
 				continue
 			}
@@ -269,6 +273,10 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 	case "flagger.app":
 		if kind == "Canary" {
 			return detectFlaggerCanaryIssues(gvr, u)
+		}
+	case "upgrade.cattle.io":
+		if kind == "Plan" {
+			return detectUpgradePlanIssues(gvr, u)
 		}
 	case "gateway.networking.k8s.io":
 		return detectGatewayConditionIssues(gvr, kind, u)

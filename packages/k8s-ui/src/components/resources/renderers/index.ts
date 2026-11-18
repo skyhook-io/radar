@@ -198,10 +198,12 @@ export { RayJobRenderer } from './RayJobRenderer'
 
 export { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from './OpenTelemetryRenderers'
 export { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from './FlaggerRenderers'
+export { UpgradePlanRenderer } from './UpgradePlanRenderer'
 export { SecretProviderClassRenderer, SecretsStoreMountsSection } from './SecretsStoreRenderers'
 
 export { StrimziConnectorRenderer } from './StrimziConnectorRenderer'
 export { StrimziKafkaRenderer, StrimziKafkaNodePoolRenderer } from './StrimziKafkaRenderer'
+export { VolumeSnapshotRenderer, VolumeSnapshotContentRenderer, VolumeSnapshotClassRenderer } from './VolumeSnapshotRenderers'
 
 export { CustomResourceDefinitionRenderer } from './CustomResourceDefinitionRenderer'
 

@@ -66,6 +66,9 @@ var crdGroupToChart = map[string]string{
 	"traefik.io":          "traefik",
 	"traefik.containo.us": "traefik",
 
+	// Rancher system-upgrade-controller (k3s/RKE2 node upgrades)
+	"upgrade.cattle.io": "system-upgrade-controller",
+
 	// CloudNativePG, and its Barman Cloud backup plugin, a separate chart
 	"postgresql.cnpg.io":  "cloudnative-pg",
 	"barmancloud.cnpg.io": "plugin-barman-cloud",

@@ -12,14 +12,13 @@ import { TrafficFocusSearch } from './TrafficFocusSearch'
 import { TrafficSourcePill } from './TrafficSourcePill'
 import { TrafficGraphTooLarge } from './TrafficGraphTooLarge'
 import { TrafficGraphUnavailable } from './TrafficGraphUnavailable'
-import { TrafficDataNote } from './TrafficDataNote'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, groupAddonFlows, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, mergedEdgePort, selectedEdgeMatcher, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, verdictChoices, type TrafficFocus, warningRetries, warningBannerTitle, emptyWarningHeadline } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, groupAddonFlows, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, mergedEdgePort, selectedEdgeMatcher, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, verdictChoices, type TrafficFocus, warningRetries, warningBannerTitle, emptyWarningHeadline, rateWindowSeconds } from './trafficFilters'
 
 // Where a warning about which cluster the traffic belongs to points: how the map
 // keeps to this cluster in a shared metrics store, and how to set its label.
@@ -1069,7 +1068,6 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       if (!data) return undefined
       const parts: string[] = []
       if (data.warning) parts.push(data.warning)
-      if (data.dataNote) parts.push(data.dataNote)
       if (data.matched > data.flows.length) {
         parts.push(`Newest ${data.flows.length.toLocaleString()} of ${data.matched.toLocaleString()} records for this selection`)
       }
@@ -1418,7 +1416,6 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                     </button>
                     </Tooltip>
                   )}
-                  <TrafficDataNote dataNote={finalFlows.length > 0 ? flowsData?.dataNote : undefined} />
                   {coverage && (
                     // Not a warning: a busy cluster reaches the limit on every
                     // fetch. It says which part of the window the map shows.
@@ -1515,6 +1512,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                     onFocus={setFocus}
                     focusedId={focusKey}
                     onLayoutUnavailable={setLayoutUnavailable}
+                    windowSeconds={rateWindowSeconds(timeRange)}
                   />
                 </>
               )}
