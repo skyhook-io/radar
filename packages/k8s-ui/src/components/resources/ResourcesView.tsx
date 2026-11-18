@@ -382,6 +382,8 @@ const PHONE_PINNED_HEAD = 'phone:sticky phone:left-[var(--pin-left)] phone:z-[3]
 const PHONE_NAME_MAX_VW = 45
 // The most of the table's width Name may hold on to (see columnLayoutWidths).
 const NAME_VIEWPORT_SHARE = 0.5
+// Room a column shrunk to its heading keeps beyond the measured heading.
+const HEADER_SHRINK_SLACK_PX = 6
 function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean | undefined, column: 'compare' | 'checkbox' | 'name'): React.CSSProperties {
   const compare = compareMode ? COMPARE_COLUMN_WIDTH : 0
   const checkbox = showCheckbox ? CHECKBOX_COLUMN_WIDTH : 0
@@ -6229,6 +6231,11 @@ export function ResourcesView({
     const nameMax = availableWidth > 0
       ? Math.max(NAME_MIN_PX, Math.min(NAME_MAX_PX, Math.floor(availableWidth * NAME_VIEWPORT_SHARE)))
       : NAME_MAX_PX
+    // The heading's measured width runs a pixel or two short of the rendered
+    // one (sub-pixel tracking, the filter button's padding). That never showed
+    // while columns sat at their curated widths; a column shrunk right down to
+    // its heading would cut it ("NO…"), so it keeps a few pixels in hand.
+    const headerShrinkWidth = (col: Column) => getColumnHeaderWidth(col, extraColumnsByKey) + HEADER_SHRINK_SLACK_PX
     const inputs: ColumnLayoutInput[] = columns.map(col => {
       const spec = columnSizingSpec(col)
       const minWidth = getColumnMinWidth(col, extraColumnsByKey)
@@ -6245,12 +6252,12 @@ export function ResourcesView({
         // the 90th percentile of its names (never below NAME_MIN_PX, never
         // above the width it holds).
         min: spec.mode === 'exact'
-          ? content !== undefined ? Math.max(getColumnHeaderWidth(col, extraColumnsByKey), content) : undefined
+          ? content !== undefined ? Math.max(headerShrinkWidth(col), content) : undefined
           : spec.keep
             ? content !== undefined
               ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000yieldTo`] ?? content, content, nameMax))
               : undefined
-            : spec.mode === 'fit' ? getColumnHeaderWidth(col, extraColumnsByKey) : undefined,
+            : spec.mode === 'fit' ? headerShrinkWidth(col) : undefined,
         yieldRank: spec.yieldRank,
         userWidth: columnWidths[col.key] || frozen?.[col.key],
         content,
