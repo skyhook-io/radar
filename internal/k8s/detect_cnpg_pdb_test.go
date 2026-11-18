@@ -73,6 +73,27 @@ func TestClassifyCNPGPrimaryPDB(t *testing.T) {
 			f.Nodes["node-1"].Spec.Taints = []corev1.Taint{{Key: "karpenter.sh/disrupted", Effect: corev1.TaintEffectNoSchedule}}
 		}, cnpgPDBBlocking},
 		{"primary node missing", 2, func(f *CNPGPDBTestFixture) { delete(f.Nodes, "node-1") }, cnpgPDBBlocking},
+		{"custom untolerated drain taint on the standby's node", 2, func(f *CNPGPDBTestFixture) {
+			f.Nodes["node-2"].Spec.Taints = []corev1.Taint{{Key: "example.com/draining", Effect: corev1.TaintEffectNoSchedule}}
+		}, cnpgPDBBlocking},
+		{"custom untolerated NoExecute taint on the primary's node", 2, func(f *CNPGPDBTestFixture) {
+			f.Nodes["node-1"].Spec.Taints = []corev1.Taint{{Key: "example.com/evict", Effect: corev1.TaintEffectNoExecute}}
+		}, cnpgPDBBlocking},
+		{"dedicated nodes the instances tolerate", 2, func(f *CNPGPDBTestFixture) {
+			for _, n := range f.Nodes {
+				n.Spec.Taints = []corev1.Taint{{Key: "dedicated", Value: "postgres", Effect: corev1.TaintEffectNoSchedule}}
+			}
+			for _, p := range f.Pods {
+				p.Spec.Tolerations = []corev1.Toleration{{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "postgres", Effect: corev1.TaintEffectNoSchedule}}
+			}
+		}, cnpgPDBExpected},
+		{"PreferNoSchedule is ignored", 2, func(f *CNPGPDBTestFixture) {
+			f.Nodes["node-2"].Spec.Taints = []corev1.Taint{{Key: "example.com/soft", Effect: corev1.TaintEffectPreferNoSchedule}}
+		}, cnpgPDBExpected},
+		{"a tolerated default drain taint still counts", 2, func(f *CNPGPDBTestFixture) {
+			f.Nodes["node-2"].Spec.Taints = []corev1.Taint{{Key: "karpenter.sh/disrupted", Effect: corev1.TaintEffectNoSchedule}}
+			f.Pods[1].Spec.Tolerations = []corev1.Toleration{{Operator: corev1.TolerationOpExists}}
+		}, cnpgPDBBlocking},
 		{"only standby's node cordoned", 2, func(f *CNPGPDBTestFixture) { f.Nodes["node-2"].Spec.Unschedulable = true }, cnpgPDBBlocking},
 		{"only standby's node not ready", 2, func(f *CNPGPDBTestFixture) {
 			f.Nodes["node-2"].Status.Conditions[0].Status = corev1.ConditionUnknown

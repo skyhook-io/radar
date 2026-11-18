@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/klog/v2"
 
 	"github.com/skyhook-io/radar/pkg/cnpg"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -146,7 +147,7 @@ func cnpgPrimaryHAGap(pdb *policyv1.PodDisruptionBudget, cluster *unstructured.U
 		}
 	}
 	primaryNode := primary.Spec.NodeName
-	if !cnpgNodeUsable(node(primaryNode)) {
+	if !cnpgNodeUsable(node(primaryNode), primary) {
 		return "the primary's node is cordoned, draining or not ready"
 	}
 	standby := false
@@ -159,7 +160,7 @@ func cnpgPrimaryHAGap(pdb *policyv1.PodDisruptionBudget, cluster *unstructured.U
 		if p.Spec.NodeName == primaryNode {
 			return "a standby shares the primary's node"
 		}
-		if p.DeletionTimestamp == nil && isPodReadyForProblem(p) && p.Spec.NodeName != "" && cnpgNodeUsable(node(p.Spec.NodeName)) {
+		if p.DeletionTimestamp == nil && isPodReadyForProblem(p) && p.Spec.NodeName != "" && cnpgNodeUsable(node(p.Spec.NodeName), p) {
 			standby = true
 		}
 	}
@@ -169,12 +170,21 @@ func cnpgPrimaryHAGap(pdb *policyv1.PodDisruptionBudget, cluster *unstructured.U
 	return ""
 }
 
-func cnpgNodeUsable(n *corev1.Node) bool {
+// cnpgNodeUsable is conservative: the operator's drain taints are
+// configurable, so besides the default keys (unusable even when tolerated) a
+// NoSchedule or NoExecute taint the instance doesn't tolerate also counts.
+func cnpgNodeUsable(n *corev1.Node, pod *corev1.Pod) bool {
 	if n == nil || n.DeletionTimestamp != nil || n.Spec.Unschedulable {
 		return false
 	}
 	for _, t := range n.Spec.Taints {
 		if slices.Contains(cnpgDrainTaints, t.Key) {
+			return false
+		}
+		if t.Effect != corev1.TaintEffectNoSchedule && t.Effect != corev1.TaintEffectNoExecute {
+			continue
+		}
+		if !slices.ContainsFunc(pod.Spec.Tolerations, func(tol corev1.Toleration) bool { return tol.ToleratesTaint(klog.Background(), &t, false) }) {
 			return false
 		}
 	}
