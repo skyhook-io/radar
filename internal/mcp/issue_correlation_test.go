@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/internal/issuecorrelation"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
@@ -483,7 +484,7 @@ func TestIssueCorrelation_WorstCasePayloadBounded(t *testing.T) {
 				ChangeCategory: issuesapi.ChangeCategorySpecConfig,
 				Summary:        "spec changed: containers[app].image, containers[app].resources, replicas, strategy, template.metadata.labels",
 			}
-			for f := 0; f < correlationFieldLimit; f++ {
+			for f := 0; f < issuecorrelation.FieldLimit; f++ {
 				change.Fields = append(change.Fields, issuesapi.ChangeField{
 					Path:     fmt.Sprintf("spec.template.spec.containers[app].env[FEATURE_FLAG_%d].value", f),
 					OldValue: "a-realistically-long-previous-configuration-value-1234567890",

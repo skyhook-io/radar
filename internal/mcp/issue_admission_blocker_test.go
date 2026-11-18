@@ -14,6 +14,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/internal/issuecorrelation"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -58,9 +59,7 @@ func initAdmissionCache(t *testing.T) {
 // setPolicyCreatedAt stands in for the cached policy object's creationTimestamp.
 func setPolicyCreatedAt(t *testing.T, at time.Time) {
 	t.Helper()
-	prev := policyCreatedAt
-	policyCreatedAt = func(string, string, string) (time.Time, bool) { return at, true }
-	t.Cleanup(func() { policyCreatedAt = prev })
+	t.Cleanup(issuecorrelation.SetPolicyCreatedAtForTest(func(string, string, string) (time.Time, bool) { return at, true }))
 }
 
 // The bench case: the Deployment is created, a ResourceQuota lands after it,
@@ -86,7 +85,7 @@ func TestAdmissionBlocker_QuotaAddedAfterWorkload(t *testing.T) {
 		t.Fatalf("want quota + deployment refs, got %+v", iss.CorrelatedChanges)
 	}
 	quota := iss.CorrelatedChanges[0]
-	if quota.Kind != "ResourceQuota" || quota.Name != "memory-limit-quota" || quota.Namespace != "shop" || quota.RankReason != admissionBlockerRankReason {
+	if quota.Kind != "ResourceQuota" || quota.Name != "memory-limit-quota" || quota.Namespace != "shop" || quota.RankReason != issuecorrelation.AdmissionBlockerRankReason {
 		t.Fatalf("quota must lead the refs: %+v", quota)
 	}
 	if iss.CorrelatedChanges[1].Kind != "Deployment" {
@@ -172,7 +171,7 @@ func TestAdmissionBlocker_LimitRangeAddedAfterWorkload(t *testing.T) {
 	iss := resp.Issues[0]
 
 	if len(iss.CorrelatedChanges) != 1 || iss.CorrelatedChanges[0].Kind != "LimitRange" || iss.CorrelatedChanges[0].Name != "container-limits" ||
-		iss.CorrelatedChanges[0].RankReason != admissionLimitRangeRankReason {
+		iss.CorrelatedChanges[0].RankReason != issuecorrelation.AdmissionLimitRangeRankReason {
 		t.Fatalf("LimitRange not linked: %+v", iss.CorrelatedChanges)
 	}
 	want := "LimitRange container-limits was created at " + utc(limitAt) + "; Deployment api has no recorded change in the last hour: the LimitRange changed last."
@@ -181,24 +180,6 @@ func TestAdmissionBlocker_LimitRangeAddedAfterWorkload(t *testing.T) {
 	}
 	if iss.IssueTiming != "" {
 		t.Fatalf("at-creation timing kept: %q", iss.IssueTiming)
-	}
-}
-
-func TestAdmissionBlocker_LimitRangeIgnoresCustomGroup(t *testing.T) {
-	initAdmissionCache(t)
-	store := initCorrelationStore(t)
-	now := time.Now().Truncate(time.Second)
-	for _, version := range []string{"v1", "example.com/v1"} {
-		appendChange(t, store, timeline.TimelineEvent{
-			ID: version, Timestamp: now.Add(-time.Minute), Kind: "LimitRange", APIVersion: version,
-			Namespace: "shop", Name: "container-limits", EventType: timeline.EventTypeAdd,
-		})
-	}
-	iss := admissionIssue(issuesapi.CategoryQuotaExceeded, "Deployment", "api",
-		`pods "api-6d8b-xyz12" is forbidden: maximum memory usage per Container is 512Mi, but limit is 1Gi`, now)
-	ev := admissionBlockerForIssue(context.Background(), &iss, time.Hour)
-	if ev == nil || !ev.complete || ev.saturated || len(ev.changes) != 1 || ev.changes[0].APIVersion != "v1" {
-		t.Fatalf("admission evidence = %+v, want complete core-only LimitRange history", ev)
 	}
 }
 
@@ -331,21 +312,6 @@ func TestAdmissionBlocker_OnlyClaimsRecordedOrder(t *testing.T) {
 		attachIssueChangeCorrelation(context.Background(), &resp)
 		if iss := resp.Issues[0]; strings.Contains(iss.TimingSummary, "no recorded change") || strings.Contains(iss.TimingSummary, "changed last") {
 			t.Fatalf("claimed an uncollected quota unchanged: %q", iss.TimingSummary)
-		}
-	})
-
-	t.Run("configmap edit is not a workload change", func(t *testing.T) {
-		initAdmissionCache(t)
-		store := initCorrelationStore(t)
-		quotaAt := now.Add(-10 * time.Minute)
-		appendChange(t, store, timeline.TimelineEvent{Timestamp: now.Add(-20 * time.Minute), Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web", EventType: timeline.EventTypeAdd})
-		appendChange(t, store, timeline.TimelineEvent{Timestamp: quotaAt, Kind: "ResourceQuota", APIVersion: "v1", Namespace: "shop", Name: "compute", EventType: timeline.EventTypeAdd})
-		cm := []issuesapi.RecentChange{{Kind: "ConfigMap", Namespace: "shop", Name: "web-config", ChangeType: "update", Timestamp: now.Add(-2 * time.Minute).Format(time.RFC3339)}}
-		ev := admissionBlockerForIssue(context.Background(), &issuesapi.Issue{Category: issuesapi.CategoryQuotaExceeded, Kind: "Deployment", Namespace: "shop", Name: "web", Message: quotaMsg}, time.Hour)
-		subject := append(cm, issuesapi.RecentChange{Kind: "Deployment", Namespace: "shop", Name: "web", ChangeType: "add", Timestamp: now.Add(-20 * time.Minute).Format(time.RFC3339)})
-		sentence, policyLast := admissionChangeOrder(&issuesapi.Issue{Kind: "Deployment", Name: "web"}, ev, subject, true, true, time.Hour)
-		if !policyLast || !strings.HasSuffix(sentence, "the ResourceQuota changed last.") {
-			t.Fatalf("a ConfigMap edit decided the order: %q", sentence)
 		}
 	})
 

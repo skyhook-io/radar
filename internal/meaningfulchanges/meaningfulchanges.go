@@ -243,6 +243,11 @@ type Query struct {
 	Kinds      []string
 	Name       string
 	Since      time.Duration
+	// From and To fix the window instead of Since. From, when set, is the
+	// window's start; To, when set, bounds the store read at its end, so a
+	// window anchored in the past does not slide forward with the clock.
+	From       time.Time
+	To         time.Time
 	Limit      int
 	FieldLimit int
 	// Allow, when set, drops changes the caller may not read before ranking
@@ -489,11 +494,26 @@ func RecentForWorkloadAndConfigMapsAuthorizedDetailed(
 	includeSource func(kind, name string) bool,
 	viewer Viewer,
 ) (result RecentResult, coverageLimited bool, err error) {
+	return RecentForWorkloadSources(ctx, obj, kind, namespace, name,
+		Query{Since: since, Limit: limit, FieldLimit: fieldLimit, Viewer: viewer}, includeSource)
+}
+
+// RecentForWorkloadSources is RecentForWorkloadAndConfigMapsAuthorizedDetailed
+// with the window, limits, viewer and row filter taken from q. q's namespaces,
+// kinds and name are replaced by the workload and its sources.
+func RecentForWorkloadSources(
+	ctx context.Context,
+	obj any,
+	kind, namespace, name string,
+	q Query,
+	includeSource func(kind, name string) bool,
+) (result RecentResult, coverageLimited bool, err error) {
 	store := timeline.GetStore()
 	if store == nil {
 		return RecentResult{}, false, timeline.StoreMissingError()
 	}
-	q := normalizeQuery(Query{Namespaces: []string{namespace}, Since: since, Limit: limit, FieldLimit: fieldLimit, Viewer: viewer})
+	q.Namespaces, q.Kinds, q.Name = []string{namespace}, nil, ""
+	q = normalizeQuery(q)
 	var events []timeline.TimelineEvent
 	fetch := func(resourceKind, resourceName string) error {
 		canonicalResourceKind := canonicalKind(resourceKind)
@@ -638,6 +658,9 @@ func normalizeQuery(q Query) Query {
 		q.Kinds[i] = canonicalKind(kind)
 	}
 	if q.start.IsZero() {
+		q.start = q.From
+	}
+	if q.start.IsZero() {
 		q.start = time.Now().Add(-q.Since)
 	}
 	return q
@@ -677,6 +700,7 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 		// Groups are matched against the recorded apiVersion.
 		RequireAPIVersion: len(q.Groups) > 0,
 		Since:             q.start,
+		Until:             q.To,
 		Sources:           []timeline.EventSource{timeline.SourceInformer},
 		EventTypes:        eventTypes,
 		// Changes are root-cause evidence for the CURRENT cluster — the

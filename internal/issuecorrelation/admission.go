@@ -1,7 +1,6 @@
-package mcp
+package issuecorrelation
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"slices"
@@ -10,7 +9,6 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
-	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -22,7 +20,7 @@ import (
 // helpers add the policy side and say which changed last.
 
 // admissionBlockerMaxChanges bounds the policy-side refs in the shared
-// correlationChangeCap, leaving room for the workload's own change.
+// ChangeCap, leaving room for the workload's own change.
 const admissionBlockerMaxChanges = 2
 
 // admissionOrderFetchLimit is the per-side fetch for admission issues: deep
@@ -40,23 +38,32 @@ const admissionOnsetSlop = 30 * time.Second
 const admissionRecordLag = 5 * time.Second
 
 const (
-	admissionBlockerRankReason    = "the object named by the admission rejection"
-	admissionLimitRangeRankReason = "a LimitRange in the rejecting namespace (LimitRange rejections name none)"
+	AdmissionBlockerRankReason    = "the object named by the admission rejection"
+	AdmissionLimitRangeRankReason = "a LimitRange in the rejecting namespace (LimitRange rejections name none)"
 )
+
+const webhookConfigurationGroup = "admissionregistration.k8s.io"
 
 type admissionBlockerEvidence struct {
 	// unchanged states that the policy side has no recorded change in the
-	// given window ("hour", "45 minutes").
+	// window, given its phrase ("in the last hour", "since ...").
 	unchanged func(window string) string
 	// changes are the visible spec and lifecycle changes, newest first.
 	changes []issuesapi.RecentChange
 	// saturated means a fetch hit its bound (correlated_changes_incomplete).
 	saturated bool
+	// outputCapped means a fetch had more qualifying rows than its limit.
+	outputCapped bool
 	// complete means nothing was missed: the object was resolved, the fetch
 	// was not saturated, and RBAC hid nothing. Only then may an empty list be
 	// stated as "no recorded change".
 	complete bool
+	history  issuesapi.HistoryCoverage
 }
+
+// admissionReadError is a failed policy-side read: the policy side is
+// unknown, which is not the same as there being no blocker.
+type admissionReadError struct{ kind string }
 
 // policyCreatedAt returns a cached ResourceQuota or LimitRange's
 // creationTimestamp; ok=false when it isn't cached or isn't one of those kinds.
@@ -82,6 +89,14 @@ var policyCreatedAt = func(kind, namespace, name string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// SetPolicyCreatedAtForTest stands in for the cached policy object's
+// creationTimestamp and returns the function that restores it.
+func SetPolicyCreatedAtForTest(createdAt func(kind, namespace, name string) (time.Time, bool)) func() {
+	prev := policyCreatedAt
+	policyCreatedAt = createdAt
+	return func() { policyCreatedAt = prev }
+}
+
 // creationTimeKnown reports whether a policy change's recorded time dates it:
 // false for an add recorded well after the object was created, as one listed
 // when its informer (re)synced is.
@@ -93,56 +108,58 @@ func creationTimeKnown(c issuesapi.RecentChange) bool {
 	return !ok || changeTime(c).Sub(created) <= admissionRecordLag
 }
 
-func isAdmissionIssue(iss *issuesapi.Issue) bool {
-	return iss.Category == issuesapi.CategoryQuotaExceeded || iss.Category == issuesapi.CategoryAdmissionWebhookBlocking
-}
-
-// admissionBlockerForIssue returns the policy-side evidence for an admission
-// issue whose message names its blocking object, or nil.
-func admissionBlockerForIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration) *admissionBlockerEvidence {
-	if !isAdmissionIssue(iss) || iss.Namespace == "" {
-		return nil
+// admissionBlocker returns the policy-side evidence for an admission issue
+// whose message names its blocking object, or nil. A read error leaves the
+// evidence nil and is returned so a caller can say the policy side is unknown.
+func (c *run) admissionBlocker() (*admissionBlockerEvidence, *admissionReadError) {
+	iss := &c.iss
+	if !IsAdmissionIssue(iss) || iss.Namespace == "" {
+		return nil, nil
 	}
 	blocker, ok := k8s.ParseAdmissionBlocker(iss.Message)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	ev := &admissionBlockerEvidence{complete: true}
 	var changes []issuesapi.RecentChange
+	historySet := false
 	// fetch reads one policy object's changes (every object of kind in the
 	// namespace when name is empty). A kind the caller can't read is not
 	// queried and leaves the policy side unknown, so no sentence rests on
 	// history the caller may not see.
-	fetch := func(kind, apiVersion, namespace, name string) bool {
-		if pkgauth.UserFromContext(ctx) != nil && !k8s.ChangeReadAllowed(kind, apiVersion, namespace, mcpChangeAuthorizer(ctx)) {
+	fetch := func(kind, group, namespace, name string) bool {
+		if !c.allowed(kind, group, namespace) {
 			ev.complete = false
 			return true
 		}
-		var res meaningfulchanges.RecentResult
-		var err error
-		if name == "" {
-			res, err = meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
-				Namespaces: []string{namespace}, Kinds: []string{kind},
-				Since: window, Limit: admissionOrderFetchLimit, FieldLimit: correlationFieldLimit,
-				Viewer: recentChangeViewer(ctx), TrackedOnly: true,
-			})
-		} else {
-			res, err = meaningfulchanges.RecentForResourceDetailed(ctx, kind, namespace, name, window, admissionOrderFetchLimit, correlationFieldLimit, recentChangeViewer(ctx))
+		q := c.query(admissionOrderFetchLimit)
+		q.Namespaces, q.Kinds, q.Name, q.TrackedOnly = nil, []string{kind}, name, true
+		if namespace != "" || name != "" {
+			q.Namespaces = []string{namespace}
 		}
+		res, err := meaningfulchanges.Recent(c.ctx, q)
 		if err != nil {
-			log.Printf("[mcp] admission blocker correlation failed for %s %s/%s: %v", kind, namespace, name, err)
+			log.Printf("[issuecorrelation] Failed to read admission policy changes for %s %s/%s: %v", kind, namespace, name, err)
 			return false
 		}
 		changes = append(changes, res.Changes...)
 		ev.saturated = ev.saturated || res.FetchSaturated
+		ev.outputCapped = ev.outputCapped || res.OutputCapped
 		// Evicted history may have held a change, as may an overfull fetch.
 		ev.complete = ev.complete && !res.FetchSaturated && !res.History.Incomplete
+		if res.History.Incomplete && !historySet {
+			ev.history, historySet = res.History, true
+			c.addUnknown(issuesapi.CorrelationUnknownHistoryIncomplete, group, kind)
+		}
 		return true
 	}
 	// Without an informer covering the namespace for the kind (no list
 	// access for Radar itself), the timeline holds none of its changes, and
 	// an empty answer means nothing.
 	collected := func(kind string) bool {
+		if c.opts.CheckCoverage {
+			c.checkCollected(kind, "", iss.Namespace)
+		}
 		cache := k8s.GetResourceCache()
 		if cache == nil {
 			return false
@@ -156,68 +173,84 @@ func admissionBlockerForIssue(ctx context.Context, iss *issuesapi.Issue, window 
 	case blocker.Kind == "ResourceQuota":
 		ev.complete = collected("ResourceQuota")
 		ev.unchanged = func(window string) string {
-			return "ResourceQuota " + blocker.Name + " has no recorded change in the last " + window
+			return "ResourceQuota " + blocker.Name + " has no recorded change " + window
 		}
-		if !fetch("ResourceQuota", "v1", iss.Namespace, blocker.Name) {
-			return nil
+		if !fetch("ResourceQuota", "", iss.Namespace, blocker.Name) {
+			return nil, &admissionReadError{kind: "ResourceQuota"}
 		}
 	case blocker.Kind == "LimitRange":
 		ev.complete = collected("LimitRange")
 		ev.unchanged = func(window string) string {
-			return "no LimitRange in namespace " + iss.Namespace + " has a recorded change in the last " + window
+			return "no LimitRange in namespace " + iss.Namespace + " has a recorded change " + window
 		}
-		if !fetch("LimitRange", "v1", iss.Namespace, "") {
-			return nil
+		if !fetch("LimitRange", "", iss.Namespace, "") {
+			return nil, &admissionReadError{kind: "LimitRange"}
 		}
 	case blocker.WebhookName != "":
 		ev.unchanged = func(window string) string {
-			return fmt.Sprintf("the configuration of webhook %q has no recorded change in the last %s", blocker.WebhookName, window)
+			return fmt.Sprintf("the configuration of webhook %q has no recorded change %s", blocker.WebhookName, window)
 		}
 		configs := meaningfulchanges.WebhookConfigurationsDeclaring(blocker.WebhookName)
+		if c.opts.CheckCoverage {
+			for _, kind := range []string{"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"} {
+				c.checkCollected(kind, webhookConfigurationGroup, "")
+			}
+		}
 		if len(configs) == 0 {
 			// Not cached, or no longer declared: whether it changed is unknown.
 			ev.complete = false
 		}
 		for _, cfg := range configs {
-			if !fetch(cfg.Kind, "admissionregistration.k8s.io/v1", "", cfg.Name) {
-				return nil
+			if !fetch(cfg.Kind, webhookConfigurationGroup, "", cfg.Name) {
+				return nil, &admissionReadError{kind: cfg.Kind}
 			}
 		}
 	default:
-		return nil
+		return nil, nil
 	}
-	visible, hidden := applyCorrelationVisibilityFilters(ctx, changes)
+	visible, hidden := c.visible(changes)
 	ev.complete = ev.complete && !hidden
 	sortChangesNewestFirst(visible)
-	rankReason := admissionBlockerRankReason
+	rankReason := AdmissionBlockerRankReason
 	if blocker.Kind == "LimitRange" {
-		rankReason = admissionLimitRangeRankReason
+		rankReason = AdmissionLimitRangeRankReason
 	}
 	for i := range visible {
 		visible[i].RankReason = rankReason
 	}
 	ev.changes = visible
-	return ev
+	return ev, nil
 }
 
-// attachAdmissionBlocker sets the issue's correlated changes from both sides,
-// states which side changed last, and withdraws a "started at resource
-// creation" timing that the policy change contradicts. subject holds the
-// workload side's visible changes; subjectComplete says an empty subject list
-// is a true "no recorded change". absenceKnown says Radar has observed long
-// enough for a side with no recorded change to count as unchanged. It returns
-// false, leaving the issue untouched, when neither side has a visible change.
-func attachAdmissionBlocker(iss *issuesapi.Issue, ev *admissionBlockerEvidence, subject []issuesapi.RecentChange, subjectComplete, absenceKnown bool, window time.Duration) bool {
-	refs := append([]issuesapi.RecentChange{}, ev.changes[:min(len(ev.changes), admissionBlockerMaxChanges)]...)
-	refs = append(refs, subject[:min(len(subject), correlationChangeCap-len(refs))]...)
-	if len(refs) == 0 {
-		return false
+// attachAdmissionBlocker returns the issue's correlated changes from both
+// sides, states which side changed last, and withdraws a "started at
+// resource creation" timing that the policy change contradicts. subject
+// holds the workload side's visible changes; subjectComplete says an empty
+// subject list is a true "no recorded change". absenceKnown says Radar has
+// observed long enough for a side with no recorded change to count as
+// unchanged. ok is false, leaving the issue untouched, when neither side
+// has a visible change.
+func (c *run) attachAdmissionBlocker(ev *admissionBlockerEvidence, subject []issuesapi.RecentChange, subjectComplete, absenceKnown bool) (refs []issuesapi.RecentChange, more, ok bool) {
+	iss := &c.iss
+	policy := ev.changes[:min(len(ev.changes), admissionBlockerMaxChanges)]
+	more = len(ev.changes) > len(policy)
+	if c.opts.Selection == SelectAroundFirstSeen {
+		var cut bool
+		refs, cut = selectAroundFirstSeen(append(slices.Clone(policy), subject...), *iss)
+		more = more || cut
+	} else {
+		refs = append([]issuesapi.RecentChange{}, policy...)
+		rest := subject[:min(len(subject), ChangeCap-len(refs))]
+		more = more || len(rest) < len(subject)
+		refs = append(refs, rest...)
 	}
-	iss.CorrelatedChanges = refs
+	if len(refs) == 0 {
+		return nil, false, false
+	}
 
-	sentence, policyChangedLast := admissionChangeOrder(iss, ev, subject, subjectComplete, absenceKnown, window)
+	sentence, policyChangedLast := admissionChangeOrder(iss, ev, subject, subjectComplete, absenceKnown, c.windowPhrase())
 	if sentence == "" {
-		return true
+		return refs, more, true
 	}
 	if policyChangedLast && iss.IssueTiming == "started_at_resource_creation" && !iss.FirstSeen.IsZero() {
 		// A policy created after the workload's last change cannot have
@@ -236,7 +269,16 @@ func attachAdmissionBlocker(iss *issuesapi.Issue, ev *admissionBlockerEvidence, 
 		iss.TimingSummary += " "
 	}
 	iss.TimingSummary += sentence
-	return true
+	return refs, more, true
+}
+
+// windowPhrase names the window in a sentence: the lookback for a window
+// that ends whenever the read runs, its start for a fixed one.
+func (c *run) windowPhrase() string {
+	if c.opts.Window.OpenEnded {
+		return "in the last " + windowText(c.opts.Window.length())
+	}
+	return "since " + c.opts.Window.From.UTC().Format(time.RFC3339)
 }
 
 // admissionChangeOrder states which side of an admission rejection changed
@@ -245,7 +287,7 @@ func attachAdmissionBlocker(iss *issuesapi.Issue, ev *admissionBlockerEvidence, 
 // When both sides have one, each record shows that side was being watched by
 // then, so the order holds however young the store is; a side with none
 // counts as unchanged only when absenceKnown.
-func admissionChangeOrder(iss *issuesapi.Issue, ev *admissionBlockerEvidence, subject []issuesapi.RecentChange, subjectComplete, absenceKnown bool, windowDur time.Duration) (string, bool) {
+func admissionChangeOrder(iss *issuesapi.Issue, ev *admissionBlockerEvidence, subject []issuesapi.RecentChange, subjectComplete, absenceKnown bool, window string) (string, bool) {
 	workload := iss.Kind + " " + iss.Name
 	// The workload object only, as in newestWorkloadChange.
 	var newestSubject *issuesapi.RecentChange
@@ -257,7 +299,6 @@ func admissionChangeOrder(iss *issuesapi.Issue, ev *admissionBlockerEvidence, su
 			newestSubject = &subject[i]
 		}
 	}
-	window := windowText(windowDur)
 	switch {
 	case len(ev.changes) > 0 && newestSubject != nil:
 		// Each verdict needs the other side complete: an unseen newer change
@@ -279,7 +320,7 @@ func admissionChangeOrder(iss *issuesapi.Issue, ev *admissionBlockerEvidence, su
 		return fmt.Sprintf("%s, after %s: the workload changed last.", describeChange(*newestSubject), describeChange(policy)), false
 	case len(ev.changes) > 0 && subjectComplete && absenceKnown && creationTimeKnown(ev.changes[0]):
 		policy := ev.changes[0]
-		return fmt.Sprintf("%s; %s has no recorded change in the last %s: the %s changed last.", describeChange(policy), workload, window, policy.Kind), true
+		return fmt.Sprintf("%s; %s has no recorded change %s: the %s changed last.", describeChange(policy), workload, window, policy.Kind), true
 	case newestSubject != nil && ev.complete && absenceKnown:
 		return fmt.Sprintf("%s; %s: the workload changed last.", describeChange(*newestSubject), ev.unchanged(window)), false
 	}

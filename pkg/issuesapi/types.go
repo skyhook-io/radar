@@ -689,7 +689,59 @@ type Issue struct {
 	// fetch bound, so older changes were not read. The listed changes are
 	// leads, not the subject's full history.
 	CorrelatedChangesIncomplete bool `json:"correlated_changes_incomplete,omitempty"`
+	// CorrelatedChangesMoreNotShown is set when the window held more
+	// changes this caller may see than CorrelatedChanges lists.
+	CorrelatedChangesMoreNotShown bool `json:"correlated_changes_more_not_shown,omitempty"`
+	// Correlation describes the window and completeness of the correlated
+	// changes. Only an issue correlated on request carries it (the
+	// per-resource issues endpoint's correlate parameter); the MCP issues
+	// tool does not.
+	Correlation *ChangeCorrelation `json:"correlation,omitempty"`
 }
+
+// ChangeCorrelation is the scope of one issue's change correlation.
+type ChangeCorrelation struct {
+	// WindowFrom and WindowTo bound the changes read: an hour before the
+	// issue was first seen (or before now when its onset is unknown) until
+	// the read.
+	WindowFrom time.Time `json:"window_from"`
+	WindowTo   time.Time `json:"window_to"`
+	// ObservedSince is when this Radar process started recording changes.
+	ObservedSince time.Time `json:"observed_since,omitzero"`
+	// Unknown says why an empty CorrelatedChanges is not "nothing changed".
+	// Listed changes are still real when it is set.
+	Unknown *CorrelationUnknown `json:"unknown,omitempty"`
+	// History is set when Radar's held history does not cover the window.
+	History *HistoryCoverage `json:"history,omitempty"`
+}
+
+// CorrelationUnknown is the reason Radar can't say nothing changed, and the
+// kinds it concerns. Whether it is set depends only on the caller's
+// permissions and Radar's own collection, never on whether a change the
+// caller can't see exists.
+type CorrelationUnknown struct {
+	Reason CorrelationUnknownReason `json:"reason"`
+	Kinds  []UncheckedKind          `json:"kinds,omitempty"`
+}
+
+// CorrelationUnknownReason is a readreason code, or one of the two reasons
+// specific to change correlation. Wire contract: clients branch on the values.
+type CorrelationUnknownReason string
+
+const (
+	CorrelationUnknownUserForbidden         = CorrelationUnknownReason(readreason.UserForbidden)
+	CorrelationUnknownPermissionCheckFailed = CorrelationUnknownReason(readreason.UserPermissionCheckFailed)
+	CorrelationUnknownKindNotCollected      = CorrelationUnknownReason(readreason.RadarKindNotCollected)
+	CorrelationUnknownNamespaceNotCollected = CorrelationUnknownReason(readreason.RadarNamespaceNotCollected)
+	CorrelationUnknownKindSyncPending       = CorrelationUnknownReason(readreason.KindSyncPending)
+	CorrelationUnknownReadError             = CorrelationUnknownReason(readreason.ReadError)
+	// CorrelationUnknownSourcesUnresolved: Radar couldn't read the workload's
+	// pod template, so it can't tell which ConfigMaps and Secrets it uses.
+	CorrelationUnknownSourcesUnresolved CorrelationUnknownReason = "sources_unresolved"
+	// CorrelationUnknownHistoryIncomplete: the window starts before the
+	// history Radar holds; ChangeCorrelation.History says why.
+	CorrelationUnknownHistoryIncomplete CorrelationUnknownReason = "history_incomplete"
+)
 
 // HistoryGapReason names why Radar's recorded change history does not cover a
 // requested window. Wire contract: clients branch on the values.
