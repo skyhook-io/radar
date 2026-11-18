@@ -46,6 +46,9 @@ it('gives every column an explicit width from its data', () => {
   const headers = host.querySelectorAll('thead th[data-column-key]').length
   expect(cols).toHaveLength(headers)
   expect(cols.every(col => /^\d+px$/.test(col.style.width))).toBe(true)
+  // The table is exactly as wide as its columns, so the browser re-shares nothing.
+  const sum = cols.reduce((t, col) => t + parseInt(col.style.width, 10), 0)
+  expect(host.querySelector<HTMLTableElement>('table')!.style.width).toBe(`${sum}px`)
   // Name fits its content: wider than its 200px floor, not the whole leftover.
   const name = parseInt(colWidth('name'), 10)
   expect(name).toBeGreaterThan(200)

@@ -165,8 +165,9 @@ Resource tables size their columns from the data (rules in `packages/k8s-ui/src/
 - Name fits its longest name, 200–480px and at most half the table's width, and keeps that width: the table scrolls sideways before a name that fits under the cap is cut.
 - Namespace and Node fit the 95th percentile of their values, so one outlier doesn't set the width.
 - Long free text (Event messages, selectors, image lists, URLs, uncurated CRD printer columns) is marked `sizing: 'grow'` on the column. Grow columns and the fit columns' longer values share the room left over by weight, each up to its longest value.
-- Room beyond that goes to an empty trailing column, not to any one column, so the useful columns stay left of the drawer.
-- When the table is short of room, grow columns are already at their floor; then curated columns shrink toward their content (never below their header) where Radar knows what their cells show; then Namespace and Node shrink to their floor; then the table scrolls.
+- Room beyond that is spread over every column in proportion to its width, so the table fills the screen and keeps its proportions.
+- When the table is short of room, grow columns are already at their floor; then Node shrinks to its floor; then curated columns shrink toward their content (never below their header) where Radar knows what their cells show — the CPU and Memory bars down to 120px; then Namespace; Name never; then the table scrolls.
+- Namespace is left out while the namespace picker narrows the list to one namespace; GPU shows while a listed Pod or Node requests GPUs. Neither changes the user's saved column choice.
 - While the data set stays the same, measured content only widens and shared room stays with the column that had it, so columns rarely move as rows stream in (a column can still give room back when a fit column's 95th percentile grows). A width the user drags is saved and kept (a saved width equal to the column's default is ignored: older versions saved every column's width on the first drag); "Reset widths" in the column picker undoes it.
 - A cut cell ends in "…" and shows its full text on hover. Use `<TruncatedText>` for a text cell, not `<Tooltip>` around a `truncate` span, which shows a tooltip even when nothing is cut.
 

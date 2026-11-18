@@ -4333,7 +4333,8 @@ export function ResourcesView({
         const savedOrder = sanitizeColumnOrder(saved.order)
         // Older settings reorder only columns after Name. Convert once to a full order.
         setColumnOrder(Array.isArray(saved.pinned) ? savedOrder : applyColumnOrder(effective, savedOrder).map(column => column.key))
-        setPinnedColumns(sanitizePinnedColumns(saved.pinned).filter(key => restoredVisible.has(key)))
+        // A pin on a column the data shows (GPU) is kept; the column may be on screen.
+        setPinnedColumns(sanitizePinnedColumns(saved.pinned).filter(key => restoredVisible.has(key) || DATA_SHOWN_COLUMNS.has(key)))
       }
     } else {
       setVisibleColumns(getDefaultVisibleColumns(effective))
@@ -7768,8 +7769,10 @@ const VirtuosoTable = React.forwardRef<HTMLTableElement, React.TableHTMLAttribut
     <table
       {...props}
       ref={ref}
-      className="w-full"
-      style={{ ...props.style, tableLayout: 'fixed', minWidth: layout.minWidth }}
+      // Exactly the columns' sum: the layout already fills the room, and a
+      // table wider than its columns would have the browser re-share the
+      // difference, moving columns the layout holds still (a drag, saved widths).
+      style={{ ...props.style, tableLayout: 'fixed', width: layout.minWidth }}
     >
       <colgroup>
         {/*

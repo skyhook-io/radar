@@ -79,3 +79,18 @@ it('lets GPU follow the data again for settings saved by the old one-shot auto-s
   expect(headerKeys()).not.toContain('gpu')
   expect(headerKeys()).toContain('restarts')
 })
+
+it('keeps a pin on the GPU column across a reload', () => {
+  localStorage.setItem('radar-columns-pods', JSON.stringify({
+    visible: ['name', 'namespace', 'containers', 'status', 'cpu', 'memory', 'restarts', 'node', 'age'],
+    widths: {}, hidden: [], pinned: ['gpu'], order: ['name', 'gpu', 'namespace', 'containers', 'status', 'cpu', 'memory', 'restarts', 'node', 'age'],
+  }))
+  render([], [pod('p1', 'a'), pod('trainer', 'ml', 2)])
+  expect(headerKeys()).toContain('gpu')
+  // Any change saves the record again; the pin must still be in it.
+  act(() => { host!.querySelector<HTMLButtonElement>('button[aria-label="Configure columns"]')!.click() })
+  const ageToggle = [...document.querySelectorAll<HTMLInputElement>('[role="region"] input[type="checkbox"]')]
+    .find(input => input.closest('label, li, div')?.textContent?.trim().startsWith('Age'))!
+  act(() => { ageToggle.click() })
+  expect(JSON.parse(localStorage.getItem('radar-columns-pods')!).pinned).toContain('gpu')
+})

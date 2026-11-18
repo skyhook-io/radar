@@ -128,6 +128,11 @@ describe('computeColumnLayout', () => {
     expect(shared).toEqual({ name: 300, a: 516, b: 183 })
   })
 
+  it('adds up to exactly the room when it spreads what is left', () => {
+    const w = computeColumnLayout([name(333.3), grow('a', 100.3, 120.7), exact('age', 96.6)], 1333)
+    expect(total(w)).toBe(1333)
+  })
+
   it('never sums to more than the room it was given', () => {
     const w = computeColumnLayout([name(333.7), grow('a', 100.3, 777.7, 3), grow('b', 100.3, 555.5, 2), grow('c', 90, 999)], 1333)
     expect(total(w)).toBeLessThanOrEqual(1333)

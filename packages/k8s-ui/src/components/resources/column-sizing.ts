@@ -107,8 +107,14 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
     left -= heldTotal * scale
   }
   left = waterFill(widths, sharing, left)
-  placeLeftover(widths, columns.filter(c => !c.userWidth), left)
-  return roundWidths(widths)
+  const spread = columns.filter(c => !c.userWidth)
+  placeLeftover(widths, spread, left)
+  roundWidths(widths)
+  // Rounding each width down leaves a few pixels; the last column takes them,
+  // so the columns add up to exactly the room.
+  const last = spread.at(-1)
+  if (left > 0 && last) widths[last.key] += Math.max(0, Math.floor(available) - sum(Object.values(widths)))
+  return widths
 }
 
 // How far a column may shrink when room is short.
