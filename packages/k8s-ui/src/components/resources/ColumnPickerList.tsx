@@ -167,7 +167,7 @@ export function ColumnPickerList({
                     onToggle(col.key)
                   }}
                   disabled={col.key === 'name'}
-                  aria-describedby={hintId}
+                  aria-describedby={hiddenToFit.has(col.key) ? `${hintId} ${hintId}-fit-${i}` : hintId}
                   className="rounded border-theme-border"
                 />
                 <span className={clsx(
@@ -180,7 +180,7 @@ export function ColumnPickerList({
               {isPaused && <span className="text-xs text-theme-text-tertiary">Scrolls</span>}
               {hiddenToFit.has(col.key) && (
                 <Tooltip content="Left out while the table is short of room. Turn it on to keep it; the table may then scroll." position="left">
-                  <span className="shrink-0 text-xs text-theme-text-tertiary">Hidden to fit</span>
+                  <span id={`${hintId}-fit-${i}`} className="shrink-0 text-xs text-theme-text-tertiary">Hidden to fit</span>
                 </Tooltip>
               )}
               <Tooltip content={fixed ? 'Context columns stay ahead of resource columns and pin with them' : isPaused ? 'Scrolls until there is room to keep it pinned. Click to unpin.' : isPinned ? 'Unpin column' : visibleColumns.has(col.key) ? 'Pin column to the left' : 'Show this column before pinning it'} position="left">

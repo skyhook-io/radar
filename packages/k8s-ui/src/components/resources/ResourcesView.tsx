@@ -6358,13 +6358,15 @@ export function ResourcesView({
   // The width each visible column renders at. One vector feeds the <colgroup>,
   // the pin offsets and budget, and the table's minimum width, so they agree.
   const lastLayout = useRef<{ signature: string; widths: Record<string, number> } | null>(null)
-  // Columns that never drop to fit: ones the user kept, pinned, sorts or filters by.
+  // Columns that never drop to fit: ones the user kept, pinned, sorts or
+  // filters by (or has the filter menu open on), and the host's context columns.
   const undroppableColumns = useMemo(() => {
-    const keys = new Set([...keptColumns, ...pinnedColumns])
+    const keys = new Set([...keptColumns, ...pinnedColumns, ...allColumns.slice(0, fixedLeadingCount).map(column => column.key)])
     if (effectiveSortColumn) keys.add(effectiveSortColumn)
+    if (openColumnFilter) keys.add(openColumnFilter)
     for (const [key, values] of Object.entries(columnFilters)) if (values?.length) keys.add(key)
     return keys
-  }, [keptColumns, pinnedColumns, effectiveSortColumn, columnFilters])
+  }, [keptColumns, pinnedColumns, allColumns, fixedLeadingCount, effectiveSortColumn, openColumnFilter, columnFilters])
   const availableWidth = tableViewportWidth - leadingPinWidth
   // Held widths only carry over while nothing but the data changed.
   const layoutSignature = [datasetIdentity, availableWidth, columns.map(c => `${c.key}=${columnWidths[c.key] ?? ''}`).join(',')].join('\u0000')
