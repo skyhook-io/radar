@@ -2,6 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it } from 'vitest'
+import { VirtuosoMockContext } from 'react-virtuoso'
 import type { TimelineEvent } from '../../types'
 import { TimelineList } from './TimelineList'
 
@@ -33,7 +34,7 @@ afterEach(() => {
 })
 
 const render = (events: TimelineEvent[]) =>
-  act(async () => root.render(<TimelineList events={events} isLoading={false} foldPerResource={foldAll} />))
+  act(async () => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 100 }}><TimelineList events={events} isLoading={false} foldPerResource={foldAll} /></VirtuosoMockContext.Provider>))
 const foldButton = () => [...container.querySelectorAll('button')].find((b) => /more on this Pod/.test(b.textContent ?? ''))!
 const isOpen = () => foldButton().getAttribute('aria-expanded') === 'true'
 const click = () => act(async () => foldButton().click())
