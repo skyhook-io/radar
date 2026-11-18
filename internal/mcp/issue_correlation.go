@@ -26,9 +26,6 @@ const (
 	// issues, Response.CorrelationTruncated says so explicitly — an unmarked
 	// issue under truncation means "not checked", never "no changes".
 	correlationIssueCap = 10
-	// correlationChangeCap bounds refs per issue: the top-ranked few changes
-	// are the evidence; the full feed stays one get_changes call away.
-	correlationChangeCap = issuecorrelation.ChangeCap
 )
 
 // correlationMinObservation is the least watch time that justifies a claim

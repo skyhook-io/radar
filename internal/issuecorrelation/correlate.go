@@ -5,7 +5,8 @@
 //
 // Two callers share it: the MCP issues tool (a fixed lookback ending now,
 // top changes by significance) and the per-resource issues endpoint (a
-// window anchored on when Radar first saw the issue). Each reads as its own
+// window anchored on the issue's first_seen, the earliest time evidence shows
+// it active, or the last 24 hours when it has none). Each reads as its own
 // caller through Access.
 package issuecorrelation
 
@@ -20,6 +21,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -129,9 +131,13 @@ type Result struct {
 	// NoChanges means the window held no change on any source, and every
 	// source was read in full.
 	NoChanges bool
-	Unknown   *issuesapi.CorrelationUnknown
-	History   issuesapi.HistoryCoverage
-	Timing    Timing
+	// PolicyOnly scopes NoChanges to the admission policy that rejected the
+	// issue: the subject's own kind isn't tracked, so only the policy was
+	// checked.
+	PolicyOnly bool
+	Unknown    *issuesapi.CorrelationUnknown
+	History    issuesapi.HistoryCoverage
+	Timing     Timing
 }
 
 // IsAdmissionIssue reports an admission rejection, which is correlated
@@ -161,6 +167,7 @@ func Correlate(ctx context.Context, iss issuesapi.Issue, opts Options, access Ac
 	c := &run{ctx: ctx, iss: iss, opts: opts, access: access, unknown: map[issuesapi.CorrelationUnknownReason][]issuesapi.UncheckedKind{}}
 	res := c.correlate()
 	res.Eligible = true
+	res.History = mergeHistory(res.History, c.watchHistory)
 	res.Unknown = c.primaryUnknown()
 	if c.iss.IssueTiming != iss.IssueTiming || c.iss.IssueTimingBasis != iss.IssueTimingBasis || c.iss.TimingSummary != iss.TimingSummary {
 		res.Timing = Timing{Changed: true, IssueTiming: c.iss.IssueTiming, IssueTimingBasis: c.iss.IssueTimingBasis, TimingSummary: c.iss.TimingSummary}
@@ -174,6 +181,9 @@ type run struct {
 	opts    Options
 	access  Access
 	unknown map[issuesapi.CorrelationUnknownReason][]issuesapi.UncheckedKind
+	// watchHistory is the coverage lost to kinds Radar started watching
+	// after the window began.
+	watchHistory issuesapi.HistoryCoverage
 }
 
 func (c *run) correlate() Result {
@@ -183,6 +193,7 @@ func (c *run) correlate() Result {
 	var res Result
 	var result meaningfulchanges.RecentResult
 	var obj any
+	var refs []configrefs.Ref
 	var changes []issuesapi.RecentChange
 	subjectAllowed, sourcesKnown := true, true
 	if subjectTracked {
@@ -208,7 +219,7 @@ func (c *run) correlate() Result {
 			subjectAllowed = false
 		default:
 			var err error
-			result, obj, sourcesKnown, err = c.subjectChanges()
+			result, obj, refs, sourcesKnown, err = c.subjectChanges()
 			if err != nil {
 				log.Printf("[issuecorrelation] Failed to read changes for %s %s/%s: %v", iss.Kind, iss.Namespace, iss.Name, err)
 				c.addUnknown(issuesapi.CorrelationUnknownReadError, iss.Group, iss.Kind)
@@ -221,7 +232,9 @@ func (c *run) correlate() Result {
 	// A saturated read may have missed older changes, a source the caller
 	// can't read was not queried, and evicted history may have held one:
 	// all are unknown, not "no changes".
-	historyComplete := historyCoversObjects(obj, iss.Namespace, result.History)
+	// Kinds watched late so far are the subject's and its sources'; the
+	// admission policy's are added below.
+	historyComplete := historyCoversObjects(obj, refs, iss.Namespace, result.History) && !c.watchHistory.Incomplete
 	if subjectTracked && !historyComplete {
 		c.addHistoryUnknown(iss)
 	}
@@ -239,8 +252,8 @@ func (c *run) correlate() Result {
 	if blocker != nil {
 		res.History = mergeHistory(res.History, blocker.history)
 		res.FetchSaturated = res.FetchSaturated || blocker.saturated
-		if refs, more, ok := c.attachAdmissionBlocker(blocker, changes, subjectComplete, absenceKnown); ok {
-			res.Changes, res.MoreNotShown = refs, more || result.OutputCapped || blocker.outputCapped
+		if shown, more, ok := c.attachAdmissionBlocker(blocker, changes, subjectComplete, absenceKnown); ok {
+			res.Changes, res.MoreNotShown = shown, more || result.OutputCapped || blocker.outputCapped
 			return res
 		}
 	}
@@ -249,6 +262,13 @@ func (c *run) correlate() Result {
 		// claimed; the MCP tool claims it from the subject's side alone.
 		if subjectTracked && subjectComplete && absenceKnown && (!c.opts.CheckCoverage || len(c.unknown) == 0 && (blocker == nil || blocker.complete)) {
 			res.NoChanges = true
+		}
+		// An admission rejection on a subject whose own changes aren't
+		// tracked (a Job, a bare ReplicaSet) can still say the policy that
+		// rejected it didn't change, scoped to the policy. Only a
+		// coverage-checking caller gets this; the MCP tool says nothing.
+		if !subjectTracked && c.opts.CheckCoverage && blocker != nil && blocker.complete && len(blocker.changes) == 0 && absenceKnown && len(c.unknown) == 0 {
+			res.NoChanges, res.PolicyOnly = true, true
 		}
 		return res
 	}
@@ -281,8 +301,8 @@ func mergeHistory(a, b issuesapi.HistoryCoverage) issuesapi.HistoryCoverage {
 // subjectChanges reads a tracked subject's changes, and a workload's
 // directly referenced ConfigMaps and Secrets. sourcesKnown is false when a
 // source was withheld from the caller or couldn't be determined. obj is the
-// workload whose sources were read, or nil.
-func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, sourcesKnown bool, err error) {
+// workload whose sources were resolved, or nil, and refs are those sources.
+func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, refs []configrefs.Ref, sourcesKnown bool, err error) {
 	iss := &c.iss
 	q := c.query(c.subjectLimit())
 	if !meaningfulchanges.WorkloadKind(iss.Kind) {
@@ -291,7 +311,7 @@ func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, 
 			c.checkCollected(iss.Kind, iss.Group, iss.Namespace)
 		}
 		result, err = meaningfulchanges.Recent(c.ctx, q)
-		return result, nil, true, err
+		return result, nil, nil, true, err
 	}
 	obj = WorkloadObjectFromCache(iss.Kind, iss.Namespace, iss.Name)
 	sourcesKnown = true
@@ -309,8 +329,10 @@ func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, 
 		sourcesKnown = false
 		c.addUnknown(issuesapi.CorrelationUnknownSourcesUnresolved, iss.Group, iss.Kind)
 	}
+	// The sources are resolved once: the ones checked are the only ones read.
+	refs = meaningfulchanges.DirectConfigReferences(obj)
 	decided := map[string]bool{}
-	for _, ref := range meaningfulchanges.DirectConfigReferences(obj) {
+	for _, ref := range refs {
 		if _, ok := decided[ref.Kind]; !ok {
 			decided[ref.Kind] = c.allowed(ref.Kind, "", iss.Namespace)
 			if decided[ref.Kind] && c.opts.CheckCoverage {
@@ -321,12 +343,26 @@ func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, 
 	if c.opts.CheckCoverage {
 		c.checkCollected(iss.Kind, iss.Group, iss.Namespace)
 	}
-	includeSource := func(kind, _ string) bool {
+	result, withheld, err := meaningfulchanges.RecentForWorkloadSourceRefs(c.ctx, refs, iss.Kind, iss.Namespace, iss.Name, q, c.sourceFilter(decided))
+	return result, obj, refs, sourcesKnown && !withheld, err
+}
+
+// sourceFilter admits the subject, which was checked before its sources
+// were resolved, and the sources whose kind the caller may list. A source
+// whose kind was never checked fails closed: it isn't read, and the caller is
+// told its access couldn't be checked.
+func (c *run) sourceFilter(decided map[string]bool) func(kind, name string) bool {
+	subjectKind := c.iss.Kind
+	return func(kind, name string) bool {
+		if strings.EqualFold(kind, subjectKind) && name == c.iss.Name {
+			return true
+		}
 		allowed, ok := decided[kind]
-		return !ok || allowed
+		if !ok {
+			c.addUnknown(issuesapi.CorrelationUnknownPermissionCheckFailed, "", kind)
+		}
+		return ok && allowed
 	}
-	result, withheld, err := meaningfulchanges.RecentForWorkloadSources(c.ctx, obj, iss.Kind, iss.Namespace, iss.Name, q, includeSource)
-	return result, obj, sourcesKnown && !withheld, err
 }
 
 func (c *run) subjectLimit() int {

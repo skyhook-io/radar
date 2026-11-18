@@ -98,6 +98,9 @@ func (s *Server) correlateResourceIssue(r *http.Request, related []issues.Issue,
 		iss.CorrelatedChangesMoreNotShown = result.MoreNotShown
 	} else if result.NoChanges {
 		iss.NoRecentChanges = &issuesapi.NoRecentChangesMarker{WindowSeconds: int(window.To.Sub(window.From).Seconds())}
+		if result.PolicyOnly {
+			iss.NoRecentChanges.Scope = issuesapi.NoRecentChangesScopeAdmissionPolicy
+		}
 	}
 	iss.Correlation = &issuesapi.ChangeCorrelation{
 		WindowFrom:    window.From.UTC(),

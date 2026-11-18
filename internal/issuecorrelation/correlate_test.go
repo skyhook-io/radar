@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -910,4 +912,141 @@ func TestCorrelate_NoFirstSeenLooksBackADay(t *testing.T) {
 			t.Fatalf("two hours of history: %+v", got)
 		}
 	})
+}
+
+// A kind Radar started watching after the window began has no record of
+// changes before that, however long the store itself has been recording: the
+// answer is history_incomplete from the watch start, never "no changes".
+func TestCorrelate_KindWatchedAfterWindowStart(t *testing.T) {
+	firstSeen := time.Now().Add(-10 * time.Minute)
+
+	t.Run("custom resource subject", func(t *testing.T) {
+		initCache(t)
+		initStore(t)
+		gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+		rollout := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout",
+			"metadata": map[string]any{"name": "web", "namespace": "shop"},
+			"spec":     map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"name": "web", "image": "web:1"}}}}}}}
+		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"}, rollout)
+		if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Rollout", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(k8s.ResetTestDynamicState)
+		watchStart := time.Now()
+		if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil || !k8s.GetDynamicResourceCache().WaitForSync(gvr, 5*time.Second) {
+			t.Fatalf("watch rollouts: %v", err)
+		}
+		iss := issuesapi.Issue{ID: "rollout", Severity: issuesapi.SeverityCritical, Category: issuesapi.CategoryCrashLoop,
+			Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: "web", FirstSeen: firstSeen}
+		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete ||
+			!slices.Contains(got.History.Reasons, issuesapi.HistoryObservationStartedLate) || got.History.CompleteSince.Before(watchStart.Truncate(time.Second)) {
+			t.Fatalf("late Rollout watch: no_changes=%v unknown=%+v history=%+v", got.NoChanges, got.Unknown, got.History)
+		}
+	})
+
+	t.Run("webhook configuration policy", func(t *testing.T) {
+		initCache(t, webDeployment())
+		store := initStore(t)
+		initWebhookCache(t, webhookConfigurationKinds, webhookConfig("pod-policy", "deny-root.policy.example.com"))
+		// A recorded policy change and a quiet workload would order the
+		// policy last, if the policy's history covered the window.
+		appendChange(t, store, timeline.TimelineEvent{Timestamp: time.Now().Add(-3 * time.Minute), Kind: "ValidatingWebhookConfiguration",
+			APIVersion: "admissionregistration.k8s.io/v1", Name: "pod-policy", EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "webhooks[0].rules", OldValue: "a", NewValue: "b"}}}})
+		iss := webhookIssue(firstSeen)
+		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		if strings.Contains(got.Timing.TimingSummary, "changed last") || got.NoChanges ||
+			got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete ||
+			!slices.Contains(got.History.Reasons, issuesapi.HistoryObservationStartedLate) {
+			t.Fatalf("late webhook watch: timing=%q no_changes=%v unknown=%+v history=%+v", got.Timing.TimingSummary, got.NoChanges, got.Unknown, got.History)
+		}
+	})
+}
+
+// A workload's sources are resolved once, and only the ones checked are
+// read: a source that isn't in the checked list (as one added to the
+// template after the check would be) is never queried, so neither its rows
+// nor its fetch saturation can reach the answer, and a source whose kind was
+// never checked fails closed.
+func TestCorrelate_SourcesAreResolvedOnce(t *testing.T) {
+	initCache(t, webDeployment())
+	store := initStore(t)
+	for i := range meaningfulchanges.NamedFetchBound + 1 {
+		appendChange(t, store, specUpdate("Secret", "web-creds", time.Now().Add(-time.Duration(i+1)*time.Second), fmt.Sprint(i)))
+	}
+	checked := []configrefs.Ref{{Kind: "ConfigMap", Name: "web-config"}}
+	q := meaningfulchanges.Query{From: time.Now().Add(-time.Hour), Limit: 50, FieldLimit: FieldLimit}
+	got, _, err := meaningfulchanges.RecentForWorkloadSourceRefs(context.Background(), checked, "Deployment", "shop", "web", q, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FetchSaturated {
+		t.Fatal("an unchecked source's saturation reached the answer")
+	}
+	for _, c := range got.Changes {
+		if c.Kind == "Secret" {
+			t.Fatalf("an unchecked source was read: %+v", c)
+		}
+	}
+
+	r := lookbackRun(webIssue(time.Now()), Access{})
+	filter := r.sourceFilter(map[string]bool{"ConfigMap": true})
+	if !filter("Deployment", "web") || !filter("ConfigMap", "web-config") {
+		t.Fatal("the checked subject and source must be read")
+	}
+	if filter("Secret", "web-creds") {
+		t.Fatal("a source whose kind was never checked was read")
+	}
+	if u := r.primaryUnknown(); u == nil || u.Reason != issuesapi.CorrelationUnknownPermissionCheckFailed || len(u.Kinds) != 1 || u.Kinds[0].Kind != "Secret" {
+		t.Fatalf("unknown = %+v, want user_permission_check_failed for Secret", u)
+	}
+}
+
+// A quiet admission rejection on a subject whose own changes aren't tracked
+// says the policy didn't change, scoped to the policy, for a coverage-checking
+// caller; the issues tool still says nothing.
+func TestCorrelate_QuietPolicyOnUntrackedSubject(t *testing.T) {
+	initCache(t, &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop"}})
+	initStore(t)
+	iss := issuesapi.Issue{ID: "batch", Severity: issuesapi.SeverityCritical, Category: issuesapi.CategoryQuotaExceeded,
+		Kind: "ReplicaSet", Group: "apps", Namespace: "shop", Name: "batch", FirstSeen: time.Now().Add(-10 * time.Minute),
+		Message: `pod creation blocked: pods "batch-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=3, limited: pods=3`}
+	got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+	if !got.NoChanges || !got.PolicyOnly || got.Unknown != nil || len(got.Changes) != 0 {
+		t.Fatalf("quiet policy on an untracked subject: %+v", got)
+	}
+	lookback := Options{Window: Window{From: time.Now().Add(-time.Hour), To: time.Now(), OpenEnded: true}, MinWindow: 5 * time.Minute}
+	if got := Correlate(context.Background(), iss, lookback, Access{}); got.NoChanges || got.PolicyOnly {
+		t.Fatalf("issues tool claimed absence for an untracked subject: %+v", got)
+	}
+}
+
+// Retention that deleted every row leaves nothing to read, but not because
+// nothing changed: an answer over that window must not claim no changes.
+func TestCorrelate_RetentionThatEmptiedTheStore(t *testing.T) {
+	initCache(t, webDeployment())
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeSQLite, Path: filepath.Join(t.TempDir(), "timeline.db")}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	timeline.SetObservationStartForTest(time.Now().Add(-3 * time.Hour))
+	store := initStoreConnected(t)
+	appendChange(t, store, specUpdate("Deployment", "web", time.Now().Add(-2*time.Hour), "web:2"))
+	cleaner, ok := store.(interface {
+		Cleanup(context.Context, time.Duration) (int64, error)
+	})
+	if !ok {
+		t.Fatal("the SQLite store has no Cleanup")
+	}
+	if n, err := cleaner.Cleanup(context.Background(), time.Hour); err != nil || n != 1 {
+		t.Fatalf("Cleanup = %d, %v; want 1 row removed", n, err)
+	}
+	iss := webIssue(time.Now().Add(-10 * time.Minute))
+	got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+	if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete ||
+		!slices.Contains(got.History.Reasons, issuesapi.HistoryEventsEvicted) {
+		t.Fatalf("emptied store: no_changes=%v unknown=%+v history=%+v", got.NoChanges, got.Unknown, got.History)
+	}
 }

@@ -1,6 +1,8 @@
 package issuecorrelation
 
 import (
+	"time"
+
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -15,13 +17,58 @@ func (c *run) checkCollected(kind, group, namespace string) {
 }
 
 // collected is checkCollected that also reports whether the kind is ready:
-// collected in namespace and synced.
+// collected in namespace and synced. For a coverage-checking caller, a kind
+// Radar started watching after the window began is not ready either: its
+// earlier changes were never seen, so the history is incomplete from then.
 func (c *run) collected(kind, group, namespace string) bool {
 	if reason, ok := collectionGap(kind, group, namespace); ok {
 		c.addUnknown(reason, group, kind)
 		return false
 	}
+	if !c.opts.CheckCoverage {
+		return true
+	}
+	if since, ok := watchedSince(kind, group, namespace); ok && since.After(c.opts.Window.From) {
+		c.watchHistory = mergeHistory(c.watchHistory, issuesapi.HistoryCoverage{
+			Incomplete: true, CompleteSince: roundUpToSecond(since).UTC(), Reasons: []issuesapi.HistoryGapReason{issuesapi.HistoryObservationStartedLate},
+		})
+		c.addUnknown(issuesapi.CorrelationUnknownHistoryIncomplete, group, kind)
+		return false
+	}
 	return true
+}
+
+// watchedSince is when Radar started watching a kind it collects through its
+// dynamic cache (custom resources, webhook configurations) in namespace. The
+// typed informers start with Radar itself, which the store's observation
+// start already covers, so ok is false for them.
+func watchedSince(kind, group, namespace string) (time.Time, bool) {
+	if b, builtin := resourceid.BuiltinForKind(kind); builtin && (group == "" || b.Group == group) {
+		if cache := k8s.GetResourceCache(); cache != nil {
+			if g, resource, _, ok := k8s.ResolveChangeGVR(kind, b.Group); ok && g == b.Group {
+				if _, known := cache.InformerSynced(resource); known {
+					return time.Time{}, false
+				}
+			}
+		}
+	}
+	disc := k8s.GetResourceDiscovery()
+	dyn := k8s.GetDynamicResourceCache()
+	if disc == nil || dyn == nil {
+		return time.Time{}, false
+	}
+	gvr, ok := disc.GetGVRWithGroup(kind, group)
+	if !ok {
+		return time.Time{}, false
+	}
+	return dyn.NamespaceWatchedSince(gvr, namespace)
+}
+
+func roundUpToSecond(t time.Time) time.Time {
+	if rounded := t.Truncate(time.Second); !rounded.Equal(t) {
+		return rounded.Add(time.Second)
+	}
+	return t
 }
 
 func collectionGap(kind, group, namespace string) (issuesapi.CorrelationUnknownReason, bool) {

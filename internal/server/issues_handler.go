@@ -335,7 +335,9 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 
 	correlateID := r.URL.Query().Get("correlate")
 	envelope := r.URL.Query().Get("coverage") == "1" || correlateID != ""
-	nativeHelm := strings.EqualFold(rawKind, "HelmRelease") && group == issues.NativeHelmGroup && namespace != ""
+	// Native Helm releases are a synthetic kind discovery doesn't serve, so
+	// the singular and plural route names are matched here.
+	nativeHelm := issues.KindFilterIncludes([]string{rawKind}, "HelmRelease", "helmreleases") && group == issues.NativeHelmGroup && namespace != ""
 
 	subjectCache, _, _ := provider.CacheIdentity()
 	evidenceWithheld := map[string]bool{}

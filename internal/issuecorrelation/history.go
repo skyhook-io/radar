@@ -4,7 +4,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -16,7 +16,7 @@ import (
 // resource_created_at can be a newer member's); its referenced ConfigMaps and
 // Secrets must be new too, and one missing from the cache is not known to be
 // new.
-func historyCoversObjects(obj any, namespace string, coverage issuesapi.HistoryCoverage) bool {
+func historyCoversObjects(obj any, refs []configrefs.Ref, namespace string, coverage issuesapi.HistoryCoverage) bool {
 	if !coverage.Incomplete {
 		return true
 	}
@@ -25,7 +25,7 @@ func historyCoversObjects(obj any, namespace string, coverage issuesapi.HistoryC
 		return false
 	}
 	cache := k8s.GetResourceCache()
-	for _, ref := range meaningfulchanges.DirectConfigReferences(obj) {
+	for _, ref := range refs {
 		if cache == nil {
 			return false
 		}

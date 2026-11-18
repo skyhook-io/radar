@@ -95,6 +95,16 @@ func correlationFixture(t *testing.T) timeline.EventStore {
 		}
 	}
 	objs = append(objs,
+		// A bare ReplicaSet: its own changes aren't tracked.
+		&appsv1.ReplicaSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "batch", Namespace: "shop", CreationTimestamp: created, UID: "rs-batch"},
+			Spec:       appsv1.ReplicaSetSpec{Replicas: &four},
+			Status: appsv1.ReplicaSetStatus{Replicas: 0, Conditions: []appsv1.ReplicaSetCondition{{
+				Type: appsv1.ReplicaSetReplicaFailure, Status: corev1.ConditionTrue, Reason: "FailedCreate",
+				Message:            `pods "batch-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=2, limited: pods=2`,
+				LastTransitionTime: metav1.NewTime(time.Now().Add(-9 * time.Minute)),
+			}}},
+		},
 		admission("vague", `pods "vague-x" is forbidden: exceeded quota`),
 		admission("orphaned", `pods "orphaned-x" is forbidden: exceeded quota: gone, requested: pods=1, used: pods=2, limited: pods=2`),
 		admission("search", `pods "search-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=2, limited: pods=2`),
@@ -480,6 +490,26 @@ func TestProxyAuth_IssueCorrelationOneWebhookKindReadable(t *testing.T) {
 	}
 }
 
+// A quota rejection on a bare ReplicaSet, whose own changes Radar doesn't
+// track, says whether the quota changed: when it didn't, the marker is scoped
+// to the policy.
+func TestProxyAuth_IssueCorrelationQuietPolicyOnUntrackedSubject(t *testing.T) {
+	store := correlationFixture(t)
+	recordChanges(t, store, "compute")
+	env := newAuthTestServer(t)
+	correlationUser(env, "full", []string{"shop"})
+	iss := correlated(t, env, "full", "ReplicaSet", "batch", "apps", issuesapi.CategoryQuotaExceeded)
+	if iss.NoRecentChanges == nil || iss.NoRecentChanges.Scope != issuesapi.NoRecentChangesScopeAdmissionPolicy || iss.Correlation.Unknown != nil {
+		t.Fatalf("quiet quota: no_recent_changes %+v, unknown %+v", iss.NoRecentChanges, iss.Correlation.Unknown)
+	}
+
+	appendInformerEvent(t, store, correlationChanges()["compute"])
+	iss = correlated(t, env, "full", "ReplicaSet", "batch", "apps", issuesapi.CategoryQuotaExceeded)
+	if iss.NoRecentChanges != nil || !slices.Equal(changeKinds(iss), []string{"ResourceQuota"}) {
+		t.Fatalf("changed quota: no_recent_changes %+v, changes %+v", iss.NoRecentChanges, iss.CorrelatedChanges)
+	}
+}
+
 // An admission issue whose rejecting policy Radar can't identify is unknown,
 // never "no changes": the message names none, or names a quota that's gone.
 func TestProxyAuth_IssueCorrelationUnresolvedAdmissionBlocker(t *testing.T) {
@@ -648,6 +678,14 @@ func TestProxyAuth_IssueCorrelationHelmReadAsCaller(t *testing.T) {
 	iss := body.Issues[0]
 	if iss.Correlation == nil || iss.Correlation.Unknown != nil || len(iss.CorrelatedChanges) == 0 || iss.CorrelatedChanges[0].Kind != "HelmRelease" {
 		t.Fatalf("reader: %+v", iss)
+	}
+
+	// The plural route name, in any case, reaches the same release.
+	for _, kind := range []string{"helmreleases", "HelmReleases"} {
+		code, body := getResourceIssues(t, env, "reader", "/api/issues/resource/"+kind+"/shop/payments?group=helm.sh&correlate="+id)
+		if code != http.StatusOK || body.CorrelationStatus != "" || len(body.Issues) != 1 || body.Issues[0].Correlation == nil || len(body.Issues[0].CorrelatedChanges) == 0 {
+			t.Fatalf("%s: %d %+v", kind, code, body)
+		}
 	}
 
 	for _, tc := range []struct {

@@ -781,7 +781,18 @@ type HistoryCoverage struct {
 // window.
 type NoRecentChangesMarker struct {
 	WindowSeconds int `json:"window_seconds"`
+	// Scope narrows what was checked. Absent means the issue's subject and
+	// its referenced ConfigMaps and Secrets (and for an admission rejection,
+	// the rejecting policy). NoRecentChangesScopeAdmissionPolicy means only
+	// the policy that rejected the admission request was checked: the
+	// subject's own kind (a Job, a bare ReplicaSet) isn't tracked. Set only
+	// on an issue correlated on request (?correlate=).
+	Scope string `json:"scope,omitempty"`
 }
+
+// NoRecentChangesScopeAdmissionPolicy is NoRecentChangesMarker.Scope for a
+// claim about the rejecting admission policy alone.
+const NoRecentChangesScopeAdmissionPolicy = "admission_policy"
 
 type Response struct {
 	Issues              []Issue         `json:"issues"`

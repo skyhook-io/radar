@@ -9,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -24,14 +25,14 @@ func TestSecretCorrelationHistoryComplete(t *testing.T) {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))}}
 	initCache(t, deployment, secret)
 	coverage := issuesapi.HistoryCoverage{Incomplete: true, CompleteSince: now.Add(-time.Minute)}
-	if historyCoversObjects(deployment, "shop", coverage) {
+	if historyCoversObjects(deployment, meaningfulchanges.DirectConfigReferences(deployment), "shop", coverage) {
 		t.Fatal("old referenced Secret incorrectly treated as complete")
 	}
 	fresh := secret.DeepCopy()
 	fresh.CreationTimestamp = metav1.NewTime(now)
 	k8s.ResetTestState()
 	initCache(t, deployment, fresh)
-	if !historyCoversObjects(deployment, "shop", coverage) {
+	if !historyCoversObjects(deployment, meaningfulchanges.DirectConfigReferences(deployment), "shop", coverage) {
 		t.Fatal("new referenced Secret should cover its whole lifetime")
 	}
 }

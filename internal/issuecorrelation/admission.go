@@ -204,14 +204,16 @@ func (c *run) admissionBlocker() (*admissionBlockerEvidence, *admissionReadError
 		// declared. Both kinds must also be collected for it to be complete.
 		allReadable := true
 		for _, kind := range webhookConfigurationKinds {
-			readable := c.allowed(kind, webhookConfigurationGroup, "")
-			allReadable = allReadable && readable
-			if !readable || !c.collected(kind, webhookConfigurationGroup, "") {
-				ev.complete = false
-			}
+			allReadable = c.allowed(kind, webhookConfigurationGroup, "") && allReadable
 		}
 		if !allReadable {
+			ev.complete = false
 			break
+		}
+		for _, kind := range webhookConfigurationKinds {
+			if !c.collected(kind, webhookConfigurationGroup, "") {
+				ev.complete = false
+			}
 		}
 		configs := meaningfulchanges.WebhookConfigurationsDeclaring(blocker.WebhookName)
 		for _, cfg := range configs {

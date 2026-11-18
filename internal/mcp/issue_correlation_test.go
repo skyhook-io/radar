@@ -476,7 +476,7 @@ func TestIssueCorrelation_WorstCasePayloadBounded(t *testing.T) {
 	var iss []issuesapi.Issue
 	for i := 0; i < correlationIssueCap; i++ {
 		issue := criticalIssue("Deployment", fmt.Sprintf("dep-%d", i))
-		for c := 0; c < correlationChangeCap; c++ {
+		for c := 0; c < issuecorrelation.ChangeCap; c++ {
 			change := issuesapi.RecentChange{
 				Source: "informer", Kind: "Deployment", Namespace: "shop",
 				Name:           fmt.Sprintf("dep-%d", i),

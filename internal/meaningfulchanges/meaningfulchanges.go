@@ -517,6 +517,19 @@ func RecentForWorkloadSources(
 	q Query,
 	includeSource func(kind, name string) bool,
 ) (result RecentResult, coverageLimited bool, err error) {
+	return RecentForWorkloadSourceRefs(ctx, DirectConfigReferences(obj), kind, namespace, name, q, includeSource)
+}
+
+// RecentForWorkloadSourceRefs is RecentForWorkloadSources over references the
+// caller already resolved, so the sources read are exactly the ones it
+// checked: the workload's template is not read again.
+func RecentForWorkloadSourceRefs(
+	ctx context.Context,
+	refs []configrefs.Ref,
+	kind, namespace, name string,
+	q Query,
+	includeSource func(kind, name string) bool,
+) (result RecentResult, coverageLimited bool, err error) {
 	store := timeline.GetStore()
 	if store == nil {
 		return RecentResult{}, false, timeline.StoreMissingError()
@@ -550,7 +563,7 @@ func RecentForWorkloadSources(
 			return RecentResult{}, coverageLimited, err
 		}
 	}
-	for _, ref := range DirectConfigReferences(obj) {
+	for _, ref := range refs {
 		if err := fetch(ref.Kind, ref.Name); err != nil {
 			return RecentResult{}, coverageLimited, err
 		}
