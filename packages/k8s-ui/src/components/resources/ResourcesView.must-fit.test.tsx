@@ -32,11 +32,12 @@ afterEach(() => {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: innerWidth })
 })
 
-function renderAt(windowWidth: number) {
+async function renderAt(windowWidth: number) {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: windowWidth })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   const items = Array.from({ length: 12 }, (_, i) => node(i))
-  act(() => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 40 }}><KeyboardShortcutProvider><ResourcesView
+  // Awaited so the deferred measurement render has run.
+  await act(async () => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 40 }}><KeyboardShortcutProvider><ResourcesView
     namespaces={[]}
     apiResources={[nodes]}
     resourceCounts={{ Node: items.length }}
@@ -48,21 +49,21 @@ function renderAt(windowWidth: number) {
   return parseInt(host.querySelector<HTMLTableElement>('table')!.style.width, 10)
 }
 
-it('applies the rule as the window crosses 1920px, without remounting', () => {
+it('applies the rule as the window crosses 1920px, without remounting', async () => {
   // The table's room stays 1456px; only the window changes.
-  expect(renderAt(1919)).toBeGreaterThan(ROOM)
-  act(() => {
+  expect(await renderAt(1919)).toBeGreaterThan(ROOM)
+  await act(async () => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1920 })
     window.dispatchEvent(new Event('resize'))
   })
   expect(parseInt(host.querySelector<HTMLTableElement>('table')!.style.width, 10)).toBeLessThanOrEqual(ROOM)
 })
 
-it('does not scroll sideways in a 1920px window, where a narrower one would', () => {
+it('does not scroll sideways in a 1920px window, where a narrower one would', async () => {
   // Below 1920 Nodes' columns keep their content and Name its protected
   // width, so the table is wider than its room...
-  expect(renderAt(1680)).toBeGreaterThan(ROOM)
+  expect(await renderAt(1680)).toBeGreaterThan(ROOM)
   act(() => root.unmount()); host.remove()
   // ...and from 1920 up the columns give way to their headings until it fits.
-  expect(renderAt(1920)).toBeLessThanOrEqual(ROOM)
+  expect(await renderAt(1920)).toBeLessThanOrEqual(ROOM)
 })

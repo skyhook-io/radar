@@ -3,14 +3,14 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { VirtuosoMockContext } from 'react-virtuoso'
 import { afterEach, expect, it, vi } from 'vitest'
-import { ResourcesView } from './ResourcesView'
-import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
 import type { APIResource } from '../../types'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })
 Element.prototype.scrollIntoView = vi.fn()
 
+// The font watcher and the glyph cache are module state, and this file swaps
+// the canvas: it runs isolated, on modules of its own (resetModules below).
 // The fallback face is twice as wide as the web font that replaces it.
 let charPx = 14
 HTMLCanvasElement.prototype.getContext = function () {
@@ -35,9 +35,13 @@ const nameWidth = () => {
 }
 
 it('drops widths measured in the fallback font once the web font arrives, though the rows are the same', async () => {
+  vi.resetModules()
+  const { ResourcesView } = await import('./ResourcesView')
+  const { KeyboardShortcutProvider } = await import('../../hooks/useKeyboardShortcuts')
   const items = [event('web-1.17f8a9b2c3d4e5f6abcdef12')] // 30 characters
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-  act(() => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 40 }}><KeyboardShortcutProvider><ResourcesView
+  // Awaited so the deferred measurement render has run before the first check.
+  await act(async () => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 40 }}><KeyboardShortcutProvider><ResourcesView
     namespaces={['test']}
     apiResources={[events]}
     resourceCounts={{ Event: 1 }}
