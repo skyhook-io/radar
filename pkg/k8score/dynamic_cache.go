@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
 )
@@ -1993,7 +1994,7 @@ func (d *DynamicResourceCache) CountDirectProbe(ctx context.Context, gvr schema.
 	if d == nil {
 		return 0, fmt.Errorf("dynamic resource cache not initialized")
 	}
-	if d.config.DynamicClient == nil {
+	if d.directClient() == nil {
 		return 0, fmt.Errorf("dynamic client not initialized")
 	}
 	if len(namespaces) == 0 {
@@ -2058,9 +2059,9 @@ func (d *DynamicResourceCache) countDirectProbeOne(ctx context.Context, gvr sche
 	var err error
 	opts := metav1.ListOptions{Limit: directCountProbeLimit}
 	if namespace != "" {
-		list, err = d.config.DynamicClient.Resource(gvr).Namespace(namespace).List(ctx, opts)
+		list, err = d.directClient().Resource(gvr).Namespace(namespace).List(ctx, opts)
 	} else {
-		list, err = d.config.DynamicClient.Resource(gvr).List(ctx, opts)
+		list, err = d.directClient().Resource(gvr).List(ctx, opts)
 	}
 	if err != nil {
 		if isAuthProbeError(err) {
@@ -2434,6 +2435,13 @@ func (d *DynamicResourceCache) ListWithSelector(gvr schema.GroupVersionResource,
 	return result, nil
 }
 
+func (d *DynamicResourceCache) directClient() dynamic.Interface {
+	if d.config.DirectClient != nil {
+		return d.config.DirectClient
+	}
+	return d.config.DynamicClient
+}
+
 // ListDirect fetches resources directly from the API (bypasses cache).
 func (d *DynamicResourceCache) ListDirect(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
 	items, _, err := d.ListDirectSelected(ctx, gvr, namespace, "", 0)
@@ -2449,9 +2457,9 @@ func (d *DynamicResourceCache) ListDirectSelected(ctx context.Context, gvr schem
 	var list *unstructured.UnstructuredList
 
 	if namespace != "" {
-		list, err = d.config.DynamicClient.Resource(gvr).Namespace(namespace).List(ctx, opts)
+		list, err = d.directClient().Resource(gvr).Namespace(namespace).List(ctx, opts)
 	} else {
-		list, err = d.config.DynamicClient.Resource(gvr).List(ctx, opts)
+		list, err = d.directClient().Resource(gvr).List(ctx, opts)
 	}
 
 	if err != nil {
@@ -2490,9 +2498,9 @@ func (d *DynamicResourceCache) getDirect(ctx context.Context, gvr schema.GroupVe
 	var err error
 
 	if namespace != "" {
-		u, err = d.config.DynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		u, err = d.directClient().Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	} else {
-		u, err = d.config.DynamicClient.Resource(gvr).Get(ctx, name, metav1.GetOptions{})
+		u, err = d.directClient().Resource(gvr).Get(ctx, name, metav1.GetOptions{})
 	}
 
 	if err != nil {

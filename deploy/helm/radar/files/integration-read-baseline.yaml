@@ -941,3 +941,31 @@ entries:
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "packages/k8s-ui/src/components/resources/ResourcesView.tsx (curated columns)"
+  - group: "agents.x-k8s.io"
+    resources: ["sandboxes"]
+    scope: Namespaced
+    collection: "agentSandbox"
+    decision: withhold
+    reason: "A Sandbox carries a full Pod template, whose environment values can contain inline credentials. Native visibility adds no caller grants."
+    source: "https://github.com/kubernetes-sigs/agent-sandbox/tree/v1.0.11/api/v1beta1"
+  - group: "extensions.agents.x-k8s.io"
+    resources: ["sandboxclaims", "sandboxtemplates", "sandboxwarmpools"]
+    scope: Namespaced
+    collection: "agentSandbox"
+    decision: withhold
+    reason: "SandboxTemplates carry Pod templates and SandboxClaims inject inline environment values; both can contain credentials. Native visibility adds no caller grants."
+    source: "https://github.com/kubernetes-sigs/agent-sandbox/tree/v1.0.11/extensions/api/v1beta1"
+  - group: "ate.dev"
+    resources: ["workerpools"]
+    scope: Namespaced
+    collection: "agentSubstrate"
+    decision: withhold
+    reason: "Pool templates and status hold no credential fields; granting Radar Cloud callers new reads is a separate review. Native visibility adds no caller grants."
+    source: "https://github.com/agent-substrate/substrate/tree/a46464663fa076221ae059e1fd4a273edd2d8b09/api/infra/k8s/ate/v1"
+  - group: "ate.dev"
+    resources: ["sandboxconfigs", "csidriverconfigs"]
+    scope: Cluster
+    collection: "agentSubstrate"
+    decision: withhold
+    reason: "Cluster-scoped runtime configuration: sandbox asset locations and CSI driver endpoints and TLS settings. Native visibility adds no caller grants."
+    source: "https://github.com/agent-substrate/substrate/tree/a46464663fa076221ae059e1fd4a273edd2d8b09/api/infra/k8s/ate/v1"

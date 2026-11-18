@@ -36,7 +36,7 @@ var (
 func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 	var initErr error
 	dynamicCacheOnce.Do(func() {
-		client := GetDynamicClient()
+		directClient, client := getDynamicCacheClients()
 		if client == nil {
 			initErr = fmt.Errorf("dynamic client not initialized")
 			return
@@ -84,6 +84,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
 			RequiredWatchKinds:          relationshipWatchKinds(),
 			DynamicClient:               client,
+			DirectClient:                directClient,
 			Discovery:                   sharedDiscovery,
 			Changes:                     changeCh,
 			NamespaceFallback:           nsFallback,
@@ -484,6 +485,15 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "nvidia.com", Versions: []string{"v1"}, Resource: "clusterpolicies", Kind: "ClusterPolicy", Namespaced: false},
 	{Group: "nvidia.com", Versions: []string{"v1alpha1"}, Resource: "nvidiadrivers", Kind: "NVIDIADriver", Namespaced: false},
 	{Group: "k8s.cni.cncf.io", Versions: []string{"v1"}, Resource: "network-attachment-definitions", Kind: "NetworkAttachmentDefinition", Namespaced: true},
+	// Agent runtimes. Substrate's actors are not Kubernetes objects; only its
+	// pools and runtime configuration are.
+	{Group: "ate.dev", Versions: []string{"v1"}, Resource: "workerpools", Kind: "WorkerPool", Namespaced: true},
+	{Group: "ate.dev", Versions: []string{"v1"}, Resource: "sandboxconfigs", Kind: "SandboxConfig", Namespaced: false},
+	{Group: "ate.dev", Versions: []string{"v1"}, Resource: "csidriverconfigs", Kind: "CSIDriverConfig", Namespaced: false},
+	{Group: "agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxes", Kind: "Sandbox", Namespaced: true},
+	{Group: "extensions.agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxclaims", Kind: "SandboxClaim", Namespaced: true},
+	{Group: "extensions.agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxtemplates", Kind: "SandboxTemplate", Namespaced: true},
+	{Group: "extensions.agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxwarmpools", Kind: "SandboxWarmPool", Namespaced: true},
 	// NOTE: the wgpolicyk8s.io PolicyReport CRDs are intentionally NOT in
 	// this list. They are warmed up conditionally — only when Kyverno is
 	// detected — via WarmupKyvernoPolicyReports in policy_reports.go. Adding
@@ -494,7 +504,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 
 func RegisterSupportedCRDFallbacks() {
 	discovery := GetResourceDiscovery()
-	client := GetDynamicClient()
+	client := GetInformerDynamicClient()
 	if discovery == nil || client == nil {
 		return
 	}
