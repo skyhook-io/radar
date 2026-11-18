@@ -33,8 +33,11 @@ export function agentSandboxResource(ref: { kind: string; group: string; namespa
   return refToSelectedResource(ref)
 }
 
-/** The title line, and the namespace filter and the screen's own filters as chips when they narrow it. */
-export function AgentSandboxHeader({ title, namespaces, onClearNamespaces, actions, chips: filters = [] }: { title: string; namespaces: string[]; onClearNamespaces: () => void; actions?: ReactNode; chips?: { label: string; onClear: () => void }[] }) {
+/** What Agent Sandbox is, in one line, at the top of its Overview: the sandbox, claim and warm pool model. */
+export const AGENT_SANDBOX_WHAT_IT_IS = 'Agent Sandbox gives each agent its own sandboxed Pod; claims take sandboxes from warm pools kept ready ahead of demand.'
+
+/** The title line, an optional intro line under it, and the namespace filter and the screen's own filters as chips when they narrow it. */
+export function AgentSandboxHeader({ title, intro, namespaces, onClearNamespaces, actions, chips: filters = [] }: { title: string; intro?: ReactNode; namespaces: string[]; onClearNamespaces: () => void; actions?: ReactNode; chips?: { label: string; onClear: () => void }[] }) {
   const chips = [...namespaceChip(namespaces, onClearNamespaces), ...filters]
   return (
     <div className="px-5 pt-4 xl:px-7">
@@ -47,6 +50,7 @@ export function AgentSandboxHeader({ title, namespaces, onClearNamespaces, actio
         <h1 className="text-lg font-semibold text-theme-text-primary">{title}</h1>
         {actions && <div className="ml-auto">{actions}</div>}
       </div>
+      {intro && <p className="mt-0.5 text-sm text-theme-text-secondary">{intro}</p>}
       {chips.length > 0 && (
         <div className="mt-2">
           <FilterChips chips={chips} />

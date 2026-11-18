@@ -24,7 +24,7 @@ import { issuesPathForSubject } from '../../utils/page-links'
 import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { AGENT_SANDBOX_EXTENSIONS_GROUP, SANDBOXES_PATH, SANDBOX_CLAIMS_PATH, SANDBOX_WARM_POOLS_PATH } from './routes'
-import { AGENT_SANDBOX_WIDE, AgentSandboxHeader, ObjectName, SourceText } from './shared'
+import { AGENT_SANDBOX_WHAT_IT_IS, AGENT_SANDBOX_WIDE, AgentSandboxHeader, ObjectName, SourceText } from './shared'
 import { CANT_SCHEDULE, notReadyMembers, objectKey, serverReadings } from './labels'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { CommandChip } from '../substrate/shared'
@@ -482,7 +482,7 @@ export function AgentSandboxOverview({ data, onClearNamespaces, onInspect, inspe
   return (
     <OpenIssueContext.Provider value={(p) => navigateTo(issuesPathForSubject(p.subject, params.get('namespaces')))}>
       <div className="flex min-h-0 flex-1 flex-col">
-        <AgentSandboxHeader title="Overview" namespaces={data.namespaces} onClearNamespaces={onClearNamespaces} />
+        <AgentSandboxHeader title="Overview" intro={AGENT_SANDBOX_WHAT_IT_IS} namespaces={data.namespaces} onClearNamespaces={onClearNamespaces} />
         <ScreenBody>
           <WorkspaceCoverageNotice data={data} />
           <div className="space-y-1.5">
