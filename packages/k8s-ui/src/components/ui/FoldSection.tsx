@@ -66,3 +66,23 @@ export function FoldSection({
     </div>
   )
 }
+
+/**
+ * A list row's Details fold: a compact header right under the row's last line,
+ * so it reads as part of that row and costs one line while closed. Use
+ * FoldSection for a page section instead.
+ */
+export function RowDetails({ open, onToggle, children }: { open: boolean; onToggle: () => void; children: ReactNode }) {
+  const d = useDisclosure(open)
+  return (
+    <div className="mt-1">
+      <button type="button" {...d.buttonProps} onClick={onToggle} className="inline-flex items-center gap-1 rounded text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+        <CollapseChevron open={open} className="h-3 w-3" />
+        Details
+      </button>
+      <Collapse open={open} id={d.panelId}>
+        <div className="space-y-1.5 pb-0.5 pl-4 pt-1">{children}</div>
+      </Collapse>
+    </div>
+  )
+}
