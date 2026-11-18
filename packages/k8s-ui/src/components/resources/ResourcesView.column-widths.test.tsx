@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { VirtuosoMockContext } from 'react-virtuoso'
 import { afterEach, expect, it, vi } from 'vitest'
-import { ResourcesView, getColumnMinWidth, withoutDefaultWidths } from './ResourcesView'
+import { COLUMN_WIDTHS_VERSION, ResourcesView, getColumnHeaderWidth, getColumnMinWidth, withoutDefaultWidths } from './ResourcesView'
 import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
 import type { APIResource } from '../../types'
 
@@ -86,7 +86,36 @@ it('drops saved widths that are only a column’s default, keeping real drags an
     { key: 'object', label: 'Object', width: 'w-48' },
     { key: 'count', label: 'Count', width: 'w-20' },
     { key: 'lastSeen', label: 'Last Seen', width: 'w-28' },
-  ])).toEqual({ name: 1064, message: 456 })
+  ], true)).toEqual({ name: 1064, message: 456 })
+})
+
+it('keeps every width of a record saved since columns sized themselves, even one near the default', () => {
+  const count = getColumnMinWidth({ key: 'count', label: 'Count', width: 'w-20' })
+  localStorage.setItem('radar-columns-events', JSON.stringify({
+    visible: ['name', 'namespace', 'type', 'reason', 'message', 'object', 'count', 'lastSeen'],
+    widths: { count: count + 2 }, // a double-click fit, two pixels past the default
+    widthsVersion: COLUMN_WIDTHS_VERSION,
+  }))
+  render([event(longName, 'hello')])
+  expect(colWidth('count')).toBe(`${count + 2}px`)
+})
+
+it('drops a legacy width at the default a column had while its heading reserved filter room', () => {
+  const containers = { key: 'containers', label: 'Containers', width: 'w-32' }
+  // The default before: the declared width, or the heading with the filter button's 20px where wider.
+  const before = Math.max(128, getColumnHeaderWidth(containers) + 20)
+  // ...which is not today's default, or this would prove nothing.
+  expect(before - getColumnMinWidth(containers)).toBeGreaterThan(4)
+  expect(withoutDefaultWidths({ containers: before, name: 400 }, [{ key: 'name', label: 'Name' }, containers], true)).toEqual({ name: 400 })
+  // A record saved since keeps it: that width is the user's.
+  expect(withoutDefaultWidths({ containers: before }, [containers], false)).toEqual({ containers: before })
+})
+
+it('ignores saved widths that are not positive finite numbers', () => {
+  const widths = JSON.parse('{"name":1e309,"message":-5,"object":"wide","count":90}')
+  const columns = [{ key: 'name', label: 'Name' }, { key: 'message', label: 'Message' }, { key: 'object', label: 'Object' }, { key: 'count', label: 'Count' }]
+  expect(withoutDefaultWidths(widths, columns, false)).toEqual({ count: 90 })
+  expect(withoutDefaultWidths(widths, columns, true)).toEqual({ count: 90 })
 })
 
 it('saves only the dragged column, and Reset widths returns it to automatic sizing', () => {

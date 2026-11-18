@@ -249,6 +249,13 @@ const WORKLOAD_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets'])
 const BULK_RESTART_WORKLOAD_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts'])
 const BULK_SCALE_WORKLOAD_KINDS = new Set(['deployments', 'statefulsets'])
 
+// Pods' and Nodes' Containers, CPU, Memory, GPU and Pods columns: their cells
+// draw from container statuses, metrics and resource requests,
+// getCellFilterValue has no case for them, and no Pod, Node or Volcano Job
+// carries a status or spec field of those names. Their headings used to
+// reserve room for a filter button anyway, so widths saved then hold that room.
+const FILTER_RESERVE_DROPPED_COLUMNS = new Set(['containers', 'cpu', 'memory', 'gpu', 'pods'])
+
 // Columns to skip for auto-detected filters (high cardinality, text-like, or non-filterable)
 export const SKIP_FILTER_COLUMNS = new Set([
   'name', 'age', 'keys', 'size', 'images', 'domains', 'hosts', 'rules',
@@ -268,11 +275,7 @@ export const SKIP_FILTER_COLUMNS = new Set([
   // status.summary. Listing them here stops the header reserving room for a
   // button that can never render.
   'critical', 'high', 'medium', 'low', 'pass', 'fail', 'warn', 'error', 'skip',
-  // The same for Pods' and Nodes' Containers, CPU, Memory, GPU and Pods
-  // columns: their cells draw from container statuses, metrics and resource
-  // requests, getCellFilterValue has no case for them, and no Pod, Node or
-  // Volcano Job carries a status or spec field of those names.
-  'containers', 'cpu', 'memory', 'gpu', 'pods',
+  ...FILTER_RESERVE_DROPPED_COLUMNS,
 ])
 
 // Namespace/node cardinality scales with cluster size, not kind enum size;
@@ -3345,26 +3348,42 @@ function columnsForKindWithPrinter(
 // pixel or two between the session that saved them and this one.
 const DEFAULT_WIDTH_TOLERANCE_PX = 4
 
+// Records saved since columns sized themselves carry this; their widths are
+// all the user's own.
+export const COLUMN_WIDTHS_VERSION = 2
+
 /**
- * Saved column widths without the ones that are just a column's default width.
+ * The usable saved column widths: positive and finite, and, in a record saved
+ * before columns sized themselves (`fromBeforeSizing`), not just a column's
+ * default width.
  *
- * Before columns sized themselves, the first drag on a table saved the width of
- * every visible column, so a saved record holds widths the user never chose.
- * Keeping them would freeze those tables as they were. A width at a column's
- * default (its declared width, or its heading where that is wider) is one of
- * those, so the column goes back to sizing itself; a width the user dragged
- * away from the default stays. Name had no default width — it took whatever
- * room was left — so a saved Name width can't be told from a drag and stays.
+ * Back then the first drag on a table saved the width of every visible column,
+ * so such a record holds widths the user never chose. Keeping them would freeze
+ * those tables as they were. A width at a column's default — its declared
+ * width, or its heading where that is wider, as measured now or, for the
+ * columns whose heading no longer reserves filter-button room, as it was — is
+ * one of those, so the column goes back to sizing itself; a width the user
+ * dragged away from the default stays. Name had no default width — it took
+ * whatever room was left — so a saved Name width can't be told from a drag and
+ * stays. A record saved since is kept whole: a width there is one the user set,
+ * even one within a few pixels of the default.
  */
-export function withoutDefaultWidths(widths: unknown, columns: Column[]): Record<string, number> {
+export function withoutDefaultWidths(widths: unknown, columns: Column[], fromBeforeSizing: boolean): Record<string, number> {
   if (!widths || typeof widths !== 'object') return {}
   const byKey = new Map(columns.map(column => [column.key, column]))
   const extras = new Map(columns.filter((column): column is ExtraColumn => 'render' in column).map(column => [column.key, column]))
+  const isDefault = (column: Column, width: number) => {
+    const near = (target: number) => Math.abs(width - target) <= DEFAULT_WIDTH_TOLERANCE_PX
+    if (near(getColumnMinWidth(column, extras))) return true
+    if (!FILTER_RESERVE_DROPPED_COLUMNS.has(column.key)) return false
+    const header = Math.min(getColumnHeaderWidth(column, extras) + HEADER_FILTER_AFFORDANCE_PX, HEADER_FLOOR_MAX_PX)
+    return near(Math.max(declaredColumnWidth(column), header))
+  }
   const kept: Record<string, number> = {}
   for (const [key, width] of Object.entries(widths as Record<string, unknown>)) {
-    if (typeof width !== 'number' || !(width > 0)) continue
+    if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) continue
     const column = byKey.get(key)
-    if (column && key !== 'name' && Math.abs(width - getColumnMinWidth(column, extras)) <= DEFAULT_WIDTH_TOLERANCE_PX) continue
+    if (fromBeforeSizing && column && key !== 'name' && isDefault(column, width)) continue
     kept[key] = width
   }
   return kept
@@ -3471,6 +3490,9 @@ interface ColumnSettings {
   /** Columns shown by the data (GPU) that the user hid. Absent on blobs written
    *  before GPU followed the data. */
   hidden?: string[]
+  /** COLUMN_WIDTHS_VERSION when written since columns sized themselves; absent
+   *  before (see withoutDefaultWidths). */
+  widthsVersion?: number
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -3492,8 +3514,8 @@ function saveColumnSettings(kind: string, group: string | undefined, settings: C
 const SORT_SETTINGS_PREFIX = 'radar-sort-'
 
 // Kept apart from the column record on purpose: a column record's existence
-// is read as "the user chose columns" (GPU auto-show stands down, the
-// stale-defaults migration is skipped), and a sort alone is not that choice.
+// is read as "the user chose columns" (its visible set replaces the kind's
+// defaults), and a sort alone is not that choice.
 function loadSavedSort(kind: string, group?: string): { column: string; direction: 'asc' | 'desc' } | null {
   try {
     const raw = localStorage.getItem(SORT_SETTINGS_PREFIX + columnSettingsKey(kind, group))
@@ -4347,7 +4369,7 @@ export function ResourcesView({
         if (!savedHidden) for (const key of DATA_SHOWN_COLUMNS) restoredVisible.delete(key)
         setVisibleColumns(restoredVisible)
         setHiddenColumns(new Set(savedHidden ?? []))
-        setColumnWidths(withoutDefaultWidths(saved.widths, effective))
+        setColumnWidths(withoutDefaultWidths(saved.widths, effective, saved.widthsVersion !== COLUMN_WIDTHS_VERSION))
         const savedOrder = sanitizeColumnOrder(saved.order)
         // Older settings reorder only columns after Name. Convert once to a full order.
         setColumnOrder(Array.isArray(saved.pinned) ? savedOrder : applyColumnOrder(effective, savedOrder).map(column => column.key))
@@ -4384,6 +4406,7 @@ export function ResourcesView({
       order: columnOrder ?? undefined,
       pinned: pinnedColumns,
       hidden: Array.from(hiddenColumns),
+      widthsVersion: COLUMN_WIDTHS_VERSION,
     })
     // allColumnKeysSig, not allColumnKeys: see the memo above.
   }, [visibleColumns, hiddenColumns, columnWidths, customColumns, columnOrder, pinnedColumns, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
@@ -6164,18 +6187,20 @@ export function ResourcesView({
   }), [selectedKind.name, selectedKind.group])
   // The CPU and Memory bars show metrics, not resource data: their labels are
   // measured from the metrics the cells read, so the columns shrink no further
-  // than the "used / limit" label.
+  // than the "used / limit" label. Read through a deferred value, like the
+  // rows below: a metrics refresh repaints the bars first and remeasures after.
+  const measureMetrics = useDeferredValue(metricsLookup)
   const usageCellWidths = useMemo(() => {
     const kindLower = selectedKind.name.toLowerCase()
     if (kindLower !== 'pods' && kindLower !== 'nodes') return undefined
     const reader = (kind: 'cpu' | 'memory'): CellWidth => (resource, measure) => usageLabelWidth(
       kindLower === 'pods'
-        ? podUsageLabel(resource, metricsLookup.pods.get(`${resource.metadata?.namespace}/${resource.metadata?.name}`), kind)
-        : nodeUsageLabel(metricsLookup.nodes.get(resource.metadata?.name), kind),
+        ? podUsageLabel(resource, measureMetrics.pods.get(`${resource.metadata?.namespace}/${resource.metadata?.name}`), kind)
+        : nodeUsageLabel(measureMetrics.nodes.get(resource.metadata?.name), kind),
       measure,
     )
     return { cpu: reader('cpu'), memory: reader('memory') }
-  }, [selectedKind.name, metricsLookup])
+  }, [selectedKind.name, measureMetrics])
   // Measured in a deferred render: a pass over a very large list must not hold
   // up the render that shows a streamed update. Only a pass over the list on
   // screen is remembered (see contentWidths), so a stale one never sticks.

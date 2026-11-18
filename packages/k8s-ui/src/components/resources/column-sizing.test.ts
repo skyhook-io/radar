@@ -135,6 +135,15 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout(cols, 510, { mustFit: true })).toEqual({ name: 300, status: 90, message: 120 })
   })
 
+  it('adds up to exactly the room when the table fits, whichever way it got there', () => {
+    // Shrunk: 199.5 each rounds down to 199; the pixel left goes to the last column.
+    expect(computeColumnLayout([{ ...exact('a', 200), min: 100 }, { ...exact('b', 200), min: 100 }], 399)).toEqual({ a: 199, b: 200 })
+    // Grown, with the room used up sharing: 200.5 each.
+    expect(computeColumnLayout([grow('a', 100, 400), grow('b', 100, 400)], 401)).toEqual({ a: 200, b: 201 })
+    // Still short: rounding takes nothing, adds nothing.
+    expect(computeColumnLayout([{ ...exact('a', 200), min: 150 }, { ...exact('b', 201), min: 150.5 }], 299)).toEqual({ a: 150, b: 150 })
+  })
+
   it('takes Name on to its median only when that ends the scrolling', () => {
     const cols: ColumnLayoutInput[] = [{ ...name(400, 300), fitMin: 240 }, exact('status', 160)]
     // 560 wanted; Name gives 100 to its yield width, the table fits at 460.
@@ -157,7 +166,7 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout(cols, 800)).toEqual({ name: 300, status: 160, message: 256, object: 256 })
     // With it: Status and the grow columns give the other 172 first, in proportion to how far
     // each is above its heading (70 : 136 : 146); Name stays at 300.
-    expect(computeColumnLayout(cols, 800, { mustFit: true })).toEqual({ name: 300, status: 125, message: 189, object: 184 })
+    expect(computeColumnLayout(cols, 800, { mustFit: true })).toEqual({ name: 300, status: 125, message: 189, object: 186 })
     expect(computeColumnLayout(cols, 600, { mustFit: true })).toEqual({ name: 280, status: 90, message: 120, object: 110 })
     // Past every hard minimum it still scrolls.
     expect(computeColumnLayout(cols, 400, { mustFit: true })).toEqual({ name: 200, status: 90, message: 120, object: 110 })
@@ -197,7 +206,7 @@ describe('computeColumnLayout', () => {
     expect(w.message).toBe(400)
     // Name's content grew by 100: A and B give it back in proportion, rather than A losing 250 to B.
     const shared = computeColumnLayout([name(300), { ...grow('a', 100, 5000), hold: 600 }, { ...grow('b', 100, 5000), hold: 200 }], 1000)
-    expect(shared).toEqual({ name: 300, a: 516, b: 183 })
+    expect(shared).toEqual({ name: 300, a: 516, b: 184 })
   })
 
   it('adds up to exactly the room when it spreads what is left', () => {
