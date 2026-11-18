@@ -95,7 +95,7 @@ func validateDisposition(t *testing.T, d relations.Disposition) {
 		default:
 			t.Fatalf("invalid edge: %+v", r)
 		}
-		if len(r.References) == 0 || len(r.Referrers) == 0 {
+		if len(r.ReferenceFields) == 0 || len(r.ReferrerFields) == 0 {
 			t.Fatalf("missing endpoint fields: %+v", r)
 		}
 	}
@@ -145,10 +145,10 @@ func checkDispositionPair(t *testing.T, name string, d relations.Disposition, so
 		m, _ := apimeta.Accessor(obj)
 		ApplyOwnership(rel, ov, ownership.Observe(projectionRef(obj), m))
 		other := dst
-		want := rule.References
+		want := rule.ReferenceFields
 		if i == 1 {
 			other = src
-			want = rule.Referrers
+			want = rule.ReferrerFields
 		}
 		got := fieldsContainingRef(reflect.ValueOf(rel).Elem(), refOf(projectionRef(other)), "")
 		slices.Sort(got)

@@ -4,7 +4,7 @@ package relations
 // in istioDomain (configrefs.IstioServiceDomain).
 func Families(istioDomain string) []*Family {
 	return []*Family{
-		ConfigReferences, Storage, Reflections, SealedSecrets, FluxHelmOrigins, CronWorkflowRuns, ArgoWorkflowPods,
+		ConfigReferences, Storage, Reflections, SealedSecrets, FluxHelmOrigins, ArgoWorkflowCronWorkflows, ArgoPodWorkflows,
 		Autoscalers, KEDAAuthentication,
 		IngressBackends, RolloutServices, GatewayParents, GatewayBackends, GatewayClasses,
 		IstioGateways, IstioServiceHosts(istioDomain),

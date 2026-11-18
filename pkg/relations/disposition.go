@@ -17,14 +17,23 @@ type Disposition struct {
 
 // ProjectionRule records the graph encoding and the resulting fields at both
 // endpoints. A nonempty Source or Target Kind narrows a rule; first match wins.
-// Dotted fields name nested Relationships fields, such as Reflection.Source.
 type ProjectionRule struct {
-	Source, Target        resourceid.GroupKind
-	Edge                  string
-	Reverse               bool
-	Label                 string
-	Partial               bool
-	References, Referrers []string
+	Source, Target resourceid.GroupKind
+	// Edge is the Topology edge type.
+	Edge string
+	// Reverse draws the edge from the declared object to the declaring one,
+	// as a HelmRelease's manages edge points at the workload whose labels
+	// name it.
+	Reverse bool
+	Label   string
+	// Staged marks the edge as a preview of a policy that doesn't enforce
+	// yet, as a Calico staged policy's is; it is the edge's partial flag.
+	Staged bool
+	// ReferenceFields are the topology.Relationships fields the declared
+	// object fills on the declaring object's answer, and ReferrerFields the
+	// fields the declaring object fills on the declared one's. Dotted
+	// names are nested fields, such as Reflection.Source.
+	ReferenceFields, ReferrerFields []string
 }
 
 // Matches reports whether the rule applies to these declaring/declared kinds.
@@ -33,7 +42,7 @@ func (r ProjectionRule) Matches(source, target resourceid.GroupKind) bool {
 }
 
 func project(edge string, reverse bool, references, referrers string) Disposition {
-	return Disposition{Rules: []ProjectionRule{{Edge: edge, Reverse: reverse, References: strings.Split(references, ","), Referrers: strings.Split(referrers, ",")}}}
+	return Disposition{Rules: []ProjectionRule{{Edge: edge, Reverse: reverse, ReferenceFields: strings.Split(references, ","), ReferrerFields: strings.Split(referrers, ",")}}}
 }
 func (d Disposition) whenSource(source resourceid.GroupKind, edge string, reverse bool, references, referrers string) Disposition {
 	r := project(edge, reverse, references, referrers).Rules[0]
@@ -54,9 +63,9 @@ func (d Disposition) labelled(label string) Disposition {
 	return d
 }
 
-func (d Disposition) partial() Disposition {
+func (d Disposition) staged() Disposition {
 	for i := range d.Rules {
-		d.Rules[i].Partial = true
+		d.Rules[i].Staged = true
 	}
 	return d
 }
