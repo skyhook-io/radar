@@ -9,6 +9,9 @@ import {
   getSandboxWarmPoolStatus,
   getWorkerPoolSandboxConfig,
   getWorkerPoolStatus,
+  imagePullNextStep,
+  REGISTRY_DNS_NEXT_STEP,
+  sandboxPodImagePullNextStep,
 } from './resource-utils-agent-runtimes'
 import { getResourceStatus } from '../shared/ResourceRendererDispatch'
 import { getCellFilterValue } from './resource-utils'
@@ -52,6 +55,37 @@ describe('Agent Sandbox status (shared with pkg/health)', () => {
       expect(getCellFilterValue(vector.object, 'status', isClaim ? 'agentsandboxclaims' : 'agentsandboxes')).toBe(vector.text)
     })
   }
+})
+
+const pullVectors = JSON.parse(readFileSync(new URL('../../../../../pkg/agentsandbox/testdata/image_pull_next_steps.json', import.meta.url), 'utf8'))
+
+describe('Agent Sandbox image pull next step (shared with pkg/agentsandbox)', () => {
+  it('pins the same step as Go', () => {
+    expect(REGISTRY_DNS_NEXT_STEP).toBe(pullVectors.registryDNSNextStep)
+    expect(REGISTRY_DNS_NEXT_STEP.split(/\s+/).length).toBeLessThanOrEqual(25)
+  })
+  for (const c of pullVectors.cases) {
+    it(c.name, () => {
+      expect(imagePullNextStep(c.reason, c.message)).toBe(c.dns ? REGISTRY_DNS_NEXT_STEP : undefined)
+    })
+  }
+
+  const [dns, , , auth] = pullVectors.cases
+  const pod = (...waiting: any[]) => ({ status: { containerStatuses: waiting.map((w, i) => ({ name: `c${i}`, state: w ? { waiting: w } : { running: {} } })) } })
+  it('reads the step from the Pod only where every container that can’t pull agrees on it', () => {
+    expect(sandboxPodImagePullNextStep('ImagePullBackOff', pod({ reason: dns.reason, message: dns.message }))).toBe(REGISTRY_DNS_NEXT_STEP)
+    // A running sidecar doesn't count against it; an init container's pull does.
+    expect(sandboxPodImagePullNextStep('ImagePullBackOff', pod({ reason: dns.reason, message: dns.message }, undefined))).toBe(REGISTRY_DNS_NEXT_STEP)
+    expect(sandboxPodImagePullNextStep('ErrImagePull', { status: { initContainerStatuses: [{ name: 'i', state: { waiting: { reason: 'ErrImagePull', message: dns.message } } }] } })).toBe(REGISTRY_DNS_NEXT_STEP)
+    // Two failures, one of them not DNS: no single cause.
+    expect(sandboxPodImagePullNextStep('ImagePullBackOff', pod({ reason: dns.reason, message: dns.message }, { reason: auth.reason, message: auth.message }))).toBeUndefined()
+    // No message, no pull failure, or no Pod read: the server's step stands.
+    expect(sandboxPodImagePullNextStep('ImagePullBackOff', pod({ reason: 'ImagePullBackOff' }))).toBeUndefined()
+    expect(sandboxPodImagePullNextStep('ImagePullBackOff', pod({ reason: 'CrashLoopBackOff', message: dns.message }))).toBeUndefined()
+    expect(sandboxPodImagePullNextStep('ImagePullBackOff', undefined)).toBeUndefined()
+    // Only where the reading is the pull failure: a crash reading keeps its own step.
+    expect(sandboxPodImagePullNextStep('CrashLoopBackOff', pod({ reason: dns.reason, message: dns.message }))).toBeUndefined()
+  })
 })
 
 describe('Agent Sandbox refused suspension', () => {

@@ -201,11 +201,23 @@ export function Absent({ children, title }: { children: ReactNode; title?: strin
  * Words a controller, the scheduler or the kubelet wrote, verbatim and set
  * apart from Radar's own: labelled, in mono, behind a rule.
  */
+/**
+ * Text that wraps only at its spaces. Each word is kept whole, since a break at
+ * a hyphen inside an image reference or URL ("does-not-" / "exist:1") reads as
+ * two words; one wider than the line still wraps within itself.
+ */
+export function wrapAtSpaces(text: string): ReactNode[] {
+  return text
+    .split(/(\s+)/)
+    .filter(Boolean)
+    .map((part, i) => (/^\s/.test(part) ? part : <span key={i} className="inline-block max-w-full align-top">{part}</span>))
+}
+
 export function SourceText({ label, text }: { label?: string; text: string }) {
   return (
     <div className="min-w-0 text-xs">
       {label && <div className="text-theme-text-tertiary">{label}</div>}
-      <div className="mt-0.5 whitespace-pre-wrap break-words border-l-2 border-theme-border pl-2 font-mono text-[11.5px] text-theme-text-secondary">{text}</div>
+      <div className="mt-0.5 whitespace-pre-wrap break-words border-l-2 border-theme-border pl-2 font-mono text-[11.5px] text-theme-text-secondary">{wrapAtSpaces(text)}</div>
     </div>
   )
 }
