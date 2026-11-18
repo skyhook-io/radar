@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react'
+import { AgentSandboxView } from '../components/agentsandbox/AgentSandboxView'
 import { CapacityView } from '../components/capacity/CapacityView'
 import { CNPGView } from '../components/cnpg/CNPGView'
 import { SubstrateView } from '../components/substrate/SubstrateView'
@@ -10,6 +11,7 @@ const screens: Record<WorkspaceRoute['id'], ComponentType<WorkspaceScreenProps>>
   capacity: ({ onOpenResource }) => <CapacityView onOpenResource={onOpenResource} />,
   velero: VeleroView,
   substrate: SubstrateView,
+  'agent-sandbox': AgentSandboxView,
 }
 
 export function WorkspaceScreen({ workspace, ...props }: WorkspaceScreenProps & { workspace: WorkspaceRoute }) {

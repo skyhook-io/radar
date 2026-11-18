@@ -60,3 +60,11 @@ it('preserves alert and unknown tones in callouts and compact lists', () => {
   type HealthyProblem = Omit<ReturnType<typeof details>, 'tone'> & { source: 'issue'; tone: 'healthy' }
   expectTypeOf<HealthyProblem>().not.toMatchTypeOf<WorkspaceProblem>()
 })
+
+describe('ProblemList next steps', () => {
+  it('shows a row’s next step only when the list asks for it', () => {
+    const p: WorkspaceProblem = { id: 'x', category: 'c', title: 'Schedule late', nextStep: 'Read the server’s logs', subject: { kind: 'Schedule', group: 'velero.io', namespace: 'velero', name: 'nightly' }, source: 'reading' as const, tone: 'degraded' as const }
+    expect(renderToStaticMarkup(<ProblemList problems={[p]} rootKind="" />)).not.toContain('Next step')
+    expect(renderToStaticMarkup(<ProblemList problems={[p]} rootKind="" showNextStep />)).toContain('Next step: </span>Read the server’s logs')
+  })
+})

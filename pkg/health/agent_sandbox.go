@@ -200,11 +200,19 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 	if reason == "ReconcilerError" {
 		return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: reason}, Mirrored: isClaim && !sandboxClaimOwnReasons[reason]}
 	}
+	// A claim whose warm pool or template is missing binds once the reference
+	// is fixed: a warning, as in its Issue and the workspace. Mirrored in k8s-ui.
+	if isClaim && (reason == "WarmPoolNotFound" || reason == "TemplateNotFound") {
+		return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: reason}}
+	}
 	if reason == "" {
 		reason = "Not Ready"
 	}
 	return AgentSandboxReadiness{Verdict: Verdict{Level: LevelUnhealthy, Reason: reason}, Mirrored: isClaim && !sandboxClaimOwnReasons[ready.reason]}
 }
+
+// AgentSandboxPodName is the Pod the controller tracks for a Sandbox.
+func AgentSandboxPodName(u *unstructured.Unstructured) string { return sandboxPodName(u) }
 
 // sandboxPodName is the Pod the controller looks for: the name a pod-name
 // annotation records (Sandboxes adopted from older warm pools carry one),

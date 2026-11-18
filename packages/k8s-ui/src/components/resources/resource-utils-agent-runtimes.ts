@@ -186,8 +186,10 @@ export function getWorkerPoolSandboxConfig(resource: any): string {
 // ============================================================================
 
 // Mirrors pkg/health ReadAgentSandbox, which the Issues and AI summaries use;
-// pkg/health/testdata/agent_sandbox.json pins both. The UI adds one shade the
-// Go levels lack: `alert` for a retried controller error or an unschedulable Pod.
+// pkg/health/testdata/agent_sandbox.json pins both. The UI differs from the Go
+// levels in two places: `alert` for a retried controller error or an
+// unschedulable Pod, and `degraded` for a claim whose warm pool or template is
+// missing, which Issues raise as a warning.
 
 // Ready=False reasons that describe a state someone chose and the controller
 // completed: an expiry, a Pod that ran to completion, a claim whose lifetime
@@ -244,6 +246,9 @@ function sandboxReadyStatus(resource: any, isClaim: boolean): StatusBadge {
   if (SANDBOX_PROGRESS_REASONS[reason]) return badge(SANDBOX_PROGRESS_REASONS[reason], 'degraded')
   // The controller retries these; a persistent one still deserves attention.
   if (reason === 'ReconcilerError') return badge(reason, 'alert')
+  // A claim whose warm pool or template is missing binds once the reference is
+  // fixed, so it reads as a warning, as its Issue and the workspace's row do.
+  if (isClaim && (reason === 'WarmPoolNotFound' || reason === 'TemplateNotFound')) return badge(reason, 'degraded')
   return badge(reason || 'Not Ready', 'unhealthy')
 }
 
