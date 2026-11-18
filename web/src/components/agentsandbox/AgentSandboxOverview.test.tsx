@@ -64,6 +64,12 @@ describe('Agent Sandbox overview gate', () => {
 })
 
 describe('Agent Sandbox overview, from the server summary', () => {
+  it('says what Agent Sandbox is under its title, the sandbox, claim and warm pool model in one line', () => {
+    const html = overview(liveWorkspace())
+    expect(html).toContain('Agent Sandbox gives each agent its own sandboxed Pod; claims take sandboxes from warm pools kept ready ahead of demand.')
+    expect(html.indexOf('Overview</h1>')).toBeLessThan(html.indexOf('Agent Sandbox gives each agent'))
+  })
+
   it('answers "is it working?" in one line from the server counts', () => {
     const data = liveWorkspace()
     expect(fact(data, 'Controller')).toBe('running')
