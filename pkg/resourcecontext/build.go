@@ -210,7 +210,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 
 	rel := opts.Relationships
 	relationshipsAvailable := rel != nil
-	addRelationshipOmissions(opts.RelationshipExtras, omitted)
+	addRelationshipOmissions(ident, opts.RelationshipExtras, omitted)
 	answered := rel != nil && rel.Ownership != nil
 	if m, ok := obj.(metav1.Object); ok && opts.Ownership != nil && !answered {
 		if rel == nil {
@@ -518,7 +518,7 @@ func ownerFromObject(obj runtime.Object, namespace string) *ContextRef {
 // ---------------------------------------------------------------------------
 
 func buildUses(ident resourceIdentity, extras *topology.RelationshipExtras, omitted *omittedTracker) *UsesBlock {
-	if !((ident.Group == "" && ident.Kind == "Pod") || (ident.Group == "apps" && slices.Contains([]string{"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"}, ident.Kind)) || (ident.Group == "batch" && slices.Contains([]string{"Job", "CronJob"}, ident.Kind)) || (ident.Group == "argoproj.io" && ident.Kind == "Rollout")) {
+	if !listsUses(ident) {
 		return nil
 	}
 	if extras == nil {

@@ -14,8 +14,11 @@ import (
 
 // RelationshipExtras is request-local evidence for context readers, never a
 // wire payload. Fields uses Relationships field names and retains coverage
-// even when no reference was emitted. Declarations are everything the
-// subject's spec names, including targets the caller may not read.
+// even when no reference was emitted; "Uses" and "ReferencedBy" are the
+// coverage of Declarations and Consumers themselves. Declarations are
+// everything the subject's spec names, including targets the caller may not
+// read; Consumers are what declares the subject as a configuration reference
+// and, for a Node, the Pods placed on it.
 type RelationshipExtras struct {
 	Subject        resourceid.Ref                    `json:"-"`
 	Coverage       map[string]relations.Coverage     `json:"-"`
@@ -23,9 +26,21 @@ type RelationshipExtras struct {
 	Consumers      []relations.Referrer              `json:"-"`
 	Declarations   []relations.Declared              `json:"-"`
 	ScalerManagers map[resourceid.Ref]resourceid.Ref `json:"-"`
-	// WithheldKinds names, per field, the kinds of the declared targets
-	// the caller may not read, so a host can say which part was withheld.
-	WithheldKinds map[string][]resourceid.GroupKind `json:"-"`
+}
+
+// declarationCoverage is what reading the subject's own declarations
+// couldn't cover: gaps on the subject's kind, such as a spec that couldn't be
+// decoded, or the subject withheld. A declaration lists its target whether or
+// not Radar holds it, so what was read about the targets says nothing about
+// the list.
+func declarationCoverage(a relations.ReferencesAnswer, subject resourceid.GroupKind) relations.Coverage {
+	c := relations.Coverage{Narrowed: a.Coverage.Narrowed && len(a.Declared) == 0}
+	for _, gap := range a.Coverage.NotChecked {
+		if gap.Kind == subject {
+			c.NotChecked = append(c.NotChecked, gap)
+		}
+	}
+	return c
 }
 
 func (e *RelationshipExtras) cover(field string, c relations.Coverage) {
@@ -73,15 +88,8 @@ func (e *RelationshipExtras) projectReferences(d relations.Disposition, subject 
 			continue
 		}
 		for _, field := range d.Rules[i].ReferenceFields {
-			if field == "" {
-				continue
-			}
-			e.cover(field, relations.Coverage{Narrowed: true})
-			if e.WithheldKinds == nil {
-				e.WithheldKinds = map[string][]resourceid.GroupKind{}
-			}
-			if !slices.Contains(e.WithheldKinds[field], kind) {
-				e.WithheldKinds[field] = append(e.WithheldKinds[field], kind)
+			if field != "" {
+				e.cover(field, relations.Coverage{Narrowed: true})
 			}
 		}
 	}
@@ -150,7 +158,7 @@ func (n *neighborhood) contextDirectEvidence(v *relations.View, subject resource
 		n.extras.cover("Node", refs.Coverage)
 		consumers := v.Referrers(relations.PodPlacement, subject, obj)
 		n.extras.Consumers = append(n.extras.Consumers, consumers.Referrers...)
-		n.extras.cover("Consumers", consumers.Coverage)
+		n.extras.cover("ReferencedBy", consumers.Coverage)
 	}
 	if relations.Storage.Covers(subject.GroupKind()) {
 		refs := v.References(relations.Storage, subject, obj)

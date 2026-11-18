@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -803,9 +804,10 @@ func TestBuild_ConfigMap_OwnerOnly(t *testing.T) {
 
 }
 
-func TestBuild_RBACDenied_AppendsOmitted(t *testing.T) {
-	// Deny reads on Secrets in the pod's namespace: uses should list none
-	// of them and record the omission.
+// A Secret the Pod's own spec names is listed by name and marked denied when
+// the caller may not read Secrets there; the list is complete, so the field
+// isn't marked withheld.
+func TestBuild_RBACDeniedDeclaredSecretIsNamed(t *testing.T) {
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "prod"},
 		Spec: corev1.PodSpec{
@@ -821,18 +823,11 @@ func TestBuild_RBACDenied_AppendsOmitted(t *testing.T) {
 		Tier:          TierBasic,
 		AccessChecker: denyChecker{group: "", kind: "Secret", namespace: "prod"},
 	})
-	if rc.Uses != nil && len(rc.Uses.Secrets) != 0 {
-		t.Errorf("Secrets should be empty after deny; got %+v", rc.Uses.Secrets)
+	if rc.Uses == nil || len(rc.Uses.Secrets) != 1 || rc.Uses.Secrets[0].Name != "web-creds" || rc.Uses.Secrets[0].State != topology.ResourceStateDenied {
+		t.Errorf("denied Secret should be named and marked denied; got %+v", rc.Uses)
 	}
-	gotOmitted := false
-	for _, o := range rc.Omitted {
-		if o.Field == "uses.secrets" && o.Reason == OmittedRBACDenied {
-			gotOmitted = true
-			break
-		}
-	}
-	if !gotOmitted {
-		t.Errorf("expected omitted [uses.secrets, rbac_denied]; got %+v", rc.Omitted)
+	if marksField(rc.Omitted, "uses.secrets") {
+		t.Errorf("a complete list was marked: %+v", rc.Omitted)
 	}
 }
 
@@ -939,6 +934,11 @@ func TestBuild_RBACDenied_HistoryAppReferences(t *testing.T) {
 			t.Fatalf("missing stale-Secret omission marker: %+v", rc.Omitted)
 		}
 	})
+}
+
+// marksField reports whether items mark field for any reason.
+func marksField(items []OmittedField, field string) bool {
+	return slices.ContainsFunc(items, func(item OmittedField) bool { return item.Field == field })
 }
 
 func hasOmitted(items []OmittedField, field string) bool {
@@ -2105,7 +2105,7 @@ func TestBuild_UsesDeclaredPodReferencesAcrossAllContainerAndVolumeSources(t *te
 		t.Fatalf("declared Pod dependencies = %+v", rc.Uses)
 	}
 	denied := fixtureContext(context.Background(), pod, nil, Options{AccessChecker: denyChecker{kind: "Secret", namespace: "team"}})
-	if denied.Uses == nil || len(denied.Uses.Secrets) != 0 || !hasOmitted(denied.Omitted, "uses.secrets") {
+	if denied.Uses == nil || len(denied.Uses.Secrets) != 2 || slices.ContainsFunc(denied.Uses.Secrets, func(r ContextRef) bool { return r.State != topology.ResourceStateDenied }) || marksField(denied.Omitted, "uses.secrets") {
 		t.Fatalf("denied credential identities = %+v omitted=%+v", denied.Uses, denied.Omitted)
 	}
 }

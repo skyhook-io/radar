@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -18,9 +19,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// Existing projection fixtures supply graph edges (topo) and provider objects.
-// Adapt those inputs at the host boundary; Build itself only consumes the
-// answers.
+// fixtureContext builds obj's context as a host does: the relationship
+// extras come from the relation answer over a session holding obj and the
+// provider's objects. A graph topo, or opts.Relationships, supplies the
+// relationship lists of the tests that exercise Build's mapping of them.
 func fixtureContext(ctx context.Context, obj runtime.Object, topo *topology.Topology, opts Options) *ResourceContext {
 	if obj == nil {
 		return Build(ctx, obj, opts)
@@ -32,30 +34,9 @@ func fixtureContext(ctx context.Context, obj runtime.Object, topo *topology.Topo
 	obj = obj.DeepCopyObject()
 	obj.GetObjectKind().SetGroupVersionKind(schema.GroupVersionKind{Group: ident.Group, Version: "v1", Kind: ident.Kind})
 	subject := resourceid.NewRef(ident.Group, ident.Kind, ident.Namespace, ident.Name)
-	session := &contextFixtureSession{subject: subject, obj: obj, provider: opts.Provider}
+	session := newContextFixtureSession(subject, obj, opts.Provider)
 	access := fixtureAccess{ctx: ctx, checker: opts.AccessChecker}
-	view := relations.NewView(session, access).WithLimit(10000)
-	extras := &topology.RelationshipExtras{Subject: subject, Fields: map[string]relations.Coverage{}, ScalerManagers: map[resourceid.Ref]resourceid.Ref{}}
-	declarations := view.References(relations.ConfigReferences, subject, obj)
-	for _, d := range declarations.Declared {
-		if d.State != relations.TargetWithheld {
-			extras.Declarations = append(extras.Declarations, d)
-		}
-	}
-	for _, field := range []string{"ConfigRefs", "StorageRefs", "ServiceAccount"} {
-		extras.Fields[field] = declarations.Coverage
-	}
-	consumers := view.Referrers(relations.ConfigReferences, subject, obj)
-	extras.Consumers, extras.Fields["Consumers"] = consumers.Referrers, consumers.Coverage
-	if opts.Provider != nil && ident.Kind == "StorageClass" && ident.Group == "storage.k8s.io" {
-		for _, kind := range []string{"PersistentVolume", "PersistentVolumeClaim"} {
-			for _, gap := range session.assess(resourceid.GroupKind{Kind: kind}, nil) {
-				c := extras.Fields["Dependents"]
-				c.NotChecked = append(c.NotChecked, gap)
-				extras.Fields["Dependents"] = c
-			}
-		}
-	}
+	_, opts.RelationshipExtras = topology.RelationsContextAnswer(session, access, access, ownership.NewView(session, access), subject, obj, opts.Provider, opts.DynamicProv)
 	if topo != nil && opts.Relationships == nil {
 		opts.Relationships = topology.GetRelationshipsWithObject(topology.KindForGVK(ident.Kind, ident.Group), ident.Namespace, ident.Name, obj, topo, opts.Provider, opts.DynamicProv, nil)
 		if opts.Relationships == nil {
@@ -68,53 +49,6 @@ func fixtureContext(ctx context.Context, obj runtime.Object, topo *topology.Topo
 		}
 		opts.Relationships.Node = &topology.ResourceRef{Kind: "Node", Name: pod.Spec.NodeName}
 	}
-	if subject.GroupKind() == (resourceid.GroupKind{Kind: "Node"}) {
-		if opts.Relationships != nil && opts.Relationships.PodPlacementObserved {
-			if opts.Relationships.PodPlacementUnavailable {
-				extras.Fields["Consumers"] = relations.Coverage{NotChecked: []ownership.Gap{{Reason: readreason.ReadError}}}
-			}
-			for _, pod := range opts.Relationships.Pods {
-				extras.Consumers = append(extras.Consumers, relations.Referrer{Ref: resourceid.NewRef(pod.Group, pod.Kind, pod.Namespace, pod.Name), Paths: []string{"spec.nodeName"}})
-			}
-		} else if opts.Provider != nil {
-			placement := view.Referrers(relations.PodPlacement, subject, obj)
-			extras.Consumers, extras.Fields["Consumers"] = placement.Referrers, placement.Coverage
-			if len(placement.Coverage.NotChecked) > 0 {
-				extras.Fields["Consumers"] = placement.Coverage
-			}
-		} else {
-			extras = nil
-		}
-	}
-	if opts.Relationships != nil {
-		for _, scaler := range opts.Relationships.Scalers {
-			if opts.Provider == nil || scaler.Kind != "HorizontalPodAutoscaler" {
-				continue
-			}
-			hpas, _ := opts.Provider.HorizontalPodAutoscalers()
-			for _, hpa := range hpas {
-				if hpa.Name != scaler.Name || hpa.Namespace != scaler.Namespace {
-					continue
-				}
-				name := hpa.Labels["scaledobject.keda.sh/name"]
-				for _, owner := range hpa.OwnerReferences {
-					if owner.Kind == "ScaledObject" && resourceid.GroupFromAPIVersion(owner.APIVersion) == "keda.sh" {
-						name = owner.Name
-						break
-					}
-				}
-				if name != "" {
-					r := resourceid.NewRef("keda.sh", "ScaledObject", hpa.Namespace, name)
-					if access.CanRead(r.GroupKind(), r.Namespace) == ownership.Allowed {
-						extras.ScalerManagers[resourceid.NewRef(scaler.Group, scaler.Kind, scaler.Namespace, scaler.Name)] = r
-					} else {
-						extras.Fields["ScalerManagers"] = relations.Coverage{Narrowed: true}
-					}
-				}
-			}
-		}
-	}
-	opts.RelationshipExtras = extras
 	return Build(ctx, obj, opts)
 }
 
@@ -131,6 +65,8 @@ func (a fixtureAccess) CanRead(gk resourceid.GroupKind, ns string) ownership.Dec
 }
 func (fixtureAccess) Namespaces() ([]string, bool) { return nil, true }
 
+// contextFixtureSession holds the subject and the provider's objects; it
+// holds no ownership managers or dependents.
 type contextFixtureSession struct {
 	ownership.ReadSession
 	subject  resourceid.Ref
@@ -138,13 +74,31 @@ type contextFixtureSession struct {
 	provider topology.ResourceProvider
 }
 
+func newContextFixtureSession(subject resourceid.Ref, obj runtime.Object, provider topology.ResourceProvider) *contextFixtureSession {
+	empty, err := ownershiptest.Scan(ownershiptest.World{}).Begin()
+	if err != nil {
+		panic(err)
+	}
+	return &contextFixtureSession{ReadSession: empty, subject: subject, obj: obj, provider: provider}
+}
+
 func (*contextFixtureSession) Catalog() *ownership.Catalog { return ownership.NewCatalog(nil, true) }
 func (s *contextFixtureSession) Borrow(r resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
-	if r == s.subject {
-		m, _ := apimeta.Accessor(s.obj)
-		return s.obj, ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(r, m)}
+	obj := s.obj
+	if r != s.subject {
+		obj = nil
+		read := s.Indexed(r.GroupKind(), "", nil, ownership.SearchScope{Namespaces: []string{r.Namespace}, IncludeClusterScoped: true})
+		for _, o := range read.Objects {
+			if o.Ref == r {
+				obj = o.Object
+			}
+		}
 	}
-	return nil, ownership.ObjectRead{State: ownership.Absent}
+	if obj == nil {
+		return nil, ownership.ObjectRead{State: ownership.Absent}
+	}
+	m, _ := apimeta.Accessor(obj)
+	return obj, ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(r, m)}
 }
 func (s *contextFixtureSession) Object(r resourceid.Ref) ownership.ObjectRead {
 	_, read := s.Borrow(r)
@@ -157,7 +111,10 @@ func (s *contextFixtureSession) assess(gk resourceid.GroupKind, namespaces []str
 	if !ok {
 		return nil
 	}
-	builtin, _ := resourceid.BuiltinForKind(gk.Kind)
+	builtin, ok := resourceid.BuiltinForKind(gk.Kind)
+	if !ok || builtin.GroupKind() != gk {
+		return nil
+	}
 	a := coverage.AssessKindRead(builtin.Resource, namespaces)
 	if a.Complete {
 		return nil
@@ -225,6 +182,12 @@ func (s *contextFixtureSession) Indexed(gk resourceid.GroupKind, _ string, _ []s
 		}
 	case "Ingress":
 		list, e := s.provider.Ingresses()
+		err = e
+		for _, o := range list {
+			add(o)
+		}
+	case "HorizontalPodAutoscaler":
+		list, e := s.provider.HorizontalPodAutoscalers()
 		err = e
 		for _, o := range list {
 			add(o)

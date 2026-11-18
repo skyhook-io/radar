@@ -78,12 +78,12 @@ func TestRelationsExtrasEmptyInventoriesKeepReadinessAndNarrowing(t *testing.T) 
 		s := inventoryGapSession{newProjectionSession(t, obj), resourceid.GroupKind{Kind: "Pod"}, readreason.KindSyncPending}
 		access := ownership.Unrestricted()
 		_, extras := RelationsContextAnswer(s, access, access, ownership.NewView(s, access), projectionRef(obj), obj, nil, nil)
-		if len(extras.Fields["Consumers"].NotChecked) == 0 {
+		if len(extras.Fields["ReferencedBy"].NotChecked) == 0 {
 			t.Fatalf("empty cold source lost for %s: %+v", projectionRef(obj).Kind, extras)
 		}
 		denied := projectionAccess{denied: []string{"Pod"}}
 		_, extras = RelationsContextAnswer(s, denied, access, ownership.NewView(s, denied), projectionRef(obj), obj, nil, nil)
-		if !extras.Fields["Consumers"].Narrowed || len(extras.Consumers) > 0 {
+		if !extras.Fields["ReferencedBy"].Narrowed || len(extras.Consumers) > 0 {
 			t.Fatalf("empty denied source lost: %+v", extras)
 		}
 	}
@@ -141,9 +141,6 @@ func TestRelationsContextDeclaredUnreadableTargetIsNamed(t *testing.T) {
 		if c.Narrowed {
 			t.Fatalf("field %q narrowed although its Secret is named: %+v", field, extras.Fields)
 		}
-	}
-	if len(extras.WithheldKinds) != 0 {
-		t.Fatalf("withheld kinds = %v", extras.WithheldKinds)
 	}
 	if !slices.ContainsFunc(extras.Declarations, func(d relations.Declared) bool {
 		return d.Ref.Kind == "Secret" && DeclaredState(d) == ResourceStateDenied
@@ -237,5 +234,81 @@ func TestFamilyAnswersWithoutExtras(t *testing.T) {
 	}
 	if len(n.edges) == 0 {
 		t.Fatal("no edge between the Pod and the ConfigMap it mounts")
+	}
+}
+
+// What a subject declares is listed whether or not Radar holds the targets,
+// so only a failure reading the subject's own spec leaves the declarations
+// incomplete: not a target kind Radar doesn't collect or is still loading,
+// nor a SealedSecret the caller may not read. The drawer's fields still carry
+// what wasn't read about the targets.
+func TestRelationsContextUsesCoverageIsTheSubjectsOwn(t *testing.T) {
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+		ServiceAccountName: "runner",
+		ImagePullSecrets:   []corev1.LocalObjectReference{{Name: "registry"}},
+		Containers:         []corev1.Container{{Name: "app", EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}}}}}},
+		Volumes:            []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}}}},
+	}}}}, "apps", "Deployment")
+	sealed := projectionCR("bitnami.com", "SealedSecret", "shop", "registry", map[string]any{})
+	secret := resourceid.GroupKind{Kind: "Secret"}
+	for _, tc := range []struct {
+		name   string
+		reason readreason.Code
+		denied []string
+	}{
+		{"secrets not collected", readreason.RadarKindNotCollected, nil},
+		{"secrets loading", readreason.KindSyncPending, nil},
+		{"sealed secret withheld", "", []string{"SealedSecret"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newProjectionSession(t, dep, sealed)
+			if tc.reason != "" {
+				s.gaps = map[resourceid.GroupKind]ownership.Gap{secret: {Kind: secret, Namespace: "shop", Reason: tc.reason}}
+			}
+			access := projectionAccess{denied: tc.denied}
+			_, extras := RelationsContextAnswer(s, access, ownership.Unrestricted(), ownership.NewView(s, access), projectionRef(dep), dep, nil, nil)
+			if c, ok := extras.Fields["Uses"]; ok {
+				t.Fatalf("declarations marked incomplete: %+v", c)
+			}
+			declared := map[string]string{}
+			for _, d := range extras.Declarations {
+				declared[d.Ref.Kind] = d.Ref.Name
+			}
+			if want := map[string]string{"ConfigMap": "settings", "Secret": "registry", "PersistentVolumeClaim": "data", "ServiceAccount": "runner"}; !reflect.DeepEqual(declared, want) {
+				t.Fatalf("declarations = %v, want %v", declared, want)
+			}
+			if refs := extras.Fields["ConfigRefs"]; tc.reason != "" && len(refs.NotChecked) == 0 || tc.denied != nil && !refs.Narrowed {
+				t.Fatalf("the drawer's field lost what wasn't read: %+v", extras.Fields)
+			}
+		})
+	}
+
+	rollout := projectionCR("argoproj.io", "Rollout", "shop", "web", map[string]any{"spec": map[string]any{"template": map[string]any{"spec": "not a pod spec"}}})
+	s := newProjectionSession(t, rollout)
+	access := ownership.Unrestricted()
+	_, extras := RelationsContextAnswer(s, access, access, ownership.NewView(s, access), projectionRef(rollout), rollout, nil, nil)
+	if c := extras.Fields["Uses"]; len(c.NotChecked) != 1 || c.NotChecked[0].Kind != projectionRef(rollout).GroupKind() || c.NotChecked[0].Reason != readreason.ReadError {
+		t.Fatalf("a spec that couldn't be read left the declarations complete: %+v", extras.Fields)
+	}
+}
+
+// A context's reverse references are the configuration references that name
+// the subject, so other families that list the subject's consumers in the
+// drawer, such as Contour's, don't mark them.
+func TestRelationsContextReferencedByCoverageIsItsOwnEvidence(t *testing.T) {
+	secret := projectionObject(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "tls", Namespace: "shop"}}, "", "Secret")
+	proxy := resourceid.GroupKind{Group: "projectcontour.io", Kind: "HTTPProxy"}
+	pod := resourceid.GroupKind{Kind: "Pod"}
+	for _, kind := range []resourceid.GroupKind{proxy, pod} {
+		s := newProjectionSession(t, secret)
+		s.gaps = map[resourceid.GroupKind]ownership.Gap{kind: {Kind: kind, Namespace: "shop", Reason: readreason.KindSyncPending}}
+		access := ownership.Unrestricted()
+		_, extras := RelationsContextAnswer(s, access, access, ownership.NewView(s, access), projectionRef(secret), secret, nil, nil)
+		if len(extras.Fields["Consumers"].NotChecked) == 0 {
+			t.Fatalf("%s: the drawer's field lost the gap: %+v", kind.Kind, extras.Fields)
+		}
+		if got := len(extras.Fields["ReferencedBy"].NotChecked) > 0; got != (kind == pod) {
+			t.Fatalf("%s: referencedBy gap = %v: %+v", kind.Kind, got, extras.Fields)
+		}
 	}
 }

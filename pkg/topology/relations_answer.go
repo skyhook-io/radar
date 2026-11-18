@@ -222,6 +222,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 				// subject, so the names are shown, marked unreadable, rather
 				// than withheld. Nothing is read about the targets themselves.
 				n.extras.Declarations = append(n.extras.Declarations, refs.Declared...)
+				n.extras.cover("Uses", declarationCoverage(refs, gk))
 				refs = n.nameUnreadable(refs)
 			}
 			n.cover(f.Name, refs.Coverage)
@@ -247,6 +248,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		n.extras.projectCoverage(disposition, gk, false, referrers.Coverage)
 		if f == relations.ConfigReferences && n.extras != nil && subject == n.extras.Subject {
 			n.extras.Consumers = append(n.extras.Consumers, referrers.Referrers...)
+			n.extras.cover("ReferencedBy", referrers.Coverage)
 		}
 		for _, r := range referrers.Referrers {
 			if e, ok := edgeFor(f.Name, r.Ref, subject); ok {

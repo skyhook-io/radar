@@ -1573,7 +1573,10 @@ expose their `healthChecks`; a MachineHealthCheck's Cluster is a dependency.
 
 Resource context's `uses` includes declared PodSpec references from regular,
 init and ephemeral containers, projected volumes, image-pull credentials and
-volume-driver credentials. `referencedBy` on core ConfigMaps, Secrets, PVCs and
+volume-driver credentials. It lists each declaration whether or not Radar holds
+the object it names, so `omitted` marks a `uses.*` field only when Radar couldn't
+read the subject's own spec, never because a declared kind isn't collected or is
+still loading. `referencedBy` on core ConfigMaps, Secrets, PVCs and
 ServiceAccounts includes both workload templates and actual Pods, including
 controlled Pods whose admitted spec may differ from the current template.
 ReplicaSet templates remain separate evidence. References are scoped and
