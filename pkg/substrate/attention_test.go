@@ -54,6 +54,18 @@ func TestNeedsAttentionCrashedActors(t *testing.T) {
 	}
 }
 
+func TestNeedsAttentionCrashedTieIsStable(t *testing.T) {
+	at := ago(3 * time.Minute)
+	a := Actor{Atespace: "research", Name: "b", State: StateCrashed, Crash: &Crash{Message: "OOMKilled", Time: at}}
+	b := Actor{Atespace: "research", Name: "a", State: StateCrashed, Crash: &Crash{Message: "OOMKilled", Time: at}}
+	for _, order := range [][]Actor{{a, b}, {b, a}} {
+		row := find(t, NeedsAttention(Inputs{Actors: order, ActorsRead: true, Now: now}), RuleCrashedActors)
+		if row.Sample[0].Name != "a" {
+			t.Fatalf("same crash time must order by atespace/name whatever the read order; sample %v", row.Sample)
+		}
+	}
+}
+
 func TestNeedsAttentionStuckTransitions(t *testing.T) {
 	actors := []Actor{
 		{Atespace: "a", Name: "long", State: StateResuming, UpdateTime: ago(20 * time.Minute)},

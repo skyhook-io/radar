@@ -355,6 +355,7 @@ func (s *Server) handleGetSubstrateConnection(w http.ResponseWriter, r *http.Req
 	}
 	view, err := s.substrateConnectionView()
 	if err != nil {
+		log.Printf("[substrate] Failed to read the saved connection settings: %v", err)
 		s.writeErrorCode(w, http.StatusInternalServerError, substrateapi.CodeSettingsFile, err.Error())
 		return
 	}
@@ -453,12 +454,14 @@ func (s *Server) handlePutSubstrateConnection(w http.ResponseWriter, r *http.Req
 		case errors.As(err, &tier):
 			s.writeErrorCode(w, http.StatusBadRequest, tier.Code, tier.Message)
 		default:
+			log.Printf("[substrate] Failed to save the connection settings: %v", err)
 			s.writeErrorCode(w, http.StatusInternalServerError, substrateapi.CodeSettingsFile, err.Error())
 		}
 		return
 	}
 	view, err := s.substrateConnectionView()
 	if err != nil {
+		log.Printf("[substrate] Failed to read the saved connection settings: %v", err)
 		s.writeErrorCode(w, http.StatusInternalServerError, substrateapi.CodeSettingsFile, err.Error())
 		return
 	}
