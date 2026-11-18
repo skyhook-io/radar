@@ -2152,6 +2152,25 @@ func TestBuild_ReverseReferencesRetainAdmittedPodsAndReplicaSetTemplates(t *test
 
 }
 
+// A ReplicaSet scaled to zero, a Deployment's retained revision, still lists
+// what its own template uses, but isn't counted among what uses a Secret.
+func TestBuild_RetiredRevisionListsItsOwnUses(t *testing.T) {
+	zero := int32(0)
+	old := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "team"}, Spec: appsv1.ReplicaSetSpec{Replicas: &zero, Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+		ServiceAccountName: "runner",
+		ImagePullSecrets:   []corev1.LocalObjectReference{{Name: "old-registry"}},
+	}}}}
+	rc := fixtureContext(context.Background(), old, nil, Options{AccessChecker: allowAllChecker{}})
+	if rc.Uses == nil || len(rc.Uses.Secrets) != 1 || rc.Uses.Secrets[0].Name != "old-registry" || rc.Uses.ServiceAccount == nil || rc.Uses.ServiceAccount.Name != "runner" {
+		t.Fatalf("retired revision uses = %+v", rc.Uses)
+	}
+	provider := mockResourceProvider{replicaSets: []*appsv1.ReplicaSet{old}}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "old-registry", Namespace: "team"}}
+	if rc := fixtureContext(context.Background(), secret, nil, Options{Provider: provider, AccessChecker: allowAllChecker{}}); rc.ReferencedBy != nil {
+		t.Fatalf("a retired revision counted as using the Secret: %+v", rc.ReferencedBy)
+	}
+}
+
 func TestBuild_ReferencedByCapPreservesTemplateAndPodKinds(t *testing.T) {
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "prod"}}
 	spec := corev1.PodSpec{Containers: []corev1.Container{{Name: "app", EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}}}}}}}

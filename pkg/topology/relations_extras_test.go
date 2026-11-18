@@ -331,3 +331,22 @@ func TestRelationsContextEntrypointsKeepTheRouteGapWithoutRoutes(t *testing.T) {
 		t.Fatalf("entrypoints lost the route store's gap: %+v", extras.Fields)
 	}
 }
+
+// A retired revision's context declarations come from its own template, while
+// Related Resources still draws none for it, as the Topology screen does.
+func TestRelationsRetiredRevisionDeclaresOnlyForItsContext(t *testing.T) {
+	zero := int32(0)
+	rs := projectionObject(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "shop"}, Spec: appsv1.ReplicaSetSpec{Replicas: &zero, Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+		ImagePullSecrets: []corev1.LocalObjectReference{{Name: "registry"}},
+	}}}}, "apps", "ReplicaSet")
+	secret := projectionObject(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "registry", Namespace: "shop"}}, "", "Secret")
+	s := newProjectionSession(t, rs, secret)
+	access := ownership.Unrestricted()
+	rel, extras := RelationsContextAnswer(s, access, access, ownership.NewView(s, access), projectionRef(rs), rs, nil, nil)
+	if len(extras.Declarations) != 1 || extras.Declarations[0].Ref.Name != "registry" || extras.Declarations[0].State != relations.TargetPresent {
+		t.Fatalf("declarations = %+v", extras.Declarations)
+	}
+	if len(rel.ConfigRefs) != 0 {
+		t.Fatalf("Related Resources drew a retired revision's Secret: %+v", rel.ConfigRefs)
+	}
+}

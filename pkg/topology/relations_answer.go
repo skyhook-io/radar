@@ -221,8 +221,12 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 				// The subject's own spec names these, and the caller reads the
 				// subject, so the names are shown, marked unreadable, rather
 				// than withheld. Nothing is read about the targets themselves.
-				n.extras.Declarations = append(n.extras.Declarations, refs.Declared...)
-				n.extras.cover("Uses", declarationCoverage(refs, gk))
+				own := refs
+				if relations.RetiredRevision(obj) {
+					own = v.References(relations.OwnConfigReferences, subject, obj)
+				}
+				n.extras.Declarations = append(n.extras.Declarations, own.Declared...)
+				n.extras.cover("Uses", declarationCoverage(own, gk))
 				refs = n.nameUnreadable(refs)
 			}
 			n.cover(f.Name, refs.Coverage)

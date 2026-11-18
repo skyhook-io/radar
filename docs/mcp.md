@@ -1579,7 +1579,10 @@ read the subject's own spec, never because a declared kind isn't collected or is
 still loading. `referencedBy` on core ConfigMaps, Secrets, PVCs and
 ServiceAccounts includes both workload templates and actual Pods, including
 controlled Pods whose admitted spec may differ from the current template.
-ReplicaSet templates remain separate evidence. References are scoped and
+ReplicaSet templates remain separate evidence, except that a ReplicaSet scaled
+to zero, usually a Deployment's revision kept for rollback, is not counted: an
+object only such revisions name reads as unreferenced. `get_resource` on that
+ReplicaSet still lists its own template's `uses`. References are scoped and
 permission-filtered, with field paths and a bounded visible-only count; they
 describe declarations rather than proving a successful mount or active read.
 Capped results round-robin readable resource kinds, preserving examples of

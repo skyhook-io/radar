@@ -11,10 +11,11 @@ import (
 
 // ConfigReferences is the family of the ConfigMaps, Secrets,
 // PersistentVolumeClaims and ServiceAccount a Pod, a pod-template workload or
-// an Ingress's TLS declares, as pkg/configrefs reads them. A ReplicaSet
-// scaled explicitly to zero declares nothing, as the Topology screen draws
-// none: usually it is a Deployment's old revision. A Deployment scaled to
-// zero still declares through its own template.
+// an Ingress's TLS declares, as pkg/configrefs reads them. A retired revision
+// (RetiredRevision) declares nothing, as the Topology screen draws none, so it
+// is never counted among what uses a ConfigMap or Secret; OwnConfigReferences
+// still reads its template. A Deployment scaled to zero still declares
+// through its own template.
 var ConfigReferences = &Family{
 	Name:       "configReferences",
 	Projection: project("configures", true, "ConfigRefs", "Consumers").whenTarget(kindPVC, "uses", true, "StorageRefs", "Consumers").whenTarget(resourceid.GroupKind{Kind: "ServiceAccount"}, "configures", true, "ServiceAccount", "Consumers"),
@@ -34,18 +35,38 @@ var ConfigReferences = &Family{
 		{Kind: "ConfigMap"}, {Kind: "Secret"}, {Kind: "PersistentVolumeClaim"}, {Kind: "ServiceAccount"},
 	},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
-		if rs, ok := obj.(*appsv1.ReplicaSet); ok && rs.Spec.Replicas != nil && *rs.Spec.Replicas == 0 {
+		if RetiredRevision(obj) {
 			return nil
 		}
-		if sa, ok := obj.(*corev1.ServiceAccount); ok {
-			for _, r := range configrefs.ServiceAccountSecretReferences(sa) {
-				visit(Declaration{Target: resourceid.Ref{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name}, Path: r.Path})
-			}
-			return nil
-		}
-		_, err := configrefs.VisitObjectReferences(obj, func(r configrefs.PodSpecReference) {
-			visit(Declaration{Target: resourceid.Ref{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name}, Path: r.Path})
-		})
-		return err
+		return declaredConfigReferences(obj, visit)
 	},
+}
+
+// OwnConfigReferences is ConfigReferences as a subject's own answer reads it:
+// a retired revision declares through its template, what it would use if
+// scaled up again. It is never searched for referrers.
+var OwnConfigReferences = func() *Family {
+	f := *ConfigReferences
+	f.Declared = declaredConfigReferences
+	return &f
+}()
+
+// RetiredRevision reports a ReplicaSet scaled explicitly to zero: usually a
+// Deployment's old revision, kept for rollback.
+func RetiredRevision(obj runtime.Object) bool {
+	rs, ok := obj.(*appsv1.ReplicaSet)
+	return ok && rs.Spec.Replicas != nil && *rs.Spec.Replicas == 0
+}
+
+func declaredConfigReferences(obj runtime.Object, visit func(Declaration)) error {
+	if sa, ok := obj.(*corev1.ServiceAccount); ok {
+		for _, r := range configrefs.ServiceAccountSecretReferences(sa) {
+			visit(Declaration{Target: resourceid.Ref{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name}, Path: r.Path})
+		}
+		return nil
+	}
+	_, err := configrefs.VisitObjectReferences(obj, func(r configrefs.PodSpecReference) {
+		visit(Declaration{Target: resourceid.Ref{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name}, Path: r.Path})
+	})
+	return err
 }
