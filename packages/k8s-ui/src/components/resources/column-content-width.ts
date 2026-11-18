@@ -23,10 +23,18 @@ import {
   getServiceSelector,
   getWorkloadImages,
 } from './resource-utils'
-import { getArgoApplicationSync } from './resource-utils-argo'
+import { getArgoApplicationHealth, getArgoApplicationSync } from './resource-utils-argo'
 import { getResourceSlicePool } from './resource-utils-dra'
 import { getGitRepositoryUrl, getHelmRepositoryUrl, getOCIRepositoryUrl } from './resource-utils-flux'
-import { getEC2NodeClassStatus, getNodeClaimNodeName, getNodePoolDisruptionPolicy, getNodePoolLimits, getNodePoolStatus } from './resource-utils-karpenter'
+import {
+  getEC2NodeClassStatus,
+  getNodeClaimNodeName,
+  getNodeClaimNodePoolRef,
+  getNodePoolDisruptionPolicy,
+  getNodePoolLimits,
+  getNodePoolNodeClassRef,
+  getNodePoolStatus,
+} from './resource-utils-karpenter'
 import { getClusterQueueCohort } from './resource-utils-kueue'
 import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
 import { getPodGpuCount } from '../../utils/extended-resources'
@@ -212,14 +220,17 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   // fit
   'events:reason': text(r => r.reason, 'medium'),
   'nodepools:status': badge(r => getNodePoolStatus(r).text),
+  'nodepools:nodeClass': text(getNodePoolNodeClassRef),
   'nodepools:limits': text(getNodePoolLimits),
   'nodepools:disruption': text(getNodePoolDisruptionPolicy),
+  'nodeclaims:nodePool': text(getNodeClaimNodePoolRef),
   'nodeclaims:nodeName': text(getNodeClaimNodeName),
   'ec2nodeclasses:status': badge(r => getEC2NodeClassStatus(r).text),
   'resourceslices:pool': text(getResourceSlicePool),
   'clusterqueues:status': badge(r => getCellFilterValue(r, 'status', 'clusterqueues')),
   'clusterqueues:cohort': text(getClusterQueueCohort),
   'applications:sync': badge(r => getArgoApplicationSync(r).status),
+  'applications:health': badge(r => getArgoApplicationHealth(r).status),
 }
 
 // What an exact column's cells show, for the kinds whose tables most often run
