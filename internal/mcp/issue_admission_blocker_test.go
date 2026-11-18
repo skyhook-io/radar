@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -486,4 +487,69 @@ func TestAdmissionBlocker_YoungStore(t *testing.T) {
 			t.Fatalf("absence claimed on a young store: %q", iss.TimingSummary)
 		}
 	})
+}
+
+// A caller who can list only one webhook configuration kind gets the same
+// issues tool answer as one who can list neither: Radar doesn't look up which
+// configuration declares the webhook for them, so no configuration's changes
+// or order sentence appear. A caller who can list both still gets them.
+func TestAdmissionBlocker_WebhookOneKindReadable(t *testing.T) {
+	store := initCorrelationStore(t)
+	vwcGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
+	mwcGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&admissionv1.ValidatingWebhookConfiguration{
+		TypeMeta:   metav1.TypeMeta{Kind: "ValidatingWebhookConfiguration", APIVersion: "admissionregistration.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-policy"},
+		Webhooks:   []admissionv1.ValidatingWebhook{{Name: "deny-root.policy.example.com"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{vwcGVR: "ValidatingWebhookConfigurationList", mwcGVR: "MutatingWebhookConfigurationList"},
+		&unstructured.Unstructured{Object: data})
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{
+		{Group: vwcGVR.Group, Version: "v1", Kind: "ValidatingWebhookConfiguration", Name: vwcGVR.Resource, Verbs: []string{"list", "watch"}},
+		{Group: mwcGVR.Group, Version: "v1", Kind: "MutatingWebhookConfiguration", Name: mwcGVR.Resource, Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	for _, gvr := range []schema.GroupVersionResource{vwcGVR, mwcGVR} {
+		if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil || !k8s.GetDynamicResourceCache().WaitForSync(gvr, 2*time.Second) {
+			t.Fatalf("watch %s: %v", gvr, err)
+		}
+	}
+	now := time.Now().Truncate(time.Second)
+	webhookAt := now.Add(-4 * time.Minute)
+	appendChange(t, store, timeline.TimelineEvent{Timestamp: now.Add(-40 * time.Minute), Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "worker", EventType: timeline.EventTypeAdd})
+	appendChange(t, store, timeline.TimelineEvent{Timestamp: webhookAt, Kind: "ValidatingWebhookConfiguration", APIVersion: "admissionregistration.k8s.io/v1", Name: "pod-policy", EventType: timeline.EventTypeAdd})
+	t.Cleanup(getPermCache().Invalidate)
+
+	answer := func(user string, validating, mutating bool) string {
+		ctx := withClusterAdmin(t, user)
+		perms := getPermCache().Get(user, nil)
+		perms.SetCanI("list", "apps", "deployments", "shop", true)
+		perms.SetCanI("list", "admissionregistration.k8s.io", "validatingwebhookconfigurations", "", validating)
+		perms.SetCanI("list", "admissionregistration.k8s.io", "mutatingwebhookconfigurations", "", mutating)
+		message := `Error creating: admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`
+		resp := issues.ListResponse{Issues: []issuesapi.Issue{admissionIssue(issuesapi.CategoryAdmissionWebhookBlocking, "Deployment", "worker", message, webhookAt.Add(5*time.Second))}}
+		attachIssueChangeCorrelation(ctx, &resp)
+		out, err := json.Marshal(resp.Issues[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	both := answer("both-kinds", true, true)
+	if !strings.Contains(both, "pod-policy") || !strings.Contains(both, "changed last") {
+		t.Fatalf("a caller who can list both kinds lost the configuration: %s", both)
+	}
+	one, neither := answer("validating-only", true, false), answer("no-webhook-kinds", false, false)
+	if one != neither {
+		t.Fatalf("one readable kind differs from none:\none:     %s\nneither: %s", one, neither)
+	}
+	if strings.Contains(one, "pod-policy") || strings.Contains(one, "changed last") {
+		t.Fatalf("a caller who can list one kind got the configuration: %s", one)
+	}
 }

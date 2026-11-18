@@ -340,8 +340,8 @@ func (c *run) subjectLimit() int {
 
 // query is the read every source shares. limit is the significance cut of
 // a significance-selected read. An anchored read has no such cut: it drops
-// status rows and rows the caller can't see, then picks by time around first
-// seen, so OutputCapped counts only changes the caller could be shown.
+// status rows and rows the caller can't see and returns every other row read
+// within the fetch bounds; the rows shown are picked afterwards.
 func (c *run) query(limit int) meaningfulchanges.Query {
 	q := meaningfulchanges.Query{
 		From: c.opts.Window.From, Limit: limit, FieldLimit: FieldLimit, Viewer: c.access.Viewer,
@@ -354,15 +354,15 @@ func (c *run) query(limit int) meaningfulchanges.Query {
 		q.Allow = func(change issuesapi.RecentChange) bool {
 			return isEvidence(change) && (rowFilter == nil || rowFilter(change))
 		}
-		// Rows are picked by time around first seen from every qualifying
-		// row, never after a significance cut, and the parts before and
-		// after first seen are read with separate bounds.
-		iss := c.iss
+		// Every qualifying row is kept: there is no significance cut, and the
+		// rows shown are picked by time around first seen only after the
+		// admission order and timing have seen all of them. The parts before
+		// and after first seen are read with separate bounds.
 		q.Select = func(changes []issuesapi.RecentChange) ([]issuesapi.RecentChange, bool) {
-			return selectAroundFirstSeen(changes, iss)
+			return changes, false
 		}
-		if anchorKnown(iss) {
-			q.SplitAt = iss.FirstSeen.Add(anchorSlop)
+		if anchorKnown(c.iss) {
+			q.SplitAt = c.iss.FirstSeen.Add(anchorSlop)
 		}
 	}
 	return q

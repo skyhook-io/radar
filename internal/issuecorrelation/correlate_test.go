@@ -742,8 +742,11 @@ func TestCorrelate_RecreateAcrossTheSplitIsOneRow(t *testing.T) {
 }
 
 // History coverage is the whole window's: an eviction inside the part after
-// first seen still makes it incomplete, and no absence is claimed.
-func TestCorrelate_EvictionAfterFirstSeenBlocksAbsence(t *testing.T) {
+// first seen makes it incomplete, and no absence is claimed. The eviction
+// happens before the read; that coverage is computed once after both parts
+// are read is not exercised here, since the timeline store can't be swapped
+// for one that evicts mid-read without a production seam.
+func TestCorrelate_EvictionInsideWindowAfterFirstSeenBlocksAbsence(t *testing.T) {
 	firstSeen := time.Now().Add(-30 * time.Minute)
 	initCache(t, webDeployment())
 	timeline.ResetStore()
@@ -762,5 +765,42 @@ func TestCorrelate_EvictionAfterFirstSeenBlocksAbsence(t *testing.T) {
 	got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
 	if got.NoChanges || !got.History.Incomplete || !slices.Contains(got.History.Reasons, issuesapi.HistoryEventsEvicted) {
 		t.Fatalf("eviction after first seen: no_changes=%v history=%+v", got.NoChanges, got.History)
+	}
+}
+
+// Which side of an admission rejection changed last is judged from every
+// change read, before the rows shown are picked: two later ConfigMap edits
+// fill the after-first-seen slots, but the Deployment edit between them and
+// the quota edit still decides the order.
+func TestCorrelate_AdmissionOrderSeesRowsNotShown(t *testing.T) {
+	firstSeen := time.Now().Add(-30 * time.Minute).Truncate(time.Second)
+	quota := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop", CreationTimestamp: metav1.NewTime(time.Now().Add(-24 * time.Hour))}}
+	initCache(t, webDeployment(), quota,
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "web-config", Namespace: "shop", CreationTimestamp: metav1.NewTime(time.Now().Add(-24 * time.Hour))}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "web-creds", Namespace: "shop", CreationTimestamp: metav1.NewTime(time.Now().Add(-24 * time.Hour))}})
+	store := initStore(t)
+	quotaAt, deployAt := firstSeen.Add(-time.Minute), firstSeen.Add(5*time.Minute)
+	appendChange(t, store, timeline.TimelineEvent{ID: "quota", Timestamp: quotaAt, Kind: "ResourceQuota", APIVersion: "v1", Namespace: "shop", Name: "compute",
+		EventType: timeline.EventTypeUpdate, Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.hard.pods", OldValue: "4", NewValue: "3"}}}})
+	appendChange(t, store, replicaUpdate("web", deployAt, 3))
+	appendChange(t, store, specUpdate("ConfigMap", "web-config", firstSeen.Add(10*time.Minute), "a"))
+	appendChange(t, store, specUpdate("ConfigMap", "web-config", firstSeen.Add(15*time.Minute), "b"))
+
+	iss := webIssue(firstSeen)
+	iss.Category = issuesapi.CategoryQuotaExceeded
+	iss.Message = `pod creation blocked: pods "web-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=3, limited: pods=3`
+	got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+
+	want := "Deployment web was updated at " + utc(deployAt) + ", after ResourceQuota compute was updated at " + utc(quotaAt) + ": the workload changed last."
+	if !strings.HasSuffix(got.Timing.TimingSummary, want) {
+		t.Fatalf("timing_summary:\n got %q\nwant suffix %q", got.Timing.TimingSummary, want)
+	}
+	var kinds []string
+	for _, c := range got.Changes {
+		kinds = append(kinds, c.Kind+"@"+utc(changeTime(c)))
+	}
+	wantRows := []string{"ResourceQuota@" + utc(quotaAt), "ConfigMap@" + utc(firstSeen.Add(15*time.Minute)), "ConfigMap@" + utc(firstSeen.Add(10*time.Minute))}
+	if !slices.Equal(kinds, wantRows) || !got.MoreNotShown {
+		t.Fatalf("rows shown %v (more %v), want %v with more not shown", kinds, got.MoreNotShown, wantRows)
 	}
 }
