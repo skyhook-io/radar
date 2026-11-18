@@ -214,14 +214,16 @@ describe('Agent Sandbox overview, from the server summary', () => {
     expect(html.indexOf(caveat)).toBeLessThan(html.indexOf('>Details<'))
   })
 
-  it('has a blocked suspension’s Pod owner checked first, with the command as a copyable chip in the step', () => {
+  it('has a blocked suspension’s Pod owner checked first, with the command on its own line under the step', () => {
     const html = row(overview(liveWorkspace()), 'Suspension blocked')
     const cmd = "kubectl get pod foreign -n radar-agents-live -o jsonpath='{.metadata.ownerReferences}'"
+    const plain = html.replace(/<[^>]+>/g, '')
     expect(html).toContain('Copy command')
-    expect(html.replace(/<[^>]+>/g, '')).toContain(`Next step: Check who owns Pod foreign ${cmd}`)
-    expect(html.replace(/<[^>]+>/g, '')).toContain(' before removing it, or recreate the Sandbox under another name')
+    // The sentence reads whole; the command follows it on its own line.
+    expect(plain).toContain(`Next step: Check who owns Pod foreign before removing it, or recreate the Sandbox under another name${cmd}`)
+    expect(html.slice(html.indexOf('data-command-line'))).toContain(cmd)
     // The parentheses the text carries for plain readers go with the chip.
-    expect(html.replace(/<[^>]+>/g, '')).not.toContain(`(${cmd})`)
+    expect(plain).not.toContain(`(${cmd})`)
   })
 
   it('says nothing needs attention only when the server read everything', () => {
