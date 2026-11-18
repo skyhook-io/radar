@@ -248,6 +248,7 @@ rbac:
     velero: true            # velero.io
     verticalPodAutoscaler: true  # autoscaling.k8s.io (VPA — granted by default; no-op on clusters where VPA isn't installed)
     volcano: true           # batch.volcano.sh, scheduling.volcano.sh, flow.volcano.sh, bus.volcano.sh
+    volumeSnapshots: true   # snapshot.storage.k8s.io (CSI VolumeSnapshots, VolumeSnapshotContents, VolumeSnapshotClasses)
 
   # Additional CRD API groups for custom/unlisted CRDs
   # Example: ["mycompany.io", "custom.example.com"]
