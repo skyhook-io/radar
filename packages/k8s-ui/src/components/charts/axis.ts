@@ -39,8 +39,10 @@ export function xLabelMaxWidthEm(plotWidth: number, intervals: number, fontSize:
   return (spacing - 1.2) / share
 }
 
+// avgCount: a count averaged across reporters, so values can be fractional
+// while the axis stays on whole numbers.
 export function isCountUnit(unit: string): boolean {
-  return unit === 'count' || unit === 'restarts'
+  return unit === 'count' || unit === 'restarts' || unit === 'avgCount'
 }
 
 /**

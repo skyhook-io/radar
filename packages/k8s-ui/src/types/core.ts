@@ -182,6 +182,7 @@ export interface FeatureCapabilities {
   yamlSchemas?: boolean
   workloadImages?: boolean
   deploymentPause?: boolean
+  substrateHealthMetrics?: boolean
   resourceIssues?: boolean
   resourceIssueCoverage?: boolean
   podEnvironment?: boolean

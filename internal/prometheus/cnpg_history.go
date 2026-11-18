@@ -143,7 +143,9 @@ type cnpgHistoryDef struct {
 	emptyReason string
 }
 
-func cnpgRateWindow(step time.Duration) string {
+// rateWindow is the rate() window for a range chart at step: two samples at
+// the usual one-minute scrape, and at least two steps so no point is empty.
+func rateWindow(step time.Duration) string {
 	return max(2*time.Minute, 2*step).Round(time.Second).String()
 }
 
@@ -152,7 +154,7 @@ func cnpgRateWindow(step time.Duration) string {
 // the instance selector with any cluster-identity matchers; pvcSel selects the
 // Cluster's claims and is empty when they are not readable.
 func cnpgHistoryDefs(sel, pvcSel string, step time.Duration) []cnpgHistoryDef {
-	w := cnpgRateWindow(step)
+	w := rateWindow(step)
 	clients := sel + `,usename!="streaming_replica",application_name!="cnpg_metrics_exporter"`
 	perPodRate := func(metric string) string {
 		return "sum by (pod) (max by (pod,datname) (rate(" + metric + "{" + sel + "}[" + w + "])))"
@@ -349,7 +351,7 @@ func runCNPGHistoryChart(ctx context.Context, q seriesQuerier, d cnpgHistoryDef,
 	for _, query := range d.queries {
 		res, err := q.QueryRange(ctx, query.expr, start, end, step)
 		if err != nil {
-			c.State, c.Reason = CNPGHistoryStateError, "Prometheus query failed: "+truncate(err.Error(), 200)
+			c.State, c.Reason = CNPGHistoryStateError, queryFailed(err)
 			c.Series = []prom.Series{}
 			return
 		}
@@ -542,7 +544,7 @@ func queryCNPGReceivers(ctx context.Context, q seriesQuerier, sel string, known 
 	query := "(max by (pod) (cnpg_pg_replication_is_wal_receiver_up{" + sel + "}) and on (pod) " + standby + ") or (-1 * " + standby + ")"
 	res, err := q.Query(ctx, query)
 	if err != nil {
-		return nil, "Prometheus query failed: " + truncate(err.Error(), 200)
+		return nil, queryFailed(err)
 	}
 	return parseCNPGReceivers(res, known), ""
 }

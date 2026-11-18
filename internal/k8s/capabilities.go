@@ -183,20 +183,22 @@ type FeatureCapabilities struct {
 	HelmSourceIdentity bool `json:"helmSourceIdentity"`
 	// GET /api/helm/inventory and /api/helm/inventory/{namespace}/{name}, and
 	// error_code release_read_denied on a Helm release read.
-	HelmInventory         bool `json:"helmInventory"`
-	ResourceReadCoverage  bool `json:"resourceReadCoverage"`
-	SearchCoverage        bool `json:"searchCoverage"`
-	ApplicationEvidence   bool `json:"applicationEvidence"`
-	SearchEventContent    bool `json:"searchEventContent"`
-	YAMLReview            bool `json:"yamlReview"`
-	YAMLSchemas           bool `json:"yamlSchemas"`
-	WorkloadImages        bool `json:"workloadImages"`
-	DeploymentPause       bool `json:"deploymentPause"`
-	ResourceIssues        bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
-	ResourceIssueCoverage bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
-	PodEnvironment        bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
-	PolicyResource        bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
-	WorkloadHistory       bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
+	HelmInventory        bool `json:"helmInventory"`
+	ResourceReadCoverage bool `json:"resourceReadCoverage"`
+	SearchCoverage       bool `json:"searchCoverage"`
+	ApplicationEvidence  bool `json:"applicationEvidence"`
+	SearchEventContent   bool `json:"searchEventContent"`
+	YAMLReview           bool `json:"yamlReview"`
+	YAMLSchemas          bool `json:"yamlSchemas"`
+	WorkloadImages       bool `json:"workloadImages"`
+	DeploymentPause      bool `json:"deploymentPause"`
+	// GET /api/prometheus/substrate/workerpools/{namespace}/{name} and /api/prometheus/substrate/nodes/{name}.
+	SubstrateHealthMetrics bool `json:"substrateHealthMetrics"`
+	ResourceIssues         bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
+	ResourceIssueCoverage  bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
+	PodEnvironment         bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
+	PolicyResource         bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
+	WorkloadHistory        bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace         bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup   bool `json:"cnpgProtectionSetup"`
