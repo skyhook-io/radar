@@ -269,6 +269,26 @@ func traefikVerdictExists(v k8s.TraefikRefVerdict, in traefikRoutesInput) *bool 
 	return &exists
 }
 
+// traefikReadsAllowed: the caller may make every read behind a fact.
+func traefikReadsAllowed(reads []issuesapi.EvidenceRead, in traefikRoutesInput) bool {
+	for _, read := range reads {
+		if in.CanRead != nil && !in.CanRead(read) {
+			return false
+		}
+	}
+	return true
+}
+
+// traefikGatedRefusal: the refusal is read from Traefik's pods, so a caller
+// who can't read them isn't told and the route counts as when Radar can't
+// tell.
+func traefikGatedRefusal(refusal func(*unstructured.Unstructured) (bool, []issuesapi.EvidenceRead), canRead func(issuesapi.EvidenceRead) bool) func(*unstructured.Unstructured) bool {
+	return func(u *unstructured.Unstructured) bool {
+		refuses, reads := refusal(u)
+		return refuses && traefikReadsAllowed(reads, traefikRoutesInput{CanRead: canRead})
+	}
+}
+
 type traefikPodCounts struct{ ready, total *int }
 
 // traefikBackend counts ready pods only for a Service Traefik routes to,
@@ -276,7 +296,7 @@ type traefikPodCounts struct{ ready, total *int }
 func traefikBackend(v k8s.TraefikRefVerdict, in traefikRoutesInput, counts map[[2]string]traefikPodCounts) traefikBackendFact {
 	fact := traefikBackendFact{Namespace: v.Namespace, Name: v.Name, Port: v.Port, Kind: v.Kind, Exists: traefikVerdictExists(v, in)}
 	ns := v.Namespace
-	if v.Kind != "Service" || v.Refused || in.Service == nil || in.Pods == nil ||
+	if v.Kind != "Service" || (v.Refused && traefikReadsAllowed(v.Reads, in)) || in.Service == nil || in.Pods == nil ||
 		(in.NSVisible != nil && !in.NSVisible(ns)) ||
 		(in.CanRead != nil && (!in.CanRead(issuesapi.EvidenceRead{Resource: "services", Namespace: ns, Verb: "list"}) ||
 			!in.CanRead(issuesapi.EvidenceRead{Resource: "pods", Namespace: ns, Verb: "list"}))) {
@@ -510,14 +530,15 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 
 	assessor := k8s.NewTraefikRouteAssessor(cache, k8s.GetDynamicResourceCache(), discovery)
 	certMemo := map[[2]string]traefikCertAnswer{}
+	canRead := traefikReadGate(s.issueEvidenceAccess(r), func(group, resource, ns, verb string) bool {
+		return s.canRead(r, group, resource, ns, verb)
+	})
 	in := traefikRoutesInput{
 		Routes:                routes,
 		Refs:                  assessor.RuleRefs,
-		RefusesCrossNamespace: assessor.RefusesCrossNamespace,
-		CanRead: traefikReadGate(s.issueEvidenceAccess(r), func(group, resource, ns, verb string) bool {
-			return s.canRead(r, group, resource, ns, verb)
-		}),
-		NSVisible: s.callerNamespaces(r),
+		RefusesCrossNamespace: traefikGatedRefusal(assessor.CrossNamespaceRefusal, canRead),
+		CanRead:               canRead,
+		NSVisible:             s.callerNamespaces(r),
 		Service: func(ns, name string) (*corev1.Service, bool) {
 			lister := cache.Services()
 			if lister == nil {
@@ -530,6 +551,11 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 			lister := cache.Pods()
 			if lister == nil {
 				return nil, fmt.Errorf("pods not cached")
+			}
+			// As the trace: a pod store that doesn't hold this namespace, or
+			// hasn't synced, lists nothing without an error.
+			if !cache.AssessKindRead("pods", []string{ns}).Complete {
+				return nil, fmt.Errorf("pods in %s not fully cached", ns)
 			}
 			return lister.Pods(ns).List(sel)
 		},

@@ -93,13 +93,26 @@ func ParseTraefikRuleRefs(route *unstructured.Unstructured) []TraefikRuleRefs {
 // RefusesCrossNamespace: a running Traefik v3 loads the route and none that
 // does allows cross-namespace references. False when Radar can't tell.
 func (a *TraefikRouteAssessor) RefusesCrossNamespace(route *unstructured.Unstructured) bool {
+	refuses, _ := a.CrossNamespaceRefusal(route)
+	return refuses
+}
+
+// CrossNamespaceRefusal is RefusesCrossNamespace with the reads of the
+// Traefik pods it comes from, which a caller must be able to make to be told.
+func (a *TraefikRouteAssessor) CrossNamespaceRefusal(route *unstructured.Unstructured) (bool, []issuesapi.EvidenceRead) {
 	loaders := a.loaders(route)
+	podNamespaces := map[string]bool{}
 	for _, inst := range loaders {
 		if inst.allowCrossNamespace {
-			return false
+			return false, nil
 		}
+		podNamespaces[inst.podNamespace] = true
 	}
-	return len(loaders) > 0
+	var reads []issuesapi.EvidenceRead
+	for _, podNs := range sortedSetKeys(podNamespaces) {
+		reads = append(reads, issuesapi.EvidenceRead{Resource: "pods", Namespace: podNs, Verb: "list"})
+	}
+	return len(loaders) > 0, reads
 }
 
 func (a *TraefikRouteAssessor) loaders(route *unstructured.Unstructured) []traefikInstance {
@@ -147,7 +160,8 @@ func (a *TraefikRouteAssessor) RuleRefs(route *unstructured.Unstructured) []Trae
 		for j, svc := range nestedMaps(r, "services") {
 			v := &out[i].Services[j]
 			if v.Namespace != ns && !allowCross {
-				v.Refused = true
+				// The refusal is read from Traefik's pods, so it carries their reads.
+				v.Refused, v.Reads = true, podReads
 				continue
 			}
 			known, missing, _, read := a.inv.servicePresence(svc, v.Namespace)

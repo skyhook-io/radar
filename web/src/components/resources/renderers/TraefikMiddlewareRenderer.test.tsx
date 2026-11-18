@@ -15,3 +15,9 @@ it('keeps the drawer unchanged on an older Radar and says when the request faile
 it('hides the section when a Radar of unknown version turns out not to have the route', () => {
   expect(middlewareUsers({ isError: true, error: new RadarFeatureUnsupportedError('traefikRoutes', {}), support: 'unknown' })).toBeUndefined()
 })
+it('never reads an unread IngressRoute answer as no route', () => {
+  expect(middlewareUsers({ data: answer('syncing'), isError: false, support: 'supported' })).toBeUndefined()
+  for (const state of ['denied', 'uncached', 'error', 'notInstalled']) {
+    expect(middlewareUsers({ data: answer(state), isError: false, support: 'supported' })).toBeNull()
+  }
+})

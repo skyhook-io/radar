@@ -558,7 +558,9 @@ func (inv *traefikInventory) middlewarePresence(ref map[string]any, ns string, a
 	if unsure {
 		return false, traefikMissingRef{}, false
 	}
-	return true, traefikMissingRef{reads: presentReads}, false
+	// Deduplicated per node: chain members shared through several paths
+	// would otherwise double the list at every level.
+	return true, traefikMissingRef{reads: dedupeEvidenceReads(presentReads)}, false
 }
 
 func (inv *traefikInventory) ruleMissingRefs(r map[string]any, ns string, allowCrossNamespace bool) []traefikMissingRef {

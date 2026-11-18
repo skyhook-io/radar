@@ -453,3 +453,35 @@ func TestBuildTraefikRoutesFlagsAPortTheServiceDoesNotExpose(t *testing.T) {
 		t.Errorf("a Service the caller can't list is not judged: %+v", rows[0].Services[0])
 	}
 }
+
+func TestTraefikGatedRefusalNeedsTraefikPods(t *testing.T) {
+	traefikPods := []issuesapi.EvidenceRead{{Resource: "pods", Namespace: "traefik", Verb: "list"}}
+	refusal := func(refuses bool) func(*unstructured.Unstructured) (bool, []issuesapi.EvidenceRead) {
+		return func(*unstructured.Unstructured) (bool, []issuesapi.EvidenceRead) { return refuses, traefikPods }
+	}
+	noTraefikPods := func(r issuesapi.EvidenceRead) bool { return r.Resource != "pods" || r.Namespace != "traefik" }
+	all := func(issuesapi.EvidenceRead) bool { return true }
+	route := tRoute("shop", "a", nil, nil)
+	if traefikGatedRefusal(refusal(true), noTraefikPods)(route) {
+		t.Error("a caller who can't read Traefik's pods must not be told it refuses")
+	}
+	if !traefikGatedRefusal(refusal(true), all)(route) {
+		t.Error("a caller who can read Traefik's pods gets the refusal")
+	}
+	if traefikGatedRefusal(refusal(false), all)(route) {
+		t.Error("no refusal, no filtering")
+	}
+}
+
+func TestBuildTraefikRoutesRefusedBackendCountedWithoutTraefikPods(t *testing.T) {
+	f := tFixture{services: map[string]*corev1.Service{"shop/ui": selService("shop", "ui")}, pods: map[string][]*corev1.Pod{"shop": {readyPod(true)}}}
+	route := tRoute("shop", "a", nil, nil, tRule("Host(`a`)", []string{"ui"}))
+	f.refs = map[string][]k8s.TraefikRuleRefs{"shop/a": {{Services: []k8s.TraefikRefVerdict{{Kind: "Service", Namespace: "shop", Name: "ui", Refused: true,
+		Reads: []issuesapi.EvidenceRead{{Resource: "pods", Namespace: "traefik", Verb: "list"}}}}}}}
+	in := f.input(route)
+	in.CanRead = func(r issuesapi.EvidenceRead) bool { return r.Resource != "pods" || r.Namespace != "traefik" }
+	rows, _, _ := buildTraefikRoutes(in)
+	if b := rows[0].Services[0]; b.ReadyPods == nil || *b.ReadyPods != 1 {
+		t.Errorf("a refusal the caller can't see must not hide the count: %+v", b)
+	}
+}

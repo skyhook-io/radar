@@ -4,15 +4,20 @@ import type { ResourceRef, TraefikRoutesResponse } from '@skyhook-io/k8s-ui'
 import { isRadarFeatureUnsupported } from '../../../api/radarFeatures'
 import { useTraefikMiddlewareUsers } from '../../../api/traefik'
 
-// undefined on an older Radar or while loading; null when the request failed.
+// undefined on an older Radar or while loading (IngressRoutes still syncing
+// included); null when the request failed or Radar couldn't read
+// IngressRoutes at all, so an unread answer never reads as "no route".
 export function middlewareUsers(query: { data?: TraefikRoutesResponse; isError: boolean; error?: unknown; support: string }): TraefikMiddlewareUsers | null | undefined {
   if (query.support === 'unsupported' || isRadarFeatureUnsupported(query.error, 'traefikRoutes')) return undefined
   if (query.isError) return null
   if (!query.data) return undefined
+  const state = query.data.coverage?.ingressroutes?.state
+  if (state === 'syncing') return undefined
+  if (state !== 'full' && state !== 'partial') return null
   return {
     routes: query.data.routes.map((r) => ({ group: r.ref.group, namespace: r.ref.namespace, name: r.ref.name })),
     truncated: query.data.truncated,
-    partial: query.data.coverage?.ingressroutes?.state !== 'full',
+    partial: state === 'partial',
   }
 }
 

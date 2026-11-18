@@ -1,8 +1,10 @@
 package k8s
 
 import (
+	"fmt"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -219,5 +221,39 @@ func TestTraefikRuleRefsChainCycleCantTell(t *testing.T) {
 	refs := traefikAssessor(t).RuleRefs(ingressRoute("shop", "uses-loop", nil, svcRef("web"), mwRef("loop-a")))
 	if v := refs[0].Middlewares[0]; v.Missing != nil {
 		t.Errorf("a cycle can't be decided: %+v", v)
+	}
+}
+
+// Chain members reached through several paths are answered once and their
+// reads deduplicated at each level, so a deep shared chain stays small.
+func TestTraefikRuleRefsSharedChainReadsStayBounded(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	const depth = 30
+	objs := []runtime.Object{traefikObject("Middleware", "shop", "m0", map[string]any{"headers": map[string]any{}})}
+	for i := 1; i <= depth; i++ {
+		prev := fmt.Sprintf("m%d", i-1)
+		objs = append(objs, traefikObject("Middleware", "shop", fmt.Sprintf("m%d", i), map[string]any{"chain": map[string]any{"middlewares": mwRef(prev, prev)}}))
+	}
+	initTraefikFixture(t, traefikPod("traefik", true, traefikArgs...), objs...)
+	a := traefikAssessor(t)
+	refs := a.RuleRefs(ingressRoute("shop", "deep", nil, svcRef("web"), mwRef(fmt.Sprintf("m%d", depth))))
+	v := refs[0].Middlewares[0]
+	if v.Missing == nil || *v.Missing {
+		t.Fatalf("deep shared chain should be present: %+v", v)
+	}
+	_, m, _ := a.inv.middlewarePresence(map[string]any{"name": fmt.Sprintf("m%d", depth)}, "shop", true, map[string]*traefikVisit{})
+	if len(m.reads) > 4 {
+		t.Errorf("reads grew with the chain: %d", len(m.reads))
+	}
+}
+
+func TestTraefikCrossNamespaceRefusalCarriesPodReads(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initTraefikFixture(t, traefikPod("traefik", true, "--entryPoints.web.address=:8000/tcp", "--providers.kubernetescrd"))
+	refuses, reads := traefikAssessor(t).CrossNamespaceRefusal(ingressRoute("shop", "r", nil, svcRef("web"), nil))
+	if !refuses || len(reads) != 1 || reads[0].Resource != "pods" || reads[0].Namespace != "traefik" {
+		t.Fatalf("refuses=%v reads=%+v", refuses, reads)
 	}
 }

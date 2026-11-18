@@ -25,6 +25,8 @@ export function useTraefikMiddlewareUsers(namespace: string, name: string) {
     queryFn: ({ signal }) => guard(() => fetchJSON<TraefikRoutesResponse>(`/traefik/routes?middleware=${encodeURIComponent(`${namespace}/${name}`)}`, signal)),
     enabled: !!namespace && !!name && support !== 'unsupported',
     staleTime: 30_000,
+    // While IngressRoutes are still syncing the drawer shows nothing; ask again.
+    refetchInterval: (q) => (q.state.data?.coverage?.ingressroutes?.state === 'syncing' ? 3_000 : false),
     retry: shouldRetryRadarQuery,
   })
   return { ...query, support }
