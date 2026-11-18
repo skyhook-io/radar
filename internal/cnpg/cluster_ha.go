@@ -245,7 +245,10 @@ func (s *Reader) ClusterHA(callerCtx context.Context, c HAClients, cache *k8s.Re
 
 	resp.Quorum = s.hAQuorum(ctx, callerCtx, c, cluster, pods, resp.Pods.State == cnpgHAStateOK)
 	resp.PDBs = s.hAPDBs(callerCtx, cache, cluster)
-	cnpgHAPrimaryProtection(&resp, cache, cluster, pods)
+	// Issues verifies the same reading with list nodes; get nodes (zones) is not enough.
+	if s.Access.CanRead(callerCtx, "", "nodes", "", "list") {
+		cnpgHAPrimaryProtection(&resp, cache, cluster, pods)
+	}
 	resp.PrimaryLease = s.hAPrimaryLease(ctx, callerCtx, c, cluster, now)
 	resp.OperatorLease = s.hAOperatorLease(ctx, callerCtx, c, cache, now)
 	resp.Jobs = s.hAJobs(callerCtx, cache, cluster)

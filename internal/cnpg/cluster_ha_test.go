@@ -4,9 +4,14 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
+	metadatafake "k8s.io/client-go/metadata/fake"
 
 	auth "github.com/skyhook-io/radar/internal/auth"
 	integration "github.com/skyhook-io/radar/internal/integration"
@@ -138,6 +143,47 @@ func TestCNPGHAPrimaryBudgetProtection(t *testing.T) {
 			if primary.Protection != tc.protection || !strings.Contains(primary.ProtectionReason, tc.reason) || (tc.reason == "") != (primary.ProtectionReason == "") {
 				t.Fatalf("protection = %q (%q), want %q (%q)", primary.Protection, primary.ProtectionReason, tc.protection, tc.reason)
 			}
+		})
+	}
+}
+
+// Through ClusterHA: the reading needs the same list nodes Issues checks,
+// not only the get nodes the zones need.
+func TestCNPGClusterHAPrimaryProtectionNeedsListNodes(t *testing.T) {
+	for _, denyList := range []bool{false, true} {
+		t.Run(map[bool]string{false: "list allowed", true: "list denied"}[denyList], func(t *testing.T) {
+			t.Cleanup(k8s.ResetTestState)
+			t.Cleanup(k8s.ResetTestDynamicState)
+			f := k8s.NewCNPGPDBTestFixture(2)
+			if err := f.Install(""); err != nil {
+				t.Fatal(err)
+			}
+			reader := &Reader{
+				Access: Access{CanRead: func(_ context.Context, _, resource, _, verb string) bool {
+					return !(denyList && resource == "nodes" && verb == "list")
+				}},
+				Observations: Observations{
+					OperatorScope: func(context.Context) []string { return nil },
+					TypedScope: func(context.Context, *k8s.ResourceCache, []string, string, string) (integration.KindAccess, []string) {
+						return integration.KindAccess{State: integration.KindCoverageUncached}, nil
+					},
+				},
+			}
+			clients := HAClients{Typed: fake.NewClientset(), Dynamic: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), Metadata: metadatafake.NewSimpleMetadataClient(metadatafake.NewTestScheme())}
+			got := reader.ClusterHA(context.Background(), clients, k8s.GetResourceCache(), f.Cluster, time.Now())
+			if got.Nodes.State != cnpgHAStateOK {
+				t.Fatalf("get nodes stays allowed: %+v", got.Nodes)
+			}
+			want := "expected"
+			if denyList {
+				want = ""
+			}
+			for _, p := range got.PDBs.Items {
+				if p.Role == "primary" && p.Protection == want {
+					return
+				}
+			}
+			t.Fatalf("primary protection want %q: %+v", want, got.PDBs.Items)
 		})
 	}
 }
