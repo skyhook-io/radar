@@ -417,10 +417,6 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 				allowed, nsApiErr := canI(checkCtx, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
-					// The grant is real, but the cluster-wide answer is still unknown.
-					if apiErr {
-						hadErrors.Store(true)
-					}
 					return
 				}
 				apiErr = apiErr || nsApiErr
@@ -719,10 +715,6 @@ func checkCapabilitiesForUser(identityKey, username string, groups []string) *Ca
 				allowed, nsAPIErr := canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
-					// The grant is real, but the cluster-wide answer is still unknown.
-					if apiErr {
-						hadErrors.Store(true)
-					}
 					return
 				}
 				apiErr = apiErr || nsAPIErr

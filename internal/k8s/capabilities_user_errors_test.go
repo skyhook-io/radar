@@ -76,9 +76,9 @@ func TestCheckCapabilitiesForUserDoesNotCacheFailedChecks(t *testing.T) {
 	}
 }
 
-// A namespace fallback that grants access does not complete a cluster-wide
-// check that errored, so the answer stays incomplete and short-lived.
-func TestCheckCapabilitiesForUserFallbackGrantKeepsClusterErrorIncomplete(t *testing.T) {
+// A namespace fallback that grants access is a settled answer even when the
+// cluster-wide check errored: re-checking cannot change what the UI shows.
+func TestCheckCapabilitiesForUserFallbackGrantIsComplete(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var review authv1.SubjectAccessReview
 		if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
@@ -119,7 +119,7 @@ func TestCheckCapabilitiesForUserFallbackGrantKeepsClusterErrorIncomplete(t *tes
 	if !caps.Exec {
 		t.Fatal("namespace fallback grant must still be reported")
 	}
-	if !caps.ChecksIncomplete {
-		t.Error("a cluster-wide check that errored must leave the answer incomplete even when the fallback grants")
+	if caps.ChecksIncomplete {
+		t.Error("a namespace fallback grant must be a settled answer even when the cluster-wide check errored")
 	}
 }
