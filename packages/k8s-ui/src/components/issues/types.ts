@@ -11,6 +11,8 @@
 // radar/pkg/audit.ResourceKey — so Issues and Checks share deep-links rather
 // than forking a second convention.
 
+import type { WorkloadHistoryCoverage } from '../../utils/workload-history-notes';
+
 /** Operational severity for live issues — distinct from the Checks 4-tier
  *  posture ladder on purpose (operational urgency vs compliance risk are
  *  separate axes). Matches radar's issues.Severity. */
@@ -310,17 +312,57 @@ export interface Issue {
   timing_summary?: string;
 
   /** Recent non-status changes (spec/config and lifecycle) on this issue's
-   *  subject (and, for workload subjects, its referenced ConfigMaps) —
-   *  deterministic evidence, not a causal claim. Populated only on
-   *  single-namespace MCP issue responses; never set on /api/issues today. */
+   *  subject (and, for workload subjects, its referenced ConfigMaps and
+   *  Secrets) — deterministic evidence, not a causal claim. Set by the MCP
+   *  issues tool, and on the one issue a per-resource issues request names
+   *  with ?correlate=; never on /api/issues. */
   correlated_changes?: IssueRecentChange[];
   /** Explicit "no tracked changes in the window" evidence. An issue with
    *  NEITHER correlation field was not checked — absence must not be read as
-   *  "no changes". MCP-only, like correlated_changes. */
+   *  "no changes". Set where correlated_changes is. */
   no_recent_changes?: IssueNoRecentChanges;
   /** The subject's change history in the window was larger than Radar reads,
-   *  so correlated_changes are leads, not its full history. MCP-only. */
+   *  so correlated_changes are leads, not its full history. */
   correlated_changes_incomplete?: boolean;
+  /** The window held more changes the caller may see than correlated_changes
+   *  lists. Set only with ?correlate=. */
+  correlated_changes_more_not_shown?: boolean;
+  /** The correlation's window and why an empty answer is not "nothing
+   *  changed". Set only with ?correlate=; absent on an older Radar. */
+  correlation?: IssueChangeCorrelation;
+}
+
+/** Why Radar can't say nothing changed: a read-reason code, or one of the two
+ *  reasons specific to change correlation. */
+export type IssueCorrelationUnknownReason =
+  | 'user_forbidden'
+  | 'user_permission_check_failed'
+  | 'radar_kind_not_collected'
+  | 'radar_namespace_not_collected'
+  | 'kind_sync_pending'
+  | 'read_error'
+  | 'sources_unresolved'
+  | 'history_incomplete';
+
+export interface IssueCorrelationUnknown {
+  reason: IssueCorrelationUnknownReason;
+  /** The kinds the reason concerns; absent for history_incomplete. */
+  kinds?: { group?: string; kind: string }[];
+}
+
+/** Scope of one issue's change correlation (?correlate=). */
+export interface IssueChangeCorrelation {
+  /** RFC 3339. An hour before first_seen (or before now when the onset is
+   *  unknown) until the read. */
+  window_from: string;
+  window_to: string;
+  /** When this Radar process started recording changes. */
+  observed_since?: string;
+  /** Set when an empty correlated_changes is not "nothing changed". Listed
+   *  changes are still real when it is set. */
+  unknown?: IssueCorrelationUnknown;
+  /** Set when Radar's held history does not cover the window. */
+  history?: WorkloadHistoryCoverage;
 }
 
 /** subjectRef builds a deep-linkable ref for an issue's subject — the row's

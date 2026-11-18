@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -138,7 +139,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	composeFilters.Limit = issues.NoLimit
 	composeFilters.Filter = nil
 	out, stats := issues.ComposeWithStats(provider, composeFilters)
-	helmIssues, helmUnchecked, helmIncomplete := s.nativeHelmIssuesForRequest(r, namespaces, filters)
+	helmIssues, _, helmUnchecked, helmIncomplete := s.nativeHelmIssuesForRequest(r, namespaces, filters.Kinds, "")
 	out, stats = issues.MergeExternalIssues(out, stats, filters, helmIssues)
 	// Shared base response shape (issues.ListResponse); surfaces add their
 	// own enrichments after this point.
@@ -218,14 +219,16 @@ func (s *Server) issueRelatedResourceAccess(r *http.Request) func(issues.Ref) bo
 // context, so the read stops when the caller disconnects instead of running
 // to completion for nobody. incomplete reports a failed read whose answer
 // someone is still waiting for (see helm.IssueReadUnchecked); the issues
-// returned alongside it come from the namespaces that were read.
-func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, filters issues.Filters) (found []issues.Issue, unchecked issuesapi.UncheckedSource, incomplete bool) {
-	if !issues.KindFilterIncludes(filters.Kinds, "HelmRelease", "helmreleases") {
-		return nil, unchecked, false
+// returned alongside it come from the namespaces that were read. name, when
+// set, keeps one release; the releases read are returned with the issues so
+// one read can also serve the release's history.
+func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, kinds []string, name string) (found []issues.Issue, releases []helm.HelmRelease, unchecked issuesapi.UncheckedSource, incomplete bool) {
+	if !issues.KindFilterIncludes(kinds, "HelmRelease", "helmreleases") {
+		return nil, nil, unchecked, false
 	}
 	helmClient := helm.GetClient()
 	if helmClient == nil {
-		return nil, unchecked, false
+		return nil, nil, unchecked, false
 	}
 	ctx := r.Context()
 	user := auth.UserFromContext(ctx)
@@ -240,17 +243,20 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 		var ok bool
 		helmNamespaces, ok, checked, unread = s.resolveHelmStorageScope(r)
 		if !ok {
-			return nil, unchecked, false
+			return nil, nil, unchecked, false
 		}
 	}
 	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, user)
+	if name != "" {
+		releases = slices.DeleteFunc(releases, func(rel helm.HelmRelease) bool { return rel.Name != name })
+	}
 	unchecked, incomplete = helm.ReportIssueRead(ctx, err, username, groups, helmNamespaces)
 	// Namespaces left out because the caller can't read Helm's storage there
 	// were never read, and the Helm view still lists their releases.
 	if !errors.Is(ctx.Err(), context.Canceled) {
 		unchecked, incomplete = helm.AddUnreadNamespaces(unchecked, incomplete, unread, checked)
 	}
-	return issues.NativeHelmReleaseIssues(releases, time.Now()), unchecked, incomplete
+	return issues.NativeHelmReleaseIssues(releases, time.Now()), releases, unchecked, incomplete
 }
 
 // handleResourceIssues serves GET /api/issues/resource/{kind}/{namespace}/{name}
@@ -266,6 +272,13 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 // composed across namespaces, which that per-row gate keeps to the caller's.
 // ?coverage=1 returns an envelope that also says whether Radar watches the
 // subject's kind and counts what the caller's access withheld.
+//
+// ?correlate=<issueID> (which implies the envelope) adds that issue's
+// correlated changes, read as the caller over a window from an hour before
+// the issue was first seen until now; other issues are unchanged. Only a
+// request naming it pays for the read. A native Helm release (kind
+// HelmRelease, group helm.sh) is composed from its storage read as the
+// caller, and that one read also serves its history.
 func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -320,22 +333,40 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		namespaces = []string{namespace}
 	}
 
+	correlateID := r.URL.Query().Get("correlate")
+	envelope := r.URL.Query().Get("coverage") == "1" || correlateID != ""
+	nativeHelm := strings.EqualFold(rawKind, "HelmRelease") && group == issues.NativeHelmGroup && namespace != ""
+
 	subjectCache, _, _ := provider.CacheIdentity()
 	evidenceWithheld := map[string]bool{}
 	var unchecked []issuesapi.UncheckedSource
-	related := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
-		OnUnchecked:          func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
-		Namespaces:           namespaces,
-		CanReadClusterScoped: s.issueClusterScopedAccess(r),
-		CanReadRelated:       s.issueRelatedResourceAccess(r),
-		CanReadSubject:       s.issueSubjectAccess(r),
-		CanReadEvidence:      s.issueEvidenceAccess(r),
-		OnEvidenceWithheld: func(i issues.Issue) {
-			if issues.Concerns(i, group, kind, namespace, name) {
-				evidenceWithheld[i.ID] = true
-			}
-		},
-	}, group, kind, namespace, name)
+	var related []issues.Issue
+	var helmReleases []helm.HelmRelease
+	helmStatus := ""
+	if nativeHelm {
+		kind = "HelmRelease"
+		var helmUnchecked issuesapi.UncheckedSource
+		var helmIncomplete bool
+		related, helmReleases, helmUnchecked, helmIncomplete = s.nativeHelmIssuesForRequest(r, []string{namespace}, nil, name)
+		if helmIncomplete {
+			unchecked = append(unchecked, helmUnchecked)
+			helmStatus = helmCorrelationStatus(helmUnchecked)
+		}
+	} else {
+		related = issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+			OnUnchecked:          func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
+			Namespaces:           namespaces,
+			CanReadClusterScoped: s.issueClusterScopedAccess(r),
+			CanReadRelated:       s.issueRelatedResourceAccess(r),
+			CanReadSubject:       s.issueSubjectAccess(r),
+			CanReadEvidence:      s.issueEvidenceAccess(r),
+			OnEvidenceWithheld: func(i issues.Issue) {
+				if issues.Concerns(i, group, kind, namespace, name) {
+					evidenceWithheld[i.ID] = true
+				}
+			},
+		}, group, kind, namespace, name)
+	}
 	if k8s.GetResourceCache() != subjectCache {
 		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
 		return
@@ -343,16 +374,31 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	if related == nil {
 		related = []issues.Issue{}
 	}
-	if r.URL.Query().Get("coverage") != "1" {
+	if !envelope {
 		s.writeJSON(w, related)
 		return
 	}
 	withheld := ResourceIssuesWithheld{Issues: len(evidenceWithheld)}
 	withheld.Issues += s.clusterScopedSubjectIssuesWithheld(r, provider, related, group, kind, namespace, name)
+	coverage := resourceIssuesCoverageOK
+	if !nativeHelm {
+		coverage = resourceIssuesCoverage(kind, group, namespace)
+	}
 	resp := ResourceIssuesResponse{
 		Issues:    related,
-		Coverage:  resourceIssuesCoverage(kind, group, namespace),
+		Coverage:  coverage,
 		Unchecked: unchecked,
+	}
+	if correlateID != "" {
+		status, err := s.correlateResourceIssue(r, related, correlateID, helmReleases)
+		if err != nil {
+			s.writeCollectionFailure(w, kind, err)
+			return
+		}
+		if status == correlationStatusNotFound && helmStatus != "" {
+			status = helmStatus
+		}
+		resp.CorrelationStatus = status
 	}
 	if kind == "CronJob" && (group == "batch" || group == "") && namespace != "" && s.canRead(r, "", "events", namespace, "list") {
 		resp.SchedulingReport = k8s.GetCronJobSchedulingEvidence(namespace, name)
@@ -390,6 +436,11 @@ type ResourceIssuesResponse struct {
 	// can't read; with it, an empty list is not "none". Its absence is not a
 	// completeness guarantee: read it with coverage, withheld and visibility.
 	Unchecked []issuesapi.UncheckedSource `json:"unchecked_sources,omitempty"`
+	// CorrelationStatus is set when ?correlate= named an issue that is not in
+	// Issues: not_found when it resolved or is outside what the caller may
+	// see, or, for a native Helm release whose storage couldn't be read,
+	// user_forbidden or read_error. Absent when the issue was found.
+	CorrelationStatus string `json:"correlation_status,omitempty"`
 }
 
 // ResourceIssuesWithheld counts what the caller's access kept out of the

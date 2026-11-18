@@ -1556,6 +1556,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		SubstrateHealthMetrics:      true,
 		ResourceIssues:              true,
 		ResourceIssueCoverage:       true,
+		IssueCorrelation:            true,
 		PodEnvironment:              true,
 		PolicyResource:              true,
 		WorkloadHistory:             true,

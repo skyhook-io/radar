@@ -187,6 +187,8 @@ export interface FeatureCapabilities {
   substrateHealthMetrics?: boolean
   resourceIssues?: boolean
   resourceIssueCoverage?: boolean
+  // GET /api/issues/resource/... with ?correlate=<issueID>
+  issueCorrelation?: boolean
   podEnvironment?: boolean
   policyResource?: boolean
   workloadHistory?: boolean
