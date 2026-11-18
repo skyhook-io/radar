@@ -76,6 +76,18 @@ describe('computeColumnLayout', () => {
     expect(c).toEqual({ name: 400, node: 176, status: 110, cpu: 136, age: 96, images: 192 })
   })
 
+  it('shrinks fit columns to their header, not their normal width, when room is short', () => {
+    const cols: ColumnLayoutInput[] = [
+      name(300),
+      { key: 'namespace', mode: 'fit', floor: 192, max: 320, content: 181, min: 145 },
+      { key: 'node', mode: 'fit', floor: 176, max: 400, content: 214, min: 87, yieldRank: 1 },
+    ]
+    // 300 + 192 + 214 = 706 normally. 106 short: all from Node (to 108).
+    expect(computeColumnLayout(cols, 600)).toEqual({ name: 300, namespace: 192, node: 108 })
+    // 146 short: Node gives all it can (127, down to its header), Namespace the other 19.
+    expect(computeColumnLayout(cols, 560)).toEqual({ name: 300, namespace: 173, node: 87 })
+  })
+
   it('lets Node give way before the exact columns, and Namespace after them', () => {
     const cols: ColumnLayoutInput[] = [
       name(300),

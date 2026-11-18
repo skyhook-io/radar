@@ -11,6 +11,7 @@ import {
   getCellFilterValue,
   getConfigMapKeys,
   getConfigMapSize,
+  getContainerSquareStates,
   getFluxHelmReleaseMessage,
   getGatewayClassDescription,
   getHPATarget,
@@ -38,15 +39,22 @@ import {
 import { getClusterQueueCohort } from './resource-utils-kueue'
 import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
 import { getPodGpuCount } from '../../utils/extended-resources'
+import { getCRDColumnValue } from './resource-utils-crd'
 
 // Cell text styles, matching the classes the cells render with (text-sm /
 // text-xs in the app font). measureText takes a CSS font shorthand.
 const FONT_FAMILY = "'DM Sans Variable', 'DM Sans', system-ui, sans-serif"
+const MONO_FAMILY = "'DM Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
 export const CELL_FONTS = {
   body: `400 14px ${FONT_FAMILY}`,
   medium: `500 14px ${FONT_FAMILY}`,
   small: `400 12px ${FONT_FAMILY}`,
   badge: `500 12px ${FONT_FAMILY}`,
+  // The usage bars' labels: text-sm / text-xs / text-[10px] font-mono.
+  monoSm: `400 14px ${MONO_FAMILY}`,
+  monoXs: `400 12px ${MONO_FAMILY}`,
+  mono10: `400 10px ${MONO_FAMILY}`,
+  tiny: `400 10px ${FONT_FAMILY}`,
 } as const
 export type CellFont = keyof typeof CELL_FONTS
 
@@ -89,7 +97,7 @@ const SHORT_VALUE_MAX_PX = 400
 // wider on average (at most ~15px, on a 2000px Event message). It makes a 50k-row pass a few lookups per character
 // instead of a canvas call per string, so there is no per-string cache to bound.
 // Without a canvas (SSR, jsdom) this falls back to an average glyph width.
-const FALLBACK_CHAR_PX: Record<CellFont, number> = { body: 7.5, medium: 7.8, small: 6.5, badge: 6.8 }
+const FALLBACK_CHAR_PX: Record<CellFont, number> = { body: 7.5, medium: 7.8, small: 6.5, badge: 6.8, monoSm: 8.4, monoXs: 7.2, mono10: 6, tiny: 5.5 }
 let measureCtx: CanvasRenderingContext2D | null | undefined
 let charWidths: Partial<Record<CellFont, Map<number, number>>> = {}
 
@@ -178,7 +186,7 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   return { mode: 'exact' }
 }
 
-type CellWidth = (resource: any, measure: MeasureText, limit: number) => number
+export type CellWidth = (resource: any, measure: MeasureText, limit: number) => number
 const text = (read: (resource: any) => string | null | undefined, font: CellFont = 'body'): CellWidth =>
   (resource, measure, limit) => measure(read(resource) || '-', font, limit)
 // A cell that is one .badge holding the label.
@@ -264,18 +272,28 @@ const EXACT_CELL_WIDTHS: Record<string, CellWidth> = {
   'replicasets:ready': text(r => `${r.status?.readyReplicas || 0}/${r.spec?.replicas || 0}`, 'medium'),
   'replicasets:status': badge(r => ((r.spec?.replicas || 0) > 0 ? 'Active' : 'Old')),
   'configmaps:size': text(getConfigMapSize),
+  'pods:containers': (r) => containerSquaresWidth(getContainerSquareStates(r)),
+  'customresourcedefinitions:kind': text(r => getCRDColumnValue(r, 'kind')),
+  'customresourcedefinitions:scope': text(r => getCRDColumnValue(r, 'scope')),
 }
 
-// Columns drawn as a picture rather than text shrink no further than this when
-// the table is short (cell padding included). The usage bars stay readable —
-// the bar and its request marker scale with the cell — down to about this
-// width; below it the "used / limit" label is cut.
-const USAGE_BAR_MIN_PX = 120
-const VISUAL_MIN_PX: Record<string, number> = {
-  'pods:cpu': USAGE_BAR_MIN_PX,
-  'pods:memory': USAGE_BAR_MIN_PX,
-  'nodes:cpu': USAGE_BAR_MIN_PX,
-  'nodes:memory': USAGE_BAR_MIN_PX,
+// The Containers cell: a 10px square per container, 4px apart, with a divider
+// (1px and its margins, plus a gap) between init and regular containers.
+export function containerSquaresWidth(squares: { isInit?: boolean }[]): number {
+  if (squares.length === 0) return 0
+  let dividers = 0
+  for (let i = 1; i < squares.length; i++) if (!!squares[i].isInit !== !!squares[i - 1].isInit) dividers++
+  return squares.length * 10 + (squares.length - 1) * 4 + dividers * (5 + 4)
+}
+
+/** What a usage bar shows, for measuring: "used / limit" and a percentage, or a bare usage and a tag. */
+export type UsageLabel = { used: string; total: string; percent: string } | { usage: string; tag: string }
+
+/** Width of a usage bar's label, as ResourceBar and the no-limit cell lay it out. */
+export function usageLabelWidth(label: UsageLabel | null, measure: MeasureText): number {
+  if (!label) return measure('-', 'body')
+  if ('usage' in label) return measure(label.usage, 'monoSm') + 6 + measure(label.tag, 'tiny')
+  return measure(`${label.used} / ${label.total}`, 'monoXs') + 4 + measure(label.percent, 'mono10')
 }
 
 /**
@@ -308,6 +326,8 @@ export interface ContentContext {
   cellFilterKind: string
   /** Audit findings keyed "namespace/name", which add a badge beside the name. */
   auditBadges?: Record<string, { danger: number; warning: number }>
+  /** Readers for cells drawn from data outside the resource (metrics), keyed by column. */
+  hostCellWidths?: Record<string, CellWidth>
 }
 
 function nameCellWidth(resource: any, measure: MeasureText, limit: number, ctx: ContentContext): number {
@@ -356,12 +376,7 @@ export function measureColumnContent(
   for (const col of columns) {
     const spec = columnSizingSpec(col)
     if (spec.mode === 'exact') {
-      const visual = VISUAL_MIN_PX[`${ctx.plural}:${col.key}`]
-      if (visual !== undefined) {
-        result[col.key] = { content: visual }
-        continue
-      }
-      const read = col.getFilterValue ? undefined : exactContentReader(ctx.plural, col.key)
+      const read = col.getFilterValue ? undefined : ctx.hostCellWidths?.[col.key] ?? exactContentReader(ctx.plural, col.key)
       if (!read) continue
       let longest = 0
       for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, Infinity))
