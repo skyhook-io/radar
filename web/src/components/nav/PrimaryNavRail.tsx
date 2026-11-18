@@ -260,8 +260,10 @@ export function PrimaryNavRail({
   );
 }
 
-// What the optional row adds to the bottom group: its h-9 plus the group's gap-0.5.
-const OPTIONAL_ROW_PX = 38;
+// What the optional row adds to the bottom group, in rem: its h-9 plus the
+// group's gap-0.5. Converted at the current root font size, because a larger
+// browser default font grows the row too.
+const OPTIONAL_ROW_REM = 2.375;
 
 // The slim rail can't scroll (see the nav comment), so an optional row renders
 // only while everything else still fits with it; otherwise it would push
@@ -284,14 +286,17 @@ function useSlimRailRoomFor(
       return;
     }
     const measure = () => {
+      const rowPx =
+        OPTIONAL_ROW_REM *
+        parseFloat(getComputedStyle(document.documentElement).fontSize);
       let used = 0;
       for (const child of Array.from(aside.children)) {
         if (child instanceof HTMLElement && "railSpacer" in child.dataset)
           continue;
         used += child.getBoundingClientRect().height;
       }
-      if (rowRef.current && !rowRef.current.hidden) used -= OPTIONAL_ROW_PX;
-      setFits(used + OPTIONAL_ROW_PX <= aside.clientHeight);
+      if (rowRef.current && !rowRef.current.hidden) used -= rowPx;
+      setFits(used + rowPx <= aside.clientHeight);
     };
     measure();
     const observer = new ResizeObserver(measure);
