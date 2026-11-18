@@ -140,6 +140,10 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout([{ ...exact('a', 200), min: 100 }, { ...exact('b', 200), min: 100 }], 399)).toEqual({ a: 199, b: 200 })
     // Grown, with the room used up sharing: 200.5 each.
     expect(computeColumnLayout([grow('a', 100, 400), grow('b', 100, 400)], 401)).toEqual({ a: 200, b: 201 })
+    // Short by 0.7px before rounding, but 150 + 150 + 150 fits: the last takes the pixel left.
+    const three = ['a', 'b', 'c'].map(key => ({ ...exact(key, 200), min: 150.7 }))
+    expect(computeColumnLayout(three, 451.4)).toEqual({ a: 150, b: 150, c: 151 })
+    expect(computeColumnLayout(three, 451)).toEqual({ a: 150, b: 150, c: 151 })
     // Still short: rounding takes nothing, adds nothing.
     expect(computeColumnLayout([{ ...exact('a', 200), min: 150 }, { ...exact('b', 201), min: 150.5 }], 299)).toEqual({ a: 150, b: 150 })
   })
