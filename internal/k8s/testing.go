@@ -419,6 +419,22 @@ func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
 	return prev
 }
 
+// SetTestInformerClient installs request as the request clientset and
+// informer as the informer clientset of the same client set, the pairing
+// production builds, and returns a restore func.
+func SetTestInformerClient(request *kubernetes.Clientset, informer kubernetes.Interface) func() {
+	clientMu.Lock()
+	prevClient, prevActive := k8sClient, activeClients
+	k8sClient = request
+	activeClients = &sharedKubernetesClients{clientset: request, informerClientset: informer}
+	clientMu.Unlock()
+	return func() {
+		clientMu.Lock()
+		k8sClient, activeClients = prevClient, prevActive
+		clientMu.Unlock()
+	}
+}
+
 // ReconnectTestClient installs c as a new connection under the current context
 // name, as a reconnect does, and returns a func that restores the previous one.
 func ReconnectTestClient(c *kubernetes.Clientset) func() {
@@ -562,6 +578,7 @@ func ResetTestState() {
 	k8sClient = nil
 	discoveryClient = nil
 	dynamicClient = nil
+	activeClients = nil
 	activeClientGeneration = 0
 	kubeconfigMode = ""
 	contextBinding = ""

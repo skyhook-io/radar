@@ -1127,7 +1127,7 @@ func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
 // SelfSubjectAccessReview is one indirection too many — it can disagree with
 // reality on clusters using webhook authorizers (e.g. GKE IAM).
 func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool) {
-	probe := probeResourcePermissions(ctx, false)
+	probe := probeResourcePermissions(ctx, false, GetDynamicClient)
 	return probe.result, publishResourcePermissions(probe)
 }
 
@@ -1145,9 +1145,12 @@ type permissionProbe struct {
 	unpublished bool
 }
 
-// probeResourcePermissions probes without publishing. It serves a fresh cached
-// result unless bypassCache is set.
-func probeResourcePermissions(ctx context.Context, bypassCache bool) permissionProbe {
+// probeResourcePermissions probes through the client dynFor returns, without
+// publishing. It serves a fresh cached result unless bypassCache is set.
+// dynFor is called only after the generation is captured. Request handlers pass
+// GetDynamicClient; only the cache's own startup probe spends the informer
+// client's rate limiter, through GetInformerDynamicClient.
+func probeResourcePermissions(ctx context.Context, bypassCache bool, dynFor func() dynamic.Interface) permissionProbe {
 	resourcePermsMu.RLock()
 	if !bypassCache && cachedPermResult != nil && time.Now().Before(resourcePermsExpiry) {
 		result := clonePermissionCheckResult(cachedPermResult)
@@ -1163,13 +1166,16 @@ func probeResourcePermissions(ctx context.Context, bypassCache bool) permissionP
 	// probe exists, and moving them later would need the same treatment.
 	probeGen := resourcePermsGen
 	resourcePermsMu.RUnlock()
+	// After the generation: a context switch installs the new client before it
+	// bumps the generation, so the reverse order can pair the previous
+	// cluster's client with the new generation.
+	dyn := dynFor()
 
 	// Compute probes WITHOUT holding the write lock — concurrent callers
 	// may race but redundant probes are harmless. Holding the lock during
 	// network calls would block InvalidateResourcePermissionsCache() during
 	// context switch.
 
-	dyn := GetDynamicClient()
 	if GetClient() == nil || dyn == nil {
 		log.Printf("Warning: K8s client not initialized, returning no resource permissions")
 		// Current: nothing superseded this, there is simply nothing to probe.
