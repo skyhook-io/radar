@@ -386,10 +386,11 @@ func ReadPods(path string) (map[string]PodInfo, error) {
 	var list struct {
 		Items []struct {
 			Metadata struct {
-				Name              string     `json:"name"`
-				UID               string     `json:"uid"`
-				CreationTimestamp time.Time  `json:"creationTimestamp"`
-				DeletionTimestamp *time.Time `json:"deletionTimestamp"`
+				Name                       string     `json:"name"`
+				UID                        string     `json:"uid"`
+				CreationTimestamp          time.Time  `json:"creationTimestamp"`
+				DeletionTimestamp          *time.Time `json:"deletionTimestamp"`
+				DeletionGracePeriodSeconds *int64     `json:"deletionGracePeriodSeconds"`
 			} `json:"metadata"`
 			Spec struct {
 				NodeName string `json:"nodeName"`
@@ -404,10 +405,14 @@ func ReadPods(path string) (map[string]PodInfo, error) {
 	}
 	out := map[string]PodInfo{}
 	for _, it := range list.Items {
-		out[it.Metadata.Name] = PodInfo{
+		pi := PodInfo{
 			Name: it.Metadata.Name, UID: it.Metadata.UID, Node: it.Spec.NodeName, IP: it.Status.PodIP,
 			Terminating: it.Metadata.DeletionTimestamp != nil, Found: true, Created: it.Metadata.CreationTimestamp,
 		}
+		if del, grace := it.Metadata.DeletionTimestamp, it.Metadata.DeletionGracePeriodSeconds; del != nil && grace != nil {
+			pi.DrainStart = del.Add(-time.Duration(*grace) * time.Second)
+		}
+		out[it.Metadata.Name] = pi
 	}
 	return out, nil
 }

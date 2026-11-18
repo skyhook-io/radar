@@ -11,8 +11,9 @@
 #             fixture's SandboxConfigs. Keeps the CRDs.
 #   purge     down, then also delete the Substrate CRDs if this fixture
 #             installed them (labelled).
-#   restart   Restart only the fake API (refreshes "N minutes ago" times and
-#             re-reads Pod UIDs); leaves the cluster alone.
+#   restart   Restart only the fake API: re-reads Pod UIDs, and writes the
+#             crashed actors' last lines into the worker Pods once they are
+#             old enough (it says how long is left). Leaves the cluster alone.
 #   status    Is the API up, what does it serve, which fixtures exist.
 #   fault     unavailable | unauthenticated | latency <dur> | clear
 #             Inject a fault into every call without restarting.
@@ -350,6 +351,6 @@ case "$CMD" in
   restart) cmd_restart ;;
   status) cmd_status ;;
   fault) cmd_fault ${ARGS[@]+"${ARGS[@]}"} ;;
-  help|-h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) fail "unknown command $CMD (try help)" ;;
 esac

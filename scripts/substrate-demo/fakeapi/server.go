@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -77,13 +78,27 @@ func (f Faults) current() Faults {
 	return out
 }
 
+// rebuildEvery bounds how far the served times trail the clock.
+const rebuildEvery = 5 * time.Second
+
 type Server struct {
 	ateapi.UnimplementedControlServer
-	d      *Dataset
 	tokens map[string]*principal
 	faults Faults
 	calls  atomic.Int64
 
+	// build makes the dataset as of a time. Every read is served from one
+	// built at most rebuildEvery ago, so an age reads the same however long
+	// the API has run; only the crash clock (gen.lag) advances.
+	build   func(now time.Time) *Dataset
+	mu      sync.Mutex
+	view    *view
+	builtAt time.Time
+}
+
+// view is one built dataset and its lookups.
+type view struct {
+	d            *Dataset
 	actorsByKey  map[string]*ateapi.Actor
 	actorsBySpc  map[string][]*ateapi.Actor
 	tmplByKey    map[string]*ateapi.ActorTemplate
@@ -94,13 +109,31 @@ type Server struct {
 	atespaceByNm map[string]*ateapi.Atespace
 }
 
-func NewServer(d *Dataset, globalToken, limitedToken string, faults Faults) *Server {
-	s := &Server{
-		d: d, faults: faults,
+func NewServer(build func(now time.Time) *Dataset, globalToken, limitedToken string, faults Faults) *Server {
+	return &Server{
+		build: build, faults: faults,
 		tokens: map[string]*principal{
 			globalToken:  {id: "system:serviceaccount:ate-system:ate-client", global: true},
 			limitedToken: {id: "demo-atespace-viewer", atespaces: map[string]bool{ScopedAtespaces[0]: true, ScopedAtespaces[1]: true}},
 		},
+	}
+}
+
+// at returns the view to serve now, rebuilding it when it is stale. The
+// dataset is deterministic, so lists and page tokens stay stable across
+// rebuilds.
+func (s *Server) at() *view {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if now := time.Now(); s.view == nil || now.Sub(s.builtAt) >= rebuildEvery {
+		s.view, s.builtAt = newView(s.build(now)), now
+	}
+	return s.view
+}
+
+func newView(d *Dataset) *view {
+	s := &view{
+		d:           d,
 		actorsByKey: map[string]*ateapi.Actor{}, actorsBySpc: map[string][]*ateapi.Actor{},
 		tmplByKey: map[string]*ateapi.ActorTemplate{}, tmplBySpc: map[string][]*ateapi.ActorTemplate{},
 		tagsByKey: map[string]*ateapi.Tag{}, tagsBySpc: map[string][]*ateapi.Tag{},
@@ -269,10 +302,11 @@ func requireGlobal(ctx context.Context, relation, object string) error {
 }
 
 func (s *Server) ListAtespaces(ctx context.Context, req *ateapi.ListAtespacesRequest) (*ateapi.ListAtespacesResponse, error) {
+	v := s.at()
 	if err := requireGlobal(ctx, "can_list_atespaces", "global:root"); err != nil {
 		return nil, err
 	}
-	page, next, err := paginate(s.d.Atespaces, req.GetOptions(), "atespaces")
+	page, next, err := paginate(v.d.Atespaces, req.GetOptions(), "atespaces")
 	if err != nil {
 		return nil, err
 	}
@@ -280,13 +314,14 @@ func (s *Server) ListAtespaces(ctx context.Context, req *ateapi.ListAtespacesReq
 }
 
 func (s *Server) GetAtespace(ctx context.Context, req *ateapi.GetAtespaceRequest) (*ateapi.Atespace, error) {
+	v := s.at()
 	if err := requireRef(req.GetAtespace(), "atespace", false); err != nil {
 		return nil, err
 	}
 	if p := caller(ctx); !p.canRead(req.GetAtespace().GetName()) {
 		return nil, denied(p, "can_get", "atespace:"+req.GetAtespace().GetName())
 	}
-	a, ok := s.atespaceByNm[req.GetAtespace().GetName()]
+	a, ok := v.atespaceByNm[req.GetAtespace().GetName()]
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Atespace %s not found", req.GetAtespace().GetName())
 	}
@@ -294,12 +329,13 @@ func (s *Server) GetAtespace(ctx context.Context, req *ateapi.GetAtespaceRequest
 }
 
 func (s *Server) ListActors(ctx context.Context, req *ateapi.ListActorsRequest) (*ateapi.ListActorsResponse, error) {
+	v := s.at()
 	if err := checkList(ctx, "can_list_actors", req.GetAtespace()); err != nil {
 		return nil, err
 	}
-	items := s.d.Actors
+	items := v.d.Actors
 	if req.GetAtespace() != "" {
-		items = s.actorsBySpc[req.GetAtespace()]
+		items = v.actorsBySpc[req.GetAtespace()]
 	}
 	page, next, err := paginate(items, req.GetOptions(), "actors/"+req.GetAtespace())
 	if err != nil {
@@ -309,6 +345,7 @@ func (s *Server) ListActors(ctx context.Context, req *ateapi.ListActorsRequest) 
 }
 
 func (s *Server) GetActor(ctx context.Context, req *ateapi.GetActorRequest) (*ateapi.Actor, error) {
+	v := s.at()
 	ref := req.GetActor()
 	if err := requireRef(ref, "actor", true); err != nil {
 		return nil, err
@@ -316,7 +353,7 @@ func (s *Server) GetActor(ctx context.Context, req *ateapi.GetActorRequest) (*at
 	if err := checkObject(ctx, "can_get", "actor", ref.GetAtespace(), ref.GetName()); err != nil {
 		return nil, err
 	}
-	a, ok := s.actorsByKey[ref.GetAtespace()+"/"+ref.GetName()]
+	a, ok := v.actorsByKey[ref.GetAtespace()+"/"+ref.GetName()]
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Actor %s/%s not found", ref.GetAtespace(), ref.GetName())
 	}
@@ -324,6 +361,7 @@ func (s *Server) GetActor(ctx context.Context, req *ateapi.GetActorRequest) (*at
 }
 
 func (s *Server) GetActorEgressPolicy(ctx context.Context, req *ateapi.GetActorEgressPolicyRequest) (*ateapi.EgressPolicy, error) {
+	v := s.at()
 	ref := req.GetActor()
 	if err := requireRef(ref, "actor", true); err != nil {
 		return nil, err
@@ -335,10 +373,10 @@ func (s *Server) GetActorEgressPolicy(ctx context.Context, req *ateapi.GetActorE
 		return nil, err
 	}
 	key := ref.GetAtespace() + "/" + ref.GetName()
-	if _, ok := s.actorsByKey[key]; !ok {
+	if _, ok := v.actorsByKey[key]; !ok {
 		return nil, status.Errorf(codes.NotFound, "Actor %s not found", key)
 	}
-	p, ok := s.d.Egress[key]
+	p, ok := v.d.Egress[key]
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "EgressPolicy %s/default not found", key)
 	}
@@ -346,12 +384,13 @@ func (s *Server) GetActorEgressPolicy(ctx context.Context, req *ateapi.GetActorE
 }
 
 func (s *Server) ListActorTemplates(ctx context.Context, req *ateapi.ListActorTemplatesRequest) (*ateapi.ListActorTemplatesResponse, error) {
+	v := s.at()
 	if err := checkList(ctx, "can_list_actor_templates", req.GetAtespace()); err != nil {
 		return nil, err
 	}
-	items := s.d.Templates
+	items := v.d.Templates
 	if req.GetAtespace() != "" {
-		items = s.tmplBySpc[req.GetAtespace()]
+		items = v.tmplBySpc[req.GetAtespace()]
 	}
 	page, next, err := paginate(items, req.GetOptions(), "templates/"+req.GetAtespace())
 	if err != nil {
@@ -361,6 +400,7 @@ func (s *Server) ListActorTemplates(ctx context.Context, req *ateapi.ListActorTe
 }
 
 func (s *Server) GetActorTemplate(ctx context.Context, req *ateapi.GetActorTemplateRequest) (*ateapi.ActorTemplate, error) {
+	v := s.at()
 	ref := req.GetActorTemplate()
 	if err := requireRef(ref, "actor_template", true); err != nil {
 		return nil, err
@@ -368,7 +408,7 @@ func (s *Server) GetActorTemplate(ctx context.Context, req *ateapi.GetActorTempl
 	if err := checkObject(ctx, "can_get", "actor_template", ref.GetAtespace(), ref.GetName()); err != nil {
 		return nil, err
 	}
-	t, ok := s.tmplByKey[ref.GetAtespace()+"/"+ref.GetName()]
+	t, ok := v.tmplByKey[ref.GetAtespace()+"/"+ref.GetName()]
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "ActorTemplate %s/%s not found", ref.GetAtespace(), ref.GetName())
 	}
@@ -376,12 +416,13 @@ func (s *Server) GetActorTemplate(ctx context.Context, req *ateapi.GetActorTempl
 }
 
 func (s *Server) ListTags(ctx context.Context, req *ateapi.ListTagsRequest) (*ateapi.ListTagsResponse, error) {
+	v := s.at()
 	if err := checkList(ctx, "can_list_tags", req.GetAtespace()); err != nil {
 		return nil, err
 	}
-	items := s.d.Tags
+	items := v.d.Tags
 	if req.GetAtespace() != "" {
-		items = s.tagsBySpc[req.GetAtespace()]
+		items = v.tagsBySpc[req.GetAtespace()]
 	}
 	page, next, err := paginate(items, req.GetOptions(), "tags/"+req.GetAtespace())
 	if err != nil {
@@ -391,6 +432,7 @@ func (s *Server) ListTags(ctx context.Context, req *ateapi.ListTagsRequest) (*at
 }
 
 func (s *Server) GetTag(ctx context.Context, req *ateapi.GetTagRequest) (*ateapi.Tag, error) {
+	v := s.at()
 	ref := req.GetTag()
 	if err := requireRef(ref, "tag", true); err != nil {
 		return nil, err
@@ -398,7 +440,7 @@ func (s *Server) GetTag(ctx context.Context, req *ateapi.GetTagRequest) (*ateapi
 	if err := checkObject(ctx, "can_get", "tag", ref.GetAtespace(), ref.GetName()); err != nil {
 		return nil, err
 	}
-	t, ok := s.tagsByKey[ref.GetAtespace()+"/"+ref.GetName()]
+	t, ok := v.tagsByKey[ref.GetAtespace()+"/"+ref.GetName()]
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Tag %s/%s not found", ref.GetAtespace(), ref.GetName())
 	}
@@ -406,10 +448,11 @@ func (s *Server) GetTag(ctx context.Context, req *ateapi.GetTagRequest) (*ateapi
 }
 
 func (s *Server) ListWorkers(ctx context.Context, req *ateapi.ListWorkersRequest) (*ateapi.ListWorkersResponse, error) {
+	v := s.at()
 	if err := requireGlobal(ctx, "can_list_workers", "global:root"); err != nil {
 		return nil, err
 	}
-	page, next, err := paginate(s.d.Workers, req.GetOptions(), "workers")
+	page, next, err := paginate(v.d.Workers, req.GetOptions(), "workers")
 	if err != nil {
 		return nil, err
 	}
@@ -417,13 +460,14 @@ func (s *Server) ListWorkers(ctx context.Context, req *ateapi.ListWorkersRequest
 }
 
 func (s *Server) GetWorker(ctx context.Context, req *ateapi.GetWorkerRequest) (*ateapi.Worker, error) {
+	v := s.at()
 	if err := requireRef(req.GetWorker(), "worker", false); err != nil {
 		return nil, err
 	}
 	if err := requireGlobal(ctx, "can_get", "worker:"+req.GetWorker().GetName()); err != nil {
 		return nil, err
 	}
-	w, ok := s.workerByName[req.GetWorker().GetName()]
+	w, ok := v.workerByName[req.GetWorker().GetName()]
 	if !ok {
 		return nil, status.Errorf(codes.NotFound, "Worker %s not found", req.GetWorker().GetName())
 	}
@@ -431,6 +475,7 @@ func (s *Server) GetWorker(ctx context.Context, req *ateapi.GetWorkerRequest) (*
 }
 
 func (s *Server) ListWorkerActorAssignments(ctx context.Context, req *ateapi.ListWorkerActorAssignmentsRequest) (*ateapi.ListWorkerActorAssignmentsResponse, error) {
+	v := s.at()
 	if err := requireRef(req.GetWorker(), "worker", false); err != nil {
 		return nil, err
 	}
@@ -438,10 +483,10 @@ func (s *Server) ListWorkerActorAssignments(ctx context.Context, req *ateapi.Lis
 	if err := requireGlobal(ctx, "can_list_actor_assignments", "worker:"+name); err != nil {
 		return nil, err
 	}
-	if _, ok := s.workerByName[name]; !ok {
+	if _, ok := v.workerByName[name]; !ok {
 		return nil, status.Errorf(codes.NotFound, "Worker %s not found", name)
 	}
-	page, next, err := paginate(s.d.Assignments[name], req.GetOptions(), "assignments/"+name)
+	page, next, err := paginate(v.d.Assignments[name], req.GetOptions(), "assignments/"+name)
 	if err != nil {
 		return nil, err
 	}

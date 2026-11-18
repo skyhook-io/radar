@@ -144,9 +144,10 @@ func (g *gen) fillStatus(r *actorRec) {
 		}
 		st.LastAssignedGeneration = generation + 1
 	case ateapi.ActorState_ACTOR_STATE_CRASHED, ateapi.ActorState_ACTOR_STATE_REVERTING:
-		st.Crash = &ateapi.ActorCrash{Message: r.sp.crash, CrashTime: g.ts(r.sp.crashAge)}
+		crashAge := g.onCrashClock(r.sp.crashAge)
+		st.Crash = &ateapi.ActorCrash{Message: r.sp.crash, CrashTime: g.ts(crashAge)}
 		if state == ateapi.ActorState_ACTOR_STATE_CRASHED {
-			age = r.sp.crashAge
+			age = crashAge
 		}
 		if generation > 0 {
 			st.Snapshots = []*ateapi.Snapshot{g.snapshot(r, generation, fid, node, completed, "current")}
@@ -174,11 +175,11 @@ func (g *gen) fillStatus(r *actorRec) {
 		case generation == 0:
 			age = g.start.Sub(a.Metadata.CreateTime.AsTime())
 		case t.atespace+"/"+a.Metadata.Name == stuckUpload:
-			age = 52 * time.Minute
+			age = stuckUploadAge
 			st.Snapshots = []*ateapi.Snapshot{g.snapshot(r, generation, fid, g.nodes[0], pending, "current")}
 			st.AssignedNode = g.nodes[0]
 		default:
-			roll := g.rng.IntN(100)
+			roll := g.ages.IntN(100)
 			switch {
 			case roll < 2:
 				age = g.between(20*time.Second, 4*time.Minute)
@@ -230,7 +231,14 @@ func (g *gen) buildWorker(p *workerPlan) *ateapi.Worker {
 	pool := poolByName(p.pool)
 	// A Worker is named after its Pod's UID, so it cannot predate it.
 	createdAge := min(p.createdAge, p.podAge(g.start))
-	stateAge := min(p.stateAge, createdAge)
+	stateAge := p.stateAge
+	if p.incident {
+		stateAge = g.onCrashClock(stateAge)
+	}
+	if drain := p.drainAge(g.start); drain > 0 {
+		stateAge = drain
+	}
+	stateAge = min(stateAge, createdAge)
 	var labels map[string]string
 	if len(pool.labels) > 0 {
 		labels = maps.Clone(pool.labels)
@@ -317,9 +325,11 @@ func buildTemplate(g *gen, t tmplSpec, uid string) *ateapi.ActorTemplate {
 		tmpl.Metadata.UpdateTime = g.ts(t.goldenAge)
 		tmpl.Metadata.Version = 7
 	case goldenFailed:
-		gs.SnapshotTime = g.ts(t.goldenAge - 3*time.Minute)
+		// Its golden actor crashed, so the failure is on the crash clock.
+		failed := g.onCrashClock(t.goldenAge)
+		gs.SnapshotTime = g.ts(failed - 3*time.Minute)
 		gs.ErrorMessage = "GoldenActorCrashed: golden actor crashed before its snapshot was taken: " + msgOOM
-		tmpl.Metadata.UpdateTime = g.ts(t.goldenAge)
+		tmpl.Metadata.UpdateTime = g.ts(failed)
 		tmpl.Metadata.Version = 6
 	case goldenDisabled:
 		tmpl.SnapshotConfig.GoldenSnapshotConfig = &ateapi.GoldenSnapshotConfig{Mode: ateapi.GoldenSnapshotMode_GOLDEN_SNAPSHOT_MODE_DISABLED}
@@ -423,6 +433,19 @@ func egressFor(r *actorRec) *ateapi.EgressPolicy {
 		},
 		Rules: rules,
 	}
+}
+
+// goldenWarmup is how long before its golden actor crashed the template
+// update that started the warm-up came.
+const goldenWarmup = 4 * time.Minute
+
+// drainAge is how long ago the worker's Pod began terminating, the drain's
+// start; zero when the Pod is not Terminating or was not read.
+func (p *workerPlan) drainAge(start time.Time) time.Duration {
+	if p.podInfo.DrainStart.IsZero() {
+		return 0
+	}
+	return max(start.Sub(p.podInfo.DrainStart), 0)
 }
 
 // podAge caps scenario ages tied to this worker: nothing on a Pod is older
