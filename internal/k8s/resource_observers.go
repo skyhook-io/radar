@@ -18,10 +18,11 @@ import (
 //     predicate) and take locks only for what passes.
 //   - Hand slow work (network calls, discovery, anything that can block) to
 //     a worker of your own.
-//   - source is the clientset the reporting cache was built from. Informer
-//     shutdown on a context switch is asynchronous, so a late callback can
-//     belong to a cache that has since been replaced; an observer holding its
-//     own clientset compares against source to ignore it.
+//   - source is the request clientset (GetClient()) of the connection the
+//     reporting cache belongs to, not the informer clientset the cache lists
+//     through. Informer shutdown on a context switch is asynchronous, so a
+//     late callback can belong to a cache that has since been replaced; an
+//     observer holding GetClient() compares against source to ignore it.
 //   - It sees typed resources only, and not core Events, which take the
 //     cache's separate OnEventChange path. The dynamic (CRD) cache does not
 //     feed these observers.

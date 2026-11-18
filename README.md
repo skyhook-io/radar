@@ -3,7 +3,7 @@
 **The missing open-source Kubernetes UI, with a built-in MCP server for your AI agent.**
 <br>Single binary. No account required. Free forever.
 
-🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Benchmarks](https://radarhq.io/benchmark) · [Releases](https://github.com/skyhook-io/radar/releases)
+🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Benchmarks](https://radarhq.io/benchmark) · [Releases](https://github.com/skyhook-io/radar/releases) · [Slack](https://radarhq.io/slack)
 
 Radar shows you what's broken in a Kubernetes cluster, why, and what changed: issues, topology, a timeline of events and resource changes, Helm, GitOps, traffic, audit, and upgrade impact. Your AI agent reads the same cluster data and relationships through Radar's MCP server, and Radar can run an AI investigation for you with the agent CLI you already use. It runs on your laptop as a `kubectl` plugin or desktop app, or in-cluster with Helm.
 
@@ -14,7 +14,7 @@ Radar shows you what's broken in a Kubernetes cluster, why, and what changed: is
 [![Release](https://img.shields.io/github/v/release/skyhook-io/radar?logo=github)](https://github.com/skyhook-io/radar/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/skyhook-io/radar/total?logo=github)](https://github.com/skyhook-io/radar/releases)
 [![Helm repo downloads](https://img.shields.io/github/downloads/skyhook-io/helm-charts/total?logo=helm&label=Helm%20repo%20downloads)](https://artifacthub.io/packages/helm/skyhook/radar)
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://radarhq.io/community/chat)
+[![Slack](https://img.shields.io/badge/Slack-Join%20the%20community-4A154B?logo=slack&logoColor=white)](https://radarhq.io/slack)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 <details>
@@ -28,6 +28,7 @@ Radar shows you what's broken in a Kubernetes cluster, why, and what changed: is
 - [Supported Resources & Integrations](#supported-resources--integrations)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Security](#security)
+- [Community and support](#community-and-support)
 - [Development](#development) · [Contributing](#contributing)
 
 </details>
@@ -499,6 +500,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **[NATS](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | JetStream consumer backlog, acknowledgment-pending and redelivery counters - **local collection** |
 | **Velero** | Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation |
 | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore |
+| **CSI Volume Snapshots** | [VolumeSnapshot, VolumeSnapshotContent and VolumeSnapshotClass](docs/integrations.md#csi-volume-snapshots): readiness, errors, restore size, source, binding and deletion policy |
 | **Secrets Store CSI Driver** | [SecretProviderClass and Pod mounts](docs/integrations.md#secrets-store-csi-driver): mount state, object versions and synced Secrets in the Pod drawer |
 | **[Vault](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | Initialization, seal and standby state - **local collection** |
 | **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler, Database, Publication, Subscription, ImageCatalog, ClusterImageCatalog, ObjectStore — plus [dedicated views](docs/cnpg.md) for fleet, protection and declaration triage |
@@ -515,6 +517,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Batch** | LeaderWorkerSet, JobSet, Volcano (Job/Queue/PodGroup/JobFlow/JobTemplate), Kubeflow (PyTorchJob/TFJob/MPIJob/TrainJob) — basic |
 | **KAI Scheduler** | Queue, PodGroup — basic |
 | **Model serving** | KAITO (Workspace, RAGEngine), NVIDIA NIM (NIMService/NIMCache/NIMPipeline), AMD GPU Operator (DeviceConfig) — basic |
+| **Agent runtimes** | [Agent Sandbox and Agent Substrate](docs/integrations.md#agent-runtimes-agent-sandbox-and-agent-substrate): sandbox and WorkerPool status read the way their controllers mean it, Issues for stuck sandboxes and broken pools |
 | **Cost (OpenCost / Kubecost)** | Namespace/workload/node cost via compatible Prometheus metrics or the Kubecost 3 Aggregator (no CRDs) |
 | **CRDs** | Any Custom Resource Definition in your cluster (auto-discovered) |
 
@@ -536,6 +539,14 @@ Radar is keyboard-first: `?` lists every shortcut, `⌘K` opens the command pale
 ## Security
 
 Radar reads your cluster through your own credentials and keeps cluster data local. It does not upload manifests, logs, events, metrics, or resource data to Skyhook, and it does not require an account, agent, or cloud backend. When you connect an AI agent or run an AI investigation, what Radar returns goes to that agent and its model provider. Found a vulnerability? Please report it privately to **security@skyhook.io** — see [SECURITY.md](SECURITY.md) for the process and response timelines.
+
+---
+
+## Community and support
+
+- **[Slack](https://radarhq.io/slack)** is the fastest way to get help. Ask in `#radar-help`, share feedback, and talk Kubernetes with the Radar team and other users.
+- **[GitHub Discussions](https://github.com/skyhook-io/radar/discussions)** for ideas and longer questions you want others to find later.
+- **[GitHub Issues](https://github.com/skyhook-io/radar/issues)** for bugs and feature requests.
 
 ---
 
@@ -562,7 +573,7 @@ make watch-backend
 
 Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details on the development workflow, pull request process, and coding standards.
 
-Questions or ideas? [GitHub Discussions](https://github.com/skyhook-io/radar/discussions) is the place — or come say hi at [radarhq.io/community](https://radarhq.io/community).
+Questions about a change? Ask in [Slack](https://radarhq.io/slack) before you start, or open a [Discussion](https://github.com/skyhook-io/radar/discussions).
 
 ---
 

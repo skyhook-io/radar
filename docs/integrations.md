@@ -1114,6 +1114,49 @@ Tested with driver 1.6.1 and the HashiCorp Vault provider (chart 0.34.1) on kind
 
 ---
 
+## CSI Volume Snapshots
+
+[CSI volume snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/) (`snapshot.storage.k8s.io`) are served by the external-snapshotter CRDs and its snapshot controller, and taken by each CSI driver's `csi-snapshotter` sidecar. A VolumeSnapshot (namespaced) is bound to a VolumeSnapshotContent (cluster-scoped), which records the snapshot on the storage system; a VolumeSnapshotClass (cluster-scoped) names the driver and deletion policy.
+
+### What Radar Shows
+
+**VolumeSnapshot:** status, ready to use, the source PVC or, for a pre-provisioned snapshot, the content it names, the snapshot class, the bound content (`status.boundVolumeSnapshotContentName`, the observed binding rather than the requested source), restore size, when the snapshot was taken, and the controller's error. Source PVC, class and content are links.
+
+**VolumeSnapshotContent:** status, the VolumeSnapshot it names (marked "not bound yet" until the controller records the snapshot's UID), driver, deletion policy and what it means, class, the source volume handle or pre-provisioned snapshot handle, the reported snapshot handle, restore size (reported in bytes), creation time (reported in nanoseconds) and the error.
+
+**VolumeSnapshotClass:** driver, deletion policy, whether it is the default class for its driver (`snapshot.storage.kubernetes.io/is-default-class`) and its parameters. CSI parameters name credential Secrets; they do not hold their values.
+
+All three kinds have curated table columns. Status reads:
+
+| Status | Source |
+|---|---|
+| Ready | `status.readyToUse: true` |
+| Error | `status.error` while not ready. The snapshot controller keeps retrying and clears the error once the snapshot is ready, so an error never outranks `readyToUse` |
+| Not ready | `status.readyToUse: false` with no error, for example while the driver uploads the snapshot |
+| Pending | A VolumeSnapshot not yet bound to a content, or a content with no status (its driver's sidecar has not processed it) |
+| Readiness unknown | Bound, but no `readyToUse` reported |
+| Terminating | `metadata.deletionTimestamp` is set |
+
+A missing restore size or creation time reads "Not reported", never zero. Ready means the CSI driver can restore a volume from the snapshot; it does not establish application consistency or that a restore was ever tested. Not every snapshot has a source PVC: a pre-provisioned snapshot names an existing content instead.
+
+A VolumeSnapshot with `status.error` that is not ready to use produces one warning in Issues (including the API and MCP), `VolumeSnapshotError`, quoting the controller's message, which the API says should not contain sensitive information. Its onset is the error's own time. A VolumeSnapshotContent produces no separate Issue: the controller copies its error onto the bound snapshot, and the content drawer shows it. MCP list summaries carry the same status, readiness, source, driver, deletion policy and restore size.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| VolumeSnapshot | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+| VolumeSnapshotContent | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+| VolumeSnapshotClass | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+
+Collection is on by default in the Helm chart (`rbac.crdGroups.volumeSnapshots`) and reads only these three kinds. Radar Cloud's default integration-read role grants all three, as the cluster read already grants PersistentVolumes and StorageClasses; see [the default read policy](cloud-rbac-baseline.md).
+
+Checked against snapshot-controller v8.6.0 and the csi-hostpath driver on kind: ready dynamic snapshots with Delete and Retain classes, a missing class, a missing PVC, an unbound PVC, and pre-provisioned contents with a valid and an unknown snapshot handle.
+
+Not covered: topology and Related Resources edges, VolumeGroupSnapshots, PVCs restored from a snapshot (`dataSource`), and snapshot creation, deletion or restore actions.
+
+---
+
 ## Strimzi Kafka connectors
 
 Connector details separate desired settings from the operator-reported connector and task states, show worker addresses and optional automatic-restart history, and link to KafkaConnect. Failed tasks override an otherwise Ready badge; stale, paused or incomplete observations never establish health. The view reads the existing custom resource without contacting Kafka Connect or requiring application credentials.
@@ -2174,6 +2217,36 @@ Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share ki
 | DeviceConfig (AMD GPU Operator) | `amd.com/v1alpha1` | Ready condition + component DaemonSet rollout counts |
 
 ---
+
+## Agent runtimes: Agent Sandbox and Agent Substrate
+
+Two projects run AI agents on Kubernetes, and Radar reads both: [Agent Sandbox](https://github.com/kubernetes-sigs/agent-sandbox) (Kubernetes SIG Apps) gives each agent its own sandboxed Pod, and [Agent Substrate](https://github.com/agent-substrate/substrate) (CNCF Sandbox) runs many mostly idle agents on a small pool of warm worker Pods. Radar reads their status the way their controllers mean it, with status badges, table columns, status filters, Issues and sidebar grouping; drawers use the standard spec/status renderer.
+
+| Resource | Group | Status source |
+|----------|-------|---------------|
+| Sandbox | `agents.x-k8s.io` (v1beta1) | `Ready` condition and its reason; `Suspended` while `spec.operatingMode` is Suspended |
+| SandboxClaim | `extensions.agents.x-k8s.io` (v1beta1) | `Ready` condition and its reason |
+| SandboxWarmPool | `extensions.agents.x-k8s.io` (v1beta1) | ready versus desired sandboxes; `observedGeneration` |
+| SandboxTemplate | `extensions.agents.x-k8s.io` (v1beta1) | — |
+| WorkerPool | `ate.dev` (v1) | per-class `Resolved` condition in `status.sandboxClasses[]`; ready versus desired workers |
+| SandboxConfig, CSIDriverConfig | `ate.dev` (v1, cluster-scoped) | — (printer columns) |
+
+**Ready=False is not always a failure.** Agent Sandbox reports every non-running state as `Ready=False`, so Radar reads the reason, in the controller's own order (reconcile errors first, then the suspension, then Pod state). One reading in `pkg/health` serves Issues and AI summaries; the UI mirrors it, and `pkg/health/testdata/agent_sandbox.json` pins both:
+
+- **Settled** (neutral, never an Issue): Suspended once the `Suspended` condition says the Pod is gone, Expired (`SandboxExpired`, a claim's `ClaimExpired`), Finished (`PodSucceeded`).
+- **In progress** (amber): Suspending (`SandboxSuspended` while the Pod still terminates), Provisioning (`DependenciesNotReady`, a claim's `SandboxNotReady` and `SandboxCreatePending`), Binding (`AdoptionConflict`), Terminating, the scheduler's reason when `PodScheduled` is False (orange), and Updating when the condition was recorded for an older generation. These raise no Issue for 30 minutes; one that lasts longer is reported, because a sandbox whose Pod or Service is never created has no other finding to fall back on. The clock starts at the resume when the `Suspended` condition records one, since Kubernetes keeps Ready's transition time across a reason change. A suspension has no reliable start time, so Suspending never raises an Issue of its own; a Pod that never terminates is reported as a stuck deletion.
+- **Attention** (orange, an Issue): `ReconcilerError` (the controller retries it), and **Suspension blocked** (Issue reason `PodNotOwned`) when a suspension is refused because the Pod the controller tracks for the Sandbox is not owned by it. Ready keeps its ordinary suspension reason then, so Radar reads the refusal from the `Suspended` condition, adds what unblocks it (remove that Pod, the one its `agents.x-k8s.io/pod-name` annotation names or else the one with its own name, or recreate the Sandbox under another name), and reports it at once: nothing is being torn down, so waiting changes nothing.
+- **Failed** (red, an Issue): a hard container failure the controller names in its message (`ImagePullBackOff`, `CrashLoopBackOff` and the like), `PodFailed`, `InvalidConfiguration`, `MultiplePods`, and a claim's `TemplateNotFound`, `WarmPoolNotFound`, `InvalidMetadata`, `EnvVarsInjectionRejected`, `VolumeClaimTemplatesError` and `SandboxMissing`.
+
+A claim forwards its Sandbox's reason; an in-progress or settled forwarded reason is left for the Sandbox to report, so it raises no Issue on the claim.
+
+**WorkerPool.** Its only condition, `Resolved`, sits per sandbox class in `status.sandboxClasses[]`, where Radar's generic condition handling never looks. A class that does not resolve to a usable SandboxConfig (`SandboxConfigNotFound`, `SandboxConfigDeleting`, `SandboxClassMismatch`, `DefaultConfigNotFound`) is an Issue, since Substrate keeps ready workers running on the last resolved config but cannot start new ones. Severity follows one rule: **critical** (red) when workers are wanted and none is ready; otherwise a warning (orange). A condition recorded for an older generation is reported as such rather than trusted, and a spec edit is not read as recovery. `pkg/health` holds this reading for AI summaries, and `pkg/health/testdata/substrate_workerpool.json` pins the UI to it. Workers that are not ready are left to the worker Deployment the pool owns. A Deployment that is never created has nothing to report it, and Substrate's controller only logs a rejected create (an admission policy, or a ServiceAccount or Deployment it may not create), so Radar raises a critical `DeploymentNotCreated` Issue when a pool wants workers, every class has resolved on the current generation, and 10 minutes later there is still no `status.selector` and no worker Pod. The pool's status then reads **Provisioning stalled** (red), from the same rule in `pkg/health`, so the badge and the Issue agree. A SandboxConfig stuck deleting because a pool still uses it is attributed to `ate-controller` (finalizer `sandboxconfig.ate.dev/workerpool-protection`).
+
+**Worker Pods.** A Pod labelled `ate.dev/worker-pool` gets a note in its drawer: Substrate places actors on it in turn, so its logs, metrics and restarts are shared by every actor it has hosted.
+
+**Not covered:** Substrate's actors, actor templates and worker assignments live in Substrate's own control plane (PostgreSQL behind a gRPC API), not in Kubernetes, so Radar does not see them. kagent's `api.kagent.dev` kinds are grouped in the sidebar but otherwise use generic discovery; the chart does not collect them by default. The drawer's conditions list shows each condition as recorded, so a settled sandbox's `Ready=False` keeps its red mark there. Topology shows the generic owner edges only (WorkerPool → Deployment → Pods; Sandbox → Pod).
+
+**Chart RBAC.** `rbac.crdGroups.agentSandbox` (`agents.x-k8s.io`, `extensions.agents.x-k8s.io`) and `rbac.crdGroups.agentSubstrate` (`ate.dev`) grant read access and are on by default. Sandboxes and SandboxTemplates carry Pod templates, which can hold inline environment values; with authentication on, users see them in namespaces they can read, like the Pods and Deployments there.
 
 ## Local runtime evidence: RabbitMQ, NATS and Vault
 

@@ -1,6 +1,8 @@
 package k8score
 
 import (
+	"slices"
+
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -56,21 +58,33 @@ func isEventResource(gvr schema.GroupVersionResource) bool {
 }
 
 // ReadableDependents returns the objects of resource in namespaces whose owner
-// references name uid, under ReadableObjects' rules: ok is false unless each
-// namespace's store is complete now, and nil namespaces means the kind's whole
-// scope. The objects are the cached ones: callers must not modify or keep
-// them.
+// references name uid, under ReadableIndexedObjects' rules.
 func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string, uid string) ([]apiruntime.Object, bool) {
+	return rc.ReadableIndexedObjects(resource, namespaces, OwnerUIDIndex, uid)
+}
+
+// ReadableIndexedObjects returns the objects of resource in namespaces that
+// index files under any of keys, under ReadableObjects' rules: ok is false
+// unless each namespace's store is complete now, and nil namespaces means the
+// kind's whole scope. An object filed under several keys is returned once.
+// With an index, no keys read nothing; an empty index reads every object.
+// For one of k8score's own indexes each store is
+// read once for all the keys; any other index, such as the namespace index,
+// is read key by key. ok is also false when the stores lack the index. The
+// objects are the cached ones: callers must not modify or keep them.
+func (rc *ResourceCache) ReadableIndexedObjects(resource string, namespaces []string, index string, keys ...string) ([]apiruntime.Object, bool) {
 	if rc == nil || !rc.isEnabled(resource) || rc.kindStores[resource] == nil {
 		return nil, false
 	}
+	keys = slices.Compact(slices.Sorted(slices.Values(keys)))
+	read := func(indexer cache.Indexer) ([]any, error) { return readIndex(indexer, index, keys) }
 	var hits []any
 	if namespaces == nil {
 		for _, st := range rc.kindStores[resource] {
 			if !st.synced() {
 				return nil, false
 			}
-			items, err := st.indexer.ByIndex(OwnerUIDIndex, uid)
+			items, err := read(st.indexer)
 			if err != nil {
 				return nil, false
 			}
@@ -80,7 +94,7 @@ func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string
 		covered := rc.KindNamespaces(resource)
 		isCovered := namespaceSet(covered)
 		wanted := namespaceSet(namespaces)
-		read := map[cache.Indexer]bool{}
+		seen := map[cache.Indexer]bool{}
 		for _, namespace := range namespaces {
 			if covered != nil && !isCovered[namespace] {
 				return nil, false
@@ -89,11 +103,11 @@ func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string
 			if !ok || !st.synced() {
 				return nil, false
 			}
-			if read[st.indexer] {
+			if seen[st.indexer] {
 				continue
 			}
-			read[st.indexer] = true
-			items, err := st.indexer.ByIndex(OwnerUIDIndex, uid)
+			seen[st.indexer] = true
+			items, err := read(st.indexer)
 			if err != nil {
 				return nil, false
 			}
@@ -113,6 +127,41 @@ func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string
 	return out, true
 }
 
+// readIndex reads the objects indexer files under any of keys, which are
+// sorted and distinct, each once; an empty index reads every object. One of k8score's own indexes answers every
+// key from one hold of the store's lock; any other is read key by key.
+func readIndex(indexer cache.Indexer, index string, keys []string) ([]any, error) {
+	switch {
+	case index == "":
+		return indexer.List(), nil
+	case len(keys) == 0:
+		return nil, nil
+	case len(keys) == 1:
+		return indexer.ByIndex(index, keys[0])
+	case multiKeyIndexes[index]:
+		return indexer.Index(index, indexQuery(keys))
+	}
+	var items []any
+	seen := map[string]bool{}
+	for _, key := range keys {
+		found, err := indexer.ByIndex(index, key)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range found {
+			if k, err := cache.MetaNamespaceKeyFunc(item); err == nil && !seen[k] {
+				seen[k] = true
+				items = append(items, item)
+			}
+		}
+	}
+	return items, nil
+}
+
+// multiKeyIndexes are k8score's own indexes, whose index functions answer an
+// indexQuery.
+var multiKeyIndexes = map[string]bool{OwnerUIDIndex: true, GitOpsMembersIndex: true, KueueQueueIndex: true}
+
 // indexQuery is a read of keys from one of k8score's indexes: their index
 // functions answer it with the keys themselves, so Indexer.Index returns the
 // objects filed under any of them from one hold of the store's lock.
@@ -121,10 +170,12 @@ type indexQuery []string
 // ReadableIndexed returns the objects of gvr in namespace that index holds
 // under any of keys — for OwnerUIDIndex, those whose owner references name one
 // of the UIDs — from the informers serving namespace now, under
-// ReadableObject's rules. Each informer's store is read once for all the keys,
-// so an object that moves from one key to another during the read is found
-// under one of them, and an object filed under several is returned once.
-// Several keys need one of k8score's own indexes. namespace "" reads only a
+// ReadableObject's rules. An object filed under several keys is returned
+// once. With an index, no keys read nothing; an empty index reads every
+// object. For one of k8score's own indexes each
+// informer's store is read once for all the keys, so an object that moves
+// from one key to another during the read is found under one of them; any
+// other index, such as the namespace index, is read key by key. namespace "" reads only a
 // cluster-wide informer, which holds every namespace of a namespaced
 // resource. ok is also false when the serving informers lack the index. The
 // objects are the cached ones: callers must not modify or keep them.
@@ -133,14 +184,9 @@ func (d *DynamicResourceCache) ReadableIndexed(gvr schema.GroupVersionResource, 
 	if !ok {
 		return nil, false
 	}
+	keys = slices.Compact(slices.Sorted(slices.Values(keys)))
 	for _, e := range entries {
-		var items []any
-		var err error
-		if len(keys) == 1 {
-			items, err = e.informer.GetIndexer().ByIndex(index, keys[0])
-		} else {
-			items, err = e.informer.GetIndexer().Index(index, indexQuery(keys))
-		}
+		items, err := readIndex(e.informer.GetIndexer(), index, keys)
 		if err != nil {
 			return nil, false
 		}
