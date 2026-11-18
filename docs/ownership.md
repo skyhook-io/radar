@@ -83,9 +83,10 @@ test pins every activation absent from the graph's cold listing, including targe
 
 ## Beyond ownership: other relations
 
-`pkg/relations` answers the relations that aren't ownership or management from the same caches, through the same
-session, `Access` and gaps: a `relations.Session` is an ownership session that also reads index lookups (`Indexed`)
-and lends cached objects (`Borrow`), which the cache source implements.
+`pkg/relations` answers every relation that isn't an owner reference or a GitOps member list, including management
+declared by spec, status or labels, from the same caches, through the same session, `Access` and gaps: a
+`relations.Session` is an ownership session that also reads index lookups (`Indexed`) and lends cached objects
+(`Borrow`), which the cache source implements.
 
 A **family** (`family.go`) is one way objects name others: the kinds that declare (each optionally narrowed to the
 target kinds it can declare), the kinds a declaration can name, and a function that visits what an object declares
@@ -151,7 +152,14 @@ The families so far:
 | `Storage` | PersistentVolumeClaims → their PersistentVolume and StorageClass; PersistentVolumes → their claim and StorageClass | `status_families.go` |
 | `MachineNodes` | Karpenter NodeClaims and Cluster API Machines → the Node their status records | `status_families.go` |
 | `AnalysisRuns` | Argo Rollouts → the AnalysisRuns their status points at | `status_families.go` |
+| `FluxHelmOrigins` | Origin labels on Deployment, Service, StatefulSet, DaemonSet, Job, CronJob and Rollout → Flux HelmRelease; the dark projection uses these only for local releases with no readable inventory | `management_families.go` |
+| `ArgoPodWorkflows` | Pods → Argo Workflow through the workflow label, preserving the graph’s label-only management path | `management_families.go` |
+| `ArgoWorkflowCronWorkflows` | Argo Workflow → CronWorkflow, preferring the controller reference to the cron-workflow label fallback | `management_families.go` |
 | `SealedSecrets` | Bitnami SealedSecrets → the Secret of their own name they produce | `status_families.go` |
+
+`CertificateRoutes` (`compositions.go`) joins a Certificate’s declared output Secret coordinates to Traefik routes and Contour proxies declaring the same Secret. Both endpoints are checked under the caller’s access; the logical Secret is never read or required to exist. The dark projection feeds Certificate `Consumers` and route `ConfigRefs`.
+
+`SealedSecretConsumers` uses the same composition over the SealedSecret’s own namespace/name and `ConfigReferences` declarations, in both directions. It feeds SealedSecret `Consumers` and consumer `ConfigRefs` even when the Secret is absent, uncollected or denied. Ordinary `Referrers` still requires a held, readable target.
 
 A **selector family** (`selectors.go`, `selector_families.go`) is one way objects choose others by labels: the kinds
 that select and how each reads its selector, and the kinds that can be chosen and how a selector sees each (a
@@ -176,6 +184,10 @@ Extractors live in `pkg/configrefs`, and the topology builder calls the same one
 families read each reference's fields the same way. Resolution can still differ: topology lists one Traefik group per
 cluster, while a family resolves each reference through its candidates, so on a cluster serving both groups a
 Middleware only in `traefik.containo.us` is a family's answer but not drawn.
+
+Each declared, selector and composition family carries its Related Resources `Projection` disposition beside its extraction rule. It names the fields in both declaration directions and the graph encoding, or explains the direct read / intentional non-projection. `relations_answer.go` generates its edge maps from these declarations. `TestEveryFamilyProjectsExactlyItsDeclaredFields` projects one isolated synthetic edge for every supported kind pair and checks the exact fields after ownership; legacy `ManagedBy` and ownership coverage are checked separately.
+
+The independent 72-family cutover inventory is `pkg/topology/testdata/relationship-family-inventory.tsv`. Each direction names registered or direct producers, or a reason it does not project. Its notes preserve the remaining held-target differences for synthetic AnalysisRun and Secret/ConfigMap nodes; these are not parity claims. `TestRelationshipFamilyInventoryHasBothDirections` rejects an unaccounted family or unknown producer.
 
 Families are built here while Related Resources still reads the relationship graph; readers switch to the families in
 one change that also removes the graph.

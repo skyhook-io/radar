@@ -2881,7 +2881,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				},
 			})
 			edges = addArgoWorkflowTemplateEdges(edges, wfID, ns, argoWorkflowTemplateRefsFromWorkflowSpec(wf.Object, "spec"), workflowTemplateIDs, clusterWorkflowTemplateIDs)
-			if owner := argoWorkflowCronOwnerName(wf); owner != "" {
+			if owner := configrefs.ArgoWorkflowCronOwnerName(wf); owner != "" {
 				if cwfID, ok := cronWorkflowIDs[ns+"/"+owner]; ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", cwfID, wfID),
@@ -6817,15 +6817,6 @@ func cronWorkflowScheduleString(cwf *unstructured.Unstructured) string {
 	}
 	schedule, _, _ := unstructured.NestedString(cwf.Object, "spec", "schedule")
 	return schedule
-}
-
-func argoWorkflowCronOwnerName(wf *unstructured.Unstructured) string {
-	for _, ref := range wf.GetOwnerReferences() {
-		if ref.Kind == "CronWorkflow" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "argoproj.io" && ref.Name != "" && ref.Controller != nil && *ref.Controller {
-			return ref.Name
-		}
-	}
-	return wf.GetLabels()["workflows.argoproj.io/cron-workflow"]
 }
 
 type argoWorkflowTemplateRef struct {

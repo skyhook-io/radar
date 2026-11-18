@@ -19,7 +19,8 @@ import (
 // and evaluate on ask.
 type SelectorFamily struct {
 	// Name identifies the family inside Radar, as Family.Name does.
-	Name string
+	Name       string
+	Projection Disposition
 	// Selectors are the kinds that choose, in the order answers list them.
 	Selectors []Selector
 	// Selectables are the kinds that can be chosen, in the order answers
@@ -175,23 +176,24 @@ func (v *View) Selected(f *SelectorFamily, subject resourceid.Ref, fetched runti
 	var s search
 	switch {
 	case selection.AnyNamespace:
-		s = v.newSearch(subject.Namespace, true, &a.Coverage)
+		s = v.newSearch(subject.Namespace, true)
 	case len(selection.Namespaces) > 0:
-		s = v.newSearchIn(selection.Namespaces, &a.Coverage)
+		s = v.newSearchIn(selection.Namespaces)
 	default:
-		s = v.newSearch(subject.Namespace, false, &a.Coverage)
+		s = v.newSearch(subject.Namespace, false)
 	}
 	for _, target := range f.Selectables {
 		if !sel.selects(target.Kind) {
 			continue
 		}
-		s.each(target.Kind, &a.Coverage, func(o IndexedObject) {
+		s.each(target.Kind, &a.Coverage, func(o IndexedObject, own *Coverage) func() {
 			if !selection.chooses(subject.Namespace, o.Ref.Namespace) {
-				return
+				return nil
 			}
-			if cand, ok := v.candidate(target, o, &a.Coverage); ok && v.match(selection, subject, cand, &a.Coverage) {
-				a.Matches = append(a.Matches, o.Ref)
+			if cand, ok := v.candidate(target, o, own); ok && v.match(selection, subject, cand, own) {
+				return func() { a.Matches = append(a.Matches, o.Ref) }
 			}
+			return nil
 		})
 	}
 	v.order(&a, f.Identity, func(gk resourceid.GroupKind) int { return f.selectable(gk) })
@@ -215,19 +217,20 @@ func (v *View) SelectedBy(f *SelectorFamily, subject resourceid.Ref, fetched run
 	if !ok {
 		return a
 	}
-	s := v.newSearch(subject.Namespace, f.CrossNamespace, &a.Coverage)
+	s := v.newSearch(subject.Namespace, f.CrossNamespace)
 	for _, sel := range f.Selectors {
 		if !sel.selects(subject.GroupKind()) {
 			continue
 		}
-		s.each(sel.Kind, &a.Coverage, func(o IndexedObject) {
+		s.each(sel.Kind, &a.Coverage, func(o IndexedObject, own *Coverage) func() {
 			selection, ok, err := sel.Selection(o.Object)
 			if err != nil {
-				a.Coverage.addGap(ownership.Gap{Kind: sel.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
+				own.addGap(ownership.Gap{Kind: sel.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
 			}
-			if ok && selection.chooses(o.Ref.Namespace, subject.Namespace) && v.match(selection, o.Ref, cand, &a.Coverage) {
-				a.Matches = append(a.Matches, o.Ref)
+			if ok && selection.chooses(o.Ref.Namespace, subject.Namespace) && v.match(selection, o.Ref, cand, own) {
+				return func() { a.Matches = append(a.Matches, o.Ref) }
 			}
+			return nil
 		})
 	}
 	v.order(&a, f.Identity, func(gk resourceid.GroupKind) int { return f.selector(gk) })

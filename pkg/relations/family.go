@@ -24,7 +24,8 @@ type Family struct {
 	// Name identifies the family inside Radar: hosts key its coverage and
 	// its edges by it. Answers on the wire are keyed by the field they fill,
 	// not by family, so a rename changes no payload.
-	Name string
+	Name       string
+	Projection Disposition
 	// Sources are the kinds that declare, in the order answers list them.
 	Sources []Source
 	// Targets are the kinds a declaration can name.
@@ -166,8 +167,13 @@ type ReferrersAnswer struct {
 }
 
 // References answers what subject declares in f. fetched is the subject as
-// the host read it, or nil to read it from the cache. A caller who may not
-// read the subject gets nothing.
+// the host read it, read instead of the cache's copy, or nil to read the
+// cache's. A caller who may not read the subject gets nothing.
+//
+// fetched means something else to Referrers and the selector answers, which
+// read the subject from the cache and take fetched only as evidence that it
+// exists. A host that wants every answer to read its copy wraps the session
+// with CaptureSubject.
 func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Object) ReferencesAnswer {
 	var a ReferencesAnswer
 	i := f.source(subject.GroupKind())
@@ -339,7 +345,7 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 	}
 	// A namespaced target's sources are in its namespace; a cluster-scoped
 	// one's, or a CrossNamespace family's, can be anywhere.
-	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace || f.ReferrersIndex != nil, &a.Coverage)
+	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace || f.ReferrersIndex != nil)
 	if f.ReferrersIndex != nil {
 		s.index, s.keys = f.ReferrersIndex.Name, []string{f.ReferrersIndex.Key(subject)}
 	}
@@ -347,22 +353,23 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 		if !source.declares(subject.GroupKind()) {
 			continue
 		}
-		s.each(source.Kind, &a.Coverage, func(o IndexedObject) {
+		s.each(source.Kind, &a.Coverage, func(o IndexedObject, own *Coverage) func() {
 			var paths []string
 			err := f.Declared(o.Object, func(d Declaration) {
 				if slices.Contains(paths, d.Path) || d.Target != subject && !slices.Contains(d.Or, subject) {
 					return
 				}
-				if len(d.Or) == 0 || v.resolvesTo(d.candidates(f, source), subject, &a.Coverage) {
+				if len(d.Or) == 0 || v.resolvesTo(d.candidates(f, source), subject, own) {
 					paths = append(paths, d.Path)
 				}
 			})
 			if err != nil {
-				a.Coverage.addGap(ownership.Gap{Kind: source.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
+				own.addGap(ownership.Gap{Kind: source.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
 			}
-			if len(paths) > 0 {
-				a.Referrers = append(a.Referrers, Referrer{Ref: o.Ref, Paths: paths})
+			if len(paths) == 0 {
+				return nil
 			}
+			return func() { a.Referrers = append(a.Referrers, Referrer{Ref: o.Ref, Paths: paths}) }
 		})
 	}
 	slices.SortStableFunc(a.Referrers, func(x, y Referrer) int {

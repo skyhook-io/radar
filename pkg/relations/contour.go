@@ -14,6 +14,7 @@ var kindHTTPProxy = resourceid.GroupKind{Group: configrefs.ContourGroup, Kind: "
 // namespace.
 var ContourBackends = &Family{
 	Name:           "contourBackends",
+	Projection:     project("exposes", false, "Backends", "Routes"),
 	Sources:        []Source{{Kind: kindHTTPProxy}},
 	Targets:        []resourceid.GroupKind{kindService, kindHTTPProxy},
 	CrossNamespace: true,
@@ -32,6 +33,7 @@ var ContourBackends = &Family{
 // delegated name places in another namespace.
 var ContourSecrets = &Family{
 	Name:           "contourSecrets",
+	Projection:     project("configures", true, "ConfigRefs", "Consumers"),
 	Sources:        []Source{{Kind: kindHTTPProxy}},
 	Targets:        []resourceid.GroupKind{kindSecret},
 	CrossNamespace: true,

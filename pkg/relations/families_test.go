@@ -176,6 +176,12 @@ func (c allNamespaces) Indexed(gk resourceid.GroupKind, index string, keys []str
 		return r
 	}
 	r := IndexedRead{Gaps: c.gaps}
+	// A kind a complete discovery doesn't serve has nothing to read, so, as
+	// the cache's session does, it costs no gap.
+	if reason, ok := c.unread[gk]; ok && reason != readreason.KindUnknown {
+		r.Gaps = append(slices.Clone(c.gaps), ownership.Gap{Kind: gk, Reason: reason})
+		return r
+	}
 	for _, obj := range c.objects {
 		if ref := refOf(obj); ref.GroupKind() == gk {
 			r.Objects = append(r.Objects, IndexedObject{Ref: ref, Object: obj})
