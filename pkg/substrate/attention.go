@@ -733,7 +733,7 @@ func goldenFailed(in Inputs) []Attention {
 		}
 		out = append(out, Attention{
 			ID: RuleGoldenFailed + ":" + t.Atespace + "/" + t.Name, Rule: RuleGoldenFailed, Severity: SeverityWarning,
-			Title:    fmt.Sprintf("%s has no golden snapshot, so new actors using the template's default boot cold", refName(t.Ref())),
+			Title:    fmt.Sprintf("%s has no golden snapshot, so new actors not seeded from a tag start from a cold boot", refName(t.Ref())),
 			Reading:  reading,
 			NextStep: step,
 			Subject:  Subject{Kind: "ActorTemplate", Atespace: t.Atespace, Name: t.Name},

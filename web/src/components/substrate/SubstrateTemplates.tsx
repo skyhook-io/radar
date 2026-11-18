@@ -216,7 +216,7 @@ function GoldenFailedBanner({ error, row }: { error?: string; row?: SubstrateAtt
   const cause = lead && !lead.startsWith('Substrate') ? lead : undefined
   return (
     // The tone of its Needs attention row: new actors boot cold, nothing is lost.
-    <AlertBanner variant={row ? attentionBannerVariant(row) : 'warning'} title="No golden snapshot: new actors from the template’s default boot cold" className="">
+    <AlertBanner variant={row ? attentionBannerVariant(row) : 'warning'} title="No golden snapshot: new actors not seeded from a tag start from a cold boot, not a prepared snapshot" className="">
       <div className="mt-1 break-words text-xs text-theme-text-secondary">
         {cause ?? <>Substrate’s message: <span className="font-medium text-theme-text-primary">{message}</span>.</>}
       </div>
@@ -311,7 +311,7 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
               <div className="mt-1 text-xs text-theme-text-primary">
                 <span className="font-medium">Next step: </span>
                 {crashes.nextStep}
-                {crashes.command && <> <CommandChip command={crashes.command} inline /></>}
+                {crashes.command && <CommandChip command={crashes.command} />}
               </div>
             )}
           </AlertBanner>

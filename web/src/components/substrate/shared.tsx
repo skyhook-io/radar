@@ -7,6 +7,7 @@ import {
   RadarUpgradeAction,
   StatusDot,
   Tooltip,
+  formatAge,
   getRadarUpgradeRequirement,
   radarUpgradeDetail,
   radarUpgradeHeadline,
@@ -290,28 +291,32 @@ export const NOT_CONNECTED_TITLE = 'Kept in Substrate’s API, not Kubernetes. R
  * A time as this workspace shows every time: relative ("12m ago", "in 4m"),
  * with the local date and time on hover, after `hint` when there is one.
  */
-export function When({ iso, hint, prefix }: { iso: string; hint?: string; prefix?: string }) {
+export function When({ iso, hint, prefix, held }: { iso: string; hint?: string; prefix?: string; held?: boolean }) {
+  // Held: how long since then ("for at least 1h"), never a time with "since" ("since 1h ago" says it twice).
   return (
     <Tooltip content={hint ? `${hint} ${localTime(iso)}.` : localTime(iso)}>
-      <span className="whitespace-nowrap">{prefix ? `${prefix} ` : ''}{relativeTime(iso)}</span>
+      <span className="whitespace-nowrap">{prefix ? `${prefix} ` : ''}{held ? formatAge(iso) : relativeTime(iso)}</span>
     </Tooltip>
   )
 }
 
-/** A shell command a next step names, as a code chip with a copy button. */
-export function CommandChip({ command, inline }: { command: string; inline?: boolean }) {
-  const chip = (
-    <span className="inline-flex max-w-full items-center gap-1 rounded-md border border-theme-border bg-theme-elevated py-px pl-2 pr-0.5 align-middle">
-      <code className="min-w-0 select-all whitespace-pre-wrap break-normal font-mono text-[11.5px] text-theme-text-primary">
-        <Tokens text={command} />
-      </code>
-      <CopyButton text={command} label="Copy command" />
-    </span>
-  )
-  // A command with <placeholders> is a template to fill in, not one to paste and run.
+/**
+ * A shell command a next step names, as a code chip with a copy button, on a
+ * line of its own under the step: it never wraps, inside itself or into the
+ * sentence; a command wider than its container scrolls. A command with
+ * <placeholders> is a template to fill in, and says so after it.
+ */
+export function CommandChip({ command }: { command: string }) {
   const holes = [...new Set(command.match(/<[^<>\s]+>/g) ?? [])]
-  const note = holes.length > 0 ? <span className="ml-1.5 text-[11px] text-theme-text-tertiary">fill in {holes.join(', ')}</span> : null
-  return inline ? <>{chip}{note}</> : <div className="mt-1">{chip}{note}</div>
+  return (
+    <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5" data-command-line>
+      <span className="flex min-w-0 max-w-full items-center gap-1 rounded-md border border-theme-border bg-theme-elevated py-px pl-2 pr-0.5">
+        <code className="min-w-0 select-all overflow-x-auto whitespace-pre font-mono text-[11.5px] text-theme-text-primary">{command}</code>
+        <CopyButton text={command} label="Copy command" />
+      </span>
+      {holes.length > 0 && <span className="text-[11px] text-theme-text-tertiary">fill in {holes.join(', ')}</span>}
+    </div>
+  )
 }
 
 /** A worker's state chip, the same on Workers and on a pool's placement cards. */

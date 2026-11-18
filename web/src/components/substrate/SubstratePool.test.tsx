@@ -186,6 +186,18 @@ describe('Workers by pool', () => {
     expect(html).toContain('4 of 16 CPU · 8Gi of 64Gi reserved')
     expect(html).toContain('Free actor slots')
     expect(html).toContain('of 4Full')
+    // Slots are utilization: a full worker in a pool with room, and the pool's free slots, are neutral facts.
+    const { Badge } = await import('@skyhook-io/k8s-ui')
+    const getSeverityColorClass = (severity: 'neutral' | 'success') => /class="([^"]*)"/.exec(renderToStaticMarkup(<Badge severity={severity} size="sm">x</Badge>))![1]
+    const rawHtml = renderToStaticMarkup(
+      <MemoryRouter>
+        <WorkersTable data={{ workers: [worker(0, { hasFreeSlot: false }), worker(1)], coverage: { workers: { state: 'full' } } }} pools={pools} onOpenSubject={() => {}} grouped />
+      </MemoryRouter>,
+    )
+    const badgeClass = (label: string) => { const i = rawHtml.indexOf(`>${label}</span>`); return rawHtml.slice(rawHtml.lastIndexOf('class="', i), i) }
+    expect(badgeClass('Full')).toContain(getSeverityColorClass('neutral'))
+    expect(badgeClass('Free actor slots')).toContain(getSeverityColorClass('neutral'))
+    expect(badgeClass('Free actor slots')).not.toContain(getSeverityColorClass('success'))
     expect(html).toContain('aria-label="Show the actors on agent-pool-worker-0"')
   })
 

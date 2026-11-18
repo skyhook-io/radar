@@ -99,7 +99,7 @@ describe('a failed template', () => {
     ;(t.template as any).golden = { state: 'failed', error: 'killed for exceeding its memory limit' }
     state.template = ok(t)
     const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'broken' }} onOpenSubject={() => {}} />, '/substrate/templates/team/broken?ctx=cluster-B')
-    expect(html).toContain('No golden snapshot: new actors from the template’s default boot cold')
+    expect(html).toContain('No golden snapshot: new actors not seeded from a tag start from a cold boot, not a prepared snapshot')
     expect(html.split('does not retry').length - 1).toBe(1)
   })
 

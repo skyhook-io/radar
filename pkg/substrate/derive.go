@@ -72,7 +72,11 @@ type ActorRow struct {
 	Name     string `json:"name"`
 	State    string `json:"state"`
 	// Reason is ActorReason; absent when there is nothing to add.
-	Reason   string `json:"reason,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	// Cause names a crash's cause where Substrate's message says it
+	// (CauseMemoryLimit), so a table can show a short label and keep Reason
+	// for hover; absent otherwise.
+	Cause    string `json:"cause,omitempty"`
 	Template Ref    `json:"template"`
 	// Worker is the hosting worker Pod; absent when the actor has no worker.
 	Worker *WorkerPodRef `json:"worker,omitempty"`
@@ -117,6 +121,9 @@ func RowOf(a Actor, now time.Time, rc ResumeContext) ActorRow {
 		row.Worker = &WorkerPodRef{Worker: as.Worker, Namespace: as.Namespace, Pool: as.Pool, Pod: as.Pod}
 	}
 	row.WaitingOn = WaitingOn(a)
+	if IsMemoryLimitCrash(a) {
+		row.Cause = CauseMemoryLimit
+	}
 	return row
 }
 
