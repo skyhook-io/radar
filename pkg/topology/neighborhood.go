@@ -4,6 +4,7 @@ import (
 	"maps"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -79,6 +80,13 @@ type Subgraph struct {
 	// group and the caller omitted ResourceRef.Group. Callers should ask the
 	// user/agent to provide group instead of returning an arbitrary first match.
 	AmbiguousRoot bool `json:"-"`
+
+	// RootUnavailable is why Radar couldn't read the root, when no candidate
+	// the caller may read was found and at least one couldn't be read: its
+	// kind still loading, or not collected. Empty when the root was found or
+	// is absent. It is set only for candidates Allow admitted, so it reveals
+	// nothing about one the caller may not read.
+	RootUnavailable readreason.Code `json:"-"`
 }
 
 // neighborhoodMaxHops is the hard ceiling on BFS depth. Two hops is enough

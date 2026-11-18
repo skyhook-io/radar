@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -394,5 +395,26 @@ func TestNeighborhoodAccessNodeNamesBuiltinResourceWithoutDiscovery(t *testing.T
 		if n.Data["apiVersion"] != tc.apiVersion || n.Data["resource"] != tc.resource {
 			t.Errorf("%s/%s: apiVersion %v resource %v, want %s %s", tc.group, tc.kind, n.Data["apiVersion"], n.Data["resource"], tc.apiVersion, tc.resource)
 		}
+	}
+}
+
+// A root Radar can't read yet says why, for a caller who may read it; for one
+// who may not, it reads as any absent root. A kind that can't live in the
+// root's namespace isn't a candidate at all.
+func TestWalkNeighborhoodRootUnavailableSaysWhy(t *testing.T) {
+	root := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "shop"}}, "", "ConfigMap")
+	s := newProjectionSession(t, root)
+	s.gaps = map[resourceid.GroupKind]ownership.Gap{{Kind: "ConfigMap"}: {Kind: resourceid.GroupKind{Kind: "ConfigMap"}, Reason: readreason.KindSyncPending}}
+	if sub := walkTestNeighborhood(t, s, root, NeighborhoodOptions{}); len(sub.Nodes) != 0 || sub.RootUnavailable != readreason.KindSyncPending {
+		t.Fatalf("unreadable root: %+v", sub)
+	}
+	if sub := walkTestNeighborhood(t, s, root, NeighborhoodOptions{Allow: func(*Node) bool { return false }}); sub.RootUnavailable != "" {
+		t.Fatalf("hidden root said why it couldn't be read: %+v", sub)
+	}
+	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}}, "", "Node")
+	s = newProjectionSession(t, node)
+	sub, err := WalkNeighborhood(context.Background(), s, ResourceRef{Kind: "Node", Namespace: "shop", Name: "n1"}, NeighborhoodOptions{}, nil, nil)
+	if err != nil || len(sub.Nodes) != 0 || sub.RootUnavailable != "" || len(s.reads) != 0 {
+		t.Fatalf("cluster-scoped kind read in a namespace: %+v %v reads=%v", sub, err, s.reads)
 	}
 }

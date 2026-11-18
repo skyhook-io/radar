@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	"github.com/go-chi/chi/v5"
@@ -149,6 +150,10 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(sub.Nodes) == 0 {
+		if sub.RootUnavailable != "" {
+			s.writeReadFailure(w, rawKind, neighborhoodRootFailure(rawKind, sub.RootUnavailable), nil)
+			return
+		}
 		s.writeError(w, http.StatusNotFound, "resource not found in topology")
 		return
 	}
@@ -172,6 +177,15 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, resp)
+}
+
+// neighborhoodRootFailure is why Radar can't answer for a root the caller may
+// read; its code sets the status, as for a resource read.
+func neighborhoodRootFailure(resource string, code readreason.Code) *resourceReadFailure {
+	if code == readreason.KindUnknown {
+		return readFailuref(code, "Radar's discovery doesn't list %s", resource)
+	}
+	return dynamicPlanFailure(resource, code)
 }
 
 // parseNeighborhoodOptions reads the query string into NeighborhoodOptions

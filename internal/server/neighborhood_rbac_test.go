@@ -1,20 +1,27 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	fakediscovery "k8s.io/client-go/discovery/fake"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -55,6 +62,42 @@ func withNeighborhoodDiscovery(t *testing.T, resources []*metav1.APIResourceList
 		t.Fatal(err)
 	}
 	t.Cleanup(restore)
+}
+
+// withWatchedNeighborhoodKinds installs discovery serving the neighborhood
+// fixtures' kinds and a dynamic cache that has loaded the custom ones, so an
+// absent custom root reads as absent rather than as not collected.
+func withWatchedNeighborhoodKinds(t *testing.T) {
+	t.Helper()
+	var resources []k8s.APIResource
+	listKinds := map[schema.GroupVersionResource]string{}
+	for _, list := range neighborhoodTestDiscovery() {
+		gv, err := schema.ParseGroupVersion(list.GroupVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		custom := gv.Group != "" && gv.Group != "apps"
+		for _, r := range list.APIResources {
+			resources = append(resources, k8s.APIResource{Group: gv.Group, Version: gv.Version, Kind: r.Kind, Name: r.Name, Namespaced: r.Namespaced, IsCRD: custom, Verbs: []string(r.Verbs)})
+			if custom {
+				listKinds[gv.WithResource(r.Name)] = r.Kind + "List"
+			}
+		}
+	}
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds), resources); err != nil {
+		t.Fatal(err)
+	}
+	dc := k8s.GetDynamicResourceCache()
+	for gvr := range listKinds {
+		if err := dc.EnsureWatching(gvr); err != nil {
+			t.Fatal(err)
+		}
+		if !dc.WaitForSync(gvr, 5*time.Second) {
+			t.Fatalf("%s did not sync", gvr)
+		}
+	}
 }
 
 // canReadNeighborhoodNode must apply per-kind Secret RBAC inside an allowed
@@ -404,7 +447,7 @@ func TestAllowPseudoKindTuples_NodePool(t *testing.T) {
 // Unqualified NodeClass roots defer provider authorization until the concrete
 // topology node resolves its API group and resource.
 func TestNeighborhood_NodeClassRootPreflightNotBadRequest(t *testing.T) {
-	withNeighborhoodDiscovery(t, neighborhoodTestDiscovery())
+	withWatchedNeighborhoodKinds(t)
 	env := newAuthTestServer(t)
 
 	// Unauthorized: missing root remains 404, not a namespace error.
@@ -443,7 +486,7 @@ func TestNeighborhood_NodeClassRootPreflightNotBadRequest(t *testing.T) {
 
 // NodePool roots are cluster-scoped and never require a namespace.
 func TestNeighborhood_NodePoolRootPreflightNotBadRequest(t *testing.T) {
-	withNeighborhoodDiscovery(t, neighborhoodTestDiscovery())
+	withWatchedNeighborhoodKinds(t)
 	env := newAuthTestServer(t)
 
 	denyPerms := &auth.UserPermissions{AllowedNamespaces: nil}
@@ -552,4 +595,37 @@ func TestNeighborhood_RoleRootNeedsItsOwnPermissionWithoutDiscovery(t *testing.T
 			}
 		}
 	})
+}
+
+// A root Radar doesn't collect answers with the read's own code and status, so
+// a caller can tell it from one that doesn't exist; a caller who may not read
+// the root still gets 404.
+func TestNeighborhood_UncollectedRootAnswersWithItsReadCode(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "key", Namespace: "shop"}},
+	), map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true}, k8score.Namespaces: {Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	withNeighborhoodDiscovery(t, neighborhoodTestDiscovery())
+	env := newAuthTestServer(t)
+	for _, grant := range []bool{true, false} {
+		user := fmt.Sprintf("secret-reader-%v", grant)
+		env.srv.permCache.Set(user, nil, &auth.UserPermissions{AllowedNamespaces: []string{"shop"}})
+		env.srv.permCache.Get(user, nil).SetCanI("get", "", "secrets", "shop", grant)
+		resp := env.authGet(t, "/api/ai/neighborhood/secret/shop/key", user, "")
+		var body struct {
+			ErrorCode readreason.Code `json:"error_code"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
+		resp.Body.Close()
+		switch {
+		case grant && (resp.StatusCode != http.StatusServiceUnavailable || body.ErrorCode != readreason.RadarKindNotCollected):
+			t.Errorf("may get secrets: %d %q, want 503 %s", resp.StatusCode, body.ErrorCode, readreason.RadarKindNotCollected)
+		case !grant && (resp.StatusCode != http.StatusNotFound || body.ErrorCode != ""):
+			t.Errorf("may not get secrets: %d %q, want 404 with no code", resp.StatusCode, body.ErrorCode)
+		}
+	}
 }

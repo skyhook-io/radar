@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -29,11 +30,15 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	candidates := neighborhoodRoots(session.Catalog(), root, dp)
 	var subject resourceid.Ref
 	var object runtime.Object
+	var unavailable []readreason.Code
 	for _, r := range candidates {
 		if !access.allowed(r) {
 			continue
 		}
 		obj, read := session.Borrow(r)
+		if read.State == ownership.Unavailable {
+			unavailable = append(unavailable, read.Gap.Reason)
+		}
 		if read.State != ownership.Present {
 			continue
 		}
@@ -44,6 +49,9 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		subject, object = r, obj
 	}
 	if object == nil {
+		if len(unavailable) > 0 {
+			sub.RootUnavailable = readreason.Primary(unavailable)
+		}
 		return sub, nil
 	}
 	sub.Root = refOf(subject)
@@ -456,13 +464,16 @@ func neighborhoodRoots(c *ownership.Catalog, root ResourceRef, dp DynamicProvide
 	if b, ok := resourceid.BuiltinForName(kind); ok {
 		kind, builtinGroup, builtin = b.Kind, b.Group, true
 	}
+	// A kind whose scope can't hold the root's namespace is no candidate: its
+	// read would be a scope error, not an answer about the root.
+	namespaced := root.Namespace != ""
 	var out []resourceid.Ref
-	if b, ok := resourceid.BuiltinForName(root.Kind); ok && (root.Group == "" || root.Group == b.Group) {
+	if b, ok := resourceid.BuiltinForName(root.Kind); ok && (root.Group == "" || root.Group == b.Group) && b.Namespaced == namespaced {
 		out = append(out, resourceid.NewRef(b.Group, b.Kind, root.Namespace, root.Name))
 	}
 	a := &neighborhoodAccess{catalog: c}
 	for _, k := range c.DependentKinds() {
-		if root.Group != "" && k.Group != root.Group {
+		if root.Group != "" && k.Group != root.Group || k.Namespaced != namespaced {
 			continue
 		}
 		n := a.node(resourceid.NewRef(k.Group, k.Kind, root.Namespace, root.Name))

@@ -5,18 +5,23 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	fakediscovery "k8s.io/client-go/discovery/fake"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -319,6 +324,7 @@ func TestAllowPseudoKindTuplesMCP_NodeClass_AllowedWithProviderSAR(t *testing.T)
 // topology node resolves its API group and resource.
 func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T) {
 	setupSecretRefCacheMCP(t)
+	withWatchedNeighborhoodKindsMCP(t)
 
 	// Unauthorized
 	ctxDeny := withTestUserPerms(t, "alice", nil, nil)
@@ -364,6 +370,7 @@ func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T
 // NodePool roots are cluster-scoped and never require a namespace.
 func TestHandleGetNeighborhoodMCP_NodePoolRootNotNamespaceRequired(t *testing.T) {
 	setupSecretRefCacheMCP(t)
+	withWatchedNeighborhoodKindsMCP(t)
 
 	ctxDeny := withTestUserPerms(t, "alice", nil, nil)
 	denyPerms := getPermCache().Get("alice", nil)
@@ -485,6 +492,42 @@ func withNeighborhoodDiscoveryMCP(t *testing.T, resources []*metav1.APIResourceL
 		t.Fatal(err)
 	}
 	t.Cleanup(restore)
+}
+
+// withWatchedNeighborhoodKindsMCP installs discovery serving the neighborhood
+// fixtures' kinds and a dynamic cache that has loaded the custom ones, so an
+// absent custom root reads as absent rather than as not collected.
+func withWatchedNeighborhoodKindsMCP(t *testing.T) {
+	t.Helper()
+	var resources []k8s.APIResource
+	listKinds := map[schema.GroupVersionResource]string{}
+	for _, list := range neighborhoodTestDiscoveryMCP() {
+		gv, err := schema.ParseGroupVersion(list.GroupVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		custom := gv.Group != "" && gv.Group != "apps"
+		for _, r := range list.APIResources {
+			resources = append(resources, k8s.APIResource{Group: gv.Group, Version: gv.Version, Kind: r.Kind, Name: r.Name, Namespaced: r.Namespaced, IsCRD: custom, Verbs: []string(r.Verbs)})
+			if custom {
+				listKinds[gv.WithResource(r.Name)] = r.Kind + "List"
+			}
+		}
+	}
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds), resources); err != nil {
+		t.Fatal(err)
+	}
+	dc := k8s.GetDynamicResourceCache()
+	for gvr := range listKinds {
+		if err := dc.EnsureWatching(gvr); err != nil {
+			t.Fatal(err)
+		}
+		if !dc.WaitForSync(gvr, 5*time.Second) {
+			t.Fatalf("%s did not sync", gvr)
+		}
+	}
 }
 
 // A Role needs the caller's own permission whether or not discovery lists the
@@ -630,5 +673,36 @@ func TestNeighborhoodMCP_SecretRootIncluded(t *testing.T) {
 		t.Error("unauthorized user got success for Secret root — Allow gate must produce not-found via empty subgraph (existence-hiding)")
 	} else if !strings.Contains(err2.Error(), "not found") {
 		t.Errorf("unauthorized user got unexpected error %v — expected 'not found' shape to mirror existence-hiding", err2)
+	}
+}
+
+// A root Radar doesn't collect answers with the read's own code, so an agent
+// can tell it from one that doesn't exist; a caller who may not read the root
+// still gets not found.
+func TestNeighborhoodMCP_UncollectedRootAnswersWithItsReadCode(t *testing.T) {
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "key", Namespace: "shop"}},
+	), map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true}, k8score.Namespaces: {Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	t.Cleanup(func() {
+		k8s.ResetTestState()
+		getPermCache().Invalidate()
+	})
+	withNeighborhoodDiscoveryMCP(t, neighborhoodTestDiscoveryMCP())
+	for _, grant := range []bool{true, false} {
+		user := fmt.Sprintf("secret-reader-%v", grant)
+		ctx := withRestrictedUser(t, user, []string{"shop"})
+		getPermCache().Get(user, nil).SetCanI("get", "", "secrets", "shop", grant)
+		_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "secret", Namespace: "shop", Name: "key"})
+		code, coded := readErrorCodeOf(err)
+		switch {
+		case grant && code != readreason.RadarKindNotCollected:
+			t.Errorf("may get secrets: %v, want %s", err, readreason.RadarKindNotCollected)
+		case !grant && (coded || err == nil || !strings.Contains(err.Error(), "not found")):
+			t.Errorf("may not get secrets: %v, want not found", err)
+		}
 	}
 }
