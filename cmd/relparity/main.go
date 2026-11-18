@@ -368,10 +368,10 @@ func main() {
 		outcome := managedByOutcome(cache, topo, ownership.Unrestricted(), s, before[i].rel.ManagedBy, after[i].rel.ManagedBy)
 		if outcome != "" {
 			rep.ManagedBy[outcome]++
-			if outcome == "lost" {
+			if unexplainedManagedBy(outcome) {
 				rep.ManagedByUnexplained++
 			}
-			if outcome == "lost" || outcome == "lateral" || len(rep.Examples[outcome]) < 5 {
+			if unexplainedManagedBy(outcome) || len(rep.Examples[outcome]) < 5 {
 				rep.Examples[outcome] = append(rep.Examples[outcome], fmt.Sprintf("%s: before %v, after %v", s.ref.Key(), before[i].rel.ManagedBy, after[i].rel.ManagedBy))
 			}
 		}
@@ -385,10 +385,10 @@ func main() {
 		outcome := managedByOutcome(cache, topo, half, s, restrictedBefore[i].rel.ManagedBy, restrictedAfter[i].rel.ManagedBy)
 		if outcome != "" {
 			rep.RestrictedManagedBy[outcome]++
-			if outcome == "lost" {
+			if unexplainedManagedBy(outcome) {
 				rep.RestrictedManagedByUnexplained++
 			}
-			if outcome == "lost" || outcome == "lateral" || len(rep.RestrictedManagedByExamples[outcome]) < 5 {
+			if unexplainedManagedBy(outcome) || len(rep.RestrictedManagedByExamples[outcome]) < 5 {
 				rep.RestrictedManagedByExamples[outcome] = append(rep.RestrictedManagedByExamples[outcome], fmt.Sprintf("%s: before %v, after %v", s.ref.Key(), restrictedBefore[i].rel.ManagedBy, restrictedAfter[i].rel.ManagedBy))
 			}
 		}
@@ -428,7 +428,7 @@ func main() {
 		fmt.Printf("INCOMPLETE: %d CRD kinds left out of the comparison: %v\n", len(rep.LeftOutCRDs), rep.LeftOutCRDs)
 	}
 	fmt.Printf("%s: %d objects, %d equal, %d differ, %d diff groups; restricted user (%d of %d namespaces): %d equal, %d differ, %d groups\n", rep.Context, rep.Objects, rep.SubjectsEqual, rep.SubjectsDiffer, len(rep.Diffs), len(half), len(allNamespaces), rep.RestrictedEqual, rep.RestrictedDiffer, len(rep.RestrictedDiffs))
-	fmt.Printf("pooled p50/p95/p99 (µs): before %v, after %v; unexplained ManagedBy losses: %d unrestricted, %d restricted\n", rep.Pooled.BeforeUS, rep.Pooled.AfterUS, rep.ManagedByUnexplained, rep.RestrictedManagedByUnexplained)
+	fmt.Printf("pooled p50/p95/p99 (µs): before %v, after %v; unexplained ManagedBy changes (lost, lower or lateral): %d unrestricted, %d restricted\n", rep.Pooled.BeforeUS, rep.Pooled.AfterUS, rep.ManagedByUnexplained, rep.RestrictedManagedByUnexplained)
 	if rep.ManagedByUnexplained+rep.RestrictedManagedByUnexplained > 0 {
 		exitCode = 1
 	}
@@ -537,19 +537,29 @@ func managedByOutcome(cache *k8s.ResourceCache, graph *topology.Topology, access
 		}
 		return false
 	}
-	related := false
+	higher, lower := false, false
 	for _, b := range before {
 		for _, a := range after {
-			related = related || ancestor(a, b) || ancestor(b, a)
+			higher = higher || ancestor(a, b)
+			lower = lower || ancestor(b, a)
 		}
 	}
 	if err := session.ValidateCaches(); err != nil {
 		log.Fatalf("ManagedBy caches: %v", err)
 	}
-	if related {
+	switch {
+	case higher:
 		return "reached-top"
+	case lower:
+		return "moved-down"
 	}
 	return "lateral"
+}
+
+// unexplainedManagedBy are the outcomes that fail the run: a manager lost,
+// one below what the graph named, or one unrelated to it.
+func unexplainedManagedBy(outcome string) bool {
+	return outcome == "lost" || outcome == "moved-down" || outcome == "lateral"
 }
 
 type measuredAnswer struct {

@@ -931,3 +931,35 @@ func TestReadvertiseCalicoPolicyNodesLeavesOtherKindsAlone(t *testing.T) {
 		t.Fatal("a missing authorizer rewrote the advertised group")
 	}
 }
+
+// Calico applies a preDNAT or doNotTrack policy to host endpoints only, so it
+// protects no workload, even with an all() selector.
+func TestHostOnlyCalicoPoliciesProtectNoWorkload(t *testing.T) {
+	provider := &calicoTestProvider{mockProvider: &mockProvider{deployments: []*appsv1.Deployment{
+		{ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "demo"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "frontend"}}}}},
+	}}}
+	dynamic := calicoTestDynamicFor("projectcalico.org")
+	gvr := dynamic.gvrs["projectcalico.org\x00GlobalNetworkPolicy"]
+	dynamic.resources[gvr] = []*unstructured.Unstructured{
+		calicoTestObject("projectcalico.org", "v3", "GlobalNetworkPolicy", "", "edge-prednat", map[string]any{"selector": "all()", "preDNAT": true, "applyOnForward": true}),
+		calicoTestObject("projectcalico.org", "v3", "GlobalNetworkPolicy", "", "edge-untracked", map[string]any{"selector": "app == 'frontend'", "doNotTrack": true, "applyOnForward": true}),
+	}
+	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build() error: %v", err)
+	}
+	for _, id := range []string{"calicoglobalnetworkpolicy//edge-prednat", "calicoglobalnetworkpolicy//edge-untracked"} {
+		node := nodeByID(topo.Nodes, id)
+		if node == nil {
+			t.Fatalf("missing node %s", id)
+		}
+		if node.Data["matchesAllPods"] != nil || node.Data["policyCoverageWorkloads"] != nil {
+			t.Errorf("%s claims coverage: %v", id, node.Data)
+		}
+		for _, edge := range topo.Edges {
+			if edge.Source == id && edge.Type == EdgeProtects {
+				t.Errorf("%s protects %s", id, edge.Target)
+			}
+		}
+	}
+}

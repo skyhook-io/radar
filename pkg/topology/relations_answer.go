@@ -83,6 +83,7 @@ type neighborhood struct {
 	edges    map[string]bool
 	coverage map[string]relations.Coverage
 	access   ownership.Access
+	decided  map[decisionKey]ownership.Decision
 }
 
 // familyNodeID is a node ID parseNodeID can't read, so a node's identity
@@ -126,7 +127,11 @@ func (n *neighborhood) cover(name string, c relations.Coverage) {
 		return
 	}
 	prior := n.coverage[name]
-	prior.NotChecked = append(prior.NotChecked, c.NotChecked...)
+	for _, g := range c.NotChecked {
+		if !slices.Contains(prior.NotChecked, g) {
+			prior.NotChecked = append(prior.NotChecked, g)
+		}
+	}
 	prior.Narrowed = prior.Narrowed || c.Narrowed
 	prior.Truncated = prior.Truncated || c.Truncated
 	prior.Total = max(prior.Total, c.Total)
@@ -135,7 +140,8 @@ func (n *neighborhood) cover(name string, c relations.Coverage) {
 
 // answer adds every family's answers about subject: what it declares and
 // selects, and what declares and selects it. routingOnly keeps the answers
-// that reach subject by routing, which is all a Service's entrypoints need.
+// that reach subject by routing, which is all a Service's entrypoints need:
+// what declares or selects it, never what it declares or selects.
 func (n *neighborhood) answer(session relations.Session, v *relations.View, families []*relations.Family, selectors []*relations.SelectorFamily, subject resourceid.Ref, obj runtime.Object, routingOnly bool) {
 	gk := subject.GroupKind()
 	for _, f := range families {
@@ -143,13 +149,15 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		if len(disposition.Rules) == 0 || !f.Covers(gk) || routingOnly && !routingDisposition(disposition) {
 			continue
 		}
-		refs := v.References(f, subject, obj)
-		n.cover(f.Name, refs.Coverage)
-		for _, d := range refs.Declared {
-			if d.State == relations.TargetPresent {
-				if e, ok := edgeFor(f.Name, subject, d.Ref); ok {
-					if n.projectFamily(session, f.Name, d.Ref) {
-						n.edge(subject, d.Ref, e)
+		if !routingOnly {
+			refs := v.References(f, subject, obj)
+			n.cover(f.Name, refs.Coverage)
+			for _, d := range refs.Declared {
+				if d.State == relations.TargetPresent {
+					if e, ok := edgeFor(f.Name, subject, d.Ref); ok {
+						if n.projectFamily(session, f.Name, d.Ref) {
+							n.edge(subject, d.Ref, e)
+						}
 					}
 				}
 			}
@@ -173,11 +181,13 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		if len(disposition.Rules) == 0 || !f.Covers(gk) || routingOnly && !routingDisposition(disposition) {
 			continue
 		}
-		chosen := v.Selected(f, subject, obj)
-		n.cover(f.Name, chosen.Coverage)
-		for _, m := range chosen.Matches {
-			if e, ok := projectedEdge(disposition, subject, m); ok {
-				n.edge(subject, m, e)
+		if !routingOnly {
+			chosen := v.Selected(f, subject, obj)
+			n.cover(f.Name, chosen.Coverage)
+			for _, m := range chosen.Matches {
+				if e, ok := projectedEdge(disposition, subject, m); ok {
+					n.edge(subject, m, e)
+				}
 			}
 		}
 		by := v.SelectedBy(f, subject, obj)
@@ -247,17 +257,25 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 		rel = &Relationships{}
 	}
 	n.networkEntrypoints(session, access, traverse, subject, obj, istioDomain, rel)
+	if _, all := access.Namespaces(); !all && (subject.GroupKind() == resourceid.GroupKind{Kind: "Node"} || subject.GroupKind() == resourceid.GroupKind{Group: "storage.k8s.io", Kind: "StorageClass"}) {
+		// A Node's Pods and a StorageClass's claims are read only in the
+		// caller's namespaces, so others may be withheld.
+		n.cover("direct", relations.Coverage{Narrowed: true})
+	}
 	if rel != nil && subject.Kind == "Deployment" && subject.Group == "apps" {
 		// The graph's shortcut to a Deployment's Pods, through its ReplicaSets.
 		for _, rs := range children.Children {
 			if rs.Ref.Kind != "ReplicaSet" || rs.Ref.Group != "apps" {
 				continue
 			}
-			for _, pod := range ov.Children(rs.Ref).Children {
+			pods := ov.Children(rs.Ref)
+			for _, pod := range pods.Children {
 				if pod.Ref.Kind == "Pod" && pod.Ref.Group == "" {
 					rel.Pods = append(rel.Pods, refOf(pod.Ref))
 				}
 			}
+			podGaps := slices.DeleteFunc(slices.Clone(pods.Gaps), func(g ownership.Gap) bool { return g.Kind != resourceid.GroupKind{Kind: "Pod"} })
+			n.cover("deploymentPods", relations.Coverage{NotChecked: podGaps, Narrowed: pods.Narrowed})
 		}
 		rel.Pods = uniqueResourceRefs(rel.Pods)
 	}
@@ -277,8 +295,8 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 }
 
 // topManager climbs from subject while something readable is above it: the
-// top of its controller chain; for an object with no controller reference, an
-// owner reference (a CiliumEndpoint's Pod, a CiliumNode's Node) or a
+// top of its controller chain; for an object with no controller reference, its
+// sole owner reference (a CiliumEndpoint's Pod, a CiliumNode's Node) or a
 // NodeClaim's NodePool. It stops below GitOps managers: what manages a
 // workload's Application is ownership.manager's answer, not this one.
 func (n *neighborhood) topManager(session relations.Session, ov *ownership.View, subject resourceid.Ref) *ResourceRef {
@@ -323,15 +341,11 @@ func OwnerAbove(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
 			return owners[i].Ref, owners[i].State == ownership.OwnerFound && owners[i].Ref != r
 		}
 	}
-	var found []resourceid.Ref
-	for _, owner := range owners {
-		if owner.State == ownership.OwnerFound {
-			found = append(found, owner.Ref)
-		}
-	}
-	if len(found) > 0 {
-		slices.SortFunc(found, func(a, b resourceid.Ref) int { return strings.Compare(a.Key(), b.Key()) })
-		return found[0], true
+	// Without a controller reference, only a sole owner says what the object
+	// belongs to; several owner references are garbage-collection
+	// dependencies with no primary, as ownership.Owner answers them.
+	if len(owners) == 1 && owners[0].State == ownership.OwnerFound {
+		return owners[0].Ref, true
 	}
 	return resourceid.Ref{}, false
 }
@@ -462,7 +476,15 @@ func (n *neighborhood) crossplane(session relations.Session, ov *ownership.View,
 	resolve := func(referrerNS string, ref crossplaneRef) (resourceid.Ref, bool) {
 		candidates := []string{ref.namespace}
 		if ref.namespace == "" {
+			// A reference names no namespace for a cluster-scoped kind, and
+			// may omit the referrer's for a namespaced one (Crossplane v2).
 			candidates = []string{"", referrerNS}
+			if namespaced, known := session.Catalog().Scope(resourceid.GroupKind{Group: ref.group, Kind: ref.kind}); known {
+				candidates = candidates[:1]
+				if namespaced {
+					candidates = []string{referrerNS}
+				}
+			}
 		}
 		for _, ns := range candidates {
 			if r := resourceid.NewRef(ref.group, ref.kind, ns, ref.name); exists(r) {

@@ -1,6 +1,7 @@
 package relations
 
 import (
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -157,5 +158,84 @@ func TestResolutionStoppedByAWithheldCandidateNarrows(t *testing.T) {
 	got := NewView(session, primaryMiddlewareDenied{}).Referrers(TraefikRouteConfig, refOf(legacy), nil)
 	if len(got.Referrers) != 0 || !got.Coverage.Narrowed {
 		t.Fatalf("resolution stopped by a withheld candidate: %+v", got)
+	}
+}
+
+// partlyCollected holds ServiceMonitors only in the namespaces it names: an
+// all-namespace read reports the rest as one gap naming no namespace.
+type partlyCollected struct {
+	cluster
+	collected []string
+}
+
+func (p partlyCollected) Catalog() *ownership.Catalog {
+	return ownership.NewCatalog([]ownership.ServedResource{{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor", Resource: "servicemonitors", Namespaced: true, Verbs: []string{"list", "watch"}}}, true)
+}
+
+func (p partlyCollected) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
+	if gk.Kind != "ServiceMonitor" {
+		return p.cluster.Indexed(gk, index, keys, scope)
+	}
+	if !scope.AllNamespaces {
+		var r IndexedRead
+		for _, ns := range scope.Namespaces {
+			if !slices.Contains(p.collected, ns) {
+				r.Gaps = append(r.Gaps, ownership.Gap{Kind: gk, Namespace: ns, Reason: readreason.RadarNamespaceNotCollected})
+			}
+		}
+		return r
+	}
+	return IndexedRead{Gaps: []ownership.Gap{{Kind: gk, Reason: readreason.RadarNamespaceNotCollected}}}
+}
+
+// When Radar collects a kind in only some namespaces, an across answer for a
+// caller whose namespaces are all collected is complete and may have withheld;
+// a caller namespace Radar doesn't collect is still a gap.
+func TestAnswersAcrossNamespacesKeepOnlyReadableUncollectedGaps(t *testing.T) {
+	svc := labelled(typed(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "web"}}, "", "v1", "Service"), map[string]string{"metrics": "on"})
+	monitors := resourceid.GroupKind{Group: "monitoring.coreos.com", Kind: "ServiceMonitor"}
+	got := NewView(partlyCollected{cluster: cluster{objects: []runtime.Object{svc}}, collected: []string{"apps", "monitoring"}}, namespaceAccess{namespace: "apps"}).SelectedBy(Monitors, refOf(svc), svc)
+	if !got.Coverage.Complete() || !got.Coverage.Narrowed {
+		t.Errorf("caller's namespaces collected: %+v; want complete and narrowed", got.Coverage)
+	}
+	got = NewView(partlyCollected{cluster: cluster{objects: []runtime.Object{svc}}, collected: []string{"monitoring"}}, namespaceAccess{namespace: "apps"}).SelectedBy(Monitors, refOf(svc), svc)
+	want := ownership.Gap{Kind: monitors, Namespace: "apps", Reason: readreason.RadarNamespaceNotCollected}
+	if len(got.Coverage.NotChecked) != 1 || got.Coverage.NotChecked[0] != want {
+		t.Errorf("caller's namespace uncollected: %+v; want gap %v", got.Coverage, want)
+	}
+}
+
+// syncingThenReady reports ServiceMonitors as syncing on its first read and
+// ready, holding a matching one, on every later read.
+type syncingThenReady struct {
+	cluster
+	reads *int
+}
+
+func (p syncingThenReady) Catalog() *ownership.Catalog { return partlyCollected{}.Catalog() }
+
+func (p syncingThenReady) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
+	if gk.Kind != "ServiceMonitor" {
+		return p.cluster.Indexed(gk, index, keys, scope)
+	}
+	*p.reads++
+	if *p.reads == 1 {
+		return IndexedRead{Gaps: []ownership.Gap{{Kind: gk, Reason: readreason.KindSyncPending}}}
+	}
+	return p.cluster.Indexed(gk, index, keys, scope)
+}
+
+// A kind still syncing on the answer's read keeps its gap, however the cache
+// reads a moment later.
+func TestAnAcrossSyncingGapIsKeptAsRead(t *testing.T) {
+	svc := labelled(typed(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "web"}}, "", "v1", "Service"), map[string]string{"metrics": "on"})
+	monitor := inNamespace(object("monitoring.coreos.com/v1", "ServiceMonitor", "web", map[string]any{
+		"selector":          map[string]any{"matchLabels": map[string]any{"metrics": "on"}},
+		"namespaceSelector": map[string]any{"any": true},
+	}), "apps")
+	reads := 0
+	got := NewView(syncingThenReady{cluster: cluster{objects: []runtime.Object{svc, monitor}}, reads: &reads}, namespaceAccess{namespace: "apps"}).SelectedBy(Monitors, refOf(svc), svc)
+	if got.Coverage.Complete() {
+		t.Errorf("a syncing kind read as complete: %+v", got)
 	}
 }

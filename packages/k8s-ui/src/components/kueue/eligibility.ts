@@ -9,8 +9,9 @@ export type NamespaceEligibility =
   /** The labels are needed and weren't read, or the selector can't be evaluated. */
   | { state: 'unknown'; why: 'labels_unread' | 'unsupported_operator'; operator?: string }
 
-interface Requirement { key?: string; operator?: string; values?: string[] }
-export interface LabelSelector { matchLabels?: Record<string, string>; matchExpressions?: Requirement[] }
+import { matchesLabelSelector, unsupportedSelectorOperator, type LabelSelector } from '../../utils/label-selector'
+
+export type { LabelSelector }
 
 function selectorHasTerms(selector: LabelSelector | null | undefined): boolean {
   return !!selector && (Object.keys(selector.matchLabels ?? {}).length > 0 || (selector.matchExpressions?.length ?? 0) > 0)
@@ -26,18 +27,8 @@ export function needsNamespaceLabels(selector: LabelSelector | null | undefined)
 export function namespaceEligibility(selector: LabelSelector | null | undefined, labels: Record<string, string> | undefined): NamespaceEligibility {
   if (selector == null) return { state: 'not_eligible', basis: 'none' }
   if (!selectorHasTerms(selector)) return { state: 'eligible', basis: 'all' }
-  const unsupported = (selector.matchExpressions ?? []).find(term => !['In', 'NotIn', 'Exists', 'DoesNotExist'].includes(term?.operator ?? ''))
-  if (unsupported) return { state: 'unknown', why: 'unsupported_operator', operator: String(unsupported?.operator ?? '') }
+  const unsupported = unsupportedSelectorOperator(selector)
+  if (unsupported !== undefined) return { state: 'unknown', why: 'unsupported_operator', operator: unsupported }
   if (!labels) return { state: 'unknown', why: 'labels_unread' }
-  const has = (key: string) => Object.prototype.hasOwnProperty.call(labels, key)
-  const matches = Object.entries(selector.matchLabels ?? {}).every(([key, value]) => has(key) && labels[key] === value)
-    && (selector.matchExpressions ?? []).every(({ key = '', operator, values = [] }) => {
-      switch (operator) {
-        case 'In': return has(key) && values.includes(labels[key])
-        case 'NotIn': return !has(key) || !values.includes(labels[key])
-        case 'Exists': return has(key)
-        default: return !has(key)
-      }
-    })
-  return matches ? { state: 'eligible', basis: 'labels' } : { state: 'not_eligible', basis: 'labels' }
+  return matchesLabelSelector(selector, labels) ? { state: 'eligible', basis: 'labels' } : { state: 'not_eligible', basis: 'labels' }
 }

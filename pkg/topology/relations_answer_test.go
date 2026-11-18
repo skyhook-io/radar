@@ -705,3 +705,111 @@ func TestProjectionSessionLocatesManagers(t *testing.T) {
 		}
 	}
 }
+
+// Several owner references with no controller are garbage-collection
+// dependencies with no primary, so none of them is climbed as a manager.
+func TestRelationsAnswerManagedByIgnoresSeveralNonControllerOwners(t *testing.T) {
+	a := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "a", UID: "a"}}, "", "Pod")
+	z := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "z", UID: "z"}}, "", "Pod")
+	state := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "state", UID: "state", OwnerReferences: []metav1.OwnerReference{
+		{APIVersion: "v1", Kind: "Pod", Name: "z", UID: "z"},
+		{APIVersion: "v1", Kind: "Pod", Name: "a", UID: "a"},
+	}}}, "", "ConfigMap")
+	rel := projectionAnswer(t, newProjectionSession(t, state, a, z), state, ownership.Unrestricted(), ownership.Unrestricted())
+	if len(rel.ManagedBy) != 0 {
+		t.Fatalf("picked a manager among several owners: %+v", rel.ManagedBy)
+	}
+}
+
+// undecidedAccess can't decide the named kinds and counts what it is asked.
+type undecidedAccess struct {
+	projectionAccess
+	undecided []string
+	asked     map[string]int
+}
+
+func (a *undecidedAccess) CanRead(gk resourceid.GroupKind, ns string) ownership.Decision {
+	a.asked[gk.Kind+"/"+ns]++
+	if slices.Contains(a.undecided, gk.Kind) {
+		return ownership.Undecided
+	}
+	return a.projectionAccess.CanRead(gk, ns)
+}
+
+// A special producer's failed check reads as a permission-check gap, a denied
+// one as narrowed, and each is asked once however many objects match.
+func TestRelationsAnswerSpecialChecksKeepTheirOutcome(t *testing.T) {
+	claim := projectionCR("karpenter.sh", "NodeClaim", "", "claim", map[string]any{})
+	claim.SetLabels(map[string]string{"karpenter.sh/nodepool": "pool"})
+	pool := projectionCR("karpenter.sh", "NodePool", "", "pool", map[string]any{})
+	answer := func(access ownership.Access, subject runtime.Object, objects ...runtime.Object) map[string]relations.Coverage {
+		t.Helper()
+		s := newProjectionSession(t, objects...)
+		captured, ok := relations.CaptureSubject(s, projectionRef(subject), subject)
+		if !ok {
+			t.Fatal("capture failed")
+		}
+		_, coverage := RelationsAnswer(captured, access, access, ownership.NewView(captured, access), projectionRef(subject), subject, nil, nil)
+		return coverage
+	}
+	coverage := answer(&undecidedAccess{undecided: []string{"NodePool"}, asked: map[string]int{}}, claim, claim, pool)
+	if !slices.Contains(coverage["special"].NotChecked, ownership.Gap{Kind: resourceid.GroupKind{Group: "karpenter.sh", Kind: "NodePool"}, Reason: readreason.UserPermissionCheckFailed}) {
+		t.Fatalf("failed NodePool check left no gap: %+v", coverage)
+	}
+	if coverage = answer(projectionAccess{denied: []string{"NodePool"}}, claim, claim, pool); !coverage["special"].Narrowed {
+		t.Fatalf("denied NodePool didn't narrow: %+v", coverage)
+	}
+
+	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node"}}, "", "Node")
+	objects := []runtime.Object{node}
+	for i := range 3 {
+		objects = append(objects, projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: fmt.Sprintf("pod-%d", i)}, Spec: corev1.PodSpec{NodeName: "node"}}, "", "Pod"))
+	}
+	access := &undecidedAccess{undecided: []string{"Pod"}, asked: map[string]int{}}
+	coverage = answer(access, node, objects...)
+	if access.asked["Pod/shop"] != 1 {
+		t.Errorf("asked about Pods in shop %d times", access.asked["Pod/shop"])
+	}
+	if len(coverage["special"].NotChecked) != 1 {
+		t.Errorf("want one permission-check gap for the node's Pods: %+v", coverage)
+	}
+}
+
+// A workload's entrypoints read what routes to its Services, never what else
+// those Services select.
+func TestRelationsAnswerEntrypointsSkipServiceSiblings(t *testing.T) {
+	labels := map[string]string{"app": "web"}
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}}}, "apps", "Deployment")
+	sibling := projectionObject(&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "db"}, Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}}}, "apps", "StatefulSet")
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Spec: corev1.ServiceSpec{Selector: labels}}, "", "Service")
+	ingress := projectionObject(&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Spec: networkingv1.IngressSpec{DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "web"}}}}, "networking.k8s.io", "Ingress")
+	access := &undecidedAccess{undecided: []string{"StatefulSet"}, asked: map[string]int{}}
+	s := newProjectionSession(t, deployment, sibling, svc, ingress)
+	captured, _ := relations.CaptureSubject(s, projectionRef(deployment), deployment)
+	rel, coverage := RelationsAnswer(captured, access, access, ownership.NewView(captured, access), projectionRef(deployment), deployment, nil, nil)
+	if len(rel.Services) != 1 || len(rel.Ingresses) != 1 {
+		t.Fatalf("entrypoints: %+v", rel)
+	}
+	if access.asked["StatefulSet/shop"] > 0 {
+		t.Errorf("read the Service's other workloads: %v, coverage %+v", access.asked, coverage)
+	}
+}
+
+// A Crossplane reference that omits its namespace resolves by the kind's
+// scope, so a namespaced composed resource is never probed cluster-wide,
+// which a cache read refuses with a gap.
+func TestRelationsAnswerCrossplaneReferenceUsesTheKindsScope(t *testing.T) {
+	composite := projectionCR("example.org", "Widget", "shop", "widget", map[string]any{"spec": map[string]any{"crossplane": map[string]any{"resourceRefs": []any{map[string]any{"apiVersion": "example.org/v1", "kind": "Bucket", "name": "bucket"}}}, "resourceRefs": []any{map[string]any{"apiVersion": "example.org/v1", "kind": "Bucket", "name": "bucket"}}}})
+	composite.SetLabels(map[string]string{"crossplane.io/composite": "widget"})
+	bucket := projectionCR("example.org", "Bucket", "shop", "bucket", map[string]any{})
+	s := newProjectionSession(t, composite, bucket)
+	rel := projectionAnswer(t, s, composite, ownership.Unrestricted(), ownership.Unrestricted())
+	if !slices.ContainsFunc(rel.Children, func(r ResourceRef) bool { return r.Kind == "Bucket" && r.Namespace == "shop" }) {
+		t.Fatalf("namespaced composed resource: %+v", rel)
+	}
+	for _, r := range s.reads {
+		if r.Kind == "Bucket" && r.Namespace == "" {
+			t.Fatalf("probed a namespaced Bucket cluster-wide: %v", r)
+		}
+	}
+}

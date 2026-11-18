@@ -419,8 +419,21 @@ type CalicoPolicyMatcher struct {
 	serviceAccountSelector calicoSelectorExpr
 }
 
+// CalicoPolicyHostOnly reports whether a policy applies only to host
+// endpoints: Calico doesn't apply a preDNAT or doNotTrack policy to workload
+// endpoints, so it selects no workload whatever its selector.
+func CalicoPolicyHostOnly(policy *unstructured.Unstructured) bool {
+	for _, field := range []string{"preDNAT", "doNotTrack"} {
+		if set, _, _ := unstructured.NestedBool(policy.Object, "spec", field); set {
+			return true
+		}
+	}
+	return false
+}
+
 // CompileCalicoPolicyMatcher compiles a policy's selectors once so it can be
-// tested against many workloads.
+// tested against many workloads. A host-only policy (CalicoPolicyHostOnly)
+// matches none.
 func CompileCalicoPolicyMatcher(policy *unstructured.Unstructured) *CalicoPolicyMatcher {
 	matcher := &CalicoPolicyMatcher{}
 	if policy == nil {
@@ -434,6 +447,11 @@ func CompileCalicoPolicyMatcher(policy *unstructured.Unstructured) *CalicoPolicy
 		}
 		matcher.kubernetesSelector = selector
 		matcher.endpointValid = true
+		return matcher
+	}
+	if CalicoPolicyHostOnly(policy) {
+		matcher.endpointValid = true
+		matcher.endpoint = func(map[string]string) bool { return false }
 		return matcher
 	}
 
