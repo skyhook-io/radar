@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { VirtuosoMockContext } from 'react-virtuoso'
 import { afterEach, expect, it, vi } from 'vitest'
-import { COLUMN_WIDTHS_VERSION, ResourcesView, columnSettingsKey, getColumnMinWidth, savedColumnWidths } from './ResourcesView'
+import { COLUMN_WIDTHS_VERSION, MIN_USER_COLUMN_WIDTH_PX, ResourcesView, columnSettingsKey, getColumnMinWidth, savedColumnWidths } from './ResourcesView'
 import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
 import type { APIResource } from '../../types'
 
@@ -82,6 +82,31 @@ it('keeps every width of a record saved since columns sized themselves, even one
   expect(colWidth('count')).toBe(`${count + 2}px`)
 })
 
+it('keeps a saved width no narrower than a user can drag a column', () => {
+  localStorage.setItem('radar-columns-events', JSON.stringify({
+    visible: ['name', 'namespace', 'type', 'reason', 'message', 'object', 'count', 'lastSeen'],
+    widths: { name: 0.5 },
+    widthsVersion: COLUMN_WIDTHS_VERSION,
+  }))
+  render([event(longName, 'hello')])
+  expect(colWidth('name')).toBe(`${MIN_USER_COLUMN_WIDTH_PX}px`)
+  expect(savedColumnWidths({ name: 0.5, count: 12 }, false)).toEqual({ name: MIN_USER_COLUMN_WIDTH_PX, count: MIN_USER_COLUMN_WIDTH_PX })
+})
+
+it('saves the dragged column when the last move and the release land in one batch', () => {
+  render([event(longName, 'hello')])
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width: 300, height: 20, top: 0, left: 0, right: 300, bottom: 20, x: 0, y: 0, toJSON: () => ({}) }))
+  const handle = () => host.querySelector<HTMLElement>('thead th[data-column-key="message"] .cursor-col-resize')!
+  act(() => { handle().dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: 100 })) })
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 200 }))
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 250 }))
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+  })
+  expect(colWidth('message')).toBe('450px')
+  expect(JSON.parse(localStorage.getItem('radar-columns-events')!).widths).toEqual({ message: 450 })
+})
+
 it('ignores saved widths that are not positive finite numbers', () => {
   const widths = JSON.parse('{"name":1e309,"message":-5,"object":"wide","count":90}')
   expect(savedColumnWidths(widths, false)).toEqual({ count: 90 })
@@ -116,7 +141,7 @@ it('lets a printer column that loads late size itself, though an older record sa
   const widgets: APIResource = { group: 'example.com', version: 'v1', kind: 'Widget', name: 'widgets', namespaced: true, isCrd: true, verbs: ['get', 'list'] }
   const widget = { apiVersion: 'example.com/v1', kind: 'Widget', metadata: { name: 'w1', namespace: 'test', uid: 'w1', creationTimestamp: '2026-01-01T00:00:00Z' }, spec: { description: 'A widget' } }
   const storageKey = 'radar-columns-' + columnSettingsKey('widgets', 'example.com')
-  localStorage.setItem(storageKey, JSON.stringify({ visible: ['name', 'namespace', 'printer:Description', 'age'], widths: { name: 400, 'printer:Description': 160 } }))
+  localStorage.setItem(storageKey, JSON.stringify({ visible: ['name', 'namespace', 'printer:Description', 'printer:Note', 'age'], widths: { name: 400, 'printer:Description': 160 } }))
   const view = (props: Partial<React.ComponentProps<typeof ResourcesView>>) => <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 40 }}><KeyboardShortcutProvider><ResourcesView
     namespaces={['test']}
     apiResources={[events, widgets]}
@@ -134,8 +159,15 @@ it('lets a printer column that loads late size itself, though an older record sa
   act(() => root.render(view({ ...onWidgets, printerTable: null })))
   act(() => root.render(view({ ...onWidgets, namespaces: ['test', 'other'], printerTable: null })))
   expect(JSON.parse(localStorage.getItem(storageKey)!)).toMatchObject({ widthsVersion: COLUMN_WIDTHS_VERSION, widths: { name: 400 } })
-  const printerTable = { kind: 'widgets', group: 'example.com', columns: [{ name: 'Description', type: 'string', jsonPath: '.spec.description' }], cells: { w1: ['A widget'] } }
+  // Description holds a long value and Note a short one; both start at the same 160px.
+  const printerTable = {
+    kind: 'widgets', group: 'example.com',
+    columns: [{ name: 'Description', type: 'string', jsonPath: '.spec.description' }, { name: 'Note', type: 'string', jsonPath: '.spec.note' }],
+    cells: { w1: ['Replicates the widget catalogue from the primary region to every secondary region nightly', 'ok'] },
+  }
   act(() => root.render(view({ ...onWidgets, namespaces: ['test', 'other'], printerTable })))
-  expect(parseInt(colWidth('printer:Description'), 10)).toBeGreaterThan(160)
+  // Description sizes itself from its value: well past the 160px saved for it,
+  // and past Note, which had the same start and only a short value.
+  expect(parseInt(colWidth('printer:Description'), 10)).toBeGreaterThan(parseInt(colWidth('printer:Note'), 10) + 100)
   expect(colWidth('name')).toBe('400px')
 })

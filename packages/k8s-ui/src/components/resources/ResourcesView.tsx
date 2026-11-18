@@ -3333,9 +3333,13 @@ function columnsForKindWithPrinter(
 
 // Records saved since columns sized themselves carry this.
 export const COLUMN_WIDTHS_VERSION = 2
+// The narrowest a user can make a column (dragging, fitting, or a saved
+// width): its content truncates with an ellipsis.
+export const MIN_USER_COLUMN_WIDTH_PX = 48
 
 /**
- * The saved column widths to apply: finite, positive numbers only. A record
+ * The saved column widths to apply: finite, positive numbers only, at least
+ * MIN_USER_COLUMN_WIDTH_PX. A record
  * saved before columns sized themselves (`fromBeforeSizing`) keeps only Name's:
  * back then the first drag on a table saved the width of every visible column,
  * so its other widths are mostly ones the user never chose, and keeping them
@@ -3347,7 +3351,7 @@ export function savedColumnWidths(widths: unknown, fromBeforeSizing: boolean): R
   for (const [key, width] of Object.entries(widths as Record<string, unknown>)) {
     if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) continue
     if (fromBeforeSizing && key !== 'name') continue
-    kept[key] = width
+    kept[key] = Math.max(MIN_USER_COLUMN_WIDTH_PX, width)
   }
   return kept
 }
@@ -4447,14 +4451,13 @@ export function ResourcesView({
     }
 
     const handleMouseMove = (me: MouseEvent) => {
-      if (!resizingColumn.current) return
+      // Read now, not in the updater: a mouseup batched with this move clears
+      // the ref before React applies the update.
+      const key = resizingColumn.current
+      if (!key) return
       const diff = me.clientX - resizeStartX.current
-
-      // Allow shrinking to a small minimum — content truncates with ellipsis
-      const minW = 48
-
-      const newWidth = Math.max(minW, resizeStartWidth.current + diff)
-      setColumnWidths(prev => ({ ...prev, [resizingColumn.current!]: newWidth }))
+      const newWidth = Math.max(MIN_USER_COLUMN_WIDTH_PX, resizeStartWidth.current + diff)
+      setColumnWidths(prev => ({ ...prev, [key]: newWidth }))
       // Update resize line position, clamped to the constrained width
       const rect = container?.getBoundingClientRect()
       if (rect) {
@@ -4502,7 +4505,7 @@ export function ResourcesView({
       copy.remove()
     })
     if (width === 0) return
-    const fitted = Math.max(48, Math.ceil(width))
+    const fitted = Math.max(MIN_USER_COLUMN_WIDTH_PX, Math.ceil(width))
     setColumnWidths(prev => ({ ...prev, [colKey]: fitted }))
   }, [])
 
@@ -6157,30 +6160,32 @@ export function ResourcesView({
     plural: normalizeKindToPlural(selectedKind.name, selectedKind.group),
     cellFilterKind: getCellFilterKind(selectedKind.name, selectedKind.group),
   }), [selectedKind.name, selectedKind.group])
-  // The CPU and Memory bars show metrics, not resource data: their labels are
-  // measured from the metrics the cells read, so the columns shrink no further
-  // than the "used / limit" label. Read through a deferred value, like the
-  // rows below: a metrics refresh repaints the bars first and remeasures after.
-  const measureMetrics = useDeferredValue(metricsLookup)
-  const usageCellWidths = useMemo(() => {
-    const kindLower = selectedKind.name.toLowerCase()
-    if (kindLower !== 'pods' && kindLower !== 'nodes') return undefined
-    const reader = (kind: 'cpu' | 'memory'): CellWidth => (resource, measure) => usageLabelWidth(
+  // Measured in a deferred render, from one snapshot of everything the
+  // measurement reads: a pass over a very large list must not hold up the
+  // render that shows an update, whether the rows, the printer cells, the
+  // metrics or the audit badges changed. Only a pass over the rows on screen is
+  // remembered (see contentWidths), so a stale one never sticks.
+  const measureInputs = useMemo(() => ({
+    tableActive, resources, columns, extraColumnsByKey, sizingKind, auditBadges, metricsLookup, kindName: selectedKind.name, headerFontEpoch,
+  }), [tableActive, resources, columns, extraColumnsByKey, sizingKind, auditBadges, metricsLookup, selectedKind.name, headerFontEpoch])
+  const measuring = useDeferredValue(measureInputs)
+  const measureSource = measuring.resources
+  const measuredContent = useMemo(() => {
+    const { resources: rows, columns: cols, extraColumnsByKey: extras, metricsLookup: metrics } = measuring
+    if (!measuring.tableActive || !rows?.length) return null
+    // The CPU and Memory bars show metrics, not resource data: their labels are
+    // measured from the metrics the cells read, so the columns shrink no
+    // further than the "used / limit" label.
+    const kindLower = measuring.kindName.toLowerCase()
+    const usage = (kind: 'cpu' | 'memory'): CellWidth => (resource, measure) => usageLabelWidth(
       kindLower === 'pods'
-        ? podUsageLabel(resource, measureMetrics.pods.get(`${resource.metadata?.namespace}/${resource.metadata?.name}`), kind)
-        : nodeUsageLabel(measureMetrics.nodes.get(resource.metadata?.name), kind),
+        ? podUsageLabel(resource, metrics.pods.get(`${resource.metadata?.namespace}/${resource.metadata?.name}`), kind)
+        : nodeUsageLabel(metrics.nodes.get(resource.metadata?.name), kind),
       measure,
     )
-    return { cpu: reader('cpu'), memory: reader('memory') }
-  }, [selectedKind.name, measureMetrics])
-  // Measured in a deferred render: a pass over a very large list must not hold
-  // up the render that shows a streamed update. Only a pass over the list on
-  // screen is remembered (see contentWidths), so a stale one never sticks.
-  const measureSource = useDeferredValue(resources)
-  const measuredContent = useMemo(() => {
-    if (!tableActive || !measureSource?.length) return null
-    const sized = columns.map(col => ({ key: col.key, sizing: col.sizing, growWeight: col.growWeight, getFilterValue: extraColumnsByKey.get(col.key)?.getFilterValue }))
-    const measured = measureColumnContent(measureSource, sized, { ...sizingKind, auditBadges, hostCellWidths: usageCellWidths })
+    const hostCellWidths = kindLower === 'pods' || kindLower === 'nodes' ? { cpu: usage('cpu'), memory: usage('memory') } : undefined
+    const sized = cols.map(col => ({ key: col.key, sizing: col.sizing, growWeight: col.growWeight, getFilterValue: extras.get(col.key)?.getFilterValue }))
+    const measured = measureColumnContent(rows, sized, { ...measuring.sizingKind, auditBadges: measuring.auditBadges, hostCellWidths })
     const flat: Record<string, number> = {}
     for (const [key, m] of Object.entries(measured)) {
       flat[key] = m.content
@@ -6189,7 +6194,7 @@ export function ResourcesView({
       if (m.fitTo !== undefined) flat[`${key}\u0000fitTo`] = m.fitTo
     }
     return flat
-  }, [tableActive, measureSource, columns, extraColumnsByKey, sizingKind, auditBadges, usageCellWidths, headerFontEpoch])
+  }, [measuring])
 
   // Grow-only while the table shows the same data set — the same kind and
   // namespace selection, without a reload in between — so rows streaming in or
@@ -6219,6 +6224,15 @@ export function ResourcesView({
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [isPhone])
+  // The no-scroll rule is defined by the window's width, which can cross the
+  // threshold while the table's own room stays the same.
+  const [mustFitWindow, setMustFitWindow] = useState(() => typeof window !== 'undefined' && window.innerWidth >= MUST_FIT_WINDOW_PX)
+  useEffect(() => {
+    const onResize = () => setMustFitWindow(window.innerWidth >= MUST_FIT_WINDOW_PX)
+    onResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   const phoneNameCap = isPhone && columns[0]?.key === 'name' ? Math.round(phoneViewportWidth * PHONE_NAME_MAX_VW / 100) : Infinity
   const leadingPinWidth = (compareMode ? COMPARE_COLUMN_WIDTH : 0) + (isCheckboxMode ? CHECKBOX_COLUMN_WIDTH : 0)
 
@@ -6299,11 +6313,11 @@ export function ResourcesView({
       })
       : inputs
     const widths = computeColumnLayout(laidOut, availableWidth, {
-      mustFit: typeof window !== 'undefined' && window.innerWidth >= MUST_FIT_WINDOW_PX,
+      mustFit: mustFitWindow,
     })
     if (capName) widths.name = Math.min(widths.name, phoneNameCap)
     return widths
-  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap])
+  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap, mustFitWindow])
   useLayoutEffect(() => {
     columnLayoutWidthsRef.current = columnLayoutWidths
     if (!resizeFrozenWidths) lastLayout.current = { signature: layoutSignature, widths: columnLayoutWidths }

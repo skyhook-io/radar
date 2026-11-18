@@ -53,6 +53,25 @@ describe('measureColumnContent', () => {
     expect(m.name).toEqual({ content: 400 + 22 + CELL_PADDING_PX, yieldTo: 100 + 22 + CELL_PADDING_PX, fitTo: 100 + 22 + CELL_PADDING_PX })
   })
 
+  it('measures a CAPI Machine\'s node from status.nodeRef, as its cell shows it', () => {
+    const machine = (name: string, node?: string) => ({ apiVersion: 'cluster.x-k8s.io/v1beta1', kind: 'Machine', metadata: { name, namespace: 'capi' }, status: node ? { nodeRef: { kind: 'Node', name: node } } : {} })
+    const nodeName = 'ip-10-0-12-34'
+    const m = measureColumnContent([machine('a', nodeName), machine('b')], [{ key: 'node' }], { plural: 'machines', cellFilterKind: 'machines' }, measure)
+    expect(m.node.stretch).toBe(nodeName.length * 10 + CELL_PADDING_PX)
+  })
+
+  it('measures what the Pod and Event count cells show, in the font they show it in', () => {
+    const fonts: string[] = []
+    const spy: MeasureText = (text, font, limit) => { fonts.push(`${text}:${font}`); return measure(text, font, limit) }
+    const pod = (restarts: number, gpu?: string) => ({
+      metadata: { name: 'p', namespace: 'x' },
+      spec: { containers: [{ name: 'c', resources: gpu ? { limits: { 'nvidia.com/gpu': gpu } } : {} }] },
+      status: { phase: 'Running', containerStatuses: [{ name: 'c', ready: true, restartCount: restarts, state: { running: {} } }] },
+    })
+    measureColumnContent([pod(3), pod(9, '2')], [{ key: 'restarts' }, { key: 'gpu' }], { plural: 'pods', cellFilterKind: 'pods' }, spy)
+    expect(fonts).toEqual(expect.arrayContaining(['3:body', '9:medium', '-:body', '2:monoSm']))
+  })
+
   it('measures the exact columns whose cells it knows, and leaves the rest unmeasured', () => {
     const p = { metadata: { name: 'a', namespace: 'x', creationTimestamp: new Date(Date.now() - 3 * 86400_000).toISOString() }, status: { phase: 'Running', containerStatuses: [{ name: 'c', ready: true, restartCount: 12, state: { running: {} } }] }, spec: { containers: [{ name: 'c' }] } }
     const m = measureColumnContent([p], [{ key: 'age' }, { key: 'restarts' }, { key: 'status' }, { key: 'cpu' }, { key: 'containers' }], { plural: 'pods', cellFilterKind: 'pods' }, measure)
