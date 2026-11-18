@@ -104,10 +104,91 @@ func TestApplicationsQueuedBuildGetsFullBudget(t *testing.T) {
 func TestApplicationsQueuedBuildRequestEnds(t *testing.T) {
 	queuedApplicationsBuildFixture(t)
 	applicationsBuildSlot <- struct{}{}
-	t.Cleanup(func() { <-applicationsBuildSlot })
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if _, err := listApplicationsForRequest(ctx, []string{"prod"}, false); !errors.Is(err, errResourceCacheUnavailable) {
 		t.Fatalf("err = %v, want errResourceCacheUnavailable", err)
+	}
+	releaseQueuedApplicationsBuild(t)
+}
+
+// releaseQueuedApplicationsBuild frees the held slot and waits out the build
+// that was queued behind it, which outlives the requests that started it.
+func releaseQueuedApplicationsBuild(t *testing.T) {
+	t.Helper()
+	<-applicationsBuildSlot
+	if _, err := listApplicationsForRequest(context.Background(), []string{"prod"}, false); err != nil {
+		t.Fatalf("queued build failed after the slot freed: %v", err)
+	}
+}
+
+// startQueuedApplicationsRequest starts a request for the queued fixture's key
+// and gives it time to join the build waiting for the held slot.
+func startQueuedApplicationsRequest(ctx context.Context) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		_, err := listApplicationsForRequest(ctx, []string{"prod"}, false)
+		done <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	return done
+}
+
+// The request that started a shared build ending doesn't fail the requests
+// waiting on the same build.
+func TestApplicationsBuildOutlivesTheRequestThatStartedIt(t *testing.T) {
+	queuedApplicationsBuildFixture(t)
+	applicationsBuildSlot <- struct{}{}
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leader := startQueuedApplicationsRequest(leaderCtx)
+	follower := startQueuedApplicationsRequest(context.Background())
+	cancelLeader()
+	if err := <-leader; !errors.Is(err, errResourceCacheUnavailable) {
+		t.Fatalf("canceled request err = %v, want errResourceCacheUnavailable", err)
+	}
+	<-applicationsBuildSlot
+	if err := <-follower; err != nil {
+		t.Fatalf("waiting request failed with the canceled one: %v", err)
+	}
+}
+
+// A request waiting on a build another request started leaves on its own
+// deadline rather than staying until the build ends.
+func TestApplicationsBuildWaiterLeavesOnItsOwnDeadline(t *testing.T) {
+	queuedApplicationsBuildFixture(t)
+	applicationsBuildSlot <- struct{}{}
+	leader := startQueuedApplicationsRequest(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	select {
+	case err := <-startQueuedApplicationsRequest(ctx):
+		if !errors.Is(err, errResourceCacheUnavailable) {
+			t.Fatalf("waiter err = %v, want errResourceCacheUnavailable", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter stayed past its deadline while the build was queued")
+	}
+	<-applicationsBuildSlot
+	if err := <-leader; err != nil {
+		t.Fatalf("starting request failed: %v", err)
+	}
+}
+
+// A build that never gets its slot gives up on its own, whatever its callers'
+// contexts allow.
+func TestApplicationsQueuedBuildWaitIsBounded(t *testing.T) {
+	queuedApplicationsBuildFixture(t)
+	prev := applicationsBuildQueueWait
+	applicationsBuildQueueWait = 50 * time.Millisecond
+	t.Cleanup(func() { applicationsBuildQueueWait = prev })
+	applicationsBuildSlot <- struct{}{}
+	t.Cleanup(func() { <-applicationsBuildSlot })
+	select {
+	case err := <-startQueuedApplicationsRequest(context.Background()):
+		if !errors.Is(err, errResourceCacheUnavailable) {
+			t.Fatalf("err = %v, want errResourceCacheUnavailable", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("queued build waited past its bound")
 	}
 }

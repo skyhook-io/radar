@@ -96,6 +96,10 @@ const applicationsCacheTTL = 10 * time.Second
 
 var applicationsBuildBudget = 30 * time.Second
 
+// applicationsBuildQueueWait bounds a build's wait for its slot; no request
+// waits on it longer than the router's request timeout.
+var applicationsBuildQueueWait = 60 * time.Second
+
 var applicationsCacheMaxEntries = 256
 
 var (
@@ -597,7 +601,10 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		return &applicationsResponse{Applications: entry.rows, ArgoClaims: entry.claims}, nil
 	}
 
-	value, err, _ := applicationsBuildSF.Do(cacheKey, func() (any, error) {
+	// The build is shared by every caller with this key, so no caller's
+	// request bounds it: each caller waits on its own context, and the build
+	// waits for its slot and runs under budgets of its own.
+	flight := applicationsBuildSF.DoChan(cacheKey, func() (any, error) {
 		applicationsCacheMu.Lock()
 		entry, hit := applicationsCache[cacheKey]
 		applicationsCacheMu.Unlock()
@@ -605,13 +612,14 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 			return &applicationsResponse{Applications: entry.rows, ArgoClaims: entry.claims}, nil
 		}
 
-		// The wait for the slot ends with the request; the build's own budget
-		// starts once it is admitted, so a build queued behind others isn't
-		// left with what the wait didn't use.
+		// The build's budget starts once it is admitted, so a build queued
+		// behind others isn't left with what the wait didn't use.
+		queued, stopWaiting := context.WithTimeout(context.WithoutCancel(ctx), applicationsBuildQueueWait)
+		defer stopWaiting()
 		select {
 		case applicationsBuildSlot <- struct{}{}:
-		case <-ctx.Done():
-			return nil, fmt.Errorf("%w: waiting for another Applications build: %v", errResourceCacheUnavailable, ctx.Err())
+		case <-queued.Done():
+			return nil, fmt.Errorf("%w: waiting for another Applications build: %v", errResourceCacheUnavailable, queued.Err())
 		}
 		defer func() { <-applicationsBuildSlot }()
 		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), applicationsBuildBudget)
@@ -650,10 +658,15 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		applicationsCacheMu.Unlock()
 		return &applicationsResponse{Applications: rows, ArgoClaims: claims}, nil
 	})
-	if err != nil {
-		return nil, err
+	select {
+	case res := <-flight:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*applicationsResponse), nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: waiting for the Applications build: %v", errResourceCacheUnavailable, ctx.Err())
 	}
-	return value.(*applicationsResponse), nil
 }
 
 func evictOldestApplicationsCacheEntry() {
