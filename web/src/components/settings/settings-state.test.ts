@@ -24,8 +24,8 @@ describe("Prometheus header edits", () => {
 });
 
 describe("Integration settings state", () => {
-  it.each(['prometheus', 'cost', 'argocd'] as const)("offers discard for a %s draft", (section) => {
-    expect(pendingSections({ prometheus: false, cost: false, argocd: false, ai: false, [section]: true })).toEqual([section]);
+  it.each(['prometheus', 'cost', 'argocd', 'substrate'] as const)("offers discard for a %s draft", (section) => {
+    expect(pendingSections({ prometheus: false, cost: false, argocd: false, substrate: false, ai: false, [section]: true })).toEqual([section]);
     expect(
       shouldShowSettingsFooter({
         canEditConfig: true,
@@ -39,7 +39,7 @@ describe("Integration settings state", () => {
   });
 
   it("offers review from other sections and retains the close guard", () => {
-    expect(pendingSections({ prometheus: true, cost: true, argocd: true, ai: true })).toEqual(['prometheus', 'cost', 'argocd', 'ai']);
+    expect(pendingSections({ prometheus: true, cost: true, argocd: true, substrate: true, ai: true })).toEqual(['prometheus', 'cost', 'argocd', 'substrate', 'ai']);
     expect(
       shouldShowSettingsFooter({
         canEditConfig: true,

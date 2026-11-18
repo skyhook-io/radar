@@ -1,6 +1,7 @@
 import type {
   SubstrateAPITier,
-  SubstrateConnection,
+  SubstrateLocalConnection,
+  SubstrateManagedConnectionView,
   SubstrateActorDetail,
   SubstrateActorRow,
   SubstrateActors,
@@ -31,17 +32,25 @@ export const notConfiguredTier: SubstrateAPITier = {
 export const sharedTier: SubstrateAPITier = {
   state: 'disabled',
   code: 'sharedRadar',
-  reason: "This Radar is shared, so it does not read Substrate's API: Substrate authorizes by its own roles, and every user would see what Radar's one identity sees. Use a local Radar (CLI or Desktop) to see actors, templates and workers.",
+  reason: 'This Radar is shared without sign-in, so it can’t tell who is asking and doesn’t read Substrate’s API.',
 }
 
-/** Radar Hub, a user who isn't an org owner: Substrate's API tier is off for them. */
-export const ownersOnlyTier: SubstrateAPITier = {
+/** An in-cluster Radar or Radar Hub whose operator turned Substrate's API off. */
+export const apiDisabledTier: SubstrateAPITier = {
   state: 'disabled',
-  code: 'ownersOnly',
-  reason: 'In Radar Hub only org owners read Substrate’s API.',
+  code: 'apiDisabled',
+  reason: 'The operator turned off reading Substrate’s API on this Radar.',
 }
 
-/** Radar Hub, an org owner: the shared client identity, minted with the owner's Kubernetes access. */
+/** A signed-in person whose Kubernetes access can't create ate-client's token. */
+export const mintDeniedTier: SubstrateAPITier = {
+  state: 'failed',
+  code: 'mintDenied',
+  reason: 'Radar could not create ate-system/ate-client’s token with your Kubernetes access.',
+  identity: { mode: 'sharedAsCaller', principal: 'system:serviceaccount:ate-system:ate-client' },
+}
+
+/** A signed-in person (in-cluster or Radar Hub): the shared client identity, minted with their Kubernetes access. */
 export const ownerTier: SubstrateAPITier = {
   ...connectedTier,
   endpoint: 'api.ate-system.svc:443',
@@ -282,12 +291,33 @@ export function actorDetail(overrides: Partial<SubstrateActorDetail> = {}): Subs
   }
 }
 
-/** GET /connection for a context with nothing saved. */
-export function connection(overrides: Partial<SubstrateConnection> = {}): SubstrateConnection {
+/** GET /connection on a local private Radar, for a context with nothing saved. */
+export function connection(overrides: Partial<SubstrateLocalConnection> = {}): SubstrateLocalConnection {
   return {
+    view: 'local',
     target: { binding: 'b', context: 'kind-demo', fingerprint: 'f', clientGeneration: 1, operationGeneration: 1 },
+    revision: 'r1',
     saved: false,
     sharedPrincipal: 'system:serviceaccount:ate-system:ate-client',
+    access: { state: 'notConfigured', code: 'notConfigured' },
+    ...overrides,
+  }
+}
+
+/** GET /connection on an in-cluster Radar or Radar Hub. */
+export function managedConnection(overrides: Partial<SubstrateManagedConnectionView> = {}): SubstrateManagedConnectionView {
+  return {
+    view: 'managed',
+    sharedPrincipal: 'system:serviceaccount:ate-system:ate-client',
+    access: ownerTier,
+    managed: {
+      enabled: true,
+      readsAs: 'eachUser',
+      endpoint: 'api.ate-system.svc:443',
+      serverName: 'api.ate-system.svc',
+      trust: 'clusterTrustBundle',
+      helm: { api: 'substrate.api.enabled', endpoint: 'substrate.api.endpoint', serverName: 'substrate.api.serverName', ca: 'substrate.api.caConfigMap', atespaces: 'substrate.api.atespaces' },
+    },
     ...overrides,
   }
 }

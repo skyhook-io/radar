@@ -86,6 +86,8 @@ import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
+
+const EMBEDDED_SETTINGS_SECTIONS: SettingsSectionId[] = ['substrate']
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
 import { createViewMemory } from './utils/viewMemory'
 import { createKindFilterStore } from './utils/kindFilterStore'
@@ -2726,6 +2728,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         initialSection={settingsSection}
         onClose={() => setShowSettings(false)}
         onNavigateToResource={navigateToResourceList}
+        // An embedding host (Radar Hub) has no local controls to offer: only
+        // the Agent Substrate workspace opens Settings there, at its own section.
+        sections={embedded ? EMBEDDED_SETTINGS_SECTIONS : undefined}
       />
 
       {/* Debug overlay — dev mode, standalone only. Embedded hosts (Radar Hub)

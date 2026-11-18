@@ -6,14 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"time"
 
-	"github.com/gofrs/flock"
+	"github.com/skyhook-io/radar/internal/config"
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
@@ -26,8 +25,7 @@ const (
 	// IdentityTokenFile sends the bearer token in a local file.
 	IdentityTokenFile = "tokenFile"
 	// IdentitySharedAsCaller is IdentityShared minted with the requesting
-	// user's own Kubernetes access, not Radar's: in Radar Hub, for an org
-	// owner. It is implicit, never saved.
+	// user's own Kubernetes access, not Radar's. It is implicit, never saved.
 	IdentitySharedAsCaller = "sharedAsCaller"
 )
 
@@ -54,15 +52,22 @@ const MaxScopedAtespaces = 64
 
 // Validate checks the settings before they are saved. File checks read the
 // file only to prove it is usable; nothing read is returned.
-func (s Settings) Validate() error {
+func (s Settings) Validate() error { return s.validate(true) }
+
+func (s Settings) validate(files bool) error {
 	switch s.Identity {
 	case IdentityShared:
 		if s.TokenFile != "" {
 			return errors.New("a token file is used only with the tokenFile identity")
 		}
 	case IdentityTokenFile:
-		if err := usableFile(s.TokenFile, "token file"); err != nil {
-			return err
+		if s.TokenFile == "" || !filepath.IsAbs(s.TokenFile) {
+			return errors.New("the token file path must be absolute")
+		}
+		if files {
+			if err := usableFile(s.TokenFile, "token file"); err != nil {
+				return err
+			}
 		}
 	default:
 		return errors.New("identity must be shared or tokenFile")
@@ -90,10 +95,19 @@ func (s Settings) Validate() error {
 	if err != nil || host == "" || port == "" || strings.ContainsAny(s.Endpoint, "/ \t\r\n") {
 		return errors.New("endpoint must be host:port")
 	}
+	if net.ParseIP(host) == nil && len(validation.IsDNS1123Subdomain(strings.ToLower(host))) > 0 {
+		return errors.New("endpoint host must be an IP address or DNS name")
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return errors.New("endpoint port must be between 1 and 65535")
+	}
 	if s.ServerName != "" && len(validation.IsDNS1123Subdomain(s.ServerName)) > 0 {
 		return errors.New("serverName must be a DNS name")
 	}
-	if s.CAFile != "" {
+	if s.CAFile != "" && !filepath.IsAbs(s.CAFile) {
+		return errors.New("the CA file path must be absolute")
+	}
+	if s.CAFile != "" && files {
 		if err := usableFile(s.CAFile, "CA file"); err != nil {
 			return err
 		}
@@ -133,8 +147,9 @@ type Saved struct {
 	Context string `json:"context"`
 	// Target fingerprints the cluster the settings were saved for, so a
 	// context that now points elsewhere does not send them to it.
-	Target   string   `json:"target"`
-	Settings Settings `json:"settings"`
+	Target   string                `json:"target"`
+	Identity config.TargetIdentity `json:"identity"`
+	Settings Settings              `json:"settings"`
 }
 
 type storeFile struct {
@@ -145,10 +160,8 @@ type storeFile struct {
 }
 
 // Store persists Substrate connection settings next to clusters.json. It is a
-// sibling of that store rather than an integration in it: clusters.json's
-// integrations are URL-plus-credentials connections that the Settings UI
-// lists, copies, imports from legacy config and probes, and Substrate's
-// connection fits none of those flows.
+// sibling because older Radar binaries reject unknown integration types in
+// clusters.json, which CLI and Desktop share.
 type Store struct{ Path string }
 
 func NewStore(radarConfigPath string) *Store {
@@ -158,25 +171,31 @@ func NewStore(radarConfigPath string) *Store {
 	return &Store{Path: filepath.Join(filepath.Dir(radarConfigPath), "substrate.json")}
 }
 
-func (s *Store) read() (storeFile, error) {
+var ErrConflict = errors.New("Substrate settings changed; reload Settings and try again")
+var ErrBusy = errors.New("Substrate settings are busy; try again")
+
+func (s *Store) file() config.RevisionFile {
+	return config.RevisionFile{Path: s.Path, MaxBytes: 1 << 20, Label: "Substrate settings", TempPattern: ".substrate-*.json", Conflict: ErrConflict, Busy: ErrBusy}
+}
+
+func (s *Store) decode(data []byte) (storeFile, error) {
 	out := storeFile{Version: 1, Contexts: map[string]Saved{}}
-	if s.Path == "" {
-		return out, errors.New("Radar's settings directory is unavailable")
-	}
-	f, err := os.Open(s.Path)
-	if os.IsNotExist(err) {
+	if data == nil {
 		return out, nil
 	}
-	if err != nil {
-		return out, fmt.Errorf("cannot read %s", s.Path)
+	out = storeFile{}
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&out); err != nil || out.Version != 1 {
+		return out, fmt.Errorf("%s is invalid; fix it or rename it to start over", s.Path)
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
-	if err != nil || len(data) > 1<<20 {
-		return out, fmt.Errorf("cannot read %s", s.Path)
+	if !json.Valid(data) {
+		return out, fmt.Errorf("%s is invalid; fix it or rename it to start over", s.Path)
 	}
-	if err := json.Unmarshal(data, &out); err != nil || out.Version != 1 {
-		return storeFile{Version: 1, Contexts: map[string]Saved{}}, fmt.Errorf("%s is invalid; fix it or rename it to start over", s.Path)
+	for _, saved := range out.Contexts {
+		if err := saved.Settings.validate(false); err != nil {
+			return out, fmt.Errorf("%s has invalid Substrate settings: %v", s.Path, err)
+		}
 	}
 	if out.Contexts == nil {
 		out.Contexts = map[string]Saved{}
@@ -184,56 +203,41 @@ func (s *Store) read() (storeFile, error) {
 	return out, nil
 }
 
-// Get returns the saved settings for a binding.
-func (s *Store) Get(binding string) (Saved, bool, error) {
-	f, err := s.read()
-	if err != nil {
-		return Saved{}, false, err
+func (s *Store) ReadSince(previous string) (storeFile, string, bool, error) {
+	data, revision, changed, err := s.file().ReadSince(previous)
+	if err != nil || !changed {
+		return storeFile{}, revision, changed, err
 	}
-	saved, ok := f.Contexts[binding]
-	return saved, ok, nil
+	out, err := s.decode(data)
+	return out, revision, changed, err
 }
 
-// Put saves (or, with nil, removes) one binding's settings.
-func (s *Store) Put(ctx context.Context, binding string, saved *Saved) error {
-	if s.Path == "" {
-		return errors.New("Radar's settings directory is unavailable")
-	}
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0700); err != nil {
-		return err
-	}
-	lock := flock.New(s.Path+".lock", flock.SetPermissions(0600))
-	defer lock.Close()
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	if locked, err := lock.TryLockContext(ctx, 10*time.Millisecond); err != nil || !locked {
-		return errors.New("Substrate settings are busy; try again")
-	}
-	defer lock.Unlock()
-	f, err := s.read()
-	if err != nil {
-		return err
-	}
-	if saved == nil {
-		delete(f.Contexts, binding)
-	} else {
-		f.Contexts[binding] = *saved
-	}
-	data, err := json.MarshalIndent(f, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.Path), ".substrate-*.json")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(append(data, '\n')); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), s.Path)
+func (s *Store) GetRevision(binding string) (Saved, bool, string, error) {
+	f, revision, _, err := s.ReadSince("")
+	saved, ok := f.Contexts[binding]
+	return saved, ok, revision, err
+}
+
+func (s *Store) Get(binding string) (Saved, bool, error) {
+	saved, ok, _, err := s.GetRevision(binding)
+	return saved, ok, err
+}
+
+func (s *Store) Update(ctx context.Context, revision, binding string, saved *Saved) (string, error) {
+	return s.file().Update(ctx, revision, func(data []byte) ([]byte, error) {
+		f, err := s.decode(data)
+		if err != nil {
+			return nil, err
+		}
+		if saved == nil {
+			delete(f.Contexts, binding)
+		} else {
+			if err := saved.Settings.validate(false); err != nil {
+				return nil, err
+			}
+			f.Contexts[binding] = *saved
+		}
+		data, err = json.MarshalIndent(f, "", "  ")
+		return append(data, '\n'), err
+	})
 }

@@ -3,13 +3,13 @@ import { Badge, CertaintyGlyph, Collapse, CollapseChevron, StatusDot, Tooltip, w
 import type { SubstrateAtespaceRead, SubstratePoolRow, SubstrateStatus, SubstrateWorkspace } from '../../api/substrateWorkspace'
 import type { SelectedResource } from '../../types'
 import { refToSelectedResource } from '../../utils/navigation'
-import { Notice, ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
+import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { INCOMPLETE_COVERAGE_STATES, coverageEmpty, coverageLabel } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
-import { OWNERS_ONLY_NOTE, attentionArea, coverageInPart, countText, poolReading, poolReadyPods, worstAttentionTone, type AttentionArea } from './readings'
+import { attentionArea, coverageInPart, countText, poolReading, poolReadyPods, worstAttentionTone, type AttentionArea } from './readings'
 import { SUBSTRATE_GROUP, substrateActorsPath } from './routes'
 import { SubstrateAttentionList, type OpenSubject } from './SubstrateAttentionList'
-import { SubstrateConnectPanel, SubstrateTierBanner, showsConnectPanel } from './SubstrateConnect'
+import { SubstrateConnectNotice, SubstrateConnectionLink, SubstrateTierBanner, showsConnectNotice } from './SubstrateConnect'
 import { SubstrateStateBar } from './SubstrateStateBar'
 import { NOT_CONNECTED_TITLE, Name, SUBSTRATE_WHAT_IT_IS, SUBSTRATE_WIDE, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread, WholeNames } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
@@ -467,24 +467,18 @@ export function SubstrateOverview({ data, status, onInspect, inspected, onOpenSu
   const navigate = useWorkspaceNavigate()
   const tier = data.apiTier
   const connected = tier.state === 'connected'
-  const [changing, setChanging] = useState(false)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SubstrateHeader title="Overview" intro={SUBSTRATE_WHAT_IT_IS} />
       <ScreenBody>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <SubstrateSourceLine tier={tier} status={status} />
-          {connected && status?.canConfigure && tier.identity?.mode !== 'sharedAsCaller' && (
-            <button type="button" onClick={() => setChanging((v) => !v)} className="text-xs font-medium text-accent-text hover:underline">
-              {changing ? 'Close' : 'Change connection'}
-            </button>
-          )}
+          {connected && <SubstrateConnectionLink status={status} />}
         </div>
         <SubstrateCoverageNotice coverage={data.coverage} kinds={['actors', 'templates', 'workers', 'atespaces']} />
         <SubstrateTierBanner tier={tier} />
         <StatusLine facts={overviewFacts(data)} />
-        {status && (showsConnectPanel(tier) || (connected && changing)) && <SubstrateConnectPanel status={status} tier={tier} />}
-        {tier.code === 'ownersOnly' && <Notice>{OWNERS_ONLY_NOTE}</Notice>}
+        {showsConnectNotice(tier) && <SubstrateConnectNotice status={status} tier={tier} />}
         {data.actorStates && (
           <section aria-labelledby="substrate-states">
             <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5">

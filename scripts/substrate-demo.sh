@@ -245,7 +245,7 @@ apply_fixtures() {
 print_settings() {
   cat <<EOF
 
-${C_GREEN}Radar connection settings (Agent Substrate, kube context ${CTX}, workers in ${NS}):${C_RESET}
+${C_GREEN}Settings → Agent Substrate (kube context ${CTX}, workers in ${NS}):${C_RESET}
   endpoint    127.0.0.1:${PORT}
   caFile      ${STATE}/ca.pem
   serverName  api.ate-system.svc

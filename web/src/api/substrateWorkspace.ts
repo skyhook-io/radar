@@ -35,18 +35,19 @@ export type SubstrateActorState =
  * connecting: settings are saved and the first read is still running; status
  * never waits for it. notConfigured: no identity saved for this context.
  * disabled: this Radar does not read Substrate's API for this request (code
- * sharedRadar, or ownersOnly in Radar Hub below org owner). failed: settings
- * exist, or a Hub owner's token could not be minted (mintDenied), but no
- * usable snapshot was read.
+ * sharedRadar: a shared Radar without sign-in; apiDisabled: turned off by the
+ * operator). failed: settings exist, or the caller's token could not be minted
+ * (mintDenied), but no usable snapshot was read.
  */
 export type SubstrateTierState = 'connected' | 'connecting' | 'notConfigured' | 'disabled' | 'failed'
 
 /** Shared by apiTier.code, coverage codes and error_code on error responses. */
 export type SubstrateCode =
+  /** A shared Radar without sign-in: it cannot tell who is asking, so it does not read Substrate's API (403). */
   | 'sharedRadar'
-  /** Radar Hub: only org owners read Substrate's API for now (403). */
-  | 'ownersOnly'
-  /** Radar Hub: the owner's own Kubernetes access cannot create a token for ate-system/ate-client (403). */
+  /** The operator turned Substrate's API off for this Radar (Helm substrate.api.enabled: false) (403). */
+  | 'apiDisabled'
+  /** The caller's own Kubernetes access cannot create a token for ate-system/ate-client (403). */
   | 'mintDenied'
   | 'notConfigured'
   | 'targetChanged'
@@ -66,6 +67,10 @@ export type SubstrateCode =
   | 'invalidSettings'
   /** Radar could not read or write ~/.radar/substrate.json. */
   | 'settingsFile'
+  /** The saved connection changed since it was shown (PUT /connection, 409). */
+  | 'conflict'
+  /** The save keeps the saved credential but sends it to a new endpoint, CA or server name (PUT /connection, 409). */
+  | 'confirmDestination'
   /** The worker Pod's log could not be read (the logs endpoint only, 502). */
   | 'logsUnavailable'
   /** Radar read too little to say whether the WorkerPool exists (pool detail, 503). */
@@ -74,7 +79,7 @@ export type SubstrateCode =
 export interface SubstrateIdentity {
   /**
    * shared: ate-system/ate-client, minted with Radar's Kubernetes access. sharedAsCaller: the same
-   * identity, minted with the requesting Hub owner's own access; implicit, nothing to save or edit.
+   * identity, minted with the signed-in person's own access; implicit, nothing to save or edit.
    */
   mode: 'shared' | 'tokenFile' | 'sharedAsCaller'
   /** Who Substrate sees. Absent for tokenFile: Substrate does not tell a client who its token is. */
@@ -564,16 +569,49 @@ export interface SubstrateConnectionTarget {
   [field: string]: unknown
 }
 
-export interface SubstrateConnection {
+/** How this Radar reads Substrate's API, when its operator sets it (in-cluster and Radar Hub). */
+export interface SubstrateManagedConnection {
+  /** false: the operator turned the API off, or this shared Radar has no sign-in. */
+  enabled: boolean
+  /** eachUser: ate-client, its token minted with each signed-in person's own Kubernetes access. */
+  readsAs: 'eachUser' | 'none'
+  endpoint: string
+  serverName: string
+  /** Where the server certificate is verified from; never a path. */
+  trust: 'clusterTrustBundle' | 'caFile'
+  /** Fallback atespaces; only present when this caller is connected. */
+  atespaces?: string[]
+  /** The Helm values that set each part. */
+  helm: { api: string; endpoint: string; serverName: string; ca: string; atespaces: string }
+}
+
+interface SubstrateConnectionBase {
+  /** Who the shared identity authenticates as. */
+  sharedPrincipal: string
+  /** This caller's own outcome, as status's apiTier. */
+  access: SubstrateAPITier
+}
+
+/** A local private Radar: this context's saved connection, editable. */
+export interface SubstrateLocalConnection extends SubstrateConnectionBase {
+  view: 'local'
   /** The context (target.context) and cluster this view was read for. Send back with PUT; a save for a context that has since moved is refused with 409 targetChanged. */
   target: SubstrateConnectionTarget
+  /** The saved file's revision; send back with PUT. A save over a newer revision is refused with 409 conflict. */
+  revision: string
   saved: boolean
   /** Saved for another cluster than this context points at now, so not used. */
   targetChanged?: boolean
-  settings?: SubstrateSettings
-  /** Who the shared identity authenticates as. */
-  sharedPrincipal: string
+  settings?: SubstrateSettings | null
 }
+
+/** In-cluster and Radar Hub: the installation's settings, read-only. */
+export interface SubstrateManagedConnectionView extends SubstrateConnectionBase {
+  view: 'managed'
+  managed: SubstrateManagedConnection
+}
+
+export type SubstrateConnection = SubstrateLocalConnection | SubstrateManagedConnectionView
 
 /**
  * PUT /connection's body: the target the connection view returned, and
@@ -587,7 +625,12 @@ export interface SubstrateConnection {
  */
 export interface SubstrateConnectionUpdate {
   target: SubstrateConnectionTarget
+  revision: string
   settings: SubstrateSettings | { identity: 'none' }
+  /** reconfirm: keep the saved settings for the cluster this context now points at. */
+  action?: 'save' | 'reconfirm'
+  /** The user agreed to send the saved credential to a changed endpoint, CA or server name. */
+  confirmDestination?: boolean
 }
 
 export interface SubstrateWorkspace {
@@ -1046,7 +1089,7 @@ export function useSubstrateStatus(enabled = true, options: SubstratePollOptions
   return useSubstrateQuery<SubstrateStatus>(['status'], '/substrate/status', enabled, options.pollMs ?? POLL_MS)
 }
 
-/** Local private Radar only; elsewhere it answers 403 sharedRadar. Enable when status.canConfigure. */
+/** How this Radar reads Substrate's API: the saved connection (view local) or the installation's (view managed). */
 export function useSubstrateConnection(enabled = true) {
   return useSubstrateQuery<SubstrateConnection>(['connection'], '/substrate/connection', enabled, false)
 }

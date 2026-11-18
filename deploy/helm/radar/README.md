@@ -842,3 +842,79 @@ Radar uses its ServiceAccount permissions to access the Kubernetes API. The UI a
 helm uninstall radar -n radar
 kubectl delete namespace radar
 ```
+
+## Agent Substrate API
+
+With sign-in (OSS proxy/OIDC or Radar Hub), Radar reads Substrate as
+`system:serviceaccount:ate-system:ate-client` only after each person's own
+Kubernetes client successfully mints its token. Hub owners, members and viewers
+follow the same rule. Radar never falls back to its own ServiceAccount to mint.
+Without sign-in on a shared listener, API reads are disabled (`sharedRadar`).
+Kubernetes WorkerPools and Prometheus metrics retain their own access gates.
+Settings → Agent Substrate shows effective installation values and the caller's
+access outcome. Operators change them through Helm and roll out Radar; there are
+no shared/Cloud settings writes or operator token Secrets.
+
+| Value | Default | Meaning |
+|---|---|---|
+| `substrate.api.enabled` | `true` | `false` disables managed API reads for everyone (`apiDisabled`) |
+| `substrate.api.endpoint` | `api.ate-system.svc:443` | Direct host:port dial |
+| `substrate.api.serverName` | `api.ate-system.svc` | TLS server name |
+| `substrate.api.atespaces` | `[]` | Up to 64 unique DNS-1123 labels, used only when listing is denied; does not restrict the identity's access |
+| `substrate.api.caConfigMap.name` | `""` | Public PEM CA ConfigMap, mounted read-only; unset uses Substrate's live ClusterTrustBundle |
+| `substrate.api.caConfigMap.key` | `ca.crt` | ConfigMap key containing the PEM certificates |
+
+The values map to `RADAR_SUBSTRATE_API` (`enabled`/`disabled`),
+`RADAR_SUBSTRATE_ENDPOINT`, `RADAR_SUBSTRATE_SERVER_NAME`,
+`RADAR_SUBSTRATE_ATESPACES` (comma list) and, when mounted,
+`RADAR_SUBSTRATE_CA_FILE=/etc/radar/substrate-ca/ca.crt`. Invalid explicit settings
+remain failed with `invalidSettings`, rather than silently falling back.
+
+
+Kubernetes's built-in `edit` role includes `create serviceaccounts/token`, and
+`admin` inherits it. With Radar Hub's default role bindings, members and owners
+therefore already qualify wherever those bindings cover `ate-system`; a
+separate Role is needed only for people without that existing grant. The default
+`view` role does not grant token creation. Operators can disable the integration
+with `substrate.api.enabled=false`. Check the intended person's actual access:
+
+```bash
+kubectl auth can-i create serviceaccounts/ate-client --subresource=token \
+  -n ate-system --as=alice --as-group=radar:member --as-group=system:authenticated
+```
+
+These Substrate values add **no token-mint RBAC** for Radar's ServiceAccount or its users.
+A cluster operator can apply this Role and bind it to the intended team:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: substrate-client-token
+  namespace: ate-system
+rules:
+  - apiGroups: [""]
+    resources: [serviceaccounts/token]
+    resourceNames: [ate-client]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: substrate-readers
+  namespace: ate-system
+subjects:
+  - kind: Group
+    name: platform-team # The group Radar impersonates for these people.
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: substrate-client-token
+  apiGroup: rbac.authorization.k8s.io
+```
+
+This permission lets those people obtain `ate-client` themselves. It is usually a
+global owner in Substrate; Radar uses only its read RPCs. Each person's proof lasts
+at most 50 minutes and is checked before warm-cache access; background reads do
+not mint tokens. For a private local CLI/Desktop connection, use **Settings →
+Agent Substrate** and `~/.radar/substrate.json` instead of installation values.

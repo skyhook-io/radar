@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
-	"strconv"
 	"sync"
 	"time"
 
@@ -35,7 +33,7 @@ func WithCaller(ctx context.Context, c Caller) context.Context {
 
 func callerFrom(ctx context.Context) (Caller, bool) {
 	c, ok := ctx.Value(callerKey{}).(Caller)
-	return c, ok && c.Client != nil
+	return c, ok
 }
 
 // callerMintTimeout bounds the TokenRequest a request makes.
@@ -76,15 +74,11 @@ func callerTokenKey(k Kube) string {
 	return k.Binding + "\x00" + k.Fingerprint + "\x00" + k.Generation
 }
 
-// callerSettings are the implicit settings of IdentitySharedAsCaller: Radar
-// runs in the cluster, so it dials the API's Service directly. CallerDial
-// overrides where (tests, and a Radar outside the cluster).
+// callerSettings are the implicit settings of IdentitySharedAsCaller: the
+// installation's endpoint and trust (CallerDial), with no token of Radar's.
 func (m *Manager) callerSettings() Settings {
 	s := m.CallerDial
 	s.Identity = IdentitySharedAsCaller
-	if s.Endpoint == "" {
-		s.Endpoint = net.JoinHostPort(APIServerName, strconv.Itoa(APIPort))
-	}
 	return s
 }
 
@@ -95,6 +89,9 @@ func (m *Manager) callerSettings() Settings {
 // caller, whatever the shared token. It runs only on a caller's own request;
 // background reads use the shared token and never mint.
 func (m *Manager) ensureCallerToken(ctx context.Context, k Kube, c Caller) *TierError {
+	if c.Client == nil {
+		return &TierError{Code: CodeMintDenied, Message: "Radar could not act as you in Kubernetes, so it cannot create Substrate's token for you."}
+	}
 	t := &m.callerTok
 	t.minting.Lock()
 	defer t.minting.Unlock()
@@ -164,7 +161,7 @@ func (s callerSource) token(context.Context) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.key != s.key || t.token == "" || t.expires.Sub(s.m.Now()) < callerTokenGrace {
-		return "", status.Error(codes.Unauthenticated, "Radar's token for Substrate's API has expired; the next request from an org owner mints a new one")
+		return "", status.Error(codes.Unauthenticated, "Radar's token for Substrate's API has expired; the next signed-in request mints a new one")
 	}
 	return t.token, nil
 }

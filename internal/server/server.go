@@ -127,8 +127,10 @@ type Server struct {
 	saveFileStreamFunc      func(defaultFilename string, r io.Reader) (string, error)
 	// substrate is the Agent Substrate API client, built on first use by
 	// substrateManager; tests inject one.
-	substrate     *substrateapi.Manager
-	substrateOnce sync.Once
+	substrate                   *substrateapi.Manager
+	substrateOnce               sync.Once
+	substrateInstallationOnce   sync.Once
+	substrateInstallationConfig substrateapi.InstallationConfig
 	// newExecutor builds the exec client for pod file transfers. Nil in
 	// production, where the package default is used; tests substitute a fake so
 	// the transfer can be driven end to end without a cluster.
@@ -422,6 +424,13 @@ func New(cfg Config) *Server {
 	}
 
 	s.setupRoutes()
+	s.substrateInstallation()
+	if s.localRuntime != nil && s.substrateLocal() {
+		s.localRuntime.SetSubstrateSelection(func(target k8s.ProfileTarget) {
+			s.substrateManager().Select(substrateapi.Kube{Binding: target.Binding, Fingerprint: target.Fingerprint,
+				Generation: strconv.FormatUint(target.ClientGeneration, 10) + "." + strconv.FormatUint(target.OperationGeneration, 10)})
+		})
+	}
 	return s
 }
 
@@ -655,8 +664,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/rbac/namespace/{namespace}", s.handleRBACNamespace)
 			r.Get("/rbac/whoami", s.handleRBACWhoami)
 			// Agent Substrate workspace. The API-tier routes serve a local
-			// Radar on a private listener and, in Radar Hub, org owners;
-			// see substrateGate. /connection is local-only.
+			// Radar on a private listener or a signed-in user who can mint;
+			// see substrateGate. Only PUT /connection is local-private.
 			r.Get("/substrate/status", s.handleSubstrateStatus)
 			r.Get("/substrate/connection", s.handleGetSubstrateConnection)
 			r.Put("/substrate/connection", s.handlePutSubstrateConnection)

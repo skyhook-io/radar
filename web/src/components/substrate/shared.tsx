@@ -106,9 +106,9 @@ export function identityText(tier: SubstrateAPITier): string {
 }
 
 /**
- * Radar Hub, for an org owner: Radar reads as Substrate's shared client
- * identity, with a token minted with the owner's own Kubernetes access, and
- * there is nothing to connect.
+ * In-cluster Radar with sign-in and Radar Hub: Radar reads as Substrate's
+ * shared client identity, with a token minted with the signed-in person's own
+ * Kubernetes access, and there is nothing to connect.
  */
 function SharedAsCallerIdentity() {
   return (
