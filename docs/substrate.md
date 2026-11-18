@@ -160,6 +160,6 @@ Routes are registered in `internal/server/server.go` and advertised by the `subs
 
 ## Testing
 
-`make substrate-demo` (read `scripts/substrate-demo/README.md` first) runs a fake Substrate API server on this machine against real WorkerPools and worker Pods in an existing cluster. It is not a kind cluster: the context defaults to `radar-test-nonprod` (`--context`). It serves Substrate's real wire protocol with deterministic data: 1,289 actors in four atespaces, and one scenario for every Needs attention rule, plus a limited token that is denied one atespace, and injected faults (`unavailable`, `unauthenticated`, `latency`). Connect Radar with the endpoint form the script prints.
+`make substrate-demo` (read `scripts/substrate-demo/README.md` first) runs a fake Substrate API server on this machine against real WorkerPools and worker Pods in an existing cluster. It is not a kind cluster: the context defaults to `radar-test-nonprod` (`--context`). It serves Substrate's real wire protocol with deterministic data: 1,293 actors in four atespaces, and one scenario for every Needs attention rule, plus a limited token that is denied one atespace, and injected faults (`unavailable`, `unauthenticated`, `latency`). Connect Radar with the endpoint form the script prints.
 
 Unit tests: `pkg/substrate/*_test.go` (rules, derivations, log filtering), `internal/substrate/manager_test.go`, `internal/server/substrate_workspace_handlers_test.go` (gates, coverage, shared Radar), and `web/src/components/substrate/*.test.tsx`.

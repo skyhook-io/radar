@@ -23,12 +23,23 @@ import (
 const crashAnchorFile = "crash-anchor"
 
 // podSetKey identifies one incarnation of the Pods crashed actors last ran
-// on; recreating any other Pod leaves their lines, and so the key, alone.
+// on, and the crashes as the dataset times them; recreating any other Pod
+// leaves their lines, and so the key, alone. Retimed crashes get new lines,
+// after the ones already in the log.
 func podSetKey(pods map[string]PodInfo) string {
 	last := map[string]bool{"batch-pool-worker-0": true} // the failed golden actor's
-	for _, sp := range specials() {
+	var story []string
+	for name, sp := range specials() {
 		if sp.lastWorker != "" {
 			last[sp.lastWorker] = true
+		}
+		if sp.crash != "" {
+			story = append(story, fmt.Sprintf("%s|%s|%s|%s", name, sp.lastWorker, sp.crash, sp.crashAge))
+		}
+	}
+	for _, t := range tmplSpecs {
+		if t.golden == goldenFailed {
+			story = append(story, fmt.Sprintf("%s|golden|%s", t.key, t.goldenAge))
 		}
 	}
 	var uids []string
@@ -38,7 +49,8 @@ func podSetKey(pods map[string]PodInfo) string {
 		}
 	}
 	sort.Strings(uids)
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(uids, ","))))[:16]
+	sort.Strings(story)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(uids, ",")+"\n"+strings.Join(story, ","))))[:16]
 }
 
 // ReadCrashAnchor returns the anchor recorded for this Pod set, or zero.
@@ -80,19 +92,23 @@ func crashStory(r *actorRec, anchor time.Time) bool {
 	return anchor.Add(-r.sp.crashAge - 3*time.Minute).After(pi.Created)
 }
 
-// anchorCrashes pins the crash times of the actors with a story to anchor, so
-// they match the lines already in the Pods' logs.
-func (d *Dataset) anchorCrashes(g *gen, anchor time.Time) {
+// storyWait is how much older the worker Pods must get before every recent
+// crash (within workerRestartAge: the incident and the worker restart) can
+// have its lines. An anchor written sooner would leave some of them without
+// lines for as long as these Pods live.
+func (d *Dataset) storyWait(at time.Time) time.Duration {
+	var wait time.Duration
 	for _, r := range d.recs {
-		if !crashStory(r, anchor) {
+		if r.sp == nil || r.actor.Status.State != ateapi.ActorState_ACTOR_STATE_CRASHED || r.sp.crashAge > workerRestartAge || r.lastPlan == nil || !r.lastPlan.owned {
 			continue
 		}
-		at := anchor.Add(-r.sp.crashAge)
-		age := g.start.Sub(at)
-		r.actor.Status.Crash.CrashTime = g.ts(age)
-		r.actor.Metadata.UpdateTime = g.ts(age)
-		r.stateAge = age
+		pi := r.lastPlan.podInfo
+		if !pi.Found || pi.Created.IsZero() || pi.Terminating {
+			continue
+		}
+		wait = max(wait, pi.Created.Add(r.sp.crashAge+3*time.Minute).Sub(at))
 	}
+	return wait
 }
 
 type timedLine struct {

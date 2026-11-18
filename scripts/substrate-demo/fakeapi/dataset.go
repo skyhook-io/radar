@@ -37,6 +37,9 @@ type PodInfo struct {
 	Terminating bool
 	Found       bool
 	Created     time.Time
+	// DrainStart is when the Pod's deletion began (its deadline less its
+	// grace period); zero unless it is Terminating.
+	DrainStart time.Time
 }
 
 type poolSpec struct {
@@ -110,7 +113,7 @@ var tmplSpecs = []tmplSpec{
 	{key: tClaude, atespace: "code-review", cpu: 1000, mem: 1536 * mib, fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, golden: goldenReady, goldenAge: 2 * time.Hour, createdAge: 21 * 24 * time.Hour, count: 430, first: 8400, nameFmt: "pr-%04d-reviewer", class: "gvisor", containers: []string{"agent"}},
 	{key: tLang, atespace: "research", cpu: 2000, mem: 2 * gib, fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, golden: goldenReady, goldenAge: 2 * 24 * time.Hour, createdAge: 18 * 24 * time.Hour, count: 160, first: 40, nameFmt: "lit-review-%04d", class: "gvisor", containers: []string{"agent"}},
 	{key: tCodex, atespace: "code-review", cpu: 4000, mem: 8 * gib, selector: map[string]string{"sandbox": "microvm"}, fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, golden: goldenReady, goldenAge: 24 * time.Hour, createdAge: 9 * 24 * time.Hour, count: 56, first: 1000, nameFmt: "codex-task-%04d", class: "microvm", containers: []string{"codex"}},
-	{key: tBrowser, atespace: "sandbox-dev", cpu: 1000, mem: 3 * gib, selector: map[string]string{"sandbox": "gvisor"}, fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, golden: goldenFailed, goldenAge: 25 * time.Minute, createdAge: 30 * time.Minute, count: 15, first: 1, nameFmt: "browser-sbx-%03d", class: "gvisor", containers: []string{"browser", "mcp-server"}},
+	{key: tBrowser, atespace: "sandbox-dev", cpu: 1000, mem: 3 * gib, selector: map[string]string{"sandbox": "gvisor"}, fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_ROOTFS, golden: goldenFailed, goldenAge: 5*time.Hour + 10*time.Minute, createdAge: 5 * 24 * time.Hour, count: 15, first: 1, nameFmt: "browser-sbx-%03d", class: "gvisor", containers: []string{"browser", "mcp-server"}},
 	{key: tNotebook, atespace: "research", cpu: 2000, mem: 4 * gib, selector: map[string]string{"tier": "batch"}, fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES, golden: goldenDisabled, createdAge: 12 * 24 * time.Hour, count: 12, first: 1, nameFmt: "notebook-%03d", class: "gvisor", containers: []string{"kernel"}},
 	{key: tGPU, atespace: "research", cpu: 4000, mem: 16 * gib, selector: map[string]string{"accelerator": "nvidia-l4"}, fidelity: ateapi.SnapshotFidelity_SNAPSHOT_FIDELITY_MEMORY, golden: goldenPending, createdAge: 3 * time.Hour, count: 3, first: 1, nameFmt: "gpu-eval-%02d", class: "gvisor", containers: []string{"eval"}},
 }
@@ -142,11 +145,14 @@ type mix struct {
 // workerPlan is one Worker. mix counts every actor assigned to it, including
 // the named special cases placed on it below.
 type workerPlan struct {
-	pool       string
-	pod        string
-	owned      bool
-	state      ateapi.WorkerState
-	stateAge   time.Duration
+	pool     string
+	pod      string
+	owned    bool
+	state    ateapi.WorkerState
+	stateAge time.Duration
+	// incident: stateAge is on the crash clock, since the crashes it caused
+	// are (gen.lag).
+	incident   bool
 	createdAge time.Duration
 	issued     int64
 	registered int64
@@ -167,16 +173,16 @@ func defaultPlans() []*workerPlan {
 	return []*workerPlan{
 		// Its Pod is Running and Ready, so Kubernetes looks fine while
 		// Substrate has stopped placing on it.
-		gv(&workerPlan{pool: "agent-pool", pod: "agent-pool-worker-0", owned: true, state: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE, stateAge: 12 * time.Minute, createdAge: 40 * time.Hour, issued: 1, registered: 1, observed: 1, mix: []mix{{tADK, 2}, {tClaude, 1}}}),
+		gv(&workerPlan{pool: "agent-pool", pod: "agent-pool-worker-0", owned: true, state: ateapi.WorkerState_WORKER_STATE_UNAVAILABLE, stateAge: 80 * time.Minute, createdAge: 40 * time.Hour, issued: 1, registered: 1, observed: 1, mix: []mix{{tADK, 2}, {tClaude, 1}}}),
 		gv(&workerPlan{pool: "agent-pool", pod: "agent-pool-worker-1", owned: true, state: ateapi.WorkerState_WORKER_STATE_ACTIVE, stateAge: 39 * time.Hour, createdAge: 39 * time.Hour, issued: 1, registered: 1, observed: 1, mix: []mix{{tADK, 12}, {tClaude, 4}, {tLang, 2}}}),
-		// Restarted 9 minutes ago; the control plane has not yet crashed the
+		// Restarted 7 minutes ago; the control plane has not yet crashed the
 		// actors the previous process ran, so three still read RUNNING.
-		gv(&workerPlan{pool: "agent-pool", pod: "agent-pool-worker-2", owned: true, state: ateapi.WorkerState_WORKER_STATE_ACTIVE, stateAge: 9 * time.Minute, createdAge: 39 * time.Hour, issued: 4, registered: 4, observed: 3, mix: []mix{{tADK, 8}, {tClaude, 3}, {tLang, 2}}}),
+		gv(&workerPlan{pool: "agent-pool", pod: "agent-pool-worker-2", owned: true, state: ateapi.WorkerState_WORKER_STATE_ACTIVE, stateAge: 7*time.Minute + 40*time.Second, createdAge: 39 * time.Hour, issued: 4, registered: 4, observed: 3, mix: []mix{{tADK, 8}, {tClaude, 3}, {tLang, 2}}}),
 		gv(&workerPlan{pool: "agent-pool", pod: "agent-pool-worker-3", owned: true, state: ateapi.WorkerState_WORKER_STATE_DRAINING, stateAge: 0, createdAge: 39 * time.Hour, issued: 1, registered: 1, observed: 1, mix: []mix{{tADK, 2}, {tClaude, 1}, {tLang, 1}}}),
 		gv(&workerPlan{pool: "healthy-pool", pod: "healthy-pool-worker-0", owned: true, state: ateapi.WorkerState_WORKER_STATE_ACTIVE, stateAge: 39 * time.Hour, createdAge: 39 * time.Hour, issued: 1, registered: 1, observed: 1, mix: []mix{{tADK, 20}, {tClaude, 4}}}),
-		// Restarted 6 minutes ago and already reconciled: the two actors it
-		// lost are CRASHED with "worker restarted while hosting the actor".
-		gv(&workerPlan{pool: "healthy-pool", pod: "healthy-pool-worker-1", owned: true, state: ateapi.WorkerState_WORKER_STATE_ACTIVE, stateAge: 6 * time.Minute, createdAge: 39 * time.Hour, issued: 2, registered: 2, observed: 2, mix: []mix{{tADK, 10}, {tClaude, 3}, {tLang, 1}}}),
+		// Restarted and already reconciled: the three actors it lost read
+		// "worker restarted while hosting the actor", crashed the same second.
+		gv(&workerPlan{pool: "healthy-pool", pod: "healthy-pool-worker-1", owned: true, state: ateapi.WorkerState_WORKER_STATE_ACTIVE, stateAge: workerRestartAge + 20*time.Second, incident: true, createdAge: 39 * time.Hour, issued: 2, registered: 2, observed: 2, mix: []mix{{tADK, 10}, {tClaude, 3}, {tLang, 1}}}),
 		gv(&workerPlan{pool: "batch-pool", pod: "batch-pool-worker-0", owned: true, state: ateapi.WorkerState_WORKER_STATE_ACTIVE, stateAge: 20 * time.Hour, createdAge: 20 * time.Hour, issued: 1, registered: 1, observed: 1, mix: []mix{{tBrowser, 3}, {tNotebook, 2}, {tClaude, 2}, {tLang, 1}}}),
 		{pool: "microvm-pool", pod: "microvm-pool-worker-0", owned: true, state: ateapi.WorkerState_WORKER_STATE_ACTIVE, stateAge: 20 * time.Hour, createdAge: 20 * time.Hour, issued: 1, registered: 1, observed: 1, slots: 8, cpu: 32000, mem: 96 * gib, mix: []mix{{tCodex, 6}}},
 	}
@@ -201,55 +207,75 @@ const (
 	msgRestoreFailure = `atelet Restore: while restoring "agent" application container: container "agent" exited with status 1 during restore`
 )
 
+// The scenario timeline. Crash times (crashAge) are on the crash clock, which
+// is the crash anchor once the worker Pods hold the crashes' last lines and
+// "now" until then (gen.lag); every other age is from now. Old enough to
+// need attention: StuckAfter and UnavailableAfter are 5 minutes, an upload is
+// overdue after 10 and critical after 60.
+const (
+	// healthy-pool-worker-1's process restarted this long ago; three actors
+	// crashed with it, at the same second.
+	workerRestartAge = 43 * time.Minute
+)
+
 func specials() map[string]special {
 	run := ateapi.ActorState_ACTOR_STATE_RUNNING
 	res := ateapi.ActorState_ACTOR_STATE_RESUMING
 	sus := ateapi.ActorState_ACTOR_STATE_SUSPENDING
 	crashed := ateapi.ActorState_ACTOR_STATE_CRASHED
 	m := map[string]special{
+		// Placed before their worker went unavailable, 80 minutes ago.
 		"support-bots/ticket-41001":    {state: run, worker: "agent-pool-worker-0", age: 3 * time.Hour},
 		"support-bots/ticket-41002":    {state: run, worker: "agent-pool-worker-0", age: 2 * time.Hour},
-		"code-review/pr-8801-reviewer": {state: run, worker: "agent-pool-worker-0", age: 70 * time.Minute},
+		"code-review/pr-8801-reviewer": {state: run, worker: "agent-pool-worker-0", age: 105 * time.Minute},
 
-		"support-bots/ticket-41302": {state: res, worker: "agent-pool-worker-1", age: 38 * time.Minute, stuck: true},
-		"support-bots/ticket-40977": {state: sus, worker: "agent-pool-worker-1", age: 47 * time.Minute, stuck: true},
-		"support-bots/ticket-41290": {state: res, worker: "agent-pool-worker-1", age: 8 * time.Second},
+		// Stuck: one recent, two long unresolved.
+		"support-bots/ticket-41302":    {state: res, worker: "agent-pool-worker-1", age: 17 * time.Minute, stuck: true},
+		"code-review/pr-8818-reviewer": {state: res, worker: "healthy-pool-worker-0", age: 65 * time.Minute, stuck: true},
+		"support-bots/ticket-40977":    {state: sus, worker: "agent-pool-worker-1", age: 140 * time.Minute, stuck: true},
+		// Normal transitions, under StuckAfter; codex-task-1050 started
+		// seconds ago.
+		"code-review/codex-task-1050": {state: res, worker: "microvm-pool-worker-0", age: 4 * time.Second},
+		"support-bots/ticket-41250":   {state: sus, worker: "healthy-pool-worker-1", age: 9 * time.Second},
+		"sandbox-dev/browser-sbx-014": {state: res, worker: "batch-pool-worker-0", age: 35 * time.Second},
+		"support-bots/ticket-41290":   {state: res, worker: "agent-pool-worker-1", age: 110 * time.Second},
 
+		// Ran under epoch 3, before the restart 7 minutes ago.
 		"support-bots/ticket-41120":    {state: run, worker: "agent-pool-worker-2", age: 2 * time.Hour, staleEpoch: true},
 		"support-bots/ticket-41121":    {state: run, worker: "agent-pool-worker-2", age: 95 * time.Minute, staleEpoch: true},
 		"code-review/pr-8822-reviewer": {state: run, worker: "agent-pool-worker-2", age: 40 * time.Minute, staleEpoch: true},
 
+		// On the draining worker: placed before the drain began
+		// (buildDataset raises them to it), suspending of their own accord.
 		"support-bots/ticket-41210":    {state: run, worker: "agent-pool-worker-3", age: 4 * time.Hour},
-		"research/lit-review-0197":     {state: run, worker: "agent-pool-worker-3", age: 25 * time.Minute},
-		"support-bots/ticket-41211":    {state: sus, worker: "agent-pool-worker-3", age: 20 * time.Second},
-		"code-review/pr-8829-reviewer": {state: sus, worker: "agent-pool-worker-3", age: 15 * time.Second},
+		"research/lit-review-0197":     {state: run, worker: "agent-pool-worker-3", age: 190 * time.Minute},
+		"code-review/pr-8829-reviewer": {state: sus, worker: "agent-pool-worker-3", age: 160 * time.Second},
+		"support-bots/ticket-41211":    {state: sus, worker: "agent-pool-worker-3", age: 205 * time.Second},
 
-		"code-review/pr-8818-reviewer": {state: res, worker: "healthy-pool-worker-0", age: 41 * time.Minute, stuck: true},
-		"support-bots/ticket-41250":    {state: sus, worker: "healthy-pool-worker-1", age: 6 * time.Second},
-		"sandbox-dev/browser-sbx-014":  {state: res, worker: "batch-pool-worker-0", age: 12 * time.Second},
-		"code-review/codex-task-1050":  {state: res, worker: "microvm-pool-worker-0", age: 5 * time.Second},
+		"code-review/pr-8812-reviewer": {state: crashed, lastWorker: "healthy-pool-worker-1", crash: msgWorkerRestart, crashAge: workerRestartAge},
+		"code-review/pr-8790-reviewer": {state: crashed, lastWorker: "healthy-pool-worker-1", crash: msgWorkerRestart, crashAge: workerRestartAge},
+		// An older failure nobody has reverted.
+		"support-bots/ticket-41077": {state: crashed, lastWorker: "healthy-pool-worker-0", crash: msgRestoreFailure, crashAge: 205 * time.Minute},
 
-		"code-review/pr-8812-reviewer": {state: crashed, lastWorker: "healthy-pool-worker-1", crash: msgWorkerRestart, crashAge: 6 * time.Minute},
-		"code-review/pr-8790-reviewer": {state: crashed, lastWorker: "healthy-pool-worker-1", crash: msgWorkerRestart, crashAge: 6 * time.Minute},
-		"support-bots/ticket-41077":    {state: crashed, lastWorker: "healthy-pool-worker-0", crash: msgRestoreFailure, crashAge: 31 * time.Minute},
-
-		"research/lit-review-0151":     {state: ateapi.ActorState_ACTOR_STATE_REVERTING, lastWorker: "agent-pool-worker-1", crash: msgOOM, crashAge: 70 * time.Minute, age: 40 * time.Second},
-		"code-review/pr-8701-reviewer": {state: ateapi.ActorState_ACTOR_STATE_REVERTING, lastWorker: "healthy-pool-worker-0", crash: msgWorkerRestart, crashAge: 3 * time.Hour, age: 75 * time.Second},
-		"sandbox-dev/browser-sbx-007":  {state: ateapi.ActorState_ACTOR_STATE_DELETING, age: 30 * time.Second},
+		// Reverts started just now: one actor of the memory-limit incident,
+		// and the third actor lost with healthy-pool-worker-1.
+		"research/lit-review-0151":     {state: ateapi.ActorState_ACTOR_STATE_REVERTING, lastWorker: "agent-pool-worker-1", crash: msgOOM, crashAge: 26*time.Minute + 30*time.Second, age: 40 * time.Second},
+		"code-review/pr-8701-reviewer": {state: ateapi.ActorState_ACTOR_STATE_REVERTING, lastWorker: "healthy-pool-worker-1", crash: msgWorkerRestart, crashAge: workerRestartAge, age: 130 * time.Second},
+		"sandbox-dev/browser-sbx-007":  {state: ateapi.ActorState_ACTOR_STATE_DELETING, age: 65 * time.Second},
 	}
-	// Eleven OOM crashes of one template inside the last hour, spread over
-	// the workers that ran them.
+	// The shared incident: eleven actors of one template killed over their
+	// memory limit within 15 minutes, spread over the workers that ran them.
 	oom := []struct {
 		n    int
 		age  time.Duration
 		last string
 	}{
-		{193, 4 * time.Minute, "agent-pool-worker-1"}, {188, 9 * time.Minute, "agent-pool-worker-2"},
-		{175, 14 * time.Minute, "agent-pool-worker-1"}, {170, 19 * time.Minute, "healthy-pool-worker-1"},
-		{166, 23 * time.Minute, "agent-pool-worker-2"}, {159, 28 * time.Minute, "agent-pool-worker-1"},
-		{147, 33 * time.Minute, "healthy-pool-worker-1"}, {139, 38 * time.Minute, "agent-pool-worker-1"},
-		{122, 44 * time.Minute, "agent-pool-worker-2"}, {108, 49 * time.Minute, "batch-pool-worker-0"},
-		{96, 55 * time.Minute, "agent-pool-worker-1"},
+		{193, 21*time.Minute + 10*time.Second, "agent-pool-worker-1"}, {188, 22*time.Minute + 5*time.Second, "agent-pool-worker-2"},
+		{175, 23*time.Minute + 40*time.Second, "agent-pool-worker-1"}, {170, 24*time.Minute + 20*time.Second, "healthy-pool-worker-1"},
+		{166, 25*time.Minute + 50*time.Second, "agent-pool-worker-2"}, {159, 27*time.Minute + 15*time.Second, "agent-pool-worker-1"},
+		{147, 28*time.Minute + 30*time.Second, "healthy-pool-worker-1"}, {139, 30*time.Minute + 5*time.Second, "agent-pool-worker-1"},
+		{122, 31*time.Minute + 45*time.Second, "agent-pool-worker-2"}, {108, 33*time.Minute + 20*time.Second, "batch-pool-worker-0"},
+		{96, 35*time.Minute + 50*time.Second, "agent-pool-worker-1"},
 	}
 	for _, o := range oom {
 		m[fmt.Sprintf("research/lit-review-%04d", o.n)] = special{state: crashed, lastWorker: o.last, crash: msgOOM, crashAge: o.age}
@@ -258,8 +284,11 @@ func specials() map[string]special {
 }
 
 // stuckUpload is suspended with its snapshot still only on the node: the
-// async upload has been PENDING for 52 minutes.
-const stuckUpload = "support-bots/ticket-40801"
+// async upload has been PENDING for nearly three hours.
+const (
+	stuckUpload    = "support-bots/ticket-40801"
+	stuckUploadAge = 170 * time.Minute
+)
 
 type actorRec struct {
 	actor     *ateapi.Actor
@@ -306,9 +335,16 @@ func hexOf(n int, parts ...string) string {
 	return sb.String()[:n]
 }
 
+// gen draws structure (versions, placement, generations, fidelity) from rng
+// and every age from ages, so retiming the scenarios never moves an actor to
+// another worker or changes what a worker Pod prints.
 type gen struct {
 	rng   *rand.Rand
+	ages  *rand.Rand
 	start time.Time
+	// lag is how far the crash clock trails start: the age of the crash
+	// anchor, when the worker Pods hold the crashes' last lines (crashstory.go).
+	lag   time.Duration
 	nodes []string
 }
 
@@ -316,11 +352,14 @@ func (g *gen) ts(age time.Duration) *timestamppb.Timestamp {
 	return timestamppb.New(g.start.Add(-age).Truncate(time.Millisecond))
 }
 
+// onCrashClock converts an age on the crash clock to one from start.
+func (g *gen) onCrashClock(age time.Duration) time.Duration { return age + g.lag }
+
 func (g *gen) between(lo, hi time.Duration) time.Duration {
 	if hi <= lo {
 		return lo
 	}
-	return lo + time.Duration(g.rng.Int64N(int64(hi-lo)))
+	return lo + time.Duration(g.ages.Int64N(int64(hi-lo)))
 }
 
 // Runtime compatibility stamps. "current" is every worker's default runtime,
@@ -357,15 +396,19 @@ func overheadBytes(class string, limit int64) int64 {
 var fallbackNodes = []string{"unscheduled-node-a", "unscheduled-node-b", "unscheduled-node-c"}
 
 // BuildDataset is deterministic for a given start time and pod set: random
-// draws never depend on the pods, which only fill in identity fields.
+// draws never depend on the pods, which only fill in identity fields, or on
+// start, which only shifts every time.
 func BuildDataset(start time.Time, pods map[string]PodInfo) *Dataset {
 	return buildDataset(start, pods, time.Time{})
 }
 
-// buildDataset with a nonzero crashAnchor pins the crashes already written to
-// the Pods' logs to it (crashstory.go).
+// buildDataset with a nonzero crashAnchor puts the crashes on the clock of
+// the lines already written to the Pods' logs (crashstory.go).
 func buildDataset(start time.Time, pods map[string]PodInfo, crashAnchor time.Time) *Dataset {
-	g := &gen{rng: rand.New(rand.NewPCG(20261118, 7)), start: start}
+	g := &gen{rng: rand.New(rand.NewPCG(20261118, 7)), ages: rand.New(rand.NewPCG(20261118, 11)), start: start}
+	if !crashAnchor.IsZero() {
+		g.lag = max(start.Sub(crashAnchor), 0)
+	}
 	d := &Dataset{Start: start, Assignments: map[string][]*ateapi.ActorAssignment{}, Egress: map[string]*ateapi.EgressPolicy{}}
 	d.plans = defaultPlans()
 
@@ -430,9 +473,14 @@ func buildDataset(start time.Time, pods map[string]PodInfo, crashAnchor time.Tim
 		if t.golden == goldenFailed || t.golden == goldenPending {
 			uid := tmplUID[t.key]
 			r := &actorRec{tmpl: t, tmplUID: uid, golden: true}
+			created := t.createdAge
+			if t.golden == goldenFailed {
+				// Created by the template update that started the warm-up.
+				created = g.onCrashClock(t.goldenAge + goldenWarmup)
+			}
 			r.actor = &ateapi.Actor{
 				Metadata: &ateapi.ResourceMetadata{
-					Atespace: t.atespace, Name: uid, Uid: hashUUID("actor", t.atespace, uid), Version: 3, CreateTime: g.ts(t.createdAge),
+					Atespace: t.atespace, Name: uid, Uid: hashUUID("actor", t.atespace, uid), Version: 3, CreateTime: g.ts(created),
 				},
 				ActorTemplate: &ateapi.ObjectRef{Atespace: t.atespace, Name: string(t.key)},
 				Status:        &ateapi.ActorStatus{},
@@ -512,7 +560,9 @@ func buildDataset(start time.Time, pods map[string]PodInfo, crashAnchor time.Tim
 		// Nothing has run since the template went, 12 days ago: a resume
 		// fails before it changes the actor.
 		if r.tmpl.key == missingTemplate {
-			age := 12*24*time.Hour + time.Duration(len(r.actor.Metadata.Name))*time.Hour
+			var n int
+			_, _ = fmt.Sscanf(r.actor.Metadata.Name, gone.nameFmt, &n)
+			age := 12*24*time.Hour + time.Duration(n*7)*time.Hour
 			r.stateAge = age
 			r.actor.Metadata.UpdateTime = g.ts(age)
 			for _, sn := range r.actor.Status.Snapshots {
@@ -522,18 +572,23 @@ func buildDataset(start time.Time, pods map[string]PodInfo, crashAnchor time.Tim
 			}
 			r.actor.Status.AssignedNode = ""
 		}
-		// What an actor did on its worker happened on that Pod.
 		if r.plan != nil {
+			// A draining worker takes no new placements: what it holds was
+			// placed, and has run, since before the drain began.
+			if drain := r.plan.drainAge(start); drain > 0 {
+				r.placedAge = max(r.placedAge, drain)
+				if r.actor.Status.State == ateapi.ActorState_ACTOR_STATE_RUNNING && r.stateAge < drain {
+					r.stateAge = drain
+					r.actor.Metadata.UpdateTime = g.ts(drain)
+				}
+			}
+			// What an actor did on its worker happened on that Pod.
 			if limit := r.plan.podAge(start); r.stateAge > limit {
 				r.stateAge = limit
 				r.actor.Metadata.UpdateTime = g.ts(limit)
 			}
 			r.placedAge = min(r.placedAge, r.plan.podAge(start))
 		}
-	}
-
-	if !crashAnchor.IsZero() {
-		d.anchorCrashes(g, crashAnchor)
 	}
 
 	for _, p := range d.plans {
