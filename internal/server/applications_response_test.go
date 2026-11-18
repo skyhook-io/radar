@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -299,4 +300,62 @@ func TestApplicationsBuildAcrossAContextSwitchIsNotPublished(t *testing.T) {
 		t.Fatalf("status = %d, want 503", got)
 	}
 	assertNoApplicationsCached(t)
+}
+
+// Rows grouped while a manager kind is still loading can regroup once it has
+// loaded: they are answered, not cached, and the first build after the load
+// is cached.
+func TestApplicationsBuildWhileAManagerKindLoadsIsNotCached(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(append(testNamespaces("prod"), &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api"}})...))
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "ApplicationList"})
+	loaded := make(chan struct{})
+	var loadOnce sync.Once
+	load := func() { loadOnce.Do(func() { close(loaded) }) }
+	// The first list is the access probe; the informer's own list waits.
+	var lists atomic.Int32
+	dyn.PrependReactor("list", "applications", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if lists.Add(1) > 1 {
+			select {
+			case <-loaded:
+			case <-time.After(10 * time.Second):
+			}
+		}
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Application", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	t.Cleanup(load)
+	addApplicationTypedDiscovery()
+	clearApplicationsCache()
+	t.Cleanup(clearApplicationsCache)
+	dc := k8s.GetDynamicResourceCache()
+	if err := dc.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if dc.WaitForSync(gvr, 10*time.Millisecond) {
+		t.Fatal("Applications loaded before the build could see them loading")
+	}
+
+	resp, err := listApplicationsForRequest(context.Background(), []string{"prod"}, false)
+	if err != nil || len(resp.Applications) != 1 {
+		t.Fatalf("rows while loading = %+v, err = %v", resp, err)
+	}
+	assertNoApplicationsCached(t)
+
+	load()
+	if !dc.WaitForSync(gvr, 5*time.Second) {
+		t.Fatal("Applications never loaded")
+	}
+	if _, err := listApplicationsForRequest(context.Background(), []string{"prod"}, false); err != nil {
+		t.Fatal(err)
+	}
+	applicationsCacheMu.Lock()
+	cached := len(applicationsCache)
+	applicationsCacheMu.Unlock()
+	if cached != 1 {
+		t.Fatalf("cached builds after the load = %d, want 1", cached)
+	}
 }

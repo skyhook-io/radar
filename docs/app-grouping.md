@@ -87,7 +87,9 @@ label, or Flux labels; a copied tracking ID names nothing), and otherwise the
 sorted-first one, so the key doesn't depend on read order. A local HelmRelease without readable inventory retains
 its matching origin labels ahead of recorded managers. Attachments come from
 one request-local family batch; the ten-second row cache is shared, and each
-caller's access filters its copy afterward. Cold builds share one process-wide
+caller's access filters its copy afterward. A build that read a GitOps manager
+or attachment kind still loading is answered but not cached, so the next
+request regroups its rows once the kind has loaded. Cold builds share one process-wide
 slot.
 
 The weaker labels (`part-of`, `name`) are a fallback for loose/raw workloads, not

@@ -662,12 +662,14 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		if err := settled(); err != nil {
 			return nil, err
 		}
-		applicationsCacheMu.Lock()
-		if len(applicationsCache) >= applicationsCacheMaxEntries {
-			evictOldestApplicationsCacheEntry()
+		if read.cacheable() {
+			applicationsCacheMu.Lock()
+			if len(applicationsCache) >= applicationsCacheMaxEntries {
+				evictOldestApplicationsCacheEntry()
+			}
+			applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows, claims: claims}
+			applicationsCacheMu.Unlock()
 		}
-		applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows, claims: claims}
-		applicationsCacheMu.Unlock()
 		return &applicationsResponse{Applications: rows, ArgoClaims: claims}, nil
 	})
 	select {

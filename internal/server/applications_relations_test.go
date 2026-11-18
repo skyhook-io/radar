@@ -297,6 +297,10 @@ func TestApplicationsBatchKeepsAnUndecidedSelectionUnknown(t *testing.T) {
 		if got := rel != nil && rel.exposureIncomplete; got != tc.unknown {
 			t.Errorf("%s: exposure unknown = %v, want %v", tc.name, got, tc.unknown)
 		}
+		// The template's kind is still loading, so the rows aren't cached.
+		if batch.loading != tc.unknown {
+			t.Errorf("%s: loading = %v, want %v", tc.name, batch.loading, tc.unknown)
+		}
 	}
 }
 
@@ -419,6 +423,54 @@ func TestApplicationsBatchEvaluatesOnlyWhatRowsRead(t *testing.T) {
 		}
 		if kind.Kind != "Ingress" && prunedReads[read] != 0 {
 			t.Errorf("pruned batch read %v, which no row reads", kind)
+		}
+	}
+}
+
+// gappedKind adds a gap to every indexed read of kind.
+type gappedKind struct {
+	relations.Session
+	kind   resourceid.GroupKind
+	reason readreason.Code
+}
+
+func (s gappedKind) Indexed(kind resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
+	read := s.Session.Indexed(kind, index, keys, scope)
+	if kind == s.kind {
+		read.Gaps = append(read.Gaps, ownership.Gap{Kind: kind, Reason: s.reason})
+	}
+	return read
+}
+
+// Only a kind still loading keeps a build from the cache: a gap that lasts,
+// such as a kind Radar doesn't collect, would keep every build out.
+func TestApplicationsBatchNotesKindsStillLoading(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(append(testNamespaces("prod"),
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api"}},
+		&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "scale"}, Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"}}},
+	)...))
+	restore, err := k8s.SetTestResourceDiscovery(fake.NewClientset().Discovery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	addApplicationTypedDiscovery()
+	session, err := k8s.BeginOwnershipRead(k8s.GetResourceCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hpa := resourceid.GroupKind{Group: "autoscaling", Kind: "HorizontalPodAutoscaler"}
+	for _, tc := range []struct {
+		name    string
+		s       relations.Session
+		loading bool
+	}{
+		{"loaded", session.(relations.Session), false},
+		{"autoscalers loading", gappedKind{session.(relations.Session), hpa, readreason.KindSyncPending}, true},
+		{"autoscalers not collected", gappedKind{session.(relations.Session), hpa, readreason.RadarKindNotCollected}, false},
+	} {
+		if got := buildAppRelationBatch(context.Background(), tc.s, []string{"prod"}).loading; got != tc.loading {
+			t.Errorf("%s: loading = %v, want %v", tc.name, got, tc.loading)
 		}
 	}
 }

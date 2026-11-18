@@ -267,7 +267,7 @@ func TestApplicationsLongNonControllerChainReachesTop(t *testing.T) {
 	workload := appTestObject("apps", "Deployment", "prod", "api")
 	workload.OwnerReferences = append(workload.OwnerReferences, links[0].OwnerRef(false))
 	session := appManagerSession(t, append(links, workload)...)
-	got := applicationStructuralRoot(session.(relations.Session), ownership.NewView(session, ownership.Unrestricted()), workload.Ref)
+	got, _ := applicationStructuralRoot(session.(relations.Session), ownership.NewView(session, ownership.Unrestricted()), workload.Ref)
 	if want := links[len(links)-1].Ref; got != want {
 		t.Fatalf("root = %v, want the chain's top %v", got, want)
 	}
