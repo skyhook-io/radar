@@ -7780,7 +7780,29 @@ export interface NamespaceScope {
   cacheScopeNamespace?: string;
   /** true when this client may rebuild the local cache for another namespace. */
   namespaceRescope: boolean;
+  /**
+   * The server's namespace LIST failed for a reason other than RBAC (e.g. a
+   * timeout right after a context switch), so accessibleNamespaces is only
+   * its short fallback list. Absent from older servers.
+   */
+  listFailed?: boolean;
 }
+
+/**
+ * A failed namespace list is retried rather than kept as the answer: 3s after
+ * the first failure, doubling to 30s so a list that keeps failing doesn't add
+ * load to an apiserver that is already struggling.
+ */
+export function namespaceScopeRefetchInterval(
+  scope: Pick<NamespaceScope, "listFailed"> | undefined,
+  consecutiveFailures: number,
+): number | false {
+  if (!scope?.listFailed) return false;
+  return Math.min(3000 * 2 ** Math.max(0, consecutiveFailures - 1), 30000);
+}
+
+// Consecutive listFailed answers per apiBase, for the back-off above.
+const namespaceListFailures = new Map<string, number>();
 
 export function useNamespaceScope() {
   return useQuery<NamespaceScope>({
@@ -7788,9 +7810,12 @@ export function useNamespaceScope() {
     queryFn: async ({ signal }) => {
       const apiBase = getApiBase();
       const scope = await fetchJSON<NamespaceScope>("/cluster/namespace-scope", signal);
+      namespaceListFailures.set(apiBase, scope.listFailed ? (namespaceListFailures.get(apiBase) ?? 0) + 1 : 0);
       return applyTabPick(scope, apiBase);
     },
     staleTime: 30000,
+    refetchInterval: (query) =>
+      namespaceScopeRefetchInterval(query.state.data, namespaceListFailures.get(getApiBase()) ?? 0),
   });
 }
 

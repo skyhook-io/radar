@@ -747,6 +747,14 @@ func SetTestContextOperationInProgress(active bool) func() {
 	return func() { activeContextOperations.Store(previous) }
 }
 
+// SwapResourceCacheForTest publishes rc (nil hides the cache) and returns a
+// func that restores the previous one, without resetting the package state
+// other tests share.
+func SwapResourceCacheForTest(rc *ResourceCache) (restore func()) {
+	prev := resourceCache.Swap(rc)
+	return func() { resourceCache.Store(prev) }
+}
+
 // InitTestReplayClients retains the supplied discovery client so refreshes see
 // the frozen catalog, rather than reverting to an empty bootstrap catalog.
 func InitTestReplayClients(client dynamic.Interface, catalog discovery.DiscoveryInterface) error {
