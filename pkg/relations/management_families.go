@@ -32,10 +32,11 @@ var FluxHelmOrigins = &Family{
 	},
 }
 
-// CronWorkflowRuns preserves Argo's controller reference before its cron-workflow
+// ArgoWorkflowCronWorkflows is the family of the CronWorkflow that started a
+// Workflow. It prefers Argo's controller reference to its cron-workflow
 // label fallback, using the same producer rule as the display graph.
-var CronWorkflowRuns = &Family{
-	Name:       "cronWorkflowRuns",
+var ArgoWorkflowCronWorkflows = &Family{
+	Name:       "argoWorkflowCronWorkflows",
 	Projection: project("manages", true, "Managers", "Manages"),
 	Sources:    []Source{{Kind: kindWorkflow}},
 	Targets:    []resourceid.GroupKind{kindCronWorkflow},
@@ -52,10 +53,10 @@ var CronWorkflowRuns = &Family{
 	},
 }
 
-// ArgoWorkflowPods preserves Workflow management declared by a Pod's workflow
-// label, including Pods whose owner reference is unavailable.
-var ArgoWorkflowPods = &Family{
-	Name:       "argoWorkflowPods",
+// ArgoPodWorkflows is the family of the Workflow a Pod's workflow label
+// names, so a Pod whose owner reference is unavailable still shows it.
+var ArgoPodWorkflows = &Family{
+	Name:       "argoPodWorkflows",
 	Projection: project("manages", true, "Managers", "Manages"),
 	Sources:    []Source{{Kind: kindPod}},
 	Targets:    []resourceid.GroupKind{kindWorkflow},

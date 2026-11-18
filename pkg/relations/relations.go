@@ -92,18 +92,20 @@ type accessKey struct {
 	namespace string
 }
 
-// DefaultLimit is the most referrers a Referrers answer lists. References
-// lists every declaration.
+// DefaultLimit is the most objects a Referrers, Selected, SelectedBy
+// or Composed answer lists. References lists every declaration.
 const DefaultLimit = 500
 
 // NewView answers for the caller access describes, from s, listing at most
-// DefaultLimit referrers per Referrers answer.
+// DefaultLimit objects per Referrers, Selected, SelectedBy or Composed
+// answer.
 func NewView(s Session, access ownership.Access) *View {
 	return &View{session: s, access: access, limit: DefaultLimit, decided: map[accessKey]ownership.Decision{}}
 }
 
-// WithLimit sets, on v itself, the most referrers a Referrers answer lists;
-// a limit of zero or less lists every one. It returns v.
+// WithLimit sets, on v itself, the most objects a Referrers, Selected,
+// SelectedBy or Composed answer lists; a limit of zero or less lists every one. It
+// returns v.
 func (v *View) WithLimit(limit int) *View {
 	v.limit = limit
 	return v
