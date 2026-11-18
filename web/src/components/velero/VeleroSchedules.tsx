@@ -1,6 +1,8 @@
 import {
   Tooltip,
   VELERO_NONE_KEPT,
+  VELERO_MANUAL_RUN,
+  VELERO_MANUAL_RUN_TITLE,
   VELERO_NONE_KEPT_SHORT,
   VELERO_RUNS_UNKNOWN,
   VeleroRunPhase,
@@ -67,12 +69,13 @@ function LastRunCell({ s, onInspect }: { s: VeleroScheduleReading; onInspect: Ve
         <Tooltip content={veleroLocalTime(run.ranAt)}>
           <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.ranAt)}</span>
         </Tooltip>
+        {run.manual && <ManualMark />}
       </button>
       {success?.name !== run.name && (
         <Sub>
           {success ? (
             <Tooltip content={veleroLocalTime(success.completed ?? success.ranAt)}>
-              <span>last success {formatRelativeAgeTime(success.completed ?? success.ranAt)}</span>
+              <span>last success {formatRelativeAgeTime(success.completed ?? success.ranAt)}{success.manual ? `, ${VELERO_MANUAL_RUN}` : ''}</span>
             </Tooltip>
           ) : (
             'no success kept'
@@ -80,6 +83,14 @@ function LastRunCell({ s, onInspect }: { s: VeleroScheduleReading; onInspect: Ve
         </Sub>
       )}
     </>
+  )
+}
+
+function ManualMark() {
+  return (
+    <Tooltip content={VELERO_MANUAL_RUN_TITLE}>
+      <span className="text-xs text-theme-text-secondary">{VELERO_MANUAL_RUN}</span>
+    </Tooltip>
   )
 }
 

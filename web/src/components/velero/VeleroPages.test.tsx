@@ -35,6 +35,7 @@ vi.mock('../../api/policy', async (importOriginal) => ({
 const { parseVeleroRoute, veleroDetailKindFor, veleroDetailPath } = await import('./routes')
 const { VeleroBackupRestores, VeleroLocationBackups, locationState, renderVeleroSummary } = await import('./VeleroPages')
 const { VeleroBackups } = await import('./VeleroRunLists')
+const { runsEmpty } = await import('./runs')
 const { VeleroScheduleStateBadge } = await import('@skyhook-io/k8s-ui')
 const { veleroResourceHost } = await import('./host')
 
@@ -163,6 +164,21 @@ describe('The composed Overview', () => {
     expect(unavailable).toContain('No: its storage location is unavailable')
     expect(unavailable).not.toContain('Restored before')
     state.runsBy = {}
+  })
+
+  it('reads a restore from a backup being deleted as uncertain: Velero would still try', () => {
+    state.workspace = workspace()
+    const backup = { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default' }, status: { phase: 'Deleting', startTimestamp: hoursAgo(5) } }
+    const html = plainText(page('backups', backup))
+    expect(html).toContain('Uncertain: it is being deleted')
+    expect(html).not.toContain('No: it is being deleted')
+  })
+
+  it('says expired backups stay while Velero’s garbage collection is disabled', () => {
+    const ws = workspace()
+    state.workspace = { ...ws, installations: [{ ...ws.installations[0], server: { ...ws.installations[0].server, gcDisabled: true } }] }
+    const backup = { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default' }, status: { phase: 'Completed', startTimestamp: hoursAgo(50), completionTimestamp: hoursAgo(49), expiration: hoursAgo(1) } }
+    expect(plainText(page('backups', backup))).toContain('Past its retention, but Velero’s garbage collection is disabled')
   })
 
   it('says a rejected backup backed up nothing, and neither keeps nor restores anything', () => {
@@ -403,6 +419,17 @@ describe('The Backups list', () => {
     expect(html).toMatch(/text-red[^"]*">1 error</)
     expect(html).not.toContain('0 warnings')
     expect(html).toContain('<span class="min-w-0 truncate">nightly-20261117</span><span class="shrink-0">041210</span>')
+  })
+
+  it('marks a Back up now run as manual, and says an empty search was over the newest runs when the list was cut', () => {
+    state.runs = { ...response([{ ...run('nightly-20261117041210', 'Completed', 'nightly'), manual: true }]), total: 6000, truncated: true }
+    const html = text(render('/resources/backups?apiGroup=velero.io'))
+    expect(html).toContain('schedule nightly')
+    expect(html).toMatch(/ · manual/)
+    type RunsData = Parameters<typeof runsEmpty>[0]['data']
+    const cut = { ...response([run('a', 'Completed')]), total: 6000, truncated: true } as unknown as RunsData
+    expect(runsEmpty({ data: cut, isPending: false, error: null }, 'backups', 'No backups match')).toBe('No backups match in the newest 1.')
+    expect(runsEmpty({ data: response([run('a', 'Completed')]) as unknown as RunsData, isPending: false, error: null }, 'backups', 'No backups match')).toBe('No backups match.')
   })
 
   it('takes no label filter from a link: a schedule’s runs are on its page', () => {

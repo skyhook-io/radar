@@ -17,7 +17,7 @@ import (
 	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
 
-const veleroSubmissionAnnotation = "radar.skyhook.io/submission"
+const veleroSubmissionAnnotation = veleropkg.SubmissionAnnotation
 
 var (
 	veleroSubmissionID = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
@@ -126,7 +126,7 @@ func (s *Server) handleVeleroBackupNow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if server.FlagsKnown() && server.BackupsDisabled {
-			s.writeError(w, http.StatusConflict, "The Velero backup controller is disabled (--restore-only or --disable-controllers=backup); enable it before backing up.")
+			s.writeError(w, http.StatusConflict, "Velero's backup controller is disabled (--restore-only, or --disable-controllers naming backup or backup-queue); enable it before backing up.")
 			return
 		}
 	}

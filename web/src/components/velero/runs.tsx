@@ -105,7 +105,9 @@ export function runsEmpty(query: { data?: VeleroRunsResponse; isPending: boolean
   if (!query.data) return `${noun[0].toUpperCase()}${noun.slice(1)} could not be read: ${(query.error as Error | null)?.message ?? 'unknown error'}`
   const cov = query.data.coverage
   if (INCOMPLETE_COVERAGE_STATES.has(cov.state)) return `${filtered} in what Radar could read (${coverageLabel(cov)}).`
-  return query.data.runs.length === 0 ? coverageEmpty(cov, noun) : `${filtered}.`
+  if (query.data.runs.length === 0) return coverageEmpty(cov, noun)
+  // Only the newest were sent, so an older match may exist.
+  return query.data.truncated ? `${filtered} in the newest ${query.data.runs.length.toLocaleString('en-US')}.` : `${filtered}.`
 }
 
 /** A read that failed or is partial, said above the rows it leaves. */

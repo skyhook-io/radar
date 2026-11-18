@@ -134,6 +134,16 @@ describe('Back up now', () => {
     expect(buttonNamed('Back up now')!.disabled).toBe(true)
   })
 
+  // Velero rejects a backup to a ReadOnly location; the attempt is still the user's to make.
+  it('warns, without refusing, when the schedule writes to a read-only location', () => {
+    state.reading = reading({ name: 'nightly', state: 'cannotRun', reason: 'locationReadOnly', attention: true, location: { name: 'primary', readOnly: true } })
+    render(<VeleroBackupNow schedule={nightly} />)
+    const button = buttonNamed('Back up now')!
+    expect(button.disabled).toBe(false)
+    act(() => button.click())
+    expect(document.body.textContent).toContain('Storage location primary is read-only, so Velero will reject this backup.')
+  })
+
   it('is absent on a Radar without the action', () => {
     state.support = 'unsupported'
     render(<VeleroBackupNow schedule={nightly} />)

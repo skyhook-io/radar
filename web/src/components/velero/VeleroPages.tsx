@@ -37,6 +37,8 @@ import {
   veleroScheduleBadge,
   veleroScheduleNeverRan,
   veleroScheduleReasonText,
+  VELERO_MANUAL_RUN,
+  VELERO_MANUAL_RUN_TITLE,
   VELERO_NONE_KEPT_SHORT,
   VELERO_RUNS_UNKNOWN,
   type NavigateToResource,
@@ -237,17 +239,20 @@ function PageLead({ kind, namespace, name, leadContent, onNavigate }: { kind: st
 
 // ---- Backup -------------------------------------------------------------
 
-// The phases Velero restores from (its restore controller refuses any other).
+// The phases a backup has its contents stored in. Velero's restore controller
+// does not check a backup's phase, but one that failed or hasn't finished has
+// no complete contents to restore.
 const RESTORABLE_PHASES = new Set(['Completed', 'PartiallyFailed'])
 
-/** Whether a restore from this backup can work: "No" with the reason where certain, else not verified. */
-function restoreAnswer(resource: any, location: ReturnType<typeof locationState> | null): string | null {
+/** Whether a restore from this backup can work: "No" with the reason where certain, an uncertain answer where Velero would try, else not verified. */
+function restoreAnswer(resource: any, location: ReturnType<typeof locationState> | null): { text: string; uncertain?: boolean } | null {
   const phase: string = resource?.status?.phase ?? ''
-  if (phase === 'Deleting' || resource?.metadata?.deletionTimestamp) return 'No: it is being deleted'
-  if (phase === 'Failed') return 'No: it did not complete'
-  if (!RESTORABLE_PHASES.has(phase)) return 'No: it hasn’t finished'
-  if (location?.missing) return 'No: its storage location doesn’t exist'
-  if (location?.loc?.phase === 'Unavailable') return 'No: its storage location is unavailable, and Velero refuses a restore from an unavailable location'
+  if (phase === 'Deleting' || resource?.metadata?.deletionTimestamp)
+    return { text: 'Uncertain: it is being deleted, so its contents may already be gone from storage', uncertain: true }
+  if (phase === 'Failed') return { text: 'No: it did not complete' }
+  if (!RESTORABLE_PHASES.has(phase)) return { text: 'No: it hasn’t finished' }
+  if (location?.missing) return { text: 'No: its storage location doesn’t exist' }
+  if (location?.loc?.phase === 'Unavailable') return { text: 'No: its storage location is unavailable, and Velero refuses a restore from an unavailable location' }
   return null
 }
 
@@ -275,6 +280,7 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
   const when = whenText(status)
   const location = locationName ? locationState(locationName, namespace, workspace.data) : null
   const restore = restoreAnswer(resource, location)
+  const gcOff = workspace.data?.installations.find((i) => i.namespace === namespace)?.server.gcDisabled === true
   const errors = getBackupErrors(resource)
   const warnings = getBackupWarnings(resource)
   const restores = useVeleroRuns('restores', namespace, { backup: resource?.metadata?.name ?? '' })
@@ -329,7 +335,11 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
                 <>
                   {veleroLocalTime(status.expiration)}
                   <Note>
-                    {expired(status.expiration) ? 'Past its retention: Velero deletes it at its next garbage collection' : veleroMomentText(status.expiration)}
+                    {gcOff
+                      ? `${expired(status.expiration) ? 'Past its retention' : veleroMomentText(status.expiration)}, but Velero’s garbage collection is disabled (--restore-only or --disable-controllers=gc), so it is not deleted then`
+                      : expired(status.expiration)
+                        ? 'Past its retention: Velero deletes it at its next garbage collection'
+                        : veleroMomentText(status.expiration)}
                     {veleroDeclaredRetention(spec.ttl) ? ` · retention ${veleroDeclaredRetention(spec.ttl)}` : ''}
                   </Note>
                 </>
@@ -352,7 +362,7 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
             <FactRow label="Restore">
               <span className="inline-flex flex-wrap items-baseline gap-x-2">
                 {restore ? (
-                  <span>{restore}</span>
+                  <span className={restore.uncertain ? 'text-theme-text-secondary' : undefined}>{restore.text}</span>
                 ) : restoredBefore ? (
                   <span>
                     Restored before:{' '}
@@ -543,6 +553,11 @@ function LastSuccess({ reading }: { reading: VeleroScheduleReading }) {
       <Tooltip content={`${success.name} · ${veleroLocalTime(at)}`}>
         <span>{formatRelativeAgeTime(at)}</span>
       </Tooltip>
+      {success.manual && (
+        <Tooltip content={VELERO_MANUAL_RUN_TITLE}>
+          <span className="text-xs text-theme-text-secondary">{VELERO_MANUAL_RUN}, not by the schedule</span>
+        </Tooltip>
+      )}
       {newestFailed && <span className={`text-xs ${toneTextClass('alert')}`}>the newest run since then failed</span>}
     </span>
   )
@@ -721,7 +736,19 @@ export function VeleroScheduleRuns({ namespace, name, onNavigate }: { namespace:
       <RunsReadNotice query={query} noun="backups" />
       <SectionTable
         columns={[
-          { header: 'Run', cell: (r: VeleroRunRow) => <VeleroName name={r.name} middle /> },
+          {
+            header: 'Run',
+            cell: (r: VeleroRunRow) => (
+              <>
+                <VeleroName name={r.name} middle />
+                {r.manual && (
+                  <Tooltip content={VELERO_MANUAL_RUN_TITLE}>
+                    <span className="block text-xs text-theme-text-secondary">{VELERO_MANUAL_RUN}</span>
+                  </Tooltip>
+                )}
+              </>
+            ),
+          },
           { header: 'Outcome', width: '170px', cell: (r: VeleroRunRow) => <OutcomeCell kind="Backup" run={r} counts={!wide} /> },
           { header: 'Started', width: wide ? '110px' : '170px', cell: (r: VeleroRunRow) => <StartedCell run={r} folded={!wide} items expires /> },
           ...(wide

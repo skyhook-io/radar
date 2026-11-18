@@ -82,8 +82,37 @@ export function veleroGlobMatch(pattern: string, name: string): boolean {
   return tokens ? matchTokens(tokens, name) : pattern === name
 }
 
-/** Whether a schedule's template selects the namespace, as Velero reads the selection: exclusions win. */
+// A pattern's wildcards read as letters must leave a namespace name (Velero's
+// validateNamespaceName); "" is allowed, Velero's "no namespace".
+function validNamespacePattern(pattern: string): boolean {
+  if (pattern === '') return true
+  if (pattern.length > VELERO_PATTERN_MAX || VELERO_PATTERN_REFUSED.test(pattern)) return false
+  const tokens = parseGlob(pattern)
+  if (!tokens) return false
+  const asName = tokens.map((t) => (t.t === 'lit' ? t.c : 'x')).join('')
+  return /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(asName)
+}
+
+/**
+ * Why Velero refuses a schedule's namespace selection
+ * (ValidateNamespaceIncludesExcludes), or undefined when it accepts it. Velero
+ * then rejects the schedule, which backs up nothing.
+ */
+export function veleroSelectionProblem(s: Pick<VeleroScheduleReading, 'includedNamespaces' | 'excludedNamespaces'>): string | undefined {
+  const inc = s.includedNamespaces
+  const exc = s.excludedNamespaces
+  if (inc.includes('*') && inc.length > 1) return 'it includes “*” beside other namespaces'
+  if (exc.includes('*')) return 'it excludes “*”'
+  const both = exc.find((ns) => inc.includes(ns))
+  if (both !== undefined) return `it both includes and excludes ${both}`
+  const bad = [...inc.filter((p) => p !== '*'), ...exc].find((p) => !validNamespacePattern(p))
+  if (bad !== undefined) return `${bad} is not a namespace name or pattern Velero accepts`
+  return undefined
+}
+
+/** Whether a schedule's template selects the namespace, as Velero reads the selection: exclusions win, and a selection Velero refuses selects nothing. */
 export function scheduleIncludes(s: Pick<VeleroScheduleReading, 'includedNamespaces' | 'excludedNamespaces'>, namespace: string): boolean {
+  if (veleroSelectionProblem(s)) return false
   if (s.excludedNamespaces.some((p) => veleroGlobMatch(p, namespace))) return false
   return s.includedNamespaces.length === 0 || s.includedNamespaces.includes('*') || s.includedNamespaces.some((p) => veleroGlobMatch(p, namespace))
 }
@@ -94,7 +123,11 @@ export function scheduleIncludes(s: Pick<VeleroScheduleReading, 'includedNamespa
  * this answers what is declared, and a paused or failing schedule is said
  * elsewhere on the Overview.
  */
-export function namespacesNoScheduleIncludes(namespaces: string[], schedules: VeleroScheduleReading[], installations: string[]): { uncovered: string[]; leftOut: number } {
+export function namespacesNoScheduleIncludes(
+  namespaces: string[],
+  schedules: VeleroScheduleReading[],
+  installations: string[],
+): { uncovered: string[]; leftOut: number } {
   const own = new Set(installations)
   const listed = namespaces.filter((ns) => !isKubernetesNamespace(ns) && !own.has(ns))
   return {

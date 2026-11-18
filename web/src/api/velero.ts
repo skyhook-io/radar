@@ -99,6 +99,8 @@ export interface VeleroRunRow {
   itemsTotal?: number
   errors: number
   warnings: number
+  /** A Backup created by Radar's Back up now from its schedule. */
+  manual?: boolean
   reason?: string
   backupName?: string
   /** A Restore's spec.scheduleName: restore from that schedule's newest completed backup. Unrelated to schedule. */
@@ -127,9 +129,9 @@ export interface VeleroRunsResponse<R extends VeleroRunRow = VeleroRunRow> {
 // same per-kind access as the Velero views; `coverage` says what it covered.
 // `schedule` and `backup` narrow the answer on the server: one schedule's
 // runs, or the restores made from one backup.
-export function useVeleroRuns(kind: 'restores', namespace?: string, filter?: { backup?: string }): UseQueryResult<VeleroRunsResponse<VeleroRestoreRow>>
-export function useVeleroRuns(kind: 'backups', namespace?: string, filter?: { schedule?: string }): UseQueryResult<VeleroRunsResponse>
-export function useVeleroRuns(kind: 'backups' | 'restores', namespace?: string, filter?: { schedule?: string; backup?: string }) {
+export function useVeleroRuns(kind: 'restores', namespace?: string, filter?: { backup?: string }, options?: { enabled?: boolean }): UseQueryResult<VeleroRunsResponse<VeleroRestoreRow>>
+export function useVeleroRuns(kind: 'backups', namespace?: string, filter?: { schedule?: string }, options?: { enabled?: boolean }): UseQueryResult<VeleroRunsResponse>
+export function useVeleroRuns(kind: 'backups' | 'restores', namespace?: string, filter?: { schedule?: string; backup?: string }, options?: { enabled?: boolean }) {
   const { guard, gatedKey } = useRadarFeature('veleroRuns')
   const base = getApiBase()
   const params = new URLSearchParams()
@@ -140,6 +142,7 @@ export function useVeleroRuns(kind: 'backups' | 'restores', namespace?: string, 
   return useQuery<VeleroRunsResponse>({
     queryKey: ['velero', 'runs', base, kind, namespace ?? '', filter?.schedule ?? '', filter?.backup ?? '', ...gatedKey],
     queryFn: ({ signal }) => guard(() => fetchJSON<VeleroRunsResponse>(`/velero/runs/${kind}${query ? `?${query}` : ''}`, signal)),
+    enabled: options?.enabled ?? true,
     staleTime: 10_000,
     refetchInterval: 30_000,
     placeholderData: (prev, prevQuery) =>

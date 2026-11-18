@@ -181,7 +181,7 @@ func (r *Reader) Workspace(ctx context.Context) WorkspaceResponse {
 		for _, s := range inv.in(schedulesKey, ns) {
 			resp.Schedules = append(resp.Schedules, domain.ReadSchedule(domain.ScheduleInput{
 				Schedule: s, Backups: bySchedule[s.GetName()], BackupsRead: backupsRead, Server: server,
-				DefaultLocation: inst.DefaultLocation, Now: now,
+				DefaultLocation: inst.DefaultLocation, Locations: inv.in(locationsKey, ns), Now: now,
 			}))
 		}
 		for _, l := range inv.in(locationsKey, ns) {
@@ -321,7 +321,7 @@ func (r *Reader) ScheduleActivity(ctx context.Context, namespace, name string) (
 	inst := r.installation(ctx, inv, namespace)
 	resp.Reading = domain.ReadSchedule(domain.ScheduleInput{
 		Schedule: target, Backups: inv.in(backupsKey, namespace), BackupsRead: inv.covered(backupsKey, namespace),
-		Server: inst.Server, DefaultLocation: inst.DefaultLocation, Now: now, WithRecent: true,
+		Server: inst.Server, DefaultLocation: inst.DefaultLocation, Locations: inv.in(locationsKey, namespace), Now: now, WithRecent: true,
 	})
 	resp.ServerStopped = inst.Server.Down()
 	if inst.Server.FlagsKnown() {
@@ -357,6 +357,9 @@ type RunRow struct {
 	ItemsTotal *int64 `json:"itemsTotal,omitempty"`
 	Errors     int64  `json:"errors"`
 	Warnings   int64  `json:"warnings"`
+	// Manual: a Backup Radar's Back up now created from its schedule
+	// (domain.SubmissionAnnotation); it is still one of the schedule's runs.
+	Manual bool `json:"manual,omitempty"`
 	// BackupName, NamespaceMapping and the namespace selection are a Restore's:
 	// together they say where it restored into. The selection is always sent
 	// for a Restore, empty meaning every namespace in the backup.
@@ -494,6 +497,7 @@ func runOf(u *unstructured.Unstructured, restore bool) RunRow {
 		run.IncludedNamespaces, run.ExcludedNamespaces = &included, &excluded
 	} else {
 		run.ItemsDone = opt("status", "progress", "itemsBackedUp")
+		_, run.Manual = u.GetAnnotations()[domain.SubmissionAnnotation]
 	}
 	return run
 }

@@ -279,6 +279,14 @@ describe('Velero overview coverage', () => {
     const partial = two({ coverage: { ...workspace().coverage, schedules: { state: 'partial' } } })
     expect(text(renderOverview(partial, ['shop']))).toContain('unknown, Radar can’t read every schedule')
     expect(text(renderOverview(two(), 'error'))).toContain('unknown, Radar couldn’t list namespaces')
+    expect(text(renderOverview(two(), []))).toContain('unknown, Radar listed no namespaces')
+  })
+
+  it('says a schedule whose namespace selection Velero refuses selects nothing', () => {
+    const data = workspace({ schedules: [schedule({ name: 'mixed', includedNamespaces: ['*', 'payments'] }), schedule({ name: 'fine', includedNamespaces: ['shop'] })] })
+    const html = text(renderOverview(data, ['shop', 'payments']))
+    expect(html).toMatch(/Selects nothing:<\/span> <span[^>]*><span><button[^>]*>mixed<\/button>: it includes “\*” beside other namespaces<\/span> — Velero refuses this namespace selection, so it backs up nothing/)
+    expect(html).toMatch(/Namespaces not in any schedule<\/span><\/span>:<\/span> <span[^>]*>payments</)
   })
 
   it('lists paused schedules as information, outside Needs attention', () => {

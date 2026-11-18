@@ -240,6 +240,21 @@ func TestVeleroScheduleThatCanNeverRun(t *testing.T) {
 	}
 }
 
+func TestVeleroScheduleWritingToAReadOnlyLocation(t *testing.T) {
+	schedule := veleroReadingObj("Schedule", "nightly", veleroNow.Add(-time.Hour), nil,
+		map[string]any{"schedule": "0 * * * *", "template": map[string]any{}}, map[string]any{"phase": "Enabled"})
+	location := veleroLocation(time.Second)
+	location.Object["spec"].(map[string]any)["accessMode"] = "ReadOnly"
+	got := byReason(veleroReadings(t, []*unstructured.Unstructured{schedule}, location, []*appsv1.Deployment{veleroServerDeployment(1)}, true, true))
+	iss, ok := got[ReasonVeleroScheduleCannotRun]
+	if !ok || iss.Severity != SeverityCritical || !strings.Contains(iss.Message, "read-only") || !hasRead(iss, VeleroGroup, "backupstoragelocations") {
+		t.Fatalf("got %v, want a critical cannot-run issue resting on the location", got)
+	}
+	if len(got) != 1 {
+		t.Errorf("the read-only location raises nothing of its own: %v", got)
+	}
+}
+
 func TestVeleroValidationOverdueWhileTheServerRuns(t *testing.T) {
 	got := byReason(veleroReadings(t, nil, veleroLocation(time.Hour), []*appsv1.Deployment{veleroServerDeployment(1)}, true, true))
 	iss, ok := got[ReasonVeleroLocationValidationOverdue]

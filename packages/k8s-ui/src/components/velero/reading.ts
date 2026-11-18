@@ -145,6 +145,8 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
         ? `Velero rejected this schedule: ${reading.validationErrors.join('; ')}`
         : 'Velero rejected this schedule, so it does not run.'
     case 'cannotRun':
+      if (reading.reason === 'locationReadOnly')
+        return `Its storage location ${reading.location.name ?? ''} is read-only, so Velero rejects every backup this schedule submits.`
       return 'This schedule’s name is longer than 63 characters, too long for the label Velero puts on its backups, so Velero submits no runs.'
     case 'notValidated': {
       if (!reading.attention) return 'Waiting for Velero to validate this schedule.'
@@ -276,6 +278,10 @@ export const VELERO_NONE_KEPT_SHORT = 'None kept'
 export function veleroScheduleNeverRan(reading: Pick<VeleroScheduleReading, 'lastSubmitted' | 'runs'>): boolean {
   return reading.runs.read !== 'unknown' && !reading.lastSubmitted && !reading.runs.newest
 }
+
+/** The word beside a run Radar's Back up now created; it still counts as one of the schedule's runs. */
+export const VELERO_MANUAL_RUN = 'manual'
+export const VELERO_MANUAL_RUN_TITLE = 'Created with Back up now, not by the schedule'
 
 /** The newest Completed run, or why there is none to show. */
 export function veleroNewestSuccessfulText(runs: VeleroScheduleRuns): { text: string; run?: VeleroRun } {

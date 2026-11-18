@@ -69,7 +69,8 @@ type VeleroDeletionResponse struct {
 // Backup needs `get backups`, following needs `list deletebackuprequests`, and submission needs `create deletebackuprequests`.
 // Refused up front (409) when Velero would refuse or never act: a backup still
 // running or not yet assigned a storage location, a storage location that is
-// read-only or unavailable, or a stopped server (no pods).
+// read-only or unavailable, a stopped server (no pods), or a server whose
+// backup-deletion controller is disabled.
 func (s *Server) handleVeleroDeleteBackup(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -131,9 +132,16 @@ func (s *Server) handleVeleroDeleteBackup(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if deployments, read := s.veleroDeployments(r, k8s.GetResourceCache(), namespace); read && veleropkg.ServerConfigFromDeployments(deployments, true).Down() {
-		s.writeError(w, http.StatusConflict, "The Velero server is stopped; start it before deleting a backup.")
-		return
+	if deployments, read := s.veleroDeployments(r, k8s.GetResourceCache(), namespace); read {
+		server := veleropkg.ServerConfigFromDeployments(deployments, true)
+		if server.Down() {
+			s.writeError(w, http.StatusConflict, "The Velero server is stopped; start it before deleting a backup.")
+			return
+		}
+		if server.FlagsKnown() && server.DeletionDisabled {
+			s.writeError(w, http.StatusConflict, "Velero's backup-deletion controller is disabled (--restore-only or --disable-controllers=backup-deletion), so it would never process the request; enable it before deleting a backup.")
+			return
+		}
 	}
 
 	// The location is read for the refusal only; a caller who can't read it

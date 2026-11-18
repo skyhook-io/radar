@@ -117,7 +117,7 @@ func detectVeleroReadingIssues(p Provider, bslGVR schema.GroupVersionResource, l
 		}
 		scheduleGVR := gvrs["Schedule"]
 		for _, s := range schedules {
-			reading := veleropkg.ReadSchedule(veleropkg.ScheduleInput{Schedule: s, Backups: backups, BackupsRead: true, Server: server, DefaultLocation: defaultLocation, Now: now})
+			reading := veleropkg.ReadSchedule(veleropkg.ScheduleInput{Schedule: s, Backups: backups, BackupsRead: true, Server: server, DefaultLocation: defaultLocation, Locations: byNS[ns], Now: now})
 			if server.Down() && reading.Attention && reading.State == veleropkg.StateLate {
 				lateWhileDown = append(lateWhileDown, Ref{Group: VeleroGroup, Kind: "Schedule", Namespace: ns, Name: s.GetName()})
 				continue
@@ -131,6 +131,9 @@ func detectVeleroReadingIssues(p Provider, bslGVR schema.GroupVersionResource, l
 				{Group: VeleroGroup, Resource: "schedules", Namespace: ns, Verb: "list"},
 				{Group: VeleroGroup, Resource: "backups", Namespace: ns, Verb: "list"},
 			}, serverReads...)
+			if reading.Reason == veleropkg.ReasonLocationReadOnly {
+				iss.RequiredReads = append(iss.RequiredReads, EvidenceRead{Group: VeleroGroup, Resource: "backupstoragelocations", Namespace: ns, Verb: "list"})
+			}
 			out = append(out, iss)
 		}
 		if server.Down() {
@@ -165,6 +168,10 @@ func veleroScheduleIssueFor(r veleropkg.ScheduleReading, server veleropkg.Server
 	}
 	switch r.State {
 	case veleropkg.StateCannotRun:
+		if r.Reason == veleropkg.ReasonLocationReadOnly {
+			return ReasonVeleroScheduleCannotRun, SeverityCritical,
+				fmt.Sprintf("Its storage location %s is read-only, so Velero rejects every backup this schedule submits. Point the schedule at a writable location, or set the location back to ReadWrite.", r.Location.Name), true
+		}
 		return ReasonVeleroScheduleCannotRun, SeverityCritical,
 			"This schedule's name is longer than 63 characters, too long for the label Velero puts on its backups, so Velero submits no runs. Recreate it with a shorter name.", true
 	case veleropkg.StateAlwaysDue:

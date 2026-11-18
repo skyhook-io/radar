@@ -667,26 +667,17 @@ func TestVeleroIssueIdentityIsStable(t *testing.T) {
 	}
 }
 
-func TestVeleroAdHocFailureLowersAfterANewerSuccessOverItsNamespaces(t *testing.T) {
+func TestVeleroAdHocFailureStaysCriticalAndNamesALaterSuccess(t *testing.T) {
 	failed := veleroObj{name: "pre-upgrade", phase: "Failed", createdMinsAgo: 120, included: []string{"shop", "db"}}
 	cases := []struct {
 		name  string
 		later veleroObj
-		lower bool
+		named bool
 	}{
-		{"same namespaces", veleroObj{name: "retry", phase: "Completed", createdMinsAgo: 60, startedMinsAgo: 59, included: []string{"db", "shop"}}, true},
-		{"every namespace", veleroObj{name: "nightly-1", schedule: "nightly", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29}, true},
-		{"every namespace but one it named", veleroObj{name: "all-but-db", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, excluded: []string{"db"}}, false},
-		{"every namespace but a pattern", veleroObj{name: "all-but-d", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, excluded: []string{"d*"}}, false},
-		{"only some of them", veleroObj{name: "shop-only", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, included: []string{"shop"}}, false},
-		{"a pattern is not read as a match", veleroObj{name: "glob", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, included: []string{"s*", "d*"}}, false},
-		{"narrowed by label", veleroObj{name: "labelled", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, labelSelector: map[string]any{"matchLabels": map[string]any{"tier": "web"}}}, false},
-		{"narrowed by a resource policy", veleroObj{name: "policy", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, resourcePolicy: map[string]any{"kind": "configmap", "name": "skip-pvcs"}}, false},
-		{"created before it", veleroObj{name: "older", phase: "Completed", createdMinsAgo: 180, startedMinsAgo: 179}, false},
+		{"completed after it", veleroObj{name: "retry", phase: "Completed", createdMinsAgo: 60, startedMinsAgo: 59, included: []string{"shop"}}, true},
+		{"a scheduled run after it", veleroObj{name: "nightly-1", schedule: "nightly", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29}, true},
 		{"created before it, queued until after it", veleroObj{name: "queued", phase: "Completed", createdMinsAgo: 180, startedMinsAgo: 60}, true},
-		{"without the file-system backup it asked for", veleroObj{name: "no-fs", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, specFlags: map[string]any{"defaultVolumesToFsBackup": false}}, false},
-		{"without cluster-scoped resources", veleroObj{name: "no-cluster", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, specFlags: map[string]any{"includeClusterResources": false}}, false},
-		{"moving snapshot data where it did not", veleroObj{name: "moved", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, specFlags: map[string]any{"snapshotMoveData": true}}, false},
+		{"created before it", veleroObj{name: "older", phase: "Completed", createdMinsAgo: 180, startedMinsAgo: 179}, false},
 		{"recreated by backup sync, ran before it", veleroObj{name: "synced", phase: "Completed", createdMinsAgo: 5, startedMinsAgo: 1440}, false},
 		{"partly failed", veleroObj{name: "partial", phase: "PartiallyFailed", createdMinsAgo: 30, startedMinsAgo: 29}, false},
 		{"another installation", veleroObj{name: "elsewhere", namespace: "velero-2", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29}, false},
@@ -702,46 +693,18 @@ func TestVeleroAdHocFailureLowersAfterANewerSuccessOverItsNamespaces(t *testing.
 			if got == nil {
 				t.Fatal("the failed ad-hoc backup must stay listed")
 			}
-			want := SeverityCritical
-			if tc.lower {
-				want = SeverityWarning
+			if got.Severity != SeverityCritical {
+				t.Fatalf("severity = %v, want critical whatever completed later (%s)", got.Severity, got.Message)
 			}
-			if got.Severity != want {
-				t.Fatalf("severity = %v, want %v (%s)", got.Severity, want, got.Message)
+			if tc.named && !strings.Contains(got.Cause, tc.later.name) {
+				t.Errorf("the cause should name the later backup: %q", got.Cause)
 			}
-			if tc.lower && got.Cause != "A later backup, "+tc.later.name+", completed over the same namespaces." {
-				t.Errorf("the cause should name the newer backup: %q", got.Cause)
-			}
-			if !tc.lower && got.Cause != "" {
-				t.Errorf("no cause without a covering backup: %q", got.Cause)
+			if !tc.named && got.Cause != "" {
+				t.Errorf("no cause without a later success: %q", got.Cause)
 			}
 			if strings.Contains(got.Message, tc.later.name) {
 				t.Errorf("Velero's message stays Velero's: %q", got.Message)
 			}
 		})
-	}
-}
-
-func TestVeleroAdHocFailureLowersOnlyForASuccessSavingDataAlike(t *testing.T) {
-	failed := veleroObj{name: "fs", phase: "Failed", createdMinsAgo: 120, included: []string{"shop"}, specFlags: map[string]any{"defaultVolumesToFsBackup": true}}
-	alike := detectBackups(failed, veleroObj{name: "fs-retry", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, included: []string{"shop"}, specFlags: map[string]any{"defaultVolumesToFsBackup": true}})
-	unset := detectBackups(failed, veleroObj{name: "default", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, included: []string{"shop"}})
-	if len(alike) != 1 || alike[0].Severity != SeverityWarning {
-		t.Fatalf("a newer backup with the same file-system setting covers it: %+v", alike)
-	}
-	if len(unset) != 1 || unset[0].Severity != SeverityCritical {
-		t.Fatalf("a newer backup leaving file-system backup to the server default does not: %+v", unset)
-	}
-}
-
-func TestVeleroAllNamespaceFailureLowersOnlyForAsWideASuccess(t *testing.T) {
-	failed := veleroObj{name: "manual", phase: "Failed", createdMinsAgo: 120, excluded: []string{"scratch"}}
-	wider := detectBackups(failed, veleroObj{name: "full", phase: "Completed", createdMinsAgo: 10, startedMinsAgo: 9})
-	narrower := detectBackups(failed, veleroObj{name: "most", phase: "Completed", createdMinsAgo: 10, startedMinsAgo: 9, excluded: []string{"scratch", "db"}})
-	if len(wider) != 1 || wider[0].Severity != SeverityWarning {
-		t.Fatalf("a newer backup of every namespace covers it: %+v", wider)
-	}
-	if len(narrower) != 1 || narrower[0].Severity != SeverityCritical {
-		t.Fatalf("a newer backup excluding one more namespace does not: %+v", narrower)
 	}
 }

@@ -2,6 +2,7 @@ package velero
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,10 +59,19 @@ type ServerConfig struct {
 	// schedule controller, so no Schedule runs. In JSON it is sent, true or
 	// false, only when the flags were read (FlagsKnown); absent means unknown.
 	SchedulingDisabled bool `json:"schedulingDisabled,omitempty"`
-	// BackupsDisabled: the backup controller is removed, so no Backup runs,
-	// manual or scheduled; independent of scheduling. Encoded as
+	// BackupsDisabled: the backup or backup-queue controller is removed
+	// (--restore-only, or --disable-controllers naming either), so no Backup
+	// runs, manual or scheduled; independent of scheduling. Encoded as
 	// SchedulingDisabled is.
 	BackupsDisabled bool `json:"backupsDisabled,omitempty"`
+	// DeletionDisabled: the backup-deletion controller is removed
+	// (--restore-only or --disable-controllers=backup-deletion), so no
+	// DeleteBackupRequest is processed. Encoded as SchedulingDisabled is.
+	DeletionDisabled bool `json:"deletionDisabled,omitempty"`
+	// GCDisabled: the gc controller is removed (--restore-only or
+	// --disable-controllers=gc), so expired backups are not deleted. Encoded
+	// as SchedulingDisabled is.
+	GCDisabled bool `json:"gcDisabled,omitempty"`
 	// Replicas counts non-terminating pods, including Pending and CrashLoop.
 	// Readiness is separate: a pod can fail its readiness probe while still
 	// processing schedules. Terminating pods stop their controllers on SIGTERM.
@@ -225,18 +235,34 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 			}
 			freq = d
 		case "restore-only":
-			if !hasValue || value == "true" {
-				cfg.SchedulingDisabled = true
-				cfg.BackupsDisabled = true
+			// Velero's server.go disables the backup, schedule,
+			// backup-deletion and gc controllers (among others) in this mode.
+			on := true
+			if hasValue {
+				b, err := strconv.ParseBool(value)
+				if err != nil {
+					return
+				}
+				on = b
+			}
+			if on {
+				cfg.SchedulingDisabled, cfg.BackupsDisabled = true, true
+				cfg.DeletionDisabled, cfg.GCDisabled = true, true
 			}
 		case "disable-controllers":
 			if v, ok := takeValue(); ok {
 				for ctl := range strings.SplitSeq(v, ",") {
-					if strings.TrimSpace(ctl) == "backup" {
+					switch strings.TrimSpace(ctl) {
+					case "backup", "backup-queue":
+						// The backup controller starts only backups the
+						// queue controller has made ready.
 						cfg.BackupsDisabled = true
-					}
-					if strings.TrimSpace(ctl) == "schedule" {
+					case "schedule":
 						cfg.SchedulingDisabled = true
+					case "backup-deletion":
+						cfg.DeletionDisabled = true
+					case "gc":
+						cfg.GCDisabled = true
 					}
 				}
 			}
@@ -247,17 +273,20 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 	cfg.flagsSet = true
 }
 
-// MarshalJSON sends schedulingDisabled and backupsDisabled only when the
-// effective flags were established, so their absence means unknown, not false.
+// MarshalJSON sends the controller flags (schedulingDisabled,
+// backupsDisabled, deletionDisabled, gcDisabled) only when the effective flags
+// were established, so their absence means unknown, not false.
 func (c ServerConfig) MarshalJSON() ([]byte, error) {
 	type config ServerConfig
-	var scheduling, backups *bool
+	var scheduling, backups, deletion, gc *bool
 	if c.FlagsKnown() {
-		scheduling, backups = &c.SchedulingDisabled, &c.BackupsDisabled
+		scheduling, backups, deletion, gc = &c.SchedulingDisabled, &c.BackupsDisabled, &c.DeletionDisabled, &c.GCDisabled
 	}
 	return json.Marshal(struct {
 		config
 		SchedulingDisabled *bool `json:"schedulingDisabled,omitempty"`
 		BackupsDisabled    *bool `json:"backupsDisabled,omitempty"`
-	}{config: config(c), SchedulingDisabled: scheduling, BackupsDisabled: backups})
+		DeletionDisabled   *bool `json:"deletionDisabled,omitempty"`
+		GCDisabled         *bool `json:"gcDisabled,omitempty"`
+	}{config: config(c), SchedulingDisabled: scheduling, BackupsDisabled: backups, DeletionDisabled: deletion, GCDisabled: gc})
 }

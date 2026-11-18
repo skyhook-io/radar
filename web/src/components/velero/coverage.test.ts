@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { namespacesNoScheduleIncludes, scheduleIncludes, veleroGlobMatch } from './coverage'
+import { namespacesNoScheduleIncludes, scheduleIncludes, veleroGlobMatch, veleroSelectionProblem } from './coverage'
 
 const sel = (includedNamespaces: string[], excludedNamespaces: string[] = []) => ({ includedNamespaces, excludedNamespaces })
 
@@ -63,5 +63,22 @@ describe('namespacesNoScheduleIncludes', () => {
   })
   it('lists every namespace when there is no schedule', () => {
     expect(namespacesNoScheduleIncludes(['b', 'a'], [], []).uncovered).toEqual(['a', 'b'])
+  })
+})
+
+describe('veleroSelectionProblem', () => {
+  it.each([
+    [['*', 'payments'], [], 'it includes “*” beside other namespaces'],
+    [[], ['*'], 'it excludes “*”'],
+    [['shop'], ['shop'], 'it both includes and excludes shop'],
+    [['Shop'], [], 'Shop is not a namespace name or pattern Velero accepts'],
+    [['shop-{a,b}'], [], 'shop-{a,b} is not a namespace name or pattern Velero accepts'],
+  ])('refuses %j excluding %j', (inc, exc, problem) => {
+    expect(veleroSelectionProblem(sel(inc, exc))).toBe(problem)
+    expect(scheduleIncludes(sel(inc, exc), 'shop')).toBe(false)
+  })
+
+  it.each([[[], []], [['*'], ['kube-*']], [['shop-*', 'db-[ab]'], ['']]])('accepts %j excluding %j', (inc, exc) => {
+    expect(veleroSelectionProblem(sel(inc, exc))).toBeUndefined()
   })
 })

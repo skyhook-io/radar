@@ -16,6 +16,10 @@ const Group = "velero.io"
 // (pkg/builder/backup_builder.go FromSchedule).
 const ScheduleNameLabel = "velero.io/schedule-name"
 
+// SubmissionAnnotation marks a Backup Radar's Back up now created from a
+// schedule; its value identifies the confirmation it came from.
+const SubmissionAnnotation = "radar.skyhook.io/submission"
+
 // maxLabelValue is Kubernetes' label value limit. Velero writes the schedule
 // name into a label without shortening it, so a longer name makes every
 // submission fail.
@@ -80,6 +84,9 @@ const (
 	ReasonBackupsUnread     ScheduleReason = "backupsUnread"
 	ReasonNoFutureTime      ScheduleReason = "noFutureTime"
 	ReasonValidationPending ScheduleReason = "validationPending"
+	// ReasonLocationReadOnly: the storage location the schedule writes to is
+	// ReadOnly, so Velero rejects every backup it submits.
+	ReasonLocationReadOnly ScheduleReason = "locationReadOnly"
 	// ReasonServerDown: the Velero server Deployment has no pods
 	// (status.replicas is 0), which explains a late or unvalidated schedule.
 	ReasonServerDown ScheduleReason = "serverDown"
@@ -113,6 +120,9 @@ type ScheduleRun struct {
 	Expiration *time.Time `json:"expiration,omitempty"`
 	Errors     int64      `json:"errors,omitempty"`
 	Warnings   int64      `json:"warnings,omitempty"`
+	// Manual: created by Radar's Back up now (SubmissionAnnotation), not by
+	// the schedule controller. It is still one of the schedule's runs.
+	Manual bool `json:"manual,omitempty"`
 }
 
 // ScheduleRuns is what the backups Velero still keeps say about a schedule.
@@ -136,6 +146,9 @@ type ScheduleLocation struct {
 	// ViaDefault: the template names no location, so the installation's
 	// default receives it; Name is that default when it could be resolved.
 	ViaDefault bool `json:"viaDefault,omitempty"`
+	// ReadOnly: the location is in ReadOnly access mode, so Velero rejects
+	// the schedule's backups. False when the location could not be read.
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 // ScheduleReading is one Schedule read against its controller's rules.
@@ -208,8 +221,11 @@ type ScheduleInput struct {
 	// DefaultLocation is the installation's default storage location name, ""
 	// when it could not be resolved.
 	DefaultLocation string
-	Now             time.Time
-	WithRecent      bool
+	// Locations are the namespace's storage locations, nil when they were not
+	// read; they say whether the schedule's location is ReadOnly.
+	Locations  []*unstructured.Unstructured
+	Now        time.Time
+	WithRecent bool
 }
 
 // ReadSchedule reads one Schedule. Backups not of this schedule are ignored,
@@ -240,6 +256,12 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	r.LastSubmitted = timeField(s, "status", "lastBackup")
 	lastSkipped := timeField(s, "status", "lastSkipped")
 	r.Location = scheduleLocation(s, in.DefaultLocation)
+	for _, l := range in.Locations {
+		if l != nil && r.Location.Name != "" && l.GetName() == r.Location.Name {
+			mode, _, _ := unstructured.NestedString(l.Object, "spec", "accessMode")
+			r.Location.ReadOnly = mode == "ReadOnly"
+		}
+	}
 	ttl, _, _ := unstructured.NestedString(s.Object, "spec", "template", "ttl")
 	r.TTL = DeclaredTTL(ttl)
 	r.IncludedNamespaces, _, _ = unstructured.NestedStringSlice(s.Object, "spec", "template", "includedNamespaces")
@@ -271,6 +293,10 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 		return r
 	case len(s.GetName()) > maxLabelValue:
 		r.State, r.Reason, r.Attention = StateCannotRun, ReasonNameTooLong, true
+		return r
+	case r.Location.ReadOnly:
+		// Velero's backup validation refuses a ReadOnly location.
+		r.State, r.Reason, r.Attention = StateCannotRun, ReasonLocationReadOnly, true
 		return r
 	case phase != "Enabled":
 		r.State, r.Reason = StateNotValidated, ReasonValidationPending
@@ -502,6 +528,7 @@ func runFrom(b *unstructured.Unstructured) ScheduleRun {
 	run.Expiration = timeField(b, "status", "expiration")
 	run.Errors, _, _ = unstructured.NestedInt64(b.Object, "status", "errors")
 	run.Warnings, _, _ = unstructured.NestedInt64(b.Object, "status", "warnings")
+	_, run.Manual = b.GetAnnotations()[SubmissionAnnotation]
 	return run
 }
 

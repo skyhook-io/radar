@@ -245,6 +245,24 @@ func TestVeleroDeleteBackupRefusesStoppedServer(t *testing.T) {
 	}
 }
 
+func TestVeleroDeleteBackupRefusesDisabledDeletionController(t *testing.T) {
+	for _, flags := range [][]string{{"--restore-only"}, {"--disable-controllers=backup-deletion"}} {
+		t.Run(strings.Join(flags, " "), func(t *testing.T) {
+			srv, dyn := deleteServer(t, deletableBackup("nightly-1", "uid-1", "Completed", "default"))
+			seedVeleroActionServer(t, 1, flags...)
+			rec := serve(srv, http.MethodPost, "/api/velero/backups/velero/nightly-1/delete", `{"uid":"uid-1"}`)
+			if rec.Code != 409 || !strings.Contains(rec.Body.String(), "backup-deletion controller is disabled") || len(deleteRequests(t, dyn)) != 0 {
+				t.Fatalf("%d %s", rec.Code, rec.Body)
+			}
+		})
+	}
+	srv, dyn := deleteServer(t, deletableBackup("nightly-1", "uid-1", "Completed", "default"))
+	seedVeleroActionServer(t, 1, "--disable-controllers=gc")
+	if rec := serve(srv, http.MethodPost, "/api/velero/backups/velero/nightly-1/delete", `{"uid":"uid-1"}`); rec.Code != http.StatusOK || len(deleteRequests(t, dyn)) != 1 {
+		t.Fatalf("gc off does not stop a deletion: %d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestVeleroDeletionLookupNewestAndOpen(t *testing.T) {
 	request := func(name, phase, uid string, ago time.Duration) *unstructured.Unstructured {
 		r := veleropkg.DeleteBackupRequestFor("velero", "nightly-1", uid)

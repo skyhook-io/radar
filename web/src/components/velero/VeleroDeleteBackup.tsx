@@ -6,7 +6,7 @@ import { showApiError } from '../ui/Toast'
 import { useRadarFeature } from '../../api/client'
 import { getApiBase } from '../../api/config'
 import { actionDialogResult } from '../../api/actions'
-import { useVeleroBackupDeletion, useVeleroDeleteBackup, useVeleroWorkspace, type VeleroDeletion } from '../../api/velero'
+import { useVeleroBackupDeletion, useVeleroDeleteBackup, useVeleroRuns, useVeleroWorkspace, type VeleroDeletion } from '../../api/velero'
 
 // The generic Delete's hover treatment, on a labelled button like the other header actions.
 const BUTTON =
@@ -15,12 +15,15 @@ const BUTTON =
 // The phases Velero's backup tracker holds a backup in (pkg/velero.BackupStillRunning).
 const RUNNING = new Set(['InProgress', 'WaitingForPluginOperations', 'WaitingForPluginOperationsPartiallyFailed', 'Finalizing', 'FinalizingPartiallyFailed'])
 const SETTLED = new Set<VeleroDeletion['state']>(['refused', 'failed', 'unknown', 'deleted'])
+// A Restore Velero has not finished: it is still reading the backup.
+const RESTORING = new Set(['', 'New', 'InProgress', 'WaitingForPluginOperations', 'WaitingForPluginOperationsPartiallyFailed', 'Finalizing', 'FinalizingPartiallyFailed'])
 
 /** Why Velero would refuse to delete this backup now, from what Radar can see. */
-export function deleteRefusal(backup: any, location: { accessMode?: string; phase?: string } | undefined, serverStopped: boolean): string | undefined {
+export function deleteRefusal(backup: any, location: { accessMode?: string; phase?: string } | undefined, serverStopped: boolean, deletionDisabled = false): string | undefined {
   const phase: string = backup?.status?.phase ?? ''
   if (RUNNING.has(phase)) return `This backup is still running (${phase}). Velero deletes a backup only once it has finished.`
   if (serverStopped) return 'The Velero server isn’t running, so nothing would be deleted now. Start it first.'
+  if (deletionDisabled) return 'Velero runs with its backup-deletion controller disabled (--restore-only or --disable-controllers=backup-deletion), so it would never process the deletion.'
   const name: string = backup?.spec?.storageLocation ?? ''
   if (!name) return 'This backup has no storage location yet; wait for Velero to start it before deleting.'
   if (location?.accessMode === 'ReadOnly') return `Its storage location ${name} is read-only, and Velero does not delete backups from a read-only location.`
@@ -89,6 +92,8 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
   const [reviewing, setReviewing] = useState<string | null>(null)
   const deleteBackup = useVeleroDeleteBackup()
   const deletion = useVeleroBackupDeletion(namespace, name, uid, support === 'supported')
+  // Read when the confirmation opens; the backup's page already holds them.
+  const restores = useVeleroRuns('restores', namespace, { backup: name }, { enabled: support === 'supported' && reviewing !== null && !!namespace && !!name })
   const request = deletion.data?.request ?? deleteBackup.data?.request
   const started = !!request || backup?.status?.phase === 'Deleting'
 
@@ -110,7 +115,8 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
   const location = workspace.data?.locations.find((l) => l.namespace === namespace && l.name === locationName)
   const installation = workspace.data?.installations.find((i) => i.namespace === namespace)
   const serverStopped = installation?.server.replicas === 0
-  const unavailable = deleteRefusal(backup, location, serverStopped)
+  const unavailable = deleteRefusal(backup, location, serverStopped, installation?.server.deletionDisabled === true)
+  const restoring = (restores.data?.runs ?? []).filter((r) => RESTORING.has(r.phase ?? ''))
 
   if (state === 'deleted') {
     return null
@@ -194,6 +200,11 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
         notes={[
           'Deleting only the Backup object would leave all of this in place, and Velero would bring the object back from storage. Velero does the deletion here, as velero backup delete does.',
           ...(backup?.status?.phase === 'Deleting' ? ['Velero has marked this backup Deleting: a deletion is under way, or an earlier one failed.'] : []),
+          ...(restoring.length > 0
+            ? [
+                `${restoring.length === 1 ? `Restore ${restoring[0].name} is` : `Restores ${restoring.map((r) => r.name).join(', ')} are`} still restoring from this backup. Deleting it removes the data ${restoring.length === 1 ? 'it reads' : 'they read'}, so ${restoring.length === 1 ? 'it' : 'they'} may fail.`,
+              ]
+            : []),
         ]}
         writes={[{ summary: `create DeleteBackupRequest in namespace ${namespace}`, detail: `spec.backupName: ${name}` }]}
         typedConfirmation={name}

@@ -120,3 +120,14 @@ describe('Recent runs', () => {
   })
 })
 
+
+describe('a schedule writing to a read-only location', () => {
+  it('says Velero rejects its backups, and marks a Back up now run as manual', () => {
+    expect(veleroScheduleReasonText(reading({ state: 'cannotRun', reason: 'locationReadOnly', attention: true, location: { name: 'archive', readOnly: true } }))).toBe(
+      'Its storage location archive is read-only, so Velero rejects every backup this schedule submits.',
+    )
+    const manual = { name: 'nightly-20261115120500', phase: 'Completed', created: ago(5), ranAt: ago(5), completed: ago(4), manual: true }
+    const html = renderToStaticMarkup(<VeleroScheduleActivity reading={reading({ runs: { read: 'full', kept: 1, newest: manual, newestCompleted: manual, recent: [manual] } })} />)
+    expect(html).toContain('>manual<')
+  })
+})

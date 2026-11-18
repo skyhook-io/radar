@@ -78,3 +78,21 @@ func TestBackupFromScheduleRefusesANameVeleroCannotLabel(t *testing.T) {
 		t.Errorf("err = %v, want ErrScheduleCannotRun", err)
 	}
 }
+
+// Velero's builder references the policy as a ConfigMap by name, whatever the template wrote.
+func TestBackupFromScheduleReferencesTheResourcePolicyAsAConfigMap(t *testing.T) {
+	s := scheduleForBackup("nightly", nil, nil, map[string]any{"template": map[string]any{
+		"resourcePolicy": map[string]any{"apiGroup": "v1", "kind": "ConfigMap", "name": "skip-pvcs"},
+	}})
+	b, err := BackupFromSchedule(s, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, _, _ := unstructured.NestedMap(b.Object, "spec", "resourcePolicy")
+	if want := map[string]any{"kind": "configmap", "name": "skip-pvcs"}; !reflect.DeepEqual(policy, want) {
+		t.Errorf("resourcePolicy %v, want %v", policy, want)
+	}
+	if kind, _, _ := unstructured.NestedString(s.Object, "spec", "template", "resourcePolicy", "kind"); kind != "ConfigMap" {
+		t.Errorf("the schedule itself must not change: %q", kind)
+	}
+}

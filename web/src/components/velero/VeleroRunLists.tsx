@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Plus, Search } from 'lucide-react'
-import { Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
+import { Tooltip, VELERO_MANUAL_RUN, VELERO_MANUAL_RUN_TITLE, toneTextClass } from '@skyhook-io/k8s-ui'
 import { useVeleroRuns, type VeleroRestoreRow, type VeleroRunRow } from '../../api/velero'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { ScreenBody, SectionTable, Segments, Sub, type TableColumn } from '../workspace/layout'
@@ -136,7 +136,8 @@ function storedInText(r: VeleroRunRow, locations: VeleroScreenProps['data']['loc
  * read, newest first, with the failed ones a segment away.
  */
 export function VeleroBackups({ data, installation, onInstallation, onInspect, inspected, onCreate }: VeleroScreenProps) {
-  const query = useVeleroRuns('backups')
+  // The installation narrows the read on the server, so its cap counts only these.
+  const query = useVeleroRuns('backups', installation ?? undefined)
   const wide = useMediaQuery(VELERO_WIDE)
   const [search, setSearch] = useState('')
   const rows = useMemo(
@@ -151,7 +152,14 @@ export function VeleroBackups({ data, installation, onInstallation, onInspect, i
       cell: (r) => (
         <>
           <VeleroName name={r.name} middle />
-          <Sub>{r.schedule ? <WholeNames text={`schedule ${r.schedule}`} /> : 'On demand'}</Sub>
+          <Sub>
+            {r.schedule ? <WholeNames text={`schedule ${r.schedule}`} /> : 'On demand'}
+            {r.manual && (
+              <Tooltip content={VELERO_MANUAL_RUN_TITLE}>
+                <span>{` · ${VELERO_MANUAL_RUN}`}</span>
+              </Tooltip>
+            )}
+          </Sub>
         </>
       ),
     },
@@ -218,7 +226,7 @@ export function VeleroBackups({ data, installation, onInstallation, onInspect, i
 
 /** The Restore kind's list: every restore, newest first, with the failed ones a segment away. */
 export function VeleroRestores({ data, installation, onInstallation, onInspect, inspected, onCreate }: VeleroScreenProps) {
-  const query = useVeleroRuns('restores')
+  const query = useVeleroRuns('restores', installation ?? undefined)
   const wide = useMediaQuery(VELERO_WIDE)
   const [search, setSearch] = useState('')
   const rows = useMemo(

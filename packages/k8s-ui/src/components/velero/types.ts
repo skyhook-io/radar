@@ -53,6 +53,7 @@ export type VeleroScheduleReason =
   | 'noFutureTime'
   | 'validationPending'
   | 'serverDown'
+  | 'locationReadOnly'
 
 /** pkg/velero ScheduleRun: one Backup a Schedule submitted. */
 export interface VeleroRun {
@@ -67,6 +68,8 @@ export interface VeleroRun {
   expiration?: string
   errors?: number
   warnings?: number
+  /** Created by Radar's Back up now, not by the schedule controller; still one of the schedule's runs. */
+  manual?: boolean
 }
 
 /** pkg/velero ScheduleRuns: what the backups Velero still keeps say about a schedule. */
@@ -86,6 +89,8 @@ export interface VeleroScheduleLocation {
   name?: string
   /** The template names no location; the installation's default receives the backups. */
   viaDefault?: boolean
+  /** The location is ReadOnly, so Velero rejects the schedule's backups. Absent when it could not be read. */
+  readOnly?: boolean
 }
 
 /** pkg/velero ScheduleReading */
@@ -134,8 +139,12 @@ export interface VeleroServerConfig {
   /** The server Deployment's pods (status.replicas): every non-terminating pod, Pending and crash-looping ones included; 0 is a stopped server. Absent when the Deployment was not found. */
   replicas?: number
   readyReplicas?: number
-  /** The backup controller is removed, so no Backup runs, manual or scheduled. True or false when the flags were read; absent when they could not be. */
+  /** The backup or backup-queue controller is removed, so no Backup runs, manual or scheduled. True or false when the flags were read; absent when they could not be. */
   backupsDisabled?: boolean
+  /** The backup-deletion controller is removed, so no deletion request is processed. As backupsDisabled. */
+  deletionDisabled?: boolean
+  /** The gc controller is removed, so expired backups are not deleted. As backupsDisabled. */
+  gcDisabled?: boolean
 }
 
 /** pkg/velero DefaultSource */
