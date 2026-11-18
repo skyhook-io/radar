@@ -48,9 +48,9 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 	}
 	// The builder draws the checkout Rollout's background analysis run from
 	// the Rollout's status. Its object is added here, not to charCluster,
-	// whose goldens record every fixture object.
-	run := charUnstructured("argoproj.io/v1alpha1", "AnalysisRun", "shop", "checkout-bg-1", nil, nil, map[string]any{"phase": "Running"},
-		charController("argoproj.io/v1alpha1", "Rollout", "checkout", "uid-shop-checkout"))
+	// whose goldens record every fixture object, and without the owner
+	// reference the controller sets, so only the status family answers it.
+	run := charUnstructured("argoproj.io/v1alpha1", "AnalysisRun", "shop", "checkout-bg-1", nil, nil, map[string]any{"phase": "Running"})
 	objects[resourceid.ResourceKey("argoproj.io", "AnalysisRun", "shop", "checkout-bg-1")] = run
 	session = append(session, run)
 	s := newProjectionSession(t, session...)
