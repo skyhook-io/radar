@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -100,10 +101,13 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	grouped := map[resourceid.Ref]string{}
 	jobUIDs := map[string]types.UID{}
 
+	// unanswered is the last hop's admissions, which no hop asks about.
+	var unanswered []resourceid.Ref
 	for hop := 0; hop < hops; hop++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		unanswered = nil
 		for _, r := range frontier {
 			obj := objects[r]
 			graph.answer(session, v, families, selectors, r, obj, false)
@@ -241,10 +245,13 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		if len(next) == 0 {
 			break
 		}
-		frontier = next
+		frontier, unanswered = next, next
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if allowed[EdgeManages] {
+		graph.ownerEdges(unanswered, objects)
 	}
 	displayObjects := make(map[resourceid.Ref]runtime.Object, len(order))
 	for _, r := range order {
@@ -354,6 +361,32 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		sub.RBACDenied = 1
 	}
 	return sub, nil
+}
+
+// ownerEdges links objects to the admitted owners their owner references name,
+// UID included, from the objects already read. It asks about nothing, so it
+// can draw the structure among the last hop's objects, which are never
+// answered.
+func (n *neighborhood) ownerEdges(refs []resourceid.Ref, objects map[resourceid.Ref]runtime.Object) {
+	for _, r := range refs {
+		m, err := apimeta.Accessor(objects[r])
+		if err != nil {
+			continue
+		}
+		for _, ref := range m.GetOwnerReferences() {
+			group := resourceid.GroupFromAPIVersion(ref.APIVersion)
+			// A namespaced object's owner may be cluster-scoped.
+			for _, ns := range slices.Compact([]string{r.Namespace, ""}) {
+				owner := resourceid.NewRef(group, ref.Kind, ns, ref.Name)
+				if o, ok := objects[owner]; ok {
+					if om, err := apimeta.Accessor(o); err == nil && om.GetUID() == ref.UID {
+						n.edge(owner, r, relationEdge{edge: EdgeManages})
+					}
+					break
+				}
+			}
+		}
+	}
 }
 
 func neighborhoodDisposition(d relations.Disposition, allowed map[EdgeType]bool) bool {

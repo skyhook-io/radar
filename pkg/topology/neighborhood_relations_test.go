@@ -499,3 +499,39 @@ func TestWalkNeighborhoodBudgetKeepsAttachmentsBeforeOwnedChildren(t *testing.T)
 		keeps(t, walkTestNeighborhood(t, newRecordingProjectionSession(t, objects...), root, NeighborhoodOptions{}), "GitRepository/repo", "Kustomization/root")
 	})
 }
+
+// Objects admitted on the last hop are never asked about, but the owner
+// references among them are already in hand: a ConfigMap's Deployment,
+// ReplicaSet and Pod come back linked, not as unconnected spokes.
+func TestWalkNeighborhoodLinksOwnersWithinTheLastHop(t *testing.T) {
+	controller := true
+	env := []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"}}}}
+	spec := corev1.PodSpec{Containers: []corev1.Container{{Name: "c", EnvFrom: env}}}
+	cm := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "shop", UID: "cfg"}}, "", "ConfigMap")
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "web"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: spec}}}, "apps", "Deployment")
+	rs := projectionObject(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "shop", UID: "rs", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "web", Controller: &controller}}}, Spec: appsv1.ReplicaSetSpec{Template: corev1.PodTemplateSpec{Spec: spec}}}, "apps", "ReplicaSet")
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "web-1-a", Namespace: "shop", UID: "pod", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-1", UID: "rs", Controller: &controller}}}, Spec: spec}, "", "Pod")
+	stale := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "web-0-a", Namespace: "shop", UID: "stale", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-1", UID: "an-earlier-rs", Controller: &controller}}}, Spec: spec}, "", "Pod")
+	sub := walkTestNeighborhood(t, newProjectionSession(t, cm, dep, rs, pod, stale), cm, NeighborhoodOptions{})
+	names := map[string]string{}
+	for _, n := range sub.Nodes {
+		names[n.ID] = n.Name
+	}
+	edges := map[string]bool{}
+	for _, e := range sub.Edges {
+		if e.Type == EdgeManages {
+			edges[names[e.Source]+" manages "+names[e.Target]] = true
+		}
+	}
+	for _, want := range []string{"web manages web-1", "web-1 manages web-1-a"} {
+		if !edges[want] {
+			t.Errorf("missing %q; manages edges %v", want, edges)
+		}
+	}
+	if edges["web-1 manages web-0-a"] {
+		t.Error("linked a Pod to a ReplicaSet its owner reference doesn't name by UID")
+	}
+	if len(sub.Nodes) != 5 {
+		t.Fatalf("the fixture no longer reaches every object at one hop: %+v", sub.Nodes)
+	}
+}
