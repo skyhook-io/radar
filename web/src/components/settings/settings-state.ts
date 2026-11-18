@@ -5,20 +5,21 @@ export type SettingsSectionId =
   | 'prometheus'
   | 'cost'
   | 'argocd'
+  | 'substrate'
   | 'ai'
   | 'advanced'
   | 'privacy'
 
 export type IntegrationSectionId = 'prometheus' | 'cost' | 'argocd'
 // Tabs whose drafts save through their own form, not the startup footer.
-export type PendingSectionId = IntegrationSectionId | 'ai'
+export type PendingSectionId = IntegrationSectionId | 'substrate' | 'ai'
 
 export const pendingSectionLabels: Record<PendingSectionId, string> = {
-  prometheus: 'Metrics', cost: 'Cost', argocd: 'Argo CD', ai: 'AI investigations',
+  prometheus: 'Metrics', cost: 'Cost', argocd: 'Argo CD', substrate: 'Agent Substrate', ai: 'AI investigations',
 }
 
 export function pendingSections(dirty: Record<PendingSectionId, boolean>): PendingSectionId[] {
-  return (['prometheus', 'cost', 'argocd', 'ai'] as const).filter(section => dirty[section])
+  return (['prometheus', 'cost', 'argocd', 'substrate', 'ai'] as const).filter(section => dirty[section])
 }
 
 // AI preferences are open to every user, so an AI draft pending in another tab

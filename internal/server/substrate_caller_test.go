@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -149,58 +150,31 @@ func TestSubstrateHubOwnerReadsAsTheSharedIdentityMintedAsThemselves(t *testing.
 	if status.CanConfigure || status.APITier.State != substrateapi.TierConnected {
 		t.Errorf("owner status = %+v", status)
 	}
-	for _, h := range []http.HandlerFunc{s.handleGetSubstrateConnection, s.handlePutSubstrateConnection} {
+	for _, h := range []http.HandlerFunc{s.handlePutSubstrateConnection} {
 		if rec := call(t, s, h, substrateCall{path: "/api/substrate/connection", user: alice}, nil); rec.Code != http.StatusForbidden || errorCode(t, rec) != substrateapi.CodeSharedRadar {
 			t.Errorf("connection stays local-only in Hub: %d %s", rec.Code, rec.Body)
 		}
 	}
 }
 
-// Below owner, or with no Hub role, nothing is minted and nothing is read.
-func TestSubstrateHubNonOwnersAreRefusedBeforeAnyMint(t *testing.T) {
+func TestSubstrateAnySignedInUserCanProveTheirOwnAccess(t *testing.T) {
 	s, mints := cloudSubstrate(t)
-	for _, user := range []*auth.User{hubUser("m", "member"), hubUser("v", "viewer"), {Username: "system:radar"}, nil} {
-		for name, route := range substrateAPIRoutes(s) {
-			rec := call(t, s, route.h, substrateCall{path: "/api/substrate/" + name, params: route.params, user: user}, nil)
-			if rec.Code != http.StatusForbidden || errorCode(t, rec) != substrateapi.CodeOwnersOnly {
-				t.Errorf("%v %s = %d %s", user, name, rec.Code, rec.Body)
+	for _, mode := range []string{"cloud", "proxy", "oidc"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("RADAR_CLOUD_MODE", fmt.Sprint(mode == "cloud"))
+			if mode != "cloud" {
+				s.authConfig.Mode = mode
 			}
-		}
-		var ws substrateWorkspaceResponse
-		call(t, s, s.handleSubstrateWorkspace, substrateCall{path: "/api/substrate/workspace", user: user}, &ws)
-		var status substrateStatusResponse
-		call(t, s, s.handleSubstrateStatus, substrateCall{path: "/api/substrate/status", user: user}, &status)
-		for _, tier := range []substrateapi.APITier{ws.APITier, status.APITier} {
-			if tier.State != substrateapi.TierDisabled || tier.Code != substrateapi.CodeOwnersOnly || !strings.Contains(tier.Reason, "only org owners") {
-				t.Errorf("%v tier = %+v", user, tier)
+			for _, role := range []string{"owner", "member", "viewer", "none"} {
+				rec := call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors", user: hubUser(mode+role, role)}, nil)
+				if rec.Code != http.StatusOK {
+					t.Errorf("%s: %d %s", role, rec.Code, rec.Body)
+				}
 			}
-		}
+		})
 	}
-	if asked, minted := mints.count(); asked != 0 || minted != 0 {
-		t.Errorf("a non-owner request reached the mint: asked %d, minted %d", asked, minted)
-	}
-	// An owner after them is not served a non-owner's (absent) read; it mints.
-	call(t, s, s.handleSubstrateWorkspace, substrateCall{path: "/api/substrate/workspace", user: hubUser("o", "owner")}, nil)
-	if _, minted := mints.count(); minted != 1 {
-		t.Errorf("owner minted %d", minted)
-	}
-}
-
-// Outside Radar Hub, a shared or authenticated Radar stays sharedRadar, for
-// every role.
-func TestSubstrateSharedOutsideHubStaysShared(t *testing.T) {
-	s := substrateTestServer(t, substrateapi.Kube{})
-	s.authConfig.Mode = "proxy"
-	mints := &mintRecorder{t: t, expires: time.Now().Add(time.Hour)}
-	mints.install(t)
-	for name, route := range substrateAPIRoutes(s) {
-		rec := call(t, s, route.h, substrateCall{path: "/api/substrate/" + name, params: route.params, user: hubUser("o", "owner")}, nil)
-		if rec.Code != http.StatusForbidden || errorCode(t, rec) != substrateapi.CodeSharedRadar {
-			t.Errorf("%s = %d %s", name, rec.Code, rec.Body)
-		}
-	}
-	if asked, _ := mints.count(); asked != 0 {
-		t.Error("no mint outside Radar Hub")
+	if _, minted := mints.count(); minted != 12 {
+		t.Errorf("each user must mint once: %d", minted)
 	}
 }
 

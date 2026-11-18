@@ -15,8 +15,8 @@ import { Notice, RefreshFailedNotice, ScreenBody, Segments, Sub, type TableColum
 import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../workspace/table'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import type { OpenSubject } from './SubstrateAttentionList'
-import { SubstrateConnectPanel, SubstrateTierBanner, showsConnectPanel } from './SubstrateConnect'
-import { bytesText, coverageInPart, coverageReason, cpuText, poolReading, tierReading, workerPodText } from './readings'
+import { SubstrateConnectNotice, SubstrateTierBanner } from './SubstrateConnect'
+import { bytesText, coverageInPart, coverageReason, cpuText, poolReading, workerPodText } from './readings'
 import { substrateActorsPath } from './routes'
 import { ActorStateBadge, Name, SUBSTRATE_WIDE, SubstrateHeader, SubstrateSourceLine, Term, Unread, WholeNames, WorkerStateChip } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
@@ -176,7 +176,7 @@ export function SubstrateWorkersScreen({ workspace, status, onOpenSubject }: { w
         {!connected && tier ? (
           <>
             <SubstrateTierBanner tier={tier} />
-            {status && showsConnectPanel(tier) ? <SubstrateConnectPanel status={status} tier={tier} /> : <Notice>{tierReading(tier).detail}</Notice>}
+            <SubstrateConnectNotice status={status} tier={tier} />
           </>
         ) : query.isLoading ? (
           <PaneLoader label="Loading workers…" />

@@ -243,12 +243,21 @@ describe('text', () => {
   })
 })
 
-describe('the Connect form', () => {
+describe('the connection settings form', () => {
   it('saves only what was chosen: no token path for the shared identity, no empty optional fields', async () => {
-    const { connectionUpdate } = await import('./SubstrateConnect')
+    const { connectionUpdate } = await import('../settings/SubstrateSettings')
     const target = { binding: 'b', context: 'kind-demo', fingerprint: 'f', clientGeneration: 1, operationGeneration: 2 }
-    expect(connectionUpdate({ identity: 'shared', tokenFile: '/tmp/t', atespaces: '', endpoint: ' ', caFile: '', serverName: '' }, target)).toEqual({ target, settings: { identity: 'shared', tokenFile: undefined, atespaces: undefined, endpoint: undefined, caFile: undefined, serverName: undefined } })
-    expect(connectionUpdate({ identity: 'tokenFile', tokenFile: ' ~/t ', atespaces: 'research, , support-bots', endpoint: 'h:443', caFile: '/ca.pem', serverName: 'api' }, target)).toEqual({ target, settings: { identity: 'tokenFile', tokenFile: '~/t', atespaces: ['research', 'support-bots'], endpoint: 'h:443', caFile: '/ca.pem', serverName: 'api' } })
+    const view = { target, revision: 'r1' }
+    expect(connectionUpdate({ identity: 'shared', tokenFile: '/tmp/t', atespaces: '', endpoint: ' ', caFile: '', serverName: '' }, view)).toEqual({ target, revision: 'r1', settings: { identity: 'shared', tokenFile: undefined, atespaces: undefined, endpoint: undefined, caFile: undefined, serverName: undefined } })
+    expect(connectionUpdate({ identity: 'tokenFile', tokenFile: ' ~/t ', atespaces: 'research, , support-bots', endpoint: 'h:443', caFile: '/ca.pem', serverName: 'api' }, view)).toEqual({ target, revision: 'r1', settings: { identity: 'tokenFile', tokenFile: '~/t', atespaces: ['research', 'support-bots'], endpoint: 'h:443', caFile: '/ca.pem', serverName: 'api' } })
+  })
+
+  it('asks to send the saved credential to a changed destination only when the user agreed', async () => {
+    const { connectionUpdate } = await import('../settings/SubstrateSettings')
+    const target = { binding: 'b', context: 'kind-demo', fingerprint: 'f', clientGeneration: 1, operationGeneration: 2 }
+    const draft = { identity: 'tokenFile' as const, tokenFile: '~/t', atespaces: '', endpoint: 'h:443', caFile: '', serverName: '' }
+    expect(connectionUpdate(draft, { target, revision: 'r1' })).not.toHaveProperty('confirmDestination')
+    expect(connectionUpdate(draft, { target, revision: 'r1' }, true)).toMatchObject({ confirmDestination: true })
   })
 })
 
@@ -396,9 +405,9 @@ describe('tier readings for a Radar Hub owner, who has no form', () => {
     }
   })
 
-  it('leaves a local Radar’s readings, which point at its form, exactly as they were', () => {
-    expect(tierReading({ state: 'failed', code: 'notInstalled' })).toEqual({ title: 'API server not found', tone: 'unknown', detail: 'Radar has not read Substrate’s API.', nextStep: 'Check that Substrate’s API server runs as Service ate-system/api, or set its endpoint under Advanced.' })
-    expect(tierReading({ state: 'failed', code: 'tls' }).nextStep).toBe('Check the CA file and server name under Advanced, or that the cluster’s trust bundle for Substrate exists.')
+  it('points a local Radar’s readings at its form in Settings', () => {
+    expect(tierReading({ state: 'failed', code: 'notInstalled' })).toEqual({ title: 'API server not found', tone: 'unknown', detail: 'Radar has not read Substrate’s API.', nextStep: 'Check that Substrate’s API server runs as Service ate-system/api, or set its endpoint in Settings → Agent Substrate, under Advanced.' })
+    expect(tierReading({ state: 'failed', code: 'tls' }).nextStep).toBe('Check the CA file and server name in Settings → Agent Substrate, under Advanced, or that the cluster’s trust bundle for Substrate exists.')
     expect(tierReading({ state: 'failed', code: 'unreachable', reason: 'dial tcp' })).toMatchObject({ title: 'API server unreachable', detail: 'dial tcp' })
     expect(tierReading({ state: 'failed', code: 'unauthenticated' }).nextStep).toBe('Check that the token is current, or choose another identity.')
     expect(tierReading({ state: 'failed', code: 'denied' }).nextStep).toBe('Ask a Substrate owner to grant this identity the viewer role, or choose another identity.')

@@ -336,6 +336,18 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
+            - name: RADAR_SUBSTRATE_API
+              value: {{ ternary "enabled" "disabled" .Values.substrate.api.enabled | quote }}
+            - name: RADAR_SUBSTRATE_ENDPOINT
+              value: {{ .Values.substrate.api.endpoint | quote }}
+            - name: RADAR_SUBSTRATE_SERVER_NAME
+              value: {{ .Values.substrate.api.serverName | quote }}
+            - name: RADAR_SUBSTRATE_ATESPACES
+              value: {{ join "," .Values.substrate.api.atespaces | quote }}
+            {{- if .Values.substrate.api.caConfigMap.name }}
+            - name: RADAR_SUBSTRATE_CA_FILE
+              value: /etc/radar/substrate-ca/ca.crt
+            {{- end }}
             {{- if not .Values.cloud.enabled }}
             - name: RADAR_OPERATOR_SETTINGS_FILE
               value: /etc/radar/operator/settings.json
@@ -502,6 +514,11 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            {{- if .Values.substrate.api.caConfigMap.name }}
+            - name: substrate-ca
+              mountPath: /etc/radar/substrate-ca
+              readOnly: true
+            {{- end }}
             {{- if not .Values.cloud.enabled }}
             - name: operator-settings
               mountPath: /etc/radar/operator
@@ -529,6 +546,14 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
+        {{- if .Values.substrate.api.caConfigMap.name }}
+        - name: substrate-ca
+          configMap:
+            name: {{ .Values.substrate.api.caConfigMap.name | quote }}
+            items:
+              - key: {{ .Values.substrate.api.caConfigMap.key | quote }}
+                path: ca.crt
+        {{- end }}
         {{- if not .Values.cloud.enabled }}
         - name: operator-settings
           configMap:

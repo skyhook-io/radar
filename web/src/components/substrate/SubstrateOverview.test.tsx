@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateStatus, SubstrateWorkspace } from '../../api/substrateWorkspace'
 import { SUBSTRATE_NO_PROBLEMS, SubstrateOverview } from './SubstrateOverview'
-import { connectedTier, connection, counts, notConnectedWorkspace, ownerTier, ownersOnlyTier, poolShortRow, sharedTier, status, workspace } from './substrate.fixtures'
+import { connectedTier, connection, counts, notConnectedWorkspace, apiDisabledTier, mintDeniedTier, ownerTier, poolShortRow, sharedTier, status, workspace } from './substrate.fixtures'
 
 const state = vi.hoisted(() => ({ connection: undefined as unknown }))
 
@@ -175,72 +175,22 @@ describe('Agent Substrate overview, not connected', () => {
     expect(html).toMatch(/Delivery \(1h\):<\/dt><dd[^>]*>(?:<[^>]+>)*unknown \(no Substrate metrics\)/)
   })
 
-  it('offers the Connect panel: the API server found, and the shared identity named as not you', () => {
-    state.connection = connection()
+  it('offers Settings → Agent Substrate where actors would be, on a local Radar', () => {
     const html = render(notConnectedWorkspace())
-    expect(html).toContain('See actors, templates and workers')
-    expect(html).toContain('Radar found Substrate’s API server')
-    expect(html).toContain('Substrate’s shared client identity')
-    expect(html).toContain('the one kubectl ate uses without')
-    // Whose access each option grants, and whose name Substrate records, said plainly.
-    expect(html).toContain('Substrate records the reads as that identity, not you')
-    expect(html).toContain('Radar sees what your access lets you see.')
-    expect(html).toContain('Your own viewer token')
-    expect(html).toContain('Recommended')
-    expect(html).toContain('This identity may be a global owner')
-    expect(html).toContain('never returns it to the browser or stores it in its settings')
-    // Secondary detail folds under labels that say what each explains; the intro stays short.
-    expect(html).toContain('How Radar handles the token')
-    expect(html).toContain('Why a separate identity?')
-    expect(html).toContain('How to get a viewer token')
-    expect(html).toContain('Radar saves only its path.')
-    expect(html).toContain('Advanced: API server address and TLS')
-    expect(html).toContain('>Connect</button>')
-    // The identity choice leads; where Radar connects and its Advanced settings follow it.
-    expect(html.indexOf('Who Radar reads Substrate as')).toBeLessThan(html.indexOf('Radar found Substrate’s API server'))
-    expect(html.indexOf('Radar found Substrate’s API server')).toBeLessThan(html.indexOf('Advanced: API server address and TLS'))
-    // Nothing saved, nothing to disconnect.
+    expect(html).toContain('Connect to Substrate’s API')
+    expect(html).toContain('>Open Substrate settings</button>')
+    // The form lives in Settings; the workspace never edits the connection.
+    expect(html).not.toContain('Who Radar reads Substrate as')
     expect(html).not.toContain('Disconnect')
   })
 
-  it('keeps Disconnect apart from saving, in the destructive tone, behind a confirmation', async () => {
-    const { toneTextClass } = await import('@skyhook-io/k8s-ui')
-    state.connection = connection({ saved: true, settings: { identity: 'tokenFile', tokenFile: '/Users/me/.radar/substrate/viewer.token', caFile: '/Users/me/.radar/substrate/a-long-ca-bundle.pem' } })
-    const html = render(notConnectedWorkspace())
-    expect(html).toContain('>Save and reconnect</button>')
-    const button = html.slice(html.lastIndexOf('<button', html.indexOf('>Disconnect</button>')), html.indexOf('>Disconnect</button>'))
-    expect(button).toContain('ml-auto')
-    expect(button).toContain(toneTextClass('unhealthy'))
-    expect(button).not.toContain('btn-brand')
-    // A long path is inspectable whole, on hover.
-    expect(html).toContain('title="/Users/me/.radar/substrate/a-long-ca-bundle.pem"')
-    state.connection = connection()
-  })
-
-  it('shows the shared identity’s warning, unfolded, once that identity is chosen', () => {
-    state.connection = connection({ saved: true, settings: { identity: 'shared' } })
-    const html = render(notConnectedWorkspace())
-    const at = html.indexOf('This identity may be a global owner')
-    expect(at).toBeGreaterThan(-1)
-    // The nearest fold around it is open: not inert.
-    const fold = html.lastIndexOf('<div class="relative overflow-hidden"', at)
-    expect(html.slice(fold, at)).not.toContain('inert')
-    state.connection = connection()
-  })
-
-  it('says the API server was not found, or that Radar can’t check', () => {
-    const missing = render(notConnectedWorkspace(), status({ apiTier: notConnectedWorkspace().apiTier, apiService: { namespace: 'ate-system', name: 'api', port: 443, found: false } }))
-    expect(missing).toContain('Substrate’s API server wasn’t found')
-    const unknown = render(notConnectedWorkspace(), status({ apiTier: notConnectedWorkspace().apiTier, apiService: { namespace: 'ate-system', name: 'api', port: 443 } }))
-    expect(unknown).toContain('can’t check it is there')
-  })
-
-  it('explains why a shared Radar does not read the API, instead of a form', () => {
+  it('explains why a shared Radar without sign-in does not read the API, and what turns it on', () => {
     const data = notConnectedWorkspace(sharedTier)
     const html = render(data, status({ apiTier: sharedTier, canConfigure: false }))
-    expect(html).toContain('This Radar is shared')
-    expect(html).not.toContain('Substrate’s shared client identity')
-    expect(html).not.toContain('>Connect</button>')
+    expect(html).toContain('Needs sign-in')
+    expect(html).toContain('Turn on sign-in for this Radar')
+    expect(html).toContain('>Connection settings</button>')
+    expect(html).not.toContain('Open Substrate settings')
   })
 
   it('reads each failure plainly with a next step', () => {
@@ -254,38 +204,40 @@ describe('Agent Substrate overview, not connected', () => {
   })
 })
 
-describe('Agent Substrate in Radar Hub', () => {
-  it('tells an org owner which identity Radar reads as, with nothing to connect or change', () => {
+describe('Agent Substrate on an in-cluster Radar with sign-in, or Radar Hub', () => {
+  it('tells a signed-in person which identity Radar reads as, with nothing to connect or change', () => {
     const html = render(workspace({ apiTier: ownerTier }), status({ apiTier: ownerTier, canConfigure: false }))
     expect(html).toContain('api.ate-system.svc:443</span> as Substrate’s shared client identity (')
     expect(html).toContain('ate-system/ate-client</span>), minted with your Kubernetes access')
     expect(html).toContain('aria-label="About this identity"')
     expect(html).not.toContain('Change connection')
-    expect(html).not.toContain('Who Radar reads Substrate as')
-    // An owner's Radar reads Substrate: the actors are there.
+    expect(html).toContain('>Connection settings</button>')
+    // Their own access could mint the token: the actors are there.
     expect(html).toContain('Actor states')
   })
 
-  it('gives everyone else a short note where the Connect panel would be, and keeps Kubernetes and Prometheus', () => {
-    const data = notConnectedWorkspace(ownersOnlyTier)
-    const html = render(data, status({ apiTier: ownersOnlyTier, canConfigure: false }))
-    expect(html).toContain('In Radar Hub, only org owners can see Substrate’s actors, templates and workers for now. Ask an org owner.')
-    expect(html).not.toContain('Who Radar reads Substrate as')
-    expect(html).not.toContain('See actors, templates and workers')
+  it('says when the operator turned the API off, and keeps Kubernetes and Prometheus', () => {
+    const data = notConnectedWorkspace(apiDisabledTier)
+    const html = render(data, status({ apiTier: apiDisabledTier, canConfigure: false }))
+    expect(html).toContain('Turned off for this Radar')
+    expect(html).toContain('substrate.api.enabled')
+    expect(html).not.toContain('Open Substrate settings')
     expect(html).not.toContain('Substrate API: ')
     expect(html).toContain('Worker pools')
     expect(html).toContain('Prometheus')
   })
 
-  it('tells an owner whose access can’t mint the token what to ask for, with no Connect form', () => {
-    const tier = { state: 'failed' as const, code: 'mintDenied' as const, identity: { mode: 'sharedAsCaller' as const } }
-    const html = render(notConnectedWorkspace(tier), status({ apiTier: tier, canConfigure: false }))
-    expect(html).toContain('Substrate API: your access can’t mint the shared identity’s token')
-    expect(html).toContain('serviceaccounts/token for ate-system/ate-client')
-    expect(html).not.toContain('Who Radar reads Substrate as')
+  it('tells a person whose access can’t mint the token what to ask for, and how to check', () => {
+    const html = render(notConnectedWorkspace(mintDeniedTier), status({ apiTier: mintDeniedTier, canConfigure: false }))
+    expect(html).toContain('Substrate API: your access can’t create the shared identity’s token')
+    expect(html).toContain('serviceaccounts/token for ate-client in ate-system')
+    expect(html).toContain('kubectl auth can-i create serviceaccounts/ate-client --subresource=token -n ate-system')
+    // The banner states the next step once; the notice below only leads to Settings.
+    expect(html.split('Ask a cluster admin for create on serviceaccounts/token').length - 1).toBe(1)
+    expect(html).toContain('Actors, templates and workers aren’t read')
   })
 
-  it('gives an owner whose install lacks the shared identity a kubectl check, not a form', () => {
+  it('gives a person whose install lacks the shared identity a kubectl check, not a form', () => {
     const tier = { state: 'failed' as const, code: 'notInstalled' as const, identity: { mode: 'sharedAsCaller' as const }, reason: 'ServiceAccount ate-system/ate-client does not exist.' }
     const html = render(notConnectedWorkspace(tier), status({ apiTier: tier, canConfigure: false }))
     expect(html).toContain('Substrate’s shared client identity (ate-system/ate-client) doesn’t exist here.')
@@ -294,13 +246,12 @@ describe('Agent Substrate in Radar Hub', () => {
     expect(html).not.toContain('Who Radar reads Substrate as')
   })
 
-  it('leaves a local Radar and a shared in-cluster Radar as they were', () => {
+  it('sends a local Radar to its settings, and tells a shared one without sign-in why not', () => {
     const local = render(notConnectedWorkspace())
-    expect(local).toContain('Who Radar reads Substrate as')
-    expect(local).not.toContain('only org owners')
+    expect(local).toContain('Open Substrate settings')
     const shared = render(notConnectedWorkspace(sharedTier), status({ apiTier: sharedTier, canConfigure: false }))
-    expect(shared).toContain('This Radar is shared')
-    expect(shared).not.toContain('only org owners')
+    expect(shared).toContain('Needs sign-in')
+    expect(shared).not.toContain('org owner')
   })
 })
 

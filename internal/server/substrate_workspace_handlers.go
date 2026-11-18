@@ -9,6 +9,7 @@ import (
 	"log"
 	"maps"
 	"net/http"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,19 +40,16 @@ import (
 )
 
 // Agent Substrate's actors, templates, workers and atespaces live in its own
-// API server, which authorizes by Substrate's roles, not Kubernetes RBAC. Radar
-// reads it with one identity, so a Radar several people use would show each
-// of them everything that identity sees. substrateGate decides per request:
-// a local Radar on a private listener reads with its saved settings; in Radar
-// Hub, an org owner's request reads as the shared ate-client identity minted
-// with the owner's own Kubernetes access; every other shared Radar or role
-// is refused. The Kubernetes side (WorkerPools) is read as the caller
-// everywhere.
-
+// API server, which authorizes by Substrate's roles, not Kubernetes RBAC.
+// Radar holds one connection per cluster, so a Radar several people use must
+// not show one person what another's identity may see. substrateGate decides
+// per request; the Kubernetes side (WorkerPools, worker Pods, logs) is read as
+// the caller everywhere.
 func (s *Server) substrateManager() *substrateapi.Manager {
 	s.substrateOnce.Do(func() {
 		if s.substrate == nil {
 			s.substrate = substrateapi.NewManager(substrateapi.NewStore(config.Path()), currentSubstrateKube)
+			s.substrate.CallerDial = s.substrateInstallation().Settings
 		}
 	})
 	return s.substrate
@@ -96,37 +94,58 @@ func (s *Server) substrateLocal() bool {
 	return s.configManagement() == "local" && !s.authConfig.Enabled() && !s.sharedListener()
 }
 
-const (
-	substrateSharedReason     = "This Radar is shared, so it does not read Substrate's API: Substrate authorizes by its own roles, and every user would see what Radar's one identity sees. Use a local Radar (CLI or Desktop) to see actors, templates and workers."
-	substrateOwnersOnlyReason = "In Radar Hub, only org owners see Substrate's actors, templates and workers for now."
-)
+const substrateSharedReason = "This Radar has no sign-in, so it cannot tell who is asking to read Substrate's API. Enabling sign-in turns on access for people whose own Kubernetes access can mint ate-client's token."
+
+// substrateInstallation is how an in-cluster Radar or Radar Hub reads
+// Substrate, from the environment Helm sets; read once, as flags are.
+func (s *Server) substrateInstallation() substrateapi.InstallationConfig {
+	s.substrateInstallationOnce.Do(func() {
+		s.substrateInstallationConfig = substrateapi.InstallationFromEnv()
+		if err := s.substrateInstallationConfig.Err; err != nil {
+			log.Printf("[substrate] Invalid installation settings: %v", err)
+		}
+	})
+	return s.substrateInstallationConfig
+}
 
 func substrateSharedTier() substrateapi.APITier {
 	return substrateapi.APITier{State: substrateapi.TierDisabled, Code: substrateapi.CodeSharedRadar, Reason: substrateSharedReason}
 }
 
-// substrateCallerClient is the requesting user's own Kubernetes client, which
-// mints the owner's token; tests replace it.
+// substrateCallerClient is the requesting user's own (impersonated or
+// user-token) Kubernetes client, which mints their token; tests replace it.
 var substrateCallerClient = func(s *Server, r *http.Request) kubernetes.Interface { return s.getClientForRequest(r) }
 
 // substrateGate decides whether this request reads Substrate's API, and as
-// whom. It returns the request to read with, carrying the caller for an org
-// owner in Radar Hub (who reads as IdentitySharedAsCaller, with no saved
-// settings), or the tier saying why not. A local private Radar reads with its
-// saved settings. A Hub user below owner, or with no role (a synthetic
-// identity), is refused with ownersOnly before anything is minted or read;
-// every other shared or authenticated Radar with sharedRadar.
+// whom, before anything is minted, dialed or read from the cache:
+//   - a local Radar on a private listener reads with this context's saved
+//     settings;
+//   - an operator who turned the API off refuses everyone (apiDisabled);
+//   - a shared Radar without sign-in refuses everyone (sharedRadar): every
+//     request would be Radar's own identity;
+//   - otherwise (signed in, in-cluster or Radar Hub, any role) the request
+//     reads as ate-system/ate-client, its token minted with the caller's own
+//     Kubernetes client. The mint is the authorization: it succeeds only for
+//     someone who could run kubectl ate themselves, so nobody sees more than
+//     their own access already allows. Radar's ServiceAccount never mints.
 func (s *Server) substrateGate(r *http.Request) (*http.Request, *substrateapi.APITier) {
 	if s.substrateLocal() {
 		return r, nil
 	}
-	if !cloudMode() {
+	installation := s.substrateInstallation()
+	if !installation.Enabled {
+		return r, &substrateapi.APITier{State: substrateapi.TierDisabled, Code: substrateapi.CodeAPIDisabled, Reason: "Substrate API access is disabled by the operator (Helm substrate.api.enabled=false)."}
+	}
+	if !cloudMode() && !s.authConfig.Enabled() {
 		tier := substrateSharedTier()
 		return r, &tier
 	}
 	user := auth.UserFromContext(r.Context())
-	if user == nil || auth.CloudRoleFromContext(r.Context()) != auth.RoleOwner {
-		return r, &substrateapi.APITier{State: substrateapi.TierDisabled, Code: substrateapi.CodeOwnersOnly, Reason: substrateOwnersOnlyReason}
+	if user == nil {
+		return r, &substrateapi.APITier{State: substrateapi.TierFailed, Code: substrateapi.CodeMintDenied, Reason: "Radar has no signed-in Kubernetes identity for this request, so it cannot create Substrate's token for you."}
+	}
+	if installation.Err != nil {
+		return r, &substrateapi.APITier{State: substrateapi.TierFailed, Code: substrateapi.CodeInvalidSettings, Reason: installation.Err.Error()}
 	}
 	client := substrateCallerClient(s, r)
 	if client == nil {
@@ -161,7 +180,7 @@ func (s *Server) writeSubstrateTier(w http.ResponseWriter, tier substrateapi.API
 	switch tier.Code {
 	case substrateapi.CodeNotConfigured, substrateapi.CodeTargetChanged, substrateapi.CodeSettingsFile, substrateapi.CodeContextChanged:
 		status = http.StatusConflict
-	case substrateapi.CodeSharedRadar, substrateapi.CodeOwnersOnly, substrateapi.CodeMintDenied:
+	case substrateapi.CodeSharedRadar, substrateapi.CodeAPIDisabled, substrateapi.CodeMintDenied:
 		status = http.StatusForbidden
 	}
 	s.writeErrorCode(w, status, tier.Code, tier.Reason)
@@ -350,55 +369,104 @@ func (s *Server) handleSubstrateStatus(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resp)
 }
 
-// substrateConnectionView is the saved connection without secrets: paths,
-// never a token.
-type substrateConnectionView struct {
-	// Saved is false when nothing is saved for this context.
+// SubstrateLocalConnectionView is a private local Radar's saved connection:
+// paths, never a token. It is exported only so JSON flattens it into
+// substrateConnectionView.
+type SubstrateLocalConnectionView struct {
 	Saved bool `json:"saved"`
-	// TargetChanged: the settings were saved for another cluster than the
-	// one this context now points at, so they are not used.
-	TargetChanged bool                   `json:"targetChanged,omitempty"`
-	Settings      *substrateapi.Settings `json:"settings,omitempty"`
-	// Target is the context and cluster this view was read for. A save or a
-	// disconnect sends it back, and is refused with targetChanged if the
-	// context has since moved, so a grant reviewed for one cluster is never
-	// saved for another.
-	Target k8s.ProfileTarget `json:"target"`
-	// SharedPrincipal is who the shared identity authenticates as.
-	SharedPrincipal string `json:"sharedPrincipal"`
+	// TargetChanged: saved while this context pointed at another cluster, so
+	// not used until reconfirmed.
+	TargetChanged bool                   `json:"targetChanged"`
+	Settings      *substrateapi.Settings `json:"settings"`
+	// Target and Revision come back with a save or disconnect, which is
+	// refused if the context has moved (targetChanged) or the file changed
+	// (conflict): a grant reviewed for one cluster is never saved for another.
+	Target   k8s.ProfileTarget `json:"target"`
+	Revision string            `json:"revision"`
+}
+
+// substrateManagedConnectionView is how an in-cluster Radar or Radar Hub
+// reads Substrate, read-only: safe values, never a path. Atespaces are shown
+// only to a caller who is connected.
+type substrateManagedConnectionView struct {
+	Enabled    bool              `json:"enabled"`
+	ReadsAs    string            `json:"readsAs"`
+	Endpoint   string            `json:"endpoint"`
+	ServerName string            `json:"serverName"`
+	Trust      string            `json:"trust"`
+	Atespaces  *[]string         `json:"atespaces,omitempty"`
+	Helm       map[string]string `json:"helm"`
+}
+
+// substrateConnectionView answers GET /connection in every mode: view local
+// (editable here) or managed (set by Helm), with this caller's own access.
+type substrateConnectionView struct {
+	View            string               `json:"view"`
+	SharedPrincipal string               `json:"sharedPrincipal"`
+	Access          substrateapi.APITier `json:"access"`
+	*SubstrateLocalConnectionView
+	Managed *substrateManagedConnectionView `json:"managed,omitempty"`
 }
 
 func (s *Server) requireSubstrateConfigurable(w http.ResponseWriter) bool {
 	if !s.substrateLocal() {
-		s.writeErrorCode(w, http.StatusForbidden, substrateapi.CodeSharedRadar, substrateSharedReason)
+		s.writeErrorCode(w, http.StatusForbidden, substrateapi.CodeSharedRadar, "Substrate connection settings are editable only in a private local Radar. Configure this installation through Helm substrate.api values.")
 		return false
 	}
 	return s.requireConnected(w)
 }
 
-func (s *Server) substrateConnectionView() (substrateConnectionView, error) {
-	target, err := k8s.CurrentProfileTarget()
-	if err != nil {
-		return substrateConnectionView{}, err
+func (s *Server) substrateConnectionView(r *http.Request) (substrateConnectionView, error) {
+	view := substrateConnectionView{View: "managed", SharedPrincipal: substrateapi.SharedPrincipal}
+	gated, denied := s.substrateGate(r)
+	var snap *substrateapi.Snapshot
+	if denied != nil {
+		view.Access = *denied
+	} else {
+		snap, view.Access = s.substrateManager().Peek(gated.Context())
 	}
-	view := substrateConnectionView{SharedPrincipal: substrateapi.SharedPrincipal, Target: target}
-	saved, ok, err := s.substrateManager().Store.Get(target.Binding)
+	if !s.substrateLocal() {
+		c := s.substrateInstallation()
+		enabled := c.Enabled && (cloudMode() || s.authConfig.Enabled())
+		readsAs := "none"
+		if enabled {
+			readsAs = "eachUser"
+		}
+		endpoint, serverName := c.Settings.Endpoint, c.Settings.ServerName
+		if c.Err != nil {
+			endpoint, serverName = "", ""
+		}
+		view.Managed = &substrateManagedConnectionView{Enabled: enabled, ReadsAs: readsAs, Endpoint: endpoint, ServerName: serverName, Trust: c.Trust(),
+			Helm: map[string]string{"api": "substrate.api.enabled", "endpoint": "substrate.api.endpoint", "serverName": "substrate.api.serverName", "ca": "substrate.api.caConfigMap", "atespaces": "substrate.api.atespaces"}}
+		if view.Access.State == substrateapi.TierConnected && snap != nil {
+			names := append([]string{}, c.Settings.Atespaces...)
+			view.Managed.Atespaces = &names
+		}
+		return view, nil
+	}
+	target, err := k8s.CurrentProfileTarget()
 	if err != nil {
 		return view, err
 	}
+	saved, ok, revision, err := s.substrateManager().Store.GetRevision(target.Binding)
+	if err != nil {
+		return view, err
+	}
+	view.View = "local"
+	view.SubstrateLocalConnectionView = &SubstrateLocalConnectionView{Target: target, Revision: revision, Saved: ok}
 	if ok {
-		view.Saved, view.TargetChanged = true, saved.Target != target.Fingerprint
 		settings := saved.Settings
 		view.Settings = &settings
+		view.TargetChanged = saved.Target != target.Fingerprint
 	}
 	return view, nil
 }
 
 func (s *Server) handleGetSubstrateConnection(w http.ResponseWriter, r *http.Request) {
-	if !s.requireSubstrateConfigurable(w) {
+	if s.substrateLocal() && !s.requireConnected(w) {
 		return
 	}
-	view, err := s.substrateConnectionView()
+	view, err := s.substrateConnectionView(r)
 	if err != nil {
 		log.Printf("[substrate] Failed to read the saved connection settings: %v", err)
 		s.writeErrorCode(w, http.StatusInternalServerError, substrateapi.CodeSettingsFile, err.Error())
@@ -410,7 +478,10 @@ func (s *Server) handleGetSubstrateConnection(w http.ResponseWriter, r *http.Req
 // substrateConnectionRequest replaces this context's settings. Identity none
 // removes them. Target is the one GET /connection returned.
 type substrateConnectionRequest struct {
-	Target k8s.ProfileTarget `json:"target"`
+	Target             k8s.ProfileTarget `json:"target"`
+	Revision           string            `json:"revision"`
+	ConfirmDestination bool              `json:"confirmDestination,omitempty"`
+	Action             string            `json:"action,omitempty"`
 	// Settings is shaped as GET returns it. Identity none removes this
 	// context's settings and takes no other field.
 	Settings *substrateapi.Settings `json:"settings"`
@@ -430,6 +501,10 @@ func (s *Server) handlePutSubstrateConnection(w http.ResponseWriter, r *http.Req
 			return
 		}
 		s.writeErrorCode(w, http.StatusBadRequest, substrateapi.CodeInvalidSettings, "invalid Substrate connection request")
+		return
+	}
+	if req.Action != "" && req.Action != "save" && req.Action != "reconfirm" {
+		s.writeErrorCode(w, http.StatusBadRequest, substrateapi.CodeInvalidSettings, "action must be save or reconfirm")
 		return
 	}
 	if req.Settings == nil {
@@ -457,6 +532,42 @@ func (s *Server) handlePutSubstrateConnection(w http.ResponseWriter, r *http.Req
 		s.writeErrorCode(w, http.StatusBadRequest, substrateapi.CodeInvalidSettings, "the request must carry the target GET /api/substrate/connection returned")
 		return
 	}
+	current, err := k8s.CurrentProfileTarget()
+	if err != nil || !current.Same(req.Target) {
+		s.writeErrorCode(w, http.StatusConflict, substrateapi.CodeTargetChanged, errSubstrateTargetChanged.Error())
+		return
+	}
+	saved, exists, revision, err := s.substrateManager().Store.GetRevision(current.Binding)
+	if err != nil {
+		s.writeErrorCode(w, http.StatusInternalServerError, substrateapi.CodeSettingsFile, err.Error())
+		return
+	}
+	if req.Revision == "" {
+		s.writeErrorCode(w, http.StatusBadRequest, substrateapi.CodeInvalidSettings, "the request must carry the revision GET /api/substrate/connection returned")
+		return
+	}
+	if revision != req.Revision {
+		s.writeErrorCode(w, http.StatusConflict, substrateapi.CodeConflict, substrateapi.ErrConflict.Error())
+		return
+	}
+	if settings != nil && exists && saved.Target != current.Fingerprint && req.Action != "reconfirm" {
+		s.writeErrorCode(w, http.StatusConflict, substrateapi.CodeTargetChanged, "The saved Kubernetes target changed. Review the current Kubernetes target, then reconfirm these settings or disconnect.")
+		return
+	}
+	if req.Action == "reconfirm" {
+		if len(saved.Settings.Atespaces) == 0 {
+			saved.Settings.Atespaces = nil
+		}
+		if !exists || settings == nil || !reflect.DeepEqual(saved.Settings, *settings) {
+			s.writeErrorCode(w, http.StatusBadRequest, substrateapi.CodeInvalidSettings, "reconfirm must carry the saved settings unchanged")
+			return
+		}
+	}
+	if settings != nil && exists && saved.Settings.Identity == settings.Identity && saved.Settings.TokenFile == settings.TokenFile &&
+		(saved.Settings.Endpoint != settings.Endpoint || saved.Settings.CAFile != settings.CAFile || saved.Settings.ServerName != settings.ServerName) && !req.ConfirmDestination {
+		s.writeErrorCode(w, http.StatusConflict, substrateapi.CodeConfirmDestination, "The saved credential would go to a changed address: "+destinationChanges(saved.Settings, *settings)+".")
+		return
+	}
 	if settings != nil {
 		if err := settings.Validate(); err != nil {
 			s.writeErrorCode(w, http.StatusBadRequest, substrateapi.CodeInvalidSettings, err.Error())
@@ -479,7 +590,7 @@ func (s *Server) handlePutSubstrateConnection(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
-	err := k8s.TryClusterConfiguration(func() error {
+	err = k8s.TryClusterConfiguration(func() error {
 		current, err := k8s.CurrentProfileTarget()
 		if err != nil {
 			return err
@@ -487,11 +598,13 @@ func (s *Server) handlePutSubstrateConnection(w http.ResponseWriter, r *http.Req
 		if !current.Same(req.Target) {
 			return errSubstrateTargetChanged
 		}
-		return s.substrateManager().SaveSettings(r.Context(), substrateapi.Target{Binding: current.Binding, Context: current.Context, Fingerprint: current.Fingerprint}, settings)
+		return s.substrateManager().SaveRevision(r.Context(), substrateapi.Target{Binding: current.Binding, Context: current.Context, Fingerprint: current.Fingerprint, Identity: current.Identity}, req.Revision, settings)
 	})
 	if err != nil {
 		var tier *substrateapi.TierError
 		switch {
+		case errors.Is(err, substrateapi.ErrConflict), errors.Is(err, substrateapi.ErrBusy):
+			s.writeErrorCode(w, http.StatusConflict, substrateapi.CodeConflict, err.Error())
 		case errors.Is(err, errSubstrateTargetChanged):
 			s.writeErrorCode(w, http.StatusConflict, substrateapi.CodeTargetChanged, err.Error())
 		case errors.Is(err, k8s.ErrContextConfigurationBusy):
@@ -504,7 +617,7 @@ func (s *Server) handlePutSubstrateConnection(w http.ResponseWriter, r *http.Req
 		}
 		return
 	}
-	view, err := s.substrateConnectionView()
+	view, err := s.substrateConnectionView(r)
 	if err != nil {
 		log.Printf("[substrate] Failed to read the saved connection settings: %v", err)
 		s.writeErrorCode(w, http.StatusInternalServerError, substrateapi.CodeSettingsFile, err.Error())
@@ -531,7 +644,7 @@ func substrateInputs(snap *substrateapi.Snapshot, pools []model.Pool, poolsCov i
 // substrateWorkerPods reads each worker's Pod from Radar's cache. A Pod of
 // the worker's name but another UID is a later Pod, not the worker's, and is
 // left out. nil when the cache does not list Pods. The Substrate API tier is
-// local-only, so Radar's cache identity is the caller's. Tests replace it.
+// read only after the caller proves their Substrate access. Tests replace it.
 var substrateWorkerPods = func(workers []model.Worker) model.WorkerPods {
 	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Pods() == nil {
@@ -1953,4 +2066,26 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.writeJSON(w, resp)
+}
+
+// destinationChanges names only what moved between two settings' endpoint,
+// CA file and server name, with the default an empty value stands for.
+func destinationChanges(from, to substrateapi.Settings) string {
+	var parts []string
+	add := func(label, a, b, empty string) {
+		if a == b {
+			return
+		}
+		or := func(v string) string {
+			if v == "" {
+				return empty
+			}
+			return v
+		}
+		parts = append(parts, fmt.Sprintf("%s %s → %s", label, or(a), or(b)))
+	}
+	add("endpoint", from.Endpoint, to.Endpoint, "port-forward to ate-system/api")
+	add("CA file", from.CAFile, to.CAFile, "the cluster's trust bundle")
+	add("server name", from.ServerName, to.ServerName, substrateapi.APIServerName)
+	return strings.Join(parts, ", ")
 }

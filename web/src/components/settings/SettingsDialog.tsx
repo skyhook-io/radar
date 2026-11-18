@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
   Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
-  LayoutDashboard, ChevronRight, AlertTriangle, Coins, EyeOff,
+  LayoutDashboard, ChevronRight, AlertTriangle, Coins, EyeOff, Bot,
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -44,6 +44,7 @@ import { previousIntegrationSettingsKey, type IntegrationSettingsResponse } from
 import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
 import { FormSaveActions } from './FormSaveActions'
+import { SubstrateSettings } from './SubstrateSettings'
 export type { SettingsSectionId } from './settings-state'
 
 interface Config {
@@ -108,6 +109,11 @@ interface SettingsDialogProps {
   onClose: () => void
   initialSection?: SettingsSectionId
   onNavigateToResource?: (resource: ResourceRef) => void
+  /**
+   * The sections this host offers; all when absent. Radar Hub embeds Radar
+   * without its local controls, so it offers Agent Substrate only.
+   */
+  sections?: SettingsSectionId[]
 }
 
 // The settings surface splits into three honest apply buckets:
@@ -143,6 +149,7 @@ export function SettingsDialog({
   onClose,
   initialSection = 'overview',
   onNavigateToResource,
+  sections,
 }: SettingsDialogProps) {
   const queryClient = useQueryClient()
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -165,6 +172,8 @@ export function SettingsDialog({
   const metricsDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, metrics: dirty })), [])
   const argoDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, argocd: dirty })), [])
   const costDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, cost: dirty })), [])
+  const [substrateDirty, setSubstrateDirty] = useState(false)
+  const [substrateBusy, setSubstrateBusy] = useState(false)
   const [connectionsChangedAt, setConnectionsChangedAt] = useState(0)
   const overviewHeading = useRef<HTMLHeadingElement>(null)
   const previousNoticeDismissed = useCallback(() => {
@@ -255,12 +264,12 @@ export function SettingsDialog({
   const advancedDirty = mcpDirty || timelineDirty
   const configDirty = configData != null && (connectionDirty || advancedDirty)
   const prometheusDirty = prometheusCredentialDirty || localDirty.metrics || (editedConfig.prometheusUrl ?? '') !== (configData?.effective.prometheusUrl ?? '')
-  const pending = pendingSections({ prometheus: prometheusDirty, cost: costIntegrationDirty, argocd: localDirty.argocd, ai: aiDirty })
+  const pending = pendingSections({ prometheus: prometheusDirty, cost: costIntegrationDirty, argocd: localDirty.argocd, substrate: substrateDirty, ai: aiDirty })
   const integrationDirty = pending.some(item => item !== 'ai')
   // Drafts that save through their own form, which "Save startup settings" leaves in place.
   const formDirty = pending.length > 0
   const reviewSection = pending.find(item => item !== section)
-  const settingsBusy = saving || costCurrencySaving || integrationBusy || storageBusy
+  const settingsBusy = saving || costCurrencySaving || integrationBusy || storageBusy || substrateBusy
   const metricsDraft = useRef({ open, scope: `${settingsApiBase}:${settingsCluster?.context}`, dirty: false })
   const [draftFrozen, setDraftFrozen] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
@@ -278,8 +287,8 @@ export function SettingsDialog({
       return
     }
     if (draftFrozen) return
-    metricsDraft.current = { open, scope: settingsScope, dirty: configData != null && (prometheusDirty || configDirty || costIntegrationDirty || localDirty.argocd || aiDirty) }
-  }, [open, settingsScope, targetChangedWithDraft, draftFrozen, configData, prometheusDirty, configDirty, costIntegrationDirty, localDirty.argocd, aiDirty])
+    metricsDraft.current = { open, scope: settingsScope, dirty: substrateDirty || (configData != null && (prometheusDirty || configDirty || costIntegrationDirty || localDirty.argocd || aiDirty)) }
+  }, [open, settingsScope, targetChangedWithDraft, draftFrozen, configData, prometheusDirty, configDirty, costIntegrationDirty, localDirty.argocd, aiDirty, substrateDirty])
 
   // Load config on open + snapshot AI prefs + pick a default section that's
   // actually accessible to the current identity.
@@ -319,9 +328,11 @@ export function SettingsDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, isSwitching, settingsCluster?.context, settingsApiBase, draftFrozen, reloadVersion])
 
+  // A host that offers some sections only opens one of them, whatever it was asked for.
+  const sectionAllowed = useCallback((id: SettingsSectionId) => !sections || sections.includes(id), [sections])
   useEffect(() => {
-    if (open) setSection(initialSection)
-  }, [open, initialSection])
+    if (open) setSection(sectionAllowed(initialSection) ? initialSection : sections?.[0] ?? 'overview')
+  }, [open, initialSection, sectionAllowed, sections])
 
   useEffect(() => {
     if (!open || diag.agents.length === 0) return
@@ -496,7 +507,7 @@ export function SettingsDialog({
   requestCloseRef.current = (afterClose) => {
     if (settingsBusy) return
     pendingCloseActionRef.current = afterClose ?? null
-    if ((canEditConfig && (configDirty || integrationDirty)) || aiDirty) setConfirmingClose(true)
+    if ((canEditConfig && (configDirty || integrationDirty)) || aiDirty || substrateDirty) setConfirmingClose(true)
     else finishClose()
   }
 
@@ -544,17 +555,20 @@ export function SettingsDialog({
   // per-section captions carry the restart-vs-live semantics, so group labels
   // would only add visual weight. AI investigations is always shown (the section
   // explains how to enable it when no agent CLI is installed).
-  const navItems: NavItemDef[] = [
+  const navItems = ([
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, ownerOnly: false, dirty: false },
     { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, dirty: false },
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, dirty: connectionDirty },
     { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: prometheusDirty },
     { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costIntegrationDirty },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: localDirty.argocd },
+    // Open to everyone: in a shared Radar it shows how Radar reads Substrate and the person's own access.
+    { id: 'substrate', label: 'Agent Substrate', icon: Bot, ownerOnly: false, dirty: substrateDirty },
     { id: 'ai', label: 'AI investigations', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
     { id: 'privacy', label: 'Privacy', icon: EyeOff, ownerOnly: false, dirty: false },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
-  ]
+  ] as NavItemDef[]).filter((item) => sectionAllowed(item.id))
+  const showNav = navItems.length > 1
 
   const showFooter = shouldShowSettingsFooter({
     canEditConfig,
@@ -629,7 +643,7 @@ export function SettingsDialog({
         {/* Body: sidebar + content */}
         <div className="flex flex-col sm:flex-row flex-1 min-h-0">
           {/* Sidebar (sm+) */}
-          <nav
+          {showNav && <nav
             role="tablist"
             aria-orientation="vertical"
             className="hidden sm:flex sm:flex-col gap-0.5 w-[200px] shrink-0 overflow-y-auto border-r border-theme-border p-3"
@@ -643,10 +657,10 @@ export function SettingsDialog({
                 onSelect={() => setSection(i.id)}
               />
             ))}
-          </nav>
+          </nav>}
 
           {/* Tab strip (below sm) */}
-          <div role="tablist" className="sm:hidden flex gap-1 overflow-x-auto border-b border-theme-border p-2 shrink-0">
+          {showNav && <div role="tablist" className="sm:hidden flex gap-1 overflow-x-auto border-b border-theme-border p-2 shrink-0">
             {navItems.map((i) => (
               <NavItem
                 key={i.id}
@@ -657,7 +671,7 @@ export function SettingsDialog({
                 onSelect={() => setSection(i.id)}
               />
             ))}
-          </div>
+          </div>}
 
           {/* Content pane — stable scrollbar gutter so switching between a
               scrolling tab and a short one doesn't shift content sideways. */}
@@ -676,10 +690,10 @@ export function SettingsDialog({
                 setReloadVersion((version) => version + 1)
               }}>Discard draft and load current cluster</button>
             </div>}
-            {!configData && !['overview', 'perms', 'ai', 'privacy'].includes(section) ? (
+            {!configData && !['overview', 'perms', 'ai', 'privacy', 'substrate'].includes(section) ? (
               <p className="text-sm text-theme-text-secondary">{loadError ? 'Configuration is unavailable. Close Settings and try again.' : 'Loading configuration…'}</p>
             ) : <div inert={draftFrozen || settingsBusy || undefined} className={draftFrozen ? 'opacity-60' : undefined}>
-            {operatorManaged && section !== 'perms' && section !== 'ai' && section !== 'privacy' && <div className="mb-4"><OperatorManagedNotice /></div>}
+            {operatorManaged && section !== 'perms' && section !== 'ai' && section !== 'privacy' && section !== 'substrate' && <div className="mb-4"><OperatorManagedNotice /></div>}
             {/* Overview — status at a glance; the landing section */}
             <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel" inert={section !== 'overview' || undefined}>
               <div className="mb-1">
@@ -877,6 +891,17 @@ export function SettingsDialog({
                   })
                 }}
               />}
+            </SectionPane>
+
+            {/* Agent Substrate — a local Radar saves this context's connection; elsewhere a read-only summary. */}
+            <SectionPane
+              id="substrate"
+              active={section}
+              title="Agent Substrate"
+              caption={configData?.management === 'local' ? localIntegrationCaption : undefined}
+              live
+            >
+              <SubstrateSettings key={`${discardGeneration}:${reloadVersion}`} active={open && section === 'substrate'} onDirtyChange={setSubstrateDirty} onBusyChange={setSubstrateBusy} />
             </SectionPane>
 
             {/* AI investigations — self-saving, usable by everyone. Same heading block

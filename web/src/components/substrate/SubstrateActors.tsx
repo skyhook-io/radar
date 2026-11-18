@@ -29,12 +29,11 @@ import {
   segmentCount,
   segmentOfState,
   templateFilterValue,
-  tierReading,
   type ActorSegment,
 } from './readings'
-import { SubstrateConnectPanel, SubstrateTierBanner, showsConnectPanel } from './SubstrateConnect'
+import { SubstrateConnectNotice, SubstrateTierBanner } from './SubstrateConnect'
 import { actorAttentionParts, substrateScreenCounts } from './attention'
-import { ActorStateBadge, NOT_CONNECTED_TITLE, Name, SUBSTRATE_WIDE, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
+import { ActorStateBadge, Name, SUBSTRATE_WIDE, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 
 export const ACTORS_PAGE_SIZE = 50
@@ -433,7 +432,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
         {notConnected && tier ? (
           <>
             <SubstrateTierBanner tier={tier} />
-            {status && showsConnectPanel(tier) ? <SubstrateConnectPanel status={status} tier={tier} /> : <Notice>{tierReading(tier).detail || NOT_CONNECTED_TITLE}</Notice>}
+            <SubstrateConnectNotice status={status} tier={tier} />
           </>
         ) : query.error && !query.data ? (
           <Notice>Radar couldn’t read the actors: {query.error instanceof Error ? query.error.message : 'unknown error'}.</Notice>

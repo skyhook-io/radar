@@ -19,11 +19,12 @@ import (
 )
 
 type Runtime struct {
-	Resolver       *connections.Resolver
-	mu             sync.Mutex
-	target         k8s.ProfileTarget
-	active         map[config.Integration]connections.Selection
-	restartTraffic func() error
+	Resolver           *connections.Resolver
+	mu                 sync.Mutex
+	target             k8s.ProfileTarget
+	active             map[config.Integration]connections.Selection
+	substrateSelection func(k8s.ProfileTarget)
+	restartTraffic     func() error
 }
 
 func New(resolver *connections.Resolver, restartTraffic func() error) *Runtime {
@@ -44,6 +45,9 @@ func (r *Runtime) Refresh(kind config.Integration) error {
 	changed := false
 	for _, integration := range config.IntegrationKinds {
 		changed = changed || r.changed(target, integration, selected[integration])
+	}
+	if !changed && r.substrateSelection != nil {
+		r.substrateSelection(target)
 	}
 	if changed {
 		err = k8s.TryClusterConfiguration(func() error {
@@ -100,6 +104,9 @@ func (r *Runtime) changed(target k8s.ProfileTarget, kind config.Integration, s c
 }
 
 func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integration]connections.Selection, switching bool) {
+	if r.substrateSelection != nil {
+		r.substrateSelection(target)
+	}
 	metricsChanged := false
 	for _, kind := range config.IntegrationKinds {
 		s := selected[kind]
@@ -176,4 +183,10 @@ func (r *Runtime) CheckCurrent(target k8s.ProfileTarget, selection connections.S
 		return errors.New("connection changed during the operation; reload Settings")
 	}
 	return nil
+}
+
+func (r *Runtime) SetSubstrateSelection(selectTarget func(k8s.ProfileTarget)) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.substrateSelection = selectTarget
 }

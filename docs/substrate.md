@@ -47,7 +47,7 @@ The Overview and each list show a source line: Substrate's API (connected or why
 | Source | What it holds | Read as | Where |
 |---|---|---|---|
 | Kubernetes | WorkerPools (desired and ready workers, sandbox classes, Radar's WorkerPool verdict), worker Pod readiness, Node readiness | WorkerPools as the caller, through the workspace coverage machinery; Nodes only when the caller may list them; Pod readiness from Radar's cache, shown only beside the API's workers | Everywhere Radar runs |
-| Substrate's API | Actors, templates, workers, atespaces, an actor's egress policy | One identity, chosen per kube context ([Connecting](#connecting-to-substrates-api)) | Only a local Radar on a private listener |
+| Substrate's API | Actors, templates, workers, atespaces, an actor's egress policy | Saved local identity, or ate-client minted with each signed-in caller's own access ([Connecting](#connecting-to-substrates-api)) | Private local Radar, or signed-in callers whose own Kubernetes access can mint `ate-client` |
 | Prometheus | Charts and hourly facts on the WorkerPool and Node pages | Radar's Prometheus connection | Wherever Prometheus is connected ([integrations.md](integrations.md#agent-runtimes-agent-sandbox-and-agent-substrate)) |
 
 Without the API, the workspace still shows pools from Kubernetes ("3 ready of 5, worker Pods, from Kubernetes"), says actors, templates and workers are kept in Substrate's API, and offers to connect when this Radar can.
@@ -76,14 +76,41 @@ Without the API, the workspace still shows pools from Kubernetes ("3 ready of 5,
 
 ## Connecting to Substrate's API
 
-**Who reads the API.** Substrate authorizes by its own roles, not Kubernetes RBAC, and Radar reads it with one identity. A Radar several people use would show each of them everything that identity sees. So the API is read, per request (`substrateGate`), in two places:
+**Who reads the API.** Substrate authorizes by its own roles. Radar reads it only as an identity the requesting person could use themselves:
 
-- **A local Radar** (CLI or Desktop) with authentication off and a loopback listener, with the identity chosen in its connection settings.
-- **Radar Hub, for org owners.** A request whose Hub role is `radar:owner` reads as `system:serviceaccount:ate-system:ate-client`, the identity `kubectl ate` uses without `--token-file`, with identity mode `sharedAsCaller`. Radar mints its token (a TokenRequest, audience `api.ate-system.svc`, one hour) with the owner's own Kubernetes access, impersonated, or the user's token in user-token mode, never with Radar's ServiceAccount. So Kubernetes lets Radar read Substrate for the owner only because the owner could do the same with `kubectl ate`. Nothing is chosen or saved, which Hub's GET-only proxy requires: Radar runs in the cluster and dials `api.ate-system.svc:443` directly, verifying TLS against the live ClusterTrustBundle its ServiceAccount reads. Each owner's own Kubernetes access must be able to create a token for `ate-system/ate-client`, and Radar checks it at least hourly per owner: an owner is served only while a TokenRequest made with their own client succeeded within the last 50 minutes, so no owner reads on another's access. An owner whose access cannot mint gets 403 `mintDenied`, even while another owner's token serves. The reads share one token and one connection, the newest minted, replaced on the first owner request within 10 minutes of its expiry; a background refresh never mints. The cost is one TokenRequest per owner per hour, which the Kubernetes audit log records as that user (impersonated by Radar's ServiceAccount). The token is never logged or returned, and the token and the owners' proofs are dropped on a context switch. Caveat: `ate-client` is usually a global owner in Substrate, so this reads everything Substrate holds. Radar only ever calls Substrate's read RPCs, pinned by a test (`TestRadarCallsOnlyReadRPCs`).
+- **Private local Radar** (CLI or Desktop, authentication off, loopback listener): the identity saved in **Settings → Agent Substrate** for this kube context.
+- **Signed-in OSS Radar and Radar Hub:** every signed-in person whose own Kubernetes client can create a token for `ate-system/ate-client`. This includes Hub owners, members and viewers; the Cloud role does not decide this access. Radar uses their impersonated access (proxy/OIDC) or their own Kubernetes token (user-token mode), never a ServiceAccount fallback. A request with no user or no usable user client is refused with `mintDenied`.
+- **Shared Radar without sign-in**, including Docker, in-cluster and local non-loopback listeners: disabled with `sharedRadar` before any saved file, mint, dial or API cache is accessed. Sign-in lets Radar establish who is asking. Port-forwarding a shared Pod does not make it private local Radar.
+- **Operator off switch:** `substrate.api.enabled=false` (`RADAR_SUBSTRATE_API=disabled`) disables managed API reads for everyone with `apiDisabled`. Private local settings are independent of installation configuration.
 
-Everyone else is refused before anything is minted or read: in Radar Hub, a member, a viewer or a request with no Hub role gets 403 `ownersOnly`; any other shared Radar (in-cluster, authentication on, a listener beyond loopback) gets 403 `sharedRadar`. Those Radars show the Kubernetes and Prometheus sources only. What other Hub roles and shared modes should see is pending a decision. The connection settings (`GET`/`PUT /connection`) stay local-only. An older Radar under a newer UI answers `sharedRadar` as before, so the UI needs no new feature flag.
+Signed-in reads use `sharedAsCaller`, the principal `system:serviceaccount:ate-system:ate-client`. Each caller proves their own access with a TokenRequest (audience `api.ate-system.svc`, one-hour lifetime) before any warm-cache read. A successful proof lasts at most 50 minutes; another person's proof never authorizes the caller. A failed mint gets `mintDenied` even while another user's snapshot is warm. The token and proofs are retired on context changes. Reads share one connection and one token; background refreshes never mint. This creates roughly one TokenRequest per active person per hour in Kubernetes audit logs. The token is never logged or returned. `ate-client` is usually a global owner in Substrate; Radar calls only its read RPCs, pinned by `TestRadarCallsOnlyReadRPCs`.
 
-**Identity.** The Connect panel asks who Radar reads Substrate as:
+
+Kubernetes's built-in `edit` role includes `create serviceaccounts/token`, and
+`admin` inherits it. With Radar Hub's default role bindings, members and owners
+therefore already qualify wherever those bindings cover `ate-system`; a
+separate Role is needed only for people without that existing grant. The default
+`view` role does not grant token creation. Operators can disable the integration
+with `substrate.api.enabled=false`. Check the intended person's actual access:
+
+```bash
+kubectl auth can-i create serviceaccounts/ate-client --subresource=token \
+  -n ate-system --as=alice --as-group=radar:member --as-group=system:authenticated
+```
+
+**Managed installation.** The operator configures OSS and Hub agents through Helm values, or environment variables, then rolls out Radar. Settings shows effective values and the requesting person's own access outcome; it never writes installation settings. No operator token Secret is supported and the chart adds no permission for Radar's ServiceAccount to mint tokens. See the [chart's Substrate settings and caller Role](../deploy/helm/radar/README.md#agent-substrate-api).
+
+| Helm value | Environment | Default |
+|---|---|---|
+| `substrate.api.enabled` | `RADAR_SUBSTRATE_API` (`enabled` or `disabled`) | `true` / `enabled` |
+| `substrate.api.endpoint` | `RADAR_SUBSTRATE_ENDPOINT` | `api.ate-system.svc:443`, direct dial |
+| `substrate.api.serverName` | `RADAR_SUBSTRATE_SERVER_NAME` | `api.ate-system.svc` |
+| `substrate.api.caConfigMap` (`name`, `key`, default `ca.crt`) | `RADAR_SUBSTRATE_CA_FILE`, a PEM path mounted read-only | Live ClusterTrustBundle |
+| `substrate.api.atespaces` | `RADAR_SUBSTRATE_ATESPACES`, comma list | `[]`; fallback only if listing is denied, at most 64 unique DNS-1123 labels |
+
+Explicit invalid environment values are logged and keep the managed API visibly failed with `invalidSettings`; Radar never silently substitutes defaults. Managed GET responses name the trust source (`clusterTrustBundle` or `caFile`), never its path, and include atespaces only after this caller is connected.
+
+**Identity.** **Settings → Agent Substrate** asks who Radar reads Substrate as:
 
 - **Shared** (`shared`): Radar mints tokens for `ate-system/ate-client`, as `kubectl ate` does without `--token-file` (audience `api.ate-system.svc`, one hour, re-minted 10 minutes before expiry). Everyone who can create a token for that ServiceAccount is the same principal, `system:serviceaccount:ate-system:ate-client`. Minting needs `create serviceaccounts/token` in `ate-system`.
 - **Token file** (`tokenFile`): Radar sends the bearer token in a local file, read on every call, so a rotated token is picked up without reconnecting. Substrate does not say who a token authenticates as, so the source line names only "a token file".
@@ -91,7 +118,7 @@ Everyone else is refused before anything is minted or read: in Radar Hub, a memb
 
 When Substrate denies a list across atespaces, Radar lists the atespaces it may see and reads each one, eight at a time. Atespaces it is refused are named in the coverage, and the kind is partial with code `denied`.
 
-**Endpoint.** By default Radar port-forwards to Service `ate-system/api` port 443 (resolving a named target port as kubectl does), and checks the server's certificate against the cluster's live ClusterTrustBundles for Substrate's signer (`servicedns.podcert.ate.dev/identity`, label `podcert.ate.dev/canarying=live`) and the name `api.ate-system.svc`. Under **Advanced**:
+**Local endpoint.** By default a private local Radar port-forwards to Service `ate-system/api` port 443 (resolving a named target port as kubectl does), and checks the server's certificate against the cluster's live ClusterTrustBundles for Substrate's signer (`servicedns.podcert.ate.dev/identity`, label `podcert.ate.dev/canarying=live`) and the name `api.ate-system.svc`. Under **Advanced**:
 
 - **Endpoint** (`host:port`) dials directly instead of port-forwarding.
 - **CA file** (PEM) verifies the endpoint instead of the trust bundles.
@@ -99,9 +126,9 @@ When Substrate denies a list across atespaces, Radar lists the atespaces it may 
 
 CA file and server name apply only with an endpoint. Connections use TLS 1.3, and the token is sent only after the handshake verifies the server. Error text never carries the token.
 
-**Where settings live.** `~/.radar/substrate.json`, next to `clusters.json`, keyed by the kube context's binding. It holds paths, never a token. Each entry records the cluster it was saved for; when the context later points at another cluster, the settings are not used (code `targetChanged`) until saved again. A context with no entry is `notConfigured`. See [configuration.md](configuration.md#agent-substrate-connection).
+**Where settings live.** `~/.radar/substrate.json`, next to `clusters.json`, keyed by the kube context's binding. It holds paths, never a token. Each entry records the Kubernetes target fingerprint and `config.TargetIdentity`. A changed target pauses the connection (`targetChanged`) until the person reviews the current target and uses `action: "reconfirm"`, or disconnects. Saves carry a content revision; a concurrent CLI/Desktop save or hand edit gets 409 `conflict`. File changes and context switches retire the manager generation before another cache read. Changing endpoint, CA file or server name while retaining the same identity and token path requires `confirmDestination: true` (otherwise 409 `confirmDestination`) before any probe sends a credential. A context with no entry is `notConfigured`. See [configuration.md](configuration.md#agent-substrate-connection).
 
-**Connection states.** The API tier is `connected` (a snapshot was read; `refreshing` and `lastError` say when it is an older one served while a refresh runs or after one failed), `connecting` (settings saved, first read still running; `/status` never waits for it), `notConfigured` (code `notConfigured`), `disabled` (a shared Radar; code `sharedRadar`), or `failed` with a code: `targetChanged`, `contextChanged` (the context or settings changed during the read; safe to retry), `notInstalled` (no Service `ate-system/api`), `tls`, `unreachable`, `unauthenticated`, `settingsFile` (`~/.radar/substrate.json` unreadable) or `failed`. `connected` and `connecting` carry no code.
+**Connection states.** The API tier is `connected` (a snapshot was read; `refreshing` and `lastError` say when it is an older one served while a refresh runs or after one failed), `connecting` (settings saved, first read still running; `/status` never waits for it), `notConfigured` (code `notConfigured`), `disabled` (no sign-in: `sharedRadar`; operator off: `apiDisabled`), or `failed` with a code: `targetChanged`, `contextChanged` (the context or settings changed during the read; safe to retry), `notInstalled` (no Service `ate-system/api`), `tls`, `unreachable`, `unauthenticated`, `settingsFile` (`~/.radar/substrate.json` unreadable), `mintDenied`, `invalidSettings` or `failed`. `connected` and `connecting` carry no code.
 
 ## Needs attention
 
@@ -132,12 +159,13 @@ What a worker's state means for an actor on it, `workerImpact` (`unavailable` wi
 
 ## API
 
-Routes are registered in `internal/server/server.go` and advertised by the `substrateWorkspace` capability, so Radar Hub asks only a Radar that serves them. All are read-only except `PUT /connection`. "API tier" means the route needs Substrate's API: a request the gate refuses answers 403 `sharedRadar` or `ownersOnly` (or `mintDenied` for a Hub owner whose access cannot mint the token); a tier that is not connected answers 409 (`notConfigured`, `targetChanged`, `settingsFile`, `contextChanged`) or 503 with the code. A bad `PUT /connection` body is 400 `invalidSettings`; an unreadable worker Pod log is 502 `logsUnavailable`.
+Routes are registered in `internal/server/server.go` and advertised by the `substrateWorkspace` capability, so Radar Hub asks only a Radar that serves them. All are read-only except `PUT /connection`. "API tier" means the route needs Substrate's API: a request the gate refuses answers 403 `sharedRadar`, `apiDisabled` or `mintDenied`; a tier that is not connected answers 409 (`notConfigured`, `targetChanged`, `settingsFile`, `contextChanged`) or 503 with the code. A bad `PUT /connection` body is 400 `invalidSettings`; an unreadable worker Pod log is 502 `logsUnavailable`.
 
 | Route (under `/api/substrate`) | Returns | Gate |
 |---|---|---|
-| `GET /status` | Whether WorkerPool is served, Service `ate-system/api` (found, when the caller may read Services there), the API tier, `coverage.pools`, `canConfigure`. Never waits for a first read: it answers `connecting` | Connected to a cluster. Never touches the API on a shared Radar |
-| `GET /connection`, `PUT /connection` | GET: this context's saved settings (paths, never a token), whether they were saved for another cluster (`targetChanged`), the shared principal, and the `target` (context and cluster) it was read for. PUT sends `{target, settings}`: that `target` back, and `settings` shaped exactly as GET returns them, or `{"identity": "none"}` (no other field) to remove them; a context that has since moved is refused with `targetChanged` and nothing is saved | A Radar that may read the API; body capped at 16 KiB (413 over it) |
+| `GET /status` | Whether WorkerPool is served, Service `ate-system/api` (found, when the caller may read Services there), the API tier, `coverage.pools`, `canConfigure`. Never waits for a first read: it answers `connecting` | Connected to a cluster. Refuses API access without sign-in, caller proof, or when the operator disables it |
+| `GET /connection` | Discriminated `view: local` (saved settings or null, saved, targetChanged, current target, revision) or `view: managed` (enabled, readsAs, endpoint, serverName, trust source, Helm keys; atespaces only when connected). Both carry sharedPrincipal and this caller's APITier as access | Every mode; refused callers never reach a mint or API cache |
+| `PUT /connection` | `{target, revision, settings, confirmDestination?, action?: "save" \| "reconfirm"}`; identity `none` removes the entry. 409 targetChanged/conflict/confirmDestination; 400 invalid settings; 413 over 16 KiB; 502 failed isolated probe keeps the old settings and active connection | Private local only. Prepare → isolated probe → target/revision recheck under lock → atomic commit → activate |
 | `GET /workspace` | Status line, Needs attention, `checks`, `notAssessed`, actor states, pool rows (with Prometheus verdicts), `service`, atespaces, per-kind coverage | WorkerPools as the caller everywhere; the API parts only where the API is read |
 | `GET /actors` | Actor rows (a crash whose message Substrate's worker writes for a memory-limit kill carries `cause: memoryLimit`, which the list shows as a short label, the message on hover), `total`, per-state `counts` (after every filter but `state`, before paging), `coverage` and `sources` | API tier |
 | `GET /actors/{atespace}/{name}` | The actor read fresh, its template (with `matchingPools`), worker, related links, the rows that cover it, egress | API tier; 404 when Substrate has no such actor, 403 when it denies it |
@@ -160,6 +188,6 @@ Routes are registered in `internal/server/server.go` and advertised by the `subs
 
 ## Testing
 
-`make substrate-demo` (read `scripts/substrate-demo/README.md` first) runs a fake Substrate API server on this machine against real WorkerPools and worker Pods in an existing cluster. It is not a kind cluster: the context defaults to `radar-test-nonprod` (`--context`). It serves Substrate's real wire protocol with deterministic data: 1,293 actors in four atespaces, and one scenario for every Needs attention rule, plus a limited token that is denied one atespace, and injected faults (`unavailable`, `unauthenticated`, `latency`). Connect Radar with the endpoint form the script prints.
+`make substrate-demo` (read `scripts/substrate-demo/README.md` first) runs a fake Substrate API server on this machine against real WorkerPools and worker Pods in an existing cluster. It is not a kind cluster: the context defaults to `radar-test-nonprod` (`--context`). It serves Substrate's real wire protocol with deterministic data: 1,293 actors in four atespaces, and one scenario for every Needs attention rule, plus a limited token that is denied one atespace, and injected faults (`unavailable`, `unauthenticated`, `latency`). Open **Settings → Agent Substrate**, then enter the endpoint settings the script prints.
 
 Unit tests: `pkg/substrate/*_test.go` (rules, derivations, log filtering), `internal/substrate/manager_test.go`, `internal/server/substrate_workspace_handlers_test.go` (gates, coverage, shared Radar), and `web/src/components/substrate/*.test.tsx`.
