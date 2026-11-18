@@ -50,9 +50,12 @@ func (f *Family) source(gk resourceid.GroupKind) int {
 }
 
 // Declaration is one target a source declares, and where. Path is the
-// declaring field from the object's root, with [] for each list it passes
-// through, such as spec.template.spec.volumes[].configMap.name; readers
-// compare these spellings, so they are part of the contract.
+// declaring field, with [] for each list it passes through. A reference
+// inside a pod spec is relative to that spec (volumes[].configMap.name,
+// containers[].envFrom[].configMapRef.name), whichever object holds it;
+// other paths start at the object's root (spec.tls[].secretName,
+// spec.scaleTargetRef). Readers compare these spellings, so they are part of
+// the contract.
 type Declaration struct {
 	Target resourceid.Ref
 	Path   string
