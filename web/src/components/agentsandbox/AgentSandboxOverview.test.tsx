@@ -12,7 +12,14 @@ import { AgentSandboxWorkspaceGate, attentionAge, attentionDetail, attentionTitl
 import { emptyWorkspace, liveAttention, liveWorkspace, minutesAgo } from './workspace.fixtures'
 
 // renderToStaticMarkup escapes apostrophes; compare against the text a reader sees.
-const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/<!-- -->/g, '')
+// Source messages wrap at spaces only, a span per word (wrapAtSpaces); read them as running text.
+const text = (html: string) =>
+  html
+    .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/<!-- -->/g, '')
+    .replace(/<span class="inline-block max-w-full align-top">([^<]*)<\/span>/g, '$1')
 const page = (node: ReactNode) => text(renderToStaticMarkup(<MemoryRouter>{node}</MemoryRouter>))
 const overview = (data: AgentSandboxWorkspaceResponse) => page(<AgentSandboxOverview data={data} onClearNamespaces={() => {}} onInspect={() => {}} inspected={null} />)
 const fact = (data: AgentSandboxWorkspaceResponse, label: string) => {

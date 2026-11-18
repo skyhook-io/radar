@@ -36,7 +36,14 @@ import { NS, claim, liveClaims, liveSandboxes, warmPool } from './agentsandbox.f
 import { liveAttention, liveWorkspace } from './workspace.fixtures'
 
 // renderToStaticMarkup escapes apostrophes; compare against the text a reader sees.
-const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/<!-- -->/g, '')
+// Source messages wrap at spaces only, a span per word (wrapAtSpaces); read them as running text.
+const text = (html: string) =>
+  html
+    .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/<!-- -->/g, '')
+    .replace(/<span class="inline-block max-w-full align-top">([^<]*)<\/span>/g, '$1')
 const page = (node: ReactNode) => text(renderToStaticMarkup(<MemoryRouter>{node}</MemoryRouter>))
 const words = (html: string) => html.replace(/<[^>]+>/g, '')
 const byName = (name: string) => liveSandboxes().find((s) => s.metadata.name === name)
@@ -127,7 +134,8 @@ describe('Agent Sandbox drawer reading', () => {
     const html = drawer('Sandbox', byName('warm-4xmkm'))
     expect(html).toContain('Warm reserve below target: 0/2 ready')
     expect(html).toContain('Scheduler: all nodes have reached their Pod limit.')
-    expect(words(html)).toContain('Next step: Free capacity on a node')
+    // The scheduler says every node is at its Pod limit, so the step is about Pod slots, not requests or tolerations.
+    expect(words(html)).toContain('Next step: Add nodes, raise the nodes’ max-pods limit, or remove Pods you no longer need')
     // The reading leads; the facts follow it.
     expect(html.indexOf('Warm reserve below target')).toBeLessThan(html.indexOf('>State<'))
     // Its own state stays, in the lists' plain words.
@@ -194,6 +202,29 @@ describe('Agent Sandbox drawer facts', () => {
     expect(words(html)).toContain('bad-image-pod · Pending')
     // Only the Pod its owner references name was asked for.
     expect(state.podRequests.filter((r) => r.enabled).map((r) => r.name)).toEqual(['bad-image-pod'])
+  })
+
+  const DNS_PULL =
+    'Back-off pulling image "registry.invalid/does-not-exist:1": ErrImagePull: failed to pull and unpack image "registry.invalid/does-not-exist:1": failed to do request: Head "https://registry.invalid/v2/does-not-exist/manifests/1": dial tcp: lookup registry.invalid on 10.0.0.2:53: no such host'
+
+  it('leads with the registry’s DNS where the pull error the Pod reports shows a failed lookup, and shows that error once, whole words to a line', () => {
+    state.relationships = podChild('bad-image-pod')
+    state.pod = podOf('bad-image-pod', [{ name: 'agent', state: { waiting: { reason: 'ImagePullBackOff', message: DNS_PULL } } }])
+    const raw = renderToStaticMarkup(<MemoryRouter><AgentSandboxSummary kind="Sandbox" apiKind="sandboxes" namespace={NS} name="bad-image" resource={withTemplate('bad-image', [{ name: 'agent', image: 'registry.invalid/does-not-exist:1' }])} onNavigate={() => {}} /></MemoryRouter>)
+    const html = text(raw)
+    expect(words(html)).toContain('Next step: Check the registry hostname in the Pod template’s image, and that the nodes’ DNS resolves it')
+    expect(words(html)).not.toContain('registry credentials')
+    expect(html.split(DNS_PULL)).toHaveLength(2)
+    // A hyphenated reference stays on one line: each word is its own unbreakable box.
+    expect(raw).toContain('<span class="inline-block max-w-full align-top">&quot;https://registry.invalid/v2/does-not-exist/manifests/1&quot;:</span>')
+  })
+
+  it('keeps the server’s step where the Pod’s pull error shows no failed lookup', () => {
+    state.relationships = podChild('bad-image-pod')
+    state.pod = podOf('bad-image-pod', [{ name: 'agent', state: { waiting: { reason: 'ErrImagePull', message: 'failed to authorize: failed to fetch anonymous token: 401 Unauthorized' } } }])
+    const html = drawer('Sandbox', withTemplate('bad-image', [{ name: 'agent', image: 'ghcr.io/acme/agent:v9' }]))
+    expect(words(html)).toContain('Next step: Check the image name and the registry credentials (imagePullSecrets)')
+    expect(words(html)).not.toContain('DNS')
   })
 
   it('shows only the template where Radar didn’t read the Pod, and never reads a Pod it would have to guess', () => {
