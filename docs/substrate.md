@@ -110,7 +110,7 @@ kubectl auth can-i create serviceaccounts/ate-client --subresource=token \
 
 Explicit invalid environment values are logged and keep the managed API visibly failed with `invalidSettings`; Radar never silently substitutes defaults. Managed GET responses name the trust source (`clusterTrustBundle` or `caFile`), never its path, and include atespaces only after this caller is connected.
 
-**Identity.** **Settings → Agent Substrate** asks who Radar reads Substrate as:
+**Identity.** **Settings → Agent Substrate** asks who Radar reads Substrate as. The section appears only for a cluster that serves Substrate's API (`ate.dev`), or one that still has a saved connection, so it can be disconnected:
 
 - **Shared** (`shared`): Radar mints tokens for `ate-system/ate-client`, as `kubectl ate` does without `--token-file` (audience `api.ate-system.svc`, one hour, re-minted 10 minutes before expiry). Everyone who can create a token for that ServiceAccount is the same principal, `system:serviceaccount:ate-system:ate-client`. Minting needs `create serviceaccounts/token` in `ate-system`.
 - **Token file** (`tokenFile`): Radar sends the bearer token in a local file, read on every call, so a rotated token is picked up without reconnecting. Substrate does not say who a token authenticates as, so the source line names only "a token file".
