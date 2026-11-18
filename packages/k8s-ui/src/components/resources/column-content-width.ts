@@ -175,10 +175,7 @@ const text = (read: (resource: any) => string | null | undefined, font: CellFont
   (resource, measure, limit) => measure(read(resource) || '-', font, limit)
 // A cell that is one .badge holding the label.
 const badge = (label: (resource: any) => string | null | undefined): CellWidth =>
-  (resource, measure, limit) => badgeWidth(label(resource), measure, limit)
-function badgeWidth(label: string | null | undefined, measure: MeasureText, limit = Infinity): number {
-  return measure(label || '-', 'badge', limit) + BADGE_CHROME_PX
-}
+  (resource, measure, limit) => measure(label(resource) || '-', 'badge', limit) + BADGE_CHROME_PX
 
 // What the cells a curated kind flags as grow or fit show, where it differs
 // from getCellFilterValue's text: other text, or a badge's padding around it.
@@ -236,9 +233,10 @@ const age: CellWidth = (resource, measure) => {
 }
 const workloadReady: CellWidth = (r, measure) =>
   measure(`${Math.min(r.status?.readyReplicas || 0, r.spec?.replicas ?? 1)}/${r.spec?.replicas ?? 1}`, 'medium') + PROBLEM_ICON_PX
+const podStatusBadge = badge(p => getPodStatus(p).text)
 const EXACT_CELL_WIDTHS: Record<string, CellWidth> = {
   '*:age': age,
-  'pods:status': (r, measure) => badgeWidth(getPodStatus(r).text, measure) + (getPodProblems(r).length > 1 ? PROBLEM_ICON_PX : 0),
+  'pods:status': (r, measure, limit) => podStatusBadge(r, measure, limit) + (getPodProblems(r).length > 1 ? PROBLEM_ICON_PX : 0),
   'pods:restarts': text(r => String(getPodRestarts(r)), 'medium'),
   'pods:gpu': text(r => String(getPodGpuCount(r) || '-')),
   'events:type': badge(r => r.type || 'Normal'),
