@@ -211,8 +211,18 @@ func TestCrashLinesOnlyOnPodsThatRanTheActor(t *testing.T) {
 	d := buildDataset(anchor.Add(time.Minute), pods, anchor)
 	for _, a := range d.Actors {
 		if a.Metadata.Name == "lit-review-0193" {
-			if got := a.Status.Crash.CrashTime.AsTime(); !got.Equal(anchor.Add(-4 * time.Minute).Truncate(time.Millisecond)) {
+			crash := anchor.Add(-specials()["research/lit-review-0193"].crashAge)
+			if got := a.Status.Crash.CrashTime.AsTime(); !got.Equal(crash.Truncate(time.Millisecond)) {
 				t.Errorf("crash time %v does not match the lines", got)
+			}
+			died := false
+			for _, l := range lines["agent-pool-worker-1"] {
+				if strings.Contains(l, `"msg":"Sandbox died"`) && strings.Contains(l, a.Metadata.Uid) {
+					died = strings.Contains(l, `"time":"`+crash.UTC().Format(time.RFC3339Nano)+`"`)
+				}
+			}
+			if !died {
+				t.Errorf("no Sandbox died line at the crash time %v", crash)
 			}
 			if a.Status.AssignedNode != "node-agent-pool-worker-1" || a.Status.Snapshots[0].Locality != "node-agent-pool-worker-1" {
 				t.Errorf("the crash's node is the Pod's: %+v", a.Status)
@@ -226,5 +236,112 @@ func TestCrashLinesOnlyOnPodsThatRanTheActor(t *testing.T) {
 	}
 	if got := buildDataset(anchor, pods, anchor).CrashLines(anchor); len(got) != 0 {
 		t.Errorf("a Pod younger than the crash holds none of it: %v", got)
+	}
+}
+
+// Ages read the same however long the API has run: only the crashes, whose
+// lines are in the Pods' logs, keep the time they happened.
+func TestTimelineHoldsWhileTheAPIRuns(t *testing.T) {
+	anchor := time.Now().Truncate(time.Second)
+	pods := map[string]PodInfo{}
+	for _, p := range defaultPlans() {
+		pi := PodInfo{Name: p.pod, UID: hashUUID("pod", p.pod), Node: "node-" + p.pod, IP: "10.0.0.1", Found: true, Created: anchor.Add(-6 * time.Hour)}
+		if p.state == ateapi.WorkerState_WORKER_STATE_DRAINING {
+			pi.Terminating, pi.DrainStart = true, pi.Created.Add(30*time.Second)
+		}
+		pods[p.pod] = pi
+	}
+	byName := func(d *Dataset) map[string]*ateapi.Actor {
+		m := map[string]*ateapi.Actor{}
+		for _, a := range d.Actors {
+			m[a.Metadata.Atespace+"/"+a.Metadata.Name] = a
+		}
+		return m
+	}
+	transitional := map[ateapi.ActorState]bool{
+		ateapi.ActorState_ACTOR_STATE_RESUMING: true, ateapi.ActorState_ACTOR_STATE_SUSPENDING: true,
+		ateapi.ActorState_ACTOR_STATE_REVERTING: true, ateapi.ActorState_ACTOR_STATE_DELETING: true,
+	}
+	type reading struct{ stuck, fresh int }
+	read := func(now time.Time) (reading, map[string]*ateapi.Actor) {
+		d := buildDataset(now, pods, anchor)
+		var r reading
+		for _, a := range d.Actors {
+			if !transitional[a.Status.State] {
+				continue
+			}
+			switch held := now.Sub(a.Metadata.UpdateTime.AsTime()); {
+			case held > 5*time.Minute:
+				r.stuck++
+			case held < 2*time.Minute:
+				r.fresh++
+			}
+		}
+		return r, byName(d)
+	}
+
+	early, a1 := read(anchor)
+	late, a2 := read(anchor.Add(3 * time.Hour))
+	if early != late || early.stuck != 3 || early.fresh == 0 {
+		t.Errorf("stuck/fresh transitions at the anchor %+v, three hours on %+v; want 3 stuck and some fresh both times", early, late)
+	}
+	for _, k := range []string{"support-bots/ticket-41302", "code-review/codex-task-1050", "support-bots/ticket-40801"} {
+		age1 := anchor.Sub(a1[k].Metadata.UpdateTime.AsTime())
+		age2 := anchor.Add(3 * time.Hour).Sub(a2[k].Metadata.UpdateTime.AsTime())
+		if age1 != age2 {
+			t.Errorf("%s reads %v at the anchor, %v three hours on", k, age1, age2)
+		}
+	}
+
+	// The incident: eleven crashes of one template, 20 to 40 minutes before
+	// the anchor, within a quarter of an hour; the crash clock does not move.
+	var lo, hi time.Duration
+	n := 0
+	for k, a := range a1 {
+		if a.Status.State != ateapi.ActorState_ACTOR_STATE_CRASHED || a.ActorTemplate.Name != string(tLang) {
+			continue
+		}
+		if !a2[k].Status.Crash.CrashTime.AsTime().Equal(a.Status.Crash.CrashTime.AsTime()) {
+			t.Errorf("%s: crash time moved with the API's clock", k)
+		}
+		age := anchor.Sub(a.Status.Crash.CrashTime.AsTime())
+		if n == 0 || age < lo {
+			lo = age
+		}
+		hi = max(hi, age)
+		n++
+	}
+	if n != 11 || lo < 20*time.Minute || hi > 40*time.Minute || hi-lo > 15*time.Minute {
+		t.Errorf("incident: %d crashes from %v to %v ago", n, lo, hi)
+	}
+
+	// The worker restart: its actors crashed the same second, after it
+	// registered its new process.
+	d := buildDataset(anchor, pods, anchor)
+	var restarted *ateapi.Worker
+	for _, w := range d.Workers {
+		if w.WorkerPod == "healthy-pool-worker-1" {
+			restarted = w
+		}
+	}
+	c1, c2 := a1["code-review/pr-8812-reviewer"].Status.Crash.CrashTime.AsTime(), a1["code-review/pr-8790-reviewer"].Status.Crash.CrashTime.AsTime()
+	if !c1.Equal(c2) || restarted.Metadata.UpdateTime.AsTime().After(c1) {
+		t.Errorf("worker restart at %v, its actors crashed at %v and %v", restarted.Metadata.UpdateTime.AsTime(), c1, c2)
+	}
+
+	// A draining worker took no placement after its drain began.
+	drainStart := pods["agent-pool-worker-3"].DrainStart
+	for _, p := range d.plans {
+		if p.pod != "agent-pool-worker-3" {
+			continue
+		}
+		if !p.worker.Metadata.UpdateTime.AsTime().Equal(drainStart) {
+			t.Errorf("draining since %v, want the Pod's drain start %v", p.worker.Metadata.UpdateTime.AsTime(), drainStart)
+		}
+		for _, as := range d.Assignments[p.name] {
+			if as.Metadata.CreateTime.AsTime().After(drainStart) {
+				t.Errorf("%s placed at %v, after the drain began", as.Actor.Name, as.Metadata.CreateTime.AsTime())
+			}
+		}
 	}
 }

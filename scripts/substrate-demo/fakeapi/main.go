@@ -101,14 +101,14 @@ func cmdServe(args []string) error {
 	return nil
 }
 
-// Start builds the dataset and serves it on addr until the returned server stops.
+// Start serves the dataset on addr until the returned server stops.
 func Start(st *State, addr string, pods map[string]PodInfo, faults Faults) (*grpc.Server, net.Listener, error) {
-	d := buildDataset(time.Now(), pods, ReadCrashAnchor(st.Dir, pods))
+	anchor := ReadCrashAnchor(st.Dir, pods)
 	tlsCfg, err := ServerTLS(st)
 	if err != nil {
 		return nil, nil, err
 	}
-	impl := NewServer(d, st.GlobalToken, st.LimitedToken, faults)
+	impl := NewServer(func(now time.Time) *Dataset { return buildDataset(now, pods, anchor) }, st.GlobalToken, st.LimitedToken, faults)
 	opts := append([]grpc.ServerOption{grpc.Creds(credentials.NewTLS(tlsCfg))}, impl.Interceptors()...)
 	srv := grpc.NewServer(opts...)
 	ateapi.RegisterControlServer(srv, impl)
@@ -275,8 +275,9 @@ func sortedCounts(m map[string]int) string {
 
 // cmdCrashLogs prints, once per set of Pods, "<pod>\t<line>" for the lines a
 // worker Pod's log holds about the actors that crashed on it, and records the
-// crash times they state. It prints nothing when they were written already or
-// no crash happened on a running Pod.
+// crash times they state. It prints nothing when they were written already,
+// no crash happened on a running Pod, or the Pods are too young to hold every
+// recent crash yet (it says how long to wait).
 func cmdCrashLogs(args []string) error {
 	fs := flag.NewFlagSet("crashlogs", flag.ExitOnError)
 	fs.StringVar(&fixtureNamespace, "namespace", fixtureNamespace, "namespace of the WorkerPools and worker Pods")
@@ -291,7 +292,12 @@ func cmdCrashLogs(args []string) error {
 		return nil
 	}
 	anchor := time.Now()
-	lines := buildDataset(anchor, podMap, anchor).CrashLines(anchor)
+	d := buildDataset(anchor, podMap, anchor)
+	if wait := d.storyWait(anchor); wait > 0 {
+		fmt.Fprintf(os.Stderr, "    ! crash lines not written: the worker Pods must be %s older to hold the recent crashes; run restart then\n", (wait + time.Minute).Truncate(time.Minute))
+		return nil
+	}
+	lines := d.CrashLines(anchor)
 	if len(lines) == 0 {
 		return nil
 	}
