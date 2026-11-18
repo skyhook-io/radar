@@ -6086,28 +6086,34 @@ export function ResourcesView({
     plural: normalizeKindToPlural(selectedKind.name, selectedKind.group),
     cellFilterKind: getCellFilterKind(selectedKind.name, selectedKind.group),
   }), [selectedKind.name, selectedKind.group])
+  // Measured in a deferred render: a pass over a very large list must not hold
+  // up the render that shows a streamed update. Only a pass over the list on
+  // screen is remembered (see contentWidths), so a stale one never sticks.
+  const measureSource = useDeferredValue(resources)
   const measuredContent = useMemo(() => {
-    if (!tableActive || !resources?.length) return null
+    if (!tableActive || !measureSource?.length) return null
     const sized = columns.map(col => ({ key: col.key, sizing: col.sizing, growWeight: col.growWeight, getFilterValue: extraColumnsByKey.get(col.key)?.getFilterValue }))
-    const measured = measureColumnContent(resources, sized, { ...sizingKind, auditBadges })
+    const measured = measureColumnContent(measureSource, sized, { ...sizingKind, auditBadges })
     const flat: Record<string, number> = {}
     for (const [key, m] of Object.entries(measured)) {
       flat[key] = m.content
       if (m.stretch !== undefined) flat[`${key}\u0000stretch`] = m.stretch
     }
     return flat
-  }, [tableActive, resources, columns, extraColumnsByKey, sizingKind, auditBadges, headerFontEpoch])
+  }, [tableActive, measureSource, columns, extraColumnsByKey, sizingKind, auditBadges, headerFontEpoch])
 
   // Grow-only while the table shows the same data set — the same kind and
   // namespace selection, without a reload in between — so rows streaming in or
   // out never narrow a column (kubectl's RememberWidths). In memory only: the
   // widths describe one cluster's data, and Radar Hub points one UI at many.
-  const datasetIdentity = `${selectedKindIdentityOf(selectedKind)}\u0000${namespaces.join(',')}`
+  // The font epoch is part of it: widths measured against the fallback face
+  // must not outlive the web font's arrival.
+  const datasetIdentity = `${selectedKindIdentityOf(selectedKind)}\u0000${namespaces.join(',')}\u0000${headerFontEpoch}`
   // Kept in refs and written only after commit, so a render React discards
   // never leaves its widths behind for the next one.
   const rememberedContent = useRef<{ identity: string; widths: Record<string, number> } | null>(null)
   const previousContent = resources && rememberedContent.current?.identity === datasetIdentity ? rememberedContent.current.widths : undefined
-  const contentWidths = measuredContent ? rememberWidths(previousContent, measuredContent) : previousContent
+  const contentWidths = measuredContent && measureSource === resources ? rememberWidths(previousContent, measuredContent) : previousContent
   useLayoutEffect(() => {
     rememberedContent.current = contentWidths ? { identity: datasetIdentity, widths: contentWidths } : null
   }, [contentWidths, datasetIdentity])

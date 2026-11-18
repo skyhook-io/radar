@@ -30,12 +30,15 @@ export function TruncatedText({ text, tooltip, className, children }: {
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    const check = () => setTruncated(el.scrollWidth > el.clientWidth + 0.5)
+    let live = true
+    const check = () => { if (live) setTruncated(el.scrollWidth > el.clientWidth + 0.5) }
     check()
-    if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(check)
-    ro.observe(el)
-    return () => { ro.disconnect() }
+    // The web font can arrive after mount and widen the text without resizing
+    // the span, which the ResizeObserver would not see.
+    void (document as Document & { fonts?: FontFaceSet }).fonts?.ready?.then(check)
+    const ro = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(check)
+    ro?.observe(el)
+    return () => { live = false; ro?.disconnect() }
   }, [text])
   return (
     <Tooltip
