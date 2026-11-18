@@ -71,12 +71,16 @@ export interface AgentSandboxAttention {
   /** Carries no elapsed time; `since` does. */
   title: string
   reading?: string
+  /** What limits or contradicts the row in Radar's own reads; never folded away. */
+  caveat?: string
   /** The controller's or scheduler's own words, folded under the reading. */
   rawDetail?: string
   rawDetailLabel?: string
   /** `scheduler`: rawDetail can be put plainly with summarizeSchedulerMessage. */
   rawDetailSource?: 'scheduler' | 'controller'
   nextStep: string
+  /** The one shell command nextStep names, verbatim and in parentheses there: a client may show it as a copyable chip. */
+  command?: string
   subject: AgentSandboxRef
   related?: { lead: string; refs: AgentSandboxRef[] }
   relations?: AgentSandboxRelation[]
@@ -88,6 +92,14 @@ export interface AgentSandboxAttention {
   since?: string
   /** Radar's Issues list the subject for the same state: the authoritative parity bit, which no rule implies. */
   issue: boolean
+  /**
+   * On a warm pool's reserve row when no sandbox in it is ready: its unbound
+   * claims still in progress, which can't take a warm sandbox. Absent when
+   * none of the namespace's claims were read.
+   */
+  waitingClaims?: AgentSandboxCount
+  /** On an unbound claim's row: the warm pool it names, read, with no sandbox ready. */
+  emptyPool?: AgentSandboxRef
 }
 
 export type AgentSandboxControllerState = 'running' | 'notReady' | 'scaledToZero' | 'notFound' | 'unread' | 'notInstalled'

@@ -167,7 +167,7 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 		// the Sandbox does not own it, and waits. Nothing is being torn down, so this
 		// is not a suspension in progress.
 		if suspended.status == "False" && suspended.reason == "PodNotOwned" {
-			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: "Suspension blocked", Message: suspensionRefusedMessage(sandboxPodName(u), suspended.message)}, SuspensionRefused: true}
+			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: "Suspension blocked", Message: suspensionRefusedMessage(u.GetNamespace(), sandboxPodName(u), suspended.message)}, SuspensionRefused: true}
 		}
 		// Both conditions can stay False through a suspension, keeping
 		// transition times from before it began, so none marks its start. A Pod
@@ -224,10 +224,22 @@ func sandboxPodName(u *unstructured.Unstructured) string {
 	return u.GetName()
 }
 
+// PodOwnersCommand prints a Pod's owner references: who else may need the Pod
+// a Sandbox doesn't own, before anyone removes it.
+func PodOwnersCommand(namespace, name string) string {
+	ns := ""
+	if namespace != "" {
+		ns = " -n " + namespace
+	}
+	return fmt.Sprintf("kubectl get pod %s%s -o jsonpath='{.metadata.ownerReferences}'", name, ns)
+}
+
 // suspensionRefusedMessage explains a refused suspension: the controller's own
-// words, then what unblocks it. Mirrored in k8s-ui's resource-utils-agent-runtimes.ts.
-func suspensionRefusedMessage(name, controllerMessage string) string {
-	next := fmt.Sprintf("The conflicting Pod is %q. Remove it, or recreate the Sandbox under another name, to allow suspension.", name)
+// words, then what unblocks it. The Pod may belong to something else, so the
+// step is to check its owner before removing it. Mirrored in k8s-ui's
+// resource-utils-agent-runtimes.ts.
+func suspensionRefusedMessage(namespace, name, controllerMessage string) string {
+	next := fmt.Sprintf("The conflicting Pod is %q. Check who owns it (%s) before removing it, or recreate the Sandbox under another name.", name, PodOwnersCommand(namespace, name))
 	if controllerMessage == "" {
 		return next
 	}

@@ -9,7 +9,7 @@ import { getSandboxStatus } from '@skyhook-io/k8s-ui/components/resources/resour
 import type { AgentSandboxLists } from './data'
 import { ClaimsScreen, SandboxesScreen, WarmPoolsScreen, filterSandboxes, poolNotReadyPath, requestedMode, stateMessage } from './AgentSandboxTables'
 import { AgentSandboxGate } from './shared'
-import { NS, PARTIAL, claim, emptyData, liveData, liveSandboxes, read, sandbox } from './agentsandbox.fixtures'
+import { NS, PARTIAL, claim, emptyData, liveData, liveSandboxes, read, sandbox, warmPool } from './agentsandbox.fixtures'
 import { liveWorkspace } from './workspace.fixtures'
 import { serverReadings } from './labels'
 
@@ -22,6 +22,12 @@ const DENIED = { state: 'failed', message: 'forbidden', denied: true } as const
 
 function page(node: ReactNode, url = '/') {
   return text(renderToStaticMarkup(<MemoryRouter initialEntries={[url]}>{node}</MemoryRouter>))
+}
+
+function warmPoolWithoutTemplate() {
+  const pool = warmPool('bare')
+  delete pool.spec.sandboxTemplateRef
+  return pool
 }
 
 const screenProps = (data: AgentSandboxLists, namespaces: string[] = []) => ({ data, namespaces, onClearNamespaces: () => {}, onInspect: () => {}, inspected: null })
@@ -187,6 +193,36 @@ describe('Agent Sandbox kind lists', () => {
     expect(page(<SandboxesScreen {...screenProps(data)} />)).toMatch(/class="[^"]*amber[^"]*"[^>]*>Provisioning</)
     const stalled = { unschedulable: new Set<string>(), tones: new Map([[`Sandbox/${NS}/slow`, 'alert' as const]]), rows: new Map() }
     expect(page(<SandboxesScreen {...screenProps(data)} server={stalled} />)).toMatch(/class="[^"]*orange[^"]*"[^>]*>Provisioning</)
+  })
+
+  it('says what an empty owner, expiry, warm pool or template means, and only where Radar knows', () => {
+    // No owner and every claim here read: standalone. No shutdownTime: no expiry.
+    const sandboxes = page(<SandboxesScreen {...screenProps(liveData())} />)
+    const badImage = sandboxes.slice(sandboxes.indexOf('>bad-image<'), sandboxes.indexOf('</tr>', sandboxes.indexOf('>bad-image<')))
+    expect(badImage).toContain('standalone')
+    expect(badImage).toContain('no expiry')
+    expect(badImage).not.toContain('>–<')
+    // Claims not read: no warm pool owns it, and a claim may still name it.
+    const unread = page(<SandboxesScreen {...screenProps(liveData({ claims: DENIED }))} />)
+    expect(unread).toContain('no warm pool; claims not read')
+    expect(unread).not.toContain('standalone')
+    // A claimed Sandbox with no shutdownTime of its own may still end with its claim.
+    const claimOwner = [{ apiVersion: 'extensions.agents.x-k8s.io/v1beta1', kind: 'SandboxClaim', name: 'c', uid: 'u', controller: true }]
+    const claimed = page(<SandboxesScreen {...screenProps(liveData({ sandboxes: [sandbox('claimed', { ownerReferences: claimOwner })] }))} />)
+    expect(claimed).toContain('none of its own')
+    expect(claimed).not.toContain('no expiry')
+    // Another kind owns it: named, not called standalone.
+    const deploy = [{ apiVersion: 'apps/v1', kind: 'Deployment', name: 'runner', uid: 'u', controller: true }]
+    const other = page(<SandboxesScreen {...screenProps(liveData({ sandboxes: [sandbox('owned', { ownerReferences: deploy })] }))} />)
+    expect(other).toContain('>runner<')
+    expect(other).toContain('Deployment')
+    expect(other).not.toContain('standalone')
+
+    const noPool = claim('direct')
+    delete noPool.spec.warmPoolRef
+    expect(page(<ClaimsScreen {...screenProps(liveData({ claims: [noPool] }))} />)).toContain('no warm pool')
+    const bare = warmPoolWithoutTemplate()
+    expect(page(<WarmPoolsScreen {...screenProps(liveData({ warmPools: [bare] }))} />)).toContain('no template')
   })
 
   it('says an empty list is unknown when the kind could not be read', () => {
