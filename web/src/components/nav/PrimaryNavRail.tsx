@@ -121,9 +121,11 @@ export function PrimaryNavRail({
 }: PrimaryNavRailProps) {
   const asideRef = useRef<HTMLElement>(null);
   const communityRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLElement>(null);
   const communityFits = useSlimRailRoomFor(
     asideRef,
     communityRef,
+    navRef,
     !pinned && !!communityUrl,
     [showPinToggle],
   );
@@ -154,6 +156,7 @@ export function PrimaryNavRail({
           in slim mode. The slim short-window case is doubly-rare (slim is
           width-triggered) and yields to keeping fly-outs intact. */}
       <nav
+        ref={navRef}
         className={clsx(
           "flex flex-col gap-0.5 pt-3 px-2",
           pinned && "flex-1 min-h-0 overflow-y-auto",
@@ -260,21 +263,20 @@ export function PrimaryNavRail({
   );
 }
 
-// What the optional row adds to the bottom group, in rem: its h-9 plus the
-// group's gap-0.5. Converted at the current root font size, because a larger
-// browser default font grows the row too.
-const OPTIONAL_ROW_REM = 2.375;
-
 // The slim rail can't scroll (see the nav comment), so an optional row renders
 // only while everything else still fits with it; otherwise it would push
 // Settings and the pin toggle off-screen. It measures the rail as rendered,
 // because the rows vary (the account row only with auth, launch-window rows)
 // and so does the room (the Windows desktop title bar sits inside the page).
 // The row's own height is left out of the measurement so hiding it can't flip
-// the answer back.
+// the answer back. Every length is read from rendered boxes, so the comparison
+// holds under the desktop app's body zoom and any root font size; the row's
+// size comes from two consecutive main-nav rows, which share its h-9 and
+// gap-0.5.
 function useSlimRailRoomFor(
   asideRef: RefObject<HTMLElement | null>,
   rowRef: RefObject<HTMLElement | null>,
+  sampleRowsRef: RefObject<HTMLElement | null>,
   active: boolean,
   deps: unknown[],
 ): boolean {
@@ -286,9 +288,10 @@ function useSlimRailRoomFor(
       return;
     }
     const measure = () => {
+      const [first, second] = Array.from(sampleRowsRef.current?.children ?? []);
+      if (!first || !second) return;
       const rowPx =
-        OPTIONAL_ROW_REM *
-        parseFloat(getComputedStyle(document.documentElement).fontSize);
+        second.getBoundingClientRect().top - first.getBoundingClientRect().top;
       let used = 0;
       for (const child of Array.from(aside.children)) {
         if (child instanceof HTMLElement && "railSpacer" in child.dataset)
@@ -296,7 +299,7 @@ function useSlimRailRoomFor(
         used += child.getBoundingClientRect().height;
       }
       if (rowRef.current && !rowRef.current.hidden) used -= rowPx;
-      setFits(used + rowPx <= aside.clientHeight);
+      setFits(used + rowPx <= aside.getBoundingClientRect().height);
     };
     measure();
     const observer = new ResizeObserver(measure);
