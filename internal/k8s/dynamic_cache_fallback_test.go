@@ -107,11 +107,14 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 		resource   string
 		kind       string
 		objectName string
+		cluster    bool
 	}{
 		{name: "StrimziPodSet v1", group: "core.strimzi.io", version: "v1", resource: "strimzipodsets", kind: "StrimziPodSet", objectName: "connect"},
 		{name: "StrimziPodSet v1beta2", group: "core.strimzi.io", version: "v1beta2", resource: "strimzipodsets", kind: "StrimziPodSet", objectName: "connect"},
 		{name: "strimzi KafkaConnect v1", group: "kafka.strimzi.io", version: "v1", resource: "kafkaconnects", kind: "KafkaConnect", objectName: "connect"},
 		{name: "strimzi KafkaConnect v1beta2", group: "kafka.strimzi.io", version: "v1beta2", resource: "kafkaconnects", kind: "KafkaConnect", objectName: "connect"},
+		{name: "ClusterNetworkPolicy v1alpha2", group: "policy.networking.k8s.io", version: "v1alpha2", resource: "clusternetworkpolicies", kind: "ClusterNetworkPolicy", objectName: "baseline", cluster: true},
+		{name: "ClusterNetworkPolicy v1beta1", group: "policy.networking.k8s.io", version: "v1beta1", resource: "clusternetworkpolicies", kind: "ClusterNetworkPolicy", objectName: "baseline", cluster: true},
 		{
 			name:       "istio virtualservice",
 			group:      "networking.istio.io",
@@ -145,6 +148,14 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 			coreGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
 			targetGVR := schema.GroupVersionResource{Group: tt.group, Version: tt.version, Resource: tt.resource}
 			listKinds := supportedFallbackListKinds(coreGVR, tt.group)
+			namespace := "default"
+			if tt.cluster {
+				namespace = ""
+			}
+			metadata := map[string]any{"name": tt.objectName}
+			if namespace != "" {
+				metadata["namespace"] = namespace
+			}
 			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
 				runtime.NewScheme(),
 				listKinds,
@@ -152,10 +163,7 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 					Object: map[string]any{
 						"apiVersion": tt.group + "/" + tt.version,
 						"kind":       tt.kind,
-						"metadata": map[string]any{
-							"name":      tt.objectName,
-							"namespace": "default",
-						},
+						"metadata":   metadata,
 					},
 				},
 			)
@@ -237,7 +245,7 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 				t.Fatalf("timed out waiting for %s informer sync", tt.kind)
 			}
 			cache := &ResourceCache{}
-			items, err := cache.ListDynamicWithGroup(context.Background(), tt.kind, "default", tt.group)
+			items, err := cache.ListDynamicWithGroup(context.Background(), tt.kind, namespace, tt.group)
 			if err != nil {
 				t.Fatalf("ListDynamicWithGroup failed after fallback registration: %v", err)
 			}
