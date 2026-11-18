@@ -1223,6 +1223,8 @@ The names in these specs are PostgreSQL names, not Kubernetes names: a Publicati
 
 A declared object the operator could not apply raises an **Issue** (`CNPGDeclarativeNotApplied`, warning) carrying the operator's own message. This is the one CNPG failure with no other signal: the CR exists, the cluster is healthy, every count is green, and the database simply is not there. Only `applied: false` raises it — an absent `applied` means not yet reconciled, and reporting that would flag every declarative object for the first seconds of its life.
 
+The operator's primary budget (`<cluster>-primary`, `minAvailable: 1`) always allows 0 disruptions. On a healthy HA Cluster that is expected protection: the operator switches over before a drain evicts the primary. When Radar verifies that (the budget's exact shape and owner UID, a healthy phase with all instances ready, no pending switchover or maintenance window, the primary and a ready standby on separate schedulable Nodes), the budget is not an Active Issue. A single-instance Cluster keeps the warning with maintenance-window advice, and any other state keeps the generic one. The verification is checked against the caller's exact `list` access to Clusters, Pods and Nodes; a caller missing any of them gets the generic warning, so hidden evidence changes nothing they see. The drain plan and Upgrade impact still report the budget as a blocker.
+
 ### Image catalogs
 
 `ImageCatalog` and `ClusterImageCatalog` pin one PostgreSQL image per major version. A Cluster that references one carries **no `spec.imageName` at all**; the resolved image lives in `status.image`, so anything reading spec alone shows a dash where an image is running.
