@@ -249,13 +249,6 @@ const WORKLOAD_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets'])
 const BULK_RESTART_WORKLOAD_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts'])
 const BULK_SCALE_WORKLOAD_KINDS = new Set(['deployments', 'statefulsets'])
 
-// Pods' and Nodes' Containers, CPU, Memory, GPU and Pods columns: their cells
-// draw from container statuses, metrics and resource requests,
-// getCellFilterValue has no case for them, and no Pod, Node or Volcano Job
-// carries a status or spec field of those names. Their headings used to
-// reserve room for a filter button anyway, so widths saved then hold that room.
-const FILTER_RESERVE_DROPPED_COLUMNS = new Set(['containers', 'cpu', 'memory', 'gpu', 'pods'])
-
 // Columns to skip for auto-detected filters (high cardinality, text-like, or non-filterable)
 export const SKIP_FILTER_COLUMNS = new Set([
   'name', 'age', 'keys', 'size', 'images', 'domains', 'hosts', 'rules',
@@ -275,7 +268,11 @@ export const SKIP_FILTER_COLUMNS = new Set([
   // status.summary. Listing them here stops the header reserving room for a
   // button that can never render.
   'critical', 'high', 'medium', 'low', 'pass', 'fail', 'warn', 'error', 'skip',
-  ...FILTER_RESERVE_DROPPED_COLUMNS,
+  // The same for Pods' and Nodes' Containers, CPU, Memory, GPU and Pods
+  // columns: their cells draw from container statuses, metrics and resource
+  // requests, getCellFilterValue has no case for them, and no Pod, Node or
+  // Volcano Job carries a status or spec field of those names.
+  'containers', 'cpu', 'memory', 'gpu', 'pods',
 ])
 
 // Namespace/node cardinality scales with cluster size, not kind enum size;
@@ -3331,6 +3328,27 @@ function columnsForKindWithPrinter(
   ]
 }
 
+// Records saved since columns sized themselves carry this.
+export const COLUMN_WIDTHS_VERSION = 2
+
+/**
+ * The saved column widths to apply: finite, positive numbers only. A record
+ * saved before columns sized themselves (`fromBeforeSizing`) keeps only Name's:
+ * back then the first drag on a table saved the width of every visible column,
+ * so its other widths are mostly ones the user never chose, and keeping them
+ * would freeze the table as it was. Those columns size themselves again.
+ */
+export function savedColumnWidths(widths: unknown, fromBeforeSizing: boolean): Record<string, number> {
+  if (!widths || typeof widths !== 'object') return {}
+  const kept: Record<string, number> = {}
+  for (const [key, width] of Object.entries(widths as Record<string, unknown>)) {
+    if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) continue
+    if (fromBeforeSizing && key !== 'name') continue
+    kept[key] = width
+  }
+  return kept
+}
+
 /**
  * The visible-column set for a kind the user has saved settings for.
  *
@@ -3340,53 +3358,6 @@ function columnsForKindWithPrinter(
  *   - printer columns, but only when the blob names none at all. Once it names
  *     one, the user has seen the set and an absent key is a deliberate hide.
  */
-// How far a saved width may sit from a column's default and still count as
-// that default: header widths are measured from the font, which can differ by a
-// pixel or two between the session that saved them and this one.
-const DEFAULT_WIDTH_TOLERANCE_PX = 4
-
-// Records saved since columns sized themselves carry this; their widths are
-// all the user's own.
-export const COLUMN_WIDTHS_VERSION = 2
-
-/**
- * The usable saved column widths: positive and finite, and, where a width was
- * saved before columns sized themselves (`fromBeforeSizing`: all of a record's
- * widths, or the keys given), not just a column's default width.
- *
- * Back then the first drag on a table saved the width of every visible column,
- * so such a record holds widths the user never chose. Keeping them would freeze
- * those tables as they were. A width at a column's default — its declared
- * width, or its heading where that is wider, as measured now or, for the
- * columns whose heading no longer reserves filter-button room, as it was — is
- * one of those, so the column goes back to sizing itself; a width the user
- * dragged away from the default stays. Name had no default width — it took
- * whatever room was left — so a saved Name width can't be told from a drag and
- * stays. A record saved since is kept whole: a width there is one the user set,
- * even one within a few pixels of the default.
- */
-export function withoutDefaultWidths(widths: unknown, columns: Column[], fromBeforeSizing: boolean | ReadonlySet<string>): Record<string, number> {
-  if (!widths || typeof widths !== 'object') return {}
-  const byKey = new Map(columns.map(column => [column.key, column]))
-  const extras = new Map(columns.filter((column): column is ExtraColumn => 'render' in column).map(column => [column.key, column]))
-  const isDefault = (column: Column, width: number) => {
-    const near = (target: number) => Math.abs(width - target) <= DEFAULT_WIDTH_TOLERANCE_PX
-    if (near(getColumnMinWidth(column, extras))) return true
-    if (!FILTER_RESERVE_DROPPED_COLUMNS.has(column.key)) return false
-    const header = Math.min(getColumnHeaderWidth(column, extras) + HEADER_FILTER_AFFORDANCE_PX, HEADER_FLOOR_MAX_PX)
-    return near(Math.max(declaredColumnWidth(column), header))
-  }
-  const kept: Record<string, number> = {}
-  for (const [key, width] of Object.entries(widths as Record<string, unknown>)) {
-    if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) continue
-    const column = byKey.get(key)
-    const legacy = fromBeforeSizing === true || (fromBeforeSizing instanceof Set && fromBeforeSizing.has(key))
-    if (legacy && column && key !== 'name' && isDefault(column, width)) continue
-    kept[key] = width
-  }
-  return kept
-}
-
 export function mergeSavedVisibleColumns(
   savedVisible: string[],
   extraKeys: string[],
@@ -3489,12 +3460,8 @@ interface ColumnSettings {
    *  before GPU followed the data. */
   hidden?: string[]
   /** COLUMN_WIDTHS_VERSION when written since columns sized themselves; absent
-   *  before (see withoutDefaultWidths). */
+   *  before (see savedColumnWidths). */
   widthsVersion?: number
-  /** Widths carried over from an older record whose column wasn't known when
-   *  it was loaded (printer columns load later), so they are still to be
-   *  checked against the column's default once it is. */
-  legacyWidths?: string[]
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -4304,10 +4271,6 @@ export function ResourcesView({
   // was one the user hid rather than one never shown.
   const knownColumnKeys = useRef<Set<string>>(new Set())
   const knownColumnKeysKind = useRef('')
-  // Widths from an older record whose column wasn't known at load, with the
-  // width each had: saved as still-legacy until their column appears (the load
-  // effect re-runs then), unless the user has since changed them.
-  const pendingLegacyWidths = useRef<Map<string, number>>(new Map())
   useEffect(() => {
     // The table's own settings: nothing to load (or clear) while a kind view replaces it.
     if (!tableActive) return
@@ -4377,7 +4340,6 @@ export function ResourcesView({
       if (isStaleDefaults) {
         clearColumnSettings(selectedKind.name, selectedKind.group)
         knownColumnKeys.current = new Set()
-        pendingLegacyWidths.current = new Map()
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setHiddenColumns(new Set())
         setColumnWidths({})
@@ -4391,14 +4353,7 @@ export function ResourcesView({
         if (!savedHidden) for (const key of DATA_SHOWN_COLUMNS) restoredVisible.delete(key)
         setVisibleColumns(restoredVisible)
         setHiddenColumns(new Set(savedHidden ?? []))
-        const savedWidths = saved.widths && typeof saved.widths === 'object' ? saved.widths : {}
-        const legacyKeys = new Set(saved.widthsVersion === COLUMN_WIDTHS_VERSION
-          ? (Array.isArray(saved.legacyWidths) ? saved.legacyWidths.filter((k): k is string => typeof k === 'string') : [])
-          : Object.keys(savedWidths))
-        const restoredWidths = withoutDefaultWidths(savedWidths, effective, legacyKeys)
-        const effectiveKeys = new Set(effective.map(column => column.key))
-        pendingLegacyWidths.current = new Map(Object.entries(restoredWidths).filter(([key]) => legacyKeys.has(key) && !effectiveKeys.has(key)))
-        setColumnWidths(restoredWidths)
+        setColumnWidths(savedColumnWidths(saved.widths, saved.widthsVersion !== COLUMN_WIDTHS_VERSION))
         const savedOrder = sanitizeColumnOrder(saved.order)
         // Older settings reorder only columns after Name. Convert once to a full order.
         setColumnOrder(Array.isArray(saved.pinned) ? savedOrder : applyColumnOrder(effective, savedOrder).map(column => column.key))
@@ -4406,7 +4361,6 @@ export function ResourcesView({
         setPinnedColumns(sanitizePinnedColumns(saved.pinned).filter(key => restoredVisible.has(key) || DATA_SHOWN_COLUMNS.has(key)))
       }
     } else {
-      pendingLegacyWidths.current = new Map()
       setVisibleColumns(getDefaultVisibleColumns(effective))
       setHiddenColumns(new Set())
       setColumnWidths({})
@@ -4437,7 +4391,6 @@ export function ResourcesView({
       pinned: pinnedColumns,
       hidden: Array.from(hiddenColumns),
       widthsVersion: COLUMN_WIDTHS_VERSION,
-      legacyWidths: [...pendingLegacyWidths.current].filter(([key, width]) => columnWidths[key] === width).map(([key]) => key),
     })
     // allColumnKeysSig, not allColumnKeys: see the memo above.
   }, [visibleColumns, hiddenColumns, columnWidths, customColumns, columnOrder, pinnedColumns, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
