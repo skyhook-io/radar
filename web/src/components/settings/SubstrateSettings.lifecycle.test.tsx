@@ -158,6 +158,21 @@ describe('the local Substrate connection form', () => {
     expect(host.textContent).toContain('Who Radar reads Substrate as')
   })
 
+  it('offers Disconnect for a connection saved on a cluster that no longer serves Substrate', async () => {
+    state.status = { data: { ...status().data, installed: false } }
+    await draw()
+    expect(host.textContent).toContain('a connection to it is still saved here')
+    expect(host.textContent).toContain('Disconnect API')
+  })
+
+  it('says only that Substrate isn’t installed when nothing is saved here', async () => {
+    state.view = localView({ saved: false, settings: null })
+    state.status = { data: { ...status().data, installed: false } }
+    await draw()
+    expect(host.textContent).toContain('Agent Substrate isn’t installed on this cluster')
+    expect(host.textContent).not.toContain('Disconnect API')
+  })
+
   it('leaves a clean, empty form after a disconnect', async () => {
     state.put.mockImplementationOnce((_update: unknown, callbacks: any) =>
       callbacks.onSuccess(localView({ saved: false, settings: null, revision: 'r2', access: { state: 'notConfigured' } })))

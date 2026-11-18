@@ -3,6 +3,7 @@ import {
   costSourceApplyLabel,
   prometheusHeadersFromRows,
   pendingSections,
+  showsSubstrateSection,
   shouldShowSettingsFooter,
 } from "./settings-state";
 
@@ -65,3 +66,20 @@ describe("Integration settings state", () => {
     expect(costSourceApplyLabel("prometheus")).toBe("Apply source");
   });
 });
+
+describe('showsSubstrateSection', () => {
+  const base = { supported: true, discovered: false, saved: false, dirty: false }
+  it('hides on a cluster that doesn’t serve Substrate', () => {
+    expect(showsSubstrateSection(base)).toBe(false)
+  })
+  it('shows where Substrate is served, or a connection to remove is still saved', () => {
+    expect(showsSubstrateSection({ ...base, discovered: true })).toBe(true)
+    expect(showsSubstrateSection({ ...base, saved: true })).toBe(true)
+  })
+  it('hides against a Radar that predates the Substrate views', () => {
+    expect(showsSubstrateSection({ ...base, supported: false, discovered: true })).toBe(false)
+  })
+  it('keeps a section holding a draft, even after a switch to a cluster without Substrate', () => {
+    expect(showsSubstrateSection({ ...base, supported: false, dirty: true })).toBe(true)
+  })
+})
