@@ -298,23 +298,26 @@ func veleroBackupIssues(gvr schema.GroupVersionResource, kind string, items []*u
 // namespace failed named; nil when there is none. The start time, not the
 // creation time, is what shows the data was saved later: backup sync
 // recreates an old backup's object with a new creation time but keeps the
-// status it was stored with.
+// status it was stored with, and a backup created earlier but queued until
+// after the failure still saved its data later.
 func newerVeleroSuccessCovering(failed *unstructured.Unstructured, items []*unstructured.Unstructured) *unstructured.Unstructured {
 	var best *unstructured.Unstructured
+	var bestStarted time.Time
 	at := veleroRunTime(failed)
 	for _, u := range items {
-		if u.GetNamespace() != failed.GetNamespace() || veleroPhase(u) != "Completed" || !veleroRunTime(u).After(at) {
+		if u.GetNamespace() != failed.GetNamespace() || veleroPhase(u) != "Completed" {
 			continue
 		}
 		started, _, _ := unstructured.NestedString(u.Object, "status", "startTimestamp")
-		if t, err := time.Parse(time.RFC3339, started); err != nil || !t.After(at) {
+		t, err := time.Parse(time.RFC3339, started)
+		if err != nil || !t.After(at) {
 			continue
 		}
 		if !veleroCoveredBy(failed, u) {
 			continue
 		}
-		if best == nil || veleroRunTime(u).After(veleroRunTime(best)) {
-			best = u
+		if best == nil || t.After(bestStarted) {
+			best, bestStarted = u, t
 		}
 	}
 	return best
@@ -332,9 +335,17 @@ var veleroNarrowingFilters = []string{
 	"resourcePolicy", "snapshotVolumes",
 }
 
+// veleroSavedDataFlags change what a backup saves whichever way they are set,
+// and unset means the server's default, so later covers earlier only when
+// both set them alike: a later run without file-system backup, data
+// movement or cluster-scoped resources saved less than one with them.
+var veleroSavedDataFlags = []string{"defaultVolumesToFsBackup", "snapshotMoveData", "includeClusterResources"}
+
 // veleroCoveredBy says whether later's spec selects at least the namespaces
 // earlier's does, read conservatively: a later backup filtered by resource,
-// label or policy covers only a backup filtered the same way, namespace names
+// label or policy covers only a backup filtered the same way, one that sets
+// the file-system backup, data movement or cluster-resource flags differently
+// covers nothing, namespace names
 // compare as written, and a glob pattern in later's exclusions or in either
 // include list (other than "*") is not evaluated, so it covers nothing. When
 // unsure it says no, which keeps the failure critical.
@@ -344,6 +355,13 @@ func veleroCoveredBy(earlier, later *unstructured.Unstructured) bool {
 		if !lok || veleroEmpty(lv) {
 			continue
 		}
+		ev, _, _ := unstructured.NestedFieldNoCopy(earlier.Object, "spec", f)
+		if !reflect.DeepEqual(lv, ev) {
+			return false
+		}
+	}
+	for _, f := range veleroSavedDataFlags {
+		lv, _, _ := unstructured.NestedFieldNoCopy(later.Object, "spec", f)
 		ev, _, _ := unstructured.NestedFieldNoCopy(earlier.Object, "spec", f)
 		if !reflect.DeepEqual(lv, ev) {
 			return false
