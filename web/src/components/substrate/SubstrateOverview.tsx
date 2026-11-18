@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { Fragment, useState, type ReactNode } from 'react'
 import { Badge, CertaintyGlyph, Collapse, CollapseChevron, StatusDot, Tooltip, worseTone, type StatusTone } from '@skyhook-io/k8s-ui'
 import type { SubstrateAtespaceRead, SubstratePoolRow, SubstrateStatus, SubstrateWorkspace } from '../../api/substrateWorkspace'
 import type { SelectedResource } from '../../types'
@@ -193,7 +193,8 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
     ].filter(Boolean)
     facts.push({
       label: <Term term="template">Templates</Term>,
-      value: <>{[countText(t.total), ...notes].map((n, i) => <span key={i}>{i > 0 && ', '}{n}</span>)}</>,
+      // Fragments, not spans: the value sits in a flex row whose gap would push each comma away from its word.
+      value: <span>{[countText(t.total), ...notes].map((n, i) => <Fragment key={i}>{i > 0 && ', '}{n}</Fragment>)}</span>,
       // A template no pool matches is at risk (alert), as its badge and row say; a failed golden snapshot is a warning.
       tone: areaTone(data, 'templates', noPool > 0 ? 'alert' : t.goldenFailed > 0 ? 'degraded' : t.total > 0 ? 'healthy' : 'neutral'),
       lowerBound: coverageInPart(cov?.templates),
