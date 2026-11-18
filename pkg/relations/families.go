@@ -244,9 +244,9 @@ func fluxSource(kind string) resourceid.GroupKind {
 // namespace. An inline HelmRelease also declares the HelmChart the controller
 // recorded for it.
 var FluxSources = &Family{
-	ScanAccepted: "Indexing a Flux object's sourceRef exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
-	Name:         "fluxSources",
-	Projection:   project("configures", true, "Dependencies,ConfigRefs", "Consumers,Dependents"),
+	ScanRationale: "Indexing a Flux object's sourceRef exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
+	Name:          "fluxSources",
+	Projection:    project("configures", true, "Dependencies,ConfigRefs", "Consumers,Dependents"),
 	Sources: []Source{
 		{Kind: resourceid.GroupKind{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}, Targets: []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("ExternalArtifact")}},
 		{Kind: resourceid.GroupKind{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}},
@@ -413,7 +413,7 @@ var IstioGateways = &Family{
 // istiod rather than from the objects, so the family is made for it.
 func IstioServiceHosts(domain string) *Family {
 	index := referrersIndex("istioServiceHosts")
-	index.Candidates = istioHostCandidates
+	index.IndexDeclarations = istioHostCandidates
 	return &Family{
 		Name:           "istioServiceHosts",
 		ReferrersIndex: index,
@@ -446,11 +446,11 @@ var (
 // ClusterWorkflowTemplates an Argo Workflow or CronWorkflow uses, through its
 // workflowTemplateRef or a task's or step's templateRef.
 var ArgoWorkflowTemplates = &Family{
-	ScanAccepted: "Indexing a Workflow's workflowTemplateRef and task templateRefs exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
-	Name:         "argoWorkflowTemplates",
-	Projection:   project("configures", true, "ConfigRefs", "Consumers"),
-	Sources:      []Source{{Kind: kindWorkflow}, {Kind: kindCronWorkflow}},
-	Targets:      []resourceid.GroupKind{{Group: configrefs.ArgoGroup, Kind: "WorkflowTemplate"}, {Group: configrefs.ArgoGroup, Kind: "ClusterWorkflowTemplate"}},
+	ScanRationale: "Indexing a Workflow's workflowTemplateRef and task templateRefs exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
+	Name:          "argoWorkflowTemplates",
+	Projection:    project("configures", true, "ConfigRefs", "Consumers"),
+	Sources:       []Source{{Kind: kindWorkflow}, {Kind: kindCronWorkflow}},
+	Targets:       []resourceid.GroupKind{{Group: configrefs.ArgoGroup, Kind: "WorkflowTemplate"}, {Group: configrefs.ArgoGroup, Kind: "ClusterWorkflowTemplate"}},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		fields := []string{"spec"}
 		u, ok := unstructuredOf(obj, kindWorkflow)

@@ -50,10 +50,10 @@ func TestWideReverseFamiliesDeclareIndexOrScanReason(t *testing.T) {
 			}
 			wide = wide || cluster[target]
 		}
-		if wide && f.ReferrersIndex == nil && strings.TrimSpace(f.ScanAccepted) == "" {
+		if wide && f.ReferrersIndex == nil && strings.TrimSpace(f.ScanRationale) == "" {
 			t.Errorf("%s scans widely without an index or accepted reason", f.Name)
 		}
-		if f.ReferrersIndex != nil && f.ScanAccepted != "" {
+		if f.ReferrersIndex != nil && f.ScanRationale != "" {
 			t.Errorf("%s declares both index and accepted scan", f.Name)
 		}
 	}
@@ -182,7 +182,7 @@ func candidateFamily(f *Family) *Family {
 	}
 	candidate := *f
 	candidate.ReferrersIndex = referrersIndex(f.Name)
-	candidate.ScanAccepted = ""
+	candidate.ScanRationale = ""
 	return &candidate
 }
 

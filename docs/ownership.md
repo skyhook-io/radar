@@ -88,7 +88,7 @@ with the path declaring it. The `View` answers every family the same way:
   doesn't scale a DaemonSet).
 - Every family whose reverse question reads every namespace (a `CrossNamespace` family, or a cluster-scoped target)
   either keeps a store index keyed by the referenced object alone (`ReferrersIndex`), so a read costs the number of
-  referrers rather than the number of sources, or says in `ScanAccepted` why it scans: an index costs work on every
+  referrers rather than the number of sources, or says in `ScanRationale` why it scans: an index costs work on every
   update and relist of its source kind, and one is kept only where that cost is within the per-update bar
   (`BenchmarkRelationIndexUpdate`; [measurements](loadtest.md#relationship-cost-baselines)). An index files every
   alternative API group a declaration can resolve to, and Istio host keys are a superset that doesn't depend on the

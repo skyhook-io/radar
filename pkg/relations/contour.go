@@ -13,7 +13,7 @@ var kindHTTPProxy = resourceid.GroupKind{Group: configrefs.ContourGroup, Kind: "
 // traffic to and the HTTPProxies it includes, which may be in another
 // namespace.
 var ContourBackends = &Family{
-	ScanAccepted:   "Indexing an HTTPProxy's backends and includes exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
+	ScanRationale:  "Indexing an HTTPProxy's backends and includes exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
 	Name:           "contourBackends",
 	Projection:     project("exposes", false, "Backends", "Routes"),
 	Sources:        []Source{{Kind: kindHTTPProxy}},
@@ -33,7 +33,7 @@ var ContourBackends = &Family{
 // for TLS, client validation and upstream or JWKS validation, which a
 // delegated name places in another namespace.
 var ContourSecrets = &Family{
-	ScanAccepted:   "Indexing an HTTPProxy's TLS and validation Secrets exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
+	ScanRationale:  "Indexing an HTTPProxy's TLS and validation Secrets exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
 	Name:           "contourSecrets",
 	Projection:     project("configures", true, "ConfigRefs", "Consumers"),
 	Sources:        []Source{{Kind: kindHTTPProxy}},

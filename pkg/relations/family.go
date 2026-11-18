@@ -43,11 +43,12 @@ type Family struct {
 	// evaluated. An index costs work on every update and relist of its source
 	// kind, so a family whose reverse search reads every namespace has one
 	// only where that cost is within the admission bar
-	// (BenchmarkRelationIndexUpdate); otherwise ScanAccepted says why it
+	// (BenchmarkRelationIndexUpdate); otherwise ScanRationale says why it
 	// scans.
 	ReferrersIndex *ReferrersIndex
-	// ScanAccepted explains why a reverse search deliberately reads every source.
-	ScanAccepted string
+	// ScanRationale says why a family without a ReferrersIndex reads every
+	// source in scope for a reverse search.
+	ScanRationale string
 	// Declared visits what obj declares, each with the path declaring it.
 	// It returns an error when part of obj couldn't be read, after visiting
 	// what could.
@@ -59,8 +60,11 @@ type Family struct {
 type ReferrersIndex struct {
 	Name string
 	Key  func(target resourceid.Ref) string
-	// Candidates can index a superset when resolution depends on request-time state.
-	Candidates func(runtime.Object, func(Declaration)) error
+	// IndexDeclarations, when set, is what the index files a source under
+	// instead of Declared: a superset of its declarations, for a family whose
+	// resolution depends on request-time state, as an Istio host's service
+	// domain does. Each candidate is still evaluated with Declared.
+	IndexDeclarations func(runtime.Object, func(Declaration)) error
 }
 
 // Source is a kind that declares. Targets narrows the family's Targets to

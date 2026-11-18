@@ -27,11 +27,11 @@ var (
 // caller may read: an index of Pods by Node would cost each Pod relist more
 // than the rare question costs (docs/loadtest.md).
 var PodPlacement = &Family{
-	Name:         "podPlacement",
-	Projection:   Disposition{DirectRead: "getRelationshipsWithObject reads Pod.Node and Node.Pods through the access-aware relationDirectProvider"},
-	ScanAccepted: "An index of Pods by Node costs every Pod relist more than the rare Node question costs (docs/loadtest.md#relationship-cost-baselines).",
-	Sources:      []Source{{Kind: kindPod}},
-	Targets:      []resourceid.GroupKind{kindNode},
+	Name:          "podPlacement",
+	Projection:    Disposition{DirectRead: "getRelationshipsWithObject reads Pod.Node and Node.Pods through the access-aware relationDirectProvider"},
+	ScanRationale: "An index of Pods by Node costs every Pod relist more than the rare Node question costs (docs/loadtest.md#relationship-cost-baselines).",
+	Sources:       []Source{{Kind: kindPod}},
+	Targets:       []resourceid.GroupKind{kindNode},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok || pod.Spec.NodeName == "" || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
@@ -78,9 +78,9 @@ var Reflections = &Family{
 // and class: a PersistentVolumeClaim's bound PersistentVolume and
 // StorageClass, and a PersistentVolume's claimRef and StorageClass.
 var Storage = &Family{
-	ScanAccepted: "Indexing a claim's or volume's binding and StorageClass exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
-	Name:         "storage",
-	Projection:   Disposition{DirectRead: "getRelationshipsWithObject reads the PVC/PV binding and StorageClass; relationDirectProvider authorizes reverse PV/PVC lists"},
+	ScanRationale: "Indexing a claim's or volume's binding and StorageClass exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
+	Name:          "storage",
+	Projection:    Disposition{DirectRead: "getRelationshipsWithObject reads the PVC/PV binding and StorageClass; relationDirectProvider authorizes reverse PV/PVC lists"},
 	Sources: []Source{
 		{Kind: kindPVC, Targets: []resourceid.GroupKind{kindPV, kindStorageClass}},
 		{Kind: kindPV, Targets: []resourceid.GroupKind{kindPVC, kindStorageClass}},

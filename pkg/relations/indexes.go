@@ -38,8 +38,8 @@ func (f *Family) IndexFunc() cache.IndexFunc {
 		}
 		var keys []string
 		declare := f.Declared
-		if f.ReferrersIndex.Candidates != nil {
-			declare = f.ReferrersIndex.Candidates
+		if f.ReferrersIndex.IndexDeclarations != nil {
+			declare = f.ReferrersIndex.IndexDeclarations
 		}
 		err := declare(o, func(d Declaration) {
 			add := func(r resourceid.Ref) {

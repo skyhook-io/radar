@@ -47,9 +47,9 @@ func traefikDeclared(extract func(*unstructured.Unstructured) []configrefs.PathR
 // to, which may be in another namespace. TCP and UDP routes send only to
 // Services: their CRDs have no backend kind.
 var TraefikBackends = &Family{
-	ScanAccepted: "Indexing a route's TraefikService alternatives in both API groups exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
-	Name:         "traefikBackends",
-	Projection:   project("exposes", false, "Backends", "Routes").whenSource(resourceid.GroupKind{Group: configrefs.TraefikGroup, Kind: "TraefikService"}, "exposes", false, "Backends", "RoutedFrom").whenSource(resourceid.GroupKind{Group: configrefs.TraefikLegacyGroup, Kind: "TraefikService"}, "exposes", false, "Backends", "RoutedFrom"),
+	ScanRationale: "Indexing a route's TraefikService alternatives in both API groups exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
+	Name:          "traefikBackends",
+	Projection:    project("exposes", false, "Backends", "Routes").whenSource(resourceid.GroupKind{Group: configrefs.TraefikGroup, Kind: "TraefikService"}, "exposes", false, "Backends", "RoutedFrom").whenSource(resourceid.GroupKind{Group: configrefs.TraefikLegacyGroup, Kind: "TraefikService"}, "exposes", false, "Backends", "RoutedFrom"),
 	Sources: append(
 		traefikSources(append([]resourceid.GroupKind{kindService}, traefikKinds("TraefikService")...), "IngressRoute", "TraefikService"),
 		traefikSources([]resourceid.GroupKind{kindService}, "IngressRouteTCP", "IngressRouteUDP")...),
@@ -63,9 +63,9 @@ var TraefikBackends = &Family{
 // through and its TLSOption, and the Middlewares a chain Middleware runs.
 // Each may be in another namespace. A UDP route has none of these.
 var TraefikRouteConfig = &Family{
-	ScanAccepted: "Indexing a route's Middleware alternatives in both API groups exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
-	Name:         "traefikRouteConfig",
-	Projection:   project("configures", true, "ConfigRefs", "Consumers"),
+	ScanRationale: "Indexing a route's Middleware alternatives in both API groups exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
+	Name:          "traefikRouteConfig",
+	Projection:    project("configures", true, "ConfigRefs", "Consumers"),
 	Sources: append(append(append([]Source{},
 		traefikSources(traefikKinds("Middleware", "ServersTransport", "TLSOption"), "IngressRoute")...),
 		traefikSources(traefikKinds("MiddlewareTCP", "ServersTransportTCP", "TLSOption"), "IngressRouteTCP")...),
