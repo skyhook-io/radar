@@ -14,6 +14,7 @@ import { RefreshFailedNotice } from '../workspace/layout'
 import { ACTOR_STATE_LABEL, definitiveFailure, placementTone, poolPodsText, poolReadFailure, poolReading, bytesText, coverageInPart, coverageReason, coverageUnread, cpuText, tierReading } from './readings'
 import { ACTOR_DRAWER_PARAM, SUBSTRATE_PATH, encodeActorParam, substrateActorPath, substrateActorsPath, substrateTemplatePath } from './routes'
 import { IMPACT_LABEL, Name, Term, Unread, When, WorkerStateChip } from './shared'
+import { RESERVED_MEANING, lostText } from './SubstrateWorkers'
 
 const CARD = 'rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm'
 
@@ -106,16 +107,23 @@ export function slotsText(w: Pick<SubstrateWorkerRow, 'state' | 'capacity' | 'al
   return `${used} of ${total} actor slots used · ${rest}`
 }
 
-function resourcesUsed(w: SubstrateWorkerRow): string | undefined {
+function resourcesReserved(w: SubstrateWorkerRow): ReactNode {
   if (!w.capacity || !w.allocated) return undefined
-  return `${cpuText(w.allocated.cpuMillicores)} of ${cpuText(w.capacity.cpuMillicores)} CPU · ${bytesText(w.allocated.memoryBytes)} of ${bytesText(w.capacity.memoryBytes)}`
+  return (
+    <>
+      {cpuText(w.allocated.cpuMillicores)} of {cpuText(w.capacity.cpuMillicores)} CPU · {bytesText(w.allocated.memoryBytes)} of {bytesText(w.capacity.memoryBytes)}{' '}
+      <Tooltip content={RESERVED_MEANING}><span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-2">reserved</span></Tooltip>
+    </>
+  )
 }
 
 function WorkerStateBadge({ w }: { w: SubstrateWorkerRow }) {
+  const lost = lostText(w)
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
       <WorkerStateChip w={w} />
       {w.state !== 'active' && w.heldForSeconds !== undefined && <span className="whitespace-nowrap text-xs text-theme-text-tertiary">for at least {formatDuration(w.heldForSeconds * 1000)}</span>}
+      {lost && <span className="whitespace-nowrap text-xs text-theme-text-secondary">{lost}</span>}
     </span>
   )
 }
@@ -123,7 +131,7 @@ function WorkerStateBadge({ w }: { w: SubstrateWorkerRow }) {
 function WorkerCard({ w, onOpenActor, onOpenPod }: { w: SubstrateWorkerRow; onOpenActor: (ref: SubstrateRef) => void; onOpenPod: (w: SubstrateWorkerRow) => void }) {
   const { actors, free } = workerSlots(w)
   const podMismatch = w.podReady === true && w.state === 'unavailable'
-  const resources = resourcesUsed(w)
+  const resources = resourcesReserved(w)
   return (
     <div className="min-w-0 rounded-lg border border-theme-border bg-theme-surface p-3">
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
@@ -213,29 +221,41 @@ function CapacityVerdict({ namespace, name, onOpenMetrics }: { namespace: string
 }
 
 /**
- * Desired workers Substrate has no registration for, from a complete worker
- * list. Substrate's list proves only that no worker registered: whether the
- * Pods exist is Kubernetes' to say, so its ready count stands beside it.
+ * The pool's workers before its map: active, registered with Substrate and
+ * desired, then any desired worker Substrate has no registration for. Only a
+ * complete worker list can say one is missing; whether its Pod exists is
+ * Kubernetes' to say, so its Pod count stands beside it.
  */
-function RegistrationGap({ missing, known, k8s }: { missing: number; known: number; k8s?: SubstrateK8sPool }) {
+export function WorkerCounts({ workers, partial, k8s, short }: { workers: Pick<SubstrateWorkerRow, 'state'>[]; partial: boolean; k8s?: SubstrateK8sPool; short: boolean }) {
+  const desired = k8s?.desired
+  const atLeast = partial ? 'at least ' : ''
+  const active = workers.filter((w) => w.state === 'active').length
+  const missing = !partial && desired !== undefined ? Math.max(0, desired - workers.length) : 0
+  // A partial read that saw none counts nothing: the line below says Radar saw none.
+  const seen = !partial || workers.length > 0
+  const parts = [seen && `${atLeast}${active} active`, seen && `${atLeast}${workers.length} registered with Substrate`, desired !== undefined && `${desired} desired`].filter(Boolean)
+  if (parts.length === 0) return null
   return (
-    <div className="flex min-h-[6rem] items-center rounded-lg border border-dashed border-theme-border-light p-3 text-sm text-theme-text-secondary">
-      <div>
-        <div className="font-medium text-theme-text-primary">{missing === 1 ? '1 desired worker is not registered with Substrate' : `${missing} desired workers are not registered with Substrate`}</div>
-        <div className="mt-0.5 text-xs text-theme-text-tertiary">
-          The pool wants {known + missing}; Substrate has {known} registered.{k8s && <> {poolPodsText(k8s)}</>}
+    <div className="mb-3 space-y-0.5">
+      <div className={clsx('text-sm font-medium', short ? toneTextClass('degraded') : 'text-theme-text-primary')}>Workers: {parts.join(' · ')}</div>
+      {missing > 0 && (
+        <div className="text-xs text-theme-text-secondary">
+          <span className="font-medium text-theme-text-primary">{missing === 1 ? '1 desired worker is not registered with Substrate.' : `${missing} desired workers are not registered with Substrate.`}</span>
+          {k8s && <> {poolPodsText(k8s)}</>}
         </div>
-      </div>
+      )}
+      {missing === 0 && k8s && <div className="text-xs text-theme-text-secondary">{poolPodsText(k8s)}</div>}
     </div>
   )
 }
 
 function Legend() {
   const items: { label: string; tone: Parameters<typeof toneFillClass>[0] }[] = [
-    { label: 'running', tone: 'healthy' },
-    { label: 'its worker is unavailable or draining', tone: 'degraded' },
-    { label: 'resuming, suspending or reverting', tone: 'neutral' },
-    { label: 'crashed, still assigned', tone: 'unhealthy' },
+    { label: 'running', tone: placementTone('running', undefined) },
+    { label: 'its worker is unavailable', tone: placementTone('running', 'unavailable') },
+    { label: 'its worker is draining', tone: placementTone('running', 'draining') },
+    { label: 'resuming, suspending or reverting', tone: placementTone('resuming', undefined) },
+    { label: 'crashed, still assigned', tone: placementTone('crashed', undefined) },
   ]
   return (
     <ul className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-theme-text-tertiary" aria-label="Legend">
@@ -253,7 +273,6 @@ function Legend() {
 
 export function Placement({ data, onOpenActor, onOpenPod, drawer }: { data: SubstratePool; onOpenActor: (ref: SubstrateRef) => void; onOpenPod: (w: SubstrateWorkerRow) => void; drawer?: boolean }) {
   const k8s = data.pool.kubernetes
-  const desired = k8s?.desired
   const workers = [...data.workers].sort((a, b) => a.pod.localeCompare(b.pod))
   const tierRead = data.apiTier.readAt
   const heading = <SectionHeading hint={<>which actor holds which slot · from Substrate’s API{tierRead ? <> · <When iso={tierRead} prefix="read" /></> : ''}</>}>Placement</SectionHeading>
@@ -269,26 +288,22 @@ export function Placement({ data, onOpenActor, onOpenPod, drawer }: { data: Subs
     )
   }
   const partial = coverageInPart(data.coverage.workers)
-  // A partial list shows what it saw; only a complete one can say registrations are missing.
-  const missing = !partial && desired !== undefined ? Math.max(0, desired - workers.length) : 0
   const rows = workers.length > PLACEMENT_CARD_LIMIT
   return (
     <section className={CARD}>
       {heading}
       {partial && <p className="mb-2 text-xs text-theme-text-secondary">Not every worker was read, so these are the ones Radar saw: {coverageReason(data.coverage.workers, 'workers')}.</p>}
+      {/* The shortage leads: how many workers the pool has and wants, above the map of what they hold. */}
+      <WorkerCounts workers={workers} partial={partial} k8s={k8s} short={data.pool.capacity === 'short'} />
       <div className="mb-3"><Legend /></div>
-      {workers.length === 0 && missing === 0 ? (
+      {workers.length === 0 ? (
         <p className="text-sm text-theme-text-tertiary">{partial ? 'Radar saw no worker of this pool in what it read.' : 'Substrate has no workers in this pool.'}</p>
       ) : rows ? (
-        <>
-          <WorkerRows workers={workers} onOpenPod={onOpenPod} />
-          {missing > 0 && <div className="mt-2"><RegistrationGap missing={missing} known={workers.length} k8s={k8s} /></div>}
-        </>
+        <WorkerRows workers={workers} onOpenPod={onOpenPod} />
       ) : (
         // items-start: each card ends at its content; order stays row by row.
         <div className={clsx('grid items-start gap-3', drawer ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2')}>
           {workers.map((w) => <WorkerCard key={w.name} w={w} onOpenActor={onOpenActor} onOpenPod={onOpenPod} />)}
-          {missing > 0 && <RegistrationGap missing={missing} known={workers.length} k8s={k8s} />}
         </div>
       )}
       <p className="mt-3 text-xs text-theme-text-tertiary">

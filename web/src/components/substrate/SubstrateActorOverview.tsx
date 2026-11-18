@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { AlertBanner, FactGrid, FactRow, FoldSection, SectionHeading, Tooltip, formatAge, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
+import { AlertBanner, FactGrid, FactRow, FoldSection, SectionHeading, Tooltip, formatAge, toneFillClass, toneTextClass, type StatusTone } from '@skyhook-io/k8s-ui'
 import {
   substrateErrorCode,
   useSubstrateActorLogs,
@@ -13,24 +13,25 @@ import {
   type SubstrateWorkerRow,
 } from '../../api/substrateWorkspace'
 import { type OpenSubject, SubjectLink } from './SubstrateAttentionList'
-import { ACTOR_STATE_LABEL, DISCARD_WHY, definitiveFailure, logsCommand, memoryKillText, attentionTone, bytesText, cpuText, durableText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, stateExtra, localTime, relativeTime, servingEvidence, withoutRepeats } from './readings'
+import { ACTOR_STATE_LABEL, DISCARD_WHY, definitiveFailure, logsCommand, memoryKillText, attentionBannerVariant, bytesText, cpuText, durableText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, stateExtra, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
 import { ActorStateBadge, CommandChip, Term, Unread, When } from './shared'
 import { RefreshFailedNotice } from '../workspace/layout'
 
 const CARD = 'rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm'
 
-const WORKER_STATE: Record<SubstrateWorkerRow['state'], { label: string; tone: 'healthy' | 'degraded' | 'unhealthy' | 'unknown' }> = {
+// The tones of the actor's own chip and banner for the same condition (workerImpactTone): one condition, one tone.
+const WORKER_STATE: Record<SubstrateWorkerRow['state'], { label: string; tone: StatusTone }> = {
   active: { label: 'active', tone: 'healthy' },
-  draining: { label: 'draining', tone: 'degraded' },
-  unavailable: { label: 'unavailable', tone: 'unhealthy' },
+  draining: { label: 'draining', tone: workerImpactTone('draining') },
+  unavailable: { label: 'unavailable', tone: workerImpactTone('unavailable') },
   unknown: { label: 'state unknown', tone: 'unknown' },
 }
 
 /**
- * The crash banner, in the order a reader acts on it: the cause and where it
- * was read, how many crashed actors share its template, one next step with
- * the exact command, and beside it what a revert keeps and drops. Substrate's
- * own message folds under Details once the worker's log names the cause.
+ * The crash banner, visible part first: the cause, how many crashed actors
+ * share its template, and one next step with its command. Where the cause was
+ * read, an earlier run's kill, what a revert keeps and drops, and Substrate's
+ * own message (once the worker's log names the cause) fold under Details.
  */
 function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject?: OpenSubject }) {
   const { actor, template, recovery } = detail
@@ -58,13 +59,33 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
   ) : (
     'Substrate recorded no crash message.'
   )
+  const details: ReactNode[] = []
+  if (kill?.current) {
+    details.push(<p key="where">Read from the worker’s log{kill.time && <> <When iso={kill.time} /></>}, in <span className="font-mono">{kill.pod}</span>.</p>)
+  }
+  if (kill && !kill.current) {
+    details.push(<p key="earlier">Earlier run: a memory-limit kill was recorded{kill.time && <> <When iso={kill.time} /></>} in <span className="font-mono">{kill.pod}</span>; Radar can’t tie it to this crash.</p>)
+  }
+  // What a revert keeps and drops stays with the crash, folded: the step above already says to wait for a pending upload.
+  if (recovery) details.push(<p key="recovery"><RecoveryText recovery={recovery} newest={detail.row.newestSnapshot?.generation} /></p>)
+  if (recovery && recovery.discarded.length > 0) {
+    details.push(
+      <ul key="discarded" className="list-disc space-y-0.5 pl-4">
+        {recovery.discarded.map((d) => (
+          <li key={d.generation}>
+            A revert drops generation {d.generation}{d.fidelity ? ` (${fidelityLabel(d.fidelity)})` : ''}: {DISCARD_WHY[d.why] ?? d.why}.
+          </li>
+        ))}
+      </ul>,
+    )
+  }
+  if (kill?.current) details.push(<p key="message">{substrateMessage}</p>)
   return (
     <AlertBanner variant="error" title={`Crashed${at ? ` ${relativeTime(at)}` : ''}`} className="">
       <div className="mt-1 break-words text-xs text-theme-text-secondary">
         {kill?.current ? (
           <>
-            Cause, from its worker’s log: <span className="font-medium text-theme-text-primary">{memoryKillText(kill)}</span>
-            {kill.time && <> <When iso={kill.time} /></>}, in <span className="font-mono">{kill.pod}</span>.
+            Cause, from its worker’s log: <span className="font-medium text-theme-text-primary">{memoryKillText(kill)}</span>.
           </>
         ) : (
           substrateMessage
@@ -72,11 +93,6 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
       </div>
       {/* Holds the cause's place while the log is read, so the banner doesn't grow under the reader. */}
       {logs.isLoading && <div className="mt-1 text-xs text-theme-text-tertiary">Reading its worker’s log for the cause…</div>}
-      {kill && !kill.current && (
-        <div className="mt-1 break-words text-xs text-theme-text-secondary">
-          Earlier run: a memory-limit kill was recorded{kill.time && <> <When iso={kill.time} /></>} in <span className="font-mono">{kill.pod}</span>; Radar can’t tie it to this crash.
-        </div>
-      )}
       {/* How many crashed actors share its template: a concentration, not a cause. */}
       {crashedOfTemplate !== undefined && crashedOfTemplate > 1 && (
         <div className="mt-1 text-xs font-medium text-theme-text-primary">
@@ -101,33 +117,30 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
           {step.command && <CommandChip command={step.command} />}
         </div>
       )}
-      {/* What a revert keeps and drops stays beside the step that reverts. */}
-      {recovery && (
-        <div className="mt-1 break-words text-xs text-theme-text-secondary">
-          <RecoveryText recovery={recovery} newest={detail.row.newestSnapshot?.generation} />
-        </div>
-      )}
-      {recovery && recovery.discarded.length > 0 && (
-        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-theme-text-secondary">
-          {recovery.discarded.map((d) => (
-            <li key={d.generation}>
-              A revert drops generation {d.generation}{d.fidelity ? ` (${fidelityLabel(d.fidelity)})` : ''}: {DISCARD_WHY[d.why] ?? d.why}.
-            </li>
-          ))}
-        </ul>
-      )}
-      {kill?.current && (
-        <div className="mt-1.5">
-          <FoldSection title="Details" summary="" attention={false}>
-            <div className="break-words text-xs text-theme-text-secondary">{substrateMessage}</div>
-          </FoldSection>
-        </div>
-      )}
+      {details.length > 0 && <BannerDetails>{details}</BannerDetails>}
     </AlertBanner>
   )
 }
 
+/** A callout's folded part: provenance, mechanics and secondary branches, under Details. */
+function BannerDetails({ children }: { children: ReactNode }) {
+  return (
+    <div className="mt-1.5">
+      <FoldSection title="Details" summary="" attention={false}>
+        <div className="space-y-1 break-words text-xs text-theme-text-secondary">{children}</div>
+      </FoldSection>
+    </div>
+  )
+}
+
 const WORKER_RULES = new Set<SubstrateAttention['rule']>(['workerUnavailable', 'workerDraining', 'workerRestarting'])
+
+// The tone of the actor's chip for the same condition: a lost sandbox is lost, an unavailable worker puts it at risk.
+const IMPACT_VARIANT: Record<NonNullable<SubstrateActorDetail['workerImpact']>['kind'], 'error' | 'alert' | 'warning'> = {
+  restarted: 'error',
+  unavailable: 'alert',
+  draining: 'warning',
+}
 
 const IMPACT_TITLE: Record<NonNullable<SubstrateActorDetail['workerImpact']>['kind'], string> = {
   unavailable: 'Its worker is unavailable',
@@ -135,19 +148,27 @@ const IMPACT_TITLE: Record<NonNullable<SubstrateActorDetail['workerImpact']>['ki
   restarted: 'Its worker restarted under it: its sandbox is gone',
 }
 
-/** What the worker's trouble means for this actor, first, before the worker's own row. */
+/**
+ * What the worker's trouble means for this actor, first, before the worker's
+ * own row. Visible: the cause, the state Substrate records beside the time of
+ * its newest output (a past line, not proof it runs now), the deadline, and
+ * the next step. The mechanics fold under Details.
+ */
 function WorkerImpactBanner({ actor, impact }: { actor: SubstrateActorDetail['actor']; impact: NonNullable<SubstrateActorDetail['workerImpact']> }) {
-  // The same read as the Overview's last lines: the actor's own output is the evidence it still runs.
+  // The same read as the Overview's last lines: the actor's own output is the evidence it may still run.
   const logs = useSubstrateActorLogs(actor, { tailLines: 8 })
   const evidence = impact.kind === 'restarted' ? undefined : servingEvidence(logs.data?.lines)
+  // The title names a draining or restarted worker; only an unavailable one's cause needs its first sentence.
+  const [cause, rest] = impact.kind === 'unavailable' ? splitReading(impact.reading) : [undefined, impact.reading]
+  const recorded = `Recorded as ${(ACTOR_STATE_LABEL[actor.state] ?? actor.state).toLowerCase()}`
   return (
-    <AlertBanner variant="warning" title={IMPACT_TITLE[impact.kind]} className="">
+    <AlertBanner variant={IMPACT_VARIANT[impact.kind]} title={IMPACT_TITLE[impact.kind]} className="">
       <div className="mt-1 break-words text-xs text-theme-text-secondary">
-        {impact.reading}
-        {evidence?.recent && evidence.at && <> Its last log line was <When iso={evidence.at} />, so it is still running for now.</>}
-        {evidence && !evidence.recent && (evidence.at
-          ? <> Its last log line was <When iso={evidence.at} />, so it may not be serving.</>
-          : <> Radar found no output from it in the worker’s log, so it may not be serving.</>)}
+        {cause && <>{cause} </>}
+        {recorded}
+        {!evidence && '.'}
+        {evidence?.at && <>; its last log line was <When iso={evidence.at} />{evidence.recent ? '.' : ', so it may not be serving.'}</>}
+        {evidence && !evidence.at && <>; Radar found no output from it in the worker’s log, so it may not be serving.</>}
       </div>
       {impact.deadline && <div className="mt-1 text-xs text-theme-text-secondary">Its Pod is due to be gone <When iso={impact.deadline} />.</div>}
       <div className="mt-1 break-words text-xs text-theme-text-primary">
@@ -155,6 +176,7 @@ function WorkerImpactBanner({ actor, impact }: { actor: SubstrateActorDetail['ac
         {impact.nextStep}
         {impact.command && <CommandChip command={impact.command} />}
       </div>
+      {rest && <BannerDetails><p>{rest}</p></BannerDetails>}
     </AlertBanner>
   )
 }
@@ -201,13 +223,17 @@ export function actorAttentionText(row: SubstrateAttention, detail: SubstrateAct
 
 function AttentionBanner({ row, detail }: { row: SubstrateAttention; detail: SubstrateActorDetail }) {
   const text = actorAttentionText(row, detail)
+  const message = withoutRepeats(text.message, row.nextStep)
+  // The first sentence stays in view, whole; the rest waits under Details.
+  const [lead, rest] = message ? splitReading(message) : [undefined, undefined]
   return (
-    <AlertBanner variant={attentionTone(row) === 'unhealthy' ? 'error' : 'warning'} title={text.title} message={withoutRepeats(text.message, row.nextStep)} className="">
+    <AlertBanner variant={attentionBannerVariant(row)} title={text.title} message={lead} className="">
       <div className="mt-1 break-words text-xs text-theme-text-primary">
         <span className="font-medium">Next step: </span>
         {row.nextStep}
         {row.command && <CommandChip command={row.command} />}
       </div>
+      {rest && <BannerDetails><p>{rest}</p></BannerDetails>}
     </AlertBanner>
   )
 }
@@ -232,88 +258,95 @@ function AtAGlance({ detail, onOpenSubject }: { detail: SubstrateActorDetail; on
   const as = actor.assignment
   const snap = row.newestSnapshot
   const egress = egressText(detail.egress)
+  // Two columns where the card is wide: where it runs on the left, what it resumes from and holds on the right.
   return (
-    <FactGrid>
-      <FactRow label="State">
-        <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
-          <ActorStateBadge state={actor.state} impact={detail.workerImpact} />
-          {actor.updateTime && (
-            <span className="text-theme-text-secondary"><When iso={actor.updateTime} prefix="since at least" hint="Substrate records no transition time; its last change to the actor is a lower bound:" /></span>
-          )}
-        </span>
-        {/* A held duration is already in "since at least"; only other facts (a pending upload) add a line. */}
-        {actor.state !== 'crashed' && stateExtra(actor.state, row.reason) && !stateExtra(actor.state, row.reason)!.startsWith('for ') && (
-          <div className="text-xs text-theme-text-secondary">{stateExtra(actor.state, row.reason)}</div>
-        )}
-      </FactRow>
-      <FactRow label={<Term term="template">Template</Term>}>
-        <SubjectLink subject={{ kind: 'ActorTemplate', atespace: actor.template.atespace, name: actor.template.name }} onOpen={onOpenSubject} withKind={false} />
-        {template && (template.cpuMillicores || template.memoryBytes) ? (
-          <div className="text-xs text-theme-text-secondary">
-            {[template.cpuMillicores ? `${cpuText(template.cpuMillicores)} CPU` : null, template.memoryBytes ? bytesText(template.memoryBytes) : null].filter(Boolean).join(', ')} per actor
-          </div>
-        ) : null}
-      </FactRow>
-      <FactRow label={<Term term="worker">Worker</Term>}>
-        {as ? (
-          <>
-            <SubjectLink subject={{ kind: 'Pod', namespace: as.namespace, name: as.pod }} label={as.pod} onOpen={onOpenSubject} withKind={false} />
-            {worker ? (
-              <span className={clsx('ml-1.5', toneTextClass(WORKER_STATE[worker.state].tone))}>{WORKER_STATE[worker.state].label}</span>
-            ) : (
-              <Unread title="Substrate’s workers were not read."> · state unknown</Unread>
+    <div className="@container">
+      <div className="grid gap-x-8 gap-y-2 @3xl:grid-cols-2">
+        <FactGrid>
+          <FactRow label="State">
+            <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <ActorStateBadge state={actor.state} impact={detail.workerImpact} updateTime={actor.updateTime} />
+              {actor.updateTime && (
+                <span className="text-theme-text-secondary"><When iso={actor.updateTime} prefix="since at least" hint="Substrate records no transition time; its last change to the actor is a lower bound:" /></span>
+              )}
+            </span>
+            {/* A held duration is already in "since at least"; only other facts (a pending upload) add a line. */}
+            {actor.state !== 'crashed' && stateExtra(actor.state, row.reason) && !stateExtra(actor.state, row.reason)!.startsWith('for ') && (
+              <div className="text-xs text-theme-text-secondary">{stateExtra(actor.state, row.reason)}</div>
             )}
-          </>
-        ) : (
-          <span className="text-theme-text-secondary">none while {ACTOR_STATE_LABEL[actor.state].toLowerCase()}</span>
-        )}
-      </FactRow>
-      <FactRow label={<Term term="pool">Pool</Term>}>
-        {as ? (
-          <>
-            <SubjectLink subject={{ kind: 'WorkerPool', namespace: as.namespace, name: as.pool }} label={as.pool} onOpen={onOpenSubject} withKind={false} />
-            <span className="text-theme-text-secondary"> · namespace <span className="whitespace-nowrap">{as.namespace}</span></span>
-            {(as.sandboxClass || snap?.sandboxClass) && <div className="text-xs text-theme-text-secondary">sandbox class <span className="font-mono">{as.sandboxClass ?? snap?.sandboxClass}</span></div>}
-          </>
-        ) : snap?.sandboxClass ? (
-          <span className="text-theme-text-secondary">none now · last ran under sandbox class <span className="font-mono">{snap.sandboxClass}</span></span>
-        ) : (
-          <span className="text-theme-text-secondary">none now</span>
-        )}
-      </FactRow>
-      <FactRow label="Node">
-        {row.node ? (
-          <>
-            <SubjectLink subject={{ kind: 'Node', name: row.node }} onOpen={onOpenSubject} withKind={false} />
-            {!as && <div className="text-xs text-theme-text-secondary">where it was last, or where its snapshot is</div>}
-          </>
-        ) : (
-          <Unread>Substrate names none</Unread>
-        )}
-      </FactRow>
-      <FactRow label={<Term term="snapshot">Newest snapshot</Term>}>
-        {snap ? (
-          <>
-            <span>generation {snap.generation} · {fidelityLabel(snap.fidelity)} · </span>
-            <Tooltip content={durableText(snap).title}>
-              <span className={durableText(snap).tone === 'healthy' ? undefined : toneTextClass(durableText(snap).tone)}>{durableText(snap).text}</span>
-            </Tooltip>
-            <div className="text-xs text-theme-text-secondary">{resumeSentence(row)}</div>
-          </>
-        ) : (
-          <span className="text-theme-text-secondary">None yet, so it boots fresh when it resumes</span>
-        )}
-      </FactRow>
-      <FactRow label="Seeded from">
-        {actor.sourceTag ? <span className="font-mono">{refText(actor.sourceTag)}</span> : <span className="text-theme-text-secondary">its template, not a tag</span>}
-      </FactRow>
-      <FactRow label="Egress">
-        <span className={egress.tone === 'unknown' ? 'text-theme-text-tertiary' : undefined}>{egress.text}</span>
-      </FactRow>
-      <FactRow label="Created">
-        {actor.createTime ? <When iso={actor.createTime} /> : <Unread>unknown</Unread>}
-      </FactRow>
-    </FactGrid>
+          </FactRow>
+          <FactRow label={<Term term="template">Template</Term>}>
+            <SubjectLink subject={{ kind: 'ActorTemplate', atespace: actor.template.atespace, name: actor.template.name }} onOpen={onOpenSubject} withKind={false} />
+            {template && (template.cpuMillicores || template.memoryBytes) ? (
+              <div className="text-xs text-theme-text-secondary">
+                {[template.cpuMillicores ? `${cpuText(template.cpuMillicores)} CPU` : null, template.memoryBytes ? bytesText(template.memoryBytes) : null].filter(Boolean).join(', ')} per actor
+              </div>
+            ) : null}
+          </FactRow>
+          <FactRow label={<Term term="worker">Worker</Term>}>
+            {as ? (
+              <>
+                <SubjectLink subject={{ kind: 'Pod', namespace: as.namespace, name: as.pod }} label={as.pod} onOpen={onOpenSubject} withKind={false} />
+                {worker ? (
+                  <span className={clsx('ml-1.5', toneTextClass(WORKER_STATE[worker.state].tone))}>{WORKER_STATE[worker.state].label}</span>
+                ) : (
+                  <Unread title="Substrate’s workers were not read."> · state unknown</Unread>
+                )}
+              </>
+            ) : (
+              <span className="text-theme-text-secondary">none while {ACTOR_STATE_LABEL[actor.state].toLowerCase()}</span>
+            )}
+          </FactRow>
+          <FactRow label={<Term term="pool">Pool</Term>}>
+            {as ? (
+              <>
+                <SubjectLink subject={{ kind: 'WorkerPool', namespace: as.namespace, name: as.pool }} label={as.pool} onOpen={onOpenSubject} withKind={false} />
+                <span className="text-theme-text-secondary"> · namespace <span className="whitespace-nowrap">{as.namespace}</span></span>
+                {(as.sandboxClass || snap?.sandboxClass) && <div className="text-xs text-theme-text-secondary">sandbox class <span className="font-mono">{as.sandboxClass ?? snap?.sandboxClass}</span></div>}
+              </>
+            ) : snap?.sandboxClass ? (
+              <span className="text-theme-text-secondary">none now · last ran under sandbox class <span className="font-mono">{snap.sandboxClass}</span></span>
+            ) : (
+              <span className="text-theme-text-secondary">none now</span>
+            )}
+          </FactRow>
+          <FactRow label="Node">
+            {row.node ? (
+              <>
+                <SubjectLink subject={{ kind: 'Node', name: row.node }} onOpen={onOpenSubject} withKind={false} />
+                {!as && <div className="text-xs text-theme-text-secondary">where it was last, or where its snapshot is</div>}
+              </>
+            ) : (
+              <Unread>Substrate names none</Unread>
+            )}
+          </FactRow>
+        </FactGrid>
+        <FactGrid>
+          <FactRow label={<Term term="snapshot">Newest snapshot</Term>}>
+            {snap ? (
+              <>
+                <span>generation {snap.generation} · {fidelityLabel(snap.fidelity)} · </span>
+                <Tooltip content={durableText(snap).title}>
+                  <span className={durableText(snap).tone === 'healthy' ? undefined : toneTextClass(durableText(snap).tone)}>{durableText(snap).text}</span>
+                </Tooltip>
+                <div className="text-xs text-theme-text-secondary">{resumeSentence(row)}</div>
+              </>
+            ) : (
+              <span className="text-theme-text-secondary">None yet, so it boots fresh when it resumes</span>
+            )}
+          </FactRow>
+          <FactRow label="Seeded from">
+            {actor.sourceTag ? <span className="font-mono">{refText(actor.sourceTag)}</span> : <span className="text-theme-text-secondary">its template, not a tag</span>}
+          </FactRow>
+          <FactRow label="Egress">
+            <span className={egress.tone === 'unknown' ? 'text-theme-text-tertiary' : undefined}>{egress.text}</span>
+          </FactRow>
+          <FactRow label="Created">
+            {actor.createTime ? <When iso={actor.createTime} /> : <Unread>unknown</Unread>}
+          </FactRow>
+        </FactGrid>
+      </div>
+    </div>
   )
 }
 

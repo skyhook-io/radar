@@ -1,12 +1,12 @@
 import { useState, type ReactNode } from 'react'
-import { Badge, CertaintyGlyph, Collapse, CollapseChevron, StatusDot, Tooltip, type StatusTone } from '@skyhook-io/k8s-ui'
+import { Badge, CertaintyGlyph, Collapse, CollapseChevron, StatusDot, Tooltip, worseTone, type StatusTone } from '@skyhook-io/k8s-ui'
 import type { SubstrateAtespaceRead, SubstratePoolRow, SubstrateStatus, SubstrateWorkspace } from '../../api/substrateWorkspace'
 import type { SelectedResource } from '../../types'
 import { refToSelectedResource } from '../../utils/navigation'
 import { Notice, ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { INCOMPLETE_COVERAGE_STATES, coverageEmpty, coverageLabel } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
-import { OWNERS_ONLY_NOTE, coverageInPart, countText, poolReading, poolReadyPods } from './readings'
+import { OWNERS_ONLY_NOTE, attentionArea, coverageInPart, countText, poolReading, poolReadyPods, worstAttentionTone, type AttentionArea } from './readings'
 import { SUBSTRATE_GROUP, substrateActorsPath } from './routes'
 import { SubstrateAttentionList, type OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectPanel, SubstrateTierBanner, showsConnectPanel } from './SubstrateConnect'
@@ -101,6 +101,17 @@ function plural(n: number, one: string, many: string) {
   return `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`
 }
 
+/**
+ * A fact's tone where Needs attention has rows about its kind: the worst of
+ * theirs, so a condition reads one tone in its row and in the fact. Info rows
+ * are expected and do not colour it.
+ */
+function areaTone(data: SubstrateWorkspace, area: AttentionArea, base: StatusTone): StatusTone {
+  const rows = data.needsAttention.filter((a) => a.severity !== 'info' && attentionArea(a) === area)
+  const worst = worstAttentionTone(rows)
+  return worst ? worseTone(base, worst) : base
+}
+
 /** The status line: pools, workers, slots, actors, templates. A value Radar did not read says so, never 0. */
 export function overviewFacts(data: SubstrateWorkspace): Fact[] {
   const { summary } = data
@@ -115,7 +126,7 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
     facts.push({
       label: <Term term="pool">Worker pools</Term>,
       value: [countText(pools.total), ...poolNotes].join(', '),
-      tone: poolNotes.length > 0 ? 'degraded' : pools.total > 0 ? 'healthy' : poolsPartial ? 'unknown' : 'neutral',
+      tone: areaTone(data, 'pools', poolNotes.length > 0 ? 'degraded' : pools.total > 0 ? 'healthy' : poolsPartial ? 'unknown' : 'neutral'),
       lowerBound: poolsPartial,
       title: poolsPartial ? `WorkerPools: ${coverageLabel(data.coverage.pools)}` : undefined,
     })
@@ -129,7 +140,8 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
     facts.push({
       label: <Term term="worker">Workers</Term>,
       value: [`${countText(w.active)} active`, ...notes].join(', '),
-      tone: w.unavailable > 0 ? 'degraded' : w.total > 0 ? 'healthy' : 'neutral',
+      // An unavailable worker is at risk (alert), the tone of its chip and its row.
+      tone: areaTone(data, 'workers', w.unavailable > 0 ? 'alert' : w.total > 0 ? 'healthy' : 'neutral'),
       lowerBound: coverageInPart(cov?.workers),
     })
   } else {
@@ -179,7 +191,8 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
     facts.push({
       label: <Term term="template">Templates</Term>,
       value: [countText(t.total), ...notes].join(', '),
-      tone: noPool > 0 || t.goldenFailed > 0 ? 'degraded' : t.total > 0 ? 'healthy' : 'neutral',
+      // A template no pool matches is at risk (alert), as its badge and row say; a failed golden snapshot is a warning.
+      tone: areaTone(data, 'templates', noPool > 0 ? 'alert' : t.goldenFailed > 0 ? 'degraded' : t.total > 0 ? 'healthy' : 'neutral'),
       lowerBound: coverageInPart(cov?.templates),
     })
   } else {
@@ -240,7 +253,8 @@ export function serviceFacts(data: Pick<SubstrateWorkspace, 'service' | 'summary
     })
   }
   if (unstored > 0) {
-    const worst = uploadRows.some((a) => a.severity === 'critical') ? 'unhealthy' : 'degraded'
+    // The tone of the worst upload row: alert while the nodes are up, critical once one holding them is down.
+    const worst = worstAttentionTone(uploadRows) ?? 'degraded'
     facts.push({
       label: 'Uploads',
       value: `${countText(unstored)} ${unstored === 1 ? 'snapshot' : 'snapshots'} not stored yet`,
@@ -251,7 +265,7 @@ export function serviceFacts(data: Pick<SubstrateWorkspace, 'service' | 'summary
     facts.push({
       label: 'Uploads',
       value: `overdue on ${svc.nodesOverdue} ${svc.nodesOverdue === 1 ? 'node' : 'nodes'}`,
-      tone: 'degraded',
+      tone: worstAttentionTone(uploadRows) ?? 'alert',
       title: 'atelet’s own count of snapshot uploads past their deadline.',
       lowerBound: svc.nodesUnknown > 0,
     })
