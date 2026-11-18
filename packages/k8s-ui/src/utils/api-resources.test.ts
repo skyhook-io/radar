@@ -67,6 +67,10 @@ describe('formatGroupName', () => {
     expect(formatGroupName('crd.k8s.amazonaws.com')).toBe('AWS VPC CNI')
     expect(formatGroupName('acid.zalan.do')).toBe('Zalando Postgres')
     expect(formatGroupName('llm-d.ai')).toBe('llm-d')
+    expect(formatGroupName('ate.dev')).toBe('Agent Substrate')
+    expect(formatGroupName('agents.x-k8s.io')).toBe('Agent Sandbox')
+    expect(formatGroupName('extensions.agents.x-k8s.io')).toBe('Agent Sandbox')
+    expect(formatGroupName('api.kagent.dev')).toBe('kagent')
   })
 
   it('formats unmapped API groups without exposing raw domain strings', () => {

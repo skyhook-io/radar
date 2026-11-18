@@ -388,7 +388,7 @@ func InitResourceCache(ctx context.Context) error {
 	var initErr error
 	once, gen := claimCacheInit()
 	once.Do(func() {
-		client := GetClient()
+		client, informerClient := getCacheClients()
 		if client == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
@@ -443,7 +443,7 @@ func InitResourceCache(ctx context.Context) error {
 		cronJobScheduleObservations := newCronJobScheduleObservationTracker()
 
 		cfg := k8score.CacheConfig{
-			Client:                  client,
+			Client:                  informerClient,
 			ResourceScopes:          scopes,
 			ResourceScopeNamespaces: permResult.ScopeNamespaces,
 			DeferredTypes:           deferredResources,
@@ -2436,7 +2436,7 @@ func bootstrapResourcePermissions(ctx context.Context, probe func(context.Contex
 // hold the very rejection being retried, without bumping the generation, so
 // the first result can still be published if the retry is discarded.
 func freshResourcePermissions(ctx context.Context, retry bool) permissionProbe {
-	return probeResourcePermissions(ctx, retry)
+	return probeResourcePermissions(ctx, retry, GetInformerDynamicClient)
 }
 
 // credentialsRejectedEverywhere reports a probe in which no kind

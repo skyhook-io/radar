@@ -427,6 +427,7 @@ func BlockClusterAccess(err error) {
 	k8sClient = nil
 	discoveryClient = nil
 	dynamicClient = nil
+	activeClients = nil
 }
 
 func contextOperationsBlockedErr() error {
