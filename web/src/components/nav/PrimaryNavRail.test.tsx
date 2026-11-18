@@ -26,4 +26,22 @@ describe("PrimaryNavRail", () => {
     expect(read).not.toContain("(unread)");
     expect(renderRail({ unread: true, onOpen: () => {} })).toContain("(unread)");
   });
+
+  it("links the community as an external link that yields first on short windows when slim", () => {
+    const render = (pinned: boolean) =>
+      renderToString(
+        <PrimaryNavRail
+          activeView="home"
+          onNavigate={() => {}}
+          pinned={pinned}
+          onTogglePinned={() => {}}
+          communityUrl="https://radarhq.io/slack"
+        />,
+      );
+    expect(renderRail()).not.toContain("radarhq.io/slack");
+    const pinned = render(true);
+    expect(pinned).toMatch(/<a[^>]*href="https:\/\/radarhq.io\/slack"[^>]*target="_blank"/);
+    expect(pinned).not.toContain("max-height:700px");
+    expect(render(false)).toContain("max-height:700px");
+  });
 });

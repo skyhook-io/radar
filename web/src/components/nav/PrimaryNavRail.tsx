@@ -23,6 +23,7 @@ import { clsx } from "clsx";
 import type { MainView } from "../../types";
 import { Tooltip } from "../ui/Tooltip";
 import { assetUrl } from "@skyhook-io/k8s-ui";
+import { SlackIcon } from "../community";
 
 const radarLogoUrl = assetUrl("/images/radar/radar-icon.svg");
 
@@ -103,6 +104,7 @@ interface PrimaryNavRailProps {
   whatsNew?: { unread: boolean; onOpen: () => void };
   // Present during the Product Hunt launch: the launch card opens from it.
   productHunt?: { onOpen: () => void; id: string; badge: string };
+  communityUrl?: string;
 }
 
 export function PrimaryNavRail({
@@ -115,6 +117,7 @@ export function PrimaryNavRail({
   accountSlot,
   whatsNew,
   productHunt,
+  communityUrl,
 }: PrimaryNavRailProps) {
   return (
     <aside
@@ -184,6 +187,22 @@ export function PrimaryNavRail({
             onClick={whatsNew.onOpen}
             unread={whatsNew.unread}
           />
+        )}
+        {/* The slim rail can't scroll (see above) and is ~683px tall with this
+            row, so on short windows it yields first rather than push Settings
+            and the pin toggle off-screen. ⌘K and Diagnostics still link it. */}
+        {communityUrl && (
+          <div
+            className={clsx(!pinned && "[@media(max-height:700px)]:hidden")}
+          >
+            <RailActionRow
+              icon={SlackIcon}
+              label="Community"
+              ariaLabel="Radar community on Slack"
+              pinned={pinned}
+              href={communityUrl}
+            />
+          </div>
         )}
         {onOpenSettings && (
           <RailActionRow
@@ -358,13 +377,16 @@ function NavRailItem({
 }
 
 // A rail-bottom action row — same icon-column + fly-out treatment as NavRailItem
-// but it's an action (onClick), not navigation, so no active-state/accent bar.
+// but it's an action (onClick) or an external link (href), not navigation, so
+// no active-state/accent bar.
 // Exported so the account control (UserMenu rail variant) can match the look.
 export function RailActionRow({
   icon: Icon,
   label,
+  ariaLabel,
   pinned,
   onClick,
+  href,
   unread = false,
   iconClassName,
   id,
@@ -372,40 +394,77 @@ export function RailActionRow({
 }: {
   icon: ComponentType<{ className?: string }>;
   label: string;
+  ariaLabel?: string;
   pinned: boolean;
-  onClick: () => void;
   unread?: boolean;
   iconClassName?: string;
   id?: string;
   // A small tilted tag on the corner, for an item that's only here for now.
   badge?: string;
-}) {
-  return (
-    <div className={clsx("group/item relative", !pinned && "w-10")}>
-      <button
-        type="button"
-        id={id}
-        onClick={onClick}
+} & (
+  { onClick: () => void; href?: never } | { href: string; onClick?: never }
+)) {
+  const rowClassName = clsx(
+    "relative flex h-9 w-full items-center rounded-md text-sm font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors",
+    !pinned && "max-w-10 overflow-hidden",
+  );
+  const content = (
+    <>
+      <span className="relative flex w-10 shrink-0 items-center justify-center">
+        <Icon
+          className={clsx(
+            "w-[18px] h-[18px]",
+            iconClassName ??
+              clsx(
+                "group-hover/item:text-theme-text-secondary",
+                unread ? "text-accent" : "text-theme-text-tertiary",
+              ),
+          )}
+        />
+        {unread && (
+          <span
+            aria-hidden
+            className="absolute top-1.5 right-2 h-2 w-2 rounded-full bg-accent ring-2 ring-theme-sidebar"
+          />
+        )}
+      </span>
+      <span
         className={clsx(
-          "relative flex h-9 w-full items-center rounded-md text-sm font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors",
-          !pinned && "max-w-10 overflow-hidden",
+          "pr-3 truncate",
+          !pinned && "opacity-0",
+          unread && "text-theme-text-primary",
         )}
       >
-        <span className="relative flex w-10 shrink-0 items-center justify-center">
-          <Icon className={clsx(
-            "w-[18px] h-[18px]",
-            iconClassName ?? clsx("group-hover/item:text-theme-text-secondary", unread ? "text-accent" : "text-theme-text-tertiary"),
-          )} />
-          {unread && (
-            <span aria-hidden className="absolute top-1.5 right-2 h-2 w-2 rounded-full bg-accent ring-2 ring-theme-sidebar" />
-          )}
-        </span>
-        <span className={clsx("pr-3 truncate", !pinned && "opacity-0", unread && "text-theme-text-primary")}>
-          {label}
-          {badge && <span className="sr-only"> ({badge})</span>}
-          {unread && <span className="sr-only"> (unread)</span>}
-        </span>
-      </button>
+        {label}
+        {badge && <span className="sr-only"> ({badge})</span>}
+        {unread && <span className="sr-only"> (unread)</span>}
+      </span>
+    </>
+  );
+  return (
+    <div className={clsx("group/item relative", !pinned && "w-10")}>
+      {href ? (
+        <a
+          id={id}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={ariaLabel}
+          className={rowClassName}
+        >
+          {content}
+        </a>
+      ) : (
+        <button
+          type="button"
+          id={id}
+          onClick={onClick}
+          aria-label={ariaLabel}
+          className={rowClassName}
+        >
+          {content}
+        </button>
+      )}
       {badge && (
         <span
           aria-hidden

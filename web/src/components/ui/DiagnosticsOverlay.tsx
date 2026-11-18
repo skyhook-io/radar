@@ -6,6 +6,7 @@ import { openExternal } from '../../utils/navigation'
 import { useDiagnostics } from '../../api/client'
 import type { DiagnosticsSnapshot, DiagEnvVar, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry, DiagCacheSyncStatus, DiagInformerSyncStatus, DiagSyncPhase, DiagSampleWindow } from '../../api/client'
 import { getK8sUIPerfSnapshot, type K8sUIPerfSnapshot } from '@skyhook-io/k8s-ui'
+import { SlackIcon } from '../community'
 
 export type DiagnosticsFocus = 'timeline'
 
@@ -14,9 +15,10 @@ interface DiagnosticsOverlayProps {
   isOpen?: boolean
   /** Section to scroll to on open, for callers linking to one specific problem. */
   focus?: DiagnosticsFocus
+  communityUrl?: string
 }
 
-export function DiagnosticsOverlay({ onClose, isOpen = true, focus }: DiagnosticsOverlayProps) {
+export function DiagnosticsOverlay({ onClose, isOpen = true, focus, communityUrl }: DiagnosticsOverlayProps) {
   const { data, isLoading, error } = useDiagnostics(true)
   const [copied, setCopied] = useState<'json' | 'formatted' | null>(null)
   const [reportOpened, setReportOpened] = useState(false)
@@ -157,6 +159,17 @@ export function DiagnosticsOverlay({ onClose, isOpen = true, focus }: Diagnostic
           <CopyButton label="Copy as Markdown" onClick={() => copyToClipboard('formatted')} copied={copied === 'formatted'} />
           <CopyButton label="Copy Raw JSON" onClick={() => copyToClipboard('json')} copied={copied === 'json'} />
           <div className="flex-1" />
+          {communityUrl && (
+            <a
+              href={communityUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated"
+            >
+              <SlackIcon className="w-3.5 h-3.5" />
+              Ask in Slack
+            </a>
+          )}
           <button
             onClick={openBugReport}
             disabled={!data}
