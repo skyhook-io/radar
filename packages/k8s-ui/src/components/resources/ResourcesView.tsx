@@ -7734,7 +7734,9 @@ function CopyNameButton({ name }: { name: string }) {
           setTimeout(() => setCopied(false), 1500)
         })
       }}
-      className="shrink-0 p-0.5 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover/row:opacity-100 transition-opacity"
+      // Gives up its room before the name does: in a tight column the name
+      // matters more than a button that only shows on hover.
+      className="shrink-[1000] min-w-0 overflow-hidden p-0.5 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover/row:opacity-100 transition-opacity"
       title="Copy name"
     >
       {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
