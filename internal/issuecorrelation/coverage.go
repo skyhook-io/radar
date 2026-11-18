@@ -11,9 +11,17 @@ import (
 // not in that namespace, or it is still loading it. An empty answer about
 // such a source means nothing.
 func (c *run) checkCollected(kind, group, namespace string) {
+	c.collected(kind, group, namespace)
+}
+
+// collected is checkCollected that also reports whether the kind is ready:
+// collected in namespace and synced.
+func (c *run) collected(kind, group, namespace string) bool {
 	if reason, ok := collectionGap(kind, group, namespace); ok {
 		c.addUnknown(reason, group, kind)
+		return false
 	}
+	return true
 }
 
 func collectionGap(kind, group, namespace string) (issuesapi.CorrelationUnknownReason, bool) {

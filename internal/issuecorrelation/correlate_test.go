@@ -6,15 +6,22 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	admissionv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -376,7 +383,7 @@ func TestCorrelate_MoreNotShown(t *testing.T) {
 		quota := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop"}}
 		initCache(t, webDeployment(), quota)
 		store := initStore(t)
-		for i := range 3 {
+		for i := range anchoredBefore + 1 {
 			appendChange(t, store, timeline.TimelineEvent{
 				ID: fmt.Sprintf("quota-%d", i), Timestamp: firstSeen.Add(-time.Duration(i+1) * time.Minute),
 				Kind: "ResourceQuota", APIVersion: "v1", Namespace: "shop", Name: "compute", EventType: timeline.EventTypeUpdate,
@@ -387,7 +394,7 @@ func TestCorrelate_MoreNotShown(t *testing.T) {
 		iss.Category = issuesapi.CategoryQuotaExceeded
 		iss.Message = `pod creation blocked: pods "web-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=3, limited: pods=3`
 		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
-		if len(got.Changes) != admissionBlockerMaxChanges || !got.MoreNotShown {
+		if len(got.Changes) != anchoredBefore || !got.MoreNotShown {
 			t.Fatalf("policy cut not reported: %d changes, more=%v", len(got.Changes), got.MoreNotShown)
 		}
 	})
@@ -439,6 +446,230 @@ func TestWindowAroundFirstSeen(t *testing.T) {
 	for _, iss := range []issuesapi.Issue{{}, {FirstSeen: now.Add(-3 * time.Hour), OnsetUnknown: true}, {FirstSeen: now.Add(time.Hour)}} {
 		if w := WindowAroundFirstSeen(iss, now); !w.From.Equal(now.Add(-time.Hour)) {
 			t.Fatalf("issue %+v: window = %+v, want the hour before now", iss, w)
+		}
+	}
+}
+
+// The before- and after-first-seen ranges are read separately, so a run of
+// later changes can't push the one before the failure out of the read.
+func TestCorrelate_AnchoredReadBoundaries(t *testing.T) {
+	firstSeen := time.Now().Add(-90 * time.Minute).Truncate(time.Second)
+	quotaMsg := `pod creation blocked: pods "web-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=3, limited: pods=3`
+
+	t.Run("one trigger and fifty equal-rank repairs", func(t *testing.T) {
+		initCache(t, webDeployment())
+		store := initStore(t)
+		trigger := firstSeen.Add(-2 * time.Minute)
+		appendChange(t, store, specUpdate("Deployment", "web", trigger, "web:bad"))
+		for i := range anchoredFetchLimit {
+			appendChange(t, store, specUpdate("Deployment", "web", firstSeen.Add(time.Duration(i+1)*time.Minute), fmt.Sprintf("web:fix%d", i)))
+		}
+		iss := webIssue(firstSeen)
+		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		if len(got.Changes) != anchoredBefore || !changeTime(got.Changes[0]).Equal(trigger) || !got.MoreNotShown {
+			t.Fatalf("trigger lost: %d changes, first %+v, more=%v", len(got.Changes), got.Changes, got.MoreNotShown)
+		}
+	})
+
+	t.Run("one pre-failure policy edit and two repair edits", func(t *testing.T) {
+		initCache(t, webDeployment(), &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop"}})
+		store := initStore(t)
+		edit := func(at time.Time, pods string) {
+			appendChange(t, store, timeline.TimelineEvent{
+				ID: "quota-" + pods, Timestamp: at, Kind: "ResourceQuota", APIVersion: "v1", Namespace: "shop", Name: "compute",
+				EventType: timeline.EventTypeUpdate, Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.hard.pods", OldValue: "x", NewValue: pods}}},
+			})
+		}
+		edit(firstSeen.Add(-3*time.Minute), "2")
+		edit(firstSeen.Add(10*time.Minute), "3")
+		edit(firstSeen.Add(20*time.Minute), "4")
+		iss := webIssue(firstSeen)
+		iss.Category, iss.Message = issuesapi.CategoryQuotaExceeded, quotaMsg
+		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		var times []time.Time
+		for _, c := range got.Changes {
+			times = append(times, changeTime(c))
+		}
+		want := []time.Time{firstSeen.Add(-3 * time.Minute), firstSeen.Add(20 * time.Minute), firstSeen.Add(10 * time.Minute)}
+		if !slices.EqualFunc(times, want, time.Time.Equal) || got.MoreNotShown {
+			t.Fatalf("policy changes %v (more %v), want %v", times, got.MoreNotShown, want)
+		}
+	})
+}
+
+// A read that hit its bound and found no change keeps that: no absence, and
+// FetchSaturated says older changes went unread.
+func TestCorrelate_SaturatedEmptyRead(t *testing.T) {
+	firstSeen := time.Now().Add(-10 * time.Minute)
+	initCache(t, webDeployment())
+	store := initStore(t)
+	appendChange(t, store, specUpdate("Deployment", "web", firstSeen.Add(-30*time.Minute), "web:2"))
+	for i := range meaningfulchanges.NamedFetchBound + 1 {
+		appendChange(t, store, timeline.TimelineEvent{
+			ID: fmt.Sprintf("status-%d", i), Timestamp: firstSeen.Add(-time.Duration(i) * time.Second),
+			Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web", EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "status.readyReplicas", OldValue: int32(i % 2), NewValue: int32((i + 1) % 2)}}},
+		})
+	}
+	iss := webIssue(firstSeen)
+	for name, opts := range map[string]Options{
+		"anchored": anchoredOptions(iss),
+		"lookback": {Window: Window{From: time.Now().Add(-time.Hour), To: time.Now(), OpenEnded: true}, MinWindow: 5 * time.Minute},
+	} {
+		got := Correlate(context.Background(), iss, opts, Access{})
+		if len(got.Changes) != 0 || got.NoChanges || !got.FetchSaturated {
+			t.Fatalf("%s: saturated empty read = %+v", name, got)
+		}
+	}
+}
+
+func initWebhookCache(t *testing.T, kinds []string, configs ...*admissionv1.ValidatingWebhookConfiguration) {
+	t.Helper()
+	gvrs := map[string]schema.GroupVersionResource{
+		"ValidatingWebhookConfiguration": {Group: webhookConfigurationGroup, Version: "v1", Resource: "validatingwebhookconfigurations"},
+		"MutatingWebhookConfiguration":   {Group: webhookConfigurationGroup, Version: "v1", Resource: "mutatingwebhookconfigurations"},
+	}
+	listKinds := map[schema.GroupVersionResource]string{}
+	var resources []k8s.APIResource
+	for _, kind := range kinds {
+		listKinds[gvrs[kind]] = kind + "List"
+		resources = append(resources, k8s.APIResource{Group: webhookConfigurationGroup, Version: "v1", Kind: kind, Name: gvrs[kind].Resource, Verbs: []string{"list", "watch"}})
+	}
+	var objs []runtime.Object
+	for _, cfg := range configs {
+		data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		objs = append(objs, &unstructured.Unstructured{Object: data})
+	}
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, objs...), resources); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	for _, kind := range kinds {
+		if err := k8s.GetDynamicResourceCache().EnsureWatching(gvrs[kind]); err != nil || !k8s.GetDynamicResourceCache().WaitForSync(gvrs[kind], 5*time.Second) {
+			t.Fatalf("watch %s: %v", kind, err)
+		}
+	}
+}
+
+func webhookConfig(name, webhook string) *admissionv1.ValidatingWebhookConfiguration {
+	return &admissionv1.ValidatingWebhookConfiguration{
+		TypeMeta:   metav1.TypeMeta{Kind: "ValidatingWebhookConfiguration", APIVersion: "admissionregistration.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Webhooks:   []admissionv1.ValidatingWebhook{{Name: webhook}},
+	}
+}
+
+func webhookIssue(firstSeen time.Time) issuesapi.Issue {
+	iss := webIssue(firstSeen)
+	iss.Category = issuesapi.CategoryAdmissionWebhookBlocking
+	iss.Message = `pod creation blocked: admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`
+	return iss
+}
+
+// A webhook no cached configuration declares (removed or renamed) leaves the
+// policy side unknown: no absence claim, and the reason says so.
+func TestCorrelate_WebhookWithoutConfiguration(t *testing.T) {
+	initCache(t, webDeployment())
+	initStore(t)
+	initWebhookCache(t, webhookConfigurationKinds, webhookConfig("other-policy", "other.example.com"))
+	iss := webhookIssue(time.Now().Add(-10 * time.Minute))
+	got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+	if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownSourcesUnresolved {
+		t.Fatalf("unresolved webhook: %+v", got)
+	}
+	var kinds []string
+	for _, k := range got.Unknown.Kinds {
+		kinds = append(kinds, k.Kind)
+	}
+	if !slices.Equal(kinds, webhookConfigurationKinds) {
+		t.Fatalf("kinds %v", kinds)
+	}
+}
+
+// Policy evidence Radar doesn't fully hold never decides which side changed
+// last: a webhook kind it doesn't collect, or a quota informer still loading.
+func TestCorrelate_IncompletePolicyEvidenceStatesNoOrder(t *testing.T) {
+	firstSeen := time.Now().Add(-5 * time.Minute)
+	lookback := Options{Window: Window{From: time.Now().Add(-time.Hour), To: time.Now(), OpenEnded: true}, MinWindow: 5 * time.Minute}
+
+	t.Run("mutating configurations not collected", func(t *testing.T) {
+		initCache(t, webDeployment())
+		store := initStore(t)
+		initWebhookCache(t, []string{"ValidatingWebhookConfiguration"}, webhookConfig("pod-policy", "deny-root.policy.example.com"))
+		appendChange(t, store, specUpdate("Deployment", "web", firstSeen.Add(-time.Minute), "web:2"))
+		for name, opts := range map[string]Options{"lookback": lookback, "anchored": anchoredOptions(webhookIssue(firstSeen))} {
+			got := Correlate(context.Background(), webhookIssue(firstSeen), opts, Access{})
+			if strings.Contains(got.Timing.TimingSummary, "changed last") || got.NoChanges {
+				t.Fatalf("%s: ordered from incomplete evidence: %+v", name, got)
+			}
+		}
+	})
+
+	t.Run("quota informer still loading", func(t *testing.T) {
+		if err := k8s.InitTestResourceCacheFromConfig(k8score.CacheConfig{
+			Client:          k8sfake.NewSimpleClientset(webDeployment(), &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop"}}),
+			ResourceTypes:   map[string]bool{k8score.Deployments: true, k8score.ResourceQuotas: true, k8score.ConfigMaps: true, k8score.Secrets: true},
+			DeferredTypes:   map[string]bool{k8score.ResourceQuotas: true},
+			DebugSyncDelays: map[string]time.Duration{k8score.ResourceQuotas: time.Hour},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(k8s.ResetTestState)
+		waitSynced(t, k8score.Deployments)
+		store := initStore(t)
+		appendChange(t, store, specUpdate("Deployment", "web", firstSeen.Add(-time.Minute), "web:2"))
+		iss := webIssue(firstSeen)
+		iss.Category = issuesapi.CategoryQuotaExceeded
+		iss.Message = `pod creation blocked: pods "web-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=3, limited: pods=3`
+		got := Correlate(context.Background(), iss, lookback, Access{})
+		if strings.Contains(got.Timing.TimingSummary, "changed last") {
+			t.Fatalf("ordered against a loading quota informer: %q", got.Timing.TimingSummary)
+		}
+		got = Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		if got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownKindSyncPending {
+			t.Fatalf("unknown = %+v, want kind_sync_pending", got.Unknown)
+		}
+	})
+}
+
+// A tracked subject's own history can be complete while the policy's isn't:
+// a new namespace holds all of its history, a cluster-scoped webhook
+// configuration doesn't. The policy side's coverage is reported.
+func TestCorrelate_PolicyHistoryCoverageReported(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", CreationTimestamp: metav1.NewTime(time.Now().Add(-10 * time.Minute))}}
+	initCache(t, webDeployment(), ns)
+	store := initStore(t)
+	timeline.SetObservationStartForTest(time.Now().Add(-30 * time.Minute))
+	initWebhookCache(t, webhookConfigurationKinds, webhookConfig("pod-policy", "deny-root.policy.example.com"))
+	appendChange(t, store, timeline.TimelineEvent{
+		Timestamp: time.Now().Add(-3 * time.Minute), Kind: "ValidatingWebhookConfiguration", APIVersion: "admissionregistration.k8s.io/v1",
+		Name: "pod-policy", EventType: timeline.EventTypeAdd,
+	})
+	iss := webhookIssue(time.Now().Add(-2 * time.Minute))
+	got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+	if !got.History.Incomplete || !slices.Contains(got.History.Reasons, issuesapi.HistoryObservationStartedLate) || got.History.CompleteSince.IsZero() {
+		t.Fatalf("history = %+v, want the policy side's incomplete coverage", got.History)
+	}
+}
+
+// An admission issue whose rejecting policy Radar can't identify is unknown
+// to a coverage-checking caller, never "no changes".
+func TestCorrelate_UnresolvedAdmissionBlocker(t *testing.T) {
+	firstSeen := time.Now().Add(-10 * time.Minute)
+	initCache(t, webDeployment())
+	initStore(t)
+	for name, message := range map[string]string{
+		"message names no policy": `pod creation blocked: pods "web-x" is forbidden: exceeded quota`,
+		"named quota not found":   `pod creation blocked: pods "web-x" is forbidden: exceeded quota: gone, requested: pods=1, used: pods=3, limited: pods=3`,
+	} {
+		iss := webIssue(firstSeen)
+		iss.Category, iss.Message = issuesapi.CategoryQuotaExceeded, message
+		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownSourcesUnresolved {
+			t.Fatalf("%s: %+v", name, got)
 		}
 	}
 }

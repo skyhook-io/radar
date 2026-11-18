@@ -684,10 +684,12 @@ type Issue struct {
 	// or when the candidate fetch saturated and may have missed changes;
 	// absence must never be read as "no changes".
 	NoRecentChanges *NoRecentChangesMarker `json:"no_recent_changes,omitempty"`
-	// CorrelatedChangesIncomplete is set when CorrelatedChanges is non-empty
-	// but the subject's change history in the window was larger than Radar's
-	// fetch bound, so older changes were not read. The listed changes are
-	// leads, not the subject's full history.
+	// CorrelatedChangesIncomplete is set when the change history in the
+	// window was larger than Radar's fetch bound, so older changes were not
+	// read. The listed changes are leads, not the full history. The MCP
+	// issues tool sets it only with a non-empty CorrelatedChanges; an issue
+	// correlated on request (?correlate=) also carries it with no changes,
+	// where it means the empty list is not complete.
 	CorrelatedChangesIncomplete bool `json:"correlated_changes_incomplete,omitempty"`
 	// CorrelatedChangesMoreNotShown is set when the window held more
 	// changes this caller may see than CorrelatedChanges lists.
@@ -735,8 +737,13 @@ const (
 	CorrelationUnknownNamespaceNotCollected = CorrelationUnknownReason(readreason.RadarNamespaceNotCollected)
 	CorrelationUnknownKindSyncPending       = CorrelationUnknownReason(readreason.KindSyncPending)
 	CorrelationUnknownReadError             = CorrelationUnknownReason(readreason.ReadError)
-	// CorrelationUnknownSourcesUnresolved: Radar couldn't read the workload's
-	// pod template, so it can't tell which ConfigMaps and Secrets it uses.
+	// CorrelationUnknownSourcesUnresolved: Radar can't tell which objects the
+	// answer depends on. Either it couldn't read the workload's pod template,
+	// so it doesn't know which ConfigMaps and Secrets it uses (kinds names the
+	// workload), or it can't identify the policy that rejected an admission
+	// request: no cached webhook configuration declares the webhook (kinds
+	// names both configuration kinds), the named ResourceQuota is gone (kinds
+	// names ResourceQuota), or the message names no policy (no kinds).
 	CorrelationUnknownSourcesUnresolved CorrelationUnknownReason = "sources_unresolved"
 	// CorrelationUnknownHistoryIncomplete: the window starts before the
 	// history Radar holds; ChangeCorrelation.History says why.

@@ -230,6 +230,8 @@ func (c *run) correlate() Result {
 	subjectComplete := subjectTracked && subjectAllowed && sourcesKnown && !result.FetchSaturated && historyComplete
 	absenceKnown := c.opts.Window.length() >= c.opts.MinWindow
 
+	res.FetchSaturated = result.FetchSaturated
+
 	blocker, blockerErr := c.admissionBlocker()
 	if blockerErr != nil {
 		// Read as "no blocker" for the changes listed, but the policy side
@@ -237,31 +239,73 @@ func (c *run) correlate() Result {
 		c.addUnknown(issuesapi.CorrelationUnknownReadError, "", blockerErr.kind)
 	}
 	if blocker != nil {
+		res.History = mergeHistory(res.History, blocker.history)
+		res.FetchSaturated = res.FetchSaturated || blocker.saturated
 		if refs, more, ok := c.attachAdmissionBlocker(blocker, changes, subjectComplete, absenceKnown); ok {
 			res.Changes, res.MoreNotShown = refs, more || result.OutputCapped || blocker.outputCapped
-			res.FetchSaturated = result.FetchSaturated || blocker.saturated
-			if !subjectTracked {
-				res.History = blocker.history
-			}
 			return res
 		}
 	}
-	if !subjectTracked {
-		if blocker != nil {
-			res.History = blocker.history
-		}
-		return res
-	}
-	if len(changes) == 0 {
-		if subjectComplete && absenceKnown && (!c.opts.CheckCoverage || len(c.unknown) == 0) {
+	if !subjectTracked || len(changes) == 0 {
+		// A coverage-checking caller is told every reason absence can't be
+		// claimed; the MCP tool claims it from the subject's side alone.
+		if subjectTracked && subjectComplete && absenceKnown && (!c.opts.CheckCoverage || len(c.unknown) == 0 && (blocker == nil || blocker.complete)) {
 			res.NoChanges = true
 		}
 		return res
 	}
 	res.Changes, res.MoreNotShown = c.selectChanges(changes)
 	res.MoreNotShown = res.MoreNotShown || result.OutputCapped
-	res.FetchSaturated = result.FetchSaturated
 	return res
+}
+
+// mergeHistory combines two reads' coverage: incomplete when either is, with
+// both reasons and the later point from which history is complete.
+func mergeHistory(a, b issuesapi.HistoryCoverage) issuesapi.HistoryCoverage {
+	if !b.Incomplete {
+		return a
+	}
+	if !a.Incomplete {
+		return b
+	}
+	out := issuesapi.HistoryCoverage{Incomplete: true, CompleteSince: a.CompleteSince, Reasons: slices.Clone(a.Reasons)}
+	if b.CompleteSince.After(out.CompleteSince) {
+		out.CompleteSince = b.CompleteSince
+	}
+	for _, reason := range b.Reasons {
+		if !slices.Contains(out.Reasons, reason) {
+			out.Reasons = append(out.Reasons, reason)
+		}
+	}
+	return out
+}
+
+// readAroundAnchor runs read over q's window. An anchored selection with a
+// known first-seen time reads before and after that point separately, each
+// with its own limit, so later changes can't push the ones before it out.
+func (c *run) readAroundAnchor(q meaningfulchanges.Query, read func(meaningfulchanges.Query) (meaningfulchanges.RecentResult, error)) (meaningfulchanges.RecentResult, error) {
+	if c.opts.Selection != SelectAroundFirstSeen || !anchorKnown(c.iss) {
+		return read(q)
+	}
+	boundary := c.iss.FirstSeen.Add(anchorSlop)
+	if !boundary.After(q.From) || (!q.To.IsZero() && !boundary.Before(q.To)) {
+		return read(q)
+	}
+	before, after := q, q
+	before.To = boundary
+	after.From = boundary.Add(time.Nanosecond)
+	early, err := read(before)
+	if err != nil {
+		return early, err
+	}
+	late, err := read(after)
+	if err != nil {
+		return late, err
+	}
+	early.Changes = append(early.Changes, late.Changes...)
+	early.OutputCapped = early.OutputCapped || late.OutputCapped
+	early.FetchSaturated = early.FetchSaturated || late.FetchSaturated
+	return early, nil
 }
 
 // subjectChanges reads a tracked subject's changes, and a workload's
@@ -276,7 +320,9 @@ func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, 
 		if c.opts.CheckCoverage {
 			c.checkCollected(iss.Kind, iss.Group, iss.Namespace)
 		}
-		result, err = meaningfulchanges.Recent(c.ctx, q)
+		result, err = c.readAroundAnchor(q, func(q meaningfulchanges.Query) (meaningfulchanges.RecentResult, error) {
+			return meaningfulchanges.Recent(c.ctx, q)
+		})
 		return result, nil, true, err
 	}
 	obj = WorkloadObjectFromCache(iss.Kind, iss.Namespace, iss.Name)
@@ -311,7 +357,12 @@ func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, 
 		allowed, ok := decided[kind]
 		return !ok || allowed
 	}
-	result, withheld, err := meaningfulchanges.RecentForWorkloadSources(c.ctx, obj, iss.Kind, iss.Namespace, iss.Name, q, includeSource)
+	withheld := false
+	result, err = c.readAroundAnchor(q, func(q meaningfulchanges.Query) (meaningfulchanges.RecentResult, error) {
+		r, limited, err := meaningfulchanges.RecentForWorkloadSources(c.ctx, obj, iss.Kind, iss.Namespace, iss.Name, q, includeSource)
+		withheld = withheld || limited
+		return r, err
+	})
 	return result, obj, sourcesKnown && !withheld, err
 }
 
@@ -394,10 +445,12 @@ func (c *run) allowed(kind, group, namespace string) bool {
 	return false
 }
 
+// addUnknown records reason for kind; an empty kind records the reason
+// without naming one.
 func (c *run) addUnknown(reason issuesapi.CorrelationUnknownReason, group, kind string) {
 	kinds := c.unknown[reason]
 	k := issuesapi.UncheckedKind{Group: group, Kind: kind}
-	if !slices.Contains(kinds, k) {
+	if kind != "" && !slices.Contains(kinds, k) {
 		kinds = append(kinds, k)
 	}
 	c.unknown[reason] = kinds

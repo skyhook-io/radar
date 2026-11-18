@@ -321,8 +321,10 @@ export interface Issue {
    *  NEITHER correlation field was not checked — absence must not be read as
    *  "no changes". Set where correlated_changes is. */
   no_recent_changes?: IssueNoRecentChanges;
-  /** The subject's change history in the window was larger than Radar reads,
-   *  so correlated_changes are leads, not its full history. */
+  /** The change history in the window was larger than Radar reads, so older
+   *  changes weren't read: correlated_changes are leads, not the full history.
+   *  With ?correlate= it can be set with no correlated_changes, meaning the
+   *  empty list is not complete; the MCP tool sets it only with changes. */
   correlated_changes_incomplete?: boolean;
   /** The window held more changes the caller may see than correlated_changes
    *  lists. Set only with ?correlate=. */
@@ -346,7 +348,11 @@ export type IssueCorrelationUnknownReason =
 
 export interface IssueCorrelationUnknown {
   reason: IssueCorrelationUnknownReason;
-  /** The kinds the reason concerns; absent for history_incomplete. */
+  /** The kinds the reason concerns. Absent for history_incomplete, and for
+   *  sources_unresolved on an admission issue whose message names no policy.
+   *  sources_unresolved names the workload kind (its pod template couldn't
+   *  be read), both webhook configuration kinds (none declares the webhook)
+   *  or ResourceQuota (the named quota is gone). */
   kinds?: { group?: string; kind: string }[];
 }
 

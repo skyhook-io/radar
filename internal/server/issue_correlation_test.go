@@ -95,6 +95,8 @@ func correlationFixture(t *testing.T) timeline.EventStore {
 		}
 	}
 	objs = append(objs,
+		admission("vague", `pods "vague-x" is forbidden: exceeded quota`),
+		admission("orphaned", `pods "orphaned-x" is forbidden: exceeded quota: gone, requested: pods=1, used: pods=2, limited: pods=2`),
 		admission("search", `pods "search-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=2, limited: pods=2`),
 		admission("hooked", `admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`),
 	)
@@ -440,6 +442,41 @@ func TestProxyAuth_IssueCorrelationRolloutWorkloadRefTarget(t *testing.T) {
 	}
 }
 
+// An admission issue whose rejecting policy Radar can't identify is unknown,
+// never "no changes": the message names none, or names a quota that's gone.
+func TestProxyAuth_IssueCorrelationUnresolvedAdmissionBlocker(t *testing.T) {
+	store := correlationFixture(t)
+	recordChanges(t, store)
+	env := newAuthTestServer(t)
+	correlationUser(env, "full", []string{"shop"})
+	for _, name := range []string{"vague", "orphaned"} {
+		iss := correlated(t, env, "full", "Deployment", name, "apps", issuesapi.CategoryQuotaExceeded)
+		if iss.NoRecentChanges != nil || iss.Correlation.Unknown == nil || iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownSourcesUnresolved {
+			t.Fatalf("%s: no_recent_changes %+v, unknown %+v", name, iss.NoRecentChanges, iss.Correlation.Unknown)
+		}
+	}
+}
+
+// A read that hit its bound and found nothing says so on the wire, so the
+// empty list doesn't read as complete.
+func TestProxyAuth_IssueCorrelationSaturatedEmptyRead(t *testing.T) {
+	store := correlationFixture(t)
+	recordChanges(t, store, "web", "web-config")
+	for i := range 101 {
+		appendInformerEvent(t, store, timeline.TimelineEvent{
+			ID: fmt.Sprintf("status-%d", i), Timestamp: time.Now().Add(-time.Duration(i+1) * time.Second), Source: timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(), Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web",
+			EventType: timeline.EventTypeUpdate, Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "status.readyReplicas", OldValue: int32(i % 2), NewValue: int32((i + 1) % 2)}}},
+		})
+	}
+	env := newAuthTestServer(t)
+	correlationUser(env, "full", []string{"shop"})
+	iss := correlated(t, env, "full", "Deployment", "web", "apps", issuesapi.CategoryCrashLoop)
+	if len(iss.CorrelatedChanges) != 0 || iss.NoRecentChanges != nil || !iss.CorrelatedChangesIncomplete {
+		t.Fatalf("saturated empty read: changes %d, no_recent_changes %+v, incomplete %v", len(iss.CorrelatedChanges), iss.NoRecentChanges, iss.CorrelatedChangesIncomplete)
+	}
+}
+
 // complete_since is store-wide: only a caller who reads every namespace gets it.
 func TestProxyAuth_IssueCorrelationCompleteSinceOnlyForAllNamespaces(t *testing.T) {
 	store := correlationFixture(t)
@@ -603,6 +640,13 @@ func TestCorrelationTimelineIdentityCheck(t *testing.T) {
 	}
 	if failure := collectionFailure("issues", err); failure.code != readreason.ConnectionChanged {
 		t.Fatalf("code %q, want connection_changed", failure.code)
+	}
+
+	// Same store, another cluster.
+	previous := k8s.SetTestContextName("before-switch")
+	t.Cleanup(func() { k8s.SetTestContextName(previous) })
+	if err := withTimelineIdentity(func() { k8s.SetTestContextName("after-switch") }); err != errReadHandlesChanged {
+		t.Fatalf("cluster switch: %v, want errReadHandlesChanged", err)
 	}
 }
 

@@ -90,9 +90,11 @@ func (s *Server) correlateResourceIssue(r *http.Request, related []issues.Issue,
 	}
 	iss.CorrelatedChanges, iss.CorrelatedChangesIncomplete, iss.CorrelatedChangesMoreNotShown = nil, false, false
 	iss.NoRecentChanges = nil
+	// Incomplete is sent with an empty list too: a read that hit its bound
+	// and found nothing is not a complete empty read.
+	iss.CorrelatedChangesIncomplete = result.FetchSaturated
 	if len(result.Changes) > 0 {
 		iss.CorrelatedChanges = result.Changes
-		iss.CorrelatedChangesIncomplete = result.FetchSaturated
 		iss.CorrelatedChangesMoreNotShown = result.MoreNotShown
 	} else if result.NoChanges {
 		iss.NoRecentChanges = &issuesapi.NoRecentChangesMarker{WindowSeconds: int(window.To.Sub(window.From).Seconds())}
