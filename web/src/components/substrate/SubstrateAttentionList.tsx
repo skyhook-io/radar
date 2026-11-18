@@ -155,12 +155,12 @@ function Tallies({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubjec
 type Tally = NonNullable<SubstrateAttention['groups']>[number]
 
 /** A row's groups that carry a remedy of their own, one entry per distinct remedy. */
-function groupRemedies(row: SubstrateAttention): { nextStep: string; command?: string; cause?: Tally['cause']; groups: Tally[] }[] {
-  const byStep = new Map<string, { nextStep: string; command?: string; cause?: Tally['cause']; groups: Tally[] }>()
+function groupRemedies(row: SubstrateAttention): { nextStep: string; command?: string; thenCommand?: string; cause?: Tally['cause']; groups: Tally[] }[] {
+  const byStep = new Map<string, { nextStep: string; command?: string; thenCommand?: string; cause?: Tally['cause']; groups: Tally[] }>()
   for (const g of row.groups ?? []) {
     if (!g.nextStep) continue
-    const key = `${g.nextStep}\u0000${g.command ?? ''}`
-    const entry = byStep.get(key) ?? { nextStep: g.nextStep, command: g.command, cause: g.cause, groups: [] }
+    const key = `${g.nextStep}\u0000${g.command ?? ''}\u0000${g.thenCommand ?? ''}`
+    const entry = byStep.get(key) ?? { nextStep: g.nextStep, command: g.command, thenCommand: g.thenCommand, cause: g.cause, groups: [] }
     entry.groups.push(g)
     byStep.set(key, entry)
   }
@@ -220,12 +220,14 @@ function splitsByRemedy(row: SubstrateAttention): boolean {
   return remedies.length > 1 || (remedies.length === 1 && rest.length > 0)
 }
 
-function StepLine({ lead, step, command }: { lead: ReactNode; step: string; command?: string }) {
+/** A next step and its commands, each on its own line, in the order they run. */
+function StepLine({ lead, step, command, thenCommand }: { lead: ReactNode; step: string; command?: string; thenCommand?: string }) {
   return (
     <div className="mt-1 break-words text-xs text-theme-text-primary">
       <span className="font-medium">{lead}</span>
       {step}
       {command && <CommandChip command={command} />}
+      {command && thenCommand && <CommandChip command={thenCommand} />}
     </div>
   )
 }
@@ -258,7 +260,7 @@ function RemedyGroups({ row, groups, onOpen }: { row: SubstrateAttention; groups
  * crash shared a remedy.
  */
 function NextStep({ row, onOpen, onShowDetails }: { row: SubstrateAttention; onOpen?: OpenSubject; onShowDetails: () => void }) {
-  if (!splitsByRemedy(row)) return <StepLine lead="Next step: " step={row.nextStep} command={row.command} />
+  if (!splitsByRemedy(row)) return <StepLine lead="Next step: " step={row.nextStep} command={row.command} thenCommand={row.thenCommand} />
   const { remedies, rest } = crashRemedies(row)
   const first = remedies[0]
   const firstCount = first.groups.reduce((n, g) => n + g.count, 0)
@@ -283,7 +285,7 @@ function NextStep({ row, onOpen, onShowDetails }: { row: SubstrateAttention; onO
   )
   return (
     <>
-      <StepLine lead={lead} step={first.nextStep} command={first.command} />
+      <StepLine lead={lead} step={first.nextStep} command={first.command} thenCommand={first.thenCommand} />
       {others > 0 && (
         <div className="mt-0.5 break-words text-xs text-theme-text-secondary">
           {otherLead}:{' '}
@@ -315,6 +317,7 @@ function OtherSteps({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSub
           lead={<>Next step for <GroupNames row={row} groups={r.groups} onOpen={onOpen} />{r.cause ? `, ${CAUSE_WORDS[r.cause]}` : ''}: </>}
           step={r.nextStep}
           command={r.command}
+          thenCommand={r.thenCommand}
         />
       ))}
       {rest.length > 0 && (
@@ -355,7 +358,7 @@ function RowDetails({ open, onToggle, children }: { open: boolean; onToggle: () 
  * One row, in the anatomy Velero's and Agent Sandbox's Needs attention rows
  * share, kept to what an operator decides on: the title in its severity's
  * tone; one line with what it is about, its age and the way to the affected
- * objects; the cause in a sentence; one next step with at most one command.
+ * objects; the cause in a sentence; one next step with its commands.
  * Everything else folds under Details: the rest of the reading (mechanics,
  * epochs, "Latest: …", Substrate's raw messages), secondary remedies, related
  * objects and the breakdowns. A crash row's visible cause is where its

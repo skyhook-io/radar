@@ -97,6 +97,13 @@ func TestGoldenOf(t *testing.T) {
 			t.Errorf("%s: %s, want %s", tc.name, got, tc.want)
 		}
 	}
+	// Only an error naming a memory-limit kill names the cause.
+	if g := GoldenOf(Template{GoldenError: "WarmupFailed: exited 137"}); g.Cause != "" {
+		t.Errorf("another failure names no cause: %+v", g)
+	}
+	if g := GoldenOf(Template{GoldenError: "WarmupFailed: golden actor crashed: " + memoryLimitMessage}); g.Cause != CauseMemoryLimit {
+		t.Errorf("a memory-limit kill is named: %+v", g)
+	}
 }
 
 func TestMatchingPools(t *testing.T) {

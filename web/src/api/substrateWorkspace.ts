@@ -360,6 +360,8 @@ export interface SubstrateServiceSummary {
   read: boolean
   /** Why they were not read: Prometheus not connected, or the first collection still running. */
   why?: string
+  /** Not read only because Radar's first collection from a connected Prometheus hasn't answered yet; a later read has it. */
+  collecting?: boolean
   /** When the measurements were collected. */
   readAt?: string
   /** The range the resume and crash facts cover, such as 1h. */
@@ -383,6 +385,8 @@ export interface SubstrateCheck {
   ran: boolean
   /** What was missing when it did not run. */
   why?: string
+  /** It did not run only because its input is still being collected (service.collecting); it runs on a later read. */
+  collecting?: boolean
 }
 
 export interface SubstrateGolden {
@@ -391,6 +395,8 @@ export interface SubstrateGolden {
   /** When warm-up ended (ready) or the template last changed (failed). */
   time?: string
   error?: string
+  /** memoryLimit when error says the golden actor was killed over its memory limit. */
+  cause?: 'memoryLimit'
   /**
    * Why a building snapshot cannot progress. noMatchingPool (the same word as
    * the rule): the complete pool list holds no pool the selector matches;
@@ -442,9 +448,13 @@ export interface SubstrateTally {
   count: number
   /** What every crash in a template group shares, when Substrate's messages name it: memoryLimit, a kill for exceeding the actor's memory limit. */
   cause?: 'memoryLimit'
-  /** The group's remedy when cause names one; command may hold `<name>`, `<atespace>` and `<new-template>` placeholders. */
+  /**
+   * The group's remedy when cause names one; its commands may hold `<name>`, `<atespace>` and
+   * `<new-template>` placeholders. thenCommand runs after command when the remedy takes two.
+   */
   nextStep?: string
   command?: string
+  thenCommand?: string
 }
 
 export type SubstrateAttentionRule =
@@ -482,6 +492,8 @@ export interface SubstrateAttention {
    * `<name>` and `<atespace>` for them; an actor page's rows have them filled in.
    */
   command?: string
+  /** Runs after command when the step takes two: a memory-limit crash's move to a new template, then its revert. */
+  thenCommand?: string
   subject: SubstrateSubject
   related?: SubstrateSubject[]
   count: number
@@ -894,9 +906,10 @@ export interface SubstrateActorLogs {
      * execution's: say "a memory-limit kill was recorded at …", not that it caused this crash.
      */
     current: boolean
-    /** The remedy, the crash step; absent unless current. */
+    /** The remedy, the crash step: command moves the actor to a new template, thenCommand reverts it. Absent unless current. */
     nextStep?: string
     command?: string
+    thenCommand?: string
   }
 }
 

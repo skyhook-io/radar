@@ -90,7 +90,7 @@ func TestSubstrateServiceSharesSubjectsUnderOneBound(t *testing.T) {
 		callers = append(callers, pools(fmt.Sprintf("p%d", i), fmt.Sprintf("p%d", i+1), "shared"))
 	}
 	for _, c := range callers {
-		if svc := substrateServiceFor(client, 1, 1, c, nil); svc.Read || svc.Why != substrateCollecting {
+		if svc := substrateServiceFor(client, 1, 1, c, nil); svc.Read || svc.Why != substrateCollecting || !svc.Collecting {
 			t.Fatalf("before any answer = %+v", svc)
 		}
 	}

@@ -128,7 +128,7 @@ func substrateServiceFor(client *Client, generation, epoch uint64, pools []subst
 		svc.Nodes[n] = e.node
 	}
 	if answered == 0 && len(pools)+len(nodes) > 0 {
-		return &substrate.Service{Why: substrateCollecting}
+		return &substrate.Service{Why: substrateCollecting, Collecting: true}
 	}
 	return svc
 }

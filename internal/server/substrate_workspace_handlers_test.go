@@ -1660,7 +1660,7 @@ func TestSubstrateMemoryKillIsTiedToTheCurrentCrash(t *testing.T) {
 	}
 	for _, tc := range tests {
 		got := memoryKillOf(tc.actor, tc.lines)
-		if got == nil || got.Current != tc.current || (got.NextStep == model.CrashedMemoryActorStep(tc.actor)) != tc.current || (got.Command == "kubectl ate update actor lit -a research --template <new-template>") != tc.current {
+		if got == nil || got.Current != tc.current || (got.NextStep == model.CrashedMemoryActorStep(tc.actor)) != tc.current || (got.Command == "kubectl ate update actor lit -a research --template <new-template>") != tc.current || (got.ThenCommand == "kubectl ate revert actor lit -a research") != tc.current {
 			t.Errorf("%s: %+v", tc.name, got)
 		}
 	}

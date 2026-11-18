@@ -421,7 +421,7 @@ const DEFAULT_ICONS: Record<string, React.ComponentType<{ className?: string }>>
 interface AlertBannerProps {
   variant: keyof typeof ALERT_COLORS
   icon?: React.ComponentType<{ className?: string }>
-  title: string
+  title: React.ReactNode
   message?: React.ReactNode
   items?: React.ReactNode[]
   children?: React.ReactNode
