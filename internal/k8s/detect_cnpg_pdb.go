@@ -229,6 +229,9 @@ func collectCNPGPDBContext(cache *ResourceCache, namespace string) cnpgPDBContex
 			continue
 		}
 		seen[ns] = true
+		if !cnpgPDBInventoryComplete(cache, ns) {
+			continue
+		}
 		// WarmupCommonCRDs owns the Clusters watch; detection never starts one.
 		observation := dynamic.NamespaceObservation(cnpgClusterGVR, ns)
 		if observation.State != k8score.DynamicObservationSynced || observation.Truncated {
@@ -258,6 +261,12 @@ func collectCNPGPDBContext(cache *ResourceCache, namespace string) cnpgPDBContex
 		}
 	}
 	return ctx
+}
+
+// cnpgPDBInventoryComplete: ruling out a second budget on the primary needs
+// every budget in the namespace, like Pods.
+func cnpgPDBInventoryComplete(cache *ResourceCache, ns string) bool {
+	return cache != nil && cache.PodDisruptionBudgets() != nil && cache.IsKindReady("poddisruptionbudgets") && cache.KindCoversNamespace("poddisruptionbudgets", ns)
 }
 
 func cnpgPrimaryPDBCandidate(pdb *policyv1.PodDisruptionBudget) bool {

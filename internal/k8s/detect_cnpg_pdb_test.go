@@ -6,10 +6,12 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 const cnpgTestNS = CNPGPDBTestNamespace
@@ -234,5 +236,25 @@ func TestDetectCNPGPrimaryPDBBlockingExplainsTheOperator(t *testing.T) {
 	}
 	if got.Severity != plain.Severity || got.Reason != plain.Reason || got.Fingerprint != plain.Fingerprint {
 		t.Fatalf("blocking changed severity/reason/fingerprint: %+v", got)
+	}
+}
+
+// A second budget on the primary is only ruled out from a complete PDB
+// inventory for the namespace; anything less keeps the warning.
+func TestCNPGPDBInventoryMustCoverTheNamespace(t *testing.T) {
+	t.Cleanup(ResetTestState)
+	f := NewCNPGPDBTestFixture(2)
+	client := fake.NewClientset(f.PDB)
+	if err := InitScopedTestResourceCache(client, map[string]k8score.ResourceScope{"poddisruptionbudgets": {Enabled: true, Namespace: "other"}}); err != nil {
+		t.Fatal(err)
+	}
+	if cnpgPDBInventoryComplete(GetResourceCache(), cnpgTestNS) {
+		t.Fatal("budgets watched only in another namespace counted as complete")
+	}
+	if !cnpgPDBInventoryComplete(GetResourceCache(), "other") {
+		t.Fatal("the watched namespace is complete")
+	}
+	if cnpgPDBInventoryComplete(nil, cnpgTestNS) {
+		t.Fatal("no cache is not complete")
 	}
 }
