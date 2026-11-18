@@ -25,6 +25,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/relations"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 var ErrResourceNotFound = errors.New("resource not found")
@@ -679,7 +680,8 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 	}
 	maps.Copy(indexers, gitopsMembersIndexers[gvr.GroupResource()])
 	maps.Copy(indexers, kueueQueueIndexers[gvr.GroupResource()])
-	maps.Copy(indexers, relations.ReferrerIndexers[gvr.GroupResource()])
+	kind := d.gvrToKind(gvr)
+	maps.Copy(indexers, relations.ReferrerIndexers[resourceid.GroupKind{Group: gvr.Group, Kind: kind}])
 	for name := range informer.GetIndexer().GetIndexers() {
 		delete(indexers, name)
 	}
@@ -698,7 +700,6 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 	}
 	delete(d.observations, gvr)
 
-	kind := d.gvrToKind(gvr)
 	d.addDynamicChangeHandlers(informer, kind, gvr)
 	// Re-apply handlers registered via AddGVRChangeHandler so informers created
 	// lazily (per-namespace watches, or a cluster-wide one replacing them) still

@@ -112,8 +112,9 @@ with the path declaring it. The `View` answers every family the same way:
   (`BenchmarkRelationIndexUpdate`; [measurements](loadtest.md#relationship-cost-baselines)). An index files every
   alternative API group a declaration can resolve to, and Istio host keys are a superset that doesn't depend on the
   mesh domain; each referrer found is still evaluated as asked. Index registration is generated from the family
-  registry for each source GroupResource and applies to every served version; a store read by an index it lacks
-  reports `read_error`, never a complete empty answer.
+  registry for each source kind, and each store of that kind takes it, at every served version and scope; a dynamic
+  store goes by the kind discovery names for its resource when the store starts. A read of a store that lacks the
+  index, typed or dynamic, reports `read_error`, never a complete empty answer.
 - A declaration may name alternatives (`Declaration.Or`): the same reference in another API group its controller also
   reads, in the order it tries them, as Traefik 2.10 tries `traefik.io` and then `traefik.containo.us`. `References`
   names the first that exists, and `Referrers` counts a declaration only for the target it resolves to. A candidate

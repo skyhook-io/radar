@@ -184,8 +184,9 @@ type indexQuery []string
 // from one key to another during the read is found under one of them; any
 // other index, such as the namespace index, is read key by key. namespace "" reads only a
 // cluster-wide informer, which holds every namespace of a namespaced
-// resource. ok is also false when the serving informers lack the index. The
-// objects are the cached ones: callers must not modify or keep them.
+// resource. ok is also false when the serving informers lack the index
+// (LacksIndex). The objects are the cached ones: callers must not modify or
+// keep them.
 func (d *DynamicResourceCache) ReadableIndexed(gvr schema.GroupVersionResource, namespace, index string, keys ...string) (objs []*unstructured.Unstructured, ok bool) {
 	entries, ok := d.servedEntries(gvr, namespace)
 	if !ok {
@@ -204,4 +205,21 @@ func (d *DynamicResourceCache) ReadableIndexed(gvr schema.GroupVersionResource, 
 		}
 	}
 	return objs, true
+}
+
+// LacksIndex reports whether an informer serving gvr in namespace doesn't
+// file its objects by index, so ReadableIndexed by it fails however long the
+// caller waits, unlike a read of an informer still loading. The empty index
+// reads every object and is never lacking.
+func (d *DynamicResourceCache) LacksIndex(gvr schema.GroupVersionResource, namespace, index string) bool {
+	if index == "" {
+		return false
+	}
+	entries, _ := d.servedEntries(gvr, namespace)
+	for _, e := range entries {
+		if e.informer.GetIndexer().GetIndexers()[index] == nil {
+			return true
+		}
+	}
+	return false
 }

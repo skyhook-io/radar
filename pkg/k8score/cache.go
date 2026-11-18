@@ -533,7 +533,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 				return fmt.Errorf("failed to index %s by owner: %w", s.kind, err)
 			}
 		}
-		if indexers := relationIndexers[s.key]; indexers != nil {
+		if indexers := typedRelationIndexers(s.kind); indexers != nil {
 			if err := inf.AddIndexers(indexers); err != nil {
 				return fmt.Errorf("failed to index %s by what it names: %w", s.kind, err)
 			}

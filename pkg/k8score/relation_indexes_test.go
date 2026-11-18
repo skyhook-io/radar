@@ -35,50 +35,87 @@ func TestReflectsIndexFilesMirrorsBySource(t *testing.T) {
 	}
 }
 
-func TestRelationIndexRegistrationCoversEverySource(t *testing.T) {
-	for gr, indexes := range relations.ReferrerIndexers {
-		for name := range indexes {
-			if gr.Group == "" && relationIndexers[gr.Resource][name] == nil {
-				t.Errorf("typed %v lacks %s", gr, name)
+// Every typed kind that is an indexed family's source carries the family's
+// index in each of its stores.
+func TestTypedRelationIndexesOnEverySourceStore(t *testing.T) {
+	enabled := map[string]bool{}
+	for _, s := range buildInformerSetups() {
+		if b, ok := resourceid.BuiltinForKind(s.kind); ok && relations.ReferrerIndexers[b.GroupKind()] != nil {
+			enabled[s.key] = true
+		}
+	}
+	if !enabled[Secrets] || !enabled[ConfigMaps] {
+		t.Fatalf("typed sources = %v; want Secrets and ConfigMaps at least", enabled)
+	}
+	rc, err := NewResourceCache(CacheConfig{Client: fake.NewClientset(), ResourceTypes: enabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Stop()
+	for _, s := range buildInformerSetups() {
+		if !enabled[s.key] {
+			continue
+		}
+		b, _ := resourceid.BuiltinForKind(s.kind)
+		if len(rc.kindStores[s.key]) == 0 {
+			t.Errorf("%s has no store", s.key)
+		}
+		for _, st := range rc.kindStores[s.key] {
+			for name := range relations.ReferrerIndexers[b.GroupKind()] {
+				if st.indexer.GetIndexers()[name] == nil {
+					t.Errorf("%s store lacks %s", s.key, name)
+				}
 			}
 		}
 	}
 }
 
+// A dynamic informer takes the indexes of the kind discovery says it serves,
+// on every version and scope, whatever its resource is called; a store read
+// by an index it lacks fails and says why.
 func TestDynamicRouteIndexesOnEveryVersionAndScope(t *testing.T) {
-	for _, version := range []string{"v1", "v1beta1"} {
-		for _, namespace := range []string{"", "alpha"} {
-			t.Run(version+"/"+namespace, func(t *testing.T) {
-				gvr := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: version, Resource: "httproutes"}
-				route := func(ns string) *unstructured.Unstructured {
-					return &unstructured.Unstructured{Object: map[string]any{
-						"apiVersion": gvr.GroupVersion().String(), "kind": "HTTPRoute", "metadata": map[string]any{"namespace": ns, "name": "route"}, "spec": map[string]any{"parentRefs": []any{map[string]any{"name": "gw", "namespace": "shared"}}},
-					}}
-				}
-				dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "HTTPRouteList"}, route("alpha"), route("beta"))
-				d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn})
-				if err != nil {
-					t.Fatal(err)
-				}
-				t.Cleanup(d.Stop)
-				if err := d.startWatching(gvr, namespace); err != nil {
-					t.Fatal(err)
-				}
-				waitUntil(t, 5*time.Second, "route informer", func() bool { return d.IsNamespaceSynced(gvr, namespace) })
-				f := relations.GatewayParents
-				target := resourceid.NewRef(gvr.Group, "Gateway", "shared", "gw")
-				hits, ok := d.ReadableIndexed(gvr, namespace, f.ReferrersIndex.Name, f.ReferrersIndex.Key(target))
-				want := 2
-				if namespace != "" {
-					want = 1
-				}
-				if !ok || len(hits) != want {
-					t.Fatalf("referrers: %d %v; want %d", len(hits), ok, want)
-				}
-				if _, ok := d.ReadableIndexed(gvr, namespace, "missing", "key"); ok {
-					t.Fatal("a read by an index the store lacks succeeded")
-				}
-			})
+	for _, resource := range []string{"httproutes", "gatewayroutes"} {
+		for _, version := range []string{"v1", "v1beta1"} {
+			for _, namespace := range []string{"", "alpha"} {
+				t.Run(resource+"/"+version+"/"+namespace, func(t *testing.T) {
+					gvr := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: version, Resource: resource}
+					route := func(ns string) *unstructured.Unstructured {
+						return &unstructured.Unstructured{Object: map[string]any{
+							"apiVersion": gvr.GroupVersion().String(), "kind": "HTTPRoute", "metadata": map[string]any{"namespace": ns, "name": "route"}, "spec": map[string]any{"parentRefs": []any{map[string]any{"name": "gw", "namespace": "shared"}}},
+						}}
+					}
+					dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "HTTPRouteList"})
+					for _, ns := range []string{"alpha", "beta"} {
+						// Filed under gvr itself: the fake would guess the resource from the kind.
+						if err := dyn.Tracker().Create(gvr, route(ns), ns); err != nil {
+							t.Fatal(err)
+						}
+					}
+					discovery := newDiscoveryWith(t, APIResource{Group: gvr.Group, Version: version, Kind: "HTTPRoute", Name: resource, Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}})
+					d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn, Discovery: discovery})
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(d.Stop)
+					if err := d.startWatching(gvr, namespace); err != nil {
+						t.Fatal(err)
+					}
+					waitUntil(t, 5*time.Second, "route informer", func() bool { return d.IsNamespaceSynced(gvr, namespace) })
+					f := relations.GatewayParents
+					target := resourceid.NewRef(gvr.Group, "Gateway", "shared", "gw")
+					hits, ok := d.ReadableIndexed(gvr, namespace, f.ReferrersIndex.Name, f.ReferrersIndex.Key(target))
+					want := 2
+					if namespace != "" {
+						want = 1
+					}
+					if !ok || len(hits) != want || d.LacksIndex(gvr, namespace, f.ReferrersIndex.Name) {
+						t.Fatalf("referrers: %d %v; want %d", len(hits), ok, want)
+					}
+					if _, ok := d.ReadableIndexed(gvr, namespace, "missing", "key"); ok || !d.LacksIndex(gvr, namespace, "missing") {
+						t.Fatal("a read by an index the store lacks succeeded or wasn't said to lack it")
+					}
+				})
+			}
 		}
 	}
 }

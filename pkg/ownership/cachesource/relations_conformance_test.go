@@ -2,13 +2,18 @@ package cachesource
 
 import (
 	"cmp"
+	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"reflect"
 	"slices"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -345,20 +350,45 @@ func (betaUndecided) CanRead(_ resourceid.GroupKind, namespace string) ownership
 }
 func (betaUndecided) Namespaces() ([]string, bool) { return nil, true }
 
-func TestIndexedReadByMissingIndexIsIncomplete(t *testing.T) {
-	f := newFixture(t, k8score.CacheConfig{}, nil)
-	f.watch(t, widgets)
-	read, err := f.source().Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := read.(relations.Session)
-	for _, gk := range []resourceid.GroupKind{{Kind: "Pod"}, {Group: "example.io", Kind: "Widget"}} {
+// A store without the index never answers, however long it loads, so a read
+// by it is a read error, for a typed kind and for a dynamic one watched
+// cluster-wide or namespace by namespace.
+func TestIndexedReadByMissingIndexIsAReadError(t *testing.T) {
+	assertReadError := func(t *testing.T, s relations.Session, gk resourceid.GroupKind) {
+		t.Helper()
 		got := s.Indexed(gk, "missing", []string{"key"}, ownership.InNamespace("alpha"))
 		if len(got.Objects) != 0 || len(got.Gaps) == 0 {
-			t.Errorf("%v: %+v; want a gap, never a complete empty answer", gk, got)
+			t.Fatalf("%v: %+v; want a gap, never a complete empty answer", gk, got)
+		}
+		for _, g := range got.Gaps {
+			if g.Reason != readreason.ReadError {
+				t.Errorf("%v: gap %+v; want %s", gk, g, readreason.ReadError)
+			}
 		}
 	}
+	t.Run("cluster-wide", func(t *testing.T) {
+		f := newFixture(t, k8score.CacheConfig{}, nil)
+		f.watch(t, widgets)
+		s := begin(t, f.source()).(relations.Session)
+		for _, gk := range []resourceid.GroupKind{{Kind: "Pod"}, widgetKind} {
+			assertReadError(t, s, gk)
+		}
+	})
+	t.Run("by namespace", func(t *testing.T) {
+		f := newFixture(t, k8score.CacheConfig{}, func(f *fixture) {
+			f.dynamic.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				if a.GetNamespace() == "" {
+					return true, nil, apierrors.NewForbidden(widgets.GroupResource(), "", errors.New("namespace scoped"))
+				}
+				return false, nil, nil
+			})
+		})
+		if err := f.caches.Dynamic.EnsureWatchingContext(context.Background(), widgets, "alpha"); err != nil {
+			t.Fatal(err)
+		}
+		waitUntil(t, "alpha ready", func() bool { return f.caches.Dynamic.IsNamespaceSynced(widgets, "alpha") })
+		assertReadError(t, begin(t, f.source()).(relations.Session), widgetKind)
+	})
 }
 
 // A kind discovery doesn't serve reads as empty when discovery covered its
