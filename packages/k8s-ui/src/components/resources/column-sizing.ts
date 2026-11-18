@@ -8,17 +8,17 @@
 // Each column is one of:
 //   exact — the curated width (getColumnMinWidth). Status, Age, Ready, counts.
 //   fit   — sized to its content within [floor, max]: Name, Namespace, Node.
-//           Name sizes to its 95th percentile, so a few outliers don't set the
-//           width, and takes part in sharing the room left (below) up to its
-//           longest name.
+//           Sized to the 95th percentile of its values, so a few outliers
+//           don't set the width, then it takes part in sharing the room left
+//           (below) up to its longest value.
 //   grow  — starts at its floor and shares whatever room is left, by weight,
 //           each up to its longest value. Long free text: Event messages,
 //           selectors, image lists, uncurated CRD printer columns.
 //   user  — a width the user dragged; kept as is.
 //
 // Room is handed out in a fixed order — user and exact widths, then fit columns
-// at their content, then the grow columns and Name's longest names share what
-// is left by weight — and whatever remains goes to the table's trailing spacer
+// at their 95th percentile, then the grow columns and the fit columns' longer
+// values share what is left by weight — and whatever remains goes to the table's trailing spacer
 // column rather than stretching any column past its content: a stretched
 // column pushes the columns after it under the resource drawer, which overlays
 // the right of the list. When the room is short, the shared room is the first

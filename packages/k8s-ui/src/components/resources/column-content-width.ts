@@ -110,23 +110,24 @@ export interface SizableColumn {
 
 export interface ColumnSizingSpec {
   mode: ColumnSizingMode
+  /** grow: share of the room left over. fit: share of it while reaching from its 95th percentile to its longest value. */
   weight?: number
   max?: number
-  /** Name only: size to the 95th percentile, and reach for the longest name from the room left over. */
-  trimOutliers?: boolean
 }
 
 export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   if (col.sizing === 'grow') return { mode: 'grow', weight: col.growWeight ?? 1, max: GROW_MAX_PX }
   if (col.sizing === 'exact') return { mode: 'exact' }
+  // Fit columns size to their 95th percentile, so a few outliers (one long
+  // namespace, one generated name) don't set the width, and reach for their
+  // longest value from the room left over. Name takes twice the share there:
+  // a cut name costs more than any other cut cell.
   switch (col.key) {
-    // Weighted like a grow column when room is shared: a cut name costs more
-    // than a cut message, so it takes twice the share.
-    case 'name': return { mode: 'fit', max: NAME_MAX_PX, trimOutliers: true, weight: 2 }
-    case 'namespace': return { mode: 'fit', max: NAMESPACE_MAX_PX }
-    case 'node': return { mode: 'fit', max: NODE_MAX_PX }
+    case 'name': return { mode: 'fit', max: NAME_MAX_PX, weight: 2 }
+    case 'namespace': return { mode: 'fit', max: NAMESPACE_MAX_PX, weight: 1 }
+    case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1 }
   }
-  if (col.sizing === 'fit') return { mode: 'fit', max: FIT_DEFAULT_MAX_PX }
+  if (col.sizing === 'fit') return { mode: 'fit', max: FIT_DEFAULT_MAX_PX, weight: 1 }
   return { mode: 'exact' }
 }
 
@@ -208,9 +209,9 @@ function cellWidthReader(col: ContentColumn, ctx: ContentContext): CellWidth {
 }
 
 export interface MeasuredContent {
-  /** What the column sizes to: the longest value, or for Name its 95th percentile. Padding included. */
+  /** What the column sizes to: grow, its longest value; fit, its 95th percentile. Padding included. */
   content: number
-  /** Name only: its longest name, which it may grow to from the room left over. */
+  /** fit only: its longest value, which it may grow to from the room left over. */
   stretch?: number
 }
 
@@ -232,7 +233,7 @@ export function measureColumnContent(
     if (spec.mode === 'exact') continue
     const read = cellWidthReader(col, ctx)
     const limit = (spec.max ?? Infinity) - CELL_PADDING_PX
-    if (spec.trimOutliers) {
+    if (spec.mode === 'fit') {
       const widths = new Array<number>(items.length)
       let longest = 0
       for (let i = 0; i < items.length; i++) {

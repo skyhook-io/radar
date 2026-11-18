@@ -26,7 +26,7 @@ const pod = (name: string, extra: Record<string, any> = {}) => ({ metadata: { na
 
 describe('columnSizingSpec', () => {
   it('fits Name, Namespace and Node, grows flagged columns, and keeps the rest exact', () => {
-    expect(columnSizingSpec({ key: 'name' })).toMatchObject({ mode: 'fit', max: 480, trimOutliers: true, weight: 2 })
+    expect(columnSizingSpec({ key: 'name' })).toEqual({ mode: 'fit', max: 480, weight: 2 })
     expect(columnSizingSpec({ key: 'namespace' }).mode).toBe('fit')
     expect(columnSizingSpec({ key: 'node' }).mode).toBe('fit')
     expect(columnSizingSpec({ key: 'message', sizing: 'grow', growWeight: 3 })).toEqual({ mode: 'grow', weight: 3, max: GROW_MAX_PX })
@@ -43,6 +43,13 @@ describe('measureColumnContent', () => {
     // 100px of text + 22px copy button + padding
     expect(m.name.content).toBe(100 + 22 + CELL_PADDING_PX)
     expect(m.name.stretch).toBe(400 + 22 + CELL_PADDING_PX)
+  })
+
+  it('trims outliers the same way for Namespace', () => {
+    const items = [...Array(39)].map(() => ({ metadata: { name: 'a', namespace: 'apps' } }))
+    items.push({ metadata: { name: 'a', namespace: 'x'.repeat(20) } })
+    const m = measureColumnContent(items, [{ key: 'namespace' }], ctx, measure)
+    expect(m.namespace).toEqual({ content: 40 + CELL_PADDING_PX, stretch: 200 + CELL_PADDING_PX })
   })
 
   it('reserves room for the Terminating chip and an audit badge beside a name', () => {
