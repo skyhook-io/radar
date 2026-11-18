@@ -289,7 +289,7 @@ unknown, partial and denied values first: every piece here exists to keep them.
   naming the job it does (the category name, the tool, shows beneath), an
   `icon`, and a `count` for its row that counts each problem once. A
   destination that is a kind's list names that `kind`, so the kind is
-  highlighted through it and not listed again under Other kinds.
+  highlighted and pinned through it and not listed again under Other kinds.
   Say whether the namespace filter applies, and why.
 - [ ] **Routes and navigation.** Use `/x`, `/x/<screen>` and
   `/x/<plural>/<ns|_>/<name>?ctx=`.

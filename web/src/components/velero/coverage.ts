@@ -3,46 +3,83 @@ import type { VeleroScheduleReading } from '@skyhook-io/k8s-ui'
 /** Kubernetes' own namespaces (kube-system, kube-public, kube-node-lease and add-ons' kube-*), which backups usually leave out on purpose. */
 const isKubernetesNamespace = (ns: string) => ns.startsWith('kube-')
 
+type GlobToken = { t: 'lit'; c: string } | { t: 'any' } | { t: 'star' } | { t: 'class'; chars: string; range?: [string, string] }
+
 /**
- * A namespace pattern as Velero matches it (gobwas/glob, no separators): `*`
- * any run, `?` one character, `{a,b}` alternatives, and a class: `[a-z]` is a
- * range only when it is exactly one (as `[!a-z]`); otherwise every character
- * between the brackets is listed as written, so `[ab-d]` is a, b, - and d.
- * A pattern that does not compile matches only itself.
+ * The longest pattern Velero accepts: with its wildcards read as letters it
+ * must be a namespace name, at most 63 characters.
  */
-export function veleroGlobMatch(pattern: string, name: string): boolean {
-  if (!/[*?[{]/.test(pattern)) return pattern === name
-  let re = ''
-  let depth = 0
+const VELERO_PATTERN_MAX = 63
+
+// Characters Velero refuses in a namespace pattern (wildcard.ValidateNamespaceName
+// and the namespace-name check), so a schedule using them is rejected and backs
+// up nothing.
+const VELERO_PATTERN_REFUSED = /[|(){},!\\]/
+
+function parseGlob(pattern: string): GlobToken[] | null {
+  const out: GlobToken[] = []
   for (let i = 0; i < pattern.length; i++) {
     const c = pattern[i]
-    if (c === '*') re += '.*'
-    else if (c === '?') re += '.'
+    if (c === '*') out.push({ t: 'star' })
+    else if (c === '?') out.push({ t: 'any' })
     else if (c === '[') {
-      const end = pattern.indexOf(']', i + 2)
-      if (end < 0) return pattern === name
-      let body = pattern.slice(i + 1, end)
-      const negated = body.startsWith('!')
-      if (negated) body = body.slice(1)
-      const escape = (t: string) => t.replace(/[\\\]^-]/g, '\\$&')
-      const range = body.length === 3 && body[1] === '-'
-      re += `[${negated ? '^' : ''}${range ? `${escape(body[0])}-${escape(body[2])}` : escape(body)}]`
+      const end = pattern.indexOf(']', i + 1)
+      if (end <= i + 1) return null
+      const body = pattern.slice(i + 1, end)
+      if (body.length === 3 && body[1] === '-') {
+        if (body[0] > body[2]) return null
+        out.push({ t: 'class', chars: '', range: [body[0], body[2]] })
+      } else out.push({ t: 'class', chars: body })
       i = end
-    } else if (c === '{') {
-      re += '(?:'
-      depth++
-    } else if (c === '}' && depth > 0) {
-      re += ')'
-      depth--
-    } else if (c === ',' && depth > 0) re += '|'
-    else re += c.replace(/[.+^$()|\\/\]{}]/g, '\\$&')
+    } else out.push({ t: 'lit', c })
   }
-  if (depth > 0) return pattern === name
-  try {
-    return new RegExp(`^${re}$`).test(name)
-  } catch {
-    return pattern === name
+  return out
+}
+
+function tokenMatches(tok: GlobToken, ch: string): boolean {
+  if (tok.t === 'any') return true
+  if (tok.t === 'lit') return tok.c === ch
+  if (tok.t !== 'class') return false
+  return tok.range ? ch >= tok.range[0] && ch <= tok.range[1] : tok.chars.includes(ch)
+}
+
+// On a mismatch it resumes after the last star, never revisiting earlier
+// ones: at most pattern × name steps, both at most 63 characters.
+function matchTokens(tokens: GlobToken[], name: string): boolean {
+  let p = 0
+  let n = 0
+  let starP = -1
+  let starN = 0
+  while (n < name.length) {
+    const tok = tokens[p]
+    if (tok?.t === 'star') {
+      starP = p++
+      starN = n
+    } else if (tok && tokenMatches(tok, name[n])) {
+      p++
+      n++
+    } else if (starP >= 0) {
+      p = starP + 1
+      n = ++starN
+    } else return false
   }
+  while (tokens[p]?.t === 'star') p++
+  return p === tokens.length
+}
+
+/**
+ * A namespace pattern as Velero matches it: `*` any run, `?` one character,
+ * and a class, where `[a-z]` is a range only when it is exactly one;
+ * otherwise every character between the brackets is listed as written, so
+ * `[ab-d]` is a, b, - and d. A pattern Velero refuses (longer than a
+ * namespace name, braces, `!`, an empty or descending class) matches only
+ * itself. Patterns come from the cluster, so matching never goes through a
+ * backtracking regular expression.
+ */
+export function veleroGlobMatch(pattern: string, name: string): boolean {
+  if (!/[*?[]/.test(pattern)) return pattern === name
+  const tokens = pattern.length <= VELERO_PATTERN_MAX && !VELERO_PATTERN_REFUSED.test(pattern) ? parseGlob(pattern) : null
+  return tokens ? matchTokens(tokens, name) : pattern === name
 }
 
 /** Whether a schedule's template selects the namespace, as Velero reads the selection: exclusions win. */
