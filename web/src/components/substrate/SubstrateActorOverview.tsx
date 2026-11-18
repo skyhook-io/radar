@@ -13,7 +13,7 @@ import {
   type SubstrateWorkerRow,
 } from '../../api/substrateWorkspace'
 import { type OpenSubject, SubjectLink } from './SubstrateAttentionList'
-import { ACTOR_STATE_LABEL, DISCARD_WHY, definitiveFailure, logsCommand, memoryKillText, attentionBannerVariant, bytesText, cpuText, durableText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, stateExtra, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
+import { ACTOR_STATE_LABEL, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, logsCommand, memoryKillText, attentionBannerVariant, bytesText, cpuText, durableText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, stateExtra, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
 import { ActorStateBadge, CommandChip, Term, Unread, When } from './shared'
 import { RefreshFailedNotice } from '../workspace/layout'
 
@@ -43,6 +43,8 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
   // The same read as the Overview's last lines; a memory-limit kill among them is the crash's cause.
   const logs = useSubstrateActorLogs(actor, { tailLines: 8 })
   const kill = logs.data?.memoryKill
+  // The evidence that ties the kill to this crash: its timing.
+  const tie = kill ? killTie(kill, actor.crash?.time) : undefined
   // The worker's log names the cause and its remedy; without it, Substrate's own crash row says what to do.
   const crashedRow = detail.attention.find((a) => a.rule === 'crashedActors')
   const step = kill?.current && kill.nextStep
@@ -61,7 +63,11 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
   )
   const details: ReactNode[] = []
   if (kill?.current) {
-    details.push(<p key="where">Read from the worker’s log{kill.time && <> <When iso={kill.time} /></>}, in <span className="font-mono">{kill.pod}</span>.</p>)
+    details.push(
+      <p key="where">
+        Read from the worker’s log{kill.time && <> <When iso={kill.time} /></>}, in <span className="font-mono">{kill.pod}</span>. Radar ties it to this crash by timing: the record names this actor{tie ? `, came ${tie},` : ''} and the lines read show no restart between them.
+      </p>,
+    )
   }
   if (kill && !kill.current) {
     details.push(<p key="earlier">Earlier run: a memory-limit kill was recorded{kill.time && <> <When iso={kill.time} /></>} in <span className="font-mono">{kill.pod}</span>; Radar can’t tie it to this crash.</p>)
@@ -85,7 +91,7 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
       <div className="mt-1 break-words text-xs text-theme-text-secondary">
         {kill?.current ? (
           <>
-            Cause, from its worker’s log: <span className="font-medium text-theme-text-primary">{memoryKillText(kill)}</span>.
+            Cause, from its worker’s log: <span className="font-medium text-theme-text-primary">{memoryKillText(kill)}</span>{tie ? `, ${tie}` : ''}.
           </>
         ) : (
           substrateMessage
@@ -238,14 +244,20 @@ function AttentionBanner({ row, detail }: { row: SubstrateAttention; detail: Sub
   )
 }
 
+// Substrate's egress gateway refuses every outbound connection of an actor
+// with no policy, or with one that has no rules, and its DNS relay answers
+// NXDOMAIN for it: no policy is a deny, not an open door.
+const EGRESS_DENIED = 'so Substrate denies all outbound traffic'
+
 export function egressText(e: SubstrateEgress): { text: ReactNode; tone: 'neutral' | 'unknown' } {
   switch (e.state) {
     case 'set': {
+      if (e.rules === 0) return { text: `A policy with no rules, ${EGRESS_DENIED}`, tone: 'neutral' }
       const dest = e.destinations?.length ? ` · ${e.destinations.join(', ')}${e.more ? ` and ${e.more} more` : ''}` : ''
       return { text: `${e.rules} ${e.rules === 1 ? 'rule' : 'rules'}${dest}`, tone: 'neutral' }
     }
     case 'none':
-      return { text: 'No policy: outbound traffic is denied', tone: 'neutral' }
+      return { text: `No egress policy, ${EGRESS_DENIED}`, tone: 'neutral' }
     case 'denied':
       return { text: `Substrate denied reading it${e.message ? `: ${e.message}` : ''}`, tone: 'unknown' }
     default:
@@ -267,10 +279,10 @@ function AtAGlance({ detail, onOpenSubject }: { detail: SubstrateActorDetail; on
             <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5">
               <ActorStateBadge state={actor.state} impact={detail.workerImpact} updateTime={actor.updateTime} />
               {actor.updateTime && (
-                <span className="text-theme-text-secondary"><When iso={actor.updateTime} prefix="since at least" hint="Substrate records no transition time; its last change to the actor is a lower bound:" /></span>
+                <span className="text-theme-text-secondary"><When iso={actor.updateTime} prefix="for at least" held hint="Substrate records no transition time; its last change to the actor is a lower bound:" /></span>
               )}
             </span>
-            {/* A held duration is already in "since at least"; only other facts (a pending upload) add a line. */}
+            {/* A held duration is already in "for at least"; only other facts (a pending upload) add a line. */}
             {actor.state !== 'crashed' && stateExtra(actor.state, row.reason) && !stateExtra(actor.state, row.reason)!.startsWith('for ') && (
               <div className="text-xs text-theme-text-secondary">{stateExtra(actor.state, row.reason)}</div>
             )}
@@ -461,7 +473,9 @@ export function ActorLogsBody({ actor, logs, compact }: { actor: SubstrateActorD
     const kill = data.memoryKill
     const at = kill ? memoryKillLine(data.lines, kill) : -1
     // Only a kill tied to this crash is its cause; an earlier run's is labelled as one.
-    const mark = kill && at >= 0 ? { index: at, current: kill.current, label: kill.current ? (actor.state === 'crashed' ? 'memory-limit kill · this crash' : 'memory-limit kill') : 'memory-limit kill · earlier run', id: lineId } : undefined
+    const mark = kill && at >= 0 ? { index: at, current: kill.current, label: killLineLabel(kill, crashedAt), id: lineId } : undefined
+    // The cause in full is the Overview banner's; here one short line points at the line, with the timing that ties it.
+    const tie = kill ? killTie(kill, crashedAt) : undefined
     const jump = mark && !compact ? (
       <button type="button" onClick={() => document.getElementById(mark.id)?.scrollIntoView({ block: 'center', behavior: 'smooth' })} className="ml-2 whitespace-nowrap text-xs font-medium text-accent-text hover:underline">
         Jump to line
@@ -482,7 +496,7 @@ export function ActorLogsBody({ actor, logs, compact }: { actor: SubstrateActorD
         {kill && !compact && (
           <p className="text-sm text-theme-text-secondary">
             {kill.current
-              ? <>In {kill.pod}{kill.time && <> <When iso={kill.time} /></>}, {memoryKillText(kill)}{actor.state === 'crashed' ? ': that is why it crashed.' : '.'}</>
+              ? <>{at >= 0 ? 'Marked below: the worker’s memory-limit kill' : 'The worker’s log records a memory-limit kill'}{tie ? `, ${tie}` : ''}.</>
               : <>Earlier run: a memory-limit kill was recorded{kill.time && <> <When iso={kill.time} /></>} in {kill.pod}: {memoryKillText(kill)}.{actor.state === 'crashed' ? ' Radar can’t tie it to this crash.' : ''}</>}
             {jump}
           </p>

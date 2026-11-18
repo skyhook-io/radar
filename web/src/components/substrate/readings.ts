@@ -563,7 +563,7 @@ export function goldenReading(t: Pick<SubstrateTemplateRow, 'golden' | 'matching
       return { label: 'Ready', severity: 'success', meaning: 'New actors start from the golden snapshot.' }
     case 'failed':
       // New actors boot cold; nothing is lost: the warning of its Needs attention row.
-      return { label: 'Failed', severity: 'warning', meaning: 'The build failed and Substrate does not retry it: new actors using the template’s default boot cold. Templates can’t be edited: recreate it to build again.' }
+      return { label: 'Failed', severity: 'warning', meaning: 'The build failed and Substrate does not retry it: new actors not seeded from a tag start from a cold boot, not a prepared snapshot. Templates can’t be edited: recreate it to build again.' }
     case 'disabled':
       return { label: 'Disabled', severity: 'neutral', meaning: 'The template turns golden snapshots off: every new actor boots cold.' }
   }
@@ -601,10 +601,11 @@ export function poolReading(p: Pick<SubstratePoolRow, 'capacity' | 'placement' |
         kubernetes,
       }
     }
+    // Slots are utilization, not health: only a pool that can place nothing new blocks work, and only that gets emphasis.
     case 'full':
-      return { label: 'No free actor slots', severity: 'alert', meaning: 'No active worker has a free actor slot.', kubernetes }
+      return { label: 'No free actor slots', severity: 'warning', meaning: 'No active worker has a free actor slot, so Substrate places no more actors in this pool. New actors whose selectors match only this pool cannot start.', kubernetes }
     case 'free':
-      return { label: 'Free actor slots', severity: 'success', meaning: 'At least one active worker has a free actor slot. Whether an actor fits depends on its size and its snapshot’s restore constraints.', kubernetes }
+      return { label: 'Free actor slots', severity: 'neutral', meaning: 'At least one active worker has a free actor slot. Whether an actor fits depends on its size and its snapshot’s restore constraints.', kubernetes }
   }
   return { label: 'Unknown', severity: 'neutral', meaning: 'Neither Kubernetes nor Substrate was read well enough to say.', kubernetes }
 }
@@ -624,6 +625,24 @@ export function memoryKillText(kill: { limitBytes: number; usageBytes?: number }
   return `the worker killed its sandbox over its memory limit of ${bytesText(kill.limitBytes)}${kill.usageBytes ? ` (it used ${bytesText(kill.usageBytes)})` : ''}`
 }
 
+/**
+ * The timing that ties a kill to the crash, the evidence the server's
+ * `current` rests on: "2m before this crash". Undefined unless the kill is
+ * tied to the present crash and both times are known.
+ */
+export function killTie(kill: { time?: string; current: boolean }, crashTime: string | undefined): string | undefined {
+  if (!kill.current || !kill.time || !crashTime) return undefined
+  const gap = Date.parse(crashTime) - Date.parse(kill.time)
+  if (!Number.isFinite(gap) || gap < 0) return undefined
+  return `${formatDuration(gap)} before this crash`
+}
+
+/** A kill line's label in the log: its tie to the crash by timing, or that it is an earlier run's. */
+export function killLineLabel(kill: { time?: string; current: boolean }, crashTime: string | undefined): string {
+  if (!kill.current) return 'memory-limit kill · earlier run'
+  const tie = killTie(kill, crashTime)
+  return tie ? `memory-limit kill · ${tie}` : 'memory-limit kill'
+}
 
 /** Local date and time to the second, for a tooltip beside a relative time. */
 export function localTime(iso: string): string {

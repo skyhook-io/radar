@@ -217,6 +217,8 @@ export interface SubstrateActorRow {
   state: SubstrateActorState
   /** Crash message, "Resuming for 6m", "Upload pending for 12m"; absent when nothing to add. */
   reason?: string
+  /** A crash's cause, where Substrate's message names it; absent otherwise, and from a Radar that predates it. */
+  cause?: 'memoryLimit'
   template: SubstrateRef
   /** Absent when the actor has no worker. */
   worker?: SubstrateWorkerPodRef

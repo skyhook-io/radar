@@ -136,7 +136,7 @@ function Tallies({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubjec
           'a node Substrate does not name'
         )}
         {NODE_STATE[n.state] && <span className={clsx('ml-1.5', n.state === 'ready' ? 'text-theme-text-tertiary' : toneTextClass('unhealthy'))}>{NODE_STATE[n.state]}</span>}
-        {n.oldest && <span className="ml-1.5 text-theme-text-tertiary"><When iso={n.oldest} prefix="waiting since" /></span>}
+        {n.oldest && <span className="ml-1.5 text-theme-text-tertiary"><When iso={n.oldest} prefix="waiting for at least" held /></span>}
       </span>
     ),
   }))
@@ -225,12 +225,31 @@ function StepLine({ lead, step, command }: { lead: ReactNode; step: string; comm
     <div className="mt-1 break-words text-xs text-theme-text-primary">
       <span className="font-medium">{lead}</span>
       {step}
-      {command && <> <CommandChip command={command} inline /></>}
+      {command && <CommandChip command={command} />}
     </div>
   )
 }
 
 const CAUSE_WORDS: Record<NonNullable<Tally['cause']>, string> = { memoryLimit: 'killed over their memory limit' }
+
+// A remedy names its templates on the visible line up to this many; more wait under Details.
+const NAMED_REMEDY_GROUPS = 2
+
+/** Which actors a remedy is for, by template: "on research / lg", "11 on research / lg and 1 on sandbox-dev / mcp", or "on 3 templates". */
+function RemedyGroups({ row, groups, onOpen }: { row: SubstrateAttention; groups: Tally[]; onOpen?: OpenSubject }) {
+  if (groups.length > NAMED_REMEDY_GROUPS) return <>on {groups.length} templates</>
+  if (groups.length === 1) return <>on <GroupName row={row} group={groups[0]} onOpen={onOpen} /></>
+  return (
+    <>
+      {groups.map((g, i) => (
+        <span key={i}>
+          {i > 0 && ' and '}
+          {g.count} on <GroupName row={row} group={g} onOpen={onOpen} />
+        </span>
+      ))}
+    </>
+  )
+}
 
 /**
  * A row's one visible next step. A crash row whose groups name a cause shows
@@ -246,15 +265,28 @@ function NextStep({ row, onOpen, onShowDetails }: { row: SubstrateAttention; onO
   const others = row.count - firstCount
   const one = rest.length === 1 && remedies.length === 1 ? groupFilter(row, rest[0]) : undefined
   // A template lands in the rest when any of its crashes is not of the named
-  // cause, so its others may be: "not all". A template with one crash in the
-  // rest is that crash, so where every one has one, none of them is.
-  const qualifier = rest.every((g) => g.count === 1) ? 'not' : 'not all'
+  // cause, so its others may be of it: they "include" other causes. A template
+  // with one crash in the rest is that crash, so where every one has one, each
+  // crashed for another reason.
+  const otherCause = remedies.length === 1 && first.cause === 'memoryLimit'
+  const otherWords = others === 1 ? 'The other one' : `The other ${others}`
+  const otherLead = !otherCause
+    ? `${otherWords} crashed`
+    : rest.every((g) => g.count === 1)
+      ? `${otherWords} crashed for another reason`
+      : `${otherWords} include crashes for other reasons`
+  // The step names which actors it is for, by template, so the concentration above and this count reconcile on sight.
+  const lead = (
+    <>
+      Next step for {firstCount}{first.cause ? ` ${CAUSE_WORDS[first.cause]}` : ''}, <RemedyGroups row={row} groups={first.groups} onOpen={onOpen} />:{' '}
+    </>
+  )
   return (
     <>
-      <StepLine lead={`Next step for ${firstCount}${first.cause ? ` ${CAUSE_WORDS[first.cause]}` : ''}: `} step={first.nextStep} command={first.command} />
+      <StepLine lead={lead} step={first.nextStep} command={first.command} />
       {others > 0 && (
         <div className="mt-0.5 break-words text-xs text-theme-text-secondary">
-          The other {others === 1 ? 'one' : others} crashed{remedies.length === 1 && first.cause === 'memoryLimit' ? `, ${qualifier} over a memory limit` : ''}:{' '}
+          {otherLead}:{' '}
           {one && onOpen ? (
             <button type="button" onClick={() => onOpen({ kind: 'Actors', filter: one })} className="text-accent-text hover:underline">show {others === 1 ? 'it' : 'them'} →</button>
           ) : (
@@ -272,7 +304,7 @@ function OtherSteps({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSub
   const { remedies, rest, restCount } = crashRemedies(row)
   return (
     <>
-      {remedies[0].groups.length > 0 && (
+      {remedies[0].groups.length > NAMED_REMEDY_GROUPS && (
         <div className="break-words text-xs text-theme-text-secondary">
           {remedies[0].cause ? `${CAUSE_WORDS[remedies[0].cause][0].toUpperCase()}${CAUSE_WORDS[remedies[0].cause].slice(1)}` : 'With that step'}: <GroupNames row={row} groups={remedies[0].groups} onOpen={onOpen} />
         </div>
@@ -345,7 +377,7 @@ export function AttentionRow({ row, onOpen }: { row: SubstrateAttention; onOpen?
       <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
         <SubjectLink subject={row.subject} onOpen={onOpen} count={row.subject.kind === 'Actors' ? row.count : undefined} short />
         <WorkerActorsLink row={row} onOpen={onOpen} />
-        {row.since && <When iso={row.since} prefix="since" hint="Newest change among them: the condition has held at least since" />}
+        {row.since && <When iso={row.since} prefix="for at least" held hint="Newest change among them: the condition has held at least since" />}
       </div>
       <Concentration row={row} onOpen={onOpen} />
       {lead && <div className="break-words text-xs text-theme-text-secondary">{lead}</div>}

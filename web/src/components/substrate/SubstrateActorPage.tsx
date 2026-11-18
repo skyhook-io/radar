@@ -16,7 +16,7 @@ import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { type OpenSubject } from './SubstrateAttentionList'
 import { NotInContext, useContextPin } from './contextPin'
 import { ActorLogsBody, SubstrateActorOverview, egressText } from './SubstrateActorOverview'
-import { bytesText, cpuText, definitiveFailure, fidelityLabel, fidelityResume, logsCommand, tierReading } from './readings'
+import { bytesText, cpuText, definitiveFailure, fidelityLabel, fidelityResume, killTie, logsCommand, tierReading } from './readings'
 import { SUBSTRATE_PATH, SUBSTRATE_SCREENS, substrateActorsPath } from './routes'
 import { ActorStateBadge, Term, Unread, When } from './shared'
 
@@ -171,7 +171,7 @@ function LogsTab({ detail }: { detail: SubstrateActorDetail }) {
           </span>
         )}
       </div>
-      {hiddenKill && <HiddenKillNotice kill={hiddenKill} onShowAll={() => { setView('all'); setContainer('') }} />}
+      {hiddenKill && <HiddenKillNotice kill={hiddenKill} crashTime={detail.actor.state === 'crashed' ? detail.actor.crash?.time : undefined} onShowAll={() => { setView('all'); setContainer('') }} />}
       <ActorLogsBody actor={detail.actor} logs={logs} />
       <p className="text-xs text-theme-text-tertiary">
         Lines from worker Pods that are gone are lost with them. While the actor runs, <span className="whitespace-nowrap font-mono">{logsCommand(detail.actor)}</span> shows the same lines.
@@ -186,10 +186,12 @@ export function hidesWorkerRecords(view: SubstrateLogSource, container: string):
 }
 
 /** Says a filter hides the kill record rather than changing the filter for the reader. */
-export function HiddenKillNotice({ kill, onShowAll }: { kill: Pick<NonNullable<SubstrateActorLogs['memoryKill']>, 'current'>; onShowAll: () => void }) {
+export function HiddenKillNotice({ kill, crashTime, onShowAll }: { kill: Pick<NonNullable<SubstrateActorLogs['memoryKill']>, 'current' | 'time'>; crashTime?: string; onShowAll: () => void }) {
+  // A kill tied to this crash says what ties it: its timing.
+  const tie = killTie(kill, crashTime)
   return (
     <p className="text-xs text-theme-text-secondary">
-      This view hides the worker’s record of a memory-limit kill{kill.current ? ', the cause of this crash' : ' from an earlier run'}.{' '}
+      This view hides the worker’s record of a memory-limit kill{kill.current ? `, ${tie ?? 'tied to this crash'}` : ' from an earlier run'}.{' '}
       <button type="button" onClick={onShowAll} className="font-medium text-accent-text hover:underline">Show all sources</button>
     </p>
   )
@@ -202,7 +204,7 @@ function EgressTab({ detail }: { detail: SubstrateActorDetail }) {
     <TabBody>
       <section className={CARD}>
         <SectionHeading>Egress policy</SectionHeading>
-        <p className={t.tone === 'unknown' ? 'text-sm text-theme-text-tertiary' : 'text-sm text-theme-text-primary'}>{e.state === 'set' ? `${e.rules} ${e.rules === 1 ? 'rule' : 'rules'}` : t.text}</p>
+        <p className={t.tone === 'unknown' ? 'text-sm text-theme-text-tertiary' : 'text-sm text-theme-text-primary'}>{e.state === 'set' && e.rules > 0 ? `${e.rules} ${e.rules === 1 ? 'rule' : 'rules'}` : t.text}</p>
         {e.state === 'set' && e.destinations && e.destinations.length > 0 && (
           <>
             <div className="mt-3 text-xs text-theme-text-tertiary">Destinations the rules name</div>

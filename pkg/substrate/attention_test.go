@@ -100,6 +100,10 @@ func TestNeedsAttentionGoldenFailed(t *testing.T) {
 	if !strings.Contains(r.NextStep, "recreate the template") || strings.Contains(r.NextStep, "new version") {
 		t.Errorf("next step must say to recreate: Substrate has no template update: %q", r.NextStep)
 	}
+	// Plain words for who boots cold: an actor seeded from a tag starts from that tag, not the golden snapshot.
+	if want := "dev / browser has no golden snapshot, so new actors not seeded from a tag start from a cold boot"; r.Title != want {
+		t.Errorf("title = %q, want %q", r.Title, want)
+	}
 }
 
 func TestNeedsAttentionNoMatchingPool(t *testing.T) {
