@@ -33,9 +33,9 @@ export function agentSandboxResource(ref: { kind: string; group: string; namespa
   return refToSelectedResource(ref)
 }
 
-/** The title line, and the namespace filter as a chip when one narrows the screen. */
-export function AgentSandboxHeader({ title, namespaces, onClearNamespaces, actions }: { title: string; namespaces: string[]; onClearNamespaces: () => void; actions?: ReactNode }) {
-  const chips = namespaceChip(namespaces, onClearNamespaces)
+/** The title line, and the namespace filter and the screen's own filters as chips when they narrow it. */
+export function AgentSandboxHeader({ title, namespaces, onClearNamespaces, actions, chips: filters = [] }: { title: string; namespaces: string[]; onClearNamespaces: () => void; actions?: ReactNode; chips?: { label: string; onClear: () => void }[] }) {
+  const chips = [...namespaceChip(namespaces, onClearNamespaces), ...filters]
   return (
     <div className="px-5 pt-4 xl:px-7">
       <div className="flex flex-wrap items-center gap-x-2">
