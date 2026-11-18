@@ -85,6 +85,10 @@ with the path declaring it. The `View` answers every family the same way:
   may read (`ownership.GapCoversReadable`).
 - A declaration counts only if its kind is one of the family's targets and its source may declare that kind (an HPA
   doesn't scale a DaemonSet).
+- A family whose sources are many and in every namespace can find a target's referrers through a store index
+  keyed by the target (`ReferrersIndex`) instead of reading every source; what each one declares is still
+  evaluated. Only `Reflections` does: an index of a busy kind costs every relist
+  ([measurements](loadtest.md#relationship-cost-baselines)).
 - A declaration may name alternatives (`Declaration.Or`): the same reference in another API group its controller also
   reads, in the order it tries them, as Traefik 2.10 tries `traefik.io` and then `traefik.containo.us`. `References`
   names the first that exists, and `Referrers` counts a declaration only for the target it resolves to. A candidate
@@ -123,6 +127,31 @@ The families so far:
 | `TraefikSecrets` | Traefik transports, TLSOptions, TLSStores and routes → the Secrets and ConfigMaps they read | `traefik.go` |
 | `ContourBackends` | Contour HTTPProxies → the Services they send to and the HTTPProxies they include or their TCP proxy delegates to, in any namespace | `contour.go` |
 | `ContourSecrets` | Contour HTTPProxies → the Secrets they read for TLS and validation | `contour.go` |
+| `PodPlacement` | Pods → the Node they run on (a finished Pod runs nowhere); a Node's Pods are read from every Pod | `status_families.go` |
+| `Reflections` | Reflector mirrors (Secrets, ConfigMaps) → the source their `reflects` annotation names, in any namespace; a source's mirrors come from `ReflectsIndex` | `status_families.go` |
+| `Storage` | PersistentVolumeClaims → their PersistentVolume and StorageClass; PersistentVolumes → their claim and StorageClass | `status_families.go` |
+| `MachineNodes` | Karpenter NodeClaims and Cluster API Machines → the Node their status records | `status_families.go` |
+| `AnalysisRuns` | Argo Rollouts → the AnalysisRuns their status points at | `status_families.go` |
+| `SealedSecrets` | Bitnami SealedSecrets → the Secret of their own name they produce | `status_families.go` |
+
+A **selector family** (`selectors.go`, `selector_families.go`) is one way objects choose others by labels: the kinds
+that select and how each reads its selector, and the kinds that can be chosen and how a selector sees each (a
+workload is seen as the pods its template makes; a Rollout with a `workloadRef` as its referenced workload's). What a
+match depends on but never lists, such as that template or a Namespace's labels, is read with Radar's identity, as the
+relationship graph reads it (`Lookup`). `Selected(family, selector)` lists what a selector chooses and
+`SelectedBy(family, object)` what chooses an object, through the same search, access checks and coverage as
+`Referrers`. They follow the API's semantics, not the topology view's display rules: an empty NetworkPolicy, Cilium,
+PodDisruptionBudget or monitor selector chooses everything in scope, as a default-deny policy does. A match Radar
+can't judge, such as a Cilium selector on Namespace labels, leaves the answer incomplete (`filter_eval_failed`)
+rather than reading as no match.
+
+| Family | Selectors → chosen |
+|---|---|
+| `ServiceSelectors` | Services → the Deployments, Rollouts, StatefulSets, DaemonSets and active Jobs whose pod template their selector matches (a Service without a selector, or an ExternalName Service, chooses none) |
+| `DisruptionBudgets` | PodDisruptionBudgets → Deployments, StatefulSets, DaemonSets |
+| `NetworkPolicies` | NetworkPolicies and CiliumNetworkPolicies → Deployments, StatefulSets, DaemonSets; Cilium policies match as Cilium does (`netpol.CiliumSelects`: every spec, label sources, identity labels) |
+| `Monitors` | ServiceMonitors → Services; PodMonitors → workloads; in the namespaces their `namespaceSelector` names |
+| `CalicoPolicies`, `CalicoStagedPolicies` | Calico NetworkPolicies and GlobalNetworkPolicies, and their staged kinds that preview protection → Deployments, StatefulSets, DaemonSets, matched as Calico does (`netpol.CompileCalicoPolicyMatcher`), reading Namespace and ServiceAccount labels, with Radar's identity as the graph does (they decide a match but are never listed), only once a policy's other selectors match; a policy both Calico groups serve is listed once |
 
 Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
 families read each reference's fields the same way. Resolution can still differ: topology lists one Traefik group per

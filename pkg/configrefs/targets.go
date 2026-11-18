@@ -1,6 +1,7 @@
 package configrefs
 
 import (
+	"slices"
 	"strings"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -89,4 +90,31 @@ func CertificateSecret(cert *unstructured.Unstructured) (PathRef, bool) {
 		return PathRef{}, false
 	}
 	return PathRef{Ref: resourceid.Ref{Kind: "Secret", Namespace: cert.GetNamespace(), Name: name}, Path: "spec.secretName"}, true
+}
+
+// RolloutAnalysisRunStatus is where an Argo Rollout's status records an
+// AnalysisRun it is running, and what triggered it.
+type RolloutAnalysisRunStatus struct {
+	Trigger string
+	Path    []string
+}
+
+// RolloutAnalysisRunStatuses are the AnalysisRuns a Rollout's status points
+// at: only the current ones, never its history.
+var RolloutAnalysisRunStatuses = []RolloutAnalysisRunStatus{
+	{"step", []string{"canary", "currentStepAnalysisRunStatus"}},
+	{"background", []string{"canary", "currentBackgroundAnalysisRunStatus"}},
+	{"pre-promotion", []string{"blueGreen", "prePromotionAnalysisRunStatus"}},
+	{"post-promotion", []string{"blueGreen", "postPromotionAnalysisRunStatus"}},
+}
+
+// RolloutAnalysisRuns returns the AnalysisRuns a Rollout's status points at.
+func RolloutAnalysisRuns(rollout *unstructured.Unstructured) []PathRef {
+	var refs []PathRef
+	for _, s := range RolloutAnalysisRunStatuses {
+		if name, _, _ := unstructured.NestedString(rollout.Object, slices.Concat([]string{"status"}, s.Path, []string{"name"})...); name != "" {
+			refs = append(refs, PathRef{Ref: resourceid.NewRef(ArgoGroup, "AnalysisRun", rollout.GetNamespace(), name), Path: "status." + strings.Join(s.Path, ".")})
+		}
+	}
+	return refs
 }

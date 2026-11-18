@@ -6750,25 +6750,15 @@ type rolloutAnalysisRunRef struct {
 // Only the runs the Rollout's own status points at — every historical
 // AnalysisRun would grow the graph without bound.
 func activeAnalysisRuns(status map[string]any) []rolloutAnalysisRunRef {
-	sources := []struct {
-		trigger string
-		path    []string
-	}{
-		{"step", []string{"canary", "currentStepAnalysisRunStatus"}},
-		{"background", []string{"canary", "currentBackgroundAnalysisRunStatus"}},
-		{"pre-promotion", []string{"blueGreen", "prePromotionAnalysisRunStatus"}},
-		{"post-promotion", []string{"blueGreen", "postPromotionAnalysisRunStatus"}},
-	}
-
-	runs := make([]rolloutAnalysisRunRef, 0, len(sources))
-	for _, source := range sources {
-		name, found, _ := unstructured.NestedString(status, append(source.path, "name")...)
+	runs := make([]rolloutAnalysisRunRef, 0, len(configrefs.RolloutAnalysisRunStatuses))
+	for _, source := range configrefs.RolloutAnalysisRunStatuses {
+		name, found, _ := unstructured.NestedString(status, append(slices.Clone(source.Path), "name")...)
 		if !found || name == "" {
 			continue
 		}
-		phase, _, _ := unstructured.NestedString(status, append(source.path, "status")...)
-		message, _, _ := unstructured.NestedString(status, append(source.path, "message")...)
-		runs = append(runs, rolloutAnalysisRunRef{name: name, phase: phase, message: message, trigger: source.trigger})
+		phase, _, _ := unstructured.NestedString(status, append(slices.Clone(source.Path), "status")...)
+		message, _, _ := unstructured.NestedString(status, append(slices.Clone(source.Path), "message")...)
+		runs = append(runs, rolloutAnalysisRunRef{name: name, phase: phase, message: message, trigger: source.Trigger})
 	}
 	return runs
 }

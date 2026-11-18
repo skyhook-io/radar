@@ -533,6 +533,11 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 				return fmt.Errorf("failed to index %s by owner: %w", s.kind, err)
 			}
 		}
+		if indexers := relationIndexers[s.key]; indexers != nil {
+			if err := inf.AddIndexers(indexers); err != nil {
+				return fmt.Errorf("failed to index %s by what it names: %w", s.kind, err)
+			}
+		}
 
 		// Wire a WatchErrorHandler so reflector-level failures (most
 		// notably 403/Unauthorized that the probe didn't predict — e.g.
