@@ -218,7 +218,7 @@ func scanNodeDrainFeasibility(input *Input) Check {
 		if state != k8score.PDBEvictionBlocked && (pdb.Status.DisruptionsAllowed != 0 || (alwaysAllow && healthy == 0)) {
 			continue
 		}
-		check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "PodDisruptionBudget allows no evictions", Level: LevelBlocker, Resource: &ResourceRef{Group: "policy", Kind: "PodDisruptionBudget", Namespace: pdb.Namespace, Name: pdb.Name}, Evidence: Evidence{Source: "live", Path: "status.disruptionsAllowed", Detail: fmt.Sprintf("0 across %d active pod(s)", len(selectedPods))}, Impact: "A default eviction-based node drain is blocked while this authoritative PDB status allows zero disruptions.", Remediation: "Restore workload headroom, scale replicas, or adjust minAvailable/maxUnavailable so at least one disruption is allowed before draining nodes.", References: append([]Reference(nil), check.References...)})
+		check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "PodDisruptionBudget allows no evictions", Level: LevelBlocker, Resource: &ResourceRef{Group: "policy", Kind: "PodDisruptionBudget", Namespace: pdb.Namespace, Name: pdb.Name}, Evidence: Evidence{Source: "live", Path: "status.disruptionsAllowed", Detail: fmt.Sprintf("0 across %d active pod(s)", len(selectedPods))}, Impact: "A default eviction-based node drain is blocked while this authoritative PDB status allows zero disruptions.", Remediation: k8score.PDBBlockedEvictionAction, References: append([]Reference(nil), check.References...)})
 	}
 	sort.Slice(selections, func(i, j int) bool {
 		if selections[i].pdb.Namespace != selections[j].pdb.Namespace {

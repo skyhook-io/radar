@@ -1,0 +1,21 @@
+suite: Longhorn managed PDB evidence RBAC
+templates:
+  - clusterrole.yaml
+tests:
+  - it: collects only InstanceManagers for PDB recognition
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["longhorn.io"]
+            resources: ["instancemanagers"]
+            verbs: ["get", "list", "watch"]
+  - it: allows collection to be disabled
+    set:
+      rbac:
+        crdGroups:
+          longhorn: false
+    asserts:
+      - notContains:
+          path: rules[*].apiGroups
+          content: longhorn.io

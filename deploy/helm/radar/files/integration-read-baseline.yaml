@@ -3,6 +3,13 @@
 # All grant rows mean get/list/watch on full objects, not redacted projections.
 # Existing grants are preserved; withhold does not revoke rights from other roles.
 entries:
+  - group: "longhorn.io"
+    resources: ["instancemanagers"]
+    scope: Namespaced
+    collection: "longhorn"
+    decision: withhold
+    reason: "PDB explanation adds no caller grants. Callers without InstanceManager list access retain the generic PDB warning."
+    source: "https://github.com/longhorn/longhorn-manager/blob/20d9c0790312b45aafd5668674e73dbf2eba1832/k8s/pkg/apis/longhorn/v1beta2/instancemanager.go"
   - group: "opentelemetry.io"
     resources: ["opentelemetrycollectors", "instrumentations"]
     scope: Namespaced

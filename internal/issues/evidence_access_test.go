@@ -2,9 +2,12 @@ package issues
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 func evidenceIssue(id string, reads ...EvidenceRead) Issue {
@@ -86,6 +89,24 @@ func TestForEvidenceDegradesWithoutTheEvidence(t *testing.T) {
 	full, ok := ForEvidence(degradedIssue("stale"), func(EvidenceRead) bool { return true }, false)
 	if !ok || full.Message != "Secret/db key password changed at 10:02" || full.FirstSeen.IsZero() {
 		t.Fatalf("a caller who can read the Secret lost the full finding: %+v", full)
+	}
+}
+
+func TestForEvidencePreservesOnlySubjectOwnedOnset(t *testing.T) {
+	issue := degradedIssue("subject-owned")
+	issue.ResourceCreatedAt = issue.FirstSeen.Add(-time.Hour)
+	issue.LastSeen = issue.FirstSeen.Add(time.Hour)
+	issue.OnsetCoverage = &issuesapi.OnsetCoverage{Known: 1, Unknown: 1}
+	issue.TimingSummary = "The subject condition supplies the onset."
+	issue.Degraded.KeepSubjectOnset = true
+	shown, ok := ForEvidence(issue, func(EvidenceRead) bool { return false }, false)
+	if !ok || !reflect.DeepEqual(longhornSubjectTiming(shown), longhornSubjectTiming(issue)) || shown.LastSeen != issue.LastSeen {
+		t.Fatalf("independent subject timing changed: before=%+v after=%+v", issue, shown)
+	}
+	issue.Degraded.KeepSubjectOnset = false
+	shown, ok = ForEvidence(issue, func(EvidenceRead) bool { return false }, false)
+	if !ok || !shown.FirstSeen.IsZero() || !shown.OnsetUnknown || shown.OnsetCoverage != nil || shown.IssueTiming != "" || shown.IssueTimingBasis != "" {
+		t.Fatalf("evidence-derived timing must remain withheld by default: %+v", shown)
 	}
 }
 
