@@ -1267,7 +1267,7 @@ func foldJobSetApplicationWorkloads(rows []appRow) {
 			}
 			visible = append(visible, workload)
 			totalHealth = packages.WorseHealth(totalHealth, packages.Health(workload.Health))
-			if workload.WorkloadClass == "service" || workload.WorkloadClass == "worker" {
+			if longRunningWorkloadClass(workload.WorkloadClass) {
 				servingHealth = packages.WorseHealth(servingHealth, packages.Health(workload.Health))
 			}
 		}
@@ -1826,7 +1826,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			r.Workloads = append(r.Workloads, in.wl)
 			r.Events = append(r.Events, in.events...)
 			r.Health = string(packages.WorseHealth(packages.Health(r.Health), packages.Health(in.wl.Health)))
-			if in.wl.WorkloadClass == "service" || in.wl.WorkloadClass == "worker" {
+			if longRunningWorkloadClass(in.wl.WorkloadClass) {
 				servingHealth = packages.WorseHealth(servingHealth, packages.Health(in.wl.Health))
 			}
 			if v := in.wl.Version; v != "" && !slices.Contains(r.Versions, v) {
@@ -2389,32 +2389,56 @@ func appWorkloadAPIGroup(kind string) string {
 	}
 }
 
+// classifyAppWorkloads folds the workloads' classes into the row's. An
+// `unknown` workload is long-running with undecided exposure, so it is a
+// service or a worker: the row takes the class both readings agree on, and is
+// `unknown` when they disagree.
 func classifyAppWorkloads(ins []appWorkloadInput) string {
-	classes := map[string]bool{}
+	var service, worker, job, undecided bool
 	for _, in := range ins {
 		switch in.wl.WorkloadClass {
-		case "service", "worker", "job":
-			classes[in.wl.WorkloadClass] = true
+		case "service":
+			service = true
+		case "worker":
+			worker = true
+		case "job":
+			job = true
+		case "unknown":
+			undecided = true
 		}
-		// Unclassifiable members (e.g. a bare Pod) don't poison a known class.
 	}
-	if len(classes) == 0 {
-		return "unknown"
+	if !undecided {
+		return foldWorkloadClasses(service, worker, job)
 	}
-	if classes["service"] && !classes["job"] {
+	if c := foldWorkloadClasses(true, worker, job); c == foldWorkloadClasses(service, true, job) {
+		return c
+	}
+	return "unknown"
+}
+
+// longRunningWorkloadClass reports whether a workload's health is part of a
+// mixed row's serving health: an `unknown` one is long-running too.
+func longRunningWorkloadClass(class string) bool {
+	return class == "service" || class == "worker" || class == "unknown"
+}
+
+func foldWorkloadClasses(service, worker, job bool) string {
+	switch {
+	case job && (service || worker):
+		// A real composition (e.g. a service plus its scheduled jobs). The UI
+		// derives the breakdown from the per-workload classes.
+		return "mixed"
+	case job:
+		return "job"
+	case service:
 		// A deployable unit with an API Deployment and a background worker is
 		// still operated primarily as a service.
 		return "service"
+	case worker:
+		return "worker"
+	default:
+		return "unknown"
 	}
-	if len(classes) == 1 {
-		for c := range classes {
-			return c
-		}
-	}
-	// A real composition (e.g. a service plus its scheduled jobs). The UI
-	// derives the breakdown from the per-workload classes; "unknown" would
-	// throw away what classifyWorkload confidently determined.
-	return "mixed"
 }
 
 func classifyAppCategory(ins []appWorkloadInput) (category, reason string) {

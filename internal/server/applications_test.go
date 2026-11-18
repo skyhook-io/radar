@@ -1215,6 +1215,50 @@ func TestGroupApplications_MixedHealthUsesServingWorkloads(t *testing.T) {
 	}
 }
 
+// A Deployment whose exposure went undecided still runs: its health is part of
+// the serving health and its class keeps a job-only row from reading as a job.
+func TestGroupApplications_UndecidedWorkloadKeepsClassAndHealth(t *testing.T) {
+	mk := func(kind, name, health string, rels *appRelationships) appWorkloadInput {
+		in := overlayInput(kind, "prod", name, "1.0", health, subject.TierPartOf, "prod/app/shop", subject.ConfidenceMedium)
+		in.wl.WorkloadClass = classifyWorkload(kind, rels)
+		in.rels = rels
+		return in
+	}
+	service := func() appWorkloadInput {
+		return mk("Deployment", "api", "healthy", &appRelationships{Services: []string{"api"}})
+	}
+	crashing := func() appWorkloadInput {
+		return mk("Deployment", "sync", "unhealthy", &appRelationships{exposureIncomplete: true})
+	}
+	cron := func() appWorkloadInput { return mk("CronJob", "nightly", "healthy", nil) }
+
+	for _, c := range []struct {
+		name      string
+		ins       []appWorkloadInput
+		wantClass string
+	}{
+		{"beside a service", []appWorkloadInput{service(), crashing()}, "service"},
+		{"beside a service and a job", []appWorkloadInput{service(), crashing(), cron()}, "mixed"},
+		{"beside a job", []appWorkloadInput{crashing(), cron()}, "mixed"},
+	} {
+		rows := groupApplications(c.ins)
+		row := rowByName(rows, "shop")
+		if row == nil || row.WorkloadClass != c.wantClass || row.Health != "unhealthy" || row.RuntimeHealth != "unhealthy" {
+			t.Errorf("%s: row = %+v, want class %s and unhealthy", c.name, row, c.wantClass)
+		}
+	}
+
+	root := overlayInput("JobSet", "prod", "train", "", "neutral", subject.TierPartOf, "prod/app/shop", subject.ConfidenceMedium)
+	member := rawInput("Job", "prod", "train-workers-0", "", "healthy")
+	member.rootKey, member.rootKind, member.rootGroup, member.rootIdentity = root.rootKey, root.rootKind, root.rootGroup, root.rootIdentity
+	member.wl.jobSetParent = root.rootIdentity
+	rows := groupApplications([]appWorkloadInput{service(), crashing(), member, root})
+	foldJobSetApplicationWorkloads(rows)
+	if row := rowByName(rows, "shop"); row == nil || row.WorkloadClass != "mixed" || row.Health != "unhealthy" || row.RuntimeHealth != "unhealthy" {
+		t.Fatalf("JobSet row = %+v, want mixed and unhealthy", row)
+	}
+}
+
 // The app's namespace is where its WORKLOADS run, not where the GitOps manager
 // lives: a Flux HelmRelease in flux-system deploying into demo is a demo app.
 // The residence override must win over identifyApp's provenance-key namespace.
@@ -1357,14 +1401,16 @@ func TestGroupApplications_MatchKeys(t *testing.T) {
 
 // A real class mix (service + scheduled job) reports "mixed", not "unknown" —
 // the per-workload classes are confident and the UI shows the composition.
-// service+worker stays "service" (operated primarily as a service), and an
-// unclassifiable member (bare Pod) doesn't poison a known class.
+// service+worker stays "service" (operated primarily as a service). A workload
+// whose exposure went undecided is a service or a worker, so the row takes the
+// class both readings give, and "unknown" when they differ.
 func TestWorkloadClass_MixedComposition(t *testing.T) {
 	mk := func(name, kind, class string) appWorkloadInput {
 		in := overlayInput(kind, "prod", name, "1.0", "healthy", subject.TierPartOf, "prod/app/shop", subject.ConfidenceMedium)
 		in.wl.WorkloadClass = class
 		return in
 	}
+	undecided := classifyWorkload("Deployment", &appRelationships{exposureIncomplete: true})
 	cases := []struct {
 		name string
 		ins  []appWorkloadInput
@@ -1373,8 +1419,11 @@ func TestWorkloadClass_MixedComposition(t *testing.T) {
 		{"service+job", []appWorkloadInput{mk("api", "Deployment", "service"), mk("nightly", "CronJob", "job")}, "mixed"},
 		{"worker+job", []appWorkloadInput{mk("proc", "Deployment", "worker"), mk("nightly", "CronJob", "job")}, "mixed"},
 		{"service+worker", []appWorkloadInput{mk("api", "Deployment", "service"), mk("proc", "Deployment", "worker")}, "service"},
-		{"service+unknown", []appWorkloadInput{mk("api", "Deployment", "service"), mk("dbg", "Pod", "unknown")}, "service"},
-		{"only-unknown", []appWorkloadInput{mk("dbg", "Pod", "unknown")}, "unknown"},
+		{"service+unknown", []appWorkloadInput{mk("api", "Deployment", "service"), mk("dbg", "Deployment", undecided)}, "service"},
+		{"unknown+job", []appWorkloadInput{mk("dbg", "Deployment", undecided), mk("nightly", "CronJob", "job")}, "mixed"},
+		{"unknown+worker", []appWorkloadInput{mk("dbg", "Deployment", undecided), mk("proc", "Deployment", "worker")}, "unknown"},
+		{"service+unknown+job", []appWorkloadInput{mk("api", "Deployment", "service"), mk("dbg", "Deployment", undecided), mk("nightly", "CronJob", "job")}, "mixed"},
+		{"only-unknown", []appWorkloadInput{mk("dbg", "Deployment", undecided)}, "unknown"},
 	}
 	for _, c := range cases {
 		rows := groupApplications(c.ins)
