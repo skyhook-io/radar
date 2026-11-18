@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,7 +15,11 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestApplicationsRetainAttachmentsAboveTopologyDisplayLimit(t *testing.T) {
@@ -191,4 +198,105 @@ func TestApplicationsQueuedBuildWaitIsBounded(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("queued build waited past its bound")
 	}
+}
+
+func listApplicationsStatus() int {
+	w := httptest.NewRecorder()
+	(&Server{}).handleListApplications(w, httptest.NewRequest(http.MethodGet, "/api/applications?namespaces=prod", nil))
+	return w.Code
+}
+
+func assertNoApplicationsCached(t *testing.T) {
+	t.Helper()
+	applicationsCacheMu.Lock()
+	defer applicationsCacheMu.Unlock()
+	if len(applicationsCache) != 0 {
+		t.Fatalf("an unfinished build was cached: %v", applicationsCache)
+	}
+}
+
+// A build that runs out of its budget answers busy, which the UI retries, not
+// an internal error.
+func TestApplicationsBuildOutOfTimeAnswersBusy(t *testing.T) {
+	queuedApplicationsBuildFixture(t)
+	prev := applicationsBuildBudget
+	applicationsBuildBudget = time.Nanosecond
+	t.Cleanup(func() { applicationsBuildBudget = prev })
+	if got := listApplicationsStatus(); got != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", got)
+	}
+	assertNoApplicationsCached(t)
+}
+
+// enrichmentBlockedFixture is the queued fixture with an Argo CD Application
+// kind whose list blocks until release, which holds a build inside the Argo CD
+// enrichment. entered closes once a build gets there.
+func enrichmentBlockedFixture(t *testing.T) (entered <-chan struct{}, release func()) {
+	t.Helper()
+	useTestResourceCache(t, fake.NewClientset(append(testNamespaces("prod"), &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api"}})...))
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "ApplicationList"})
+	reached, unblock := make(chan struct{}), make(chan struct{})
+	var reachedOnce, unblockOnce sync.Once
+	dyn.PrependReactor("list", "applications", func(k8stesting.Action) (bool, runtime.Object, error) {
+		reachedOnce.Do(func() { close(reached) })
+		<-unblock
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Application", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	addApplicationTypedDiscovery()
+	clearApplicationsCache()
+	t.Cleanup(clearApplicationsCache)
+	release = func() {
+		unblockOnce.Do(func() { close(unblock) })
+		// The blocked list belongs to a watch start that outlives the build.
+		_ = k8s.GetDynamicResourceCache().EnsureWatching(gvr)
+	}
+	t.Cleanup(release)
+	return reached, release
+}
+
+// A build that runs out of time inside the Argo CD enrichment would answer
+// rows without their sources: it answers busy and caches nothing.
+func TestApplicationsBuildOutOfTimeInEnrichmentIsNotPublished(t *testing.T) {
+	entered, release := enrichmentBlockedFixture(t)
+	prev := applicationsBuildBudget
+	applicationsBuildBudget = 2 * time.Second
+	t.Cleanup(func() { applicationsBuildBudget = prev })
+	status := listApplicationsStatus()
+	select {
+	case <-entered:
+	default:
+		t.Fatal("the build ran out of time before the enrichment")
+	}
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", status)
+	}
+	assertNoApplicationsCached(t)
+	release()
+}
+
+// A context switch while the enrichment reads the dynamic cache would mix two
+// clusters in one answer: the build answers busy and caches nothing.
+func TestApplicationsBuildAcrossAContextSwitchIsNotPublished(t *testing.T) {
+	entered, release := enrichmentBlockedFixture(t)
+	status := make(chan int, 1)
+	go func() { status <- listApplicationsStatus() }()
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the build never reached the enrichment")
+	}
+	k8s.ResetResourceCache()
+	if err := k8s.InitTestResourceCache(fake.NewClientset(testNamespaces("prod")...)); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if got := <-status; got != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", got)
+	}
+	assertNoApplicationsCached(t)
 }

@@ -635,12 +635,21 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		managers := ownership.NewView(session, ownership.Unrestricted())
 		batch := buildAppRelationBatch(buildCtx, session.(relations.Session), namespaces)
 		read := &applicationInventory{batch: batch, session: session.(relations.Session), owners: managers}
-		wls := collectAppWorkloads(buildCtx, cache, namespaces, read, managers, canListClusterWorkflowTemplates)
-		if err := buildCtx.Err(); err != nil {
-			return nil, err
+		// A build that ran out of time has lost workloads and attachments, and
+		// one that read across a context switch mixes two clusters: neither is
+		// answered or cached, and the caller retries.
+		settled := func() error {
+			if err := buildCtx.Err(); err != nil {
+				return fmt.Errorf("%w: the Applications build ran out of time: %v", errResourceCacheUnavailable, err)
+			}
+			if err := session.ValidateCaches(); err != nil {
+				return fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
+			}
+			return nil
 		}
-		if err := session.ValidateCaches(); err != nil {
-			return nil, fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
+		wls := collectAppWorkloads(buildCtx, cache, namespaces, read, managers, canListClusterWorkflowTemplates)
+		if err := settled(); err != nil {
+			return nil, err
 		}
 		rows := groupApplications(wls)
 		sourcePaths, appSetChildren, argoItems := argoApplicationFacts(buildCtx, cache)
@@ -650,6 +659,9 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(buildCtx, cache))
 		foldJobSetApplicationWorkloads(rows)
 		claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
+		if err := settled(); err != nil {
+			return nil, err
+		}
 		applicationsCacheMu.Lock()
 		if len(applicationsCache) >= applicationsCacheMaxEntries {
 			evictOldestApplicationsCacheEntry()

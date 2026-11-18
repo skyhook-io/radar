@@ -181,7 +181,6 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 		for _, source := range f.Sources {
 			for _, o := range objects(source.Kind).Objects {
 				if ctx.Err() != nil {
-					b.exposureIncomplete = true
 					return b
 				}
 				refs := view.References(f, o.Ref, o.Object)
@@ -267,7 +266,6 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 			}
 			for _, o := range read.Objects {
 				if ctx.Err() != nil {
-					b.exposureIncomplete = true
 					return b
 				}
 				id := o.Ref
