@@ -1,10 +1,11 @@
 import { Bot } from 'lucide-react'
-import { AlertBanner, Badge, FactGrid, FactRow, PaneLoader, SectionHeading, Tooltip } from '@skyhook-io/k8s-ui'
+import { AlertBanner, Badge, FactGrid, FactRow, FoldSection, PaneLoader, SectionHeading, Tooltip } from '@skyhook-io/k8s-ui'
 import {
   substrateErrorCode,
   useSubstrateTemplate,
   useSubstrateWorkspace,
   useSubstrateTemplates,
+  type SubstrateAttention,
   type SubstrateRef,
   type SubstrateStatus,
   type SubstrateTemplateRow,
@@ -18,7 +19,7 @@ import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import type { OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectPanel, SubstrateTierBanner, showsConnectPanel } from './SubstrateConnect'
 import { SubstrateStateBar } from './SubstrateStateBar'
-import { OWNERS_ONLY_NOTE, templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, templateFilterValue, tierReading } from './readings'
+import { OWNERS_ONLY_NOTE, templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, splitReading, templateFilterValue, tierReading } from './readings'
 import { SUBSTRATE_PATH, SUBSTRATE_SCREENS, substrateActorsPath, substrateTemplatePath } from './routes'
 import { CommandChip, Name, SUBSTRATE_WIDE, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
@@ -203,6 +204,38 @@ function TemplateSpec({ spec, unavailable, template }: { spec?: SubstrateTemplat
   )
 }
 
+/**
+ * A failed golden snapshot: the cause Substrate's row reads from the error,
+ * once, then the step. Substrate's own message and that it never retries
+ * fold under Details.
+ */
+function GoldenFailedBanner({ error, row }: { error?: string; row?: SubstrateAttention }) {
+  const message = withoutReasonCode(error ?? '')
+  const [lead] = row ? splitReading(row.reading) : []
+  // The row's reading leads with Substrate's message when it names no cause; then the message is the lead.
+  const cause = lead && !lead.startsWith('Substrate') ? lead : undefined
+  return (
+    <AlertBanner variant="error" title="No golden snapshot: new actors from the template’s default boot cold" className="">
+      <div className="mt-1 break-words text-xs text-theme-text-secondary">
+        {cause ?? <>Substrate’s message: <span className="font-medium text-theme-text-primary">{message}</span>.</>}
+      </div>
+      <div className="mt-1 text-xs text-theme-text-primary">
+        <span className="font-medium">Next step: </span>
+        {row?.nextStep ?? 'Fix the cause in Substrate’s message, then recreate the template: templates can’t be edited, and each new one gets a golden snapshot build.'}
+        {row?.command && <CommandChip command={row.command} />}
+      </div>
+      <div className="mt-1.5">
+        <FoldSection title="Details" summary="" attention={false}>
+          <div className="break-words text-xs text-theme-text-secondary">
+            {cause && <>Substrate’s message: <span className="font-medium text-theme-text-primary">{message}</span>. </>}
+            Substrate does not retry a failed build.
+          </div>
+        </FoldSection>
+      </div>
+    </AlertBanner>
+  )
+}
+
 /** A template's page: its golden snapshot, the actors of it by state, and the pools that can run it. */
 export function SubstrateTemplatePage({ template, onOpenSubject }: { template: SubstrateRef; onOpenSubject: OpenSubject }) {
   const navigate = useWorkspaceNavigate()
@@ -251,7 +284,6 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
   const crashes = workspace.data?.needsAttention
     .find((a) => a.rule === 'crashedActors')
     ?.groups?.find((g) => g.subject?.kind === 'ActorTemplate' && g.subject.atespace === t.atespace && g.subject.name === t.name)
-  const perActor = resourcesText(t)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="px-5 pt-4 xl:px-7">
@@ -264,21 +296,12 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
       </div>
       <ScreenBody>
         <RefreshFailedNotice queries={[query]} />
-        {t.golden.state === 'failed' && (
-          <AlertBanner variant="error" title="No golden snapshot, so every new actor boots cold" className="">
-            <div className="mt-1 break-words text-xs text-theme-text-secondary">Substrate’s message: <span className="font-medium text-theme-text-primary">{withoutReasonCode(t.golden.error ?? '')}</span>. Substrate does not retry a failed build.</div>
-            <div className="mt-1 text-xs text-theme-text-primary">
-              <span className="font-medium">Next step: </span>
-              {goldenRow?.nextStep ?? 'Templates are immutable, so fix the cause and create the template again: delete and recreate it, or create it under a new name. Substrate builds a golden snapshot for each new template.'}
-              {goldenRow?.command && <CommandChip command={goldenRow.command} />}
-            </div>
-          </AlertBanner>
-        )}
+        {t.golden.state === 'failed' && <GoldenFailedBanner error={t.golden.error} row={goldenRow} />}
         {crashes && crashes.count > 0 && (
-          <AlertBanner variant="error" title={`${crashes.count} of its actors crashed${crashes.cause === 'memoryLimit' ? ': killed over their memory limit' : ''}`} className="">
-            {crashes.cause === 'memoryLimit' && perActor && (
+          <AlertBanner variant="error" title={`${crashes.count} of its actors ${crashes.count === 1 ? 'is' : 'are'} crashed`} className="">
+            {crashes.cause === 'memoryLimit' && (
               <div className="mt-1 text-xs text-theme-text-secondary">
-                Per actor it sets {perActor}{t.memoryBytes ? `; ${bytesText(t.memoryBytes)} of memory is the limit they were killed for exceeding` : ''}.
+                {t.memoryBytes ? `Killed over the ${bytesText(t.memoryBytes)} memory limit it sets per actor.` : 'Killed over their memory limit.'}
               </div>
             )}
             {crashes.nextStep && (

@@ -1,6 +1,6 @@
-import { useLayoutEffect, useRef, type ReactNode } from 'react'
+import { useId, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { AlertBanner, FactGrid, FactRow, SectionHeading, Tooltip, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
+import { AlertBanner, FactGrid, FactRow, FoldSection, SectionHeading, Tooltip, formatAge, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
 import {
   substrateErrorCode,
   useSubstrateActorLogs,
@@ -26,13 +26,17 @@ const WORKER_STATE: Record<SubstrateWorkerRow['state'], { label: string; tone: '
   unknown: { label: 'state unknown', tone: 'unknown' },
 }
 
-/** The crash banner: Substrate's message, what a revert leaves and drops, and one next step with the exact command. */
+/**
+ * The crash banner, in the order a reader acts on it: the cause and where it
+ * was read, how many crashed actors share its template, one next step with
+ * the exact command, and beside it what a revert keeps and drops. Substrate's
+ * own message folds under Details once the worker's log names the cause.
+ */
 function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject?: OpenSubject }) {
   const { actor, template, recovery } = detail
   const at = actor.crash?.time ?? actor.updateTime
   const message = actor.crash?.message
   const crashedOfTemplate = template?.actors?.byState.crashed
-  const others = crashedOfTemplate !== undefined ? crashedOfTemplate - 1 : undefined
   // A pending upload that can still finish is worth waiting for; an abandoned one never is.
   const pending = recovery?.discarded.filter((d) => d.why === 'uploadPending') ?? []
   // The same read as the Overview's last lines; a memory-limit kill among them is the crash's cause.
@@ -47,45 +51,47 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
       : recovery
         ? { text: 'Fix the cause in Substrate’s message, then revert the actor.', command: revertCommand(actor) }
         : undefined
+  const substrateMessage = message ? (
+    <>
+      Substrate’s message: <span className="font-medium text-theme-text-primary">{message}</span>
+    </>
+  ) : (
+    'Substrate recorded no crash message.'
+  )
   return (
     <AlertBanner variant="error" title={`Crashed${at ? ` ${relativeTime(at)}` : ''}`} className="">
       <div className="mt-1 break-words text-xs text-theme-text-secondary">
-        {message ? (
+        {kill?.current ? (
           <>
-            Substrate’s message: <span className="font-medium text-theme-text-primary">{message}</span>
+            Cause, from its worker’s log: <span className="font-medium text-theme-text-primary">{memoryKillText(kill)}</span>
+            {kill.time && <> <When iso={kill.time} /></>}, in <span className="font-mono">{kill.pod}</span>.
           </>
         ) : (
-          'Substrate recorded no crash message.'
+          substrateMessage
         )}
       </div>
       {/* Holds the cause's place while the log is read, so the banner doesn't grow under the reader. */}
       {logs.isLoading && <div className="mt-1 text-xs text-theme-text-tertiary">Reading its worker’s log for the cause…</div>}
-      {kill?.current && (
-        <div className="mt-1 break-words text-xs text-theme-text-secondary">
-          Cause, from its worker’s log: <span className="font-medium text-theme-text-primary">{memoryKillText(kill)}</span>
-          {kill.time && <> <When iso={kill.time} /></>}, in <span className="font-mono">{kill.pod}</span>.
-        </div>
-      )}
       {kill && !kill.current && (
         <div className="mt-1 break-words text-xs text-theme-text-secondary">
-          A memory-limit kill was recorded{kill.time && <> <When iso={kill.time} /></>} in <span className="font-mono">{kill.pod}</span>, from an earlier run; Radar can’t tie it to this crash.
+          Earlier run: a memory-limit kill was recorded{kill.time && <> <When iso={kill.time} /></>} in <span className="font-mono">{kill.pod}</span>; Radar can’t tie it to this crash.
         </div>
       )}
-      <div className="mt-1 break-words text-xs text-theme-text-secondary">
-        Substrate stopped the actor and released its worker.
-        {recovery && <> <RecoveryText recovery={recovery} newest={detail.row.newestSnapshot?.generation} /></>}
-        {others !== undefined && others > 0 && (
-          <> {others === 1 ? '1 other actor' : `${others} other actors`} of the same template {others === 1 ? 'is' : 'are'} crashed too, so the cause may be the template rather than this actor.</>
-        )}
-      </div>
-      {recovery && recovery.discarded.length > 0 && (
-        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-theme-text-secondary">
-          {recovery.discarded.map((d) => (
-            <li key={d.generation}>
-              A revert drops generation {d.generation}{d.fidelity ? ` (${fidelityLabel(d.fidelity)})` : ''}: {DISCARD_WHY[d.why] ?? d.why}.
-            </li>
-          ))}
-        </ul>
+      {/* How many crashed actors share its template: a concentration, not a cause. */}
+      {crashedOfTemplate !== undefined && crashedOfTemplate > 1 && (
+        <div className="mt-1 text-xs font-medium text-theme-text-primary">
+          {onOpenSubject ? (
+            <button
+              type="button"
+              onClick={() => onOpenSubject({ kind: 'Actors', filter: { state: 'crashed', template: `${actor.template.atespace}/${actor.template.name}` } })}
+              className="text-left text-accent-text hover:underline"
+            >
+              {crashedOfTemplate} crashed actors use its template, this one included →
+            </button>
+          ) : (
+            <>{crashedOfTemplate} crashed actors use its template, this one included</>
+          )}
+        </div>
       )}
       {step && (
         <div className="mt-1.5 break-words text-xs text-theme-text-primary">
@@ -95,15 +101,26 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
           {step.command && <CommandChip command={step.command} />}
         </div>
       )}
-      {others !== undefined && others > 0 && onOpenSubject && (
-        <div className="mt-1.5 text-xs">
-          <button
-            type="button"
-            onClick={() => onOpenSubject({ kind: 'Actors', filter: { state: 'crashed', template: `${actor.template.atespace}/${actor.template.name}` } })}
-            className="text-accent-text hover:underline"
-          >
-            The {crashedOfTemplate} crashed actors of this template →
-          </button>
+      {/* What a revert keeps and drops stays beside the step that reverts. */}
+      {recovery && (
+        <div className="mt-1 break-words text-xs text-theme-text-secondary">
+          <RecoveryText recovery={recovery} newest={detail.row.newestSnapshot?.generation} />
+        </div>
+      )}
+      {recovery && recovery.discarded.length > 0 && (
+        <ul className="mt-1 list-disc space-y-0.5 pl-4 text-xs text-theme-text-secondary">
+          {recovery.discarded.map((d) => (
+            <li key={d.generation}>
+              A revert drops generation {d.generation}{d.fidelity ? ` (${fidelityLabel(d.fidelity)})` : ''}: {DISCARD_WHY[d.why] ?? d.why}.
+            </li>
+          ))}
+        </ul>
+      )}
+      {kill?.current && (
+        <div className="mt-1.5">
+          <FoldSection title="Details" summary="" attention={false}>
+            <div className="break-words text-xs text-theme-text-secondary">{substrateMessage}</div>
+          </FoldSection>
         </div>
       )}
     </AlertBanner>
@@ -248,7 +265,7 @@ function AtAGlance({ detail, onOpenSubject }: { detail: SubstrateActorDetail; on
             )}
           </>
         ) : (
-          <span className="text-theme-text-secondary">None: a {ACTOR_STATE_LABEL[actor.state].toLowerCase()} actor runs on no worker</span>
+          <span className="text-theme-text-secondary">none while {ACTOR_STATE_LABEL[actor.state].toLowerCase()}</span>
         )}
       </FactRow>
       <FactRow label={<Term term="pool">Pool</Term>}>
@@ -300,7 +317,17 @@ function AtAGlance({ detail, onOpenSubject }: { detail: SubstrateActorDetail; on
   )
 }
 
-export function LogLines({ lines, showPod }: { lines: (SubstrateLogLine & { pod?: string })[]; showPod?: boolean }) {
+/** A line LogLines marks in place: the worker's memory-limit kill, of this crash or an earlier run. */
+export interface MarkedLine {
+  index: number
+  /** The kill is tied to the present crash: an error rail; otherwise a label alone. */
+  current: boolean
+  label: string
+  /** The line's element id, for "Jump to line". */
+  id: string
+}
+
+export function LogLines({ lines, showPod, mark }: { lines: (SubstrateLogLine & { pod?: string })[]; showPod?: boolean; mark?: MarkedLine }) {
   // Opens at the newest line and follows new ones, unless the reader has scrolled up to read.
   const ref = useRef<HTMLPreElement>(null)
   const following = useRef(true)
@@ -314,16 +341,30 @@ export function LogLines({ lines, showPod }: { lines: (SubstrateLogLine & { pod?
   }
   return (
     <pre ref={ref} onScroll={onScroll} className="max-h-[28rem] overflow-auto rounded-lg border border-theme-border bg-theme-base px-3 py-2 font-mono text-[12px] leading-5 text-theme-text-primary">
-      {lines.map((l, i) => (
-        <div key={i} className="whitespace-pre-wrap break-words">
-          {l.time && <span className="text-theme-text-tertiary">{new Date(l.time).toLocaleTimeString()} </span>}
-          {showPod && l.pod && <span className="text-theme-text-tertiary">{l.pod} </span>}
-          <span className="text-theme-text-tertiary">{l.kind === 'container' ? l.container ?? 'container' : l.kind} </span>
-          {l.message ?? l.text}
-        </div>
-      ))}
+      {lines.map((l, i) => {
+        const marked = mark?.index === i ? mark : undefined
+        return (
+          <div key={i} id={marked?.id} className={clsx('whitespace-pre-wrap break-words', marked && 'relative')} data-marked={marked ? (marked.current ? 'current' : 'earlier') : undefined}>
+            {marked?.current && <span aria-hidden className={clsx('absolute -left-2 bottom-0.5 top-0.5 w-0.5 rounded-sm', toneFillClass('unhealthy'))} />}
+            {l.time && <span className="text-theme-text-tertiary">{new Date(l.time).toLocaleTimeString()} </span>}
+            {showPod && l.pod && <span className="text-theme-text-tertiary">{l.pod} </span>}
+            <span className="text-theme-text-tertiary">{l.kind === 'container' ? l.container ?? 'container' : l.kind} </span>
+            {l.message ?? l.text}
+            {marked && <span className={clsx('ml-2 font-sans text-[11px] font-medium', marked.current ? toneTextClass('unhealthy') : 'text-theme-text-tertiary')}>{marked.label}</span>}
+          </div>
+        )
+      })}
     </pre>
   )
+}
+
+/** The loaded line that is the worker's memory-limit kill record, newest first; -1 when the lines read don't hold it. */
+export function memoryKillLine(lines: (SubstrateLogLine & { pod?: string })[], kill: NonNullable<SubstrateActorLogs['memoryKill']>): number {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i]
+    if (l.kind === 'worker' && l.memoryLimitBytes !== undefined && l.pod === kill.pod && (!kill.time || l.time === kill.time)) return i
+  }
+  return -1
 }
 
 /** The query an external log backend takes for an actor: Substrate's own log attribute keys (ateattr). */
@@ -374,6 +415,7 @@ function logGap(logs: SubstrateActorLogs, actor: SubstrateActorDetail['actor']):
 type LogsRead = { data?: SubstrateActorLogs; isLoading: boolean; error: unknown; isRefetchError?: boolean; dataUpdatedAt?: number }
 
 export function ActorLogsBody({ actor, logs, compact }: { actor: SubstrateActorDetail['actor']; logs: LogsRead; compact?: boolean }) {
+  const lineId = useId()
   // A refresh that says the log can't be read any more replaces the lines kept from before.
   const data = definitiveFailure(substrateErrorCode(logs.error)) ? undefined : logs.data
   const stale = data && logs.isRefetchError ? <RefreshFailedNotice queries={[{ isRefetchError: true, error: logs.error instanceof Error ? logs.error : null, dataUpdatedAt: logs.dataUpdatedAt ?? 0 }]} /> : null
@@ -384,22 +426,35 @@ export function ActorLogsBody({ actor, logs, compact }: { actor: SubstrateActorD
   if (data.lines.length > 0) {
     const pods = [...new Set(data.lines.map((l) => l.pod))]
     const kill = data.memoryKill
+    const at = kill ? memoryKillLine(data.lines, kill) : -1
+    // Only a kill tied to this crash is its cause; an earlier run's is labelled as one.
+    const mark = kill && at >= 0 ? { index: at, current: kill.current, label: kill.current ? (actor.state === 'crashed' ? 'memory-limit kill · this crash' : 'memory-limit kill') : 'memory-limit kill · earlier run', id: lineId } : undefined
+    const jump = mark && !compact ? (
+      <button type="button" onClick={() => document.getElementById(mark.id)?.scrollIntoView({ block: 'center', behavior: 'smooth' })} className="ml-2 whitespace-nowrap text-xs font-medium text-accent-text hover:underline">
+        Jump to line
+      </button>
+    ) : null
     return (
       <div className="space-y-1.5">
         {stale}
+        {/* One provenance line: where these lines come from. The Overview's heading already says it for a current worker. */}
+        {data.origin === 'worker' && data.worker && !compact && (
+          <p className="text-xs text-theme-text-secondary">From its current worker Pod <span className="font-mono">{data.worker.namespace}/{data.worker.pod}</span>.</p>
+        )}
+        {data.origin === 'lastNode' && (
+          <p className="text-xs text-theme-text-secondary">
+            Candidates from {pods.length === 1 ? <span className="font-mono">{pods[0]}</span> : `${pods.length} worker Pods`} on <span className="font-mono">{data.node}</span>, the node it last ran on{crashedAt ? <>, before it crashed <When iso={crashedAt} /></> : ''}: Substrate doesn’t record which Pod it ran in{pods.length > 1 ? ', so each line names its Pod' : ''}.
+          </p>
+        )}
         {kill && !compact && (
           <p className="text-sm text-theme-text-secondary">
             {kill.current
               ? <>In {kill.pod}{kill.time && <> <When iso={kill.time} /></>}, {memoryKillText(kill)}{actor.state === 'crashed' ? ': that is why it crashed.' : '.'}</>
-              : <>A memory-limit kill was recorded{kill.time && <> <When iso={kill.time} /></>} in {kill.pod}, from an earlier run: {memoryKillText(kill)}.{actor.state === 'crashed' ? ' Radar can’t tie it to this crash.' : ''}</>}
+              : <>Earlier run: a memory-limit kill was recorded{kill.time && <> <When iso={kill.time} /></>} in {kill.pod}: {memoryKillText(kill)}.{actor.state === 'crashed' ? ' Radar can’t tie it to this crash.' : ''}</>}
+            {jump}
           </p>
         )}
-        {data.origin === 'lastNode' && (
-          <p className="text-xs text-theme-text-secondary">
-            Found on {pods.length === 1 ? <span className="font-mono">{pods[0]}</span> : `${pods.length} worker Pods`}, on <span className="font-mono">{data.node}</span>, the node it last ran on{crashedAt ? <>, before it crashed <When iso={crashedAt} /></> : ''}. Substrate doesn’t record which Pod it ran in, so these are candidates{pods.length > 1 ? ': each line names its Pod' : ''}.
-          </p>
-        )}
-        <LogLines lines={data.lines} showPod={data.origin === 'lastNode' && pods.length > 1} />
+        <LogLines lines={data.lines} showPod={data.origin === 'lastNode' && pods.length > 1} mark={mark} />
         {data.windowFull && <p className="text-xs text-theme-text-tertiary">Radar read the newest lines of each Pod’s log; older lines of this actor may exist beyond them.</p>}
       </div>
     )

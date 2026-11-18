@@ -34,6 +34,7 @@ import {
   type ActorSegment,
 } from './readings'
 import { SubstrateConnectPanel, SubstrateTierBanner, showsConnectPanel } from './SubstrateConnect'
+import { actorAttentionParts, substrateScreenCounts } from './attention'
 import { ActorStateBadge, NOT_CONNECTED_TITLE, Name, SUBSTRATE_WIDE, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 
@@ -128,7 +129,9 @@ function StateCell({ row }: { row: SubstrateActorRow }) {
   const text = [waiting, extra].filter(Boolean).join(' · ')
   const hover = [row.reason, row.waitingOn?.reading].filter(Boolean).join(' ')
   // The one cell that may take a second line: a crash message or a wait reads whole at 1440.
-  const line = text ? <span className={clsx('line-clamp-2 min-w-0 text-xs leading-4', row.state === 'crashed' ? toneTextClass('unhealthy') : stuck ? toneTextClass('degraded') : 'text-theme-text-tertiary')}>{text}</span> : null
+  // The badge is a crash's one red signal; its message reads neutral, so a different cause stands out by its words.
+  // A stuck transition keeps its amber: the badge alone doesn't say it is stuck.
+  const line = text ? <span className={clsx('line-clamp-2 min-w-0 text-xs leading-4', row.state === 'crashed' ? 'text-theme-text-secondary' : stuck ? toneTextClass('degraded') : 'text-theme-text-tertiary')}>{text}</span> : null
   // Beside the chip while there is room for a few words, under it when there isn't.
   const place = 'min-w-[8rem] flex-1 pt-0.5'
   return (
@@ -194,6 +197,44 @@ function actorColumns(wide: boolean): TableColumn<SubstrateActorRow>[] {
         }]
       : []),
   ]
+}
+
+/**
+ * What the Actors badge in the sidebar counts, said on the page it opens:
+ * "N need attention: C crashed · S stuck", from the same read and the same
+ * count. Each part opens its segment.
+ */
+export function ActorAttentionSummary({ workspace, onCrashed, onStuck }: { workspace: SubstrateWorkspace; onCrashed: () => void; onStuck: () => void }) {
+  const c = substrateScreenCounts(workspace).actors
+  const { crashed, stuck } = actorAttentionParts(workspace)
+  if (c.count === null) {
+    return (
+      <p className="text-sm text-theme-text-secondary">
+        <Tooltip content={c.title}><span tabIndex={0} className="font-medium text-theme-text-primary">Needing attention: unknown</span></Tooltip>
+      </p>
+    )
+  }
+  if (c.count === 0 && !c.lowerBound) return null
+  const parts = [
+    crashed > 0 && (
+      <button key="crashed" type="button" onClick={onCrashed} className="text-accent-text hover:underline">{crashed.toLocaleString('en-US')} crashed</button>
+    ),
+    stuck > 0 && (
+      <Tooltip key="stuck" content="Opens In progress, with the actors stuck longest first. Stuck: held in a transition past Substrate’s 5m threshold.">
+        <button type="button" onClick={onStuck} className="text-accent-text hover:underline">{stuck.toLocaleString('en-US')} stuck</button>
+      </Tooltip>
+    ),
+  ].filter(Boolean)
+  return (
+    <p className="text-sm text-theme-text-secondary">
+      <Tooltip content={c.title}>
+        <span tabIndex={0} className="font-medium text-theme-text-primary">
+          {c.lowerBound ? 'At least ' : ''}{c.count.toLocaleString('en-US')} {c.count === 1 ? 'needs' : 'need'} attention
+        </span>
+      </Tooltip>
+      {parts.length > 0 && <>: {parts.map((p, i) => <span key={i}>{i > 0 && ' · '}{p}</span>)}</>}
+    </p>
+  )
 }
 
 export interface SubstrateActorsProps {
@@ -321,6 +362,20 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
       </SubstrateHeader>
       <ScreenBody>
         {tier && <SubstrateSourceLine tier={tier} status={status} />}
+        {workspace && workspace.apiTier.state === 'connected' && !notConnected && (
+          <ActorAttentionSummary
+            workspace={workspace}
+            onCrashed={() => setSegment('crashed')}
+            onStuck={() => {
+              const p = new URLSearchParams(params)
+              p.set('state', 'inProgress')
+              // Needs attention first puts the stuck ones on top.
+              p.delete('sort')
+              p.delete('page')
+              setParams(p, { replace: true })
+            }}
+          />
+        )}
         {node && !notConnected && (
           <div className="flex flex-wrap items-center gap-3 text-sm text-theme-text-secondary">
             <Segments

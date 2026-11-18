@@ -40,7 +40,7 @@ func TestNeedsAttentionCrashedActors(t *testing.T) {
 	if row.Severity != SeverityCritical || row.Count != 4 {
 		t.Fatalf("row = %+v", row)
 	}
-	if row.Title != "4 actors are crashed, 3 of them from one template" {
+	if row.Title != "4 actors are crashed" {
 		t.Errorf("title = %q", row.Title)
 	}
 	if row.Groups[0].Count != 3 || row.Groups[0].Subject.Name != "lang" || row.Messages[0].Text != "OOMKilled" || row.Messages[0].Count != 3 {
@@ -413,7 +413,8 @@ func TestPoolShortCountsPods(t *testing.T) {
 func TestMemoryCauseRemedies(t *testing.T) {
 	templates := []Template{{Atespace: "a", Name: "mcp", GoldenError: "GoldenActorCrashed: golden actor crashed before its snapshot was taken: killed for exceeding its memory limit"}}
 	g := find(t, NeedsAttention(Inputs{Templates: templates, TemplatesRead: true, Now: now}), "goldenSnapshotFailed:a/mcp")
-	if !strings.HasPrefix(g.NextStep, "Recreate the template with a higher memory limit") || strings.Contains(g.Reading, "GoldenActorCrashed") {
+	if !strings.HasPrefix(g.NextStep, "Recreate the template with a higher memory limit") || strings.Contains(g.Reading, "GoldenActorCrashed") ||
+		!strings.HasPrefix(g.Reading, "Its golden actor was killed for exceeding its memory limit") || strings.Contains(g.NextStep, "killed") {
 		t.Errorf("golden = %+v", g)
 	}
 	actors := []Actor{

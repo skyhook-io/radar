@@ -175,12 +175,15 @@ function ConnectForm({ connection }: { connection: SubstrateConnection | undefin
             <span className="font-medium text-theme-text-primary">Your own viewer token</span>{' '}
             <Badge tone="note" size="sm">Recommended</Badge>
             <span className="block text-theme-text-secondary">
-              A token for an identity a Substrate owner has made a viewer, in a file on this machine. Radar reads the file each time it connects, sends the token only to the selected Substrate API over verified TLS, and never returns it to the browser or stores it in its settings: only the path is saved.
+              A token a Substrate owner has made a viewer, in a file on this machine. Radar saves only the path.
             </span>
           </span>
         </label>
         <Collapse open={draft.identity === 'tokenFile'}>
           <div className="space-y-3 pl-6">
+            <Disclosure label="How Radar handles the token">
+              Radar reads the file each time it connects, sends the token only to the selected Substrate API over verified TLS, and never returns it to the browser or stores it in its settings.
+            </Disclosure>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field id={`${id}-token`} label="Token file path">
                 <Input id={`${id}-token`} className={INPUT} value={draft.tokenFile} onChange={(e) => edit({ tokenFile: e.target.value })} placeholder="~/ate.token" spellCheck={false} />
@@ -269,33 +272,42 @@ const AUTHZ_DOC = 'https://github.com/agent-substrate/substrate/blob/main/docs/g
  * access policy.
  */
 function TokenSetup() {
+  return (
+    <Disclosure label="How to get a viewer token">
+      <ol className="list-decimal space-y-2 pl-5">
+        <li>
+          Mint a token for your own ServiceAccount, for example in a namespace set aside for Substrate users (Substrate’s authentication guide, “Your own ServiceAccount”):
+          <CommandChip command="kubectl create token -n ate-users <you> --audience api.ate-system.svc > ~/ate.token" />
+          The token expires; Radar rereads the file when it reconnects, so write a fresh one there when it does.
+        </li>
+        <li>
+          Ask a Substrate owner to add <span className="font-mono">user:system:serviceaccount:ate-users:&lt;you&gt;</span> as a <span className="font-medium">viewer</span>:
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            <li>in the global access policy, to see workers and every atespace;</li>
+            <li>or in one atespace’s policy, to see its actors and templates only. Workers then stay unread: only a global viewer may list them.</li>
+          </ul>
+          There is no single grant command. The owner edits the policy and writes it back:
+          <CommandChip command="kubectl ate get access-policy --global -o yaml > policy.yaml" />
+          <CommandChip command="kubectl ate update access-policy --global -f policy.yaml" />
+          See <a href={AUTHZ_DOC} target="_blank" rel="noreferrer" className="text-accent-text hover:underline">Managing access</a> in Substrate’s authorization guide.
+        </li>
+      </ol>
+    </Disclosure>
+  )
+}
+
+/** Secondary detail under a label that says what it explains; folded until asked for. */
+function Disclosure({ label, children }: { label: string; children: ReactNode }) {
   const [open, setOpen] = useState(false)
   const id = useId()
   return (
     <div>
       <button type="button" aria-expanded={open} aria-controls={id} onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1 text-xs font-medium text-accent-text hover:underline">
         <CollapseChevron open={open} />
-        How to get a viewer token
+        {label}
       </button>
       <Collapse open={open} id={id}>
-        <ol className="mt-2 list-decimal space-y-2 pl-5 text-xs text-theme-text-secondary">
-          <li>
-            Mint a token for your own ServiceAccount, for example in a namespace set aside for Substrate users (Substrate’s authentication guide, “Your own ServiceAccount”):
-            <CommandChip command="kubectl create token -n ate-users <you> --audience api.ate-system.svc > ~/ate.token" />
-            The token expires; Radar rereads the file when it reconnects, so write a fresh one there when it does.
-          </li>
-          <li>
-            Ask a Substrate owner to add <span className="font-mono">user:system:serviceaccount:ate-users:&lt;you&gt;</span> as a <span className="font-medium">viewer</span>:
-            <ul className="mt-1 list-disc space-y-0.5 pl-4">
-              <li>in the global access policy, to see workers and every atespace;</li>
-              <li>or in one atespace’s policy, to see its actors and templates only. Workers then stay unread: only a global viewer may list them.</li>
-            </ul>
-            There is no single grant command. The owner edits the policy and writes it back:
-            <CommandChip command="kubectl ate get access-policy --global -o yaml > policy.yaml" />
-            <CommandChip command="kubectl ate update access-policy --global -f policy.yaml" />
-            See <a href={AUTHZ_DOC} target="_blank" rel="noreferrer" className="text-accent-text hover:underline">Managing access</a> in Substrate’s authorization guide.
-          </li>
-        </ol>
+        <div className="pt-1.5 text-xs text-theme-text-secondary">{children}</div>
       </Collapse>
     </div>
   )
@@ -313,8 +325,13 @@ export function SubstrateConnectPanel({ status, tier }: { status: SubstrateStatu
     <section aria-labelledby="substrate-connect" className="rounded-xl border border-theme-border bg-theme-surface px-4 py-4 shadow-theme-sm">
       <h2 id="substrate-connect" className="text-sm font-semibold text-theme-text-primary">See actors, templates and workers</h2>
       <p className="mt-1 text-sm text-theme-text-secondary">
-        Substrate keeps <Term term="actor">actors</Term>, <Term term="template">templates</Term> and which <Term term="worker">worker</Term> runs each actor in its own API server, not in Kubernetes. Radar reads them, read-only, once you choose who it reads as. Substrate checks its own roles, not Kubernetes RBAC, so this is a separate grant. Pools, worker Pods and Prometheus readings show either way.
+        Substrate keeps <Term term="actor">actors</Term>, <Term term="template">templates</Term> and <Term term="worker">workers</Term> in its own API, not Kubernetes. Radar reads them, read-only, as the identity you choose.
       </p>
+      <div className="mt-1">
+        <Disclosure label="Why a separate identity?">
+          Substrate checks its own roles, not Kubernetes RBAC, so reading it takes its own grant. Pools, worker Pods and Prometheus readings show either way.
+        </Disclosure>
+      </div>
       {!status.canConfigure ? (
         <p className="mt-3 text-sm text-theme-text-secondary">{tier.reason ?? 'This Radar is shared, so it does not read Substrate’s API.'}</p>
       ) : (
