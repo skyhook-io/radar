@@ -12,13 +12,13 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// A SelectorFamily is one way objects choose others by labels, as a
-// PodDisruptionBudget's selector chooses the workloads whose pods it
-// matches. Where a Family's source names its targets, a selector is matched
+// A SelectorFamily is one way objects choose others by a predicate over
+// each candidate, today a label selector, as a PodDisruptionBudget's
+// selector chooses the workloads whose pods it matches. Where a Family's source names its targets, a selector is matched
 // against each candidate, so both directions read the candidates' namespace
 // and evaluate on ask.
 type SelectorFamily struct {
-	// Name keys the family's coverage on the wire.
+	// Name identifies the family inside Radar, as Family.Name does.
 	Name       string
 	Projection Disposition
 	// Selectors are the kinds that choose, in the order answers list them.

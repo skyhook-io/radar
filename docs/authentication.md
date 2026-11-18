@@ -42,6 +42,14 @@ answers can be narrower than the UI's. A manager the caller can't read contribut
 own metadata stays as a `withheld` claim, and the answer says it is `narrowed`. These reference checks do not support
 `resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object).
 
+Relationship answers (what uses a ConfigMap, what a selector matches, what routes to a Service) follow the same
+namespace rule. A search that spans namespaces, such as a ServiceMonitor's with `namespaceSelector: any`, matches
+against Radar's cache first and then drops what you may not read, and the answer says it is `narrowed`. It never
+returns the identities or bodies of what it dropped, but because you can write your own selectors, the mark can
+reveal whether hidden cached objects match one: whether something in a namespace you can't see carries those labels.
+A `narrowed` mark is not proof of a match, since a namespace Radar couldn't read also narrows the answer. If that is
+too much for your setup, run a Radar instance per trust boundary, as described above.
+
 Deletion-impact previews fetch the root as the caller and use caller-readable ownership data. Permission and collection gaps make the result partial; remote or unknown GitOps destinations expose no local inventory. See [Shared deletion preview](mcp.md#shared-deletion-preview). Policy coverage metadata is filtered alongside its referenced workloads; it does not reveal names from hidden namespaces.
 
 ### Image inspection

@@ -14,7 +14,10 @@ import (
 // Composition joins a producer's declarations to consumers' declarations of
 // the same logical coordinates. The intermediate object is never read: the
 // evidence is in the two readable endpoints, even before a Secret is created.
+// Only Secret coordinates join today; declarations of any other kind are
+// ignored.
 type Composition struct {
+	// Name identifies the composition inside Radar, as Family.Name does.
 	Name          string
 	Projection    Disposition
 	Producer      *Family
