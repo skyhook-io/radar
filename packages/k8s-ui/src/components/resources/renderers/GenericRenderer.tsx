@@ -4,7 +4,7 @@ import { clsx } from 'clsx'
 import { AlertBanner, Section, PropertyList, Property, isInvertedPolarityCondition } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
-import { getAgentRuntimeStatus } from '../resource-utils-agent-runtimes'
+import { getAgentRuntimeStatus, isAgentSandboxResource } from '../resource-utils-agent-runtimes'
 import { isApiGroup } from '../resource-utils-cnpg'
 import { getInferenceServiceStatus, isInferenceServiceStopRequested } from '../resource-utils-kserve'
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
@@ -346,6 +346,11 @@ export function genericConditionTone(resource: any, cond: any): GenericCondition
   if (isKServeStopState(resource, cond)) return 'neutral'
   if (resource?.kind === 'ApplicationSet' && isApiGroup(resource?.apiVersion, 'argoproj.io')
     && cond.type === 'RolloutProgressing') return 'neutral'
+  // A Sandbox's Suspended says which lifecycle state it is in, not whether it
+  // is healthy. Only a suspension the controller refuses is a problem.
+  if (resource?.kind === 'Sandbox' && isAgentSandboxResource(resource) && cond.type === 'Suspended') {
+    return cond.status === 'False' && cond.reason === 'PodNotOwned' ? 'warning' : 'neutral'
+  }
   const isTrue = cond.status === 'True'
   if (WARNING_CONDITION_TYPES.has(cond.type)) return isTrue ? 'warning' : 'ok'
   if (isInvertedPolarityCondition(cond.type)) return isTrue ? 'fail' : 'ok'

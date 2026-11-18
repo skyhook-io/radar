@@ -1,5 +1,6 @@
 import type { HealthLevel, StatusBadge } from '@skyhook-io/k8s-ui'
-import type { AgentSandboxWorkspaceResponse } from '../../api/agentSandbox'
+import { summarizeSchedulerMessage } from '@skyhook-io/k8s-ui/components/resources/resource-utils'
+import type { AgentSandboxAttention, AgentSandboxWorkspaceResponse } from '../../api/agentSandbox'
 
 // Plain words for the controller's and Kubernetes' reasons a reading names.
 // The readings keep the raw reason as their text, which stays the filter and
@@ -59,6 +60,8 @@ export interface ServerReadings {
    * state reads the same color on the Overview and in the lists.
    */
   tones: Map<string, RowTone>
+  /** The Needs attention row about an object, keyed by objectKey. */
+  rows: Map<string, AgentSandboxAttention>
 }
 
 export const objectKey = (kind: string, namespace: string, name: string) => `${kind}/${namespace}/${name}`
@@ -67,6 +70,27 @@ const TONE: Record<'critical' | 'alert' | 'warning', RowTone> = { critical: 'unh
 
 export function serverReadings(workspace: AgentSandboxWorkspaceResponse | undefined): ServerReadings {
   const tones = new Map<string, RowTone>()
-  for (const a of workspace?.attention ?? []) tones.set(objectKey(a.subject.kind, a.subject.namespace ?? '', a.subject.name), TONE[a.severity])
-  return { unschedulable: unschedulablePools(workspace), tones }
+  const rows = new Map<string, AgentSandboxAttention>()
+  for (const a of workspace?.attention ?? []) {
+    const k = objectKey(a.subject.kind, a.subject.namespace ?? '', a.subject.name)
+    tones.set(k, TONE[a.severity])
+    rows.set(k, a)
+  }
+  return { unschedulable: unschedulablePools(workspace), tones, rows }
+}
+
+/**
+ * The scheduler's verdict on a row, in the plain words the Overview's reading
+ * gives it ("All nodes have reached their Pod limit"), with its own message
+ * for a hover; nothing when the scheduler isn't the row's source.
+ */
+export function schedulerReason(a: AgentSandboxAttention | undefined): { plain: string; raw: string } | undefined {
+  if (a?.rawDetailSource !== 'scheduler' || !a.rawDetail) return undefined
+  const plain = summarizeSchedulerMessage(a.rawDetail, { plain: true })
+  return plain ? { plain: `${plain[0].toUpperCase()}${plain.slice(1)}`, raw: a.rawDetail } : undefined
+}
+
+/** The sandboxes a warm pool's reserve row names as not ready. */
+export function notReadyMembers(a: AgentSandboxAttention | undefined) {
+  return a?.rule === 'reserveBelowTarget' ? a.related?.refs.filter((r) => r.kind === 'Sandbox') ?? [] : []
 }
