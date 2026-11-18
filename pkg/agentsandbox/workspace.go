@@ -1045,7 +1045,7 @@ func expired(in Input) Expired {
 			if !r.Settled || r.Verdict.Reason != "Expired" {
 				continue
 			}
-			if t, ok := ShutdownTime(u); ok && in.Now.Sub(t) <= RecentExpiry {
+			if t, ok := ShutdownTime(u); ok && !t.After(in.Now) && in.Now.Sub(t) <= RecentExpiry {
 				entries = append(entries, ExpiredEntry{Ref: ref(u), At: t.UTC()})
 			}
 		}
