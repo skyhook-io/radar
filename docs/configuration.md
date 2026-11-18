@@ -856,7 +856,8 @@ launch context, so switching to another context goes back to discovery.
 
 Agent Substrate's actors, templates and workers live in its own API server, which
 a local Radar (CLI or Desktop, authentication off, loopback listener) reads once you
-choose who it reads as, in **Settings → Agent Substrate**. The
+choose who it reads as, in **Settings → Agent Substrate** (shown for clusters that
+serve Substrate, or still have a saved connection). The
 choice is saved per context in `~/.radar/substrate.json`, next to `clusters.json`
 but separate from it. Save it from Settings rather than by hand: the keys
 are values Radar computes. The file is version 1:

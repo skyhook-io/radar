@@ -114,7 +114,10 @@ export function SubstrateSettings({ active, onDirtyChange, onBusyChange }: {
   if (!latest && !keepForm) {
     return <p className="text-sm text-theme-text-secondary">Loading…</p>
   }
-  if (!keepForm && status.data && !status.data.installed) {
+  const notInstalled = status.data?.installed === false
+  // A connection saved before Substrate went away stays editable, so it can be disconnected.
+  const savedHere = latest?.view === 'local' && latest.saved
+  if (!keepForm && notInstalled && !savedHere) {
     return (
       <p className="text-sm text-theme-text-secondary">
         Agent Substrate isn’t installed on this cluster: it doesn’t serve the WorkerPool kind (ate.dev). Radar reads Substrate’s API once it is.
@@ -132,6 +135,11 @@ export function SubstrateSettings({ active, onDirtyChange, onBusyChange }: {
         Substrate keeps <Term term="actor">actors</Term>, <Term term="template">templates</Term> and <Term term="worker">workers</Term> in its own API, not Kubernetes, and checks its own roles there. Radar reads them, read-only, as the identity below. Pools, worker Pods and Prometheus readings show either way.
       </p>
       {statusError}
+      {notInstalled && savedHere && (
+        <p className="text-sm text-theme-text-secondary">
+          Agent Substrate isn’t installed on this cluster, but a connection to it is still saved here. Disconnect it to remove it.
+        </p>
+      )}
       {keepForm || latest?.view === 'local' ? (
         <LocalSubstrateForm
           initial={(keepForm ? lastLocal : latest) as SubstrateLocalConnection}

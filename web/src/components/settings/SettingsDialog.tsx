@@ -34,7 +34,7 @@ import {
   costSourcePreferenceLabel,
   COST_SOURCE_OPTIONS,
 } from '../cost/source'
-import { costSourceApplyLabel, pendingSectionLabels, pendingSections, shouldShowSettingsFooter } from './settings-state'
+import { costSourceApplyLabel, pendingSectionLabels, pendingSections, shouldShowSettingsFooter, showsSubstrateSection } from './settings-state'
 import { PrometheusConfigField } from './PrometheusConfigField'
 import { LocalConnectionSettings, type IntegrationProfiles, type IntegrationKind } from './LocalConnectionSettings'
 import { LocalIntegrationStatus } from './LocalIntegrationStatus'
@@ -45,6 +45,10 @@ import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
 import { FormSaveActions } from './FormSaveActions'
 import { SubstrateSettings } from './SubstrateSettings'
+import { useAPIResources } from '../../api/apiResources'
+import { useRadarFeature } from '../../api/client'
+import { useSubstrateConnection } from '../../api/substrateWorkspace'
+import { substrateDiscovered } from '../substrate/useSubstrateSidebarWorkspace'
 export type { SettingsSectionId } from './settings-state'
 
 interface Config {
@@ -334,6 +338,31 @@ export function SettingsDialog({
     if (open) setSection(sectionAllowed(initialSection) ? initialSection : sections?.[0] ?? 'overview')
   }, [open, initialSection, sectionAllowed, sections])
 
+  const { data: apiResources } = useAPIResources()
+  const { support: substrateSupport } = useRadarFeature('substrateWorkspace')
+  const substrateHere = substrateDiscovered(apiResources)
+  const substrateSupported = substrateSupport !== 'unsupported'
+  // Asked only where Substrate isn't served, for a saved connection that still needs disconnecting.
+  const substrateLeftover = useSubstrateConnection(open && apiResources !== undefined && !substrateHere && substrateSupported)
+  const substrateSaved = substrateLeftover.data?.view === 'local' && substrateLeftover.data.saved
+  // Kept until the dialog closes or the cluster changes, so Disconnect doesn't pull the section away mid-use.
+  const [substrateSavedOn, setSubstrateSavedOn] = useState<string | undefined>()
+  useEffect(() => {
+    if (!open) setSubstrateSavedOn(undefined)
+    else if (substrateSaved) setSubstrateSavedOn(settingsCluster?.context)
+  }, [open, substrateSaved, settingsCluster?.context])
+  const showSubstrate = showsSubstrateSection({
+    supported: substrateSupported,
+    discovered: substrateHere,
+    saved: substrateSaved || (substrateSavedOn !== undefined && substrateSavedOn === settingsCluster?.context),
+    dirty: substrateDirty,
+  })
+  const substrateKnown = apiResources !== undefined && (substrateHere || !substrateSupported || substrateLeftover.isFetched)
+  // A cluster without Substrate has no section to stay on.
+  useEffect(() => {
+    if (open && section === 'substrate' && substrateKnown && !showSubstrate && sectionAllowed('overview')) setSection('overview')
+  }, [open, section, substrateKnown, showSubstrate, sectionAllowed])
+
   useEffect(() => {
     if (!open || diag.agents.length === 0) return
     setAiDraft((current) => {
@@ -562,12 +591,12 @@ export function SettingsDialog({
     { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: prometheusDirty },
     { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costIntegrationDirty },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: localDirty.argocd },
-    // Open to everyone: in a shared Radar it shows how Radar reads Substrate and the person's own access.
+    // Open to everyone: in a shared Radar it shows how Radar reads Substrate and the person's own access. Only on clusters it applies to.
     { id: 'substrate', label: 'Agent Substrate', icon: Bot, ownerOnly: false, dirty: substrateDirty },
     { id: 'ai', label: 'AI investigations', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
     { id: 'privacy', label: 'Privacy', icon: EyeOff, ownerOnly: false, dirty: false },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
-  ] as NavItemDef[]).filter((item) => sectionAllowed(item.id))
+  ] as NavItemDef[]).filter((item) => sectionAllowed(item.id) && (item.id !== 'substrate' || showSubstrate))
   const showNav = navItems.length > 1
 
   const showFooter = shouldShowSettingsFooter({
