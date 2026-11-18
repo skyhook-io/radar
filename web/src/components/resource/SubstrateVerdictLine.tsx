@@ -130,7 +130,7 @@ function Fact({ fact }: { fact: SubstrateFact }) {
   const title = [placed && POOL_PLACED, hourly && HOURLY].filter(Boolean).join(' ') || undefined
   return (
     <Property
-      label={<span title={title}>{fact.label}{hourly ? ' (1h)' : ''}</span>}
+      label={title ? <Tooltip content={title}><span>{fact.label}{hourly ? ' (1h)' : ''}</span></Tooltip> : <span>{fact.label}</span>}
       value={<span className="tabular-nums"><FactValue fact={fact} /></span>}
     />
   )
@@ -145,7 +145,7 @@ function FactValue({ fact }: { fact: SubstrateFact }) {
     )
   }
   if (fact.state === 'empty') {
-    return <span title={fact.reason}>None</span>
+    return fact.reason ? <Tooltip content={fact.reason}><span>None</span></Tooltip> : <span>None</span>
   }
   const value = fact.value!
   switch (fact.id) {
