@@ -10,14 +10,12 @@
 //           When the room is short it may give back down to `min`: the larger
 //           of its header and its measured content (for the CPU and Memory
 //           bars, their "used / limit" label).
-//   fit   — sized to its content within [floor, max]: Namespace, Node. Sized
-//           to the 95th percentile of its values, so a few outliers don't set
-//           the width, then it takes part in sharing the room left (below) up
-//           to its longest value.
-//   kept  — a fit column marked `keep` (Name): sized to its longest value
-//           within [floor, max] — its protected width — and never given back.
-//           Only a value longer than max is cut; the table scrolls sideways
-//           before a shorter one is.
+//   fit   — sized to its content within [floor, max]. Namespace and Node are
+//           sized to the 95th percentile of their values, so a few outliers
+//           don't set the width, then take part in sharing the room left
+//           (below) up to their longest value. Name is sized to its longest
+//           name (its protected width, capped by max) and gives way last, and
+//           only down to the 90th percentile of its names.
 //   grow  — starts at its floor and shares whatever room is left, by weight,
 //           each up to its longest value. Long free text: Event messages,
 //           selectors, image lists, uncurated CRD printer columns.
@@ -29,11 +27,12 @@
 // then whatever is still left is spread over every column in proportion to its
 // width, so the table fills its room and keeps its proportions (placeLeftover).
 //
-// When the room is short it is taken back in rank order (yieldRank): Node
-// first, then exact columns, then the other fit columns (Namespace), each down
-// to its `min` (its header, or for an exact column the larger of its header
-// and its content). Grow columns are already at their
-// floor, and Name and user widths never shrink. Past that the table scrolls
+// When the room is short it is taken back in rank order (yieldRank), each
+// column down to its `min`: Node first (to its header), then exact columns (to
+// the larger of their header and their content), then Namespace (to its
+// header), then Name (to its 90th percentile, so only its longest names are
+// cut, and only when the alternative is scrolling). Grow columns are already
+// at their floor and user widths never shrink. Past that the table scrolls
 // sideways.
 
 export type ColumnSizingMode = 'exact' | 'fit' | 'grow'
@@ -41,13 +40,12 @@ export type ColumnSizingMode = 'exact' | 'fit' | 'grow'
 export interface ColumnLayoutInput {
   key: string
   mode: ColumnSizingMode
-  /** Its normal width; never rendered narrower than this, except an exact column down to `min` when room is short. */
+  /** The narrowest it starts at; a fit column may be wider, an exact column is exactly this. */
   floor: number
   /** How far it may shrink when room is short (default: floor): exact, to its
-   *  header or content; fit, to its header. */
+   *  header or content; Namespace and Node, to their header; Name, to the 90th
+   *  percentile of its names. A min above its width means it doesn't shrink. */
   min?: number
-  /** fit only: never give width back when room is short (Name). */
-  keep?: boolean
   /** When room is short, lower ranks give way first (default: exact 2, fit 3). */
   yieldRank?: number
   /** Width the user dragged or double-click fitted. Overrides everything else. */
@@ -79,7 +77,7 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
   const used = sum(Object.values(widths))
   if (used > available) {
     let short = used - available
-    const yielding = columns.filter(c => !c.userWidth && !c.keep && (c.mode === 'exact' || c.mode === 'fit'))
+    const yielding = columns.filter(c => !c.userWidth && (c.mode === 'exact' || c.mode === 'fit'))
     const rank = (c: ColumnLayoutInput) => c.yieldRank ?? (c.mode === 'exact' ? 2 : 3)
     for (const r of [...new Set(yielding.map(rank))].sort((x, y) => x - y)) {
       short = giveBack(widths, yielding.filter(c => rank(c) === r), lowerBound, short)
@@ -119,10 +117,9 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
   return widths
 }
 
-// How far a column may shrink when room is short: its `min` where it has one,
-// never more than its normal width.
+// How far a column may shrink when room is short.
 function lowerBound(c: ColumnLayoutInput): number {
-  return Math.min(c.floor, c.min ?? c.floor)
+  return c.min ?? c.floor
 }
 
 // Where room goes once every column has its content: spread over the columns

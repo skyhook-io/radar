@@ -141,7 +141,8 @@ export interface ColumnSizingSpec {
   /** grow: share of the room left over. fit: share of it while reaching from its 95th percentile to its longest value. */
   weight?: number
   max?: number
-  /** Name: sized to its longest value (not its 95th percentile) and never given back when room is short. */
+  /** Name: sized to its longest value (not its 95th percentile); when room is short it
+   *  gives way last, and only down to the 90th percentile of its names. */
   keep?: boolean
   /** When room is short, lower ranks give way first (see ColumnLayoutInput). */
   yieldRank?: number
@@ -151,12 +152,13 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   if (col.sizing === 'grow') return { mode: 'grow', weight: col.growWeight ?? 1, max: GROW_MAX_PX }
   if (col.sizing === 'exact') return { mode: 'exact' }
   // Name is what a reader scans for, so it fits its longest name (up to the
-  // cap) and holds that width: the table scrolls sideways before a name that
-  // fits under the cap is cut. Other fit columns size to their 95th
+  // cap) and is the last column to give way when room is short — and then
+  // only down to the 90th percentile of its names, so just the longest are
+  // cut before the table scrolls sideways. Other fit columns size to their 95th
   // percentile, so a few outliers (one long namespace) don't set the width,
   // and reach for their longest value from the room left over.
   switch (col.key) {
-    case 'name': return { mode: 'fit', max: NAME_MAX_PX, keep: true }
+    case 'name': return { mode: 'fit', max: NAME_MAX_PX, keep: true, yieldRank: 4 }
     case 'namespace': return { mode: 'fit', max: NAMESPACE_MAX_PX, weight: 1 }
     // Node is worth showing but is the first to give way when room is short.
     case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1, yieldRank: 1 }
@@ -319,6 +321,8 @@ export interface MeasuredContent {
   content: number
   /** fit only: its longest value, which it may grow to from the room left over. */
   stretch?: number
+  /** Name only: the 90th percentile of its names, the narrowest it gives way to. */
+  yieldTo?: number
 }
 
 /**
@@ -348,9 +352,16 @@ export function measureColumnContent(
     const read = cellWidthReader(col, ctx)
     const limit = (spec.max ?? Infinity) - CELL_PADDING_PX
     if (spec.mode === 'fit' && spec.keep) {
+      const widths = new Array<number>(items.length)
       let longest = 0
-      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, limit))
-      result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
+      for (let i = 0; i < items.length; i++) {
+        widths[i] = safeWidth(read, items[i], measure, limit)
+        if (widths[i] > longest) longest = widths[i]
+      }
+      result[col.key] = {
+        content: Math.ceil(longest) + CELL_PADDING_PX,
+        yieldTo: Math.ceil(percentile(widths, 0.9)) + CELL_PADDING_PX,
+      }
     } else if (spec.mode === 'fit') {
       const widths = new Array<number>(items.length)
       let longest = 0
