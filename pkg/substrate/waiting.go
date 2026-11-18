@@ -70,7 +70,7 @@ func WaitingOn(a Actor) *Waiting {
 const (
 	// ImpactUnavailable: Substrate marks the worker unavailable, which its
 	// controller does while the worker Pod is not Ready or has no IP. It
-	// places nothing new there and keeps the actor assigned and running in
+	// places no new actors there and keeps the actor assigned and running in
 	// its records. If the Pod is deleted Substrate crashes the actor.
 	ImpactUnavailable = "unavailable"
 	// ImpactDraining: the worker Pod is terminating. When it is gone Substrate
@@ -201,7 +201,7 @@ func WorkerImpactOf(a Actor, w Worker, pods WorkerPods) *WorkerImpact {
 		state := pods.PodStateOf(w)
 		step := workerUnavailableStep[state]
 		return &WorkerImpact{Kind: ImpactUnavailable, PodState: state, NextStep: step.text, Command: step.command(w),
-			Reading: unavailableCause(state) + " It places nothing new there and still records this actor as " + a.State + ". If the Pod is deleted, Substrate marks it crashed."}
+			Reading: unavailableCause(state) + " It places no new actors there and still records this actor as " + a.State + ". If the Pod is deleted, Substrate marks it crashed."}
 	}
 	return nil
 }
@@ -231,9 +231,9 @@ func WorkerReadingOf(w Worker, assigned []Actor, actorsRead bool, pods WorkerPod
 	r := &WorkerReading{}
 	switch {
 	case w.State == WorkerDraining:
-		r.Kind, r.Reading = WorkerDraining, "Its Pod is terminating; Substrate places nothing new on it and marks any actor still assigned crashed when the Pod is gone."
+		r.Kind, r.Reading = WorkerDraining, "Its Pod is terminating; Substrate places no new actors on it and marks any actor still assigned crashed when the Pod is gone."
 	case w.State == WorkerUnavailable:
-		r.Kind, r.Reading = WorkerUnavailable, workerUnavailableCause[pods.PodStateOf(w)]+" Substrate places nothing new on it."
+		r.Kind, r.Reading = WorkerUnavailable, workerUnavailableCause[pods.PodStateOf(w)]+" Substrate places no new actors on it."
 	case w.RegisteredEpoch > w.ObservedEpoch:
 		r.Kind = WorkerReconciling
 		r.Reading = fmt.Sprintf("Its process restarted: registered epoch %d, which Substrate has not yet reconciled (observed %d).", w.RegisteredEpoch, w.ObservedEpoch)

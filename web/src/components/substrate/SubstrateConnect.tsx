@@ -144,7 +144,7 @@ function PathInput({ id, value, onChange, placeholder }: { id: string; value: st
   )
 }
 
-function Field({ label, hint, id, children }: { label: string; hint?: string; id: string; children: ReactNode }) {
+function Field({ label, hint, id, children }: { label: ReactNode; hint?: string; id: string; children: ReactNode }) {
   return (
     <div>
       <label htmlFor={id} className="block text-xs font-medium text-theme-text-secondary">{label}</label>
@@ -198,7 +198,7 @@ function ConnectForm({ connection, server }: { connection: SubstrateConnection |
             <Field id={`${id}-token`} label="Token file path">
               <PathInput id={`${id}-token`} value={draft.tokenFile} onChange={(v) => edit({ tokenFile: v })} placeholder="~/ate.token" />
             </Field>
-            <Field id={`${id}-atespaces`} label="Atespaces (optional)" hint="If your token can’t list atespaces, name the ones to read. The rest stay unknown.">
+            <Field id={`${id}-atespaces`} label={<><Term term="atespace">Atespaces</Term> (optional)</>} hint="If your token can’t list atespaces, name the ones to read. The rest stay unknown.">
               <Input id={`${id}-atespaces`} className={INPUT} value={draft.atespaces} onChange={(e) => edit({ atespaces: e.target.value })} placeholder="research, support-bots" spellCheck={false} />
             </Field>
             <Disclosure label="How Radar handles the token">

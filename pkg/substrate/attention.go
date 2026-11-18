@@ -78,9 +78,11 @@ type Tally struct {
 	// Cause is what every crash in a template group shares, when Substrate's
 	// messages name one: CauseMemoryLimit. Absent otherwise.
 	Cause string `json:"cause,omitempty"`
-	// NextStep and Command are the group's remedy when Cause names one.
-	NextStep string `json:"nextStep,omitempty"`
-	Command  string `json:"command,omitempty"`
+	// NextStep and Command are the group's remedy when Cause names one;
+	// ThenCommand runs after Command when the remedy takes two.
+	NextStep    string `json:"nextStep,omitempty"`
+	Command     string `json:"command,omitempty"`
+	ThenCommand string `json:"thenCommand,omitempty"`
 }
 
 // Attention is one needs-attention row.
@@ -97,8 +99,11 @@ type Attention struct {
 	// Command runs the next step, when one command does; absent otherwise. A
 	// row covering several actors writes <name> and <atespace> for them;
 	// ActorAttention fills them in.
-	Command string  `json:"command,omitempty"`
-	Subject Subject `json:"subject"`
+	Command string `json:"command,omitempty"`
+	// ThenCommand runs after Command when the step takes two, as a
+	// memory-limit crash's move to a new template and then its revert.
+	ThenCommand string  `json:"thenCommand,omitempty"`
+	Subject     Subject `json:"subject"`
 	// Related are links beside the subject, such as a worker's Pod and node.
 	Related []Subject `json:"related,omitempty"`
 	// Count is how many things the row covers (actors, workers).
@@ -183,6 +188,9 @@ type Service struct {
 	// Read: Prometheus was connected and queried. Why says why not.
 	Read bool   `json:"read"`
 	Why  string `json:"why,omitempty"`
+	// Collecting: not read only because Radar's first collection from a
+	// connected Prometheus has not answered yet; a later read has it.
+	Collecting bool `json:"collecting,omitempty"`
 	// ReadAt is when the answer was collected; it may be up to a minute old.
 	ReadAt time.Time `json:"readAt,omitzero"`
 	// Window is the range the resume and crash facts cover, such as 1h.
@@ -385,12 +393,12 @@ func crashedActors(in Inputs) []Attention {
 		if mixed[key] {
 			allMemory = false
 		} else {
-			groups[i].Cause, groups[i].NextStep, groups[i].Command = CauseMemoryLimit, CrashedMemoryNextStep, retemplateCommand
+			groups[i].Cause, groups[i].NextStep, groups[i].Command, groups[i].ThenCommand = CauseMemoryLimit, CrashedMemoryNextStep, retemplateCommand, revertCommand
 		}
 	}
-	nextStep, command := crashedNextStep, revertCommand
+	nextStep, command, then := crashedNextStep, revertCommand, ""
 	if allMemory {
-		nextStep, command = CrashedMemoryNextStep, retemplateCommand
+		nextStep, command, then = CrashedMemoryNextStep, retemplateCommand, revertCommand
 	}
 	// Which template most crashes share is Groups' to say, beside the title.
 	title := plural(len(crashed), "actor is crashed", "actors are crashed")
@@ -402,7 +410,7 @@ func crashedActors(in Inputs) []Attention {
 	return []Attention{{
 		ID: RuleCrashedActors, Rule: RuleCrashedActors, Severity: SeverityCritical,
 		Title: title, Reading: reading,
-		NextStep: nextStep, Command: command,
+		NextStep: nextStep, Command: command, ThenCommand: then,
 		Subject: Subject{Kind: "Actors", Filter: map[string]string{"state": StateCrashed}},
 		Count:   len(crashed), Since: crashTime(latest),
 		Groups: groups, Messages: tallies(messages, nil, 3), Sample: sample(crashed),
@@ -482,9 +490,13 @@ func CrashedMemoryActorStep(a Actor) string {
 	return move + "; what it restores then is unknown: Substrate names no fidelity for its snapshot."
 }
 
-// CrashedMemoryCommand is the command of the memory-limit step for a: moving
-// it to the new template, which the user names.
+// CrashedMemoryCommand is the first command of the memory-limit step for a:
+// moving it to the new template, which the user names.
 func CrashedMemoryCommand(a Actor) string { return forActor(retemplateCommand, a) }
+
+// RevertCommand reverts a; it follows CrashedMemoryCommand in the
+// memory-limit step.
+func RevertCommand(a Actor) string { return forActor(revertCommand, a) }
 
 func forActor(command string, a Actor) string {
 	return strings.NewReplacer("<name>", a.Name, "<atespace>", a.Atespace).Replace(command)
@@ -727,7 +739,7 @@ func goldenFailed(in Inputs) []Attention {
 		step := "Fix the cause in Substrate's message, then recreate the template: templates can't be edited, and each new one gets a golden snapshot build."
 		reading := "Substrate's message: " + GoldenMessage(g.Error) + ". Substrate does not retry a failed build."
 		// The cause leads, once; Substrate's own words follow it.
-		if strings.Contains(g.Error, memoryLimitMessage) {
+		if g.Cause == CauseMemoryLimit {
 			step = "Recreate the template with a higher memory limit; templates can't be edited."
 			reading = "Its golden actor was killed for exceeding its memory limit before the snapshot was taken. Substrate does not retry a failed build. Substrate's message: " + GoldenMessage(g.Error) + "."
 		}
@@ -1207,6 +1219,9 @@ type Check struct {
 	Ran   bool   `json:"ran"`
 	// Why says what was missing when it did not run.
 	Why string `json:"why,omitempty"`
+	// Collecting: it did not run only because its input is still being
+	// collected (Service.Collecting); it runs on a later read.
+	Collecting bool `json:"collecting,omitempty"`
 }
 
 // NotAssessed are health surfaces no check reads, so an empty list never
@@ -1221,33 +1236,31 @@ var NotAssessed = []string{
 // Checks lists the rules and whether each ran on these inputs, so an empty
 // NeedsAttention can say which checks found nothing.
 func Checks(in Inputs) []Check {
-	need := func(rule, label string, reqs ...struct {
-		ok  bool
-		why string
-	}) Check {
+	type req = struct {
+		ok         bool
+		why        string
+		collecting bool
+	}
+	need := func(rule, label string, reqs ...req) Check {
 		for _, r := range reqs {
 			if !r.ok {
-				return Check{Rule: rule, Label: label, Why: r.why}
+				return Check{Rule: rule, Label: label, Why: r.why, Collecting: r.collecting}
 			}
 		}
 		return Check{Rule: rule, Label: label, Ran: true}
 	}
-	type req = struct {
-		ok  bool
-		why string
-	}
-	actors := req{in.ActorsRead, "actors were not read"}
-	templates := req{in.TemplatesRead, "templates were not read"}
-	templatesAll := req{in.TemplatesComplete, "the template list is incomplete"}
-	workers := req{in.WorkersRead, "workers were not read"}
-	poolsAll := req{in.PoolsComplete, "the WorkerPool list is incomplete"}
-	pools := req{in.PoolsUsable || in.WorkersRead, "neither WorkerPools nor workers were read"}
+	actors := req{ok: in.ActorsRead, why: "actors were not read"}
+	templates := req{ok: in.TemplatesRead, why: "templates were not read"}
+	templatesAll := req{ok: in.TemplatesComplete, why: "the template list is incomplete"}
+	workers := req{ok: in.WorkersRead, why: "workers were not read"}
+	poolsAll := req{ok: in.PoolsComplete, why: "the WorkerPool list is incomplete"}
+	pools := req{ok: in.PoolsUsable || in.WorkersRead, why: "neither WorkerPools nor workers were read"}
 	svcWhy := "Prometheus was not queried"
 	if in.Service != nil && in.Service.Why != "" {
 		svcWhy = in.Service.Why
 	}
-	svc := req{serviceRead(in), svcWhy}
-	nodes := req{serviceRead(in) && len(in.Service.Nodes) > 0, "no node holding actor state was known"}
+	svc := req{ok: serviceRead(in), why: svcWhy, collecting: in.Service != nil && in.Service.Collecting}
+	nodes := req{ok: serviceRead(in) && len(in.Service.Nodes) > 0, why: "no node holding actor state was known"}
 	return []Check{
 		need(RuleCrashedActors, "Crashed actors", actors),
 		need(RuleStuckTransition, "Actors stuck resuming, suspending, reverting or deleting", actors),
@@ -1277,14 +1290,14 @@ func ActorAttention(rows []Attention, a Actor, now time.Time) []Attention {
 		}
 		switch r.Rule {
 		case RuleCrashedActors:
-			r.NextStep, r.Command = crashedActorNextStep, revertCommand
+			r.NextStep, r.Command, r.ThenCommand = crashedActorNextStep, revertCommand, ""
 			if IsMemoryLimitCrash(a) {
-				r.NextStep, r.Command = CrashedMemoryActorStep(a), retemplateCommand
+				r.NextStep, r.Command, r.ThenCommand = CrashedMemoryActorStep(a), retemplateCommand, revertCommand
 			}
 		case RuleStuckTransition:
 			r.NextStep = stuckActorNextStep[r.key]
 		}
-		r.Command = forActor(r.Command, a)
+		r.Command, r.ThenCommand = forActor(r.Command, a), forActor(r.ThenCommand, a)
 		out = append(out, r)
 	}
 	return out
@@ -1318,10 +1331,13 @@ func covers(r Attention, a Actor, now time.Time) bool {
 
 // ServiceSummary is the workspace's one-line reading of Service.
 type ServiceSummary struct {
-	Read   bool      `json:"read"`
-	Why    string    `json:"why,omitempty"`
-	ReadAt time.Time `json:"readAt,omitzero"`
-	Window string    `json:"window,omitempty"`
+	Read bool   `json:"read"`
+	Why  string `json:"why,omitempty"`
+	// Collecting is Service.Collecting: the first collection has not
+	// answered yet.
+	Collecting bool      `json:"collecting,omitempty"`
+	ReadAt     time.Time `json:"readAt,omitzero"`
+	Window     string    `json:"window,omitempty"`
 	// Crashes sums the pools that reported one; absent when none did.
 	Crashes *float64 `json:"crashes,omitempty"`
 	// SlowestResume is the pool with the highest resume p95.
@@ -1347,7 +1363,7 @@ func SummarizeService(svc *Service) ServiceSummary {
 	if svc == nil {
 		return ServiceSummary{Why: "Prometheus was not queried"}
 	}
-	out := ServiceSummary{Read: svc.Read, Why: svc.Why, ReadAt: svc.ReadAt, Window: svc.Window}
+	out := ServiceSummary{Read: svc.Read, Why: svc.Why, Collecting: svc.Collecting, ReadAt: svc.ReadAt, Window: svc.Window}
 	for _, key := range slices.Sorted(maps.Keys(svc.Pools)) {
 		ps := svc.Pools[key]
 		ns, name, _ := strings.Cut(key, "/")

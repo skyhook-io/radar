@@ -29,7 +29,7 @@ const WORKER_STATE: Record<SubstrateWorkerRow['state'], { label: string; tone: S
 
 /**
  * The crash banner, visible part first: the cause, how many crashed actors
- * share its template, and one next step with its command. Where the cause was
+ * share its template, and one next step with its commands. Where the cause was
  * read, an earlier run's kill, what a revert keeps and drops, and Substrate's
  * own message (once the worker's log names the cause) fold under Details.
  */
@@ -48,9 +48,9 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
   // The worker's log names the cause and its remedy; without it, Substrate's own crash row says what to do.
   const crashedRow = detail.attention.find((a) => a.rule === 'crashedActors')
   const step = kill?.current && kill.nextStep
-    ? { text: kill.nextStep, command: kill.command }
+    ? { text: kill.nextStep, command: kill.command, thenCommand: kill.thenCommand }
     : crashedRow
-      ? { text: crashedRow.nextStep, command: crashedRow.command }
+      ? { text: crashedRow.nextStep, command: crashedRow.command, thenCommand: crashedRow.thenCommand }
       : recovery
         ? { text: 'Fix the cause in Substrate’s message, then revert the actor.', command: revertCommand(actor) }
         : undefined
@@ -121,6 +121,7 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
           {step.text}
           {pending.length > 0 && <> To keep generation {pending[0].generation}, wait for its upload to finish before reverting.</>}
           {step.command && <CommandChip command={step.command} />}
+          {step.command && step.thenCommand && <CommandChip command={step.thenCommand} />}
         </div>
       )}
       {details.length > 0 && <BannerDetails>{details}</BannerDetails>}
@@ -238,6 +239,7 @@ function AttentionBanner({ row, detail }: { row: SubstrateAttention; detail: Sub
         <span className="font-medium">Next step: </span>
         {row.nextStep}
         {row.command && <CommandChip command={row.command} />}
+        {row.command && row.thenCommand && <CommandChip command={row.thenCommand} />}
       </div>
       {rest && <BannerDetails><p>{rest}</p></BannerDetails>}
     </AlertBanner>

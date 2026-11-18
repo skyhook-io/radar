@@ -21,6 +21,8 @@ vi.mock('../../api/substrateWorkspace', async (importOriginal) => ({
 const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&')
 // Names wrap only after a hyphen, so each segment is its own span; read them as the reader does.
 const plain = (html: string) => html.replace(/<\/?span[^>]*>/g, '')
+// The words alone: glossary terms and tooltips sit inside sentences.
+const words = (html: string) => html.replace(/<[^>]+>/g, '')
 
 function render(data: SubstrateWorkspace, st: SubstrateStatus | undefined = status({ apiTier: data.apiTier })) {
   return text(renderToStaticMarkup(
@@ -45,7 +47,7 @@ describe('Agent Substrate overview, connected', () => {
     expect(html).toContain('18 active, 1 draining, 1 unavailable')
     expect(html).toContain('212 of 236 used (24 free, 21 of them on batch-pool)')
     expect(html).toContain('1,284, 14 crashed')
-    expect(html).toContain('6, 1 golden snapshot failed')
+    expect(words(html)).toContain('6, 1 golden snapshot failed')
   })
 
   it('draws the state bar with accessible counts, and lists Needs attention in the server’s order, each row labelled', () => {
@@ -83,9 +85,42 @@ describe('Agent Substrate overview, connected', () => {
     // Slots count active workers only; the rest of a pool's actors are said to be elsewhere, not left to contradict.
     const ws = workspace()
     ws.pools[0] = { ...ws.pools[0], actors: 40 }
-    expect(render(ws)).toContain('+3 actors on workers that take nothing new')
+    // Which workers they are on, and what that means, in plain words.
+    expect(render(ws)).toContain('+3 actors on unavailable workers, which take no new actors')
     expect(html).toContain('Free actor slots')
     expect(plain(html)).toContain('support-bots')
+  })
+
+  it('says checks waiting on Prometheus’s first answer are still running, and ones Prometheus can’t serve could not run', () => {
+    const collecting = 'Radar is collecting Substrate’s metrics from Prometheus; they show on the next refresh'
+    const base = workspace()
+    const ws = {
+      ...base,
+      checks: [
+        ...base.checks,
+        { rule: 'poolService' as const, label: 'Substrate’s pool capacity verdicts (Prometheus)', ran: false, why: collecting, collecting: true },
+        { rule: 'nodeUploadsOverdue' as const, label: 'Overdue snapshot uploads per node (Prometheus)', ran: false, why: collecting, collecting: true },
+      ],
+      service: { ...base.service, why: collecting, collecting: true },
+    }
+    let html = words(render(ws))
+    expect(html).toContain('What was checked: 3 of 5 checks ran, 2 still running')
+    expect(html).not.toContain('could not')
+    expect(html).toContain(`Still running: ${collecting}`)
+    // The Delivery fact doesn't claim an absence Radar hasn't read yet.
+    expect(html).toContain('being collected from Prometheus')
+    expect(html).not.toContain('no Substrate metrics')
+    // Prometheus not connected: the honest state is that they could not run, and why.
+    const down = { ...ws, checks: ws.checks.map((c) => (c.collecting ? { ...c, why: 'Prometheus is not connected', collecting: false } : c)), service: base.service }
+    html = words(render(down))
+    expect(html).toContain('What was checked: 3 of 5 checks ran, 2 could not')
+    expect(html).not.toContain('still running')
+    expect(html).toContain('Substrate’s pool capacity verdicts (Prometheus): Prometheus is not connected')
+  })
+
+  it('defines atespace where the Overview first names it', () => {
+    const raw = render(workspace())
+    expect(raw).toMatch(/counted by Substrate across ?(<!-- -->)?\s*(<!-- -->)?\d+(<!-- -->)? (<!-- -->)?<span[^>]*><span[^>]*decoration-dotted[^>]*>atespaces?<\/span>/)
   })
 
   it('says an atespace Substrate denied is unread, never empty', () => {

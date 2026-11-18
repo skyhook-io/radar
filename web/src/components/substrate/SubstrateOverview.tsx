@@ -25,10 +25,14 @@ export const SUBSTRATE_NO_PROBLEMS = 'No problems found by these checks:'
 function ChecksSummary({ data, empty }: { data: SubstrateWorkspace; empty?: boolean }) {
   const [open, setOpen] = useState(false)
   const ran = data.checks.filter((c) => c.ran)
-  const skipped = data.checks.filter((c) => !c.ran)
+  // A check waiting on Radar's first collection from Prometheus runs on a later read: it is still running, not one that could not.
+  const running = data.checks.filter((c) => !c.ran && c.collecting)
+  const skipped = data.checks.filter((c) => !c.ran && !c.collecting)
+  const counts = [running.length > 0 && `${running.length} still running`, skipped.length > 0 && `${skipped.length} could not`].filter(Boolean)
   const body = (
     <div className="space-y-2 text-xs text-theme-text-secondary">
       {ran.length > 0 && <CheckList title={empty ? undefined : 'Checks that ran'} items={ran.map((c) => c.label)} />}
+      {running.length > 0 && <CheckList title={`Still running: ${running[0].why ?? 'their inputs are still being collected'}`} items={running.map((c) => c.label)} />}
       {skipped.length > 0 && <CheckList title="Not checked on this read" items={skipped.map((c) => `${c.label}: ${c.why ?? 'its inputs were not read'}`)} />}
       {data.notAssessed.length > 0 && <CheckList title="Not assessed by any check" items={data.notAssessed} />}
     </div>
@@ -45,7 +49,7 @@ function ChecksSummary({ data, empty }: { data: SubstrateWorkspace; empty?: bool
     <div className="mt-3 border-t-subtle pt-2">
       <button type="button" aria-expanded={open} aria-controls="substrate-checks" onClick={() => setOpen((v) => !v)} className="inline-flex items-center gap-1 text-xs font-medium text-accent-text hover:underline">
         <CollapseChevron open={open} />
-        What was checked: {ran.length} of {data.checks.length} checks ran{skipped.length > 0 ? `, ${skipped.length} could not` : ''}
+        What was checked: {ran.length} of {data.checks.length} checks ran{counts.length > 0 ? `, ${counts.join(', ')}` : ''}
       </button>
       <Collapse open={open} id="substrate-checks"><div className="pt-2">{body}</div></Collapse>
     </div>
@@ -95,10 +99,6 @@ function StatusLine({ facts }: { facts: Fact[] }) {
       ))}
     </dl>
   )
-}
-
-function plural(n: number, one: string, many: string) {
-  return `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`
 }
 
 /**
@@ -187,10 +187,13 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
   if (summary.templates) {
     const t = summary.templates
     const noPool = t.noMatchingPool ?? 0
-    const notes = [t.goldenFailed > 0 && `${t.goldenFailed} golden snapshot failed`, noPool > 0 && `${noPool} with no pool`].filter(Boolean)
+    const notes: ReactNode[] = [
+      t.goldenFailed > 0 && <>{t.goldenFailed} <Term term="golden">golden snapshot</Term> failed</>,
+      noPool > 0 && `${noPool} with no pool`,
+    ].filter(Boolean)
     facts.push({
       label: <Term term="template">Templates</Term>,
-      value: [countText(t.total), ...notes].join(', '),
+      value: <>{[countText(t.total), ...notes].map((n, i) => <span key={i}>{i > 0 && ', '}{n}</span>)}</>,
       // A template no pool matches is at risk (alert), as its badge and row say; a failed golden snapshot is a warning.
       tone: areaTone(data, 'templates', noPool > 0 ? 'alert' : t.goldenFailed > 0 ? 'degraded' : t.total > 0 ? 'healthy' : 'neutral'),
       lowerBound: coverageInPart(cov?.templates),
@@ -227,7 +230,10 @@ export function serviceFacts(data: Pick<SubstrateWorkspace, 'service' | 'summary
   if (!serviceMeasured(svc)) {
     facts.push({
       label: `Delivery (${window})`,
-      value: <Unread title={svc.why ?? 'Prometheus holds no Agent Substrate series, so resume latency, failed resumes and crash rates are unknown.'}>unknown (no Substrate metrics)</Unread>,
+      // While the first collection runs, "no Substrate metrics" would claim an absence Radar hasn't read yet.
+      value: svc.collecting
+        ? <Unread title={svc.why}>being collected from Prometheus</Unread>
+        : <Unread title={svc.why ?? 'Prometheus holds no Agent Substrate series, so resume latency, failed resumes and crash rates are unknown.'}>unknown (no Substrate metrics)</Unread>,
       tone: 'unknown',
     })
   } else {
@@ -330,17 +336,18 @@ function SlotsCell({ p, connected }: { p: SubstratePoolRow; connected: boolean }
   const s = p.placement.slots
   // Substrate counts an unreported actor capacity as zero: such a worker takes no actors.
   if (s.total === 0) return <Tooltip content="No active worker of this pool has an actor slot, so Substrate places no actors here."><span>0 slots</span></Tooltip>
-  // Slots count active workers only; the pool's other actors sit on workers that take nothing new.
+  // Slots count active workers only; the pool's other actors sit on draining or unavailable workers, which take no new actors.
   // Saying so keeps "31 of 48 used" beside "38 actors" from reading as a contradiction.
   const w = p.placement.workers
   const elsewhere = p.actors !== undefined && w.draining + w.unavailable > 0 ? p.actors - s.used : 0
+  const which = w.draining > 0 && w.unavailable > 0 ? 'draining or unavailable' : w.draining > 0 ? 'draining' : 'unavailable'
   return (
     <>
       <span className="inline-flex items-center gap-1 whitespace-nowrap">
         {!p.placement.complete && <CertaintyGlyph certainty="lower_bound" title="At least: Radar read only part of Substrate’s workers" />}
         {s.used} of {s.total} used
       </span>
-      {elsewhere > 0 && <Sub>+{elsewhere} {elsewhere === 1 ? 'actor' : 'actors'} on workers that take nothing new</Sub>}
+      {elsewhere > 0 && <Sub>+{elsewhere} {elsewhere === 1 ? 'actor' : 'actors'} on {which} workers, which take no new actors</Sub>}
     </>
   )
 }
@@ -482,7 +489,12 @@ export function SubstrateOverview({ data, status, onInspect, inspected, onOpenSu
             <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5">
               <h2 id="substrate-states" className="text-sm font-semibold text-theme-text-primary">Actor states</h2>
               <span className="text-xs text-theme-text-tertiary">
-                counted by Substrate across {data.atespaces ? plural(data.atespaces.length, 'atespace', 'atespaces') : 'every atespace it lets Radar read'}
+                counted by Substrate across{' '}
+                {data.atespaces ? (
+                  <>{data.atespaces.length.toLocaleString('en-US')} <Term term="atespace">{data.atespaces.length === 1 ? 'atespace' : 'atespaces'}</Term></>
+                ) : (
+                  <>every <Term term="atespace">atespace</Term> it lets Radar read</>
+                )}
               </span>
             </div>
             <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
