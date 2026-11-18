@@ -122,10 +122,10 @@ describe('computeColumnLayout', () => {
   it('where the table must fit, takes every column on to its hard minimum before scrolling, Name last', () => {
     const cols: ColumnLayoutInput[] = [
       { ...name(400, 300), hardMin: 200 },
-      { key: 'status', mode: 'exact', floor: 160, min: 178, hardMin: 90 },
-      grow('message', 256, 900, 1),
-      { ...grow('message', 256, 900, 1), key: 'object', hardMin: 110 },
-    ].map(c => c.key === 'message' ? { ...c, hardMin: 120 } : c)
+      { ...exact('status', 160), min: 178, hardMin: 90 },
+      { ...grow('message', 256, 900, 1), hardMin: 120 },
+      { ...grow('object', 256, 900, 1), hardMin: 110 },
+    ]
     // 400 + 160 + 256 + 256 = 1072. Without mustFit Name gives 100 and the rest scrolls.
     expect(computeColumnLayout(cols, 800)).toEqual({ name: 300, status: 160, message: 256, object: 256 })
     // With it: Status and the grow columns give the other 172 first, in proportion to how far
