@@ -219,6 +219,15 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   return { mode: 'exact' }
 }
 
+/**
+ * How far a short-value fit column (sizing: 'fit') may give way when the table
+ * is short of room: to its curated width, so it cuts no more than before, or
+ * to its heading and content when those need less than that.
+ */
+export function shortValueMin(floor: number, heading: number, content: number): number {
+  return Math.min(floor, Math.max(heading, content))
+}
+
 export type CellWidth = (resource: any, measure: MeasureText, limit: number, ctx?: ContentContext) => number
 const text = (read: (resource: any) => string | null | undefined, font: CellFont = 'body'): CellWidth =>
   (resource, measure, limit) => measure(read(resource) || '-', font, limit)

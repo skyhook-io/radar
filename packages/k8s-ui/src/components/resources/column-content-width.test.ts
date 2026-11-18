@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
-import { CELL_PADDING_PX, type MeasureText, GROW_MAX_PX, columnSizingSpec, containerSquaresWidth, hasCuratedCellWidth, measureCellText, measureColumnContent, usageLabelWidth, workloadImagesText } from './column-content-width'
+import { CELL_PADDING_PX, type MeasureText, GROW_MAX_PX, columnSizingSpec, containerSquaresWidth, hasCuratedCellWidth, measureCellText, measureColumnContent, shortValueMin, usageLabelWidth, workloadImagesText } from './column-content-width'
+import { computeColumnLayout } from './column-sizing'
 
 // The curated grow or fit flags, parsed from the source as curated-column-ownership.test.ts does.
 function curatedSizedColumns(mode: 'grow' | 'fit'): string[] {
@@ -21,6 +22,8 @@ function curatedSizedColumns(mode: 'grow' | 'fit'): string[] {
 
 // 10px per character, 0 for nothing: easy arithmetic.
 const measure: MeasureText = (text, _font, limit = Infinity) => Math.min(text.length * 10, limit + 10)
+// A badge's 12px label measures narrower than 14px body text.
+const fontMeasure: MeasureText = (text, font, limit = Infinity) => Math.min(text.length * (font === 'badge' ? 7 : 10), limit + 10)
 const ctx = { plural: 'events', cellFilterKind: 'events' }
 const pod = (name: string, extra: Record<string, any> = {}) => ({ metadata: { name, namespace: 'default', ...extra } })
 
@@ -131,18 +134,32 @@ describe('measureColumnContent', () => {
     const pool = (ready: string, reason?: string) => ({ metadata: { name: 'p' }, status: { conditions: [{ type: 'Ready', status: ready, reason }] } })
     const items = [...Array(99)].map(() => pool('True'))
     items.push(pool('False', 'UnhealthyDependents'))
-    const m = measureColumnContent(items, [{ key: 'status', sizing: 'fit' }], { plural: 'nodepools', cellFilterKind: 'nodepools' }, measure)
-    // One failing pool among a hundred ready ones still sets the width, badge padding included.
-    expect(m.status).toEqual({ content: 'UnhealthyDependents'.length * 10 + 18 + CELL_PADDING_PX })
+    const m = measureColumnContent(items, [{ key: 'status', sizing: 'fit' }], { plural: 'nodepools', cellFilterKind: 'nodepools' }, fontMeasure)
+    // One failing pool among a hundred ready ones still sets the width, in the
+    // badge's font, its padding included.
+    expect(m.status).toEqual({ content: 'UnhealthyDependents'.length * 7 + 18 + CELL_PADDING_PX })
+  })
+
+  it('lets a short-value column hold its longest value, and give way no further than its curated width or what it needs', () => {
+    // Curated 96px. A badge wider than that gets its width while there is room,
+    // and gives way to the curated width when the table is short...
+    const wide = { key: 'status', mode: 'fit' as const, floor: 96, max: 400, content: 130, min: shortValueMin(96, 70, 130) }
+    const age = { key: 'age', mode: 'exact' as const, floor: 100 }
+    expect(computeColumnLayout([wide, age], 230)).toEqual({ status: 130, age: 100 })
+    expect(computeColumnLayout([wide, age], 150)).toEqual({ status: 96, age: 100 })
+    // ...and one narrower than its curated width gives way to its heading and content.
+    const narrow = { ...wide, content: 86, min: shortValueMin(96, 70, 86) }
+    expect(computeColumnLayout([narrow, age], 150)).toEqual({ status: 86, age: 100 })
+    expect(computeColumnLayout([narrow, age], 190)).toEqual({ status: 90, age: 100 })
   })
 
   it('measures the Endpoints badge the audit puts in place of the guess', () => {
     const svc = { metadata: { name: 's', namespace: 'default' }, spec: { selector: { app: 'x' } } }
     const cols = [{ key: 'endpoints', sizing: 'fit' as const }]
-    const plain = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services' }, measure)
-    expect(plain.endpoints.content).toBe('Active'.length * 10 + 18 + CELL_PADDING_PX)
-    const flagged = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services', auditBadges: { 'default/s': { danger: 0, warning: 1 } } }, measure)
-    expect(flagged.endpoints.content).toBe('No endpoints'.length * 10 + 18 + CELL_PADDING_PX)
+    const plain = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services' }, fontMeasure)
+    expect(plain.endpoints.content).toBe('Active'.length * 7 + 18 + CELL_PADDING_PX)
+    const flagged = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services', auditBadges: { 'default/s': { danger: 0, warning: 1 } } }, fontMeasure)
+    expect(flagged.endpoints.content).toBe('No endpoints'.length * 7 + 18 + CELL_PADDING_PX)
   })
 
   it('measures an Event reason in the medium weight its cell renders', () => {
