@@ -111,8 +111,10 @@ const (
 	TargetPresent TargetState = iota
 	// TargetAbsent: the target's store had loaded in full and doesn't hold it.
 	TargetAbsent
-	// TargetUnread: Radar couldn't read the target, or couldn't check the
-	// caller's access to it; Gap says why.
+	// TargetUnread: Radar couldn't read the target, couldn't check the
+	// caller's access to it, or found it only in an older API group whose
+	// use by the controller it can't confirm (legacy_group_only); Gap says
+	// why.
 	TargetUnread
 	// TargetWithheld: the caller may not read the target.
 	TargetWithheld

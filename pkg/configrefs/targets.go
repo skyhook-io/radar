@@ -13,8 +13,11 @@ import (
 type PathRef struct {
 	Ref  resourceid.Ref
 	Path string
-	// Or are the same reference in other API groups the controller also
-	// resolves it from, as Traefik 2 reads both of its groups.
+	// Or are the same reference in older API groups, in the order a
+	// controller may try them after Ref; nil means Ref alone. They are
+	// candidates, not groups every controller version reads: Traefik 2.10
+	// and 2.11 read both of Traefik's groups, Traefik 3 only the first. See
+	// relations.Declaration.Or for how a family resolves them.
 	Or []resourceid.Ref
 }
 

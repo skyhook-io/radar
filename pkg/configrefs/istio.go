@@ -14,8 +14,10 @@ const IstioNetworkingGroup = "networking.istio.io"
 
 // IstioServiceDomain is the domain Istio's service registry builds FQDNs
 // with: pilot-discovery's --domain, read from the discovery container of the
-// istiod Deployments, not a suffix inferred from a destination. Conflicting
-// revisions or an unreadable argument leave it unknown ("").
+// istiod Deployments, not a suffix inferred from a destination. With no
+// istiod Deployment observed, or one that sets no --domain, it is
+// pilot-discovery's default, cluster.local. Conflicting revisions or an
+// unreadable or invalid argument leave it unknown ("").
 func IstioServiceDomain(deployments []*appsv1.Deployment) string {
 	domain, observed := "", false
 	for _, deployment := range deployments {
