@@ -6,7 +6,7 @@ import { openExternal } from '../../utils/navigation'
 import { useDiagnostics } from '../../api/client'
 import type { DiagnosticsSnapshot, DiagEnvVar, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry, DiagCacheSyncStatus, DiagInformerSyncStatus, DiagSyncPhase, DiagSampleWindow } from '../../api/client'
 import { getK8sUIPerfSnapshot, type K8sUIPerfSnapshot } from '@skyhook-io/k8s-ui'
-import { SlackIcon } from '../community'
+import { SLACK_COLORS_ON_HOVER, SlackIcon } from '../community'
 
 export type DiagnosticsFocus = 'timeline'
 
@@ -164,9 +164,9 @@ export function DiagnosticsOverlay({ onClose, isOpen = true, focus, communityUrl
               href={communityUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated"
+              className="group flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated"
             >
-              <SlackIcon className="w-3.5 h-3.5" />
+              <SlackIcon className={clsx('w-3.5 h-3.5', SLACK_COLORS_ON_HOVER)} />
               Ask in Slack
             </a>
           )}

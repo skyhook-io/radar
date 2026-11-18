@@ -23,7 +23,11 @@ import { clsx } from "clsx";
 import type { MainView } from "../../types";
 import { Tooltip } from "../ui/Tooltip";
 import { assetUrl } from "@skyhook-io/k8s-ui";
-import { SlackIcon } from "../community";
+import {
+  COMMUNITY_HINT,
+  SLACK_COLORS_ON_ROW_HOVER,
+  SlackIcon,
+} from "../community";
 
 const radarLogoUrl = assetUrl("/images/radar/radar-icon.svg");
 
@@ -208,6 +212,8 @@ export function PrimaryNavRail({
               icon={SlackIcon}
               label="Community"
               ariaLabel="Radar community on Slack"
+              hint={COMMUNITY_HINT}
+              iconHoverClassName={SLACK_COLORS_ON_ROW_HOVER}
               pinned={pinned}
               href={communityUrl}
             />
@@ -446,6 +452,8 @@ export function RailActionRow({
   href,
   unread = false,
   iconClassName,
+  iconHoverClassName,
+  hint,
   id,
   badge,
 }: {
@@ -455,6 +463,10 @@ export function RailActionRow({
   pinned: boolean;
   unread?: boolean;
   iconClassName?: string;
+  // Added to the default icon classes rather than replacing them.
+  iconHoverClassName?: string;
+  // A line under the label: in the fly-out when slim, a tooltip when pinned.
+  hint?: string;
   id?: string;
   // A small tilted tag on the corner, for an item that's only here for now.
   badge?: string;
@@ -476,6 +488,7 @@ export function RailActionRow({
                 "group-hover/item:text-theme-text-secondary",
                 unread ? "text-accent" : "text-theme-text-tertiary",
               ),
+            iconHoverClassName,
           )}
         />
         {unread && (
@@ -498,29 +511,40 @@ export function RailActionRow({
       </span>
     </>
   );
+  const row = href ? (
+    <a
+      id={id}
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={ariaLabel}
+      className={rowClassName}
+    >
+      {content}
+    </a>
+  ) : (
+    <button
+      type="button"
+      id={id}
+      onClick={onClick}
+      aria-label={ariaLabel}
+      className={rowClassName}
+    >
+      {content}
+    </button>
+  );
   return (
     <div className={clsx("group/item relative", !pinned && "w-10")}>
-      {href ? (
-        <a
-          id={id}
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={ariaLabel}
-          className={rowClassName}
+      {pinned && hint ? (
+        <Tooltip
+          content={hint}
+          position="right"
+          wrapperClassName="!block w-full"
         >
-          {content}
-        </a>
+          {row}
+        </Tooltip>
       ) : (
-        <button
-          type="button"
-          id={id}
-          onClick={onClick}
-          aria-label={ariaLabel}
-          className={rowClassName}
-        >
-          {content}
-        </button>
+        row
       )}
       {badge && (
         <span
@@ -536,6 +560,11 @@ export function RailActionRow({
           className="pointer-events-none absolute left-full top-1/2 z-50 ml-1 hidden -translate-y-1/2 whitespace-nowrap rounded-md border border-theme-border bg-theme-hover px-2.5 py-1 text-[13px] font-medium text-theme-text-primary opacity-0 shadow-lg shadow-black/30 transition-opacity duration-75 group-hover/item:block group-hover/item:opacity-100"
         >
           {label}
+          {hint && (
+            <span className="block w-56 whitespace-normal text-xs font-normal text-theme-text-secondary">
+              {hint}
+            </span>
+          )}
         </span>
       )}
     </div>
