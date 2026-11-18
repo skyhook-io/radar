@@ -881,7 +881,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'provisioner', label: 'Provisioner', width: 'w-48' },
     { key: 'reclaimPolicy', label: 'Reclaim', width: 'w-20', tooltip: 'Default policy for volumes this class provisions — Delete removes the backing storage when the claim goes away; Retain leaves it for manual reclamation.' },
-    { key: 'bindingMode', label: 'Binding Mode', width: 'w-36', tooltip: "When the volume is provisioned — WaitForFirstConsumer waits for a pod so the disk lands in the right zone; Immediate provisions before the pod's placement is known, which can leave the pod unschedulable." },
+    { key: 'bindingMode', label: 'Binding Mode', width: 'w-36', sizing: 'fit', tooltip: "When the volume is provisioned — WaitForFirstConsumer waits for a pod so the disk lands in the right zone; Immediate provisions before the pod's placement is known, which can leave the pod unschedulable." },
     { key: 'expansion', label: 'Expansion', width: 'w-24', tooltip: 'Whether volumes can be expanded after creation' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -896,14 +896,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   clusterissuers: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Ready', width: 'w-24' },
-    { key: 'issuerType', label: 'Type', width: 'w-24' },
+    { key: 'issuerType', label: 'Type', width: 'w-24', sizing: 'fit' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   issuers: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Ready', width: 'w-24' },
-    { key: 'issuerType', label: 'Type', width: 'w-24' },
+    { key: 'issuerType', label: 'Type', width: 'w-24', sizing: 'fit' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   orders: [
@@ -927,7 +927,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-28', tooltip: "Programmed = the controller reports configuration should take effect soon; traffic has not been tested. Accepted = the controller accepted this Gateway but has not reported Programmed. If it stays Accepted, check the Gateway's conditions and addresses." },
-    { key: 'class', label: 'Class', width: 'w-36' },
+    { key: 'class', label: 'Class', width: 'w-36', sizing: 'fit' },
     { key: 'listeners', label: 'Listeners', width: 'w-40', tooltip: 'Protocol:Port for each listener' },
     // attachedRoutes is reported per listener, so a route attached to several
     // listeners is counted once for each — the total is not a route count.
@@ -980,7 +980,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   ec2nodeclasses: [
     { key: 'name', label: 'Name' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-24', sizing: 'fit' },
     { key: 'ami', label: 'AMI', width: 'w-36', tooltip: 'AMI selector alias or ID' },
     { key: 'role', label: 'IAM Role', width: 'w-48' },
     { key: 'volumeSize', label: 'Volume', width: 'w-24', tooltip: 'Root volume size' },
@@ -1020,7 +1020,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   resourceslices: [
     { key: 'name', label: 'Name' },
     { key: 'driver', label: 'Driver', width: 'w-44' },
-    { key: 'pool', label: 'Pool', width: 'w-36', tooltip: "Pools are identified by driver and pool name. The scheduler needs a complete set of slices at the pool's highest generation before allocating from it." },
+    { key: 'pool', label: 'Pool', width: 'w-36', sizing: 'fit', tooltip: "Pools are identified by driver and pool name. The scheduler needs a complete set of slices at the pool's highest generation before allocating from it." },
     { key: 'node', label: 'Node', width: 'w-44', tooltip: "Node providing this slice's devices. A dash means node access is described by a node selector, all-nodes access, or per-device node selection." },
     { key: 'devices', label: 'Devices', width: 'w-24', tooltip: 'Devices published in this slice, including devices already allocated. This is not a count of free devices or the whole pool.' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1616,7 +1616,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   networkpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'policyTypes', label: 'Types', width: 'w-28' },
+    { key: 'policyTypes', label: 'Types', width: 'w-28', sizing: 'fit' },
     { key: 'selector', label: 'Pod Selector', width: 'w-48' },
     { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress allow-rule counts. For a direction listed in Types, 0 means this policy allows none; other policies can still allow traffic.' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1838,7 +1838,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   kustomizations: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'source', label: 'Source', width: 'w-48', tooltip: 'Source GitRepository or OCIRepository' },
+    { key: 'source', label: 'Source', width: 'w-48', sizing: 'fit', tooltip: 'Source GitRepository or OCIRepository' },
     { key: 'path', label: 'Path', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'revision', label: 'Revision', width: 'w-48', tooltip: 'Applied git revision' },
@@ -1897,7 +1897,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   vulnerabilityreports: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'container', label: 'Container', width: 'w-28' },
+    { key: 'container', label: 'Container', width: 'w-28', sizing: 'fit' },
     { key: 'image', label: 'Image', width: 'w-48' },
     { key: 'critical', label: 'C', width: 'w-12', sizing: 'fit', tooltip: 'Critical-severity vulnerabilities. C/H/M/L = Critical, High, Medium, Low.' },
     { key: 'high', label: 'H', width: 'w-12', sizing: 'fit', tooltip: 'High vulnerabilities' },
@@ -1918,7 +1918,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   exposedsecretreports: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'container', label: 'Container', width: 'w-28' },
+    { key: 'container', label: 'Container', width: 'w-28', sizing: 'fit' },
     { key: 'image', label: 'Image', width: 'w-48' },
     { key: 'critical', label: 'C', width: 'w-12', sizing: 'fit', tooltip: 'Critical-severity exposed secrets. C/H/M/L = Critical, High, Medium, Low.' },
     { key: 'high', label: 'H', width: 'w-12', sizing: 'fit', tooltip: 'High secrets' },
@@ -1957,16 +1957,16 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'image', label: 'Image', width: 'w-48', tooltip: 'Image the SBOM describes. The container name alone does not identify what was scanned.' },
-    { key: 'container', label: 'Container', width: 'w-28' },
+    { key: 'container', label: 'Container', width: 'w-28', sizing: 'fit' },
     { key: 'components', label: 'Components', width: 'w-24', tooltip: 'Packages and libraries found in the image' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-28', sizing: 'fit' },
     { key: 'age', label: 'Age', width: 'w-16' },
   ],
   clustersbomreports: [
     { key: 'name', label: 'Name' },
     { key: 'image', label: 'Image', width: 'w-48', tooltip: 'Image the SBOM describes. The container name alone does not identify what was scanned.' },
     { key: 'components', label: 'Components', width: 'w-24' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-28', sizing: 'fit' },
     { key: 'age', label: 'Age', width: 'w-16' },
   ],
   infraassessmentreports: [
@@ -2289,7 +2289,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'url', label: 'URL', width: 'w-56' },
-    { key: 'latestRevision', label: 'Latest Revision', width: 'w-44', tooltip: 'Newest revision that has reported Ready. A newer revision may still be starting or may have failed; this revision need not receive traffic.' },
+    { key: 'latestRevision', label: 'Latest Revision', width: 'w-44', sizing: 'fit', tooltip: 'Newest revision that has reported Ready. A newer revision may still be starting or may have failed; this revision need not receive traffic.' },
     { key: 'traffic', label: 'Traffic', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -2492,7 +2492,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   traefikservices: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
-    { key: 'type', label: 'Type', width: 'w-36 shrink-0' },
+    { key: 'type', label: 'Type', width: 'w-36 shrink-0', sizing: 'fit' },
     { key: 'targets', label: 'Targets', width: 'min-w-48' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],

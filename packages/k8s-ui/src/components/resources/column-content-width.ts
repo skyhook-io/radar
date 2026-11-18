@@ -10,21 +10,28 @@ import {
   getCellFilterValue,
   getConfigMapKeys,
   getFluxHelmReleaseMessage,
+  getGatewayClass,
   getGatewayClassDescription,
   getHPATarget,
   getIngressHosts,
-  getNodeVersion,
   getIngressRules,
+  getNetworkPolicyTypes,
+  getNodeVersion,
   getReplicaSetOwner,
   getServiceEndpointsStatus,
   getServicePorts,
   getServiceSelector,
   getServiceStatus,
+  getStorageClassBindingMode,
   getWorkloadImages,
 } from './resource-utils'
-import { getNodeClaimNodeName, getNodeClaimNodePoolRef, getNodePoolDisruptionPolicy, getNodePoolLimits, getNodePoolNodeClassRef, getNodePoolStatus } from './resource-utils-karpenter'
+import { getEC2NodeClassStatus, getNodeClaimNodeName, getNodeClaimNodePoolRef, getNodePoolDisruptionPolicy, getNodePoolLimits, getNodePoolNodeClassRef, getNodePoolStatus } from './resource-utils-karpenter'
 import { getArgoApplicationHealth, getArgoApplicationSync } from './resource-utils-argo'
-import { getConfigAuditReportSummary, getVulnerabilityReportSummary } from './resource-utils-trivy'
+import { getConfigAuditReportSummary, getSbomReportStatus, getVulnerabilityReportContainer, getVulnerabilityReportSummary } from './resource-utils-trivy'
+import { getClusterIssuerType } from './resource-utils-certmanager'
+import { getResourceSlicePool } from './resource-utils-dra'
+import { getKnativeServiceLatestRevision } from './resource-utils-knative'
+import { getTraefikServiceType } from './resource-utils-traefik'
 import { getBackupExpiry } from './resource-utils-velero'
 import {
   getClusterQueueCohort,
@@ -32,7 +39,7 @@ import {
   getKueueWorkloadQueueName,
   getLocalQueueClusterQueue,
 } from './resource-utils-kueue'
-import { getGitRepositoryUrl, getHelmRepositoryUrl, getOCIRepositoryUrl } from './resource-utils-flux'
+import { getGitRepositoryUrl, getHelmRepositoryUrl, getKustomizationSource, getOCIRepositoryUrl } from './resource-utils-flux'
 import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
 
 // Cell text styles, matching the classes the cells render with (text-sm /
@@ -242,6 +249,21 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'admissionchecks:status': statusBadge('admissionchecks'),
   'provisioningrequests:status': statusBadge('provisioningrequests'),
   'jobsets:status': statusBadge('jobsets'),
+  'ec2nodeclasses:status': badge(r => getEC2NodeClassStatus(r).text),
+  'storageclasses:bindingMode': text(getStorageClassBindingMode),
+  'networkpolicies:policyTypes': text(getNetworkPolicyTypes),
+  'issuers:issuerType': text(getClusterIssuerType),
+  'clusterissuers:issuerType': text(getClusterIssuerType),
+  'gateways:class': text(getGatewayClass),
+  'resourceslices:pool': text(getResourceSlicePool),
+  'kustomizations:source': text(getKustomizationSource),
+  'knativeservices:latestRevision': text(getKnativeServiceLatestRevision),
+  'traefikservices:type': text(getTraefikServiceType),
+  'sbomreports:status': badge(r => getSbomReportStatus(r).text),
+  'clustersbomreports:status': badge(r => getSbomReportStatus(r).text),
+  'sbomreports:container': text(getVulnerabilityReportContainer),
+  'vulnerabilityreports:container': text(getVulnerabilityReportContainer),
+  'exposedsecretreports:container': text(getVulnerabilityReportContainer),
   ...trivySeverityCounts('vulnerabilityreports', getVulnerabilityReportSummary),
   ...trivySeverityCounts('exposedsecretreports', getVulnerabilityReportSummary),
   ...trivySeverityCounts('configauditreports', getConfigAuditReportSummary),
