@@ -151,8 +151,8 @@ func TestSubstrateHubOwnerReadsAsTheSharedIdentityMintedAsThemselves(t *testing.
 		t.Errorf("owner status = %+v", status)
 	}
 	for _, h := range []http.HandlerFunc{s.handlePutSubstrateConnection} {
-		if rec := call(t, s, h, substrateCall{path: "/api/substrate/connection", user: alice}, nil); rec.Code != http.StatusForbidden || errorCode(t, rec) != substrateapi.CodeSharedRadar {
-			t.Errorf("connection stays local-only in Hub: %d %s", rec.Code, rec.Body)
+		if rec := call(t, s, h, substrateCall{path: "/api/substrate/connection", user: alice}, nil); rec.Code != http.StatusForbidden || errorCode(t, rec) != "operator_managed" {
+			t.Errorf("Hub's connection is its operator's, as every integration's: %d %s", rec.Code, rec.Body)
 		}
 	}
 }

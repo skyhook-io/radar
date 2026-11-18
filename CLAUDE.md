@@ -237,7 +237,7 @@ Radar Hub embeds the newest `@skyhook-io/radar-app` against whatever Radar each 
 Every review of server or UI behavior considers all four:
 - **Local:** one user, auth off, UI and server ship together.
 - **In-cluster shared:** auth on, many users on one process. Anything process-wide (managers, caches, connections, detections) is shared across users, and per-user namespace RBAC must hold for derived data too (counts, coverage, timings).
-- **Radar Hub:** the newest `radar-app` against whatever Radar each cluster runs, through a GET-only proxy.
+- **Radar Hub:** the newest `radar-app` against whatever Radar each cluster runs, through Hub's per-cluster proxy. It forwards writes from signed-in UI sessions; in a read-only org it refuses writes from API tokens (PATs).
 - **Shared without authentication:** the Docker image and the Helm default (`auth.mode: none` on `0.0.0.0`). Anyone who reaches the address is a user, which is accepted; a web page in their browser must still get nothing, and nothing may exceed Radar's Kubernetes identity (host access, process internals, lasting outbound actions). A new route or capability states what it does here and has a test for it. The rules are in [docs/authentication.md](docs/authentication.md#without-authentication); `Server.sharedListener()` is the check.
 
 ### Error Handling (Frontend)
