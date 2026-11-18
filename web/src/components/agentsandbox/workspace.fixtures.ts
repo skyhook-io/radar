@@ -12,6 +12,7 @@ const sandbox = (name: string) => ({ kind: 'Sandbox', group: 'agents.x-k8s.io', 
 const claim = (name: string) => ({ kind: 'SandboxClaim', group: 'extensions.agents.x-k8s.io', namespace: NS, name })
 const pool = (name: string) => ({ kind: 'SandboxWarmPool', group: 'extensions.agents.x-k8s.io', namespace: NS, name })
 const pod = (name: string) => ({ kind: 'Pod', group: '', namespace: NS, name })
+const FOREIGN_OWNERS = `kubectl get pod foreign -n ${NS} -o jsonpath='{.metadata.ownerReferences}'`
 
 export function liveAttention(): AgentSandboxAttention[] {
   // In the server's order: severity, then rule, then newest first.
@@ -33,7 +34,8 @@ export function liveAttention(): AgentSandboxAttention[] {
       title: 'Suspension blocked',
       reading: 'The controller refuses to delete a Pod this Sandbox doesn’t own, so the suspension waits.',
       rawDetail: 'Refused to delete pod because it is not owned by this sandbox', rawDetailLabel: 'Controller’s message', rawDetailSource: 'controller',
-      nextStep: 'Remove Pod foreign, which this Sandbox doesn’t own, or recreate the Sandbox under another name',
+      nextStep: `Check who owns Pod foreign (${FOREIGN_OWNERS}) before removing it, or recreate the Sandbox under another name`,
+      command: FOREIGN_OWNERS,
       subject: sandbox('foreign'), related: { lead: 'The Pod it won’t delete:', refs: [pod('foreign')] }, issue: true,
     },
     {
@@ -45,6 +47,7 @@ export function liveAttention(): AgentSandboxAttention[] {
       nextStep: 'Free capacity on a node, or change the Pod template’s requests, node selector or tolerations',
       subject: pool('warm'), related: { lead: 'Not ready:', refs: [sandbox('warm-nd2zw'), sandbox('warm-4xmkm')] },
       relations: [{ role: 'template', ref: { kind: 'SandboxTemplate', group: 'extensions.agents.x-k8s.io', namespace: NS, name: 'tmpl' }, presence: 'present' }],
+      waitingClaims: { count: 0, lowerBound: false },
       issue: false,
     },
     {

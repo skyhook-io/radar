@@ -25,7 +25,7 @@ import {
   AGENT_SANDBOX_WIDE,
   AgentSandboxCoverageNotice,
   AgentSandboxHeader,
-  Dash,
+  Absent,
   ExpiryCell,
   ObjectName,
   ReadingBadge,
@@ -114,32 +114,52 @@ function StateCell({ o, status, requested, level, hideMessage }: { o: any; statu
 
 function AgeCell({ o }: { o: any }) {
   const created = o?.metadata?.creationTimestamp
-  return created ? <span className="text-sm text-theme-text-secondary">{formatAge(created)}</span> : <Dash />
+  return created ? <span className="text-sm text-theme-text-secondary">{formatAge(created)}</span> : <Absent>unknown</Absent>
 }
 
 /** Narrow: the expiry with the age under it. */
-function ExpiryAgeCell({ o }: { o: any }) {
+function ExpiryAgeCell({ o, claimed }: { o: any; claimed?: boolean }) {
   const created = o?.metadata?.creationTimestamp
   return (
     <>
-      <ExpiryCell resource={o} />
+      <ExpiryCell resource={o} claimed={claimed} />
       {created && <Sub>{formatAge(created)} old</Sub>}
     </>
   )
 }
 
-export function SandboxesTable({ read, claims, onInspect, inspected, title, server, empty }: { read: KindRead; claims: any[]; onInspect: (r: SelectedResource) => void; inspected: SelectedResource | null; title?: string; server?: ServerReadings; empty?: string }) {
+/**
+ * What owns a Sandbox, from its owner references: a claim or a warm pool,
+ * else what else owns it, else nothing. "standalone" only where every claim
+ * in its namespace was read, since a claim can name a Sandbox it doesn't own.
+ */
+export function OwnerAbsent({ o, claims }: { o: any; claims: KindRead }) {
+  const refs: any[] = Array.isArray(o?.metadata?.ownerReferences) ? o.metadata.ownerReferences : []
+  const other = refs.find((r) => r?.controller) ?? refs[0]
+  if (other?.kind && other?.name) {
+    return (
+      <>
+        <ObjectName name={other.name} />
+        <Sub>{other.kind}</Sub>
+      </>
+    )
+  }
+  if (readInNamespace(claims, ns(o))) return <Absent title="No warm pool or claim owns it, and no claim names it.">standalone</Absent>
+  return <Absent title="No warm pool or claim owns it. Radar couldn’t read every claim here, so one may name it.">no warm pool; claims not read</Absent>
+}
+
+export function SandboxesTable({ read, claims: claimsRead, onInspect, inspected, title, server, empty }: { read: KindRead; claims: KindRead; onInspect: (r: SelectedResource) => void; inspected: SelectedResource | null; title?: string; server?: ServerReadings; empty?: string }) {
   const rows = useMemo(() => byReading(readItems(read), getSandboxStatus), [read])
   const multi = manyNamespaces(rows)
   // A Sandbox a claim names but doesn't own (adopted from a warm pool) still belongs to that claim.
   const claimFor = useMemo(() => {
     const m = new Map<string, any>()
-    for (const c of claims) {
+    for (const c of readItems(claimsRead)) {
       const name = claimSandboxName(c)
       if (name) m.set(`${ns(c)}/${name}`, c)
     }
     return m
-  }, [claims])
+  }, [claimsRead])
   const wide = useMediaQuery(AGENT_SANDBOX_WIDE)
   const ownerOf = (o: any) => {
     const claim = claimFor.get(rowKey(o))
@@ -161,6 +181,11 @@ export function SandboxesTable({ read, claims, onInspect, inspected, title, serv
                 {ownerWord(owner)} <RowLink refTo={owner} onInspect={onInspect} inline />
               </Sub>
             )}
+            {!wide && !owner && (
+              <Sub>
+                <OwnerAbsent o={o} claims={claimsRead} />
+              </Sub>
+            )}
           </>
         )
       },
@@ -173,7 +198,7 @@ export function SandboxesTable({ read, claims, onInspect, inspected, title, serv
             width: '18%',
             cell: (o: any) => {
               const owner = ownerOf(o)
-              if (!owner) return <Dash />
+              if (!owner) return <OwnerAbsent o={o} claims={claimsRead} />
               return (
                 <>
                   <RowLink refTo={owner} onInspect={onInspect} />
@@ -182,10 +207,10 @@ export function SandboxesTable({ read, claims, onInspect, inspected, title, serv
               )
             },
           },
-          { header: 'Expiry', width: '16%', cell: (o: any) => <ExpiryCell resource={o} /> },
+          { header: 'Expiry', width: '16%', cell: (o: any) => <ExpiryCell resource={o} claimed={ownerOf(o)?.kind === 'SandboxClaim'} /> },
           { header: 'Age', width: '8%', cell: (o: any) => <AgeCell o={o} /> },
         ]
-      : [{ header: 'Expiry, age', width: '24%', cell: (o: any) => <ExpiryAgeCell o={o} /> }]),
+      : [{ header: 'Expiry, age', width: '24%', cell: (o: any) => <ExpiryAgeCell o={o} claimed={ownerOf(o)?.kind === 'SandboxClaim'} /> }]),
   ]
   return (
     <SectionTable
@@ -218,7 +243,7 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server }: {
   }
   const poolCell = (o: any) => {
     const pool = getSandboxClaimWarmPool(o)
-    if (pool === '-') return <Dash />
+    if (pool === '-') return <Absent>no warm pool</Absent>
     const ref = { kind: 'SandboxWarmPool', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: pool }
     // A pool Radar didn't find is named, not linked: "not found" only where
     // every warm pool in the namespace was read, else "not read". Where the
@@ -263,7 +288,7 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server }: {
             width: '16%',
             cell: (o: any) => {
               const sb = sandboxOf(o)
-              return sb ? <RowLink refTo={sb} onInspect={onInspect} /> : <Dash />
+              return sb ? <RowLink refTo={sb} onInspect={onInspect} /> : <Absent title="The claim’s status names no Sandbox now.">not bound</Absent>
             },
           },
           { header: 'Expiry', width: '13%', cell: (o: any) => <ExpiryCell resource={o} /> },
@@ -348,7 +373,7 @@ export function WarmPoolsTable({
       width: wide ? '18%' : '24%',
       cell: (o) => {
         const t = getSandboxWarmPoolTemplate(o)
-        return t === '-' ? <Dash /> : <RowLink refTo={{ kind: 'SandboxTemplate', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: t }} onInspect={onInspect} />
+        return t === '-' ? <Absent>no template</Absent> : <RowLink refTo={{ kind: 'SandboxTemplate', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: t }} onInspect={onInspect} />
       },
     },
     {
@@ -481,7 +506,7 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
       <AgentSandboxHeader title="Sandboxes" namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_KIND.kind} />} />
       <ScreenBody>
         <AgentSandboxCoverageNotice data={data} kinds={['sandboxes', 'claims']} />
-        <SandboxesTable read={sandboxes} claims={readItems(data.claims)} onInspect={onInspect} inspected={inspected} server={server} empty={filtered ? 'No Sandboxes match these filters.' : undefined} />
+        <SandboxesTable read={sandboxes} claims={data.claims} onInspect={onInspect} inspected={inspected} server={server} empty={filtered ? 'No Sandboxes match these filters.' : undefined} />
       </ScreenBody>
     </div>
   )

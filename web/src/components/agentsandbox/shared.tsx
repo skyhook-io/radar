@@ -191,11 +191,26 @@ export function RowLink({ refTo, onInspect, children, inline }: { refTo: { kind:
  */
 export { SUBSTRATE_WIDE as AGENT_SANDBOX_WIDE } from '../substrate/shared'
 
-export function Dash() {
-  return <span className="text-theme-text-tertiary">–</span>
+/** Absence in a table cell or fact, in words: "no expiry", "not bound", "unknown". */
+export function Absent({ children, title }: { children: ReactNode; title?: string }) {
+  const text = <span className="text-sm text-theme-text-tertiary">{children}</span>
+  return title ? <Tooltip content={title}>{text}</Tooltip> : text
 }
 
-/** "expires in 12m", "expired 2h ago", or a dash; the exact time on hover. */
+/**
+ * Words a controller, the scheduler or the kubelet wrote, verbatim and set
+ * apart from Radar's own: labelled, in mono, behind a rule.
+ */
+export function SourceText({ label, text }: { label?: string; text: string }) {
+  return (
+    <div className="min-w-0 text-xs">
+      {label && <div className="text-theme-text-tertiary">{label}</div>}
+      <div className="mt-0.5 whitespace-pre-wrap break-words border-l-2 border-theme-border pl-2 font-mono text-[11.5px] text-theme-text-secondary">{text}</div>
+    </div>
+  )
+}
+
+/** "expires in 12m", "expired 2h ago", or undefined when none is set; the exact time on hover. */
 export function expiryText(value: string | undefined, now = Date.now()): string | undefined {
   if (!value) return undefined
   const at = Date.parse(value)
@@ -203,10 +218,17 @@ export function expiryText(value: string | undefined, now = Date.now()): string 
   return `${at >= now ? 'expires' : 'expired'} ${formatSandboxExpiry(value, now)}`
 }
 
-export function ExpiryCell({ resource }: { resource: any }) {
+/**
+ * The object's own spec.shutdownTime. With none set, a claim or a Sandbox
+ * nothing claims has no expiry; a claimed Sandbox may still end with its
+ * claim, so it says only that it sets none of its own.
+ */
+export function ExpiryCell({ resource, claimed }: { resource: any; claimed?: boolean }) {
   const value = getSandboxExpiry(resource)
   const text = expiryText(value)
-  if (!text || !value) return <Dash />
+  if (!text || !value) {
+    return claimed ? <Absent title="This Sandbox sets no shutdownTime; its claim’s expiry can still end it.">none of its own</Absent> : <Absent>no expiry</Absent>
+  }
   return (
     <Tooltip content={new Date(value).toLocaleString()}>
       <span className="text-sm text-theme-text-secondary">{text}</span>

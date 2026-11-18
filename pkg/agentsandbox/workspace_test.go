@@ -676,3 +676,86 @@ func TestUnschedulableCount(t *testing.T) {
 		t.Errorf("unschedulable %d, starting %d; want 2 and 2", c.Unschedulable, c.Starting)
 	}
 }
+
+// A refused suspension's Pod isn't the Sandbox's: its owner is checked before
+// anyone removes it, with the one command that shows it.
+func TestSuspensionBlockedChecksTheOwnerFirst(t *testing.T) {
+	row := rowFor(Summarize(liveInput()), "Sandbox", "foreign")
+	cmd := "kubectl get pod foreign -n radar-agents-live -o jsonpath='{.metadata.ownerReferences}'"
+	if row == nil || row.NextStep != "Check who owns Pod foreign ("+cmd+") before removing it, or recreate the Sandbox under another name" {
+		t.Fatalf("next step %+v", row)
+	}
+	if row.Command != cmd {
+		t.Errorf("command %q, want %q", row.Command, cmd)
+	}
+	if words := len(strings.Fields(row.NextStep)); words > 25 {
+		t.Errorf("next step and command run to %d words", words)
+	}
+}
+
+// Claims that name a pool with no ready sandbox wait on it: counted on the
+// pool's row, and the pool named on each late claim's row. Only claims that are
+// unbound and still in progress count; a lower bound where claims were read in part.
+func TestEmptyReserveNamesTheClaimsWaitingOnIt(t *testing.T) {
+	in := liveInput()
+	waits := func(name string) *unstructured.Unstructured {
+		return claim(name, 2*time.Hour, spec(map[string]any{"warmPoolRef": map[string]any{"name": "warm"}}), conds(cnd("Ready", "False", "SandboxNotReady", "", 2*time.Hour)))
+	}
+	in.Claims = full(append(liveClaims(), waits("a"), waits("b"),
+		claim("bound", 2*time.Hour, spec(map[string]any{"warmPoolRef": map[string]any{"name": "warm"}}), status(map[string]any{"sandbox": map[string]any{"name": "x"}}), conds(cnd("Ready", "True", "Ready", "", time.Hour))),
+	)...)
+	s := Summarize(in)
+	reserve := rowFor(s, "SandboxWarmPool", "warm")
+	if reserve == nil || reserve.WaitingClaims == nil || reserve.WaitingClaims.Count == nil || *reserve.WaitingClaims.Count != 2 || reserve.WaitingClaims.LowerBound {
+		t.Fatalf("pool row waiting claims %+v", reserve)
+	}
+	for _, name := range []string{"a", "b"} {
+		if r := rowFor(s, "SandboxClaim", name); r == nil || r.EmptyPool == nil || r.EmptyPool.Name != "warm" {
+			t.Errorf("claim %s: %+v, want its empty pool named", name, r)
+		}
+	}
+
+	// The live namespace's only claim on the pool expired: none waits, and that is known.
+	live := rowFor(Summarize(liveInput()), "SandboxWarmPool", "warm")
+	if live.WaitingClaims == nil || *live.WaitingClaims.Count != 0 || live.WaitingClaims.LowerBound {
+		t.Errorf("live waiting claims %+v", live.WaitingClaims)
+	}
+
+	// Claims read elsewhere only: none found here proves nothing.
+	in.Claims = readIn([]string{"team-b"})
+	if r := rowFor(Summarize(in), "SandboxWarmPool", "warm"); r.WaitingClaims != nil {
+		t.Errorf("unread claims counted %+v", r.WaitingClaims)
+	}
+	in.Claims = readIn([]string{"team-b"}, waits("a"))
+	if r := rowFor(Summarize(in), "SandboxWarmPool", "warm"); r.WaitingClaims == nil || *r.WaitingClaims.Count != 1 || !r.WaitingClaims.LowerBound {
+		t.Errorf("partly read claims %+v, want a lower bound of 1", r.WaitingClaims)
+	}
+
+	// With a sandbox ready the next claim takes it: no claim is said to wait on the reserve.
+	in.Claims = full(waits("a"))
+	in.WarmPools = full(pool("warm", "tmpl", 3, 1, 42*time.Hour))
+	s = Summarize(in)
+	if r := rowFor(s, "SandboxWarmPool", "warm"); r != nil && r.WaitingClaims != nil {
+		t.Errorf("ready reserve, yet waiting claims %+v", r.WaitingClaims)
+	}
+	if r := rowFor(s, "SandboxClaim", "a"); r == nil || r.EmptyPool != nil {
+		t.Errorf("claim a %+v, want no empty pool", r)
+	}
+}
+
+// What limits Radar's own reading stays beside the title, not in the folded reading.
+func TestCaveatsAreNotFolded(t *testing.T) {
+	in := liveInput()
+	in.WarmPools = full(pool("warm", "tmpl", 2, 0, 42*time.Hour), pool("no-such-pool", "tmpl", 1, 1, time.Hour))
+	row := rowFor(Summarize(in), "SandboxClaim", "claim-missing-pool")
+	if row == nil || !strings.Contains(row.Caveat, "may predate it") || row.Reading != "" {
+		t.Errorf("claim row %+v, want the contradiction as its caveat", row)
+	}
+
+	in = liveInput()
+	in.Sandboxes = readIn(nil)
+	row = rowFor(Summarize(in), "SandboxWarmPool", "warm")
+	if row == nil || row.Caveat != "Radar couldn’t read its sandboxes, so it can’t say why they aren’t ready." || strings.Contains(row.Reading, "couldn’t read") {
+		t.Errorf("pool row %+v", row)
+	}
+}

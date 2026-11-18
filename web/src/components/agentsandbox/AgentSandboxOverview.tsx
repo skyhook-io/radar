@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useContext, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import {
@@ -7,7 +7,6 @@ import {
   CollapseChevron,
   FoldSection,
   OpenIssueContext,
-  ProblemMeta,
   RefLink,
   StatusDot,
   Tooltip,
@@ -25,10 +24,12 @@ import { issuesPathForSubject } from '../../utils/page-links'
 import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { AGENT_SANDBOX_EXTENSIONS_GROUP, SANDBOXES_PATH, SANDBOX_CLAIMS_PATH, SANDBOX_WARM_POOLS_PATH } from './routes'
-import { AGENT_SANDBOX_WIDE, AgentSandboxHeader, Dash, ObjectName } from './shared'
-import { CANT_SCHEDULE, objectKey, serverReadings } from './labels'
+import { AGENT_SANDBOX_WIDE, AgentSandboxHeader, ObjectName, SourceText } from './shared'
+import { CANT_SCHEDULE, notReadyMembers, objectKey, serverReadings } from './labels'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
-import { PRESENCE_TEXT, WorkspaceCoverageNotice, attentionAge, attentionProblem, controllerValue, leftOutText, relationLabel, severityTone } from './workspace'
+import { CommandChip } from '../substrate/shared'
+import { poolNotReadyPath } from './AgentSandboxTables'
+import { PRESENCE_TEXT, WorkspaceCoverageNotice, attentionAge, attentionDetail, attentionProblem, controllerValue, leftOutText, relationLabel, severityTone } from './workspace'
 
 export const NOTHING_NEEDS_ATTENTION = 'Nothing needs attention.'
 /** The same, when part of Agent Sandbox could not be read: an empty list there proves less. */
@@ -151,9 +152,13 @@ function RefsLine({ lead, refs, onNavigate }: { lead: string; refs: AgentSandbox
  * when it is there, "not found" only where its kind was read in full in that
  * namespace, "not read" otherwise. Objects the row already links are left out.
  */
+function shownRelations(a: AgentSandboxAttention) {
+  const linked = new Set([a.subject, ...(a.related?.refs ?? []), ...(a.emptyPool ? [a.emptyPool] : [])].map((r) => `${r.kind}/${r.namespace ?? ''}/${r.name}`))
+  return (a.relations ?? []).filter((r) => !linked.has(`${r.ref.kind}/${r.ref.namespace ?? ''}/${r.ref.name}`))
+}
+
 function RelationsLine({ a, onNavigate }: { a: AgentSandboxAttention; onNavigate: (ref: ResourceRef) => void }) {
-  const linked = new Set([a.subject, ...(a.related?.refs ?? [])].map((r) => `${r.kind}/${r.namespace ?? ''}/${r.name}`))
-  const shown = (a.relations ?? []).filter((r) => !linked.has(`${r.ref.kind}/${r.ref.namespace ?? ''}/${r.ref.name}`))
+  const shown = shownRelations(a)
   if (shown.length === 0) return null
   return (
     <div className="break-words text-xs text-theme-text-secondary">
@@ -175,31 +180,111 @@ function RelationsLine({ a, onNavigate }: { a: AgentSandboxAttention; onNavigate
   )
 }
 
-/** One row: title, subject, Radar's reading, links, the next step, and the source's own words folded last. */
+/**
+ * What else the row holds up, where the server read it: the Sandboxes a
+ * stopped controller leaves waiting, the claims an empty reserve leaves
+ * without a warm sandbox, or, on a claim, the empty pool it waits on.
+ */
+function Impact({ a, onNavigate }: { a: AgentSandboxAttention; onNavigate: (ref: ResourceRef) => void }) {
+  if (a.rule === 'controllerNotRunning' && a.related) return <span>{a.related.lead.replace(/:$/, '')}</span>
+  const w = a.waitingClaims
+  if (w && w.count !== null) {
+    if (w.count === 0) return <span>no claim waits on it</span>
+    return (
+      <span>
+        {w.lowerBound ? 'at least ' : ''}
+        {plural(w.count, 'claim', 'claims')} can’t take a warm sandbox
+      </span>
+    )
+  }
+  if (a.emptyPool) {
+    return (
+      <span>
+        can’t take a warm sandbox: warm pool <RefLink refTo={toRef(a.emptyPool)} onNavigate={onNavigate} mono /> has none ready
+      </span>
+    )
+  }
+  return null
+}
+
+/** The row's one diagnostic link: a pool's sandboxes that aren't ready, else the same finding in Radar's Issues. */
+function RowLinkOut({ a }: { a: AgentSandboxAttention }) {
+  const openIssue = useContext(OpenIssueContext)
+  const navigateTo = useWorkspaceNavigate()
+  const members = notReadyMembers(a)
+  if (members.length > 0) {
+    return (
+      <button type="button" onClick={() => navigateTo(poolNotReadyPath(a.subject.namespace ?? '', a.subject.name))} className="whitespace-nowrap text-accent-text hover:underline">
+        {members.length === 1 ? 'Show the sandbox that isn’t ready' : `Show the ${members.length} sandboxes that aren’t ready`} →
+      </button>
+    )
+  }
+  if (!openIssue || !a.issue) return null
+  return (
+    <button type="button" onClick={() => openIssue(attentionProblem(a))} className="whitespace-nowrap text-accent-text hover:underline">
+      See in Issues →
+    </button>
+  )
+}
+
+/** The next step, with the command it names as a copyable chip where the text names it. */
+function NextStepText({ a }: { a: AgentSandboxAttention }) {
+  if (!a.command) return <>{a.nextStep}</>
+  const at = a.nextStep.indexOf(`(${a.command})`)
+  if (at < 0) {
+    return (
+      <>
+        {a.nextStep} <CommandChip command={a.command} inline />
+      </>
+    )
+  }
+  return (
+    <>
+      {a.nextStep.slice(0, at)}
+      <CommandChip command={a.command} inline />
+      {a.nextStep.slice(at + a.command.length + 2)}
+    </>
+  )
+}
+
+/**
+ * One row, compact: the title in its tone; one line with the subject, what
+ * else it holds up, its age and one link; what limits Radar's reading; the
+ * next step with its command. Radar's fuller reading, the objects it names
+ * and the source's own words fold under Details.
+ */
 function AttentionRow({ a, onNavigate }: { a: AgentSandboxAttention; onNavigate: (ref: ResourceRef) => void }) {
-  const p = attentionProblem(a)
   const age = attentionAge(a)
+  const detail = attentionDetail(a)
+  const hasDetails = !!detail || !!a.related || shownRelations(a).length > 0 || !!a.rawDetail
   return (
     <li className="min-w-0 text-sm" data-rule={a.rule}>
-      <div className="break-words">
-        <span className={clsx('font-medium', toneTextClass(severityTone(a.severity)))}>{p.title}</span>
+      <div className={clsx('break-words font-medium', toneTextClass(severityTone(a.severity)))}>{a.title}</div>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
+        <span className="min-w-0 break-words">
+          {a.subject.kind} <RefLink refTo={toRef(a.subject)} onNavigate={onNavigate} mono />
+        </span>
+        <Impact a={a} onNavigate={onNavigate} />
         {age && (
           <Tooltip content={age.tip}>
-            <span className="ml-1.5 text-xs text-theme-text-tertiary">{age.text}</span>
+            <span className="whitespace-nowrap">{a.rule === 'controllerNotRunning' ? `for ${age.text}` : `began ${age.text} ago`}</span>
           </Tooltip>
         )}
+        <RowLinkOut a={a} />
       </div>
-      <ProblemMeta problem={p} rootKind="" onNavigate={onNavigate} hideOrigin className="mt-0.5" />
-      {p.detail && <div className="break-words text-xs text-theme-text-secondary">{p.detail}</div>}
-      {a.related && <RefsLine lead={a.related.lead} refs={a.related.refs} onNavigate={onNavigate} />}
-      <RelationsLine a={a} onNavigate={onNavigate} />
+      {a.caveat && <div className="break-words text-xs text-theme-text-secondary">{a.caveat}</div>}
       <div className="mt-0.5 break-words text-xs text-theme-text-primary">
         <span className="font-medium">Next step: </span>
-        {a.nextStep}
+        <NextStepText a={a} />
       </div>
-      {a.rawDetail && (
-        <FoldSection title={a.rawDetailLabel ?? 'Original evidence'} summary="" attention={false}>
-          <div className="break-words text-xs text-theme-text-secondary">{a.rawDetail}</div>
+      {hasDetails && (
+        <FoldSection title="Details" summary="" attention={false}>
+          <div className="space-y-1.5">
+            {detail && <div className="break-words text-xs text-theme-text-secondary">{detail}</div>}
+            {a.related && <RefsLine lead={a.related.lead} refs={a.related.refs} onNavigate={onNavigate} />}
+            <RelationsLine a={a} onNavigate={onNavigate} />
+            {a.rawDetail && <SourceText label={a.rawDetailLabel ?? 'Source’s message'} text={a.rawDetail} />}
+          </div>
         </FoldSection>
       )}
     </li>
@@ -243,7 +328,7 @@ function AttentionList({ rows, onNavigate }: { rows: AgentSandboxAttention[]; on
 }
 
 function TemplateCell({ p, onInspect }: { p: AgentSandboxWarmPoolRow; onInspect: (r: SelectedResource) => void }) {
-  if (!p.template) return <Dash />
+  if (!p.template) return <span className="text-sm text-theme-text-tertiary">no template</span>
   if (p.templatePresence === 'present') {
     return (
       <button
@@ -340,7 +425,7 @@ function WarmPoolsTable({ data, onInspect, inspected }: Pick<AgentSandboxOvervie
         ),
     },
     ...(wide
-      ? [{ header: 'Age', width: '10%', cell: (p: AgentSandboxWarmPoolRow) => (p.created ? <span className="text-sm text-theme-text-secondary">{formatAge(p.created)}</span> : <Dash />) }]
+      ? [{ header: 'Age', width: '10%', cell: (p: AgentSandboxWarmPoolRow) => (p.created ? <span className="text-sm text-theme-text-secondary">{formatAge(p.created)}</span> : <span className="text-sm text-theme-text-tertiary">unknown</span>) }]
       : []),
   ]
   const empty = !data.counts.warmPools
