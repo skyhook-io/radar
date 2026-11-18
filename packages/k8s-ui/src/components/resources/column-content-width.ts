@@ -23,11 +23,13 @@ import {
   getReplicaSetOwner,
   getServiceSelector,
   getWorkloadImages,
+  getWorkloadProblems,
 } from './resource-utils'
 import { getGitRepositoryUrl, getHelmRepositoryUrl, getOCIRepositoryUrl } from './resource-utils-flux'
 import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
 import { getPodGpuCount } from '../../utils/extended-resources'
 import { getCRDColumnValue } from './resource-utils-crd'
+import { getMachineNodeRef } from './resource-utils-capi'
 
 // Cell text styles, matching the classes the cells render with (text-sm /
 // text-xs in the app font). measureText takes a CSS font shorthand.
@@ -43,6 +45,7 @@ export const CELL_FONTS = {
   monoXs: `400 12px ${MONO_FAMILY}`,
   mono10: `400 10px ${MONO_FAMILY}`,
   tiny: `400 10px ${FONT_FAMILY}`,
+  tinyMedium: `500 10px ${FONT_FAMILY}`,
 } as const
 export type CellFont = keyof typeof CELL_FONTS
 
@@ -52,16 +55,19 @@ export type MeasureText = (text: string, font: CellFont, limit?: number) => numb
 export const CELL_PADDING_PX = 32 // px-4 on both sides
 // The copy button that sits beside every name: gap-1.5 + p-0.5 around a w-3 icon.
 const NAME_COPY_BUTTON_PX = 22
-// The Terminating chip beside a deleting resource's name, with its gap.
-const NAME_TERMINATING_CHIP_PX = 104
-// The audit-findings count beside a name, with its gap.
-const NAME_AUDIT_BADGE_PX = 36
+// The Terminating chip beside a deleting resource's name, besides its label:
+// gap-1.5, px-1.5 on both sides, a w-3 icon and gap-1.
+const NAME_TERMINATING_CHIP_CHROME_PX = 6 + 12 + 12 + 4
+// The audit-findings count beside a name, besides the count: gap-1.5, a w-3 icon and gap-0.5.
+const NAME_AUDIT_BADGE_CHROME_PX = 6 + 12 + 2
 // A Crossplane pause chip beside a name, besides its label: gap, padding, icon.
 const NAME_PAUSE_CHIP_CHROME_PX = 6 + 12 + 12 + 4
-// A .badge around its label: px-2 on both sides and a 1px border.
-const BADGE_CHROME_PX = 18
-// The problems icon beside a status badge or a ready count, with its gap.
+// A .badge around its label: px-2 on both sides and a 0.5px border.
+const BADGE_CHROME_PX = 17
+// The problems icon beside a Pod's status badge: gap-2 and a w-3.5 icon.
 const PROBLEM_ICON_PX = 8 + 14
+// The problems icon beside a workload's ready count: gap-1.5 and a w-3.5 icon.
+const READY_PROBLEM_ICON_PX = 6 + 14
 
 export const NAME_MIN_PX = 200
 export const NAME_MAX_PX = 480
@@ -97,7 +103,7 @@ const FIT_DEFAULT_MAX_PX = 400
 // wider on average (at most ~15px, on a 2000px Event message). It makes a 50k-row pass a few lookups per character
 // instead of a canvas call per string, so there is no per-string cache to bound.
 // Without a canvas (SSR, jsdom) this falls back to an average glyph width.
-const FALLBACK_CHAR_PX: Record<CellFont, number> = { body: 7.5, medium: 7.8, small: 6.5, badge: 6.8, monoSm: 8.4, monoXs: 7.2, mono10: 6, tiny: 5.5 }
+const FALLBACK_CHAR_PX: Record<CellFont, number> = { body: 7.5, medium: 7.8, small: 6.5, badge: 6.8, monoSm: 8.4, monoXs: 7.2, mono10: 6, tiny: 5.5, tinyMedium: 5.7 }
 let measureCtx: CanvasRenderingContext2D | null | undefined
 let charWidths: Partial<Record<CellFont, Map<number, number>>> = {}
 
@@ -191,8 +197,9 @@ export type CellWidth = (resource: any, measure: MeasureText, limit: number) => 
 const text = (read: (resource: any) => string | null | undefined, font: CellFont = 'body'): CellWidth =>
   (resource, measure, limit) => measure(read(resource) || '-', font, limit)
 
-// Display text of the cells a curated kind flags as grow, where it differs from
-// getCellFilterValue. Keyed `${plural}:${column}`.
+// Display text of the cells a curated kind sizes automatically (grow columns,
+// and a fit column whose cell shows something other than getCellFilterValue).
+// Keyed `${plural}:${column}`.
 const workloadImages = text(r => workloadImagesText(getWorkloadImages(r)))
 const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'events:message': text(r => r.message),
@@ -221,6 +228,8 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'appprojects:description': text(getArgoAppProjectDescription),
   'gatewayclasses:description': text(getGatewayClassDescription),
   'priorityclasses:description': text(r => r.description),
+  // A CAPI Machine's node is status.nodeRef, not the Pod-style spec.nodeName.
+  'machines:node': text(getMachineNodeRef),
 }
 
 // What an exact column's cells show, for the kinds whose tables most often run
@@ -234,26 +243,36 @@ const age: CellWidth = (resource, measure) => {
   const created = resource?.metadata?.creationTimestamp
   return measure(created ? formatAge(created) : '-', 'body')
 }
-const workloadReady: CellWidth = (r, measure) =>
-  measure(`${Math.min(r.status?.readyReplicas || 0, r.spec?.replicas ?? 1)}/${r.spec?.replicas ?? 1}`, 'medium') + PROBLEM_ICON_PX
+const workloadReady = (kind: string): CellWidth => (r, measure) =>
+  measure(`${Math.min(r.status?.readyReplicas || 0, r.spec?.replicas ?? 1)}/${r.spec?.replicas ?? 1}`, 'medium')
+  + (getWorkloadProblems(r, kind).length > 0 ? READY_PROBLEM_ICON_PX : 0)
 const podStatusBadge = badge(p => getPodStatus(p).text)
 const EXACT_CELL_WIDTHS: Record<string, CellWidth> = {
   '*:age': age,
   'pods:status': (r, measure, limit) => podStatusBadge(r, measure, limit) + (getPodProblems(r).length > 1 ? PROBLEM_ICON_PX : 0),
-  'pods:restarts': text(r => String(getPodRestarts(r)), 'medium'),
-  'pods:gpu': text(r => String(getPodGpuCount(r) || '-')),
+  'pods:restarts': (r, measure) => {
+    const restarts = getPodRestarts(r)
+    return measure(String(restarts), restarts > 5 ? 'medium' : 'body')
+  },
+  'pods:gpu': (r, measure) => {
+    const count = getPodGpuCount(r)
+    return count ? measure(String(count), 'monoSm') : measure('-', 'body')
+  },
   'events:type': badge(r => r.type || 'Normal'),
-  'events:count': text(r => String(r.count || 1), 'medium'),
+  'events:count': (r, measure) => {
+    const count = r.count || 1
+    return measure(String(count), count > 1 ? 'medium' : 'body')
+  },
   'events:lastSeen': text(r => {
     const t = r.lastTimestamp || r.metadata?.creationTimestamp
     return t ? formatAge(t) : '-'
   }),
-  'deployments:ready': workloadReady,
-  'statefulsets:ready': workloadReady,
+  'deployments:ready': workloadReady('deployments'),
+  'statefulsets:ready': workloadReady('statefulsets'),
   'deployments:upToDate': text(r => String(r.status?.updatedReplicas || 0)),
   'deployments:available': text(r => String(r.status?.availableReplicas || 0)),
   'statefulsets:upToDate': text(r => String(r.status?.updatedReplicas || 0)),
-  'replicasets:ready': text(r => `${r.status?.readyReplicas || 0}/${r.spec?.replicas || 0}`, 'medium'),
+  'replicasets:ready': text(r => `${r.status?.readyReplicas || 0}/${r.spec?.replicas ?? 1}`, 'medium'),
   'replicasets:status': badge(r => ((r.spec?.replicas || 0) > 0 ? 'Active' : 'Old')),
   'configmaps:size': text(getConfigMapSize),
   'pods:containers': (r) => containerSquaresWidth(getContainerSquareStates(r)),
@@ -317,9 +336,10 @@ export interface ContentContext {
 function nameCellWidth(resource: any, measure: MeasureText, limit: number, ctx: ContentContext): number {
   const meta = resource?.metadata || {}
   let width = measure(meta.name || '', 'medium', limit) + NAME_COPY_BUTTON_PX
-  if (meta.deletionTimestamp) width += NAME_TERMINATING_CHIP_PX
+  if (meta.deletionTimestamp) width += NAME_TERMINATING_CHIP_CHROME_PX + measure('Terminating', 'tinyMedium')
   const audit = ctx.auditBadges?.[`${meta.namespace || ''}/${meta.name}`]
-  if (audit && audit.danger + audit.warning > 0) width += NAME_AUDIT_BADGE_PX
+  const auditTotal = audit ? audit.danger + audit.warning : 0
+  if (auditTotal > 0) width += NAME_AUDIT_BADGE_CHROME_PX + measure(String(auditTotal), 'tinyMedium')
   // The same condition the name cell shows the chip under.
   const pause = isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged'
     ? getCrossplanePauseState(resource)

@@ -48,6 +48,16 @@ function renderAt(windowWidth: number) {
   return parseInt(host.querySelector<HTMLTableElement>('table')!.style.width, 10)
 }
 
+it('applies the rule as the window crosses 1920px, without remounting', () => {
+  // The table's room stays 1456px; only the window changes.
+  expect(renderAt(1919)).toBeGreaterThan(ROOM)
+  act(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1920 })
+    window.dispatchEvent(new Event('resize'))
+  })
+  expect(parseInt(host.querySelector<HTMLTableElement>('table')!.style.width, 10)).toBeLessThanOrEqual(ROOM)
+})
+
 it('does not scroll sideways in a 1920px window, where a narrower one would', () => {
   // Below 1920 Nodes' columns keep their content and Name its protected
   // width, so the table is wider than its room...
