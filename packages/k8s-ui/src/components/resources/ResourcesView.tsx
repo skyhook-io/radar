@@ -6291,8 +6291,9 @@ export function ResourcesView({
             // An unprotected Name (Events) yields to its floor, NAME_MIN_PX.
             : spec.mode === 'fit' && !isName ? headerShrinkWidth(col) : undefined,
         yieldRank: spec.yieldRank,
-        // Past `min`, only when that ends the scrolling (always from
-        // MUST_FIT_WINDOW_PX up): Name to its median, other columns to their heading.
+        // Past `min`: Name to its median, only when that ends the scrolling;
+        // from MUST_FIT_WINDOW_PX up, every column to its heading and Name to
+        // NAME_MIN_PX.
         fitMin: spec.keep && content !== undefined
           ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000fitTo`] ?? content, content, nameMax, NAME_PROTECTED_MAX_PX))
           : undefined,
