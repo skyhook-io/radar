@@ -1039,27 +1039,36 @@ func TestCorrelate_RetentionThatEmptiedTheStore(t *testing.T) {
 	}
 }
 
-// initDeferredCache starts a typed cache whose deferred informers start
-// only after the critical ones synced, as Radar's own cache does, and waits
-// for them to sync. It returns the earliest time they could have started.
-func initDeferredCache(t *testing.T, deferred []string, objs ...runtime.Object) time.Time {
+// initDeferredCache starts a typed cache in which only the deferred kind is
+// deferred, as Radar defers it, and held back 300ms more, so its watch
+// boundary falls well after the critical informers' boundaries. It returns a
+// window start between the two, having checked that ordering.
+func initDeferredCache(t *testing.T, deferred string, objs ...runtime.Object) (windowStart, deferredBoundary time.Time) {
 	t.Helper()
 	types := map[string]bool{k8score.Deployments: true, k8score.ConfigMaps: true, k8score.Secrets: true, k8score.ResourceQuotas: true}
-	deferredTypes := map[string]bool{}
-	for _, k := range deferred {
-		deferredTypes[k] = true
-	}
-	before := time.Now()
 	if err := k8s.InitTestResourceCacheFromConfig(k8score.CacheConfig{
-		Client: k8sfake.NewSimpleClientset(objs...), ResourceTypes: types, DeferredTypes: deferredTypes,
+		Client: k8sfake.NewSimpleClientset(objs...), ResourceTypes: types,
+		DeferredTypes:   map[string]bool{deferred: true},
+		DebugSyncDelays: map[string]time.Duration{deferred: 300 * time.Millisecond},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestState)
+	var latestCritical time.Time
 	for k := range types {
 		waitCaughtUp(t, k)
+		since, _, _ := k8s.GetResourceCache().InformerWatchedSince(k)
+		if k == deferred {
+			deferredBoundary = since
+		} else if since.After(latestCritical) {
+			latestCritical = since
+		}
 	}
-	return before
+	windowStart = latestCritical.Add(deferredBoundary.Sub(latestCritical) / 2)
+	if !latestCritical.Before(windowStart) || !windowStart.Before(deferredBoundary) {
+		t.Fatalf("setup: want critical boundaries %v < window start %v < %s boundary %v", latestCritical, windowStart, deferred, deferredBoundary)
+	}
+	return windowStart, deferredBoundary
 }
 
 // waitCaughtUp waits until resource's informer has its watch boundary, which
@@ -1078,34 +1087,38 @@ func waitCaughtUp(t *testing.T, resource string) {
 	}
 }
 
-// A deferred typed informer starts after the store began recording, so a
-// window that starts before its watch began can't claim nothing changed on
-// that kind: a referenced ConfigMap, or the ResourceQuota that rejected the
-// workload.
+// A deferred typed informer's history starts later than the critical ones':
+// a window that starts after the critical informers caught up but before the
+// deferred one did can't claim nothing changed on the deferred kind, a
+// referenced ConfigMap or the ResourceQuota that rejected the workload, even
+// though the subject's own history is complete.
 func TestCorrelate_DeferredWatchStartedAfterWindowStart(t *testing.T) {
-	firstSeen := time.Now().Add(-10 * time.Minute)
+	windowAt := func(from time.Time) Options {
+		return Options{Window: Window{From: from, To: time.Now().Add(time.Minute)}, Selection: SelectAroundFirstSeen, CheckCoverage: true}
+	}
 
 	t.Run("referenced ConfigMap", func(t *testing.T) {
-		started := initDeferredCache(t, []string{k8score.ConfigMaps, k8score.Secrets}, webDeployment())
+		from, boundary := initDeferredCache(t, k8score.ConfigMaps, webDeployment())
 		initStore(t)
-		iss := webIssue(firstSeen)
-		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		got := Correlate(context.Background(), webIssue(time.Time{}), windowAt(from), Access{})
 		if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete ||
-			!slices.Contains(got.History.Reasons, issuesapi.HistoryObservationStartedLate) || got.History.CompleteSince.Before(started.Truncate(time.Second)) {
+			!slices.Contains(got.History.Reasons, issuesapi.HistoryObservationStartedLate) || got.History.CompleteSince.Before(boundary.Truncate(time.Second)) {
 			t.Fatalf("deferred ConfigMap watch: no_changes=%v unknown=%+v history=%+v", got.NoChanges, got.Unknown, got.History)
 		}
 	})
 
 	t.Run("rejecting ResourceQuota", func(t *testing.T) {
-		initDeferredCache(t, []string{k8score.ResourceQuotas}, webDeployment(), &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop"}})
+		from, _ := initDeferredCache(t, k8score.ResourceQuotas, webDeployment(), &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop"}})
 		store := initStore(t)
-		appendChange(t, store, timeline.TimelineEvent{ID: "quota", Timestamp: time.Now().Add(-3 * time.Minute), Kind: "ResourceQuota", APIVersion: "v1",
+		// A quota edit and a quiet workload would order the quota last, if the
+		// quota's history covered the window.
+		appendChange(t, store, timeline.TimelineEvent{ID: "quota", Timestamp: time.Now(), Kind: "ResourceQuota", APIVersion: "v1",
 			Namespace: "shop", Name: "compute", EventType: timeline.EventTypeUpdate,
 			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.hard.pods", OldValue: "4", NewValue: "3"}}}})
-		iss := webIssue(firstSeen)
+		iss := webIssue(time.Time{})
 		iss.Category = issuesapi.CategoryQuotaExceeded
 		iss.Message = `pod creation blocked: pods "web-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=3, limited: pods=3`
-		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		got := Correlate(context.Background(), iss, windowAt(from), Access{})
 		if strings.Contains(got.Timing.TimingSummary, "changed last") || got.NoChanges ||
 			got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
 			t.Fatalf("deferred quota watch: timing=%q unknown=%+v", got.Timing.TimingSummary, got.Unknown)
