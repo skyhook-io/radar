@@ -68,7 +68,16 @@ it('shows GPU while a listed pod requests GPUs, hides it otherwise, and keeps a 
   act(() => { gpuToggle.click() })
   expect(headerKeys()).not.toContain('gpu')
   expect(JSON.parse(localStorage.getItem('radar-columns-pods')!).hidden).toEqual(['gpu'])
+
+  // Turned back on while GPU pods are listed: the data decides again.
+  act(() => { gpuToggleNow().click() })
+  expect(headerKeys()).toContain('gpu')
+  render(['a'], [pod('p1', 'a')])
+  expect(headerKeys()).not.toContain('gpu')
 })
+
+const gpuToggleNow = () => [...document.querySelectorAll<HTMLInputElement>('[role="region"] input[type="checkbox"]')]
+  .find(input => input.closest('label, li, div')?.textContent?.includes('GPU'))!
 
 it('lets GPU follow the data again for settings saved by the old one-shot auto-show', () => {
   localStorage.setItem('radar-columns-pods', JSON.stringify({

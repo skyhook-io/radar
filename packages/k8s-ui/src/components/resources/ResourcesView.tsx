@@ -6113,16 +6113,21 @@ export function ResourcesView({
 
   const toggleColumnVisibility = useCallback((colKey: string) => {
     const shown = pickerVisibleColumns.has(colKey)
+    const dataShown = DATA_SHOWN_COLUMNS.has(colKey)
     // A hidden column has no pin to surprise the user when it is shown again.
     setPinnedColumns(prev => prev.filter(key => key !== colKey))
+    // Turning a data-shown column back on while the data would show it just
+    // lets the data decide again; only turning it on without such data makes
+    // it a column the user keeps.
+    const keepShown = !shown && !(dataShown && gpuInData)
     setVisibleColumns(prev => {
       const next = new Set(prev)
-      if (shown) next.delete(colKey)
-      else next.add(colKey)
+      if (keepShown) next.add(colKey)
+      else next.delete(colKey)
       return next
     })
     // Remember hiding a column the data would show, so the data doesn't bring it back.
-    if (DATA_SHOWN_COLUMNS.has(colKey)) {
+    if (dataShown) {
       setHiddenColumns(prev => {
         const next = new Set(prev)
         if (shown) next.add(colKey)
@@ -6130,7 +6135,7 @@ export function ResourcesView({
         return next
       })
     }
-  }, [pickerVisibleColumns])
+  }, [pickerVisibleColumns, gpuInData])
 
   // Automatic column widths (see column-sizing.ts for the rules). Content is
   // measured over every fetched item, not the filtered rows, so typing a search
