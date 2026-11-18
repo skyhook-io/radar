@@ -102,7 +102,7 @@ describe('GenericRenderer conditions', () => {
     const html = render([cond('InvalidRolloutConfig', 'False'), cond('RolloutProgressing', 'False')], appSet)
     expect(chipClass(html, 'InvalidRolloutConfig', 'False')).not.toContain('status-red')
     expect(chipClass(html, 'RolloutProgressing', 'False')).not.toContain('status-red')
-    expect(html).not.toContain('bg-red-500/10')
+    expect(html).not.toContain('bg-red-50 ')
   })
 
   it("doesn't color a healthy service's Stopped=False red", () => {
@@ -113,7 +113,7 @@ describe('GenericRenderer conditions', () => {
   it('shows a deliberately stopped model as stopped, not failed', () => {
     const html = render([cond('Stopped', 'True'), { type: 'Ready', status: 'False', reason: 'Stopped' }], stopRequested)
     expect(html).toContain("This model is stopped and isn&#x27;t serving requests.")
-    expect(html).not.toContain('bg-red-500/10')
+    expect(html).not.toContain('bg-red-50 ')
     expect(chipClass(html, 'Ready', 'False')).not.toContain('status-red')
   })
 
@@ -121,7 +121,7 @@ describe('GenericRenderer conditions', () => {
     const html = render([cond('Stopped', 'True'), { type: 'PredictorReady', status: 'False', reason: 'ReconcileFailed' }, { type: 'Ready', status: 'False', reason: 'Stopped' }], stopRequested)
     expect(html).not.toContain('isn&#x27;t serving requests')
     expect(html).toContain('ReconcileFailed')
-    expect(html).toContain('bg-red-500/10')
+    expect(html).toContain('bg-red-50 ')
     expect(chipClass(html, 'PredictorReady', 'False')).toContain('status-red')
   })
 

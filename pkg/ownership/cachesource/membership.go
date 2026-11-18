@@ -175,7 +175,7 @@ func (s *session) placements(ref resourceid.Ref) ([]string, readreason.Code) {
 	namespaced, known := s.catalog.Scope(gk)
 	_, builtin := builtinKind(ref.Group, ref.Kind)
 	switch {
-	case !known && (builtin || s.catalog.Ambiguous(gk) || !s.catalog.Complete()):
+	case !known && (builtin || s.catalog.Ambiguous(gk) || !s.catalog.CoversGroup(gk.Group)):
 		// Radar can't tell the kind's scope.
 		return nil, readreason.ReadError
 	case !known:
@@ -210,7 +210,7 @@ func (s *session) RecordingManagers(ref resourceid.Ref) ownership.RecordingManag
 		kind, served := s.catalog.Kind(gk)
 		if !served {
 			// Not installed, unless discovery missed it.
-			if !s.catalog.Complete() || s.catalog.Ambiguous(gk) {
+			if !s.catalog.CoversGroup(gk.Group) || s.catalog.Ambiguous(gk) {
 				q.gap(gk, "", readreason.ReadError)
 			}
 			continue

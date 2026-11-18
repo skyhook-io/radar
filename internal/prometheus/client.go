@@ -954,3 +954,15 @@ func (c *Client) Query(ctx context.Context, query string) (*prom.QueryResult, er
 	}
 	return p.Query(ctx, query)
 }
+
+// QueryPost is Query with the query sent in a POST body rather than the URL.
+func (c *Client) QueryPost(ctx context.Context, query string) (*prom.QueryResult, error) {
+	if _, _, err := c.EnsureConnected(ctx); err != nil {
+		return nil, err
+	}
+	p := c.getPromClient()
+	if p == nil {
+		return nil, errors.New("prometheus connection was reset")
+	}
+	return p.QueryPost(ctx, query)
+}

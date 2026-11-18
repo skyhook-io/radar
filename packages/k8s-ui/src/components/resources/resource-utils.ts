@@ -2,6 +2,7 @@ import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 // Utility functions for resource display in tables
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
@@ -816,7 +817,8 @@ export function getPodRestarts(pod: any): number {
 
 export interface ContainerSquareState {
   name: string
-  status: 'ready' | 'running' | 'waiting' | 'completed' | 'terminated' | 'unknown'
+  /** starting: waiting on a transient reason (PodInitializing, ContainerCreating), not a failure. */
+  status: 'ready' | 'running' | 'starting' | 'waiting' | 'completed' | 'terminated' | 'unknown'
   restarts: number
   reason?: string
   message?: string
@@ -904,6 +906,12 @@ export function getDefaultLogContainerName(pod: any): string | undefined {
   return stuck?.name || getDefaultContainerName(pod)
 }
 
+// PodInitializing and ContainerCreating are steps every container passes
+// through, so they read as starting; any other waiting reason is a problem.
+function waitingSquareStatus(reason: string | undefined): ContainerSquareState['status'] {
+  return reason === 'PodInitializing' || reason === 'ContainerCreating' ? 'starting' : 'waiting'
+}
+
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
   const result: ContainerSquareState[] = []
   const initStatuses = pod.status?.initContainerStatuses || []
@@ -918,7 +926,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
     } else if (stateKey === 'running') {
       status = cs.ready ? 'ready' : 'running'
     } else if (stateKey === 'waiting') {
-      status = 'waiting'
+      status = waitingSquareStatus(cs.state?.waiting?.reason)
     } else if (stateKey === 'terminated') {
       status = 'terminated'
     }
@@ -951,7 +959,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
       } else if (stateKey === 'terminated') {
         status = 'terminated'
       } else if (stateKey === 'waiting') {
-        status = 'waiting'
+        status = waitingSquareStatus(cs.state?.waiting?.reason)
       }
       const stateDetail = cs.state?.[stateKey]
       const lastTerm = cs.lastState?.terminated
@@ -2564,6 +2572,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
   if (flaggerValue !== undefined) return flaggerValue
+  const planValue = getUpgradePlanColumnValue(resource, column)
+  if (planValue !== undefined) return planValue
   const crdValue = getCRDColumnValue(resource, column)
   if (crdValue !== undefined) return crdValue
   const kindLower = kind.toLowerCase()
