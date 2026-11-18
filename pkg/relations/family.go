@@ -20,7 +20,9 @@ import (
 // naming a namespaced target are found by reading its namespace, and those
 // naming a cluster-scoped one by reading every namespace.
 type Family struct {
-	// Name keys the family's coverage on the wire.
+	// Name identifies the family inside Radar: hosts key its coverage and
+	// its edges by it. Answers on the wire are keyed by the field they fill,
+	// not by family, so a rename changes no payload.
 	Name string
 	// Sources are the kinds that declare, in the order answers list them.
 	Sources []Source
