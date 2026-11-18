@@ -20,8 +20,27 @@ describe('veleroGlobMatch', () => {
     ['{shop,db}-prod', 'web-prod', false],
     ['a.b', 'axb', false],
     ['[unclosed', '[unclosed', true],
+    ['{unclosed', '{unclosed', true],
+    ['{a,{b,c}}-x', 'c-x', true],
+    ['{,pre}fix', 'fix', true],
+    ['a}b,c', 'a}b,c', true],
+    ['*-prod-*', 'eu-prod-1', true],
+    ['*a*', 'bbb', false],
   ])('%s against %s is %s', (pattern, name, want) => {
     expect(veleroGlobMatch(pattern, name)).toBe(want)
+  })
+})
+
+describe('veleroGlobMatch on hostile patterns', () => {
+  it('matches many stars against a long name without backtracking', () => {
+    const start = performance.now()
+    expect(veleroGlobMatch('*a'.repeat(24) + 'b', 'a'.repeat(63))).toBe(false)
+    expect(performance.now() - start).toBeLessThan(200)
+  })
+  it('matches a pattern with too many brace alternatives only as written', () => {
+    const pattern = '{a,b}'.repeat(9)
+    expect(veleroGlobMatch(pattern, 'a'.repeat(9))).toBe(false)
+    expect(veleroGlobMatch(pattern, pattern)).toBe(true)
   })
 })
 
