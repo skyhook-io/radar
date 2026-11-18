@@ -589,6 +589,11 @@ rules:
     resources: ["secretproviderclasses", "secretproviderclasspodstatuses"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.volumeSnapshots }}
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.strimzi }}
   - apiGroups: ["strimzi.io", "kafka.strimzi.io"]
     resources: ["*"]

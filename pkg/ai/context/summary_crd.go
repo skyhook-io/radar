@@ -105,6 +105,12 @@ func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecon
 		return summarizeNvidiaDriver(obj)
 	case group == csr.Group && kind == csr.Kind:
 		return summarizeCertificateSigningRequest(obj)
+	case group == volumeSnapshotGroup && kind == "VolumeSnapshot":
+		return summarizeVolumeSnapshot(obj)
+	case group == volumeSnapshotGroup && kind == "VolumeSnapshotContent":
+		return summarizeVolumeSnapshotContent(obj)
+	case group == volumeSnapshotGroup && kind == "VolumeSnapshotClass":
+		return summarizeVolumeSnapshotClass(obj)
 	}
 
 	// Generic fallback

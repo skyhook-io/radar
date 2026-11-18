@@ -766,6 +766,7 @@ retain their finite grants.
 | `trivy` | `aquasecurity.github.io` |
 | `velero` | `velero.io` |
 | `verticalPodAutoscaler` | `autoscaling.k8s.io` |
+| `volumeSnapshots` | `snapshot.storage.k8s.io` (`volumesnapshots`, `volumesnapshotcontents`, `volumesnapshotclasses` only) |
 
 **VictoriaMetrics collection:** the chart grants Radar cluster-wide `get/list/watch`
 on VMAgent, VMCluster and VMSingle (`vmagents`, `vmclusters`, `vmsingles` in
