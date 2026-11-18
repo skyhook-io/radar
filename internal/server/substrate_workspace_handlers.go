@@ -1675,6 +1675,9 @@ type substrateAssignedActor struct {
 	Name     string    `json:"name"`
 	State    string    `json:"state"`
 	Template model.Ref `json:"template"`
+	// UpdateTime is the actor's last change, which tells a stuck transition
+	// from one still within its budget.
+	UpdateTime time.Time `json:"updateTime,omitzero"`
 	// WorkerImpact is what this worker's state means for the actor; absent
 	// when it means nothing.
 	WorkerImpact *model.WorkerImpact `json:"workerImpact,omitempty"`
@@ -1696,7 +1699,7 @@ func substrateWorkerRowOf(wk model.Worker, assigned []model.Actor, actorsRead bo
 	if actorsRead {
 		row.Actors = make([]substrateAssignedActor, 0, len(assigned))
 		for _, a := range assigned {
-			row.Actors = append(row.Actors, substrateAssignedActor{Atespace: a.Atespace, Name: a.Name, State: a.State, Template: a.Template, WorkerImpact: model.WorkerImpactOf(a, wk, pods)})
+			row.Actors = append(row.Actors, substrateAssignedActor{Atespace: a.Atespace, Name: a.Name, State: a.State, Template: a.Template, UpdateTime: a.UpdateTime, WorkerImpact: model.WorkerImpactOf(a, wk, pods)})
 		}
 	}
 	return row

@@ -539,6 +539,12 @@ func TestSubstrateConnected(t *testing.T) {
 	if workers.Counts.Active != 1 || len(workers.Workers) != 1 || len(workers.Workers[0].Actors) != 2 || workers.Workers[0].Allocated.Actors != 2 {
 		t.Errorf("workers = %+v", workers)
 	}
+	for _, a := range workers.Workers[0].Actors {
+		// The Workers list marks a transition past its budget as stuck from it.
+		if a.UpdateTime.IsZero() {
+			t.Errorf("assigned actor %s/%s has no updateTime", a.Atespace, a.Name)
+		}
+	}
 
 	var templates substrateTemplatesResponse
 	call(t, s, s.handleSubstrateTemplates, substrateCall{path: "/api/substrate/templates"}, &templates)
