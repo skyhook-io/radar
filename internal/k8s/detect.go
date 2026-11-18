@@ -990,7 +990,7 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: pdb.CreationTimestamp.Time,
 			}
-			applyCNPGPrimaryPDBVerdict(&detection, cnpgContext.classify(pdb))
+			cnpgContext.apply(&detection, pdb)
 			setDetectionOnset(&detection, now, onsetAt)
 			problems = append(problems, detection)
 		}

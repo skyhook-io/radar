@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -170,12 +171,10 @@ func TestDetectCNPGPrimaryPDBSingleInstance(t *testing.T) {
 }
 
 func TestDetectCNPGPrimaryPDBUnknownKeepsWarning(t *testing.T) {
-	for _, mode := range []string{"no-cluster", "no-nodes", "blocking", "missing-cluster"} {
+	for _, mode := range []string{"no-cluster", "no-nodes", "missing-cluster"} {
 		t.Run(mode, func(t *testing.T) {
 			f := NewCNPGPDBTestFixture(2)
 			switch mode {
-			case "blocking":
-				f.Nodes["node-1"].Spec.Unschedulable = true
 			case "missing-cluster":
 				f.Cluster = nil
 			}
@@ -184,5 +183,35 @@ func TestDetectCNPGPrimaryPDBUnknownKeepsWarning(t *testing.T) {
 				t.Fatalf("unverified budget changed: %+v", got)
 			}
 		})
+	}
+}
+
+// A verified operator budget outside the idle layout keeps the warning, with
+// CloudNativePG's own advice and the classifier's reason instead of the
+// generic advice to relax the budget.
+func TestDetectCNPGPrimaryPDBBlockingExplainsTheOperator(t *testing.T) {
+	f := NewCNPGPDBTestFixture(2)
+	f.Nodes["node-2"].Spec.Unschedulable = true
+	got, plain := detectCNPGPDB(t, f, "")
+	_, reason := classifyCNPGPrimaryPDB(f.PDB, f.Cluster, f.Pods, f.PDBs, func(n string) *corev1.Node { return f.Nodes[n] })
+	if got.ExpectedWhenVerified || got.Message != cnpgBlockingPDBMessage(reason) || got.Action != cnpgBlockingPDBAction {
+		t.Fatalf("blocking copy missing: %+v", got)
+	}
+	if !strings.Contains(got.Message, "no ready standby is on a schedulable node") || strings.Contains(got.Action, "Relax") {
+		t.Fatalf("blocking copy = %q / %q", got.Message, got.Action)
+	}
+	wantReads := []issuesapi.EvidenceRead{
+		{Resource: "nodes", Verb: "list", Exact: true},
+		{Group: "postgresql.cnpg.io", Resource: "clusters", Namespace: cnpgTestNS, Verb: "list", Exact: true},
+		{Resource: "pods", Namespace: cnpgTestNS, Verb: "list", Exact: true},
+	}
+	if !reflect.DeepEqual(got.RequiredReads, wantReads) {
+		t.Fatalf("reads = %+v", got.RequiredReads)
+	}
+	if got.Degraded == nil || got.Degraded.Message != plain.Message || got.Degraded.Action != plain.Action || !got.Degraded.KeepSubjectOnset {
+		t.Fatalf("degraded form must be the unrecognised warning: %+v", got.Degraded)
+	}
+	if got.Severity != plain.Severity || got.Reason != plain.Reason || got.Fingerprint != plain.Fingerprint {
+		t.Fatalf("blocking changed severity/reason/fingerprint: %+v", got)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -17,10 +18,15 @@ import (
 
 func installCNPGPDBFixture(t *testing.T, instances int) {
 	t.Helper()
+	installCNPGPDB(t, k8s.NewCNPGPDBTestFixture(instances))
+}
+
+func installCNPGPDB(t *testing.T, f *k8s.CNPGPDBTestFixture) {
+	t.Helper()
 	t.Cleanup(func() { k8s.ResetResourceCache(); _ = k8s.InitTestResourceCache(testFakeClient) })
 	t.Cleanup(k8s.ResetTestDynamicState)
 	t.Cleanup(k8s.SetTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected}))
-	if err := k8s.NewCNPGPDBTestFixture(instances).Install(""); err != nil {
+	if err := f.Install(""); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -185,5 +191,31 @@ func TestCNPGPrimaryPDBIssuesWithoutAuth(t *testing.T) {
 	}
 	if _, ok := rows["plain"]; !ok {
 		t.Fatal("unrecognised budget missing")
+	}
+}
+
+// A verified operator budget that isn't idle keeps the warning with
+// CloudNativePG's advice, never the advice to relax it; a caller who can't
+// verify gets the generic warning unchanged.
+func TestCNPGBlockingPDBCopyNeedsTheExactReads(t *testing.T) {
+	f := k8s.NewCNPGPDBTestFixture(2)
+	f.Nodes["node-2"].Spec.Unschedulable = true
+	installCNPGPDB(t, f)
+	for _, deny := range []string{"", "nodes"} {
+		t.Run("deny="+deny, func(t *testing.T) {
+			s, user := cnpgPDBCaller(t, deny)
+			rows, _ := listPDBIssues(t, s, user)
+			got, plain := rows["pg-primary"], rows["plain"]
+			if got.Name == "" {
+				t.Fatalf("blocking budget missing: %+v", rows)
+			}
+			if deny == "" && (!strings.HasPrefix(got.Message, "CloudNativePG manages this budget") || !strings.Contains(got.Message, "no ready standby is on a schedulable node") ||
+				strings.Contains(got.Action, "Relax") || !strings.Contains(got.Action, "Don't relax this budget by hand")) {
+				t.Fatalf("verified caller got %q / %q", got.Message, got.Action)
+			}
+			if deny != "" && !reflect.DeepEqual(warningShape(got), warningShape(plain)) {
+				t.Fatalf("restricted caller can tell the budgets apart: %+v", got)
+			}
+		})
 	}
 }

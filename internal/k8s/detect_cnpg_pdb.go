@@ -259,31 +259,52 @@ func cnpgPrimaryPDBCandidate(pdb *policyv1.PodDisruptionBudget) bool {
 	return false
 }
 
-func (c cnpgPDBContext) classify(pdb *policyv1.PodDisruptionBudget) cnpgPDBVerdict {
+func (c cnpgPDBContext) classify(pdb *policyv1.PodDisruptionBudget) (cnpgPDBVerdict, string) {
 	if !cnpgPrimaryPDBCandidate(pdb) {
-		return cnpgPDBNone
+		return cnpgPDBNone, ""
 	}
 	cluster := c.clusters[pdb.Namespace+"/"+strings.TrimSuffix(pdb.Name, "-primary")]
-	verdict, _ := classifyCNPGPrimaryPDB(pdb, cluster, c.pods[pdb.Namespace], c.pdbs[pdb.Namespace], c.node)
-	return verdict
+	pods, podsKnown := c.pods[pdb.Namespace]
+	missed := false
+	node := func(name string) *corev1.Node {
+		n := c.node(name)
+		missed = missed || n == nil
+		return n
+	}
+	verdict, reason := classifyCNPGPrimaryPDB(pdb, cluster, pods, c.pdbs[pdb.Namespace], node)
+	// A reason drawn from Pods or Nodes Radar doesn't hold would be a guess.
+	if verdict == cnpgPDBBlocking && (!podsKnown || missed) {
+		return cnpgPDBNone, ""
+	}
+	return verdict, reason
 }
 
-// applyCNPGPrimaryPDBVerdict keeps the generic warning as the form for a
-// caller who can't make the exact reads behind the verdict, so a restricted
-// caller learns nothing it can't read. The onset is the budget's own.
-func applyCNPGPrimaryPDBVerdict(d *Detection, verdict cnpgPDBVerdict) {
+// apply keeps the generic warning as the form for a caller who can't make
+// the exact reads behind the verdict, so a restricted caller learns nothing
+// it can't read. The onset is the budget's own.
+func (c cnpgPDBContext) apply(d *Detection, pdb *policyv1.PodDisruptionBudget) {
+	verdict, reason := c.classify(pdb)
 	clusters := issuesapi.EvidenceRead{Group: cnpg.Group, Resource: "clusters", Namespace: d.Namespace, Verb: "list", Exact: true}
+	// Nodes first: a restricted caller fails on one cluster-wide check.
+	layout := []issuesapi.EvidenceRead{{Resource: "nodes", Verb: "list", Exact: true}, clusters,
+		{Resource: "pods", Namespace: d.Namespace, Verb: "list", Exact: true}}
 	generic := &issuesapi.DegradedFinding{Message: d.Message, Cause: d.Cause, Action: d.Action, KeepSubjectOnset: true}
 	switch verdict {
 	case cnpgPDBExpected:
 		d.ExpectedWhenVerified = true
-		d.Degraded = generic
-		// Nodes first: a restricted caller fails on one cluster-wide check.
-		d.RequiredReads = []issuesapi.EvidenceRead{{Resource: "nodes", Verb: "list", Exact: true}, clusters,
-			{Resource: "pods", Namespace: d.Namespace, Verb: "list", Exact: true}}
+		d.Degraded, d.RequiredReads = generic, layout
+	case cnpgPDBBlocking:
+		d.Degraded, d.RequiredReads = generic, layout
+		d.Message, d.Action = cnpgBlockingPDBMessage(reason), cnpgBlockingPDBAction
 	case cnpgPDBSingleInstance:
 		d.Degraded = generic
 		d.RequiredReads = []issuesapi.EvidenceRead{clusters}
 		d.Message, d.Action = cnpgSingleInstancePDBMessage, cnpgSingleInstancePDBAction
 	}
+}
+
+const cnpgBlockingPDBAction = "Check the Cluster's status and its standby instances: whether they are ready and which nodes they run on. Don't relax this budget by hand; the operator recreates it."
+
+func cnpgBlockingPDBMessage(reason string) string {
+	return "CloudNativePG manages this budget and keeps the primary in place. A drain of the primary's node waits until a ready standby is on a schedulable node, so CloudNativePG can switch over. Now: " + reason + "."
 }
