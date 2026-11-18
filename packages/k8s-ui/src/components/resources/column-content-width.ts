@@ -13,31 +13,20 @@ import {
   getConfigMapSize,
   getContainerSquareStates,
   getFluxHelmReleaseMessage,
-  getGatewayClass,
   getGatewayClassDescription,
   getHPATarget,
   getIngressHosts,
   getIngressRules,
-  getNetworkPolicyTypes,
   getPodProblems,
   getPodRestarts,
   getPodStatus,
   getReplicaSetOwner,
-  getNodeVersion,
   getServiceEndpointsStatus,
   getServicePorts,
   getServiceSelector,
   getServiceStatus,
-  getStorageClassBindingMode,
   getWorkloadImages,
 } from './resource-utils'
-import { getClusterIssuerType } from './resource-utils-certmanager'
-import { getKustomizationSource } from './resource-utils-flux'
-import { getKnativeServiceLatestRevision } from './resource-utils-knative'
-import { getKueueWorkloadAdmittedBy, getKueueWorkloadQueueName, getLocalQueueClusterQueue } from './resource-utils-kueue'
-import { getTraefikServiceType } from './resource-utils-traefik'
-import { getConfigAuditReportSummary, getSbomReportStatus, getVulnerabilityReportContainer, getVulnerabilityReportSummary } from './resource-utils-trivy'
-import { getBackupExpiry } from './resource-utils-velero'
 import { getArgoApplicationHealth, getArgoApplicationSync } from './resource-utils-argo'
 import { getResourceSlicePool } from './resource-utils-dra'
 import { getGitRepositoryUrl, getHelmRepositoryUrl, getOCIRepositoryUrl } from './resource-utils-flux'
@@ -50,7 +39,8 @@ import {
   getNodePoolNodeClassRef,
   getNodePoolStatus,
 } from './resource-utils-karpenter'
-import { getClusterQueueCohort } from './resource-utils-kueue'
+import { getClusterQueueCohort, getKueueWorkloadAdmittedBy, getLocalQueueClusterQueue } from './resource-utils-kueue'
+import { getBackupExpiry } from './resource-utils-velero'
 import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
 import { getPodGpuCount } from '../../utils/extended-resources'
 import { getCRDColumnValue } from './resource-utils-crd'
@@ -206,6 +196,8 @@ const text = (read: (resource: any) => string | null | undefined, font: CellFont
 // A cell that is one .badge holding the label.
 const badge = (label: (resource: any) => string | null | undefined): CellWidth =>
   (resource, measure, limit) => measure(label(resource) || '-', 'badge', limit) + BADGE_CHROME_PX
+// The status badge of a kind whose cell shows getCellFilterValue's status text.
+const kindStatusBadge = (plural: string): CellWidth => badge(r => getCellFilterValue(r, 'status', plural))
 
 // What the cells a curated kind flags as grow or fit show, where it differs
 // from getCellFilterValue's text: other text, or a badge's padding around it.
@@ -248,8 +240,6 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
     return measure(label, 'badge', limit) + BADGE_CHROME_PX
   },
   'services:ports': text(getServicePorts),
-  // A skewed version renders medium weight; measure every one that way.
-  'nodes:version': text(getNodeVersion, 'medium'),
   'events:reason': text(r => r.reason, 'medium'),
   'nodepools:status': badge(r => getNodePoolStatus(r).text),
   'nodepools:nodeClass': text(getNodePoolNodeClassRef),
@@ -259,33 +249,15 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'nodeclaims:nodeName': text(getNodeClaimNodeName),
   'ec2nodeclasses:status': badge(r => getEC2NodeClassStatus(r).text),
   'resourceslices:pool': text(getResourceSlicePool),
-  'clusterqueues:status': badge(r => getCellFilterValue(r, 'status', 'clusterqueues')),
+  'clusterqueues:status': kindStatusBadge('clusterqueues'),
   'clusterqueues:cohort': text(getClusterQueueCohort),
+  'localqueues:status': kindStatusBadge('localqueues'),
+  'localqueues:clusterQueue': text(getLocalQueueClusterQueue),
+  'workloads:admittedBy': text(getKueueWorkloadAdmittedBy),
+  'jobsets:status': kindStatusBadge('jobsets'),
   'applications:sync': badge(r => getArgoApplicationSync(r).status),
   'applications:health': badge(r => getArgoApplicationHealth(r).status),
   'backups:expiry': text(getBackupExpiry),
-  'localqueues:status': badge(r => getCellFilterValue(r, 'status', 'localqueues')),
-  'localqueues:clusterQueue': text(getLocalQueueClusterQueue),
-  'workloads:status': badge(r => getCellFilterValue(r, 'status', 'workloads')),
-  'workloads:queueName': text(getKueueWorkloadQueueName),
-  'workloads:admittedBy': text(getKueueWorkloadAdmittedBy),
-  'admissionchecks:status': badge(r => getCellFilterValue(r, 'status', 'admissionchecks')),
-  'provisioningrequests:status': badge(r => getCellFilterValue(r, 'status', 'provisioningrequests')),
-  'jobsets:status': badge(r => getCellFilterValue(r, 'status', 'jobsets')),
-  'storageclasses:bindingMode': text(getStorageClassBindingMode),
-  'networkpolicies:policyTypes': text(getNetworkPolicyTypes),
-  'issuers:issuerType': text(getClusterIssuerType),
-  'gateways:class': text(getGatewayClass),
-  'kustomizations:source': text(getKustomizationSource),
-  'knativeservices:latestRevision': text(getKnativeServiceLatestRevision),
-  'traefikservices:type': text(getTraefikServiceType),
-  'sbomreports:status': badge(r => getSbomReportStatus(r).text),
-  'sbomreports:container': text(getVulnerabilityReportContainer),
-  'vulnerabilityreports:container': text(getVulnerabilityReportContainer),
-  'exposedsecretreports:container': text(getVulnerabilityReportContainer),
-  'vulnerabilityreports:medium': text(r => String(getVulnerabilityReportSummary(r).medium), 'medium'),
-  'vulnerabilityreports:low': text(r => String(getVulnerabilityReportSummary(r).low), 'medium'),
-  'configauditreports:low': text(r => String(getConfigAuditReportSummary(r).low), 'medium'),
 }
 
 // What an exact column's cells show, for the kinds whose tables most often run
