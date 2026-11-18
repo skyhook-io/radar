@@ -54,14 +54,15 @@ func fakeNamespaceAPIServer(t *testing.T, listStatus, sarStatus int, namespaces 
 	}
 	prevClient := k8s.SetTestClient(client)
 	t.Cleanup(func() { k8s.SetTestClient(prevClient) })
-	// Namespace answers come from this apiserver alone, not a synced cache.
-	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	prevConn := k8s.GetConnectionStatus()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
 }
 
 func TestGetAccessibleNamespacesWithSource(t *testing.T) {
+	// A failed LIST would otherwise be answered from the fixture's synced
+	// namespace cache.
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	cases := []struct {
 		name       string
 		listStatus int
@@ -85,6 +86,7 @@ func TestGetAccessibleNamespacesWithSource(t *testing.T) {
 // --rbac-namespaces is the install's complete namespace set only when the
 // cluster-wide LIST is denied; a failed LIST stays a best-effort list.
 func TestGetAccessibleNamespacesWithSource_RBACNamespaces(t *testing.T) {
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	cases := []struct {
 		name       string
 		listStatus int
@@ -178,6 +180,9 @@ func TestNamespaceScope_ListFailureKeepsSavedPick(t *testing.T) {
 	prevNs := k8s.SetTestContextNamespace("default")
 	t.Cleanup(func() { k8s.SetTestContextNamespace(prevNs) })
 	fakeNamespaceAPIServer(t, http.StatusInternalServerError, http.StatusForbidden)
+	// Otherwise the fixture's synced namespace cache answers the failed LIST
+	// with "broken" in it, and the seed trim is never reached.
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 
 	srv := New(Config{DevMode: true})
 	ts := httptest.NewServer(srv.Handler())
@@ -186,8 +191,8 @@ func TestNamespaceScope_ListFailureKeepsSavedPick(t *testing.T) {
 		srv.Stop()
 	})
 	req := httptest.NewRequest("GET", "/api/cluster/namespace-scope", nil)
-	// "broken" exists in the shared fixture cache, so the deleted-namespace
-	// prune keeps it; it is not among the seeds.
+	// With no cache the deleted-namespace prune keeps every pick; "broken" is
+	// not among the seeds.
 	srv.setActiveNamespaceForUser(req, []string{"broken"})
 
 	resp, err := http.Get(ts.URL + "/api/cluster/namespace-scope")
@@ -321,6 +326,8 @@ func TestAccessibleNamespacesFallBackToTheSyncedCacheWhenTheListFails(t *testing
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}},
 	)
 	fakeNamespaceAPIServer(t, http.StatusInternalServerError, http.StatusForbidden)
+	// Puts back the shared fixture cache that InitTestResourceCache replaces.
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	if err := k8s.InitTestResourceCache(cacheClient); err != nil {
 		t.Fatalf("init cache: %v", err)
 	}
@@ -350,6 +357,7 @@ func TestNamespaceScope_CacheFallbackKeepsPickAndRetries(t *testing.T) {
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "broken"}},
 	)
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	if err := k8s.InitTestResourceCache(cacheClient); err != nil {
 		t.Fatalf("init cache: %v", err)
 	}
