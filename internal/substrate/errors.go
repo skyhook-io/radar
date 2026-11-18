@@ -11,14 +11,22 @@ import (
 // Error codes, shared by the API tier status, per-kind coverage and error
 // responses.
 const (
-	// CodeSharedRadar: this Radar is shared (auth on, a non-loopback
-	// listener, or in-cluster) outside Radar Hub, so it does not read
-	// Substrate's API.
+	// CodeSharedRadar: a shared Radar without sign-in (a non-loopback
+	// listener, or in-cluster with auth off). It cannot tell who is asking,
+	// so it does not read Substrate's API for anyone.
 	CodeSharedRadar = "sharedRadar"
-	// CodeOwnersOnly: in Radar Hub, only org owners read Substrate's API.
-	CodeOwnersOnly = "ownersOnly"
-	// CodeMintDenied: the requesting owner's Kubernetes access cannot mint
-	// a token for ate-system/ate-client.
+	// CodeAPIDisabled: the operator turned Substrate's API off for this
+	// installation (RADAR_SUBSTRATE_API=disabled).
+	CodeAPIDisabled = "apiDisabled"
+	// CodeConflict: the saved connection file changed since the caller read
+	// it (another Radar process, or the Desktop app, saved meanwhile).
+	CodeConflict = "conflict"
+	// CodeConfirmDestination: a save keeps the saved credential but sends it
+	// to a changed endpoint, CA or server name, and the caller has not agreed.
+	CodeConfirmDestination = "confirmDestination"
+	// CodeMintDenied: the signed-in caller's own Kubernetes access cannot
+	// create a token for ate-system/ate-client, or Radar has no identity of
+	// theirs to create it with.
 	CodeMintDenied = "mintDenied"
 	// CodeNotConfigured: no identity has been chosen for this context.
 	CodeNotConfigured = "notConfigured"

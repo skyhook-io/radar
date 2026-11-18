@@ -5,7 +5,7 @@ import type { SubstrateActorLogs, SubstrateActors, SubstrateActorsQuery } from '
 import { ApiError } from '../../api/client'
 import { ActorsTable, SubstrateActorsScreen, stateCellReading } from './SubstrateActors'
 import { SubstrateActorOverview } from './SubstrateActorOverview'
-import { actorDetail, actorRow, actors, connection, crashedRow, ownersOnlyTier, minutesAgo, poolShortRow, notConnectedWorkspace, status, workspace } from './substrate.fixtures'
+import { actorDetail, actorRow, actors, connection, crashedRow, apiDisabledTier, minutesAgo, poolShortRow, notConnectedWorkspace, status, workspace } from './substrate.fixtures'
 
 const state = vi.hoisted(() => ({
   actors: undefined as SubstrateActors | undefined,
@@ -154,21 +154,20 @@ describe('Actors list', () => {
     expect(html).toMatch(/<tr tabindex="0"/)
   })
 
-  it('shows Radar Hub’s owners-only note, not an error or a form, to a user who isn’t an org owner', () => {
+  it('says the operator turned the API off, not an error, when actors are refused for that', () => {
     state.actors = undefined
-    state.actorsError = new ApiError('only org owners', 403, { error: 'only org owners', error_code: 'ownersOnly' })
-    const html = screen('/substrate/actors', notConnectedWorkspace(ownersOnlyTier))
-    expect(html).toContain('In Radar Hub, only org owners can see Substrate’s actors, templates and workers for now. Ask an org owner.')
-    expect(html).not.toContain('Who Radar reads Substrate as')
+    state.actorsError = new ApiError('turned off', 403, { error: 'turned off', error_code: 'apiDisabled' })
+    const html = screen('/substrate/actors', notConnectedWorkspace(apiDisabledTier))
+    expect(html).toContain('Turned off for this Radar')
     expect(html).not.toContain('couldn’t read the actors')
     state.actorsError = null
   })
 
-  it('reads an actor page refused for owners only as that note', async () => {
+  it('reads an actor page refused because the API is off as that, with what to ask for', async () => {
     const { ActorReadFailure } = await import('./SubstrateActorPage')
-    const html = text(renderToStaticMarkup(<MemoryRouter><ActorReadFailure actor={{ atespace: 'r', name: 'a' }} error={new ApiError('x', 403, { error: 'x', error_code: 'ownersOnly' })} onBack={() => {}} /></MemoryRouter>))
-    expect(html).toContain('Actors are for org owners')
-    expect(html).toContain('only org owners can see')
+    const html = text(renderToStaticMarkup(<MemoryRouter><ActorReadFailure actor={{ atespace: 'r', name: 'a' }} error={new ApiError('x', 403, { error: 'x', error_code: 'apiDisabled' })} onBack={() => {}} /></MemoryRouter>))
+    expect(html).toContain('Turned off for this Radar')
+    expect(html).toContain('substrate.api.enabled')
   })
 
   it('labels a crash cause Substrate’s message names in a few words, the message on hover', () => {
@@ -226,11 +225,11 @@ describe('Actors list', () => {
     expect(unfiltered).not.toContain('across all actors')
   })
 
-  it('offers the Connect panel instead of the table while not connected', () => {
+  it('leads to Substrate settings instead of the table while not connected', () => {
     state.actors = undefined
     state.actorsError = new ApiError('Choose who Radar reads as', 409, { error_code: 'notConfigured' })
     const html = screen('/substrate/actors', notConnectedWorkspace())
-    expect(html).toContain('See actors, templates and workers')
+    expect(html).toContain('Open Substrate settings')
     expect(html).not.toContain('No actors match')
     state.actorsError = null
   })

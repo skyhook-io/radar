@@ -834,3 +834,14 @@ probes:
     periodSeconds: 10
     timeoutSeconds: 5
     failureThreshold: 3
+
+# Substrate API reads require sign-in and each user's own TokenRequest access.
+substrate:
+  api:
+    enabled: true
+    endpoint: api.ate-system.svc:443
+    serverName: api.ate-system.svc
+    atespaces: []
+    caConfigMap:
+      name: ""
+      key: ca.crt

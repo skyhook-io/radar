@@ -148,6 +148,9 @@ func dial(ctx context.Context, k Kube, s Settings, caller tokenSource) (*conn, e
 		pool, err := caFilePool(s.CAFile)
 		if err != nil {
 			c.close()
+			if s.Identity == IdentitySharedAsCaller {
+				return nil, &TierError{Code: CodeTLS, Message: "Cannot read a PEM CA certificate from RADAR_SUBSTRATE_CA_FILE; check the installation's mounted CA."}
+			}
 			return nil, err
 		}
 		tlsCfg.RootCAs = pool

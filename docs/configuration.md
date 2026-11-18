@@ -856,9 +856,9 @@ launch context, so switching to another context goes back to discovery.
 
 Agent Substrate's actors, templates and workers live in its own API server, which
 a local Radar (CLI or Desktop, authentication off, loopback listener) reads once you
-choose who it reads as, from the Connect panel on any Agent Substrate screen. The
+choose who it reads as, in **Settings → Agent Substrate**. The
 choice is saved per context in `~/.radar/substrate.json`, next to `clusters.json`
-but separate from it. Save it from the Connect panel rather than by hand: the keys
+but separate from it. Save it from Settings rather than by hand: the keys
 are values Radar computes. The file is version 1:
 
 ```json
@@ -868,6 +868,7 @@ are values Radar computes. The file is version 1:
     "<binding>": {
       "context": "my-cluster",
       "target": "<fingerprint>",
+      "identity": {"server": "https://cluster.example", "user": "developer", "trust": "<CA fingerprint>"},
       "settings": {
         "identity": "tokenFile",
         "tokenFile": "/home/me/.config/ate/token",
@@ -888,7 +889,7 @@ are values Radar computes. The file is version 1:
   the file.
 - **`target`** is an opaque fingerprint of the cluster the settings were saved for
   (server, CA trust, TLS settings, proxy, user reference). When the context comes to
-  point elsewhere, the settings are not used (`targetChanged`) until saved again.
+  point elsewhere, the settings are not used (`targetChanged`) until reviewed and explicitly reconfirmed. `identity` records the Kubernetes server, TLS name, user, CA trust fingerprint, proxy and insecure-TLS choice.
 - **`settings.identity`** is `shared`, which mints tokens for
   `ate-system/ate-client` (and allows no `tokenFile`), or `tokenFile`. There is no
   stored `none`: removing the settings (identity `none` on save) deletes the entry.
@@ -901,10 +902,22 @@ are values Radar computes. The file is version 1:
   Service `ate-system/api`; **`caFile`** and **`serverName`** (a DNS name) apply only
   with it. With `--disable-auto-port-forward`, set an endpoint.
 
-A context with no entry is not configured. A missing `version` reads as 1, and a
-missing or null `contexts` as empty; a file Radar cannot parse, or of another
-version, is reported (`settingsFile`), not overwritten: fix it or rename it to start
-over. See [substrate.md](substrate.md#connecting-to-substrates-api).
+A context with no entry is not configured. Invalid JSON, unknown fields, invalid
+settings and unsupported file versions are reported as `settingsFile`, never
+overwritten. Saves use a content revision checked under the shared file lock;
+concurrent CLI/Desktop saves return 409 `conflict`. File edits and context switches
+retire the active Substrate generation. Changing the destination (endpoint, CA
+file or server name) while keeping the same credential requires explicit
+`confirmDestination: true` before the probe sends it. A failed probe keeps the old
+settings and active connection.
+
+On in-cluster OSS and Radar Hub, **Settings → Agent Substrate** shows effective
+installation settings and your own access outcome. Operators configure
+`substrate.api.{enabled,endpoint,serverName,caConfigMap,atespaces}` through Helm,
+or the `RADAR_SUBSTRATE_*` environment variables, then roll out Radar. Any signed-in
+person whose own Kubernetes access can mint `ate-system/ate-client` may read;
+shared Radar without sign-in cannot. See
+[substrate.md](substrate.md#connecting-to-substrates-api).
 
 ## Workload metrics overrides by run mode
 

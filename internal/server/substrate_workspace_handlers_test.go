@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,6 +63,7 @@ const (
 // everything; the limited one may not list across atespaces and is denied
 // the "secret" atespace.
 type fakeControl struct {
+	atespaceCalls atomic.Int64
 	ateapi.UnimplementedControlServer
 	atespaces []string
 	actors    []*ateapi.Actor
@@ -117,6 +119,7 @@ func paged[T any](items []T, opts *ateapi.ListOptions) ([]T, string) {
 }
 
 func (f *fakeControl) ListAtespaces(ctx context.Context, req *ateapi.ListAtespacesRequest) (*ateapi.ListAtespacesResponse, error) {
+	f.atespaceCalls.Add(1)
 	if principal(ctx) == scopedToken {
 		return nil, status.Error(codes.PermissionDenied, "ListAtespaces requires a global viewer")
 	}
@@ -329,7 +332,11 @@ func saveTestSettings(t *testing.T, s *Server, settings *substrateapi.Settings) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.substrate.SaveSettings(context.Background(), substrateapi.Target{Binding: k.Binding, Context: k.Context, Fingerprint: k.Fingerprint}, settings); err != nil {
+	_, _, revision, err := s.substrate.Store.GetRevision(k.Binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.substrate.SaveRevision(context.Background(), substrateapi.Target{Binding: k.Binding, Context: k.Context, Fingerprint: k.Fingerprint}, revision, settings); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -375,7 +382,11 @@ func putConnection(t *testing.T, s *Server, settings map[string]any, out any) *h
 // older view does.
 func putConnectionFor(t *testing.T, s *Server, target k8s.ProfileTarget, settings map[string]any, out any) *httptest.ResponseRecorder {
 	t.Helper()
-	data, _ := json.Marshal(map[string]any{"target": target, "settings": settings})
+	_, _, revision, err := s.substrate.Store.GetRevision(target.Binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]any{"target": target, "revision": revision, "settings": settings})
 	return call(t, s, s.handlePutSubstrateConnection, substrateCall{method: http.MethodPut, path: "/api/substrate/connection", body: string(data)}, out)
 }
 
@@ -644,7 +655,7 @@ func TestSubstrateSharedListenerRefusesConnection(t *testing.T) {
 	if rec.Code != http.StatusForbidden || errorCode(t, rec) != substrateapi.CodeSharedRadar {
 		t.Errorf("PUT on a shared listener = %d %s", rec.Code, rec.Body)
 	}
-	if rec := call(t, s, s.handleGetSubstrateConnection, substrateCall{path: "/api/substrate/connection"}, nil); rec.Code != http.StatusForbidden {
+	if rec := call(t, s, s.handleGetSubstrateConnection, substrateCall{path: "/api/substrate/connection"}, nil); rec.Code != http.StatusOK {
 		t.Errorf("GET on a shared listener = %d", rec.Code)
 	}
 	var status substrateStatusResponse
@@ -1060,13 +1071,13 @@ func TestSubstrateEveryAPIRouteRejectsSharedRadar(t *testing.T) {
 			case "cloud":
 				s.cloudConnectCfg.CloudTunnelConfigured = true
 			}
-			for _, h := range []http.HandlerFunc{s.handleGetSubstrateConnection, s.handlePutSubstrateConnection, s.handleSubstrateActors, s.handleSubstrateActor,
+			for _, h := range []http.HandlerFunc{s.handlePutSubstrateConnection, s.handleSubstrateActors, s.handleSubstrateActor,
 				s.handleSubstrateActorLogs, s.handleSubstrateWorkers, s.handleSubstrateTemplates, s.handleSubstrateTemplate, s.handleSubstratePool} {
 				if rec := call(t, s, h, substrateCall{path: "/api/substrate/x"}, nil); rec.Code != http.StatusForbidden {
 					t.Errorf("API-tier route = %d %s", rec.Code, rec.Body)
 				}
 			}
-			for _, h := range []http.HandlerFunc{s.handleSubstrateStatus, s.handleSubstrateWorkspace} {
+			for _, h := range []http.HandlerFunc{s.handleSubstrateStatus, s.handleSubstrateWorkspace, s.handleGetSubstrateConnection} {
 				if rec := call(t, s, h, substrateCall{path: "/api/substrate/x"}, nil); rec.Code != http.StatusOK {
 					t.Errorf("Kubernetes-only route = %d %s", rec.Code, rec.Body)
 				}

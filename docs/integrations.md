@@ -2313,7 +2313,7 @@ Only Short of workers needs the controller's `ate.workerpool.desired_workers`. S
 
 ### Agent Substrate workspace
 
-Substrate's actors, actor templates, workers and atespaces live in its own API server, not in Kubernetes. A local Radar reads them, read-only, once it is told who to read as; the **Agent actors** workspace (`/substrate`) joins them with the WorkerPools: an Overview with Needs attention, Actors, Templates, Workers and Pools, with pages for actors, templates and WorkerPools. A shared Radar (in-cluster, Cloud, authentication on, or a listener beyond loopback) does not read the API, since every user would see what its one identity sees; it shows the Kubernetes and Prometheus readings above. See [substrate.md](substrate.md).
+Substrate's actors, actor templates, workers and atespaces live in its own API server, not in Kubernetes. A local Radar reads them, read-only, once it is told who to read as; the **Agent actors** workspace (`/substrate`) joins them with the WorkerPools: an Overview with Needs attention, Actors, Templates, Workers and Pools, with pages for actors, templates and WorkerPools. Configure private local connections in **Settings → Agent Substrate**. Signed-in OSS and Radar Hub users read as `ate-client` only after their own Kubernetes client successfully mints its token, regardless of Hub role. Operators configure shared installations through `substrate.api` Helm values and can disable the API for everyone. Shared Radar without sign-in shows only Kubernetes and Prometheus readings. See [substrate.md](substrate.md).
 
 ## Local runtime evidence: RabbitMQ, NATS and Vault
 

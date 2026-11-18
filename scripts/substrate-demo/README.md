@@ -16,8 +16,8 @@ with `--context <ctx>` or `SUBSTRATE_DEMO_CONTEXT`. The namespace defaults to
 go to the same place. The binary is built into the state directory, never the
 worktree.
 
-Radar settings for that kube context (the endpoint-override form of the
-Substrate connection):
+Open **Settings → Agent Substrate** for that kube context, then set the
+Advanced endpoint overrides:
 
 | Setting | Value |
 |---|---|

@@ -423,26 +423,35 @@ export interface TierReading {
   tone: StatusTone
 }
 
-/** What a Radar Hub user who isn't an org owner reads where Substrate's own values would be. */
-export const OWNERS_ONLY_NOTE = 'In Radar Hub, only org owners can see Substrate’s actors, templates and workers for now. Ask an org owner.'
-
 const CODE_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'> & { detail?: string }>> = {
-  notConfigured: { title: 'Not connected', tone: 'unknown', nextStep: 'Choose who Radar reads Substrate as.' },
+  notConfigured: { title: 'Not connected', tone: 'unknown', nextStep: 'Choose who Radar reads Substrate as, in Settings → Agent Substrate.' },
   targetChanged: {
     title: 'Saved for another cluster',
     tone: 'unknown',
     detail: 'The connection was saved while this context pointed at another cluster, so Radar does not use it here.',
-    nextStep: 'Choose the identity again for this cluster.',
+    nextStep: 'Review it in Settings → Agent Substrate.',
   },
-  sharedRadar: { title: 'Not available in a shared Radar', tone: 'unknown' },
+  sharedRadar: {
+    title: 'Needs sign-in',
+    tone: 'unknown',
+    detail: 'This Radar is shared without sign-in, so it can’t tell who is asking and doesn’t read Substrate’s API.',
+    nextStep: 'Turn on sign-in for this Radar; then each person sees what their own Kubernetes access allows.',
+  },
+  apiDisabled: {
+    title: 'Turned off for this Radar',
+    tone: 'unknown',
+    detail: 'The operator turned off reading Substrate’s API here.',
+    nextStep: 'Ask your operator to set substrate.api.enabled in Radar’s Helm values.',
+  },
   mintDenied: {
-    title: 'Your access can’t mint the shared identity’s token',
+    title: 'Your access can’t create the shared identity’s token',
     tone: 'unhealthy',
-    detail: 'In Radar Hub, Radar reads Substrate as ate-system/ate-client with a token minted with your own Kubernetes access, and that access can’t create one.',
-    nextStep: 'Ask a cluster admin for create on serviceaccounts/token for ate-system/ate-client.',
+    detail: 'Radar reads Substrate as ate-system/ate-client, with a token created with your own Kubernetes access, and that access can’t create one.',
+    nextStep: 'Ask a cluster admin for create on serviceaccounts/token for ate-client in ate-system.',
+    command: 'kubectl auth can-i create serviceaccounts/ate-client --subresource=token -n ate-system',
   },
-  notInstalled: { title: 'API server not found', tone: 'unknown', nextStep: 'Check that Substrate’s API server runs as Service ate-system/api, or set its endpoint under Advanced.' },
-  tls: { title: 'TLS check failed', tone: 'unhealthy', nextStep: 'Check the CA file and server name under Advanced, or that the cluster’s trust bundle for Substrate exists.' },
+  notInstalled: { title: 'API server not found', tone: 'unknown', nextStep: 'Check that Substrate’s API server runs as Service ate-system/api, or set its endpoint in Settings → Agent Substrate, under Advanced.' },
+  tls: { title: 'TLS check failed', tone: 'unhealthy', nextStep: 'Check the CA file and server name in Settings → Agent Substrate, under Advanced, or that the cluster’s trust bundle for Substrate exists.' },
   unreachable: { title: 'API server unreachable', tone: 'unhealthy', nextStep: 'Check that the API server’s Pods are running, then retry; with a custom endpoint, check it is reachable from this machine.' },
   unauthenticated: { title: 'Substrate rejected the identity', tone: 'unhealthy', nextStep: 'Check that the token is current, or choose another identity.' },
   denied: { title: 'Substrate denied the read', tone: 'unhealthy', nextStep: 'Ask a Substrate owner to grant this identity the viewer role, or choose another identity.' },
@@ -453,9 +462,10 @@ const CODE_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'> & 
 }
 
 /**
- * The same codes for a Radar Hub owner, who reads as ate-client with nothing
- * to configure: no Advanced fields, no other identity to choose, no "this
- * machine". Steps name what the owner can ask for instead.
+ * The same codes for a signed-in person on an in-cluster Radar or Radar Hub,
+ * who reads as ate-client with nothing to configure: no Advanced fields, no
+ * other identity to choose, no "this machine". Steps name what they can ask
+ * for instead.
  */
 const NO_FORM_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'> & { detail?: string; withReason?: boolean }>> = {
   notInstalled: {
@@ -499,8 +509,6 @@ const NO_FORM_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'>
 
 export function tierReading(tier: SubstrateAPITier): TierReading {
   if (tier.state === 'connected') return { title: 'Connected', detail: '', tone: 'healthy' }
-  // A product policy, not a fault: the same short note everywhere, whatever the server's sentence.
-  if (tier.code === 'ownersOnly') return { title: 'For org owners', detail: OWNERS_ONLY_NOTE, tone: 'unknown' }
   if (tier.state === 'connecting') return { title: 'Connecting', detail: 'The connection is saved; Radar is reading Substrate’s API for the first time.', tone: 'unknown' }
   const noForm = tier.code ? tier.identity?.mode === 'sharedAsCaller' && NO_FORM_READING[tier.code] : undefined
   if (noForm) {

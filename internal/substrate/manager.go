@@ -2,6 +2,7 @@ package substrate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 	model "github.com/skyhook-io/radar/pkg/substrate"
@@ -34,8 +36,8 @@ const (
 	// TierNotConfigured: no identity is saved for this context.
 	TierNotConfigured = "notConfigured"
 	// TierDisabled: this Radar does not read Substrate's API for this
-	// request: it is shared (code sharedRadar), or it is Radar Hub and the
-	// caller is not an org owner (ownersOnly).
+	// request: it has no sign-in (sharedRadar), or the operator disabled it
+	// (apiDisabled).
 	TierDisabled = "disabled"
 	// TierFailed: settings exist but no usable snapshot could be read.
 	TierFailed = "failed"
@@ -58,7 +60,7 @@ type APITier struct {
 	// Reason says why, in a sentence; absent when connected.
 	Reason string `json:"reason,omitempty"`
 	// Code is set with notConfigured (notConfigured), disabled (sharedRadar,
-	// ownersOnly) and failed (targetChanged, contextChanged, notInstalled,
+	// apiDisabled) and failed (targetChanged, contextChanged, notInstalled,
 	// tls, unreachable, unauthenticated, mintDenied, settingsFile or failed);
 	// absent when connected or connecting.
 	Code string `json:"code,omitempty"`
@@ -106,8 +108,10 @@ type Manager struct {
 	Now  func() time.Time
 	// CallerDial is where IdentitySharedAsCaller connects: endpoint, CA file
 	// and server name. Zero dials the API's Service in the cluster.
-	CallerDial Settings
-	callerTok  callerToken
+	CallerDial  Settings
+	selectionMu sync.Mutex
+	selection   string
+	callerTok   callerToken
 
 	// dialMu serializes dials: every conn shares Radar's one Substrate
 	// port-forward, so two racing dials would tear down each other's tunnel.
@@ -145,7 +149,7 @@ type readResult struct {
 }
 
 func NewManager(store *Store, kube func() (Kube, error)) *Manager {
-	m := &Manager{Store: store, Kube: kube, Now: time.Now}
+	m := &Manager{Store: store, Kube: kube, Now: time.Now, CallerDial: DefaultInstallationSettings()}
 	m.genCtx, m.cancel = context.WithCancel(context.Background())
 	return m
 }
@@ -210,6 +214,7 @@ func (m *Manager) settings(ctx context.Context) (Kube, *Settings, *APITier) {
 		return k, nil, &tier
 	}
 	if err != nil {
+		m.Reset()
 		tier := callerTier
 		tier.State, tier.Code, tier.Reason = TierFailed, CodeUnreachable, "Not connected to Kubernetes: "+err.Error()
 		return k, nil, &tier
@@ -223,9 +228,9 @@ func (m *Manager) settings(ctx context.Context) (Kube, *Settings, *APITier) {
 		}
 		return k, &s, tier
 	}
-	saved, ok, err := m.Store.Get(k.Binding)
-	if err != nil {
-		return k, nil, &APITier{State: TierFailed, Code: CodeSettingsFile, Reason: err.Error()}
+	saved, ok, settingsErr := m.selectLocal(k)
+	if settingsErr != nil {
+		return k, nil, &APITier{State: TierFailed, Code: CodeSettingsFile, Reason: settingsErr.Error()}
 	}
 	if !ok {
 		return k, nil, &APITier{State: TierNotConfigured, Code: CodeNotConfigured, Reason: "Choose who Radar reads Substrate's API as."}
@@ -351,6 +356,14 @@ func (m *Manager) snapshot(ctx context.Context, wait bool) (*Snapshot, APITier) 
 	}
 	if recentFailure {
 		return nil, withRead(*tier, nil, failed.err)
+	}
+	// A retry after a failure is not a first read: keep saying why the last
+	// one failed while it runs, so a failing connection doesn't flicker
+	// between failed and connecting.
+	if failed != nil && !wait {
+		served := withRead(*tier, nil, failed.err)
+		served.Refreshing = true
+		return nil, served
 	}
 	if !wait {
 		tier.State, tier.Code, tier.Reason = TierConnecting, "", "Radar is reading Substrate's API for the first time."
@@ -609,21 +622,22 @@ type Target struct {
 	Binding     string
 	Context     string
 	Fingerprint string
+	Identity    config.TargetIdentity
 }
 
-// SaveSettings saves (nil removes) target's settings and retires the current
+// SaveRevision saves (nil removes) target's settings and retires the current
 // generation, so the next read uses them. It does not capture the cluster
 // itself: the caller holds the configuration guard, under which a capture
 // would be refused.
-func (m *Manager) SaveSettings(ctx context.Context, target Target, s *Settings) error {
+func (m *Manager) SaveRevision(ctx context.Context, target Target, revision string, s *Settings) error {
 	var saved *Saved
 	if s != nil {
 		if err := s.Validate(); err != nil {
 			return &TierError{Code: CodeInvalidSettings, Message: err.Error()}
 		}
-		saved = &Saved{Context: target.Context, Target: target.Fingerprint, Settings: *s}
+		saved = &Saved{Context: target.Context, Target: target.Fingerprint, Identity: target.Identity, Settings: *s}
 	}
-	if err := m.Store.Put(ctx, target.Binding, saved); err != nil {
+	if _, err := m.Store.Update(ctx, revision, target.Binding, saved); err != nil {
 		return err
 	}
 	m.Reset()
@@ -642,4 +656,25 @@ func (m *Manager) SavedSettings() (*Saved, bool, error) {
 		return nil, false, err
 	}
 	return &saved, saved.Target == k.Fingerprint, nil
+}
+
+// Select retires work when the selected file or Kubernetes target changes.
+// It never calls the runtime refresh hook: activation may hold its lock.
+func (m *Manager) Select(k Kube) { m.selectLocal(k) }
+
+func (m *Manager) selectLocal(k Kube) (Saved, bool, error) {
+	m.selectionMu.Lock()
+	defer m.selectionMu.Unlock()
+	saved, exists, revision, err := m.Store.GetRevision(k.Binding)
+	errorText := ""
+	if err != nil {
+		errorText = err.Error()
+	}
+	data, _ := json.Marshal([]string{k.Binding, k.Fingerprint, k.Generation, revision, errorText})
+	selection := string(data)
+	if m.selection != selection {
+		m.Reset()
+		m.selection = selection
+	}
+	return saved, exists, err
 }

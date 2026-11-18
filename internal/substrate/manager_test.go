@@ -85,9 +85,14 @@ func stubManager(t *testing.T, kube func() (Kube, error)) (*Manager, Kube, Setti
 	k, _ := kube()
 	s := Settings{Identity: IdentityShared}
 	m := NewManager(&Store{Path: filepath.Join(t.TempDir(), "substrate.json")}, kube)
-	if err := m.Store.Put(context.Background(), k.Binding, &Saved{Target: k.Fingerprint, Settings: s}); err != nil {
+	_, _, revision, err := m.Store.GetRevision(k.Binding)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := m.Store.Update(context.Background(), revision, k.Binding, &Saved{Target: k.Fingerprint, Settings: s}); err != nil {
+		t.Fatal(err)
+	}
+	m.Select(k)
 	return m, k, s
 }
 
@@ -253,4 +258,49 @@ func TestSettingsAtespacesValidated(t *testing.T) {
 	if err := (Settings{Identity: IdentityShared, Atespaces: []string{"team", "research-2"}}).Validate(); err != nil {
 		t.Error(err)
 	}
+}
+
+func TestBusyClusterCapturePreservesSelection(t *testing.T) {
+	m, k, s := stubManager(t, fixedKube)
+	m.conn = &conn{key: connKey(k, s), client: &stubControl{actor: "warm"}}
+	if _, tier := m.Snapshot(context.Background()); tier.State != TierConnected {
+		t.Fatalf("seed: %+v", tier)
+	}
+	gen, ctx := m.generation()
+	good := m.good
+	m.Kube = func() (Kube, error) { return Kube{}, ErrClusterChanging }
+	if snap, tier := m.Peek(context.Background()); snap != nil || tier.Code != CodeContextChanged {
+		t.Fatalf("busy capture: %+v", tier)
+	}
+	next, _ := m.generation()
+	if next != gen || ctx.Err() != nil || m.good != good {
+		t.Fatal("transient configuration lock retired a healthy selection")
+	}
+	m.Kube = fixedKube
+	if snap, tier := m.Snapshot(context.Background()); snap == nil || tier.State != TierConnected {
+		t.Fatalf("recovered capture: %+v", tier)
+	}
+}
+
+func TestPeekKeepsTheLastFailureWhileARetryRuns(t *testing.T) {
+	m, k, s := stubManager(t, fixedKube)
+	now := time.Now()
+	m.Now = func() time.Time { return now }
+	m.conn = &conn{key: connKey(k, s), client: &stubControl{unavailable: true}}
+	if _, tier := m.Snapshot(context.Background()); tier.State != TierFailed || tier.Code != CodeUnreachable {
+		t.Fatalf("first read = %+v", tier)
+	}
+
+	// Past the failure's freshness, a status peek starts a retry; it blocks here.
+	blocked := &stubControl{entered: make(chan struct{}), release: make(chan struct{}), unavailable: true}
+	m.mu.Lock()
+	m.conn = &conn{key: connKey(k, s), client: blocked}
+	m.mu.Unlock()
+	now = now.Add(Freshness + time.Second)
+	_, tier := m.Peek(context.Background())
+	if tier.State != TierFailed || tier.Code != CodeUnreachable || !tier.Refreshing {
+		t.Errorf("a retry after a failure must keep the failure, refreshing, not read as a first connect: %+v", tier)
+	}
+	<-blocked.entered
+	close(blocked.release)
 }

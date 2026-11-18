@@ -3,17 +3,10 @@ package config
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
-	"time"
-
-	"github.com/gofrs/flock"
 )
 
 var ErrProfileConflict = errors.New("cluster settings changed; reload Settings and try again")
@@ -45,11 +38,6 @@ func NewProfileStore() *ProfileStore {
 	return &ProfileStore{Path: filepath.Join(filepath.Dir(Path()), "clusters.json")}
 }
 
-func profileRevision(data []byte) string {
-	digest := sha256.Sum256(data)
-	return hex.EncodeToString(digest[:])
-}
-
 func (s *ProfileStore) Read() (ClusterProfiles, string, error) {
 	file, revision, _, err := s.ReadSince("")
 	return file, revision, err
@@ -60,44 +48,41 @@ func (s *ProfileStore) ReadSince(previous string) (ClusterProfiles, string, bool
 	if s.Path == "" {
 		return result, "", false, errors.New("cluster settings directory is unavailable")
 	}
-	f, err := os.Open(s.Path)
-	if os.IsNotExist(err) {
-		return result, profileRevision(nil), previous != profileRevision(nil), nil
+	data, revision, changed, err := s.file().ReadSince(previous)
+	if err != nil || !changed || data == nil {
+		return result, revision, changed, err
 	}
+	result, err = s.decode(data)
 	if err != nil {
-		return result, "", false, fmt.Errorf("cannot read cluster settings: %w", err)
+		return result, "", false, err
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, 4*1024*1024+1))
-	if err != nil {
-		return result, "", false, fmt.Errorf("cannot read cluster settings: %w", err)
-	}
-	if len(data) > 4*1024*1024 {
-		return result, "", false, fmt.Errorf("%s exceeds 4 MiB. Rename the file to start over without saved integration settings", s.Path)
-	}
-	revision := profileRevision(data)
-	if previous == revision {
-		return result, revision, false, nil
+	return result, revision, true, nil
+}
+
+func (s *ProfileStore) decode(data []byte) (ClusterProfiles, error) {
+	result := ClusterProfiles{Version: 1, Profiles: map[string]ClusterProfile{}, Imported: map[Integration]bool{}}
+	if data == nil {
+		return result, nil
 	}
 	var header struct {
 		Version int `json:"version"`
 	}
 	if err := json.Unmarshal(data, &header); err != nil {
-		return result, "", false, invalidProfileJSON(s.Path, err)
+		return result, invalidProfileJSON(s.Path, err)
 	}
 	if header.Version > 1 {
-		return result, "", false, fmt.Errorf("clusters.json uses a newer format (version %d); upgrade Radar to read it; the file was not changed", header.Version)
+		return result, fmt.Errorf("clusters.json uses a newer format (version %d); upgrade Radar to read it; the file was not changed", header.Version)
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	result = ClusterProfiles{}
 	if err := dec.Decode(&result); err != nil {
-		return result, "", false, invalidProfileJSON(s.Path, err)
+		return result, invalidProfileJSON(s.Path, err)
 	}
 	if err := result.ValidateStructure(); err != nil {
-		return result, "", false, fmt.Errorf("%s is invalid: %v. Fix it, or rename the file to start over without saved integration settings", s.Path, err)
+		return result, fmt.Errorf("%s is invalid: %v. Fix it, or rename the file to start over without saved integration settings", s.Path, err)
 	}
-	return result, revision, true, nil
+	return result, nil
 }
 
 func invalidProfileJSON(path string, err error) error {
@@ -117,81 +102,38 @@ func invalidProfileJSON(path string, err error) error {
 	return fmt.Errorf("%s is invalid%s. Fix its JSON syntax, field names or value types, or rename the file to start over without saved integration settings", path, location)
 }
 
+func (s *ProfileStore) file() RevisionFile {
+	return RevisionFile{Path: s.Path, MaxBytes: 4 * 1024 * 1024, Label: "cluster settings", TempPattern: ".clusters-*.json", Conflict: ErrProfileConflict, Busy: ErrProfileBusy, Validate: func(data []byte) error { _, err := s.decode(data); return err }}
+}
+
 func (s *ProfileStore) Update(ctx context.Context, revision string, mutate func(*ClusterProfiles) error) (string, error) {
-	if s.Path == "" {
-		return "", errors.New("cluster settings directory is unavailable")
-	}
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0700); err != nil {
-		return "", err
-	}
-	lock := flock.New(s.Path+".lock", flock.SetPermissions(0600))
-	defer lock.Close()
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	locked, err := lock.TryLockContext(ctx, 10*time.Millisecond)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return "", ErrProfileBusy
+	return s.file().Update(ctx, revision, func(data []byte) ([]byte, error) {
+		current, err := s.decode(data)
+		if err != nil {
+			return nil, err
 		}
-		return "", err
-	}
-	if !locked {
-		return "", ErrProfileBusy
-	}
-	defer lock.Unlock()
-	current, actual, err := s.Read()
-	if err != nil {
-		return "", err
-	}
-	if revision != actual {
-		return "", ErrProfileConflict
-	}
-	beforeData, err := json.Marshal(current)
-	if err != nil {
-		return "", err
-	}
-	var before ClusterProfiles
-	if err := json.Unmarshal(beforeData, &before); err != nil {
-		return "", err
-	}
-	if err := mutate(&current); err != nil {
-		return "", err
-	}
-	if err := current.ValidateStructure(); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrProfileInvalid, err)
-	}
-	if err := current.ValidateChanges(before); err != nil {
-		return "", fmt.Errorf("%w: %v", ErrProfileInvalid, err)
-	}
-	data, err := json.MarshalIndent(current, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	data = append(data, '\n')
-	if len(data) > 4*1024*1024 {
-		return "", errors.New("cluster settings exceed 4 MiB")
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.Path), ".clusters-*.json")
-	if err != nil {
-		return "", err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err = tmp.Write(data); err != nil {
-		tmp.Close()
-		return "", err
-	}
-	if err = tmp.Sync(); err != nil {
-		tmp.Close()
-		return "", err
-	}
-	if err = tmp.Close(); err != nil {
-		return "", err
-	}
-	if err = os.Rename(tmp.Name(), s.Path); err != nil {
-		return "", err
-	}
-	return profileRevision(data), nil
+		beforeData, err := json.Marshal(current)
+		if err != nil {
+			return nil, err
+		}
+		var before ClusterProfiles
+		if err := json.Unmarshal(beforeData, &before); err != nil {
+			return nil, err
+		}
+		if err := mutate(&current); err != nil {
+			return nil, err
+		}
+		if err := current.ValidateStructure(); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrProfileInvalid, err)
+		}
+		if err := current.ValidateChanges(before); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrProfileInvalid, err)
+		}
+		data, err = json.MarshalIndent(current, "", "  ")
+		if err != nil {
+			return nil, err
+		}
+		data = append(data, '\n')
+		return data, nil
+	})
 }

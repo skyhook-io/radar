@@ -308,27 +308,27 @@ describe('the screen gate on a Radar without the Substrate workspace', () => {
   })
 })
 
-describe('Radar Hub, a user who isn’t an org owner', () => {
-  it('shows the owners-only note on Templates and Workers, not an error or a Connect form', async () => {
+describe('An in-cluster Radar or Radar Hub whose operator turned the API off', () => {
+  it('says so on Templates and Workers, not an error', async () => {
     const { SubstrateTemplatesScreen } = await import('./SubstrateTemplates')
     const { SubstrateWorkersScreen } = await import('./SubstrateWorkers')
-    const { notConnectedWorkspace, ownersOnlyTier, status: statusOf } = await import('./substrate.fixtures')
-    const ws = notConnectedWorkspace(ownersOnlyTier)
-    const st = statusOf({ apiTier: ownersOnlyTier, canConfigure: false })
+    const { notConnectedWorkspace, apiDisabledTier, status: statusOf } = await import('./substrate.fixtures')
+    const ws = notConnectedWorkspace(apiDisabledTier)
+    const st = statusOf({ apiTier: apiDisabledTier, canConfigure: false })
     for (const html of [
       render(<SubstrateTemplatesScreen workspace={ws} status={st} />, '/substrate/templates'),
       render(<SubstrateWorkersScreen workspace={ws} status={st} onOpenSubject={() => {}} />, '/substrate/workers'),
     ]) {
-      expect(html).toContain('In Radar Hub, only org owners can see Substrate’s actors, templates and workers for now. Ask an org owner.')
-      expect(html).not.toContain('Who Radar reads Substrate as')
+      expect(html).toContain('Turned off for this Radar')
+      expect(html).toContain('>Connection settings</button>')
       expect(html).not.toContain('couldn’t read')
     }
   })
 
-  it('reads a template page refused for owners only as that note', () => {
-    state.template = { data: undefined, error: apiError(403, 'ownersOnly'), isLoading: false, isRefetchError: false, dataUpdatedAt: 0 }
+  it('reads a template page refused because the API is off as that, with what to ask for', () => {
+    state.template = { data: undefined, error: apiError(403, 'apiDisabled'), isLoading: false, isRefetchError: false, dataUpdatedAt: 0 }
     const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'x' }} onOpenSubject={() => {}} />, '/substrate/templates/team/x?ctx=cluster-B')
-    expect(html).toContain('Templates are for org owners')
-    expect(html).toContain('only org owners can see')
+    expect(html).toContain('Turned off for this Radar')
+    expect(html).toContain('substrate.api.enabled')
   })
 })
