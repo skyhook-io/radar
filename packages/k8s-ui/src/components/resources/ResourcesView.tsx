@@ -7724,23 +7724,25 @@ const VIRTUOSO_TABLE_COMPONENTS = { Table: VirtuosoTable, TableRow: VirtuosoTabl
 function CopyNameButton({ name }: { name: string }) {
   const [copied, setCopied] = useState(false)
   if (!name) return null
+  // Gives up its room, gap included, before the name does: in a tight column
+  // the name matters more than a button that only shows on hover.
   return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation()
-        void copyText(name).then((didCopy) => {
-          if (!didCopy) return
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        })
-      }}
-      // Gives up its room before the name does: in a tight column the name
-      // matters more than a button that only shows on hover.
-      className="shrink-[1000] min-w-0 overflow-hidden p-0.5 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover/row:opacity-100 transition-opacity"
-      title="Copy name"
-    >
-      {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-    </button>
+    <span className="flex shrink-[1000] min-w-0 overflow-hidden">
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          void copyText(name).then((didCopy) => {
+            if (!didCopy) return
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          })
+        }}
+        className="ml-1.5 shrink-0 p-0.5 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover/row:opacity-100 transition-opacity"
+        title="Copy name"
+      >
+        {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+      </button>
+    </span>
   )
 }
 
@@ -7780,19 +7782,21 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     const auditTotal = audit ? audit.danger + audit.warning : 0
     return (
       <div className="flex items-center gap-1.5 min-w-0">
-        {nameHref ? (
-          <TruncatedText text={meta.name || ''} className={nameClass}>
-            <a
-              href={nameHref}
-              className="hover:underline focus-visible:underline focus-visible:outline-none rounded-sm"
-            >
-              {meta.name}
-            </a>
-          </TruncatedText>
-        ) : (
-          <TruncatedText text={meta.name || ''} className={nameClass} />
-        )}
-        <CopyNameButton name={meta.name} />
+        <span className="flex items-center min-w-0">
+          {nameHref ? (
+            <TruncatedText text={meta.name || ''} className={nameClass}>
+              <a
+                href={nameHref}
+                className="hover:underline focus-visible:underline focus-visible:outline-none rounded-sm"
+              >
+                {meta.name}
+              </a>
+            </TruncatedText>
+          ) : (
+            <TruncatedText text={meta.name || ''} className={nameClass} />
+          )}
+          <CopyNameButton name={meta.name} />
+        </span>
         <CrossplanePauseChip state={pauseState} compact />
         {findingMatch && (
           <Tooltip content={findingMatch.text}>
