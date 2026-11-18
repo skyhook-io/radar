@@ -6,13 +6,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -64,7 +68,7 @@ func serveResults(t *testing.T, body []byte) *httptest.Server {
 func TestFetchVeleroResultsReadsWhatVeleroWrote(t *testing.T) {
 	srv := serveResults(t, gzipped(t, realResultsJSON))
 
-	got, err := fetchVeleroResults(context.Background(), srv.URL)
+	got, err := fetchVeleroResults(context.Background(), srv.URL, localVeleroDownloadPolicy)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -91,7 +95,7 @@ func TestFetchVeleroResultsIsOrdered(t *testing.T) {
     }`
 	srv := serveResults(t, gzipped(t, body))
 
-	got, err := fetchVeleroResults(context.Background(), srv.URL)
+	got, err := fetchVeleroResults(context.Background(), srv.URL, localVeleroDownloadPolicy)
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -116,7 +120,7 @@ func TestFetchVeleroResultsIsOrdered(t *testing.T) {
 // link out of the process.
 func TestFetchVeleroResultsRefusesNonHTTP(t *testing.T) {
 	for _, raw := range []string{"file:///etc/passwd", "gopher://example.com/", "ftp://example.com/x"} {
-		if _, err := fetchVeleroResults(context.Background(), raw); err == nil {
+		if _, err := fetchVeleroResults(context.Background(), raw, localVeleroDownloadPolicy); err == nil {
 			t.Errorf("fetching %q was allowed", raw)
 		}
 	}
@@ -128,13 +132,13 @@ func TestFetchVeleroResultsRefusesNonHTTP(t *testing.T) {
 func TestFetchVeleroResultsRejectsGarbage(t *testing.T) {
 	t.Run("not gzip", func(t *testing.T) {
 		srv := serveResults(t, []byte("plain text, not gzip"))
-		if _, err := fetchVeleroResults(context.Background(), srv.URL); err == nil {
+		if _, err := fetchVeleroResults(context.Background(), srv.URL, localVeleroDownloadPolicy); err == nil {
 			t.Error("a non-gzip body was accepted")
 		}
 	})
 	t.Run("not json", func(t *testing.T) {
 		srv := serveResults(t, gzipped(t, "<html>404</html>"))
-		if _, err := fetchVeleroResults(context.Background(), srv.URL); err == nil {
+		if _, err := fetchVeleroResults(context.Background(), srv.URL, localVeleroDownloadPolicy); err == nil {
 			t.Error("a non-JSON body was accepted")
 		}
 	})
@@ -143,7 +147,7 @@ func TestFetchVeleroResultsRejectsGarbage(t *testing.T) {
 			w.WriteHeader(http.StatusForbidden)
 		}))
 		defer srv.Close()
-		if _, err := fetchVeleroResults(context.Background(), srv.URL); err == nil {
+		if _, err := fetchVeleroResults(context.Background(), srv.URL, localVeleroDownloadPolicy); err == nil {
 			t.Error("a 403 from object storage was treated as success")
 		}
 	})
@@ -183,7 +187,7 @@ func TestFetchVeleroResultsDoesNotFollowRedirects(t *testing.T) {
 	}))
 	defer redirector.Close()
 
-	_, err := fetchVeleroResults(context.Background(), redirector.URL)
+	_, err := fetchVeleroResults(context.Background(), redirector.URL, localVeleroDownloadPolicy)
 	if err == nil {
 		t.Fatal("a redirect was followed and the response accepted")
 	}
@@ -313,7 +317,7 @@ func TestVeleroRunMessagesRoutesEachFailureToItsOwnAnswer(t *testing.T) {
 		return dyn
 	}
 
-	post := func(t *testing.T, dyn dynamic.Interface, path string) *httptest.ResponseRecorder {
+	post := func(t *testing.T, dyn dynamic.Interface, path string, modes ...string) *httptest.ResponseRecorder {
 		t.Helper()
 		// Sets the package-level dynamic client, which is what
 		// getDynamicClientForRequest falls back to when auth is off.
@@ -325,11 +329,30 @@ func TestVeleroRunMessagesRoutesEachFailureToItsOwnAnswer(t *testing.T) {
 			t.Fatalf("seed download requests: %v", err)
 		}
 		t.Cleanup(k8s.ResetTestDynamicState)
-		srv := New(Config{DevMode: true})
+		t.Cleanup(k8s.SetTestLocalMode())
+		address := "localhost"
+		if len(modes) > 0 && modes[0] == "shared" {
+			address = "0.0.0.0"
+		}
+		if len(modes) > 0 && modes[0] == "in-cluster" {
+			k8s.ForceInCluster = true
+		}
+		srv := New(Config{DevMode: true, ListenAddress: address})
 		t.Cleanup(srv.Stop)
 		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "http://localhost"+path, nil))
 		return rec
+	}
+
+	for _, mode := range []string{"shared", "in-cluster"} {
+		t.Run("refuses loopback in "+mode, func(t *testing.T) {
+			store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("forbidden store was contacted") }))
+			defer store.Close()
+			rec := post(t, answerWith(t, store.URL+"?signature=secret"), "/api/velero/backups/velero/nightly/messages", mode)
+			if rec.Code != 503 || !strings.Contains(rec.Body.String(), "destination") || strings.Contains(rec.Body.String(), "secret") {
+				t.Fatalf("%d %s", rec.Code, rec.Body)
+			}
+		})
 	}
 
 	t.Run("returns the messages Velero wrote", func(t *testing.T) {
@@ -397,6 +420,47 @@ func TestVeleroRunMessagesRoutesEachFailureToItsOwnAnswer(t *testing.T) {
 		}
 	})
 
+	// The server Deployment is readable and stopped: nothing can answer, so the
+	// reader is told now, and nothing is created for Velero to clean up later.
+	t.Run("answers at once when the Velero server is stopped", func(t *testing.T) {
+		dep := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "velero", Namespace: "velero"},
+			Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
+				{Name: "velero", Image: "velero/velero:v1.18.1", Command: []string{"/velero"}, Args: []string{"server"}},
+			}}}},
+		}
+		if _, err := testFakeClient.AppsV1().Deployments("velero").Create(context.Background(), dep, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("create deployment: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = testFakeClient.AppsV1().Deployments("velero").Delete(context.Background(), "velero", metav1.DeleteOptions{})
+		})
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if _, err := k8s.GetResourceCache().Deployments().Deployments("velero").Get("velero"); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("deployment never reached the cache")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		dyn := answerWith(t, "http://unused")
+		start := time.Now()
+		rec := post(t, dyn, "/api/velero/backups/velero/nightly/messages")
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "has no running replicas") {
+			t.Fatalf("status = %d body = %s, want 503 naming the stopped server", rec.Code, rec.Body.String())
+		}
+		if time.Since(start) > 2*time.Second {
+			t.Errorf("took %s; a known-stopped server must not be waited on", time.Since(start))
+		}
+		for _, a := range dyn.Actions() {
+			if a.GetVerb() == "create" {
+				t.Errorf("created a %s Velero cannot serve", a.GetResource().Resource)
+			}
+		}
+	})
+
 	// Only Backups and Restores have a results target. A Schedule has none, and
 	// answering with an empty list would read as "this ran cleanly".
 	t.Run("refuses a kind that has no results", func(t *testing.T) {
@@ -418,7 +482,7 @@ func TestVeleroResultsErrorsNeverCarryTheSignedURL(t *testing.T) {
 		"?X-Amz-Credential=AKIAEXAMPLE&X-Amz-Signature=" + signature
 
 	// Unreachable host: the transport error is the one that embeds the URL.
-	_, err := fetchVeleroResults(context.Background(), signed)
+	_, err := fetchVeleroResults(context.Background(), signed, localVeleroDownloadPolicy)
 	if err == nil {
 		t.Fatal("want a transport failure against an invalid host")
 	}
@@ -438,11 +502,66 @@ func TestVeleroResultsErrorsNeverCarryTheSignedURL(t *testing.T) {
 
 	// Same guarantee when the store answers, but with the wrong bytes.
 	plain := serveResults(t, []byte("not gzip"))
-	_, err = fetchVeleroResults(context.Background(), plain.URL+"?X-Amz-Signature="+signature)
+	_, err = fetchVeleroResults(context.Background(), plain.URL+"?X-Amz-Signature="+signature, localVeleroDownloadPolicy)
 	if err == nil || strings.Contains(err.Error(), signature) {
 		t.Errorf("err = %v, want a classified error with no signature in it", err)
 	}
 	if !errors.Is(err, errNotAResultsFile) {
 		t.Errorf("err = %v, want errNotAResultsFile", err)
+	}
+}
+
+func TestVeleroDownloadDestinations(t *testing.T) {
+	for _, addr := range []string{"169.254.169.254", "169.254.0.1", "fe80::1", "0.0.0.0", "::", "224.0.0.1", "ff02::1", "::ffff:169.254.169.254"} {
+		for _, local := range []bool{false, true} {
+			if veleroDownloadAddressAllowed(net.ParseIP(addr), local) {
+				t.Errorf("allowed %s (local=%v)", addr, local)
+			}
+		}
+	}
+	for _, addr := range []string{"127.0.0.1", "::1", "::ffff:127.0.0.1"} {
+		if veleroDownloadAddressAllowed(net.ParseIP(addr), false) || !veleroDownloadAddressAllowed(net.ParseIP(addr), true) {
+			t.Errorf("loopback policy %s", addr)
+		}
+	}
+	for _, addr := range []string{"10.0.0.1", "172.16.0.1", "192.168.1.1", "fd00::1", "203.0.113.1"} {
+		if !veleroDownloadAddressAllowed(net.ParseIP(addr), false) {
+			t.Errorf("refused object storage %s", addr)
+		}
+	}
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; w.WriteHeader(403) }))
+	defer srv.Close()
+	// Resolve a hostname rather than checking the URL's literal host.
+	hostname := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+	_, err := fetchVeleroResults(t.Context(), hostname+"?signature=secret", func(ip net.IP) bool { return veleroDownloadAddressAllowed(ip, false) })
+	if !errors.Is(err, errDownloadDestination) || hits != 0 {
+		t.Fatalf("refusal %v, hits %d", err, hits)
+	}
+	if strings.Contains(veleroFetchMessage(err), "secret") || !strings.Contains(veleroFetchMessage(err), "destination") {
+		t.Fatal(veleroFetchMessage(err))
+	}
+	_, err = fetchVeleroResults(t.Context(), srv.URL, localVeleroDownloadPolicy)
+	if !errors.Is(err, errStorageRefused) || hits != 1 {
+		t.Fatalf("local store %v, hits %d", err, hits)
+	}
+}
+
+func localVeleroDownloadPolicy(ip net.IP) bool { return veleroDownloadAddressAllowed(ip, true) }
+
+func TestVeleroResultsUsesDialTimePolicy(t *testing.T) {
+	hits := 0
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; w.WriteHeader(403) }))
+	defer store.Close()
+	checked := 0
+	_, err := fetchVeleroResults(t.Context(), store.URL, func(ip net.IP) bool {
+		checked++
+		if ip == nil || !ip.IsLoopback() {
+			t.Errorf("policy saw an unresolved address: %v", ip)
+		}
+		return false
+	})
+	if checked == 0 || hits != 0 || !errors.Is(err, errDownloadDestination) {
+		t.Fatalf("checks=%d requests=%d err=%v", checked, hits, err)
 	}
 }

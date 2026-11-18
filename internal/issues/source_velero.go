@@ -2,6 +2,8 @@ package issues
 
 import (
 	"fmt"
+	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -194,6 +196,20 @@ var veleroPartialPhases = map[string]bool{
 	"WaitingForPluginOperationsPartiallyFailed": true,
 }
 
+// DetectVelero returns the rows the Problems surface raises for these Velero
+// objects (Kind → objects), sorted as it sorts them. It reads nothing, so a
+// caller that read the objects with the user's own access gets only rows that
+// access covers, without composing every other source in the cluster.
+func DetectVelero(byKind map[string][]*unstructured.Unstructured) []Issue {
+	var out []Issue
+	for kind, items := range byKind {
+		out = append(out, detectVeleroIssues(schema.GroupVersionResource{Group: VeleroGroup}, kind, items, nil)...)
+	}
+	out = foldVeleroLocationRejections(out)
+	out, _ = finalizeShapedIssues(out, Filters{}, true, true)
+	return out
+}
+
 // detectVeleroIssues turns one GVR's worth of Velero objects into Issues. It
 // takes the whole list rather than one object at a time because supersession is
 // a property of the series, not of a single backup.
@@ -239,6 +255,11 @@ func detectVeleroIssues(gvr schema.GroupVersionResource, kind string, items []*u
 // backup is a one-off run and nothing later supersedes it. Within a group only
 // the newest *decided* run is considered: if it succeeded, the group is clear;
 // otherwise that one run drives the issue and the older failures stay quiet.
+//
+// An ad-hoc backup that failed stays listed, but drops from critical to a
+// warning once a backup created after it, in the same Velero namespace,
+// completed over at least the namespaces it named (see veleroCoveredBy): the
+// data it was meant to save has since been saved.
 func veleroBackupIssues(gvr schema.GroupVersionResource, kind string, items []*unstructured.Unstructured) []Issue {
 	groups := map[string][]*unstructured.Unstructured{}
 	var order []string
@@ -256,12 +277,158 @@ func veleroBackupIssues(gvr schema.GroupVersionResource, kind string, items []*u
 		if newest == nil {
 			continue
 		}
-		if iss, ok := veleroRunIssue(gvr, kind, newest,
-			ReasonVeleroBackupFailed, ReasonVeleroBackupPartiallyFailed, ReasonVeleroBackupValidationFailed); ok {
-			out = append(out, iss)
+		iss, ok := veleroRunIssue(gvr, kind, newest,
+			ReasonVeleroBackupFailed, ReasonVeleroBackupPartiallyFailed, ReasonVeleroBackupValidationFailed)
+		if !ok {
+			continue
 		}
+		if iss.Severity == SeverityCritical && newest.GetLabels()[veleroScheduleLabel] == "" {
+			if later := newerVeleroSuccessCovering(newest, items); later != nil {
+				iss.Severity = SeverityWarning
+				iss.Cause = "A later backup, " + later.GetName() + ", completed over the same namespaces."
+			}
+		}
+		out = append(out, iss)
 	}
 	return append(out, veleroStalledRunIssues(gvr, kind, items)...)
+}
+
+// newerVeleroSuccessCovering is the newest Completed backup that started
+// after failed was created, in its Velero namespace, and backed up every
+// namespace failed named; nil when there is none. The start time, not the
+// creation time, is what shows the data was saved later: backup sync
+// recreates an old backup's object with a new creation time but keeps the
+// status it was stored with, and a backup created earlier but queued until
+// after the failure still saved its data later.
+func newerVeleroSuccessCovering(failed *unstructured.Unstructured, items []*unstructured.Unstructured) *unstructured.Unstructured {
+	var best *unstructured.Unstructured
+	var bestStarted time.Time
+	at := veleroRunTime(failed)
+	for _, u := range items {
+		if u.GetNamespace() != failed.GetNamespace() || veleroPhase(u) != "Completed" {
+			continue
+		}
+		started, _, _ := unstructured.NestedString(u.Object, "status", "startTimestamp")
+		t, err := time.Parse(time.RFC3339, started)
+		if err != nil || !t.After(at) {
+			continue
+		}
+		if !veleroCoveredBy(failed, u) {
+			continue
+		}
+		if best == nil || t.After(bestStarted) {
+			best, bestStarted = u, t
+		}
+	}
+	return best
+}
+
+// veleroNarrowingFilters are the spec fields that select less than every
+// object in a namespace.
+var veleroNarrowingFilters = []string{
+	"includedResources", "excludedResources",
+	"includedClusterScopedResources", "excludedClusterScopedResources",
+	"includedNamespaceScopedResources", "excludedNamespaceScopedResources",
+	"labelSelector", "orLabelSelectors",
+	// A resource policy filters volumes and resources outside these lists;
+	// snapshotVolumes false saves no volume data.
+	"resourcePolicy", "snapshotVolumes",
+}
+
+// veleroSavedDataFlags change what a backup saves whichever way they are set,
+// and unset means the server's default, so later covers earlier only when
+// both set them alike: a later run without file-system backup, data
+// movement or cluster-scoped resources saved less than one with them.
+var veleroSavedDataFlags = []string{"defaultVolumesToFsBackup", "snapshotMoveData", "includeClusterResources"}
+
+// veleroCoveredBy says whether later's spec selects at least the namespaces
+// earlier's does, read conservatively: a later backup filtered by resource,
+// label or policy covers only a backup filtered the same way, one that sets
+// the file-system backup, data movement or cluster-resource flags differently
+// covers nothing, namespace names
+// compare as written, and a glob pattern in later's exclusions or in either
+// include list (other than "*") is not evaluated, so it covers nothing. When
+// unsure it says no, which keeps the failure critical.
+func veleroCoveredBy(earlier, later *unstructured.Unstructured) bool {
+	for _, f := range veleroNarrowingFilters {
+		lv, lok, _ := unstructured.NestedFieldNoCopy(later.Object, "spec", f)
+		if !lok || veleroEmpty(lv) {
+			continue
+		}
+		ev, _, _ := unstructured.NestedFieldNoCopy(earlier.Object, "spec", f)
+		if !reflect.DeepEqual(lv, ev) {
+			return false
+		}
+	}
+	for _, f := range veleroSavedDataFlags {
+		lv, _, _ := unstructured.NestedFieldNoCopy(later.Object, "spec", f)
+		ev, _, _ := unstructured.NestedFieldNoCopy(earlier.Object, "spec", f)
+		if !reflect.DeepEqual(lv, ev) {
+			return false
+		}
+	}
+	eIn, eEx := veleroNamespaceSelection(earlier)
+	lIn, lEx := veleroNamespaceSelection(later)
+	for _, set := range []map[string]bool{eIn, lIn, lEx} {
+		for ns := range set {
+			if strings.ContainsAny(ns, "*?[{") {
+				return false
+			}
+		}
+	}
+	if lIn == nil {
+		// Later selects every namespace except lEx: each it excludes must be
+		// excluded by earlier too, or outside what earlier named.
+		for ns := range lEx {
+			if eIn == nil && !eEx[ns] || eIn != nil && eIn[ns] {
+				return false
+			}
+		}
+		return true
+	}
+	if eIn == nil {
+		return false
+	}
+	for ns := range eIn {
+		if !lIn[ns] || lEx[ns] {
+			return false
+		}
+	}
+	return true
+}
+
+// veleroNamespaceSelection is a spec's namespaces as sets: included is nil
+// when it selects every namespace (empty, or containing "*").
+func veleroNamespaceSelection(u *unstructured.Unstructured) (included, excluded map[string]bool) {
+	in := veleroStringSlice(u, "spec", "includedNamespaces")
+	excluded = map[string]bool{}
+	for _, ns := range veleroStringSlice(u, "spec", "excludedNamespaces") {
+		excluded[ns] = true
+	}
+	if len(in) == 0 || slices.Contains(in, "*") {
+		return nil, excluded
+	}
+	included = map[string]bool{}
+	for _, ns := range in {
+		if !excluded[ns] {
+			included[ns] = true
+		}
+	}
+	return included, excluded
+}
+
+func veleroEmpty(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return true
+	case []any:
+		return len(t) == 0
+	case map[string]any:
+		return len(t) == 0
+	case string:
+		return t == ""
+	}
+	return false
 }
 
 // veleroStalledRunIssues reports runs that are still in flight long past the
@@ -418,13 +585,16 @@ func veleroRunIssue(gvr schema.GroupVersionResource, kind string, u *unstructure
 		}
 	case phase == "Failed":
 		severity, reason = SeverityCritical, failedReason
-		message = veleroFailureMessage(u, "phase Failed")
+		message = veleroFailureMessage(u, "Velero recorded no reason")
 	case veleroPartialPhases[phase]:
 		// Partial failure is a warning, not critical: some of the data made it.
 		// It must still surface — "partially failed" is where silent data loss
 		// hides, because the run looks like it worked.
 		severity, reason = SeverityWarning, partialReason
-		detail := "phase " + phase + " — some items were not processed"
+		detail := "some items were not restored"
+		if kind == "Backup" {
+			detail = "some items were not backed up — do not assume this backup is complete"
+		}
 		// Two of these three phases are still executing: Velero is finalizing or
 		// waiting on plugin operations while already carrying a partial failure.
 		// One of those wedged forever is exactly what the stall check exists to
@@ -433,7 +603,7 @@ func veleroRunIssue(gvr schema.GroupVersionResource, kind string, u *unstructure
 		// already raises, so it is neither duplicated nor lost.
 		if veleroInFlightPartialPhases[phase] {
 			if over, stalled := veleroStalledFor(u); stalled {
-				detail += ", and it has been in flight " + formatVeleroDuration(over) + " with nothing appearing to advance it"
+				detail += "; it has been in flight " + formatVeleroDuration(over) + " with nothing appearing to advance it"
 			}
 		}
 		message = veleroFailureMessage(u, detail)
@@ -505,6 +675,9 @@ func veleroRepositoryIssues(gvr schema.GroupVersionResource, kind string, items 
 	var out []Issue
 	for _, u := range items {
 		if veleroPhase(u) != "NotReady" {
+			if iss, ok := veleroMaintenanceIssue(gvr, kind, u); ok {
+				out = append(out, iss)
+			}
 			continue
 		}
 		message := veleroFailureMessage(u, "backup repository is NotReady — filesystem and data-mover backups to it will fail")
@@ -512,6 +685,52 @@ func veleroRepositoryIssues(gvr schema.GroupVersionResource, kind string, items 
 			SeverityWarning, ReasonVeleroRepositoryNotReady, message, u.GetCreationTimestamp().Time))
 	}
 	return out
+}
+
+// veleroMaintenanceIssue: the newest maintenance run Velero recorded for a
+// repository failed. Maintenance (pruning and compacting the repository) runs
+// as a Job in Velero's namespace; when it keeps failing, the Job's pods show up
+// as a generic crash loop with nothing saying which repository suffers. A
+// NotReady repository already raises its own Issue, so this is raised only
+// for one Velero still reports usable.
+func veleroMaintenanceIssue(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) (Issue, bool) {
+	runs, _, _ := unstructured.NestedSlice(u.Object, "status", "recentMaintenance")
+	type run struct {
+		result, message string
+		start           time.Time
+	}
+	var all []run
+	for _, r := range runs {
+		m, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		result, _, _ := unstructured.NestedString(m, "result")
+		message, _, _ := unstructured.NestedString(m, "message")
+		started, _, _ := unstructured.NestedString(m, "startTimestamp")
+		at, _ := time.Parse(time.RFC3339, started)
+		all = append(all, run{result: result, message: strings.TrimSpace(message), start: at})
+	}
+	if len(all) == 0 {
+		return Issue{}, false
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].start.Before(all[j].start) })
+	newest := all[len(all)-1]
+	if newest.result != "Failed" {
+		return Issue{}, false
+	}
+	failed := 0
+	for _, r := range all {
+		if r.result == "Failed" {
+			failed++
+		}
+	}
+	message := fmt.Sprintf("Velero's last maintenance of this repository failed (%d of the last %d runs).", failed, len(all))
+	if newest.message != "" {
+		message += " " + newest.message
+	}
+	message += fmt.Sprintf(" Maintenance runs as Jobs in namespace %s; without it the repository is not pruned or checked.", u.GetNamespace())
+	return veleroStateIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, ReasonVeleroRepositoryMaintenanceFails, message, u.GetCreationTimestamp().Time), true
 }
 
 func veleroPhase(u *unstructured.Unstructured) string {

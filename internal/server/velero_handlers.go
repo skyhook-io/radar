@@ -12,6 +12,7 @@ import (
 
 	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
+	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
 
 const veleroGroup = "velero.io"
@@ -88,6 +89,9 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, http.StatusBadRequest, "storage location namespace and name are required")
 		return
 	}
+	if s.refuseOutsideVeleroPin(w, namespace) {
+		return
+	}
 	if !s.canRead(r, veleroGroup, "backups", namespace, "list") {
 		s.writeError(w, http.StatusForbidden, "no access to Velero backups")
 		return
@@ -117,17 +121,12 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Which location is the default one, read rather than assumed. A failure to
-	// list them is not fatal here: it only costs the fallback, and backups that
-	// name their location explicitly are unaffected.
-	defaultName := ""
-	if locs, lerr := listDynamicSynced(r.Context(), cache, "BackupStorageLocation", veleroGroup, namespace); lerr == nil {
-		defaultName = veleroDefaultLocationName(locs)
-	}
-
 	resp := VeleroStoredBackupsResponse{Backups: []VeleroStoredBackup{}}
 	for _, u := range items {
-		if u == nil || veleroBackupLocation(u, defaultName) != name {
+		if u == nil {
+			continue
+		}
+		if location, assigned := veleropkg.LocationOf(u); !assigned || location != name {
 			continue
 		}
 		b := VeleroStoredBackup{Namespace: u.GetNamespace(), Name: u.GetName()}
@@ -159,40 +158,6 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		resp.Truncated = true
 	}
 	s.writeJSON(w, resp)
-}
-
-// veleroBackupLocation is the storage location a Backup names, applying Velero's
-// default.
-//
-// An unset spec.storageLocation means "the location marked default", which is a
-// flag on the location (spec.default) and not a name. Assuming the literal name
-// "default" is right on most installs and silently wrong on any that renamed it
-// — and being wrong here does not look like an error, it looks like a location
-// holding nothing, which is the sentence someone reads before deciding they
-// cannot restore. So the flag is what decides, and the name is only the
-// fallback for when no location claims it.
-func veleroBackupLocation(u *unstructured.Unstructured, defaultLocation string) string {
-	if loc, ok, _ := unstructured.NestedString(u.Object, "spec", "storageLocation"); ok && loc != "" {
-		return loc
-	}
-	if defaultLocation != "" {
-		return defaultLocation
-	}
-	return "default"
-}
-
-// veleroDefaultLocationName returns the name of the location flagged
-// spec.default, or "" when none is. Velero permits at most one.
-func veleroDefaultLocationName(locations []*unstructured.Unstructured) string {
-	for _, l := range locations {
-		if l == nil {
-			continue
-		}
-		if isDefault, ok, _ := unstructured.NestedBool(l.Object, "spec", "default"); ok && isDefault {
-			return l.GetName()
-		}
-	}
-	return ""
 }
 
 // veleroExpired reports whether Velero's own expiration has passed. Same rule

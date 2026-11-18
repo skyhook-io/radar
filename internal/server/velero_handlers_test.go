@@ -19,64 +19,6 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
-// Velero resolves an unset spec.storageLocation to the location marked default.
-// Reading absent as "no location" would drop every backup taken with the default
-// settings out of the list — which is most of them — and leave a storage location
-// page saying nothing depends on it.
-func TestVeleroBackupLocation_AppliesVeleroDefault(t *testing.T) {
-	for _, c := range []struct {
-		name        string
-		spec        map[string]interface{}
-		defaultName string
-		want        string
-	}{
-		{"explicit location", map[string]interface{}{"storageLocation": "dr-replica"}, "primary", "dr-replica"},
-		{"absent uses the location flagged default", map[string]interface{}{}, "primary", "primary"},
-		{"empty uses the location flagged default", map[string]interface{}{"storageLocation": ""}, "primary", "primary"},
-		// Nothing claims the flag: fall back to the conventional name rather than
-		// dropping the backup out of every location's list.
-		{"absent with no flagged default", map[string]interface{}{}, "", "default"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			u := &unstructured.Unstructured{Object: map[string]interface{}{"spec": c.spec}}
-			if got := veleroBackupLocation(u, c.defaultName); got != c.want {
-				t.Errorf("veleroBackupLocation(%v, %q) = %q, want %q", c.spec, c.defaultName, got, c.want)
-			}
-		})
-	}
-}
-
-// The name "default" is a convention, not the contract — the contract is
-// spec.default on the location. An install that renamed its default location
-// would otherwise have every backup taken with default settings attributed to a
-// location that does not exist, and the real one would report holding nothing.
-func TestVeleroDefaultLocationName(t *testing.T) {
-	loc := func(name string, isDefault bool) *unstructured.Unstructured {
-		u := &unstructured.Unstructured{Object: map[string]interface{}{
-			"spec": map[string]interface{}{"default": isDefault},
-		}}
-		u.SetName(name)
-		return u
-	}
-
-	if got := veleroDefaultLocationName([]*unstructured.Unstructured{
-		loc("dr-replica", false), loc("primary", true),
-	}); got != "primary" {
-		t.Errorf("got %q, want the location carrying the flag", got)
-	}
-
-	// None flagged: say so rather than guessing, and let the caller fall back.
-	if got := veleroDefaultLocationName([]*unstructured.Unstructured{
-		loc("a", false), loc("b", false),
-	}); got != "" {
-		t.Errorf("got %q, want empty when no location claims the flag", got)
-	}
-
-	if got := veleroDefaultLocationName(nil); got != "" {
-		t.Errorf("got %q, want empty for no locations", got)
-	}
-}
-
 // A caller who may not list Backups is told so. An empty list would read as "this
 // storage location holds nothing", which on the page someone opens to decide
 // whether they can still restore is the worst possible wrong answer.
@@ -201,8 +143,10 @@ func TestVeleroExpiredDecidesWhatCountsAsARestorePoint(t *testing.T) {
 // The counts on the storage location page, driven through the handler rather
 // than recomputed beside it. Restorable is the number an operator reads to
 // answer "can I restore" — it is wrong if it counts a backup Velero has already
-// aged out, and wrong in the other direction if it misses one taken with the
-// default settings, which is most of them.
+// aged out. Velero writes the resolved location into spec.storageLocation when it
+// first processes a backup (spec.default first, then the server's flag), so a
+// backup without one has not been processed and is not attributed to today's
+// default.
 func TestVeleroStoredBackupsCountsWhatCanActuallyBeRestored(t *testing.T) {
 	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 	future := time.Now().Add(720 * time.Hour).UTC().Format(time.RFC3339)
@@ -231,15 +175,14 @@ func TestVeleroStoredBackupsCountsWhatCanActuallyBeRestored(t *testing.T) {
 		}}
 	}
 
-	// The install that catches the assumption: the default location is not the
-	// one named "default".
 	seedVeleroDynamic(t,
 		location("primary", true),
 		location("dr-replica", false),
-		backup("nightly-fresh", "", "Completed", future, "2026-08-16T01:00:00Z"),
-		backup("nightly-aged", "", "Completed", past, "2026-06-01T01:00:00Z"),
-		backup("nightly-broke", "", "Failed", future, "2026-08-15T01:00:00Z"),
+		backup("nightly-fresh", "primary", "Completed", future, "2026-08-16T01:00:00Z"),
+		backup("nightly-aged", "primary", "Completed", past, "2026-06-01T01:00:00Z"),
+		backup("nightly-broke", "primary", "Failed", future, "2026-08-15T01:00:00Z"),
 		backup("dr-copy", "dr-replica", "Completed", future, "2026-08-16T02:00:00Z"),
+		backup("just-submitted", "", "New", "", ""),
 	)
 
 	env := newAuthTestServer(t)
@@ -257,10 +200,8 @@ func TestVeleroStoredBackupsCountsWhatCanActuallyBeRestored(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	// The three backups that named no location belong to "primary" because it
-	// carries spec.default — not to a location called "default".
 	if got.Stored != 3 {
-		t.Errorf("Stored = %d, want 3 — the backups with no location belong to the default one: %+v", got.Stored, got.Backups)
+		t.Errorf("Stored = %d, want 3 — the unprocessed backup has no location yet: %+v", got.Stored, got.Backups)
 	}
 	if got.Restorable != 1 {
 		t.Errorf("Restorable = %d, want 1 — only nightly-fresh is Completed and still inside its TTL", got.Restorable)

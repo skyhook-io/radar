@@ -1,5 +1,5 @@
 import { HardDrive, Clock, Archive } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, RelationshipGroup, AlertBanner } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, RelationshipGroup, AlertBanner, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { TimeValue } from '../../ui/ScheduleValue'
 import {
   getBSLStatus,
@@ -47,7 +47,7 @@ interface VeleroBSLRendererProps {
   /** How many the location holds in total. Larger than the list when the server
    *  capped it — the counts describe the location, the list is a page of it. */
   storedTotal?: number
-  /** How many of those are complete restore points, counted by the server over
+  /** How many of those completed and are inside their retention, counted by the server over
    *  the whole location. Deriving this from the list instead would pair a page's
    *  count with the location's total and undercount a capped location. */
   restorableTotal?: number
@@ -66,6 +66,7 @@ export function VeleroBSLRenderer({ data, storedBackups, storedTotal, restorable
   const conditions = status.conditions || []
   const bslStatus = getBSLStatus(data)
   const message = getBSLMessage(data)
+  const issueShown = useOperationalIssuesShown()
   const config = data.spec?.config || {}
   // Two things falsify "restorable", and the phase sees neither. A backup that
   // did complete is still not something to go back to once its TTL has passed —
@@ -90,10 +91,11 @@ export function VeleroBSLRenderer({ data, storedBackups, storedTotal, restorable
 
   return (
     <>
-      {/* The reason, not just the state. An unavailable location means Velero's
+      {/* The reason, not just the state. Shown when no issue describes it
+          above. An unavailable location means Velero's
           last validation of the bucket failed, and status.message is the only
           place that reason exists — the object carries no conditions. */}
-      {bslStatus.level === 'unhealthy' && (
+      {bslStatus.level === 'unhealthy' && !issueShown && (
         <AlertBanner
           variant="error"
           title="Storage Location Unavailable"
@@ -190,7 +192,7 @@ export function VeleroBSLRenderer({ data, storedBackups, storedTotal, restorable
               )}
               {/* The list below is everything stored here, and its count is the
                   only number on a healthy location — so "Backups (2)" sat next
-                  to a restorable point derived from one of them with nothing
+                  to a newest-backup line derived from one of them with nothing
                   reconciling the two.
 
                   Stated as the positive on purpose. The alternative — counting
@@ -199,12 +201,14 @@ export function VeleroBSLRenderer({ data, storedBackups, storedTotal, restorable
                   twice: a `Deleting` backup already ran, and the
                   *PartiallyFailed phases mean part of the data made it (see
                   BACKUP_PARTIAL_PHASES). Neither is "has not completed". How
-                  many are whole restore points is true regardless. */}
+                  many completed inside their retention is true regardless;
+                  "restore point" would claim a restore was tested, which
+                  Velero never does. */}
               {restorable !== stored && (
                 <div className="text-xs text-theme-text-secondary mb-2">
                   {restorable === 0
-                    ? `${stored === 1 ? 'The backup stored here is not' : `None of the ${stored} backups stored here is`} a complete restore point.`
-                    : `${restorable} of ${stored} backups stored here ${restorable === 1 ? 'is a complete restore point' : 'are complete restore points'}.`}
+                    ? `${stored === 1 ? 'The backup stored here is not' : `None of the ${stored} backups stored here is`} both completed and inside its retention.`
+                    : `${restorable} of ${stored} backups stored here ${restorable === 1 ? 'is' : 'are'} completed and inside ${restorable === 1 ? 'its' : 'their'} retention.`}
                 </div>
               )}
               {listTruncated && (
@@ -226,25 +230,25 @@ export function VeleroBSLRenderer({ data, storedBackups, storedTotal, restorable
                 <div className="mt-2 pt-2 border-t border-theme-border text-xs text-theme-text-secondary">
                   {/* The question this page is opened to answer — worded for the
                       state the location is actually in. Calling this a
-                      "restorable point" on an unavailable location contradicts
+                      a "restorable point" on an unavailable location contradicts
                       the sentence directly above it, which has just said these
                       are not something you can restore from. The date is still
                       worth having: it is what you get back when the location
                       recovers. */}
                   {bslStatus.level === 'healthy' ? (
                     <>
-                      Most recent restorable point: <TimeValue timestamp={newest} />
+                      Newest completed backup inside its retention: <TimeValue timestamp={newest} />
                     </>
                   ) : bslStatus.level === 'unhealthy' ? (
                     <>
-                      Most recent point held here, once this location is reachable again:{' '}
+                      Newest completed backup recorded here, while the location is unavailable:{' '}
                       <TimeValue timestamp={newest} />
                     </>
                   ) : (
                     // Unknown: do not imply it is unreachable, and do not call it
                     // restorable either. Say what the timestamp is.
                     <>
-                      Most recent point held here: <TimeValue timestamp={newest} />
+                      Newest completed backup held here: <TimeValue timestamp={newest} />
                     </>
                   )}
                 </div>

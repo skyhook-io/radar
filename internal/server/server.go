@@ -685,10 +685,18 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/poolers/{namespace}/{name}/capabilities", s.handleCNPGPoolerCapabilities)
 			r.Get("/cnpg/poolers/{namespace}/{name}/pgbouncer-state", s.handleCNPGPgBouncerState)
 			r.Post("/cnpg/poolers/{namespace}/{name}/actions/{action}", s.handleCNPGPoolerAction)
+			r.Get("/velero/workspace", s.handleVeleroWorkspace)
+			r.Get("/velero/schedules/{namespace}/{name}/activity", s.handleVeleroScheduleActivity)
 			r.Get("/velero/backupstoragelocations/{namespace}/{name}/backups", s.handleVeleroStoredBackups)
+			r.Get("/velero/runs/{kind}", s.handleVeleroRuns)
 			// POST: creates a DownloadRequest, which is the only supported way to
 			// read the messages behind a run's error and warning counts.
 			r.Post("/velero/{kind}/{namespace}/{name}/messages", s.handleVeleroRunMessages)
+			// POST: creates a Backup from the schedule's template, as the caller.
+			r.Post("/velero/schedules/{namespace}/{name}/backup", s.handleVeleroBackupNow)
+			// POST: creates a DeleteBackupRequest, the way Velero deletes a backup.
+			r.Post("/velero/backups/{namespace}/{name}/delete", s.handleVeleroDeleteBackup)
+			r.Get("/velero/backups/{namespace}/{name}/deletion", s.handleVeleroBackupDeletion)
 
 			r.Get("/namespaces", s.handleNamespaces)
 			r.Get("/api-resources", s.handleAPIResources)
@@ -1566,6 +1574,10 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		WorkloadHistory:          true,
 		CNPGWorkspace:            true,
 		CNPGProtectionSetup:      true,
+		VeleroWorkspace:          true,
+		VeleroBackupNow:          true,
+		VeleroRuns:               true,
+		VeleroDeleteBackup:       true,
 		ServiceEndpointSlices:    true,
 		TrafficRecords:           true,
 		GitOpsWriteEvidence:      true,

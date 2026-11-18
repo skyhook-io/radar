@@ -44,18 +44,18 @@ describe('what a storage location holds', () => {
       />,
     )
     expect(html).toContain('not something you can restore from')
-    expect(html).not.toContain('Most recent restorable point')
-    expect(html).toContain('once this location is reachable again')
+    expect(html).not.toContain('Newest completed backup inside its retention')
+    expect(html).toContain('Newest completed backup recorded here, while the location is unavailable')
   })
 
-  it('calls it a restorable point when the location can actually serve it', () => {
+  it('names the newest completed backup when the location can actually serve it', () => {
     const html = renderToString(
       <VeleroBSLRenderer
         data={bsl('Available')}
         storedBackups={[completed('nightly', '2026-08-14T01:00:00Z')]}
       />,
     )
-    expect(html).toContain('Most recent restorable point')
+    expect(html).toContain('Newest completed backup inside its retention')
   })
 
   it('agrees in number', () => {
@@ -114,7 +114,7 @@ describe('what a storage location holds', () => {
       />,
     )
     expect(html).toContain('passed its retention')
-    expect(html).not.toContain('Most recent restorable point')
+    expect(html).not.toContain('Newest completed backup inside its retention')
   })
 
   it('still counts a backup inside its retention', () => {
@@ -248,24 +248,24 @@ describe('a location holding runs that are not restore points', () => {
         ]}
       />,
     )
-    expect(html).toContain('1 of 2 backups stored here is a complete restore point')
+    expect(html).toContain('1 of 2 backups stored here is completed and inside its retention')
     // Both are stored, so both are listed — the sentence explains the list, it
     // does not filter it.
     expect(html).toContain('nightly')
     expect(html).toContain('stalled')
     // The completed one is still a restore point; the note must not read as
     // though nothing here is usable.
-    expect(html).toContain('Most recent restorable point')
+    expect(html).toContain('Newest completed backup inside its retention')
   })
 
-  it('says nothing when every stored backup is a restore point', () => {
+  it('says nothing when every stored backup completed inside its retention', () => {
     const html = renderToString(
       <VeleroBSLRenderer
         data={bsl('Available')}
         storedBackups={[completed('nightly', '2026-08-14T01:00:00Z')]}
       />,
     )
-    expect(html).not.toContain('complete restore point')
+    expect(html).not.toMatch(/stored here (is|are) (completed|both|not)/)
   })
 
   // A Deleting backup already ran and is now on its way out, and a
@@ -283,8 +283,8 @@ describe('a location holding runs that are not restore points', () => {
       />,
     )
     expect(html).not.toContain('not completed')
-    expect(html).toContain('None of the 2 backups stored here is a complete restore point')
-    expect(html).not.toContain('Most recent restorable point')
+    expect(html).toContain('None of the 2 backups stored here is both completed and inside its retention')
+    expect(html).not.toContain('Newest completed backup inside its retention')
   })
 })
 
@@ -333,7 +333,7 @@ describe('the sentences at a count of one', () => {
 
   it('reads correctly when a single backup is not a restore point', () => {
     const html = oneOf('Available', [{ namespace: 'velero', name: 'only', phase: 'InProgress' }])
-    expect(html).toContain('The backup stored here is not a complete restore point')
+    expect(html).toContain('The backup stored here is not both completed and inside its retention')
     expect(html).not.toContain('None of the 1')
   })
 

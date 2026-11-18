@@ -66,7 +66,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		// entirely. Match in lowercase (same as applyFilters) so
 		// "Pod"/"pod" and CRD-typed "MyResource"/"myresource" both
 		// compare equal.
-		if len(wantKind) > 0 && !wantKind[strings.ToLower(kind)] {
+		if len(wantKind) > 0 && !wantKind[strings.ToLower(kind)] && !veleroReadingsWanted(gvr, kind, wantKind) {
 			continue
 		}
 		clusterScoped, _, _ := classifyDynamicScope(p, gvr, kind)
@@ -129,6 +129,11 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		// backup supersession is a property of the series, not of one object.
 		if gvr.Group == VeleroGroup {
 			out = append(out, detectVeleroIssues(gvr, kind, items, ownedSubjects)...)
+			// Every installation has a storage location, so its list is where
+			// the server, its schedules and its validation are read together.
+			if kind == "BackupStorageLocation" {
+				out = append(out, detectVeleroReadingIssues(p, gvr, items, time.Now())...)
+			}
 			continue
 		}
 		// A schedule's outcome is read against the cluster's backups, so it is
@@ -261,7 +266,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			out = append(out, iss)
 		}
 	}
-	return out
+	return foldVeleroLocationRejections(out)
 }
 
 func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
@@ -802,3 +807,11 @@ func argoRolloutFailure(u *unstructured.Unstructured) (reason, message string, t
 // ---------------------------------------------------------------------------
 // Source-specific normalization
 // ---------------------------------------------------------------------------
+
+// veleroReadingsWanted: the Velero readings are raised while visiting the
+// storage-location list but are about Schedules, the server Deployment and the
+// locations, so a request for any of those kinds still visits it. Rows of
+// other kinds are dropped by the kind filter afterwards.
+func veleroReadingsWanted(gvr schema.GroupVersionResource, kind string, wantKind map[string]bool) bool {
+	return gvr.Group == VeleroGroup && kind == "BackupStorageLocation" && (wantKind["schedule"] || wantKind["deployment"])
+}
