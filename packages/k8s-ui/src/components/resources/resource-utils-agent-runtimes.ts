@@ -187,9 +187,8 @@ export function getWorkerPoolSandboxConfig(resource: any): string {
 
 // Mirrors pkg/health ReadAgentSandbox, which the Issues and AI summaries use;
 // pkg/health/testdata/agent_sandbox.json pins both. The UI differs from the Go
-// levels in two places: `alert` for a retried controller error or an
-// unschedulable Pod, and `degraded` for a claim whose warm pool or template is
-// missing, which Issues raise as a warning.
+// levels in one place: `alert` for a retried controller error or an
+// unschedulable Pod.
 
 // Ready=False reasons that describe a state someone chose and the controller
 // completed: an expiry, a Pod that ran to completion, a claim whose lifetime
