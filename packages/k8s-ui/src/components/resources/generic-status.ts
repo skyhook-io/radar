@@ -1,8 +1,11 @@
+import { argoApplicationSetConditionsToGitOpsStatus } from '../../types/gitops'
+import { getArgoApplicationSetStatus } from './resource-utils-argo'
 import { getCRDStatus } from './resource-utils-crd'
 import { getStrimziConnectorStatus, getStrimziClusterStatus, isStrimziKafka, isStrimziKafkaNodePool } from './resource-utils-strimzi'
 import { getVolumeSnapshotStatus, getVolumeSnapshotErrorMessage, isVolumeSnapshot, isVolumeSnapshotContent } from './resource-utils-volumesnapshot'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from './resource-utils-opentelemetry'
 import { getFlaggerCanaryStatus } from './resource-utils-flagger'
+import { UPGRADE_PLAN_GROUP, getUpgradePlanStatus } from './resource-utils-upgrade-plan'
 import { isApiGroup } from './resource-utils-cnpg'
 import type { HealthLevel } from './resource-utils'
 import { getGatewayPolicyStatus } from './gateway-policy-status'
@@ -94,6 +97,11 @@ function fromCondition(cond: any, polarityKnown: boolean): GenericStatus | null 
  * callers render their own placeholder rather than inventing one.
  */
 export function getGenericResourceStatus(resource: any): GenericStatus | null {
+  if (resource?.kind === 'ApplicationSet' && isApiGroup(resource.apiVersion, 'argoproj.io')) {
+    const native = getArgoApplicationSetStatus(resource)
+    const { message } = argoApplicationSetConditionsToGitOpsStatus(resource.status?.conditions ?? [], resource.status?.health)
+    return { text: native.text, tone: native.level, reason: native.level === 'healthy' ? undefined : message }
+  }
   if (resource?.kind === 'CustomResourceDefinition' && isApiGroup(resource.apiVersion, 'apiextensions.k8s.io')) return getCRDStatus(resource)
   if (resource?.kind === 'KafkaConnector' && isApiGroup(resource.apiVersion, 'kafka.strimzi.io')) {
     const native = getStrimziConnectorStatus(resource)
@@ -118,6 +126,10 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
       return { text: native.text, tone: native.level }
     }
     if (resource.kind === 'MetricTemplate') return { text: 'Configured', tone: 'neutral' }
+  }
+  if (isApiGroup(resource?.apiVersion, UPGRADE_PLAN_GROUP) && resource.kind === 'Plan') {
+    const native = getUpgradePlanStatus(resource)
+    return { text: native.text, tone: native.level }
   }
   const status = resource?.status
   if (!status || typeof status !== 'object') return null

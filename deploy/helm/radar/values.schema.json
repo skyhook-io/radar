@@ -92,6 +92,7 @@
             "externalDns": { "type": "boolean" },
             "externalSecrets": { "type": "boolean" },
             "flagger": { "type": "boolean", "description": "Opt-in read collection for flagger.app Canaries and MetricTemplates (default false)." },
+            "systemUpgrade": { "type": "boolean", "description": "Opt-in read collection for upgrade.cattle.io Plans of system-upgrade-controller (default false); their env can hold values." },
             "flux": { "type": "boolean" },
             "gatewayApi": { "type": "boolean" },
             "gcpMonitoring": { "type": "boolean" },
