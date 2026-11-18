@@ -165,7 +165,7 @@ func cnpgPrimaryHAGap(pdb *policyv1.PodDisruptionBudget, cluster *unstructured.U
 		}
 	}
 	if !standby {
-		return "no ready standby is on a schedulable node; after a switchover off a cordoned node this lasts until that node is uncordoned"
+		return "no ready standby is on a schedulable node (a standby on a cordoned or draining node doesn't count)"
 	}
 	return ""
 }

@@ -109,7 +109,7 @@ func TestCNPGHAPrimaryBudgetProtection(t *testing.T) {
 		{"healthy HA", 2, nil, "expected", ""},
 		{"single instance", 1, nil, "singleInstance", ""},
 		{"primary node cordoned", 2, func(f *k8s.CNPGPDBTestFixture) { f.Nodes["node-1"].Spec.Unschedulable = true }, "blocking", "the primary's node is cordoned, draining or not ready"},
-		{"standby left on a cordoned node", 2, func(f *k8s.CNPGPDBTestFixture) { f.Nodes["node-2"].Spec.Unschedulable = true }, "blocking", "until that node is uncordoned"},
+		{"standby left on a cordoned node", 2, func(f *k8s.CNPGPDBTestFixture) { f.Nodes["node-2"].Spec.Unschedulable = true }, "blocking", "on a cordoned or draining node doesn't count"},
 		{"a Node missing from the cache leaves it unknown", 2, func(f *k8s.CNPGPDBTestFixture) { delete(f.Nodes, "node-2") }, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
