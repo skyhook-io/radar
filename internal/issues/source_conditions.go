@@ -164,6 +164,10 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 				out = append(out, StrimziKafkaIssues(gvr, u)...)
 				continue
 			}
+			if gvr.Group == VolumeSnapshotGroup && kind == "VolumeSnapshot" {
+				out = append(out, VolumeSnapshotIssues(gvr, u)...)
+				continue
+			}
 			if ownedSubjects[resourceKey(gvr.Group, kind, u.GetNamespace(), u.GetName())] {
 				continue
 			}
@@ -176,7 +180,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			// silent ON PURPOSE — because the object is mid-operation and its
 			// False Ready is expected — has to say so explicitly, or the noise
 			// it just suppressed comes straight back through the generic path.
-			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) {
+			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) || agentSandboxSuppressesGenericConditions(gvr.Group, kind, u) {
 				continue
 			}
 			condTypes := conditions.DefaultFalseConditionTypes
@@ -286,6 +290,12 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 		}
 	case "postgresql.cnpg.io":
 		return detectCNPGIssues(gvr, kind, u)
+	case agentSandboxGroup:
+		return detectSandboxSuspensionBlocked(gvr, kind, u)
+	case substrateGroup:
+		if kind == "WorkerPool" {
+			return detectWorkerPoolIssues(gvr, kind, u)
+		}
 	}
 	return nil
 }

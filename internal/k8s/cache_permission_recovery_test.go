@@ -9,6 +9,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
@@ -246,4 +247,26 @@ func bootstrapResult(ctx context.Context, check func(context.Context, bool) *Per
 		return permissionProbe{result: check(ctx, retry)}
 	})
 	return probe.result, err
+}
+
+// A context switch installs the new client before it bumps the generation, so
+// a probe must read the generation before the client. Otherwise a probe can
+// pick the previous cluster's client, read the bumped generation, and publish
+// the previous cluster's access as the new one's.
+func TestProbeReadsClientAfterGeneration(t *testing.T) {
+	InvalidateResourcePermissionsCache()
+	t.Cleanup(InvalidateResourcePermissionsCache)
+	prevClient := SetTestClient(kubernetes.NewForConfigOrDie(&rest.Config{Host: "http://127.0.0.1:1"}))
+	t.Cleanup(func() { SetTestClient(prevClient) })
+	previousCluster := fakeDyn(t, func(schema.GroupVersionResource, string) bool { return true })
+
+	probe := probeResourcePermissions(context.Background(), false, func() dynamic.Interface {
+		// The switch lands here: the previous client was already picked, and
+		// the generation moves on.
+		InvalidateResourcePermissionsCache()
+		return previousCluster
+	})
+	if publishResourcePermissions(probe) || GetCachedPermissionResult() != nil {
+		t.Fatalf("the previous cluster's result was published under the new generation: %+v", GetCachedPermissionResult())
+	}
 }

@@ -107,6 +107,7 @@ func apiObject(t testing.TB, o ownershiptest.Object) (runtime.Object, bool) {
 			t.Fatal(err)
 		}
 		setMeta(t, obj, o)
+		ownershiptest.ApplyDeclarations(obj, o.Declares)
 		return obj, true
 	}
 	u := &unstructured.Unstructured{}
@@ -118,6 +119,7 @@ func apiObject(t testing.TB, o ownershiptest.Object) (runtime.Object, bool) {
 	case ownership.FluxHelmRelease, ownership.FluxKustomization:
 		renderFluxManager(u, o)
 	}
+	ownershiptest.ApplyDeclarations(u, o.Declares)
 	return u, false
 }
 

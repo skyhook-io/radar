@@ -1,12 +1,18 @@
 package configrefs
 
+import (
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
+)
+
 // Gateway API reference defaults: an omitted backendRef group/kind names a core
 // Service, an omitted parentRef group/kind names a Gateway, and an omitted
 // namespace is the route's own. An explicit group or kind always wins, so a
 // mesh parentRef to a Service or a backendRef to a same-named custom kind must
 // never be joined to a Gateway or core Service that happens to share the name.
 
-const gatewayAPIGroup = "gateway.networking.k8s.io"
+const GatewayAPIGroup = "gateway.networking.k8s.io"
 
 // GatewayBackendIsService reports whether a route backendRef names a core Service.
 func GatewayBackendIsService(ref map[string]any) bool {
@@ -19,7 +25,7 @@ func GatewayBackendIsService(ref map[string]any) bool {
 func GatewayParentIsGateway(ref map[string]any) bool {
 	group, hasGroup := ref["group"].(string)
 	kind, _ := ref["kind"].(string)
-	return (!hasGroup || group == gatewayAPIGroup) && (kind == "" || kind == "Gateway")
+	return (!hasGroup || group == GatewayAPIGroup) && (kind == "" || kind == "Gateway")
 }
 
 // GatewayRefNamespace returns the reference's namespace, defaulting to the route's.
@@ -87,7 +93,7 @@ func gatewayRefGroup(ref map[string]any) string {
 	if g, ok := ref["group"].(string); ok {
 		return g
 	}
-	return gatewayAPIGroup
+	return GatewayAPIGroup
 }
 
 // gatewayRefKind returns the parentRef's kind. Kind defaults to Gateway
@@ -133,4 +139,53 @@ func gatewayPortValue(v any) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// GatewayRouteKinds are the Gateway API route kinds.
+var GatewayRouteKinds = []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"}
+
+// GatewayRouteParents returns the Gateways a route's parentRefs attach it to,
+// in their namespaces.
+func GatewayRouteParents(route *unstructured.Unstructured) []PathRef {
+	parents, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+	var refs []PathRef
+	for _, p := range parents {
+		m, ok := p.(map[string]any)
+		name, _ := m["name"].(string)
+		if !ok || name == "" || !GatewayParentIsGateway(m) {
+			continue
+		}
+		refs = append(refs, PathRef{Ref: resourceid.Ref{Group: GatewayAPIGroup, Kind: "Gateway", Namespace: GatewayRefNamespace(m, route.GetNamespace()), Name: name}, Path: "spec.parentRefs[]"})
+	}
+	return refs
+}
+
+// GatewayRouteBackendServices returns the Services a route's rules send
+// traffic to, in their namespaces. A backend in another namespace is listed
+// whether or not a ReferenceGrant permits it.
+func GatewayRouteBackendServices(route *unstructured.Unstructured) []PathRef {
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	var refs []PathRef
+	for _, rule := range rules {
+		r, _ := rule.(map[string]any)
+		backends, _, _ := unstructured.NestedSlice(r, "backendRefs")
+		for _, b := range backends {
+			m, ok := b.(map[string]any)
+			name, _ := m["name"].(string)
+			if !ok || name == "" || !GatewayBackendIsService(m) {
+				continue
+			}
+			refs = append(refs, PathRef{Ref: resourceid.Ref{Kind: "Service", Namespace: GatewayRefNamespace(m, route.GetNamespace()), Name: name}, Path: "spec.rules[].backendRefs[]"})
+		}
+	}
+	return refs
+}
+
+// GatewayClassOf returns the GatewayClass a Gateway names.
+func GatewayClassOf(gateway *unstructured.Unstructured) (PathRef, bool) {
+	name, _, _ := unstructured.NestedString(gateway.Object, "spec", "gatewayClassName")
+	if name == "" {
+		return PathRef{}, false
+	}
+	return PathRef{Ref: resourceid.Ref{Group: GatewayAPIGroup, Kind: "GatewayClass", Name: name}, Path: "spec.gatewayClassName"}, true
 }

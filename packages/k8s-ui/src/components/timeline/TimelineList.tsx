@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import { memo, useState, useMemo, useEffect, useLayoutEffect, useCallback, useRef, type ReactNode } from 'react'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { PaneLoader } from '../ui/PaneLoader'
 import { Tooltip } from '../ui/Tooltip'
@@ -15,7 +15,10 @@ import {
   X,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { Virtuoso, type VirtuosoHandle, type ListItem, type SizeRange } from 'react-virtuoso'
+import { rowOffset } from './timeline-row-offset'
 import { Collapse, CollapseChevron } from '../ui/Collapse'
+import { DURATION_DISCLOSURE, prefersReducedMotion } from '../../utils/animation'
 import { DiffViewer, DiffBadge } from './DiffViewer'
 import { TimelineToolbar } from './TimelineToolbar'
 import {
@@ -105,6 +108,68 @@ export interface TimelineListProps {
   foldPerResource?: (event: TimelineEvent) => boolean
 }
 
+// Every row stays mounted in compact mode and at or below this many rows, so
+// browser find, select and copy, screen readers and focus see the whole list.
+// The compact embeds (workload, CNPG) have no search box of their own, so
+// browser find is their only text search; the full timeline has one.
+const FULL_MOUNT_MAX_ROWS = 300
+const FULL_MOUNT_VIEWPORT_PX = 10_000_000
+const WINDOWED_VIEWPORT_PX = 200
+// How long after the reader's input a correction waits; see lastInputAt.
+const INPUT_SETTLE_MS = 150
+// Only the first rows of an opening or closing fold are listed while it
+// animates; the rest join once it has opened and leave as it starts to close.
+// Virtuoso mounts as many rows as fit, rows collapsed to nothing would all fit
+// at once, and later rows shown at full height would sit in view ahead of the
+// reveal.
+const FOLD_REVEAL_ROWS = 20
+
+type AggregatedItem = {
+  type: 'single'
+  item: TimelineEvent
+} | {
+  type: 'aggregated'
+  first: TimelineEvent
+  last: TimelineEvent
+  count: number
+  reason: string
+} | {
+  type: 'folded'
+  // Stable across live updates, so an opened fold stays open as rows arrive.
+  key: string
+  latest: TimelineEvent
+  // Newest first.
+  others: TimelineEvent[]
+}
+
+// An open fold's children are rows of their own, so jump-to-time can reach
+// them and a large open fold mounts only what is near the viewport.
+type ListRow = {
+  type: 'header'
+  key: string
+  label: string
+  count: number
+} | {
+  type: 'activity'
+  key: string
+  item: AggregatedItem
+  eventId: string
+  fromMs: number
+  toMs: number
+  lastInGroup: boolean
+  foldRowsShown: boolean
+} | {
+  type: 'foldChild'
+  key: string
+  foldKey: string
+  event: TimelineEvent
+  eventId: string
+  fromMs: number
+  toMs: number
+  lastInFold: boolean
+  lastInGroup: boolean
+}
+
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: '5m', label: '5 min' },
   { value: '30m', label: '30 min' },
@@ -135,6 +200,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   const showDeleted = showDeletedProp ?? showDeletedInternal
   const setShowDeleted = onShowDeletedChange ?? setShowDeletedInternal
   const [expandedItem, setExpandedItem] = useState<string | null>(null)
+  const [openFolds, setOpenFolds] = useState<Set<string>>(() => new Set())
 
   // Clear every content filter at once. Each setter already resolves to the
   // controlled callback or the internal state setter, so this works in both
@@ -187,25 +253,6 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     [routineEvents, matchesListFilters],
   )
   const canShowRoutine = !showRoutine && routineCount > 0 && !!onShowRoutineChange
-
-  // Aggregated event group type
-  type AggregatedItem = {
-    type: 'single'
-    item: TimelineEvent
-  } | {
-    type: 'aggregated'
-    first: TimelineEvent
-    last: TimelineEvent
-    count: number
-    reason: string
-  } | {
-    type: 'folded'
-    // Stable across live updates, so an opened fold stays open as rows arrive.
-    key: string
-    latest: TimelineEvent
-    // Newest first.
-    others: TimelineEvent[]
-  }
 
   // Aggregate repeated events for the same resource with the same reason
   const aggregateEvents = (items: TimelineEvent[]): AggregatedItem[] => {
@@ -350,89 +397,422 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     return groups
   }, [filteredActivity, compact, foldPerResource, selectedEventId])
 
-  // Visible-window reporting: rows carry their time span in data attributes;
-  // on scroll (rAF-throttled) and whenever the row set changes, the span of
-  // rows intersecting the scrollport is reported so a host scrubber can show
-  // it as the lens. DOM-measured, so it runs only in effects/handlers —
-  // SSR-safe by construction.
-  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [foldMotion, setFoldMotion] = useState<ReadonlyMap<string, 'opening' | 'closing'>>(() => new Map())
+  const listRows = useMemo<ListRow[]>(() => {
+    const rows: ListRow[] = []
+    for (const group of groupedActivity) {
+      rows.push({ type: 'header', key: `header:${group.label}`, label: group.label, count: group.items.length })
+      group.items.forEach((item, index) => {
+        const lastInGroup = index === group.items.length - 1
+        if (item.type === 'folded') {
+          const key = `${group.label}:${item.key}`
+          const latestMs = new Date(item.latest.timestamp).getTime()
+          const children = !openFolds.has(key) ? []
+            : foldMotion.has(key) ? item.others.slice(0, FOLD_REVEAL_ROWS) : item.others
+          rows.push({
+            type: 'activity', key, item, eventId: item.latest.id,
+            // Open, the children report their own times; closed, the head
+            // stands for the whole fold.
+            fromMs: children.length > 0 ? latestMs : new Date(item.others[item.others.length - 1].timestamp).getTime(),
+            toMs: latestMs, lastInGroup, foldRowsShown: children.length > 0,
+          })
+          children.forEach((event, indexInFold) => {
+            const ms = new Date(event.timestamp).getTime()
+            rows.push({
+              type: 'foldChild', key: `${key}:${event.id}`, foldKey: key, event, eventId: event.id,
+              fromMs: ms, toMs: ms, lastInFold: indexInFold === children.length - 1, lastInGroup,
+            })
+          })
+          return
+        }
+        const first = item.type === 'aggregated' ? item.first : item.item
+        const last = item.type === 'aggregated' ? item.last : item.item
+        rows.push({
+          type: 'activity',
+          key: `${group.label}:${item.type === 'aggregated' ? `agg-${item.first.id}-${item.last.id}` : item.item.id}`,
+          item, eventId: first.id,
+          fromMs: new Date(first.timestamp).getTime(),
+          toMs: new Date(last.timestamp).getTime(),
+          lastInGroup, foldRowsShown: false,
+        })
+      })
+    }
+    return rows
+  }, [groupedActivity, openFolds, foldMotion])
+  // A row's identity across updates, independent of its index and time group:
+  // its oldest event, which newer arrivals joining the row don't change.
+  const anchorId = (row: ListRow) => row.type === 'header' ? row.key
+    : row.type === 'foldChild' ? `event:${row.eventId}`
+    : row.item.type === 'folded' ? `fold:${row.item.others[row.item.others.length - 1].id}`
+    : `event:${row.eventId}`
+
+  useEffect(() => {
+    setOpenFolds((previous) => {
+      if (previous.size === 0) return previous
+      const keys = new Set(listRows.map((row) => row.key))
+      const next = new Set([...previous].filter((key) => keys.has(key)))
+      return next.size === previous.size ? previous : next
+    })
+  }, [listRows])
+
+  // Closing keeps the first rows mounted while they animate shut, then drops
+  // them; reduced motion skips straight to the end state.
+  const foldTimers = useRef(new Map<string, number>())
+  useEffect(() => {
+    const timers = foldTimers.current
+    return () => timers.forEach((timer) => window.clearTimeout(timer))
+  }, [])
+  const setFoldPhase = useCallback((key: string, phase: 'opening' | 'closing' | null) => {
+    window.clearTimeout(foldTimers.current.get(key))
+    foldTimers.current.delete(key)
+    setFoldMotion((previous) => {
+      if (previous.get(key) === (phase ?? undefined)) return previous
+      const next = new Map(previous)
+      if (phase) next.set(key, phase)
+      else next.delete(key)
+      return next
+    })
+    if (!phase) return
+    foldTimers.current.set(key, window.setTimeout(() => {
+      foldTimers.current.delete(key)
+      setFoldMotion((previous) => {
+        const next = new Map(previous)
+        next.delete(key)
+        return next
+      })
+      if (phase === 'closing') setOpenFolds((previous) => {
+        const next = new Set(previous)
+        next.delete(key)
+        return next
+      })
+    }, DURATION_DISCLOSURE))
+  }, [])
+  const isFoldOpen = useCallback((key: string) => openFolds.has(key) && foldMotion.get(key) !== 'closing', [openFolds, foldMotion])
+  const toggleFold = useCallback((key: string) => {
+    const animate = !prefersReducedMotion()
+    if (isFoldOpen(key)) {
+      if (animate) {
+        setFoldPhase(key, 'closing')
+        return
+      }
+      setFoldPhase(key, null)
+      setOpenFolds((previous) => {
+        const next = new Set(previous)
+        next.delete(key)
+        return next
+      })
+      return
+    }
+    setOpenFolds((previous) => new Set(previous).add(key))
+    setFoldPhase(key, animate ? 'opening' : null)
+  }, [isFoldOpen, setFoldPhase])
+
+  // Only rows near the viewport are mounted, so the visible window reported to
+  // a host scrubber (its lens) comes from the rendered items' offsets and time
+  // spans, not from the DOM.
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
+  const [scroller, setScroller] = useState<HTMLElement | null>(null)
+  const renderedItems = useRef<ListItem<ListRow>[]>([])
+  const [listReady, setListReady] = useState(false)
+  // The reader's place: a row (by identity, not index), its offset from the
+  // top of the scrollport, and the scroll position it was taken at. Re-applied
+  // when rows are inserted above it or rows above it change height; Virtuoso
+  // turns off the browser's own scroll anchoring.
+  const anchor = useRef<{ id: string; delta: number; scrollTop: number } | null>(null)
+  const committedRows = useRef<ListRow[] | null>(null)
+  // When the reader last used the wheel, touch, a key or the pointer. WebKit
+  // animates a keyboard scroll and the position script reads stays put for its
+  // first frames, so a correction then looks safe and its scroll cancels the
+  // reader's. Corrections wait for a pause in input, then run if the reader
+  // hasn't scrolled meanwhile.
+  const lastInputAt = useRef(-Infinity)
+  const deferredHold = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const runDeferredHold = useRef<() => void>(() => {})
+  const handleScrollerRef = useCallback((element: HTMLElement | Window | null) => {
+    const next = element instanceof HTMLElement ? element : null
+    setScroller(next)
+    if (next) return
+    setListReady(false)
+    renderedItems.current = []
+    anchor.current = null
+  }, [])
   const visibleWindowRaf = useRef<number | null>(null)
+  // Set while the range is re-derived on leaving full-mount mode; the
+  // intermediate positions are not the reader's.
+  const rewindowing = useRef(false)
+  const scrolledToRef = useRef<number | null>(null)
+  const reportedWindow = useRef<{ callback: typeof onVisibleWindowChange; fromMs: number; toMs: number } | null>(null)
   const reportVisibleWindow = useCallback(() => {
-    const container = scrollRef.current
-    if (!container || !onVisibleWindowChange) return
-    const containerRect = container.getBoundingClientRect()
+    if (!onVisibleWindowChange || rewindowing.current) return
+    // Until a requested jump has landed, the rows on screen are not the ones
+    // the host asked to see.
+    if (scrollToMs != null && scrolledToRef.current !== scrollToMs && (isLoading || listRows.length > 0)) return
     let fromMs = Infinity
     let toMs = -Infinity
-    for (const row of container.querySelectorAll<HTMLElement>('[data-ts-from]')) {
-      const rect = row.getBoundingClientRect()
-      if (rect.bottom < containerRect.top || rect.top > containerRect.bottom) continue
-      const from = Number(row.dataset.tsFrom)
-      const to = Number(row.dataset.tsTo)
-      if (Number.isFinite(from) && from < fromMs) fromMs = from
-      if (Number.isFinite(to) && to > toMs) toMs = to
+    if (scroller && !isLoading && listRows.length > 0) {
+      const top = scroller.scrollTop
+      const bottom = top + scroller.clientHeight
+      // The rendered range includes overscan; only its intersection with the
+      // actual scrollport belongs in the host's lens.
+      for (const row of renderedItems.current) {
+        if (row.offset + row.size < top || row.offset > bottom) continue
+        const data = row.data
+        if (!data || data.type === 'header') continue
+        if (Number.isFinite(data.fromMs)) fromMs = Math.min(fromMs, data.fromMs)
+        if (Number.isFinite(data.toMs)) toMs = Math.max(toMs, data.toMs)
+      }
     }
+    const previous = reportedWindow.current
+    if (previous?.callback === onVisibleWindowChange && previous.fromMs === fromMs && previous.toMs === toMs) return
+    reportedWindow.current = { callback: onVisibleWindowChange, fromMs, toMs }
     onVisibleWindowChange(fromMs <= toMs ? { fromMs, toMs } : null)
-  }, [onVisibleWindowChange])
+  }, [onVisibleWindowChange, scroller, isLoading, listRows, scrollToMs])
+  const captureAnchor = useCallback(() => {
+    const rows = committedRows.current
+    if (!scroller || !rows) return
+    const top = scroller.scrollTop
+    for (const item of renderedItems.current) {
+      // Virtuoso reports the new rows before they are committed here; their
+      // offsets still describe the old layout.
+      if (rows[item.index] !== item.data || !item.data) return
+      if (item.size > 0 && item.offset + item.size > top) {
+        anchor.current = { id: anchorId(item.data), delta: item.offset - top, scrollTop: top }
+        return
+      }
+    }
+  }, [scroller])
+  // Put row `index` `delta` px from the top of the scrollport. A plain scroll to
+  // the offset Virtuoso holds for it: scrollToIndex keeps re-aiming at its
+  // target for up to a second while rows are measured, and the reader's own
+  // scroll doesn't cancel that, so it would pull them back. What measurement
+  // then moves, holdAnchor corrects until the reader scrolls.
+  const placeRow = useCallback((index: number, delta: number) => {
+    let ranges: SizeRange[] = []
+    virtuosoRef.current?.getState((state) => { ranges = state.ranges })
+    if (ranges.length === 0) return
+    virtuosoRef.current?.scrollTo({ top: rowOffset(ranges, index) - delta })
+  }, [])
+  // A re-measured row above the reader (a fold whose newest card got longer, a
+  // narrower window wrapping text) moves the anchor without any scroll, far
+  // enough to leave the rendered range. Only while the scroll position is the
+  // one the anchor was taken at: any scroll, the user's or a jump, re-captures.
+  const holdAnchor = useCallback(() => {
+    const place = anchor.current
+    const rows = committedRows.current
+    if (!place || !rows || !scroller) return false
+    const top = scroller.scrollTop
+    if (top <= 0 || top !== place.scrollTop) return false
+    const sinceInput = performance.now() - lastInputAt.current
+    if (sinceInput < INPUT_SETTLE_MS) {
+      if (deferredHold.current == null) {
+        deferredHold.current = setTimeout(() => {
+          deferredHold.current = null
+          runDeferredHold.current()
+        }, INPUT_SETTLE_MS - sinceInput)
+      }
+      return true
+    }
+    // Rows not yet committed here: the layout effect below handles that change.
+    if (renderedItems.current.some((rendered) => rows[rendered.index] !== rendered.data)) return true
+    const item = renderedItems.current.find((rendered) => rendered.data && anchorId(rendered.data) === place.id)
+    const index = item ? item.index : rows.findIndex((row) => anchorId(row) === place.id)
+    if (index < 0) return false
+    if (!item) {
+      placeRow(index, place.delta)
+      anchor.current = { ...place, scrollTop: scroller.scrollTop }
+    } else if (Math.abs(item.offset - top - place.delta) >= 1) {
+      virtuosoRef.current?.scrollTo({ top: item.offset - place.delta })
+      anchor.current = { ...place, scrollTop: scroller.scrollTop }
+    }
+    return true
+  }, [scroller, placeRow])
+  // A focused card that scrolls out of the mounted range is removed from the
+  // DOM and focus falls to the body. Focus the same control in the card's new
+  // copy if there is one (it can be remounted at once), else the list. Checked
+  // a frame later: Chromium blurs the card before removing it, and the rows
+  // Virtuoso reports are committed after its callback.
+  const focusedInList = useRef<HTMLElement | null>(null)
+  const restoreFocusLater = useCallback(() => {
+    if (!focusedInList.current || !scroller) return
+    requestAnimationFrame(() => {
+      const focused = focusedInList.current
+      if (!focused || !scroller.isConnected) return
+      if (focused.isConnected) {
+        // Still in the DOM: focus left by the user's choice.
+        if (!scroller.contains(document.activeElement) || document.activeElement === scroller) focusedInList.current = null
+        return
+      }
+      focusedInList.current = null
+      if (document.activeElement !== document.body && document.activeElement) return
+      const card = focused.closest<HTMLElement>('[data-event-id]')
+      const position = card ? [...card.querySelectorAll('button')].indexOf(focused as HTMLButtonElement) : -1
+      const copy = card && [...scroller.querySelectorAll<HTMLElement>('[data-event-id]')].find((element) => element.dataset.eventId === card.dataset.eventId)
+      const replacement = position >= 0 ? copy?.querySelectorAll('button')[position] : undefined
+      ;(replacement ?? scroller).focus({ preventScroll: true })
+    })
+  }, [scroller])
+  useLayoutEffect(() => {
+    runDeferredHold.current = () => {
+      if (!holdAnchor()) captureAnchor()
+    }
+  }, [holdAnchor, captureAnchor])
+  useEffect(() => () => {
+    if (deferredHold.current != null) clearTimeout(deferredHold.current)
+    deferredHold.current = null
+  }, [scroller])
+  const handleItemsRendered = useCallback((items: ListItem<ListRow>[]) => {
+    renderedItems.current = items
+    setListReady(items.some((row) => row.size > 0))
+    if (rewindowing.current) return
+    if (!holdAnchor()) captureAnchor()
+    reportVisibleWindow()
+    restoreFocusLater()
+  }, [holdAnchor, captureAnchor, reportVisibleWindow, restoreFocusLater])
+  useEffect(() => {
+    if (!scroller) return
+    const onInput = () => { lastInputAt.current = performance.now() }
+    const inputs = ['wheel', 'touchstart', 'touchmove', 'keydown', 'pointerdown'] as const
+    for (const type of inputs) scroller.addEventListener(type, onInput, { capture: true, passive: true })
+    return () => {
+      for (const type of inputs) scroller.removeEventListener(type, onInput, { capture: true })
+    }
+  }, [scroller])
+  useEffect(() => {
+    if (!scroller) return
+    const onFocusIn = (event: FocusEvent) => {
+      focusedInList.current = event.target instanceof HTMLElement && event.target !== scroller ? event.target : null
+    }
+    const onFocusOut = (event: FocusEvent) => {
+      if (!scroller.contains(event.relatedTarget as Node | null)) restoreFocusLater()
+    }
+    scroller.addEventListener('focusin', onFocusIn)
+    scroller.addEventListener('focusout', onFocusOut)
+    return () => {
+      scroller.removeEventListener('focusin', onFocusIn)
+      scroller.removeEventListener('focusout', onFocusOut)
+    }
+  }, [scroller, restoreFocusLater])
   const handleListScroll = useCallback(() => {
-    if (visibleWindowRaf.current != null) return
+    if (rewindowing.current) return
+    // The event for a position this list set itself arrives late; only a real
+    // move takes a new anchor, else a stale layout could replace the reader's.
+    if (!scroller || scroller.scrollTop !== anchor.current?.scrollTop) captureAnchor()
+    if (!onVisibleWindowChange || visibleWindowRaf.current != null) return
     visibleWindowRaf.current = requestAnimationFrame(() => {
       visibleWindowRaf.current = null
       reportVisibleWindow()
     })
-  }, [reportVisibleWindow])
+  }, [captureAnchor, onVisibleWindowChange, reportVisibleWindow, scroller])
   useEffect(() => {
     reportVisibleWindow()
     return () => {
-      if (visibleWindowRaf.current != null) cancelAnimationFrame(visibleWindowRaf.current)
+      if (visibleWindowRaf.current != null) {
+        cancelAnimationFrame(visibleWindowRaf.current)
+        visibleWindowRaf.current = null
+      }
     }
-  }, [reportVisibleWindow, groupedActivity])
+  }, [reportVisibleWindow])
+
+  // Rows inserted above the reader (new events in a newest-first list, a new
+  // group header, an aggregate moving to the top) would otherwise slide the
+  // text being read down out of view. At the very top, new events simply
+  // appear above.
+  useLayoutEffect(() => {
+    const previous = committedRows.current
+    committedRows.current = listRows
+    const place = anchor.current
+    if (!previous || previous === listRows || !place || !scroller || scroller.scrollTop <= 0) return
+    const index = listRows.findIndex((row) => anchorId(row) === place.id)
+    if (index < 0 || index === previous.findIndex((row) => anchorId(row) === place.id)) return
+    // A scroll whose event hasn't arrived yet is the reader's; keep it.
+    const delta = place.delta - (scroller.scrollTop - place.scrollTop)
+    placeRow(index, delta)
+    anchor.current = { id: place.id, delta, scrollTop: scroller.scrollTop }
+  }, [listRows, scroller, placeRow])
 
   // Carry the swimlane's view window into the list: once rows exist, scroll so
   // the row nearest `scrollToMs` sits at the top. Applied once per `scrollToMs`
   // (a fresh view switch), so it never fights the user's own scrolling after.
-  const scrolledToRef = useRef<number | null>(null)
   useEffect(() => {
-    if (scrollToMs == null || scrolledToRef.current === scrollToMs) return
-    const container = scrollRef.current
-    if (!container) return
-    const rows = container.querySelectorAll<HTMLElement>('[data-ts-from]')
-    if (rows.length === 0) return
-    let best: HTMLElement | null = null
+    // While a fold opens only its first rows are listed; the target may be later.
+    if (isLoading || !scroller || !listReady || scrollToMs == null || scrolledToRef.current === scrollToMs || foldMotion.size > 0) return
+    let bestIndex = -1
     let bestDelta = Infinity
-    for (const row of rows) {
-      const delta = Math.abs(Number(row.dataset.tsFrom) - scrollToMs)
-      if (delta < bestDelta) { bestDelta = delta; best = row }
-    }
-    if (best) {
-      container.scrollTop += best.getBoundingClientRect().top - container.getBoundingClientRect().top
+    listRows.forEach((row, index) => {
+      if (row.type === 'header') return
+      const delta = Math.abs(row.fromMs - scrollToMs)
+      if (delta < bestDelta) { bestDelta = delta; bestIndex = index }
+    })
+    if (bestIndex >= 0) {
+      const before = scroller.scrollTop
       scrolledToRef.current = scrollToMs
-      // A jump that lands where the list already sits emits no scroll event, so
-      // the host's lens would keep showing the pre-jump window without this.
-      reportVisibleWindow()
+      virtuosoRef.current?.scrollToIndex({ index: bestIndex, align: 'start' })
+      // A jump that lands where the list already sits emits no scroll event or
+      // range change, so report here. After a real jump the rendered items are
+      // still the old ones until Virtuoso re-renders, which reports by itself.
+      if (scroller.scrollTop === before) reportVisibleWindow()
     }
-  }, [scrollToMs, groupedActivity, reportVisibleWindow])
+  }, [scrollToMs, listRows, listReady, scroller, isLoading, reportVisibleWindow, foldMotion])
 
   // Bidirectional sync: when the selection changes externally (a swimlane marker
-  // click), scroll the matching card into view. Re-runs on groupedActivity so a
-  // selection made before the rows exist still lands once they render.
+  // click), scroll the matching card into view, mounted or not. Re-runs on the
+  // row set so a selection made before the rows exist still lands. Smooth only
+  // for a card already rendered: a smooth scroll to a distant one crawls
+  // through rows Virtuoso has yet to measure.
   useEffect(() => {
-    if (!selectedEventId) return
-    const container = scrollRef.current
-    const card = container?.querySelector<HTMLElement>(`[data-event-id="${CSS.escape(selectedEventId)}"]`)
-    card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [selectedEventId, groupedActivity])
+    if (isLoading || !scroller || !listReady || !selectedEventId) return
+    const index = listRows.findIndex((row) => row.type !== 'header' && row.eventId === selectedEventId)
+    if (index < 0) return
+    const rendered = renderedItems.current
+    const nearby = rendered.length > 0 && index >= rendered[0].index && index <= rendered[rendered.length - 1].index
+    virtuosoRef.current?.scrollToIndex({ index, align: 'center', behavior: nearby && !prefersReducedMotion() ? 'smooth' : 'auto' })
+  }, [selectedEventId, listRows, listReady, scroller, isLoading])
 
-  const renderActivityCard = (item: TimelineEvent) => (
-    <ActivityCard
-      item={item}
-      expanded={expandedItem === item.id}
-      onToggle={() => setExpandedItem(expandedItem === item.id ? null : item.id)}
-      onResourceClick={onResourceClick}
-      compact={compact}
-      selected={selectedEventId === item.id}
-      onSelect={() => onSelectEvent?.(selectedEventId === item.id ? null : item.id)}
-    />
-  )
+  const mountAllRows = compact || listRows.length <= FULL_MOUNT_MAX_ROWS
+  // Virtuoso only re-derives its rendered range when the viewport nears that
+  // range's edge, so leaving full-mount mode while scrolled would keep every row
+  // mounted. A scroll to the top and straight back, in one task so nothing in
+  // between paints, makes it window around the reader again. (Remounting it
+  // instead blanks the list for four frames.)
+  const wasMountAll = useRef(mountAllRows)
+  useLayoutEffect(() => {
+    const was = wasMountAll.current
+    wasMountAll.current = mountAllRows
+    if (!was || mountAllRows || !scroller) return
+    // After the commit, once Virtuoso has rendered the new rows.
+    queueMicrotask(() => {
+      const top = scroller.scrollTop
+      if (top <= 0 || !scroller.isConnected) return
+      rewindowing.current = true
+      scroller.scrollTop = 0
+      scroller.dispatchEvent(new Event('scroll'))
+      scroller.scrollTop = top
+      scroller.dispatchEvent(new Event('scroll'))
+      rewindowing.current = false
+      if (!holdAnchor()) captureAnchor()
+      reportVisibleWindow()
+      restoreFocusLater()
+    })
+  }, [mountAllRows, scroller, holdAnchor, captureAnchor, reportVisibleWindow, restoreFocusLater])
+
+  const listComponents = useMemo(() => ({
+    Footer: () => (
+      <div className="px-4 pb-4">
+        {truncatedAt != null && (isTruncated ?? events.length >= truncatedAt) && (
+          <div className="flex items-center justify-center gap-2 pt-10 pb-4 text-sm text-theme-text-tertiary">
+            <Clock className="h-4 w-4 opacity-50" />
+            <span>{truncationMessage ?? `Showing the newest ${truncatedAt.toLocaleString()} events in this range — narrow the query to see older ones`}</span>
+          </div>
+        )}
+      </div>
+    ),
+  }), [truncatedAt, isTruncated, events.length, truncationMessage])
+
+  const toggleExpanded = useCallback((id: string) => setExpandedItem((previous) => (previous === id ? null : id)), [])
+  // Rows are memoized on this, so Virtuoso's measuring re-renders skip the cards.
+  const rowContext = useMemo<RowContext>(() => ({
+    expandedItem, toggleExpanded, onResourceClick, compact, selectedEventId, onSelectEvent, foldMotion, isFoldOpen, toggleFold,
+  }), [expandedItem, toggleExpanded, onResourceClick, compact, selectedEventId, onSelectEvent, foldMotion, isFoldOpen, toggleFold])
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -465,7 +845,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       )}
 
       {/* Timeline content */}
-      <div className="flex-1 overflow-auto" ref={scrollRef} onScroll={onVisibleWindowChange ? handleListScroll : undefined}>
+      <div className="flex-1 min-h-0 overflow-auto">
         {isLoading ? (
           <PaneLoader label="Loading timeline…" className="h-full" />
         ) : filteredActivity.length === 0 ? (
@@ -536,85 +916,109 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
             })()}
           </div>
         ) : (
-          <div className="p-4 space-y-6">
-            {groupedActivity.map((group) => (
-              <div key={group.label}>
-                {/* Time period header */}
-                <div className="flex items-center gap-2 mb-3">
-                  <Clock className="w-4 h-4 text-theme-text-tertiary" />
-                  <span className="text-sm font-medium text-theme-text-secondary">{group.label}</span>
-                  <span className="text-xs text-theme-text-disabled">
-                    ({pluralize(group.items.length, 'item')})
-                  </span>
-                </div>
-
-                {/* Activity list */}
-                <div className="space-y-2 ml-6 border-l-2 border-theme-border pl-4">
-                  {group.items.map((aggItem) => (
-                    aggItem.type === 'folded' ? (
-                      <div
-                        key={aggItem.key}
-                        data-event-id={aggItem.latest.id}
-                        data-ts-from={new Date(aggItem.others[aggItem.others.length - 1].timestamp).getTime()}
-                        data-ts-to={new Date(aggItem.latest.timestamp).getTime()}
-                      >
-                        {renderActivityCard(aggItem.latest)}
-                        <FoldedProblems latest={aggItem.latest} others={aggItem.others} renderCard={renderActivityCard} />
-                      </div>
-                    ) : aggItem.type === 'aggregated' ? (
-                      <div
-                        key={`agg-${aggItem.first.id}-${aggItem.last.id}`}
-                        data-event-id={aggItem.first.id}
-                        data-ts-from={new Date(aggItem.first.timestamp).getTime()}
-                        data-ts-to={new Date(aggItem.last.timestamp).getTime()}
-                      >
-                        <AggregatedActivityCard
-                          first={aggItem.first}
-                          last={aggItem.last}
-                          count={aggItem.count}
-                          reason={aggItem.reason}
-                          expanded={expandedItem === aggItem.first.id}
-                          onToggle={() => setExpandedItem(expandedItem === aggItem.first.id ? null : aggItem.first.id)}
-                          onResourceClick={onResourceClick}
-                          compact={compact}
-                          selected={selectedEventId === aggItem.first.id}
-                          onSelect={() => onSelectEvent?.(selectedEventId === aggItem.first.id ? null : aggItem.first.id)}
-                        />
-                      </div>
-                    ) : (
-                      <div
-                        key={aggItem.item.id}
-                        data-event-id={aggItem.item.id}
-                        data-ts-from={new Date(aggItem.item.timestamp).getTime()}
-                        data-ts-to={new Date(aggItem.item.timestamp).getTime()}
-                      >
-                        <ActivityCard
-                          item={aggItem.item}
-                          expanded={expandedItem === aggItem.item.id}
-                          onToggle={() => setExpandedItem(expandedItem === aggItem.item.id ? null : aggItem.item.id)}
-                          onResourceClick={onResourceClick}
-                          compact={compact}
-                          selected={selectedEventId === aggItem.item.id}
-                          onSelect={() => onSelectEvent?.(selectedEventId === aggItem.item.id ? null : aggItem.item.id)}
-                        />
-                      </div>
-                    )
-                  ))}
-                </div>
-              </div>
-            ))}
-            {truncatedAt != null && (isTruncated ?? events.length >= truncatedAt) && (
-              <div className="flex items-center justify-center gap-2 py-4 text-sm text-theme-text-tertiary">
-                <Clock className="h-4 w-4 opacity-50" />
-                <span>{truncationMessage ?? `Showing the newest ${truncatedAt.toLocaleString()} events in this range — narrow the query to see older ones`}</span>
-              </div>
-            )}
-          </div>
+          <Virtuoso
+            ref={virtuosoRef}
+            className="h-full w-full focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+            scrollerRef={handleScrollerRef}
+            onScroll={handleListScroll}
+            data={listRows}
+            computeItemKey={(_index, row) => row.key}
+            initialItemCount={mountAllRows ? listRows.length : 10}
+            increaseViewportBy={mountAllRows ? FULL_MOUNT_VIEWPORT_PX : WINDOWED_VIEWPORT_PX}
+            itemsRendered={handleItemsRendered}
+            components={listComponents}
+            itemContent={(index, row) => <TimelineRow row={row} first={index === 0} context={rowContext} />}
+          />
         )}
       </div>
     </div>
   )
 }
+
+interface RowContext {
+  expandedItem: string | null
+  toggleExpanded: (id: string) => void
+  onResourceClick?: NavigateToResource
+  compact: boolean
+  selectedEventId?: string | null
+  onSelectEvent?: (id: string | null) => void
+  foldMotion: ReadonlyMap<string, 'opening' | 'closing'>
+  isFoldOpen: (key: string) => boolean
+  toggleFold: (key: string) => void
+}
+
+const TimelineRow = memo(function TimelineRow({ row, first, context }: { row: ListRow; first: boolean; context: RowContext }) {
+  const { expandedItem, toggleExpanded, onResourceClick, compact, selectedEventId, onSelectEvent } = context
+  const card = (item: TimelineEvent) => (
+    <ActivityCard
+      item={item}
+      expanded={expandedItem === item.id}
+      onToggle={() => toggleExpanded(item.id)}
+      onResourceClick={onResourceClick}
+      compact={compact}
+      selected={selectedEventId === item.id}
+      onSelect={() => onSelectEvent?.(selectedEventId === item.id ? null : item.id)}
+    />
+  )
+  if (row.type === 'header') return (
+    <div className={clsx('px-4 pb-3', first ? 'pt-4' : 'pt-6')}>
+      <div className="flex items-center gap-2">
+        <Clock className="w-4 h-4 text-theme-text-tertiary" />
+        <span className="text-sm font-medium text-theme-text-secondary">{row.label}</span>
+        <span className="text-xs text-theme-text-disabled">({pluralize(row.count, 'item')})</span>
+      </div>
+    </div>
+  )
+  if (row.type === 'foldChild') return (
+    <div className="px-4">
+      {/* min-h-px: Virtuoso rejects zero-height rows, which a row collapsed mid-animation would be. */}
+      <div className={clsx('ml-6 min-h-px border-l-2 border-theme-border pl-4', row.lastInFold && !row.lastInGroup && 'pb-2')}>
+        <FoldReveal phase={context.foldMotion.get(row.foldKey)}>
+          <div className="pl-3">
+            <div className={clsx('border-l-2 border-theme-border pl-3', !row.lastInFold && 'pb-2')}>
+              <div data-event-id={row.eventId}>
+                {card(row.event)}
+              </div>
+            </div>
+          </div>
+        </FoldReveal>
+      </div>
+    </div>
+  )
+  const aggItem = row.item
+  return (
+    <div className="px-4">
+      <div className={clsx('ml-6 border-l-2 border-theme-border pl-4', !row.lastInGroup && !row.foldRowsShown && 'pb-2')}>
+        <div data-event-id={row.eventId}>
+          {aggItem.type === 'folded' ? (
+            <>
+              {card(aggItem.latest)}
+              <FoldedProblems
+                latest={aggItem.latest}
+                others={aggItem.others}
+                open={context.isFoldOpen(row.key)}
+                onToggle={() => context.toggleFold(row.key)}
+              />
+            </>
+          ) : aggItem.type === 'aggregated' ? (
+            <AggregatedActivityCard
+              first={aggItem.first}
+              last={aggItem.last}
+              count={aggItem.count}
+              reason={aggItem.reason}
+              expanded={expandedItem === aggItem.first.id}
+              onToggle={() => toggleExpanded(aggItem.first.id)}
+              onResourceClick={onResourceClick}
+              compact={compact}
+              selected={selectedEventId === aggItem.first.id}
+              onSelect={() => onSelectEvent?.(selectedEventId === aggItem.first.id ? null : aggItem.first.id)}
+            />
+          ) : card(aggItem.item)}
+        </div>
+      </div>
+    </div>
+  )
+})
 
 interface ActivityCardProps {
   item: TimelineEvent
@@ -847,29 +1251,42 @@ function describeFolded(others: TimelineEvent[]): string {
 }
 
 // The rest of a child resource's problems in one time group, behind one line
-// under its newest card, so a crash-looping pod doesn't fill the list.
-function FoldedProblems({ latest, others, renderCard }: { latest: TimelineEvent; others: TimelineEvent[]; renderCard: (item: TimelineEvent) => ReactNode }) {
-  const [open, setOpen] = useState(false)
+// under its newest card, so a crash-looping pod doesn't fill the list. The
+// cards themselves are list rows of their own, below this one.
+function FoldedProblems({ latest, others, open, onToggle }: { latest: TimelineEvent; others: TimelineEvent[]; open: boolean; onToggle: () => void }) {
   return (
     <div className="pl-3">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={onToggle}
         aria-expanded={open}
         className="flex items-center gap-1 rounded px-1 py-0.5 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
       >
         <CollapseChevron open={open} inheritColor className="h-3.5 w-3.5" />
         {others.length} more on this {latest.kind}: {describeFolded(others)}
       </button>
-      <Collapse open={open} unmountOnExit>
-        <div className="mt-2 space-y-2 border-l-2 border-theme-border pl-3">{others.map((e) => (
-          <div key={e.id} data-event-id={e.id} data-ts-from={new Date(e.timestamp).getTime()} data-ts-to={new Date(e.timestamp).getTime()}>
-            {renderCard(e)}
-          </div>
-        ))}</div>
+      <Collapse open={open}>
+        <div className="h-2" />
       </Collapse>
     </div>
   )
+}
+
+// One fold child's card, revealed on the disclosure clock when its fold opens
+// and closed on it when the fold closes. A row mounted later by scrolling is
+// shown at once. The first frame must render collapsed for the open to animate.
+function FoldReveal({ phase, children }: { phase: 'opening' | 'closing' | undefined; children: ReactNode }) {
+  const [revealed, setRevealed] = useState(phase !== 'opening')
+  useEffect(() => {
+    if (revealed) return
+    let inner = 0
+    const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setRevealed(true)) })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [revealed])
+  return <Collapse open={revealed && phase !== 'closing'}>{children}</Collapse>
 }
 
 // Component for aggregated repeated events (e.g., multiple OOMKilled)
