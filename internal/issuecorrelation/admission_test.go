@@ -51,3 +51,29 @@ func TestAdmissionChangeOrder_ConfigMapEditIsNotAWorkloadChange(t *testing.T) {
 		t.Fatalf("a ConfigMap edit decided the order: %q", sentence)
 	}
 }
+
+// Changes recorded in the same second can only be called a tie when both
+// sides are complete: an unseen newer change on either side would make even
+// that wrong, so incomplete evidence gets no sentence at all.
+func TestAdmissionChangeOrder_SameSecondNeedsCompleteEvidence(t *testing.T) {
+	at := time.Now().Truncate(time.Second).Add(-5 * time.Minute).UTC().Format(time.RFC3339)
+	policy := issuesapi.RecentChange{Kind: "ResourceQuota", Namespace: "shop", Name: "compute", ChangeType: "update", Timestamp: at}
+	subject := []issuesapi.RecentChange{{Kind: "Deployment", Namespace: "shop", Name: "web", ChangeType: "update", Timestamp: at}}
+	iss := &issuesapi.Issue{Kind: "Deployment", Name: "web"}
+	for _, tc := range []struct {
+		name                            string
+		policyComplete, subjectComplete bool
+		wantTie                         bool
+	}{
+		{"both complete", true, true, true},
+		{"policy incomplete", false, true, false},
+		{"subject incomplete", true, false, false},
+	} {
+		ev := &admissionBlockerEvidence{changes: []issuesapi.RecentChange{policy}, complete: tc.policyComplete,
+			unchanged: func(string) string { return "" }}
+		sentence, _ := admissionChangeOrder(iss, ev, subject, tc.subjectComplete, true, "in the last hour")
+		if gotTie := strings.Contains(sentence, "same second"); gotTie != tc.wantTie || (!tc.wantTie && sentence != "") {
+			t.Fatalf("%s: sentence %q", tc.name, sentence)
+		}
+	}
+}

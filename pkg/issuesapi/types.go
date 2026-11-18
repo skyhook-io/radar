@@ -781,12 +781,15 @@ type HistoryCoverage struct {
 // window.
 type NoRecentChangesMarker struct {
 	WindowSeconds int `json:"window_seconds"`
-	// Scope narrows what was checked. Absent means the issue's subject and
-	// its referenced ConfigMaps and Secrets (and for an admission rejection,
-	// the rejecting policy). NoRecentChangesScopeAdmissionPolicy means only
-	// the policy that rejected the admission request was checked: the
-	// subject's own kind (a Job, a bare ReplicaSet) isn't tracked. Set only
-	// on an issue correlated on request (?correlate=).
+	// Scope narrows what was checked. On an issue correlated on request
+	// (?correlate=), absent means the subject and its referenced ConfigMaps
+	// and Secrets were checked, and for an admission rejection the rejecting
+	// policy too; NoRecentChangesScopeAdmissionPolicy means only the policy
+	// that rejected the admission request was checked, since the subject's
+	// own kind (a Job, a bare ReplicaSet) isn't tracked. The MCP issues tool
+	// never sets Scope, and its marker can rest on the subject's side alone:
+	// it is also emitted when the admission policy's evidence was unavailable
+	// (unreadable, unidentified or not fully collected).
 	Scope string `json:"scope,omitempty"`
 }
 

@@ -188,11 +188,13 @@ export interface IssueConditionalCleanup {
  *  window_seconds so a change just outside it can't be misread as absent. */
 export interface IssueNoRecentChanges {
   window_seconds: number;
-  /** Absent: the subject and its referenced ConfigMaps and Secrets (and the
-   *  rejecting policy of an admission issue) were checked. 'admission_policy':
-   *  only the policy that rejected the admission request was checked, since
-   *  the subject's own kind (a Job, a bare ReplicaSet) isn't tracked. Set only
-   *  with ?correlate=. */
+  /** With ?correlate=: absent means the subject and its referenced
+   *  ConfigMaps and Secrets were checked, and for an admission issue the
+   *  rejecting policy too; 'admission_policy' means only the policy that
+   *  rejected the admission request was checked, since the subject's own kind
+   *  (a Job, a bare ReplicaSet) isn't tracked. The MCP issues tool never sets
+   *  scope, and its marker can rest on the subject's side alone, including
+   *  when the admission policy's evidence was unavailable. */
   scope?: 'admission_policy';
 }
 

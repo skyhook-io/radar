@@ -329,6 +329,11 @@ func admissionChangeOrder(iss *issuesapi.Issue, ev *admissionBlockerEvidence, su
 		// there would reverse it.
 		policy := ev.changes[0]
 		if changeTime(policy).Equal(changeTime(*newestSubject)) {
+			// An unseen newer change on either side would make even "they
+			// tie" wrong, so incomplete evidence gets no sentence.
+			if !ev.complete || !subjectComplete {
+				return "", false
+			}
 			// Change times are Radar's whole-second receipt times.
 			return fmt.Sprintf("%s and %s: Radar recorded both in the same second, so it can't tell which changed last.", describeChange(policy), describeChange(*newestSubject)), false
 		}

@@ -964,12 +964,10 @@ func TestCorrelate_KindWatchedAfterWindowStart(t *testing.T) {
 	})
 }
 
-// A workload's sources are resolved once, and only the ones checked are
-// read: a source that isn't in the checked list (as one added to the
-// template after the check would be) is never queried, so neither its rows
-// nor its fetch saturation can reach the answer, and a source whose kind was
-// never checked fails closed.
-func TestCorrelate_SourcesAreResolvedOnce(t *testing.T) {
+// The read helper queries only the references it is given, and the
+// engine's source filter fails closed for a kind it never checked. The
+// caller-level race is TestCorrelate_RolloutTargetGainsSourceDuringRead.
+func TestRecentForWorkloadSourceRefsAndSourceFilter(t *testing.T) {
 	initCache(t, webDeployment())
 	store := initStore(t)
 	for i := range meaningfulchanges.NamedFetchBound + 1 {
@@ -1048,5 +1046,142 @@ func TestCorrelate_RetentionThatEmptiedTheStore(t *testing.T) {
 	if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete ||
 		!slices.Contains(got.History.Reasons, issuesapi.HistoryEventsEvicted) {
 		t.Fatalf("emptied store: no_changes=%v unknown=%+v history=%+v", got.NoChanges, got.Unknown, got.History)
+	}
+}
+
+// initDeferredCache starts a typed cache whose deferred informers start
+// only after the critical ones synced, as Radar's own cache does, and waits
+// for them to sync. It returns the earliest time they could have started.
+func initDeferredCache(t *testing.T, deferred []string, objs ...runtime.Object) time.Time {
+	t.Helper()
+	types := map[string]bool{k8score.Deployments: true, k8score.ConfigMaps: true, k8score.Secrets: true, k8score.ResourceQuotas: true}
+	deferredTypes := map[string]bool{}
+	for _, k := range deferred {
+		deferredTypes[k] = true
+	}
+	before := time.Now()
+	if err := k8s.InitTestResourceCacheFromConfig(k8score.CacheConfig{
+		Client: k8sfake.NewSimpleClientset(objs...), ResourceTypes: types, DeferredTypes: deferredTypes,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	for k := range types {
+		waitSynced(t, k)
+	}
+	return before
+}
+
+// A deferred typed informer starts after the store began recording, so a
+// window that starts before its watch began can't claim nothing changed on
+// that kind: a referenced ConfigMap, or the ResourceQuota that rejected the
+// workload.
+func TestCorrelate_DeferredWatchStartedAfterWindowStart(t *testing.T) {
+	firstSeen := time.Now().Add(-10 * time.Minute)
+
+	t.Run("referenced ConfigMap", func(t *testing.T) {
+		started := initDeferredCache(t, []string{k8score.ConfigMaps, k8score.Secrets}, webDeployment())
+		initStore(t)
+		iss := webIssue(firstSeen)
+		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete ||
+			!slices.Contains(got.History.Reasons, issuesapi.HistoryObservationStartedLate) || got.History.CompleteSince.Before(started.Truncate(time.Second)) {
+			t.Fatalf("deferred ConfigMap watch: no_changes=%v unknown=%+v history=%+v", got.NoChanges, got.Unknown, got.History)
+		}
+	})
+
+	t.Run("rejecting ResourceQuota", func(t *testing.T) {
+		initDeferredCache(t, []string{k8score.ResourceQuotas}, webDeployment(), &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop"}})
+		store := initStore(t)
+		appendChange(t, store, timeline.TimelineEvent{ID: "quota", Timestamp: time.Now().Add(-3 * time.Minute), Kind: "ResourceQuota", APIVersion: "v1",
+			Namespace: "shop", Name: "compute", EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.hard.pods", OldValue: "4", NewValue: "3"}}}})
+		iss := webIssue(firstSeen)
+		iss.Category = issuesapi.CategoryQuotaExceeded
+		iss.Message = `pod creation blocked: pods "web-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=3, limited: pods=3`
+		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		if strings.Contains(got.Timing.TimingSummary, "changed last") || got.NoChanges ||
+			got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
+			t.Fatalf("deferred quota watch: timing=%q unknown=%+v", got.Timing.TimingSummary, got.Unknown)
+		}
+	})
+}
+
+// A Rollout's workloadRef target gains a Secret reference after the engine
+// checked the sources it found, while the read is still to come: the Secret
+// is never queried, so neither its rows nor its fetch saturation reach the
+// answer.
+func TestCorrelate_RolloutTargetGainsSourceDuringRead(t *testing.T) {
+	ctx := context.Background()
+	target := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "shop", CreationTimestamp: metav1.NewTime(time.Now().Add(-24 * time.Hour))},
+		Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			Volumes: []corev1.Volume{{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "api-config"}}}}},
+			Containers: []corev1.Container{{Name: "api", Image: "api:1"}},
+		}}},
+	}
+	client := k8sfake.NewSimpleClientset(target)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	rollout := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout",
+		"metadata": map[string]any{"name": "roll", "namespace": "shop"},
+		"spec":     map[string]any{"workloadRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "api"}}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"}, rollout)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Rollout", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil || !k8s.GetDynamicResourceCache().WaitForSync(gvr, 5*time.Second) {
+		t.Fatalf("watch rollouts: %v", err)
+	}
+	store := initStore(t)
+	for i := range meaningfulchanges.NamedFetchBound + 1 {
+		appendChange(t, store, specUpdate("Secret", "api-creds", time.Now().Add(-time.Duration(i+1)*time.Second), fmt.Sprint(i)))
+	}
+
+	// The template gains the Secret once the engine has checked the
+	// ConfigMap, the last source it found, and before it reads anything.
+	addSecret := func() {
+		updated := target.DeepCopy()
+		updated.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "TOKEN", ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "api-creds"}, Key: "token"}}}}
+		if _, err := client.AppsV1().Deployments("shop").Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if d, err := k8s.GetResourceCache().Deployments().Deployments("shop").Get("api"); err == nil && len(d.Spec.Template.Spec.Containers[0].Env) > 0 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the cache never saw the new Secret reference")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	access := Access{Check: func(kind, _, _ string) Decision {
+		if kind == "ConfigMap" {
+			addSecret()
+		}
+		return Allowed
+	}}
+	iss := issuesapi.Issue{ID: "roll", Severity: issuesapi.SeverityCritical, Category: issuesapi.CategoryCrashLoop,
+		Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: "roll", FirstSeen: time.Now().Add(-10 * time.Minute)}
+	lookback := Options{Window: Window{From: time.Now().Add(-time.Hour), To: time.Now(), OpenEnded: true}, MinWindow: 5 * time.Minute}
+	got := Correlate(ctx, iss, lookback, access)
+	if got.FetchSaturated {
+		t.Fatal("the Secret added after the check was read: its saturation reached the answer")
+	}
+	for _, c := range got.Changes {
+		if c.Kind == "Secret" {
+			t.Fatalf("the Secret added after the check was read: %+v", c)
+		}
+	}
+	if d, _ := k8s.GetResourceCache().Deployments().Deployments("shop").Get("api"); len(d.Spec.Template.Spec.Containers[0].Env) == 0 {
+		t.Fatal("the race wasn't set up: the template never gained the Secret")
 	}
 }

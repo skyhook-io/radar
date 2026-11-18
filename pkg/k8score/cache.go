@@ -59,6 +59,9 @@ type ResourceCache struct {
 	// empty list must ask this rather than read the flag. Also backs
 	// KindReadiness and GetSyncSnapshot for the same reason.
 	informerHasSynced []func() bool
+	// informerStartedAt is when each informer actually started watching
+	// (after any staggered or debug delay), keyed like informerStatuses.
+	informerStartedAt map[string]time.Time
 	informerMu        sync.RWMutex
 	promotedKinds     []string // set when SyncTimeout fires; empty on normal sync
 	syncStartTime     time.Time
@@ -618,6 +621,14 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			run = inf.Run
 		}
 
+		// Record when the watch really starts: deferred informers start only
+		// after the critical ones sync, well after Radar began recording.
+		started := run
+		startedKey := s.key
+		run = func(stopCh <-chan struct{}) {
+			rc.markInformerStarted(startedKey)
+			started(stopCh)
+		}
 		if delay := cfg.DebugSyncDelays[s.key]; delay > 0 {
 			inner := run
 			run = func(stopCh <-chan struct{}) {
@@ -1690,6 +1701,42 @@ func (rc *ResourceCache) DeferredDone() <-chan struct{} {
 	rc.deferredMu.RLock()
 	defer rc.deferredMu.RUnlock()
 	return rc.deferredDone
+}
+
+func (rc *ResourceCache) markInformerStarted(key string) {
+	rc.informerMu.Lock()
+	defer rc.informerMu.Unlock()
+	if rc.informerStartedAt == nil {
+		rc.informerStartedAt = map[string]time.Time{}
+	}
+	rc.informerStartedAt[key] = time.Now()
+}
+
+// InformerWatchedSince returns when this cache started the informer for key,
+// and whether it is a deferred informer (started only after the critical
+// ones synced). Every change after since was delivered. ok is false when the
+// kind isn't watched, its informer hasn't started, or it hasn't synced.
+func (rc *ResourceCache) InformerWatchedSince(key string) (since time.Time, deferred, ok bool) {
+	if rc == nil {
+		return time.Time{}, false, false
+	}
+	synced, known := rc.InformerSynced(key)
+	if !known || !synced {
+		return time.Time{}, false, false
+	}
+	rc.informerMu.RLock()
+	defer rc.informerMu.RUnlock()
+	since, started := rc.informerStartedAt[key]
+	if !started {
+		return time.Time{}, false, false
+	}
+	for _, status := range rc.informerStatuses {
+		if status.Key == key {
+			deferred = status.Deferred
+			break
+		}
+	}
+	return since, deferred, true
 }
 
 // InformerSynced reports one informer's initial-sync state. `known` is false
