@@ -199,10 +199,10 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 			routes := relations.NewView(s, traverse).WithLimit(0).Referrers(composition.backends, svc, nil)
 			routes.Coverage.Total = 0
 			n.cover(composition.parents.Name, routes.Coverage)
+			n.extras.cover("Entrypoints", routes.Coverage)
 			for _, route := range routes.Referrers {
 				parents := relations.NewView(s, intermediateAccess{Access: emit, ref: route.Ref, traverse: traverse}).References(composition.parents, route.Ref, nil)
 				n.cover(composition.parents.Name, parents.Coverage)
-				n.extras.cover("Entrypoints", routes.Coverage)
 				n.extras.cover("Entrypoints", parents.Coverage)
 				for _, parent := range parents.Declared {
 					if parent.State == relations.TargetPresent {

@@ -312,3 +312,22 @@ func TestRelationsContextReferencedByCoverageIsItsOwnEvidence(t *testing.T) {
 		}
 	}
 }
+
+// A Service no route reaches still says when the routes Radar searched were
+// incomplete: a route store still loading in a namespace the caller can't see
+// leaves its entrypoints unknown, not only withheld.
+func TestRelationsContextEntrypointsKeepTheRouteGapWithoutRoutes(t *testing.T) {
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}}, "", "Service")
+	route := resourceid.GroupKind{Group: "gateway.networking.k8s.io", Kind: "HTTPRoute"}
+	gap := ownership.Gap{Kind: route, Namespace: "other", Reason: readreason.KindSyncPending}
+	s := newProjectionSession(t, svc)
+	s.gaps = map[resourceid.GroupKind]ownership.Gap{route: gap}
+	emit := projectionAccess{namespaces: []string{"shop"}}
+	rel, extras := RelationsContextAnswer(s, emit, ownership.Unrestricted(), ownership.NewView(s, emit), projectionRef(svc), svc, nil, nil)
+	if len(rel.Routes)+len(rel.Gateways) != 0 {
+		t.Fatalf("no route reaches the Service: %+v", rel)
+	}
+	if !slices.Contains(extras.Fields["Entrypoints"].NotChecked, gap) {
+		t.Fatalf("entrypoints lost the route store's gap: %+v", extras.Fields)
+	}
+}
