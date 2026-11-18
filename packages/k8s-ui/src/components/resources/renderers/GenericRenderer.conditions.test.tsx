@@ -49,6 +49,18 @@ describe('genericConditionTone', () => {
     expect(genericConditionTone(unrequested, stoppedReady)).toBe('fail')
   })
 
+  it('reads an Agent Sandbox’s Suspended as its lifecycle state, a refused suspension as a problem', () => {
+    const sandbox = { apiVersion: 'agents.x-k8s.io/v1beta1', kind: 'Sandbox', metadata: { name: 'agent' } }
+    expect(genericConditionTone(sandbox, { type: 'Suspended', status: 'False', reason: 'NotSuspended' })).toBe('neutral')
+    expect(genericConditionTone(sandbox, { type: 'Suspended', status: 'True', reason: 'Suspended' })).toBe('neutral')
+    expect(genericConditionTone(sandbox, { type: 'Suspended', status: 'False', reason: 'PodNotOwned' })).toBe('warning')
+    expect(genericConditionTone(sandbox, { type: 'Suspended', status: 'Unknown' })).toBe('unknown')
+    expect(genericConditionTone(sandbox, cond('Ready', 'False'))).toBe('fail')
+    // Only Agent Sandbox's Sandbox: the same condition elsewhere keeps the generic reading.
+    expect(genericConditionTone({ ...sandbox, apiVersion: 'example.com/v1' }, cond('Suspended', 'False'))).toBe('unclear')
+    expect(genericConditionTone({ ...sandbox, kind: 'SandboxClaim', apiVersion: 'extensions.agents.x-k8s.io/v1beta1' }, cond('Suspended', 'False'))).toBe('unclear')
+  })
+
   it('reads Stopped as a state only on KServe resources', () => {
     const other = { apiVersion: 'example.com/v1', kind: 'Pipeline', metadata: { name: 'etl' } }
     expect(genericConditionTone(other, cond('Stopped', 'True'))).toBe('ok')
@@ -123,6 +135,18 @@ describe('GenericRenderer conditions', () => {
     expect(html).toContain('ReconcileFailed')
     expect(html).toContain('bg-red-50 ')
     expect(chipClass(html, 'PredictorReady', 'False')).toContain('status-red')
+  })
+
+  it("renders a running Sandbox's Suspended=False as neutral, neither red nor green", () => {
+    const sandbox = { apiVersion: 'agents.x-k8s.io/v1beta1', kind: 'Sandbox', metadata: { name: 'agent' } }
+    const html = render([cond('Ready', 'True'), { type: 'Suspended', status: 'False', reason: 'NotSuspended' }], sandbox)
+    const chip = chipClass(html, 'Suspended', 'False')
+    expect(chip).not.toContain('status-red')
+    expect(chip).not.toContain('status-green')
+    const at = html.indexOf('>Suspended<')
+    const icon = html.slice(html.lastIndexOf('<span class="w-5 h-5', at), at)
+    expect(icon).toContain('text-theme-text-tertiary')
+    expect(icon).not.toContain('text-green-400')
   })
 
   it("doesn't color an Unknown status as a failure", () => {

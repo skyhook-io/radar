@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Tooltip, type StatusBadge } from '@skyhook-io/k8s-ui'
 import { formatAge, summarizeSchedulerMessage } from '@skyhook-io/k8s-ui/components/resources/resource-utils'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
@@ -14,11 +15,12 @@ import {
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { SelectedResource } from '../../types'
 import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { claimSandboxName, poolClaims, sandboxController } from './lists'
-import { CANT_SCHEDULE, objectKey, type ServerReadings } from './labels'
+import { CANT_SCHEDULE, notReadyMembers, objectKey, schedulerReason, type ServerReadings } from './labels'
 import type { KindRead } from './data'
 import { readInNamespace, readItems } from './data'
-import { AGENT_SANDBOX_EXTENSIONS_GROUP, AGENT_SANDBOX_GROUP, SANDBOX_CLAIM_KIND, SANDBOX_KIND, SANDBOX_WARM_POOL_KIND } from './routes'
+import { AGENT_SANDBOX_EXTENSIONS_GROUP, AGENT_SANDBOX_GROUP, SANDBOXES_PATH, SANDBOX_CLAIM_KIND, SANDBOX_KIND, SANDBOX_WARM_POOL_KIND } from './routes'
 import {
   AGENT_SANDBOX_WIDE,
   AgentSandboxCoverageNotice,
@@ -92,9 +94,9 @@ export function stateMessage(o: any, status: StatusBadge): string | undefined {
   return message
 }
 
-/** The reading, with what explains it under it. */
-function StateCell({ o, status, requested, level }: { o: any; status: StatusBadge; requested?: string; level?: StatusBadge['level'] }) {
-  const message = stateMessage(o, status)
+/** The reading, with what explains it under it, unless another column already says it. */
+function StateCell({ o, status, requested, level, hideMessage }: { o: any; status: StatusBadge; requested?: string; level?: StatusBadge['level']; hideMessage?: boolean }) {
+  const message = hideMessage ? undefined : stateMessage(o, status)
   return (
     <>
       <span className="inline-flex flex-wrap items-center gap-x-1.5">
@@ -126,7 +128,7 @@ function ExpiryAgeCell({ o }: { o: any }) {
   )
 }
 
-export function SandboxesTable({ read, claims, onInspect, inspected, title, server }: { read: KindRead; claims: any[]; onInspect: (r: SelectedResource) => void; inspected: SelectedResource | null; title?: string; server?: ServerReadings }) {
+export function SandboxesTable({ read, claims, onInspect, inspected, title, server, empty }: { read: KindRead; claims: any[]; onInspect: (r: SelectedResource) => void; inspected: SelectedResource | null; title?: string; server?: ServerReadings; empty?: string }) {
   const rows = useMemo(() => byReading(readItems(read), getSandboxStatus), [read])
   const multi = manyNamespaces(rows)
   // A Sandbox a claim names but doesn't own (adopted from a warm pool) still belongs to that claim.
@@ -194,10 +196,15 @@ export function SandboxesTable({ read, claims, onInspect, inspected, title, serv
       rowResource={(o) => agentSandboxResource({ kind: 'Sandbox', group: AGENT_SANDBOX_GROUP, namespace: ns(o), name: nm(o) })}
       onInspect={onInspect}
       inspected={inspected}
-      empty={coverageEmptyText(read, 'Sandboxes')}
+      empty={empty ?? coverageEmptyText(read, 'Sandboxes')}
       minWidth={wide ? 760 : 560}
     />
   )
+}
+
+/** The claim's state is the controller's WarmPoolNotFound. */
+export function reportsMissingPool(o: any): boolean {
+  return getSandboxClaimStatus(o).text === 'WarmPoolNotFound'
 }
 
 export function ClaimsTable({ read, warmPools, onInspect, inspected, server }: { read: KindRead; warmPools: KindRead; onInspect: (r: SelectedResource) => void; inspected: SelectedResource | null; server?: ServerReadings }) {
@@ -214,12 +221,14 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server }: {
     if (pool === '-') return <Dash />
     const ref = { kind: 'SandboxWarmPool', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: pool }
     // A pool Radar didn't find is named, not linked: "not found" only where
-    // every warm pool in the namespace was read, else "not read".
+    // every warm pool in the namespace was read, else "not read". Where the
+    // claim's state already says the pool is missing, its name is enough.
     if (!pools.has(`${ns(o)}/${pool}`)) {
+      const absent = readInNamespace(warmPools, ns(o))
       return (
         <>
           <ObjectName name={pool} />
-          <Sub>{readInNamespace(warmPools, ns(o)) ? 'not found' : 'not read'}</Sub>
+          {!(absent && reportsMissingPool(o)) && <Sub>{absent ? 'not found' : 'not read'}</Sub>}
         </>
       )
     }
@@ -244,7 +253,8 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server }: {
         )
       },
     },
-    { header: 'State', width: wide ? '28%' : '34%', cell: (o) => <StateCell o={o} status={getSandboxClaimStatus(o)} level={server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o)))} /> },
+    // A missing warm pool reads once, as the state, and its name sits in its own column; the controller's sentence is in the drawer.
+    { header: 'State', width: wide ? '28%' : '34%', cell: (o) => <StateCell o={o} status={getSandboxClaimStatus(o)} level={server?.tones.get(objectKey('SandboxClaim', ns(o), nm(o)))} hideMessage={reportsMissingPool(o)} /> },
     { header: 'Warm pool', width: wide ? '16%' : '18%', cell: poolCell },
     ...(wide
       ? [
@@ -314,6 +324,7 @@ export function WarmPoolsTable({
       cell: (o) => (
         <>
           <PoolStateBadge o={o} server={server} />
+          <PoolStateDetail o={o} server={server} />
           {!wide && <Sub>{getReadyOfDesired(o)} ready</Sub>}
         </>
       ),
@@ -383,6 +394,47 @@ function PoolStateBadge({ o, server }: { o: any; server?: ServerReadings }) {
   return <ReadingBadge status={status} level={level} />
 }
 
+/** The Sandboxes list narrowed to one warm pool's sandboxes that aren't ready. */
+export function poolNotReadyPath(namespace: string, name: string): string {
+  return `${SANDBOXES_PATH}&pool=${encodeURIComponent(`${namespace}/${name}`)}&state=notReady`
+}
+
+/**
+ * Under a pool's state, from the server's row about it: the scheduler's
+ * verdict in plain words (its own message on hover, in full in the drawer),
+ * and the sandboxes it names as not ready, as a link to them.
+ */
+function PoolStateDetail({ o, server }: { o: any; server?: ServerReadings }) {
+  const navigate = useWorkspaceNavigate()
+  const row = server?.rows.get(objectKey('SandboxWarmPool', ns(o), nm(o)))
+  const reason = schedulerReason(row)
+  const members = notReadyMembers(row)
+  return (
+    <>
+      {reason && (
+        <Sub>
+          <Tooltip content={reason.raw}><span className="line-clamp-2">{reason.plain}</span></Tooltip>
+        </Sub>
+      )}
+      {members.length > 0 && (
+        <Sub>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              navigate(poolNotReadyPath(ns(o), nm(o)))
+            }}
+            onKeyDown={(e) => e.stopPropagation()}
+            className="text-accent-text hover:underline"
+          >
+            {members.length} {members.length === 1 ? 'sandbox' : 'sandboxes'} not ready
+          </button>
+        </Sub>
+      )}
+    </>
+  )
+}
+
 function CreateButton({ onCreate, label }: { onCreate?: () => void; label: string }) {
   if (!onCreate) return null
   return (
@@ -392,13 +444,44 @@ function CreateButton({ onCreate, label }: { onCreate?: () => void; label: strin
   )
 }
 
+/**
+ * The Sandboxes list's own filters, from the URL: `pool` (namespace/name)
+ * keeps one warm pool's sandboxes, `state=notReady` those whose reading
+ * isn't Ready. A warm pool's "not ready" link sets both.
+ */
+export function filterSandboxes(read: KindRead, pool: string, state: string): KindRead {
+  if (read.state !== 'read' || (!pool && state !== 'notReady')) return read
+  const items = read.items.filter((o) => {
+    if (pool) {
+      const owner = sandboxController(o)
+      if (owner?.kind !== 'SandboxWarmPool' || `${owner.namespace}/${owner.name}` !== pool) return false
+    }
+    return state !== 'notReady' || getSandboxStatus(o).level !== 'healthy'
+  })
+  return { ...read, items }
+}
+
 export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect, inspected, onCreate, server }: AgentSandboxScreenProps & { onCreate?: () => void; server?: ServerReadings }) {
+  const [params, setParams] = useSearchParams()
+  const pool = params.get('pool') ?? ''
+  const state = params.get('state') === 'notReady' ? 'notReady' : ''
+  const clear = (key: string) => {
+    const p = new URLSearchParams(params)
+    p.delete(key)
+    setParams(p, { replace: true })
+  }
+  const chips = [
+    ...(pool ? [{ label: `Warm pool: ${pool.slice(pool.indexOf('/') + 1)}`, onClear: () => clear('pool') }] : []),
+    ...(state ? [{ label: 'Not ready', onClear: () => clear('state') }] : []),
+  ]
+  const sandboxes = useMemo(() => filterSandboxes(data.sandboxes, pool, state), [data.sandboxes, pool, state])
+  const filtered = chips.length > 0 && sandboxes.state === 'read' && sandboxes.items.length === 0
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <AgentSandboxHeader title="Sandboxes" namespaces={namespaces} onClearNamespaces={onClearNamespaces} actions={<CreateButton onCreate={onCreate} label={SANDBOX_KIND.kind} />} />
+      <AgentSandboxHeader title="Sandboxes" namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_KIND.kind} />} />
       <ScreenBody>
         <AgentSandboxCoverageNotice data={data} kinds={['sandboxes', 'claims']} />
-        <SandboxesTable read={data.sandboxes} claims={readItems(data.claims)} onInspect={onInspect} inspected={inspected} server={server} />
+        <SandboxesTable read={sandboxes} claims={readItems(data.claims)} onInspect={onInspect} inspected={inspected} server={server} empty={filtered ? 'No Sandboxes match these filters.' : undefined} />
       </ScreenBody>
     </div>
   )
