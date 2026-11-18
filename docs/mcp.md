@@ -1687,6 +1687,28 @@ Resource context can include `relatedFindings`: independently scoped groups of c
 
 `get_neighborhood` (and `GET /api/ai/neighborhood/{kind}/{namespace}/{name}`) walks the relation families out from one root, hop by hop, admitting only objects the caller may read, and also draws what the last hop's objects declare of one another. A related object the caller may not read is left out and noted only as one `omitted` entry. Within `max_nodes`, each hop admits what manages an object first, then what exposes, protects or configures it, then what it manages and its replicas, the root's own descendants before a neighbor's; a cut answer sets `truncated`. A root the caller may read but Radar can't answers with the read's code (and on REST its status) instead of "not found": `kind_sync_pending` while its kind loads (a custom kind nothing has watched yet starts loading on the first request), `radar_kind_not_collected`, `radar_forbidden`, or `cluster_connecting` before discovery has answered; a walk past its deadline is a timeout (504 on REST) with a hint to narrow it.
 
+## Per-issue change correlation
+
+The `issues` tool and the per-resource issues endpoint answer "what changed on this around the time it broke?" from the same code (`internal/issuecorrelation`). The changes cover the issue's subject, a workload's directly referenced ConfigMaps and Secrets, and for an admission rejection the ResourceQuota, LimitRanges or webhook configuration that rejected it. Status-only rows are never listed. None of it is a causal claim.
+
+| | `issues` tool | `GET /api/issues/resource/{kind}/{namespace}/{name}?correlate=<issueID>` |
+|---|---|---|
+| Issues correlated | Critical, then warning, up to 10 per single-namespace call (`correlation_truncated` past that) | Only the issue with that ID |
+| Window | The last hour, clamped to how long Radar has been recording | From an hour before `first_seen` (before now when the onset is unknown) until now |
+| Changes kept | The 3 most significant | Up to 3 at or before `first_seen` (30 s slack), closest first, then up to 2 after it, newest first; the 3 newest when the onset is unknown or a grouped issue's onsets are mixed |
+| Absence | `no_recent_changes` when every source was read in full and Radar has recorded for at least 5 minutes | `no_recent_changes` when every source was read in full and `correlation.unknown` is absent |
+
+Every source is checked against the caller's list permission before it is read. A source the caller can't list is never read, so what Radar says about it does not depend on whether it changed: the tool omits the marker, and the endpoint names the source's kind in `correlation.unknown`. When the subject itself is denied, the ConfigMaps and Secrets its spec names aren't read either. For a webhook rejection, both webhook configuration kinds are checked before Radar looks up which configuration declares the webhook.
+
+With `correlate=`, the response is always the `?coverage=1` envelope, and the named issue also carries:
+
+- `correlated_changes_more_not_shown`: the window held more changes the caller may see than are listed.
+- `correlated_changes_incomplete`: a read hit its bound, so older changes in the window were not read.
+- `correlation`: `window_from`, `window_to`, `observed_since` (when this Radar process started recording), `unknown` (`reason` and `kinds`) and `history` (the `historyCoverage` shape, with `complete_since` only for callers who can read every namespace). `unknown.reason` is one of `user_forbidden`, `user_permission_check_failed`, `radar_kind_not_collected`, `radar_namespace_not_collected`, `kind_sync_pending`, `read_error`, `sources_unresolved` (Radar couldn't read the workload's pod template, so it can't tell which ConfigMaps and Secrets it uses) or `history_incomplete`. Listed changes are real even when `unknown` is set.
+- Its timing fields as corrected by the correlation, as the tool corrects them.
+
+Other issues in the response are unchanged. When the ID isn't in the answer (resolved, or outside what the caller may see), the envelope carries `correlation_status: "not_found"`. A native Helm release (`kind=HelmRelease`, `group=helm.sh`) is composed from its release storage read as the caller, and that read also gives its history; when the read is refused or fails, `correlation_status` is `user_forbidden` or `read_error` and `unchecked_sources` names the Helm read. A cluster switch during the read fails the request with `connection_changed`. The UI checks the `issueCorrelation` capability before asking, since an older Radar serves the route and ignores `correlate=`.
+
 ## Strimzi connector evidence
 
 See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors) for the Issues/API/MCP coverage, required read access, and operator-snapshot limitations.

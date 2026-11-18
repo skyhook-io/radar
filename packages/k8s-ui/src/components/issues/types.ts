@@ -313,7 +313,7 @@ export interface Issue {
 
   /** Recent non-status changes (spec/config and lifecycle) on this issue's
    *  subject (and, for workload subjects, its referenced ConfigMaps and
-   *  Secrets) — deterministic evidence, not a causal claim. Set by the MCP
+   *  Secrets): deterministic evidence, not a causal claim. Set by the MCP
    *  issues tool, and on the one issue a per-resource issues request names
    *  with ?correlate=; never on /api/issues. */
   correlated_changes?: IssueRecentChange[];
