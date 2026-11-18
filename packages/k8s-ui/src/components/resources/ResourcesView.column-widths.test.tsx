@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { VirtuosoMockContext } from 'react-virtuoso'
 import { afterEach, expect, it, vi } from 'vitest'
-import { COLUMN_WIDTHS_VERSION, ResourcesView, getColumnHeaderWidth, getColumnMinWidth, withoutDefaultWidths } from './ResourcesView'
+import { COLUMN_WIDTHS_VERSION, ResourcesView, columnSettingsKey, getColumnHeaderWidth, getColumnMinWidth, withoutDefaultWidths } from './ResourcesView'
 import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
 import type { APIResource } from '../../types'
 
@@ -138,4 +138,39 @@ it('saves only the dragged column, and Reset widths returns it to automatic sizi
   expect(colWidth('message')).not.toBe('450px')
   expect(JSON.parse(localStorage.getItem('radar-columns-events')!).widths).toEqual({})
   expect([...document.querySelectorAll('button')].some(b => b.textContent === 'Reset widths')).toBe(false)
+})
+
+it('checks a legacy width against its column’s default once the column loads late', () => {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1456)
+  const widgets: APIResource = { group: 'example.com', version: 'v1', kind: 'Widget', name: 'widgets', namespaced: true, isCrd: true, verbs: ['get', 'list'] }
+  const widget = { apiVersion: 'example.com/v1', kind: 'Widget', metadata: { name: 'w1', namespace: 'test', uid: 'w1', creationTimestamp: '2026-01-01T00:00:00Z' }, spec: { description: 'A widget' } }
+  const storageKey = 'radar-columns-' + columnSettingsKey('widgets', 'example.com')
+  // Saved before columns sized themselves: Name as dragged, Description at its old default.
+  localStorage.setItem(storageKey, JSON.stringify({ visible: ['name', 'namespace', 'printer:Description', 'age'], widths: { name: 400, 'printer:Description': 160 } }))
+  const view = (props: Partial<React.ComponentProps<typeof ResourcesView>>) => <VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 40 }}><KeyboardShortcutProvider><ResourcesView
+    namespaces={['test']}
+    apiResources={[events, widgets]}
+    resourceCounts={{ Event: 1, Widget: 1 }}
+    selectedKindQuery={{ isLoading: false, data: [event(longName, 'hello')], resourceName: 'events', group: '' }}
+    locationPathname="/resources/events"
+    locationSearch=""
+    onNavigate={() => {}}
+    {...props}
+  /></KeyboardShortcutProvider></VirtuosoMockContext.Provider>
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  act(() => root.render(view({})))
+  // Over to Widgets: its printer columns are still loading, and the settings are saved meanwhile.
+  const onWidgets = { selectedKindQuery: { isLoading: false, data: [widget], resourceName: 'widgets', group: 'example.com' }, locationPathname: '/resources/widgets', locationSearch: '?apiGroup=example.com' }
+  act(() => root.render(view({ ...onWidgets, printerTable: null })))
+  act(() => root.render(view({ ...onWidgets, namespaces: ['test', 'other'], printerTable: null })))
+  const midway = JSON.parse(localStorage.getItem(storageKey)!)
+  expect(midway.widthsVersion).toBe(COLUMN_WIDTHS_VERSION)
+  expect(midway.legacyWidths).toEqual(['printer:Description'])
+  // Description arrives: its 160px is its old default, not a resize, so it sizes itself.
+  const printerTable = { kind: 'widgets', group: 'example.com', columns: [{ name: 'Description', type: 'string', jsonPath: '.spec.description' }], cells: { w1: ['A widget'] } }
+  act(() => root.render(view({ ...onWidgets, namespaces: ['test', 'other'], printerTable })))
+  expect(parseInt(colWidth('printer:Description'), 10)).toBeGreaterThan(160)
+  expect(colWidth('name')).toBe('400px')
+  act(() => root.render(view({ ...onWidgets, namespaces: ['test'], printerTable })))
+  expect(JSON.parse(localStorage.getItem(storageKey)!).widths).toEqual({ name: 400 })
 })

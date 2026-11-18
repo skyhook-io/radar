@@ -119,9 +119,12 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
         }
       }
     }
-    // A table that fits fills its room exactly; one that scrolls keeps its
-    // rounded widths, so rounding never adds to the scrolling.
-    return short > 0.5 ? roundWidths(widths) : roundToRoom(widths, columns.filter(c => !c.userWidth).at(-1), available)
+    // Decided on the rounded widths: a table that fits once rounded down fills
+    // its room exactly; one that scrolls keeps them, so rounding never adds to
+    // the scrolling.
+    roundWidths(widths)
+    if (sum(Object.values(widths)) > Math.floor(available)) return widths
+    return roundToRoom(widths, columns.filter(c => !c.userWidth).at(-1), available)
   }
 
   let left = available - used
