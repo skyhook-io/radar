@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -22,9 +23,11 @@ type candidate struct {
 	obj apiruntime.Object
 }
 
-// search collects one DependentCandidates call's candidates and gaps.
+// search collects one index search's candidates and gaps: the objects index
+// files under any of keys.
 type search struct {
-	uid        string
+	index      string
+	keys       []string
 	scope      ownership.SearchScope
 	namespaces []string
 	found      []candidate
@@ -32,17 +35,7 @@ type search struct {
 }
 
 func (s *session) DependentCandidates(uid types.UID, scope ownership.SearchScope) ownership.DependentCandidatesRead {
-	q := &search{uid: string(uid), scope: scope}
-	if !scope.AllNamespaces {
-		for _, ns := range slices.Compact(slices.Sorted(slices.Values(scope.Namespaces))) {
-			if ns == "" {
-				// A store read for "" would answer for every namespace.
-				q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.NamespaceRequired})
-				continue
-			}
-			q.namespaces = append(q.namespaces, ns)
-		}
-	}
+	q := newSearch(k8score.OwnerUIDIndex, []string{string(uid)}, scope)
 	searches := scope.Searches(true) || scope.Searches(false)
 	if searches {
 		s.prepareDependentKinds(scope)
@@ -169,6 +162,21 @@ func (q *search) gapEverywhere(gk resourceid.GroupKind, namespaced bool, reason 
 	q.gap(gk, "", reason)
 }
 
+func newSearch(index string, keys []string, scope ownership.SearchScope) *search {
+	q := &search{index: index, keys: keys, scope: scope}
+	if !scope.AllNamespaces {
+		for _, ns := range slices.Compact(slices.Sorted(slices.Values(scope.Namespaces))) {
+			if ns == "" {
+				// A store read for "" would answer for every namespace.
+				q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.NamespaceRequired})
+				continue
+			}
+			q.namespaces = append(q.namespaces, ns)
+		}
+	}
+	return q
+}
+
 func (q *search) add(gk resourceid.GroupKind, obj apiruntime.Object, namespace, name string) {
 	q.found = append(q.found, candidate{
 		ref: resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: namespace, Name: name},
@@ -218,7 +226,7 @@ func (s *session) typedCandidates(q *search, b resourceid.Builtin) {
 			return
 		}
 	}
-	objs, ok := s.caches.Typed.ReadableDependents(b.Resource, read, q.uid)
+	objs, ok := s.caches.Typed.ReadableIndexedObjects(b.Resource, read, q.index, q.keys...)
 	if !ok {
 		q.gapEverywhere(gk, b.Namespaced, readreason.ReadError)
 		return
@@ -231,7 +239,7 @@ func (s *session) typedCandidates(q *search, b resourceid.Builtin) {
 }
 
 func (s *session) dynamicCandidates(q *search, kind ownership.CatalogKind) {
-	s.dynamicIndexed(q, kind, k8score.OwnerUIDIndex, []string{q.uid}, func(u *unstructured.Unstructured) {
+	s.dynamicIndexed(q, kind, q.index, q.keys, func(u *unstructured.Unstructured) {
 		q.add(kind.GroupKind, u, u.GetNamespace(), u.GetName())
 	})
 }
@@ -382,4 +390,40 @@ func compareRefs(a, b resourceid.Ref) int {
 
 func compareGaps(a, b ownership.Gap) int {
 	return cmp.Or(cmp.Compare(a.Kind.Group, b.Kind.Group), cmp.Compare(a.Kind.Kind, b.Kind.Kind), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Reason, b.Reason))
+}
+
+// Indexed reads the objects of gk in scope that index files under any of
+// keys: a typed kind from the typed cache, any other kind through the same
+// version and namespace rules as DependentCandidates. A kind the catalog
+// doesn't serve, typed or not, is read as empty when discovery covered its
+// group, and as a gap otherwise.
+func (s *session) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
+	q := newSearch(index, keys, scope)
+	kind, known := s.catalog.Kind(gk)
+	switch b, typed := typedKinds[gk]; {
+	case s.catalog.Ambiguous(gk):
+		q.gap(gk, "", readreason.ReadError)
+	case !known:
+		if !s.catalog.CoversGroup(gk.Group) {
+			q.gap(gk, "", readreason.ReadError)
+		}
+	case !scope.Searches(kind.Namespaced):
+	case typed:
+		s.typedCandidates(q, b)
+	default:
+		s.dynamicIndexed(q, kind, index, keys, func(u *unstructured.Unstructured) {
+			q.add(gk, u, u.GetNamespace(), u.GetName())
+		})
+	}
+	slices.SortFunc(q.found, func(a, b candidate) int { return compareRefs(a.ref, b.ref) })
+	r := relations.IndexedRead{Gaps: q.gaps}
+	for i, c := range q.found {
+		if i > 0 && q.found[i-1].ref == c.ref {
+			continue
+		}
+		r.Objects = append(r.Objects, relations.IndexedObject{Ref: c.ref, Object: c.obj})
+	}
+	slices.SortFunc(r.Gaps, compareGaps)
+	r.Gaps = slices.Compact(r.Gaps)
+	return r
 }

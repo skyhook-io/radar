@@ -129,7 +129,10 @@ describe('ResourcesSidebar category workspaces', () => {
     verbs: ['list'],
   }
 
-  it('renders destinations above the kinds, with the active object nested and no kind selected', () => {
+  const deployment: APIResource = { group: 'apps', version: 'v1', kind: 'Deployment', name: 'deployments', namespaced: true, isCrd: false, verbs: ['list'] }
+  const clusterKind = { name: 'clusters', kind: 'Cluster', group: 'postgresql.cnpg.io' }
+
+  it('lists an integration under Integrations by its job, the tool beneath, with its total and its destinations', () => {
     const html = renderToString(
       <ResourcesSidebar
         selectedKind={null}
@@ -138,46 +141,39 @@ describe('ResourcesSidebar category workspaces', () => {
         resourceCounts={{ 'postgresql.cnpg.io/Cluster': 2, 'barmancloud.cnpg.io/ObjectStore': 1 }}
         categoryWorkspaces={{
           CloudNativePG: {
+            label: 'Databases',
+            count: 3,
             destinations: [
-              { id: 'overview', label: 'Overview', count: 3, countTitle: '3 clusters need attention', active: true, child: { label: 'pg-orders' }, onSelect: () => {} },
-              { id: 'protection', label: 'Backups', onSelect: () => {} },
+              { id: 'overview', label: 'Overview', active: true, child: { label: 'pg-orders' }, onSelect: () => {} },
+              { id: 'protection', label: 'Protection', onSelect: () => {} },
             ],
-            defaultKindsCollapsed: true,
             scopeNote: 'Counts for namespace payments',
           },
         }}
       />
     )
-    expect(html).toContain('Views')
-    expect(html).toContain('Overview')
+    expect(html).toContain('Integrations')
+    expect(html).toMatch(/>Databases<\/span><span[^>]*>CloudNativePG</)
+    expect(html).toMatch(/status-degraded[^>]*>(<!-- -->)?3</)
     expect(html).toContain('pg-orders')
     expect(html).toContain('Counts for namespace payments')
-    expect(html).toContain('Resource kinds')
-    expect(html).toMatch(/aria-expanded="false"[^>]*>(?:(?!<\/button>).)*Resource kinds/)
-    expect(html).not.toContain('selection-strong selection-text">Pod')
+    expect(html).toMatch(/aria-expanded="false"[^>]*>(?:(?!<\/button>).)*Other kinds \((<!-- -->)?2(<!-- -->)?\)/)
+    expect(html).not.toContain('>Views<')
+    expect(html).not.toContain('Resource kinds')
   })
 
-  // One view needs no headings: it sits above the kinds, which stay listed.
-  it('lists a single view above the kinds without headings or a collapsed kind list', () => {
+  it('highlights the destination whose kind is selected, and does not list that kind again under Other kinds', () => {
     const html = renderToString(
       <ResourcesSidebar
-        selectedKind={null}
+        selectedKind={clusterKind}
         onSelectedKindChange={() => {}}
         apiResources={[cnpgCluster, objectStore]}
         resourceCounts={{ 'postgresql.cnpg.io/Cluster': 2, 'barmancloud.cnpg.io/ObjectStore': 1 }}
-        categoryWorkspaces={{
-          CloudNativePG: {
-            destinations: [{ id: 'overview', label: 'Overview', count: 3, active: true, onSelect: () => {} }],
-            defaultKindsCollapsed: true,
-          },
-        }}
+        categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'clusters', label: 'Clusters', kind: clusterKind, onSelect: () => {} }] } }}
       />
     )
-    expect(html).toContain('Overview')
-    expect(html).not.toContain('>Views<')
-    expect(html).not.toContain('Resource kinds')
-    expect(html).toContain('Cluster')
-    expect(html).toContain('ObjectStore')
+    expect(html).toMatch(/aria-current="page"[^>]*>(?:(?!<\/button>).)*Clusters/)
+    expect(html).toMatch(/Other kinds \((<!-- -->)?1(<!-- -->)?\)/)
   })
 
   it('marks a count taken over partly readable data as a lower bound, and never shows its zero as none', () => {
@@ -188,14 +184,14 @@ describe('ResourcesSidebar category workspaces', () => {
           onSelectedKindChange={() => {}}
           apiResources={[cnpgCluster]}
           resourceCounts={{ 'postgresql.cnpg.io/Cluster': 1 }}
-          categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Overview', count, countLowerBound: true, onSelect: () => {} }] } }}
+          categoryWorkspaces={{ CloudNativePG: { count, countLowerBound: true, destinations: [{ id: 'overview', label: 'Overview', active: true, onSelect: () => {} }] } }}
         />,
       )
     expect(render(2)).toMatch(/≥(<!-- -->)?2/)
     expect(render(0)).toContain('–')
   })
 
-  it('keeps a workspace category visible when it has no resources', () => {
+  it('keeps an integration listed when it has no resources', () => {
     const html = renderToString(
       <ResourcesSidebar
         selectedKind={null}
@@ -205,36 +201,33 @@ describe('ResourcesSidebar category workspaces', () => {
         categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Overview', onSelect: () => {} }] } }}
       />
     )
+    expect(html).toContain('Integrations')
     expect(html).toContain('CloudNativePG')
-    expect(html).toContain('Overview')
   })
 
-  it('keeps a workspace category first while one of its kinds is open, as on its views', () => {
-    const deployment: APIResource = { group: 'apps', version: 'v1', kind: 'Deployment', name: 'deployments', namespaced: true, isCrd: false, verbs: ['list'] }
-    const render = (selectedKind: { name: string; kind: string; group: string }) =>
-      renderToString(
+  it('lists integrations above the kind categories, wherever the user is', () => {
+    for (const selectedKind of [clusterKind, { name: 'deployments', kind: 'Deployment', group: 'apps' }]) {
+      const html = renderToString(
         <ResourcesSidebar
           selectedKind={selectedKind}
           onSelectedKindChange={() => {}}
           apiResources={[deployment, cnpgCluster]}
           resourceCounts={{ 'apps/Deployment': 3, 'postgresql.cnpg.io/Cluster': 2 }}
-          categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Overview', onSelect: () => {} }] } }}
+          categoryWorkspaces={{ CloudNativePG: { label: 'Databases', destinations: [{ id: 'overview', label: 'Overview', onSelect: () => {} }] } }}
         />,
       )
-    const onKind = render({ name: 'clusters', kind: 'Cluster', group: 'postgresql.cnpg.io' })
-    expect(onKind.indexOf('CloudNativePG')).toBeLessThan(onKind.indexOf('Workloads'))
-    const elsewhere = render({ name: 'deployments', kind: 'Deployment', group: 'apps' })
-    expect(elsewhere.indexOf('Workloads')).toBeLessThan(elsewhere.indexOf('CloudNativePG'))
+      expect(html.indexOf('Databases')).toBeLessThan(html.indexOf('Workloads'))
+    }
   })
 
-  it('labels API groups when a workspace category spans several', () => {
+  it('labels API groups when the other kinds of an integration span several', () => {
     const html = renderToString(
       <ResourcesSidebar
-        selectedKind={{ name: 'clusters', kind: 'Cluster', group: 'postgresql.cnpg.io' }}
+        selectedKind={clusterKind}
         onSelectedKindChange={() => {}}
         apiResources={[cnpgCluster, objectStore]}
         resourceCounts={{ 'postgresql.cnpg.io/Cluster': 2, 'barmancloud.cnpg.io/ObjectStore': 1 }}
-        categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Overview', onSelect: () => {} }], defaultKindsCollapsed: true } }}
+        categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Overview', onSelect: () => {} }] } }}
       />
     )
     expect(html).toContain('postgresql.cnpg.io')
@@ -285,6 +278,11 @@ describe('sidebarDestinationsMatching', () => {
   })
   it('keeps every view without a term', () => {
     expect(labels('  ')).toHaveLength(5)
+  })
+  it('finds a view by the job the integration is named for, and by the kind it lists', () => {
+    expect(sidebarDestinationsMatching('Velero', [], views, 'backups', 'Backups')).toHaveLength(5)
+    const locations = [{ id: 'locations', label: 'Locations', kind: { name: 'backupstoragelocations', kind: 'BackupStorageLocation', group: 'velero.io' }, onSelect: () => {} }]
+    expect(sidebarDestinationsMatching('Velero', [], locations, 'storagelocation')).toHaveLength(1)
   })
 })
 

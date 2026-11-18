@@ -1415,6 +1415,7 @@ export function WorkloadView({
       onTabChange={handleSetTab}
       scopeControls={scopeControls}
       tabStripEnd={<ResourceActionsBar key={actionsBarKey} resource={selectedResource} data={resource} hideLogs {...actionsBarPropsForState} />}
+      wrapTabStripEnd
       overlay={saveSuccess ? <SaveSuccessAnimation /> : null}
       compactHeader={compactHeader}
     >

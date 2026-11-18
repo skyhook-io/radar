@@ -256,12 +256,12 @@ describe('Velero overview', () => {
     expect(one).toContain('nightly')
   })
 
-  it('states the scope, and the forced namespace when Radar is limited to one', () => {
-    expect(text(render(workspace()))).toContain('Velero in namespace velero. The namespace filter doesn’t apply here.')
+  it('says nothing about scope for one installation, names a forced namespace, and offers installations when there are several', () => {
+    expect(text(render(workspace()))).not.toMatch(/namespace filter|Velero in namespace/)
     expect(text(render(workspace({ forcedNamespace: 'velero' })))).toContain('Radar is limited to namespace velero')
     const two = workspace()
     two.installations = [two.installations[0], { ...two.installations[0], namespace: 'kommander' }]
-    expect(text(render(two))).toContain('Velero installations in namespaces velero and kommander.')
+    expect(text(render(two))).toContain('kommander')
   })
 })
 

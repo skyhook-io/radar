@@ -634,6 +634,9 @@ export function WorkloadView({
   // of itself. Fall back to the group derived from the fetched resource, then
   // to undefined (which the gate treats as "group unknown → allow").
   const effectiveGroup = rest.group || resourceGroup || undefined
+  // The fetched resource's own group, once it has loaded: the route's group is
+  // '' whenever a link left ?apiGroup out.
+  const identityGroup = resource?.apiVersion ? resourceGroup : effectiveGroup
   const batchKind = pluralToKind(apiKind)
   const batchExecution = supportsBatchExecution(batchKind, apiKind, effectiveGroup, resource?.apiVersion)
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
@@ -1292,7 +1295,7 @@ export function WorkloadView({
             viewNamespaces={viewNamespaces}
           />
         )}
-        {...resourceDetailSlots({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, rest.extraTabs)}
+        {...resourceDetailSlots({ kind: apiKind, group: identityGroup, namespace, name }, rest.extraTabs)}
         onSelectTopologyMember={batchExecution && batchKind === 'JobSet' ? handleSelectTopologyMember : undefined}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res, leadContent }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
@@ -1405,7 +1408,7 @@ export function WorkloadView({
               return resourceIssueDetail({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, { issue, resource })
             }}
             compact={!expanded}
-            subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
+            subjectResource={{ kind: apiKind, namespace, name, group: identityGroup }}
             onResourceClick={openIssueResource}
           />
           </div>

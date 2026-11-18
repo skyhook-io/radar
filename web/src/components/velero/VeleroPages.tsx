@@ -780,12 +780,17 @@ function LocationBackupCounts({ loc, namespace, name, unavailable }: { loc?: Vel
   const parts: ReactNode[] = [plural(counts.total, 'backup'), `${counts.usable} completed`, `${counts.expired} expired`, ...tail].filter(Boolean)
   return (
     <>
-      {parts.map((p, i) => (
-        <span key={i}>
-          {i > 0 && ' · '}
-          {p}
+      <span className="inline-flex flex-wrap items-baseline gap-x-3">
+        <span>
+          {parts.map((p, i) => (
+            <span key={i}>
+              {i > 0 && ' · '}
+              {p}
+            </span>
+          ))}
         </span>
-      ))}
+        {counts.total > 0 && <TabLink tab="backups">Backups</TabLink>}
+      </span>
       {unavailable && counts.usable > 0 && (
         <div className={`text-xs ${toneTextClass('unhealthy')}`}>None of them can be restored while the location is unavailable: Velero refuses a restore from it.</div>
       )}

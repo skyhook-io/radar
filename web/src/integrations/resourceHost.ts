@@ -27,6 +27,8 @@ export interface ResourceHost {
     title: string
     mode: (support: RadarFeatureSupport, pending: boolean) => KindListMode
     Component: ComponentType<KindListProps>
+    /** Set when the list ignores the namespace filter: the header's picker is disabled with this tooltip while the list shows. */
+    namespaceFilterTooltip?: string
   }[]
   renderers?: RendererOverrides
   resources?: readonly { name: string; group: string }[]
