@@ -816,7 +816,8 @@ export function getPodRestarts(pod: any): number {
 
 export interface ContainerSquareState {
   name: string
-  status: 'ready' | 'running' | 'waiting' | 'completed' | 'terminated' | 'unknown'
+  /** starting: waiting on a transient reason (PodInitializing, ContainerCreating), not a failure. */
+  status: 'ready' | 'running' | 'starting' | 'waiting' | 'completed' | 'terminated' | 'unknown'
   restarts: number
   reason?: string
   message?: string
@@ -904,6 +905,12 @@ export function getDefaultLogContainerName(pod: any): string | undefined {
   return stuck?.name || getDefaultContainerName(pod)
 }
 
+// PodInitializing and ContainerCreating are steps every container passes
+// through, so they read as starting; any other waiting reason is a problem.
+function waitingSquareStatus(reason: string | undefined): ContainerSquareState['status'] {
+  return reason === 'PodInitializing' || reason === 'ContainerCreating' ? 'starting' : 'waiting'
+}
+
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
   const result: ContainerSquareState[] = []
   const initStatuses = pod.status?.initContainerStatuses || []
@@ -918,7 +925,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
     } else if (stateKey === 'running') {
       status = cs.ready ? 'ready' : 'running'
     } else if (stateKey === 'waiting') {
-      status = 'waiting'
+      status = waitingSquareStatus(cs.state?.waiting?.reason)
     } else if (stateKey === 'terminated') {
       status = 'terminated'
     }
@@ -951,7 +958,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
       } else if (stateKey === 'terminated') {
         status = 'terminated'
       } else if (stateKey === 'waiting') {
-        status = 'waiting'
+        status = waitingSquareStatus(cs.state?.waiting?.reason)
       }
       const stateDetail = cs.state?.[stateKey]
       const lastTerm = cs.lastState?.terminated
