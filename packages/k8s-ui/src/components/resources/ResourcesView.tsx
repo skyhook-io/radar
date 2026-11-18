@@ -182,7 +182,7 @@ import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessContr
 import { Tooltip } from '../ui/Tooltip'
 import { TruncatedText } from '../ui/TruncatedText'
 import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, rememberWidths } from './column-sizing'
-import { type CellWidth, type UsageLabel, NAME_MAX_PX, NAME_MIN_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, usageLabelWidth, workloadImagesText } from './column-content-width'
+import { type CellWidth, type UsageLabel, NAME_MAX_PX, NAME_MIN_PX, NAME_PROTECTED_MAX_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, usageLabelWidth, workloadImagesText } from './column-content-width'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import type { Issue } from '../issues/types'
 import { issueTitle } from '../issues/severity'
@@ -387,6 +387,11 @@ const PHONE_NAME_MAX_VW = 45
 const NAME_VIEWPORT_SHARE = 0.5
 // Room a column shrunk to its heading keeps beyond the measured heading.
 const HEADER_SHRINK_SLACK_PX = 6
+// From a 1080p window up (maximized, Radar's default sidebars), a table never
+// scrolls sideways: columns give way to their headings and Name to
+// NAME_MIN_PX before it would. Narrower windows keep the gentler rules and may
+// scroll rather than cut most names.
+export const MUST_FIT_WINDOW_PX = 1920
 function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean | undefined, column: 'compare' | 'checkbox' | 'name'): React.CSSProperties {
   const compare = compareMode ? COMPARE_COLUMN_WIDTH : 0
   const checkbox = showCheckbox ? CHECKBOX_COLUMN_WIDTH : 0
@@ -1810,7 +1815,10 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   events: [
-    { key: 'name', label: 'Name' },
+    // An Event's name is the involved object's name plus a hash, and Object
+    // already names the object (`kubectl get events` doesn't print NAME at
+    // all), so it gets no protection: it gives way first when room is short.
+    { key: 'name', label: 'Name', sizing: 'fit' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'type', label: 'Type', width: 'w-24' },
     { key: 'reason', label: 'Reason', width: 'w-32', sizing: 'fit' },
@@ -6181,6 +6189,7 @@ export function ResourcesView({
       flat[key] = m.content
       if (m.stretch !== undefined) flat[`${key}\u0000stretch`] = m.stretch
       if (m.yieldTo !== undefined) flat[`${key}\u0000yieldTo`] = m.yieldTo
+      if (m.fitTo !== undefined) flat[`${key}\u0000fitTo`] = m.fitTo
     }
     return flat
   }, [tableActive, measureSource, columns, extraColumnsByKey, sizingKind, auditBadges, usageCellWidths, headerFontEpoch])
@@ -6253,18 +6262,25 @@ export function ResourcesView({
         // (never below their heading), but only where the content is known;
         // short-value fit columns to their curated width, or their content
         // when that is narrower; Node and Namespace to their heading, cutting
-        // values; Name, last, to the 90th percentile of its names (never below
-        // NAME_MIN_PX, never above the width it holds).
+        // values; Name, last, to the 75th percentile of its names (never below
+        // NAME_MIN_PX, never above the width it holds or NAME_PROTECTED_MAX_PX).
         min: spec.mode === 'exact'
           ? content !== undefined ? Math.max(headerShrinkWidth(col), content) : undefined
           : spec.longest
             ? content !== undefined ? Math.min(floor, Math.max(headerShrinkWidth(col), content)) : undefined
           : spec.keep
             ? content !== undefined
-              ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000yieldTo`] ?? content, content, nameMax))
+              ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000yieldTo`] ?? content, content, nameMax, NAME_PROTECTED_MAX_PX))
               : undefined
-            : spec.mode === 'fit' ? headerShrinkWidth(col) : undefined,
+            // An unprotected Name (Events) yields to its floor, NAME_MIN_PX.
+            : spec.mode === 'fit' && !isName ? headerShrinkWidth(col) : undefined,
         yieldRank: spec.yieldRank,
+        // Past `min`, only when that ends the scrolling (always from
+        // MUST_FIT_WINDOW_PX up): Name to its median, other columns to their heading.
+        fitMin: spec.keep && content !== undefined
+          ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000fitTo`] ?? content, content, nameMax, NAME_PROTECTED_MAX_PX))
+          : undefined,
+        hardMin: isName ? NAME_MIN_PX : headerShrinkWidth(col),
         userWidth: columnWidths[col.key] || frozen?.[col.key],
         content,
         stretch: contentWidths?.[`${col.key}\u0000stretch`],
@@ -6273,9 +6289,21 @@ export function ResourcesView({
         hold: held?.[col.key],
       }
     })
-    const widths = computeColumnLayout(inputs, availableWidth)
-    const first = columns[0]
-    if (first?.key === 'name' && phoneNameCap !== Infinity) widths.name = Math.min(widths.name, phoneNameCap)
+    // The phone cap goes into the layout, so the room it frees counts when
+    // deciding whether the table can fit, and again after it, since leftover
+    // room is spread over every column regardless of its max.
+    const capped = (v: number | undefined) => v === undefined ? undefined : Math.min(v, phoneNameCap)
+    const capName = columns[0]?.key === 'name' && phoneNameCap !== Infinity
+    const laidOut = capName
+      ? inputs.map(c => c.key !== 'name' ? c : {
+        ...c, floor: Math.min(c.floor, phoneNameCap), max: capped(c.max ?? Infinity), content: capped(c.content),
+        min: capped(c.min), fitMin: capped(c.fitMin), hardMin: capped(c.hardMin), hold: capped(c.hold), userWidth: capped(c.userWidth),
+      })
+      : inputs
+    const widths = computeColumnLayout(laidOut, availableWidth, {
+      mustFit: typeof window !== 'undefined' && window.innerWidth >= MUST_FIT_WINDOW_PX,
+    })
+    if (capName) widths.name = Math.min(widths.name, phoneNameCap)
     return widths
   }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap])
   useLayoutEffect(() => {
