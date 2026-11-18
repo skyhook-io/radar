@@ -227,22 +227,19 @@ function RowLinkOut({ a }: { a: AgentSandboxAttention }) {
   )
 }
 
-/** The next step, with the command it names as a copyable chip where the text names it. */
+/**
+ * The next step, then the command it names on its own line as a copyable chip,
+ * as Substrate's workspace shows commands. Where the text quotes the command in
+ * parentheses, the quote is dropped so the command appears once.
+ */
 function NextStepText({ a }: { a: AgentSandboxAttention }) {
   if (!a.command) return <>{a.nextStep}</>
-  const at = a.nextStep.indexOf(`(${a.command})`)
-  if (at < 0) {
-    return (
-      <>
-        {a.nextStep} <CommandChip command={a.command} inline />
-      </>
-    )
-  }
+  const quoted = ` (${a.command})`
+  const text = a.nextStep.includes(quoted) ? a.nextStep.replace(quoted, '') : a.nextStep
   return (
     <>
-      {a.nextStep.slice(0, at)}
-      <CommandChip command={a.command} inline />
-      {a.nextStep.slice(at + a.command.length + 2)}
+      {text}
+      <CommandChip command={a.command} />
     </>
   )
 }
