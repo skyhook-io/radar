@@ -56,9 +56,9 @@ const FIT_DEFAULT_MAX_PX = 400
 // ---------------------------------------------------------------------------
 
 // Each character is measured once per font and a string's width is the sum.
-// That skips kerning, which in this face is well under a pixel per string, and
-// makes a 50k-row pass a few array lookups per character instead of a canvas
-// call per string — so there is no per-string cache to bound.
+// That skips kerning: measured against the rendered text it came out 0.3–0.8%
+// wider on average (at most ~15px, on a 2000px Event message). It makes a 50k-row pass a few lookups per character
+// instead of a canvas call per string, so there is no per-string cache to bound.
 // Without a canvas (SSR, jsdom) this falls back to an average glyph width.
 const FALLBACK_CHAR_PX: Record<CellFont, number> = { body: 7.5, medium: 7.8, small: 6.5 }
 let measureCtx: CanvasRenderingContext2D | null | undefined
@@ -112,7 +112,7 @@ export interface ColumnSizingSpec {
   mode: ColumnSizingMode
   weight?: number
   max?: number
-  /** Name only: size to the 95th percentile, and stretch to the longest value if room is left. */
+  /** Name only: size to the 95th percentile; longer names are cut, with a tooltip. */
   trimOutliers?: boolean
 }
 
@@ -208,8 +208,6 @@ function cellWidthReader(col: ContentColumn, ctx: ContentContext): CellWidth {
 export interface MeasuredContent {
   /** What the column sizes to: the longest value, or for Name its 95th percentile. Padding included. */
   content: number
-  /** Name only: its longest value, taken when room is left over. */
-  stretch?: number
 }
 
 /**
@@ -232,16 +230,8 @@ export function measureColumnContent(
     const limit = (spec.max ?? Infinity) - CELL_PADDING_PX
     if (spec.trimOutliers) {
       const widths = new Array<number>(items.length)
-      let longest = 0
-      for (let i = 0; i < items.length; i++) {
-        const w = safeWidth(read, items[i], measure, limit)
-        widths[i] = w
-        if (w > longest) longest = w
-      }
-      result[col.key] = {
-        content: Math.ceil(percentile(widths, 0.95)) + CELL_PADDING_PX,
-        stretch: Math.ceil(longest) + CELL_PADDING_PX,
-      }
+      for (let i = 0; i < items.length; i++) widths[i] = safeWidth(read, items[i], measure, limit)
+      result[col.key] = { content: Math.ceil(percentile(widths, 0.95)) + CELL_PADDING_PX }
     } else {
       let longest = 0
       for (const item of items) {

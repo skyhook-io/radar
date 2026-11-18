@@ -14,10 +14,11 @@
 //   user  — a width the user dragged; kept as is.
 //
 // Room is handed out in a fixed order — user and exact widths, then fit columns
-// at their content, then grow columns, then Name up to its longest value — and
-// whatever remains goes to the table's trailing spacer column rather than to
-// any one column: a stretched column pushes the columns after it under the
-// resource drawer, which overlays the right of the list. When the room is
+// at their content, then grow columns — and whatever remains goes to the
+// table's trailing spacer column rather than to any one column (not even to
+// Name's longest values past its 95th percentile): a stretched column pushes
+// the columns after it under the resource drawer, which overlays the right of
+// the list. When the room is
 // short, grow columns are the first to give it back (they are already at their
 // floor before they get any), then fit columns shrink toward their floor; below
 // the sum of floors the table scrolls sideways.
@@ -33,8 +34,6 @@ export interface ColumnLayoutInput {
   userWidth?: number
   /** Measured content width, cell padding included. fit: the target; grow: the cap. */
   content?: number
-  /** fit only: a wider target taken from room left after grow columns (Name's longest value). */
-  stretch?: number
   /** Upper bound for fit and grow columns. */
   max?: number
   /** grow only: share of the room left over. */
@@ -70,21 +69,19 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
   const grows = columns
     .filter(c => !c.userWidth && c.mode === 'grow')
     .map(c => ({ key: c.key, weight: c.weight && c.weight > 0 ? c.weight : 1, target: cap(c, c.content ?? 0), hold: c.hold }))
-  const stretches = columns
-    .filter(c => !c.userWidth && c.mode === 'fit' && c.stretch !== undefined)
-    .map(c => ({ key: c.key, weight: 1, target: cap(c, c.stretch!), hold: c.hold }))
   // Sharing by weight alone would let one column's longer new value take room
   // another was already showing, so a column could narrow while every
   // measurement only grew. Each first gets back the width it had (up to its
-  // target), if all of those still fit, and only the rest is shared.
-  const sharing = [...grows, ...stretches]
-  const held = sharing.map(g => Math.max(0, Math.min(g.hold ?? 0, g.target) - widths[g.key]))
-  if (sum(held) <= left) {
-    sharing.forEach((g, i) => { widths[g.key] += held[i] })
-    left -= sum(held)
+  // target) — scaled down evenly when they no longer all fit, so a shortfall
+  // costs each only its share — and only the rest is shared.
+  const held = grows.map(g => Math.max(0, Math.min(g.hold ?? 0, g.target) - widths[g.key]))
+  const heldTotal = sum(held)
+  if (heldTotal > 0) {
+    const scale = Math.min(1, left / heldTotal)
+    grows.forEach((g, i) => { widths[g.key] += held[i] * scale })
+    left -= heldTotal * scale
   }
-  left = waterFill(widths, grows, left)
-  waterFill(widths, stretches, left)
+  waterFill(widths, grows, left)
   return roundWidths(widths)
 }
 

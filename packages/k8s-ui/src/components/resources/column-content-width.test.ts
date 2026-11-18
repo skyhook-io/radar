@@ -36,13 +36,12 @@ describe('columnSizingSpec', () => {
 })
 
 describe('measureColumnContent', () => {
-  it('sizes Name to its 95th percentile and stretches to its longest, with chrome and padding', () => {
+  it('sizes Name to its 95th percentile, with chrome and padding', () => {
     const items = [...Array(95)].map((_, i) => pod(`n${String(i).padStart(9, '0')}`)) // 10 chars
     for (let i = 0; i < 5; i++) items.push(pod('x'.repeat(40)))
     const m = measureColumnContent(items, [{ key: 'name' }], ctx, measure)
     // 100px of text + 22px copy button + padding
     expect(m.name.content).toBe(100 + 22 + CELL_PADDING_PX)
-    expect(m.name.stretch).toBe(400 + 22 + CELL_PADDING_PX)
   })
 
   it('reserves room for the Terminating chip and an audit badge beside a name', () => {

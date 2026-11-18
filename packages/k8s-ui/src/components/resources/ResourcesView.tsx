@@ -6091,12 +6091,7 @@ export function ResourcesView({
     if (!tableActive || !resources?.length) return null
     const sized = columns.map(col => ({ key: col.key, sizing: col.sizing, growWeight: col.growWeight, getFilterValue: extraColumnsByKey.get(col.key)?.getFilterValue }))
     const measured = measureColumnContent(resources, sized, { ...sizingKind, auditBadges })
-    const flat: Record<string, number> = {}
-    for (const [key, m] of Object.entries(measured)) {
-      flat[key] = m.content
-      if (m.stretch !== undefined) flat[`${key}\u0000stretch`] = m.stretch
-    }
-    return flat
+    return Object.fromEntries(Object.entries(measured).map(([key, m]) => [key, m.content]))
   }, [tableActive, resources, columns, extraColumnsByKey, sizingKind, auditBadges, headerFontEpoch])
 
   // Grow-only while the table shows the same data set — the same kind and
@@ -6104,14 +6099,14 @@ export function ResourcesView({
   // out never narrow a column (kubectl's RememberWidths). In memory only: the
   // widths describe one cluster's data, and Radar Hub points one UI at many.
   const datasetIdentity = `${selectedKindIdentityOf(selectedKind)}\u0000${namespaces.join(',')}`
+  // Kept in refs and written only after commit, so a render React discards
+  // never leaves its widths behind for the next one.
   const rememberedContent = useRef<{ identity: string; widths: Record<string, number> } | null>(null)
-  if (!resources) rememberedContent.current = null
-  if (measuredContent) {
-    const previous = rememberedContent.current?.identity === datasetIdentity ? rememberedContent.current.widths : undefined
-    const widths = rememberWidths(previous, measuredContent)
-    if (widths !== previous) rememberedContent.current = { identity: datasetIdentity, widths }
-  }
-  const contentWidths = rememberedContent.current?.identity === datasetIdentity ? rememberedContent.current.widths : undefined
+  const previousContent = resources && rememberedContent.current?.identity === datasetIdentity ? rememberedContent.current.widths : undefined
+  const contentWidths = measuredContent ? rememberWidths(previousContent, measuredContent) : previousContent
+  useLayoutEffect(() => {
+    rememberedContent.current = contentWidths ? { identity: datasetIdentity, widths: contentWidths } : null
+  }, [contentWidths, datasetIdentity])
 
   // Phones pin a leading Name column (see PHONE_PINNED_CELL). Cap it at
   // PHONE_NAME_MAX_VW percent of the screen so a width saved on desktop can't
@@ -6131,15 +6126,15 @@ export function ResourcesView({
   // The width each visible column renders at. One vector feeds the <colgroup>,
   // the pin offsets and budget, and the table's minimum width, so they agree.
   const lastLayout = useRef<{ signature: string; widths: Record<string, number> } | null>(null)
+  const availableWidth = tableViewportWidth - leadingPinWidth
+  // Held widths only carry over while nothing but the data changed.
+  const layoutSignature = [datasetIdentity, availableWidth, columns.map(c => `${c.key}=${columnWidths[c.key] ?? ''}`).join(',')].join('\u0000')
   const columnLayoutWidths = useMemo(() => {
-    const available = tableViewportWidth - leadingPinWidth
     // While a column is being dragged, every other column holds still:
     // the drag tracks the pointer from the dragged column's left edge, which
     // must not move under it. The room is re-shared on release.
     const frozen = resizeFrozenWidths
-    // Held widths only carry over while nothing but the data changed.
-    const signature = [datasetIdentity, available, columns.map(c => `${c.key}=${columnWidths[c.key] ?? ''}`).join(',')].join('\u0000')
-    const held = lastLayout.current?.signature === signature ? lastLayout.current.widths : undefined
+    const held = lastLayout.current?.signature === layoutSignature ? lastLayout.current.widths : undefined
     const inputs: ColumnLayoutInput[] = columns.map(col => {
       const spec = columnSizingSpec(col)
       const minWidth = getColumnMinWidth(col, extraColumnsByKey)
@@ -6150,19 +6145,20 @@ export function ResourcesView({
         floor,
         userWidth: columnWidths[col.key] || frozen?.[col.key],
         content: contentWidths?.[col.key],
-        stretch: contentWidths?.[`${col.key}\u0000stretch`],
         max: spec.max,
         weight: spec.weight,
         hold: held?.[col.key],
       }
     })
-    const widths = computeColumnLayout(inputs, available)
-    if (!frozen) lastLayout.current = { signature, widths }
+    const widths = computeColumnLayout(inputs, availableWidth)
     const first = columns[0]
     if (first?.key === 'name' && phoneNameCap !== Infinity) widths.name = Math.min(widths.name, phoneNameCap)
     return widths
-  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, tableViewportWidth, leadingPinWidth, datasetIdentity, extraColumnsByKey, headerFontEpoch, phoneNameCap])
-  columnLayoutWidthsRef.current = columnLayoutWidths
+  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap])
+  useLayoutEffect(() => {
+    columnLayoutWidthsRef.current = columnLayoutWidths
+    if (!resizeFrozenWidths) lastLayout.current = { signature: layoutSignature, widths: columnLayoutWidths }
+  }, [columnLayoutWidths, layoutSignature, resizeFrozenWidths])
 
   const pinWidths = useMemo(() => visibleTableColumns.map(column => ({ key: column.key, width: columnLayoutWidths[column.key] })),
     [visibleTableColumns, columnLayoutWidths])
