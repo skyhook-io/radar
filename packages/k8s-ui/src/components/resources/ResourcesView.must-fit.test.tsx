@@ -1,0 +1,58 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { VirtuosoMockContext } from 'react-virtuoso'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { ResourcesView } from './ResourcesView'
+import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
+import type { APIResource } from '../../types'
+
+;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })
+Element.prototype.scrollIntoView = vi.fn()
+const nodes: APIResource = { group: '', version: 'v1', kind: 'Node', name: 'nodes', namespaced: false, isCrd: false, verbs: ['get', 'list'] }
+// Long generated node names (Name holds on to 320px before the table scrolls)
+// and GPU nodes (the GPU column shows): together a little wider than 1456px.
+const node = (i: number) => ({
+  apiVersion: 'v1', kind: 'Node',
+  metadata: { name: `ip-10-0-${i}-17.ec2.internal-pool-general-purpose-amd64-${i}`, uid: `n${i}`, creationTimestamp: '2026-01-01T00:00:00Z' },
+  status: { conditions: [{ type: 'Ready', status: 'True' }], nodeInfo: { kubeletVersion: 'v1.31.2' }, allocatable: { cpu: '4', memory: '16Gi', pods: '110', 'nvidia.com/gpu': '8' }, capacity: { 'nvidia.com/gpu': '8' } },
+})
+// The table's room in a maximized 1920px window with Radar's default sidebars.
+const ROOM = 1456
+let root: ReturnType<typeof createRoot>
+let host: HTMLDivElement
+const innerWidth = window.innerWidth
+
+beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(ROOM)
+})
+afterEach(() => {
+  act(() => root?.unmount()); host?.remove(); vi.restoreAllMocks(); localStorage.clear()
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: innerWidth })
+})
+
+function renderAt(windowWidth: number) {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: windowWidth })
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  const items = Array.from({ length: 12 }, (_, i) => node(i))
+  act(() => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 40 }}><KeyboardShortcutProvider><ResourcesView
+    namespaces={[]}
+    apiResources={[nodes]}
+    resourceCounts={{ Node: items.length }}
+    selectedKindQuery={{ isLoading: false, data: items, resourceName: 'nodes', group: '' }}
+    locationPathname="/resources/nodes"
+    locationSearch=""
+    onNavigate={() => {}}
+  /></KeyboardShortcutProvider></VirtuosoMockContext.Provider>))
+  return parseInt(host.querySelector<HTMLTableElement>('table')!.style.width, 10)
+}
+
+it('does not scroll sideways in a 1920px window, where a narrower one would', () => {
+  // Below 1920 Nodes' columns keep their content and Name its protected
+  // width, so the table is wider than its room...
+  expect(renderAt(1680)).toBeGreaterThan(ROOM)
+  act(() => root.unmount()); host.remove()
+  // ...and from 1920 up the columns give way to their headings until it fits.
+  expect(renderAt(1920)).toBeLessThanOrEqual(ROOM)
+})
