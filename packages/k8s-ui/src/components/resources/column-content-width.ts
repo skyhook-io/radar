@@ -5,10 +5,12 @@
 import type { ColumnSizingMode } from './column-sizing'
 import { percentile } from './column-sizing'
 import {
+  formatAge,
   getArgoAppProjectDescription,
   getArgoApplicationRepo,
   getCellFilterValue,
   getConfigMapKeys,
+  getConfigMapSize,
   getFluxHelmReleaseMessage,
   getGatewayClass,
   getGatewayClassDescription,
@@ -17,6 +19,9 @@ import {
   getIngressRules,
   getNetworkPolicyTypes,
   getNodeVersion,
+  getPodProblems,
+  getPodRestarts,
+  getPodStatus,
   getReplicaSetOwner,
   getServiceEndpointsStatus,
   getServicePorts,
@@ -25,22 +30,26 @@ import {
   getStorageClassBindingMode,
   getWorkloadImages,
 } from './resource-utils'
-import { getEC2NodeClassStatus, getNodeClaimNodeName, getNodeClaimNodePoolRef, getNodePoolDisruptionPolicy, getNodePoolLimits, getNodePoolNodeClassRef, getNodePoolStatus } from './resource-utils-karpenter'
 import { getArgoApplicationHealth, getArgoApplicationSync } from './resource-utils-argo'
-import { getConfigAuditReportSummary, getSbomReportStatus, getVulnerabilityReportContainer, getVulnerabilityReportSummary } from './resource-utils-trivy'
 import { getClusterIssuerType } from './resource-utils-certmanager'
 import { getResourceSlicePool } from './resource-utils-dra'
-import { getKnativeServiceLatestRevision } from './resource-utils-knative'
-import { getTraefikServiceType } from './resource-utils-traefik'
-import { getBackupExpiry } from './resource-utils-velero'
-import {
-  getClusterQueueCohort,
-  getKueueWorkloadAdmittedBy,
-  getKueueWorkloadQueueName,
-  getLocalQueueClusterQueue,
-} from './resource-utils-kueue'
 import { getGitRepositoryUrl, getHelmRepositoryUrl, getKustomizationSource, getOCIRepositoryUrl } from './resource-utils-flux'
+import {
+  getEC2NodeClassStatus,
+  getNodeClaimNodeName,
+  getNodeClaimNodePoolRef,
+  getNodePoolDisruptionPolicy,
+  getNodePoolLimits,
+  getNodePoolNodeClassRef,
+  getNodePoolStatus,
+} from './resource-utils-karpenter'
+import { getKnativeServiceLatestRevision } from './resource-utils-knative'
+import { getClusterQueueCohort, getKueueWorkloadAdmittedBy, getKueueWorkloadQueueName, getLocalQueueClusterQueue } from './resource-utils-kueue'
+import { getTraefikServiceType } from './resource-utils-traefik'
+import { getConfigAuditReportSummary, getSbomReportStatus, getVulnerabilityReportContainer, getVulnerabilityReportSummary } from './resource-utils-trivy'
+import { getBackupExpiry } from './resource-utils-velero'
 import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
+import { getPodGpuCount } from '../../utils/extended-resources'
 
 // Cell text styles, matching the classes the cells render with (text-sm /
 // text-xs in the app font). measureText takes a CSS font shorthand.
@@ -65,6 +74,10 @@ const NAME_TERMINATING_CHIP_PX = 104
 const NAME_AUDIT_BADGE_PX = 36
 // A Crossplane pause chip beside a name, besides its label: gap, padding, icon.
 const NAME_PAUSE_CHIP_CHROME_PX = 6 + 12 + 12 + 4
+// A .badge around its label: px-2 on both sides and a 1px border.
+const BADGE_CHROME_PX = 18
+// The problems icon beside a status badge or a ready count, with its gap.
+const PROBLEM_ICON_PX = 8 + 14
 
 export const NAME_MIN_PX = 200
 export const NAME_MAX_PX = 480
@@ -75,12 +88,9 @@ const NODE_MAX_PX = 400
 // columns after it, which a very wide column would push under the drawer.
 export const GROW_MAX_PX = 960
 // A short value — a badge, an enum, a version, an object's name — is useless
-// cut, so its column fits the longest one. Past this it is not short any more,
-// and the cell cuts it like any other.
+// cut, so a column flagged fit sizes to its longest one. Past this it is not
+// short any more, and the cell cuts it like any other.
 const SHORT_VALUE_MAX_PX = 400
-// .badge: px-2 and a 0.5px border on each side; .badge-sm: px-1.5.
-const BADGE_CHROME_PX = 17
-const BADGE_SM_CHROME_PX = 13
 
 // ---------------------------------------------------------------------------
 // Text measurement
@@ -147,44 +157,57 @@ export interface SizableColumn {
 
 export interface ColumnSizingSpec {
   mode: ColumnSizingMode
-  /** fit: size to the longest value instead of the 95th percentile. */
-  longest?: boolean
   /** grow: share of the room left over. fit: share of it while reaching from its 95th percentile to its longest value. */
   weight?: number
   max?: number
+  /** Name: sized to its longest value (not its 95th percentile) and never given back when room is short. */
+  keep?: boolean
+  /** When room is short, lower ranks give way first (see ColumnLayoutInput). */
+  yieldRank?: number
+  /** fit: size to the longest value instead of the 95th percentile. */
+  longest?: boolean
 }
 
 export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   if (col.sizing === 'grow') return { mode: 'grow', weight: col.growWeight ?? 1, max: GROW_MAX_PX }
   if (col.sizing === 'exact') return { mode: 'exact' }
-  // Fit columns size to their 95th percentile, so a few outliers (one long
-  // namespace, one generated name) don't set the width, and reach for their
-  // longest value from the room left over. Name takes twice the share there:
-  // a cut name costs more than any other cut cell.
+  // Name is what a reader scans for, so it fits its longest name (up to the
+  // cap) and holds that width: the table scrolls sideways before a name that
+  // fits under the cap is cut. Other fit columns size to their 95th
+  // percentile, so a few outliers (one long namespace) don't set the width,
+  // and reach for their longest value from the room left over.
   switch (col.key) {
-    case 'name': return { mode: 'fit', max: NAME_MAX_PX, weight: 2 }
+    case 'name': return { mode: 'fit', max: NAME_MAX_PX, keep: true }
     case 'namespace': return { mode: 'fit', max: NAMESPACE_MAX_PX, weight: 1 }
-    case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1 }
+    // Node is worth showing but is the first to give way when room is short.
+    case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1, yieldRank: 1 }
   }
   // A column flagged fit holds short values (see SHORT_VALUE_MAX_PX), which
   // have no outliers worth trimming: one ExternalName among a hundred
-  // ClusterIPs still needs its whole badge.
+  // ClusterIPs still needs its whole badge. When room is short it gives way
+  // after the exact columns, down to its curated width.
   if (col.sizing === 'fit') return { mode: 'fit', max: SHORT_VALUE_MAX_PX, longest: true }
   return { mode: 'exact' }
 }
 
 type CellWidth = (resource: any, measure: MeasureText, limit: number, ctx: ContentContext) => number
-type CellText = (resource: any) => string | null | undefined
-const text = (read: CellText, font: CellFont = 'body'): CellWidth =>
+const text = (read: (resource: any) => string | null | undefined, font: CellFont = 'body'): CellWidth =>
   (resource, measure, limit) => measure(read(resource) || '-', font, limit)
-// A cell that is one .badge (or .badge-sm) holding the text.
-const badge = (read: CellText, size: 'badge' | 'badge-sm' = 'badge'): CellWidth =>
-  (resource, measure, limit) => badgeWidth(read(resource), measure, limit, size)
-function badgeWidth(label: string | null | undefined, measure: MeasureText, limit: number, size: 'badge' | 'badge-sm' = 'badge'): number {
-  if (!label) return measure('-', 'body')
-  return size === 'badge'
-    ? measure(label, 'badge', limit) + BADGE_CHROME_PX
-    : measure(label, 'small', limit) + BADGE_SM_CHROME_PX
+// A cell that is one .badge holding the label.
+const badge = (label: (resource: any) => string | null | undefined): CellWidth =>
+  (resource, measure, limit) => badgeWidth(label(resource), measure, limit)
+function badgeWidth(label: string | null | undefined, measure: MeasureText, limit = Infinity): number {
+  return measure(label || '-', 'badge', limit) + BADGE_CHROME_PX
+}
+// The status badge of a kind whose cell shows getCellFilterValue's status text.
+const statusBadge = (plural: string): CellWidth => badge(r => getCellFilterValue(r, 'status', plural))
+// Trivy's C/H/M/L count cells, in text-sm font-medium.
+function trivySeverityCounts(plural: string, summary: (report: any) => Record<'critical' | 'high' | 'medium' | 'low', number>): Record<string, CellWidth> {
+  const out: Record<string, CellWidth> = {}
+  for (const severity of ['critical', 'high', 'medium', 'low'] as const) {
+    out[`${plural}:${severity}`] = text(r => String(summary(r)[severity]), 'medium')
+  }
+  return out
 }
 
 // What the cells a curated kind flags as grow or fit show, where it differs
@@ -236,6 +259,7 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'nodepools:disruption': text(getNodePoolDisruptionPolicy),
   'nodeclaims:nodePool': text(getNodeClaimNodePoolRef),
   'nodeclaims:nodeName': text(getNodeClaimNodeName),
+  'ec2nodeclasses:status': badge(r => getEC2NodeClassStatus(r).text),
   'applications:sync': badge(r => getArgoApplicationSync(r).status),
   'applications:health': badge(r => getArgoApplicationHealth(r).status),
   'backups:expiry': text(getBackupExpiry),
@@ -249,7 +273,6 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'admissionchecks:status': statusBadge('admissionchecks'),
   'provisioningrequests:status': statusBadge('provisioningrequests'),
   'jobsets:status': statusBadge('jobsets'),
-  'ec2nodeclasses:status': badge(r => getEC2NodeClassStatus(r).text),
   'storageclasses:bindingMode': text(getStorageClassBindingMode),
   'networkpolicies:policyTypes': text(getNetworkPolicyTypes),
   'issuers:issuerType': text(getClusterIssuerType),
@@ -273,18 +296,56 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   ...trivySeverityCounts('clusterinfraassessmentreports', getConfigAuditReportSummary),
 }
 
-// The status badge of a kind whose cell shows getCellFilterValue's status text.
-function statusBadge(plural: string): CellWidth {
-  return badge(r => getCellFilterValue(r, 'status', plural))
+// What an exact column's cells show, for the kinds whose tables most often run
+// short of room. Measured so the column can shrink to its content when the
+// table is too narrow; an exact column without a reader here never shrinks
+// below its curated width, because its content is unknown. Keyed
+// `${plural}:${column}`, or `*:${column}` for a cell every kind renders alike.
+const age: CellWidth = (resource, measure) => {
+  const created = resource?.metadata?.creationTimestamp
+  return measure(created ? formatAge(created) : '-', 'body')
+}
+const workloadReady: CellWidth = (r, measure) =>
+  measure(`${Math.min(r.status?.readyReplicas || 0, r.spec?.replicas ?? 1)}/${r.spec?.replicas ?? 1}`, 'medium') + PROBLEM_ICON_PX
+const EXACT_CELL_WIDTHS: Record<string, CellWidth> = {
+  '*:age': age,
+  'pods:status': (r, measure) => badgeWidth(getPodStatus(r).text, measure) + (getPodProblems(r).length > 1 ? PROBLEM_ICON_PX : 0),
+  'pods:restarts': text(r => String(getPodRestarts(r)), 'medium'),
+  'pods:gpu': text(r => String(getPodGpuCount(r) || '-')),
+  'events:type': badge(r => r.type || 'Normal'),
+  'events:count': text(r => String(r.count || 1), 'medium'),
+  'events:lastSeen': text(r => {
+    const t = r.lastTimestamp || r.metadata?.creationTimestamp
+    return t ? formatAge(t) : '-'
+  }),
+  'deployments:ready': workloadReady,
+  'statefulsets:ready': workloadReady,
+  'deployments:upToDate': text(r => String(r.status?.updatedReplicas || 0)),
+  'deployments:available': text(r => String(r.status?.availableReplicas || 0)),
+  'statefulsets:upToDate': text(r => String(r.status?.updatedReplicas || 0)),
+  'replicasets:ready': text(r => `${r.status?.readyReplicas || 0}/${r.spec?.replicas || 0}`, 'medium'),
+  'replicasets:status': badge(r => ((r.spec?.replicas || 0) > 0 ? 'Active' : 'Old')),
+  'configmaps:size': text(getConfigMapSize),
 }
 
-// Trivy's C/H/M/L count cells, in text-sm font-medium.
-function trivySeverityCounts(plural: string, summary: (report: any) => Record<'critical' | 'high' | 'medium' | 'low', number>): Record<string, CellWidth> {
-  const out: Record<string, CellWidth> = {}
-  for (const severity of ['critical', 'high', 'medium', 'low'] as const) {
-    out[`${plural}:${severity}`] = text(r => String(summary(r)[severity]), 'medium')
-  }
-  return out
+// Columns drawn as a picture rather than text shrink no further than this when
+// the table is short (cell padding included). The usage bars stay readable —
+// the bar and its request marker scale with the cell — down to about this
+// width; below it the "used / limit" label is cut.
+const USAGE_BAR_MIN_PX = 120
+const VISUAL_MIN_PX: Record<string, number> = {
+  'pods:cpu': USAGE_BAR_MIN_PX,
+  'pods:memory': USAGE_BAR_MIN_PX,
+  'nodes:cpu': USAGE_BAR_MIN_PX,
+  'nodes:memory': USAGE_BAR_MIN_PX,
+}
+
+/**
+ * The narrowest an exact column's content needs, cell padding included, or
+ * undefined when Radar doesn't know what its cells show.
+ */
+export function exactContentReader(plural: string, column: string): CellWidth | undefined {
+  return EXACT_CELL_WIDTHS[`${plural}:${column}`] ?? EXACT_CELL_WIDTHS[`*:${column}`]
 }
 
 /** Whether a curated grow or fit column has its own reader of what its cell shows (tested for drift). */
@@ -334,17 +395,18 @@ function cellWidthReader(col: ContentColumn, ctx: ContentContext): CellWidth {
 }
 
 export interface MeasuredContent {
-  /** What the column sizes to: grow, its longest value; fit, its 95th percentile. Padding included. */
+  /** grow, exact, Name and flagged fit columns: the longest value; Namespace and Node: the 95th percentile. Padding included. */
   content: number
   /** fit only: its longest value, which it may grow to from the room left over. */
   stretch?: number
 }
 
 /**
- * Content widths of the automatically sized columns over every item. Exact
- * columns are not measured. Each value stops being counted once past the
- * column's cap, so an Event message thousands of pixels long costs no more
- * than one at the cap.
+ * Content widths over every item: of the automatically sized columns, and of
+ * the exact columns Radar knows the content of (how far they may shrink when
+ * room is short). Each value stops being counted once past the column's cap,
+ * so an Event message thousands of pixels long costs no more than one at the
+ * cap.
  */
 export function measureColumnContent(
   items: readonly any[],
@@ -355,15 +417,24 @@ export function measureColumnContent(
   const result: Record<string, MeasuredContent> = {}
   for (const col of columns) {
     const spec = columnSizingSpec(col)
-    if (spec.mode === 'exact') continue
+    if (spec.mode === 'exact') {
+      const visual = VISUAL_MIN_PX[`${ctx.plural}:${col.key}`]
+      if (visual !== undefined) {
+        result[col.key] = { content: visual }
+        continue
+      }
+      const read = col.getFilterValue ? undefined : exactContentReader(ctx.plural, col.key)
+      if (!read) continue
+      let longest = 0
+      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, Infinity, ctx))
+      result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
+      continue
+    }
     const read = cellWidthReader(col, ctx)
     const limit = (spec.max ?? Infinity) - CELL_PADDING_PX
-    if (spec.mode === 'fit' && spec.longest) {
+    if (spec.mode === 'fit' && (spec.keep || spec.longest)) {
       let longest = 0
-      for (const item of items) {
-        const w = safeWidth(read, item, measure, limit, ctx)
-        if (w > longest) longest = w
-      }
+      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, limit, ctx))
       result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
     } else if (spec.mode === 'fit') {
       const widths = new Array<number>(items.length)

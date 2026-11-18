@@ -1,26 +1,30 @@
 import { describe, expect, it } from 'vitest'
 import { type ColumnLayoutInput, computeColumnLayout, percentile, rememberWidths } from './column-sizing'
 
-const name = (content: number, stretch?: number): ColumnLayoutInput => ({ key: 'name', mode: 'fit', floor: 200, max: 480, content, stretch, weight: 2 })
+const name = (content: number): ColumnLayoutInput => ({ key: 'name', mode: 'fit', floor: 200, max: 480, content, keep: true })
 const exact = (key: string, floor: number): ColumnLayoutInput => ({ key, mode: 'exact', floor })
 const grow = (key: string, floor: number, content: number, weight = 1, max = 960): ColumnLayoutInput => ({ key, mode: 'grow', floor, content, weight, max })
 const total = (widths: Record<string, number>) => Object.values(widths).reduce((a, b) => a + b, 0)
 
 describe('computeColumnLayout', () => {
   it('keeps exact columns at their floor and fits Name to its content', () => {
-    const w = computeColumnLayout([name(300), exact('status', 160), exact('age', 96)], 2000)
+    const w = computeColumnLayout([name(300), exact('status', 160), exact('age', 96)], 556)
     expect(w).toEqual({ name: 300, status: 160, age: 96 })
   })
 
-  it('gives Name at least its floor and at most its cap', () => {
-    expect(computeColumnLayout([name(120)], 2000).name).toBe(200)
-    expect(computeColumnLayout([name(900)], 2000).name).toBe(480)
+  it('protects Name at its content, at least its floor and at most its cap', () => {
+    expect(computeColumnLayout([name(120)], 0).name).toBe(200)
+    expect(computeColumnLayout([name(900)], 0).name).toBe(480)
   })
 
-  it('leaves room beyond every column’s content to the spacer instead of stretching one', () => {
-    const w = computeColumnLayout([name(300), grow('message', 256, 600)], 2560)
-    expect(w).toEqual({ name: 300, message: 600 })
-    expect(total(w)).toBeLessThan(2560)
+  it('spreads room beyond every column’s content over all of them in proportion, keeping dragged widths', () => {
+    // Content first: Name 300, Message grows to 600 (900 in all); the other 900 is spread 1:2.
+    const w = computeColumnLayout([name(300), grow('message', 256, 600)], 1800)
+    expect(w).toEqual({ name: 600, message: 1200 })
+    const dragged = computeColumnLayout([name(300), grow('message', 256, 600), { ...exact('age', 96), userWidth: 100 }], 1900)
+    expect(dragged).toEqual({ name: 600, message: 1200, age: 100 })
+    // Name's cap limits only the width it claims before the others, not its share.
+    expect(computeColumnLayout([name(900), exact('age', 96)], 1152).name).toBe(960)
   })
 
   it('shares the room left by weight, each grow column up to its longest value', () => {
@@ -30,32 +34,71 @@ describe('computeColumnLayout', () => {
     expect(w).toEqual({ name: 200, message: 650, object: 150 })
   })
 
-  it('caps a grow column at its max even with room to spare', () => {
-    expect(computeColumnLayout([grow('message', 256, 3000)], 5000).message).toBe(960)
+  it('caps what a grow column claims at its max; past that it only takes its proportional share', () => {
+    // Message claims up to 960; the remaining 1056 is spread 960:96, keeping the 10:1 ratio.
+    const w = computeColumnLayout([grow('message', 256, 3000), exact('age', 96)], 2112)
+    expect(w).toEqual({ message: 1920, age: 192 })
   })
 
-  it('lets Name reach for its longest name from the room left, sharing it with grow columns by weight', () => {
-    // 900 - 250 - 192 = 458 left; Name (weight 2) and selector (1) share it: Name +305 capped at +150.
-    const w = computeColumnLayout([name(250, 400), grow('selector', 192, 1000)], 900)
-    expect(w.name).toBe(400)
-    expect(w.selector).toBe(500)
-    expect(computeColumnLayout([name(250, 300), grow('selector', 192, 500)], 2000)).toEqual({ name: 300, selector: 500 })
+  it('lets a fit column reach for its longest value from the room left, sharing it with grow columns by weight', () => {
+    // 900 - 200 - 250 - 192 = 258 left; namespace (weight 2) and selector (1) share it: namespace +172 capped at +150.
+    const ns = (content: number, stretch?: number): ColumnLayoutInput => ({ key: 'namespace', mode: 'fit', floor: 192, max: 400, content, stretch, weight: 2 })
+    const w = computeColumnLayout([name(200), ns(250, 400), grow('selector', 192, 1000)], 900)
+    expect(w.namespace).toBe(400)
+    expect(w.selector).toBe(300)
     // Without a stretch it stays at its content.
-    expect(computeColumnLayout([name(250), grow('selector', 192, 500)], 2000)).toEqual({ name: 250, selector: 500 })
+    expect(computeColumnLayout([name(200), ns(250), grow('selector', 192, 500)], 950)).toEqual({ name: 200, namespace: 250, selector: 500 })
   })
 
-  it('takes room back from fit columns, down to their floor, before the table scrolls', () => {
-    const w = computeColumnLayout([name(400), { key: 'node', mode: 'fit', floor: 176, max: 400, content: 276 }, exact('age', 96), grow('images', 192, 400)], 700)
-    expect(w.images).toBe(192) // grow columns are already at their floor
-    expect(w.age).toBe(96)
-    expect(total(w)).toBeLessThanOrEqual(700)
-    expect(w.name).toBeGreaterThanOrEqual(200)
-    expect(w.node).toBeGreaterThanOrEqual(176)
+  it('when short, takes room from exact columns down to their content before fit columns, and never from Name', () => {
+    const cols: ColumnLayoutInput[] = [
+      name(400),
+      { key: 'node', mode: 'fit', floor: 176, max: 400, content: 276 },
+      { key: 'status', mode: 'exact', floor: 160, min: 110 },
+      { key: 'cpu', mode: 'exact', floor: 160, min: 136 },
+      exact('age', 96),
+      grow('images', 192, 400),
+    ]
+    // Room for everything at its normal width: 400+276+160+160+96+192 = 1284.
+    expect(total(computeColumnLayout(cols, 1284))).toBe(1284)
+    // 50 short: only the exact columns give, in proportion to their slack (50 and 24).
+    const a = computeColumnLayout(cols, 1234)
+    expect(a.name).toBe(400)
+    expect(a.node).toBe(276)
+    expect(a.status + a.cpu).toBeGreaterThanOrEqual(270 - 1)
+    expect(a.age).toBe(96) // no known content: never shrinks
+    // 150 short: exact columns are at their content (74 given), Node gives the rest down to its floor.
+    const b = computeColumnLayout(cols, 1134)
+    expect(b).toMatchObject({ name: 400, status: 110, cpu: 136, age: 96, images: 192 })
+    expect(b.node).toBe(276 - 76)
+    // Past every lower bound: Name still holds, the table scrolls.
+    const c = computeColumnLayout(cols, 600)
+    expect(c).toEqual({ name: 400, node: 176, status: 110, cpu: 136, age: 96, images: 192 })
+  })
+
+  it('lets Node give way before the exact columns, and Namespace after them', () => {
+    const cols: ColumnLayoutInput[] = [
+      name(300),
+      { key: 'namespace', mode: 'fit', floor: 150, max: 320, content: 200 },
+      { key: 'status', mode: 'exact', floor: 160, min: 110 },
+      { key: 'node', mode: 'fit', floor: 176, max: 400, content: 276, yieldRank: 1 },
+    ]
+    // 936 at normal widths. 60 short: all from Node.
+    expect(computeColumnLayout(cols, 876)).toEqual({ name: 300, namespace: 200, status: 160, node: 216 })
+    // 150 short: Node to its floor (100), then Status to its content (50).
+    expect(computeColumnLayout(cols, 786)).toEqual({ name: 300, namespace: 200, status: 110, node: 176 })
+    // 170 short: then Namespace (20).
+    expect(computeColumnLayout(cols, 766)).toEqual({ name: 300, namespace: 180, status: 110, node: 176 })
+  })
+
+  it('never shrinks an exact column below its normal width when its content is wider', () => {
+    const w = computeColumnLayout([name(200), { key: 'reason', mode: 'exact', floor: 128, min: 200 }], 250)
+    expect(w.reason).toBe(128)
   })
 
   it('never goes below the floors: the table scrolls instead', () => {
     const w = computeColumnLayout([name(400), exact('status', 160), grow('images', 192, 400)], 300)
-    expect(w).toEqual({ name: 200, status: 160, images: 192 })
+    expect(w).toEqual({ name: 400, status: 160, images: 192 })
   })
 
   it('keeps a width the user dragged, whatever the mode and room', () => {
@@ -83,6 +126,11 @@ describe('computeColumnLayout', () => {
     // Name's content grew by 100: A and B give it back in proportion, rather than A losing 250 to B.
     const shared = computeColumnLayout([name(300), { ...grow('a', 100, 5000), hold: 600 }, { ...grow('b', 100, 5000), hold: 200 }], 1000)
     expect(shared).toEqual({ name: 300, a: 516, b: 183 })
+  })
+
+  it('adds up to exactly the room when it spreads what is left', () => {
+    const w = computeColumnLayout([name(333.3), grow('a', 100.3, 120.7), exact('age', 96.6)], 1333)
+    expect(total(w)).toBe(1333)
   })
 
   it('never sums to more than the room it was given', () => {

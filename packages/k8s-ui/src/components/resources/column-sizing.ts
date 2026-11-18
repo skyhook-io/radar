@@ -7,32 +7,47 @@
 //
 // Each column is one of:
 //   exact — the curated width (getColumnMinWidth). Status, Age, Ready, counts.
-//   fit   — sized to its content within [floor, max]: Name, Namespace, Node.
-//           Sized to the 95th percentile of its values, so a few outliers
-//           don't set the width, then it takes part in sharing the room left
-//           (below) up to its longest value.
+//           When the room is short it may give back down to `min`: the larger
+//           of its header and its measured content (or, for a picture such as
+//           the CPU and Memory bars, the narrowest it still reads at).
+//   fit   — sized to its content within [floor, max]: Namespace, Node. Sized
+//           to the 95th percentile of its values, so a few outliers don't set
+//           the width, then it takes part in sharing the room left (below) up
+//           to its longest value.
+//   kept  — a fit column marked `keep` (Name): sized to its longest value
+//           within [floor, max] — its protected width — and never given back.
+//           Only a value longer than max is cut; the table scrolls sideways
+//           before a shorter one is.
 //   grow  — starts at its floor and shares whatever room is left, by weight,
 //           each up to its longest value. Long free text: Event messages,
 //           selectors, image lists, uncurated CRD printer columns.
 //   user  — a width the user dragged; kept as is.
 //
-// Room is handed out in a fixed order — user and exact widths, then fit columns
-// at their 95th percentile, then the grow columns and the fit columns' longer
-// values share what is left by weight — and whatever remains goes to the table's trailing spacer
-// column rather than stretching any column past its content: a stretched
-// column pushes the columns after it under the resource drawer, which overlays
-// the right of the list. When the room is short, the shared room is the first
-// to go (those columns are at their floor or content before they get any),
-// then fit columns shrink toward their floor; below the sum of floors the table
-// scrolls sideways.
+// Room is handed out in a fixed order: user widths, Name, exact widths and fit
+// columns at their 95th percentile; then the grow columns and the fit columns'
+// longer values share what is left by weight, each up to its longest value;
+// then whatever is still left is spread over every column in proportion to its
+// width, so the table fills its room and keeps its proportions (placeLeftover).
+//
+// When the room is short it is taken back in rank order (yieldRank): Node to
+// its floor first, then exact columns toward their `min`, then the other fit
+// columns (Namespace) toward their floor. Grow columns are already at their
+// floor, and Name and user widths never shrink. Past that the table scrolls
+// sideways.
 
 export type ColumnSizingMode = 'exact' | 'fit' | 'grow'
 
 export interface ColumnLayoutInput {
   key: string
   mode: ColumnSizingMode
-  /** Never rendered narrower than this (except a user width, which wins). */
+  /** Its normal width; never rendered narrower than this, except an exact column down to `min` when room is short. */
   floor: number
+  /** exact only: how far it may shrink when room is short (default: floor). */
+  min?: number
+  /** fit only: never give width back when room is short (Name). */
+  keep?: boolean
+  /** When room is short, lower ranks give way first (default: exact 2, fit 3). */
+  yieldRank?: number
   /** Width the user dragged or double-click fitted. Overrides everything else. */
   userWidth?: number
   /** Measured content width, cell padding included. fit: the target; grow: the cap. */
@@ -59,13 +74,13 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
   // stand, and nothing is shared or taken back.
   if (!(available > 0)) return roundWidths(widths)
 
-  let used = sum(Object.values(widths))
+  const used = sum(Object.values(widths))
   if (used > available) {
-    const fits = columns.filter(c => !c.userWidth && c.mode === 'fit')
-    const slack = sum(fits.map(c => widths[c.key] - c.floor))
-    if (slack > 0) {
-      const ratio = Math.min(1, (used - available) / slack)
-      for (const c of fits) widths[c.key] -= (widths[c.key] - c.floor) * ratio
+    let short = used - available
+    const yielding = columns.filter(c => !c.userWidth && !c.keep && (c.mode === 'exact' || c.mode === 'fit'))
+    const rank = (c: ColumnLayoutInput) => c.yieldRank ?? (c.mode === 'exact' ? 2 : 3)
+    for (const r of [...new Set(yielding.map(rank))].sort((x, y) => x - y)) {
+      short = giveBack(widths, yielding.filter(c => rank(c) === r), lowerBound, short)
     }
     return roundWidths(widths)
   }
@@ -91,8 +106,45 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
     sharing.forEach((g, i) => { widths[g.key] += held[i] * scale })
     left -= heldTotal * scale
   }
-  waterFill(widths, sharing, left)
-  return roundWidths(widths)
+  left = waterFill(widths, sharing, left)
+  const spread = columns.filter(c => !c.userWidth)
+  placeLeftover(widths, spread, left)
+  roundWidths(widths)
+  // Rounding each width down leaves a few pixels; the last column takes them,
+  // so the columns add up to exactly the room.
+  const last = spread.at(-1)
+  if (left > 0 && last) widths[last.key] += Math.max(0, Math.floor(available) - sum(Object.values(widths)))
+  return widths
+}
+
+// How far a column may shrink when room is short.
+function lowerBound(c: ColumnLayoutInput): number {
+  return c.mode === 'exact' ? Math.min(c.floor, c.min ?? c.floor) : c.floor
+}
+
+// Where room goes once every column has its content: spread over the columns
+// in proportion to their width, so the table fills its room and keeps its
+// proportions. Widths the user dragged stay as dragged. Kept as its own step
+// so that choice can change in one place.
+function placeLeftover(widths: Record<string, number>, columns: ColumnLayoutInput[], left: number): void {
+  const total = sum(columns.map(c => widths[c.key]))
+  if (!(left > 0) || total <= 0) return
+  for (const c of columns) widths[c.key] += left * widths[c.key] / total
+}
+
+// Takes up to `short` back from the columns, each in proportion to how far it
+// is above its lower bound. Returns what is still short.
+function giveBack(
+  widths: Record<string, number>,
+  columns: ColumnLayoutInput[],
+  lowerBound: (c: ColumnLayoutInput) => number,
+  short: number,
+): number {
+  const slack = sum(columns.map(c => Math.max(0, widths[c.key] - lowerBound(c))))
+  if (!(short > 0) || slack <= 0) return short
+  const ratio = Math.min(1, short / slack)
+  for (const c of columns) widths[c.key] -= Math.max(0, widths[c.key] - lowerBound(c)) * ratio
+  return short - slack * ratio
 }
 
 // Shares `left` among columns by weight, each up to its target, re-sharing what

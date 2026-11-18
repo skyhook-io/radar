@@ -182,7 +182,7 @@ import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessContr
 import { Tooltip } from '../ui/Tooltip'
 import { TruncatedText } from '../ui/TruncatedText'
 import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, rememberWidths } from './column-sizing'
-import { NAME_MIN_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, workloadImagesText } from './column-content-width'
+import { NAME_MAX_PX, NAME_MIN_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, workloadImagesText } from './column-content-width'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import type { Issue } from '../issues/types'
 import { issueTitle } from '../issues/severity'
@@ -378,6 +378,8 @@ const CHECKBOX_COLUMN_WIDTH = 40
 const PHONE_PINNED_CELL = 'phone:sticky phone:left-[var(--pin-left)] phone:z-[1] phone:bg-theme-surface'
 const PHONE_PINNED_HEAD = 'phone:sticky phone:left-[var(--pin-left)] phone:z-[3]'
 const PHONE_NAME_MAX_VW = 45
+// The most of the table's width Name may hold on to (see columnLayoutWidths).
+const NAME_VIEWPORT_SHARE = 0.5
 function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean | undefined, column: 'compare' | 'checkbox' | 'name'): React.CSSProperties {
   const compare = compareMode ? COMPARE_COLUMN_WIDTH : 0
   const checkbox = showCheckbox ? CHECKBOX_COLUMN_WIDTH : 0
@@ -522,7 +524,11 @@ export function isColumnSortable(col: Column, extras?: Map<string, ExtraColumn>)
 }
 
 export function getColumnMinWidth(col: Column, extras?: Map<string, ExtraColumn>): number {
-  const declared = declaredColumnWidth(col)
+  return Math.max(declaredColumnWidth(col), getColumnHeaderWidth(col, extras))
+}
+
+/** The room a column's heading needs: label, padding, and the sort and filter controls. */
+export function getColumnHeaderWidth(col: Column, extras?: Map<string, ExtraColumn>): number {
   // A column-filter button also sits in this row, but whether one renders
   // depends on the distinct values in the data (isColumnFilterableByDistinctCount),
   // which isn't knowable here — those columns stay ~20px tighter than ideal.
@@ -534,7 +540,7 @@ export function getColumnMinWidth(col: Column, extras?: Map<string, ExtraColumn>
   const affordance = (isColumnSortable(col, extras) ? HEADER_SORT_AFFORDANCE_PX : 0)
     + (SKIP_FILTER_COLUMNS.has(col.key) ? 0 : HEADER_FILTER_AFFORDANCE_PX)
   const headerFloor = HEADER_PADDING_PX + headerLabelWidth(col.label) + affordance
-  return Math.max(declared, Math.min(Math.ceil(headerFloor), HEADER_FLOOR_MAX_PX))
+  return Math.min(Math.ceil(headerFloor), HEADER_FLOOR_MAX_PX)
 }
 
 function declaredColumnWidth(col: Column): number {
@@ -3319,6 +3325,36 @@ function columnsForKindWithPrinter(
  *   - printer columns, but only when the blob names none at all. Once it names
  *     one, the user has seen the set and an absent key is a deliberate hide.
  */
+// How far a saved width may sit from a column's default and still count as
+// that default: header widths are measured from the font, which can differ by a
+// pixel or two between the session that saved them and this one.
+const DEFAULT_WIDTH_TOLERANCE_PX = 4
+
+/**
+ * Saved column widths without the ones that are just a column's default width.
+ *
+ * Before columns sized themselves, the first drag on a table saved the width of
+ * every visible column, so a saved record holds widths the user never chose.
+ * Keeping them would freeze those tables as they were. A width at a column's
+ * default (its declared width, or its heading where that is wider) is one of
+ * those, so the column goes back to sizing itself; a width the user dragged
+ * away from the default stays. Name had no default width — it took whatever
+ * room was left — so a saved Name width can't be told from a drag and stays.
+ */
+export function withoutDefaultWidths(widths: unknown, columns: Column[]): Record<string, number> {
+  if (!widths || typeof widths !== 'object') return {}
+  const byKey = new Map(columns.map(column => [column.key, column]))
+  const extras = new Map(columns.filter((column): column is ExtraColumn => 'render' in column).map(column => [column.key, column]))
+  const kept: Record<string, number> = {}
+  for (const [key, width] of Object.entries(widths as Record<string, unknown>)) {
+    if (typeof width !== 'number' || !(width > 0)) continue
+    const column = byKey.get(key)
+    if (column && key !== 'name' && Math.abs(width - getColumnMinWidth(column, extras)) <= DEFAULT_WIDTH_TOLERANCE_PX) continue
+    kept[key] = width
+  }
+  return kept
+}
+
 export function mergeSavedVisibleColumns(
   savedVisible: string[],
   extraKeys: string[],
@@ -3383,6 +3419,9 @@ function filterHostExtras(
   })
 }
 
+// Columns the data can show on its own (see gpuInData).
+const DATA_SHOWN_COLUMNS = new Set(['gpu'])
+
 // localStorage helpers for column settings
 const COLUMN_SETTINGS_PREFIX = 'radar-columns-'
 const CHECKBOX_VISIBILITY_KEY = 'radar-resource-checkboxes'
@@ -3414,6 +3453,9 @@ interface ColumnSettings {
   /** Full display order, including hidden columns. Older saves omit Name. */
   order?: string[]
   pinned?: string[]
+  /** Columns shown by the data (GPU) that the user hid. Absent on blobs written
+   *  before GPU followed the data. */
+  hidden?: string[]
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -3977,6 +4019,7 @@ export function ResourcesView({
   const [showInactiveReplicaSets, setShowInactiveReplicaSets] = useState(initialFilters.showInactive)
   // Column visibility and resize state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set())
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set())
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [columnOrder, setColumnOrder] = useState<string[] | null>(null)
   const [pinnedColumns, setPinnedColumns] = useState<string[]>([])
@@ -4207,13 +4250,6 @@ export function ResourcesView({
   // was one the user hid rather than one never shown.
   const knownColumnKeys = useRef<Set<string>>(new Set())
   const knownColumnKeysKind = useRef('')
-  // Whether the user has a persisted column blob for this kind — data-driven
-  // column defaults (GPU auto-show) must never override explicit user choices.
-  const hadSavedColumnSettings = useRef(false)
-  // Kinds where GPU auto-show already fired this mount. Firing is one-shot:
-  // without this, hiding the auto-shown column re-triggers the effect (it
-  // depends on visibleColumns) and instantly reverts the user's hide.
-  const gpuAutoShownKinds = useRef<Set<string>>(new Set())
   useEffect(() => {
     // The table's own settings: nothing to load (or clear) while a kind view replaces it.
     if (!tableActive) return
@@ -4225,7 +4261,6 @@ export function ResourcesView({
     // prevents that cross-kind write.
     isColumnSettingsLoaded.current = false
     const saved = loadColumnSettings(selectedKind.name, selectedKind.group)
-    hadSavedColumnSettings.current = !!saved
     // Reconstruct the effective column list locally rather than reading
     // `allColumns` — keying this effect to the kind (not allColumns) keeps
     // runtime custom-column add/remove from re-running it and clobbering the
@@ -4284,22 +4319,29 @@ export function ResourcesView({
       if (isStaleDefaults) {
         clearColumnSettings(selectedKind.name, selectedKind.group)
         knownColumnKeys.current = new Set()
-        hadSavedColumnSettings.current = false
         setVisibleColumns(getDefaultVisibleColumns(effective))
+        setHiddenColumns(new Set())
         setColumnWidths({})
         setColumnOrder(null)
         setPinnedColumns([])
       } else {
         const restoredVisible = mergeSavedVisibleColumns(saved.visible, extraKeys, builtPrinterColumns, effective, savedKnown)
+        const savedHidden = Array.isArray(saved.hidden) ? saved.hidden.filter((k): k is string => typeof k === 'string') : undefined
+        // Blobs from before GPU followed the data hold the GPU column as the
+        // old one-shot auto-show left it; let it follow the data instead.
+        if (!savedHidden) for (const key of DATA_SHOWN_COLUMNS) restoredVisible.delete(key)
         setVisibleColumns(restoredVisible)
-        setColumnWidths(saved.widths || {})
+        setHiddenColumns(new Set(savedHidden ?? []))
+        setColumnWidths(withoutDefaultWidths(saved.widths, effective))
         const savedOrder = sanitizeColumnOrder(saved.order)
         // Older settings reorder only columns after Name. Convert once to a full order.
         setColumnOrder(Array.isArray(saved.pinned) ? savedOrder : applyColumnOrder(effective, savedOrder).map(column => column.key))
-        setPinnedColumns(sanitizePinnedColumns(saved.pinned).filter(key => restoredVisible.has(key)))
+        // A pin on a column the data shows (GPU) is kept; the column may be on screen.
+        setPinnedColumns(sanitizePinnedColumns(saved.pinned).filter(key => restoredVisible.has(key) || DATA_SHOWN_COLUMNS.has(key)))
       }
     } else {
       setVisibleColumns(getDefaultVisibleColumns(effective))
+      setHiddenColumns(new Set())
       setColumnWidths({})
       setColumnOrder(null)
       setPinnedColumns([])
@@ -4326,12 +4368,10 @@ export function ResourcesView({
       known: Array.from(knownColumnKeys.current),
       order: columnOrder ?? undefined,
       pinned: pinnedColumns,
+      hidden: Array.from(hiddenColumns),
     })
-    // A persisted blob blocks GPU auto-show from here on — same rule in-session
-    // as across sessions, so a later data refresh can't override user choices.
-    hadSavedColumnSettings.current = true
     // allColumnKeysSig, not allColumnKeys: see the memo above.
-  }, [visibleColumns, columnWidths, customColumns, columnOrder, pinnedColumns, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
+  }, [visibleColumns, hiddenColumns, columnWidths, customColumns, columnOrder, pinnedColumns, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
 
   // Close column picker on outside click or Escape
   useLayoutEffect(() => {
@@ -4456,20 +4496,6 @@ export function ResourcesView({
     setColumnWidths(prev => ({ ...prev, [colKey]: fitted }))
   }, [])
 
-  // Toggle column visibility
-  const toggleColumnVisibility = useCallback((colKey: string) => {
-    // A hidden column has no pin to surprise the user when it is shown again.
-    setPinnedColumns(prev => prev.filter(key => key !== colKey))
-    setVisibleColumns(prev => {
-      const next = new Set(prev)
-      if (next.has(colKey)) {
-        next.delete(colKey)
-      } else {
-        next.add(colKey)
-      }
-      return next
-    })
-  }, [])
 
   // Reset column settings to defaults (also drops user-added custom columns)
   const resetColumnSettings = useCallback(() => {
@@ -4478,6 +4504,7 @@ export function ResourcesView({
     setCustomColumns([])
     const customKeys = new Set(builtCustomColumns.map(c => c.key))
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
+    setHiddenColumns(new Set())
     setColumnWidths({})
     setColumnOrder(null)
     setPinnedColumns([])
@@ -4485,9 +4512,6 @@ export function ResourcesView({
     setSortDirection(null)
     saveSavedSort(selectedKind.name, selectedKind.group, null)
     isColumnSettingsLoaded.current = false
-    // Back to data-driven defaults: re-arm GPU auto-show for this kind.
-    hadSavedColumnSettings.current = false
-    gpuAutoShownKinds.current.delete(selectedKind.name.toLowerCase())
   }, [selectedKind.name, selectedKind.group, allColumns, builtCustomColumns])
 
   // Add a user-defined label/annotation column (dedupe by key) and show it.
@@ -5314,27 +5338,17 @@ export function ResourcesView({
   const selectedQueryMatchesKind = resourceQueryMatchesSelectedKind(selectedQuery, selectedKind)
   const resources = selectedQueryMatchesKind ? selectedQuery?.data : undefined
 
-  // Auto-surface the GPU column the first time GPU-bearing rows load for a kind
-  // the user has never customized — a static default can't know whether the
-  // cluster has GPUs, and hiding the signal on GPU clusters buries the point.
-  // The resulting save persists it; explicit user hides are never overridden
-  // (hadSavedColumnSettings guard).
-  useEffect(() => {
-    if (hadSavedColumnSettings.current) return
+  // The GPU column shows while any listed Pod (or Node) has GPUs, and not
+  // otherwise — a static default can't know whether the cluster, or the
+  // namespaces picked, have any. The user's own choice wins either way: a
+  // column they turned on stays, one they turned off stays off (hiddenColumns).
+  const gpuInData = useMemo(() => {
     const kindLower = selectedKind.name.toLowerCase()
-    if (kindLower !== 'pods' && kindLower !== 'nodes') return
-    if (gpuAutoShownKinds.current.has(kindLower)) return
-    if (visibleColumns.size === 0 || visibleColumns.has('gpu')) return
     const rows = (resources as any[] | undefined) ?? []
-    if (rows.length === 0) return
-    const hasGpu = kindLower === 'pods'
-      ? rows.some(r => getPodGpuCount(r) > 0)
-      : rows.some(r => getNodeGpuCount(r) > 0)
-    if (hasGpu) {
-      gpuAutoShownKinds.current.add(kindLower)
-      setVisibleColumns(prev => new Set([...prev, 'gpu']))
-    }
-  }, [resources, selectedKind.name, visibleColumns])
+    if (kindLower === 'pods') return rows.some(r => getPodGpuCount(r) > 0)
+    if (kindLower === 'nodes') return rows.some(r => getNodeGpuCount(r) > 0)
+    return false
+  }, [resources, selectedKind.name])
 
   // Label/annotation keys present on the loaded rows — powers the
   // add-custom-column autocomplete so users don't type keys blind. Sampled
@@ -6076,11 +6090,55 @@ export function ResourcesView({
   const handleRowMouseEnter = useCallback(() => setHighlightedIndex(-1), [])
 
   // Filter columns by visibility
-  const visibleTableColumns = useMemo(() => {
-    if (visibleColumns.size === 0) return allColumns.filter(c => c.defaultVisible !== false)
-    return allColumns.filter(c => visibleColumns.has(c.key))
-  }, [allColumns, visibleColumns])
+  // Namespace says nothing when the namespace picker narrows the list to one,
+  // so it is left out then, whatever the saved choice — which still applies
+  // as soon as more than one namespace is in scope. Read from the pick, not
+  // the rows, so it doesn't come and go as rows stream in.
+  const singleNamespaceInScope = namespaces.length === 1
+  const dataShownColumns = useMemo(() => {
+    const shown = new Set<string>()
+    const kindLower = selectedKind.name.toLowerCase()
+    if (gpuInData && (kindLower === 'pods' || kindLower === 'nodes') && !hiddenColumns.has('gpu')) shown.add('gpu')
+    return shown
+  }, [gpuInData, selectedKind.name, hiddenColumns])
+  // What the column picker shows as on: the saved choice, plus columns the data shows.
+  const pickerVisibleColumns = useMemo(() => {
+    if (!dataShownColumns.size) return visibleColumns
+    return new Set([...visibleColumns, ...dataShownColumns])
+  }, [visibleColumns, dataShownColumns])
+  const visibleTableColumns = useMemo(() => allColumns.filter(c => {
+    if (c.key === 'namespace' && singleNamespaceInScope) return false
+    if (dataShownColumns.has(c.key)) return true
+    if (visibleColumns.size === 0) return c.defaultVisible !== false
+    return visibleColumns.has(c.key)
+  }), [allColumns, visibleColumns, dataShownColumns, singleNamespaceInScope])
   const columns = visibleTableColumns
+
+  const toggleColumnVisibility = useCallback((colKey: string) => {
+    const shown = pickerVisibleColumns.has(colKey)
+    const dataShown = DATA_SHOWN_COLUMNS.has(colKey)
+    // A hidden column has no pin to surprise the user when it is shown again.
+    setPinnedColumns(prev => prev.filter(key => key !== colKey))
+    // Turning a data-shown column back on while the data would show it just
+    // lets the data decide again; only turning it on without such data makes
+    // it a column the user keeps.
+    const keepShown = !shown && !(dataShown && gpuInData)
+    setVisibleColumns(prev => {
+      const next = new Set(prev)
+      if (keepShown) next.add(colKey)
+      else next.delete(colKey)
+      return next
+    })
+    // Remember hiding a column the data would show, so the data doesn't bring it back.
+    if (dataShown) {
+      setHiddenColumns(prev => {
+        const next = new Set(prev)
+        if (shown) next.add(colKey)
+        else next.delete(colKey)
+        return next
+      })
+    }
+  }, [pickerVisibleColumns, gpuInData])
 
   // Automatic column widths (see column-sizing.ts for the rules). Content is
   // measured over every fetched item, not the filtered rows, so typing a search
@@ -6148,18 +6206,33 @@ export function ResourcesView({
     // must not move under it. The room is re-shared on release.
     const frozen = resizeFrozenWidths
     const held = lastLayout.current?.signature === layoutSignature ? lastLayout.current.widths : undefined
+    // Name holds the width of its longest name, up to NAME_MAX_PX but never
+    // more than NAME_VIEWPORT_SHARE of the table, so on a narrow window or a
+    // phone it can't push every other column off screen.
+    const nameMax = availableWidth > 0
+      ? Math.max(NAME_MIN_PX, Math.min(NAME_MAX_PX, Math.floor(availableWidth * NAME_VIEWPORT_SHARE)))
+      : NAME_MAX_PX
     const inputs: ColumnLayoutInput[] = columns.map(col => {
       const spec = columnSizingSpec(col)
       const minWidth = getColumnMinWidth(col, extraColumnsByKey)
-      const floor = col.key === 'name' ? Math.max(NAME_MIN_PX, minWidth) : minWidth
+      const isName = col.key === 'name'
+      const floor = isName ? Math.max(NAME_MIN_PX, minWidth) : minWidth
+      const content = contentWidths?.[col.key]
       return {
         key: col.key,
         mode: spec.mode,
         floor,
+        // Exact columns may shrink to their content (never below their
+        // heading) when room is short, but only where the content is known.
+        min: spec.mode === 'exact' && content !== undefined
+          ? Math.max(getColumnHeaderWidth(col, extraColumnsByKey), content)
+          : undefined,
+        keep: spec.keep,
+        yieldRank: spec.yieldRank,
         userWidth: columnWidths[col.key] || frozen?.[col.key],
-        content: contentWidths?.[col.key],
+        content,
         stretch: contentWidths?.[`${col.key}\u0000stretch`],
-        max: spec.max,
+        max: isName ? nameMax : spec.max,
         weight: spec.weight,
         hold: held?.[col.key],
       }
@@ -6208,9 +6281,8 @@ export function ResourcesView({
     setPinnedColumns(order.filter(key => pinnedColumns.includes(key)))
   }
 
-  // Every column has an explicit width, so the table is at least their sum
-  // (and scrolls sideways below it); any room beyond goes to the trailing
-  // spacer column rather than stretching one of them.
+  // Every column has an explicit width that together fill the room, so the
+  // table is at least their sum and scrolls sideways below it.
   const tableColumnLayout = useMemo<TableColumnLayout>(() => {
     const widths = columns.map(col => columnLayoutWidths[col.key])
     return {
@@ -6784,13 +6856,14 @@ export function ResourcesView({
                 </div>
                 <p className="shrink-0 px-3 pt-2 pb-1 text-xs text-theme-text-tertiary">
                   {columnPins.paused.length ? 'Some pins scroll until there is more room.' : 'Pinned columns stay visible as you scroll.'}
+                  {singleNamespaceInScope && allColumns.some(c => c.key === 'namespace') && ' Namespace is left out while one namespace is selected.'}
                 </p>
                 {/* Column list scrolls; the add-column footer stays pinned so
                     its input isn't pushed below the fold on kinds with many columns. */}
                 <div className="overflow-y-auto flex-1 min-h-0">
                 <ColumnPickerList
                   columns={allColumns}
-                  visibleColumns={visibleColumns}
+                  visibleColumns={pickerVisibleColumns}
                   customColumnKeys={customColumnKeySet}
                   onToggle={toggleColumnVisibility}
                   onRemoveCustom={removeCustomColumn}
@@ -7354,7 +7427,6 @@ export function ResourcesView({
                       </th>
                     )
                   })}
-                  <th className="bg-theme-base border-b border-theme-border p-0" />
                 </tr>
               )}
               itemContent={(index, resource) => {
@@ -7676,7 +7748,6 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
           />
         </td>
       ))}
-      <td className="border-b-subtle p-0" />
     </>
   )
 })
@@ -7706,8 +7777,10 @@ const VirtuosoTable = React.forwardRef<HTMLTableElement, React.TableHTMLAttribut
     <table
       {...props}
       ref={ref}
-      className="w-full"
-      style={{ ...props.style, tableLayout: 'fixed', minWidth: layout.minWidth }}
+      // Exactly the columns' sum: the layout already fills the room, and a
+      // table wider than its columns would have the browser re-share the
+      // difference, moving columns the layout holds still (a drag, saved widths).
+      style={{ ...props.style, tableLayout: 'fixed', width: layout.minWidth }}
     >
       <colgroup>
         {/*
@@ -7720,8 +7793,6 @@ const VirtuosoTable = React.forwardRef<HTMLTableElement, React.TableHTMLAttribut
         {layout.compareMode && <col style={{ width: COMPARE_COLUMN_WIDTH }} />}
         {layout.checkbox && <col style={{ width: CHECKBOX_COLUMN_WIDTH }} />}
         {layout.keys.map((key, i) => <col key={key} style={{ width: `${layout.widths[i]}px` }} />)}
-        {/* Takes whatever room the columns leave. */}
-        <col />
       </colgroup>
       {props.children}
     </table>
