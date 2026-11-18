@@ -27,6 +27,8 @@ const pod = (name: string, extra: Record<string, any> = {}) => ({ metadata: { na
 describe('columnSizingSpec', () => {
   it('fits Name, Namespace and Node, grows flagged columns, and keeps the rest exact', () => {
     expect(columnSizingSpec({ key: 'name' })).toEqual({ mode: 'fit', max: 480, keep: true, yieldRank: 4 })
+    // A kind can opt its Name out of the protection (Events): an ordinary fit column that gives way first.
+    expect(columnSizingSpec({ key: 'name', sizing: 'fit' })).toEqual({ mode: 'fit', max: 480, weight: 1, yieldRank: 1 })
     expect(columnSizingSpec({ key: 'namespace' }).mode).toBe('fit')
     expect(columnSizingSpec({ key: 'node' }).mode).toBe('fit')
     expect(columnSizingSpec({ key: 'message', sizing: 'grow', growWeight: 3 })).toEqual({ mode: 'grow', weight: 3, max: GROW_MAX_PX })

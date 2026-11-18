@@ -182,7 +182,7 @@ import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessContr
 import { Tooltip } from '../ui/Tooltip'
 import { TruncatedText } from '../ui/TruncatedText'
 import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, rememberWidths } from './column-sizing'
-import { type CellWidth, type UsageLabel, NAME_MAX_PX, NAME_MIN_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, usageLabelWidth, workloadImagesText } from './column-content-width'
+import { type CellWidth, type UsageLabel, NAME_MAX_PX, NAME_MIN_PX, NAME_PROTECTED_MAX_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, usageLabelWidth, workloadImagesText } from './column-content-width'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import type { Issue } from '../issues/types'
 import { issueTitle } from '../issues/severity'
@@ -1807,7 +1807,10 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   events: [
-    { key: 'name', label: 'Name' },
+    // An Event's name is the involved object's name plus a hash, and Object
+    // already names the object (`kubectl get events` doesn't print NAME at
+    // all), so it gets no protection: it gives way first when room is short.
+    { key: 'name', label: 'Name', sizing: 'fit' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'type', label: 'Type', width: 'w-24' },
     { key: 'reason', label: 'Reason', width: 'w-32' },
@@ -6250,14 +6253,15 @@ export function ResourcesView({
         // (never below their heading), but only where the content is known;
         // Node and Namespace to their heading, cutting values; Name, last, to
         // the 90th percentile of its names (never below NAME_MIN_PX, never
-        // above the width it holds).
+        // above the width it holds or NAME_PROTECTED_MAX_PX).
         min: spec.mode === 'exact'
           ? content !== undefined ? Math.max(headerShrinkWidth(col), content) : undefined
           : spec.keep
             ? content !== undefined
-              ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000yieldTo`] ?? content, content, nameMax))
+              ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000yieldTo`] ?? content, content, nameMax, NAME_PROTECTED_MAX_PX))
               : undefined
-            : spec.mode === 'fit' ? headerShrinkWidth(col) : undefined,
+            // An unprotected Name (Events) yields to its floor, NAME_MIN_PX.
+            : spec.mode === 'fit' && !isName ? headerShrinkWidth(col) : undefined,
         yieldRank: spec.yieldRank,
         userWidth: columnWidths[col.key] || frozen?.[col.key],
         content,

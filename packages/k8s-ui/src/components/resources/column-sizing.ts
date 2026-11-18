@@ -14,8 +14,8 @@
 //           sized to the 95th percentile of their values, so a few outliers
 //           don't set the width, then take part in sharing the room left
 //           (below) up to their longest value. Name is sized to its longest
-//           name (its protected width, capped by max) and gives way last, and
-//           only down to the 90th percentile of its names.
+//           name (capped by max) and gives way last, and only down to the
+//           90th percentile of its names.
 //   grow  — starts at its floor and shares whatever room is left, by weight,
 //           each up to its longest value. Long free text: Event messages,
 //           selectors, image lists, uncurated CRD printer columns.
@@ -30,8 +30,9 @@
 // When the room is short it is taken back in rank order (yieldRank), each
 // column down to its `min`: Node first (to its header), then exact columns (to
 // the larger of their header and their content), then Namespace (to its
-// header), then Name (to its 90th percentile, so only its longest names are
-// cut, and only when the alternative is scrolling). Grow columns are already
+// header), then Name (to its 90th percentile, at most NAME_PROTECTED_MAX_PX,
+// so only its longest names are cut, and only when the alternative is
+// scrolling; a kind can opt its Name out, as Events does). Grow columns are already
 // at their floor and user widths never shrink. Past that the table scrolls
 // sideways.
 

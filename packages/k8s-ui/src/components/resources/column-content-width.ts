@@ -65,6 +65,10 @@ const PROBLEM_ICON_PX = 8 + 14
 
 export const NAME_MIN_PX = 200
 export const NAME_MAX_PX = 480
+// The most Name holds on to when the table is short of room: it gives way to
+// its 90th percentile, but never keeps more than this, so a list of long
+// names (Events, PVCs) doesn't scroll sideways to save a handful of them.
+export const NAME_PROTECTED_MAX_PX = 320
 const NAMESPACE_MAX_PX = 320
 const NODE_MAX_PX = 400
 // Grow columns stop at their longest value or this, whichever is less. Past it a
@@ -158,7 +162,11 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   // percentile, so a few outliers (one long namespace) don't set the width,
   // and reach for their longest value from the room left over.
   switch (col.key) {
-    case 'name': return { mode: 'fit', max: NAME_MAX_PX, keep: true, yieldRank: 4 }
+    case 'name':
+      // A kind can mark its Name `sizing: 'fit'` to give it no protection: it
+      // sizes like any fit column and gives way first (see Events' columns).
+      if (col.sizing === 'fit') return { mode: 'fit', max: NAME_MAX_PX, weight: 1, yieldRank: 1 }
+      return { mode: 'fit', max: NAME_MAX_PX, keep: true, yieldRank: 4 }
     case 'namespace': return { mode: 'fit', max: NAMESPACE_MAX_PX, weight: 1 }
     // Node is worth showing but is the first to give way when room is short.
     case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1, yieldRank: 1 }
