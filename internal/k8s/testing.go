@@ -261,7 +261,7 @@ func (s *connectionCache) installTestCache(cache *ResourceCache, complete bool) 
 }
 
 // waitForInformerStatuses blocks until every informer's InformerSyncStatus
-// reports synced.
+// reports synced and its watch boundary is recorded.
 //
 // NewResourceCache returns as soon as the informers themselves report synced,
 // but InformerSyncStatus.Synced is a mirror of that, flipped by a goroutine per
@@ -284,11 +284,24 @@ func waitForInformerStatuses(rc *ResourceCache) {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		st := rc.GetSyncStatus()
-		if len(st.PendingCritical) == 0 && len(st.PendingDeferred) == 0 {
+		if len(st.PendingCritical) == 0 && len(st.PendingDeferred) == 0 && informersCaughtUp(rc, st.Informers) {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// informersCaughtUp reports whether every informer has its watch boundary
+// (InformerWatchedSince), which a goroutine records just after it syncs. A
+// test reading change coverage on the next line would otherwise see a kind
+// still loading.
+func informersCaughtUp(rc *ResourceCache, informers []k8score.InformerSyncStatus) bool {
+	for _, inf := range informers {
+		if _, _, ok := rc.InformerWatchedSince(inf.Key); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // InitTestDynamicResourceCache wires the dynamic resource cache and discovery

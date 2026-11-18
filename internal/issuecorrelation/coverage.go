@@ -87,6 +87,12 @@ func collectionGap(kind, group, namespace string) (issuesapi.CorrelationUnknownR
 					case !synced:
 						return issuesapi.CorrelationUnknownKindSyncPending, true
 					}
+					// Synced, but its change handlers haven't finished the
+					// initial list: until then changes may arrive as initial
+					// state, so the kind is still loading.
+					if _, _, caughtUp := cache.InformerWatchedSince(resource); !caughtUp {
+						return issuesapi.CorrelationUnknownKindSyncPending, true
+					}
 					return "", false
 				}
 			}

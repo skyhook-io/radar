@@ -1733,12 +1733,15 @@ func (rc *ResourceCache) markInformerCaughtUp(key string) {
 	rc.informerCaughtUpAt[key] = time.Now()
 }
 
-// InformerWatchedSince returns a conservative point from which the informer
-// for key delivers every change as a change: when Radar first saw its initial
-// list complete and its change handlers done with that list. An edit before
-// it may surface only as the object's initial state, with no diff. deferred
-// reports an informer started only after the critical ones synced. ok is
-// false when the kind isn't watched or hasn't reached that point yet.
+// InformerWatchedSince returns when this cache first saw the informer for
+// key with its initial list in the store and every change handler of its own
+// done processing that list. From then on the informer hands each change to
+// those handlers as an update or delete rather than as initial state; an edit
+// before it may surface only as the object's initial state, with no diff.
+// It says nothing about delivery beyond the handlers: the changes channel and
+// callbacks downstream can still drop a change under load. deferred reports
+// an informer started only after the critical ones synced. ok is false when
+// the kind isn't watched or hasn't reached that point yet.
 func (rc *ResourceCache) InformerWatchedSince(key string) (since time.Time, deferred, ok bool) {
 	if rc == nil {
 		return time.Time{}, false, false

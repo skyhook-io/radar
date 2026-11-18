@@ -152,7 +152,7 @@ func TestCorrelate_UnknownReasons(t *testing.T) {
 					t.Fatal(err)
 				}
 				t.Cleanup(k8s.ResetTestState)
-				waitSynced(t, k8score.Deployments)
+				waitCaughtUp(t, k8score.Deployments)
 				initStore(t)
 			},
 			want: issuesapi.CorrelationUnknownKindSyncPending, kinds: []string{"Secret"},
@@ -224,20 +224,6 @@ func initScopedCache(t *testing.T, scopes map[string]k8score.ResourceScope, objs
 		t.Fatalf("InitScopedTestResourceCache: %v", err)
 	}
 	t.Cleanup(k8s.ResetTestState)
-}
-
-func waitSynced(t *testing.T, resource string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if synced, known := k8s.GetResourceCache().InformerSynced(resource); known && synced {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("%s never synced", resource)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 }
 
 // A hidden source is decided before it is read: the answer is the same
@@ -633,7 +619,7 @@ func TestCorrelate_IncompletePolicyEvidenceStatesNoOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(k8s.ResetTestState)
-		waitSynced(t, k8score.Deployments)
+		waitCaughtUp(t, k8score.Deployments)
 		store := initStore(t)
 		appendChange(t, store, specUpdate("Deployment", "web", firstSeen.Add(-time.Minute), "web:2"))
 		iss := webIssue(firstSeen)
@@ -1069,9 +1055,25 @@ func initDeferredCache(t *testing.T, deferred []string, objs ...runtime.Object) 
 	}
 	t.Cleanup(k8s.ResetTestState)
 	for k := range types {
-		waitSynced(t, k)
+		waitCaughtUp(t, k)
 	}
 	return before
+}
+
+// waitCaughtUp waits until resource's informer has its watch boundary, which
+// is recorded asynchronously just after it syncs.
+func waitCaughtUp(t *testing.T, resource string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, _, ok := k8s.GetResourceCache().InformerWatchedSince(resource); ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never caught up", resource)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // A deferred typed informer starts after the store began recording, so a
@@ -1228,7 +1230,7 @@ func TestCorrelate_WindowStartsBeforeFirstSyncCompleted(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	waitSynced(t, k8score.Secrets)
+	waitCaughtUp(t, k8score.Secrets)
 	initStore(t)
 	// The list took 300ms, so a start 100ms before it returned is after the
 	// watch began and before the history became complete.
@@ -1241,4 +1243,43 @@ func TestCorrelate_WindowStartsBeforeFirstSyncCompleted(t *testing.T) {
 	if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
 		t.Fatalf("window inside the first list: no_changes=%v unknown=%+v history=%+v", got.NoChanges, got.Unknown, got.History)
 	}
+}
+
+// A kind whose informer has synced but whose change handlers are still
+// working through the initial list is still loading: until they finish, a
+// change can arrive as initial state, so nothing is claimed about it.
+func TestCorrelate_HandlersStillOnInitialList(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	if err := k8s.InitTestResourceCacheFromConfig(k8score.CacheConfig{
+		Client: k8sfake.NewSimpleClientset(webDeployment(),
+			&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "web-config", Namespace: "shop"}}),
+		ResourceTypes: map[string]bool{k8score.Deployments: true, k8score.ConfigMaps: true, k8score.Secrets: true},
+		// The ConfigMap handler holds on its first object until released.
+		OnReceived: func(kind string) {
+			if kind == "ConfigMap" {
+				<-release
+			}
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	waitCaughtUp(t, k8score.Deployments)
+	waitCaughtUp(t, k8score.Secrets)
+	if synced, known := k8s.GetResourceCache().InformerSynced(k8score.ConfigMaps); !known || !synced {
+		t.Fatal("the ConfigMap informer must be synced for this case")
+	}
+	if _, _, ok := k8s.GetResourceCache().InformerWatchedSince(k8score.ConfigMaps); ok {
+		t.Fatal("the ConfigMap handler was released early")
+	}
+	initStore(t)
+	iss := webIssue(time.Now().Add(-10 * time.Minute))
+	got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+	if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownKindSyncPending ||
+		len(got.Unknown.Kinds) != 1 || got.Unknown.Kinds[0].Kind != "ConfigMap" {
+		t.Fatalf("handlers still on the initial list: no_changes=%v unknown=%+v", got.NoChanges, got.Unknown)
+	}
+	once.Do(func() { close(release) })
 }
