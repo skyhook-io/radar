@@ -7,9 +7,9 @@ vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ conn
 
 import { getSandboxStatus } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { AgentSandboxLists } from './data'
-import { ClaimsScreen, SandboxesScreen, WarmPoolsScreen, requestedMode, stateMessage } from './AgentSandboxTables'
+import { ClaimsScreen, SandboxesScreen, WarmPoolsScreen, filterSandboxes, poolNotReadyPath, requestedMode, stateMessage } from './AgentSandboxTables'
 import { AgentSandboxGate } from './shared'
-import { NS, PARTIAL, emptyData, liveData, liveSandboxes, read, sandbox } from './agentsandbox.fixtures'
+import { NS, PARTIAL, claim, emptyData, liveData, liveSandboxes, read, sandbox } from './agentsandbox.fixtures'
 import { liveWorkspace } from './workspace.fixtures'
 import { serverReadings } from './labels'
 
@@ -20,8 +20,8 @@ import { serverReadings } from './labels'
 const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/<!-- -->/g, '')
 const DENIED = { state: 'failed', message: 'forbidden', denied: true } as const
 
-function page(node: ReactNode) {
-  return text(renderToStaticMarkup(<MemoryRouter>{node}</MemoryRouter>))
+function page(node: ReactNode, url = '/') {
+  return text(renderToStaticMarkup(<MemoryRouter initialEntries={[url]}>{node}</MemoryRouter>))
 }
 
 const screenProps = (data: AgentSandboxLists, namespaces: string[] = []) => ({ data, namespaces, onClearNamespaces: () => {}, onInspect: () => {}, inspected: null })
@@ -99,12 +99,24 @@ describe('Agent Sandbox kind lists', () => {
     expect(page(<SandboxesScreen {...screenProps(liveData({ sandboxes: [suspendedAsked] }))} />)).toContain('requested suspended')
   })
 
-  it('names a claim’s missing warm pool instead of linking it, and links the pool it has', () => {
+  it('says a claim’s missing warm pool once, as its state, with the pool named in its column', () => {
     const html = page(<ClaimsScreen {...screenProps(liveData())} />)
-    expect(html).toMatch(/no-such-pool<\/span>.*?not found/)
-    expect(html).toContain('>warm</button>')
+    expect(html.match(/[Nn]ot found/g)).toEqual(['not found'])
     expect(html).toContain('>Warm pool not found<')
     expect(html).not.toContain('>WarmPoolNotFound<')
+    // The controller's sentence is in the drawer, not under the state.
+    expect(html).not.toContain('SandboxWarmPool "no-such-pool" not found')
+    // Named, not linked; the pool it has is linked.
+    expect(html).toMatch(/>no-such-pool<\/span>/)
+    expect(html).not.toContain('>no-such-pool</button>')
+    expect(html).toContain('>warm</button>')
+  })
+
+  it('still says not found where only Radar’s read says the pool is missing', () => {
+    // The controller hasn't said why this claim waits: the column is the only place the missing pool shows.
+    const waiting = claim('waiting', { pool: 'gone-pool', reason: 'SandboxNotReady', message: 'waiting for a sandbox' })
+    const html = page(<ClaimsScreen {...screenProps(liveData({ claims: [waiting] }))} />)
+    expect(html).toMatch(/gone-pool(<\/span>)+<div[^>]*>not found/)
   })
 
   it('says a relation it could not read is not read, never not found', () => {
@@ -113,6 +125,7 @@ describe('Agent Sandbox kind lists', () => {
     const claims = page(<ClaimsScreen {...screenProps(liveData({ warmPools: partial }))} />)
     expect(claims).toMatch(/no-such-pool<\/span>.*?not read/)
     expect(claims).not.toMatch(/no-such-pool(<\/span>)+<div[^>]*>not found/)
+    expect(claims).toContain('>Warm pool not found<')
     expect(page(<ClaimsScreen {...screenProps(liveData({ warmPools: DENIED }))} />)).toMatch(/no-such-pool(<\/span>)+<div[^>]*>not read/)
     // A pool's claims Radar couldn't read are unknown, not none.
     expect(page(<WarmPoolsScreen {...screenProps(liveData({ claims: DENIED }))} />)).toMatch(/unknown/)
@@ -134,6 +147,34 @@ describe('Agent Sandbox kind lists', () => {
     expect(html).toMatch(/class="[^"]*orange[^"]*"[^>]*>Can’t schedule</)
   })
 
+  it('says why a warm pool can’t schedule in the Overview’s plain words, and links the sandboxes it holds back', () => {
+    const html = page(<WarmPoolsScreen {...screenProps(liveData())} server={serverReadings(liveWorkspace())} />)
+    expect(html).toMatch(/Can’t schedule<.*?>All nodes have reached their Pod limit</)
+    // The scheduler's own message is on hover and in the drawer, not in the row.
+    expect(html).not.toContain('Too many pods')
+    expect(html).toMatch(/<button[^>]*>2 sandboxes not ready<\/button>/)
+    // Without the server's row there is no reason to give and nothing to count.
+    const bare = page(<WarmPoolsScreen {...screenProps(liveData())} />)
+    expect(bare).not.toContain('Pod limit')
+    expect(bare).not.toContain('not ready</button>')
+  })
+
+  it('narrows the Sandboxes list to one pool’s sandboxes that aren’t ready, as the pool’s link asks', () => {
+    expect(poolNotReadyPath(NS, 'warm')).toBe(`/resources/sandboxes?apiGroup=agents.x-k8s.io&pool=${encodeURIComponent(`${NS}/warm`)}&state=notReady`)
+    const all = read(liveSandboxes())
+    const names = (r: ReturnType<typeof filterSandboxes>) => (r.state === 'read' ? r.items.map((o) => o.metadata.name).sort() : [])
+    expect(names(filterSandboxes(all, `${NS}/warm`, 'notReady'))).toEqual(['warm-4xmkm', 'warm-nd2zw'])
+    expect(names(filterSandboxes(all, `${NS}/other`, 'notReady'))).toEqual([])
+    expect(filterSandboxes(all, '', '')).toBe(all)
+    const html = page(<SandboxesScreen {...screenProps(liveData())} />, `/resources/sandboxes?pool=${encodeURIComponent(`${NS}/warm`)}&state=notReady`)
+    expect(html).toContain('Warm pool: warm')
+    expect(html).toContain('Not ready')
+    expect(html).toContain('warm-4xmkm')
+    expect(html).not.toContain('bad-image')
+    const none = page(<SandboxesScreen {...screenProps(liveData())} />, `/resources/sandboxes?pool=${encodeURIComponent(`${NS}/other`)}`)
+    expect(none).toContain('No Sandboxes match these filters.')
+  })
+
   it('colors a row as the server’s Needs attention row about it, so a state reads the same on the Overview', () => {
     // A claim that can't bind is a warning in the reading, the row and Issues alike.
     const claims = page(<ClaimsScreen {...screenProps(liveData())} server={serverReadings(liveWorkspace())} />)
@@ -144,7 +185,7 @@ describe('Agent Sandbox kind lists', () => {
     const slow = sandbox('slow', { conditions: [{ type: 'Ready', status: 'False', reason: 'DependenciesNotReady', message: 'Pod exists with phase: Pending', lastTransitionTime: at }] })
     const data = liveData({ sandboxes: [slow] })
     expect(page(<SandboxesScreen {...screenProps(data)} />)).toMatch(/class="[^"]*amber[^"]*"[^>]*>Provisioning</)
-    const stalled = { unschedulable: new Set<string>(), tones: new Map([[`Sandbox/${NS}/slow`, 'alert' as const]]) }
+    const stalled = { unschedulable: new Set<string>(), tones: new Map([[`Sandbox/${NS}/slow`, 'alert' as const]]), rows: new Map() }
     expect(page(<SandboxesScreen {...screenProps(data)} server={stalled} />)).toMatch(/class="[^"]*orange[^"]*"[^>]*>Provisioning</)
   })
 
