@@ -13,10 +13,12 @@ import {
   getConfigMapSize,
   getContainerSquareStates,
   getFluxHelmReleaseMessage,
+  getGatewayClass,
   getGatewayClassDescription,
   getHPATarget,
   getIngressHosts,
   getIngressRules,
+  getNetworkPolicyTypes,
   getPodProblems,
   getPodRestarts,
   getPodStatus,
@@ -26,8 +28,16 @@ import {
   getServicePorts,
   getServiceSelector,
   getServiceStatus,
+  getStorageClassBindingMode,
   getWorkloadImages,
 } from './resource-utils'
+import { getClusterIssuerType } from './resource-utils-certmanager'
+import { getKustomizationSource } from './resource-utils-flux'
+import { getKnativeServiceLatestRevision } from './resource-utils-knative'
+import { getKueueWorkloadAdmittedBy, getKueueWorkloadQueueName, getLocalQueueClusterQueue } from './resource-utils-kueue'
+import { getTraefikServiceType } from './resource-utils-traefik'
+import { getConfigAuditReportSummary, getSbomReportStatus, getVulnerabilityReportContainer, getVulnerabilityReportSummary } from './resource-utils-trivy'
+import { getBackupExpiry } from './resource-utils-velero'
 import { getArgoApplicationHealth, getArgoApplicationSync } from './resource-utils-argo'
 import { getResourceSlicePool } from './resource-utils-dra'
 import { getGitRepositoryUrl, getHelmRepositoryUrl, getOCIRepositoryUrl } from './resource-utils-flux'
@@ -253,6 +263,29 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'clusterqueues:cohort': text(getClusterQueueCohort),
   'applications:sync': badge(r => getArgoApplicationSync(r).status),
   'applications:health': badge(r => getArgoApplicationHealth(r).status),
+  'backups:expiry': text(getBackupExpiry),
+  'localqueues:status': badge(r => getCellFilterValue(r, 'status', 'localqueues')),
+  'localqueues:clusterQueue': text(getLocalQueueClusterQueue),
+  'workloads:status': badge(r => getCellFilterValue(r, 'status', 'workloads')),
+  'workloads:queueName': text(getKueueWorkloadQueueName),
+  'workloads:admittedBy': text(getKueueWorkloadAdmittedBy),
+  'admissionchecks:status': badge(r => getCellFilterValue(r, 'status', 'admissionchecks')),
+  'provisioningrequests:status': badge(r => getCellFilterValue(r, 'status', 'provisioningrequests')),
+  'jobsets:status': badge(r => getCellFilterValue(r, 'status', 'jobsets')),
+  'storageclasses:bindingMode': text(getStorageClassBindingMode),
+  'networkpolicies:policyTypes': text(getNetworkPolicyTypes),
+  'issuers:issuerType': text(getClusterIssuerType),
+  'gateways:class': text(getGatewayClass),
+  'kustomizations:source': text(getKustomizationSource),
+  'knativeservices:latestRevision': text(getKnativeServiceLatestRevision),
+  'traefikservices:type': text(getTraefikServiceType),
+  'sbomreports:status': badge(r => getSbomReportStatus(r).text),
+  'sbomreports:container': text(getVulnerabilityReportContainer),
+  'vulnerabilityreports:container': text(getVulnerabilityReportContainer),
+  'exposedsecretreports:container': text(getVulnerabilityReportContainer),
+  'vulnerabilityreports:medium': text(r => String(getVulnerabilityReportSummary(r).medium), 'medium'),
+  'vulnerabilityreports:low': text(r => String(getVulnerabilityReportSummary(r).low), 'medium'),
+  'configauditreports:low': text(r => String(getConfigAuditReportSummary(r).low), 'medium'),
 }
 
 // What an exact column's cells show, for the kinds whose tables most often run
