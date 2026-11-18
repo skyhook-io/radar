@@ -48,6 +48,9 @@ describe('Agent Substrate overview, connected', () => {
     expect(html).toContain('212 of 236 used (24 free, 21 of them on batch-pool)')
     expect(html).toContain('1,284, 14 crashed')
     expect(words(html)).toContain('6, 1 golden snapshot failed')
+    // One run of text, not an element per part: the facts row is a flex row
+    // whose gap would set each comma apart from the word before it.
+    expect(html).toContain('6, 1 ')
   })
 
   it('draws the state bar with accessible counts, and lists Needs attention in the server’s order, each row labelled', () => {
