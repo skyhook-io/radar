@@ -6181,7 +6181,6 @@ export function ResourcesView({
     tableActive, resources, columns, extraColumnsByKey, sizingKind, auditBadges, metricsLookup, kindName: selectedKind.name, headerFontEpoch,
   }), [tableActive, resources, columns, extraColumnsByKey, sizingKind, auditBadges, metricsLookup, selectedKind.name, headerFontEpoch])
   const measuring = useDeferredValue(measureInputs)
-  const measureSource = measuring.resources
   const measuredContent = useMemo(() => {
     const { resources: rows, columns: cols, extraColumnsByKey: extras, metricsLookup: metrics } = measuring
     if (!measuring.tableActive || !rows?.length) return null
@@ -6219,7 +6218,10 @@ export function ResourcesView({
   // never leaves its widths behind for the next one.
   const rememberedContent = useRef<{ identity: string; widths: Record<string, number> } | null>(null)
   const previousContent = resources && rememberedContent.current?.identity === datasetIdentity ? rememberedContent.current.widths : undefined
-  const contentWidths = measuredContent && measureSource === resources ? rememberWidths(previousContent, measuredContent) : previousContent
+  // Remembered only when the snapshot measured is the current one: rows alone
+  // aren't enough, since the same rows measured in the fallback font must not
+  // be kept under the web font's epoch.
+  const contentWidths = measuredContent && measuring === measureInputs ? rememberWidths(previousContent, measuredContent) : previousContent
   useLayoutEffect(() => {
     rememberedContent.current = contentWidths ? { identity: datasetIdentity, widths: contentWidths } : null
   }, [contentWidths, datasetIdentity])
