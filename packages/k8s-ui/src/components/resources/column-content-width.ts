@@ -157,8 +157,9 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   if (col.sizing === 'exact') return { mode: 'exact' }
   // Name is what a reader scans for, so it fits its longest name (up to the
   // cap) and is the last column to give way when room is short — and then
-  // only down to the 90th percentile of its names, so just the longest are
-  // cut before the table scrolls sideways. Other fit columns size to their 95th
+  // only down to the 90th percentile of its names (at most
+  // NAME_PROTECTED_MAX_PX), so only names wider than that are cut before the
+  // table scrolls sideways. Other fit columns size to their 95th
   // percentile, so a few outliers (one long namespace) don't set the width,
   // and reach for their longest value from the room left over.
   switch (col.key) {

@@ -30,10 +30,10 @@
 // When the room is short it is taken back in rank order (yieldRank), each
 // column down to its `min`: Node first (to its header), then exact columns (to
 // the larger of their header and their content), then Namespace (to its
-// header), then Name (to its 90th percentile, at most NAME_PROTECTED_MAX_PX,
-// so only its longest names are cut, and only when the alternative is
-// scrolling; a kind can opt its Name out, as Events does). Grow columns are already
-// at their floor and user widths never shrink. Past that the table scrolls
+// header), then Name (to its 90th percentile, at most NAME_PROTECTED_MAX_PX:
+// only names wider than that are cut, and only when the alternative is
+// scrolling; a kind can opt its Name out, as Events does). Grow columns are
+// already at their floor and user widths never shrink. Past that the table scrolls
 // sideways.
 
 export type ColumnSizingMode = 'exact' | 'fit' | 'grow'

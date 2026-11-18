@@ -162,7 +162,7 @@ Use CSS classes from `components.css` for status cells in table rows:
 ### Resource Table Column Widths
 Resource tables size their columns from the data (rules in `packages/k8s-ui/src/components/resources/column-sizing.ts`):
 - Most columns keep their curated width (the `w-*` on the column, never narrower than its header).
-- Name fits its longest name, 200–480px and at most half the table's width. It is the last column to give way when the table is short, and only down to the 90th percentile of its names (at most 320px): only the longest names are cut, and only when the alternative is scrolling sideways. Events' Name gets no such protection — the Object column already names the object — and gives way first.
+- Name fits its longest name, 200–480px and at most half the table's width. It is the last column to give way when the table is short, and only down to the 90th percentile of its names, and never holds more than 320px: only names wider than that are cut, and only when the alternative is scrolling sideways. In a list of long names that can be most of them. Events' Name gets no such protection — the Object column already names the object — and gives way first.
 - Namespace and Node fit the 95th percentile of their values, so one outlier doesn't set the width.
 - Long free text (Event messages, selectors, image lists, URLs, uncurated CRD printer columns) is marked `sizing: 'grow'` on the column. Grow columns and the fit columns' longer values share the room left over by weight, each up to its longest value.
 - Room beyond that is spread over every column in proportion to its width, so the table fills the screen and keeps its proportions.
