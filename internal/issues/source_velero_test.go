@@ -39,6 +39,8 @@ type veleroObj struct {
 	included, excluded   []string
 	labelSelector        map[string]any
 	resourcePolicy       map[string]any
+	// specFlags are further spec fields, set as given.
+	specFlags map[string]any
 }
 
 func (o veleroObj) build(kind string) *unstructured.Unstructured {
@@ -101,6 +103,9 @@ func (o veleroObj) build(kind string) *unstructured.Unstructured {
 	}
 	if o.resourcePolicy != nil {
 		spec["resourcePolicy"] = o.resourcePolicy
+	}
+	for k, v := range o.specFlags {
+		spec[k] = v
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "velero.io/v1",
@@ -678,6 +683,10 @@ func TestVeleroAdHocFailureLowersAfterANewerSuccessOverItsNamespaces(t *testing.
 		{"narrowed by label", veleroObj{name: "labelled", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, labelSelector: map[string]any{"matchLabels": map[string]any{"tier": "web"}}}, false},
 		{"narrowed by a resource policy", veleroObj{name: "policy", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, resourcePolicy: map[string]any{"kind": "configmap", "name": "skip-pvcs"}}, false},
 		{"created before it", veleroObj{name: "older", phase: "Completed", createdMinsAgo: 180, startedMinsAgo: 179}, false},
+		{"created before it, queued until after it", veleroObj{name: "queued", phase: "Completed", createdMinsAgo: 180, startedMinsAgo: 60}, true},
+		{"without the file-system backup it asked for", veleroObj{name: "no-fs", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, specFlags: map[string]any{"defaultVolumesToFsBackup": false}}, false},
+		{"without cluster-scoped resources", veleroObj{name: "no-cluster", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, specFlags: map[string]any{"includeClusterResources": false}}, false},
+		{"moving snapshot data where it did not", veleroObj{name: "moved", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, specFlags: map[string]any{"snapshotMoveData": true}}, false},
 		{"recreated by backup sync, ran before it", veleroObj{name: "synced", phase: "Completed", createdMinsAgo: 5, startedMinsAgo: 1440}, false},
 		{"partly failed", veleroObj{name: "partial", phase: "PartiallyFailed", createdMinsAgo: 30, startedMinsAgo: 29}, false},
 		{"another installation", veleroObj{name: "elsewhere", namespace: "velero-2", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29}, false},
@@ -710,6 +719,18 @@ func TestVeleroAdHocFailureLowersAfterANewerSuccessOverItsNamespaces(t *testing.
 				t.Errorf("Velero's message stays Velero's: %q", got.Message)
 			}
 		})
+	}
+}
+
+func TestVeleroAdHocFailureLowersOnlyForASuccessSavingDataAlike(t *testing.T) {
+	failed := veleroObj{name: "fs", phase: "Failed", createdMinsAgo: 120, included: []string{"shop"}, specFlags: map[string]any{"defaultVolumesToFsBackup": true}}
+	alike := detectBackups(failed, veleroObj{name: "fs-retry", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, included: []string{"shop"}, specFlags: map[string]any{"defaultVolumesToFsBackup": true}})
+	unset := detectBackups(failed, veleroObj{name: "default", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, included: []string{"shop"}})
+	if len(alike) != 1 || alike[0].Severity != SeverityWarning {
+		t.Fatalf("a newer backup with the same file-system setting covers it: %+v", alike)
+	}
+	if len(unset) != 1 || unset[0].Severity != SeverityCritical {
+		t.Fatalf("a newer backup leaving file-system backup to the server default does not: %+v", unset)
 	}
 }
 

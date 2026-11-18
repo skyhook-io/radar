@@ -6444,6 +6444,7 @@ export function ResourcesView({
       togglePin={togglePin}
       isPinned={isPinned}
       categoryWorkspaces={sidebarCategoryWorkspaces}
+      onDestinationSelected={() => setKindsDrawerOpen(false)}
       onKindNavigated={() => {
         // After selecting a kind via keyboard, move focus to the table search
         // so the user can immediately filter within the selected kind.
