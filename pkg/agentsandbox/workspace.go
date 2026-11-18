@@ -353,7 +353,6 @@ var claimTitles = map[string]string{
 }
 
 const (
-	schedulerNextStep   = "Free capacity on a node, or change the Pod template’s requests, node selector or tolerations"
 	schedulerLabel      = "Scheduler’s message"
 	controllerLabel     = "Controller’s message"
 	reconcilerTitle     = "Controller can’t reconcile it"
@@ -369,7 +368,12 @@ func failureTitle(reason string) string {
 	return "Failed: " + reason
 }
 
-func failureNextStep(reason string) string {
+// failureNextStep is the reason's next step, or the one its message gives
+// evidence for.
+func failureNextStep(reason, message string) string {
+	if s := imagePullNextStep(reason, message); s != "" {
+		return s
+	}
 	if s, ok := failureNextSteps[reason]; ok {
 		return s
 	}
@@ -417,7 +421,7 @@ func progressDetail(a *Attention, u *unstructured.Unstructured, r health.AgentSa
 		}
 		a.Reading = "The scheduler can’t place its Pod."
 		a.RawDetail, a.RawDetailLabel, a.RawDetailSource = scheduled.message, schedulerLabel, DetailScheduler
-		a.NextStep = schedulerNextStep
+		a.NextStep = schedulerStep(scheduled.message)
 		a.Severity = SeverityAlert
 		return
 	}
@@ -481,7 +485,7 @@ func (b *builder) sandboxRow(u *unstructured.Unstructured) (a *Attention, progre
 		if row.RawDetail != "" {
 			row.RawDetailLabel, row.RawDetailSource = controllerLabel, DetailController
 		}
-		row.NextStep = failureNextStep(r.Verdict.Reason)
+		row.NextStep = failureNextStep(r.Verdict.Reason, ready.message)
 		row.Related = pod
 		row.Since = reportedSince(u)
 		return &row, false
@@ -546,7 +550,7 @@ func (b *builder) claimRow(u *unstructured.Unstructured) *Attention {
 			if row.RawDetail != "" {
 				row.RawDetailLabel, row.RawDetailSource = controllerLabel, DetailController
 			}
-			row.NextStep = failureNextStep(r.Verdict.Reason)
+			row.NextStep = failureNextStep(r.Verdict.Reason, ready.message)
 			row.Since = reportedSince(u)
 			if bound != "" {
 				row.Related = &Related{Lead: "Its Sandbox:", Refs: []Ref{{Kind: "Sandbox", Group: Group, Namespace: ns, Name: bound}}}
@@ -785,13 +789,14 @@ func (b *builder) poolRow(u *unstructured.Unstructured) (*Attention, []string) {
 	switch {
 	case scheduler.reason != "":
 		row.RawDetail, row.RawDetailLabel, row.RawDetailSource = scheduler.message, schedulerLabel, DetailScheduler
-		row.NextStep = schedulerNextStep
+		row.NextStep = schedulerStep(scheduler.message)
 	case worst >= 0:
-		if ready, _ := condition(notReady[worst].u, "Ready"); ready.message != "" {
+		ready, _ := condition(notReady[worst].u, "Ready")
+		if ready.message != "" {
 			row.RawDetail, row.RawDetailLabel, row.RawDetailSource = ready.message, controllerLabel, DetailController
 		}
 		if notReady[worst].r.Verdict.Level == health.LevelUnhealthy {
-			row.NextStep = failureNextStep(notReady[worst].r.Verdict.Reason)
+			row.NextStep = failureNextStep(notReady[worst].r.Verdict.Reason, ready.message)
 		}
 	}
 	if row.NextStep == "" {
