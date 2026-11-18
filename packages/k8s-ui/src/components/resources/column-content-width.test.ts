@@ -192,7 +192,7 @@ describe('curated grow and fit columns', () => {
     })).toEqual([])
   })
 
-  it('each fit column has a reader for what its cell shows, badge padding included', () => {
+  it('each fit column has its own reader registered', () => {
     const flagged = curatedSizedColumns('fit')
     expect(flagged.length).toBeGreaterThan(5)
     expect(flagged.filter(entry => {

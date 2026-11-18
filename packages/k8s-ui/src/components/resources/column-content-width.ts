@@ -375,7 +375,7 @@ function cellWidthReader(col: ContentColumn, ctx: ContentContext): CellWidth {
 }
 
 export interface MeasuredContent {
-  /** grow, exact and Name: the longest value; other fit columns: the 95th percentile. Padding included. */
+  /** grow, exact, Name and flagged fit columns: the longest value; Namespace and Node: the 95th percentile. Padding included. */
   content: number
   /** fit only: its longest value, which it may grow to from the room left over. */
   stretch?: number

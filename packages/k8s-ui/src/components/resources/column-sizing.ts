@@ -24,7 +24,7 @@
 //   user  — a width the user dragged; kept as is.
 //
 // Room is handed out in a fixed order: user widths, Name, exact widths and fit
-// columns at their 95th percentile; then the grow columns and the fit columns'
+// columns at their measured content; then the grow columns and the fit columns'
 // longer values share what is left by weight, each up to its longest value;
 // then whatever is still left is spread over every column in proportion to its
 // width, so the table fills its room and keeps its proportions (placeLeftover).
