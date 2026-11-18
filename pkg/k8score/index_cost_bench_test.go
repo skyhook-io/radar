@@ -37,7 +37,7 @@ func indexCostPods(n, namespaces int) []any {
 			Labels:          map[string]string{"app": fmt.Sprintf("app-%05d", i/2)},
 			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: fmt.Sprintf("rs-%05d", i),
 				UID: types.UID(fmt.Sprintf("3f6d2c1a-%04d-4b7e-8c9d-%012d", i%10000, i))}},
-		}}
+		}, Spec: corev1.PodSpec{NodeName: fmt.Sprintf("ip-10-0-%d-%d.ec2.internal", i/30/250, i/30%250)}}
 	}
 	return objects
 }
@@ -46,6 +46,11 @@ func indexCostIndexers() map[string]cache.Indexers {
 	return map[string]cache.Indexers{
 		"namespace-only": {cache.NamespaceIndex: cache.MetaNamespaceIndexFunc},
 		"with-owner-uid": {cache.NamespaceIndex: cache.MetaNamespaceIndexFunc, OwnerUIDIndex: ownerUIDs},
+		// An index of Pods by Node, weighed against reading every Pod for
+		// the rare question it answers (BenchmarkNodePods in pkg/relations).
+		"with-owner-uid-and-node": {cache.NamespaceIndex: cache.MetaNamespaceIndexFunc, OwnerUIDIndex: ownerUIDs, "podNode": func(obj any) ([]string, error) {
+			return []string{obj.(*corev1.Pod).Spec.NodeName}, nil
+		}},
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,6 +53,17 @@ var workloadRefTargets = map[string]workloadRefTarget{
 }
 
 var specTemplatePath = []string{"spec", "template"}
+
+// WorkloadRefKinds are the workloads a Rollout's workloadRef may name, each in
+// its own API group.
+func WorkloadRefKinds() []schema.GroupKind {
+	out := make([]schema.GroupKind, 0, len(workloadRefTargets))
+	for kind, t := range workloadRefTargets {
+		out = append(out, schema.GroupKind{Group: t.gvr.Group, Kind: kind})
+	}
+	slices.SortFunc(out, func(a, b schema.GroupKind) int { return strings.Compare(a.String(), b.String()) })
+	return out
+}
 
 type TemplateTarget struct {
 	GVR          schema.GroupVersionResource

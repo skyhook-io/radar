@@ -1,8 +1,10 @@
 import { CRDVersionsCell } from './renderers/crd-cells'
 import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
+import { getVolumeSnapshotColumnValue, getVolumeSnapshotSortValue } from './resource-utils-volumesnapshot'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { getAgentRuntimeSortValue } from './resource-utils-agent-runtimes'
 import { UPGRADE_PLAN_GROUP, getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 import type { ResourceCoverage } from '../../types/resource-coverage'
 import { resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from '../../utils/resource-coverage'
@@ -205,6 +207,7 @@ import { InferencePoolCell, InferenceObjectiveCell } from './renderers/inference
 import { VolcanoJobCell, VolcanoQueueCell, VolcanoPodGroupCell, JobFlowCell, JobTemplateCell } from './renderers/volcano-cells'
 import { KaiQueueCell, KaiPodGroupCell } from './renderers/kai-cells'
 import { KaitoWorkspaceCell, RAGEngineCell } from './renderers/kaito-cells'
+import { SandboxCell, SandboxClaimCell, SandboxWarmPoolCell, WorkerPoolCell } from './renderers/agent-runtime-cells'
 import { NIMServiceCell, NIMCacheCell, NIMPipelineCell } from './renderers/nim-cells'
 import { AMDDeviceConfigCell } from './renderers/amd-gpu-cells'
 import { PyTorchJobCell, TFJobCell, MPIJobCell, TrainJobCell } from './renderers/kubeflow-training-cells'
@@ -382,6 +385,7 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
   'connectCluster', 'connectorClass', 'connectorTasks',
   'kafkaVersion', 'kafkaWarnings', 'kafkaPools', 'kafkaListeners', 'poolKafka', 'poolRoles', 'poolReplicas',
+  'snapshotSource', 'restoreSize', 'snapshotClass', 'snapshotContent', 'snapshotTaken', 'snapshotRef', 'snapshotDriver', 'deletionPolicy', 'defaultClass',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -629,6 +633,34 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'poolKafka', label: 'Kafka', width: 'min-w-32' },
     { key: 'poolRoles', label: 'Roles', width: 'w-40 shrink-0' },
     { key: 'poolReplicas', label: 'Replicas', width: 'w-28 shrink-0', tooltip: 'Node IDs Strimzi assigned / desired replicas. Not a count of running Pods.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  volumesnapshots: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-36 shrink-0', tooltip: 'Readiness the CSI driver reports. Ready to use does not establish application consistency or a tested restore.' },
+    { key: 'snapshotSource', label: 'Source', width: 'min-w-40', tooltip: 'The PVC to snapshot, or the content a pre-provisioned snapshot names.' },
+    { key: 'restoreSize', label: 'Restore Size', width: 'w-28 shrink-0', tooltip: 'Minimum size of a volume restored from this snapshot. Empty when the driver did not report it.' },
+    { key: 'snapshotClass', label: 'Class', width: 'w-44 shrink-0' },
+    { key: 'snapshotContent', label: 'Bound Content', width: 'min-w-40', tooltip: 'The VolumeSnapshotContent the controller bound. Empty until binding succeeds.' },
+    { key: 'snapshotTaken', label: 'Taken', width: 'w-24 shrink-0', tooltip: 'When the storage system cut the snapshot, as the driver reports it.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  volumesnapshotcontents: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'status', label: 'Status', width: 'w-36 shrink-0', tooltip: 'Readiness the CSI driver reports for the snapshot on the storage system.' },
+    { key: 'snapshotRef', label: 'Volume Snapshot', width: 'min-w-40' },
+    { key: 'snapshotDriver', label: 'Driver', width: 'w-48 shrink-0' },
+    { key: 'deletionPolicy', label: 'Deletion Policy', width: 'w-32 shrink-0', tooltip: 'Delete removes the storage snapshot with its VolumeSnapshot; Retain keeps it.' },
+    { key: 'restoreSize', label: 'Restore Size', width: 'w-28 shrink-0' },
+    { key: 'snapshotClass', label: 'Class', width: 'w-44 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  volumesnapshotclasses: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'snapshotDriver', label: 'Driver', width: 'w-56 shrink-0' },
+    { key: 'deletionPolicy', label: 'Deletion Policy', width: 'w-32 shrink-0', tooltip: 'Policy for contents created from this class: Delete removes the storage snapshot with its VolumeSnapshot; Retain keeps it.' },
+    { key: 'defaultClass', label: 'Default', width: 'w-24 shrink-0', tooltip: 'Used for snapshots of this driver that name no class.' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   opentelemetrycollectors: [
@@ -1289,6 +1321,41 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'queue', label: 'Queue', width: 'w-32' },
     { key: 'minMember', label: 'Min Member', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  substrateworkerpools: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-48' },
+    { key: 'workers', label: 'Workers', width: 'w-24', tooltip: 'Ready worker Pods / desired. Workers are Pods, not actor slots: each hosts many actors in turn.' },
+    { key: 'sandboxClass', label: 'Sandbox', width: 'w-24', tooltip: 'Sandbox runtime family the workers run (gVisor or microVM)' },
+    { key: 'sandboxConfig', label: 'Config', width: 'w-44', tooltip: 'SandboxConfig the controller resolved for this pool; an arrow marks a switch it is still confirming.' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  agentsandboxes: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-36' },
+    { key: 'operatingMode', label: 'Requested', width: 'w-36', tooltip: 'Requested operating mode (spec.operatingMode). Status is what the controller observed.' },
+    { key: 'sandboxNode', label: 'Node', width: 'w-44' },
+    { key: 'expires', label: 'Expires', width: 'w-28', tooltip: 'shutdownTime: when the controller tears the sandbox down' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  agentsandboxclaims: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-44' },
+    { key: 'warmPool', label: 'Warm pool', width: 'w-40' },
+    { key: 'claimedSandbox', label: 'Sandbox', width: 'w-44' },
+    { key: 'expires', label: 'Expires', width: 'w-28', tooltip: 'lifecycle.shutdownTime: when the claim and its sandbox expire' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  agentsandboxwarmpools: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'warmReady', label: 'Ready', width: 'w-20', tooltip: 'Ready, unclaimed sandboxes / desired' },
+    { key: 'template', label: 'Template', width: 'w-44' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   kaitoworkspaces: [
@@ -2819,6 +2886,14 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   podgroup: { 'scheduling.volcano.sh': 'volcanopodgroups', 'scheduling.run.ai': 'kaipodgroups' },
   podgroups: { 'scheduling.volcano.sh': 'volcanopodgroups', 'scheduling.run.ai': 'kaipodgroups' },
   workspace: { 'kaito.sh': 'kaitoworkspaces' },
+  workerpool: { 'ate.dev': 'substrateworkerpools' },
+  workerpools: { 'ate.dev': 'substrateworkerpools' },
+  sandbox: { 'agents.x-k8s.io': 'agentsandboxes' },
+  sandboxes: { 'agents.x-k8s.io': 'agentsandboxes' },
+  sandboxclaim: { 'extensions.agents.x-k8s.io': 'agentsandboxclaims' },
+  sandboxclaims: { 'extensions.agents.x-k8s.io': 'agentsandboxclaims' },
+  sandboxwarmpool: { 'extensions.agents.x-k8s.io': 'agentsandboxwarmpools' },
+  sandboxwarmpools: { 'extensions.agents.x-k8s.io': 'agentsandboxwarmpools' },
   workspaces: { 'kaito.sh': 'kaitoworkspaces' },
   services: { 'serving.knative.dev': 'knativeservices' },
   configurations: { 'serving.knative.dev': 'knativeconfigurations' },
@@ -2994,6 +3069,9 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   kafkaconnectors: ['kafka.strimzi.io'],
   kafkas: ['kafka.strimzi.io'],
   kafkanodepools: ['kafka.strimzi.io'],
+  volumesnapshots: ['snapshot.storage.k8s.io'],
+  volumesnapshotcontents: ['snapshot.storage.k8s.io'],
+  volumesnapshotclasses: ['snapshot.storage.k8s.io'],
   opentelemetrycollectors: ['opentelemetry.io'],
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
@@ -3176,6 +3254,10 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   inferenceobjectives: ['inference.networking.x-k8s.io', 'llm-d.ai'],
   jobsets: ['jobset.x-k8s.io'],
   kaitoworkspaces: ['kaito.sh'],
+  substrateworkerpools: ['ate.dev'],
+  agentsandboxes: ['agents.x-k8s.io'],
+  agentsandboxclaims: ['extensions.agents.x-k8s.io'],
+  agentsandboxwarmpools: ['extensions.agents.x-k8s.io'],
   ragengines: ['kaito.sh'],
   admissionchecks: ['kueue.x-k8s.io'],
   clusterqueues: ['kueue.x-k8s.io'],
@@ -5611,10 +5693,14 @@ export function ResourcesView({
       if (column === 'poolReplicas') return Number.isInteger(resource.status?.replicas) ? resource.status.replicas : -1
       return strimziClusterValue
     }
+    const volumeSnapshotValue = getVolumeSnapshotSortValue(resource, column)
+    if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
     const otelValue = getOpenTelemetryColumnValue(resource, column)
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
     if (flaggerValue !== undefined) return flaggerValue
+    const agentRuntimeValue = getAgentRuntimeSortValue(resource, column)
+    if (agentRuntimeValue !== undefined) return agentRuntimeValue
     const planValue = getUpgradePlanColumnValue(resource, column)
     if (planValue !== undefined) return planValue
 
@@ -7841,6 +7927,11 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{strimziClusterValue || '-'}</span>
   }
+  const volumeSnapshotValue = getVolumeSnapshotColumnValue(resource, column)
+  if (volumeSnapshotValue !== undefined) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{volumeSnapshotValue || '-'}</span>
+  }
   if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{getOpenTelemetryColumnValue(resource, column) || '-'}</span>
@@ -8093,6 +8184,15 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <KaiQueueCell resource={resource} column={column} />
     case 'kaipodgroups':
       return <KaiPodGroupCell resource={resource} column={column} />
+    // Agent runtimes
+    case 'substrateworkerpools':
+      return <WorkerPoolCell resource={resource} column={column} />
+    case 'agentsandboxes':
+      return <SandboxCell resource={resource} column={column} />
+    case 'agentsandboxclaims':
+      return <SandboxClaimCell resource={resource} column={column} />
+    case 'agentsandboxwarmpools':
+      return <SandboxWarmPoolCell resource={resource} column={column} />
     // KAITO
     case 'kaitoworkspaces':
       return <KaitoWorkspaceCell resource={resource} column={column} />

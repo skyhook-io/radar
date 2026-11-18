@@ -1209,6 +1209,30 @@ describe('Strimzi Kafka and KafkaNodePool exact group', () => {
   })
 })
 
+describe('CSI VolumeSnapshot exact group', () => {
+  const snapshot = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshot', metadata: {name: 'data-snap', namespace: 'demo'}, spec: {source: {persistentVolumeClaimName: 'data'}}, status: {error: {message: 'class not found'}}}
+  const content = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshotContent', metadata: {name: 'snapcontent-1'}, spec: {driver: 'hostpath.csi.k8s.io', deletionPolicy: 'Retain', source: {volumeHandle: 'v'}, volumeSnapshotRef: {name: 'data-snap', namespace: 'demo', uid: 'u'}}, status: {readyToUse: true}}
+  const snapshotClass = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshotClass', metadata: {name: 'csi'}, driver: 'hostpath.csi.k8s.io', deletionPolicy: 'Delete'}
+  it('renders curated drawers and snapshot status', () => {
+    expect(getResourceStatus('volumesnapshots', snapshot)?.text).toBe('Error')
+    expect(renderKind('volumesnapshots', snapshot, 'demo')).toContain('Source PVC')
+    expect(getResourceStatus('volumesnapshotcontents', content)?.text).toBe('Ready')
+    expect(renderKind('volumesnapshotcontents', content)).toContain('Deletion policy')
+    expect(getResourceStatus('volumesnapshotclasses', snapshotClass)).toBeNull()
+    expect(renderKind('volumesnapshotclasses', snapshotClass)).toContain('Default class')
+  })
+  it('leaves unrelated and lookalike groups generic', () => {
+    for (const apiVersion of ['volumesnapshot.external-storage.k8s.io/v1', 'fake.snapshot.storage.k8s.io/v1']) {
+      for (const [kind, data, marker] of [['volumesnapshots', snapshot, 'Source PVC'], ['volumesnapshotcontents', content, 'Deletion policy'], ['volumesnapshotclasses', snapshotClass, 'Default class']] as const) {
+        const other = {...data, apiVersion}
+        expect(renderKind(kind, other)).not.toContain(marker)
+      }
+      expect(getResourceStatus('volumesnapshots', {...snapshot, apiVersion})?.text).not.toBe('Error')
+      expect(getResourceStatus('volumesnapshotcontents', {...content, apiVersion})?.text).not.toBe('Ready')
+    }
+  })
+})
+
 it('keeps foreign customresourcedefinitions on generic renderer and status', () => {
   const data = { apiVersion: 'foreign.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'foreign' }, spec: { example: 'generic-sentinel' }, status: { conditions: [{ type: 'Established', status: 'True' }] } }
   const html = renderToString(<ResourceRendererDispatch resource={{ kind: 'customresourcedefinitions', name: 'foreign', namespace: '' }} data={data} onCopy={() => {}} copied={null} showCommonSections={false} />)

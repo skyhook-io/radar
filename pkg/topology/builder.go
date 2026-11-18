@@ -1362,21 +1362,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if !ok {
 					continue
 				}
-				// v1beta2 names the class in topology.classRef; earlier versions
-				// in topology.class and topology.classNamespace.
-				className, _, _ := unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "name")
-				classNS, _, _ := unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "namespace")
-				if className == "" {
-					className, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "class")
-					classNS, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "classNamespace")
-				}
-				if className == "" {
+				class, named := configrefs.CAPIClusterClass(cl)
+				if !named {
 					continue
 				}
-				if classNS == "" {
-					classNS = ns
-				}
-				ccID, ok := clusterClassIDs[classNS+"/"+className]
+				ccID, ok := clusterClassIDs[class.Ref.Namespace+"/"+class.Ref.Name]
 				if ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ccID, clID),
@@ -2891,7 +2881,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				},
 			})
 			edges = addArgoWorkflowTemplateEdges(edges, wfID, ns, argoWorkflowTemplateRefsFromWorkflowSpec(wf.Object, "spec"), workflowTemplateIDs, clusterWorkflowTemplateIDs)
-			if owner := argoWorkflowCronOwnerName(wf); owner != "" {
+			if owner := configrefs.ArgoWorkflowCronOwnerName(wf); owner != "" {
 				if cwfID, ok := cronWorkflowIDs[ns+"/"+owner]; ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", cwfID, wfID),
@@ -4591,25 +4581,13 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		vsName := vs.GetName()
 		vsID := virtualServiceIDs[vsNs+"/"+vsName]
 
-		spec, _, _ := unstructured.NestedMap(vs.Object, "spec")
-		if spec == nil {
+		if spec, _, _ := unstructured.NestedMap(vs.Object, "spec"); spec == nil {
 			continue
 		}
 
 		// Create Istio Gateway → VirtualService edges
-		vsGateways, _, _ := unstructured.NestedStringSlice(spec, "gateways")
-		for _, gwRef := range vsGateways {
-			if gwRef == "mesh" {
-				continue // "mesh" is a special keyword meaning sidecar-to-sidecar
-			}
-			// Gateway ref can be "namespace/name" or just "name" (same namespace)
-			gwNs := vsNs
-			gwName := gwRef
-			if parts := strings.SplitN(gwRef, "/", 2); len(parts) == 2 {
-				gwNs = parts[0]
-				gwName = parts[1]
-			}
-			if igwID, ok := istioGatewayIDs[gwNs+"/"+gwName]; ok {
+		for _, gw := range configrefs.IstioVirtualServiceGateways(vs) {
+			if igwID, ok := istioGatewayIDs[gw.Ref.Namespace+"/"+gw.Ref.Name]; ok {
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", igwID, vsID),
 					Source: igwID,
@@ -4619,20 +4597,20 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 		}
 
-		// addVSToSvcEdge is a helper that deduplicates VS→Service edges
-		addVSToSvcEdge := func(protocol string, destHost string) {
-			svcName, svcNs := parseIstioHost(destHost, vsNs, istioDomain)
-			svcID, ok := serviceIDs[svcNs+"/"+svcName]
+		// VirtualService → Service edges, from HTTP, then TCP, then TLS
+		// routes; the first protocol to reach a Service names the edge.
+		for _, dest := range configrefs.IstioVirtualServiceDestinations(vs, istioDomain) {
+			svcID, ok := serviceIDs[dest.Ref.Namespace+"/"+dest.Ref.Name]
 			if !ok {
-				return
+				continue
 			}
 			dedupeKey := vsID + "|" + svcID
 			if vsToSvcSeen[dedupeKey] {
-				return
+				continue
 			}
 			vsToSvcSeen[dedupeKey] = true
 			suffix := ""
-			if protocol != "" {
+			if protocol, _, _ := strings.Cut(strings.TrimPrefix(dest.Path, "spec."), "["); protocol != "http" {
 				suffix = "-" + protocol
 			}
 			edges = append(edges, Edge{
@@ -4642,66 +4620,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Type:   EdgeExposes,
 			})
 		}
-
-		// Create VirtualService → Service edges (via HTTP route destinations)
-		httpRoutes, _, _ := unstructured.NestedSlice(spec, "http")
-		for _, httpRoute := range httpRoutes {
-			routeMap, ok := httpRoute.(map[string]any)
-			if !ok {
-				continue
-			}
-			routeDestinations, _, _ := unstructured.NestedSlice(routeMap, "route")
-			for _, rd := range routeDestinations {
-				rdMap, ok := rd.(map[string]any)
-				if !ok {
-					continue
-				}
-				destHost, _, _ := unstructured.NestedString(rdMap, "destination", "host")
-				if destHost != "" {
-					addVSToSvcEdge("", destHost)
-				}
-			}
-		}
-
-		// Also handle TCP route destinations
-		tcpRoutes, _, _ := unstructured.NestedSlice(spec, "tcp")
-		for _, tcpRoute := range tcpRoutes {
-			routeMap, ok := tcpRoute.(map[string]any)
-			if !ok {
-				continue
-			}
-			routeDestinations, _, _ := unstructured.NestedSlice(routeMap, "route")
-			for _, rd := range routeDestinations {
-				rdMap, ok := rd.(map[string]any)
-				if !ok {
-					continue
-				}
-				destHost, _, _ := unstructured.NestedString(rdMap, "destination", "host")
-				if destHost != "" {
-					addVSToSvcEdge("tcp", destHost)
-				}
-			}
-		}
-
-		// Also handle TLS route destinations
-		tlsRoutes, _, _ := unstructured.NestedSlice(spec, "tls")
-		for _, tlsRoute := range tlsRoutes {
-			routeMap, ok := tlsRoute.(map[string]any)
-			if !ok {
-				continue
-			}
-			routeDestinations, _, _ := unstructured.NestedSlice(routeMap, "route")
-			for _, rd := range routeDestinations {
-				rdMap, ok := rd.(map[string]any)
-				if !ok {
-					continue
-				}
-				destHost, _, _ := unstructured.NestedString(rdMap, "destination", "host")
-				if destHost != "" {
-					addVSToSvcEdge("tls", destHost)
-				}
-			}
-		}
 	}
 
 	// 14c. Create Istio DestinationRule → Service edges (via spec.host)
@@ -4710,13 +4628,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		drName := dr.GetName()
 		drID := destinationRuleIDs[drNs+"/"+drName]
 
-		host, _, _ := unstructured.NestedString(dr.Object, "spec", "host")
-		if host == "" {
+		host, named := configrefs.IstioDestinationRuleService(dr, istioDomain)
+		if !named {
 			continue
 		}
-
-		svcName, svcNs := parseIstioHost(host, drNs, istioDomain)
-		if svcID, ok := serviceIDs[svcNs+"/"+svcName]; ok {
+		if svcID, ok := serviceIDs[host.Ref.Namespace+"/"+host.Ref.Name]; ok {
 			edges = append(edges, Edge{
 				ID:     fmt.Sprintf("%s-to-%s", drID, svcID),
 				Source: drID,
@@ -4821,17 +4737,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		krouteName := kroute.GetName()
 		krouteID := knativeRouteIDs[krouteNs+"/"+krouteName]
 
-		trafficTargets, _, _ := unstructured.NestedSlice(kroute.Object, "status", "traffic")
-		for _, tt := range trafficTargets {
-			ttMap, ok := tt.(map[string]any)
-			if !ok {
-				continue
-			}
-			revName, _, _ := unstructured.NestedString(ttMap, "revisionName")
-			if revName == "" {
-				continue
-			}
-			if krevID, ok := knativeRevisionIDs[krouteNs+"/"+revName]; ok {
+		for _, rev := range configrefs.KnativeRouteRevisions(kroute) {
+			if krevID, ok := knativeRevisionIDs[krouteNs+"/"+rev.Ref.Name]; ok {
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", krouteID, krevID),
 					Source: krouteID,
@@ -4941,18 +4848,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		routeID := routeIDs[routeKind+"/"+ns+"/"+name]
 
 		// Gateway → Route edges (read parentRefs)
-		parentRefs, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
-		for _, pRef := range parentRefs {
-			pMap, ok := pRef.(map[string]any)
-			if !ok {
-				continue
-			}
-			if !configrefs.GatewayParentIsGateway(pMap) {
-				continue
-			}
-			parentName, _ := pMap["name"].(string)
-			parentNS := configrefs.GatewayRefNamespace(pMap, ns)
-			gwID := gatewayIDs[parentNS+"/"+parentName]
+		for _, parent := range configrefs.GatewayRouteParents(route) {
+			gwID := gatewayIDs[parent.Ref.Namespace+"/"+parent.Ref.Name]
 			if edgeID := fmt.Sprintf("%s-to-%s", gwID, routeID); gwID != "" && !gatewayEdgeSeen[edgeID] {
 				gatewayEdgeSeen[edgeID] = true
 				edges = append(edges, Edge{
@@ -4965,32 +4862,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 
 		// Route → Service edges (read backendRefs from rules)
-		rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
-		for _, rule := range rules {
-			ruleMap, ok := rule.(map[string]any)
-			if !ok {
-				continue
-			}
-			backendRefs, _, _ := unstructured.NestedSlice(ruleMap, "backendRefs")
-			for _, bRef := range backendRefs {
-				bMap, ok := bRef.(map[string]any)
-				if !ok {
-					continue
-				}
-				backendName, _ := bMap["name"].(string)
-				backendNS := configrefs.GatewayRefNamespace(bMap, ns)
-				if configrefs.GatewayBackendIsService(bMap) {
-					svcKey := backendNS + "/" + backendName
-					if svcID, ok := serviceIDs[svcKey]; ok && !gatewayEdgeSeen[routeID+"-to-"+svcID] {
-						gatewayEdgeSeen[routeID+"-to-"+svcID] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
-							Source: routeID,
-							Target: svcID,
-							Type:   EdgeRoutesTo,
-						})
-					}
-				}
+		for _, backend := range configrefs.GatewayRouteBackendServices(route) {
+			svcKey := backend.Ref.Namespace + "/" + backend.Ref.Name
+			if svcID, ok := serviceIDs[svcKey]; ok && !gatewayEdgeSeen[routeID+"-to-"+svcID] {
+				gatewayEdgeSeen[routeID+"-to-"+svcID] = true
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
+					Source: routeID,
+					Target: svcID,
+					Type:   EdgeRoutesTo,
+				})
 			}
 		}
 	}
@@ -5032,310 +4913,78 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	for _, res := range traefikRouteResources {
 		def := traefikRouteKinds[res]
-		routeNs := res.GetNamespace()
-		routeID := traefikRouteIDs[def.prefix+":"+routeNs+"/"+res.GetName()]
+		routeID := traefikRouteIDs[def.prefix+":"+res.GetNamespace()+"/"+res.GetName()]
 		if routeID == "" {
 			continue
 		}
-
-		routes, _, _ := unstructured.NestedSlice(res.Object, "spec", "routes")
-		for _, route := range routes {
-			routeMap, ok := route.(map[string]any)
-			if !ok {
+		for _, r := range configrefs.TraefikBackendReferences(res) {
+			key := r.Ref.Namespace + "/" + r.Ref.Name
+			targetID := serviceIDs[key]
+			if r.Ref.Kind == "TraefikService" {
+				targetID = traefikServiceIDs[key]
+			}
+			if targetID == "" || traefikEdgeSeen[routeID+"|"+targetID] {
 				continue
 			}
-
-			// Route → Service/TraefikService edges. A serversTransport only
-			// configures how Traefik dials the backend: it is configuration of
-			// the route, never a hop between the route and its Service.
-			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
-			for _, svc := range svcs {
-				svcMap, ok := svc.(map[string]any)
-				if !ok {
-					continue
-				}
-				svcName, _ := svcMap["name"].(string)
-				if svcName == "" {
-					continue
-				}
-				svcNs, _ := svcMap["namespace"].(string)
-				if svcNs == "" {
-					svcNs = routeNs
-				}
-				svcKind, _ := svcMap["kind"].(string)
-
-				// The route uses its transport whether or not the backend exists.
-				// Traefik resolves an HTTP transport in the backend Service's
-				// namespace and a TCP transport in the route's, and ignores it
-				// on a TraefikService backend.
-				if stName, _ := svcMap["serversTransport"].(string); stName != "" && svcKind != "TraefikService" {
-					stPrefix, stNs := "serverstransport", svcNs
-					if def.kind == "IngressRouteTCP" {
-						stPrefix, stNs = "serverstransporttcp", routeNs
-					}
-					if stID := traefikConfigIDs[stPrefix+":"+stNs+"/"+stName]; stID != "" {
-						dedupeKey := stID + "|" + routeID
-						if !traefikEdgeSeen[dedupeKey] {
-							traefikEdgeSeen[dedupeKey] = true
-							edges = append(edges, Edge{
-								ID:     fmt.Sprintf("%s-to-%s", stID, routeID),
-								Source: stID,
-								Target: routeID,
-								Type:   EdgeConfigures,
-							})
-						}
-					}
-				}
-
-				var targetID string
-				if svcKind == "TraefikService" {
-					targetID = traefikServiceIDs[svcNs+"/"+svcName]
-				} else {
-					// Default kind is K8s Service
-					targetID = serviceIDs[svcNs+"/"+svcName]
-				}
-				if targetID == "" {
-					continue
-				}
-				dedupeKey := routeID + "|" + targetID
-				if traefikEdgeSeen[dedupeKey] {
-					continue
-				}
-				traefikEdgeSeen[dedupeKey] = true
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", routeID, targetID),
-					Source: routeID,
-					Target: targetID,
-					Type:   EdgeExposes,
-				})
-			}
-
-			middlewares, _, _ := unstructured.NestedSlice(routeMap, "middlewares")
-			for _, mw := range middlewares {
-				mwMap, ok := mw.(map[string]any)
-				if !ok {
-					continue
-				}
-				mwName, _ := mwMap["name"].(string)
-				if mwName == "" {
-					continue
-				}
-				mwNs, _ := mwMap["namespace"].(string)
-				if mwNs == "" {
-					mwNs = routeNs
-				}
-				// IngressRouteTCP uses MiddlewareTCP, others use Middleware
-				mwPrefix := "middleware"
-				if def.kind == "IngressRouteTCP" {
-					mwPrefix = "middlewaretcp"
-				}
-				mwID := middlewareIDs[mwPrefix+":"+mwNs+"/"+mwName]
-				if mwID == "" {
-					continue
-				}
-				dedupeKey := routeID + "|" + mwID
-				if traefikEdgeSeen[dedupeKey] {
-					continue
-				}
-				traefikEdgeSeen[dedupeKey] = true
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", mwID, routeID),
-					Source: mwID,
-					Target: routeID,
-					Type:   EdgeConfigures,
-				})
-			}
+			traefikEdgeSeen[routeID+"|"+targetID] = true
+			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", routeID, targetID), Source: routeID, Target: targetID, Type: EdgeExposes})
 		}
-
-		// TLS-related edges (IngressRoute and IngressRouteTCP only, not UDP)
-		if def.kind != "IngressRouteUDP" {
-			tlsOptName, _, _ := unstructured.NestedString(res.Object, "spec", "tls", "options", "name")
-			if tlsOptName != "" {
-				tlsOptNs, _, _ := unstructured.NestedString(res.Object, "spec", "tls", "options", "namespace")
-				if tlsOptNs == "" {
-					tlsOptNs = routeNs
-				}
-				tlsOptID := traefikConfigIDs["tlsoption:"+tlsOptNs+"/"+tlsOptName]
-				if tlsOptID != "" {
-					dedupeKey := routeID + "|" + tlsOptID
-					if !traefikEdgeSeen[dedupeKey] {
-						traefikEdgeSeen[dedupeKey] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", tlsOptID, routeID),
-							Source: tlsOptID,
-							Target: routeID,
-							Type:   EdgeConfigures,
-						})
-					}
-				}
+		for _, r := range configrefs.TraefikRouteConfigReferences(res) {
+			key := strings.ToLower(r.Ref.Kind) + ":" + r.Ref.Namespace + "/" + r.Ref.Name
+			targetID := traefikConfigIDs[key]
+			if r.Ref.Kind == "Middleware" || r.Ref.Kind == "MiddlewareTCP" {
+				targetID = middlewareIDs[key]
 			}
-
-			// spec.tls.store is not drawn: Traefik serves every route from the
-			// default TLSStore and ignores a route's store reference.
-
-			// Certificate → IngressRoute (via spec.tls.secretName matching cert-manager Certificate)
-			tlsSecretName, _, _ := unstructured.NestedString(res.Object, "spec", "tls", "secretName")
-			if tlsSecretName != "" {
-				certID := certBySecret[routeNs+"/"+tlsSecretName]
-				if certID != "" {
-					dedupeKey := routeID + "|" + certID
-					if !traefikEdgeSeen[dedupeKey] {
-						traefikEdgeSeen[dedupeKey] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", certID, routeID),
-							Source: certID,
-							Target: routeID,
-							Type:   EdgeConfigures,
-						})
-					}
-				}
+			if targetID == "" || traefikEdgeSeen[routeID+"|"+targetID] {
+				continue
 			}
+			traefikEdgeSeen[routeID+"|"+targetID] = true
+			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", targetID, routeID), Source: targetID, Target: routeID, Type: EdgeConfigures})
+		}
+		for _, r := range configrefs.TraefikSecretReferences(res) {
+			certID := certBySecret[r.Ref.Namespace+"/"+r.Ref.Name]
+			if certID == "" || traefikEdgeSeen[routeID+"|"+certID] {
+				continue
+			}
+			traefikEdgeSeen[routeID+"|"+certID] = true
+			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", certID, routeID), Source: certID, Target: routeID, Type: EdgeConfigures})
 		}
 	}
 
-	// TraefikService → Service/TraefikService edges
 	for _, ts := range traefikServiceResources {
-		tsNs := ts.GetNamespace()
-		tsID := traefikServiceIDs[tsNs+"/"+ts.GetName()]
+		tsID := traefikServiceIDs[ts.GetNamespace()+"/"+ts.GetName()]
 		if tsID == "" {
 			continue
 		}
-
-		spec, _, _ := unstructured.NestedMap(ts.Object, "spec")
-
-		// Collect all service references from weighted, mirroring, and highestRandomWeight
-		type svcRef struct {
-			name, ns, kind string
-		}
-		var refs []svcRef
-
-		// Weighted services
-		if weighted, ok := spec["weighted"]; ok {
-			if wm, ok := weighted.(map[string]any); ok {
-				wsvcs, _, _ := unstructured.NestedSlice(wm, "services")
-				for _, ws := range wsvcs {
-					if wsm, ok := ws.(map[string]any); ok {
-						n, _ := wsm["name"].(string)
-						ns, _ := wsm["namespace"].(string)
-						k, _ := wsm["kind"].(string)
-						if n != "" {
-							refs = append(refs, svcRef{n, ns, k})
-						}
-					}
-				}
+		for _, r := range configrefs.TraefikBackendReferences(ts) {
+			key := r.Ref.Namespace + "/" + r.Ref.Name
+			targetID := serviceIDs[key]
+			if r.Ref.Kind == "TraefikService" {
+				targetID = traefikServiceIDs[key]
 			}
-		}
-
-		// HighestRandomWeight services
-		if hrw, ok := spec["highestRandomWeight"]; ok {
-			if hm, ok := hrw.(map[string]any); ok {
-				hsvcs, _, _ := unstructured.NestedSlice(hm, "services")
-				for _, hs := range hsvcs {
-					if hsm, ok := hs.(map[string]any); ok {
-						n, _ := hsm["name"].(string)
-						ns, _ := hsm["namespace"].(string)
-						k, _ := hsm["kind"].(string)
-						if n != "" {
-							refs = append(refs, svcRef{n, ns, k})
-						}
-					}
-				}
-			}
-		}
-
-		// Mirroring: primary + mirrors
-		if mirroring, ok := spec["mirroring"]; ok {
-			if mm, ok := mirroring.(map[string]any); ok {
-				n, _ := mm["name"].(string)
-				ns, _ := mm["namespace"].(string)
-				k, _ := mm["kind"].(string)
-				if n != "" {
-					refs = append(refs, svcRef{n, ns, k})
-				}
-				mirrors, _, _ := unstructured.NestedSlice(mm, "mirrors")
-				for _, m := range mirrors {
-					if mirrorMap, ok := m.(map[string]any); ok {
-						n, _ := mirrorMap["name"].(string)
-						ns, _ := mirrorMap["namespace"].(string)
-						k, _ := mirrorMap["kind"].(string)
-						if n != "" {
-							refs = append(refs, svcRef{n, ns, k})
-						}
-					}
-				}
-			}
-		}
-
-		for _, ref := range refs {
-			refNs := ref.ns
-			if refNs == "" {
-				refNs = tsNs
-			}
-			var targetID string
-			if ref.kind == "TraefikService" {
-				targetID = traefikServiceIDs[refNs+"/"+ref.name]
-			} else {
-				targetID = serviceIDs[refNs+"/"+ref.name]
-			}
-			if targetID == "" {
+			if targetID == "" || traefikEdgeSeen[tsID+"|"+targetID] {
 				continue
 			}
-			dedupeKey := tsID + "|" + targetID
-			if traefikEdgeSeen[dedupeKey] {
-				continue
-			}
-			traefikEdgeSeen[dedupeKey] = true
-			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", tsID, targetID),
-				Source: tsID,
-				Target: targetID,
-				Type:   EdgeExposes,
-			})
+			traefikEdgeSeen[tsID+"|"+targetID] = true
+			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", tsID, targetID), Source: tsID, Target: targetID, Type: EdgeExposes})
 		}
 	}
 
-	// Child Middleware → Middleware chain edges (spec.chain.middlewares[])
 	for _, mw := range middlewareResources {
-		mwNs := mw.GetNamespace()
-		mwID := middlewareIDs["middleware:"+mwNs+"/"+mw.GetName()]
+		mwID := middlewareIDs["middleware:"+mw.GetNamespace()+"/"+mw.GetName()]
 		if mwID == "" {
 			continue
 		}
-
-		chainMWs, _, _ := unstructured.NestedSlice(mw.Object, "spec", "chain", "middlewares")
-		for _, chainRef := range chainMWs {
-			refMap, ok := chainRef.(map[string]any)
-			if !ok {
+		for _, r := range configrefs.TraefikRouteConfigReferences(mw) {
+			targetID := middlewareIDs["middleware:"+r.Ref.Namespace+"/"+r.Ref.Name]
+			if targetID == "" || traefikEdgeSeen[mwID+"|"+targetID] {
 				continue
 			}
-			refName, _ := refMap["name"].(string)
-			if refName == "" {
-				continue
-			}
-			refNs, _ := refMap["namespace"].(string)
-			if refNs == "" {
-				refNs = mwNs
-			}
-			targetID := middlewareIDs["middleware:"+refNs+"/"+refName]
-			if targetID == "" {
-				continue
-			}
-			dedupeKey := mwID + "|" + targetID
-			if !traefikEdgeSeen[dedupeKey] {
-				traefikEdgeSeen[dedupeKey] = true
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", targetID, mwID),
-					Source: targetID,
-					Target: mwID,
-					Type:   EdgeConfigures,
-				})
-			}
+			traefikEdgeSeen[mwID+"|"+targetID] = true
+			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", targetID, mwID), Source: targetID, Target: mwID, Type: EdgeConfigures})
 		}
 	}
 
-	// Secret/ConfigMap → ServersTransport/TCP edges (via configrefs.TraefikTransportRefs)
-	// Secret → TLSOption edges (via spec.clientAuth.secretNames[])
-	// Secret → TLSStore edges (via configrefs.TraefikTLSStoreSecrets)
 	// Creates Secret and ConfigMap nodes on demand, since IncludeSecrets and
 	// IncludeConfigMaps may be false.
 	existingSecretNodes := make(map[string]bool)
@@ -5361,106 +5010,42 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 		return id
 	}
-	for _, ste := range serversTransportResources {
-		st := ste.resource
-		stNs := st.GetNamespace()
-		stID := traefikConfigIDs[ste.prefix+":"+stNs+"/"+st.GetName()]
-		if stID == "" {
-			continue
-		}
-
-		secretNames, configMapNames := configrefs.TraefikTransportRefs(st.Object, ste.prefix == "serverstransporttcp")
-		for _, cmName := range configMapNames {
-			cmNodeID := fmt.Sprintf("configmap/%s/%s", stNs, cmName)
-			if !existingConfigMapNodes[cmNodeID] {
-				existingConfigMapNodes[cmNodeID] = true
-				nodes = append(nodes, Node{
-					ID:     cmNodeID,
-					Kind:   KindConfigMap,
-					Name:   cmName,
-					Status: StatusUnknown,
-					Data: map[string]any{
-						"namespace": stNs,
-						"labels":    map[string]string{},
-					},
-				})
+	for _, entries := range [][]traefikConfigEntry{serversTransportResources, tlsOptionResources, tlsStoreResources} {
+		for _, entry := range entries {
+			res := &entry.resource
+			configID := traefikConfigIDs[entry.prefix+":"+res.GetNamespace()+"/"+res.GetName()]
+			if configID == "" {
+				continue
 			}
-			dedupeKey := stID + "|" + cmNodeID
-			if !traefikEdgeSeen[dedupeKey] {
-				traefikEdgeSeen[dedupeKey] = true
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", cmNodeID, stID),
-					Source: cmNodeID,
-					Target: stID,
-					Type:   EdgeConfigures,
-				})
-			}
-		}
-
-		for _, secretName := range secretNames {
-			secretNodeID := fmt.Sprintf("secret/%s/%s", stNs, secretName)
-
-			// Create Secret node if it doesn't already exist
-			ensureSecretNode(stNs, secretName)
-
-			dedupeKey := stID + "|" + secretNodeID
-			if !traefikEdgeSeen[dedupeKey] {
-				traefikEdgeSeen[dedupeKey] = true
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", secretNodeID, stID),
-					Source: secretNodeID,
-					Target: stID,
-					Type:   EdgeConfigures,
-				})
-			}
-		}
-	}
-
-	// Secret → TLSOption edges (via spec.clientAuth.secretNames[])
-	for _, entry := range tlsOptionResources {
-		res := entry.resource
-		ns := res.GetNamespace()
-		optID := traefikConfigIDs["tlsoption:"+ns+"/"+res.GetName()]
-		if optID == "" {
-			continue
-		}
-		secretNames, _, _ := unstructured.NestedStringSlice(res.Object, "spec", "clientAuth", "secretNames")
-		for _, secretName := range secretNames {
-			secretNodeID := fmt.Sprintf("secret/%s/%s", ns, secretName)
-			ensureSecretNode(ns, secretName)
-			dedupeKey := optID + "|" + secretNodeID
-			if !traefikEdgeSeen[dedupeKey] {
-				traefikEdgeSeen[dedupeKey] = true
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", secretNodeID, optID),
-					Source: secretNodeID,
-					Target: optID,
-					Type:   EdgeConfigures,
-				})
-			}
-		}
-	}
-
-	// Secret → TLSStore edges (via spec.defaultCertificate and spec.certificates[])
-	for _, entry := range tlsStoreResources {
-		res := entry.resource
-		ns := res.GetNamespace()
-		storeID := traefikConfigIDs["tlsstore:"+ns+"/"+res.GetName()]
-		if storeID == "" {
-			continue
-		}
-		for _, secretName := range configrefs.TraefikTLSStoreSecrets(res.Object) {
-			secretNodeID := fmt.Sprintf("secret/%s/%s", ns, secretName)
-			ensureSecretNode(ns, secretName)
-			dedupeKey := storeID + "|" + secretNodeID
-			if !traefikEdgeSeen[dedupeKey] {
-				traefikEdgeSeen[dedupeKey] = true
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", secretNodeID, storeID),
-					Source: secretNodeID,
-					Target: storeID,
-					Type:   EdgeConfigures,
-				})
+			// ConfigMaps come first, as they always have: a neighborhood
+			// capped by node count keeps the earliest edges.
+			refs := configrefs.TraefikSecretReferences(res)
+			slices.SortStableFunc(refs, func(x, y configrefs.PathRef) int {
+				rank := func(r configrefs.PathRef) int {
+					if r.Ref.Kind == "ConfigMap" {
+						return 0
+					}
+					return 1
+				}
+				return rank(x) - rank(y)
+			})
+			for _, r := range refs {
+				ref := r.Ref
+				nodeID := "secret/" + ref.Namespace + "/" + ref.Name
+				if ref.Kind == "ConfigMap" {
+					nodeID = "configmap/" + ref.Namespace + "/" + ref.Name
+					if !existingConfigMapNodes[nodeID] {
+						existingConfigMapNodes[nodeID] = true
+						nodes = append(nodes, Node{ID: nodeID, Kind: KindConfigMap, Name: ref.Name, Status: StatusUnknown, Data: map[string]any{"namespace": ref.Namespace, "labels": map[string]string{}}})
+					}
+				} else {
+					ensureSecretNode(ref.Namespace, ref.Name)
+				}
+				if traefikEdgeSeen[configID+"|"+nodeID] {
+					continue
+				}
+				traefikEdgeSeen[configID+"|"+nodeID] = true
+				edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", nodeID, configID), Source: nodeID, Target: configID, Type: EdgeConfigures})
 			}
 		}
 	}
@@ -5479,77 +5064,22 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 
-		// HTTPProxy → Service edges (via spec.routes[].services[])
-		routes, _, _ := unstructured.NestedSlice(res.Object, "spec", "routes")
-		for _, route := range routes {
-			routeMap, ok := route.(map[string]any)
-			if !ok {
+		for _, r := range configrefs.ContourBackendReferences(res) {
+			key := r.Ref.Namespace + "/" + r.Ref.Name
+			targetID := serviceIDs[key]
+			if r.Ref.Kind == "HTTPProxy" {
+				targetID = httpProxyIDs[key]
+			}
+			if targetID == "" || contourEdgeSeen[resID+"|"+targetID] {
 				continue
 			}
-			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
-			for _, svc := range svcs {
-				svcMap, ok := svc.(map[string]any)
-				if !ok {
-					continue
-				}
-				svcName, _ := svcMap["name"].(string)
-				if svcName == "" {
-					continue
-				}
-				svcNs := resNs
-				targetID := serviceIDs[svcNs+"/"+svcName]
-				if targetID == "" {
-					continue
-				}
-				dedupeKey := resID + "|" + targetID
-				if contourEdgeSeen[dedupeKey] {
-					continue
-				}
-				contourEdgeSeen[dedupeKey] = true
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", resID, targetID),
-					Source: resID,
-					Target: targetID,
-					Type:   EdgeExposes,
-				})
-			}
-		}
-
-		// HTTPProxy → HTTPProxy edges (via spec.includes[])
-		includes, _, _ := unstructured.NestedSlice(res.Object, "spec", "includes")
-		for _, incl := range includes {
-			inclMap, ok := incl.(map[string]any)
-			if !ok {
-				continue
-			}
-			inclName, _ := inclMap["name"].(string)
-			if inclName == "" {
-				continue
-			}
-			inclNs, _ := inclMap["namespace"].(string)
-			if inclNs == "" {
-				inclNs = resNs
-			}
-			targetID := httpProxyIDs[inclNs+"/"+inclName]
-			if targetID == "" {
-				continue
-			}
-			dedupeKey := resID + "|" + targetID
-			if contourEdgeSeen[dedupeKey] {
-				continue
-			}
-			contourEdgeSeen[dedupeKey] = true
-			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", resID, targetID),
-				Source: resID,
-				Target: targetID,
-				Type:   EdgeExposes,
-			})
+			contourEdgeSeen[resID+"|"+targetID] = true
+			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", resID, targetID), Source: resID, Target: targetID, Type: EdgeExposes})
 		}
 
 		// Secret → HTTPProxy configuration edges
-		for _, secretRef := range configrefs.ContourSecretReferences(res) {
-			secretNS, tlsSecretName := secretRef.Namespace, secretRef.Name
+		for _, r := range configrefs.ContourSecretPathReferences(res) {
+			secretNS, tlsSecretName := r.Ref.Namespace, r.Ref.Name
 			if !opts.MatchesNamespaceFilter(secretNS) {
 				continue
 			}
@@ -5580,35 +5110,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					})
 				}
 			}
-		}
-
-		// HTTPProxy → Service via tcpproxy (via spec.tcpproxy.services[])
-		tcpSvcs, _, _ := unstructured.NestedSlice(res.Object, "spec", "tcpproxy", "services")
-		for _, svc := range tcpSvcs {
-			svcMap, ok := svc.(map[string]any)
-			if !ok {
-				continue
-			}
-			svcName, _ := svcMap["name"].(string)
-			if svcName == "" {
-				continue
-			}
-			svcNs := resNs
-			targetID := serviceIDs[svcNs+"/"+svcName]
-			if targetID == "" {
-				continue
-			}
-			dedupeKey := resID + "|" + targetID
-			if contourEdgeSeen[dedupeKey] {
-				continue
-			}
-			contourEdgeSeen[dedupeKey] = true
-			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", resID, targetID),
-				Source: resID,
-				Target: targetID,
-				Type:   EdgeExposes,
-			})
 		}
 	}
 
@@ -5921,23 +5422,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		if !opts.MatchesNamespaceFilter(ns) {
 			continue
 		}
-		rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
-		for _, rule := range rules {
-			ruleMap, ok := rule.(map[string]any)
-			if !ok {
-				continue
-			}
-			backendRefs, _, _ := unstructured.NestedSlice(ruleMap, "backendRefs")
-			for _, bRef := range backendRefs {
-				bMap, ok := bRef.(map[string]any)
-				if !ok {
-					continue
-				}
-				backendName, _ := bMap["name"].(string)
-				if configrefs.GatewayBackendIsService(bMap) {
-					servicesFromGateway[configrefs.GatewayRefNamespace(bMap, ns)+"/"+backendName] = true
-				}
-			}
+		for _, backend := range configrefs.GatewayRouteBackendServices(route) {
+			servicesFromGateway[backend.Ref.Namespace+"/"+backend.Ref.Name] = true
 		}
 	}
 
@@ -5948,32 +5434,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		if !opts.MatchesNamespaceFilter(vsNs) {
 			continue
 		}
-		spec, _, _ := unstructured.NestedMap(vs.Object, "spec")
-		if spec == nil {
-			continue
-		}
-		for _, routeKey := range []string{"http", "tcp", "tls"} {
-			routes, _, _ := unstructured.NestedSlice(spec, routeKey)
-			for _, route := range routes {
-				routeMap, ok := route.(map[string]any)
-				if !ok {
-					continue
-				}
-				routeDests, _, _ := unstructured.NestedSlice(routeMap, "route")
-				for _, rd := range routeDests {
-					rdMap, ok := rd.(map[string]any)
-					if !ok {
-						continue
-					}
-					destHost, _, _ := unstructured.NestedString(rdMap, "destination", "host")
-					if destHost == "" {
-						continue
-					}
-					svcName, svcNs := parseIstioHost(destHost, vsNs, istioDomain)
-					svcKey := svcNs + "/" + svcName
-					servicesFromIstio[svcKey] = true
-				}
-			}
+		for _, dest := range configrefs.IstioVirtualServiceDestinations(vs, istioDomain) {
+			servicesFromIstio[dest.Ref.Namespace+"/"+dest.Ref.Name] = true
 		}
 	}
 
@@ -6058,89 +5520,14 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 
 	// Step 1e: Find services referenced by Traefik IngressRoutes
 	servicesFromTraefik := make(map[string]bool)
-	for _, rt := range trafficTraefikRoutes {
-		ns := rt.GetNamespace()
-		if !opts.MatchesNamespaceFilter(ns) {
-			continue
-		}
-		routes, _, _ := unstructured.NestedSlice(rt.Object, "spec", "routes")
-		for _, route := range routes {
-			routeMap, ok := route.(map[string]any)
-			if !ok {
+	for _, resources := range [][]*unstructured.Unstructured{trafficTraefikRoutes, trafficTraefikServices} {
+		for _, obj := range resources {
+			if !opts.MatchesNamespaceFilter(obj.GetNamespace()) {
 				continue
 			}
-			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
-			for _, svc := range svcs {
-				svcMap, ok := svc.(map[string]any)
-				if !ok {
-					continue
-				}
-				svcName, _ := svcMap["name"].(string)
-				svcKind, _ := svcMap["kind"].(string)
-				if svcName == "" || (svcKind != "" && svcKind != "Service") {
-					continue
-				}
-				svcNs, _ := svcMap["namespace"].(string)
-				if svcNs == "" {
-					svcNs = ns
-				}
-				servicesFromTraefik[svcNs+"/"+svcName] = true
-			}
-		}
-	}
-	// Also find services referenced by TraefikService (weighted/mirroring)
-	for _, ts := range trafficTraefikServices {
-		ns := ts.GetNamespace()
-		if !opts.MatchesNamespaceFilter(ns) {
-			continue
-		}
-		spec, _, _ := unstructured.NestedMap(ts.Object, "spec")
-		if spec == nil {
-			continue
-		}
-		for _, svcListKey := range []string{"weighted", "highestRandomWeight"} {
-			svcList, _, _ := unstructured.NestedSlice(spec, svcListKey, "services")
-			for _, svc := range svcList {
-				svcMap, ok := svc.(map[string]any)
-				if !ok {
-					continue
-				}
-				svcName, _ := svcMap["name"].(string)
-				svcKind, _ := svcMap["kind"].(string)
-				if svcName == "" || (svcKind != "" && svcKind != "Service") {
-					continue
-				}
-				svcNs, _ := svcMap["namespace"].(string)
-				if svcNs == "" {
-					svcNs = ns
-				}
-				servicesFromTraefik[svcNs+"/"+svcName] = true
-			}
-		}
-		// mirroring: primary service + mirror targets
-		mirrorBody, _, _ := unstructured.NestedMap(spec, "mirroring")
-		if mirrorBody != nil {
-			bodyName, _ := mirrorBody["name"].(string)
-			bodyKind, _ := mirrorBody["kind"].(string)
-			if bodyName != "" && (bodyKind == "" || bodyKind == "Service") {
-				bodyNs, _ := mirrorBody["namespace"].(string)
-				if bodyNs == "" {
-					bodyNs = ns
-				}
-				servicesFromTraefik[bodyNs+"/"+bodyName] = true
-			}
-			mirrors, _, _ := unstructured.NestedSlice(mirrorBody, "mirrors")
-			for _, m := range mirrors {
-				if mm, ok := m.(map[string]any); ok {
-					mName, _ := mm["name"].(string)
-					mKind, _ := mm["kind"].(string)
-					if mName != "" && (mKind == "" || mKind == "Service") {
-						mNs, _ := mm["namespace"].(string)
-						if mNs == "" {
-							mNs = ns
-						}
-						servicesFromTraefik[mNs+"/"+mName] = true
-					}
+			for _, r := range configrefs.TraefikBackendReferences(obj) {
+				if r.Ref.Kind == "Service" {
+					servicesFromTraefik[r.Ref.Namespace+"/"+r.Ref.Name] = true
 				}
 			}
 		}
@@ -6163,41 +5550,13 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	// Step 1f: Find services referenced by Contour HTTPProxy
 	servicesFromContour := make(map[string]bool)
 	for _, hp := range trafficHTTPProxies {
-		ns := hp.GetNamespace()
-		if !opts.MatchesNamespaceFilter(ns) {
+		if !opts.MatchesNamespaceFilter(hp.GetNamespace()) {
 			continue
 		}
-		routes, _, _ := unstructured.NestedSlice(hp.Object, "spec", "routes")
-		for _, route := range routes {
-			routeMap, ok := route.(map[string]any)
-			if !ok {
-				continue
+		for _, r := range configrefs.ContourBackendReferences(hp) {
+			if r.Ref.Kind == "Service" {
+				servicesFromContour[r.Ref.Namespace+"/"+r.Ref.Name] = true
 			}
-			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
-			for _, svc := range svcs {
-				svcMap, ok := svc.(map[string]any)
-				if !ok {
-					continue
-				}
-				svcName, _ := svcMap["name"].(string)
-				if svcName == "" {
-					continue
-				}
-				servicesFromContour[ns+"/"+svcName] = true
-			}
-		}
-		// Also check tcpproxy services
-		tcpSvcs, _, _ := unstructured.NestedSlice(hp.Object, "spec", "tcpproxy", "services")
-		for _, svc := range tcpSvcs {
-			svcMap, ok := svc.(map[string]any)
-			if !ok {
-				continue
-			}
-			svcName, _ := svcMap["name"].(string)
-			if svcName == "" {
-				continue
-			}
-			servicesFromContour[ns+"/"+svcName] = true
 		}
 	}
 
@@ -6345,17 +5704,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Gateway → Route edges
-		parentRefs, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
-		for _, pRef := range parentRefs {
-			pMap, ok := pRef.(map[string]any)
-			if !ok {
-				continue
-			}
-			if !configrefs.GatewayParentIsGateway(pMap) {
-				continue
-			}
-			parentName, _ := pMap["name"].(string)
-			if gwID, ok := trafficGwIDMap[configrefs.GatewayRefNamespace(pMap, ns)+"/"+parentName]; ok && !trafficGatewayEdgeSeen[gwID+"-to-"+routeID] {
+		for _, parent := range configrefs.GatewayRouteParents(route) {
+			if gwID, ok := trafficGwIDMap[parent.Ref.Namespace+"/"+parent.Ref.Name]; ok && !trafficGatewayEdgeSeen[gwID+"-to-"+routeID] {
 				trafficGatewayEdgeSeen[gwID+"-to-"+routeID] = true
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", gwID, routeID),
@@ -6367,37 +5717,23 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 
 		// Route → Service edges
-		for _, rule := range rules {
-			ruleMap, ok := rule.(map[string]any)
-			if !ok {
+		for _, backend := range configrefs.GatewayRouteBackendServices(route) {
+			svcKey := backend.Ref.Namespace + "/" + backend.Ref.Name
+			if _, ok := servicesToInclude[svcKey]; !ok {
 				continue
 			}
-			backendRefs, _, _ := unstructured.NestedSlice(ruleMap, "backendRefs")
-			for _, bRef := range backendRefs {
-				bMap, ok := bRef.(map[string]any)
-				if !ok {
-					continue
-				}
-				backendName, _ := bMap["name"].(string)
-				backendNS := configrefs.GatewayRefNamespace(bMap, ns)
-				if configrefs.GatewayBackendIsService(bMap) {
-					svcKey := backendNS + "/" + backendName
-					if _, ok := servicesToInclude[svcKey]; ok {
-						svcID := fmt.Sprintf("service/%s/%s", backendNS, backendName)
-						serviceIDs[svcKey] = svcID
-						if trafficGatewayEdgeSeen[routeID+"-to-"+svcID] {
-							continue
-						}
-						trafficGatewayEdgeSeen[routeID+"-to-"+svcID] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
-							Source: routeID,
-							Target: svcID,
-							Type:   EdgeRoutesTo,
-						})
-					}
-				}
+			svcID := fmt.Sprintf("service/%s/%s", backend.Ref.Namespace, backend.Ref.Name)
+			serviceIDs[svcKey] = svcID
+			if trafficGatewayEdgeSeen[routeID+"-to-"+svcID] {
+				continue
 			}
+			trafficGatewayEdgeSeen[routeID+"-to-"+svcID] = true
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
+				Source: routeID,
+				Target: svcID,
+				Type:   EdgeRoutesTo,
+			})
 		}
 	}
 
@@ -6483,17 +5819,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// IstioGateway → VirtualService edges
-		for _, gwRef := range gateways {
-			if gwRef == "mesh" {
-				continue
-			}
-			gwNs := vsNs
-			gwName := gwRef
-			if parts := strings.SplitN(gwRef, "/", 2); len(parts) == 2 {
-				gwNs = parts[0]
-				gwName = parts[1]
-			}
-			if igwID, ok := trafficIstioGwIDMap[gwNs+"/"+gwName]; ok {
+		for _, gw := range configrefs.IstioVirtualServiceGateways(vs) {
+			if igwID, ok := trafficIstioGwIDMap[gw.Ref.Namespace+"/"+gw.Ref.Name]; ok {
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", igwID, vsID),
 					Source: igwID,
@@ -6504,43 +5831,24 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 
 		// VirtualService → Service edges (deduped)
-		for _, routeKey := range []string{"http", "tcp", "tls"} {
-			routes, _, _ := unstructured.NestedSlice(spec, routeKey)
-			for _, route := range routes {
-				routeMap, ok := route.(map[string]any)
-				if !ok {
-					continue
-				}
-				routeDests, _, _ := unstructured.NestedSlice(routeMap, "route")
-				for _, rd := range routeDests {
-					rdMap, ok := rd.(map[string]any)
-					if !ok {
-						continue
-					}
-					destHost, _, _ := unstructured.NestedString(rdMap, "destination", "host")
-					if destHost == "" {
-						continue
-					}
-					svcName, svcNs := parseIstioHost(destHost, vsNs, istioDomain)
-					svcKey := svcNs + "/" + svcName
-					if _, ok := servicesToInclude[svcKey]; !ok {
-						continue
-					}
-					svcID := fmt.Sprintf("service/%s/%s", svcNs, svcName)
-					serviceIDs[svcKey] = svcID
-					dedupeKey := vsID + "|" + svcID
-					if trafficVsToSvcSeen[dedupeKey] {
-						continue
-					}
-					trafficVsToSvcSeen[dedupeKey] = true
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", vsID, svcID),
-						Source: vsID,
-						Target: svcID,
-						Type:   EdgeExposes,
-					})
-				}
+		for _, dest := range configrefs.IstioVirtualServiceDestinations(vs, istioDomain) {
+			svcKey := dest.Ref.Namespace + "/" + dest.Ref.Name
+			if _, ok := servicesToInclude[svcKey]; !ok {
+				continue
 			}
+			svcID := fmt.Sprintf("service/%s/%s", dest.Ref.Namespace, dest.Ref.Name)
+			serviceIDs[svcKey] = svcID
+			dedupeKey := vsID + "|" + svcID
+			if trafficVsToSvcSeen[dedupeKey] {
+				continue
+			}
+			trafficVsToSvcSeen[dedupeKey] = true
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", vsID, svcID),
+				Source: vsID,
+				Target: svcID,
+				Type:   EdgeExposes,
+			})
 		}
 	}
 
@@ -6700,121 +6008,23 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 
-		spec, _, _ := unstructured.NestedMap(ts.Object, "spec")
-		if spec != nil {
-			// Collect service refs from weighted and highestRandomWeight
-			for _, svcListKey := range []string{"weighted", "highestRandomWeight"} {
-				svcList, _, _ := unstructured.NestedSlice(spec, svcListKey, "services")
-				for _, svc := range svcList {
-					svcMap, ok := svc.(map[string]any)
-					if !ok {
-						continue
-					}
-					svcName, _ := svcMap["name"].(string)
-					svcKind, _ := svcMap["kind"].(string)
-					if svcName == "" {
-						continue
-					}
-					svcNs, _ := svcMap["namespace"].(string)
-					if svcNs == "" {
-						svcNs = ns
-					}
-					if svcKind == "TraefikService" {
-						targetID := trafficTraefikServiceIDMap[svcNs+"/"+svcName]
-						if targetID != "" && targetID != tsID {
-							dedupeKey := tsID + "|" + targetID
-							if !trafficTraefikEdgeSeen[dedupeKey] {
-								trafficTraefikEdgeSeen[dedupeKey] = true
-								edges = append(edges, Edge{
-									ID:     fmt.Sprintf("%s-to-%s", tsID, targetID),
-									Source: tsID,
-									Target: targetID,
-									Type:   EdgeExposes,
-								})
-							}
-						}
-					} else if svcKind == "" || svcKind == "Service" {
-						svcKey := svcNs + "/" + svcName
-						if _, ok := servicesToInclude[svcKey]; ok {
-							svcID := fmt.Sprintf("service/%s/%s", svcNs, svcName)
-							serviceIDs[svcKey] = svcID
-							dedupeKey := tsID + "|" + svcID
-							if !trafficTraefikEdgeSeen[dedupeKey] {
-								trafficTraefikEdgeSeen[dedupeKey] = true
-								edges = append(edges, Edge{
-									ID:     fmt.Sprintf("%s-to-%s", tsID, svcID),
-									Source: tsID,
-									Target: svcID,
-									Type:   EdgeExposes,
-								})
-							}
-						}
-					}
+		for _, r := range configrefs.TraefikBackendReferences(ts) {
+			key := r.Ref.Namespace + "/" + r.Ref.Name
+			var targetID string
+			if r.Ref.Kind == "TraefikService" {
+				targetID = trafficTraefikServiceIDMap[key]
+				if targetID == tsID {
+					continue
 				}
+			} else if _, ok := servicesToInclude[key]; ok {
+				targetID = "service/" + key
+				serviceIDs[key] = targetID
 			}
-			// mirroring: primary service + mirror targets
-			mirrorBody, _, _ := unstructured.NestedMap(spec, "mirroring")
-			if mirrorBody != nil {
-				// Collect all mirroring refs (primary + mirrors) into one slice
-				type mirrorRef struct {
-					name, kind, namespace string
-				}
-				var mirrorRefs []mirrorRef
-				bodyName, _ := mirrorBody["name"].(string)
-				if bodyName != "" {
-					bodyKind, _ := mirrorBody["kind"].(string)
-					bodyNs, _ := mirrorBody["namespace"].(string)
-					mirrorRefs = append(mirrorRefs, mirrorRef{bodyName, bodyKind, bodyNs})
-				}
-				mirrors, _, _ := unstructured.NestedSlice(mirrorBody, "mirrors")
-				for _, m := range mirrors {
-					if mm, ok := m.(map[string]any); ok {
-						mName, _ := mm["name"].(string)
-						if mName != "" {
-							mKind, _ := mm["kind"].(string)
-							mNs, _ := mm["namespace"].(string)
-							mirrorRefs = append(mirrorRefs, mirrorRef{mName, mKind, mNs})
-						}
-					}
-				}
-				for _, ref := range mirrorRefs {
-					refNs := ref.namespace
-					if refNs == "" {
-						refNs = ns
-					}
-					if ref.kind == "TraefikService" {
-						targetID := trafficTraefikServiceIDMap[refNs+"/"+ref.name]
-						if targetID != "" && targetID != tsID {
-							dedupeKey := tsID + "|" + targetID
-							if !trafficTraefikEdgeSeen[dedupeKey] {
-								trafficTraefikEdgeSeen[dedupeKey] = true
-								edges = append(edges, Edge{
-									ID:     fmt.Sprintf("%s-to-%s", tsID, targetID),
-									Source: tsID,
-									Target: targetID,
-									Type:   EdgeExposes,
-								})
-							}
-						}
-					} else if ref.kind == "" || ref.kind == "Service" {
-						svcKey := refNs + "/" + ref.name
-						if _, ok := servicesToInclude[svcKey]; ok {
-							svcID := fmt.Sprintf("service/%s/%s", refNs, ref.name)
-							serviceIDs[svcKey] = svcID
-							dedupeKey := tsID + "|" + svcID
-							if !trafficTraefikEdgeSeen[dedupeKey] {
-								trafficTraefikEdgeSeen[dedupeKey] = true
-								edges = append(edges, Edge{
-									ID:     fmt.Sprintf("%s-to-%s", tsID, svcID),
-									Source: tsID,
-									Target: svcID,
-									Type:   EdgeExposes,
-								})
-							}
-						}
-					}
-				}
+			if targetID == "" || trafficTraefikEdgeSeen[tsID+"|"+targetID] {
+				continue
 			}
+			trafficTraefikEdgeSeen[tsID+"|"+targetID] = true
+			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", tsID, targetID), Source: tsID, Target: targetID, Type: EdgeExposes})
 		}
 	}
 
@@ -6907,93 +6117,31 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			},
 		})
 
-		// IngressRoute → Service and IngressRoute → TraefikService edges
-		for _, route := range routes {
-			routeMap, ok := route.(map[string]any)
-			if !ok {
+		for _, r := range configrefs.TraefikBackendReferences(rt) {
+			key := r.Ref.Namespace + "/" + r.Ref.Name
+			var targetID string
+			if r.Ref.Kind == "TraefikService" {
+				targetID = trafficTraefikServiceIDMap[key]
+			} else if _, ok := servicesToInclude[key]; ok {
+				targetID = "service/" + key
+				serviceIDs[key] = targetID
+			}
+			if targetID == "" || trafficTraefikEdgeSeen[routeID+"|"+targetID] {
 				continue
 			}
-			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
-			for _, svc := range svcs {
-				svcMap, ok := svc.(map[string]any)
-				if !ok {
-					continue
-				}
-				svcName, _ := svcMap["name"].(string)
-				if svcName == "" {
-					continue
-				}
-				svcKind, _ := svcMap["kind"].(string)
-				svcNs, _ := svcMap["namespace"].(string)
-				if svcNs == "" {
-					svcNs = ns
-				}
-
-				if svcKind == "TraefikService" {
-					targetID := trafficTraefikServiceIDMap[svcNs+"/"+svcName]
-					if targetID != "" {
-						dedupeKey := routeID + "|" + targetID
-						if !trafficTraefikEdgeSeen[dedupeKey] {
-							trafficTraefikEdgeSeen[dedupeKey] = true
-							edges = append(edges, Edge{
-								ID:     fmt.Sprintf("%s-to-%s", routeID, targetID),
-								Source: routeID,
-								Target: targetID,
-								Type:   EdgeExposes,
-							})
-						}
-					}
-				} else if svcKind == "" || svcKind == "Service" {
-					svcKey := svcNs + "/" + svcName
-					if _, ok := servicesToInclude[svcKey]; ok {
-						svcID := fmt.Sprintf("service/%s/%s", svcNs, svcName)
-						serviceIDs[svcKey] = svcID
-						dedupeKey := routeID + "|" + svcID
-						if !trafficTraefikEdgeSeen[dedupeKey] {
-							trafficTraefikEdgeSeen[dedupeKey] = true
-							edges = append(edges, Edge{
-								ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
-								Source: routeID,
-								Target: svcID,
-								Type:   EdgeExposes,
-							})
-						}
-					}
-				}
+			trafficTraefikEdgeSeen[routeID+"|"+targetID] = true
+			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", routeID, targetID), Source: routeID, Target: targetID, Type: EdgeExposes})
+		}
+		for _, r := range configrefs.TraefikRouteConfigReferences(rt) {
+			if r.Ref.Kind != "Middleware" && r.Ref.Kind != "MiddlewareTCP" {
+				continue
 			}
-
-			middlewares, _, _ := unstructured.NestedSlice(routeMap, "middlewares")
-			for _, mw := range middlewares {
-				mwMap, ok := mw.(map[string]any)
-				if !ok {
-					continue
-				}
-				mwName, _ := mwMap["name"].(string)
-				if mwName == "" {
-					continue
-				}
-				mwNs, _ := mwMap["namespace"].(string)
-				if mwNs == "" {
-					mwNs = ns
-				}
-				mwPrefix := "middleware"
-				if routeKind == "IngressRouteTCP" {
-					mwPrefix = "middlewaretcp"
-				}
-				mwID := trafficMiddlewareIDMap[mwPrefix+":"+mwNs+"/"+mwName]
-				if mwID != "" {
-					dedupeKey := routeID + "|" + mwID
-					if !trafficTraefikEdgeSeen[dedupeKey] {
-						trafficTraefikEdgeSeen[dedupeKey] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", mwID, routeID),
-							Source: mwID,
-							Target: routeID,
-							Type:   EdgeConfigures,
-						})
-					}
-				}
+			mwID := trafficMiddlewareIDMap[strings.ToLower(r.Ref.Kind)+":"+r.Ref.Namespace+"/"+r.Ref.Name]
+			if mwID == "" || trafficTraefikEdgeSeen[routeID+"|"+mwID] {
+				continue
 			}
+			trafficTraefikEdgeSeen[routeID+"|"+mwID] = true
+			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", mwID, routeID), Source: mwID, Target: routeID, Type: EdgeConfigures})
 		}
 	}
 
@@ -7064,100 +6212,20 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 
-		// HTTPProxy → Service edges (via spec.routes[].services[])
-		routes, _, _ := unstructured.NestedSlice(hp.Object, "spec", "routes")
-		for _, route := range routes {
-			routeMap, ok := route.(map[string]any)
-			if !ok {
+		for _, r := range configrefs.ContourBackendReferences(hp) {
+			key := r.Ref.Namespace + "/" + r.Ref.Name
+			var targetID string
+			if r.Ref.Kind == "HTTPProxy" {
+				targetID = trafficHTTPProxyIDMap[key]
+			} else if _, ok := servicesToInclude[key]; ok {
+				targetID = "service/" + key
+				serviceIDs[key] = targetID
+			}
+			if targetID == "" || trafficContourEdgeSeen[hpID+"|"+targetID] {
 				continue
 			}
-			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
-			for _, svc := range svcs {
-				svcMap, ok := svc.(map[string]any)
-				if !ok {
-					continue
-				}
-				svcName, _ := svcMap["name"].(string)
-				if svcName == "" {
-					continue
-				}
-				svcNs := ns
-				svcKey := svcNs + "/" + svcName
-				if _, ok := servicesToInclude[svcKey]; ok {
-					svcID := fmt.Sprintf("service/%s/%s", svcNs, svcName)
-					serviceIDs[svcKey] = svcID
-					dedupeKey := hpID + "|" + svcID
-					if !trafficContourEdgeSeen[dedupeKey] {
-						trafficContourEdgeSeen[dedupeKey] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", hpID, svcID),
-							Source: hpID,
-							Target: svcID,
-							Type:   EdgeExposes,
-						})
-					}
-				}
-			}
-		}
-
-		// HTTPProxy → HTTPProxy edges (via spec.includes[])
-		includes, _, _ := unstructured.NestedSlice(hp.Object, "spec", "includes")
-		for _, incl := range includes {
-			inclMap, ok := incl.(map[string]any)
-			if !ok {
-				continue
-			}
-			inclName, _ := inclMap["name"].(string)
-			if inclName == "" {
-				continue
-			}
-			inclNs, _ := inclMap["namespace"].(string)
-			if inclNs == "" {
-				inclNs = ns
-			}
-			targetID := trafficHTTPProxyIDMap[inclNs+"/"+inclName]
-			if targetID == "" {
-				continue
-			}
-			dedupeKey := hpID + "|" + targetID
-			if !trafficContourEdgeSeen[dedupeKey] {
-				trafficContourEdgeSeen[dedupeKey] = true
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hpID, targetID),
-					Source: hpID,
-					Target: targetID,
-					Type:   EdgeExposes,
-				})
-			}
-		}
-
-		// HTTPProxy → Service via tcpproxy (via spec.tcpproxy.services[])
-		tcpSvcs, _, _ := unstructured.NestedSlice(hp.Object, "spec", "tcpproxy", "services")
-		for _, svc := range tcpSvcs {
-			svcMap, ok := svc.(map[string]any)
-			if !ok {
-				continue
-			}
-			svcName, _ := svcMap["name"].(string)
-			if svcName == "" {
-				continue
-			}
-			svcNs := ns
-			svcKey := svcNs + "/" + svcName
-			if _, ok := servicesToInclude[svcKey]; ok {
-				svcID := fmt.Sprintf("service/%s/%s", svcNs, svcName)
-				serviceIDs[svcKey] = svcID
-				dedupeKey := hpID + "|" + svcID
-				if !trafficContourEdgeSeen[dedupeKey] {
-					trafficContourEdgeSeen[dedupeKey] = true
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", hpID, svcID),
-						Source: hpID,
-						Target: svcID,
-						Type:   EdgeExposes,
-					})
-				}
-			}
+			trafficContourEdgeSeen[hpID+"|"+targetID] = true
+			edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", hpID, targetID), Source: hpID, Target: targetID, Type: EdgeExposes})
 		}
 	}
 
@@ -7682,25 +6750,15 @@ type rolloutAnalysisRunRef struct {
 // Only the runs the Rollout's own status points at — every historical
 // AnalysisRun would grow the graph without bound.
 func activeAnalysisRuns(status map[string]any) []rolloutAnalysisRunRef {
-	sources := []struct {
-		trigger string
-		path    []string
-	}{
-		{"step", []string{"canary", "currentStepAnalysisRunStatus"}},
-		{"background", []string{"canary", "currentBackgroundAnalysisRunStatus"}},
-		{"pre-promotion", []string{"blueGreen", "prePromotionAnalysisRunStatus"}},
-		{"post-promotion", []string{"blueGreen", "postPromotionAnalysisRunStatus"}},
-	}
-
-	runs := make([]rolloutAnalysisRunRef, 0, len(sources))
-	for _, source := range sources {
-		name, found, _ := unstructured.NestedString(status, append(source.path, "name")...)
+	runs := make([]rolloutAnalysisRunRef, 0, len(configrefs.RolloutAnalysisRunStatuses))
+	for _, source := range configrefs.RolloutAnalysisRunStatuses {
+		name, found, _ := unstructured.NestedString(status, append(slices.Clone(source.Path), "name")...)
 		if !found || name == "" {
 			continue
 		}
-		phase, _, _ := unstructured.NestedString(status, append(source.path, "status")...)
-		message, _, _ := unstructured.NestedString(status, append(source.path, "message")...)
-		runs = append(runs, rolloutAnalysisRunRef{name: name, phase: phase, message: message, trigger: source.trigger})
+		phase, _, _ := unstructured.NestedString(status, append(slices.Clone(source.Path), "status")...)
+		message, _, _ := unstructured.NestedString(status, append(slices.Clone(source.Path), "message")...)
+		runs = append(runs, rolloutAnalysisRunRef{name: name, phase: phase, message: message, trigger: source.Trigger})
 	}
 	return runs
 }
@@ -7761,75 +6819,19 @@ func cronWorkflowScheduleString(cwf *unstructured.Unstructured) string {
 	return schedule
 }
 
-func argoWorkflowCronOwnerName(wf *unstructured.Unstructured) string {
-	for _, ref := range wf.GetOwnerReferences() {
-		if ref.Kind == "CronWorkflow" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "argoproj.io" && ref.Name != "" && ref.Controller != nil && *ref.Controller {
-			return ref.Name
-		}
-	}
-	return wf.GetLabels()["workflows.argoproj.io/cron-workflow"]
-}
-
 type argoWorkflowTemplateRef struct {
 	name         string
 	clusterScope bool
 }
 
 func argoWorkflowTemplateRefsFromWorkflowSpec(obj map[string]any, fields ...string) []argoWorkflowTemplateRef {
-	spec, found, _ := unstructured.NestedMap(obj, fields...)
-	if !found {
-		return nil
-	}
-	refs := make([]argoWorkflowTemplateRef, 0)
-	seen := make(map[string]bool)
-	addRef := func(raw map[string]any) {
-		name, _, _ := unstructured.NestedString(raw, "name")
-		if name == "" {
-			return
-		}
-		clusterScope, _, _ := unstructured.NestedBool(raw, "clusterScope")
-		key := fmt.Sprintf("%t/%s", clusterScope, name)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		refs = append(refs, argoWorkflowTemplateRef{name: name, clusterScope: clusterScope})
-	}
-
-	if workflowRef, found, _ := unstructured.NestedMap(spec, "workflowTemplateRef"); found {
-		addRef(workflowRef)
-	}
-	templates, _, _ := unstructured.NestedSlice(spec, "templates")
-	for _, rawTemplate := range templates {
-		template, ok := rawTemplate.(map[string]any)
-		if !ok {
-			continue
-		}
-		for _, rawTask := range argoTemplateTasks(template) {
-			task, ok := rawTask.(map[string]any)
-			if !ok {
-				continue
-			}
-			if templateRef, found, _ := unstructured.NestedMap(task, "templateRef"); found {
-				addRef(templateRef)
-			}
+	var refs []argoWorkflowTemplateRef
+	for _, r := range configrefs.ArgoWorkflowTemplateRefs(obj, "", fields...) {
+		if ref := (argoWorkflowTemplateRef{name: r.Ref.Name, clusterScope: r.Ref.Kind == "ClusterWorkflowTemplate"}); !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
 		}
 	}
 	return refs
-}
-
-func argoTemplateTasks(template map[string]any) []any {
-	tasks := make([]any, 0)
-	if dagTasks, found, _ := unstructured.NestedSlice(template, "dag", "tasks"); found {
-		tasks = append(tasks, dagTasks...)
-	}
-	stepGroups, _, _ := unstructured.NestedSlice(template, "steps")
-	for _, rawGroup := range stepGroups {
-		if group, ok := rawGroup.([]any); ok {
-			tasks = append(tasks, group...)
-		}
-	}
-	return tasks
 }
 
 func addArgoWorkflowTemplateEdges(edges []Edge, sourceID, sourceNamespace string, refs []argoWorkflowTemplateRef, workflowTemplateIDs, clusterWorkflowTemplateIDs map[string]string) []Edge {
