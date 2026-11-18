@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Database, FileCheck2, Settings2, ShieldCheck, Waypoints } from 'lucide-react'
+import { Database } from 'lucide-react'
 import { applyCNPGDisk, applyCNPGFleetMetrics, buildCNPGFleet, type CNPGDiskReading, type CNPGFleet, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../../types'
 import { useCNPGWorkspace } from '../../api/cnpg'
@@ -10,14 +10,6 @@ import { CNPG_CLUSTER_KIND, CNPG_SCREENS, cnpgClusterKindListMode, type CNPGScre
 import { useCNPGNavigate } from './useCNPGNavigate'
 
 export const CNPG_SIDEBAR_CATEGORY = 'CloudNativePG'
-
-const ICONS: Record<CNPGScreen, SidebarCategoryWorkspace['destinations'][number]['icon']> = {
-  overview: Database,
-  protection: ShieldCheck,
-  declarations: FileCheck2,
-  pooling: Waypoints,
-  operator: Settings2,
-}
 
 export function cnpgDiscovered(apiResources: APIResource[] | undefined): boolean {
   return !!apiResources?.some((r) => r.group === 'postgresql.cnpg.io')
@@ -123,7 +115,6 @@ export function useCNPGSidebarWorkspace({
       return {
         id: s.id,
         label: s.label,
-        icon: ICONS[s.id],
         kind: s.id === 'overview' && clustersIsKindList ? CNPG_CLUSTER_KIND : undefined,
         count,
         countLowerBound: lowerBound,

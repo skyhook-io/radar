@@ -17,9 +17,9 @@ const (
 	// ServerFromDeployment: the server Deployment was read and its rollout is
 	// complete, so its template is what the running controller uses.
 	ServerFromDeployment ServerSource = "deployment"
-	// ServerRolling: a rollout is in progress; the running controller may still
+	// ServerRolloutInProgress: a rollout is in progress; the running controller may still
 	// use the previous template, so nothing is taken from it.
-	ServerRolling ServerSource = "rolloutInProgress"
+	ServerRolloutInProgress ServerSource = "rolloutInProgress"
 	// ServerNotFound: Deployments in the namespace were read and none runs
 	// `velero server`.
 	ServerNotFound ServerSource = "notFound"
@@ -37,6 +37,11 @@ const (
 // Radar could establish it. A field is set only when its effective value is
 // known: a TZ supplied through envFrom or valueFrom, or a flag built from
 // $(VAR) expansion, leaves it unset rather than guessed.
+//
+// Build it with ServerConfigFromDeployments. Its JSON is for display: the
+// resolved zone and whether the flags were read are not encoded, so a
+// ServerConfig decoded from JSON (or written as a literal) reports
+// FlagsKnown() false and resolves no zone.
 type ServerConfig struct {
 	Source     ServerSource `json:"source"`
 	Deployment string       `json:"deployment,omitempty"`
@@ -50,9 +55,12 @@ type ServerConfig struct {
 	// recurring validation.
 	ValidationFrequencySeconds *int64 `json:"validationFrequencySeconds,omitempty"`
 	// SchedulingDisabled: --restore-only or --disable-controllers removes the
-	// schedule controller, so no Schedule runs.
+	// schedule controller, so no Schedule runs. In JSON it is sent, true or
+	// false, only when the flags were read (FlagsKnown); absent means unknown.
 	SchedulingDisabled bool `json:"schedulingDisabled,omitempty"`
-	// BackupsDisabled is independent of scheduling: manual Backups need the backup controller too.
+	// BackupsDisabled: the backup controller is removed, so no Backup runs,
+	// manual or scheduled; independent of scheduling. Encoded as
+	// SchedulingDisabled is.
 	BackupsDisabled bool `json:"backupsDisabled,omitempty"`
 	// Replicas counts non-terminating pods, including Pending and CrashLoop.
 	// Readiness is separate: a pod can fail its readiness probe while still
@@ -64,9 +72,10 @@ type ServerConfig struct {
 	flagsSet bool
 }
 
-// Down reports that the server Deployment was read and has no running replica
-// (scaled to zero, or its pods cannot be created), so nothing new submits
-// scheduled backups or validates locations.
+// Down reports that the server Deployment was read and has no pods
+// (status.replicas is 0: scaled to zero, or its pods cannot be created), so
+// nothing submits scheduled backups or validates locations. A Pending or
+// crash-looping pod still counts, so such a server is not Down.
 func (c ServerConfig) Down() bool { return c.Replicas != nil && *c.Replicas == 0 }
 
 // FlagsKnown reports whether the server's flags were read in full.
@@ -100,7 +109,7 @@ func ServerConfigFromDeployments(deployments []*appsv1.Deployment, read bool) Se
 		replicas, ready := d.Status.Replicas, d.Status.ReadyReplicas
 		cfg := ServerConfig{Source: ServerFromDeployment, Deployment: d.Name, Replicas: &replicas, ReadyReplicas: &ready}
 		if !rolloutComplete(d) {
-			cfg.Source = ServerRolling
+			cfg.Source = ServerRolloutInProgress
 			return cfg
 		}
 		cfg.readZone(c)
@@ -238,15 +247,17 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 	cfg.flagsSet = true
 }
 
-// BackupsDisabled is absent when the effective flags could not be established.
+// MarshalJSON sends schedulingDisabled and backupsDisabled only when the
+// effective flags were established, so their absence means unknown, not false.
 func (c ServerConfig) MarshalJSON() ([]byte, error) {
 	type config ServerConfig
-	var disabled *bool
+	var scheduling, backups *bool
 	if c.FlagsKnown() {
-		disabled = &c.BackupsDisabled
+		scheduling, backups = &c.SchedulingDisabled, &c.BackupsDisabled
 	}
 	return json.Marshal(struct {
 		config
-		BackupsDisabled *bool `json:"backupsDisabled,omitempty"`
-	}{config: config(c), BackupsDisabled: disabled})
+		SchedulingDisabled *bool `json:"schedulingDisabled,omitempty"`
+		BackupsDisabled    *bool `json:"backupsDisabled,omitempty"`
+	}{config: config(c), SchedulingDisabled: scheduling, BackupsDisabled: backups})
 }

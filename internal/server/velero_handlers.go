@@ -26,8 +26,9 @@ type VeleroStoredBackup struct {
 	// backups that all expire next week is a different answer to "what can I
 	// restore" than one that keeps them for a year.
 	Expiration string `json:"expiration,omitempty"`
-	// Completed is when the backup finished — the point in time a restore from
-	// it would return to.
+	// Completed is the backup's status.completionTimestamp, when it finished.
+	// Objects are captured throughout the run, so it is not one point in time
+	// a restore returns to.
 	Completed string `json:"completed,omitempty"`
 }
 

@@ -234,7 +234,7 @@ func TestScheduleActivityBackupControllerFact(t *testing.T) {
 		}}, true
 	}
 	response, readable, found := reader.ScheduleActivity(t.Context(), "velero", "nightly")
-	if !readable || !found || !response.BackupsDisabled || response.ServerStopped || response.Reading.State == domain.StateSchedulingDisabled {
+	if !readable || !found || response.BackupsDisabled == nil || !*response.BackupsDisabled || response.ServerStopped || response.Reading.State == domain.StateSchedulingDisabled {
 		t.Fatalf("%+v read=%v found=%v", response, readable, found)
 	}
 }

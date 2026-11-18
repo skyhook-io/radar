@@ -47,12 +47,17 @@ type VeleroDeleteBackupResponse struct {
 // VeleroDeletionResponse is where one deletion stands.
 type VeleroDeletionResponse struct {
 	veleropkg.DeletionReading
+	// Request is absent when no request for this backup is retained: Velero
+	// removes a successful one with the backup, and any processed one after a
+	// day. State then says what can be concluded.
 	Request string `json:"request,omitempty"`
 	// Created is when the request was made, so a settled one can say how long
-	// ago (Velero keeps processed requests for a day).
+	// ago; absent with Request, or when the request has no creation time.
 	Created *time.Time `json:"created,omitempty"`
-	// ServerStopped: the Velero server is not running, so a waiting request
-	// stays waiting until it starts.
+	// ServerStopped: the request is waiting and the server Deployment was read
+	// and has no pods (status.replicas is 0), so it stays waiting until the
+	// server starts. Sent only when true; checked only for a waiting request,
+	// and absent when the Deployment could not be read.
 	ServerStopped bool `json:"serverStopped,omitempty"`
 }
 
@@ -62,8 +67,9 @@ type VeleroDeletionResponse struct {
 //
 // Read and create run as the caller, so the apiserver decides: reading the
 // Backup needs `get backups`, following needs `list deletebackuprequests`, and submission needs `create deletebackuprequests`.
-// Refused up front when Velero would refuse: a backup still running, or a
-// storage location that is read-only or unavailable.
+// Refused up front (409) when Velero would refuse or never act: a backup still
+// running or not yet assigned a storage location, a storage location that is
+// read-only or unavailable, or a stopped server (no pods).
 func (s *Server) handleVeleroDeleteBackup(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -224,7 +230,7 @@ func (s *Server) handleVeleroBackupDeletion(w http.ResponseWriter, r *http.Reque
 // openOnly lets a retry reuse an outstanding request even if a newer processed
 // request is still retained. All reads use the caller's namespace client.
 func newestVeleroDeletion(ctx context.Context, requests dynamic.ResourceInterface, name, uid string, openOnly bool) (*unstructured.Unstructured, error) {
-	selector := labels.Set{veleropkg.BackupNameLabel: veleropkg.ValidLabelValue(name), veleropkg.BackupUIDLabel: uid}.AsSelector().String()
+	selector := labels.Set{veleropkg.BackupNameLabel: veleropkg.ShortenLabelValue(name), veleropkg.BackupUIDLabel: uid}.AsSelector().String()
 	list, err := requests.List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return nil, err

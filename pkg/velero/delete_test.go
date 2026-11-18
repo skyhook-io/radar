@@ -7,15 +7,15 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func TestValidLabelValueMatchesVelero(t *testing.T) {
-	if got := ValidLabelValue("nightly-20261116"); got != "nightly-20261116" {
+func TestShortenLabelValueMatchesVelero(t *testing.T) {
+	if got := ShortenLabelValue("nightly-20261116"); got != "nightly-20261116" {
 		t.Errorf("a short name changed: %q", got)
 	}
 	long := strings.Repeat("a", 70)
-	got := ValidLabelValue(long)
+	got := ShortenLabelValue(long)
 	// Velero v1.18.2 label.GetValidName: 57 characters of the name and 6 of its SHA-256.
 	if len(got) != 63 || !strings.HasPrefix(got, strings.Repeat("a", 57)) || got[57:] != "6bd5e5" {
-		t.Errorf("ValidLabelValue(70×a) = %q", got)
+		t.Errorf("ShortenLabelValue(70×a) = %q", got)
 	}
 }
 
@@ -95,8 +95,8 @@ func TestReadDeletion(t *testing.T) {
 		{"failed partway", request("Processed", "error deleting snapshot snap-1: throttled"), true, DeletionFailed},
 		{"failed with several errors", request("Processed", "backup storage location x not found", "error deleting restore velero/r"), true, DeletionFailed},
 		{"processed, object still going", request("Processed"), true, DeletionInProgress},
-		{"processed and gone", request("Processed"), false, DeletionDone},
-		{"request removed with the backup", nil, false, DeletionDone},
+		{"processed and gone", request("Processed"), false, DeletionDeleted},
+		{"request removed with the backup", nil, false, DeletionDeleted},
 		{"request removed, backup remains", nil, true, DeletionUnknown},
 	}
 	for _, c := range cases {

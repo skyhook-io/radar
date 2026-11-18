@@ -136,7 +136,7 @@ func detectVeleroReadingIssues(p Provider, bslGVR schema.GroupVersionResource, l
 		if server.Down() {
 			iss := newConditionIssue(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, "Deployment", ns, server.Deployment,
 				SeverityCritical, ReasonVeleroServerNotRunning,
-				fmt.Sprintf("The Velero server Deployment %s has no running replicas, so no scheduled backup is submitted and no storage location is validated.", server.Deployment),
+				fmt.Sprintf("The Velero server Deployment %s has no pods, so no scheduled backup is submitted and no storage location is validated.", server.Deployment),
 				time.Time{}, false, "", time.Time{})
 			iss.FirstSeen, iss.LastSeen = time.Time{}, now
 			iss.RequiredReads = serverReads
@@ -169,7 +169,7 @@ func veleroScheduleIssueFor(r veleropkg.ScheduleReading, server veleropkg.Server
 			"This schedule's name is longer than 63 characters, too long for the label Velero puts on its backups, so Velero submits no runs. Recreate it with a shorter name.", true
 	case veleropkg.StateAlwaysDue:
 		return ReasonVeleroScheduleCannotRun, SeverityCritical,
-			"This cron expression has no future time, so Velero treats the schedule as always due and submits a new backup whenever the previous one has started.", true
+			"This cron expression has no future time, so Velero treats the schedule as always due and submits a new backup whenever none of its backups is waiting to start or running.", true
 	case veleropkg.StateLate:
 		since := "since the schedule was created"
 		if r.LastSubmitted != nil {

@@ -59,8 +59,10 @@ export function useVeleroScheduleActivity(namespace: string, name: string, optio
 export function useVeleroBackupNow() {
   const queryClient = useQueryClient()
   return useMutation({
-    // backupName is chosen when the confirmation opens, so sending the same
-    // confirmation again returns the backup it already created.
+    // backupName and submission (8–64 letters, digits or hyphens) are chosen
+    // when the confirmation opens. Sending the same confirmation again, with
+    // both unchanged, returns the backup it already created; without
+    // backupName each request creates a new backup.
     mutationFn: async ({ namespace, name, resourceVersion, backupName, submission }: { namespace: string; name: string; resourceVersion: string; backupName?: string; submission: string }) => {
       const response = await apiFetch(
         `${getApiBase()}/velero/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/backup`,
@@ -79,7 +81,7 @@ export function useVeleroBackupNow() {
   })
 }
 
-/** internal/velero Run: one Backup or Restore as its list and pages show it. */
+/** internal/velero RunRow: one Backup or Restore as its list and pages show it. */
 export interface VeleroRunRow {
   namespace: string
   name: string
@@ -89,14 +91,17 @@ export interface VeleroRunRow {
   started?: string
   completed?: string
   expiration?: string
+  /** A Backup's velero.io/schedule-name label: the schedule that submitted it. Never set on a Restore. */
   schedule?: string
   storageLocation?: string
+  /** Velero's progress: items processed so far (a Restore's itemsRestored also counts skipped and failed items), of itemsTotal. Absent until Velero reports them. */
   itemsDone?: number
   itemsTotal?: number
   errors: number
   warnings: number
   reason?: string
   backupName?: string
+  /** A Restore's spec.scheduleName: restore from that schedule's newest completed backup. Unrelated to schedule. */
   scheduleName?: string
   namespaceMapping?: Record<string, string>
 }
@@ -111,6 +116,7 @@ export interface VeleroRunsResponse<R extends VeleroRunRow = VeleroRunRow> {
   observedAt: string
   coverage: import('@skyhook-io/k8s-ui').VeleroKindCoverage
   runs: R[]
+  /** The runs that passed the schedule or backup filter, before the cap; runs holds the newest. */
   total: number
   truncated?: boolean
 }
@@ -145,9 +151,11 @@ export function useVeleroRuns(kind: 'backups' | 'restores', namespace?: string, 
 export interface VeleroDeletion {
   state: 'waiting' | 'inProgress' | 'refused' | 'failed' | 'deleted' | 'unknown'
   errors?: string[]
+  /** Absent when no request for the backup is retained: Velero removes a successful one with the backup, and any processed one after a day. */
   request?: string
-  /** When the request was made; absent from an older Radar. */
+  /** When the request was made; absent with request, or when it has no creation time. */
   created?: string
+  /** A waiting request whose server Deployment has no pods (status.replicas is 0). Sent only when true, and checked only while waiting. */
   serverStopped?: boolean
 }
 

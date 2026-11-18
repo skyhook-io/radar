@@ -52,7 +52,7 @@ describe('VeleroScheduleActivity', () => {
     const html = text(renderToStaticMarkup(
       <VeleroScheduleActivity reading={reading({ runs: { read: 'unknown', kept: 0 }, nextRunCertain: false, zone: { name: 'UTC', source: 'unknown' } })} />,
     ))
-    expect(html).toContain('Unknown — no access to backups')
+    expect(html).toContain('Unknown — backups were not read')
     expect(html).not.toContain('None kept')
     expect(html).toContain('~in ')
     expect(html).toContain('time zone not confirmed')
@@ -115,7 +115,7 @@ describe('Recent runs', () => {
   })
 
   it('does not promise a submission while the server is stopped', () => {
-    expect(veleroScheduleReasonText(reading({ state: 'due', reason: 'serverDown' }))).toBe('Due now, but the Velero server has no running replicas, so nothing will submit it.')
+    expect(veleroScheduleReasonText(reading({ state: 'due', reason: 'serverDown' }))).toBe('Due now, but the Velero server has no pods, so nothing will submit it.')
     expect(veleroScheduleReasonText(reading({ state: 'due' }))).toBe('Due now. Velero normally submits it within a few minutes.')
   })
 })

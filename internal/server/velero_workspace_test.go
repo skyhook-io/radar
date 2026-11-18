@@ -224,8 +224,8 @@ func TestVeleroWorkspace_DeniedBackupsLeaveRunsUnknownAndWithholdTheirIssues(t *
 	if hasVeleroIssue(got, "Backup", "adhoc-broken") {
 		t.Error("an issue on a Backup the caller cannot list was returned")
 	}
-	if got.Locations[0].Backups != nil || got.Installations[0].UnassignedBackups != nil {
-		t.Errorf("backup counts must stay unknown: %+v %+v", got.Locations[0].Backups, got.Installations[0].UnassignedBackups)
+	if got.Locations[0].Backups != nil {
+		t.Errorf("backup counts must stay unknown: %+v", got.Locations[0].Backups)
 	}
 }
 

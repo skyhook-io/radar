@@ -131,7 +131,7 @@ function newestBackupFact(schedules: VeleroScheduleReading[], schedulesPartial: 
   // Schedules or their backups Radar could not read may hold a newer one.
   const unread = schedulesPartial || schedules.some((s) => s.runs.read === 'unknown')
   if (!newest) {
-    if (unread) return { label, value: schedulesPartial && schedules.length === 0 ? 'unknown — not read' : 'unknown — no access to backups', tone: 'unknown' }
+    if (unread) return { label, value: schedulesPartial && schedules.length === 0 ? 'unknown — not read' : 'unknown — backups were not read', tone: 'unknown' }
     return { label, value: schedules.length === 0 ? 'no schedules' : 'none kept', tone: schedules.length === 0 ? 'neutral' : 'alert' }
   }
   const run = newest

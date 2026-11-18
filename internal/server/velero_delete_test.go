@@ -190,8 +190,8 @@ func TestVeleroBackupDeletion(t *testing.T) {
 		{"deleting", []runtime.Object{request("InProgress"), deletableBackup("nightly-1", "uid-1", "Deleting", "default")}, veleropkg.DeletionInProgress},
 		{"refused by Velero", []runtime.Object{request("Processed", "backup storage location default not found"), deletableBackup("nightly-1", "uid-1", "Completed", "default")}, veleropkg.DeletionRefused},
 		{"failed partway", []runtime.Object{request("Processed", "error deleting snapshot snap-1: throttled"), deletableBackup("nightly-1", "uid-1", "Deleting", "default")}, veleropkg.DeletionFailed},
-		{"done: request and backup gone", nil, veleropkg.DeletionDone},
-		{"done: a new backup took the name", []runtime.Object{deletableBackup("nightly-1", "uid-9", "Completed", "default")}, veleropkg.DeletionDone},
+		{"done: request and backup gone", nil, veleropkg.DeletionDeleted},
+		{"done: a new backup took the name", []runtime.Object{deletableBackup("nightly-1", "uid-9", "Completed", "default")}, veleropkg.DeletionDeleted},
 		{"unknown: request gone, backup remains", []runtime.Object{deletableBackup("nightly-1", "uid-1", "Completed", "default")}, veleropkg.DeletionUnknown},
 	}
 	for _, c := range cases {

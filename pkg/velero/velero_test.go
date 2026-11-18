@@ -96,7 +96,7 @@ func TestReadScheduleTiming(t *testing.T) {
 		unread    bool
 		now       time.Time
 		state     ScheduleState
-		reason    string
+		reason    ScheduleReason
 		attention bool
 		missed    int
 	}{
@@ -289,7 +289,7 @@ func TestServerConfigFromDeployments(t *testing.T) {
 	}
 	rolling := veleroDeployment(nil, nil)
 	rolling.Status.UpdatedReplicas = 0
-	if got := ServerConfigFromDeployments([]*appsv1.Deployment{rolling}, true); got.Source != ServerRolling || got.TimeZone != "" {
+	if got := ServerConfigFromDeployments([]*appsv1.Deployment{rolling}, true); got.Source != ServerRolloutInProgress || got.TimeZone != "" {
 		t.Fatalf("rolling %+v", got)
 	}
 	other := veleroDeployment(nil, nil)
@@ -355,9 +355,6 @@ func TestReadLocation(t *testing.T) {
 	}
 	if len(r.Schedules) != 2 || r.Schedules[0] != (ScheduleRef{Name: "explicit"}) || r.Schedules[1] != (ScheduleRef{Name: "implicit", ViaDefault: true}) {
 		t.Fatalf("schedules %+v", r.Schedules)
-	}
-	if UnassignedBackups(backups) != 1 {
-		t.Fatalf("unassigned %d", UnassignedBackups(backups))
 	}
 	unread := ReadLocation(LocationInput{Location: locs[0], Server: utcServer, Now: at("12:00")})
 	if unread.Backups != nil || unread.Schedules != nil {
@@ -522,17 +519,17 @@ func TestServerReadyReplicasAndBackupControllerFlags(t *testing.T) {
 		}
 		encoded, err := json.Marshal(cfg)
 		var decoded ServerConfig
-		if err := json.Unmarshal(encoded, &decoded); err != nil || decoded.BackupsDisabled != cfg.BackupsDisabled {
+		if err := json.Unmarshal(encoded, &decoded); err != nil || decoded.BackupsDisabled != cfg.BackupsDisabled || decoded.SchedulingDisabled != cfg.SchedulingDisabled {
 			t.Fatalf("controller fact did not round-trip: %s (%v)", encoded, err)
 		}
-		if err != nil || !strings.Contains(string(encoded), `"backupsDisabled":`) || !strings.Contains(string(encoded), `"readyReplicas":0`) {
+		if err != nil || !strings.Contains(string(encoded), `"backupsDisabled":`) || !strings.Contains(string(encoded), `"schedulingDisabled":`) || !strings.Contains(string(encoded), `"readyReplicas":0`) {
 			t.Fatalf("wire %s: %v", encoded, err)
 		}
 	}
 	d := veleroDeployment(nil, []string{"--restore-only", "--default-backup-storage-location=$(LOC)"})
 	cfg := ServerConfigFromDeployments([]*appsv1.Deployment{d}, true)
 	encoded, _ := json.Marshal(cfg)
-	if cfg.FlagsKnown() || strings.Contains(string(encoded), "backupsDisabled") {
+	if cfg.FlagsKnown() || strings.Contains(string(encoded), "backupsDisabled") || strings.Contains(string(encoded), "schedulingDisabled") {
 		t.Fatalf("unknown flags serialized a fact: %s", encoded)
 	}
 }

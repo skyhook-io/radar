@@ -64,7 +64,7 @@ function serverProblem(namespace: string, deployment: string | undefined, late: 
     category: 'server',
     title: 'Velero server not running',
     // The subject link below names the Deployment.
-    detail: `No running replicas, so no new scheduled backups are submitted and no storage location is validated.${missed}`,
+    detail: `No pods, so no new scheduled backups are submitted and no storage location is validated.${missed}`,
     nextStep: VELERO_START_SERVER,
     subject: { kind: 'Deployment', group: 'apps', namespace, name: deployment ?? 'velero' },
     source: 'reading',

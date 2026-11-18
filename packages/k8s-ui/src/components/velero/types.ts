@@ -43,7 +43,7 @@ export type VeleroScheduleState =
   | 'due'
   | 'onSchedule'
 
-/** pkg/velero reason codes qualifying a state. */
+/** pkg/velero ScheduleReason: qualifies a state. */
 export type VeleroScheduleReason =
   | 'nameTooLong'
   | 'unparseable'
@@ -54,7 +54,7 @@ export type VeleroScheduleReason =
   | 'validationPending'
   | 'serverDown'
 
-/** pkg/velero Run: one Backup a Schedule submitted. */
+/** pkg/velero ScheduleRun: one Backup a Schedule submitted. */
 export interface VeleroRun {
   name: string
   phase?: string
@@ -63,7 +63,8 @@ export interface VeleroRun {
   ranAt: string
   started?: string
   completed?: string
-  expires?: string
+  /** The Backup's status.expiration; Velero deletes it at the next garbage collection after it. */
+  expiration?: string
   errors?: number
   warnings?: number
 }
@@ -72,10 +73,11 @@ export interface VeleroRun {
 export interface VeleroScheduleRuns {
   /** "unknown": the namespace's Backups were not read, so nothing is known about the runs. */
   read: 'full' | 'unknown'
+  /** The schedule's backups Velero still keeps; 0 and meaningless when read is "unknown". */
   kept: number
   newest?: VeleroRun
   newestCompleted?: VeleroRun
-  /** Filled only by the schedule activity endpoint. */
+  /** The newest runs, up to 10, filled only by the schedule activity endpoint. Absent in the workspace, when read is "unknown", and when no runs are kept. */
   recent?: VeleroRun[]
 }
 
@@ -96,20 +98,21 @@ export interface VeleroScheduleReading {
   zone: VeleroZone
   state: VeleroScheduleState
   reason?: VeleroScheduleReason
+  /** The reading itself needs a look. Faults the Issues engine raises (a rejected schedule) carry no attention here, so false is not a health verdict. */
   attention: boolean
-  paused?: boolean
   validationErrors?: string[]
+  /** status.lastBackup: when the controller last submitted a run, whatever became of it. */
   lastSubmitted?: string
-  lastSkipped?: string
+  /** When the controller will next submit a run. Absent when not evaluated (paused, disabled, rejected, unvalidated, unparseable or skip-pending) and when the cron has no future time. */
   nextRun?: string
-  /** nextRun is evaluated in the zone the controller uses. */
+  /** nextRun is exact: evaluated in the zone the controller uses, or an @every schedule, whose times do not depend on the zone. */
   nextRunCertain: boolean
-  /** Scheduled times that passed with no submission, when late (capped at 100). */
+  /** Scheduled times that passed with no submission, when late; capped at 100 (100 means at least 100). */
   missedRuns?: number
   blocker?: VeleroRun
   runs: VeleroScheduleRuns
   location: VeleroScheduleLocation
-  /** The template's spec.ttl as written; "" when the server's --default-backup-ttl applies (absent or a zero duration). */
+  /** The template's spec.ttl as Velero applies it; "" when the server's --default-backup-ttl applies (absent or a zero duration). */
   ttl: string
   /** The template's namespace selection as written: an empty or "*" include list is every namespace; entries may be glob patterns. */
   includedNamespaces: string[]
@@ -126,10 +129,12 @@ export interface VeleroServerConfig {
   timeZone?: string
   defaultLocation?: string
   validationFrequencySeconds?: number
+  /** The schedule controller is removed (--restore-only or --disable-controllers). True or false when the flags were read; absent when they could not be. */
   schedulingDisabled?: boolean
-  /** The server Deployment's running replicas (status.replicas, terminating pods excluded), when the Deployment was found. */
+  /** The server Deployment's pods (status.replicas): every non-terminating pod, Pending and crash-looping ones included; 0 is a stopped server. Absent when the Deployment was not found. */
   replicas?: number
   readyReplicas?: number
+  /** The backup controller is removed, so no Backup runs, manual or scheduled. True or false when the flags were read; absent when they could not be. */
   backupsDisabled?: boolean
 }
 
@@ -172,13 +177,14 @@ export interface VeleroLocationReading {
   /** No validation recorded although the location is older than ten minutes. */
   neverValidated?: boolean
   default: boolean
+  /** How the installation's default was decided, the same on all its locations. */
   defaultSource: VeleroDefaultSource
   /** Absent when the namespace's Backups were not read. */
   backups?: VeleroLocationBackups | null
   /** null when the namespace's Schedules were not read. */
   schedules: VeleroScheduleRef[] | null
   attention: boolean
-  /** 'serverDown' when the Velero server having no available pod explains an overdue validation. */
+  /** 'serverDown' when the server Deployment having no pods (status.replicas is 0) explains an overdue or never-recorded validation. */
   reason?: 'serverDown'
 }
 
@@ -188,8 +194,6 @@ export interface VeleroInstallation {
   server: VeleroServerConfig
   defaultLocation?: string
   defaultSource: VeleroDefaultSource
-  /** Absent when the namespace's Backups were not read. */
-  unassignedBackups?: number
 }
 
 /** internal/velero Issue: the subset of an Issues row the views render. */
@@ -205,6 +209,7 @@ export interface VeleroIssue {
   message?: string
   cause?: string
   action?: string
+  /** When the fault began; absent when its onset is not known, which does not mean it is new. */
   first_seen?: string
   /** The runs this row covers, which raise no row of their own: for an unavailable location, the runs Velero rejected because of it. */
   affected?: { kind: string; namespace?: string; name: string }[]
@@ -230,7 +235,8 @@ export interface VeleroScheduleActivityResponse {
   observedAt: string
   reading: VeleroScheduleReading
   coverage: Partial<Record<VeleroWorkspaceKey, VeleroKindCoverage>>
-  /** The server Deployment was read and has no running replicas. Absent from an older Radar. */
+  /** The server Deployment was read and has no pods (status.replicas is 0). Sent only when true: absent means it has pods, or its Deployment could not be read. */
   serverStopped?: boolean
+  /** As the server's backupsDisabled: true or false when the flags were read, absent when they could not be. */
   backupsDisabled?: boolean
 }

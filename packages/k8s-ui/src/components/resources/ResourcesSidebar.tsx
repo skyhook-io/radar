@@ -36,7 +36,6 @@ export interface PinnedItem {
 export interface SidebarCategoryDestination {
   id: string
   label: string
-  icon?: ComponentType<{ className?: string }>
   /** Problem count. `undefined` renders no badge; `null` renders the unknown dash. */
   count?: number | null
   /** The count was taken over data read only in part: rendered "≥N", and a zero is unknown rather than none. */
@@ -153,7 +152,7 @@ export function sidebarDestinationsMatching(
   const normalized = term.trim().toLowerCase()
   if (!normalized) return destinations
   if (categoryName.toLowerCase().includes(normalized) || label?.toLowerCase().includes(normalized) || resources.some((r) => r.group.toLowerCase().includes(normalized))) return destinations
-  // A destination is also found by the kind it lists ("BackupStorageLocation" finds Locations).
+  // A destination is also found by the kind it lists ("BackupStorageLocation" finds Storage locations).
   return destinations.filter((d) => [d.label, d.kind?.kind, d.kind?.name].some((s) => s?.toLowerCase().includes(normalized)))
 }
 

@@ -21,7 +21,7 @@ describe('Velero storage locations', () => {
       installations: [{ namespace: 'velero', server: { source: 'unread' }, defaultSource: 'unknown' }],
       locations: [location({ backups: null, schedules: null, default: false, defaultSource: 'unknown', frequency: undefined })],
     }))
-    expect(html).toContain('Unknown — no access to backups')
+    expect(html).toContain('Unknown — backups were not read')
     expect(html).toContain('Unknown — no access to schedules')
     expect(html).toContain('frequency unknown')
     expect(html).toContain('default unknown')
@@ -31,7 +31,7 @@ describe('Velero storage locations', () => {
 
   it('counts the backups each location is named by and flags overdue validation', () => {
     const data = workspace({
-      installations: [{ namespace: 'velero', server: { source: 'deployment' }, defaultLocation: 'default', defaultSource: 'spec', unassignedBackups: 2 }],
+      installations: [{ namespace: 'velero', server: { source: 'deployment' }, defaultLocation: 'default', defaultSource: 'spec' }],
       locations: [location({ validationOverdue: true, attention: true, lastValidation: hoursAgo(2), schedules: [{ name: 'nightly' }, { name: 'weekly', viaDefault: true }] })],
     })
     const html = render(data)
