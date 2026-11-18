@@ -285,6 +285,36 @@ export function getSandboxClaimSandbox(resource: any): string {
   return resource?.status?.sandbox?.name || '-'
 }
 
+// Mirrors pkg/agentsandbox registryDNSFailure and imagePullNextStep;
+// pkg/agentsandbox/testdata/image_pull_next_steps.json pins both. The server
+// reads the controller's message, which names only the waiting reason; a
+// drawer that read the Pod has the pull error itself.
+const REGISTRY_DNS_FAILURE = /no such host|server misbehaving|\blookup \S+ on \S+/i
+export const REGISTRY_DNS_NEXT_STEP = 'Check the registry hostname in the Pod template’s image, and that the nodes’ DNS resolves it'
+const IMAGE_PULL_REASONS = new Set(['ImagePullBackOff', 'ErrImagePull'])
+
+/** The next step an image pull failure's message gives evidence for, or undefined when it names no cause Radar recognizes. */
+export function imagePullNextStep(reason: unknown, message: unknown): string | undefined {
+  return typeof reason === 'string' && IMAGE_PULL_REASONS.has(reason) && typeof message === 'string' && REGISTRY_DNS_FAILURE.test(message)
+    ? REGISTRY_DNS_NEXT_STEP
+    : undefined
+}
+
+/**
+ * The next step a Sandbox's Pod gives evidence for, where the reading is an
+ * image pull failure: one every container that can't pull its image agrees on.
+ * Undefined otherwise (another reading, no such container, errors that differ
+ * or name no cause), and the server's step stands.
+ */
+export function sandboxPodImagePullNextStep(reason: unknown, pod: any): string | undefined {
+  if (typeof reason !== 'string' || !IMAGE_PULL_REASONS.has(reason)) return undefined
+  const statuses = [pod?.status?.initContainerStatuses, pod?.status?.containerStatuses].flatMap((s) => (Array.isArray(s) ? s : []))
+  const pulls = statuses.map((s: any) => s?.state?.waiting).filter((w: any) => IMAGE_PULL_REASONS.has(w?.reason))
+  if (pulls.length === 0) return undefined
+  const steps = pulls.map((w: any) => imagePullNextStep(w.reason, w.message))
+  return steps.every((s) => s !== undefined && s === steps[0]) ? steps[0] : undefined
+}
+
 // ============================================================================
 // AGENT SANDBOX — SandboxWarmPool
 // ============================================================================

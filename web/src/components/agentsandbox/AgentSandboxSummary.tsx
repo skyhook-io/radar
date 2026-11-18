@@ -12,6 +12,7 @@ import {
   getSandboxStatus,
   getSandboxWarmPoolStatus,
   getSandboxWarmPoolTemplate,
+  sandboxPodImagePullNextStep,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { AgentSandboxAttention, AgentSandboxWorkspaceResponse } from '../../api/agentSandbox'
 import { useAgentSandboxWorkspace } from '../../api/agentSandbox'
@@ -63,12 +64,17 @@ export function objectReadings(data: AgentSandboxWorkspaceResponse, subject: Sub
  * A refused suspension is the exception: its Pod is the one the controller
  * reported it won't delete, which by definition this Sandbox doesn't own, so
  * no owner-reference lookup can find it and the server's ref stays.
+ *
+ * The server reads the controller's message, which names only an image pull's
+ * waiting reason; with the Sandbox's own Pod read, its pull error can show the
+ * cause, and the next step follows it.
  */
-export function drawerProblem(a: AgentSandboxAttention): WorkspaceProblem {
+export function drawerProblem(a: AgentSandboxAttention, pod?: any): WorkspaceProblem {
   const p = attentionProblem(a)
   if (a.rule === 'suspensionBlocked') return p
   const refs = p.related?.refs.filter((r) => r.kind !== 'Pod') ?? []
-  return { ...p, related: p.related && refs.length > 0 ? { ...p.related, refs } : undefined }
+  const nextStep = (a.subject.kind === 'Sandbox' && a.rule === 'failed' && sandboxPodImagePullNextStep(a.reason, pod)) || p.nextStep
+  return { ...p, nextStep, related: p.related && refs.length > 0 ? { ...p.related, refs } : undefined }
 }
 
 export type PodAnswer =
@@ -277,7 +283,7 @@ export function AgentSandboxSummary({
   const showIssues = own.length === 0 && !pending
 
   const callout = (a: AgentSandboxAttention) => (
-    <WorkspaceProblemCallout key={a.id} problem={drawerProblem(a)} rootKind={kind} subjectIsSelf={sameRef(a.subject, subject)} onNavigate={navigate} />
+    <WorkspaceProblemCallout key={a.id} problem={drawerProblem(a, sameRef(a.subject, subject) ? podRead : undefined)} rootKind={kind} subjectIsSelf={sameRef(a.subject, subject)} onNavigate={navigate} />
   )
   const others = otherConditions(resource, status, [...own, ...folded])
   // The Pod of a refused suspension isn't owned by the Sandbox: an owner-reference "none" would contradict the reading.

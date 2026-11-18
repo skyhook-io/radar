@@ -1,0 +1,54 @@
+{
+  "comment": "An image pull failure's next step, from the pull error. pkg/agentsandbox (nextsteps_test.go) and its k8s-ui mirror (resource-utils-agent-runtimes.test.ts) both read these vectors. dns: the next step is the registry's DNS; otherwise neither names one, and the reason's general step stands.",
+  "registryDNSNextStep": "Check the registry hostname in the Pod template’s image, and that the nodes’ DNS resolves it",
+  "cases": [
+    {
+      "name": "back-off over a lookup that found no such host (the live test cluster)",
+      "reason": "ImagePullBackOff",
+      "message": "Back-off pulling image \"registry.invalid/does-not-exist:1\": ErrImagePull: failed to pull and unpack image \"registry.invalid/does-not-exist:1\": failed to resolve reference \"registry.invalid/does-not-exist:1\": failed to do request: Head \"https://registry.invalid/v2/does-not-exist/manifests/1\": dial tcp: lookup registry.invalid on 10.0.0.2:53: no such host",
+      "dns": true
+    },
+    {
+      "name": "the DNS server answers server misbehaving",
+      "reason": "ErrImagePull",
+      "message": "failed to pull and unpack image \"registry.corp.example/agent:1\": failed to resolve reference \"registry.corp.example/agent:1\": failed to do request: Head \"https://registry.corp.example/v2/agent/manifests/1\": dial tcp: lookup registry.corp.example on 127.0.0.53:53: server misbehaving",
+      "dns": true
+    },
+    {
+      "name": "the lookup itself times out",
+      "reason": "ErrImagePull",
+      "message": "failed to do request: Head \"https://registry.corp.example/v2/agent/manifests/1\": dial tcp: lookup registry.corp.example on 10.96.0.10:53: read udp 10.0.0.5:41234->10.96.0.10:53: i/o timeout",
+      "dns": true
+    },
+    {
+      "name": "the registry refuses the credentials",
+      "reason": "ErrImagePull",
+      "message": "failed to pull and unpack image \"ghcr.io/acme/agent:v9\": failed to resolve reference \"ghcr.io/acme/agent:v9\": failed to authorize: failed to fetch anonymous token: unexpected status from GET request to https://ghcr.io/token: 401 Unauthorized",
+      "dns": false
+    },
+    {
+      "name": "the tag doesn't exist",
+      "reason": "ErrImagePull",
+      "message": "rpc error: code = NotFound desc = failed to pull and unpack image \"ghcr.io/acme/agent:v9\": failed to resolve reference \"ghcr.io/acme/agent:v9\": ghcr.io/acme/agent:v9: not found",
+      "dns": false
+    },
+    {
+      "name": "the back-off alone names no cause",
+      "reason": "ImagePullBackOff",
+      "message": "Back-off pulling image \"ghcr.io/acme/agent:v9\"",
+      "dns": false
+    },
+    {
+      "name": "the controller's summary names only the waiting reason",
+      "reason": "ImagePullBackOff",
+      "message": "Pod exists with phase: Pending; container \"agent\" is waiting: ImagePullBackOff",
+      "dns": false
+    },
+    {
+      "name": "a crashing container's own failed lookup is not the registry's",
+      "reason": "CrashLoopBackOff",
+      "message": "dial tcp: lookup api.example.com on 10.96.0.10:53: no such host",
+      "dns": false
+    }
+  ]
+}

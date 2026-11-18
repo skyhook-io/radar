@@ -44,7 +44,7 @@ export function liveAttention(): AgentSandboxAttention[] {
       reading: 'Its 2 sandboxes can’t be scheduled. No sandbox is ready in reserve, so a new claim can’t take a warm one and waits for a sandbox to start.',
       rawDetail: '0/4 nodes are available: 4 Too many pods. no new claims to deallocate, preemption: 0/4 nodes are available: 4 No preemption victims found for incoming pod.',
       rawDetailLabel: 'Scheduler’s message', rawDetailSource: 'scheduler',
-      nextStep: 'Free capacity on a node, or change the Pod template’s requests, node selector or tolerations',
+      nextStep: 'Add nodes, raise the nodes’ max-pods limit, or remove Pods you no longer need',
       subject: pool('warm'), related: { lead: 'Not ready:', refs: [sandbox('warm-nd2zw'), sandbox('warm-4xmkm')] },
       relations: [{ role: 'template', ref: { kind: 'SandboxTemplate', group: 'extensions.agents.x-k8s.io', namespace: NS, name: 'tmpl' }, presence: 'present' }],
       waitingClaims: { count: 0, lowerBound: false },
