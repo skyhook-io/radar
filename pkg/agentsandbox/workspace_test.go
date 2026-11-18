@@ -620,13 +620,15 @@ func TestRecentExpiryNeedsADate(t *testing.T) {
 		sandbox("undated", 40*24*time.Hour, conds(expired)),
 		sandbox("old", 40*24*time.Hour, spec(map[string]any{"shutdownTime": ago(30 * 24 * time.Hour)}), conds(expired)),
 		sandbox("recent", 40*24*time.Hour, spec(map[string]any{"shutdownTime": ago(24 * time.Hour)}), conds(expired)),
+		// Expired, then its shutdown time moved forward: not a recent expiry.
+		sandbox("moved", 40*24*time.Hour, spec(map[string]any{"shutdownTime": ago(-2 * time.Hour)}), conds(expired)),
 	)}
 	s := Summarize(in)
 	if s.Expired.RecentTotal != 1 || len(s.Expired.Recent) != 1 || s.Expired.Recent[0].Ref.Name != "recent" || !s.Expired.Recent[0].At.Equal(now.Add(-24*time.Hour)) {
 		t.Errorf("expired %+v", s.Expired)
 	}
-	if s.Counts.Sandboxes.Expired != 3 {
-		t.Errorf("expired count %d, want all three", s.Counts.Sandboxes.Expired)
+	if s.Counts.Sandboxes.Expired != 4 {
+		t.Errorf("expired count %d, want all four", s.Counts.Sandboxes.Expired)
 	}
 }
 
