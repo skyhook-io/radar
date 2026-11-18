@@ -33,8 +33,9 @@ const (
 	TierConnecting = "connecting"
 	// TierNotConfigured: no identity is saved for this context.
 	TierNotConfigured = "notConfigured"
-	// TierDisabled: this Radar is shared, so it does not read Substrate's
-	// API at all (code sharedRadar).
+	// TierDisabled: this Radar does not read Substrate's API for this
+	// request: it is shared (code sharedRadar), or it is Radar Hub and the
+	// caller is not an org owner (ownersOnly).
 	TierDisabled = "disabled"
 	// TierFailed: settings exist but no usable snapshot could be read.
 	TierFailed = "failed"
@@ -42,7 +43,8 @@ const (
 
 // Identity is who Radar reads Substrate as.
 type Identity struct {
-	// Mode is shared or tokenFile.
+	// Mode is shared, tokenFile, or sharedAsCaller: the shared identity,
+	// minted with the requesting user's Kubernetes access.
 	Mode string `json:"mode"`
 	// Principal is who Substrate sees. Absent for tokenFile: Substrate does
 	// not tell a client who its token authenticates as.
@@ -55,10 +57,10 @@ type APITier struct {
 	State string `json:"state"`
 	// Reason says why, in a sentence; absent when connected.
 	Reason string `json:"reason,omitempty"`
-	// Code is set with notConfigured (notConfigured), disabled (sharedRadar)
-	// and failed (targetChanged, contextChanged, notInstalled, tls,
-	// unreachable, unauthenticated, settingsFile or failed); absent when
-	// connected or connecting.
+	// Code is set with notConfigured (notConfigured), disabled (sharedRadar,
+	// ownersOnly) and failed (targetChanged, contextChanged, notInstalled,
+	// tls, unreachable, unauthenticated, mintDenied, settingsFile or failed);
+	// absent when connected or connecting.
 	Code string `json:"code,omitempty"`
 	// Identity and Endpoint are set once settings are saved.
 	Identity *Identity `json:"identity,omitempty"`
@@ -85,7 +87,7 @@ type ReadError struct {
 
 func identityOf(s Settings) *Identity {
 	id := &Identity{Mode: s.Identity}
-	if s.Identity == IdentityShared {
+	if s.Identity == IdentityShared || s.Identity == IdentitySharedAsCaller {
 		id.Principal = SharedPrincipal
 	}
 	return id
@@ -102,6 +104,10 @@ type Manager struct {
 	// clients together, consistent with context switches.
 	Kube func() (Kube, error)
 	Now  func() time.Time
+	// CallerDial is where IdentitySharedAsCaller connects: endpoint, CA file
+	// and server name. Zero dials the API's Service in the cluster.
+	CallerDial Settings
+	callerTok  callerToken
 
 	// dialMu serializes dials: every conn shares Radar's one Substrate
 	// port-forward, so two racing dials would tear down each other's tunnel.
@@ -158,6 +164,9 @@ func (m *Manager) Reset() {
 	// port-forward that this close would stop.
 	m.conn.close()
 	m.conn, m.good, m.failed, m.scoped = nil, nil, nil, nil
+	m.callerTok.mu.Lock()
+	m.callerTok.clearLocked("")
+	m.callerTok.mu.Unlock()
 }
 
 func (m *Manager) generation() (uint64, context.Context) {
@@ -181,15 +190,38 @@ func (m *Manager) stillCaptured(k Kube) bool {
 	return err == nil && now.Binding == k.Binding && now.Fingerprint == k.Fingerprint && now.Generation == k.Generation
 }
 
-// settings returns the current context's saved settings, or a tier state
-// that says why there are none to use.
-func (m *Manager) settings() (Kube, *Settings, *APITier) {
+// settings returns the settings to read with, or a tier state that says why
+// there are none: for a request served as IdentitySharedAsCaller (WithCaller)
+// the implicit ones, with the token minted for it; otherwise the current
+// context's saved settings.
+func (m *Manager) settings(ctx context.Context) (Kube, *Settings, *APITier) {
+	c, isCaller := callerFrom(ctx)
+	// A caller's tier names its identity in every state, failures included,
+	// so the UI can tell it has no settings to change.
+	var callerTier APITier
+	if isCaller {
+		s := m.callerSettings()
+		callerTier = APITier{Identity: identityOf(s), Endpoint: endpointLabel(s)}
+	}
 	k, err := m.Kube()
 	if errors.Is(err, ErrClusterChanging) {
-		return k, nil, &APITier{State: TierFailed, Code: CodeContextChanged, Reason: err.Error()}
+		tier := callerTier
+		tier.State, tier.Code, tier.Reason = TierFailed, CodeContextChanged, err.Error()
+		return k, nil, &tier
 	}
 	if err != nil {
-		return k, nil, &APITier{State: TierFailed, Code: CodeUnreachable, Reason: "Not connected to Kubernetes: " + err.Error()}
+		tier := callerTier
+		tier.State, tier.Code, tier.Reason = TierFailed, CodeUnreachable, "Not connected to Kubernetes: "+err.Error()
+		return k, nil, &tier
+	}
+	if isCaller {
+		s := m.callerSettings()
+		tier := &callerTier
+		if tierErr := m.ensureCallerToken(ctx, k, c); tierErr != nil {
+			tier.State, tier.Code, tier.Reason = TierFailed, tierErr.Code, tierErr.Message
+			return k, nil, tier
+		}
+		return k, &s, tier
 	}
 	saved, ok, err := m.Store.Get(k.Binding)
 	if err != nil {
@@ -235,7 +267,11 @@ func (m *Manager) client(ctx context.Context, k Kube, s Settings, gen uint64) (*
 	old.close()
 	m.mu.Unlock()
 
-	c, err := dial(ctx, k, s)
+	var caller tokenSource
+	if s.Identity == IdentitySharedAsCaller {
+		caller = callerSource{m: m, key: callerTokenKey(k)}
+	}
+	c, err := dial(ctx, k, s, caller)
 	if err != nil {
 		if ctx.Err() != nil && !m.current(gen) {
 			return nil, errRetired
@@ -283,7 +319,7 @@ func (m *Manager) Peek(ctx context.Context) (*Snapshot, APITier) {
 }
 
 func (m *Manager) snapshot(ctx context.Context, wait bool) (*Snapshot, APITier) {
-	k, s, tier := m.settings()
+	k, s, tier := m.settings(ctx)
 	if s == nil {
 		return nil, *tier
 	}
@@ -402,7 +438,7 @@ const MaxScopedReads = 16
 // AtespaceActors reads one atespace's actors directly, for a query the shared
 // snapshot cannot answer in full. A read under Freshness old is reused.
 func (m *Manager) AtespaceActors(ctx context.Context, atespace string) ([]model.Actor, Coverage, *APITier) {
-	k, s, tier := m.settings()
+	k, s, tier := m.settings(ctx)
 	if s == nil {
 		return nil, Coverage{}, tier
 	}
@@ -468,7 +504,7 @@ func (m *Manager) AtespaceActors(ctx context.Context, atespace string) ([]model.
 // (an actor's detail). It returns the tier when the call could not be made,
 // and maps a failed RPC to a code and a scrubbed message. Reset cancels it.
 func (m *Manager) Call(ctx context.Context, fn func(ctx context.Context, client ateapi.ControlClient) error) (*APITier, string, string) {
-	k, s, tier := m.settings()
+	k, s, tier := m.settings(ctx)
 	if s == nil {
 		return tier, "", ""
 	}
@@ -531,7 +567,7 @@ func (m *Manager) Probe(ctx context.Context, k Kube, s Settings) *TierError {
 	if !m.stillCaptured(k) {
 		return &TierError{Code: CodeContextChanged, Message: ErrClusterChanging.Error()}
 	}
-	c, err := dial(ctx, k, s)
+	c, err := dial(ctx, k, s, nil)
 	if err != nil {
 		code, msg := classify(err, nil)
 		return &TierError{Code: code, Message: msg}

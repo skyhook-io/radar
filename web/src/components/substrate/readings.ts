@@ -323,8 +323,13 @@ export interface TierReading {
   title: string
   detail: string
   nextStep?: string
+  /** A command that checks or does the next step, shown as a copyable chip. */
+  command?: string
   tone: StatusTone
 }
+
+/** What a Radar Hub user who isn't an org owner reads where Substrate's own values would be. */
+export const OWNERS_ONLY_NOTE = 'In Radar Hub, only org owners can see Substrate’s actors, templates and workers for now. Ask an org owner.'
 
 const CODE_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'> & { detail?: string }>> = {
   notConfigured: { title: 'Not connected', tone: 'unknown', nextStep: 'Choose who Radar reads Substrate as.' },
@@ -335,6 +340,12 @@ const CODE_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'> & 
     nextStep: 'Choose the identity again for this cluster.',
   },
   sharedRadar: { title: 'Not available in a shared Radar', tone: 'unknown' },
+  mintDenied: {
+    title: 'Your access can’t mint the shared identity’s token',
+    tone: 'unhealthy',
+    detail: 'In Radar Hub, Radar reads Substrate as ate-system/ate-client with a token minted with your own Kubernetes access, and that access can’t create one.',
+    nextStep: 'Ask a cluster admin for create on serviceaccounts/token for ate-system/ate-client.',
+  },
   notInstalled: { title: 'API server not found', tone: 'unknown', nextStep: 'Check that Substrate’s API server runs as Service ate-system/api, or set its endpoint under Advanced.' },
   tls: { title: 'TLS check failed', tone: 'unhealthy', nextStep: 'Check the CA file and server name under Advanced, or that the cluster’s trust bundle for Substrate exists.' },
   unreachable: { title: 'API server unreachable', tone: 'unhealthy', nextStep: 'Check that the API server’s Pods are running, then retry; with a custom endpoint, check it is reachable from this machine.' },
@@ -346,9 +357,62 @@ const CODE_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'> & 
   failed: { title: 'Reading Substrate failed', tone: 'unhealthy', nextStep: 'Retry; if it keeps failing, read the API server’s log.' },
 }
 
+/**
+ * The same codes for a Radar Hub owner, who reads as ate-client with nothing
+ * to configure: no Advanced fields, no other identity to choose, no "this
+ * machine". Steps name what the owner can ask for instead.
+ */
+const NO_FORM_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'> & { detail?: string; withReason?: boolean }>> = {
+  notInstalled: {
+    title: 'Substrate isn’t installed here',
+    tone: 'unknown',
+    detail: 'Substrate’s shared client identity (ate-system/ate-client) doesn’t exist here.',
+    nextStep: 'Check that Substrate is installed in ate-system.',
+    command: 'kubectl -n ate-system get sa ate-client',
+  },
+  tls: {
+    title: 'Radar couldn’t verify Substrate’s API server',
+    tone: 'unhealthy',
+    detail: 'Radar couldn’t verify api.ate-system.svc:443 from inside the cluster.',
+    withReason: true,
+    nextStep: 'Check Substrate’s API Service and its Pods.',
+    command: 'kubectl -n ate-system get svc api',
+  },
+  unreachable: {
+    title: 'Radar couldn’t reach Substrate’s API server',
+    tone: 'unhealthy',
+    detail: 'Radar couldn’t reach api.ate-system.svc:443 from inside the cluster.',
+    withReason: true,
+    nextStep: 'Check that Substrate’s API server Pods are running.',
+    command: 'kubectl -n ate-system get pods',
+  },
+  unauthenticated: {
+    title: 'Substrate refused the shared identity',
+    tone: 'unhealthy',
+    detail: 'Substrate refused ate-system/ate-client: it isn’t granted in this install.',
+    withReason: true,
+    nextStep: 'Ask a Substrate operator to grant it; until then, this Radar can’t read Substrate as it stands.',
+  },
+  denied: {
+    title: 'Substrate refused the shared identity',
+    tone: 'unhealthy',
+    detail: 'Substrate denied ate-system/ate-client the read: it isn’t granted in this install.',
+    withReason: true,
+    nextStep: 'Ask a Substrate operator to grant it the viewer role; until then, this Radar can’t read Substrate as it stands.',
+  },
+}
+
 export function tierReading(tier: SubstrateAPITier): TierReading {
   if (tier.state === 'connected') return { title: 'Connected', detail: '', tone: 'healthy' }
+  // A product policy, not a fault: the same short note everywhere, whatever the server's sentence.
+  if (tier.code === 'ownersOnly') return { title: 'For org owners', detail: OWNERS_ONLY_NOTE, tone: 'unknown' }
   if (tier.state === 'connecting') return { title: 'Connecting', detail: 'The connection is saved; Radar is reading Substrate’s API for the first time.', tone: 'unknown' }
+  const noForm = tier.code ? tier.identity?.mode === 'sharedAsCaller' && NO_FORM_READING[tier.code] : undefined
+  if (noForm) {
+    // The plain state is Radar's; the server's own words follow as its reason.
+    const { withReason, ...reading } = noForm
+    return { ...reading, detail: withReason && tier.reason ? `${noForm.detail} ${tier.reason}` : noForm.detail ?? tier.reason ?? '' }
+  }
   const known = tier.code ? CODE_READING[tier.code] : undefined
   const detail = tier.reason ?? known?.detail ?? 'Radar has not read Substrate’s API.'
   if (known) return { ...known, detail: known.detail && !tier.reason ? known.detail : detail }

@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -26,6 +27,7 @@ import (
 	"github.com/skyhook-io/radar/internal/readscope"
 	substrateapi "github.com/skyhook-io/radar/internal/substrate"
 	"github.com/skyhook-io/radar/internal/substrate/ateapi"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	model "github.com/skyhook-io/radar/pkg/substrate"
@@ -39,9 +41,12 @@ import (
 // Agent Substrate's actors, templates, workers and atespaces live in its own
 // API server, which authorizes by Substrate's roles, not Kubernetes RBAC. Radar
 // reads it with one identity, so a Radar several people use would show each
-// of them everything that identity sees: the API tier is served only by a
-// local Radar on a private listener (substrateAPIAllowed). The Kubernetes
-// side (WorkerPools) is read as the caller everywhere.
+// of them everything that identity sees. substrateGate decides per request:
+// a local Radar on a private listener reads with its saved settings; in Radar
+// Hub, an org owner's request reads as the shared ate-client identity minted
+// with the owner's own Kubernetes access; every other shared Radar or role
+// is refused. The Kubernetes side (WorkerPools) is read as the caller
+// everywhere.
 
 func (s *Server) substrateManager() *substrateapi.Manager {
 	s.substrateOnce.Do(func() {
@@ -85,30 +90,70 @@ func (s *Server) resetSubstrate() {
 	s.substrateManager().Reset()
 }
 
-// substrateAPIAllowed: local CLI or Desktop, auth off, loopback listener.
-func (s *Server) substrateAPIAllowed() bool {
+// substrateLocal: local CLI or Desktop, auth off, loopback listener. Only
+// here are connection settings chosen and saved.
+func (s *Server) substrateLocal() bool {
 	return s.configManagement() == "local" && !s.authConfig.Enabled() && !s.sharedListener()
 }
 
-const substrateSharedReason = "This Radar is shared, so it does not read Substrate's API: Substrate authorizes by its own roles, and every user would see what Radar's one identity sees. Use a local Radar (CLI or Desktop) to see actors, templates and workers."
+const (
+	substrateSharedReason     = "This Radar is shared, so it does not read Substrate's API: Substrate authorizes by its own roles, and every user would see what Radar's one identity sees. Use a local Radar (CLI or Desktop) to see actors, templates and workers."
+	substrateOwnersOnlyReason = "In Radar Hub, only org owners see Substrate's actors, templates and workers for now."
+)
 
 func substrateSharedTier() substrateapi.APITier {
 	return substrateapi.APITier{State: substrateapi.TierDisabled, Code: substrateapi.CodeSharedRadar, Reason: substrateSharedReason}
 }
 
+// substrateCallerClient is the requesting user's own Kubernetes client, which
+// mints the owner's token; tests replace it.
+var substrateCallerClient = func(s *Server, r *http.Request) kubernetes.Interface { return s.getClientForRequest(r) }
+
+// substrateGate decides whether this request reads Substrate's API, and as
+// whom. It returns the request to read with, carrying the caller for an org
+// owner in Radar Hub (who reads as IdentitySharedAsCaller, with no saved
+// settings), or the tier saying why not. A local private Radar reads with its
+// saved settings. A Hub user below owner, or with no role (a synthetic
+// identity), is refused with ownersOnly before anything is minted or read;
+// every other shared or authenticated Radar with sharedRadar.
+func (s *Server) substrateGate(r *http.Request) (*http.Request, *substrateapi.APITier) {
+	if s.substrateLocal() {
+		return r, nil
+	}
+	if !cloudMode() {
+		tier := substrateSharedTier()
+		return r, &tier
+	}
+	user := auth.UserFromContext(r.Context())
+	if user == nil || auth.CloudRoleFromContext(r.Context()) != auth.RoleOwner {
+		return r, &substrateapi.APITier{State: substrateapi.TierDisabled, Code: substrateapi.CodeOwnersOnly, Reason: substrateOwnersOnlyReason}
+	}
+	client := substrateCallerClient(s, r)
+	if client == nil {
+		return r, &substrateapi.APITier{State: substrateapi.TierFailed, Code: substrateapi.CodeMintDenied, Reason: "Radar could not act as you in Kubernetes, so it cannot create Substrate's token for you.",
+			Identity: &substrateapi.Identity{Mode: substrateapi.IdentitySharedAsCaller, Principal: substrateapi.SharedPrincipal}}
+	}
+	// The proof key is the identity Radar impersonates for this user, the
+	// key of every other per-user cache.
+	caller := substrateapi.Caller{Client: client, Identity: pkgauth.IdentityCacheKey(user.Username, user.Groups)}
+	return r.WithContext(substrateapi.WithCaller(r.Context(), caller)), nil
+}
+
 // substrateSnapshot serves the API-tier reads: it writes the error and returns
-// false when the tier is not connected.
-func (s *Server) substrateSnapshot(w http.ResponseWriter, r *http.Request) (*substrateapi.Snapshot, substrateapi.APITier, bool) {
-	if !s.substrateAPIAllowed() {
-		s.writeErrorCode(w, http.StatusForbidden, substrateapi.CodeSharedRadar, substrateSharedReason)
-		return nil, substrateSharedTier(), false
+// false when the tier is not connected. The request it returns is the one
+// to make further API-tier calls with (substrateGate).
+func (s *Server) substrateSnapshot(w http.ResponseWriter, r *http.Request) (*substrateapi.Snapshot, substrateapi.APITier, *http.Request, bool) {
+	r, denied := s.substrateGate(r)
+	if denied != nil {
+		s.writeSubstrateTier(w, *denied)
+		return nil, *denied, r, false
 	}
 	snap, tier := s.substrateManager().Snapshot(r.Context())
 	if snap == nil {
 		s.writeSubstrateTier(w, tier)
-		return nil, tier, false
+		return nil, tier, r, false
 	}
-	return snap, tier, true
+	return snap, tier, r, true
 }
 
 func (s *Server) writeSubstrateTier(w http.ResponseWriter, tier substrateapi.APITier) {
@@ -116,7 +161,7 @@ func (s *Server) writeSubstrateTier(w http.ResponseWriter, tier substrateapi.API
 	switch tier.Code {
 	case substrateapi.CodeNotConfigured, substrateapi.CodeTargetChanged, substrateapi.CodeSettingsFile, substrateapi.CodeContextChanged:
 		status = http.StatusConflict
-	case substrateapi.CodeSharedRadar:
+	case substrateapi.CodeSharedRadar, substrateapi.CodeOwnersOnly, substrateapi.CodeMintDenied:
 		status = http.StatusForbidden
 	}
 	s.writeErrorCode(w, status, tier.Code, tier.Reason)
@@ -286,7 +331,7 @@ func (s *Server) handleSubstrateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := substrateStatusResponse{
 		APIService:   substrateAPIService{Namespace: substrateapi.SystemNamespace, Name: substrateapi.APIService, Port: substrateapi.APIPort},
-		CanConfigure: s.substrateAPIAllowed(),
+		CanConfigure: s.substrateLocal(),
 	}
 	if d := k8s.GetResourceDiscovery(); d != nil {
 		_, resp.Installed = d.GetResourceWithGroup("WorkerPool", "ate.dev")
@@ -297,10 +342,10 @@ func (s *Server) handleSubstrateStatus(w http.ResponseWriter, r *http.Request) {
 		resp.APIService.Found = &found
 	}
 	_, resp.Coverage.Pools = s.substratePools(r)
-	if resp.CanConfigure {
-		_, resp.APITier = s.substrateManager().Peek(r.Context())
+	if gated, denied := s.substrateGate(r); denied != nil {
+		resp.APITier = *denied
 	} else {
-		resp.APITier = substrateSharedTier()
+		_, resp.APITier = s.substrateManager().Peek(gated.Context())
 	}
 	s.writeJSON(w, resp)
 }
@@ -324,7 +369,7 @@ type substrateConnectionView struct {
 }
 
 func (s *Server) requireSubstrateConfigurable(w http.ResponseWriter) bool {
-	if !s.substrateAPIAllowed() {
+	if !s.substrateLocal() {
 		s.writeErrorCode(w, http.StatusForbidden, substrateapi.CodeSharedRadar, substrateSharedReason)
 		return false
 	}
@@ -667,9 +712,12 @@ func (s *Server) handleSubstrateWorkspace(w http.ResponseWriter, r *http.Request
 	}
 	pools, poolsCov := s.substratePools(r)
 	var snap *substrateapi.Snapshot
-	tier := substrateSharedTier()
-	if s.substrateAPIAllowed() {
-		snap, tier = s.substrateManager().Snapshot(r.Context())
+	gated, denied := s.substrateGate(r)
+	var tier substrateapi.APITier
+	if denied != nil {
+		tier = *denied
+	} else {
+		snap, tier = s.substrateManager().Snapshot(gated.Context())
 	}
 	now := time.Now()
 	in := substrateInputs(snap, pools, poolsCov, now)
@@ -836,7 +884,7 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	snap, tier, ok := s.substrateSnapshot(w, r)
+	snap, tier, r, ok := s.substrateSnapshot(w, r)
 	if !ok {
 		return
 	}
@@ -1144,7 +1192,7 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	snap, tier, ok := s.substrateSnapshot(w, r)
+	snap, tier, r, ok := s.substrateSnapshot(w, r)
 	if !ok {
 		return
 	}
@@ -1399,8 +1447,9 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 	if !s.requireConnected(w) {
 		return
 	}
-	if !s.substrateAPIAllowed() {
-		s.writeErrorCode(w, http.StatusForbidden, substrateapi.CodeSharedRadar, substrateSharedReason)
+	r, denied := s.substrateGate(r)
+	if denied != nil {
+		s.writeSubstrateTier(w, *denied)
 		return
 	}
 	target := model.Ref{Atespace: chi.URLParam(r, "atespace"), Name: chi.URLParam(r, "name")}
@@ -1678,7 +1727,7 @@ func (s *Server) handleSubstrateWorkers(w http.ResponseWriter, r *http.Request) 
 	if !s.requireConnected(w) {
 		return
 	}
-	snap, tier, ok := s.substrateSnapshot(w, r)
+	snap, tier, r, ok := s.substrateSnapshot(w, r)
 	if !ok {
 		return
 	}
@@ -1734,7 +1783,7 @@ func (s *Server) handleSubstrateTemplates(w http.ResponseWriter, r *http.Request
 	if !s.requireConnected(w) {
 		return
 	}
-	snap, tier, ok := s.substrateSnapshot(w, r)
+	snap, tier, r, ok := s.substrateSnapshot(w, r)
 	if !ok {
 		return
 	}
@@ -1767,7 +1816,7 @@ func (s *Server) handleSubstrateTemplate(w http.ResponseWriter, r *http.Request)
 	if !s.requireConnected(w) {
 		return
 	}
-	snap, tier, ok := s.substrateSnapshot(w, r)
+	snap, tier, r, ok := s.substrateSnapshot(w, r)
 	if !ok {
 		return
 	}
@@ -1829,7 +1878,7 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	snap, tier, ok := s.substrateSnapshot(w, r)
+	snap, tier, r, ok := s.substrateSnapshot(w, r)
 	if !ok {
 		return
 	}

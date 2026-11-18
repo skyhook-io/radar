@@ -40,6 +40,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	substrateapi "github.com/skyhook-io/radar/internal/substrate"
@@ -382,6 +383,8 @@ type substrateCall struct {
 	method, path, body string
 	params             map[string]string
 	header             map[string]string
+	// user is the authenticated caller, as the auth middleware sets it.
+	user *auth.User
 }
 
 func call(t *testing.T, s *Server, h http.HandlerFunc, c substrateCall, out any) *httptest.ResponseRecorder {
@@ -393,6 +396,9 @@ func call(t *testing.T, s *Server, h http.HandlerFunc, c substrateCall, out any)
 	req := httptest.NewRequest(method, c.path, strings.NewReader(c.body))
 	for k, v := range c.header {
 		req.Header.Set(k, v)
+	}
+	if c.user != nil {
+		req = req.WithContext(auth.ContextWithUser(req.Context(), c.user))
 	}
 	if len(c.params) > 0 {
 		rctx := chi.NewRouteContext()

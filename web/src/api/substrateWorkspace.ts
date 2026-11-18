@@ -34,14 +34,20 @@ export type SubstrateActorState =
  * connected: a snapshot was read (it may be stale: see refreshing/lastError).
  * connecting: settings are saved and the first read is still running; status
  * never waits for it. notConfigured: no identity saved for this context.
- * disabled: this Radar is shared, so it does not read Substrate's API (code
- * sharedRadar). failed: settings exist but no usable snapshot was read.
+ * disabled: this Radar does not read Substrate's API for this request (code
+ * sharedRadar, or ownersOnly in Radar Hub below org owner). failed: settings
+ * exist, or a Hub owner's token could not be minted (mintDenied), but no
+ * usable snapshot was read.
  */
 export type SubstrateTierState = 'connected' | 'connecting' | 'notConfigured' | 'disabled' | 'failed'
 
 /** Shared by apiTier.code, coverage codes and error_code on error responses. */
 export type SubstrateCode =
   | 'sharedRadar'
+  /** Radar Hub: only org owners read Substrate's API for now (403). */
+  | 'ownersOnly'
+  /** Radar Hub: the owner's own Kubernetes access cannot create a token for ate-system/ate-client (403). */
+  | 'mintDenied'
   | 'notConfigured'
   | 'targetChanged'
   | 'notInstalled'
@@ -66,7 +72,11 @@ export type SubstrateCode =
   | 'incomplete'
 
 export interface SubstrateIdentity {
-  mode: 'shared' | 'tokenFile'
+  /**
+   * shared: ate-system/ate-client, minted with Radar's Kubernetes access. sharedAsCaller: the same
+   * identity, minted with the requesting Hub owner's own access; implicit, nothing to save or edit.
+   */
+  mode: 'shared' | 'tokenFile' | 'sharedAsCaller'
   /** Who Substrate sees. Absent for tokenFile: Substrate does not tell a client who its token is. */
   principal?: string
 }

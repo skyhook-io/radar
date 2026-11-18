@@ -12,8 +12,14 @@ import (
 // responses.
 const (
 	// CodeSharedRadar: this Radar is shared (auth on, a non-loopback
-	// listener, in-cluster or Cloud), so it does not read Substrate's API.
+	// listener, or in-cluster) outside Radar Hub, so it does not read
+	// Substrate's API.
 	CodeSharedRadar = "sharedRadar"
+	// CodeOwnersOnly: in Radar Hub, only org owners read Substrate's API.
+	CodeOwnersOnly = "ownersOnly"
+	// CodeMintDenied: the requesting owner's Kubernetes access cannot mint
+	// a token for ate-system/ate-client.
+	CodeMintDenied = "mintDenied"
 	// CodeNotConfigured: no identity has been chosen for this context.
 	CodeNotConfigured = "notConfigured"
 	// CodeTargetChanged: the context now points at another cluster than the

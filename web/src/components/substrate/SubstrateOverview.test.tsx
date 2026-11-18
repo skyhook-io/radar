@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateStatus, SubstrateWorkspace } from '../../api/substrateWorkspace'
 import { SUBSTRATE_NO_PROBLEMS, SubstrateOverview } from './SubstrateOverview'
-import { connectedTier, connection, counts, notConnectedWorkspace, sharedTier, status, workspace } from './substrate.fixtures'
+import { connectedTier, connection, counts, notConnectedWorkspace, ownerTier, ownersOnlyTier, sharedTier, status, workspace } from './substrate.fixtures'
 
 const state = vi.hoisted(() => ({ connection: undefined as unknown }))
 
@@ -174,6 +174,56 @@ describe('Agent Substrate overview, not connected', () => {
     expect(html).toContain('Next step: </span>Check that the API server’s Pods are running')
     const denied = render(notConnectedWorkspace({ state: 'failed', code: 'denied', reason: 'permission denied' }))
     expect(denied).toContain('viewer role')
+  })
+})
+
+describe('Agent Substrate in Radar Hub', () => {
+  it('tells an org owner which identity Radar reads as, with nothing to connect or change', () => {
+    const html = render(workspace({ apiTier: ownerTier }), status({ apiTier: ownerTier, canConfigure: false }))
+    expect(html).toContain('api.ate-system.svc:443</span> as Substrate’s shared client identity (')
+    expect(html).toContain('ate-system/ate-client</span>), minted with your Kubernetes access')
+    expect(html).toContain('aria-label="About this identity"')
+    expect(html).not.toContain('Change connection')
+    expect(html).not.toContain('Choose who Radar reads as')
+    // An owner's Radar reads Substrate: the actors are there.
+    expect(html).toContain('Actor states')
+  })
+
+  it('gives everyone else a short note where the Connect panel would be, and keeps Kubernetes and Prometheus', () => {
+    const data = notConnectedWorkspace(ownersOnlyTier)
+    const html = render(data, status({ apiTier: ownersOnlyTier, canConfigure: false }))
+    expect(html).toContain('In Radar Hub, only org owners can see Substrate’s actors, templates and workers for now. Ask an org owner.')
+    expect(html).not.toContain('Choose who Radar reads as')
+    expect(html).not.toContain('See actors, templates and workers')
+    expect(html).not.toContain('Substrate API: ')
+    expect(html).toContain('Worker pools')
+    expect(html).toContain('Prometheus')
+  })
+
+  it('tells an owner whose access can’t mint the token what to ask for, with no Connect form', () => {
+    const tier = { state: 'failed' as const, code: 'mintDenied' as const, identity: { mode: 'sharedAsCaller' as const } }
+    const html = render(notConnectedWorkspace(tier), status({ apiTier: tier, canConfigure: false }))
+    expect(html).toContain('Substrate API: your access can’t mint the shared identity’s token')
+    expect(html).toContain('serviceaccounts/token for ate-system/ate-client')
+    expect(html).not.toContain('Choose who Radar reads as')
+  })
+
+  it('gives an owner whose install lacks the shared identity a kubectl check, not a form', () => {
+    const tier = { state: 'failed' as const, code: 'notInstalled' as const, identity: { mode: 'sharedAsCaller' as const }, reason: 'ServiceAccount ate-system/ate-client does not exist.' }
+    const html = render(notConnectedWorkspace(tier), status({ apiTier: tier, canConfigure: false }))
+    expect(html).toContain('Substrate’s shared client identity (ate-system/ate-client) doesn’t exist here.')
+    expect(html).toContain('kubectl -n ate-system get sa ate-client'.split(' ').pop()!)
+    expect(html).not.toContain('Advanced')
+    expect(html).not.toContain('Choose who Radar reads as')
+  })
+
+  it('leaves a local Radar and a shared in-cluster Radar as they were', () => {
+    const local = render(notConnectedWorkspace())
+    expect(local).toContain('Choose who Radar reads as')
+    expect(local).not.toContain('only org owners')
+    const shared = render(notConnectedWorkspace(sharedTier), status({ apiTier: sharedTier, canConfigure: false }))
+    expect(shared).toContain('This Radar is shared')
+    expect(shared).not.toContain('only org owners')
   })
 })
 

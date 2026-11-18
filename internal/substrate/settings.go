@@ -25,6 +25,10 @@ const (
 	IdentityShared = "shared"
 	// IdentityTokenFile sends the bearer token in a local file.
 	IdentityTokenFile = "tokenFile"
+	// IdentitySharedAsCaller is IdentityShared minted with the requesting
+	// user's own Kubernetes access, not Radar's: in Radar Hub, for an org
+	// owner. It is implicit, never saved.
+	IdentitySharedAsCaller = "sharedAsCaller"
 )
 
 // Settings is how Radar connects to Substrate's API for one kube context. It
