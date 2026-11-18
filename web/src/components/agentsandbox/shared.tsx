@@ -108,8 +108,11 @@ export function AgentSandboxGate({
   const reads = keys.map((k) => data[k])
   // One kind still loading doesn't hold the screen once another has answered; the notice names it.
   if (discoveryPending || (reads.some((r) => r.state === 'loading') && reads.every((r) => r.state === 'loading' || r.state === 'notServed'))) return <PaneLoader label="Loading Agent Sandbox…" className="flex-1" />
-  if (!discovered || reads.every((r) => r.state === 'notServed')) {
+  if (!discovered) {
     return <ScreenEmptyState icon={Boxes} title="Agent Sandbox is not installed" detail={`No agents.x-k8s.io resources are served in ${connection.context || 'this cluster'}.`} />
+  }
+  if (reads.every((r) => r.state === 'notServed')) {
+    return <ScreenEmptyState icon={Boxes} title="Not served by this Agent Sandbox" detail={`Agent Sandbox is installed in ${connection.context || 'this cluster'}, but its version doesn't serve this kind.`} />
   }
   if (reads.every((r) => r.state === 'failed' || r.state === 'notServed')) {
     const failed = reads.find((r): r is Extract<KindRead, { state: 'failed' }> => r.state === 'failed')

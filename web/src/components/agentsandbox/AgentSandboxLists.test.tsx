@@ -43,7 +43,12 @@ describe('Agent Sandbox kind list gate', () => {
 
   it('says when Agent Sandbox is not installed', () => {
     expect(gate(liveData(), { discovered: false })).toContain('Agent Sandbox is not installed')
-    expect(gate(liveData({ sandboxes: { state: 'notServed' }, claims: { state: 'notServed' }, warmPools: { state: 'notServed' } }))).toContain('No agents.x-k8s.io resources are served in kind-demo')
+  })
+
+  it('says a kind this Agent Sandbox version does not serve, rather than that Agent Sandbox is missing', () => {
+    const html = gate(liveData({ sandboxes: { state: 'notServed' }, claims: { state: 'notServed' }, warmPools: { state: 'notServed' } }))
+    expect(html).toContain('Not served by this Agent Sandbox')
+    expect(html).not.toContain('Agent Sandbox is not installed')
   })
 
   it('tells a denial from a failure, and offers a retry only for the failure', () => {
