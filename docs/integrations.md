@@ -1114,6 +1114,49 @@ Tested with driver 1.6.1 and the HashiCorp Vault provider (chart 0.34.1) on kind
 
 ---
 
+## CSI Volume Snapshots
+
+[CSI volume snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/) (`snapshot.storage.k8s.io`) are served by the external-snapshotter CRDs and its snapshot controller, and taken by each CSI driver's `csi-snapshotter` sidecar. A VolumeSnapshot (namespaced) is bound to a VolumeSnapshotContent (cluster-scoped), which records the snapshot on the storage system; a VolumeSnapshotClass (cluster-scoped) names the driver and deletion policy.
+
+### What Radar Shows
+
+**VolumeSnapshot:** status, ready to use, the source PVC or, for a pre-provisioned snapshot, the content it names, the snapshot class, the bound content (`status.boundVolumeSnapshotContentName`, the observed binding rather than the requested source), restore size, when the snapshot was taken, and the controller's error. Source PVC, class and content are links.
+
+**VolumeSnapshotContent:** status, the VolumeSnapshot it names (marked "not bound yet" until the controller records the snapshot's UID), driver, deletion policy and what it means, class, the source volume handle or pre-provisioned snapshot handle, the reported snapshot handle, restore size (reported in bytes), creation time (reported in nanoseconds) and the error.
+
+**VolumeSnapshotClass:** driver, deletion policy, whether it is the default class for its driver (`snapshot.storage.kubernetes.io/is-default-class`) and its parameters. CSI parameters name credential Secrets; they do not hold their values.
+
+All three kinds have curated table columns. Status reads:
+
+| Status | Source |
+|---|---|
+| Ready | `status.readyToUse: true` |
+| Error | `status.error` while not ready. The snapshot controller keeps retrying and clears the error once the snapshot is ready, so an error never outranks `readyToUse` |
+| Not ready | `status.readyToUse: false` with no error, for example while the driver uploads the snapshot |
+| Pending | A VolumeSnapshot not yet bound to a content, or a content with no status (its driver's sidecar has not processed it) |
+| Readiness unknown | Bound, but no `readyToUse` reported |
+| Terminating | `metadata.deletionTimestamp` is set |
+
+A missing restore size or creation time reads "Not reported", never zero. Ready means the CSI driver can restore a volume from the snapshot; it does not establish application consistency or that a restore was ever tested. Not every snapshot has a source PVC: a pre-provisioned snapshot names an existing content instead.
+
+A VolumeSnapshot with `status.error` that is not ready to use produces one warning in Issues (including the API and MCP), `VolumeSnapshotError`, quoting the controller's message, which the API says should not contain sensitive information. Its onset is the error's own time. A VolumeSnapshotContent produces no separate Issue: the controller copies its error onto the bound snapshot, and the content drawer shows it. MCP list summaries carry the same status, readiness, source, driver, deletion policy and restore size.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| VolumeSnapshot | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+| VolumeSnapshotContent | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+| VolumeSnapshotClass | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+
+Collection is on by default in the Helm chart (`rbac.crdGroups.volumeSnapshots`) and reads only these three kinds. Radar Cloud's default integration-read role grants all three, as the cluster read already grants PersistentVolumes and StorageClasses; see [the default read policy](cloud-rbac-baseline.md).
+
+Checked against snapshot-controller v8.6.0 and the csi-hostpath driver on kind: ready dynamic snapshots with Delete and Retain classes, a missing class, a missing PVC, an unbound PVC, and pre-provisioned contents with a valid and an unknown snapshot handle.
+
+Not covered: topology and Related Resources edges, VolumeGroupSnapshots, PVCs restored from a snapshot (`dataSource`), and snapshot creation, deletion or restore actions.
+
+---
+
 ## Strimzi Kafka connectors
 
 Connector details separate desired settings from the operator-reported connector and task states, show worker addresses and optional automatic-restart history, and link to KafkaConnect. Failed tasks override an otherwise Ready badge; stale, paused or incomplete observations never establish health. The view reads the existing custom resource without contacting Kafka Connect or requiring application credentials.
