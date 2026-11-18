@@ -205,6 +205,8 @@ export interface FeatureCapabilities {
   workloadHistory?: boolean
   cnpgWorkspace?: boolean
   cnpgProtectionSetup?: boolean
+  /** GET /api/agentsandbox/workspace */
+  agentSandboxWorkspace?: boolean
   veleroWorkspace?: boolean
   /** POST /api/velero/schedules/{namespace}/{name}/backup */
   veleroBackupNow?: boolean

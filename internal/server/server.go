@@ -710,6 +710,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/poolers/{namespace}/{name}/capabilities", s.handleCNPGPoolerCapabilities)
 			r.Get("/cnpg/poolers/{namespace}/{name}/pgbouncer-state", s.handleCNPGPgBouncerState)
 			r.Post("/cnpg/poolers/{namespace}/{name}/actions/{action}", s.bindWrite(s.handleCNPGPoolerAction))
+			r.Get("/agentsandbox/workspace", s.handleAgentSandboxWorkspace)
 			r.Get("/velero/workspace", s.handleVeleroWorkspace)
 			r.Get("/velero/schedules/{namespace}/{name}/activity", s.handleVeleroScheduleActivity)
 			r.Get("/velero/backupstoragelocations/{namespace}/{name}/backups", s.handleVeleroStoredBackups)
@@ -1624,6 +1625,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		RuntimeAdvisoryProgress:      true,
 		CronJobTriggerJobName:        true,
 		WorkflowStop:                 true,
+		AgentSandboxWorkspace:        true,
 		WorkflowTemplateSubmit:       true,
 	}
 }

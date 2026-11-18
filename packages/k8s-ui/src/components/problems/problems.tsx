@@ -190,8 +190,10 @@ export function WorkspaceProblemCallout({
  * The problems a callout does not show, as a compact list with the callout's
  * tone, title and source. `subjectFirst` names each row's subject under its
  * title, before the detail, for a list whose rows are about many objects.
+ * `showNextStep` adds each row's next step under its detail, as a callout
+ * shows it, for a list that is where the reader acts (a Needs attention list).
  */
-export function ProblemList({ problems, rootKind, onNavigate, hideOrigin, subjectFirst }: { problems: WorkspaceProblem[]; rootKind: string; onNavigate?: NavigateToRef; hideOrigin?: boolean; subjectFirst?: boolean }) {
+export function ProblemList({ problems, rootKind, onNavigate, hideOrigin, subjectFirst, showNextStep }: { problems: WorkspaceProblem[]; rootKind: string; onNavigate?: NavigateToRef; hideOrigin?: boolean; subjectFirst?: boolean; showNextStep?: boolean }) {
   return (
     <ul className="space-y-2">
       {problems.map((p) => {
@@ -202,6 +204,12 @@ export function ProblemList({ problems, rootKind, onNavigate, hideOrigin, subjec
             {subjectFirst && meta}
             {p.detail && <div className="text-xs text-theme-text-secondary break-words">{p.detail}</div>}
             {p.related && <RelatedRefs related={p.related} onNavigate={onNavigate} className="text-theme-text-secondary" />}
+            {showNextStep && p.nextStep && (
+              <div className="mt-0.5 break-words text-xs text-theme-text-primary">
+                <span className="font-medium">Next step: </span>
+                {p.nextStep}
+              </div>
+            )}
             {p.rawDetail && <FoldSection title={p.rawDetailLabel ?? "Original evidence"} summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{p.rawDetail}</div></FoldSection>}
             {!subjectFirst && meta}
           </li>

@@ -61,6 +61,7 @@ export const RADAR_FEATURES = {
   workflowStop: { label: 'Argo Workflow stop actions', flag: 'workflowStop', flagShippedWithEndpoint: true },
   workflowTemplateSubmit: { label: 'Argo WorkflowTemplate submissions', flag: 'workflowTemplateSubmit', flagShippedWithEndpoint: true },
   cnpgProtectionSetup: { label: 'CloudNativePG backup setup', flag: 'cnpgProtectionSetup', flagShippedWithEndpoint: true },
+  agentSandboxWorkspace: { label: 'Agent Sandbox overview', flag: 'agentSandboxWorkspace', flagShippedWithEndpoint: true },
   veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
   veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },
   veleroSchedulePause: { label: 'Pause and resume Velero schedules', flag: 'veleroSchedulePause', flagShippedWithEndpoint: true },

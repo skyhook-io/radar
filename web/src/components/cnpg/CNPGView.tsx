@@ -18,6 +18,7 @@ import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
 import { useSubstrateSidebarWorkspace } from '../substrate/useSubstrateSidebarWorkspace'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
+import { useAgentSandboxSidebarWorkspace } from '../agentsandbox/useAgentSandboxSidebarWorkspace'
 import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
 
 interface CNPGViewProps {
@@ -50,7 +51,8 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
   })
   const veleroSidebar = useVeleroSidebarWorkspace({ apiResources })
   const substrateSidebar = useSubstrateSidebarWorkspace({ apiResources })
-  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar)
+  const sandboxSidebar = useAgentSandboxSidebarWorkspace({ apiResources, namespaces })
+  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar, sandboxSidebar)
   const { query, fleet } = useCNPGFleet(namespaces)
   const { drawerTarget, inspect, searchParams } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
 
