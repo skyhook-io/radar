@@ -70,10 +70,11 @@ export const NAME_MAX_PX = 480
 // than NAME_PROTECTED_MAX_PX. The trade: sideways scrolling hides whole
 // columns, a cut name keeps its start and shows in full on hover, so the
 // table may cut the longest quarter of the names to scroll less. It goes on
-// to the width half its names need (NAME_FIT_PERCENTILE) only when that ends
-// the scrolling altogether: cutting half the names is worth a table with every
-// column in view, not one that still scrolls. Below that a Name column cuts
-// most names and no longer does its job, so the table scrolls instead. The cap
+// to the width half its names need (NAME_FIT_PERCENTILE), with the other
+// columns at their headings, only when that ends the scrolling altogether:
+// cutting half the names is worth a table with every column in view, not one
+// that still scrolls. Below that a Name column cuts most names and no longer
+// does its job, so the table scrolls instead. The cap
 // keeps a list of long names (PVCs, generated names) from scrolling to save a
 // few of them.
 export const NAME_YIELD_PERCENTILE = 0.75

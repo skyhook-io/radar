@@ -32,12 +32,13 @@
 // the larger of their header and their content), then Namespace (to its
 // header), then Name (to its 75th percentile, at most NAME_PROTECTED_MAX_PX:
 // only names wider than that are cut, and only when the alternative is
-// scrolling; on to its median only if that ends the scrolling; a kind can opt
-// its Name out, as Events does). Grow columns are
-// already at their floor and user widths never shrink. Past that the table scrolls
-// sideways — except where the table must fit (a window 1920px wide or more):
-// there a second pass takes every column on to its heading and Name to
-// NAME_MIN_PX, in the same order, before the table scrolls.
+// scrolling; a kind can opt its Name out, as Events does). Grow columns are
+// already at their floor and user widths never shrink. If the table is still
+// short, a second pass in the same order takes every column on to its heading
+// and Name to its median, but only if that ends the scrolling; otherwise the
+// first pass stands and the table scrolls sideways. Where the table must fit
+// (a window 1920px wide or more) the second pass always runs and Name goes on
+// to NAME_MIN_PX.
 
 export type ColumnSizingMode = 'exact' | 'fit' | 'grow'
 
@@ -52,11 +53,11 @@ export interface ColumnLayoutInput {
   min?: number
   /** When room is short, lower ranks give way first (default: exact and grow 2, fit 3). */
   yieldRank?: number
-  /** How far past `min` it may shrink, but only if the table then fits
-   *  without scrolling (Name: the width half its names need). */
+  /** Name only: how far past `min` it may shrink when that ends the
+   *  scrolling (the width half its names need). Default: hardMin. */
   fitMin?: number
-  /** When the table must fit (`mustFit`), how far it may shrink past `min`:
-   *  its heading, or for Name NAME_MIN_PX. */
+  /** How far past `min` it may shrink when that ends the scrolling, or always
+   *  where the table must fit (`mustFit`): its heading, or for Name NAME_MIN_PX. */
   hardMin?: number
   /** Width the user dragged or double-click fitted. Overrides everything else. */
   userWidth?: number
@@ -98,18 +99,19 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
     for (const r of ranks(yielding)) {
       short = giveBack(widths, yielding.filter(c => rank(c) === r), lowerBound, short)
     }
-    // A column with a fitMin goes on to it only when that ends the scrolling.
-    const fitting = yielding.filter(c => c.fitMin !== undefined)
-    if (short > 0.5 && sum(fitting.map(c => Math.max(0, widths[c.key] - c.fitMin!))) >= short - 0.5) {
-      short = giveBack(widths, fitting, c => c.fitMin!, short)
-    }
-    // Where the table must fit, a second pass in the same order takes every
-    // column on past its usual bound to its hard minimum (headings; Name to
-    // NAME_MIN_PX), grow columns included. Only past that does it scroll.
-    if (options.mustFit && short > 0.5) {
-      const hard = columns.filter(c => !c.userWidth && c.hardMin !== undefined)
-      for (const r of ranks(hard)) {
-        short = giveBack(widths, hard.filter(c => rank(c) === r), c => c.hardMin!, short)
+    // Still short: a second pass, in the same order, takes every column on to
+    // its heading (grow columns included) and Name to its median (fitMin) —
+    // but only when that ends the scrolling. Cutting values is worth a table
+    // with every column in view, not one that scrolls anyway. Where the table
+    // must fit, it always runs and Name goes on to its hardMin.
+    if (short > 0.5) {
+      const bound = (c: ColumnLayoutInput) => (options.mustFit ? c.hardMin ?? c.fitMin : c.fitMin ?? c.hardMin)
+      const second = columns.filter(c => !c.userWidth && bound(c) !== undefined)
+      const slack = sum(second.map(c => Math.max(0, widths[c.key] - bound(c)!)))
+      if (options.mustFit || slack >= short - 0.5) {
+        for (const r of ranks(second)) {
+          short = giveBack(widths, second.filter(c => rank(c) === r), c => bound(c)!, short)
+        }
       }
     }
     return roundWidths(widths)

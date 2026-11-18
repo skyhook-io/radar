@@ -119,6 +119,22 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout(cols, 500)).toEqual({ name: 360, namespace: 145, status: 130, node: 86 })
   })
 
+  it('takes columns on to their headings, and Name to its median, only when that ends the scrolling', () => {
+    const cols: ColumnLayoutInput[] = [
+      { ...name(400, 300), fitMin: 240, hardMin: 200 },
+      { ...exact('status', 160), min: 150, hardMin: 90 },
+      { ...grow('message', 256, 900), hardMin: 120 },
+    ]
+    // 816 wanted; the first pass gives 110 (Status 10, Name 100): 706.
+    expect(computeColumnLayout(cols, 706)).toEqual({ name: 300, status: 150, message: 256 })
+    // Status and Message to their headings (196) end the scrolling at 510...
+    expect(computeColumnLayout(cols, 510)).toEqual({ name: 300, status: 90, message: 120 })
+    // ...and Name to its median at 450.
+    expect(computeColumnLayout(cols, 450)).toEqual({ name: 240, status: 90, message: 120 })
+    // Short of that the table scrolls, with the first pass's widths.
+    expect(computeColumnLayout(cols, 449)).toEqual({ name: 300, status: 150, message: 256 })
+  })
+
   it('takes Name on to its median only when that ends the scrolling', () => {
     const cols: ColumnLayoutInput[] = [{ ...name(400, 300), fitMin: 240 }, exact('status', 160)]
     // 560 wanted; Name gives 100 to its yield width, the table fits at 460.
@@ -137,8 +153,9 @@ describe('computeColumnLayout', () => {
       { ...grow('message', 256, 900, 1), hardMin: 120 },
       { ...grow('object', 256, 900, 1), hardMin: 110 },
     ]
-    // 400 + 160 + 256 + 256 = 1072. Without mustFit Name gives 100 and the rest scrolls.
-    expect(computeColumnLayout(cols, 800)).toEqual({ name: 300, status: 160, message: 256, object: 256 })
+    // 400 + 160 + 256 + 256 = 1072. Without mustFit, where every hard minimum
+    // still doesn't fit, Name gives 100 and the rest scrolls.
+    expect(computeColumnLayout(cols, 400)).toEqual({ name: 300, status: 160, message: 256, object: 256 })
     // With it: Status and the grow columns give the other 172 first, in proportion to how far
     // each is above its heading (70 : 136 : 146); Name stays at 300.
     expect(computeColumnLayout(cols, 800, { mustFit: true })).toEqual({ name: 300, status: 125, message: 189, object: 184 })
