@@ -772,6 +772,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // screen, where there is nothing beside it to lay out.
   const [resourceDrawerWidth, setResourceDrawerWidth] = useState(0)
   const resourcesCoveredRight = routeSelectedResource && !isMobile ? resourceDrawerWidth : 0
+  // A drawer mounted again starts at its default width: don't lay the table
+  // out for the previous one's first.
+  useEffect(() => {
+    if (!resourceDrawer.shouldRender) setResourceDrawerWidth(0)
+  }, [resourceDrawer.shouldRender])
 
   // Effective fullscreen state — keyed off the resource that's ACTUALLY rendering
   // (routeSelectedResource), not the raw selection, so an orphaned/mismatched peek
