@@ -21,6 +21,34 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
+// recordGitOpsMembers gives a GitOps manager's observation the member list it
+// records, as the caches index it.
+func recordGitOpsMembers(observation *ownershiptest.Object, obj runtime.Object) {
+	ref := observation.Ref
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok || !ownership.IsRecordingManager(ref.GroupKind()) {
+		return
+	}
+	var list gitops.MemberList
+	var readable bool
+	if ref.GroupKind() == ownership.ArgoApplication {
+		list, readable = gitops.ArgoMembers(u)
+	} else {
+		list, readable = gitops.FluxMembers(u)
+	}
+	if !readable {
+		return
+	}
+	observation.Membership = ownership.MembersRecorded
+	if ref.GroupKind() == ownership.ArgoApplication && !gitops.IsInClusterDestination(u) || ref.GroupKind() != ownership.ArgoApplication && !gitops.FluxTargetsLocalCluster(u) {
+		observation.Membership = ownership.MembersRemote
+	}
+	observation.DestinationNamespace = list.DestinationNamespace
+	for _, e := range list.Entries {
+		observation.Members = append(observation.Members, resourceid.NewRef(e.Group, e.Kind, e.Namespace, e.Name))
+	}
+}
+
 func neighborhoodFixtureSession(tb testing.TB, f *charFixture) *projectionSession {
 	tb.Helper()
 	w := ownershiptest.World{}
@@ -41,25 +69,7 @@ func neighborhoodFixtureSession(tb testing.TB, f *charFixture) *projectionSessio
 		ref := resourceid.NewRef(o.group, o.kind, o.obj.GetNamespace(), o.obj.GetName())
 		s.objects[ref] = obj
 		observation := ownershiptest.Object{Ref: ref, UID: o.obj.GetUID(), APIVersion: obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), OwnerReferences: o.obj.GetOwnerReferences(), Labels: o.obj.GetLabels(), Annotations: o.obj.GetAnnotations()}
-		if u, ok := obj.(*unstructured.Unstructured); ok && ownership.IsRecordingManager(ref.GroupKind()) {
-			var list gitops.MemberList
-			var readable bool
-			if ref.GroupKind() == ownership.ArgoApplication {
-				list, readable = gitops.ArgoMembers(u)
-			} else {
-				list, readable = gitops.FluxMembers(u)
-			}
-			if readable {
-				observation.Membership = ownership.MembersRecorded
-				if ref.GroupKind() == ownership.ArgoApplication && !gitops.IsInClusterDestination(u) || ref.GroupKind() != ownership.ArgoApplication && !gitops.FluxTargetsLocalCluster(u) {
-					observation.Membership = ownership.MembersRemote
-				}
-				observation.DestinationNamespace = list.DestinationNamespace
-				for _, e := range list.Entries {
-					observation.Members = append(observation.Members, resourceid.NewRef(e.Group, e.Kind, e.Namespace, e.Name))
-				}
-			}
-		}
+		recordGitOpsMembers(&observation, obj)
 		w.Objects = append(w.Objects, observation)
 	}
 	s.ReadSession, err = ownershiptest.Scan(w).Begin()

@@ -41,6 +41,18 @@ func projectionObject(obj runtime.Object, group, kind string) runtime.Object {
 }
 func newProjectionSession(t testing.TB, objects ...runtime.Object) *projectionSession {
 	t.Helper()
+	return projectionSessionOf(t, false, objects)
+}
+
+// newRecordingProjectionSession is newProjectionSession with each GitOps
+// manager's recorded member list.
+func newRecordingProjectionSession(t testing.TB, objects ...runtime.Object) *projectionSession {
+	t.Helper()
+	return projectionSessionOf(t, true, objects)
+}
+
+func projectionSessionOf(t testing.TB, recordMembers bool, objects []runtime.Object) *projectionSession {
+	t.Helper()
 	w := ownershiptest.World{}
 	s := &projectionSession{objects: map[resourceid.Ref]runtime.Object{}}
 	seen := map[resourceid.GroupKind]bool{}
@@ -48,7 +60,11 @@ func newProjectionSession(t testing.TB, objects ...runtime.Object) *projectionSe
 		ref := projectionRef(obj)
 		m, _ := apimeta.Accessor(obj)
 		s.objects[ref] = obj
-		w.Objects = append(w.Objects, ownershiptest.Object{Ref: ref, UID: m.GetUID(), APIVersion: obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), ResourceVersion: m.GetResourceVersion(), OwnerReferences: m.GetOwnerReferences(), Labels: m.GetLabels(), Annotations: m.GetAnnotations()})
+		observation := ownershiptest.Object{Ref: ref, UID: m.GetUID(), APIVersion: obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), ResourceVersion: m.GetResourceVersion(), OwnerReferences: m.GetOwnerReferences(), Labels: m.GetLabels(), Annotations: m.GetAnnotations()}
+		if recordMembers {
+			recordGitOpsMembers(&observation, obj)
+		}
+		w.Objects = append(w.Objects, observation)
 		if !seen[ref.GroupKind()] {
 			w.Resources = append(w.Resources, ownership.ServedResource{Group: ref.Group, Version: "v1", Kind: ref.Kind, Resource: ref.Kind + "s", Namespaced: ref.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
 			seen[ref.GroupKind()] = true

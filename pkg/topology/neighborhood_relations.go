@@ -365,12 +365,20 @@ func neighborhoodDisposition(d relations.Disposition, allowed map[EdgeType]bool)
 	return false
 }
 
+// neighborhoodPriority orders a hop's candidates for the node budget: what
+// manages the frontier object, what exposes or routes to it, its policies, its
+// other attachments, then what it manages, and replicas last. downstream: r is
+// the edge's target. A controller or GitOps manager can own hundreds of
+// objects; they must not crowd out its parent, Service, policy or source.
 func neighborhoodPriority(edge EdgeType, r resourceid.Ref, downstream bool) int {
 	if r.Group == "" && r.Kind == "Pod" || r.Group == "apps" && r.Kind == "ReplicaSet" && downstream {
-		return 4
+		return 5
 	}
 	switch edge {
 	case EdgeManages:
+		if downstream {
+			return 4
+		}
 		return 0
 	case EdgeExposes, EdgeRoutesTo:
 		return 1

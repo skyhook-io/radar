@@ -451,3 +451,51 @@ func TestWalkNeighborhoodAsksAllowOncePerKindAndNamespace(t *testing.T) {
 		}
 	}
 }
+
+// Within the budget, what manages the root and what exposes, protects or
+// configures it come before what the root manages, and replicas come last.
+func TestWalkNeighborhoodBudgetKeepsAttachmentsBeforeOwnedChildren(t *testing.T) {
+	keeps := func(t *testing.T, sub *Subgraph, want ...string) {
+		t.Helper()
+		if !sub.Truncated || len(sub.Nodes) != neighborhoodDefaultMaxNodes {
+			t.Fatalf("the fixture no longer fills the budget: truncated=%v nodes=%d", sub.Truncated, len(sub.Nodes))
+		}
+		for _, w := range want {
+			if !slices.ContainsFunc(sub.Nodes, func(n Node) bool { return string(n.Kind)+"/"+n.Name == w }) {
+				t.Errorf("owned children crowded out %s", w)
+			}
+		}
+	}
+	t.Run("controller", func(t *testing.T) {
+		controller := true
+		parent := projectionCR("example.io", "Database", "shop", "db", map[string]any{})
+		parent.SetUID("database")
+		root := projectionObject(&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", UID: "db", OwnerReferences: []metav1.OwnerReference{{APIVersion: "example.io/v1", Kind: "Database", Name: "db", UID: "database", Controller: &controller}}}, Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "db"}}}}}, "apps", "StatefulSet")
+		svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "db"}}}, "", "Service")
+		policy := projectionObject(&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: "db-policy", Namespace: "shop"}, Spec: networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "db"}}}}, "networking.k8s.io", "NetworkPolicy")
+		objects := []runtime.Object{parent, root, svc, policy}
+		for i := 0; i < 30; i++ {
+			objects = append(objects, projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("cm-%02d", i), Namespace: "shop", UID: types.UID(fmt.Sprint("cm", i)), OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "StatefulSet", Name: "db", UID: "db"}}}}, "", "ConfigMap"))
+		}
+		keeps(t, walkTestNeighborhood(t, newProjectionSession(t, objects...), root, NeighborhoodOptions{}), "Database/db", "Service/db", "NetworkPolicy/db-policy")
+	})
+	t.Run("gitops manager", func(t *testing.T) {
+		repo := projectionCR("source.toolkit.fluxcd.io", "GitRepository", "flux-system", "repo", map[string]any{})
+		var entries []any
+		objects := []runtime.Object{repo}
+		for i := 0; i < 30; i++ {
+			name := fmt.Sprintf("cm-%02d", i)
+			entries = append(entries, map[string]any{"id": "shop_" + name + "__ConfigMap", "v": "v1"})
+			objects = append(objects, projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop", UID: types.UID(name)}}, "", "ConfigMap"))
+		}
+		root := projectionCR("kustomize.toolkit.fluxcd.io", "Kustomization", "flux-system", "apps", map[string]any{
+			"spec":   map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}},
+			"status": map[string]any{"inventory": map[string]any{"entries": entries}},
+		})
+		parent := projectionCR("kustomize.toolkit.fluxcd.io", "Kustomization", "flux-system", "root", map[string]any{
+			"status": map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "flux-system_apps_kustomize.toolkit.fluxcd.io_Kustomization", "v": "v1"}}}},
+		})
+		objects = append(objects, root, parent)
+		keeps(t, walkTestNeighborhood(t, newRecordingProjectionSession(t, objects...), root, NeighborhoodOptions{}), "GitRepository/repo", "Kustomization/root")
+	})
+}
