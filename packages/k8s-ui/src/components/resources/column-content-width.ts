@@ -62,8 +62,9 @@ const NAME_TERMINATING_CHIP_CHROME_PX = 6 + 12 + 12 + 4
 const NAME_AUDIT_BADGE_CHROME_PX = 6 + 12 + 2
 // A Crossplane pause chip beside a name, besides its label: gap, padding, icon.
 const NAME_PAUSE_CHIP_CHROME_PX = 6 + 12 + 12 + 4
-// A .badge around its label: px-2 on both sides and a 0.5px border.
-const BADGE_CHROME_PX = 17
+// A .badge around its label: px-2 on both sides and a 0.5px border, which
+// Chrome draws a full pixel wide at 1x, so 16 + 2.
+const BADGE_CHROME_PX = 18
 // The problems icon beside a Pod's status badge: gap-2 and a w-3.5 icon.
 const PROBLEM_ICON_PX = 8 + 14
 // The problems icon beside a workload's ready count: gap-1.5 and a w-3.5 icon.
