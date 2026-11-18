@@ -22,7 +22,16 @@ import {
   getServiceStatus,
   getWorkloadImages,
 } from './resource-utils'
-import { getNodePoolDisruptionPolicy, getNodePoolLimits, getNodePoolNodeClassRef, getNodePoolStatus } from './resource-utils-karpenter'
+import { getNodeClaimNodeName, getNodeClaimNodePoolRef, getNodePoolDisruptionPolicy, getNodePoolLimits, getNodePoolNodeClassRef, getNodePoolStatus } from './resource-utils-karpenter'
+import { getArgoApplicationHealth, getArgoApplicationSync } from './resource-utils-argo'
+import { getConfigAuditReportSummary, getVulnerabilityReportSummary } from './resource-utils-trivy'
+import { getBackupExpiry } from './resource-utils-velero'
+import {
+  getClusterQueueCohort,
+  getKueueWorkloadAdmittedBy,
+  getKueueWorkloadQueueName,
+  getLocalQueueClusterQueue,
+} from './resource-utils-kueue'
 import { getGitRepositoryUrl, getHelmRepositoryUrl, getOCIRepositoryUrl } from './resource-utils-flux'
 import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
 
@@ -218,6 +227,42 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'nodepools:nodeClass': text(getNodePoolNodeClassRef),
   'nodepools:limits': text(getNodePoolLimits),
   'nodepools:disruption': text(getNodePoolDisruptionPolicy),
+  'nodeclaims:nodePool': text(getNodeClaimNodePoolRef),
+  'nodeclaims:nodeName': text(getNodeClaimNodeName),
+  'applications:sync': badge(r => getArgoApplicationSync(r).status),
+  'applications:health': badge(r => getArgoApplicationHealth(r).status),
+  'backups:expiry': text(getBackupExpiry),
+  'clusterqueues:status': statusBadge('clusterqueues'),
+  'clusterqueues:cohort': text(getClusterQueueCohort),
+  'localqueues:status': statusBadge('localqueues'),
+  'localqueues:clusterQueue': text(getLocalQueueClusterQueue),
+  'workloads:status': statusBadge('workloads'),
+  'workloads:queueName': text(getKueueWorkloadQueueName),
+  'workloads:admittedBy': text(getKueueWorkloadAdmittedBy),
+  'admissionchecks:status': statusBadge('admissionchecks'),
+  'provisioningrequests:status': statusBadge('provisioningrequests'),
+  'jobsets:status': statusBadge('jobsets'),
+  ...trivySeverityCounts('vulnerabilityreports', getVulnerabilityReportSummary),
+  ...trivySeverityCounts('exposedsecretreports', getVulnerabilityReportSummary),
+  ...trivySeverityCounts('configauditreports', getConfigAuditReportSummary),
+  ...trivySeverityCounts('rbacassessmentreports', getConfigAuditReportSummary),
+  ...trivySeverityCounts('clusterrbacassessmentreports', getConfigAuditReportSummary),
+  ...trivySeverityCounts('infraassessmentreports', getConfigAuditReportSummary),
+  ...trivySeverityCounts('clusterinfraassessmentreports', getConfigAuditReportSummary),
+}
+
+// The status badge of a kind whose cell shows getCellFilterValue's status text.
+function statusBadge(plural: string): CellWidth {
+  return badge(r => getCellFilterValue(r, 'status', plural))
+}
+
+// Trivy's C/H/M/L count cells, in text-sm font-medium.
+function trivySeverityCounts(plural: string, summary: (report: any) => Record<'critical' | 'high' | 'medium' | 'low', number>): Record<string, CellWidth> {
+  const out: Record<string, CellWidth> = {}
+  for (const severity of ['critical', 'high', 'medium', 'low'] as const) {
+    out[`${plural}:${severity}`] = text(r => String(summary(r)[severity]), 'medium')
+  }
+  return out
 }
 
 /** Whether a curated grow or fit column has its own reader of what its cell shows (tested for drift). */
