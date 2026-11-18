@@ -596,7 +596,9 @@ export function ResourcesSidebar({
   }, [effectiveSelectedKind.name, effectiveSelectedKind.group])
 
   return (
-    <div className={clsx('w-56 2xl:w-72 bg-theme-surface dark:bg-theme-base border-r border-theme-border overflow-y-auto overflow-x-hidden shrink-0', className)}>
+    // 224px up to an 1800px window, so the laptop screens between 1536 and
+    // 1800 (MacBook Air 15", MacBook Pro 16") keep the room for the table.
+    <div className={clsx('w-56 min-[1800px]:w-72 bg-theme-surface dark:bg-theme-base border-r border-theme-border overflow-y-auto overflow-x-hidden shrink-0', className)}>
       {/* py-3 matches the table toolbar's vertical padding so the sidebar
           header and the toolbar align (same band height + border line). */}
       <div className="px-2 py-3 border-b border-theme-border">
