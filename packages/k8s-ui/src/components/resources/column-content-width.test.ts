@@ -44,7 +44,7 @@ describe('measureColumnContent', () => {
     const m = measureColumnContent(items, [{ key: 'name' }], ctx, measure)
     // 400px of text + 22px copy button + padding
     // ...and yields, when room is short, no further than its 75th percentile.
-    expect(m.name).toEqual({ content: 400 + 22 + CELL_PADDING_PX, yieldTo: 100 + 22 + CELL_PADDING_PX })
+    expect(m.name).toEqual({ content: 400 + 22 + CELL_PADDING_PX, yieldTo: 100 + 22 + CELL_PADDING_PX, fitTo: 100 + 22 + CELL_PADDING_PX })
   })
 
   it('measures the exact columns whose cells it knows, and leaves the rest unmeasured', () => {

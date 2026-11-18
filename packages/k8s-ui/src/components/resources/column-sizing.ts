@@ -32,7 +32,8 @@
 // the larger of their header and their content), then Namespace (to its
 // header), then Name (to its 75th percentile, at most NAME_PROTECTED_MAX_PX:
 // only names wider than that are cut, and only when the alternative is
-// scrolling; a kind can opt its Name out, as Events does). Grow columns are
+// scrolling; on to its median only if that ends the scrolling; a kind can opt
+// its Name out, as Events does). Grow columns are
 // already at their floor and user widths never shrink. Past that the table scrolls
 // sideways — except where the table must fit (a window 1920px wide or more):
 // there a second pass takes every column on to its heading and Name to
@@ -51,6 +52,9 @@ export interface ColumnLayoutInput {
   min?: number
   /** When room is short, lower ranks give way first (default: exact and grow 2, fit 3). */
   yieldRank?: number
+  /** How far past `min` it may shrink, but only if the table then fits
+   *  without scrolling (Name: the width half its names need). */
+  fitMin?: number
   /** When the table must fit (`mustFit`), how far it may shrink past `min`:
    *  its heading, or for Name NAME_MIN_PX. */
   hardMin?: number
@@ -93,6 +97,11 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
     const ranks = (cols: ColumnLayoutInput[]) => [...new Set(cols.map(rank))].sort((x, y) => x - y)
     for (const r of ranks(yielding)) {
       short = giveBack(widths, yielding.filter(c => rank(c) === r), lowerBound, short)
+    }
+    // A column with a fitMin goes on to it only when that ends the scrolling.
+    const fitting = yielding.filter(c => c.fitMin !== undefined)
+    if (short > 0.5 && sum(fitting.map(c => Math.max(0, widths[c.key] - c.fitMin!))) >= short - 0.5) {
+      short = giveBack(widths, fitting, c => c.fitMin!, short)
     }
     // Where the table must fit, a second pass in the same order takes every
     // column on past its usual bound to its hard minimum (headings; Name to

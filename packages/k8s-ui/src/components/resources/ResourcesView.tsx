@@ -6186,6 +6186,7 @@ export function ResourcesView({
       flat[key] = m.content
       if (m.stretch !== undefined) flat[`${key}\u0000stretch`] = m.stretch
       if (m.yieldTo !== undefined) flat[`${key}\u0000yieldTo`] = m.yieldTo
+      if (m.fitTo !== undefined) flat[`${key}\u0000fitTo`] = m.fitTo
     }
     return flat
   }, [tableActive, measureSource, columns, extraColumnsByKey, sizingKind, auditBadges, usageCellWidths, headerFontEpoch])
@@ -6268,6 +6269,10 @@ export function ResourcesView({
             // An unprotected Name (Events) yields to its floor, NAME_MIN_PX.
             : spec.mode === 'fit' && !isName ? headerShrinkWidth(col) : undefined,
         yieldRank: spec.yieldRank,
+        // Name's median, taken only if the table then fits (NAME_FIT_PERCENTILE).
+        fitMin: spec.keep && content !== undefined
+          ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000fitTo`] ?? content, content, nameMax, NAME_PROTECTED_MAX_PX))
+          : undefined,
         hardMin: isName ? NAME_MIN_PX : headerShrinkWidth(col),
         userWidth: columnWidths[col.key] || frozen?.[col.key],
         content,

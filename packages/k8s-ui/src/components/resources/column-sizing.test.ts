@@ -119,6 +119,17 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout(cols, 500)).toEqual({ name: 360, namespace: 145, status: 130, node: 86 })
   })
 
+  it('takes Name on to its median only when that ends the scrolling', () => {
+    const cols: ColumnLayoutInput[] = [{ ...name(400, 300), fitMin: 240 }, exact('status', 160)]
+    // 560 wanted; Name gives 100 to its yield width, the table fits at 460.
+    expect(computeColumnLayout(cols, 460)).toEqual({ name: 300, status: 160 })
+    // 20 short of 460: the median ends the scrolling, so Name goes on.
+    expect(computeColumnLayout(cols, 440)).toEqual({ name: 280, status: 160 })
+    expect(computeColumnLayout(cols, 400)).toEqual({ name: 240, status: 160 })
+    // Past the median it would still scroll, so Name stays at its yield width.
+    expect(computeColumnLayout(cols, 399)).toEqual({ name: 300, status: 160 })
+  })
+
   it('where the table must fit, takes every column on to its hard minimum before scrolling, Name last', () => {
     const cols: ColumnLayoutInput[] = [
       { ...name(400, 300), hardMin: 200 },

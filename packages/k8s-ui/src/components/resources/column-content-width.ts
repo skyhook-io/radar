@@ -69,11 +69,15 @@ export const NAME_MAX_PX = 480
 // keeps NAME_YIELD_PERCENTILE of its names whole, and never holds on to more
 // than NAME_PROTECTED_MAX_PX. The trade: sideways scrolling hides whole
 // columns, a cut name keeps its start and shows in full on hover, so the
-// table may cut the longest quarter of the names to fit — but no more, since
-// a Name column that cuts most names no longer does its job; past that the
-// table scrolls. The cap keeps a list of long names (PVCs, generated names)
-// from scrolling to save a few of them.
+// table may cut the longest quarter of the names to scroll less. It goes on
+// to the width half its names need (NAME_FIT_PERCENTILE) only when that ends
+// the scrolling altogether: cutting half the names is worth a table with every
+// column in view, not one that still scrolls. Below that a Name column cuts
+// most names and no longer does its job, so the table scrolls instead. The cap
+// keeps a list of long names (PVCs, generated names) from scrolling to save a
+// few of them.
 export const NAME_YIELD_PERCENTILE = 0.75
+export const NAME_FIT_PERCENTILE = 0.5
 export const NAME_PROTECTED_MAX_PX = 320
 const NAMESPACE_MAX_PX = 320
 const NODE_MAX_PX = 400
@@ -338,6 +342,8 @@ export interface MeasuredContent {
   stretch?: number
   /** Name only: the width NAME_YIELD_PERCENTILE of its names need, the narrowest it gives way to. */
   yieldTo?: number
+  /** Name only: the width NAME_FIT_PERCENTILE of its names need, which it gives way to only if the table then fits. */
+  fitTo?: number
 }
 
 /**
@@ -376,6 +382,7 @@ export function measureColumnContent(
       result[col.key] = {
         content: Math.ceil(longest) + CELL_PADDING_PX,
         yieldTo: Math.ceil(percentile(widths, NAME_YIELD_PERCENTILE)) + CELL_PADDING_PX,
+        fitTo: Math.ceil(percentile(widths, NAME_FIT_PERCENTILE)) + CELL_PADDING_PX,
       }
     } else if (spec.mode === 'fit') {
       const widths = new Array<number>(items.length)
