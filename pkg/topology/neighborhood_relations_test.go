@@ -14,8 +14,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 func walkTestNeighborhood(t *testing.T, s *projectionSession, root runtime.Object, opts NeighborhoodOptions) *Subgraph {
@@ -374,6 +376,23 @@ func TestWalkNeighborhoodWithholdsOnlyRelatedObjects(t *testing.T) {
 			if n.Kind == KindService {
 				t.Errorf("%s: surfaced a Service the caller may not read: %s", tc.name, n.ID)
 			}
+		}
+	}
+}
+
+// A built-in kind discovery doesn't list still names the resource its
+// per-kind gate checks: the typed caches read it without discovery.
+func TestNeighborhoodAccessNodeNamesBuiltinResourceWithoutDiscovery(t *testing.T) {
+	a := &neighborhoodAccess{catalog: ownership.NewCatalog(nil, false)}
+	for _, tc := range []struct{ group, kind, apiVersion, resource string }{
+		{"rbac.authorization.k8s.io", "Role", "rbac.authorization.k8s.io/v1", "roles"},
+		{"rbac.authorization.k8s.io", "RoleBinding", "rbac.authorization.k8s.io/v1", "rolebindings"},
+		{"", "LimitRange", "v1", "limitranges"},
+		{"example.com", "Role", "example.com/v1", ""},
+	} {
+		n := a.node(resourceid.NewRef(tc.group, tc.kind, "shop", "x"))
+		if n.Data["apiVersion"] != tc.apiVersion || n.Data["resource"] != tc.resource {
+			t.Errorf("%s/%s: apiVersion %v resource %v, want %s %s", tc.group, tc.kind, n.Data["apiVersion"], n.Data["resource"], tc.apiVersion, tc.resource)
 		}
 	}
 }

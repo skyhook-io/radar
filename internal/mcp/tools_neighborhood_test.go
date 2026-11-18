@@ -2,17 +2,22 @@ package mcp
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -439,6 +444,89 @@ func setupSecretRefCacheMCP(t *testing.T) {
 	t.Cleanup(func() {
 		k8s.ResetTestState()
 		getPermCache().Invalidate()
+	})
+	withNeighborhoodDiscoveryMCP(t, neighborhoodTestDiscoveryMCP())
+}
+
+// neighborhoodTestDiscoveryMCP is what a connected cluster's discovery serves
+// for the neighborhood fixtures. The neighborhood refuses to answer until
+// discovery has served something.
+func neighborhoodTestDiscoveryMCP() []*metav1.APIResourceList {
+	verbs := metav1.Verbs{"delete", "get", "list", "watch"}
+	return []*metav1.APIResourceList{
+		{GroupVersion: "v1", APIResources: []metav1.APIResource{
+			{Name: "pods", Kind: "Pod", Namespaced: true, Verbs: verbs},
+			{Name: "secrets", Kind: "Secret", Namespaced: true, Verbs: verbs},
+			{Name: "configmaps", Kind: "ConfigMap", Namespaced: true, Verbs: verbs},
+			{Name: "services", Kind: "Service", Namespaced: true, Verbs: verbs},
+			{Name: "namespaces", Kind: "Namespace", Verbs: verbs},
+			{Name: "nodes", Kind: "Node", Verbs: verbs},
+		}},
+		{GroupVersion: "apps/v1", APIResources: []metav1.APIResource{
+			{Name: "deployments", Kind: "Deployment", Namespaced: true, Verbs: verbs},
+			{Name: "replicasets", Kind: "ReplicaSet", Namespaced: true, Verbs: verbs},
+		}},
+		{GroupVersion: "karpenter.sh/v1", APIResources: []metav1.APIResource{
+			{Name: "nodepools", Kind: "NodePool", Verbs: verbs},
+			{Name: "nodeclaims", Kind: "NodeClaim", Verbs: verbs},
+		}},
+		{GroupVersion: "karpenter.k8s.aws/v1", APIResources: []metav1.APIResource{{Name: "ec2nodeclasses", Kind: "EC2NodeClass", Verbs: verbs}}},
+		{GroupVersion: "karpenter.azure.com/v1beta1", APIResources: []metav1.APIResource{{Name: "aksnodeclasses", Kind: "AKSNodeClass", Verbs: verbs}}},
+		{GroupVersion: "karpenter.k8s.gcp/v1alpha1", APIResources: []metav1.APIResource{{Name: "gcenodeclasses", Kind: "GCENodeClass", Verbs: verbs}}},
+	}
+}
+
+func withNeighborhoodDiscoveryMCP(t *testing.T, resources []*metav1.APIResourceList) {
+	t.Helper()
+	fd := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	fd.Resources = resources
+	restore, err := k8s.SetTestResourceDiscovery(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+}
+
+// A Role needs the caller's own permission whether or not discovery lists the
+// RBAC group, since the typed cache reads it either way; and before discovery
+// has served anything the neighborhood doesn't answer at all.
+func TestNeighborhoodMCP_RoleRootNeedsItsOwnPermissionWithoutDiscovery(t *testing.T) {
+	client := fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "web-role", Namespace: "shop", UID: "role-uid"}},
+	)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	t.Cleanup(func() {
+		k8s.ResetTestState()
+		getPermCache().Invalidate()
+	})
+	call := func(user string, grant bool) (*mcp.CallToolResult, error) {
+		t.Helper()
+		ctx := withRestrictedUser(t, user, []string{"shop"})
+		getPermCache().Get(user, nil).SetCanI("get", "rbac.authorization.k8s.io", "roles", "shop", grant)
+		result, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "role", Namespace: "shop", Name: "web-role"})
+		return result, err
+	}
+	t.Run("rbac group missing from discovery", func(t *testing.T) {
+		withNeighborhoodDiscoveryMCP(t, neighborhoodTestDiscoveryMCP())
+		if _, err := call("role-granted", true); err != nil {
+			t.Fatalf("user who may get roles: %v; the fixture no longer reaches the Role", err)
+		}
+		if result, err := call("role-denied", false); err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Errorf("user who may not get roles: %+v, %v; want not found", result, err)
+		}
+	})
+	t.Run("empty discovery", func(t *testing.T) {
+		withNeighborhoodDiscoveryMCP(t, nil)
+		for _, grant := range []bool{false, true} {
+			_, err := call(fmt.Sprintf("role-empty-%v", grant), grant)
+			if code, ok := readErrorCodeOf(err); !ok || code != readreason.ClusterConnecting {
+				t.Errorf("get roles %v with nothing discovered: %v, want %s", grant, err, readreason.ClusterConnecting)
+			}
+		}
 	})
 }
 

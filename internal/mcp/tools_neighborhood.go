@@ -2,9 +2,12 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -113,7 +116,13 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 	}
 
 	sub, err := k8s.AnswerNeighborhood(ctx, cache, root, opts)
-	if err != nil {
+	switch {
+	case err == nil:
+	case errors.Is(err, ownership.ErrCachesReplaced):
+		return nil, nil, errConnectionChanged()
+	case errors.Is(err, ownership.ErrNotConnected):
+		return nil, nil, readErrorf(readreason.ClusterConnecting, "Radar is still connecting to the cluster or discovering its resource kinds, so it can't answer the neighborhood yet; retry shortly.")
+	default:
 		return nil, nil, fmt.Errorf("failed to answer neighborhood: %w", err)
 	}
 	// Same reason as the REST neighborhood: a Calico policy admitted through one
@@ -191,7 +200,7 @@ func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
 			if !checkNamespaceAccess(ctx, ns) {
 				return false
 			}
-			if group, resource := k8s.ExactNamespaceAccessNode(n); resource != "" && !canReadInNamespace(ctx, group, resource, ns, "get") {
+			if group, resource, resolved := k8s.ExactNamespaceAccessNode(n); !resolved || resource != "" && !canReadInNamespace(ctx, group, resource, ns, "get") {
 				return false
 			}
 		}

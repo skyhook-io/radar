@@ -421,6 +421,13 @@ func (a *neighborhoodAccess) node(r resourceid.Ref) Node {
 		if len(k.Versions) > 0 {
 			apiVersion = k.Versions[0]
 		}
+	} else if b, ok := resourceid.BuiltinForKind(r.Kind); ok && b.Group == r.Group {
+		// The typed caches read built-ins discovery doesn't list, and a
+		// per-kind gate needs the resource to check.
+		resource = b.Resource
+		if b.Version != "" {
+			apiVersion = b.Version
+		}
 	}
 	if r.Group != "" {
 		apiVersion = r.Group + "/" + apiVersion

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -14,6 +15,11 @@ func AnswerNeighborhood(ctx context.Context, cache *ResourceCache, root topology
 	session, err := BeginOwnershipRead(cache)
 	if err != nil {
 		return nil, err
+	}
+	if len(session.Catalog().DependentKinds()) == 0 {
+		// Discovery hasn't answered yet, as while Radar starts, so no related
+		// kind could be searched or resolved.
+		return nil, ownership.ErrNotConnected
 	}
 	rs, ok := session.(relations.Session)
 	if !ok {

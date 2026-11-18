@@ -244,7 +244,7 @@ func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool
 			if readscope.NoNamespaceAccess(allowed) {
 				return false
 			}
-			if group, resource := k8s.ExactNamespaceAccessNode(n); resource != "" && !s.canRead(r, group, resource, ns, "get") {
+			if group, resource, resolved := k8s.ExactNamespaceAccessNode(n); !resolved || resource != "" && !s.canRead(r, group, resource, ns, "get") {
 				return false
 			}
 		}

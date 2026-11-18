@@ -32,12 +32,20 @@ func ExactNamespaceAccessResource(kind, requestedGroup string) (group, resource 
 
 // ExactNamespaceAccessNode is ExactNamespaceAccessResource for a namespaced
 // neighborhood node, read from the served resource the walk records on it.
-func ExactNamespaceAccessNode(n *topology.Node) (group, resource string) {
+// resolved is false when the node's kind may need that permission but the node
+// records no resource to check it against; the caller must deny the node.
+func ExactNamespaceAccessNode(n *topology.Node) (group, resource string, resolved bool) {
 	apiVersion, _ := n.Data["apiVersion"].(string)
 	resource, _ = n.Data["resource"].(string)
 	group = resourceid.GroupFromAPIVersion(apiVersion)
-	if RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: group, Resource: resource}) {
-		return group, resource
+	if resource == "" {
+		kind, _ := n.Data["resourceKind"].(string)
+		b, builtin := resourceid.BuiltinForKind(kind)
+		exact := group == aicontext.TrivyGroup || builtin && b.Group == group && RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: b.Group, Resource: b.Resource})
+		return "", "", !exact
 	}
-	return "", ""
+	if RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: group, Resource: resource}) {
+		return group, resource, true
+	}
+	return "", "", true
 }
