@@ -291,7 +291,10 @@ export interface Column {
   minWidth?: number // minimum width in px
   /** How the column is sized automatically (see column-sizing.ts). Name,
    *  Namespace and Node fit their content; anything else keeps its width
-   *  unless it says 'grow' — long free text that takes the room left over. */
+   *  unless it says 'fit' — short values (badges, enums, versions) that are
+   *  useless cut, sized to the longest — or 'grow' — long free text that
+   *  takes the room left over. Either needs a reader of what its cell shows
+   *  in column-content-width.ts. */
   sizing?: ColumnSizingMode
   /** A grow column's share of the room left over (default 1). */
   growWeight?: number
@@ -703,10 +706,10 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   services: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'type', label: 'Type', width: 'w-28' },
+    { key: 'type', label: 'Type', width: 'w-28', sizing: 'fit' },
     { key: 'selector', label: 'Selector', width: 'w-48', sizing: 'grow', growWeight: 2 },
-    { key: 'endpoints', label: 'Endpoints', width: 'w-24' },
-    { key: 'ports', label: 'Ports', width: 'w-40' },
+    { key: 'endpoints', label: 'Endpoints', width: 'w-24', sizing: 'fit' },
+    { key: 'ports', label: 'Ports', width: 'w-40', sizing: 'fit' },
     { key: 'externalIP', label: 'External', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -740,7 +743,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'gpu', label: 'GPUs', width: 'w-20', tooltip: 'Allocatable GPUs', defaultVisible: false },
     { key: 'conditions', label: 'Conditions', width: 'w-40' },
     { key: 'taints', label: 'Taints', width: 'w-24' },
-    { key: 'version', label: 'Version', width: 'w-28' },
+    { key: 'version', label: 'Version', width: 'w-28', sizing: 'fit' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   configmaps: [
@@ -959,10 +962,10 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   nodepools: [
     { key: 'name', label: 'Name' },
-    { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'nodeClass', label: 'Node Class', width: 'w-36' },
-    { key: 'limits', label: 'Limits', width: 'w-36', tooltip: 'Configured provisioning ceilings — not what the pool has provisioned. Concurrent provisioning can exceed them during rapid scale-out, and a limit does not remove nodes already running.' },
-    { key: 'disruption', label: 'Disruption', width: 'w-40', tooltip: 'Which nodes Karpenter may consolidate; budgets and timing controls can still prevent removal or replacement' },
+    { key: 'status', label: 'Status', width: 'w-24', sizing: 'fit' },
+    { key: 'nodeClass', label: 'Node Class', width: 'w-36', sizing: 'fit' },
+    { key: 'limits', label: 'Limits', width: 'w-36', sizing: 'fit', tooltip: 'Configured provisioning ceilings — not what the pool has provisioned. Concurrent provisioning can exceed them during rapid scale-out, and a limit does not remove nodes already running.' },
+    { key: 'disruption', label: 'Disruption', width: 'w-40', sizing: 'fit', tooltip: 'Which nodes Karpenter may consolidate; budgets and timing controls can still prevent removal or replacement' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   nodeclaims: [
@@ -1797,7 +1800,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'type', label: 'Type', width: 'w-24' },
-    { key: 'reason', label: 'Reason', width: 'w-32' },
+    { key: 'reason', label: 'Reason', width: 'w-32', sizing: 'fit' },
     { key: 'message', label: 'Message', width: 'w-64', sizing: 'grow', growWeight: 3 },
     { key: 'object', label: 'Object', width: 'w-48', sizing: 'grow', growWeight: 3 },
     { key: 'count', label: 'Count', width: 'w-20' },

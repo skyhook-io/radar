@@ -13,11 +13,16 @@ import {
   getGatewayClassDescription,
   getHPATarget,
   getIngressHosts,
+  getNodeVersion,
   getIngressRules,
   getReplicaSetOwner,
+  getServiceEndpointsStatus,
+  getServicePorts,
   getServiceSelector,
+  getServiceStatus,
   getWorkloadImages,
 } from './resource-utils'
+import { getNodePoolDisruptionPolicy, getNodePoolLimits, getNodePoolNodeClassRef, getNodePoolStatus } from './resource-utils-karpenter'
 import { getGitRepositoryUrl, getHelmRepositoryUrl, getOCIRepositoryUrl } from './resource-utils-flux'
 import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
 
@@ -28,6 +33,7 @@ export const CELL_FONTS = {
   body: `400 14px ${FONT_FAMILY}`,
   medium: `500 14px ${FONT_FAMILY}`,
   small: `400 12px ${FONT_FAMILY}`,
+  badge: `500 12px ${FONT_FAMILY}`,
 } as const
 export type CellFont = keyof typeof CELL_FONTS
 
@@ -52,7 +58,13 @@ const NODE_MAX_PX = 400
 // line is easier to read in the drawer, and the room is worth more to the
 // columns after it, which a very wide column would push under the drawer.
 export const GROW_MAX_PX = 960
-const FIT_DEFAULT_MAX_PX = 400
+// A short value — a badge, an enum, a version, an object's name — is useless
+// cut, so its column fits the longest one. Past this it is not short any more,
+// and the cell cuts it like any other.
+const SHORT_VALUE_MAX_PX = 400
+// .badge: px-2 and a 0.5px border on each side; .badge-sm: px-1.5.
+const BADGE_CHROME_PX = 17
+const BADGE_SM_CHROME_PX = 13
 
 // ---------------------------------------------------------------------------
 // Text measurement
@@ -63,7 +75,7 @@ const FIT_DEFAULT_MAX_PX = 400
 // wider on average (at most ~15px, on a 2000px Event message). It makes a 50k-row pass a few lookups per character
 // instead of a canvas call per string, so there is no per-string cache to bound.
 // Without a canvas (SSR, jsdom) this falls back to an average glyph width.
-const FALLBACK_CHAR_PX: Record<CellFont, number> = { body: 7.5, medium: 7.8, small: 6.5 }
+const FALLBACK_CHAR_PX: Record<CellFont, number> = { body: 7.5, medium: 7.8, small: 6.5, badge: 6.8 }
 let measureCtx: CanvasRenderingContext2D | null | undefined
 let charWidths: Partial<Record<CellFont, Map<number, number>>> = {}
 
@@ -119,6 +131,8 @@ export interface SizableColumn {
 
 export interface ColumnSizingSpec {
   mode: ColumnSizingMode
+  /** fit: size to the longest value instead of the 95th percentile. */
+  longest?: boolean
   /** grow: share of the room left over. fit: share of it while reaching from its 95th percentile to its longest value. */
   weight?: number
   max?: number
@@ -136,16 +150,30 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
     case 'namespace': return { mode: 'fit', max: NAMESPACE_MAX_PX, weight: 1 }
     case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1 }
   }
-  if (col.sizing === 'fit') return { mode: 'fit', max: FIT_DEFAULT_MAX_PX, weight: 1 }
+  // A column flagged fit holds short values (see SHORT_VALUE_MAX_PX), which
+  // have no outliers worth trimming: one ExternalName among a hundred
+  // ClusterIPs still needs its whole badge.
+  if (col.sizing === 'fit') return { mode: 'fit', max: SHORT_VALUE_MAX_PX, longest: true }
   return { mode: 'exact' }
 }
 
-type CellWidth = (resource: any, measure: MeasureText, limit: number) => number
-const text = (read: (resource: any) => string | null | undefined, font: CellFont = 'body'): CellWidth =>
+type CellWidth = (resource: any, measure: MeasureText, limit: number, ctx: ContentContext) => number
+type CellText = (resource: any) => string | null | undefined
+const text = (read: CellText, font: CellFont = 'body'): CellWidth =>
   (resource, measure, limit) => measure(read(resource) || '-', font, limit)
+// A cell that is one .badge (or .badge-sm) holding the text.
+const badge = (read: CellText, size: 'badge' | 'badge-sm' = 'badge'): CellWidth =>
+  (resource, measure, limit) => badgeWidth(read(resource), measure, limit, size)
+function badgeWidth(label: string | null | undefined, measure: MeasureText, limit: number, size: 'badge' | 'badge-sm' = 'badge'): number {
+  if (!label) return measure('-', 'body')
+  return size === 'badge'
+    ? measure(label, 'badge', limit) + BADGE_CHROME_PX
+    : measure(label, 'small', limit) + BADGE_SM_CHROME_PX
+}
 
-// Display text of the cells a curated kind flags as grow, where it differs from
-// getCellFilterValue. Keyed `${plural}:${column}`.
+// What the cells a curated kind flags as grow or fit show, where it differs
+// from getCellFilterValue's text: other text, or a badge's padding around it.
+// Keyed `${plural}:${column}`.
 const workloadImages = text(r => workloadImagesText(getWorkloadImages(r)))
 const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'events:message': text(r => r.message),
@@ -174,9 +202,25 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'appprojects:description': text(getArgoAppProjectDescription),
   'gatewayclasses:description': text(getGatewayClassDescription),
   'priorityclasses:description': text(r => r.description),
+
+  // fit
+  'services:type': badge(r => getServiceStatus(r).text),
+  // An audit finding replaces the badge with "No endpoints", as the cell does.
+  'services:endpoints': (r, measure, limit, ctx) => {
+    const audit = ctx.auditBadges?.[`${r?.metadata?.namespace || ''}/${r?.metadata?.name}`]
+    return badgeWidth(audit && audit.danger + audit.warning > 0 ? 'No endpoints' : getServiceEndpointsStatus(r).status, measure, limit)
+  },
+  'services:ports': text(getServicePorts),
+  // A skewed version renders medium weight; measure every one that way.
+  'nodes:version': text(getNodeVersion, 'medium'),
+  'events:reason': text(r => r.reason, 'medium'),
+  'nodepools:status': badge(r => getNodePoolStatus(r).text),
+  'nodepools:nodeClass': text(getNodePoolNodeClassRef),
+  'nodepools:limits': text(getNodePoolLimits),
+  'nodepools:disruption': text(getNodePoolDisruptionPolicy),
 }
 
-/** Whether a curated grow column has its own display-text reader (tested for drift). */
+/** Whether a curated grow or fit column has its own reader of what its cell shows (tested for drift). */
 export function hasCuratedCellWidth(plural: string, column: string): boolean {
   return `${plural}:${column}` in CURATED_CELL_WIDTHS
 }
@@ -215,7 +259,7 @@ function nameCellWidth(resource: any, measure: MeasureText, limit: number, ctx: 
 }
 
 function cellWidthReader(col: ContentColumn, ctx: ContentContext): CellWidth {
-  if (col.key === 'name') return (r, m, limit) => nameCellWidth(r, m, limit, ctx)
+  if (col.key === 'name') return nameCellWidth
   if (col.key === 'namespace') return text(r => r?.metadata?.namespace)
   if (col.getFilterValue) return text(col.getFilterValue)
   return CURATED_CELL_WIDTHS[`${ctx.plural}:${col.key}`]
@@ -247,11 +291,18 @@ export function measureColumnContent(
     if (spec.mode === 'exact') continue
     const read = cellWidthReader(col, ctx)
     const limit = (spec.max ?? Infinity) - CELL_PADDING_PX
-    if (spec.mode === 'fit') {
+    if (spec.mode === 'fit' && spec.longest) {
+      let longest = 0
+      for (const item of items) {
+        const w = safeWidth(read, item, measure, limit, ctx)
+        if (w > longest) longest = w
+      }
+      result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
+    } else if (spec.mode === 'fit') {
       const widths = new Array<number>(items.length)
       let longest = 0
       for (let i = 0; i < items.length; i++) {
-        widths[i] = safeWidth(read, items[i], measure, limit)
+        widths[i] = safeWidth(read, items[i], measure, limit, ctx)
         if (widths[i] > longest) longest = widths[i]
       }
       result[col.key] = {
@@ -261,7 +312,7 @@ export function measureColumnContent(
     } else {
       let longest = 0
       for (const item of items) {
-        const w = safeWidth(read, item, measure, limit)
+        const w = safeWidth(read, item, measure, limit, ctx)
         if (w > longest) longest = w
       }
       result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
@@ -272,9 +323,9 @@ export function measureColumnContent(
 
 // A reader that throws on an odd object must not take the table down; that
 // cell just doesn't count toward the width.
-function safeWidth(read: CellWidth, item: any, measure: MeasureText, limit: number): number {
+function safeWidth(read: CellWidth, item: any, measure: MeasureText, limit: number, ctx: ContentContext): number {
   try {
-    return read(item, measure, limit)
+    return read(item, measure, limit, ctx)
   } catch {
     return 0
   }

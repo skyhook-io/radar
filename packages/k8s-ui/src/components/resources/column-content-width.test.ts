@@ -3,8 +3,8 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { CELL_PADDING_PX, type MeasureText, GROW_MAX_PX, columnSizingSpec, hasCuratedCellWidth, measureCellText, measureColumnContent, workloadImagesText } from './column-content-width'
 
-// The curated grow flags, parsed from the source as curated-column-ownership.test.ts does.
-function curatedGrowColumns(): string[] {
+// The curated grow or fit flags, parsed from the source as curated-column-ownership.test.ts does.
+function curatedSizedColumns(mode: 'grow' | 'fit'): string[] {
   const src = readFileSync(join(__dirname, 'ResourcesView.tsx'), 'utf8')
   const start = src.indexOf('const KNOWN_COLUMNS')
   const body = src.slice(start, src.indexOf('\n}\n', start))
@@ -13,7 +13,7 @@ function curatedGrowColumns(): string[] {
   for (const line of body.split('\n')) {
     const kind = line.match(/^  '?([a-z0-9.]+)'?: \[/)
     if (kind) plural = kind[1]
-    const col = line.match(/key: '([a-zA-Z]+)'.*sizing: 'grow'/)
+    const col = line.match(new RegExp(`key: '([a-zA-Z]+)'.*sizing: '${mode}'`))
     if (col) found.push(`${plural}:${col[1]}`)
   }
   return found
@@ -32,6 +32,12 @@ describe('columnSizingSpec', () => {
     expect(columnSizingSpec({ key: 'message', sizing: 'grow', growWeight: 3 })).toEqual({ mode: 'grow', weight: 3, max: GROW_MAX_PX })
     expect(columnSizingSpec({ key: 'status' }).mode).toBe('exact')
     expect(columnSizingSpec({ key: 'age' }).mode).toBe('exact')
+  })
+
+  it('sizes a column flagged fit to its longest value', () => {
+    expect(columnSizingSpec({ key: 'type', sizing: 'fit' })).toEqual({ mode: 'fit', max: 400, longest: true })
+    // Name, Namespace and Node keep their 95th percentile even if flagged.
+    expect(columnSizingSpec({ key: 'node', sizing: 'fit' }).longest).toBeUndefined()
   })
 })
 
@@ -83,6 +89,24 @@ describe('measureColumnContent', () => {
     expect(m.message.content).toBeLessThanOrEqual(GROW_MAX_PX + 10 + CELL_PADDING_PX)
   })
 
+  it('sizes a fit column to its longest value, with a badge\'s padding around it', () => {
+    const svc = (type: string) => ({ metadata: { name: 's', namespace: 'default' }, spec: { type, selector: { app: 'x' } } })
+    const items = [...Array(99)].map(() => svc('ClusterIP'))
+    items.push(svc('ExternalName'))
+    const m = measureColumnContent(items, [{ key: 'type', sizing: 'fit' }], { plural: 'services', cellFilterKind: 'services' }, measure)
+    // One ExternalName among a hundred still sets the width, badge padding included.
+    expect(m.type).toEqual({ content: 120 + 17 + CELL_PADDING_PX })
+  })
+
+  it('measures the Endpoints badge the audit puts in place of the guess', () => {
+    const svc = { metadata: { name: 's', namespace: 'default' }, spec: { selector: { app: 'x' } } }
+    const cols = [{ key: 'endpoints', sizing: 'fit' as const }]
+    const plain = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services' }, measure)
+    expect(plain.endpoints.content).toBe('Active'.length * 10 + 17 + CELL_PADDING_PX)
+    const flagged = measureColumnContent([svc], cols, { plural: 'services', cellFilterKind: 'services', auditBadges: { 'default/s': { danger: 0, warning: 1 } } }, measure)
+    expect(flagged.endpoints.content).toBe('No endpoints'.length * 10 + 17 + CELL_PADDING_PX)
+  })
+
   it('skips a value whose reader throws rather than failing the table', () => {
     const bad = { metadata: { name: 'abc' }, get message(): string { throw new Error('boom') } }
     const m = measureColumnContent([bad], [{ key: 'message', sizing: 'grow' }], ctx, measure)
@@ -121,10 +145,19 @@ describe('measureCellText', () => {
   })
 })
 
-describe('curated grow columns', () => {
-  it('each has a reader for the text its cell shows', () => {
-    const flagged = curatedGrowColumns()
+describe('curated grow and fit columns', () => {
+  it('each grow column has a reader for the text its cell shows', () => {
+    const flagged = curatedSizedColumns('grow')
     expect(flagged.length).toBeGreaterThan(15)
+    expect(flagged.filter(entry => {
+      const [plural, column] = entry.split(':')
+      return !hasCuratedCellWidth(plural, column)
+    })).toEqual([])
+  })
+
+  it('each fit column has a reader for what its cell shows, badge padding included', () => {
+    const flagged = curatedSizedColumns('fit')
+    expect(flagged.length).toBeGreaterThan(5)
     expect(flagged.filter(entry => {
       const [plural, column] = entry.split(':')
       return !hasCuratedCellWidth(plural, column)
