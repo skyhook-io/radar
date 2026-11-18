@@ -5,7 +5,7 @@ import type { SubstrateActorLogs, SubstrateActors, SubstrateActorsQuery } from '
 import { ApiError } from '../../api/client'
 import { ActorsTable, SubstrateActorsScreen } from './SubstrateActors'
 import { SubstrateActorOverview } from './SubstrateActorOverview'
-import { actorDetail, actorRow, actors, connection, minutesAgo, poolShortRow, notConnectedWorkspace, status, workspace } from './substrate.fixtures'
+import { actorDetail, actorRow, actors, connection, ownersOnlyTier, minutesAgo, poolShortRow, notConnectedWorkspace, status, workspace } from './substrate.fixtures'
 
 const state = vi.hoisted(() => ({
   actors: undefined as SubstrateActors | undefined,
@@ -149,6 +149,23 @@ describe('Actors list', () => {
     state.actors = actors()
     const html = screen()
     expect(html).toMatch(/<tr tabindex="0"/)
+  })
+
+  it('shows Radar Hub’s owners-only note, not an error or a form, to a user who isn’t an org owner', () => {
+    state.actors = undefined
+    state.actorsError = new ApiError('only org owners', 403, { error: 'only org owners', error_code: 'ownersOnly' })
+    const html = screen('/substrate/actors', notConnectedWorkspace(ownersOnlyTier))
+    expect(html).toContain('In Radar Hub, only org owners can see Substrate’s actors, templates and workers for now. Ask an org owner.')
+    expect(html).not.toContain('Choose who Radar reads as')
+    expect(html).not.toContain('couldn’t read the actors')
+    state.actorsError = null
+  })
+
+  it('reads an actor page refused for owners only as that note', async () => {
+    const { ActorReadFailure } = await import('./SubstrateActorPage')
+    const html = text(renderToStaticMarkup(<MemoryRouter><ActorReadFailure actor={{ atespace: 'r', name: 'a' }} error={new ApiError('x', 403, { error: 'x', error_code: 'ownersOnly' })} onBack={() => {}} /></MemoryRouter>))
+    expect(html).toContain('Actors are for org owners')
+    expect(html).toContain('only org owners can see')
   })
 
   it('offers the Connect panel instead of the table while not connected', () => {

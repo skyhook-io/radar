@@ -196,3 +196,28 @@ describe('the screen gate on a Radar without the Substrate workspace', () => {
     expect(html).not.toContain('Agent Substrate unavailable')
   })
 })
+
+describe('Radar Hub, a user who isn’t an org owner', () => {
+  it('shows the owners-only note on Templates and Workers, not an error or a Connect form', async () => {
+    const { SubstrateTemplatesScreen } = await import('./SubstrateTemplates')
+    const { SubstrateWorkersScreen } = await import('./SubstrateWorkers')
+    const { notConnectedWorkspace, ownersOnlyTier, status: statusOf } = await import('./substrate.fixtures')
+    const ws = notConnectedWorkspace(ownersOnlyTier)
+    const st = statusOf({ apiTier: ownersOnlyTier, canConfigure: false })
+    for (const html of [
+      render(<SubstrateTemplatesScreen workspace={ws} status={st} />, '/substrate/templates'),
+      render(<SubstrateWorkersScreen workspace={ws} status={st} onOpenSubject={() => {}} />, '/substrate/workers'),
+    ]) {
+      expect(html).toContain('In Radar Hub, only org owners can see Substrate’s actors, templates and workers for now. Ask an org owner.')
+      expect(html).not.toContain('Choose who Radar reads as')
+      expect(html).not.toContain('couldn’t read')
+    }
+  })
+
+  it('reads a template page refused for owners only as that note', () => {
+    state.template = { data: undefined, error: apiError(403, 'ownersOnly'), isLoading: false, isRefetchError: false, dataUpdatedAt: 0 }
+    const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'x' }} onOpenSubject={() => {}} />, '/substrate/templates/team/x?ctx=cluster-B')
+    expect(html).toContain('Templates are for org owners')
+    expect(html).toContain('only org owners can see')
+  })
+})

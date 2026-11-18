@@ -356,7 +356,7 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
         {notConnected && tier ? (
           <>
             <SubstrateTierBanner tier={tier} />
-            {status && showsConnectPanel(tier) ? <SubstrateConnectPanel status={status} tier={tier} /> : <Notice>{tier.reason ?? tierReading(tier).detail ?? NOT_CONNECTED_TITLE}</Notice>}
+            {status && showsConnectPanel(tier) ? <SubstrateConnectPanel status={status} tier={tier} /> : <Notice>{tierReading(tier).detail || NOT_CONNECTED_TITLE}</Notice>}
           </>
         ) : query.error && !query.data ? (
           <Notice>Radar couldn’t read the actors: {query.error instanceof Error ? query.error.message : 'unknown error'}.</Notice>

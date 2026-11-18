@@ -125,7 +125,9 @@ func endpointLabel(s Settings) string {
 	return fmt.Sprintf("%s/%s:%d (port-forward)", SystemNamespace, APIService, APIPort)
 }
 
-func dial(ctx context.Context, k Kube, s Settings) (*conn, error) {
+// dial connects with s. caller is the token source of IdentitySharedAsCaller,
+// nil for the other identities.
+func dial(ctx context.Context, k Kube, s Settings, caller tokenSource) (*conn, error) {
 	c := &conn{key: connKey(k, s), endpoint: endpointLabel(s)}
 	target := s.Endpoint
 	if target == "" {
@@ -160,6 +162,12 @@ func dial(ctx context.Context, k Kube, s Settings) (*conn, error) {
 
 	var source tokenSource
 	switch s.Identity {
+	case IdentitySharedAsCaller:
+		if caller == nil {
+			c.close()
+			return nil, &TierError{Code: CodeUnauthenticated, Message: "no token was minted for this request"}
+		}
+		source = caller
 	case IdentityShared:
 		source = &sharedToken{client: k.Client}
 	case IdentityTokenFile:
@@ -385,10 +393,7 @@ func (s *sharedToken) token(ctx context.Context) (string, error) {
 	if s.current != "" && s.expires.Sub(s.clock()) > tokenRefreshBefore {
 		return s.current, nil
 	}
-	seconds := int64(tokenLifetime / time.Second)
-	resp, err := s.client.CoreV1().ServiceAccounts(SystemNamespace).CreateToken(ctx, ClientServiceAccount, &authv1.TokenRequest{
-		Spec: authv1.TokenRequestSpec{Audiences: []string{APIServerName}, ExpirationSeconds: &seconds},
-	}, metav1.CreateOptions{})
+	t, expires, err := mintShared(ctx, s.client, s.clock())
 	if err != nil {
 		msg := fmt.Sprintf("cannot mint a token for %s/%s", SystemNamespace, ClientServiceAccount)
 		switch {
@@ -399,15 +404,31 @@ func (s *sharedToken) token(ctx context.Context) (string, error) {
 		}
 		return "", status.Error(codes.Unauthenticated, msg)
 	}
-	if resp.Status.Token == "" {
-		return "", status.Error(codes.Unauthenticated, "Kubernetes returned an empty token for "+SharedPrincipal)
-	}
-	s.current = resp.Status.Token
-	s.expires = resp.Status.ExpirationTimestamp.Time
-	if s.expires.IsZero() {
-		s.expires = s.clock().Add(tokenLifetime)
-	}
+	s.current, s.expires = t, expires
 	return s.current, nil
+}
+
+// errEmptyToken is a TokenRequest answered with no token.
+var errEmptyToken = errors.New("Kubernetes returned an empty token for " + SharedPrincipal)
+
+// mintShared makes a TokenRequest for ate-system/ate-client with client, as
+// kubectl ate does without --token-file: audience the API's name, an hour.
+func mintShared(ctx context.Context, client kubernetes.Interface, now time.Time) (string, time.Time, error) {
+	seconds := int64(tokenLifetime / time.Second)
+	resp, err := client.CoreV1().ServiceAccounts(SystemNamespace).CreateToken(ctx, ClientServiceAccount, &authv1.TokenRequest{
+		Spec: authv1.TokenRequestSpec{Audiences: []string{APIServerName}, ExpirationSeconds: &seconds},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if resp.Status.Token == "" {
+		return "", time.Time{}, errEmptyToken
+	}
+	expires := resp.Status.ExpirationTimestamp.Time
+	if expires.IsZero() {
+		expires = now.Add(tokenLifetime)
+	}
+	return resp.Status.Token, expires, nil
 }
 
 // fileToken reads its file on every RPC, so a rotated token is picked up

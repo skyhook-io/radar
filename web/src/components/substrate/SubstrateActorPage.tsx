@@ -205,7 +205,8 @@ function SpecTab({ detail }: { detail: SubstrateActorDetail }) {
 /** The actor page's or drawer's read failed: Substrate has no such actor, denied it, or the tier is down. */
 export function ActorReadFailure({ actor, error, onBack, backLabel = 'Go to Actors' }: { actor: SubstrateRef; error: unknown; onBack: () => void; backLabel?: string }) {
   const code = substrateErrorCode(error)
-  const title = code === 'notFound' ? `Substrate has no actor ${actor.name}` : code === 'denied' ? `Substrate denied reading ${actor.name}` : `${actor.name} couldn’t be read`
+  // Not a failure: in Radar Hub only org owners read Substrate's API.
+  const title = code === 'ownersOnly' ? 'Actors are for org owners' : code === 'notFound' ? `Substrate has no actor ${actor.name}` : code === 'denied' ? `Substrate denied reading ${actor.name}` : `${actor.name} couldn’t be read`
   const tier = code && code !== 'notFound' && code !== 'denied' ? tierReading({ state: 'failed', code, reason: error instanceof Error ? error.message : undefined }) : undefined
   const detail = code === 'notFound'
     ? `There is no actor ${actor.name} in atespace ${actor.atespace}. It may have been deleted since this link was made.`

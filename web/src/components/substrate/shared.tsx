@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
-import { Bot } from 'lucide-react'
+import { Bot, Info } from 'lucide-react'
 import {
   Badge,
   PaneLoader,
@@ -114,6 +114,27 @@ export function identityText(tier: SubstrateAPITier): string {
 }
 
 /**
+ * Radar Hub, for an org owner: Radar reads as Substrate's shared client
+ * identity, with a token minted with the owner's own Kubernetes access, and
+ * there is nothing to connect.
+ */
+function SharedAsCallerIdentity() {
+  return (
+    <>
+      as Substrate’s shared client identity (<span className="font-mono">ate-system/ate-client</span>), minted with your Kubernetes access
+      <Tooltip
+        content="ate-client is usually one of Substrate’s global owners, so it can see every atespace. Radar only reads with it: it lists actors, templates and workers and never changes them. The token is minted with your own Kubernetes access, so it works only while you may create tokens for ate-system/ate-client. This may change to reading with your own Substrate access."
+        wrapperClassName="ml-1 align-middle"
+      >
+        <span tabIndex={0} aria-label="About this identity" className="inline-flex text-theme-text-tertiary hover:text-theme-text-secondary">
+          <Info className="h-3.5 w-3.5" />
+        </span>
+      </Tooltip>
+    </>
+  )
+}
+
+/**
  * Where the screen's values come from: Substrate's API (endpoint, identity,
  * read age), Prometheus, and Kubernetes, which Radar always reads.
  */
@@ -126,8 +147,17 @@ export function SubstrateSourceLine({ tier, status }: { tier: SubstrateAPITier; 
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs" aria-label="Sources">
       {tier.state === 'connected' ? (
         <SourcePart tone="healthy" label="Substrate API">
-          {endpoint && <span className="font-mono">{endpoint}</span>} as{' '}
-          <span className={tier.identity?.mode === 'tokenFile' ? undefined : 'font-mono'}>{identityText(tier)}</span>
+          {tier.identity?.mode === 'sharedAsCaller' ? (
+            <>
+              {endpoint && <><span className="font-mono">{endpoint}</span> </>}
+              <SharedAsCallerIdentity />
+            </>
+          ) : (
+            <>
+              {endpoint && <span className="font-mono">{endpoint}</span>} as{' '}
+              <span className={tier.identity?.mode === 'tokenFile' ? undefined : 'font-mono'}>{identityText(tier)}</span>
+            </>
+          )}
           {tier.readAt && (
             <>
               {' · '}
