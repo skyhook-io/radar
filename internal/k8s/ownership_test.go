@@ -554,3 +554,26 @@ func TestRelationshipAnswerSurvivesAccessChangingMidAnswer(t *testing.T) {
 		})
 	}
 }
+
+// A fetched Deployment the cache doesn't hold yet still answers what reads its
+// ownership: its ReplicaSets' Pods, as well as its children.
+func TestRelationshipAnswerSeedsAFetchedSubjectTheCacheLacks(t *testing.T) {
+	rs := historyReplicaSet("fresh-1", "1", 1, 1)
+	rs.OwnerReferences[0].Name, rs.OwnerReferences[0].UID = "fresh", "uid-fresh"
+	_, typed, source, _ := historyFixture(t, rs, historyPod("fresh-1-a", "fresh-1"))
+	previous := ownershipSource
+	ownershipSource = source.(*cachesource.Source)
+	t.Cleanup(func() { ownershipSource = previous })
+	obj := &appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "fresh", UID: "uid-fresh", Annotations: map[string]string{historyRevision: "1"}}}
+	access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+	rel, _, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, access)
+	if rel == nil {
+		t.Fatal("answer unavailable")
+	}
+	if !slices.ContainsFunc(rel.Children, func(r topology.ResourceRef) bool { return r.Name == "fresh-1" }) {
+		t.Fatalf("children: %+v", rel.Children)
+	}
+	if len(rel.Pods) != 1 || rel.Pods[0].Name != "fresh-1-a" {
+		t.Fatalf("pods: %+v", rel.Pods)
+	}
+}

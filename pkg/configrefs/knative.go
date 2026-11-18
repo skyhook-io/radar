@@ -86,8 +86,9 @@ func KnativeEventDestinations(obj *unstructured.Unstructured) []PathRef {
 }
 
 // KnativeTriggerBroker returns the Broker a Trigger subscribes to: its
-// brokerRef, which names the Broker's namespace, or else the older
-// spec.broker in the Trigger's namespace.
+// brokerRef, which names the Broker's namespace, or, only when brokerRef is
+// absent, the older spec.broker in the Trigger's namespace. A brokerRef
+// without a name or namespace names nothing, whatever spec.broker says.
 func KnativeTriggerBroker(trigger *unstructured.Unstructured) (PathRef, bool) {
 	if raw, present, _ := unstructured.NestedMap(trigger.Object, "spec", "brokerRef"); present {
 		ref, ok := KnativeTriggerBrokerReference(raw)

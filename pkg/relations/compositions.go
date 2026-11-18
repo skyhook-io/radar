@@ -77,9 +77,10 @@ func (v *View) Composed(f *Composition, subject resourceid.Ref, fetched runtime.
 		}
 		return refs
 	}
+	seen := map[ComposedEdge]bool{}
 	add := func(p, c resourceid.Ref) {
-		e := ComposedEdge{p, c}
-		if !slices.Contains(a.Edges, e) {
+		if e := (ComposedEdge{p, c}); !seen[e] {
+			seen[e] = true
 			a.Edges = append(a.Edges, e)
 		}
 	}
