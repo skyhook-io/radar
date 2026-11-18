@@ -5,7 +5,7 @@ import type { SubstrateActorLogs, SubstrateActors, SubstrateActorsQuery } from '
 import { ApiError } from '../../api/client'
 import { ActorsTable, SubstrateActorsScreen } from './SubstrateActors'
 import { SubstrateActorOverview } from './SubstrateActorOverview'
-import { actorDetail, actorRow, actors, connection, ownersOnlyTier, minutesAgo, poolShortRow, notConnectedWorkspace, status, workspace } from './substrate.fixtures'
+import { actorDetail, actorRow, actors, connection, crashedRow, ownersOnlyTier, minutesAgo, poolShortRow, notConnectedWorkspace, status, workspace } from './substrate.fixtures'
 
 const state = vi.hoisted(() => ({
   actors: undefined as SubstrateActors | undefined,
@@ -168,6 +168,35 @@ describe('Actors list', () => {
     expect(html).toContain('only org owners can see')
   })
 
+  it('gives a crashed row one red signal, its badge: the crash message reads neutral', async () => {
+    const { toneTextClass } = await import('@skyhook-io/k8s-ui')
+    state.actors = actors()
+    const html = screen('/substrate/actors?state=crashed')
+    const msg = html.indexOf('container agent: OOMKilled (limit 2Gi)')
+    expect(msg).toBeGreaterThan(-1)
+    const cls = html.slice(html.lastIndexOf('class="', msg), msg)
+    expect(cls).toContain('text-theme-text-secondary')
+    expect(cls).not.toContain(toneTextClass('unhealthy'))
+    expect(html).toContain('>Crashed<')
+  })
+
+  it('says what the sidebar’s Actors badge counts, with the same number, each part a filter', async () => {
+    const { substrateScreenCounts } = await import('./attention')
+    state.actors = actors()
+    const stuckRow = { ...poolShortRow, id: 'stuckTransition:resuming', rule: 'stuckTransition' as const, count: 3, subject: { kind: 'Actors' as const, filter: { state: 'resuming' } } }
+    const ws = workspace({ needsAttention: [crashedRow, stuckRow, poolShortRow] })
+    const html = plain(screen('/substrate/actors', ws))
+    expect(html).toMatch(/17 need attention: <button[^>]*>14 crashed<\/button> · <button[^>]*>3 stuck<\/button>/)
+    expect(substrateScreenCounts(ws).actors.count).toBe(17)
+    // A partial actor read makes it a lower bound, as the badge is.
+    const partial = workspace({ needsAttention: [crashedRow], coverage: { ...workspace().coverage, actors: { state: 'partial', code: 'capExceeded', count: 500 } } })
+    expect(plain(screen('/substrate/actors', partial))).toContain('At least 14 need attention')
+    // Nothing found in a partial read is unknown, never zero.
+    const none = workspace({ needsAttention: [], coverage: { ...workspace().coverage, actors: { state: 'partial', code: 'capExceeded', count: 500 } } })
+    expect(plain(screen('/substrate/actors', none))).toContain('Needing attention: unknown')
+    expect(plain(screen('/substrate/actors', workspace({ needsAttention: [] })))).not.toContain('need attention')
+  })
+
   it('offers the Connect panel instead of the table while not connected', () => {
     state.actors = undefined
     state.actorsError = new ApiError('Choose who Radar reads as', 409, { error_code: 'notConfigured' })
@@ -186,10 +215,11 @@ describe('Actor overview', () => {
     expect(html).toContain('container agent: OOMKilled (limit 2Gi)')
     expect(html).toContain('A revert returns it to suspended at generation 14, its newest stored snapshot.')
     expect(html).toContain('Resumes where it left off: the snapshot holds its memory.')
-    expect(html).toContain('10 other actors of the same template are crashed too')
+    // How many share its template, as a concentration: never a guess that the template is the cause.
+    expect(plain(html)).toContain('11 crashed actors use its template, this one included →')
+    expect(html).not.toContain('the cause may be')
     // The command box keeps each word unbroken in its own span.
     expect(html.replace(/<\/?span[^>]*>/g, '')).toContain('kubectl ate revert actor lit-review-0193 -a research')
-    expect(html).toContain('The 11 crashed actors of this template →')
     // The crash is the banner; the backend's crashed-actors row is not repeated.
     expect(html).not.toContain('14 actors are crashed')
   })
@@ -213,6 +243,10 @@ describe('Actor overview', () => {
     expect(html).not.toContain('Find the cause')
     // The banner names the cause; the last lines below don't repeat it.
     expect(html).not.toContain('that is why it crashed')
+    // The cause leads; Substrate's own message folds under Details, and the mechanism is gone.
+    expect(html.indexOf('Cause, from its worker’s log')).toBeLessThan(html.indexOf('Next step:'))
+    expect(html.indexOf('Details')).toBeGreaterThan(html.indexOf('Next step:'))
+    expect(html).not.toContain('released its worker')
     state.logs = before
   })
 
@@ -222,7 +256,7 @@ describe('Actor overview', () => {
       state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-4-57', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [{ kind: 'worker', time: '2026-11-17T15:48:03Z', message: 'Killing a sandbox over its memory limit', text: 'x', pod: 'agent-pool-worker-1' }], memoryKill: { time: '2026-11-17T15:48:03Z', pod: 'agent-pool-worker-1', limitBytes: 2147483648, current: false } }
       const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={actorDetail()} onOpenSubject={() => {}} /></MemoryRouter>)))
       expect(html).not.toContain('Cause, from its worker’s log')
-      expect(html).toContain('A memory-limit kill was recorded')
+      expect(html).toContain('Earlier run: a memory-limit kill was recorded')
       expect(html).toContain('Radar can’t tie it to this crash')
       expect(html).not.toContain('Raise the template’s memory limit')
     } finally {
@@ -246,7 +280,7 @@ describe('Actor overview', () => {
 
   it('says why a crashed actor has no worker and no log, and keeps its last node', () => {
     const html = text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={actorDetail()} /></MemoryRouter>))
-    expect(html).toContain('None: a crashed actor runs on no worker')
+    expect(html).toContain('none while crashed')
     expect(html).toContain('ip-10-0-4-57')
     // The last node was searched and held nothing: said plainly, with the crash time, no promise that history returns.
     expect(html).toContain('None of the 1 worker Pod on node ip-10-0-4-57 holds its lines.')
@@ -286,14 +320,49 @@ describe('Logs for an actor on no worker', () => {
   it('never calls an earlier run’s memory-limit kill the reason for the crash in the logs', async () => {
     const html = await render({ ...base, origin: 'lastNode', node: 'node', reasonCode: 'candidates', searched: [], lines: [{ kind: 'worker', pod: 'worker', text: 'old kill', message: 'old kill', time: '2026-11-17T12:00:00Z' }], memoryKill: { time: '2026-11-17T12:00:00Z', pod: 'worker', limitBytes: 1024, current: false } })
     expect(html).not.toContain('that is why it crashed')
-    expect(html).toContain('A memory-limit kill was recorded')
+    expect(html).toContain('Earlier run: a memory-limit kill was recorded')
     expect(html).toContain('Radar can’t tie it to this crash.')
   })
 
   it('labels lines found on the node it last ran on as candidates, naming the Pod and the crash time', async () => {
     const html = await render({ ...base, origin: 'lastNode', node: 'ip-10-0-4-57', reasonCode: 'candidates', searched: [], lines: [{ kind: 'container', time: '2026-11-17T15:48:03Z', container: 'agent', message: 'OOM', text: 'x', pod: 'agent-pool-worker-2' }] })
-    expect(html).toContain('Found on agent-pool-worker-2, on ip-10-0-4-57, the node it last ran on, before it crashed ')
-    expect(html).toContain('these are candidates')
+    // One provenance line names the source and why these are only candidates.
+    expect(html).toContain('Candidates from agent-pool-worker-2 on ip-10-0-4-57, the node it last ran on, before it crashed ')
+    expect(html).toContain('Substrate doesn’t record which Pod it ran in.')
+    expect(html.match(/the node it last ran on/g)).toHaveLength(1)
+  })
+
+  it('marks the kill line of this crash in place, with a label and a way to jump to it', async () => {
+    const kill = { kind: 'worker' as const, time: '2026-11-17T15:48:03Z', message: 'Killing a sandbox over its memory limit', text: 'x', pod: 'agent-pool-worker-1', memoryLimitBytes: 2147483648 }
+    const lines = [{ kind: 'container' as const, time: '2026-11-17T15:47:00Z', container: 'agent', message: 'working', text: 'x', pod: 'agent-pool-worker-1' }, kill, { kind: 'worker' as const, time: '2026-11-17T15:48:04Z', message: 'Sandbox died', text: 'x', pod: 'agent-pool-worker-1' }]
+    const html = await render({ ...base, origin: 'lastNode', node: 'n', reasonCode: 'candidates', searched: [], lines, memoryKill: { time: kill.time, pod: kill.pod, limitBytes: kill.memoryLimitBytes, current: true } })
+    expect(html).toMatch(/data-marked="current"[^>]*>(?:(?!<\/div>).)*Killing a sandbox over its memory limit(?:(?!<\/div>).)*memory-limit kill · this crash/)
+    expect(html.match(/data-marked=/g)).toHaveLength(1)
+    expect(html).toContain('Jump to line')
+    // The line stays where it is in the log, once.
+    expect(html.split('Killing a sandbox over its memory limit').length - 1).toBe(1)
+  })
+
+  it('labels an earlier run’s kill line as one, without the error rail', async () => {
+    const kill = { kind: 'worker' as const, time: '2026-11-17T12:00:00Z', message: 'Killing a sandbox over its memory limit', text: 'x', pod: 'w', memoryLimitBytes: 1024 }
+    const html = await render({ ...base, origin: 'lastNode', node: 'n', reasonCode: 'candidates', searched: [], lines: [kill], memoryKill: { time: kill.time, pod: 'w', limitBytes: 1024, current: false } })
+    expect(html).toContain('data-marked="earlier"')
+    expect(html).toContain('memory-limit kill · earlier run')
+    expect(html).not.toContain('memory-limit kill · this crash')
+    expect(html).not.toMatch(/absolute -left-2/)
+  })
+
+  it('says when a filter hides the kill record, instead of changing the filter', async () => {
+    const { HiddenKillNotice, hidesWorkerRecords } = await import('./SubstrateActorPage')
+    expect(hidesWorkerRecords('containers', '')).toBe(true)
+    expect(hidesWorkerRecords('lifecycle', '')).toBe(true)
+    expect(hidesWorkerRecords('all', 'agent')).toBe(true)
+    expect(hidesWorkerRecords('all', '')).toBe(false)
+    expect(hidesWorkerRecords('worker', '')).toBe(false)
+    const html = text(renderToStaticMarkup(<HiddenKillNotice kill={{ current: true }} onShowAll={() => {}} />))
+    expect(html).toContain('This view hides the worker’s record of a memory-limit kill, the cause of this crash.')
+    expect(html).toContain('Show all sources')
+    expect(text(renderToStaticMarkup(<HiddenKillNotice kill={{ current: false }} onShowAll={() => {}} />))).toContain('from an earlier run')
   })
 
   it('says a worker Pod that is gone in product words, never the raw API error', async () => {
@@ -351,16 +420,48 @@ describe('A running actor on a bad worker', () => {
 describe('Needs attention rows', () => {
   it('shows a crash group’s own remedy on the row when its cause is known', async () => {
     const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
-    const row = { ...poolShortRow, rule: 'crashedActors' as const, groups: [
+    const row = { ...poolShortRow, rule: 'crashedActors' as const, count: 14, nextStep: 'Fix the cause Substrate’s crash message names, then revert each actor.', command: 'kubectl ate revert actor <name> -a <atespace>', groups: [
       { subject: { kind: 'ActorTemplate' as const, atespace: 'research', name: 'langgraph-research' }, count: 11, cause: 'memoryLimit' as const, nextStep: 'Create a template with a higher memory limit, move the actors to it, then revert them.', command: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' },
       { subject: { kind: 'ActorTemplate' as const, atespace: 'code-review', name: 'claude-code-gvisor' }, count: 2 },
       { subject: { kind: 'ActorTemplate' as const, atespace: 'sandbox-dev', name: 'mcp-browser' }, count: 1, cause: 'memoryLimit' as const, nextStep: 'Create a template with a higher memory limit, move the actors to it, then revert them.', command: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' },
     ] }
     const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[row]} /></MemoryRouter>)))
     // One line per remedy, naming every group it is for.
-    expect(html).toContain('For research / langgraph-research (11) and sandbox-dev / mcp-browser (1), killed over their memory limit: Create a template with a higher memory limit')
+    expect(html).toContain('Next step for research / langgraph-research (11) and sandbox-dev / mcp-browser (1), killed over their memory limit: Create a template with a higher memory limit')
     expect(html.split('Create a template with a higher memory limit').length - 1).toBe(1)
-    expect(html).not.toContain('For code-review / claude-code-gvisor')
+    // The rest get the general step and a route to them, never the subgroup's command or one command for all 14.
+    expect(html).toContain('For the other 2, on code-review / claude-code-gvisor (2): Fix the cause Substrate’s crash message names, then revert each actor.')
+    expect(html).not.toContain('kubectl ate revert actor')
+    expect(html.match(/aria-label="Copy command"/g)).toHaveLength(1)
+    // Concentration, not cause.
+    expect(html).toContain('11 of the 14 use template research / langgraph-research')
+    expect(html).not.toMatch(/from one template|caused/)
+  })
+
+  it('links each crash group to its crashed actors', async () => {
+    const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
+    const opened: unknown[] = []
+    const row = { ...poolShortRow, rule: 'crashedActors' as const, count: 3, subject: { kind: 'Actors' as const, filter: { state: 'crashed' } }, groups: [
+      { subject: { kind: 'ActorTemplate' as const, atespace: 'research', name: 'lg' }, count: 2, cause: 'memoryLimit' as const, nextStep: 'Move them.', command: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' },
+      { subject: { kind: 'ActorTemplate' as const, atespace: 'code', name: 'cc' }, count: 1 },
+    ] }
+    const html = renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[row]} onOpen={(s) => opened.push(s)} /></MemoryRouter>)
+    expect(html.match(/<button[^>]*>research \/ lg<\/button>/g)?.length).toBeGreaterThanOrEqual(2)
+    expect(html).toMatch(/<button[^>]*>code \/ cc<\/button>/)
+  })
+
+  it('gives crashes that share one remedy that remedy once, with its command', async () => {
+    const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
+    const step = 'Move the actors to a template with more memory, then revert them.'
+    const cmd = 'kubectl ate update actor <name> -a <atespace> --template <new-template>'
+    const row = { ...poolShortRow, rule: 'crashedActors' as const, count: 3, nextStep: step, command: cmd, groups: [
+      { subject: { kind: 'ActorTemplate' as const, atespace: 'a', name: 'one' }, count: 2, cause: 'memoryLimit' as const, nextStep: step, command: cmd },
+      { subject: { kind: 'ActorTemplate' as const, atespace: 'a', name: 'two' }, count: 1, cause: 'memoryLimit' as const, nextStep: step, command: cmd },
+    ] }
+    const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[row]} /></MemoryRouter>)))
+    expect(html.split(step).length - 1).toBe(1)
+    expect(html).toContain(`Next step: ${step}`)
+    expect(html).not.toContain('For the other')
   })
 
   it('reads a link’s worker-impact filter and lets it be cleared', () => {

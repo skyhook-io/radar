@@ -165,6 +165,88 @@ function groupRemedies(row: SubstrateAttention): { nextStep: string; command?: s
   return [...byStep.values()]
 }
 
+/** A crash group's actors, as a filtered list: the template's name links to its crashed actors. */
+function GroupName({ row, group, onOpen }: { row: SubstrateAttention; group: Tally; onOpen?: OpenSubject }) {
+  const filter = groupFilter(row, group)
+  const label = group.subject ? subjectLabel(group.subject) : group.text
+  return filter && onOpen ? (
+    <button type="button" onClick={() => onOpen({ kind: 'Actors', filter })} className="font-mono text-accent-text hover:underline">{label}</button>
+  ) : (
+    <span className="font-mono">{label}</span>
+  )
+}
+
+function GroupNames({ row, groups, onOpen }: { row: SubstrateAttention; groups: Tally[]; onOpen?: OpenSubject }) {
+  return (
+    <>
+      {groups.map((g, i) => (
+        <span key={i}>
+          {i > 0 && (i === groups.length - 1 ? ' and ' : ', ')}
+          <GroupName row={row} group={g} onOpen={onOpen} /> ({g.count})
+        </span>
+      ))}
+    </>
+  )
+}
+
+/**
+ * Where most of a crash row's actors are: "11 of the 15 use template X". It
+ * states a concentration, not a cause; the remedies below say what is known
+ * of causes.
+ */
+function Concentration({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubject }) {
+  const groups = row.groups ?? []
+  const top = groups[0]
+  if (row.rule !== 'crashedActors' || groups.length < 2 || !top?.subject || top.subject.kind !== 'ActorTemplate' || top.count * 2 <= row.count) return null
+  return (
+    <div className="break-words text-xs font-medium text-theme-text-primary">
+      {top.count} of the {row.count} use template <GroupName row={row} group={top} onOpen={onOpen} />
+    </div>
+  )
+}
+
+/**
+ * A row's next step. A crash row whose groups name a cause gives each its
+ * own remedy, and the rest the general step without a command: no one command
+ * is offered as though every crash shared a remedy.
+ */
+function NextSteps({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubject }) {
+  const remedies = groupRemedies(row)
+  const rest = (row.groups ?? []).filter((g) => !g.nextStep)
+  if (remedies.length === 0 || (remedies.length === 1 && rest.length === 0)) {
+    return (
+      <div className="mt-0.5 break-words text-xs text-theme-text-primary">
+        <span className="font-medium">Next step: </span>
+        {row.nextStep}
+        {row.command && <> <CommandChip command={row.command} inline /></>}
+      </div>
+    )
+  }
+  const restCount = rest.reduce((n, g) => n + g.count, 0)
+  return (
+    <>
+      {remedies.map((r) => (
+        <div key={r.nextStep} className="mt-0.5 break-words text-xs text-theme-text-primary">
+          <span className="font-medium">
+            Next step for <GroupNames row={row} groups={r.groups} onOpen={onOpen} />
+            {r.cause === 'memoryLimit' ? ', killed over their memory limit' : ''}:{' '}
+          </span>
+          {r.nextStep}
+          {r.command && <> <CommandChip command={r.command} inline /></>}
+        </div>
+      ))}
+      {rest.length > 0 && (
+        <div className="mt-0.5 break-words text-xs text-theme-text-primary">
+          <span className="font-medium">
+            For the other {restCount === 1 ? 'one' : restCount}, on <GroupNames row={row} groups={rest} onOpen={onOpen} />:{' '}
+          </span>
+          {row.nextStep}
+        </div>
+      )}
+    </>
+  )
+}
+
 /** A worker row's link to the actors on that worker, beside its subject: the row is about them. */
 function WorkerActorsLink({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubject }) {
   if (!WORKER_RULES.has(row.rule) || row.subject.kind !== 'Worker' || !row.subject.name || row.count <= 0) return null
@@ -201,29 +283,9 @@ export function AttentionRow({ row, onOpen }: { row: SubstrateAttention; onOpen?
         <WorkerActorsLink row={row} onOpen={onOpen} />
         {row.since && <When iso={row.since} prefix="since" hint="Newest change among them: the condition has held at least since" />}
       </div>
+      <Concentration row={row} onOpen={onOpen} />
       {lead && <div className="break-words text-xs text-theme-text-secondary">{lead}</div>}
-      <div className="mt-0.5 break-words text-xs text-theme-text-primary">
-        <span className="font-medium">Next step: </span>
-        {row.nextStep}
-        {row.command && <> <CommandChip command={row.command} inline /></>}
-      </div>
-      {/* A group whose cause is known has its own remedy, which the row's general step can't name. Groups with one remedy share a line. */}
-      {groupRemedies(row).map((r) => (
-        <div key={r.nextStep} className="mt-0.5 break-words text-xs text-theme-text-primary">
-          <span className="font-medium">
-            For{' '}
-            {r.groups.map((g, i) => (
-              <span key={i}>
-                {i > 0 && (i === r.groups.length - 1 ? ' and ' : ', ')}
-                <span className="font-mono">{g.subject ? subjectLabel(g.subject) : g.text}</span> ({g.count})
-              </span>
-            ))}
-            {r.cause === 'memoryLimit' ? ', killed over their memory limit' : ''}:{' '}
-          </span>
-          {r.nextStep}
-          {r.command && <> <CommandChip command={r.command} inline /></>}
-        </div>
-      ))}
+      <NextSteps row={row} onOpen={onOpen} />
       {hasDetails && (
         <FoldSection title="Details" summary="" attention={false}>
           <div className="space-y-1.5">

@@ -99,7 +99,7 @@ describe('a failed template', () => {
     ;(t.template as any).golden = { state: 'failed', error: 'killed for exceeding its memory limit' }
     state.template = ok(t)
     const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'broken' }} onOpenSubject={() => {}} />, '/substrate/templates/team/broken?ctx=cluster-B')
-    expect(html).toContain('No golden snapshot, so every new actor boots cold')
+    expect(html).toContain('No golden snapshot: new actors from the template’s default boot cold')
     expect(html.split('does not retry').length - 1).toBe(1)
   })
 
@@ -107,12 +107,17 @@ describe('a failed template', () => {
     const t = template('broken')
     ;(t.template as any).golden = { state: 'failed', error: 'GoldenActorCrashed: golden actor crashed: killed for exceeding its memory limit' }
     state.template = ok(t)
-    const golden = { id: 'g', rule: 'goldenSnapshotFailed', severity: 'warning', title: 't', reading: 'r', nextStep: 'Recreate the template with a higher memory limit.', command: 'kubectl ate get actor-template broken -a team -o yaml', subject: { kind: 'ActorTemplate', atespace: 'team', name: 'broken' }, count: 1 }
+    const golden = { id: 'g', rule: 'goldenSnapshotFailed', severity: 'warning', title: 't', reading: 'Its golden actor was killed for exceeding its memory limit before the snapshot was taken. Substrate does not retry a failed build. Substrate’s message: golden actor crashed: killed for exceeding its memory limit.', nextStep: 'Recreate the template with a higher memory limit.', command: 'kubectl ate get actor-template broken -a team -o yaml', subject: { kind: 'ActorTemplate', atespace: 'team', name: 'broken' }, count: 1 }
     state.workspace = { ...workspace(), needsAttention: [golden] }
     const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'broken' }} onOpenSubject={() => {}} />, '/substrate/templates/team/broken?ctx=cluster-B')
     expect(html).toContain('Next step: Recreate the template with a higher memory limit.')
     expect(html).toContain('golden actor crashed: killed for exceeding its memory limit')
     expect(html).not.toContain('GoldenActorCrashed:')
+    // The cause leads once; Substrate's own words and the no-retry note fold under Details, after the step.
+    expect(html.split('killed for exceeding its memory limit before').length - 1).toBe(1)
+    expect(html.indexOf('Its golden actor was killed')).toBeLessThan(html.indexOf('Next step:'))
+    expect(html.indexOf('Details')).toBeGreaterThan(html.indexOf('Next step: Recreate'))
+    expect(html.indexOf('golden actor crashed: killed')).toBeGreaterThan(html.indexOf('Details'))
     state.workspace = undefined
   })
 })
@@ -127,8 +132,9 @@ describe('a template whose actors crashed', () => {
       groups: [{ subject: { kind: 'ActorTemplate', atespace: 'team', name: 'langgraph-research' }, count: 11, cause: 'memoryLimit', nextStep: 'Create a template with a higher memory limit.', command: 'kubectl ate update actor <name> -a <atespace> --template <new-template>' }] }
     state.workspace = { ...workspace(), needsAttention: [crash] }
     const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'langgraph-research' }} onOpenSubject={() => {}} />, '/substrate/templates/team/langgraph-research?ctx=cluster-B')
-    expect(html).toContain('11 of its actors crashed: killed over their memory limit')
-    expect(html).toContain('Per actor it sets 2 CPU, 2Gi; 2Gi of memory is the limit they were killed for exceeding.')
+    expect(html).toContain('11 of its actors are crashed')
+    expect(html).toContain('Killed over the 2Gi memory limit it sets per actor.')
+    expect(html).not.toContain('they were killed for exceeding')
     expect(html).toContain('Next step: Create a template with a higher memory limit.')
     expect(html).toContain('The 11 crashed actors →')
     // Beside a crash callout, the header chip names what is ready: the golden snapshot, not the template.

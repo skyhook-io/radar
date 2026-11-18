@@ -59,6 +59,13 @@ export function substrateAttentionCount(data: SubstrateWorkspace): SubstrateAtte
 
 const subjectKey = (s: SubstrateAttention['subject']) => `${s.kind}/${s.namespace ?? s.atespace ?? ''}/${s.name ?? s.filter?.template ?? ''}`
 
+/** The actors the Actors badge counts, by why: crashed, and stuck in a transition. */
+export function actorAttentionParts(data: SubstrateWorkspace): { crashed: number; stuck: number } {
+  const rows = needing(data)
+  const sum = (rule: SubstrateAttention['rule']) => rows.filter((a) => a.rule === rule).reduce((n, a) => n + a.count, 0)
+  return { crashed: sum('crashedActors'), stuck: sum('stuckTransition') }
+}
+
 /**
  * Each screen's badge counts the objects of that screen needing attention, so
  * it matches what the screen shows: actors crashed or stuck in a transition;
@@ -66,8 +73,7 @@ const subjectKey = (s: SubstrateAttention['subject']) => `${s.kind}/${s.namespac
  */
 export function substrateScreenCounts(data: SubstrateWorkspace): Record<AttentionArea, SubstrateAttentionCount> {
   const rows = needing(data)
-  const crashed = rows.filter((a) => a.rule === 'crashedActors').reduce((n, a) => n + a.count, 0)
-  const stuck = rows.filter((a) => a.rule === 'stuckTransition').reduce((n, a) => n + a.count, 0)
+  const { crashed, stuck } = actorAttentionParts(data)
   const distinct = (area: AttentionArea) => new Set(rows.filter((a) => attentionArea(a) === area).map((a) => subjectKey(a.subject))).size
   const objects = (one: string, many: string) => (n: number) => `${n} ${n === 1 ? `${one} needs` : `${many} need`} attention`
   return {

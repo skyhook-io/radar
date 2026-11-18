@@ -392,10 +392,8 @@ func crashedActors(in Inputs) []Attention {
 	if allMemory {
 		nextStep, command = CrashedMemoryNextStep, retemplateCommand
 	}
+	// Which template most crashes share is Groups' to say, beside the title.
 	title := plural(len(crashed), "actor is crashed", "actors are crashed")
-	if len(groups) > 1 && groups[0].Count*2 > len(crashed) {
-		title += fmt.Sprintf(", %d of them from one template", groups[0].Count)
-	}
 	latest := crashed[0]
 	reading := fmt.Sprintf("Latest: %s", refName(latest.Ref()))
 	if latest.Crash != nil && latest.Crash.Message != "" {
@@ -435,8 +433,9 @@ const (
 	// CrashedMemoryNextStep is the step for memory-limit kills. Templates
 	// cannot be edited, but an actor's template can be changed. A snapshot
 	// stamped with the template it was taken under restores only its volumes
-	// under another (Substrate's templateReplaced).
-	CrashedMemoryNextStep = "Move the actors to a template with more memory, then revert them; on the new template their stored snapshots restore volumes only."
+	// under another (Substrate's templateReplaced); an unstamped one restores
+	// whole, so the group step says "may".
+	CrashedMemoryNextStep = "Move the actors to a template with more memory, then revert them. A snapshot taken under the old template may restore only its volumes."
 	// crashedActorNextStep is crashedNextStep on one actor's own page.
 	crashedActorNextStep = "Fix the cause Substrate's crash message names, then revert this actor to its newest stored generation."
 )
@@ -718,13 +717,16 @@ func goldenFailed(in Inputs) []Attention {
 			continue
 		}
 		step := "Fix the cause in Substrate's message, then recreate the template: templates can't be edited, and each new one gets a golden snapshot build."
+		reading := "Substrate's message: " + GoldenMessage(g.Error) + ". Substrate does not retry a failed build."
+		// The cause leads, once; Substrate's own words follow it.
 		if strings.Contains(g.Error, memoryLimitMessage) {
-			step = "Recreate the template with a higher memory limit: its golden actor was killed for exceeding it, and templates can't be edited."
+			step = "Recreate the template with a higher memory limit; templates can't be edited."
+			reading = "Its golden actor was killed for exceeding its memory limit before the snapshot was taken. Substrate does not retry a failed build. Substrate's message: " + GoldenMessage(g.Error) + "."
 		}
 		out = append(out, Attention{
 			ID: RuleGoldenFailed + ":" + t.Atespace + "/" + t.Name, Rule: RuleGoldenFailed, Severity: SeverityWarning,
 			Title:    fmt.Sprintf("%s has no golden snapshot, so new actors using the template's default boot cold", refName(t.Ref())),
-			Reading:  "Substrate's message: " + GoldenMessage(g.Error) + ". Substrate does not retry a failed build.",
+			Reading:  reading,
 			NextStep: step,
 			Subject:  Subject{Kind: "ActorTemplate", Atespace: t.Atespace, Name: t.Name},
 			Count:    1, Since: t.UpdateTime,
