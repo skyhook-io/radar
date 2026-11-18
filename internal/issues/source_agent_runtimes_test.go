@@ -69,9 +69,17 @@ func TestAgentSandboxReadyReasons(t *testing.T) {
 			t.Errorf("%s: unexpected issue %q", quiet, issue.Reason)
 		}
 	}
-	for _, loud := range []string{"stuck", "failed", "erroring", "invalid", "foreign-pod"} {
-		if _, ok := got[loud]; !ok {
+	// A terminal failure is critical (agentsandbox.Failed, which the workspace
+	// shares); a stall, a retried controller error and a refused suspension
+	// stay warnings.
+	for loud, severity := range map[string]Severity{"stuck": SeverityWarning, "failed": SeverityCritical, "erroring": SeverityWarning, "invalid": SeverityCritical, "foreign-pod": SeverityWarning} {
+		issue, ok := got[loud]
+		if !ok {
 			t.Errorf("%s: expected an issue, got %v", loud, got)
+			continue
+		}
+		if issue.Severity != severity {
+			t.Errorf("%s: severity %s, want %s", loud, issue.Severity, severity)
 		}
 	}
 	// A refused suspension is reported at once, under the Suspended condition's reason.
@@ -91,9 +99,16 @@ func TestAgentSandboxClaimReadyReasons(t *testing.T) {
 		readyFalse("cold-start", "SandboxNotReady", time.Minute),
 		// The claim's Sandbox reports a stuck provision under its own name.
 		readyFalse("mirrors-provisioning", "DependenciesNotReady", 2*time.Hour),
+		// A failure forwarded from the claim's Sandbox stays on the claim too.
+		readyFalse("mirrors-failure", "PodFailed", time.Minute),
 	)
-	if _, ok := got["no-pool"]; !ok || len(got) != 1 {
-		t.Fatalf("issues = %v, want only no-pool", got)
+	if len(got) != 2 {
+		t.Fatalf("issues = %v, want no-pool and mirrors-failure", got)
+	}
+	// The claim's own reason is fixable, so a warning; the forwarded failure is
+	// terminal, so critical, as on the Sandbox.
+	if got["no-pool"].Severity != SeverityWarning || got["mirrors-failure"].Severity != SeverityCritical {
+		t.Errorf("no-pool %s, mirrors-failure %s", got["no-pool"].Severity, got["mirrors-failure"].Severity)
 	}
 }
 

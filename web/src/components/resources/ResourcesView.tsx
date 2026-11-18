@@ -17,6 +17,7 @@ import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
 import { useSubstrateSidebarWorkspace } from '../substrate/useSubstrateSidebarWorkspace'
 import { isVeleroBackupKind } from '../velero/routes'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
+import { useAgentSandboxSidebarWorkspace } from '../agentsandbox/useAgentSandboxSidebarWorkspace'
 import { renderResourceKindList, resourceKindListMode, useResourceHostFeatures } from '../../integrations/resourceHosts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
@@ -130,7 +131,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const cnpgSidebarWorkspace = useCNPGSidebarWorkspace({ apiResources, namespaces, withMetrics: selectedKind?.group === 'postgresql.cnpg.io' })
   const veleroSidebarWorkspace = useVeleroSidebarWorkspace({ apiResources })
   const substrateSidebarWorkspace = useSubstrateSidebarWorkspace({ apiResources })
-  const sidebarCategoryWorkspaces = useMergedSidebarWorkspaces(cnpgSidebarWorkspace, veleroSidebarWorkspace, substrateSidebarWorkspace)
+  const sandboxSidebar = useAgentSandboxSidebarWorkspace({ apiResources, namespaces })
+  const sidebarCategoryWorkspaces = useMergedSidebarWorkspaces(cnpgSidebarWorkspace, veleroSidebarWorkspace, substrateSidebarWorkspace, sandboxSidebar)
   const workloadWrites = namespaces.length === 0
     ? capabilities?.workloadWrites
     : namespaces.length === 1

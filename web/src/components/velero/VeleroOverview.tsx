@@ -205,12 +205,12 @@ function AttentionGroup({ id, title, problems, visible, onNavigate }: { id: stri
       <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
         {title} <span className="font-normal">· {problems.length}</span>
       </h3>
-      <ProblemList problems={shown} rootKind="" onNavigate={onNavigate} hideOrigin subjectFirst />
+      <ProblemList problems={shown} rootKind="" onNavigate={onNavigate} hideOrigin subjectFirst showNextStep />
       {folded.length > 0 && (
         <>
           <Collapse open={showAll} id={foldId}>
             <div className="pt-2">
-              <ProblemList problems={folded} rootKind="" onNavigate={onNavigate} hideOrigin subjectFirst />
+              <ProblemList problems={folded} rootKind="" onNavigate={onNavigate} hideOrigin subjectFirst showNextStep />
             </div>
           </Collapse>
           <button

@@ -659,9 +659,40 @@
         ]
       }
     },
-    "level": "unhealthy",
-    "uiLevel": "unhealthy",
+    "level": "degraded",
+    "uiLevel": "degraded",
     "text": "WarmPoolNotFound",
+    "settled": false,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "claim template missing",
+    "object": {
+      "apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+      "kind": "SandboxClaim",
+      "metadata": {
+        "name": "c",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "TemplateNotFound",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "TemplateNotFound",
     "settled": false,
     "inProgress": false,
     "mirrored": false

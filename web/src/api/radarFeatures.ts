@@ -50,6 +50,7 @@ export const RADAR_FEATURES = {
   substrateWorkspace: { label: 'Agent Substrate actors, templates and workers', flag: 'substrateWorkspace', flagShippedWithEndpoint: true },
   cnpgWorkspace: { label: 'CloudNativePG views', flag: 'cnpgWorkspace', flagShippedWithEndpoint: true },
   cnpgProtectionSetup: { label: 'CloudNativePG backup setup', flag: 'cnpgProtectionSetup', flagShippedWithEndpoint: true },
+  agentSandboxWorkspace: { label: 'Agent Sandbox overview', flag: 'agentSandboxWorkspace', flagShippedWithEndpoint: true },
   veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
   veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },
   veleroRuns: { label: 'Velero backup and restore lists', flag: 'veleroRuns', flagShippedWithEndpoint: true },
