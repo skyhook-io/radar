@@ -288,7 +288,16 @@ cmd_down() {
     for pod in $(k get pods -n "$NS" -l "$SEL" -o jsonpath='{.items[*].metadata.name}'); do
       delete_fixture_pod "$pod"
     done
-    k delete namespace "$NS" --wait=true --timeout=120s | sed 's/^/    /'
+    k delete workerpools.ate.dev,configmaps -n "$NS" -l "$SEL" 2>&1 | sed 's/^/    /' || true
+    # Delete the namespace only when nothing the demo didn't create is left in it.
+    others=$(k get all,configmaps,secrets,persistentvolumeclaims,workerpools.ate.dev -n "$NS" -o name 2>/dev/null \
+      | grep -v -e '^configmap/kube-root-ca.crt$' -e '^secret/default-token' || true)
+    if [ -z "$others" ]; then
+      k delete namespace "$NS" --wait=true --timeout=120s | sed 's/^/    /'
+    else
+      warn "kept namespace $NS: it holds objects the demo didn't create:"
+      echo "$others" | sed 's/^/      /'
+    fi
   fi
   k delete sandboxconfigs.ate.dev -l "$SEL" 2>&1 | sed 's/^/    /' || true
   ok "done; state (CA, tokens) kept in $STATE"
@@ -297,7 +306,15 @@ cmd_down() {
 cmd_purge() {
   cmd_down
   step "Deleting fixture-installed Substrate CRDs"
-  k delete crd -l "$SEL" 2>&1 | sed 's/^/    /' || true
+  for crd in $(k get crd -l "$SEL" -o jsonpath='{.items[*].metadata.name}'); do
+    # Deleting a CRD deletes every resource of it; keep one someone else has started using.
+    others=$(k get "$crd" -A -o name 2>/dev/null | head -5)
+    if [ -n "$others" ]; then
+      warn "kept CRD $crd: resources of it remain (e.g. $(echo "$others" | head -1)); delete them first if they are yours"
+    else
+      k delete crd "$crd" 2>&1 | sed 's/^/    /' || true
+    fi
+  done
 }
 
 cmd_status() {

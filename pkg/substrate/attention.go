@@ -372,7 +372,12 @@ func crashedActors(in Inputs) []Attention {
 	if len(crashed) == 0 {
 		return nil
 	}
-	slices.SortFunc(crashed, func(a, b Actor) int { return crashTime(b).Compare(crashTime(a)) })
+	slices.SortFunc(crashed, func(a, b Actor) int {
+		if c := crashTime(b).Compare(crashTime(a)); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Atespace+"/"+a.Name, b.Atespace+"/"+b.Name)
+	})
 	groups := tallies(byTemplate, templateSubjects, 0)
 	allMemory := true
 	for i := range groups {
