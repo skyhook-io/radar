@@ -6,6 +6,7 @@ import {
 import { clsx } from 'clsx'
 import type { SelectedResource } from '../../types'
 import { useDockReservedHeight } from '../dock/DockContext'
+import { clampDrawerWidth, defaultDrawerWidth } from './drawer-width'
 
 interface ResourceDetailDrawerProps {
   resource: SelectedResource
@@ -55,21 +56,6 @@ interface ResourceDetailDrawerProps {
   }) => ReactNode
 }
 
-const MIN_WIDTH = 520
-const MAX_WIDTH_PERCENT = 0.7
-const DEFAULT_WIDTH = 550
-const WIDE_WIDTH = 750
-
-const WIDE_KINDS = new Set([
-  'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
-  'rbacassessmentreports', 'clusterrbacassessmentreports', 'clustercompliancereports',
-  'sbomreports', 'clustersbomreports', 'policyreports', 'clusterpolicyreports',
-])
-
-function getDefaultWidth(kind: string): number {
-  return WIDE_KINDS.has(kind.toLowerCase()) ? WIDE_WIDTH : DEFAULT_WIDTH
-}
-
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(
     () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches,
@@ -85,12 +71,41 @@ function usePrefersReducedMotion(): boolean {
 }
 
 export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, isOpen = true, expanded, onCollapse, onExpand, canCollapseToDrawer = true, onNavigateToResource, headerHeight: headerHeightProp, leftOffset = 0, rightInset = 0, children }: ResourceDetailDrawerProps) {
-  const [drawerWidth, setDrawerWidth] = useState(() => getDefaultWidth(resource.kind))
+  // The width the user dragged to, or null to follow the default for the room
+  // available — so a window resize re-derives an undragged drawer, and only
+  // clamps a dragged one (which returns to its width when the room comes back).
+  const [draggedWidth, setDraggedWidth] = useState<number | null>(null)
+  const [available, setAvailable] = useState(() =>
+    typeof window === 'undefined' ? 0 : window.innerWidth - leftOffset - rightInset,
+  )
   const [isResizing, setIsResizing] = useState(false)
   const resizeStartX = useRef(0)
-  const resizeStartWidth = useRef(getDefaultWidth(resource.kind))
+  const resizeStartWidth = useRef(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const prefersReducedMotion = usePrefersReducedMotion()
+  const drawerWidth = draggedWidth === null
+    ? defaultDrawerWidth(resource.kind, available)
+    : clampDrawerWidth(draggedWidth, available)
+
+  // The room is the positioned host the drawer is laid out in, not the window:
+  // it excludes the nav rail, Radar Hub's chrome and a docked side panel.
+  const measureAvailable = useCallback(() => {
+    const parent = containerRef.current?.offsetParent as HTMLElement | null
+    const width = (parent?.clientWidth ?? window.innerWidth) - leftOffset - rightInset
+    if (width > 0) setAvailable(width)
+  }, [leftOffset, rightInset])
+
+  useLayoutEffect(() => {
+    measureAvailable()
+    const parent = containerRef.current?.offsetParent
+    if (parent && typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(measureAvailable)
+      ro.observe(parent)
+      return () => ro.disconnect()
+    }
+    window.addEventListener('resize', measureAvailable)
+    return () => window.removeEventListener('resize', measureAvailable)
+  }, [measureAvailable])
 
   // Expand/collapse crossfade. During the window we mount BOTH the drawer and
   // full-screen layouts, each pinned to its own width (so neither reflows or
@@ -166,11 +181,9 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
     }
   }, [expanded, prefersReducedMotion, measureFullWidth])
 
-  // Reset drawer width when resource kind changes
+  // A different kind starts from its own default width
   useEffect(() => {
-    const w = getDefaultWidth(resource.kind)
-    setDrawerWidth(w)
-    resizeStartWidth.current = w
+    setDraggedWidth(null)
   }, [resource.kind])
 
   // Drop a pending prewarm if the drawer closes or the target resource changes —
@@ -192,11 +205,9 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
     if (!isResizing) return
     document.body.style.cursor = 'ew-resize'
     document.body.style.userSelect = 'none'
-    const maxWidth = window.innerWidth * MAX_WIDTH_PERCENT
     const handleMouseMove = (e: MouseEvent) => {
       const deltaX = resizeStartX.current - e.clientX
-      const newWidth = resizeStartWidth.current + deltaX
-      setDrawerWidth(Math.max(MIN_WIDTH, Math.min(newWidth, maxWidth)))
+      setDraggedWidth(clampDrawerWidth(resizeStartWidth.current + deltaX, available))
     }
     const handleMouseUp = () => setIsResizing(false)
     document.addEventListener('mousemove', handleMouseMove)
@@ -207,7 +218,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [isResizing])
+  }, [isResizing, available])
 
   // Route navigation based on expanded state
   const handleNavigate = useCallback((res: SelectedResource) => {
