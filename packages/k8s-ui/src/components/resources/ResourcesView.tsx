@@ -6283,18 +6283,22 @@ export function ResourcesView({
         hold: held?.[col.key],
       }
     })
-    // The phone cap goes into the layout, not after it, so the room it frees
-    // counts when deciding whether the table can fit.
+    // The phone cap goes into the layout, so the room it frees counts when
+    // deciding whether the table can fit, and again after it, since leftover
+    // room is spread over every column regardless of its max.
     const capped = (v: number | undefined) => v === undefined ? undefined : Math.min(v, phoneNameCap)
-    const laidOut = columns[0]?.key === 'name' && phoneNameCap !== Infinity
+    const capName = columns[0]?.key === 'name' && phoneNameCap !== Infinity
+    const laidOut = capName
       ? inputs.map(c => c.key !== 'name' ? c : {
         ...c, floor: Math.min(c.floor, phoneNameCap), max: capped(c.max ?? Infinity), content: capped(c.content),
         min: capped(c.min), fitMin: capped(c.fitMin), hardMin: capped(c.hardMin), hold: capped(c.hold), userWidth: capped(c.userWidth),
       })
       : inputs
-    return computeColumnLayout(laidOut, availableWidth, {
+    const widths = computeColumnLayout(laidOut, availableWidth, {
       mustFit: typeof window !== 'undefined' && window.innerWidth >= MUST_FIT_WINDOW_PX,
     })
+    if (capName) widths.name = Math.min(widths.name, phoneNameCap)
+    return widths
   }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap])
   useLayoutEffect(() => {
     columnLayoutWidthsRef.current = columnLayoutWidths
