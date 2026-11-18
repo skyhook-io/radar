@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 💬 Discord Community
-    url: https://radarhq.io/community/chat
-    about: Ask questions, share feedback, and chat with the team and other Radar users.
+  - name: 💬 Slack Community
+    url: https://radarhq.io/slack
+    about: The fastest way to get help. Ask in #radar-help, share feedback, and chat with the team and other Radar users.
   - name: Questions & Discussions
     url: https://github.com/skyhook-io/radar/discussions
     about: Ask questions, share ideas, or discuss features with the community.
