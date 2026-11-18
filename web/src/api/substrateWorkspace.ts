@@ -465,8 +465,12 @@ export interface SubstrateAttention {
   /** Stable across reads for the same rule and subject. */
   id: string
   rule: SubstrateAttentionRule
-  /** info: expected and still within its budget (a drain before its Pod's deadline). */
-  severity: 'critical' | 'warning' | 'info'
+  /**
+   * critical: something is already lost or down. alert: at risk, nothing lost
+   * yet. info: expected and still within its budget (a drain before its Pod's
+   * deadline).
+   */
+  severity: 'critical' | 'alert' | 'warning' | 'info'
   title: string
   reading: string
   /** One action in a short sentence. */

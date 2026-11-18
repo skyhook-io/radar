@@ -114,11 +114,13 @@ func TestNeedsAttentionNoMatchingPool(t *testing.T) {
 	if r := find(t, rows, "noMatchingPool:a/gpu"); strings.Contains(r.NextStep, "fix the selector") || !strings.Contains(r.NextStep, "Label a pool to match") || !strings.Contains(r.NextStep, "recreate the template") {
 		t.Errorf("templates cannot be edited: label a pool, or recreate the template: %q", r.NextStep)
 	}
-	if r := find(t, rows, "noMatchingPool:a/gpu"); r.Severity != SeverityCritical {
-		t.Errorf("a template with actors not running is critical: %+v", r)
+	// Nothing it ran is lost, but none of its actors can be placed: alert,
+	// waiting actors or not, so the template reads one tone everywhere.
+	if r := find(t, rows, "noMatchingPool:a/gpu"); r.Severity != SeverityAlert || !strings.HasPrefix(r.Reading, "No pool's labels match its worker selector, so Substrate can place none of its actors, and 1 of them is not running.") {
+		t.Errorf("a template with actors not running is an alert that counts them in its first sentence: %+v", r)
 	}
-	if r := find(t, rows, "noMatchingPool:a/gpu-idle"); r.Severity != SeverityWarning {
-		t.Errorf("a template with no waiting actors is a warning: %+v", r)
+	if r := find(t, rows, "noMatchingPool:a/gpu-idle"); r.Severity != SeverityAlert || strings.Contains(r.Reading, "not running") {
+		t.Errorf("a template with no waiting actors is an alert too: %+v", r)
 	}
 	if slices.Contains(rules(rows), "noMatchingPool:a/ok") {
 		t.Error("a matching template is not flagged")
@@ -157,7 +159,9 @@ func TestNeedsAttentionWorkers(t *testing.T) {
 		Actors: actors, ActorsRead: true, Now: now,
 	})
 	u := find(t, rows, "workerUnavailable:u")
-	if u.Severity != SeverityCritical || u.Count != 1 || u.Title != "1 actor is still assigned to u-pod, unavailable for at least 12m" || !strings.HasPrefix(u.Reading, "1 actor is still assigned to it. ") {
+	// At risk, not lost: an alert. The title counts the actors, so the
+	// reading leads with the cause instead of saying it again.
+	if u.Severity != SeverityAlert || u.Count != 1 || u.Title != "1 actor is still assigned to u-pod, unavailable for at least 12m" || !strings.HasPrefix(u.Reading, workerUnavailableCause[PodUnread]) || strings.Contains(u.Reading, "still assigned") {
 		t.Errorf("unavailable with an actor assigned = %+v", u)
 	}
 	if slices.Contains(rules(rows), "workerUnavailable:ru") {
@@ -175,6 +179,11 @@ func TestNeedsAttentionWorkers(t *testing.T) {
 	}
 	if r.Subject.Kind != "Actors" || r.Subject.Filter["worker"] != "r-pod" || r.Subject.Filter["impact"] != ImpactRestarted || r.Command != revertCommand || strings.Contains(r.NextStep, "Wait") {
 		t.Errorf("restarting row links the lost actors and says what to do: %+v", r)
+	}
+	// What a reader sees next, that lists may still call it running, leads;
+	// the epochs are mechanics and follow.
+	if !strings.HasPrefix(r.Reading, "It may still show running until Substrate reconciles the worker and marks it crashed. ") || !strings.Contains(r.Reading, "replaced at epoch 5") {
+		t.Errorf("restarting reading = %q", r.Reading)
 	}
 	if !rankedBefore(rows, "workerRestarting:r", RuleUploadOverdue) {
 		t.Errorf("lost sandboxes rank above pending uploads: %v", rules(rows))
@@ -259,8 +268,11 @@ func TestNeedsAttentionUploadsOverdue(t *testing.T) {
 		t.Fatalf("one row for every node, not one per node: %v", rules(rows))
 	}
 	r := rows[0]
-	if r.Severity != SeverityWarning || r.Count != 3 || r.Title != "3 suspended actors' newest snapshots are pending upload" {
+	if r.Severity != SeverityAlert || r.Count != 3 || r.Title != "3 suspended actors' newest snapshots are pending upload" {
 		t.Errorf("row = %+v", r)
+	}
+	if !strings.HasPrefix(r.Reading, "Until each is stored, its state is only on its node; the oldest was last updated 45m ago. ") {
+		t.Errorf("the reading leads with what is at risk: %q", r.Reading)
 	}
 	if len(r.Nodes) != 2 || r.Nodes[0] != (UploadNode{Node: "node-a", State: NodeReady, Count: 2, Oldest: ago(45 * time.Minute)}) || r.Nodes[1].Node != "node-b" {
 		t.Errorf("nodes = %+v", r.Nodes)
@@ -270,18 +282,21 @@ func TestNeedsAttentionUploadsOverdue(t *testing.T) {
 		t.Errorf("singular row = %+v", one)
 	}
 
+	// A node that is down may have taken the files: critical, said first.
+	// A long wait on nodes that are up loses nothing yet: still an alert.
 	for _, tc := range []struct {
-		name  string
-		ready map[string]bool
-		now   time.Time
-		says  string
+		name     string
+		ready    map[string]bool
+		now      time.Time
+		severity string
+		leads    string
 	}{
-		{"node NotReady", map[string]bool{"node-a": false, "node-b": true}, now, "Node node-a is NotReady"},
-		{"node gone", map[string]bool{"node-b": true}, now, "Node node-a is gone"},
-		{"over an hour", ready, now.Add(20 * time.Minute), "The oldest last update is over an hour ago."},
+		{"node NotReady", map[string]bool{"node-a": false, "node-b": true}, now, SeverityCritical, "Node node-a is NotReady, so the snapshots it holds may be lost. "},
+		{"node gone", map[string]bool{"node-b": true}, now, SeverityCritical, "Node node-a is gone, so the snapshots it holds may be lost. "},
+		{"over an hour", ready, now.Add(20 * time.Minute), SeverityAlert, "Until each is stored, its state is only on its node; the oldest was last updated 1h ago. "},
 	} {
 		r := NeedsAttention(Inputs{Actors: actors, ActorsRead: true, NodeReady: tc.ready, Now: tc.now})[0]
-		if r.Severity != SeverityCritical || !strings.Contains(r.Reading, tc.says) {
+		if r.Severity != tc.severity || !strings.HasPrefix(r.Reading, tc.leads) {
 			t.Errorf("%s: %s %q", tc.name, r.Severity, r.Reading)
 		}
 	}
@@ -308,10 +323,36 @@ func TestNeedsAttentionRankWithinSeverity(t *testing.T) {
 	})
 	want := []string{
 		RuleCrashedActors, "poolShort:agents/p", RuleUploadOverdue, // critical
-		"noMatchingPool:a/nopool", "workerUnavailable:u", "stuckTransition:resuming", "goldenSnapshotFailed:a/golden", // warning
+		"noMatchingPool:a/nopool", "workerUnavailable:u", // alert
+		"stuckTransition:resuming", "goldenSnapshotFailed:a/golden", // warning
 	}
 	if got := rules(rows); !slices.Equal(got, want) {
 		t.Errorf("order =\n%v\nwant\n%v", got, want)
+	}
+}
+
+// Alert sits between critical and warning, whatever the rule: an
+// unavailable worker (alert) ranks above an actor whose template is gone
+// (warning), though the latter's rule ranks first within one severity.
+func TestAlertRanksBetweenCriticalAndWarning(t *testing.T) {
+	unavailable := worker("u", "p", WorkerUnavailable, 8, 0)
+	unavailable.UpdateTime = ago(time.Hour)
+	actors := []Actor{
+		{Atespace: "a", Name: "c", Template: Ref{"a", "t"}, State: StateCrashed, UpdateTime: ago(time.Hour)},
+		{Atespace: "a", Name: "orphan", Template: Ref{"a", "gone"}, State: StateSuspended, UpdateTime: ago(time.Hour)},
+	}
+	rows := NeedsAttention(Inputs{
+		Actors: actors, ActorsRead: true, Templates: []Template{{Atespace: "a", Name: "t", GoldenDisabled: true}}, TemplatesRead: true, TemplatesComplete: true,
+		Workers: []Worker{unavailable}, WorkersRead: true, Now: now,
+	})
+	want := []string{RuleCrashedActors, "workerUnavailable:u", "missingTemplate:a/gone"}
+	if got := rules(rows); !slices.Equal(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+	for id, sev := range map[string]string{RuleCrashedActors: SeverityCritical, "workerUnavailable:u": SeverityAlert, "missingTemplate:a/gone": SeverityWarning} {
+		if r := find(t, rows, id); r.Severity != sev {
+			t.Errorf("%s: severity %s, want %s", id, r.Severity, sev)
+		}
 	}
 }
 

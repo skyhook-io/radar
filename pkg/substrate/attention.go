@@ -11,16 +11,19 @@ import (
 	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
-// Severities of a needs-attention row.
+// Severities of a needs-attention row, the house's four steps.
 const (
+	// SeverityCritical: something is already lost or down.
 	SeverityCritical = "critical"
-	SeverityWarning  = "warning"
+	// SeverityAlert: at risk, nothing lost yet.
+	SeverityAlert   = "alert"
+	SeverityWarning = "warning"
 	// SeverityInfo: expected and still within its budget, shown so the
 	// operator knows it is in progress.
 	SeverityInfo = "info"
 )
 
-var severityRank = map[string]int{SeverityCritical: 0, SeverityWarning: 1, SeverityInfo: 2}
+var severityRank = map[string]int{SeverityCritical: 0, SeverityAlert: 1, SeverityWarning: 2, SeverityInfo: 3}
 
 // Needs-attention rules.
 const (
@@ -42,11 +45,8 @@ const (
 
 // Thresholds a state must hold, at least, before it needs attention.
 const (
-	StuckAfter = 5 * time.Minute
-	// UploadCriticalAfter is when an overdue upload becomes critical even
-	// with its node ready.
-	UploadCriticalAfter = 60 * time.Minute
-	UnavailableAfter    = 5 * time.Minute
+	StuckAfter       = 5 * time.Minute
+	UnavailableAfter = 5 * time.Minute
 	// DefaultDrainGrace is the termination grace Substrate gives worker Pods
 	// (workerpool_apply.go), used when Radar cannot read the Pod's own
 	// deadline. The worker allows its applications 30 minutes of it.
@@ -241,8 +241,8 @@ var ruleRank = map[string]int{
 }
 
 // NeedsAttention applies every rule whose inputs were read (Checks lists
-// them): critical first, then warning, then info, then by rule (ruleRank),
-// then newest first.
+// them): critical first, then alert, warning and info, then by rule
+// (ruleRank), then newest first.
 func NeedsAttention(in Inputs) []Attention {
 	out := []Attention{}
 	if in.ActorsRead {
@@ -454,24 +454,32 @@ const (
 
 // CrashedMemoryActorStep is the memory-limit remedy on a's own page, worded
 // by the snapshot its revert keeps (RecoverySource) and what that snapshot
-// restores under the new template. It names that condition: the actor page
-// also says how the snapshot resumes as things stand.
+// restores under the new template. The page also says what the snapshot
+// holds and how it resumes as things stand ("holds memory"), so a step that
+// loses some of it says the move is what drops it: the two never read as
+// contradicting each other. A snapshot stamped with its template restores
+// only its volumes under another (templateReplaced); an unstamped one
+// restores whole.
 func CrashedMemoryActorStep(a Actor) string {
-	const move = "Move this actor to a template with more memory, then revert it; "
+	const move = "Move this actor to a template with more memory, then revert it"
 	src := RecoverySource(a)
 	switch {
 	case src == nil:
-		return move + "it has no stored snapshot, so it boots fresh."
+		return move + "; it has no stored snapshot, so it boots fresh."
 	case src.Fidelity == FidelityVolumes:
-		return move + "on the new template it resumes from its volumes."
+		return move + "; on the new template it resumes from its volumes."
 	case src.ActorTemplateUID != "" && src.Fidelity == FidelityMemory:
-		return move + "on the new template it resumes from volumes, without memory or files."
+		return move + ". The move drops its snapshot's memory and files: it restarts from volumes."
 	case src.ActorTemplateUID != "" && src.Fidelity == FidelityRootFS:
-		return move + "on the new template it resumes from volumes, without its saved files."
-	case src.ActorTemplateUID == "" && src.Fidelity == FidelityRootFS:
-		return move + "on the new template it resumes from its saved files."
+		return move + ". The move drops its snapshot's saved files: it restarts from volumes."
+	case src.ActorTemplateUID != "":
+		return move + ". The move drops all but its snapshot's volumes: it restarts from them."
+	case src.Fidelity == FidelityRootFS:
+		return move + "; on the new template it resumes from its saved files."
+	case src.Fidelity == FidelityMemory:
+		return move + "; on the new template it still resumes from memory on a compatible runtime."
 	}
-	return move + "on the new template it resumes from its stored snapshot."
+	return move + "; what it restores then is unknown: Substrate names no fidelity for its snapshot."
 }
 
 // CrashedMemoryCommand is the command of the memory-limit step for a: moving
@@ -621,8 +629,8 @@ func uploadOverdue(a Actor, now time.Time) (string, bool) {
 
 // Rule 8: suspended actors whose newest snapshot is pending upload, last
 // updated more than UploadPendingAfter ago, one row with a per-node
-// breakdown. A warning, critical when a node holding the only copy is
-// NotReady or gone, or the last update is over UploadCriticalAfter ago. It
+// breakdown. An alert however long it waits, critical when a node holding
+// the only copy is NotReady or gone. It
 // reads the API only: an actor that keeps resuming and suspending resets its
 // update time and never shows here, which is what atelet's own durability
 // clock (RuleNodeUploadsOverdue) covers.
@@ -665,8 +673,12 @@ func uploadsOverdue(in Inputs) []Attention {
 	if len(actors) > 1 {
 		title = fmt.Sprintf("%d suspended actors' newest snapshots are pending upload", len(actors))
 	}
-	reading := fmt.Sprintf("Each is suspended with its newest snapshot pending upload and was last updated at least %s ago; the oldest last update was %s ago. Substrate does not record when an upload started. Until one is stored, that state is only on its node.", timeutil.FormatAgeShort(UploadPendingAfter), timeutil.FormatAgeShort(oldestWait))
-	severity := SeverityWarning
+	// The first sentence is what the row shows; the mechanics follow it.
+	reading := fmt.Sprintf("Until each is stored, its state is only on its node; the oldest was last updated %s ago.", timeutil.FormatAgeShort(oldestWait))
+	reading += fmt.Sprintf(" Each is suspended with its newest snapshot pending upload and was last updated at least %s ago. Substrate does not record when an upload started.", timeutil.FormatAgeShort(UploadPendingAfter))
+	// Nothing is lost while the node holding the files is up, however long
+	// the wait: alert. A node that is down may have taken them: critical.
+	severity := SeverityAlert
 	var lost []string
 	for _, n := range nodes {
 		switch n.State {
@@ -676,13 +688,9 @@ func uploadsOverdue(in Inputs) []Attention {
 			lost = append(lost, n.Node+" is gone")
 		}
 	}
-	switch {
-	case len(lost) > 0:
+	if len(lost) > 0 {
 		severity = SeverityCritical
-		reading += " Node " + strings.Join(lost, ", node ") + ", so the snapshots it holds may be lost."
-	case oldestWait > UploadCriticalAfter:
-		severity = SeverityCritical
-		reading += " The oldest last update is over an hour ago."
+		reading = "Node " + strings.Join(lost, ", node ") + ", so the snapshots it holds may be lost. " + reading
 	}
 	return []Attention{{
 		ID: RuleUploadOverdue, Rule: RuleUploadOverdue, Severity: severity,
@@ -761,17 +769,18 @@ func noMatchingPool(in Inputs) []Attention {
 		if len(MatchingPools(t, pools)) > 0 {
 			continue
 		}
-		severity := SeverityWarning
-		reading := "No pool's labels match its worker selector, so Substrate can place none of its actors."
+		// Nothing it runs is lost, but nothing of it can be placed: alert,
+		// with or without actors waiting.
+		reading := "No pool's labels match its worker selector, so Substrate can place none of its actors"
+		if n := waiting[t.Ref()]; n > 0 {
+			reading += fmt.Sprintf(", and %s not running", plural(n, "of them is", "of them are"))
+		}
+		reading += "."
 		if GoldenOf(t).State == GoldenBuilding {
 			reading += " Its golden snapshot cannot be built either: the build runs on a worker too."
 		}
-		if n := waiting[t.Ref()]; n > 0 {
-			severity = SeverityCritical
-			reading += fmt.Sprintf(" %s of it %s not running.", plural(n, "actor", "actors"), map[bool]string{true: "is", false: "are"}[n == 1])
-		}
 		out = append(out, Attention{
-			ID: RuleNoMatchingPool + ":" + t.Atespace + "/" + t.Name, Rule: RuleNoMatchingPool, Severity: severity, key: t.Atespace + "/" + t.Name,
+			ID: RuleNoMatchingPool + ":" + t.Atespace + "/" + t.Name, Rule: RuleNoMatchingPool, Severity: SeverityAlert, key: t.Atespace + "/" + t.Name,
 			Title:    fmt.Sprintf("No pool matches the selector of %s", refName(t.Ref())),
 			Reading:  reading,
 			NextStep: "Label a pool to match the template's worker selector, or recreate the template with a selector a pool matches.",
@@ -836,20 +845,20 @@ func workerRows(in Inputs) []Attention {
 		assigned := byWorker[w.Name]
 		switch {
 		case w.State == WorkerUnavailable && held > UnavailableAfter:
-			severity := SeverityWarning
+			// At risk, not yet lost: Substrate still records its actors as
+			// assigned. One tone whether or not any are, as on its chip.
 			podState := in.WorkerPods.PodStateOf(w)
 			title := fmt.Sprintf("Worker %s has been unavailable for at least %s", w.Pod, timeutil.FormatAgeShort(held))
+			// The title names the actors; the reading leads with the cause.
 			reading := workerUnavailableCause[podState] + " Substrate places no new actors on it."
 			rowRelated := related
 			if len(assigned) > 0 {
-				severity = SeverityCritical
 				title = fmt.Sprintf("%s still assigned to %s, unavailable for at least %s", plural(len(assigned), "actor is", "actors are"), w.Pod, timeutil.FormatAgeShort(held))
-				reading = fmt.Sprintf("%s still assigned to it. ", plural(len(assigned), "actor is", "actors are")) + reading
 				rowRelated = append([]Subject{workerActors(w, ImpactUnavailable)}, related...)
 			}
 			step := workerUnavailableStep[podState]
 			out = append(out, Attention{
-				ID: RuleWorkerUnavailable + ":" + w.Name, Rule: RuleWorkerUnavailable, Severity: severity, key: w.Name,
+				ID: RuleWorkerUnavailable + ":" + w.Name, Rule: RuleWorkerUnavailable, Severity: SeverityAlert, key: w.Name,
 				Title:    title,
 				Reading:  reading,
 				NextStep: step.text, Command: step.command(w),
@@ -863,20 +872,26 @@ func workerRows(in Inputs) []Attention {
 			row := Attention{
 				ID: RuleWorkerRestarting + ":" + w.Name, Rule: RuleWorkerRestarting, Severity: SeverityWarning, key: w.Name, epoch: w.RegisteredEpoch,
 				Title:    fmt.Sprintf("Worker %s's registration is being reconciled", w.Pod),
-				Reading:  fmt.Sprintf("Substrate has not yet reconciled the worker's registration (registered epoch %d, observed %d). No actor still assigned ran under the earlier process.", w.RegisteredEpoch, w.ObservedEpoch),
+				Reading:  fmt.Sprintf("No actor still assigned ran under the worker's earlier process. Substrate has not yet reconciled its registration (registered epoch %d, observed %d).", w.RegisteredEpoch, w.ObservedEpoch),
 				NextStep: "Wait a few minutes for Substrate to reconcile the worker; if it does not, read the Substrate API server's log.",
 				Command:  apiServerLogs,
 				Subject:  subject, Related: related, Count: 1, Since: w.UpdateTime,
 			}
 			if !in.ActorsRead {
-				row.Reading = fmt.Sprintf("Substrate has not yet reconciled the worker's registration (registered epoch %d, observed %d). Actors were not read, so Radar cannot say which ran under the earlier process.", w.RegisteredEpoch, w.ObservedEpoch)
+				row.Reading = fmt.Sprintf("Actors were not read, so Radar cannot say which ran under the worker's earlier process. Substrate has not yet reconciled its registration (registered epoch %d, observed %d).", w.RegisteredEpoch, w.ObservedEpoch)
 			}
 			// The actors' sandboxes are already gone; Substrate only records it.
 			if len(lost) > 0 {
 				row.Severity = SeverityCritical
 				row.Title = fmt.Sprintf("%s when %s restarted", plural(len(lost), "actor lost its sandbox", "actors lost their sandboxes"), w.Pod)
-				row.Reading = fmt.Sprintf("%s under an earlier process of the worker, replaced at epoch %d, so %s. Substrate marks them crashed when it reconciles the worker (observed epoch %d); until then they may still show running.",
-					plural(len(lost), "actor ran", "actors ran"), w.RegisteredEpoch, map[bool]string{true: "its sandbox is lost", false: "their sandboxes are lost"}[len(lost) == 1], w.ObservedEpoch)
+				// The title says they are lost; what the reader sees next is
+				// that the lists may still call them running.
+				lead := "They may still show running until Substrate reconciles the worker and marks them crashed."
+				if len(lost) == 1 {
+					lead = "It may still show running until Substrate reconciles the worker and marks it crashed."
+				}
+				row.Reading = fmt.Sprintf("%s %s under an earlier process of the worker, replaced at epoch %d; Substrate has observed epoch %d.",
+					lead, plural(len(lost), "actor ran", "actors ran"), w.RegisteredEpoch, w.ObservedEpoch)
 				row.NextStep = "Revert each to its newest stored generation now; Substrate marks them crashed when it reconciles the worker anyway."
 				row.Command = revertCommand
 				row.Subject = workerActors(w, ImpactRestarted)
@@ -1074,6 +1089,7 @@ func nodeUploadRows(in Inputs) []Attention {
 		}
 		n := int(*ns.OverdueUploads)
 		reading := fmt.Sprintf("atelet on this node counts %s past their deadline", plural(n, "snapshot upload", "snapshot uploads"))
+		state := nodeState(in.NodeReady, node)
 		if len(ns.Bands) > 0 {
 			var parts []string
 			for _, b := range []string{"over_15m", "5m_to_15m", "1m_to_5m"} {
@@ -1089,12 +1105,14 @@ func nodeUploadRows(in Inputs) []Attention {
 		if ns.OldestUnsavedSeconds != nil {
 			reading += " The oldest state not yet stored is " + timeutil.FormatAgeShort(time.Duration(*ns.OldestUnsavedSeconds*float64(time.Second))) + " old."
 		}
-		severity := SeverityWarning
-		switch nodeState(in.NodeReady, node) {
+		// As with the API's own upload rule: alert while the node is up,
+		// critical once it is down.
+		severity := SeverityAlert
+		switch state {
 		case NodeNotReady:
-			severity, reading = SeverityCritical, reading+" The node is NotReady."
+			severity, reading = SeverityCritical, "The node is NotReady, so the actor state not yet stored there may be lost. "+reading
 		case NodeGone:
-			severity, reading = SeverityCritical, reading+" The node is gone."
+			severity, reading = SeverityCritical, "The node is gone, so the actor state not yet stored there may be lost. "+reading
 		}
 		out = append(out, Attention{
 			ID: RuleNodeUploadsOverdue + ":" + node, Rule: RuleNodeUploadsOverdue, Severity: severity, key: node,
@@ -1149,7 +1167,10 @@ func drainingRow(in Inputs, w Worker, held time.Duration, assigned []Actor, subj
 	if !known && !w.UpdateTime.IsZero() {
 		deadline = w.UpdateTime.Add(DefaultDrainGrace)
 	}
-	base := fmt.Sprintf("Draining stops new placements; it does not suspend or move actors. %s still assigned and run until their applications shut down, or until someone suspends or deletes them. When the Pod is gone, Substrate marks any still assigned crashed.", plural(len(assigned), "actor is", "actors are"))
+	// The row shows its first sentence: when the Pod goes, and what happens
+	// to the actors then. How draining works follows it.
+	const crashes = "once the Pod is gone, Substrate marks any actor still assigned crashed."
+	how := fmt.Sprintf(" Draining stops new placements; it does not suspend or move actors. %s still assigned and run until their applications shut down, or until someone suspends or deletes them.", plural(len(assigned), "actor is", "actors are"))
 	row := Attention{
 		ID: RuleWorkerDraining + ":" + w.Name, Rule: RuleWorkerDraining, Severity: SeverityInfo, key: w.Name,
 		Title:   fmt.Sprintf("Worker %s is draining with %s", w.Pod, plural(len(assigned), "actor", "actors")),
@@ -1157,23 +1178,23 @@ func drainingRow(in Inputs, w Worker, held time.Duration, assigned []Actor, subj
 	}
 	switch {
 	case deadline.IsZero():
-		row.Reading = base + " Radar cannot tell when the drain began or when the Pod is killed."
+		row.Reading = "Radar cannot tell when the drain began or when the Pod is killed; " + crashes + how
 		row.NextStep = "Suspend any actor whose state must be kept before its worker Pod is gone."
 	case in.Now.Before(deadline):
-		when := "Its Pod's termination deadline is in " + timeutil.FormatAgeShort(deadline.Sub(in.Now)) + "."
+		when := "Its Pod's termination deadline is in " + timeutil.FormatAgeShort(deadline.Sub(in.Now)) + "; " + crashes
 		if !known {
-			when = "Radar cannot read the Pod's deadline; Substrate gives worker Pods " + timeutil.FormatAgeShort(DefaultDrainGrace) + ", which from the drain's start ends in about " + timeutil.FormatAgeShort(deadline.Sub(in.Now)) + "."
+			when = "Radar cannot read the Pod's deadline; Substrate gives worker Pods " + timeutil.FormatAgeShort(DefaultDrainGrace) + ", which from the drain's start ends in about " + timeutil.FormatAgeShort(deadline.Sub(in.Now)) + ". Then, " + crashes
 		}
-		row.Reading = base + " " + when
+		row.Reading = when + how
 		row.NextStep = "Nothing to do unless an actor's state must be kept: suspend it before the deadline."
 	default:
 		row.Severity = SeverityWarning
 		row.Title = fmt.Sprintf("Worker %s is past its Pod's termination deadline with %s", w.Pod, plural(len(assigned), "actor", "actors"))
-		passed := "Its Pod's termination deadline passed " + timeutil.FormatAgeShort(in.Now.Sub(deadline)) + " ago."
+		passed := "Its Pod's termination deadline passed " + timeutil.FormatAgeShort(in.Now.Sub(deadline)) + " ago; " + crashes
 		if !known {
-			passed = fmt.Sprintf("It has been draining for at least %s, longer than the %s Substrate gives worker Pods; Radar cannot read the Pod's own deadline.", timeutil.FormatAgeShort(held), timeutil.FormatAgeShort(DefaultDrainGrace))
+			passed = fmt.Sprintf("It has been draining for at least %s, longer than the %s Substrate gives worker Pods; Radar cannot read the Pod's own deadline. Then, %s", timeutil.FormatAgeShort(held), timeutil.FormatAgeShort(DefaultDrainGrace), crashes)
 		}
-		row.Reading = base + " " + passed
+		row.Reading = passed + how
 		row.NextStep = "Check the worker Pod: whether it is still terminating, and the worker's log for applications that did not stop."
 	}
 	return row

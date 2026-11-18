@@ -24,12 +24,56 @@ import { segmentStates } from './SubstrateActors'
 import { counts, notConnectedWorkspace, poolShortRow, sharedTier, workspace } from './substrate.fixtures'
 
 describe('actor states', () => {
-  it('reads suspended as calm, transitions as pending and a crash as a failure', () => {
+  it('reads suspended as the quietest, a transition in flight in one quiet tone, and a crash as a failure', () => {
     expect(actorStateTone('running')).toBe('healthy')
-    expect(actorStateTone('suspended')).toBe('neutral')
-    expect(actorStateTone('resuming')).toBe('degraded')
+    expect(actorStateTone('suspended')).toBe('unknown')
+    for (const s of ['resuming', 'suspending', 'reverting', 'deleting'] as const) expect(actorStateTone(s)).toBe('neutral')
     expect(actorStateTone('crashed')).toBe('unhealthy')
     expect(actorStateTone('unknown')).toBe('unknown')
+  })
+
+  it('never fills Unknown like Suspended: Unknown keeps Radar’s unknown slate, Suspended a quiet resting fill', async () => {
+    const { actorStateFill } = await import('./readings')
+    const { toneFillClass } = await import('@skyhook-io/k8s-ui')
+    expect(actorStateFill('unknown')).toBe(toneFillClass('unknown'))
+    expect(actorStateFill('suspended')).not.toBe(actorStateFill('unknown'))
+    // Every state's fill is its own on the bar, the transitions in flight apart, sharing one.
+    const states = ['running', 'suspended', 'resuming', 'crashed', 'unknown'] as const
+    expect(new Set(states.map(actorStateFill)).size).toBe(states.length)
+    for (const s of ['suspending', 'reverting', 'deleting'] as const) expect(actorStateFill(s)).toBe(actorStateFill('resuming'))
+    // Drawn: the bar's segments and the legend's dots.
+    const { renderToStaticMarkup } = await import('react-dom/server')
+    const { createElement } = await import('react')
+    const { SubstrateStateBar } = await import('./SubstrateStateBar')
+    const html = renderToStaticMarkup(createElement(SubstrateStateBar, { counts: counts({ suspended: 900, unknown: 3, running: 97 }) }))
+    const fillOf = (label: string) => new RegExp(`<span aria-hidden="true" class="inline-block h-1.5 w-1.5 rounded-full ([^"]+)"></span>(?:<[^>]+>)*${label} `).exec(html)?.[1]
+    expect(fillOf('Suspended')).toBe(actorStateFill('suspended'))
+    expect(fillOf('Unknown')).toBe(toneFillClass('unknown'))
+  })
+
+  it('keeps amber for a stuck transition, and says "stuck" in the chip’s words', async () => {
+    const { actorStateReading } = await import('./readings')
+    const now = Date.parse('2026-11-18T12:00:00Z')
+    const ago = (m: number) => new Date(now - m * 60_000).toISOString()
+    expect(actorStateReading('resuming', { updateTime: ago(1), now })).toEqual({ label: 'Resuming', severity: 'info' })
+    expect(actorStateReading('deleting', { updateTime: ago(51), now })).toMatchObject({ label: 'Deleting · stuck', severity: 'warning' })
+    // Without the actor's last change Radar can't judge stuck: the chip stays in flight, never guesses.
+    expect(actorStateReading('suspending', { now })).toEqual({ label: 'Suspending', severity: 'info' })
+    // A resting state is never stuck, however old.
+    expect(actorStateReading('suspended', { updateTime: ago(600), now })).toEqual({ label: 'Suspended', severity: 'neutral' })
+    // A worker in trouble names itself first; an unavailable one is at risk (alert), a lost sandbox is lost.
+    expect(actorStateReading('running', { impact: { kind: 'unavailable', reading: 'r' }, updateTime: ago(51), now })).toEqual({ label: 'Running · worker unavailable', severity: 'alert', title: 'r' })
+    expect(actorStateReading('running', { impact: { kind: 'restarted', reading: 'r' } }).severity).toBe('error')
+    expect(actorStateReading('running', { impact: { kind: 'draining', reading: 'r' } }).severity).toBe('warning')
+  })
+
+  it('gives the placement grid the badge’s tones, so its legend and the state bar agree', async () => {
+    const { placementTone, workerImpactTone } = await import('./readings')
+    for (const s of ['running', 'suspended', 'resuming', 'suspending', 'reverting', 'deleting', 'crashed', 'unknown'] as const) expect(placementTone(s, undefined)).toBe(actorStateTone(s))
+    for (const k of ['unavailable', 'draining', 'restarted'] as const) expect(placementTone('running', k)).toBe(workerImpactTone(k))
+    // Unavailable and draining read apart: orange and amber.
+    expect(placementTone('running', 'unavailable')).toBe('alert')
+    expect(placementTone('running', 'draining')).toBe('degraded')
   })
 
   it('counts the In progress segment over the four transitions, and leaves unread counts undefined', () => {
@@ -117,6 +161,23 @@ describe('API tier readings', () => {
   it('names denied atespaces and a reached cap', () => {
     expect(coverageReason({ state: 'partial', deniedAtespaces: ['a', 'b'] }, 'actors')).toBe('Substrate denied atespaces a, b')
     expect(coverageReason({ state: 'partial', code: 'capExceeded', cap: 50000 }, 'actors')).toBe('Radar read the first 50000 actors and stopped there')
+  })
+})
+
+describe('needs-attention severity', () => {
+  it('reads the four steps in the house’s tones, and a banner in the same one', async () => {
+    const { attentionTone, attentionBannerVariant, worstAttentionTone } = await import('./readings')
+    expect((['critical', 'alert', 'warning', 'info'] as const).map((severity) => attentionTone({ severity }))).toEqual(['unhealthy', 'alert', 'degraded', 'neutral'])
+    expect((['critical', 'alert', 'warning', 'info'] as const).map((severity) => attentionBannerVariant({ severity }))).toEqual(['error', 'alert', 'warning', 'info'])
+    expect(worstAttentionTone([{ severity: 'warning' }, { severity: 'alert' }, { severity: 'info' }])).toBe('alert')
+    expect(worstAttentionTone([])).toBeUndefined()
+  })
+
+  it('counts an alert row as needing attention, like any but info', () => {
+    const data = workspace()
+    const alert = { ...poolShortRow, id: 'workerUnavailable:w', rule: 'workerUnavailable' as const, severity: 'alert' as const, subject: { kind: 'Worker' as const, namespace: 'ns', name: 'w' } }
+    expect(substrateAttentionCount({ ...data, needsAttention: [...data.needsAttention, alert] }).count).toBe(4)
+    expect(substrateScreenCounts({ ...data, needsAttention: [...data.needsAttention, alert] }).workers.count).toBe(1)
   })
 })
 
@@ -246,10 +307,15 @@ describe('one fact once, and a worker that says what happened to its actors', ()
       .toBe('Checkpointing on worker w-1. 3 other actors are in the same state.')
   })
 
-  it('names a reconciling worker’s lost actors on its chip, in amber, and a terminating Pod as terminating', async () => {
+  it('reads a reconciling worker’s lost sandboxes in its chip’s red, the count left to the line beside it, and a terminating Pod as terminating', async () => {
     const { workerStateReading, workerPodText } = await import('./readings')
     const reading = '3 actors lost their sandboxes when its process restarted; Substrate marks them crashed when it reconciles the worker.'
-    expect(workerStateReading({ state: 'active', workerState: { kind: 'reconciling', assigned: 13, lost: 3, reading } })).toMatchObject({ label: 'Active · reconciling (3 actors lost)', severity: 'warning', title: reading })
+    // Lost sandboxes are critical, the tone of their Needs attention row; a reconcile that lost none stays amber.
+    expect(workerStateReading({ state: 'active', workerState: { kind: 'reconciling', assigned: 13, lost: 3, reading } })).toMatchObject({ label: 'Active · reconciling', severity: 'error', title: reading })
+    expect(workerStateReading({ state: 'active', workerState: { kind: 'reconciling', assigned: 13, lost: 0, reading } })).toMatchObject({ severity: 'warning' })
+    // An unavailable worker is at risk, not lost: orange, as its row reads.
+    expect(workerStateReading({ state: 'unavailable' }).severity).toBe('alert')
+    expect(workerStateReading({ state: 'unavailable', workerState: { kind: 'reconciling', reading } }).severity).toBe('alert')
     // Actors not read: no count is made up.
     expect(workerStateReading({ state: 'active', workerState: { kind: 'reconciling', reading } }).label).toBe('Active · reconciling')
     expect(workerStateReading({ state: 'active' })).toMatchObject({ label: 'Active', severity: 'success' })

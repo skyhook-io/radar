@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { Collapse, CollapseChevron, FoldSection, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
+import { Collapse, CollapseChevron, Tooltip, toneTextClass, useDisclosure } from '@skyhook-io/k8s-ui'
 import type { SubstrateAttention, SubstrateSubject } from '../../api/substrateWorkspace'
 import { SUBJECT_KIND_LABEL, attentionTone, splitReading, subjectLabel } from './readings'
 import { CommandChip, Tokens, When } from './shared'
@@ -140,10 +140,12 @@ function Tallies({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubjec
       </span>
     ),
   }))
-  if (groups.length <= 1 && messages.length <= 1 && nodes.length === 0) return null
+  // A crash row split by remedy names its templates beside each step already.
+  const byGroup = groups.length > 1 && !splitsByRemedy(row)
+  if (!byGroup && messages.length <= 1 && nodes.length === 0) return null
   return (
-    <div className="mt-1 grid gap-x-8 gap-y-2 text-xs text-theme-text-secondary lg:grid-cols-2">
-      {groups.length > 1 && <TallyList title={groupTitle} items={groups} />}
+    <div className="grid gap-x-8 gap-y-2 text-xs text-theme-text-secondary lg:grid-cols-2">
+      {byGroup && <TallyList title={groupTitle} items={groups} />}
       {messages.length > 1 && <TallyList title="Substrate’s messages" items={messages} />}
       {nodes.length > 0 && <TallyList title="Nodes holding them" items={nodes} />}
     </div>
@@ -205,43 +207,86 @@ function Concentration({ row, onOpen }: { row: SubstrateAttention; onOpen?: Open
   )
 }
 
-/**
- * A row's next step. A crash row whose groups name a cause gives each its
- * own remedy, and the rest the general step without a command: no one command
- * is offered as though every crash shared a remedy.
- */
-function NextSteps({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubject }) {
+/** A crash row's groups by remedy: those whose cause names one, and the rest, which share the row's general step. */
+function crashRemedies(row: SubstrateAttention) {
   const remedies = groupRemedies(row)
   const rest = (row.groups ?? []).filter((g) => !g.nextStep)
-  if (remedies.length === 0 || (remedies.length === 1 && rest.length === 0)) {
-    return (
-      <div className="mt-0.5 break-words text-xs text-theme-text-primary">
-        <span className="font-medium">Next step: </span>
-        {row.nextStep}
-        {row.command && <> <CommandChip command={row.command} inline /></>}
-      </div>
-    )
-  }
-  const restCount = rest.reduce((n, g) => n + g.count, 0)
+  return { remedies, rest, restCount: rest.reduce((n, g) => n + g.count, 0) }
+}
+
+/** Whether a row splits its crashes by remedy: one remedy of a known cause shows, the others wait under Details. */
+function splitsByRemedy(row: SubstrateAttention): boolean {
+  const { remedies, rest } = crashRemedies(row)
+  return remedies.length > 1 || (remedies.length === 1 && rest.length > 0)
+}
+
+function StepLine({ lead, step, command }: { lead: ReactNode; step: string; command?: string }) {
+  return (
+    <div className="mt-1 break-words text-xs text-theme-text-primary">
+      <span className="font-medium">{lead}</span>
+      {step}
+      {command && <> <CommandChip command={command} inline /></>}
+    </div>
+  )
+}
+
+const CAUSE_WORDS: Record<NonNullable<Tally['cause']>, string> = { memoryLimit: 'killed over their memory limit' }
+
+/**
+ * A row's one visible next step. A crash row whose groups name a cause shows
+ * that cause's remedy, with its command, and one line for the rest, whose
+ * general step waits under Details: no one command is offered as though every
+ * crash shared a remedy.
+ */
+function NextStep({ row, onOpen, onShowDetails }: { row: SubstrateAttention; onOpen?: OpenSubject; onShowDetails: () => void }) {
+  if (!splitsByRemedy(row)) return <StepLine lead="Next step: " step={row.nextStep} command={row.command} />
+  const { remedies, rest } = crashRemedies(row)
+  const first = remedies[0]
+  const firstCount = first.groups.reduce((n, g) => n + g.count, 0)
+  const others = row.count - firstCount
+  const one = rest.length === 1 && remedies.length === 1 ? groupFilter(row, rest[0]) : undefined
+  // A template lands in the rest when any of its crashes is not of the named
+  // cause, so its others may be: "not all". A template with one crash in the
+  // rest is that crash, so where every one has one, none of them is.
+  const qualifier = rest.every((g) => g.count === 1) ? 'not' : 'not all'
   return (
     <>
-      {remedies.map((r) => (
-        <div key={r.nextStep} className="mt-0.5 break-words text-xs text-theme-text-primary">
-          <span className="font-medium">
-            Next step for <GroupNames row={row} groups={r.groups} onOpen={onOpen} />
-            {r.cause === 'memoryLimit' ? ', killed over their memory limit' : ''}:{' '}
-          </span>
-          {r.nextStep}
-          {r.command && <> <CommandChip command={r.command} inline /></>}
+      <StepLine lead={`Next step for ${firstCount}${first.cause ? ` ${CAUSE_WORDS[first.cause]}` : ''}: `} step={first.nextStep} command={first.command} />
+      {others > 0 && (
+        <div className="mt-0.5 break-words text-xs text-theme-text-secondary">
+          The other {others === 1 ? 'one' : others} crashed{remedies.length === 1 && first.cause === 'memoryLimit' ? `, ${qualifier} over a memory limit` : ''}:{' '}
+          {one && onOpen ? (
+            <button type="button" onClick={() => onOpen({ kind: 'Actors', filter: one })} className="text-accent-text hover:underline">show {others === 1 ? 'it' : 'them'} →</button>
+          ) : (
+            <button type="button" onClick={onShowDetails} className="text-accent-text hover:underline">see Details</button>
+          )}
         </div>
+      )}
+    </>
+  )
+}
+
+/** What a split crash row leaves for Details: each other remedy, and the general step for the rest, naming their templates. */
+function OtherSteps({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubject }) {
+  if (!splitsByRemedy(row)) return null
+  const { remedies, rest, restCount } = crashRemedies(row)
+  return (
+    <>
+      {remedies[0].groups.length > 0 && (
+        <div className="break-words text-xs text-theme-text-secondary">
+          {remedies[0].cause ? `${CAUSE_WORDS[remedies[0].cause][0].toUpperCase()}${CAUSE_WORDS[remedies[0].cause].slice(1)}` : 'With that step'}: <GroupNames row={row} groups={remedies[0].groups} onOpen={onOpen} />
+        </div>
+      )}
+      {remedies.slice(1).map((r) => (
+        <StepLine
+          key={r.nextStep}
+          lead={<>Next step for <GroupNames row={row} groups={r.groups} onOpen={onOpen} />{r.cause ? `, ${CAUSE_WORDS[r.cause]}` : ''}: </>}
+          step={r.nextStep}
+          command={r.command}
+        />
       ))}
       {rest.length > 0 && (
-        <div className="mt-0.5 break-words text-xs text-theme-text-primary">
-          <span className="font-medium">
-            For the other {restCount === 1 ? 'one' : restCount}, on <GroupNames row={row} groups={rest} onOpen={onOpen} />:{' '}
-          </span>
-          {row.nextStep}
-        </div>
+        <StepLine lead={<>For the other {restCount === 1 ? 'one' : restCount}, on <GroupNames row={row} groups={rest} onOpen={onOpen} />: </>} step={row.nextStep} />
       )}
     </>
   )
@@ -258,25 +303,44 @@ function WorkerActorsLink({ row, onOpen }: { row: SubstrateAttention; onOpen?: O
   )
 }
 
+/** A row's Details fold: a compact header under the step, so a row costs one line for it. */
+function RowDetails({ open, onToggle, children }: { open: boolean; onToggle: () => void; children: ReactNode }) {
+  const d = useDisclosure(open)
+  return (
+    <div className="mt-1">
+      <button type="button" {...d.buttonProps} onClick={onToggle} className="inline-flex items-center gap-1 rounded text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+        <CollapseChevron open={open} className="h-3 w-3" />
+        Details
+      </button>
+      <Collapse open={open} id={d.panelId}>
+        <div className="space-y-1.5 pb-0.5 pl-4 pt-1">{children}</div>
+      </Collapse>
+    </div>
+  )
+}
+
 /**
  * One row, in the anatomy Velero's and Agent Sandbox's Needs attention rows
- * share: the title in its tone, the subject, Radar's reading, the next step,
- * and the rest folded last. Here the fold holds the rest of the reading and
- * the breakdowns (by template or worker, Substrate's messages, nodes, the
- * actors on a worker). A worker row's reading shows whole: what happened to
- * its actors must never be behind the fold.
+ * share, kept to what an operator decides on: the title in its severity's
+ * tone; one line with what it is about, its age and the way to the affected
+ * objects; the cause in a sentence; one next step with at most one command.
+ * Everything else folds under Details: the rest of the reading (mechanics,
+ * epochs, "Latest: …", Substrate's raw messages), secondary remedies, related
+ * objects and the breakdowns. A crash row's visible cause is where its
+ * crashes concentrate; its "Latest: …" reading is provenance.
  */
 export function AttentionRow({ row, onOpen }: { row: SubstrateAttention; onOpen?: OpenSubject }) {
+  const [open, setOpen] = useState(false)
   const related = (row.related ?? [])
     // A worker is its Pod: the subject already links it.
     .filter((r) => !(row.subject.kind === 'Worker' && r.kind === 'Pod' && r.name === row.subject.name))
+  const crash = row.rule === 'crashedActors'
   const [first, others] = splitReading(row.reading)
-  const whole = WORKER_RULES.has(row.rule)
-  const lead = whole ? row.reading : first
-  const rest = whole ? undefined : others
-  const hasDetails = related.length > 0 || (row.groups?.length ?? 0) > 1 || (row.messages?.length ?? 0) > 1 || (row.nodes?.length ?? 0) > 0 || (row.sample?.length ?? 0) > 0 || !!rest
+  const lead = crash ? undefined : first
+  const rest = crash ? row.reading || undefined : others
+  const hasDetails = related.length > 0 || splitsByRemedy(row) || (row.groups?.length ?? 0) > 1 || (row.messages?.length ?? 0) > 1 || (row.nodes?.length ?? 0) > 0 || (row.sample?.length ?? 0) > 0 || !!rest
   return (
-    <li className="min-w-0 text-sm" data-rule={row.rule}>
+    <li className="min-w-0 text-sm" data-rule={row.rule} data-severity={row.severity}>
       <div className={clsx('font-medium break-words', toneTextClass(attentionTone(row)))}>{row.title}</div>
       <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
         <SubjectLink subject={row.subject} onOpen={onOpen} count={row.subject.kind === 'Actors' ? row.count : undefined} short />
@@ -285,20 +349,19 @@ export function AttentionRow({ row, onOpen }: { row: SubstrateAttention; onOpen?
       </div>
       <Concentration row={row} onOpen={onOpen} />
       {lead && <div className="break-words text-xs text-theme-text-secondary">{lead}</div>}
-      <NextSteps row={row} onOpen={onOpen} />
+      <NextStep row={row} onOpen={onOpen} onShowDetails={() => setOpen(true)} />
       {hasDetails && (
-        <FoldSection title="Details" summary="" attention={false}>
-          <div className="space-y-1.5">
-            {rest && <div className="break-words text-xs text-theme-text-secondary">{rest}</div>}
-            {related.length > 0 && (
-              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
-                {related.map((r) => <SubjectLink key={`${r.kind}/${r.namespace}/${r.name}`} subject={r} onOpen={onOpen} short />)}
-              </div>
-            )}
-            <AffectedActors row={row} onOpen={onOpen} />
-            <Tallies row={row} onOpen={onOpen} />
-          </div>
-        </FoldSection>
+        <RowDetails open={open} onToggle={() => setOpen((v) => !v)}>
+          {rest && <div className="break-words text-xs text-theme-text-secondary">{rest}</div>}
+          <OtherSteps row={row} onOpen={onOpen} />
+          {related.length > 0 && (
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
+              {related.map((r) => <SubjectLink key={`${r.kind}/${r.namespace}/${r.name}`} subject={r} onOpen={onOpen} short />)}
+            </div>
+          )}
+          <AffectedActors row={row} onOpen={onOpen} />
+          <Tallies row={row} onOpen={onOpen} />
+        </RowDetails>
       )}
     </li>
   )
@@ -317,13 +380,13 @@ export function SubstrateAttentionList({ rows, onOpen }: { rows: SubstrateAttent
   const foldId = 'substrate-attention-more'
   return (
     <div>
-      <ul className="space-y-2.5">
+      <ul className="space-y-3">
         {shown.map((r) => <AttentionRow key={r.id} row={r} onOpen={onOpen} />)}
       </ul>
       {folded.length > 0 && (
         <>
           <Collapse open={showAll} id={foldId}>
-            <ul className="space-y-2.5 pt-2.5">
+            <ul className="space-y-3 pt-3">
               {folded.map((r) => <AttentionRow key={r.id} row={r} onOpen={onOpen} />)}
             </ul>
           </Collapse>

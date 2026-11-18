@@ -28,7 +28,7 @@ import { usePrometheusStatus } from '../../api/client'
 import { BreakText, Notice, RefreshFailedNotice, ScreenEmptyState } from '../workspace/layout'
 import { INCOMPLETE_COVERAGE_STATES, coverageLabel } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
-import { ACTOR_STATE_LABEL, actorStateTone, coverageInPart, coverageReason, localTime, relativeTime, tierReading, toneSeverity, workerStateReading } from './readings'
+import { IMPACT_LABEL, actorStateReading, coverageInPart, coverageReason, localTime, relativeTime, tierReading, workerStateReading } from './readings'
 import { SUBSTRATE_PATH } from './routes'
 
 /** Substrate's terms, defined where they first appear on a screen. */
@@ -54,26 +54,17 @@ export function Term({ term, children }: { term: SubstrateTerm; children: ReactN
   )
 }
 
-export const IMPACT_LABEL: Record<SubstrateWorkerImpact['kind'], string> = {
-  unavailable: 'worker unavailable',
-  draining: 'worker draining',
-  restarted: 'sandbox lost',
-}
+export { IMPACT_LABEL }
 
 /**
- * An actor's state chip. Substrate's state, qualified when its worker is in
- * trouble: "Running · worker unavailable" in amber, since Substrate still
- * records it running while it may not be serving.
+ * An actor's state chip (actorStateReading). Pass `updateTime` wherever the
+ * actor's last change is known: a transition held past the stuck threshold
+ * then says "stuck" in amber, and one in flight stays quiet.
  */
-export function ActorStateBadge({ state, impact }: { state: SubstrateActorState; impact?: SubstrateWorkerImpact }) {
-  if (impact) {
-    return (
-      <Tooltip content={impact.reading}>
-        <span><Badge severity={impact.kind === 'restarted' ? 'error' : 'warning'} size="sm" className="whitespace-nowrap">{ACTOR_STATE_LABEL[state] ?? state} · {IMPACT_LABEL[impact.kind]}</Badge></span>
-      </Tooltip>
-    )
-  }
-  return <Badge severity={toneSeverity(actorStateTone(state))} size="sm">{ACTOR_STATE_LABEL[state] ?? state}</Badge>
+export function ActorStateBadge({ state, impact, updateTime }: { state: SubstrateActorState; impact?: SubstrateWorkerImpact; updateTime?: string }) {
+  const r = actorStateReading(state, { impact, updateTime })
+  const badge = <Badge severity={r.severity} size="sm" className="whitespace-nowrap">{r.label}</Badge>
+  return r.title ? <Tooltip content={r.title}><span>{badge}</span></Tooltip> : badge
 }
 
 /** What the workspace is, in one line, at the top of its Overview. */
@@ -328,7 +319,7 @@ export function WorkerStateChip({ w }: { w: Pick<SubstrateWorkerRow, 'state' | '
   const r = workerStateReading(w)
   return (
     <Tooltip content={r.title}>
-      <span className="max-w-full"><Badge severity={r.severity} size="sm" className="whitespace-normal text-left">{r.label}</Badge></span>
+      <span className="max-w-full"><Badge severity={r.severity} size="sm" className="whitespace-nowrap">{r.label}</Badge></span>
     </Tooltip>
   )
 }

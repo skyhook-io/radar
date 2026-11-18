@@ -1,7 +1,6 @@
 import { clsx } from 'clsx'
-import { StatusDot, toneFillClass } from '@skyhook-io/k8s-ui'
 import type { SubstrateActorState, SubstrateStateCounts } from '../../api/substrateWorkspace'
-import { ACTOR_STATE_LABEL, actorStateTone, stateBarSegments } from './readings'
+import { ACTOR_STATE_LABEL, actorStateFill, stateBarSegments } from './readings'
 
 /**
  * The actors by state as one bar: a mark per actor while there are few enough
@@ -30,10 +29,10 @@ export function SubstrateStateBar({
       className={clsx('flex w-full overflow-hidden rounded', compact ? 'h-1.5 gap-px' : 'h-3', countable && !compact ? 'gap-0.5' : !compact && 'gap-px')}
     >
       {countable
-        ? segments.flatMap((s) => Array.from({ length: s.count }, (_, i) => <span key={`${s.state}-${i}`} className={clsx('min-w-0 flex-1 rounded-[2px]', toneFillClass(actorStateTone(s.state)))} />))
+        ? segments.flatMap((s) => Array.from({ length: s.count }, (_, i) => <span key={`${s.state}-${i}`} className={clsx('min-w-0 flex-1 rounded-[2px]', actorStateFill(s.state))} />))
         : segments.map((s) => (
             // A state with a handful of actors among thousands keeps a visible sliver.
-            <span key={s.state} style={{ flexGrow: s.share, flexBasis: 0, minWidth: 3 }} className={clsx('h-full', toneFillClass(actorStateTone(s.state)))} />
+            <span key={s.state} style={{ flexGrow: s.share, flexBasis: 0, minWidth: 3 }} className={clsx('h-full', actorStateFill(s.state))} />
           ))}
     </div>
   )
@@ -44,7 +43,7 @@ export function SubstrateStateBar({
       <ul className="flex flex-wrap gap-x-5 gap-y-1 text-sm" aria-label="Actors by state">
         {segments.map((s) => (
           <li key={s.state} className="flex items-center gap-1.5">
-            <StatusDot tone={actorStateTone(s.state)} />
+            <span aria-hidden className={clsx('inline-block h-1.5 w-1.5 rounded-full', actorStateFill(s.state))} />
             {onSelectState ? (
               <button type="button" onClick={() => onSelectState(s.state)} className="text-theme-text-secondary hover:text-theme-text-primary hover:underline">
                 {ACTOR_STATE_LABEL[s.state]} <span className="font-medium text-theme-text-primary">{s.count.toLocaleString('en-US')}</span>

@@ -55,7 +55,7 @@ function ActorDrawerBody({ actor, onClose, onOpenFull, onOpenSubject }: { actor:
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone="structural" size="sm">Actor</Badge>
-            {detail && <ActorStateBadge state={detail.actor.state} impact={detail.workerImpact} />}
+            {detail && <ActorStateBadge state={detail.actor.state} impact={detail.workerImpact} updateTime={detail.actor.updateTime} />}
           </div>
           <h2 className="mt-1 truncate font-mono text-base font-semibold text-theme-text-primary">{actor.name}</h2>
           <div className="text-xs text-theme-text-tertiary"><Term term="atespace">atespace</Term> <span className="font-mono">{actor.atespace}</span></div>

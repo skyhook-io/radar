@@ -55,7 +55,8 @@ describe('WorkerPool placement', () => {
     expect(html).not.toContain('border-dashed')
     expect(html).not.toMatch(/>free</)
     expect(html).toContain('2 of 4 actor slots used · 2 free')
-    expect(html).toContain('4 of 16 CPU · 8Gi of 64Gi')
+    // What the figures are, from Substrate's fields: what its actors request of the capacity it reports, not usage.
+    expect(html).toContain('4 of 16 CPU · 8Gi of 64Gi reserved')
   })
 
   it('says a worker that takes nothing new has unused slots, not free ones, and when its Pod is Ready', () => {
@@ -78,9 +79,28 @@ describe('WorkerPool placement', () => {
 
   it('calls a gap in a complete worker list a registration shortfall, never missing Pods', () => {
     const html = render(pool([worker(0), worker(1, { podTerminating: true })], 3))
-    expect(html).toContain('1 desired worker is not registered with Substrate')
-    expect(html).toContain('The pool wants 3; Substrate has 2 registered. Kubernetes calls 2 of 3 worker Pods ready.')
+    expect(html).toContain('Workers: 2 active · 2 registered with Substrate · 3 desired')
+    expect(html).toContain('1 desired worker is not registered with Substrate. Kubernetes calls 2 of 3 worker Pods ready.')
     expect(html).not.toMatch(/no Pod/)
+  })
+
+  it('leads with the workers it has and wants, above the legend and the map', () => {
+    const data = pool([worker(0), worker(1, { state: 'unavailable' })], 5)
+    data.pool.capacity = 'short'
+    const html = render(data)
+    const counts = html.indexOf('Workers: 1 active · 2 registered with Substrate · 5 desired')
+    expect(counts).toBeGreaterThan(-1)
+    expect(html.indexOf('3 desired workers are not registered with Substrate.')).toBeGreaterThan(counts)
+    expect(counts).toBeLessThan(html.indexOf('aria-label="Legend"'))
+    expect(counts).toBeLessThan(html.indexOf('agent-pool-worker-0'))
+  })
+
+  it('counts a partial worker read as a lower bound, and never zero when it saw none', () => {
+    const partial = (workers: SubstrateWorkerRow[]) => ({ ...pool(workers, 3), coverage: { ...pool([]).coverage, workers: { state: 'partial' as const, code: 'capExceeded' as const } } })
+    expect(render(partial([worker(0)]))).toContain('Workers: at least 1 active · at least 1 registered with Substrate · 3 desired')
+    const none = render(partial([]))
+    expect(none).toContain('Workers: 3 desired')
+    expect(none).not.toContain('at least 0')
   })
 
   it('counts the worker Pods Radar holds, citing the WorkerPool’s own ready count only where it differs', () => {
@@ -159,10 +179,41 @@ describe('Workers by pool', () => {
         <WorkersTable data={{ workers: [worker(0, { hasFreeSlot: false }), worker(1)], coverage: { workers: { state: 'full' } } }} pools={pools} onOpenSubject={() => {}} grouped />
       </MemoryRouter>,
     ))
-    expect(html).toContain('6 of 8 actor slots used')
+    expect(html).toContain('6 of 8 actor slots used on active workers')
+    // Registered, active and desired are each named, from the pool's totals.
+    expect(html).toContain('2 workers registered, 2 active')
+    // Narrow (as rendered here), CPU and memory sit under the slots, still labelled.
+    expect(html).toContain('4 of 16 CPU · 8Gi of 64Gi reserved')
     expect(html).toContain('Free actor slots')
     expect(html).toContain('of 4Full')
     expect(html).toContain('aria-label="Show the actors on agent-pool-worker-0"')
+  })
+
+  it('names registered of desired workers on the pool header, and keeps a lost count out of the state chip', async () => {
+    const { WorkersTable, poolWorkersText } = await import('./SubstrateWorkers')
+    const row = { placement: { workers: { total: 4, active: 2, draining: 1, unavailable: 1 }, slots: { used: 6, total: 8 }, cpuMillicores: { used: 1, total: 2 }, memoryBytes: { used: 1, total: 2 }, complete: true }, kubernetes: { namespace: 'agents', name: 'agent-pool', desired: 5, ready: 3, health: 'degraded', healthReason: '' } }
+    expect(poolWorkersText(row, [])).toBe('4 of 5 desired workers registered, 2 active')
+    expect(poolWorkersText({ ...row, placement: { ...row.placement, complete: false } }, [])).toBe('at least 4 of 5 desired workers registered, at least 2 active')
+    const reconciling = worker(0, { workerState: { kind: 'reconciling', assigned: 13, lost: 3, reading: 'Restarted.' } })
+    const html = text(renderToStaticMarkup(<MemoryRouter><WorkersTable data={{ workers: [reconciling], coverage: { workers: { state: 'full' } } }} onOpenSubject={() => {}} /></MemoryRouter>))
+    expect(html).toContain('3 actors lost · Pod ready')
+    // The chip is one short line; the count rides beside it, never inside it.
+    expect(html).toContain('Active · reconciling')
+    expect(html).not.toContain('(3 actors lost)')
+    const raw = renderToStaticMarkup(<MemoryRouter><WorkersTable data={{ workers: [reconciling], coverage: { workers: { state: 'full' } } }} onOpenSubject={() => {}} /></MemoryRouter>)
+    expect(raw).toMatch(/class="[^"]*whitespace-nowrap[^"]*">Active · reconciling</)
+  })
+
+  it('labels wide CPU and memory as reserved, and keeps a node’s hostname whole, never broken inside it', async () => {
+    const { workerColumns } = await import('./SubstrateWorkers')
+    const cols = workerColumns(() => {}, true)
+    const headers = text(renderToStaticMarkup(<MemoryRouter>{cols.map((c, i) => <div key={i}>{c.header}</div>)}</MemoryRouter>))
+    expect(headers).toContain('CPU reserved')
+    expect(headers).toContain('Memory reserved')
+    const node = cols.find((c) => c.header === 'Node')!
+    const html = renderToStaticMarkup(<MemoryRouter>{node.cell(worker(0))}</MemoryRouter>)
+    expect(html).toMatch(/class="block truncate whitespace-nowrap font-mono text-\[12px\]">ip-10-0-16-162\.ec2\.internal</)
+    expect(html).not.toContain('overflow-wrap:anywhere')
   })
 
   it('marks a running actor on an unavailable worker apart from healthy running', () => {
@@ -170,8 +221,8 @@ describe('Workers by pool', () => {
     const w = worker(0, { state: 'unavailable', actors: [{ atespace: 'research', name: 'ticket-41001', state: 'running', template: { atespace: 'research', name: 'lg' }, workerImpact: impact }] })
     const html = render(pool([w]))
     expect(html).toContain('ticket-41001, Running · worker unavailable')
-    expect(html).toContain('its worker is unavailable or draining')
-    expect(raw(pool([w]))).toMatch(/bg-amber-500"><\/span><span[^>]*>ticket-41001/)
+    expect(html).toContain('its worker is unavailable')
+    expect(raw(pool([w]))).toMatch(/bg-orange-500"><\/span><span[^>]*>ticket-41001/)
   })
 
   it('colours a lost sandbox, an unavailable worker and a transition apart, as the legend does', () => {

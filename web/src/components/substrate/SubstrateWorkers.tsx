@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { Badge, Collapse, CollapseChevron, PaneLoader, SelectMenu, Tooltip, formatDuration } from '@skyhook-io/k8s-ui'
@@ -22,6 +22,23 @@ import { ActorStateBadge, Name, SUBSTRATE_WIDE, SubstrateHeader, SubstrateSource
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 
 
+
+/** What a worker's CPU and memory figures are, from Substrate's own fields. */
+export const RESERVED_MEANING = 'Reserved: what the actors on it request, with their runtime’s overhead, of the capacity the worker reports to Substrate. Not measured usage.'
+
+/** A worker's actors lost to its restart, while Substrate has not yet reconciled it: said beside the chip, so the chip stays one line. */
+export function lostText(w: Pick<SubstrateWorkerRow, 'workerState'>): string | undefined {
+  const lost = w.workerState?.kind === 'reconciling' ? w.workerState.lost : undefined
+  return lost ? `${lost} ${lost === 1 ? 'actor' : 'actors'} lost` : undefined
+}
+
+function Reserved({ children }: { children: ReactNode }) {
+  return (
+    <Tooltip content={RESERVED_MEANING}>
+      <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-2">{children}</span>
+    </Tooltip>
+  )
+}
 
 function usage(allocated: SubstrateResources | undefined, capacity: SubstrateResources | undefined, dim: keyof SubstrateResources, fmt: (n: number) => string) {
   if (!allocated || !capacity) return <Unread>unknown</Unread>
@@ -55,7 +72,7 @@ export function workerColumns(onOpenSubject: OpenSubject, wide: boolean, grouped
             {w.heldForSeconds !== undefined && <span className="whitespace-nowrap text-xs text-theme-text-tertiary">for at least {formatDuration(w.heldForSeconds * 1000)}</span>}
           </span>
           <Sub>
-            {workerPodText(w)}
+            {[lostText(w), workerPodText(w)].filter(Boolean).join(' · ')}
           </Sub>
         </>
       ),
@@ -71,15 +88,20 @@ export function workerColumns(onOpenSubject: OpenSubject, wide: boolean, grouped
               <Tooltip content="No actor slot left: Substrate places no new actor here until one suspends."><span><Badge severity="alert" size="sm">Full</Badge></span></Tooltip>
             )}
           </span>
-          {!wide && <Sub>{usage(w.allocated, w.capacity, 'cpuMillicores', cpuText)} CPU · {usage(w.allocated, w.capacity, 'memoryBytes', bytesText)}</Sub>}
+          {!wide && <Sub>{usage(w.allocated, w.capacity, 'cpuMillicores', cpuText)} CPU · {usage(w.allocated, w.capacity, 'memoryBytes', bytesText)} <Reserved>reserved</Reserved></Sub>}
         </>
       ),
     },
     ...(wide
       ? [
-          { header: 'CPU', width: '9%', cell: (w: SubstrateWorkerRow) => usage(w.allocated, w.capacity, 'cpuMillicores', cpuText) },
-          { header: 'Memory', width: '12%', cell: (w: SubstrateWorkerRow) => usage(w.allocated, w.capacity, 'memoryBytes', bytesText) },
-          { header: 'Node', width: '20%', cell: (w: SubstrateWorkerRow) => (w.node ? <span className="text-[12.5px] [overflow-wrap:anywhere]">{w.node}</span> : <Unread>unknown</Unread>) },
+          { header: <Reserved>CPU reserved</Reserved>, width: '10%', cell: (w: SubstrateWorkerRow) => usage(w.allocated, w.capacity, 'cpuMillicores', cpuText) },
+          { header: <Reserved>Memory reserved</Reserved>, width: '12%', cell: (w: SubstrateWorkerRow) => usage(w.allocated, w.capacity, 'memoryBytes', bytesText) },
+          {
+            header: 'Node',
+            width: '19%',
+            // A hostname truncates whole, with the name on hover; it never breaks inside a label.
+            cell: (w: SubstrateWorkerRow) => (w.node ? <Tooltip content={w.node} wrapperClassName="min-w-0 max-w-full"><span className="block truncate whitespace-nowrap font-mono text-[12px]">{w.node}</span></Tooltip> : <Unread>unknown</Unread>),
+          },
         ]
       : []),
     {
@@ -300,8 +322,8 @@ export function WorkersTable({
                           <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
                             <span className="font-mono text-sm font-medium text-theme-text-primary">{name}</span>
                             <span className="text-theme-text-tertiary">
-                              {ns} · {g.workers.length} {g.workers.length === 1 ? 'worker' : 'workers'}
-                              {slots ? ` · ${row?.placement?.complete === false ? 'at least ' : ''}${slots.used} of ${slots.total} actor slots used` : ''}
+                              {ns} · {poolWorkersText(row, g.workers)}
+                              {slots ? ` · ${row?.placement?.complete === false ? 'at least ' : ''}${slots.used} of ${slots.total} actor slots used on active workers` : ''}
                             </span>
                             {row && <PoolReadingBadge p={row} />}
                           </span>
@@ -318,6 +340,21 @@ export function WorkersTable({
       </div>
     </section>
   )
+}
+
+/**
+ * A pool's workers by name: registered with Substrate, of those active, and
+ * the desired count Kubernetes holds. From the pool's own totals, not the
+ * rows a state filter left; a partial read is a lower bound.
+ */
+export function poolWorkersText(row: Pick<SubstratePoolRow, 'placement' | 'kubernetes'> | undefined, shown: Pick<SubstrateWorkerRow, 'state'>[]): string {
+  const counts = row?.placement?.workers
+  const registered = counts?.total ?? shown.length
+  const active = counts?.active ?? shown.filter((w) => w.state === 'active').length
+  const atLeast = row?.placement?.complete === false ? 'at least ' : ''
+  const desired = row?.kubernetes?.desired
+  const reg = desired !== undefined ? `${atLeast}${registered} of ${desired} desired workers registered` : `${atLeast}${registered} ${registered === 1 ? 'worker' : 'workers'} registered`
+  return `${reg}, ${atLeast}${active} active`
 }
 
 function PoolReadingBadge({ p }: { p: SubstratePoolRow }) {

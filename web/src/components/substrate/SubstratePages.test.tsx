@@ -140,7 +140,25 @@ describe('a template whose actors crashed', () => {
     // Beside a crash callout, the header chip names what is ready: the golden snapshot, not the template.
     expect(html).toContain('Golden snapshot ready')
     expect(html).toContain('a ceiling, not a guarantee')
+    // Compact: the cause and the way to the actors on one line, then the step with its one command.
+    expect(html).toMatch(/Killed over the 2Gi memory limit it sets per actor\.(<\/span>)?<button[^>]*>The 11 crashed actors →<\/button><\/div>/)
+    expect(html.indexOf('The 11 crashed actors')).toBeLessThan(html.indexOf('Next step: Create'))
+    expect(html.match(/aria-label="Copy command"/g)?.length).toBe(2) // the step's, and the Spec's YAML command
     state.workspace = undefined
+  })
+})
+
+describe('a template’s banners', () => {
+  it('reads each in its row’s tone: no matching pool an alert, a failed golden snapshot a warning', () => {
+    const t = template('stranded')
+    ;(t.template as any).matchingPools = []
+    ;(t.template as any).golden = { state: 'failed', error: 'x' }
+    state.template = ok(t)
+    const html = render(<SubstrateTemplatePage template={{ atespace: 'team', name: 'stranded' }} onOpenSubject={() => {}} />, '/substrate/templates/team/stranded?ctx=cluster-B')
+    const banner = (title: string) => html.slice(html.lastIndexOf('<div class="p-3 border rounded-lg', html.indexOf(title)), html.indexOf(title))
+    expect(banner('No pool can run it')).toContain('status-alert')
+    expect(banner('No golden snapshot')).toContain('bg-amber-50')
+    expect(html).not.toContain('bg-red-50')
   })
 })
 
@@ -172,6 +190,39 @@ describe('a detail read whose refresh failed', () => {
     html = render(<SubstrateActorPage actor={{ atespace: 'research', name: 'lit-review-0193' }} onOpenSubject={() => {}} />, '/substrate/actors/research/lit-review-0193?ctx=cluster-B')
     expect(html).toContain('At a glance')
     expect(html).toContain('Last refresh failed: unreachable from Substrate')
+  })
+})
+
+describe('an actor’s snapshots', () => {
+  const page = (snapshots: NonNullable<SubstrateActorDetail['actor']['snapshots']>) => {
+    state.actor = ok(actorDetail({ actor: { ...actorDetail().actor, snapshots } }))
+    return render(<SubstrateActorPage actor={{ atespace: 'research', name: 'lit-review-0193' }} onOpenSubject={() => {}} />, '/substrate/actors/research/lit-review-0193?tab=snapshots&ctx=cluster-B')
+  }
+
+  it('says where each copy is kept, durable or only on its node, never "stored" twice', () => {
+    const html = page([
+      { generation: 6, fidelity: 'memory', owner: 'actor', durable: 'pending', locality: 'ip-10-0-17-21.ec2.internal' },
+      { generation: 5, fidelity: 'memory', owner: 'actor', durable: 'completed' },
+      { generation: 4, fidelity: 'rootfs', owner: 'actor', durable: 'none', locality: 'ip-10-0-17-21.ec2.internal' },
+    ])
+    expect(html).toContain('Where it is kept')
+    expect(html).not.toContain('>Stored<')
+    expect(html).toContain('Only on its nodeUpload pending. Until it finishes, its state is only on')
+    expect(html).toContain('Durable copyUploaded to object storage.')
+    expect(html).toContain('No durable copy recorded. Its files are only on')
+    // The hostname stays one unbroken token.
+    const raw = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/substrate/actors/research/lit-review-0193?tab=snapshots&ctx=cluster-B']}><SubstrateActorPage actor={{ atespace: 'research', name: 'lit-review-0193' }} onOpenSubject={() => {}} /></MemoryRouter></QueryClientProvider>)
+    expect(raw).toMatch(/class="block truncate whitespace-nowrap font-mono text-\[12\.5px\]">ip-10-0-17-21\.ec2\.internal</)
+    // Substrate records no upload time, so none is invented.
+    expect(html).not.toMatch(/uploaded \d|upload(ed)? at/i)
+  })
+
+  it('says why earlier generations are absent only from what Substrate’s record holds, and nothing when none are', () => {
+    const missing = page([{ generation: 6, fidelity: 'memory', owner: 'actor', durable: 'completed' }])
+    expect(missing).toContain('Substrate’s record of an actor lists only its active and in-progress generations, so 5 earlier generations are not listed.')
+    expect(missing).not.toContain('pruned')
+    const whole = page([{ generation: 2, fidelity: 'memory', owner: 'actor', durable: 'completed' }, { generation: 1, fidelity: 'memory', owner: 'actor', durable: 'completed' }])
+    expect(whole).not.toContain('earlier generation')
   })
 })
 
@@ -215,7 +266,7 @@ describe('Radar Hub, a user who isn’t an org owner', () => {
       render(<SubstrateWorkersScreen workspace={ws} status={st} onOpenSubject={() => {}} />, '/substrate/workers'),
     ]) {
       expect(html).toContain('In Radar Hub, only org owners can see Substrate’s actors, templates and workers for now. Ask an org owner.')
-      expect(html).not.toContain('Choose who Radar reads as')
+      expect(html).not.toContain('Who Radar reads Substrate as')
       expect(html).not.toContain('couldn’t read')
     }
   })

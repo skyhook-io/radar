@@ -16,7 +16,7 @@ import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { type OpenSubject } from './SubstrateAttentionList'
 import { NotInContext, useContextPin } from './contextPin'
 import { ActorLogsBody, SubstrateActorOverview, egressText } from './SubstrateActorOverview'
-import { bytesText, cpuText, definitiveFailure, durableText, fidelityLabel, fidelityResume, logsCommand, tierReading } from './readings'
+import { bytesText, cpuText, definitiveFailure, fidelityLabel, fidelityResume, logsCommand, tierReading } from './readings'
 import { SUBSTRATE_PATH, SUBSTRATE_SCREENS, substrateActorsPath } from './routes'
 import { ActorStateBadge, Term, Unread, When } from './shared'
 
@@ -36,10 +36,48 @@ function TabBody({ children }: { children: ReactNode }) {
 
 type SnapshotRow = NonNullable<SubstrateActorDetail['actor']['snapshots']>[number]
 
+/** A node's hostname, whole: it truncates with the name on hover rather than breaking inside a label. */
+function NodeName({ node }: { node: string }) {
+  return (
+    <Tooltip content={node} wrapperClassName="min-w-0 max-w-full">
+      <span className="block truncate whitespace-nowrap font-mono text-[12.5px]">{node}</span>
+    </Tooltip>
+  )
+}
+
+/**
+ * Where a snapshot's state is kept: a durable copy in object storage, which
+ * outlives the node, or files on one node only. Substrate records no upload
+ * time, so none is shown.
+ */
+export function snapshotWhere(s: Pick<SnapshotRow, 'durable' | 'locality'>): { label: string; tone: 'healthy' | 'degraded'; detail: string; node?: string } {
+  switch (s.durable) {
+    case 'completed':
+      return s.locality
+        ? { label: 'Durable copy', tone: 'healthy', detail: 'Uploaded to object storage. Its files are also on', node: s.locality }
+        : { label: 'Durable copy', tone: 'healthy', detail: 'Uploaded to object storage.' }
+    case 'pending':
+      return s.locality
+        ? { label: 'Only on its node', tone: 'degraded', detail: 'Upload pending. Until it finishes, its state is only on', node: s.locality }
+        : { label: 'Upload pending', tone: 'degraded', detail: 'Substrate names no node holding its files.' }
+    default:
+      return s.locality
+        ? { label: 'Only on its node', tone: 'degraded', detail: 'No durable copy recorded. Its files are only on', node: s.locality }
+        : { label: 'Not stored', tone: 'degraded', detail: 'No durable copy recorded, and no node holds its files.' }
+  }
+}
+
+/** Generations below the newest that the list doesn't hold. */
+export function unlistedGenerations(rows: Pick<SnapshotRow, 'generation'>[]): number {
+  if (rows.length === 0) return 0
+  const newest = Math.max(...rows.map((r) => r.generation))
+  return newest - new Set(rows.map((r) => r.generation)).size
+}
+
 function SnapshotsTab({ detail }: { detail: SubstrateActorDetail }) {
   const rows = [...(detail.actor.snapshots ?? [])].sort((a, b) => b.generation - a.generation)
   const columns: TableColumn<SnapshotRow>[] = [
-    { header: 'Generation', width: '110px', cell: (s) => <span className="font-mono">{s.generation}</span> },
+    { header: 'Generation', width: '100px', cell: (s) => <span className="font-mono">{s.generation}</span> },
     {
       header: 'Holds',
       cell: (s) => (
@@ -50,22 +88,33 @@ function SnapshotsTab({ detail }: { detail: SubstrateActorDetail }) {
       ),
     },
     {
-      header: 'Stored',
-      width: '170px',
+      header: 'Where it is kept',
+      width: '260px',
       cell: (s) => {
-        const d = durableText(s)
-        return <Tooltip content={d.title}><span className={d.tone === 'healthy' ? undefined : toneTextClass(d.tone)}>{d.text}</span></Tooltip>
+        const w = snapshotWhere(s)
+        return (
+          <span className="block min-w-0">
+            <span className={w.tone === 'healthy' ? undefined : toneTextClass(w.tone)}>{w.label}</span>
+            <span className="block text-xs text-theme-text-tertiary">{w.detail}</span>
+            {w.node && <NodeName node={w.node} />}
+          </span>
+        )
       },
     },
-    { header: 'Files on node', width: '170px', cell: (s) => (s.locality ? <span className="font-mono text-[12.5px]">{s.locality}</span> : <Unread title="Detached from the node once stored.">none</Unread>) },
-    { header: 'Taken by', width: '110px', cell: (s) => (s.owner === 'tag' ? <Tooltip content="A tag’s copy, such as the template’s golden snapshot."><span>a tag</span></Tooltip> : s.owner === 'actor' ? 'this actor' : <Unread>unknown</Unread>) },
-    { header: 'Sandbox class', width: '130px', cell: (s) => (s.sandboxClass ? <span className="font-mono text-[12.5px]">{s.sandboxClass}</span> : <Unread>unknown</Unread>) },
+    { header: 'Taken by', width: '100px', cell: (s) => (s.owner === 'tag' ? <Tooltip content="A tag’s copy, such as the template’s golden snapshot."><span>a tag</span></Tooltip> : s.owner === 'actor' ? 'this actor' : <Unread>unknown</Unread>) },
+    { header: 'Sandbox class', width: '120px', cell: (s) => (s.sandboxClass ? <span className="font-mono text-[12.5px]">{s.sandboxClass}</span> : <Unread>unknown</Unread>) },
   ]
+  const unlisted = unlistedGenerations(rows)
   return (
     <TabBody>
       <SectionTable
         title={<Term term="snapshot">Snapshots</Term>}
-        subtitle="Newest first. A resume restores from the newest one that is stored or still on its node."
+        subtitle={
+          <>
+            Newest first. A resume restores from the newest one with a durable copy or files still on its node.
+            {unlisted > 0 && <> Substrate’s record of an actor lists only its active and in-progress generations, so {unlisted === 1 ? '1 earlier generation is' : `${unlisted} earlier generations are`} not listed.</>}
+          </>
+        }
         columns={columns}
         rows={rows}
         rowKey={(s) => String(s.generation)}
@@ -282,7 +331,7 @@ export function SubstrateActorPage({ actor, onOpenSubject }: { actor: SubstrateR
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <h1 className="min-w-0 truncate font-mono text-lg font-semibold text-theme-text-primary">{actor.name}</h1>
       <Badge tone="structural" size="sm">Actor</Badge>
-      {detail && <ActorStateBadge state={detail.actor.state} impact={detail.workerImpact} />}
+      {detail && <ActorStateBadge state={detail.actor.state} impact={detail.workerImpact} updateTime={detail.actor.updateTime} />}
       <span className="text-sm text-theme-text-secondary"><Term term="atespace">atespace</Term> <span className="font-mono">{actor.atespace}</span></span>
     </div>
   )
