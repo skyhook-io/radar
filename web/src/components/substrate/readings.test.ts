@@ -159,6 +159,16 @@ describe('API tier readings', () => {
     expect(tierReading({ state: 'notConfigured', code: 'notConfigured' }).title).toBe('Not connected')
   })
 
+  it('doesn’t send a reader already in Settings to Settings', () => {
+    for (const code of ['notConfigured', 'targetChanged', 'notInstalled', 'tls'] as const) {
+      const state = code === 'notConfigured' ? 'notConfigured' : 'failed'
+      expect(tierReading({ state, code }).nextStep).toContain('Settings → Agent Substrate')
+      expect(tierReading({ state, code }, { inSettings: true }).nextStep ?? '').not.toContain('Settings')
+    }
+    expect(tierReading({ state: 'notConfigured' }, { inSettings: true }).nextStep).toBeUndefined()
+    expect(tierReading({ state: 'failed', code: 'notInstalled' }, { inSettings: true }).nextStep).toContain('under Advanced')
+  })
+
   it('names denied atespaces and a reached cap', () => {
     expect(coverageReason({ state: 'partial', deniedAtespaces: ['a', 'b'] }, 'actors')).toBe('Substrate denied atespaces a, b')
     expect(coverageReason({ state: 'partial', code: 'capExceeded', cap: 50000 }, 'actors')).toBe('Radar read the first 50000 actors and stopped there')
