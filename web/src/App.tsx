@@ -767,6 +767,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const lastResourceRef = useRef(routeSelectedResource)
   if (routeSelectedResource) lastResourceRef.current = routeSelectedResource
   const drawerResource = routeSelectedResource || lastResourceRef.current
+  // The resource drawer's settled width, so the Resources table can lay its
+  // columns out beside it rather than under it. Phones show the drawer full
+  // screen, where there is nothing beside it to lay out.
+  const [resourceDrawerWidth, setResourceDrawerWidth] = useState(0)
+  const resourcesCoveredRight = routeSelectedResource && !isMobile ? resourceDrawerWidth : 0
 
   // Effective fullscreen state — keyed off the resource that's ACTUALLY rendering
   // (routeSelectedResource), not the raw selection, so an orphaned/mismatched peek
@@ -2343,6 +2348,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             // Embedded hosts own their namespace picker, and a cache-scoped
             // Radar can't take an arbitrary set.
             onApplyNamespacesToAllSections={namespaceScope?.cacheScoped || !kindFilterStore ? undefined : applyNamespacesToAllSections}
+            coveredRight={resourcesCoveredRight}
           />
         )}
 
@@ -2502,6 +2508,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           // to the top of the content area instead of leaving a 49px gap.
           headerHeight={embedded ? 0 : undefined}
           rightInset={contentGutter}
+          onWidthChange={setResourceDrawerWidth}
           isOpen={resourceDrawer.isOpen}
           expanded={drawerExpandedProp}
           onClose={closeDrawer}

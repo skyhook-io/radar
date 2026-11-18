@@ -35,6 +35,10 @@ interface ResourceDetailDrawerProps {
   /** Right inset in px to leave clear (e.g. a docked side panel) so the drawer sits
    *  beside it instead of under it. Shared "right-side surface" contract (default: 0). */
   rightInset?: number
+  /** Called with the drawer's width in px whenever it settles: on mount, when
+   *  the resource kind resets it, and when a resize drag is released (not on
+   *  every pointer move). Lets the host lay out what the drawer covers. */
+  onWidthChange?: (width: number) => void
   /** Render the content inside the drawer */
   children: (props: {
     resource: SelectedResource
@@ -84,7 +88,7 @@ function usePrefersReducedMotion(): boolean {
   return reduced
 }
 
-export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, isOpen = true, expanded, onCollapse, onExpand, canCollapseToDrawer = true, onNavigateToResource, headerHeight: headerHeightProp, leftOffset = 0, rightInset = 0, children }: ResourceDetailDrawerProps) {
+export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, isOpen = true, expanded, onCollapse, onExpand, canCollapseToDrawer = true, onNavigateToResource, headerHeight: headerHeightProp, leftOffset = 0, rightInset = 0, onWidthChange, children }: ResourceDetailDrawerProps) {
   const [drawerWidth, setDrawerWidth] = useState(() => getDefaultWidth(resource.kind))
   const [isResizing, setIsResizing] = useState(false)
   const resizeStartX = useRef(0)
@@ -208,6 +212,14 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
       document.removeEventListener('mouseup', handleMouseUp)
     }
   }, [isResizing])
+
+  // A layout effect, so a host that re-lays out around the drawer does it
+  // before the drawer first paints.
+  const onWidthChangeRef = useRef(onWidthChange)
+  onWidthChangeRef.current = onWidthChange
+  useLayoutEffect(() => {
+    if (!isResizing) onWidthChangeRef.current?.(drawerWidth)
+  }, [drawerWidth, isResizing])
 
   // Route navigation based on expanded state
   const handleNavigate = useCallback((res: SelectedResource) => {

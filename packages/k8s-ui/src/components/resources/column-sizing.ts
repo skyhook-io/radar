@@ -117,6 +117,18 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
   return widths
 }
 
+/**
+ * How much of the table's columns a cover over its right edge hides, such as
+ * a detail drawer `covered` px wide: the columns are laid out for the rest.
+ * `viewport` is the scroller's inner width; `chrome` what its outer width adds
+ * (a vertical scrollbar, borders), which the cover hides first. A cover that
+ * would leave no room beyond the `leading` fixed columns is ignored (0).
+ */
+export function coveredTableWidth(viewport: number, chrome: number, covered: number, leading: number): number {
+  const hidden = Math.max(0, covered - Math.max(0, chrome))
+  return hidden > 0 && viewport - hidden > leading ? hidden : 0
+}
+
 // How far a column may shrink when room is short.
 function lowerBound(c: ColumnLayoutInput): number {
   return c.min ?? c.floor

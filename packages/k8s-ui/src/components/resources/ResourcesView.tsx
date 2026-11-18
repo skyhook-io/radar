@@ -181,7 +181,7 @@ import { isRolloutActivityVisible } from '../../utils/workload-rollout'
 import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { Tooltip } from '../ui/Tooltip'
 import { TruncatedText } from '../ui/TruncatedText'
-import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, rememberWidths } from './column-sizing'
+import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, coveredTableWidth, rememberWidths } from './column-sizing'
 import { type CellWidth, type UsageLabel, NAME_MAX_PX, NAME_MIN_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, usageLabelWidth, workloadImagesText } from './column-content-width'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import type { Issue } from '../issues/types'
@@ -3711,6 +3711,14 @@ interface ResourcesViewProps {
    * promise resolves (a rejection keeps it).
    */
   onApplyNamespacesToAllSections?: (namespaces: string[]) => Promise<unknown> | void
+  /**
+   * Pixels of the table's right side the host covers with something drawn over
+   * it, such as a detail drawer. The columns are then laid out for the part
+   * left uncovered, and the table can scroll its last column out from under
+   * the cover. Change it when the cover settles, not on every frame: each
+   * change re-lays out the columns. Omitted or 0, the table uses its full width.
+   */
+  coveredRight?: number
   // Bulk operations
   onBulkDelete?: (items: BulkResourceItem[], options?: { force?: boolean; onSuccess?: () => void }) => void
   isBulkDeleting?: boolean
@@ -3925,6 +3933,7 @@ export function ResourcesView({
   rememberedKindSearch,
   onKindFiltersChange,
   onApplyNamespacesToAllSections,
+  coveredRight = 0,
   onBulkDelete,
   isBulkDeleting = false,
   onBulkRestart,
@@ -4135,13 +4144,19 @@ export function ResourcesView({
   const tableContainerRef = useRef<HTMLDivElement>(null)
   const [tableScroller, setTableScroller] = useState<HTMLElement | null>(null)
   const [tableViewportWidth, setTableViewportWidth] = useState(0)
+  // The scroller's vertical scrollbar (and border): a cover over the right
+  // edge hides it before it hides any column.
+  const [tableViewportChrome, setTableViewportChrome] = useState(0)
   const captureTableScroller = useCallback((element: HTMLElement | Window | null) => {
     setTableScroller(element instanceof HTMLElement ? element : null)
   }, [])
   useEffect(() => {
     const viewport = tableScroller ?? tableContainerRef.current
     if (!viewport) return
-    const measure = () => setTableViewportWidth(viewport.clientWidth)
+    const measure = () => {
+      setTableViewportWidth(viewport.clientWidth)
+      setTableViewportChrome(Math.max(0, viewport.offsetWidth - viewport.clientWidth))
+    }
     measure()
     if (typeof ResizeObserver === 'undefined') {
       window.addEventListener('resize', measure)
@@ -6212,11 +6227,15 @@ export function ResourcesView({
   }, [isPhone])
   const phoneNameCap = isPhone && columns[0]?.key === 'name' ? Math.round(phoneViewportWidth * PHONE_NAME_MAX_VW / 100) : Infinity
   const leadingPinWidth = (compareMode ? COMPARE_COLUMN_WIDTH : 0) + (isCheckboxMode ? CHECKBOX_COLUMN_WIDTH : 0)
+  // Columns are laid out for the part of the table a cover leaves visible
+  // (see coveredRight), and the covered width trails the last column as scroll room.
+  const tableCover = coveredTableWidth(tableViewportWidth, tableViewportChrome, coveredRight, leadingPinWidth)
+  const visibleTableWidth = tableViewportWidth - tableCover
 
   // The width each visible column renders at. One vector feeds the <colgroup>,
   // the pin offsets and budget, and the table's minimum width, so they agree.
   const lastLayout = useRef<{ signature: string; widths: Record<string, number> } | null>(null)
-  const availableWidth = tableViewportWidth - leadingPinWidth
+  const availableWidth = visibleTableWidth - leadingPinWidth
   // Held widths only carry over while nothing but the data changed.
   const layoutSignature = [datasetIdentity, availableWidth, columns.map(c => `${c.key}=${columnWidths[c.key] ?? ''}`).join(',')].join('\u0000')
   const columnLayoutWidths = useMemo(() => {
@@ -6227,9 +6246,12 @@ export function ResourcesView({
     const held = lastLayout.current?.signature === layoutSignature ? lastLayout.current.widths : undefined
     // Name holds the width of its longest name, up to NAME_MAX_PX but never
     // more than NAME_VIEWPORT_SHARE of the table, so on a narrow window or a
-    // phone it can't push every other column off screen.
+    // phone it can't push every other column off screen. The share is of the
+    // whole table, cover included: a drawer opening over it must not cut names
+    // the table showed in full, and Name holds still while the drawer opens.
+    const nameShareOf = tableViewportWidth - leadingPinWidth
     const nameMax = availableWidth > 0
-      ? Math.max(NAME_MIN_PX, Math.min(NAME_MAX_PX, Math.floor(availableWidth * NAME_VIEWPORT_SHARE)))
+      ? Math.max(NAME_MIN_PX, Math.min(NAME_MAX_PX, Math.floor(nameShareOf * NAME_VIEWPORT_SHARE)))
       : NAME_MAX_PX
     // The heading's measured width runs a pixel or two short of the rendered
     // one (sub-pixel tracking, the filter button's padding). That never showed
@@ -6271,7 +6293,7 @@ export function ResourcesView({
     const first = columns[0]
     if (first?.key === 'name' && phoneNameCap !== Infinity) widths.name = Math.min(widths.name, phoneNameCap)
     return widths
-  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap])
+  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, tableViewportWidth, leadingPinWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap])
   useLayoutEffect(() => {
     columnLayoutWidthsRef.current = columnLayoutWidths
     if (!resizeFrozenWidths) lastLayout.current = { signature: layoutSignature, widths: columnLayoutWidths }
@@ -6285,8 +6307,8 @@ export function ResourcesView({
     const context = allColumns.slice(0, fixedLeadingCount).map(column => column.key)
     return [...new Set([...context, ...pinnedColumns])].filter(key => visible.has(key))
   }, [allColumns, fixedLeadingCount, pinnedColumns, visibleTableColumns])
-  const columnPins = useMemo(() => resolveColumnPins(pinWidths, effectivePinnedColumns, tableViewportWidth, leadingPinWidth),
-    [pinWidths, effectivePinnedColumns, tableViewportWidth, leadingPinWidth])
+  const columnPins = useMemo(() => resolveColumnPins(pinWidths, effectivePinnedColumns, visibleTableWidth, leadingPinWidth),
+    [pinWidths, effectivePinnedColumns, visibleTableWidth, leadingPinWidth])
   const activePinnedColumns = useMemo(() => effectivePinnedColumns.slice(0, columnPins.offsets.size), [effectivePinnedColumns, columnPins.offsets.size])
   const pinStyles = useMemo(() => {
     const styles = new Map<string, React.CSSProperties>()
@@ -6320,9 +6342,10 @@ export function ResourcesView({
       keys: columns.map(col => col.key),
       compareMode: !!compareMode,
       checkbox: isCheckboxMode,
-      minWidth: leadingPinWidth + widths.reduce((total, w) => total + w, 0),
+      trailing: tableCover,
+      minWidth: leadingPinWidth + widths.reduce((total, w) => total + w, 0) + tableCover,
     }
-  }, [columns, columnLayoutWidths, compareMode, isCheckboxMode, leadingPinWidth])
+  }, [columns, columnLayoutWidths, compareMode, isCheckboxMode, leadingPinWidth, tableCover])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -7793,13 +7816,15 @@ interface TableColumnLayout {
   keys: string[]
   compareMode: boolean
   checkbox: boolean
+  /** Empty room after the last column, under a cover (see coveredRight). */
+  trailing: number
   minWidth: number
 }
 
 // The widths reach the table through context so the Table component keeps one
 // identity: a new component type on each width change would remount the whole
 // table body, losing focus and hover state on every resize or data update.
-const TableColumnLayoutContext = React.createContext<TableColumnLayout>({ widths: [], keys: [], compareMode: false, checkbox: false, minWidth: 0 })
+const TableColumnLayoutContext = React.createContext<TableColumnLayout>({ widths: [], keys: [], compareMode: false, checkbox: false, trailing: 0, minWidth: 0 })
 
 const VirtuosoTable = React.forwardRef<HTMLTableElement, React.TableHTMLAttributes<HTMLTableElement>>(function VirtuosoTable(props, ref) {
   const layout = useContext(TableColumnLayoutContext)
@@ -7823,6 +7848,8 @@ const VirtuosoTable = React.forwardRef<HTMLTableElement, React.TableHTMLAttribut
         {layout.compareMode && <col style={{ width: COMPARE_COLUMN_WIDTH }} />}
         {layout.checkbox && <col style={{ width: CHECKBOX_COLUMN_WIDTH }} />}
         {layout.keys.map((key, i) => <col key={key} style={{ width: `${layout.widths[i]}px` }} />)}
+        {/* No cell fills it: it only lets the last column scroll out from under the cover. */}
+        {layout.trailing > 0 && <col style={{ width: `${layout.trailing}px` }} />}
       </colgroup>
       {props.children}
     </table>
