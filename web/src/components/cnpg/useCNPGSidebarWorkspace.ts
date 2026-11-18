@@ -127,10 +127,16 @@ export function useCNPGSidebarWorkspace({
         onSelect: () => navigate(s.path),
       }
     })
+    // Every screen counts clusters, and Clusters counts each one that needs attention once, so it is the total.
+    const clusters = destinations.find((d) => d.id === 'overview')
     return {
       [CNPG_SIDEBAR_CATEGORY]: {
+        label: 'Databases',
+        icon: Database,
+        count: clusters?.count,
+        countLowerBound: clusters?.countLowerBound,
+        countTitle: clusters?.countTitle,
         destinations,
-        defaultKindsCollapsed: !!active,
         scopeNote: nsKey ? `Counts for namespace ${nsKey.split(',').join(', ')}` : undefined,
       },
     }

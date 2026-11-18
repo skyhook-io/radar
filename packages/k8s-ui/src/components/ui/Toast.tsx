@@ -20,6 +20,8 @@ type ToastOptions = Omit<Toast, 'id' | 'message' | 'dismissing'> & {
   duration?: number
 }
 
+type NoticeOptions = Pick<ToastOptions, 'id' | 'duration' | 'action'>
+
 interface ToastContextType {
   showToast: (message: string, options?: ToastOptions) => void
   showCopied: (command: string, label?: string, event?: React.MouseEvent) => void
@@ -65,8 +67,8 @@ class ToastManager {
     this.showSuccessFn ? this.showSuccessFn(message, detail, action, onDetailClick) : console.log('[Toast]', message, detail)
   }
 
-  showNotice(message: string, detail: string | undefined, type: 'warning' | 'info') {
-    this.showToastFn ? this.showToastFn(message, { detail, type }) : console.warn('[Toast]', message, detail)
+  showNotice(message: string, detail: string | undefined, type: 'warning' | 'info', options?: NoticeOptions) {
+    this.showToastFn ? this.showToastFn(message, { ...options, detail, type }) : console.warn('[Toast]', message, detail)
   }
 }
 
@@ -80,8 +82,8 @@ export function showApiSuccess(message: string, detail?: string, action?: Toast[
   toastManager.showSuccess(message, detail, action, onDetailClick)
 }
 
-export function showApiNotice(message: string, detail: string | undefined, type: 'warning' | 'info') {
-  toastManager.showNotice(message, detail, type)
+export function showApiNotice(message: string, detail: string | undefined, type: 'warning' | 'info', options?: NoticeOptions) {
+  toastManager.showNotice(message, detail, type, options)
 }
 
 export function useToast() {

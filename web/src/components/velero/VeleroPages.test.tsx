@@ -351,6 +351,7 @@ describe('The composed Overview', () => {
     expect(plain).toContain('No — default is the default location')
     expect(html).toContain('aws · s3://radar-dr/velero')
     expect(plain).toContain('2 backups · 1 completed · 0 expired · 1 failed')
+    expect(plain).toContain('Backups →')
     expect(plain).toContain('None of them can be restored while the location is unavailable')
     expect(plain).toMatch(/Last checked \d+s ago — failed/)
     expect(plain).not.toContain('Last validated')

@@ -39,6 +39,7 @@ import { KyvernoPolicyCoverage } from '../components/resources/renderers/Kyverno
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
+import { UpgradePlanRenderer } from '../components/resources/renderers/UpgradePlanRenderer'
 import {
   ValidatingAdmissionPolicyBindingRenderer,
   ValidatingAdmissionPolicyRenderer,
@@ -48,6 +49,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
   { id: 'gateway-api', renderers: { HTTPRouteRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
+  { id: 'system-upgrade', renderers: { UpgradePlanRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
   {
     id: 'kueue-queues',
@@ -132,6 +134,13 @@ function kindListHost(kind: Pick<HostKind, 'name' | 'group'> | null) {
 export function resourceKindListMode(kind: Pick<HostKind, 'name' | 'group'> | null, features: HostFeatures, pending: boolean) {
   const contribution = kindListHost(kind)
   return contribution?.list.mode(hostSupport(contribution.host, features), pending) ?? 'table'
+}
+
+/** The disabled picker's tooltip while a kind's own list, which ignores the namespace filter, is on screen. */
+export function resourceKindListNamespaceFilterTooltip(kind: Pick<HostKind, 'name' | 'group'> | null, features: HostFeatures, pending: boolean): string | undefined {
+  const contribution = kindListHost(kind)
+  if (!contribution?.list.namespaceFilterTooltip) return undefined
+  return contribution.list.mode(hostSupport(contribution.host, features), pending) === 'view' ? contribution.list.namespaceFilterTooltip : undefined
 }
 
 export function resourceKindListTitle(kind: Pick<HostKind, 'name' | 'group'>): string | null {

@@ -42,17 +42,6 @@ const KIND_LABEL: Record<VeleroWorkspaceKey, string> = {
   backupRepositories: 'BackupRepository',
 }
 
-export const VELERO_SCOPE_LINE = 'All Velero installations you can read. The namespace filter does not apply here.'
-
-/** Names where Velero was read, so the scope is visible without knowing Velero's layout. */
-export function veleroScopeLine(namespaces: string[]): string {
-  const list = namespaces.length < 2 ? namespaces.join('') : `${namespaces.slice(0, -1).join(', ')} and ${namespaces.at(-1)}`
-  if (namespaces.length === 0) return VELERO_SCOPE_LINE
-  return namespaces.length === 1
-    ? `Velero in namespace ${list}. The namespace filter doesn’t apply here.`
-    : `Velero installations in namespaces ${list}. The namespace filter doesn’t apply here.`
-}
-
 export function list(values: unknown): string[] {
   return Array.isArray(values) ? values.filter((v): v is string => typeof v === 'string') : []
 }
@@ -207,8 +196,9 @@ export function inInstallation<T extends { namespace: string }>(rows: T[], insta
 }
 
 /**
- * The title line, the scope line and, with more than one installation, the
- * installation picker. The picker narrows what was already read; it never
+ * The title line, a note when Radar is limited to one namespace and, with
+ * more than one installation, the installation picker. The namespace picker
+ * says the filter does not apply (VELERO_NAMESPACE_FILTER_TOOLTIP). The picker narrows what was already read; it never
  * changes what the server reads.
  */
 export function VeleroWorkspaceHeader({ title, data, installation, onInstallation }: { title: string } & Pick<VeleroScreenProps, 'data' | 'installation' | 'onInstallation'>) {
@@ -223,11 +213,11 @@ export function VeleroWorkspaceHeader({ title, data, installation, onInstallatio
         </span>
         <h1 className="text-lg font-semibold text-theme-text-primary">{title}</h1>
       </div>
-      <div className="mt-0.5 text-sm text-theme-text-secondary">
-        {data.forcedNamespace
-          ? `Radar is limited to namespace ${data.forcedNamespace}, so only a Velero installation there is shown. The namespace filter does not apply here.`
-          : veleroScopeLine(namespaces)}
-      </div>
+      {data.forcedNamespace && (
+        <div className="mt-0.5 text-sm text-theme-text-secondary">
+          Radar is limited to namespace {data.forcedNamespace}, so only a Velero installation there is shown.
+        </div>
+      )}
       {namespaces.length > 1 && (
         <div className="mt-2.5">
           <Segments

@@ -7973,8 +7973,24 @@ type workloadRefs struct {
 }
 
 func extractWorkloadReferences(spec corev1.PodSpec, forRelationships bool) workloadRefs {
-	refs := workloadRefs{configMaps: map[string]bool{}, secrets: map[string]bool{}, pvcs: map[string]bool{}, serviceAccount: spec.ServiceAccountName}
-	configrefs.VisitPodSpecReferences("", spec, func(reference configrefs.PodSpecReference) {
+	refs := newWorkloadRefs(spec.ServiceAccountName)
+	configrefs.VisitPodSpecReferences("", spec, refs.collect(forRelationships))
+	return refs
+}
+
+func extractWorkloadReferencesFromMap(spec map[string]any, forRelationships bool) (workloadRefs, error) {
+	serviceAccount, _ := spec["serviceAccountName"].(string)
+	refs := newWorkloadRefs(serviceAccount)
+	err := configrefs.VisitPodSpecMapReferences("", spec, refs.collect(forRelationships))
+	return refs, err
+}
+
+func newWorkloadRefs(serviceAccount string) workloadRefs {
+	return workloadRefs{configMaps: map[string]bool{}, secrets: map[string]bool{}, pvcs: map[string]bool{}, serviceAccount: serviceAccount}
+}
+
+func (refs workloadRefs) collect(forRelationships bool) func(configrefs.PodSpecReference) {
+	return func(reference configrefs.PodSpecReference) {
 		// Expanded declaration paths belong in resource reads, without redefining application grouping.
 		if !forRelationships {
 			switch reference.Path {
@@ -7993,71 +8009,7 @@ func extractWorkloadReferences(spec corev1.PodSpec, forRelationships bool) workl
 		case "PersistentVolumeClaim":
 			refs.pvcs[reference.Name] = true
 		}
-	})
-	return refs
-}
-
-func extractWorkloadReferencesFromMap(spec map[string]any, forRelationships bool) (workloadRefs, error) {
-	var podSpec corev1.PodSpec
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(spec, &podSpec); err != nil {
-		return recoverWorkloadReferencesFromMap(spec, forRelationships), err
 	}
-	return extractWorkloadReferences(podSpec, forRelationships), nil
-}
-
-// Unrelated malformed fields must not hide declarations that can still be read.
-func recoverWorkloadReferencesFromMap(spec map[string]any, forRelationships bool) workloadRefs {
-	refs := extractWorkloadReferences(corev1.PodSpec{}, forRelationships)
-	collect := func(part map[string]any) {
-		var podSpec corev1.PodSpec
-		if runtime.DefaultUnstructuredConverter.FromUnstructured(part, &podSpec) != nil {
-			return
-		}
-		partRefs := extractWorkloadReferences(podSpec, forRelationships)
-		maps.Copy(refs.configMaps, partRefs.configMaps)
-		maps.Copy(refs.secrets, partRefs.secrets)
-		maps.Copy(refs.pvcs, partRefs.pvcs)
-		if partRefs.serviceAccount != "" {
-			refs.serviceAccount = partRefs.serviceAccount
-		}
-	}
-	for _, field := range []string{"containers", "initContainers", "ephemeralContainers"} {
-		containers, _ := spec[field].([]any)
-		for _, raw := range containers {
-			container, _ := raw.(map[string]any)
-			for _, envField := range []string{"env", "envFrom"} {
-				entries, _ := container[envField].([]any)
-				for _, entry := range entries {
-					if envField == "env" {
-						variable, _ := entry.(map[string]any)
-						entry = map[string]any{"valueFrom": variable["valueFrom"]}
-					}
-					collect(map[string]any{field: []any{map[string]any{envField: []any{entry}}}})
-				}
-			}
-		}
-	}
-	volumes, _ := spec["volumes"].([]any)
-	for _, raw := range volumes {
-		volume, _ := raw.(map[string]any)
-		for field, value := range volume {
-			if field == "projected" {
-				projection, _ := value.(map[string]any)
-				sources, _ := projection["sources"].([]any)
-				for _, source := range sources {
-					collect(map[string]any{"volumes": []any{map[string]any{"projected": map[string]any{"sources": []any{source}}}}})
-				}
-			} else {
-				collect(map[string]any{"volumes": []any{map[string]any{field: value}}})
-			}
-		}
-	}
-	pullSecrets, _ := spec["imagePullSecrets"].([]any)
-	for _, secret := range pullSecrets {
-		collect(map[string]any{"imagePullSecrets": []any{secret}})
-	}
-	collect(map[string]any{"serviceAccountName": spec["serviceAccountName"]})
-	return refs
 }
 
 // getGatewayHealth derives Gateway health from status.conditions

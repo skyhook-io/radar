@@ -228,10 +228,10 @@ func (v *View) Children(ref resourceid.Ref) ChildrenAnswer {
 	}
 	a.Gaps = found.Gaps
 	for i, g := range found.Gaps {
-		if !v.coversReadable(g, scope) {
+		if !GapCoversReadable(v.access, v.session.Catalog(), g, scope) {
 			a.Gaps = slices.Clone(found.Gaps[:i])
 			for _, later := range found.Gaps[i+1:] {
-				if v.coversReadable(later, scope) {
+				if GapCoversReadable(v.access, v.session.Catalog(), later, scope) {
 					a.Gaps = append(a.Gaps, later)
 				}
 			}
@@ -299,25 +299,29 @@ func (v *View) candidates(found DependentCandidatesRead) (out []Observation, unr
 	return out, unread, undecided
 }
 
-// coversReadable reports whether gap covers something the caller may read
-// within scope, so leaving it unread may have hidden a child. A gap on a
-// namespaced kind without a namespace covers every namespace of the scope,
-// and counts if the caller may read the kind in any of them.
-func (v *View) coversReadable(g Gap, scope SearchScope) bool {
+// GapCoversReadable reports whether a search's gap covers something access
+// may read within scope, so leaving it unread may have hidden an answer; a
+// gap that doesn't is withheld, as it would name what the caller may not
+// read. A gap on a namespaced kind without a namespace covers every
+// namespace of the scope, and counts if the caller may read the kind in any
+// of them. g must come from a search of scope: a gap naming a namespace is
+// not tested against scope. A check that couldn't be made counts as
+// readable, so the gap is kept.
+func GapCoversReadable(access Access, catalog *Catalog, g Gap, scope SearchScope) bool {
 	if g.Kind.Kind == "" {
 		return true
 	}
 	if g.Namespace != "" {
-		return v.access.CanRead(g.Kind, g.Namespace) != Denied
+		return access.CanRead(g.Kind, g.Namespace) != Denied
 	}
-	k, known := v.session.Catalog().Kind(g.Kind)
+	k, known := catalog.Kind(g.Kind)
 	if !known || !k.Namespaced {
-		return v.access.CanRead(g.Kind, "") != Denied
+		return access.CanRead(g.Kind, "") != Denied
 	}
 	if scope.AllNamespaces {
-		return v.access.CanRead(g.Kind, "") != Denied
+		return access.CanRead(g.Kind, "") != Denied
 	}
-	return slices.ContainsFunc(scope.Namespaces, func(ns string) bool { return v.access.CanRead(g.Kind, ns) != Denied })
+	return slices.ContainsFunc(scope.Namespaces, func(ns string) bool { return access.CanRead(g.Kind, ns) != Denied })
 }
 
 // ControllerChainAnswer is the chain of controller references from an object

@@ -5,6 +5,9 @@ export const VELERO_GROUP = 'velero.io'
 /** The one Velero view; Radar's Schedule, storage-location, Backup and Restore tables are those kinds' lists. */
 export const VELERO_OVERVIEW = { label: 'Overview', title: 'Velero overview', path: '/velero' }
 
+/** The namespace picker's tooltip on every Velero screen: Velero keeps its objects in its own namespace, so the filter would empty the views. */
+export const VELERO_NAMESPACE_FILTER_TOOLTIP = 'Velero is shown for every installation you can read — the namespace filter doesn’t apply here.'
+
 export const VELERO_SCHEDULES_PATH = '/resources/schedules?apiGroup=velero.io'
 export const VELERO_LOCATIONS_PATH = '/resources/backupstoragelocations?apiGroup=velero.io'
 
