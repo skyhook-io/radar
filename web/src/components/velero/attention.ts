@@ -142,6 +142,14 @@ export interface VeleroAttentionCount {
   title: string
 }
 
+/** The Issues the server counted but did not send (it sends the newest 50 per installation). */
+function cappedIssues(data: VeleroWorkspaceResponse): number {
+  return Object.entries(data.issueTotals ?? {}).reduce(
+    (n, [ns, total]) => n + Math.max(0, total - data.issues.filter((i) => (i.namespace ?? '') === ns).length),
+    0,
+  )
+}
+
 const OVERVIEW_KINDS: readonly VeleroWorkspaceKey[] = ['schedules', 'backups', 'restores', 'backupStorageLocations', 'backupRepositories']
 
 /**
@@ -150,11 +158,7 @@ const OVERVIEW_KINDS: readonly VeleroWorkspaceKey[] = ['schedules', 'backups', '
  * only in part is a lower bound, and its zero is unknown.
  */
 export function veleroAttentionCount(data: VeleroWorkspaceResponse): VeleroAttentionCount {
-  const capped = Object.entries(data.issueTotals ?? {}).reduce(
-    (n, [ns, total]) => n + Math.max(0, total - data.issues.filter((i) => (i.namespace ?? '') === ns).length),
-    0,
-  )
-  const count = veleroAttention(data, null).length + capped
+  const count = veleroAttention(data, null).length + cappedIssues(data)
   const partial = OVERVIEW_KINDS.some((k) => readInPart(data.coverage[k]))
   if (partial && count === 0) {
     return { count: null, lowerBound: true, title: 'Unknown: some Velero data could not be read, so nothing found does not mean nothing needs attention.' }
@@ -176,21 +180,26 @@ export type VeleroScreen = keyof typeof SCREEN_KINDS
  * Each list screen's sidebar badge: the rows Needs attention lists about that
  * screen's kind, so the screens' badges add up to the Overview's total less
  * what belongs to no screen (a stopped server, Issues the server capped).
+ * Issues the server capped may be about any kind, so while there are some
+ * every screen's count is a lower bound.
  */
 export function veleroScreenCounts(data: VeleroWorkspaceResponse): Record<VeleroScreen, VeleroAttentionCount> {
   const problems = veleroAttention(data, null)
+  const capped = cappedIssues(data) > 0
   const out = {} as Record<VeleroScreen, VeleroAttentionCount>
   for (const [screen, { kind, coverage, noun }] of Object.entries(SCREEN_KINDS) as [VeleroScreen, (typeof SCREEN_KINDS)[VeleroScreen]][]) {
     const count = problems.filter((p) => p.subject?.kind === kind).length
-    const partial = readInPart(data.coverage[coverage])
+    const unread = readInPart(data.coverage[coverage])
+    const partial = unread || capped
+    const why = unread ? `Radar couldn’t read every ${noun[0]}` : 'Radar lists only the newest issues'
     if (partial && count === 0) {
-      out[screen] = { count: null, lowerBound: true, title: `Unknown: Radar couldn’t read every ${noun[0]}.` }
+      out[screen] = { count: null, lowerBound: true, title: `Unknown: ${why}.` }
       continue
     }
     out[screen] = {
       count,
       lowerBound: partial,
-      title: `${partial ? 'At least ' : ''}${count} ${count === 1 ? `${noun[0]} needs` : `${noun[1]} need`} attention.${partial ? ' Some could not be read.' : ''}`,
+      title: `${partial ? 'At least ' : ''}${count} ${count === 1 ? `${noun[0]} needs` : `${noun[1]} need`} attention.${unread ? ' Some could not be read.' : capped ? ' Radar lists only the newest issues, so there may be more.' : ''}`,
     }
   }
   return out

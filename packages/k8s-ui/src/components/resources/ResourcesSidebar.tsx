@@ -93,6 +93,9 @@ export interface ResourcesSidebarProps {
   /** Task destinations keyed by category name (e.g. "CloudNativePG"). A category
    *  with a workspace stays visible even when it has no resources. */
   categoryWorkspaces?: Record<string, SidebarCategoryWorkspace>
+  /** Called after a destination is chosen, as onSelectedKindChange is after a
+   *  kind: a host showing the sidebar in a drawer closes it. */
+  onDestinationSelected?: () => void
   /** Display settings held by the parent, for a sidebar that unmounts between
    *  uses (the phone drawer) and should not reset them each time it opens. */
   displayState?: SidebarDisplayState
@@ -283,6 +286,7 @@ export function ResourcesSidebar({
   onNavigate,
   basePath,
   onKindNavigated,
+  onDestinationSelected,
   categoryWorkspaces,
   displayState,
   onDisplayStateChange,
@@ -296,6 +300,10 @@ export function ResourcesSidebar({
       const path = `${basePath}/${kind.name}${kind.group ? `?apiGroup=${kind.group}` : ''}`
       onNavigate(path)
     }
+  }
+  const selectDestination = (d: SidebarCategoryDestination) => {
+    d.onSelect()
+    onDestinationSelected?.()
   }
 
   // --- Sidebar-local state ---
@@ -618,7 +626,7 @@ export function ResourcesSidebar({
       setHighlightedIndex(prev => Math.max(prev - 1, 0))
     } else if (e.key === 'Enter' && highlightedResult) {
       e.preventDefault()
-      if (highlightedResult.type === 'view') highlightedResult.destination.onSelect()
+      if (highlightedResult.type === 'view') selectDestination(highlightedResult.destination)
       else selectKind(highlightedResult.kind)
       setHighlightedIndex(-1)
       setKindFilter('')
@@ -752,7 +760,7 @@ export function ResourcesSidebar({
                           // Opening waits for the page: set here, it would be the
                           // state the remounted sidebar starts from, already open.
                           if (!first || destinationActive(first)) setOpenIntegration(category.name)
-                          else first.onSelect()
+                          else selectDestination(first)
                         }}
                         title={rawCRDGroupTitle(category.resources)}
                         className="flex-1 flex items-center gap-2 pl-1 pr-2 xl:pr-3 py-1.5 rounded-lg text-sm min-w-0 font-medium text-theme-text-primary hover:bg-theme-elevated"
@@ -770,6 +778,9 @@ export function ResourcesSidebar({
                         workspace={workspace}
                         destinations={sidebarDestinationsMatching(category.name, category.resources, workspace.destinations, kindFilter, workspace.label)}
                         isActive={destinationActive}
+                        onSelect={selectDestination}
+                        isPinned={(k) => isPinned(k.name, k.group)}
+                        onTogglePin={(k) => togglePin({ name: k.name, kind: k.kind, group: k.group })}
                         highlightedId={highlightedResult?.type === 'view' && highlightedResult.category === category.name ? highlightedResult.destination.id : undefined}
                         highlightedRef={highlightedRef}
                         otherKindsCount={otherKinds(category).length}
@@ -991,6 +1002,9 @@ function IntegrationContents({
   workspace,
   destinations,
   isActive,
+  onSelect,
+  isPinned,
+  onTogglePin,
   otherKindsCount,
   filtering,
   kindsOpen,
@@ -1002,6 +1016,9 @@ function IntegrationContents({
   workspace: SidebarCategoryWorkspace
   destinations: SidebarCategoryDestination[]
   isActive: (d: SidebarCategoryDestination) => boolean
+  onSelect: (d: SidebarCategoryDestination) => void
+  isPinned: (kind: SelectedKindInfo) => boolean
+  onTogglePin: (kind: SelectedKindInfo) => void
   otherKindsCount: number
   filtering: boolean
   kindsOpen: boolean
@@ -1014,14 +1031,15 @@ function IntegrationContents({
     <div className="space-y-0.5 pt-0.5">
       {destinations.map((d) => {
         const active = isActive(d)
+        const pinned = !!d.kind && isPinned(d.kind)
         return (
           <div key={d.id}>
             <button
               ref={highlightedId === d.id ? highlightedRef : undefined}
-              onClick={d.onSelect}
+              onClick={() => onSelect(d)}
               aria-current={active && !d.child ? 'page' : undefined}
               className={clsx(
-                'w-full flex items-center gap-2 pl-9 xl:pl-10 pr-2 xl:pr-3 py-1.5 rounded-lg text-sm transition-colors min-w-0',
+                'w-full flex items-center gap-2 pl-9 xl:pl-10 pr-2 xl:pr-3 py-1.5 rounded-lg text-sm transition-colors min-w-0 group/kind',
                 active && !d.child
                   ? 'selection-strong selection-text'
                   : highlightedId === d.id
@@ -1032,6 +1050,23 @@ function IntegrationContents({
               )}
             >
               <span className="flex-1 text-left truncate">{d.label}</span>
+              {d.kind && (
+                // A destination that is a kind's list takes the kind's place, favorites included.
+                <span
+                  role="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onTogglePin(d.kind!)
+                  }}
+                  className={clsx(
+                    'p-0.5 rounded transition-all hover:bg-theme-hover shrink-0',
+                    pinned ? 'text-theme-text-secondary' : 'opacity-0 group-hover/kind:opacity-100 text-theme-text-disabled',
+                  )}
+                  title={pinned ? 'Unpin from favorites' : 'Pin to favorites'}
+                >
+                  <Pin className={clsx('w-3 h-3', pinned && 'fill-current')} />
+                </span>
+              )}
               <AttentionCount count={d.count} lowerBound={d.countLowerBound} title={d.countTitle} />
             </button>
             {d.child && (

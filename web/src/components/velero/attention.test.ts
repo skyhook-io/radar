@@ -47,6 +47,13 @@ describe('the Velero Overview badge', () => {
     const data = workspace({ issues: [issue('Backup', 'a')], issueTotals: { velero: 7 } })
     expect(veleroAttentionCount(data)).toMatchObject({ count: 7, lowerBound: false })
   })
+
+  it('gives each list a lower bound while the server capped issues, since those may be about any kind', () => {
+    const screens = veleroScreenCounts(workspace({ issues: [issue('Backup', 'a')], issueTotals: { velero: 7 } }))
+    expect(screens.backups).toMatchObject({ count: 1, lowerBound: true })
+    expect(screens.backups.title).toContain('there may be more')
+    expect(screens.schedules).toMatchObject({ count: null, lowerBound: true })
+  })
 })
 
 // One fault is one row, as on the Issues page: the stopped server's row names

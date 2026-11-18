@@ -111,3 +111,18 @@ it('keeps the last integration open after leaving it, across a remount, until an
   expect(state()).toEqual({ backups: false, databases: true })
   expect(await show(null)).toEqual({ backups: false, databases: true })
 })
+it('lets a destination that is a kind\'s list be pinned, and tells the host when a destination is chosen', () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  const view = vi.fn(), chosen = vi.fn(), togglePin = vi.fn()
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  const schedules = { group: 'velero.io', version: 'v1', kind: 'Schedule', name: 'schedules', namespaced: true, isCrd: true, verbs: ['list'] }
+  const kind = { name: 'schedules', kind: 'Schedule', group: 'velero.io' }
+  act(() => root.render(<ResourcesSidebar selectedKind={kind} onSelectedKindChange={() => {}} apiResources={[schedules]} togglePin={togglePin} onDestinationSelected={chosen} categoryWorkspaces={{ Velero: { label: 'Backups', destinations: [{ id: 'schedules', label: 'Schedules', kind, onSelect: view }] } }} />))
+  const row = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Schedules'))!
+  act(() => row.querySelector<HTMLElement>('[title="Pin to favorites"]')!.click())
+  expect(togglePin).toHaveBeenCalledWith(kind)
+  expect(view).not.toHaveBeenCalled()
+  act(() => row.click())
+  expect(view).toHaveBeenCalledTimes(1)
+  expect(chosen).toHaveBeenCalledTimes(1)
+})
