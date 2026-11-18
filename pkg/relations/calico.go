@@ -108,7 +108,7 @@ var CalicoPolicies = &SelectorFamily{
 // policies would apply to once promoted.
 var CalicoStagedPolicies = &SelectorFamily{
 	Name:           "calicoStagedPolicies",
-	Projection:     project("protects", false, "Protects", "StagedPolicies").partial(),
+	Projection:     project("protects", false, "Protects", "StagedPolicies").staged(),
 	Selectors:      calicoSelectors(true),
 	Selectables:    []Selectable{selectDeployment, selectStatefulSet, selectDaemonSet},
 	CrossNamespace: true,

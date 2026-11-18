@@ -64,9 +64,10 @@ The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, wi
 
 ## Beyond ownership: other relations
 
-`pkg/relations` answers the relations that aren't ownership or management from the same caches, through the same
-session, `Access` and gaps: a `relations.Session` is an ownership session that also reads index lookups (`Indexed`)
-and lends cached objects (`Borrow`), which the cache source implements.
+`pkg/relations` answers every relation that isn't an owner reference or a GitOps member list, including management
+declared by spec, status or labels, from the same caches, through the same session, `Access` and gaps: a
+`relations.Session` is an ownership session that also reads index lookups (`Indexed`) and lends cached objects
+(`Borrow`), which the cache source implements.
 
 A **family** (`family.go`) is one way objects name others: the kinds that declare (each optionally narrowed to the
 target kinds it can declare), the kinds a declaration can name, and a function that visits what an object declares
@@ -133,8 +134,8 @@ The families so far:
 | `MachineNodes` | Karpenter NodeClaims and Cluster API Machines → the Node their status records | `status_families.go` |
 | `AnalysisRuns` | Argo Rollouts → the AnalysisRuns their status points at | `status_families.go` |
 | `FluxHelmOrigins` | Origin labels on Deployment, Service, StatefulSet, DaemonSet, Job, CronJob and Rollout → Flux HelmRelease; the dark projection uses these only for local releases with no readable inventory | `management_families.go` |
-| `ArgoWorkflowPods` | Pods → Argo Workflow through the workflow label, preserving the graph’s label-only management path | `management_families.go` |
-| `CronWorkflowRuns` | Argo Workflow → CronWorkflow, preferring the controller reference to the cron-workflow label fallback | `management_families.go` |
+| `ArgoPodWorkflows` | Pods → Argo Workflow through the workflow label, preserving the graph’s label-only management path | `management_families.go` |
+| `ArgoWorkflowCronWorkflows` | Argo Workflow → CronWorkflow, preferring the controller reference to the cron-workflow label fallback | `management_families.go` |
 | `SealedSecrets` | Bitnami SealedSecrets → the Secret of their own name they produce | `status_families.go` |
 
 `CertificateRoutes` (`compositions.go`) joins a Certificate’s declared output Secret coordinates to Traefik routes and Contour proxies declaring the same Secret. Both endpoints are checked under the caller’s access; the logical Secret is never read or required to exist. The projection feeds Certificate `Consumers` and route `ConfigRefs`.

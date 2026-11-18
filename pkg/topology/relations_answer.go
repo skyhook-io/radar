@@ -49,7 +49,7 @@ var selectorEdges = func() map[string]relations.Disposition {
 func projectedEdge(d relations.Disposition, source, target resourceid.Ref) (relationEdge, bool) {
 	for _, r := range d.Rules {
 		if r.Matches(source.GroupKind(), target.GroupKind()) {
-			return relationEdge{edge: EdgeType(r.Edge), reverse: r.Reverse, label: r.Label, partial: r.Partial}, true
+			return relationEdge{edge: EdgeType(r.Edge), reverse: r.Reverse, label: r.Label, partial: r.Staged}, true
 		}
 	}
 	return relationEdge{}, false

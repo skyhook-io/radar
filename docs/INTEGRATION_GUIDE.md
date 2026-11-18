@@ -255,10 +255,12 @@ drawer section in
   links—not matching names, historical references treated as live usage, or
   configuration treated as observed traffic. Preserve group/namespace identity
   and handle missing/unreadable related objects honestly.
-- [ ] Choose semantic edges: `EdgeManages` (ownership), `EdgeExposes` (exposure),
-  `EdgeConfigures` (configuration), `EdgeUses` (scaling/usage), `EdgeProtects`
-  (protection). These control display semantics. Related Resources grouping comes
-  from each family's field disposition, projected in `relations_answer.go`.
+- [ ] Choose semantic edges: `EdgeManages` (an owner, or management the object
+  declares — not ownership by itself), `EdgeExposes` (exposure), `EdgeRoutesTo`
+  (traffic's next hop), `EdgeConfigures` (configuration), `EdgeUses`
+  (scaling/usage), `EdgeProtects` (protection; `partial` marks a staged policy).
+  These control display semantics. Related Resources grouping comes from each
+  family's field disposition, projected in `relations_answer.go`.
 - [ ] Reuse lists between node/edge construction and handle cache errors. Check
   the generic CRD pass for duplicates and collisions: it skips an object a typed
   pass already drew (matched by resource key, `nodeResourceKeys`) and only adds

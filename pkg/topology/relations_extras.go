@@ -72,7 +72,7 @@ func (e *RelationshipExtras) projectReferences(d relations.Disposition, subject 
 		if i < 0 {
 			continue
 		}
-		for _, field := range d.Rules[i].References {
+		for _, field := range d.Rules[i].ReferenceFields {
 			if field == "" {
 				continue
 			}
@@ -92,9 +92,9 @@ func (e *RelationshipExtras) projectCoverage(d relations.Disposition, subject re
 		return
 	}
 	for _, rule := range d.Rules {
-		fields, kind := rule.Referrers, rule.Target
+		fields, kind := rule.ReferrerFields, rule.Target
 		if forward {
-			fields, kind = rule.References, rule.Source
+			fields, kind = rule.ReferenceFields, rule.Source
 		}
 		if kind.Kind != "" && kind != subject {
 			continue
