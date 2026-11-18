@@ -93,16 +93,22 @@ export function NodeRiskLinks({ node }: { node: string }) {
   )
 }
 
-function FreeCell({ children = 'free' }: { children?: string }) {
-  return <div className="rounded-md border border-dashed border-theme-border px-1.5 py-1 text-[11px] text-theme-text-tertiary">{children}</div>
+/**
+ * A worker's actor slots in words. Free slots are a count, not positions:
+ * "18 of 24 actor slots used · 6 free". A worker that takes nothing new has
+ * unused slots, not free ones. Unknown capacity stays unknown.
+ */
+export function slotsText(w: Pick<SubstrateWorkerRow, 'state' | 'capacity' | 'allocated' | 'actors'>): string {
+  const { actors, free, total } = workerSlots(w)
+  const used = Math.max(actors.length, w.allocated?.actors ?? 0)
+  if (total === undefined) return `${used} ${used === 1 ? 'actor' : 'actors'} · slot capacity unknown`
+  const rest = w.state === 'active' ? `${free} free` : `${free} unused · places nothing new`
+  return `${used} of ${total} actor slots used · ${rest}`
 }
 
-function usageText(w: SubstrateWorkerRow): string {
-  const parts: string[] = []
-  const { actors, total } = workerSlots(w)
-  if (total !== undefined) parts.push(`${Math.max(actors.length, w.allocated?.actors ?? 0)}/${total} slots`)
-  if (w.capacity && w.allocated) parts.push(`${cpuText(w.allocated.cpuMillicores)} of ${cpuText(w.capacity.cpuMillicores)} CPU`, `${bytesText(w.allocated.memoryBytes)} of ${bytesText(w.capacity.memoryBytes)}`)
-  return parts.join(' · ')
+function resourcesUsed(w: SubstrateWorkerRow): string | undefined {
+  if (!w.capacity || !w.allocated) return undefined
+  return `${cpuText(w.allocated.cpuMillicores)} of ${cpuText(w.capacity.cpuMillicores)} CPU · ${bytesText(w.allocated.memoryBytes)} of ${bytesText(w.capacity.memoryBytes)}`
 }
 
 function WorkerStateBadge({ w }: { w: SubstrateWorkerRow }) {
@@ -116,8 +122,8 @@ function WorkerStateBadge({ w }: { w: SubstrateWorkerRow }) {
 
 function WorkerCard({ w, onOpenActor, onOpenPod }: { w: SubstrateWorkerRow; onOpenActor: (ref: SubstrateRef) => void; onOpenPod: (w: SubstrateWorkerRow) => void }) {
   const { actors, free } = workerSlots(w)
-  const takes = w.state === 'active'
   const podMismatch = w.podReady === true && w.state === 'unavailable'
+  const resources = resourcesUsed(w)
   return (
     <div className="min-w-0 rounded-lg border border-theme-border bg-theme-surface p-3">
       <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
@@ -128,19 +134,21 @@ function WorkerCard({ w, onOpenActor, onOpenPod }: { w: SubstrateWorkerRow; onOp
       </div>
       {w.actors === undefined ? (
         <p className="mt-2 text-xs text-theme-text-tertiary">Actors were not read, so which actor holds each slot is unknown.</p>
-      ) : actors.length + free === 0 ? (
+      ) : actors.length + free === 0 && w.capacity?.actors === 0 ? (
         <p className="mt-2 text-xs text-theme-text-tertiary">0 slots: the worker reports no actor capacity, so Substrate places nothing here.</p>
       ) : (
-        <div className="mt-2 grid grid-cols-[repeat(auto-fill,minmax(8.75rem,1fr))] gap-1">
-          {actors.map((a) => <ActorCell key={`${a.atespace}/${a.name}`} actor={a} onOpen={onOpenActor} />)}
-          {/* A worker that takes nothing new offers no free slot: its unused ones are one cell. */}
-          {takes ? Array.from({ length: free }, (_, i) => <FreeCell key={`free-${i}`} />) : free > 0 && <FreeCell>{`${free} unused`}</FreeCell>}
-        </div>
+        <>
+          {actors.length > 0 && (
+            <div className="mt-2 grid grid-cols-[repeat(auto-fill,minmax(8.75rem,1fr))] gap-1">
+              {actors.map((a) => <ActorCell key={`${a.atespace}/${a.name}`} actor={a} onOpen={onOpenActor} />)}
+            </div>
+          )}
+          <div className="mt-2 text-xs text-theme-text-secondary">{slotsText(w)}</div>
+        </>
       )}
-      <div className="mt-2 text-xs text-theme-text-tertiary">
+      <div className="mt-0.5 text-xs text-theme-text-tertiary">
         <span className="whitespace-nowrap font-mono">{w.node || 'node unknown'}</span>
-        {usageText(w) && <> · {usageText(w)}</>}
-        {!takes && ' · places nothing new'}
+        {resources && <> · {resources}</>}
       </div>
       {w.node && <NodeRiskLinks node={w.node} />}
       {podMismatch && <div className="mt-1 text-xs text-theme-text-secondary">Its Pod is Ready, so the worker, not Kubernetes, is refusing work.</div>}
@@ -179,7 +187,7 @@ function WorkerRows({ workers, onOpenPod }: { workers: SubstrateWorkerRow[]; onO
           <WorkerStateBadge w={w} />
           <SlotBar w={w} />
           <button type="button" onClick={() => navigate(substrateActorsPath({ worker: w.pod }))} className="whitespace-nowrap text-xs text-accent-text hover:underline">
-            {usageText(w) || 'actors'}
+            {slotsText(w)}
           </button>
         </li>
       ))}
@@ -239,7 +247,6 @@ function Legend() {
         <LostMarker />
         sandbox lost: its worker restarted under it
       </li>
-      <li className="flex items-center gap-1.5"><span aria-hidden className="h-3 w-3 rounded-sm border border-dashed border-theme-border" />free, or unused on a worker that takes nothing new</li>
     </ul>
   )
 }
@@ -278,7 +285,8 @@ export function Placement({ data, onOpenActor, onOpenPod, drawer }: { data: Subs
           {missing > 0 && <div className="mt-2"><RegistrationGap missing={missing} known={workers.length} k8s={k8s} /></div>}
         </>
       ) : (
-        <div className={clsx('grid gap-3', drawer ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2')}>
+        // items-start: each card ends at its content; order stays row by row.
+        <div className={clsx('grid items-start gap-3', drawer ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2')}>
           {workers.map((w) => <WorkerCard key={w.name} w={w} onOpenActor={onOpenActor} onOpenPod={onOpenPod} />)}
           {missing > 0 && <RegistrationGap missing={missing} known={workers.length} k8s={k8s} />}
         </div>

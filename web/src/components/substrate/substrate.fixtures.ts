@@ -68,7 +68,7 @@ export const crashedRow: SubstrateAttention = {
   id: 'crashedActors',
   rule: 'crashedActors',
   severity: 'critical',
-  title: '14 actors are crashed, 11 of them from one template',
+  title: '14 actors are crashed',
   reading: "Latest: research/lit-review-0193. Substrate's message: container agent: OOMKilled (limit 2Gi)",
   nextStep: "Fix the cause Substrate's crash message names, then revert each actor to its newest stored generation.",
   command: 'kubectl ate revert actor <name> -a <atespace>',

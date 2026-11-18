@@ -7,6 +7,7 @@ import {
   useSubstrateActor,
   useSubstrateActorLogs,
   type SubstrateActorDetail,
+  type SubstrateActorLogs,
   type SubstrateLogSource,
   type SubstrateRef,
 } from '../../api/substrateWorkspace'
@@ -85,13 +86,12 @@ function LogsTab({ detail }: { detail: SubstrateActorDetail }) {
   const [view, setView] = useState<SubstrateLogSource>('all')
   const [container, setContainer] = useState('')
   const containers = detail.template?.containers ?? []
+  const filtered = hidesWorkerRecords(view, container)
   const logs = useSubstrateActorLogs(detail.actor, { source: view, container: view === 'lifecycle' || view === 'worker' ? undefined : container || undefined, tailLines: 500 })
+  // A view that leaves out the worker's records can hide a memory-limit kill; its own small read says whether it does.
+  const workerRecords = useSubstrateActorLogs(filtered ? detail.actor : null, { source: 'worker', tailLines: 500 })
   const data = logs.data
-  const where = data?.origin === 'worker' && data.worker
-    ? <>from its current worker Pod <span className="font-mono">{data.worker.namespace}/{data.worker.pod}</span></>
-    : data?.origin === 'lastNode'
-      ? <>from the worker Pods on <span className="font-mono">{data.node}</span>, the node it last ran on</>
-      : null
+  const hiddenKill = filtered && data && !data.memoryKill ? workerRecords.data?.memoryKill : undefined
   return (
     <TabBody>
       <div className="flex flex-wrap items-center gap-3">
@@ -115,7 +115,6 @@ function LogsTab({ detail }: { detail: SubstrateActorDetail }) {
             </select>
           </label>
         )}
-        {where && <span className="text-xs text-theme-text-tertiary">{where}</span>}
         {data?.origin === 'worker' && logs.dataUpdatedAt > 0 && (
           <span className="inline-flex items-center gap-1.5 text-xs text-theme-text-secondary">
             <StatusDot tone="healthy" />
@@ -123,11 +122,27 @@ function LogsTab({ detail }: { detail: SubstrateActorDetail }) {
           </span>
         )}
       </div>
+      {hiddenKill && <HiddenKillNotice kill={hiddenKill} onShowAll={() => { setView('all'); setContainer('') }} />}
       <ActorLogsBody actor={detail.actor} logs={logs} />
       <p className="text-xs text-theme-text-tertiary">
-        Radar reads worker Pod logs for as long as Kubernetes keeps them; lines from workers that are gone are not linked. The same lines as <span className="whitespace-nowrap font-mono">{logsCommand(detail.actor)}</span> when the actor runs.
+        Lines from worker Pods that are gone are lost with them. While the actor runs, <span className="whitespace-nowrap font-mono">{logsCommand(detail.actor)}</span> shows the same lines.
       </p>
     </TabBody>
+  )
+}
+
+/** A log view that leaves out the worker's own records, where a memory-limit kill is written. */
+export function hidesWorkerRecords(view: SubstrateLogSource, container: string): boolean {
+  return view === 'containers' || view === 'lifecycle' || (view === 'all' && !!container)
+}
+
+/** Says a filter hides the kill record rather than changing the filter for the reader. */
+export function HiddenKillNotice({ kill, onShowAll }: { kill: Pick<NonNullable<SubstrateActorLogs['memoryKill']>, 'current'>; onShowAll: () => void }) {
+  return (
+    <p className="text-xs text-theme-text-secondary">
+      This view hides the worker’s record of a memory-limit kill{kill.current ? ', the cause of this crash' : ' from an earlier run'}.{' '}
+      <button type="button" onClick={onShowAll} className="font-medium text-accent-text hover:underline">Show all sources</button>
+    </p>
   )
 }
 

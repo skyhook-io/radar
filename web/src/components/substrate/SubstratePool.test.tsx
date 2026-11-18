@@ -47,20 +47,33 @@ const raw = (data: SubstratePool) => renderToStaticMarkup(<MemoryRouter><Placeme
 const render = (data: SubstratePool) => text(renderToStaticMarkup(<MemoryRouter><Placement data={data} onOpenActor={() => {}} onOpenPod={() => {}} /></MemoryRouter>))
 
 describe('WorkerPool placement', () => {
-  it('draws one card per worker, one cell per slot naming its actor, the rest free', () => {
+  it('draws one card per worker with a cell per actor, and counts the free slots in words, not cells', () => {
     const html = render(pool([worker(0)]))
     expect(html).toContain('agent-pool-worker-0')
     expect(html).toContain('lit-review-0193')
-    expect(html.match(/border-dashed[^>]*>free</g)?.length).toBe(2)
-    expect(html).toContain('2/4 slots · 4 of 16 CPU · 8Gi of 64Gi')
+    // Free slots have no position, so they are a count: no cell repeats "free".
+    expect(html).not.toContain('border-dashed')
+    expect(html).not.toMatch(/>free</)
+    expect(html).toContain('2 of 4 actor slots used · 2 free')
+    expect(html).toContain('4 of 16 CPU · 8Gi of 64Gi')
   })
 
   it('says a worker that takes nothing new has unused slots, not free ones, and when its Pod is Ready', () => {
     const html = render(pool([worker(0, { state: 'unavailable' })]))
-    expect(html).toContain('2 unused')
-    expect(html).not.toMatch(/border-dashed[^>]*>free</)
-    expect(html).toContain('places nothing new')
+    expect(html).toContain('2 of 4 actor slots used · 2 unused · places nothing new')
+    expect(html).not.toContain('2 free')
     expect(html).toContain('Its Pod is Ready, so the worker, not Kubernetes, is refusing work.')
+  })
+
+  it('keeps an unknown capacity unknown, never zero free', () => {
+    const html = render(pool([worker(0, { capacity: undefined })]))
+    expect(html).toContain('2 actors · slot capacity unknown')
+    expect(html).not.toContain('0 free')
+    expect(html).not.toContain('0 slots')
+  })
+
+  it('lets each card end at its content, in row order', () => {
+    expect(raw(pool([worker(0), worker(1)]))).toMatch(/class="grid items-start gap-3/)
   })
 
   it('calls a gap in a complete worker list a registration shortfall, never missing Pods', () => {

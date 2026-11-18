@@ -60,7 +60,9 @@ describe('Agent Substrate overview, connected', () => {
     expect(pool).toBeLessThan(golden)
     // Each row names its kind on the subject line, as Velero's and Agent Sandbox's rows do.
     expect(attention).toMatch(/<span>Pool <span[^>]*><span><button[^>]*><span[^>]*>agent-pool</)
-    expect(attention).toContain('14 actors are crashed, 11 of them from one template')
+    expect(attention).toContain('14 actors are crashed')
+    // Where most of them are, as a concentration with a link, not a cause.
+    expect(plain(attention)).toMatch(/11 of the 14 use template <button[^>]*>research \/ langgraph-research<\/button>/)
     expect(attention).toContain('Show the 14 actors →')
     expect(attention).toContain('research / langgraph-research')
     expect(attention).toContain('Substrate’s messages')
@@ -147,8 +149,24 @@ describe('Agent Substrate overview, not connected', () => {
     expect(html).toContain('Recommended')
     expect(html).toContain('This identity may be a global owner')
     expect(html).toContain('never returns it to the browser or stores it in its settings')
+    // Secondary detail folds under labels that say what each explains; the intro stays short.
+    expect(html).toContain('How Radar handles the token')
+    expect(html).toContain('Why a separate identity?')
+    expect(html).toContain('How to get a viewer token')
+    expect(html).toContain('Radar saves only the path.')
     expect(html).toContain('Advanced: API server address and TLS')
     expect(html).toContain('>Connect</button>')
+  })
+
+  it('shows the shared identity’s warning, unfolded, once that identity is chosen', () => {
+    state.connection = connection({ saved: true, settings: { identity: 'shared' } })
+    const html = render(notConnectedWorkspace())
+    const at = html.indexOf('This identity may be a global owner')
+    expect(at).toBeGreaterThan(-1)
+    // The nearest fold around it is open: not inert.
+    const fold = html.lastIndexOf('<div class="relative overflow-hidden"', at)
+    expect(html.slice(fold, at)).not.toContain('inert')
+    state.connection = connection()
   })
 
   it('says the API server was not found, or that Radar can’t check', () => {
