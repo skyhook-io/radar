@@ -75,14 +75,23 @@ with the path declaring it. The `View` answers every family the same way:
 - `References(family, subject)`: each target the subject declares, every path declaring it, and what reading it
   found: present, absent, unread (with its gap) or withheld from the caller.
 - `Referrers(family, subject)`: what declares the subject, as the caller may read it, up to 500 with a total. A
-  family's namespaced targets are always in the declarer's namespace, so the answer reads that namespace's objects of
-  each declaring kind through the namespace index and evaluates what each declares. A cluster-scoped target is answered
-  as `Children` answers a cluster-scoped owner: the namespaces the caller may read something in are searched, each
-  declarer is checked where it is, and a gap is kept only if it covers what the caller may read
-  (`ownership.GapCoversReadable`). An index of every declaration cost about 1.4 KB per Pod
-  and made a Pod relist about five times as long ([measurements](loadtest.md#relationship-cost-baselines)).
+  namespaced target is normally declared from its own namespace, so the answer reads that namespace's objects of each
+  declaring kind through the namespace index and evaluates what each declares. An index of every declaration cost
+  about 1.4 KB per Pod and made a Pod relist about five times as long
+  ([measurements](loadtest.md#relationship-cost-baselines)).
+- A cluster-scoped target, or any target of a family whose declarations cross namespaces (`CrossNamespace`, as Gateway
+  API references do), is answered as `Children` answers a cluster-scoped owner: the namespaces the caller may read
+  something in are searched, each declarer is checked where it is, and a gap is kept only if it covers what the caller
+  may read (`ownership.GapCoversReadable`).
 - A declaration counts only if its kind is one of the family's targets and its source may declare that kind (an HPA
   doesn't scale a DaemonSet).
+- A declaration may name alternatives (`Declaration.Or`): the same reference in another API group its controller also
+  reads, in the order it tries them, as Traefik 2.10 tries `traefik.io` and then `traefik.containo.us`. `References`
+  names the first that exists, and `Referrers` counts a declaration only for the target it resolves to. A candidate
+  Radar couldn't read, or the caller may not, stops the resolution there: the answer names it and says so rather than
+  falling back to a later one. A target in none of them is named in the first group the cluster serves. A target found
+  only after served groups that lack it carries `legacy_group_only`, in both directions: Traefik 2.10 and 2.11 read
+  `traefik.containo.us` too, Traefik 3 ignores it, and Radar can't tell which controller runs.
 - Both answer nothing for a subject the caller may not read; a permission check that couldn't be made is a gap, not a
   denial; a subject the host read that the cache doesn't hold yet leaves the answer incomplete.
 
@@ -96,8 +105,29 @@ The families so far:
 | `IngressBackends` | Ingresses → their default and rule backend Services | `families.go` |
 | `RolloutServices` | Argo Rollouts → the canary, stable, active and preview Services their strategy names | `families.go` |
 | `CertificateSecrets` | cert-manager Certificates → the Secret they write | `families.go` |
+| `GatewayParents` | Gateway API routes (HTTP, GRPC, TCP, TLS, UDP) → the Gateways their parentRefs attach to, in any namespace | `families.go` |
+| `GatewayBackends` | Gateway API routes → the Services their rules send traffic to, in any namespace, whether or not a ReferenceGrant permits it | `families.go` |
+| `GatewayClasses` | Gateways → the GatewayClass they name | `families.go` |
+| `CertManagerIssuers` | cert-manager Certificates, CertificateRequests, ACME Orders and Challenges → the Issuer or ClusterIssuer their `issuerRef` names (external issuers aren't followed) | `families.go` |
+| `FluxSources` | Flux Kustomizations, HelmReleases, HelmCharts → the GitRepository, OCIRepository, Bucket, ExternalArtifact, HelmRepository or HelmChart they build from, in any namespace (an inline HelmRelease also declares the HelmChart the controller recorded) | `families.go` |
+| `NodeClasses` | Karpenter NodePools → their provider's NodeClass, or EKS Auto Mode's (`IsTarget`: each provider defines its own kind) | `families.go` |
+| `ClusterClasses` | Cluster API Clusters → the ClusterClass their topology names, in any namespace | `families.go` |
+| `KnativeEventDestinations` | Knative Triggers, event sources and Channels → where they send events (subscriber, sink, backing channel), in any namespace: core Services and any kind in a Knative group, such as JobSink | `families.go` |
+| `KnativeTriggerBrokers` | Knative Triggers → the Broker they subscribe to (`brokerRef` in any namespace, or the older same-namespace `broker`) | `families.go` |
+| `KnativeRouteRevisions` | Knative Routes → the Revisions their status sends traffic to | `families.go` |
+| `IstioGateways` | Istio VirtualServices → the Istio Gateways they bind to, in any namespace (`mesh` binds sidecars, not a Gateway) | `families.go` |
+| `IstioServiceHosts(domain)` | Istio VirtualServices (HTTP, TCP, TLS routes) and DestinationRules → the Services their hosts name, in any namespace. Made per request with the mesh's domain from istiod (`configrefs.IstioServiceDomain`): an FQDN resolves only with it | `families.go` |
+| `ArgoWorkflowTemplates` | Argo Workflows and CronWorkflows → the WorkflowTemplates and ClusterWorkflowTemplates their `workflowTemplateRef` and task or step `templateRef`s use | `families.go` |
+| `TraefikBackends` | Traefik IngressRoutes and TraefikServices → the Services and TraefikServices they route, balance or mirror to; IngressRouteTCPs and IngressRouteUDPs → their Services; in any namespace | `traefik.go` |
+| `TraefikRouteConfig` | Traefik HTTP and TCP routes → their Middlewares (MiddlewareTCP), ServersTransports (ServersTransportTCP) and TLSOption, and chain Middlewares → the Middlewares they run, in any namespace | `traefik.go` |
+| `TraefikSecrets` | Traefik transports, TLSOptions, TLSStores and routes → the Secrets and ConfigMaps they read | `traefik.go` |
+| `ContourBackends` | Contour HTTPProxies → the Services they send to and the HTTPProxies they include or their TCP proxy delegates to, in any namespace | `contour.go` |
+| `ContourSecrets` | Contour HTTPProxies → the Secrets they read for TLS and validation | `contour.go` |
 
-Extractors live in `pkg/configrefs`, which the topology builder also uses.
+Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
+families read each reference's fields the same way. Resolution can still differ: topology lists one Traefik group per
+cluster, while a family resolves each reference through its candidates, so on a cluster serving both groups a
+Middleware only in `traefik.containo.us` is a family's answer but not drawn.
 
 Families are built here while Related Resources still reads the relationship graph; readers switch to the families in
 one change that also removes the graph.
