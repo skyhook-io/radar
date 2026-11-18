@@ -8,14 +8,14 @@ F06	JobSet → Job	ownership	ownership
 F07	CAPI chain	ownership	ownership		
 F08	Knative Serving chain	ownership	ownership		
 F09	Knative Channel owner	ownership	ownership		
-F10	CronWorkflow → Workflow	ownership,cronWorkflowRuns	ownership,cronWorkflowRuns		
+F10	CronWorkflow → Workflow	ownership,argoWorkflowCronWorkflows	ownership,argoWorkflowCronWorkflows		
 F11	NodePool → NodeClaim	ownership,nodePool	ownership,nodePool		
 F12	Generic CRD owner refs	ownership	ownership		
 F13	MHC → CAPI Cluster	healthChecks	healthChecks		
 F14	Argo CD recorded resources	ownership	ownership		
 F15	Flux inventory	ownership	ownership		
 F16	Flux HelmRelease by origin labels	fluxHelmOrigins	fluxHelmOrigins		
-F17	Argo Workflow → Pod	ownership,argoWorkflowPods	ownership,argoWorkflowPods		
+F17	Argo Workflow → Pod	ownership,argoPodWorkflows	ownership,argoPodWorkflows		
 F18	Reflector mirrors	reflections	reflections		
 F19	Service selects workloads	serviceSelectors	serviceSelectors		
 F20	Rollout's named Services	rolloutServices	rolloutServices		
