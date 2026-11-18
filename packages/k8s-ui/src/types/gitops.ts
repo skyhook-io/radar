@@ -379,53 +379,26 @@ export function argoStatusToGitOpsStatus(status: ArgoAppStatus): GitOpsStatus {
   }
 }
 
-/**
- * Maps an Argo CD ApplicationSet's conditions to a GitOpsStatus.
- *
- * An ApplicationSet generates Applications; it does not apply declared state
- * to a cluster itself. Sync answers "is the declared state applied", so there
- * is no honest sync value here and it stays Unknown - the generated
- * Applications each carry their own.
- *
- * Health answers whether the generator is doing its job, which its conditions
- * do report, in a vocabulary of their own (ErrorOccurred / ParametersGenerated
- * / ResourcesUpToDate - never Ready):
- * - ErrorOccurred=True      → Degraded, carrying the controller's message
- * - ResourcesUpToDate=True  → Healthy
- * - neither                 → Unknown (status not populated yet)
- *
- * The Resources view renders the same three conditions through
- * getArgoApplicationSetStatus for its own badge vocabulary. The two read the
- * same signals and must agree on which condition wins.
- */
+// ApplicationSets generate Applications rather than applying workloads, so sync
+// stays Unknown. Health may be unpopulated on older or upgraded controllers.
 export function argoApplicationSetConditionsToGitOpsStatus(
-  conditions: FluxCondition[]
+  conditions: FluxCondition[],
+  reportedHealth?: { status?: string; message?: string }
 ): GitOpsStatus {
-  const error = conditions.find(c => c.type === 'ErrorOccurred' && c.status === 'True')
-  if (error) {
-    return {
-      sync: 'Unknown',
-      health: 'Degraded',
-      message: error.message || 'Generation failed',
-      lastSyncTime: error.lastTransitionTime,
-      suspended: false,
-    }
-  }
-
-  const upToDate = conditions.find(c => c.type === 'ResourcesUpToDate')
-  if (upToDate?.status === 'True') {
-    return {
-      sync: 'Unknown',
-      health: 'Healthy',
-      lastSyncTime: upToDate.lastTransitionTime,
-      suspended: false,
-    }
-  }
+  const condition = conditions.find(c => c.type === 'ErrorOccurred' && c.status === 'True')
+    ?? conditions.find(c => c.type === 'RolloutProgressing' && c.status === 'True')
+    ?? conditions.find(c => c.type === 'ResourcesUpToDate' && c.status === 'True')
+  const derivedHealth = condition?.type === 'ErrorOccurred' ? 'Degraded'
+    : condition?.type === 'RolloutProgressing' ? 'Progressing'
+    : condition?.type === 'ResourcesUpToDate' ? 'Healthy' : 'Unknown'
 
   return {
     sync: 'Unknown',
-    health: 'Unknown',
-    message: 'Status cannot be determined',
+    health: reportedHealth?.status ? mapArgoHealth(reportedHealth.status) ?? 'Unknown' : derivedHealth,
+    message: reportedHealth?.status ? reportedHealth.message
+      : condition?.message || (derivedHealth === 'Degraded' ? 'Generation failed'
+        : derivedHealth === 'Unknown' ? 'Status cannot be determined' : undefined),
+    lastSyncTime: condition?.lastTransitionTime,
     suspended: false,
   }
 }

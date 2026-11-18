@@ -76,6 +76,7 @@ export const RADAR_FEATURES = {
   helmInventory: { label: 'Helm releases without Secret access', flag: 'helmInventory', flagShippedWithEndpoint: true },
   agentSigninCheck: { label: 'Agent sign-in checks', flag: 'agentSigninCheck', flagShippedWithEndpoint: true },
   podFileUpload: { label: 'Pod file uploads', flag: 'podFileUpload', flagShippedWithEndpoint: true },
+  vulnerabilities: { label: 'Vulnerability views', flag: 'vulnerabilities', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES

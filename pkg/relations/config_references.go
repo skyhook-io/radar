@@ -1,0 +1,42 @@
+package relations
+
+import (
+	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+)
+
+// ConfigReferences is the family of the ConfigMaps, Secrets,
+// PersistentVolumeClaims and ServiceAccount a Pod, a pod-template workload or
+// an Ingress's TLS declares, as pkg/configrefs reads them. A ReplicaSet
+// scaled explicitly to zero declares nothing, as the Topology screen draws
+// none: usually it is a Deployment's old revision. A Deployment scaled to
+// zero still declares through its own template.
+var ConfigReferences = &Family{
+	Name: "configReferences",
+	Sources: []Source{
+		{Kind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}},
+		{Kind: resourceid.GroupKind{Group: configrefs.ArgoRolloutsGroup, Kind: "Rollout"}},
+		{Kind: resourceid.GroupKind{Group: "apps", Kind: "StatefulSet"}},
+		{Kind: resourceid.GroupKind{Group: "apps", Kind: "DaemonSet"}},
+		{Kind: resourceid.GroupKind{Group: "batch", Kind: "CronJob"}},
+		{Kind: resourceid.GroupKind{Group: "batch", Kind: "Job"}},
+		{Kind: resourceid.GroupKind{Group: "apps", Kind: "ReplicaSet"}},
+		{Kind: resourceid.GroupKind{Group: "networking.k8s.io", Kind: "Ingress"}, Targets: []resourceid.GroupKind{{Kind: "Secret"}}},
+		{Kind: resourceid.GroupKind{Kind: "Pod"}},
+	},
+	Targets: []resourceid.GroupKind{
+		{Kind: "ConfigMap"}, {Kind: "Secret"}, {Kind: "PersistentVolumeClaim"}, {Kind: "ServiceAccount"},
+	},
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if rs, ok := obj.(*appsv1.ReplicaSet); ok && rs.Spec.Replicas != nil && *rs.Spec.Replicas == 0 {
+			return nil
+		}
+		_, err := configrefs.VisitObjectReferences(obj, func(r configrefs.PodSpecReference) {
+			visit(Declaration{Target: resourceid.Ref{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name}, Path: r.Path})
+		})
+		return err
+	},
+}
