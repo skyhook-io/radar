@@ -160,7 +160,8 @@ export interface ColumnSizingSpec {
   /** grow: share of the room left over. fit: share of it while reaching from its 95th percentile to its longest value. */
   weight?: number
   max?: number
-  /** Name: sized to its longest value (not its 95th percentile) and never given back when room is short. */
+  /** Name: sized to its longest value (not its 95th percentile); when room is short it
+   *  gives way last, and only down to the 90th percentile of its names. */
   keep?: boolean
   /** When room is short, lower ranks give way first (see ColumnLayoutInput). */
   yieldRank?: number
@@ -172,12 +173,13 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   if (col.sizing === 'grow') return { mode: 'grow', weight: col.growWeight ?? 1, max: GROW_MAX_PX }
   if (col.sizing === 'exact') return { mode: 'exact' }
   // Name is what a reader scans for, so it fits its longest name (up to the
-  // cap) and holds that width: the table scrolls sideways before a name that
-  // fits under the cap is cut. Other fit columns size to their 95th
+  // cap) and is the last column to give way when room is short — and then
+  // only down to the 90th percentile of its names, so just the longest are
+  // cut before the table scrolls sideways. Other fit columns size to their 95th
   // percentile, so a few outliers (one long namespace) don't set the width,
   // and reach for their longest value from the room left over.
   switch (col.key) {
-    case 'name': return { mode: 'fit', max: NAME_MAX_PX, keep: true }
+    case 'name': return { mode: 'fit', max: NAME_MAX_PX, keep: true, yieldRank: 4 }
     case 'namespace': return { mode: 'fit', max: NAMESPACE_MAX_PX, weight: 1 }
     // Node is worth showing but is the first to give way when room is short.
     case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1, yieldRank: 1 }
@@ -185,7 +187,7 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   // A column flagged fit holds short values (see SHORT_VALUE_MAX_PX), which
   // have no outliers worth trimming: one failing NodePool among a hundred
   // Ready ones still needs its whole badge. When room is short it gives way
-  // after the exact columns, down to its curated width.
+  // with Namespace, but no further than its curated width.
   if (col.sizing === 'fit') return { mode: 'fit', max: SHORT_VALUE_MAX_PX, longest: true }
   return { mode: 'exact' }
 }
@@ -193,6 +195,7 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
 export type CellWidth = (resource: any, measure: MeasureText, limit: number, ctx?: ContentContext) => number
 const text = (read: (resource: any) => string | null | undefined, font: CellFont = 'body'): CellWidth =>
   (resource, measure, limit) => measure(read(resource) || '-', font, limit)
+
 // A cell that is one .badge holding the label.
 const badge = (label: (resource: any) => string | null | undefined): CellWidth =>
   (resource, measure, limit) => measure(label(resource) || '-', 'badge', limit) + BADGE_CHROME_PX
@@ -372,10 +375,12 @@ function cellWidthReader(col: ContentColumn, ctx: ContentContext): CellWidth {
 }
 
 export interface MeasuredContent {
-  /** grow, exact, Name and flagged fit columns: the longest value; Namespace and Node: the 95th percentile. Padding included. */
+  /** grow, exact and Name: the longest value; other fit columns: the 95th percentile. Padding included. */
   content: number
   /** fit only: its longest value, which it may grow to from the room left over. */
   stretch?: number
+  /** Name only: the 90th percentile of its names, the narrowest it gives way to. */
+  yieldTo?: number
 }
 
 /**
@@ -398,16 +403,27 @@ export function measureColumnContent(
       const read = col.getFilterValue ? undefined : ctx.hostCellWidths?.[col.key] ?? exactContentReader(ctx.plural, col.key)
       if (!read) continue
       let longest = 0
-      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, Infinity, ctx))
+      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, Infinity))
       result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
       continue
     }
     const read = cellWidthReader(col, ctx)
     const limit = (spec.max ?? Infinity) - CELL_PADDING_PX
-    if (spec.mode === 'fit' && (spec.keep || spec.longest)) {
+    if (spec.mode === 'fit' && spec.longest) {
       let longest = 0
       for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, limit, ctx))
       result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
+    } else if (spec.mode === 'fit' && spec.keep) {
+      const widths = new Array<number>(items.length)
+      let longest = 0
+      for (let i = 0; i < items.length; i++) {
+        widths[i] = safeWidth(read, items[i], measure, limit, ctx)
+        if (widths[i] > longest) longest = widths[i]
+      }
+      result[col.key] = {
+        content: Math.ceil(longest) + CELL_PADDING_PX,
+        yieldTo: Math.ceil(percentile(widths, 0.9)) + CELL_PADDING_PX,
+      }
     } else if (spec.mode === 'fit') {
       const widths = new Array<number>(items.length)
       let longest = 0
@@ -433,7 +449,7 @@ export function measureColumnContent(
 
 // A reader that throws on an odd object must not take the table down; that
 // cell just doesn't count toward the width.
-function safeWidth(read: CellWidth, item: any, measure: MeasureText, limit: number, ctx: ContentContext): number {
+function safeWidth(read: CellWidth, item: any, measure: MeasureText, limit: number, ctx?: ContentContext): number {
   try {
     return read(item, measure, limit, ctx)
   } catch {

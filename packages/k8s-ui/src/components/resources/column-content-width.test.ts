@@ -26,7 +26,7 @@ const pod = (name: string, extra: Record<string, any> = {}) => ({ metadata: { na
 
 describe('columnSizingSpec', () => {
   it('fits Name, Namespace and Node, grows flagged columns, and keeps the rest exact', () => {
-    expect(columnSizingSpec({ key: 'name' })).toEqual({ mode: 'fit', max: 480, keep: true })
+    expect(columnSizingSpec({ key: 'name' })).toEqual({ mode: 'fit', max: 480, keep: true, yieldRank: 4 })
     expect(columnSizingSpec({ key: 'namespace' }).mode).toBe('fit')
     expect(columnSizingSpec({ key: 'node' }).mode).toBe('fit')
     expect(columnSizingSpec({ key: 'message', sizing: 'grow', growWeight: 3 })).toEqual({ mode: 'grow', weight: 3, max: GROW_MAX_PX })
@@ -47,7 +47,8 @@ describe('measureColumnContent', () => {
     for (let i = 0; i < 5; i++) items.push(pod('x'.repeat(40)))
     const m = measureColumnContent(items, [{ key: 'name' }], ctx, measure)
     // 400px of text + 22px copy button + padding
-    expect(m.name).toEqual({ content: 400 + 22 + CELL_PADDING_PX })
+    // ...and yields, when room is short, no further than its 90th percentile.
+    expect(m.name).toEqual({ content: 400 + 22 + CELL_PADDING_PX, yieldTo: 100 + 22 + CELL_PADDING_PX })
   })
 
   it('measures the exact columns whose cells it knows, and leaves the rest unmeasured', () => {

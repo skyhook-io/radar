@@ -268,6 +268,11 @@ export const SKIP_FILTER_COLUMNS = new Set([
   // status.summary. Listing them here stops the header reserving room for a
   // button that can never render.
   'critical', 'high', 'medium', 'low', 'pass', 'fail', 'warn', 'error', 'skip',
+  // The same for Pods' and Nodes' Containers, CPU, Memory, GPU and Pods
+  // columns: their cells draw from container statuses, metrics and resource
+  // requests, getCellFilterValue has no case for them, and no Pod, Node or
+  // Volcano Job carries a status or spec field of those names.
+  'containers', 'cpu', 'memory', 'gpu', 'pods',
 ])
 
 // Namespace/node cardinality scales with cluster size, not kind enum size;
@@ -6173,6 +6178,7 @@ export function ResourcesView({
     for (const [key, m] of Object.entries(measured)) {
       flat[key] = m.content
       if (m.stretch !== undefined) flat[`${key}\u0000stretch`] = m.stretch
+      if (m.yieldTo !== undefined) flat[`${key}\u0000yieldTo`] = m.yieldTo
     }
     return flat
   }, [tableActive, measureSource, columns, extraColumnsByKey, sizingKind, auditBadges, usageCellWidths, headerFontEpoch])
@@ -6236,14 +6242,19 @@ export function ResourcesView({
         key: col.key,
         mode: spec.mode,
         floor,
-        // When room is short: exact columns may shrink to their content
-        // (never below their heading), but only where the content is known,
-        // and so may short-value fit columns, which hold values that are
-        // useless cut; Node and Namespace to their heading, cutting values.
+        // When room is short: exact columns and short-value fit columns may
+        // shrink to their content (never below their heading), but only where
+        // the content is known;
+        // Node and Namespace to their heading, cutting values; Name, last, to
+        // the 90th percentile of its names (never below NAME_MIN_PX, never
+        // above the width it holds).
         min: spec.mode === 'exact' || spec.longest
           ? content !== undefined ? Math.max(getColumnHeaderWidth(col, extraColumnsByKey), content) : undefined
-          : spec.mode === 'fit' && !spec.keep ? getColumnHeaderWidth(col, extraColumnsByKey) : undefined,
-        keep: spec.keep,
+          : spec.keep
+            ? content !== undefined
+              ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000yieldTo`] ?? content, content, nameMax))
+              : undefined
+            : spec.mode === 'fit' ? getColumnHeaderWidth(col, extraColumnsByKey) : undefined,
         yieldRank: spec.yieldRank,
         userWidth: columnWidths[col.key] || frozen?.[col.key],
         content,

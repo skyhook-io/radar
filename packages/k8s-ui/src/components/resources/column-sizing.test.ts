@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { type ColumnLayoutInput, computeColumnLayout, percentile, rememberWidths } from './column-sizing'
 
-const name = (content: number): ColumnLayoutInput => ({ key: 'name', mode: 'fit', floor: 200, max: 480, content, keep: true })
+// Name as the table builds it: yields last, here no further than its content (fully protected).
+const name = (content: number, min = content): ColumnLayoutInput => ({ key: 'name', mode: 'fit', floor: 200, max: 480, content, min, yieldRank: 4 })
 const exact = (key: string, floor: number): ColumnLayoutInput => ({ key, mode: 'exact', floor })
 const grow = (key: string, floor: number, content: number, weight = 1, max = 960): ColumnLayoutInput => ({ key, mode: 'grow', floor, content, weight, max })
 const total = (widths: Record<string, number>) => Object.values(widths).reduce((a, b) => a + b, 0)
@@ -101,6 +102,21 @@ describe('computeColumnLayout', () => {
     expect(computeColumnLayout(cols, 786)).toEqual({ name: 300, namespace: 200, status: 110, node: 176 })
     // 170 short: then Namespace (20).
     expect(computeColumnLayout(cols, 766)).toEqual({ name: 300, namespace: 180, status: 110, node: 176 })
+  })
+
+  it('takes room from Name last, and only down to its 90th percentile, before the table scrolls', () => {
+    const cols: ColumnLayoutInput[] = [
+      name(480, 360),
+      { key: 'namespace', mode: 'fit', floor: 192, max: 320, content: 181, min: 145 },
+      { key: 'status', mode: 'exact', floor: 160, min: 130 },
+      { key: 'node', mode: 'fit', floor: 176, max: 400, content: 214, min: 86, yieldRank: 1 },
+    ]
+    // 480 + 192 + 160 + 214 = 1046. Everything else gives first: Node 128, Status 30, Namespace 47 = 205.
+    expect(computeColumnLayout(cols, 841)).toEqual({ name: 480, namespace: 145, status: 130, node: 86 })
+    // 60 more short: only now Name gives, down to 420.
+    expect(computeColumnLayout(cols, 781)).toEqual({ name: 420, namespace: 145, status: 130, node: 86 })
+    // Past its 90th percentile Name holds and the table scrolls.
+    expect(computeColumnLayout(cols, 500)).toEqual({ name: 360, namespace: 145, status: 130, node: 86 })
   })
 
   it('never shrinks an exact column below its normal width when its content is wider', () => {
