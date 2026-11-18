@@ -48,15 +48,20 @@ func ForEvidence(issue Issue, canRead func(EvidenceRead) bool, allowUnfiltered b
 	return issue, true
 }
 
-// degradeIssue tells the finding without its evidence. The onset goes too:
-// it is when the evidence changed.
+// degradeIssue tells the finding without its evidence. Evidence-derived onset
+// goes too; a detector can retain timing owned by the readable subject itself.
 func degradeIssue(issue Issue) Issue {
 	d := issue.Degraded
-	issue.Message, issue.RawMessage, issue.Cause, issue.Action = d.Message, d.Message, d.Cause, d.Action
+	issue.Message, issue.Cause, issue.Action = d.Message, d.Cause, d.Action
+	if issue.RawMessage != "" {
+		issue.RawMessage = d.Message
+	}
 	issue.ActionPrimary, issue.ActionSecondaryTitle, issue.ActionSecondary = "", "", nil
 	issue.Hazard = ""
-	issue.FirstSeen, issue.OnsetUnknown, issue.OnsetCoverage = time.Time{}, true, nil
-	issue.IssueTiming, issue.IssueTimingBasis = "", ""
+	if !d.KeepSubjectOnset {
+		issue.FirstSeen, issue.OnsetUnknown, issue.OnsetCoverage = time.Time{}, true, nil
+		issue.IssueTiming, issue.IssueTimingBasis = "", ""
+	}
 	issue.RequiredReads, issue.Degraded = nil, nil
 	return issue
 }

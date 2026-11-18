@@ -493,6 +493,9 @@ type DegradedFinding struct {
 	Message string
 	Cause   string
 	Action  string
+	// KeepSubjectOnset preserves timing derived from the finding's own
+	// readable subject, independent of the withheld supporting evidence.
+	KeepSubjectOnset bool `json:"-"`
 }
 
 // ConditionalCleanup is a step that is right only when Condition holds. It is
@@ -525,8 +528,9 @@ type FinalizerRemoval struct {
 
 type Issue struct {
 	// Degraded replaces the message, cause and action for a caller who can't
-	// make RequiredReads, and the onset is withheld with it. Without it such a
-	// caller doesn't get the finding.
+	// make RequiredReads. Evidence-derived onset is withheld too, unless the
+	// degraded form preserves independently readable subject timing. Without
+	// a degraded form such a caller doesn't get the finding.
 	Degraded *DegradedFinding `json:"-"`
 
 	// RequiredReads describe the inventories behind a cross-resource finding.
