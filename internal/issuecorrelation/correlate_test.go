@@ -461,7 +461,7 @@ func TestCorrelate_AnchoredReadBoundaries(t *testing.T) {
 		store := initStore(t)
 		trigger := firstSeen.Add(-2 * time.Minute)
 		appendChange(t, store, specUpdate("Deployment", "web", trigger, "web:bad"))
-		for i := range anchoredFetchLimit {
+		for i := range 50 {
 			appendChange(t, store, specUpdate("Deployment", "web", firstSeen.Add(time.Duration(i+1)*time.Minute), fmt.Sprintf("web:fix%d", i)))
 		}
 		iss := webIssue(firstSeen)
@@ -671,5 +671,96 @@ func TestCorrelate_UnresolvedAdmissionBlocker(t *testing.T) {
 		if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownSourcesUnresolved {
 			t.Fatalf("%s: %+v", name, got)
 		}
+	}
+}
+
+func replicaUpdate(name string, at time.Time, replicas int64) timeline.TimelineEvent {
+	return timeline.TimelineEvent{
+		ID: fmt.Sprintf("replicas/%s/%d", name, at.UnixNano()), Timestamp: at,
+		Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: name, EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.replicas", OldValue: replicas - 1, NewValue: replicas}}},
+	}
+}
+
+// Changes are picked by time before any significance cut: a lower-ranked
+// edit nearest first seen is kept over many higher-ranked edits further
+// away, on both sides of it.
+func TestCorrelate_AnchoredSelectionIgnoresSignificance(t *testing.T) {
+	firstSeen := time.Now().Add(-60 * time.Minute).Truncate(time.Second)
+
+	t.Run("before first seen", func(t *testing.T) {
+		initCache(t, webDeployment())
+		store := initStore(t)
+		for i := range 50 {
+			appendChange(t, store, specUpdate("Deployment", "web", firstSeen.Add(-time.Duration(i+5)*time.Minute), fmt.Sprintf("web:%d", i)))
+		}
+		nearest := firstSeen.Add(-time.Minute)
+		appendChange(t, store, replicaUpdate("web", nearest, 3))
+		iss := webIssue(firstSeen)
+		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		if len(got.Changes) == 0 || !changeTime(got.Changes[0]).Equal(nearest) || got.Changes[0].Fields[0].Path != "spec.replicas" || !got.MoreNotShown {
+			t.Fatalf("nearest lower-ranked edit dropped: %+v", got.Changes)
+		}
+	})
+
+	t.Run("after first seen", func(t *testing.T) {
+		initCache(t, webDeployment())
+		store := initStore(t)
+		for i := range 50 {
+			appendChange(t, store, specUpdate("Deployment", "web", firstSeen.Add(time.Minute+time.Duration(i)*time.Minute/2), fmt.Sprintf("web:%d", i)))
+		}
+		newest := firstSeen.Add(50 * time.Minute)
+		appendChange(t, store, replicaUpdate("web", newest, 3))
+		iss := webIssue(firstSeen)
+		got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+		found := false
+		for _, c := range got.Changes {
+			found = found || changeTime(c).Equal(newest)
+		}
+		if !found || !got.MoreNotShown {
+			t.Fatalf("newest lower-ranked edit after first seen dropped: %+v", got.Changes)
+		}
+	})
+}
+
+// A delete just before the read's split and its recreate just after it are
+// one change, as they are in an unsplit read.
+func TestCorrelate_RecreateAcrossTheSplitIsOneRow(t *testing.T) {
+	firstSeen := time.Now().Add(-20 * time.Minute).Truncate(time.Second)
+	boundary := firstSeen.Add(anchorSlop)
+	initCache(t, webDeployment())
+	store := initStore(t)
+	appendChange(t, store, timeline.TimelineEvent{ID: "web-delete", Timestamp: boundary.Add(-5 * time.Second),
+		Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web", EventType: timeline.EventTypeDelete})
+	appendChange(t, store, timeline.TimelineEvent{ID: "web-recreate", Timestamp: boundary.Add(5 * time.Second),
+		Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web", EventType: timeline.EventTypeAdd, Reason: timeline.ReasonRecreated})
+	iss := webIssue(firstSeen)
+	got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+	if len(got.Changes) != 1 || got.Changes[0].ChangeType == "delete" {
+		t.Fatalf("recreate split into %d rows: %+v", len(got.Changes), got.Changes)
+	}
+}
+
+// History coverage is the whole window's: an eviction inside the part after
+// first seen still makes it incomplete, and no absence is claimed.
+func TestCorrelate_EvictionAfterFirstSeenBlocksAbsence(t *testing.T) {
+	firstSeen := time.Now().Add(-30 * time.Minute)
+	initCache(t, webDeployment())
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 3}); err != nil {
+		t.Fatal(err)
+	}
+	timeline.SetObservationStartForTest(time.Now().Add(-2 * time.Hour))
+	store := initStoreConnected(t)
+	for i := range 6 {
+		appendChange(t, store, timeline.TimelineEvent{ID: fmt.Sprintf("noise-%d", i), Timestamp: firstSeen.Add(time.Duration(i+5) * time.Minute),
+			Kind: "Deployment", APIVersion: "apps/v1", Namespace: "noise", Name: "busy", EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.replicas", OldValue: int64(i), NewValue: int64(i + 1)}}}})
+	}
+	iss := webIssue(firstSeen)
+	got := Correlate(context.Background(), iss, anchoredOptions(iss), Access{})
+	if got.NoChanges || !got.History.Incomplete || !slices.Contains(got.History.Reasons, issuesapi.HistoryEventsEvicted) {
+		t.Fatalf("eviction after first seen: no_changes=%v history=%+v", got.NoChanges, got.History)
 	}
 }

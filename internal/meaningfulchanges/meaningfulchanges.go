@@ -246,8 +246,17 @@ type Query struct {
 	// From and To fix the window instead of Since. From, when set, is the
 	// window's start; To, when set, bounds the store read at its end, so a
 	// window anchored in the past does not slide forward with the clock.
-	From       time.Time
-	To         time.Time
+	From time.Time
+	To   time.Time
+	// SplitAt, when inside the window, reads the part of the window up to it
+	// and the part after it separately, each with its own fetch bound, so a
+	// run of rows on one side can't push the other side's out of the read.
+	// The candidates are combined before recreate pairs are coalesced.
+	SplitAt time.Time
+	// Select, when set, replaces the significance ranking and the Limit cut:
+	// it picks the rows to return from every qualifying row and says whether
+	// it left any out.
+	Select     func([]issuesapi.RecentChange) ([]issuesapi.RecentChange, bool)
 	Limit      int
 	FieldLimit int
 	// Allow, when set, drops changes the caller may not read before ranking
@@ -340,14 +349,14 @@ func Recent(ctx context.Context, q Query) (RecentResult, error) {
 	var events []timeline.TimelineEvent
 	saturated := false
 	for _, kinds := range updateKinds {
-		got, full, err := queryCandidates(ctx, store, q, kinds, updateEventTypes, bound)
+		got, full, err := readCandidates(ctx, store, q, kinds, updateEventTypes, bound)
 		if err != nil {
 			return RecentResult{}, err
 		}
 		events = append(events, got...)
 		saturated = saturated || full
 	}
-	got, full, err := queryCandidates(ctx, store, q, lifecycleKinds, lifecycleEventTypes, bound)
+	got, full, err := readCandidates(ctx, store, q, lifecycleKinds, lifecycleEventTypes, bound)
 	if err != nil {
 		return RecentResult{}, err
 	}
@@ -526,7 +535,7 @@ func RecentForWorkloadSources(
 		sourceQuery.Name = resourceName
 		sourceQuery.TrackedOnly = true
 		for _, eventTypes := range [][]timeline.EventType{updateEventTypes, lifecycleEventTypes} {
-			got, saturated, err := queryCandidates(ctx, store, sourceQuery, sourceQuery.Kinds, eventTypes, NamedFetchBound)
+			got, saturated, err := readCandidates(ctx, store, sourceQuery, sourceQuery.Kinds, eventTypes, NamedFetchBound)
 			if err != nil {
 				return err
 			}
@@ -679,6 +688,26 @@ var (
 // out even then: they are derived copies whose churn would crowd the rows
 // asked for. A Node's owner (Karpenter's NodeClaim) manages the machine, and
 // the Node's taints and labels are its own configuration.
+// readCandidates is queryCandidates over q's window, read in two parts when
+// q.SplitAt falls inside it. Saturation of either part is reported.
+func readCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, eventTypes []timeline.EventType, bound int) ([]timeline.TimelineEvent, bool, error) {
+	if q.SplitAt.IsZero() || !q.SplitAt.After(q.start) || (!q.To.IsZero() && !q.SplitAt.Before(q.To)) {
+		return queryCandidates(ctx, store, q, kinds, eventTypes, bound)
+	}
+	before, after := q, q
+	before.To = q.SplitAt
+	after.start = q.SplitAt.Add(time.Nanosecond)
+	early, earlyFull, err := queryCandidates(ctx, store, before, kinds, eventTypes, bound)
+	if err != nil {
+		return nil, false, err
+	}
+	late, lateFull, err := queryCandidates(ctx, store, after, kinds, eventTypes, bound)
+	if err != nil {
+		return nil, false, err
+	}
+	return append(late, early...), earlyFull || lateFull, nil
+}
+
 func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, eventTypes []timeline.EventType, bound int) ([]timeline.TimelineEvent, bool, error) {
 	queryKinds := compactKinds(kinds)
 	includeCustom := !q.TrackedOnly && (len(q.Kinds) > 0 || q.Name != "")
@@ -863,6 +892,12 @@ func rankedChanges(ctx context.Context, events []timeline.TimelineEvent, q Query
 	annotateRunningPreviousValue(ctx, out, pods, q.Viewer)
 	if len(q.Kinds) == 0 && q.Name == "" {
 		out = collapseSecretUpdates(out)
+	}
+	if q.Select != nil {
+		for i := range out {
+			classifyApplicationConfigurationChange(&out[i])
+		}
+		return q.Select(out)
 	}
 	capped := len(out) > q.Limit
 	RankAndCap(&out, q.Limit)

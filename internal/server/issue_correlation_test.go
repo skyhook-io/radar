@@ -442,6 +442,43 @@ func TestProxyAuth_IssueCorrelationRolloutWorkloadRefTarget(t *testing.T) {
 	}
 }
 
+// A caller who can list only one webhook configuration kind gets what a
+// caller who can list neither gets: Radar doesn't look up which configuration
+// declares the webhook for them, so nothing names one. Only the kinds they
+// can't list differ.
+func TestProxyAuth_IssueCorrelationOneWebhookKindReadable(t *testing.T) {
+	store := correlationFixture(t)
+	recordChanges(t, store)
+	env := newAuthTestServer(t)
+	correlationUser(env, "validating-only", []string{"shop"}, "mutatingwebhookconfigurations")
+	correlationUser(env, "no-webhook-list", []string{"shop"}, "validatingwebhookconfigurations", "mutatingwebhookconfigurations")
+	answer := func(user string) (string, []string) {
+		iss := correlated(t, env, user, "Deployment", "hooked", "apps", issuesapi.CategoryAdmissionWebhookBlocking)
+		kinds := unknownKinds(iss)
+		if iss.Correlation.Unknown == nil || iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownUserForbidden {
+			t.Fatalf("%s: unknown %+v", user, iss.Correlation.Unknown)
+		}
+		iss.Correlation.Unknown.Kinds = nil
+		iss.LastSeen, iss.Correlation.WindowFrom, iss.Correlation.WindowTo = time.Time{}, time.Time{}, time.Time{}
+		data, err := json.Marshal(iss)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "pod-policy") {
+			t.Fatalf("%s: a configuration is named: %s", user, data)
+		}
+		return string(data), kinds
+	}
+	one, oneKinds := answer("validating-only")
+	neither, neitherKinds := answer("no-webhook-list")
+	if one != neither {
+		t.Fatalf("answers differ:\none kind:  %s\nneither:   %s", one, neither)
+	}
+	if !slices.Equal(oneKinds, []string{"MutatingWebhookConfiguration"}) || !slices.Equal(neitherKinds, []string{"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"}) {
+		t.Fatalf("unknown kinds: one %v, neither %v", oneKinds, neitherKinds)
+	}
+}
+
 // An admission issue whose rejecting policy Radar can't identify is unknown,
 // never "no changes": the message names none, or names a quota that's gone.
 func TestProxyAuth_IssueCorrelationUnresolvedAdmissionBlocker(t *testing.T) {

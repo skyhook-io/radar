@@ -29,6 +29,16 @@ func initStore(t *testing.T) timeline.EventStore {
 	return timeline.GetStore()
 }
 
+// initStoreConnected marks the cluster connected for an already initialized
+// store, so the timeline answers.
+func initStoreConnected(t *testing.T) timeline.EventStore {
+	t.Helper()
+	prev := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: prev.Context})
+	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	return timeline.GetStore()
+}
+
 func initCache(t *testing.T, objs ...runtime.Object) {
 	t.Helper()
 	if err := k8s.InitTestResourceCache(k8sfake.NewSimpleClientset(objs...)); err != nil {

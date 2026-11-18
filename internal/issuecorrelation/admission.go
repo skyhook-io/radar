@@ -139,18 +139,12 @@ func (c *run) admissionBlocker() (*admissionBlockerEvidence, *admissionReadError
 			ev.complete = false
 			return true
 		}
-		limit := admissionOrderFetchLimit
-		if c.opts.Selection == SelectAroundFirstSeen {
-			limit = anchoredFetchLimit
-		}
-		q := c.query(limit)
+		q := c.query(admissionOrderFetchLimit)
 		q.Namespaces, q.Kinds, q.Name, q.TrackedOnly = nil, []string{kind}, name, true
 		if namespace != "" || name != "" {
 			q.Namespaces = []string{namespace}
 		}
-		res, err := c.readAroundAnchor(q, func(q meaningfulchanges.Query) (meaningfulchanges.RecentResult, error) {
-			return meaningfulchanges.Recent(c.ctx, q)
-		})
+		res, err := meaningfulchanges.Recent(c.ctx, q)
 		if err != nil {
 			log.Printf("[issuecorrelation] Failed to read admission policy changes for %s %s/%s: %v", kind, namespace, name, err)
 			return false
@@ -202,40 +196,35 @@ func (c *run) admissionBlocker() (*admissionBlockerEvidence, *admissionReadError
 		ev.unchanged = func(window string) string {
 			return fmt.Sprintf("the configuration of webhook %q has no recorded change %s", blocker.WebhookName, window)
 		}
-		// Both configuration kinds are checked before the cache is searched
-		// for the one declaring the webhook: which configuration declares it
-		// is cluster-scoped data a caller who can't list that kind may not
-		// learn, so a denied kind leaves the policy side unknown either way.
-		// Either kind can declare the webhook, so both must be readable and
-		// collected for the policy side to be complete.
-		readable := map[string]bool{}
+		// Either kind can declare the webhook, and which configuration
+		// declares it is cluster-scoped data, so Radar searches its cache for
+		// the declaring configuration only for a caller who may list both
+		// kinds. For anyone else the policy side is unknown and nothing about
+		// it is read, so the answer is the same wherever the webhook is
+		// declared. Both kinds must also be collected for it to be complete.
 		allReadable := true
 		for _, kind := range webhookConfigurationKinds {
-			readable[kind] = c.allowed(kind, webhookConfigurationGroup, "")
-			allReadable = allReadable && readable[kind]
-			if !readable[kind] || !c.collected(kind, webhookConfigurationGroup, "") {
+			readable := c.allowed(kind, webhookConfigurationGroup, "")
+			allReadable = allReadable && readable
+			if !readable || !c.collected(kind, webhookConfigurationGroup, "") {
 				ev.complete = false
 			}
 		}
-		found := false
-		for _, cfg := range meaningfulchanges.WebhookConfigurationsDeclaring(blocker.WebhookName) {
-			if !readable[cfg.Kind] {
-				continue
-			}
-			found = true
+		if !allReadable {
+			break
+		}
+		configs := meaningfulchanges.WebhookConfigurationsDeclaring(blocker.WebhookName)
+		for _, cfg := range configs {
 			if !fetch(cfg.Kind, webhookConfigurationGroup, "", cfg.Name) {
 				return nil, &admissionReadError{kind: cfg.Kind}
 			}
 		}
-		if !found {
+		if len(configs) == 0 {
 			// Not cached, or no longer declared: which configuration rejected
-			// the workload, and whether it changed, is unknown. Only a caller
-			// who may read both kinds is told, since the lookup reads both.
+			// the workload, and whether it changed, is unknown.
 			ev.complete = false
-			if allReadable {
-				for _, kind := range webhookConfigurationKinds {
-					c.addUnknown(issuesapi.CorrelationUnknownSourcesUnresolved, webhookConfigurationGroup, kind)
-				}
+			for _, kind := range webhookConfigurationKinds {
+				c.addUnknown(issuesapi.CorrelationUnknownSourcesUnresolved, webhookConfigurationGroup, kind)
 			}
 		}
 	default:

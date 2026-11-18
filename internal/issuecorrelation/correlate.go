@@ -36,8 +36,6 @@ const (
 	// anchorSlop counts a change recorded just after first seen as before
 	// it: event times are whole seconds and can trail the change.
 	anchorSlop = 30 * time.Second
-	// anchoredFetchLimit is the most visible changes an anchored read ranks.
-	anchoredFetchLimit = 50
 )
 
 // Decision is the answer to a caller's permission check.
@@ -280,34 +278,6 @@ func mergeHistory(a, b issuesapi.HistoryCoverage) issuesapi.HistoryCoverage {
 	return out
 }
 
-// readAroundAnchor runs read over q's window. An anchored selection with a
-// known first-seen time reads before and after that point separately, each
-// with its own limit, so later changes can't push the ones before it out.
-func (c *run) readAroundAnchor(q meaningfulchanges.Query, read func(meaningfulchanges.Query) (meaningfulchanges.RecentResult, error)) (meaningfulchanges.RecentResult, error) {
-	if c.opts.Selection != SelectAroundFirstSeen || !anchorKnown(c.iss) {
-		return read(q)
-	}
-	boundary := c.iss.FirstSeen.Add(anchorSlop)
-	if !boundary.After(q.From) || (!q.To.IsZero() && !boundary.Before(q.To)) {
-		return read(q)
-	}
-	before, after := q, q
-	before.To = boundary
-	after.From = boundary.Add(time.Nanosecond)
-	early, err := read(before)
-	if err != nil {
-		return early, err
-	}
-	late, err := read(after)
-	if err != nil {
-		return late, err
-	}
-	early.Changes = append(early.Changes, late.Changes...)
-	early.OutputCapped = early.OutputCapped || late.OutputCapped
-	early.FetchSaturated = early.FetchSaturated || late.FetchSaturated
-	return early, nil
-}
-
 // subjectChanges reads a tracked subject's changes, and a workload's
 // directly referenced ConfigMaps and Secrets. sourcesKnown is false when a
 // source was withheld from the caller or couldn't be determined. obj is the
@@ -320,9 +290,7 @@ func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, 
 		if c.opts.CheckCoverage {
 			c.checkCollected(iss.Kind, iss.Group, iss.Namespace)
 		}
-		result, err = c.readAroundAnchor(q, func(q meaningfulchanges.Query) (meaningfulchanges.RecentResult, error) {
-			return meaningfulchanges.Recent(c.ctx, q)
-		})
+		result, err = meaningfulchanges.Recent(c.ctx, q)
 		return result, nil, true, err
 	}
 	obj = WorkloadObjectFromCache(iss.Kind, iss.Namespace, iss.Name)
@@ -357,19 +325,11 @@ func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, 
 		allowed, ok := decided[kind]
 		return !ok || allowed
 	}
-	withheld := false
-	result, err = c.readAroundAnchor(q, func(q meaningfulchanges.Query) (meaningfulchanges.RecentResult, error) {
-		r, limited, err := meaningfulchanges.RecentForWorkloadSources(c.ctx, obj, iss.Kind, iss.Namespace, iss.Name, q, includeSource)
-		withheld = withheld || limited
-		return r, err
-	})
+	result, withheld, err := meaningfulchanges.RecentForWorkloadSources(c.ctx, obj, iss.Kind, iss.Namespace, iss.Name, q, includeSource)
 	return result, obj, sourcesKnown && !withheld, err
 }
 
 func (c *run) subjectLimit() int {
-	if c.opts.Selection == SelectAroundFirstSeen {
-		return anchoredFetchLimit
-	}
 	if IsAdmissionIssue(&c.iss) {
 		// Saying which side changed last needs the newest change, which a
 		// significance-ranked top 3 can drop.
@@ -378,9 +338,10 @@ func (c *run) subjectLimit() int {
 	return ChangeCap
 }
 
-// query is the read every source shares. An anchored read drops status rows
-// and rows the caller can't see before ranking and the cut, so its limit
-// and OutputCapped count only changes the caller could be shown.
+// query is the read every source shares. limit is the significance cut of
+// a significance-selected read. An anchored read has no such cut: it drops
+// status rows and rows the caller can't see, then picks by time around first
+// seen, so OutputCapped counts only changes the caller could be shown.
 func (c *run) query(limit int) meaningfulchanges.Query {
 	q := meaningfulchanges.Query{
 		From: c.opts.Window.From, Limit: limit, FieldLimit: FieldLimit, Viewer: c.access.Viewer,
@@ -392,6 +353,16 @@ func (c *run) query(limit int) meaningfulchanges.Query {
 		rowFilter := c.access.RowFilter
 		q.Allow = func(change issuesapi.RecentChange) bool {
 			return isEvidence(change) && (rowFilter == nil || rowFilter(change))
+		}
+		// Rows are picked by time around first seen from every qualifying
+		// row, never after a significance cut, and the parts before and
+		// after first seen are read with separate bounds.
+		iss := c.iss
+		q.Select = func(changes []issuesapi.RecentChange) ([]issuesapi.RecentChange, bool) {
+			return selectAroundFirstSeen(changes, iss)
+		}
+		if anchorKnown(iss) {
+			q.SplitAt = iss.FirstSeen.Add(anchorSlop)
 		}
 	}
 	return q
