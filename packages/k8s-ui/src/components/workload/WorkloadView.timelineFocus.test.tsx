@@ -2,6 +2,7 @@
 import { StrictMode, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { VirtuosoMockContext } from 'react-virtuoso'
 import type { TimelineEvent } from '../../types'
 import { WorkloadView } from './WorkloadView'
 
@@ -33,23 +34,41 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
-async function render(events: TimelineEvent[], options: { truncated?: boolean; loadOlder?: () => void; loadingOlder?: boolean; error?: Error; target?: { id: string } } = {}) {
-  await act(async () => root.render(<StrictMode><WorkloadView
+async function render(events: TimelineEvent[], options: { truncated?: boolean; loadOlder?: () => void; loadingOlder?: boolean; error?: Error; target?: { id: string }; wrap?: boolean } = {}) {
+  const view = (<WorkloadView
     kind="cronjobs" namespace="demo" name="nightly" resource={resource} onBack={() => {}}
     expanded activeTab="timeline" allEvents={events} historyScoped timelineFocusEvent={options.target ?? focus}
     historyTruncated={options.truncated} onLoadOlderHistory={options.loadOlder}
     loadingOlderHistory={options.loadingOlder} olderHistoryError={options.error}
-  /></StrictMode>))
+  />)
+  await act(async () => root.render(<StrictMode>{options.wrap
+    ? <VirtuosoMockContext.Provider value={{ viewportHeight: 250, itemHeight: 100 }}>{view}</VirtuosoMockContext.Provider>
+    : view}</StrictMode>))
 }
 
 it('scrolls to the exact report even among warnings with the same reason', async () => {
-  await render([row('newest', 1), row('target', 5), row('oldest', 10)])
-  const target = container.querySelector('[data-event-id="target"]')
-  expect(target).not.toBeNull()
-  expect(target?.textContent).toContain('report target')
-  expect(target?.querySelector('.ring-2')).not.toBeNull()
-  expect(scroll).toHaveBeenCalled()
-  expect(container.textContent).not.toContain('not available')
+  // jsdom has no layout: give the list a 250px viewport of 100px rows.
+  const sizes = [
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(250),
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(250),
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000),
+  ]
+  const scrollTo = vi.fn(function (this: HTMLElement, options: ScrollToOptions) { this.scrollTop = options.top ?? this.scrollTop })
+  Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo })
+  try {
+    await render([row('newest', 1), row('target', 5), row('oldest', 10)], { wrap: true })
+    const target = container.querySelector('[data-event-id="target"]')
+    expect(target).not.toBeNull()
+    expect(target?.textContent).toContain('report target')
+    expect(target?.querySelector('.ring-2')).not.toBeNull()
+    // Rows: the date header, the two other warnings folded into one aggregate,
+    // then the report at index 2, centered: 2 * 100 + 50 - 250 / 2.
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 125 }))
+    expect(container.textContent).not.toContain('not available')
+  } finally {
+    sizes.forEach((spy) => spy.mockRestore())
+    Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo')
+  }
 })
 
 it('loads older pages until the report appears, without duplicate requests in Strict Mode', async () => {

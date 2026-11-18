@@ -128,6 +128,7 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 				stillCurrent := func() bool {
 					return GetDynamicResourceCache() == dc && GetResourceCache() == cache
 				}
+				runCRDWarmupSequence(lifecycleCtx, nil, stillCurrent, dc.StartWatchReconciler)
 				runCRDWarmupSequence(lifecycleCtx, deferredDone, stillCurrent,
 					func() {
 						wt := time.Now()

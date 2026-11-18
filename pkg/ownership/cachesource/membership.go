@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -117,7 +118,11 @@ func (s *session) Members(manager resourceid.Ref) ownership.MembersRead {
 		return ownership.MembersRead{Manager: unavailable(manager, readreason.ReadError)}
 	}
 	var members recordedMembers
-	read := s.readObject(manager, func(u *unstructured.Unstructured) { members = membersOf(gk, u) })
+	read := s.readObject(manager, func(obj apiruntime.Object) {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			members = membersOf(gk, u)
+		}
+	})
 	r := ownership.MembersRead{Manager: read}
 	if read.State != ownership.Present {
 		return r
@@ -141,7 +146,11 @@ func (s *session) Membership(manager resourceid.Ref) ownership.MembersRead {
 		return ownership.MembersRead{Manager: unavailable(manager, readreason.ReadError)}
 	}
 	var state ownership.MembershipState
-	read := s.readObject(manager, func(u *unstructured.Unstructured) { state = s.cachedMemberState(gk, u) })
+	read := s.readObject(manager, func(obj apiruntime.Object) {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			state = s.cachedMemberState(gk, u)
+		}
+	})
 	r := ownership.MembersRead{Manager: read}
 	if read.State == ownership.Present {
 		r.Membership = state

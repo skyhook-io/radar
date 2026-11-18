@@ -3,11 +3,13 @@ import type { TimeSeries } from './types'
 
 // Caps visible entries to match AreaChart's SERIES_COLORS length; extras
 // collapse to "+N more".
-export function SeriesLegend({ series, color, seriesLabels }: {
+export function SeriesLegend({ series, color, seriesLabels, values }: {
   series: TimeSeries[]
   color: string
   /** Display name per series, parallel to `series`; defaults to label-derived names. */
   seriesLabels?: string[]
+  /** Optional value per series shown after its name (e.g. the latest), parallel to `series`. */
+  values?: (string | undefined)[]
 }) {
   const labels = seriesLabels ?? seriesDisplayLabels(series)
   return (
@@ -21,6 +23,7 @@ export function SeriesLegend({ series, color, seriesLabels }: {
               style={{ backgroundColor: seriesColor(i, color) }}
             />
             <span className="truncate" title={labels[i]}>{shortName}</span>
+            {values?.[i] !== undefined && <span className="tabular-nums text-theme-text-secondary">{values[i]}</span>}
           </div>
         )
       })}

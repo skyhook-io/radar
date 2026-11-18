@@ -1,0 +1,85 @@
+package relations
+
+import (
+	"slices"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+)
+
+func calicoPolicy(group, kind, namespace, name string, spec map[string]any) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]any{"apiVersion": group + "/v3", "kind": kind, "metadata": map[string]any{"name": name}, "spec": spec}}
+	u.SetNamespace(namespace)
+	return u
+}
+
+func TestCalicoPoliciesSelectAsCalicoDoes(t *testing.T) {
+	web := labelled(deployment("web", mounts()), map[string]string{"app": "web"})
+	api := labelled(deployment("api", mounts()), map[string]string{"app": "api"})
+	np := calicoPolicy("projectcalico.org", "NetworkPolicy", "shop", "web", map[string]any{"selector": "app == 'web'"})
+	checkSelects(t, CalicoPolicies, []runtime.Object{web, api, np}, np, web)
+
+	// Calico's endpoint labels: every workload's pods carry their namespace.
+	byNamespace := calicoPolicy("projectcalico.org", "NetworkPolicy", "shop", "ns", map[string]any{"selector": "projectcalico.org/namespace == 'shop'"})
+	checkSelects(t, CalicoPolicies, []runtime.Object{web, api, byNamespace}, byNamespace, api, web)
+
+	// A policy both groups serve is listed once.
+	mirror := calicoPolicy("crd.projectcalico.org", "NetworkPolicy", "shop", "web", map[string]any{"selector": "app == 'web'"})
+	got := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{web, np, mirror}}}, ownership.Unrestricted()).SelectedBy(CalicoPolicies, refOf(web), nil)
+	if !slices.Equal(got.Matches, []resourceid.Ref{refOf(np)}) {
+		t.Errorf("the workload's Calico policies are %v; want the policy once", got.Matches)
+	}
+}
+
+func TestAGlobalCalicoPolicyReadsNamespaceLabelsOnlyWhenItSelectsOnThem(t *testing.T) {
+	web := labelled(deployment("web", mounts()), map[string]string{"app": "web"})
+	ns := typed(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", Labels: map[string]string{"team": "retail"}}}, "", "v1", "Namespace")
+	global := calicoPolicy("projectcalico.org", "GlobalNetworkPolicy", "", "retail", map[string]any{"selector": "all()", "namespaceSelector": "team == 'retail'"})
+	checkSelects(t, CalicoPolicies, []runtime.Object{web, ns, global}, global, web)
+
+	plain := calicoPolicy("projectcalico.org", "GlobalNetworkPolicy", "", "all", map[string]any{"selector": "app == 'web'"})
+	unread := allNamespaces{cluster: cluster{objects: []runtime.Object{web, ns, global, plain}, unread: map[resourceid.GroupKind]readreason.Code{{Kind: "Namespace"}: readreason.KindSyncPending}}}
+	if got := NewView(unread, ownership.Unrestricted()).Selected(CalicoPolicies, refOf(global), nil); len(got.Matches) != 0 || got.Coverage.Complete() {
+		t.Errorf("with Namespaces unread the global policy selects %+v; want none, incomplete", got)
+	}
+	if got := NewView(unread, ownership.Unrestricted()).Selected(CalicoPolicies, refOf(plain), nil); !slices.Equal(got.Matches, []resourceid.Ref{refOf(web)}) || !got.Coverage.Complete() {
+		t.Errorf("a global policy without a namespaceSelector needs no Namespace: %+v", got)
+	}
+}
+
+// A preDNAT or doNotTrack policy applies to host endpoints only.
+func TestAHostOnlyCalicoPolicySelectsNoWorkload(t *testing.T) {
+	web := labelled(deployment("web", mounts()), map[string]string{"app": "web"})
+	preDNAT := calicoPolicy("projectcalico.org", "GlobalNetworkPolicy", "", "edge", map[string]any{"selector": "all()", "preDNAT": true, "applyOnForward": true})
+	checkSelects(t, CalicoPolicies, []runtime.Object{web, preDNAT}, preDNAT)
+}
+
+func TestStagedCalicoPoliciesPreviewProtectionOnly(t *testing.T) {
+	web := labelled(deployment("web", mounts()), map[string]string{"app": "web"})
+	staged := calicoPolicy("projectcalico.org", "StagedNetworkPolicy", "shop", "next", map[string]any{"selector": "app == 'web'", "stagedAction": "Set"})
+	checkSelects(t, CalicoStagedPolicies, []runtime.Object{web, staged}, staged, web)
+	deletion := calicoPolicy("projectcalico.org", "StagedNetworkPolicy", "shop", "gone", map[string]any{"stagedAction": "Delete"})
+	checkSelects(t, CalicoStagedPolicies, []runtime.Object{web, deletion}, deletion)
+
+	kubernetes := calicoPolicy("projectcalico.org", "StagedKubernetesNetworkPolicy", "shop", "k8s", map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "web"}}})
+	checkSelects(t, CalicoStagedPolicies, []runtime.Object{web, kubernetes}, kubernetes, web)
+	if CalicoPolicies.Covers(resourceid.GroupKind{Group: "projectcalico.org", Kind: "StagedNetworkPolicy"}) {
+		t.Error("enforced Calico policies cover a staged kind")
+	}
+}
+
+func TestACalicoPolicyThatRulesAWorkloadOutNeedsNoNamespace(t *testing.T) {
+	api := labelled(deployment("api", mounts()), map[string]string{"app": "api"})
+	global := calicoPolicy("projectcalico.org", "GlobalNetworkPolicy", "", "retail", map[string]any{"selector": "app == 'web'", "namespaceSelector": "team == 'retail'"})
+	c := allNamespaces{cluster: cluster{objects: []runtime.Object{api, global}, unread: map[resourceid.GroupKind]readreason.Code{{Kind: "Namespace"}: readreason.KindSyncPending}}}
+	if got := NewView(c, ownership.Unrestricted()).SelectedBy(CalicoPolicies, refOf(api), nil); len(got.Matches) != 0 || !got.Coverage.Complete() {
+		t.Errorf("a policy whose selector rules the workload out answered %+v; want none, complete", got)
+	}
+}

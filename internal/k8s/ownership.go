@@ -10,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -53,19 +54,22 @@ func BeginOwnershipRead(cache *ResourceCache) (ownership.ReadSession, error) {
 // a context switch refuses them with it. Caches replaced or not ready leave
 // the answer unavailable.
 func AnswerOwnership(rel *topology.Relationships, fetched ownership.Observation, owner metav1.Object, access func(*ownership.Catalog) ownership.Access) {
-	answerOwnership(ownershipSource, topology.ApplyOwnership, splitHistory(fetched.Ref, owner), rel, fetched, access)
+	answerOwnership(ownershipSource, topology.ApplyOwnership, splitHistory(fetched.Ref, owner, nil), rel, fetched, access)
 }
 
 // splitHistory moves the ReplicaSets among rel's Children that only keep
 // subject's rollback history to OlderRevisions, reading them and the Pods
 // still naming them through the typed cache the session reads.
-func splitHistory(subject resourceid.Ref, owner metav1.Object) func(*topology.Relationships, *ownership.View, ownership.ReadSession) {
+func splitHistory(subject resourceid.Ref, owner metav1.Object, access ownership.Access) func(*topology.Relationships, *ownership.View, ownership.ReadSession) {
 	return func(rel *topology.Relationships, _ *ownership.View, s ownership.ReadSession) {
 		typed, ok := cachesource.TypedCache(s)
 		if !ok || owner == nil {
 			return
 		}
 		topology.SplitOlderRevisions(rel, subject.GroupKind(), owner.GetAnnotations(), func(namespace, name string) (*appsv1.ReplicaSet, bool, bool) {
+			if access != nil && access.CanRead(resourceid.GroupKind{Kind: "Pod"}, namespace) != ownership.Allowed {
+				return nil, false, false
+			}
 			obj, found, ok := typed.ReadableObject(k8score.ReplicaSets, namespace, name)
 			rs, isReplicaSet := obj.(*appsv1.ReplicaSet)
 			if !ok || !found || !isReplicaSet {
@@ -154,6 +158,67 @@ func answerOwnership(source ownership.Source, apply func(*topology.Relationships
 		// A cluster switch mid-answer: it may mix two clusters.
 		topology.OwnershipUnavailable(rel, string(readreason.ConnectionChanged))
 	}
+}
+
+// AnswerRelationships is a fetched object's Related Resources answered from
+// the caches in one session: the relation families projected as the
+// relationship graph's edges are (topology.RelationsAnswer), then ownership,
+// with one ownership view whose searches both share. It answers nil when the
+// caches aren't ready or are replaced mid-answer.
+func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access) (*topology.Relationships, map[string]relations.Coverage) {
+	session, err := BeginOwnershipRead(cache)
+	if err != nil || len(session.Catalog().DependentKinds()) == 0 {
+		return nil, nil
+	}
+	rs, ok := session.(relations.Session)
+	if !ok {
+		return nil, nil
+	}
+	caches, ok := cachesource.SessionCaches(session)
+	if !ok {
+		return nil, nil
+	}
+	provider := NewTopologyResourceProvider(&ResourceCache{ResourceCache: caches.Typed})
+	var dp topology.DynamicProvider
+	if caches.Dynamic != nil && caches.Discovery != nil {
+		dp = NewTopologyDynamicProvider(&DynamicResourceCache{DynamicResourceCache: caches.Dynamic}, &ResourceDiscovery{ResourceDiscovery: caches.Discovery})
+	}
+	fetched, valid := OwnershipObservation(obj)
+	if !valid {
+		return nil, nil
+	}
+	owner, _ := apimeta.Accessor(obj)
+	acc := access(session.Catalog())
+	if acc.CanRead(fetched.Ref.GroupKind(), fetched.Ref.Namespace) != ownership.Allowed {
+		if session.ValidateCaches() != nil {
+			return nil, nil
+		}
+		return &topology.Relationships{}, nil
+	}
+	captured, current := relations.CaptureSubject(rs, fetched.Ref, obj)
+	if !current {
+		if session.ValidateCaches() != nil {
+			return nil, nil
+		}
+		rel := &topology.Relationships{}
+		topology.OwnershipUnavailable(rel, string(readreason.ReadError))
+		return rel, map[string]relations.Coverage{"subject": {SubjectState: "replaced"}}
+	}
+	rs = captured
+	ov := ownership.NewView(rs, acc)
+	// Seeded before the answer, whose Deployment Pods and ManagedBy read
+	// ownership, so a subject the cache doesn't hold yet still has them.
+	ov.Seed(fetched)
+	rel, coverage := topology.RelationsAnswer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, provider, dp)
+	if rel == nil {
+		rel = &topology.Relationships{}
+	}
+	topology.ApplyOwnership(rel, ov, fetched)
+	splitHistory(fetched.Ref, owner, acc)(rel, ov, session)
+	if session.ValidateCaches() != nil {
+		return nil, nil
+	}
+	return rel, coverage
 }
 
 // OwnershipObservation is what ownership reads from a fetched object, whose

@@ -6,13 +6,13 @@ import (
 	"sync"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -90,6 +90,9 @@ var typedKinds = func() map[resourceid.GroupKind]resourceid.Builtin {
 }()
 
 type session struct {
+	subjectRef resourceid.Ref
+	subject    apiruntime.Object
+
 	caches  Caches
 	current func() Caches
 	catalog *ownership.Catalog
@@ -133,6 +136,22 @@ func TypedCache(s ownership.ReadSession) (*k8score.ResourceCache, bool) {
 	return cs.caches.Typed, true
 }
 
+// SessionCaches returns the caches pinned by a session begun by this source.
+func SessionCaches(s ownership.ReadSession) (Caches, bool) {
+	cs, ok := s.(*session)
+	if !ok {
+		return Caches{}, false
+	}
+	return cs.caches, true
+}
+
+// CaptureSubject also pins status reads such as a manager's recorded members.
+func (s *session) CaptureSubject(ref resourceid.Ref, obj apiruntime.Object) relations.Session {
+	captured := *s
+	captured.subjectRef, captured.subject = ref, obj
+	return &captured
+}
+
 func (s *session) Catalog() *ownership.Catalog {
 	return s.catalog
 }
@@ -141,22 +160,36 @@ func (s *session) Object(ref resourceid.Ref) ownership.ObjectRead {
 	return s.readObject(ref, nil)
 }
 
+// Borrow is Object, also lending the cached object when it is Present.
+func (s *session) Borrow(ref resourceid.Ref) (apiruntime.Object, ownership.ObjectRead) {
+	var borrowed apiruntime.Object
+	read := s.readObject(ref, func(obj apiruntime.Object) { borrowed = obj })
+	return borrowed, read
+}
+
 // readObject is Object, lending the cached object it answered from, when
 // present, to borrow, which must not modify or keep it.
-func (s *session) readObject(ref resourceid.Ref, borrow func(*unstructured.Unstructured)) ownership.ObjectRead {
+func (s *session) readObject(ref resourceid.Ref, borrow func(apiruntime.Object)) ownership.ObjectRead {
 	if ref.Kind == "" || ref.Name == "" {
 		return unavailable(ref, readreason.ReadError)
 	}
 	if ownership.IsEvent(ref.GroupKind()) {
 		return ownership.ObjectRead{State: ownership.Excluded}
 	}
+	if s.subject != nil && ref == s.subjectRef {
+		read := observe(ref, s.subject)
+		if borrow != nil && read.State == ownership.Present {
+			borrow(s.subject)
+		}
+		return read
+	}
 	if b, ok := typedKinds[ref.GroupKind()]; ok {
-		return s.typedObject(ref, b)
+		return s.typedObject(ref, b, borrow)
 	}
 	return s.dynamicObject(ref, borrow)
 }
 
-func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin) ownership.ObjectRead {
+func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin, borrow func(apiruntime.Object)) ownership.ObjectRead {
 	if reason, wrong := scopeMismatch(ref, b.Namespaced); wrong {
 		return unavailable(ref, reason)
 	}
@@ -167,10 +200,14 @@ func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin) ownershi
 	case !found:
 		return ownership.ObjectRead{State: ownership.Absent}
 	}
-	return observe(ref, obj)
+	read := observe(ref, obj)
+	if borrow != nil && read.State == ownership.Present {
+		borrow(obj)
+	}
+	return read
 }
 
-func (s *session) dynamicObject(ref resourceid.Ref, borrow func(*unstructured.Unstructured)) ownership.ObjectRead {
+func (s *session) dynamicObject(ref resourceid.Ref, borrow func(apiruntime.Object)) ownership.ObjectRead {
 	if s.catalog.Ambiguous(ref.GroupKind()) {
 		return unavailable(ref, readreason.ReadError)
 	}
