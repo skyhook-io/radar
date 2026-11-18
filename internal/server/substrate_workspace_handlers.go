@@ -408,9 +408,17 @@ type substrateConnectionView struct {
 	Managed *substrateManagedConnectionView `json:"managed,omitempty"`
 }
 
+// requireSubstrateConfigurable admits only a private local Radar's settings
+// writes. An installation's (in-cluster or Radar Hub) are its operator's, as
+// for every other integration (operator_managed); a local Radar on a shared
+// listener has no one person whose settings these would be (sharedRadar).
 func (s *Server) requireSubstrateConfigurable(w http.ResponseWriter) bool {
 	if !s.substrateLocal() {
-		s.writeErrorCode(w, http.StatusForbidden, substrateapi.CodeSharedRadar, "Substrate connection settings are editable only in a private local Radar. Configure this installation through Helm substrate.api values.")
+		if s.configManagement() == "local" {
+			s.writeErrorCode(w, http.StatusForbidden, substrateapi.CodeSharedRadar, "Substrate connection settings are editable only in a local Radar on a private listener without sign-in.")
+		} else {
+			s.writeErrorCode(w, http.StatusForbidden, "operator_managed", "This Radar reads Substrate as its operator configured it. Update the Helm substrate.api values and restart Radar.")
+		}
 		return false
 	}
 	return s.requireConnected(w)
