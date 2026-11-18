@@ -37,7 +37,8 @@ const nameWidth = () => {
 it('drops widths measured in the fallback font once the web font arrives, though the rows are the same', async () => {
   const items = [event('web-1.17f8a9b2c3d4e5f6abcdef12')] // 30 characters
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-  act(() => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 40 }}><KeyboardShortcutProvider><ResourcesView
+  // Awaited so the deferred measurement render has run before the first check.
+  await act(async () => root.render(<VirtuosoMockContext.Provider value={{ viewportHeight: 600, itemHeight: 40 }}><KeyboardShortcutProvider><ResourcesView
     namespaces={['test']}
     apiResources={[events]}
     resourceCounts={{ Event: 1 }}
