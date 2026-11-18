@@ -158,7 +158,7 @@ export function SubstrateSettings({ active, onDirtyChange, onBusyChange }: {
 
 /** This caller's own access in one row: the state, and what to do when it isn't connected. */
 function AccessRow({ tier, label = 'Status' }: { tier: SubstrateAPITier; label?: string }) {
-  const r = tierReading(tier)
+  const r = tierReading(tier, { inSettings: true })
   const connected = tier.state === 'connected'
   return (
     <div className="rounded-md border border-theme-border bg-theme-elevated/40 px-3 py-2 text-sm">

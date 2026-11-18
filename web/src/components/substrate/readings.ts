@@ -507,7 +507,19 @@ const NO_FORM_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'>
   },
 }
 
-export function tierReading(tier: SubstrateAPITier): TierReading {
+/**
+ * The steps that send the reader to Settings → Agent Substrate, as they read
+ * inside it: the form is on the same page. notConfigured's detail already says
+ * what to do there.
+ */
+const IN_SETTINGS_STEP: Partial<Record<SubstrateCode, string | undefined>> = {
+  notConfigured: undefined,
+  targetChanged: 'Review it below, then save it for this cluster.',
+  notInstalled: 'Check that Substrate’s API server runs as Service ate-system/api, or set its endpoint under Advanced.',
+  tls: 'Check the CA file and server name under Advanced, or that the cluster’s trust bundle for Substrate exists.',
+}
+
+export function tierReading(tier: SubstrateAPITier, { inSettings = false }: { inSettings?: boolean } = {}): TierReading {
   if (tier.state === 'connected') return { title: 'Connected', detail: '', tone: 'healthy' }
   if (tier.state === 'connecting') return { title: 'Connecting', detail: 'The connection is saved; Radar is reading Substrate’s API for the first time.', tone: 'unknown' }
   const noForm = tier.code ? tier.identity?.mode === 'sharedAsCaller' && NO_FORM_READING[tier.code] : undefined
@@ -516,10 +528,14 @@ export function tierReading(tier: SubstrateAPITier): TierReading {
     const { withReason, ...reading } = noForm
     return { ...reading, detail: withReason && tier.reason ? `${noForm.detail} ${tier.reason}` : noForm.detail ?? tier.reason ?? '' }
   }
-  const known = tier.code ? CODE_READING[tier.code] : undefined
+  const code = tier.code ?? (tier.state === 'notConfigured' ? 'notConfigured' : undefined)
+  const known = code ? CODE_READING[code] : undefined
   const detail = tier.reason ?? known?.detail ?? 'Radar has not read Substrate’s API.'
-  if (known) return { ...known, detail: known.detail && !tier.reason ? known.detail : detail }
-  if (tier.state === 'notConfigured') return { title: 'Not connected', tone: 'unknown', detail, nextStep: CODE_READING.notConfigured!.nextStep }
+  if (known) {
+    const nextStep = inSettings && code && code in IN_SETTINGS_STEP ? IN_SETTINGS_STEP[code] : known.nextStep
+    return { ...known, nextStep, detail: known.detail && !tier.reason ? known.detail : detail }
+  }
+  if (tier.state === 'notConfigured') return { title: 'Not connected', tone: 'unknown', detail, nextStep: inSettings ? undefined : CODE_READING.notConfigured!.nextStep }
   return { title: 'Not read', tone: 'unknown', detail }
 }
 
