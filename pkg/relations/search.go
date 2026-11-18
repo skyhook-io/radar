@@ -82,17 +82,7 @@ func (v *View) newSearchIn(namespaces []string) search {
 func (s search) each(gk resourceid.GroupKind, c *Coverage, relate func(o IndexedObject, c *Coverage) (emit func())) {
 	read := s.v.session.Indexed(gk, s.index, s.keys, s.scope)
 	if len(read.Gaps) > 0 && (s.across || s.v.mayRead(gk, s.namespace, c)) {
-		for _, g := range read.Gaps {
-			unreadable := g.Namespace != "" && !s.readable.AllNamespaces && !slices.Contains(s.readable.Namespaces, g.Namespace)
-			switch {
-			case !unreadable && (!s.across || ownership.GapCoversReadable(s.v.access, s.v.session.Catalog(), g, s.readable)):
-				c.addGap(g)
-			default:
-				// Unread where the caller may not read, so a related object
-				// there may be hidden.
-				c.Narrowed = true
-			}
-		}
+		s.keepGaps(gk, read.Gaps, c)
 	}
 	for _, o := range read.Objects {
 		var own Coverage
@@ -106,6 +96,50 @@ func (s search) each(gk resourceid.GroupKind, c *Coverage, relate func(o Indexed
 		c.merge(own)
 		if emit != nil {
 			emit()
+		}
+	}
+}
+
+// keepGaps keeps the gaps of a read that cover what the caller may read and
+// narrows the answer for the rest: unread where the caller may not read, a
+// related object there may be hidden.
+func (s search) keepGaps(gk resourceid.GroupKind, gaps []ownership.Gap, c *Coverage) {
+	for _, g := range gaps {
+		if s.across && g.Namespace == "" && g.Reason == readreason.RadarNamespaceNotCollected && !s.readable.AllNamespaces && g.Kind == gk {
+			if namespaced, known := s.v.session.Catalog().Scope(gk); namespaced && known {
+				// An all-namespace read names no namespace for what Radar
+				// doesn't hold. Of that, only what lies in the caller's
+				// namespaces leaves the answer incomplete. Any other gap is
+				// kept as read: the second read here only places what Radar
+				// doesn't hold, and a namespace it starts holding meanwhile
+				// reads as still syncing.
+				s.keepReadableGaps(gk, c)
+				c.Narrowed = true
+				continue
+			}
+		}
+		unreadable := g.Namespace != "" && !s.readable.AllNamespaces && !slices.Contains(s.readable.Namespaces, g.Namespace)
+		if !unreadable && (!s.across || ownership.GapCoversReadable(s.v.access, s.v.session.Catalog(), g, s.readable)) {
+			c.addGap(g)
+		} else {
+			c.Narrowed = true
+		}
+	}
+}
+
+// keepReadableGaps keeps the gaps a read of gk in the caller's namespaces
+// has, for an across search whose all-namespace read couldn't say where it
+// was incomplete.
+func (s search) keepReadableGaps(gk resourceid.GroupKind, c *Coverage) {
+	if len(s.readable.Namespaces) == 0 {
+		return
+	}
+	scope := ownership.SearchScope{Namespaces: s.readable.Namespaces}
+	for _, g := range s.v.session.Indexed(gk, cache.NamespaceIndex, s.readable.Namespaces, scope).Gaps {
+		if ownership.GapCoversReadable(s.v.access, s.v.session.Catalog(), g, scope) {
+			c.addGap(g)
+		} else {
+			c.Narrowed = true
 		}
 	}
 }

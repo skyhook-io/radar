@@ -9,12 +9,40 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
+// allowed reports whether the caller may read r, deciding each kind and
+// namespace once per answer, so a failing check costs one review rather than
+// one per matching object. As in the families' searches, a hidden related
+// object narrows the answer and a check that couldn't be made leaves it
+// incomplete; the gap names no namespace.
 func (n *neighborhood) allowed(r resourceid.Ref) bool {
-	return n.access.CanRead(r.GroupKind(), r.Namespace) == ownership.Allowed
+	key := decisionKey{r.GroupKind(), r.Namespace}
+	d, seen := n.decided[key]
+	if !seen {
+		d = n.access.CanRead(r.GroupKind(), r.Namespace)
+		if n.decided == nil {
+			n.decided = map[decisionKey]ownership.Decision{}
+		}
+		n.decided[key] = d
+	}
+	switch d {
+	case ownership.Allowed:
+		return true
+	case ownership.Undecided:
+		n.cover("special", relations.Coverage{NotChecked: []ownership.Gap{{Kind: r.GroupKind(), Reason: readreason.UserPermissionCheckFailed}}})
+	default:
+		n.cover("special", relations.Coverage{Narrowed: true})
+	}
+	return false
+}
+
+type decisionKey struct {
+	kind      resourceid.GroupKind
+	namespace string
 }
 
 func (n *neighborhood) allowedRef(r ResourceRef) bool { return n.allowed(refIdentity(r)) }
