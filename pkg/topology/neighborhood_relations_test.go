@@ -31,22 +31,22 @@ func walkTestNeighborhood(t *testing.T, s *projectionSession, root runtime.Objec
 }
 
 func TestWalkNeighborhoodForbiddenIntermediateNeverBridgesOrSpendsBudget(t *testing.T) {
-	ingress := projectionObject(&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "entry", Namespace: "shop"}, Spec: networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{
-		{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "hidden"}}},
-		{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "visible"}}},
-	}}}}}}}, "networking.k8s.io", "Ingress")
-	hidden := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "hidden", Namespace: "shop"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "private"}}}, "", "Service")
+	route := projectionCR("gateway.networking.k8s.io", "HTTPRoute", "shop", "entry", map[string]any{"spec": map[string]any{"rules": []any{map[string]any{"backendRefs": []any{
+		map[string]any{"name": "hidden", "namespace": "private"},
+		map[string]any{"name": "visible"},
+	}}}}})
+	hidden := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "hidden", Namespace: "private"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "private"}}}, "", "Service")
 	visible := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "visible", Namespace: "shop"}}, "", "Service")
-	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "backend", Namespace: "shop", Labels: map[string]string{"app": "private"}}}, "", "Pod")
-	opts := NeighborhoodOptions{Hops: 2, MaxNodes: 2, Allow: func(n *Node) bool { return n.Name != "hidden" }}
+	backend := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "backend", Namespace: "private", Labels: map[string]string{"app": "private"}}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "private"}}}}}, "apps", "Deployment")
+	opts := NeighborhoodOptions{Hops: 2, MaxNodes: 2, Allow: func(n *Node) bool { return n.Data["namespace"] != "private" }}
 	var baseline []byte
 	for _, present := range []bool{false, true} {
-		objects := []runtime.Object{ingress, visible, pod}
+		objects := []runtime.Object{route, visible, backend}
 		if present {
 			objects = append(objects, hidden)
 		}
 		s := newProjectionSession(t, objects...)
-		sub := walkTestNeighborhood(t, s, ingress, opts)
+		sub := walkTestNeighborhood(t, s, route, opts)
 		if len(sub.Nodes) != 2 || sub.Truncated || sub.Nodes[1].Name != "visible" {
 			t.Fatalf("hidden spent budget or bridged: %+v", sub)
 		}
@@ -166,19 +166,22 @@ func TestWalkNeighborhoodCalicoAliasesShareBudgetAndAllowEitherGroup(t *testing.
 	}
 }
 
+// A cluster-scoped owner's Pods in a namespace the caller can't read neither
+// join the admitted Pods' group nor spend the budget.
 func TestWalkNeighborhoodPodGroupContainsOnlyAdmittedPods(t *testing.T) {
 	controller := true
-	root := projectionObject(&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", UID: "db"}}, "apps", "StatefulSet")
+	root := projectionCR("example.io", "Fleet", "", "web", map[string]any{})
+	root.SetUID("fleet")
 	objects := []runtime.Object{root}
-	for i := 0; i < 10; i++ {
-		objects = append(objects, projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprint(i), Namespace: "shop", UID: types.UID(fmt.Sprint(i)), OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "StatefulSet", Name: "db", UID: "db", Controller: &controller}}}}, "", "Pod"))
+	for i, ns := range []string{"shop", "shop", "shop", "shop", "shop", "shop", "shop", "shop", "shop", "private", "private", "private"} {
+		objects = append(objects, projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprint(i), Namespace: ns, UID: types.UID(fmt.Sprint(i)), Labels: map[string]string{"app": "web"}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "example.io/v1", Kind: "Fleet", Name: "web", UID: "fleet", Controller: &controller}}}}, "", "Pod"))
 	}
-	sub := walkTestNeighborhood(t, newProjectionSession(t, objects...), root, NeighborhoodOptions{MaxNodes: 2, Allow: func(n *Node) bool { return n.Name != "9" }})
+	sub := walkTestNeighborhood(t, newProjectionSession(t, objects...), root, NeighborhoodOptions{MaxNodes: 2, Allow: func(n *Node) bool { return n.Data["namespace"] != "private" }})
 	if len(sub.Nodes) != 2 || sub.Truncated || sub.Nodes[1].Kind != KindPodGroup || sub.Nodes[1].Data["podCount"] != 9 {
 		t.Fatalf("wrong authorized group: %+v", sub)
 	}
 	for _, pod := range sub.Nodes[1].Data["pods"].([]map[string]any) {
-		if pod["name"] == "9" {
+		if pod["namespace"] == "private" {
 			t.Fatal("forbidden pod serialized")
 		}
 	}
@@ -416,5 +419,35 @@ func TestWalkNeighborhoodRootUnavailableSaysWhy(t *testing.T) {
 	sub, err := WalkNeighborhood(context.Background(), s, ResourceRef{Kind: "Node", Namespace: "shop", Name: "n1"}, NeighborhoodOptions{}, nil, nil)
 	if err != nil || len(sub.Nodes) != 0 || sub.RootUnavailable != "" || len(s.reads) != 0 {
 		t.Fatalf("cluster-scoped kind read in a namespace: %+v %v reads=%v", sub, err, s.reads)
+	}
+}
+
+// Allow decides by kind and namespace, so the walk asks it once for each,
+// however many objects of the kind it meets.
+func TestWalkNeighborhoodAsksAllowOncePerKindAndNamespace(t *testing.T) {
+	controller := true
+	root := projectionObject(&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", UID: "db"}, Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "db"}}}}}, "apps", "StatefulSet")
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "db"}}}, "", "Service")
+	objects := []runtime.Object{root, svc}
+	for i := 0; i < 50; i++ {
+		objects = append(objects, projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("db-%02d", i), Namespace: "shop", UID: types.UID(fmt.Sprint(i)), Labels: map[string]string{"app": "db"}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "StatefulSet", Name: "db", UID: "db", Controller: &controller}}}}, "", "Pod"))
+	}
+	for _, hops := range []int{1, 2} {
+		asked := map[string]int{}
+		sub := walkTestNeighborhood(t, newProjectionSession(t, objects...), root, NeighborhoodOptions{Hops: hops, Allow: func(n *Node) bool {
+			if n.Name != "" {
+				t.Errorf("hops=%d: Allow asked about %s by name", hops, n.Name)
+			}
+			asked[fmt.Sprint(n.Data["apiVersion"], " ", n.Data["resourceKind"], " ", n.Data["namespace"])]++
+			return true
+		}})
+		if !slices.ContainsFunc(sub.Nodes, func(n Node) bool { return n.Kind == KindPodGroup && n.Data["podCount"] == 50 }) {
+			t.Fatalf("hops=%d: the fixture no longer reaches the Pods: %+v", hops, sub.Nodes)
+		}
+		for key, calls := range asked {
+			if calls > 1 {
+				t.Errorf("hops=%d: Allow asked %d times about %s", hops, calls, key)
+			}
+		}
 	}
 }

@@ -46,10 +46,14 @@ type NeighborhoodOptions struct {
 	// Allow gates each candidate node during BFS expansion. nil means
 	// allow all. When non-nil, BFS skips nodes for which Allow returns
 	// false — they don't consume the MaxNodes budget, can't appear as
-	// path-fragments between two allowed nodes, and bump
+	// path-fragments between two allowed nodes, and set
 	// Subgraph.RBACDenied so callers can report omissions to the user.
 	// The root node is also checked so callers can hide roots that pass
 	// coarse preflight checks but fail per-kind gates such as Secrets.
+	//
+	// Allow must decide by kind and namespace alone: WalkNeighborhood calls
+	// it once for each (group, kind, namespace), with a node that has no
+	// name, and applies the answer to every object of that kind there.
 	//
 	// This is the security boundary: forbidden nodes must not influence
 	// the visible graph shape. Post-hoc filtering would let an
@@ -69,11 +73,10 @@ type Subgraph struct {
 	Edges     []Edge      `json:"edges"`
 	Truncated bool        `json:"truncated,omitempty"`
 
-	// RBACDenied counts nodes skipped during BFS because Allow returned
-	// false. Reported as a single aggregated omission by the caller; we
-	// intentionally do NOT track which specific nodes were denied, since
-	// surfacing those names would re-introduce the existence-leak the
-	// Allow gate exists to prevent.
+	// RBACDenied is nonzero when Allow withheld some related node. Reported
+	// as a single aggregated omission by the caller; we intentionally do NOT
+	// track which specific nodes were denied, since surfacing those names
+	// would re-introduce the existence-leak the Allow gate exists to prevent.
 	RBACDenied int `json:"-"`
 
 	// AmbiguousRoot is set when the root lookup matched more than one API

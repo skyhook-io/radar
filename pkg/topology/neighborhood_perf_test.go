@@ -245,24 +245,36 @@ func TestWalkNeighborhoodPodGroupKeepsEachPodsSources(t *testing.T) {
 	orphan := charPod("shop", "orphan", "", map[string]string{"app": "shared"}, charPodSpec("settings", ""), metav1.OwnerReference{})
 	orphan.OwnerReferences = nil
 	f.objects = append(f.objects, charObject{kind: "Pod", resource: "pods", obj: orphan})
-	for _, denyB := range []bool{false, true} {
-		t.Run(fmt.Sprint(denyB), func(t *testing.T) {
-			sub, err := WalkNeighborhood(context.Background(), neighborhoodFixtureSession(t, f), ResourceRef{Kind: "ConfigMap", Namespace: "shop", Name: "settings"}, NeighborhoodOptions{Hops: 2, Profile: ProfileAll, Allow: func(n *Node) bool { return !denyB || n.Kind != KindReplicaSet || n.Name != "b" }}, f.provider, f.dynamic)
+	for _, denyReplicaSets := range []bool{false, true} {
+		t.Run(fmt.Sprint(denyReplicaSets), func(t *testing.T) {
+			sub, err := WalkNeighborhood(context.Background(), neighborhoodFixtureSession(t, f), ResourceRef{Kind: "ConfigMap", Namespace: "shop", Name: "settings"}, NeighborhoodOptions{Hops: 2, Profile: ProfileAll, Allow: func(n *Node) bool { return !denyReplicaSets || n.Kind != KindReplicaSet }}, f.provider, f.dynamic)
 			if err != nil {
 				t.Fatal(err)
 			}
 			checked := 0
 			for _, n := range sub.Nodes {
+				if n.Kind == KindReplicaSet && denyReplicaSets {
+					t.Fatalf("withheld ReplicaSet admitted: %+v", n)
+				}
 				if n.Kind != KindPodGroup {
 					continue
 				}
 				for _, pod := range n.Data["pods"].([]map[string]any) {
 					name := pod["name"].(string)
+					if denyReplicaSets {
+						// Every Pod's one admitted source is the ConfigMap, so
+						// the group is uniform and names no withheld owner.
+						if ids, ok := pod["ownerIds"]; ok {
+							t.Fatalf("pod %s names sources %v", name, ids)
+						}
+						checked++
+						continue
+					}
 					want := []string{"configmap/shop/settings"}
 					if strings.HasPrefix(name, "a-") {
 						want = append(want, "replicaset/shop/a")
 					}
-					if strings.HasPrefix(name, "b-") && !denyB {
+					if strings.HasPrefix(name, "b-") {
 						want = append(want, "replicaset/shop/b")
 					}
 					got, ok := pod["ownerIds"].([]string)

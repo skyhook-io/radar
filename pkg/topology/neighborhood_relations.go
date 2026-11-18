@@ -411,15 +411,7 @@ func (a *neighborhoodAccess) CanRead(gk resourceid.GroupKind, ns string) ownersh
 	return d
 }
 func (a *neighborhoodAccess) allowed(r resourceid.Ref) bool {
-	if a.CanRead(r.GroupKind(), r.Namespace) != ownership.Allowed {
-		return false
-	}
-	n := a.node(r)
-	if a.allow != nil && !a.allow(&n) {
-		a.denied = true
-		return false
-	}
-	return true
+	return a.CanRead(r.GroupKind(), r.Namespace) == ownership.Allowed
 }
 func (a *neighborhoodAccess) node(r resourceid.Ref) Node {
 	apiVersion := "v1"
