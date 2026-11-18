@@ -2,6 +2,7 @@ package topology
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"sort"
@@ -30,7 +31,9 @@ var displayOnlyEdges = map[string]string{
 // The Topology screen draws relationships with the display builder; the drawer
 // and every other reader answer from the relation families. An edge drawn
 // between two objects that neither end's family answer names is drift: the
-// screen and the drawer disagree about the cluster.
+// screen and the drawer disagree about the cluster. Every edge is checked but
+// one to a synthetic node; an edge to an object the fixture lacks fails
+// rather than going unchecked.
 func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 	f := charCluster()
 	objects := map[string]runtime.Object{}
@@ -43,6 +46,13 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 		objects[o.key()] = obj
 		session = append(session, obj)
 	}
+	// The builder draws the checkout Rollout's background analysis run from
+	// the Rollout's status. Its object is added here, not to charCluster,
+	// whose goldens record every fixture object.
+	run := charUnstructured("argoproj.io/v1alpha1", "AnalysisRun", "shop", "checkout-bg-1", nil, nil, map[string]any{"phase": "Running"},
+		charController("argoproj.io/v1alpha1", "Rollout", "checkout", "uid-shop-checkout"))
+	objects[resourceid.ResourceKey("argoproj.io", "AnalysisRun", "shop", "checkout-bg-1")] = run
+	session = append(session, run)
 	s := newProjectionSession(t, session...)
 	answers := map[string]map[string]bool{}
 	answer := func(key string) map[string]bool {
@@ -57,6 +67,7 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 	drift := map[string][]string{}
 	drawn := map[string]int{}
 	used := map[string]bool{}
+	missing := map[string][]string{}
 	for _, c := range charCases() {
 		topo := charBuild(t, f, c.opts())
 		nodes := map[string]*Node{}
@@ -66,11 +77,21 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 		for _, e := range topo.Edges {
 			src, dst := nodes[e.Source], nodes[e.Target]
 			if src == nil || dst == nil {
+				t.Errorf("%s: edge %s -> %s names a node the topology doesn't have", c.name, e.Source, e.Target)
+				continue
+			}
+			if syntheticDisplayKinds[src.Kind] || syntheticDisplayKinds[dst.Kind] {
 				continue
 			}
 			sk, dk := displayNodeKey(src), displayNodeKey(dst)
 			if objects[sk] == nil || objects[dk] == nil {
-				continue // a node that draws no single object, such as a grouping
+				edge := fmt.Sprintf("%s -> %s", sk, dk)
+				for _, k := range []string{sk, dk} {
+					if objects[k] == nil && !slices.Contains(missing[k], edge) {
+						missing[k] = append(missing[k], edge)
+					}
+				}
+				continue
 			}
 			class := fmt.Sprintf("%s %s -> %s", e.Type, displayKindKey(src), displayKindKey(dst))
 			drawn[class]++
@@ -92,6 +113,9 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 		}
 	}
 
+	for _, key := range slices.Sorted(maps.Keys(missing)) {
+		t.Errorf("the Topology screen draws edges to %s, which isn't a fixture object, so they go unchecked: %v", key, missing[key])
+	}
 	classes := make([]string, 0, len(drift))
 	for class := range drift {
 		classes = append(classes, class)
@@ -106,6 +130,10 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 		}
 	}
 }
+
+// syntheticDisplayKinds are the nodes that draw no single object: a group of
+// Pods, and the internet in front of an entry point.
+var syntheticDisplayKinds = map[NodeKind]bool{KindPodGroup: true, KindInternet: true}
 
 func displayNodeKey(n *Node) string {
 	return resourceid.ResourceKey(nodeGroup(n), KubernetesKindForNode(n), nodeNamespaceFromData(n), n.Name)
