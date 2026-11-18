@@ -484,6 +484,9 @@ type EvidenceRead struct {
 	Resource  string
 	Namespace string
 	Verb      string
+	// Exact asks for the exact (group, resource, namespace, verb) check even
+	// where namespace access usually stands for a namespaced read.
+	Exact bool
 }
 
 // DegradedFinding is a finding as told to a caller who can't make its
@@ -536,6 +539,10 @@ type Issue struct {
 	// RequiredReads describe the inventories behind a cross-resource finding.
 	// They are retained internally so cached and grouped projections can authorize it.
 	RequiredReads []EvidenceRead `json:"-"`
+	// ExpectedWhenVerified marks a finding the evidence shows is expected: a
+	// caller who can make every RequiredRead doesn't get it, and one who
+	// can't gets Degraded.
+	ExpectedWhenVerified bool `json:"-"`
 	// AffectedRefs are the resources a finding about another subject affects,
 	// all of them rather than the capped links a diagnostic fact shows.
 	// Related-issue lookup matches them; they are never serialized.

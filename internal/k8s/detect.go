@@ -137,6 +137,9 @@ type Detection struct {
 	// Degraded is nil.
 	RequiredReads []issuesapi.EvidenceRead   `json:"-"`
 	Degraded      *issuesapi.DegradedFinding `json:"-"`
+	// ExpectedWhenVerified: a caller who can make every RequiredRead doesn't
+	// get this detection at all (see issuesapi.Issue).
+	ExpectedWhenVerified bool `json:"-"`
 	// OwnerKind + OwnerName name the topmost stable controller of a Pod
 	// problem (Pod→Deployment, not the intermediate ReplicaSet), resolved
 	// via topOwnerForPod when the Pod is detected. Empty for non-Pod and
@@ -956,6 +959,7 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 		} else {
 			pdbs, _ = pdbLister.List(labels.Everything())
 		}
+		cnpgContext := collectCNPGPDBContext(cache, pdbs)
 		for _, pdb := range pdbs {
 			if det, ok := terminatingProblem("PodDisruptionBudget", "policy", pdb, now); ok {
 				problems = append(problems, det)
@@ -987,6 +991,7 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 				ResourceCreatedAt: pdb.CreationTimestamp.Time,
 			}
 			setDetectionOnset(&detection, now, onsetAt)
+			applyCNPGPrimaryPDBVerdict(&detection, cnpgContext.classify(pdb))
 			problems = append(problems, detection)
 		}
 	}
