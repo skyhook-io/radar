@@ -11,21 +11,18 @@ describe('veleroGlobMatch', () => {
     ['shop-?', 'shop-1', true],
     ['shop-?', 'shop-12', false],
     ['db-[ab]', 'db-a', true],
-    ['db-[!ab]', 'db-a', false],
     ['db-[a-c]', 'db-b', true],
     ['ns-[ab-d]-prod', 'ns-c-prod', false],
     ['ns-[ab-d]-prod', 'ns---prod', true],
-    ['db-[!a-c]', 'db-d', true],
-    ['{shop,db}-prod', 'db-prod', true],
-    ['{shop,db}-prod', 'web-prod', false],
-    ['a.b', 'axb', false],
-    ['[unclosed', '[unclosed', true],
-    ['{unclosed', '{unclosed', true],
-    ['{a,{b,c}}-x', 'c-x', true],
-    ['{,pre}fix', 'fix', true],
-    ['a}b,c', 'a}b,c', true],
     ['*-prod-*', 'eu-prod-1', true],
     ['*a*', 'bbb', false],
+    ['a.b', 'axb', false],
+    // Patterns Velero refuses, so a schedule using them backs up nothing.
+    ['[unclosed', '[unclosed', true],
+    ['db-[]', 'db-a', false],
+    ['db-[!ab]', 'db-c', false],
+    ['{shop,db}-prod', 'db-prod', false],
+    ['[z-a]*', 'shop', false],
   ])('%s against %s is %s', (pattern, name, want) => {
     expect(veleroGlobMatch(pattern, name)).toBe(want)
   })
@@ -37,9 +34,9 @@ describe('veleroGlobMatch on hostile patterns', () => {
     expect(veleroGlobMatch('*a'.repeat(24) + 'b', 'a'.repeat(63))).toBe(false)
     expect(performance.now() - start).toBeLessThan(200)
   })
-  it('matches a pattern with too many brace alternatives only as written', () => {
-    const pattern = '{a,b}'.repeat(9)
-    expect(veleroGlobMatch(pattern, 'a'.repeat(9))).toBe(false)
+  it('matches a pattern longer than a namespace name only as written', () => {
+    const pattern = '*'.repeat(10_000) + '?'
+    expect(veleroGlobMatch(pattern, 'shop')).toBe(false)
     expect(veleroGlobMatch(pattern, pattern)).toBe(true)
   })
 })
