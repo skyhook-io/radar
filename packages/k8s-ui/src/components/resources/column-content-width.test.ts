@@ -26,7 +26,7 @@ const pod = (name: string, extra: Record<string, any> = {}) => ({ metadata: { na
 
 describe('columnSizingSpec', () => {
   it('fits Name, Namespace and Node, grows flagged columns, and keeps the rest exact', () => {
-    expect(columnSizingSpec({ key: 'name' })).toEqual({ mode: 'fit', max: 480, weight: 2 })
+    expect(columnSizingSpec({ key: 'name' })).toEqual({ mode: 'fit', max: 480, keep: true })
     expect(columnSizingSpec({ key: 'namespace' }).mode).toBe('fit')
     expect(columnSizingSpec({ key: 'node' }).mode).toBe('fit')
     expect(columnSizingSpec({ key: 'message', sizing: 'grow', growWeight: 3 })).toEqual({ mode: 'grow', weight: 3, max: GROW_MAX_PX })
@@ -36,13 +36,22 @@ describe('columnSizingSpec', () => {
 })
 
 describe('measureColumnContent', () => {
-  it('sizes Name to its 95th percentile and reaches for its longest, with chrome and padding', () => {
+  it('sizes Name to its longest name, not a percentile, with chrome and padding', () => {
     const items = [...Array(95)].map((_, i) => pod(`n${String(i).padStart(9, '0')}`)) // 10 chars
     for (let i = 0; i < 5; i++) items.push(pod('x'.repeat(40)))
     const m = measureColumnContent(items, [{ key: 'name' }], ctx, measure)
-    // 100px of text + 22px copy button + padding
-    expect(m.name.content).toBe(100 + 22 + CELL_PADDING_PX)
-    expect(m.name.stretch).toBe(400 + 22 + CELL_PADDING_PX)
+    // 400px of text + 22px copy button + padding
+    expect(m.name).toEqual({ content: 400 + 22 + CELL_PADDING_PX })
+  })
+
+  it('measures the exact columns whose cells it knows, and leaves the rest unmeasured', () => {
+    const p = { metadata: { name: 'a', namespace: 'x', creationTimestamp: new Date(Date.now() - 3 * 86400_000).toISOString() }, status: { phase: 'Running', containerStatuses: [{ name: 'c', ready: true, restartCount: 12, state: { running: {} } }] }, spec: { containers: [{ name: 'c' }] } }
+    const m = measureColumnContent([p], [{ key: 'age' }, { key: 'restarts' }, { key: 'status' }, { key: 'cpu' }, { key: 'containers' }], { plural: 'pods', cellFilterKind: 'pods' }, measure)
+    expect(m.age.content).toBe('3d'.length * 10 + CELL_PADDING_PX)
+    expect(m.restarts.content).toBe('12'.length * 10 + CELL_PADDING_PX)
+    expect(m.status.content).toBeGreaterThan('Running'.length * 10 + CELL_PADDING_PX) // badge chrome
+    expect(m.cpu.content).toBe(120) // a picture: a fixed minimum
+    expect(m.containers).toBeUndefined()
   })
 
   it('trims outliers the same way for Namespace', () => {

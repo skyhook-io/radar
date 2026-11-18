@@ -5,21 +5,27 @@
 import type { ColumnSizingMode } from './column-sizing'
 import { percentile } from './column-sizing'
 import {
+  formatAge,
   getArgoAppProjectDescription,
   getArgoApplicationRepo,
   getCellFilterValue,
   getConfigMapKeys,
+  getConfigMapSize,
   getFluxHelmReleaseMessage,
   getGatewayClassDescription,
   getHPATarget,
   getIngressHosts,
   getIngressRules,
+  getPodProblems,
+  getPodRestarts,
+  getPodStatus,
   getReplicaSetOwner,
   getServiceSelector,
   getWorkloadImages,
 } from './resource-utils'
 import { getGitRepositoryUrl, getHelmRepositoryUrl, getOCIRepositoryUrl } from './resource-utils-flux'
 import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
+import { getPodGpuCount } from '../../utils/extended-resources'
 
 // Cell text styles, matching the classes the cells render with (text-sm /
 // text-xs in the app font). measureText takes a CSS font shorthand.
@@ -28,6 +34,7 @@ export const CELL_FONTS = {
   body: `400 14px ${FONT_FAMILY}`,
   medium: `500 14px ${FONT_FAMILY}`,
   small: `400 12px ${FONT_FAMILY}`,
+  badge: `500 12px ${FONT_FAMILY}`,
 } as const
 export type CellFont = keyof typeof CELL_FONTS
 
@@ -43,6 +50,10 @@ const NAME_TERMINATING_CHIP_PX = 104
 const NAME_AUDIT_BADGE_PX = 36
 // A Crossplane pause chip beside a name, besides its label: gap, padding, icon.
 const NAME_PAUSE_CHIP_CHROME_PX = 6 + 12 + 12 + 4
+// A .badge around its label: px-2 on both sides and a 1px border.
+const BADGE_CHROME_PX = 18
+// The problems icon beside a status badge or a ready count, with its gap.
+const PROBLEM_ICON_PX = 8 + 14
 
 export const NAME_MIN_PX = 200
 export const NAME_MAX_PX = 480
@@ -63,7 +74,7 @@ const FIT_DEFAULT_MAX_PX = 400
 // wider on average (at most ~15px, on a 2000px Event message). It makes a 50k-row pass a few lookups per character
 // instead of a canvas call per string, so there is no per-string cache to bound.
 // Without a canvas (SSR, jsdom) this falls back to an average glyph width.
-const FALLBACK_CHAR_PX: Record<CellFont, number> = { body: 7.5, medium: 7.8, small: 6.5 }
+const FALLBACK_CHAR_PX: Record<CellFont, number> = { body: 7.5, medium: 7.8, small: 6.5, badge: 6.8 }
 let measureCtx: CanvasRenderingContext2D | null | undefined
 let charWidths: Partial<Record<CellFont, Map<number, number>>> = {}
 
@@ -122,19 +133,25 @@ export interface ColumnSizingSpec {
   /** grow: share of the room left over. fit: share of it while reaching from its 95th percentile to its longest value. */
   weight?: number
   max?: number
+  /** Name: sized to its longest value (not its 95th percentile) and never given back when room is short. */
+  keep?: boolean
+  /** When room is short, lower ranks give way first (see ColumnLayoutInput). */
+  yieldRank?: number
 }
 
 export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
   if (col.sizing === 'grow') return { mode: 'grow', weight: col.growWeight ?? 1, max: GROW_MAX_PX }
   if (col.sizing === 'exact') return { mode: 'exact' }
-  // Fit columns size to their 95th percentile, so a few outliers (one long
-  // namespace, one generated name) don't set the width, and reach for their
-  // longest value from the room left over. Name takes twice the share there:
-  // a cut name costs more than any other cut cell.
+  // Name is what a reader scans for, so it fits its longest name (up to the
+  // cap) and holds that width: the table scrolls sideways before a name that
+  // fits under the cap is cut. Other fit columns size to their 95th
+  // percentile, so a few outliers (one long namespace) don't set the width,
+  // and reach for their longest value from the room left over.
   switch (col.key) {
-    case 'name': return { mode: 'fit', max: NAME_MAX_PX, weight: 2 }
+    case 'name': return { mode: 'fit', max: NAME_MAX_PX, keep: true }
     case 'namespace': return { mode: 'fit', max: NAMESPACE_MAX_PX, weight: 1 }
-    case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1 }
+    // Node is worth showing but is the first to give way when room is short.
+    case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1, yieldRank: 1 }
   }
   if (col.sizing === 'fit') return { mode: 'fit', max: FIT_DEFAULT_MAX_PX, weight: 1 }
   return { mode: 'exact' }
@@ -174,6 +191,60 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'appprojects:description': text(getArgoAppProjectDescription),
   'gatewayclasses:description': text(getGatewayClassDescription),
   'priorityclasses:description': text(r => r.description),
+}
+
+// What an exact column's cells show, for the kinds whose tables most often run
+// short of room. Measured so the column can shrink to its content when the
+// table is too narrow; an exact column without a reader here never shrinks
+// below its curated width, because its content is unknown. Keyed
+// `${plural}:${column}`, or `*:${column}` for a cell every kind renders alike.
+const badge = (label: (resource: any) => string | null | undefined): CellWidth =>
+  (resource, measure) => measure(label(resource) || '-', 'badge') + BADGE_CHROME_PX
+const age: CellWidth = (resource, measure) => {
+  const created = resource?.metadata?.creationTimestamp
+  return measure(created ? formatAge(created) : '-', 'body')
+}
+const workloadReady: CellWidth = (r, measure) =>
+  measure(`${Math.min(r.status?.readyReplicas || 0, r.spec?.replicas ?? 1)}/${r.spec?.replicas ?? 1}`, 'medium') + PROBLEM_ICON_PX
+const EXACT_CELL_WIDTHS: Record<string, CellWidth> = {
+  '*:age': age,
+  'pods:status': (r, measure) => badge(p => getPodStatus(p).text)(r, measure, Infinity) + (getPodProblems(r).length > 1 ? PROBLEM_ICON_PX : 0),
+  'pods:restarts': text(r => String(getPodRestarts(r)), 'medium'),
+  'pods:gpu': text(r => String(getPodGpuCount(r) || '-')),
+  'events:type': badge(r => r.type || 'Normal'),
+  'events:count': text(r => String(r.count || 1), 'medium'),
+  'events:lastSeen': text(r => {
+    const t = r.lastTimestamp || r.metadata?.creationTimestamp
+    return t ? formatAge(t) : '-'
+  }),
+  'deployments:ready': workloadReady,
+  'statefulsets:ready': workloadReady,
+  'deployments:upToDate': text(r => String(r.status?.updatedReplicas || 0)),
+  'deployments:available': text(r => String(r.status?.availableReplicas || 0)),
+  'statefulsets:upToDate': text(r => String(r.status?.updatedReplicas || 0)),
+  'replicasets:ready': text(r => `${r.status?.readyReplicas || 0}/${r.spec?.replicas || 0}`, 'medium'),
+  'replicasets:status': badge(r => ((r.spec?.replicas || 0) > 0 ? 'Active' : 'Old')),
+  'configmaps:size': text(getConfigMapSize),
+}
+
+// Columns drawn as a picture rather than text shrink no further than this when
+// the table is short (cell padding included). The usage bars stay readable —
+// the bar and its request marker scale with the cell — down to about this
+// width; below it the "used / limit" label is cut.
+const USAGE_BAR_MIN_PX = 120
+const VISUAL_MIN_PX: Record<string, number> = {
+  'pods:cpu': USAGE_BAR_MIN_PX,
+  'pods:memory': USAGE_BAR_MIN_PX,
+  'nodes:cpu': USAGE_BAR_MIN_PX,
+  'nodes:memory': USAGE_BAR_MIN_PX,
+}
+
+/**
+ * The narrowest an exact column's content needs, cell padding included, or
+ * undefined when Radar doesn't know what its cells show.
+ */
+export function exactContentReader(plural: string, column: string): CellWidth | undefined {
+  return EXACT_CELL_WIDTHS[`${plural}:${column}`] ?? EXACT_CELL_WIDTHS[`*:${column}`]
 }
 
 /** Whether a curated grow column has its own display-text reader (tested for drift). */
@@ -223,17 +294,18 @@ function cellWidthReader(col: ContentColumn, ctx: ContentContext): CellWidth {
 }
 
 export interface MeasuredContent {
-  /** What the column sizes to: grow, its longest value; fit, its 95th percentile. Padding included. */
+  /** grow, exact and Name: the longest value; other fit columns: the 95th percentile. Padding included. */
   content: number
   /** fit only: its longest value, which it may grow to from the room left over. */
   stretch?: number
 }
 
 /**
- * Content widths of the automatically sized columns over every item. Exact
- * columns are not measured. Each value stops being counted once past the
- * column's cap, so an Event message thousands of pixels long costs no more
- * than one at the cap.
+ * Content widths over every item: of the automatically sized columns, and of
+ * the exact columns Radar knows the content of (how far they may shrink when
+ * room is short). Each value stops being counted once past the column's cap,
+ * so an Event message thousands of pixels long costs no more than one at the
+ * cap.
  */
 export function measureColumnContent(
   items: readonly any[],
@@ -244,10 +316,26 @@ export function measureColumnContent(
   const result: Record<string, MeasuredContent> = {}
   for (const col of columns) {
     const spec = columnSizingSpec(col)
-    if (spec.mode === 'exact') continue
+    if (spec.mode === 'exact') {
+      const visual = VISUAL_MIN_PX[`${ctx.plural}:${col.key}`]
+      if (visual !== undefined) {
+        result[col.key] = { content: visual }
+        continue
+      }
+      const read = col.getFilterValue ? undefined : exactContentReader(ctx.plural, col.key)
+      if (!read) continue
+      let longest = 0
+      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, Infinity))
+      result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
+      continue
+    }
     const read = cellWidthReader(col, ctx)
     const limit = (spec.max ?? Infinity) - CELL_PADDING_PX
-    if (spec.mode === 'fit') {
+    if (spec.mode === 'fit' && spec.keep) {
+      let longest = 0
+      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, limit))
+      result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
+    } else if (spec.mode === 'fit') {
       const widths = new Array<number>(items.length)
       let longest = 0
       for (let i = 0; i < items.length; i++) {
