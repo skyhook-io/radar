@@ -6242,14 +6242,16 @@ export function ResourcesView({
         key: col.key,
         mode: spec.mode,
         floor,
-        // When room is short: exact columns and short-value fit columns may
-        // shrink to their content (never below their heading), but only where
-        // the content is known;
-        // Node and Namespace to their heading, cutting values; Name, last, to
-        // the 90th percentile of its names (never below NAME_MIN_PX, never
-        // above the width it holds).
-        min: spec.mode === 'exact' || spec.longest
+        // When room is short: exact columns may shrink to their content
+        // (never below their heading), but only where the content is known;
+        // short-value fit columns to their curated width, or their content
+        // when that is narrower; Node and Namespace to their heading, cutting
+        // values; Name, last, to the 90th percentile of its names (never below
+        // NAME_MIN_PX, never above the width it holds).
+        min: spec.mode === 'exact'
           ? content !== undefined ? Math.max(getColumnHeaderWidth(col, extraColumnsByKey), content) : undefined
+          : spec.longest
+            ? content !== undefined ? Math.min(floor, Math.max(getColumnHeaderWidth(col, extraColumnsByKey), content)) : undefined
           : spec.keep
             ? content !== undefined
               ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000yieldTo`] ?? content, content, nameMax))
