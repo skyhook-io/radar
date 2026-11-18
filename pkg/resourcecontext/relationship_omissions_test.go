@@ -50,6 +50,15 @@ func TestRelationshipOmissionsFollowEachFieldsEvidence(t *testing.T) {
 		t.Fatalf("Secret referencedBy = %+v", got)
 	}
 
+	unanswered := map[string]relations.Coverage{"answer": {NotChecked: []ownership.Gap{{Reason: readreason.ClusterConnecting}}}}
+	pod := omissions("Pod", "", unanswered)
+	if !slices.Contains(pod, OmittedField{Field: "uses", Reason: OmittedUnavailable}) || !slices.Contains(pod, OmittedField{Field: "exposedBy", Reason: OmittedUnavailable}) {
+		t.Fatalf("a Pod without an answer = %+v", pod)
+	}
+	if slices.ContainsFunc(pod, func(o OmittedField) bool { return o.Field == "runsOn" || o.Field == "referencedBy" }) {
+		t.Fatalf("a Pod without an answer marked a field its spec answers or it doesn't have: %+v", pod)
+	}
+
 	for _, o := range omissions("Ingress", "networking.k8s.io", map[string]relations.Coverage{"subject": {SubjectState: "replaced"}}) {
 		if strings.HasPrefix(o.Field, "uses.") || o.Field == "referencedBy" || o.Field == "runsOn" {
 			t.Fatalf("an Ingress's replaced subject marked %s", o.Field)

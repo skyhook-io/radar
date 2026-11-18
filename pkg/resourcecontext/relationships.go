@@ -26,6 +26,9 @@ func addRelationshipOmissions(ident resourceIdentity, extras *topology.Relations
 		"Uses": {"uses.configMaps", "uses.secrets", "uses.pvcs", "uses.serviceAccount"},
 		"Node": {"runsOn"}, "Managers": {"managedBy"},
 		"subject": {"exposes", "exposedBy", "backends", "selectedBy", "scaledBy", "protects", "healthChecks", "stagedPolicies", "monitors", "monitorTargets", "dependencies", "dependents", "referencedBy", "uses.configMaps", "uses.secrets", "uses.pvcs", "uses.serviceAccount", "runsOn"},
+		// No answer at all: every field one fills, but runsOn, which a Pod's
+		// own spec names without one.
+		"answer": {"exposes", "exposedBy", "backends", "selectedBy", "scaledBy", "protects", "healthChecks", "stagedPolicies", "monitors", "monitorTargets", "dependencies", "dependents", "referencedBy", "uses"},
 	}
 	for _, field := range slices.Sorted(maps.Keys(extras.Fields)) {
 		coverage := extras.Fields[field]
@@ -59,7 +62,7 @@ func addRelationshipOmissions(ident resourceIdentity, extras *topology.Relations
 func listsField(ident resourceIdentity, name string) bool {
 	gk := resourceid.GroupKind{Group: ident.Group, Kind: ident.Kind}
 	switch {
-	case strings.HasPrefix(name, "uses."):
+	case name == "uses" || strings.HasPrefix(name, "uses."):
 		return listsUses(ident)
 	case name == "referencedBy":
 		return slices.Contains(relations.ConfigReferences.Targets, gk) || slices.Contains(relations.PodPlacement.Targets, gk)

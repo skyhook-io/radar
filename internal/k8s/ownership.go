@@ -163,8 +163,9 @@ func answerOwnership(source ownership.Source, apply func(*topology.Relationships
 // AnswerRelationships is a fetched object's Related Resources answered from
 // the caches in one session: the relation families projected as the
 // relationship graph's edges are (topology.RelationsAnswer), then ownership,
-// with one ownership view whose searches both share. It answers nil when the
-// caches aren't ready or are replaced mid-answer.
+// with one ownership view whose searches both share. When the caches aren't
+// ready or are replaced mid-answer, the relationships are nil and the extras
+// say why (topology.UnansweredRelationships).
 func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
 	return answerRelationships(cache, obj, access, traverse, false)
 }
@@ -176,17 +177,23 @@ func AnswerResourceContextRelationships(cache *ResourceCache, obj runtime.Object
 }
 
 func answerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access, contextOnly bool) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
+	unanswered := func(reason readreason.Code) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
+		extras := topology.UnansweredRelationships(reason)
+		return nil, extras.Coverage, extras
+	}
 	session, err := BeginOwnershipRead(cache)
 	if err != nil || len(session.Catalog().DependentKinds()) == 0 {
-		return nil, nil, nil
+		// Not connected, or discovery hasn't answered yet, as while Radar
+		// starts.
+		return unanswered(readreason.ClusterConnecting)
 	}
 	rs, ok := session.(relations.Session)
 	if !ok {
-		return nil, nil, nil
+		return unanswered(readreason.ReadError)
 	}
 	caches, ok := cachesource.SessionCaches(session)
 	if !ok {
-		return nil, nil, nil
+		return unanswered(readreason.ReadError)
 	}
 	provider := NewTopologyResourceProvider(&ResourceCache{ResourceCache: caches.Typed})
 	var dp topology.DynamicProvider
@@ -195,20 +202,21 @@ func answerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 	}
 	fetched, valid := OwnershipObservation(obj)
 	if !valid {
-		return nil, nil, nil
+		return unanswered(readreason.ReadError)
 	}
 	owner, _ := apimeta.Accessor(obj)
 	acc := access(session.Catalog())
 	if decision := acc.CanRead(fetched.Ref.GroupKind(), fetched.Ref.Namespace); decision != ownership.Allowed {
 		if session.ValidateCaches() != nil {
-			return nil, nil, nil
+			return unanswered(readreason.ConnectionChanged)
 		}
-		return topology.RefusedRelationships(decision), nil, nil
+		rel, extras := topology.RefusedRelationships(fetched.Ref, decision)
+		return rel, extras.Coverage, extras
 	}
 	captured, current := relations.CaptureSubject(rs, fetched.Ref, obj)
 	if !current {
 		if session.ValidateCaches() != nil {
-			return nil, nil, nil
+			return unanswered(readreason.ConnectionChanged)
 		}
 		rel := &topology.Relationships{}
 		topology.OwnershipUnavailable(rel, string(readreason.ReadError))
@@ -224,16 +232,13 @@ func answerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 		answer = topology.RelationsContextAnswer
 	}
 	rel, extras := answer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, provider, dp)
-	if extras == nil {
+	if rel.Ownership != nil {
 		// The answer checks the caller's access to obj again; a decision
 		// that changed since the check above refuses it there, and says why.
 		if session.ValidateCaches() != nil {
-			return nil, nil, nil
+			return unanswered(readreason.ConnectionChanged)
 		}
-		return rel, nil, nil
-	}
-	if rel == nil {
-		rel = &topology.Relationships{}
+		return rel, extras.Coverage, extras
 	}
 	if contextOnly {
 		topology.ApplyOwner(rel, ov, fetched)
@@ -244,7 +249,7 @@ func answerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 		splitHistory(fetched.Ref, owner, acc)(rel, ov, session)
 	}
 	if session.ValidateCaches() != nil {
-		return nil, nil, nil
+		return unanswered(readreason.ConnectionChanged)
 	}
 	return rel, extras.Coverage, extras
 }

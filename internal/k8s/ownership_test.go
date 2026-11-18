@@ -1,8 +1,10 @@
 package k8s
 
 import (
+	goctx "context"
 	"errors"
 	"fmt"
+	"reflect"
 	goruntime "runtime"
 	"slices"
 	"testing"
@@ -21,6 +23,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -172,6 +175,40 @@ func TestAnswerOwnershipWaitsForDiscovery(t *testing.T) {
 		if rel.Ownership == nil || rel.Ownership.UnavailableReason != string(readreason.ClusterConnecting) || len(rel.Children) != 0 {
 			t.Errorf("%s: ownership %+v, children %v; want unavailable while discovery hasn't answered", name, rel.Ownership, rel.Children)
 		}
+	}
+}
+
+// Before discovery answers, as while Radar starts, a resource context says
+// every field a relationship answer fills is unavailable, rather than empty,
+// and still names the Node a Pod's own spec names.
+func TestResourceContextWithoutARelationshipAnswer(t *testing.T) {
+	_, typed, _, deployment := historyFixture(t)
+	previous := ownershipSource
+	ownershipSource = cachesource.New(func() cachesource.Caches { return cachesource.Caches{Typed: typed} })
+	t.Cleanup(func() { ownershipSource = previous })
+	access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+	context := func(obj runtime.Object) *resourcecontext.ResourceContext {
+		rel, _, extras := AnswerResourceContextRelationships(&ResourceCache{ResourceCache: typed}, obj, access, access)
+		if rel != nil || extras == nil {
+			t.Fatalf("no answer for %T: %+v %+v", obj, rel, extras)
+		}
+		return resourcecontext.Build(goctx.Background(), obj, resourcecontext.Options{Relationships: rel, RelationshipExtras: extras})
+	}
+	obj := deployment.DeepCopy()
+	obj.APIVersion, obj.Kind = "apps/v1", "Deployment"
+	rc := context(obj)
+	for _, field := range []string{"exposes", "exposedBy", "backends", "selectedBy", "scaledBy", "protects", "dependencies", "dependents", "uses"} {
+		if !slices.Contains(rc.Omitted, resourcecontext.OmittedField{Field: field, Reason: resourcecontext.OmittedUnavailable}) {
+			t.Errorf("%s not marked unavailable: %+v", field, rc.Omitted)
+		}
+	}
+	if slices.ContainsFunc(rc.Omitted, func(o resourcecontext.OmittedField) bool { return o.Field == "referencedBy" || o.Field == "runsOn" }) {
+		t.Errorf("a Deployment's context marked a field it doesn't have: %+v", rc.Omitted)
+	}
+	pod := &corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web-a"}, Spec: corev1.PodSpec{NodeName: "worker"}}
+	rc = context(pod)
+	if rc.RunsOn == nil || rc.RunsOn.Name != "worker" || slices.ContainsFunc(rc.Omitted, func(o resourcecontext.OmittedField) bool { return o.Field == "runsOn" }) {
+		t.Fatalf("Pod's Node = %+v, omitted %+v", rc.RunsOn, rc.Omitted)
 	}
 }
 
@@ -455,7 +492,7 @@ func TestRelationshipSubjectReplacementAndFinalValidation(t *testing.T) {
 		return ownership.Unrestricted()
 	}
 	rel, coverage, _ = AnswerRelationships(captured, obj, switched, access)
-	if rel != nil || coverage != nil {
+	if rel != nil || !slices.Contains(coverage["answer"].NotChecked, ownership.Gap{Reason: readreason.ConnectionChanged}) {
 		t.Fatalf("published after cache replacement: %+v, %+v", rel, coverage)
 	}
 }
@@ -562,11 +599,15 @@ func TestRelationshipAnswerSurvivesAccessChangingMidAnswer(t *testing.T) {
 			if checks < 2 {
 				t.Fatalf("subject checked %d times; the test needs the answer's own check", checks)
 			}
-			if rel == nil || len(rel.Children)+len(rel.OlderRevisions) > 0 || rel.Owner != nil || coverage != nil || extras != nil {
+			if rel == nil || len(rel.Children)+len(rel.OlderRevisions) > 0 || rel.Owner != nil || extras == nil {
 				t.Fatalf("refused subject answered: %+v %+v %+v", rel, coverage, extras)
 			}
 			if rel.Ownership == nil || rel.Ownership.UnavailableReason != string(tc.reason) {
 				t.Fatalf("refused subject's ownership = %+v, want %s", rel.Ownership, tc.reason)
+			}
+			refused := extras.Fields["answer"]
+			if tc.then == ownership.Denied && !refused.Narrowed || tc.then == ownership.Undecided && (len(refused.NotChecked) != 1 || refused.NotChecked[0].Reason != tc.reason) || !reflect.DeepEqual(coverage, extras.Coverage) {
+				t.Fatalf("refused subject's fields = %+v, coverage %+v", extras.Fields, coverage)
 			}
 		})
 	}

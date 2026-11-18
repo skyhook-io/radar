@@ -8,6 +8,7 @@ import (
 	"math"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -26,6 +27,34 @@ type RelationshipExtras struct {
 	Consumers      []relations.Referrer              `json:"-"`
 	Declarations   []relations.Declared              `json:"-"`
 	ScalerManagers map[resourceid.Ref]resourceid.Ref `json:"-"`
+}
+
+// RefusedRelationships is the answer for a subject the caller's access
+// refuses by decision, which isn't Allowed: no relationships, and ownership
+// unavailable because the caller may not read the subject's kind there, or
+// because that couldn't be checked. Its extras say the same of every field
+// an answer fills.
+func RefusedRelationships(subject resourceid.Ref, decision ownership.Decision) (*Relationships, *RelationshipExtras) {
+	rel := &Relationships{}
+	reason := readreason.UserForbidden
+	c := relations.Coverage{Narrowed: true}
+	if decision == ownership.Undecided {
+		reason = readreason.UserPermissionCheckFailed
+		c = relations.Coverage{NotChecked: []ownership.Gap{{Kind: subject.GroupKind(), Namespace: subject.Namespace, Reason: reason}}}
+	}
+	OwnershipUnavailable(rel, string(reason))
+	return rel, unanswered(c)
+}
+
+// UnansweredRelationships are the extras when Radar couldn't answer a
+// subject's relationships at all, for reason: every field an answer fills is
+// unavailable. A host's nil extras instead means it supplied none.
+func UnansweredRelationships(reason readreason.Code) *RelationshipExtras {
+	return unanswered(relations.Coverage{NotChecked: []ownership.Gap{{Reason: reason}}})
+}
+
+func unanswered(c relations.Coverage) *RelationshipExtras {
+	return &RelationshipExtras{Coverage: map[string]relations.Coverage{"answer": c}, Fields: map[string]relations.Coverage{"answer": c}}
 }
 
 // declarationCoverage is what reading the subject's own declarations
