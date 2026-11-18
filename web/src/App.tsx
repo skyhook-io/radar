@@ -53,6 +53,7 @@ import { NoClusterAccessBanner } from './components/NoClusterAccessBanner'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
 import { RadarUpgradeProvider } from './context/RadarUpgrade'
 import { UserMenu } from './components/UserMenu'
+import { COMMUNITY_SLACK_URL } from './components/community'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './components/whats-new/WhatsNew'
@@ -1875,6 +1876,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           accountSlot={<UserMenu variant="rail" pinned={navRailEffectivePinned} />}
           whatsNew={whatsNewStatus.available ? { unread: whatsNewStatus.unread, onOpen: openWhatsNew } : undefined}
           productHunt={productHuntRailEntry}
+          communityUrl={COMMUNITY_SLACK_URL}
         />
       )}
       {/* `relative` makes this column the containing block for the absolute
@@ -1979,6 +1981,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             onToggleTheme={toggleTheme}
             onShowDiagnostics={() => setShowDiagnostics(true)}
             onShowWhatsNew={whatsNewStatus.available ? openWhatsNew : undefined}
+            onOpenCommunity={() => openExternal(COMMUNITY_SLACK_URL)}
             onOpenResource={(hit) => navigateToResourceList(searchHitToSelectedResource(hit))}
           />
         </div>
@@ -2640,7 +2643,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {helpOverlay.shouldRender && <ShortcutHelpOverlay isOpen={helpOverlay.isOpen} onClose={() => setShowHelp(false)} currentView={mainView} />}
 
       {/* Diagnostics overlay */}
-      {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} focus={diagnosticsFocus} onClose={() => { setShowDiagnostics(false); setDiagnosticsFocus(undefined) }} />}
+      {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} focus={diagnosticsFocus} communityUrl={embedded ? undefined : COMMUNITY_SLACK_URL} onClose={() => { setShowDiagnostics(false); setDiagnosticsFocus(undefined) }} />}
 
       <AboutDialog
         info={aboutInfo}
