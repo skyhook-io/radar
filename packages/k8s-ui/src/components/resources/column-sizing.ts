@@ -38,11 +38,11 @@
 // percentile, at most NAME_PROTECTED_MAX_PX: only names wider than that are
 // cut, and only when the alternative is scrolling; a kind can opt its Name out,
 // as Events does). Grow columns are already at their floor and user widths
-// never shrink. If the table is still short, a second pass in the same order
-// takes every column on to its heading and Name to its median, but only if
-// that ends the scrolling; otherwise the first pass stands and the table
-// scrolls sideways. Where the table must fit (a window 1920px wide or more)
-// the second pass always runs and Name goes on to NAME_MIN_PX.
+// never shrink. If the table is still short, Name goes on to its median, but
+// only if that ends the scrolling; otherwise the first pass stands and the
+// table scrolls sideways. Where the table must fit (a window 1920px wide or
+// more) a second pass in the same order always takes every column on to its
+// heading and Name to NAME_MIN_PX.
 
 export type ColumnSizingMode = 'exact' | 'fit' | 'grow'
 
@@ -58,10 +58,10 @@ export interface ColumnLayoutInput {
   /** When room is short, lower ranks give way first (default: exact and grow 2, fit 3). */
   yieldRank?: number
   /** Name only: how far past `min` it may shrink when that ends the
-   *  scrolling (the width half its names need). Default: hardMin. */
+   *  scrolling (the width half its names need). */
   fitMin?: number
-  /** How far past `min` it may shrink when that ends the scrolling, or always
-   *  where the table must fit (`mustFit`): its heading, or for Name NAME_MIN_PX. */
+  /** Where the table must fit (`mustFit`), how far past `min` it shrinks:
+   *  its heading, or for Name NAME_MIN_PX. */
   hardMin?: number
   /** Width the user dragged or double-click fitted. Overrides everything else. */
   userWidth?: number
@@ -103,13 +103,14 @@ export function computeColumnLayout(columns: ColumnLayoutInput[], available: num
     for (const r of ranks(yielding)) {
       short = giveBack(widths, yielding.filter(c => rank(c) === r), lowerBound, short)
     }
-    // Still short: a second pass, in the same order, takes every column on to
-    // its heading (grow columns included) and Name to its median (fitMin) —
-    // but only when that ends the scrolling. Cutting values is worth a table
-    // with every column in view, not one that scrolls anyway. Where the table
-    // must fit, it always runs and Name goes on to its hardMin.
+    // Still short: a second pass, in the same order. Where the table must
+    // fit, it always runs and takes every column on to its hardMin (headings,
+    // grow columns included; Name to NAME_MIN_PX). Elsewhere only Name goes on,
+    // to its median (fitMin), and only when that ends the scrolling: the other
+    // columns keep their content (a usage bar without its limit, an Event
+    // without its message, is worse than scrolling).
     if (short > 0.5) {
-      const bound = (c: ColumnLayoutInput) => (options.mustFit ? c.hardMin ?? c.fitMin : c.fitMin ?? c.hardMin)
+      const bound = (c: ColumnLayoutInput) => (options.mustFit ? c.hardMin ?? c.fitMin : c.fitMin)
       const second = columns.filter(c => !c.userWidth && bound(c) !== undefined)
       const slack = sum(second.map(c => Math.max(0, widths[c.key] - bound(c)!)))
       if (options.mustFit || slack >= short - 0.5) {
