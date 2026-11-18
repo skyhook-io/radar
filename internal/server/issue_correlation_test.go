@@ -173,7 +173,7 @@ func appendInformerEvent(t *testing.T, store timeline.EventStore, e timeline.Tim
 
 var correlationResources = []string{
 	"/pods", "/configmaps", "/secrets", "/services", "/resourcequotas", "/limitranges", "/events", "/namespaces",
-	"apps/deployments", "apps/replicasets",
+	"apps/deployments", "apps/replicasets", "argoproj.io/rollouts",
 	"admissionregistration.k8s.io/validatingwebhookconfigurations", "admissionregistration.k8s.io/mutatingwebhookconfigurations",
 }
 
@@ -381,6 +381,62 @@ func TestProxyAuth_IssueCorrelationMissingWorkloadIsUnresolved(t *testing.T) {
 	iss := correlated(t, env, "full", "Deployment", "ghost", "apps", issuesapi.CategoryCrashLoop)
 	if iss.NoRecentChanges != nil || iss.Correlation.Unknown == nil || iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownSourcesUnresolved {
 		t.Fatalf("missing workload: %+v", iss.Correlation)
+	}
+}
+
+// A Rollout that takes its template from a Deployment names its sources
+// through that Deployment, so a caller who can't list Deployments learns
+// nothing from the template.
+func TestProxyAuth_IssueCorrelationRolloutWorkloadRefTarget(t *testing.T) {
+	created := metav1.NewTime(time.Now().Add(-24 * time.Hour))
+	controller := true
+	zero := int32(0)
+	spec := corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "app:1", Env: []corev1.EnvVar{{Name: "PASSWORD", ValueFrom: &corev1.EnvVarSource{
+		SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "db"}, Key: "password"}}}}}}}
+	useTestResourceCache(t, fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", CreationTimestamp: created}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", CreationTimestamp: created}, Data: map[string][]byte{"password": []byte("x")}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "shop", CreationTimestamp: created},
+			Spec: appsv1.DeploymentSpec{Replicas: &zero, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}}, Template: corev1.PodTemplateSpec{Spec: spec}}},
+		&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "roll-rs", Namespace: "shop", CreationTimestamp: created, UID: "rs-roll",
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "roll", UID: "rollout-roll", Controller: &controller}}}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "roll-rs-1", Namespace: "shop", CreationTimestamp: created,
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "roll-rs", UID: "rs-roll", Controller: &controller}}},
+			Spec: spec,
+			Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: "app", RestartCount: 7,
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff", Message: "back-off"}}}}}},
+	))
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	rollout := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout",
+		"metadata": map[string]any{"name": "roll", "namespace": "shop", "uid": "rollout-roll"},
+		"spec":     map[string]any{"workloadRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "api"}}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"}, rollout)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Rollout", Name: gvr.Resource, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil || !k8s.GetDynamicResourceCache().WaitForSync(gvr, 5*time.Second) {
+		t.Fatalf("watch rollouts: %v", err)
+	}
+	store := useMemoryTimeline(t)
+	timeline.SetObservationStartForTest(time.Now().Add(-4 * time.Hour))
+	t.Cleanup(func() { timeline.SetObservationStartForTest(time.Time{}) })
+	appendInformerEvent(t, store, timeline.TimelineEvent{
+		ID: "secret-write", Timestamp: time.Now().Add(-5 * time.Minute), Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Secret", APIVersion: "v1", Namespace: "shop", Name: "db", EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data (modified keys)", OldValue: []string{"password"}, NewValue: []string{"password"}}}},
+	})
+	env := newAuthTestServer(t)
+	correlationUser(env, "full", []string{"shop"})
+	correlationUser(env, "no-deployments", []string{"shop"}, "deployments")
+
+	if iss := correlated(t, env, "full", "Rollout", "roll", "argoproj.io", issuesapi.CategoryCrashLoop); !slices.Equal(changeKinds(iss), []string{"Secret"}) {
+		t.Fatalf("full: %+v", iss.CorrelatedChanges)
+	}
+	iss := correlated(t, env, "no-deployments", "Rollout", "roll", "argoproj.io", issuesapi.CategoryCrashLoop)
+	if len(iss.CorrelatedChanges) != 0 || iss.NoRecentChanges != nil || iss.Correlation.Unknown == nil ||
+		iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownUserForbidden || !slices.Equal(unknownKinds(iss), []string{"Deployment"}) {
+		t.Fatalf("no-deployments: changes %+v, correlation %+v", iss.CorrelatedChanges, iss.Correlation.Unknown)
 	}
 }
 

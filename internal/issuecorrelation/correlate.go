@@ -281,11 +281,17 @@ func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, 
 	}
 	obj = WorkloadObjectFromCache(iss.Kind, iss.Namespace, iss.Name)
 	sourcesKnown = true
-	// A Rollout whose template can't be read (an unsupported or missing
-	// workloadRef target) has unknown sources, so absence proves nothing. A
-	// workload missing from the cache is the same, but only a coverage-
-	// checking caller is told: the MCP tool reads its references as none.
-	if (strings.EqualFold(iss.Kind, "Rollout") || c.opts.CheckCoverage) && !meaningfulchanges.ConfigReferencesKnown(obj) {
+	// A Rollout that takes its template from a workloadRef target names its
+	// sources through that object, so the caller must be able to list the
+	// target's kind before the template is read.
+	if group, kind, ok := meaningfulchanges.RolloutTemplateSource(obj); ok && !c.allowed(kind, group, iss.Namespace) {
+		obj, sourcesKnown = nil, false
+	} else if (strings.EqualFold(iss.Kind, "Rollout") || c.opts.CheckCoverage) && !meaningfulchanges.ConfigReferencesKnown(obj) {
+		// A Rollout whose template can't be read (an unsupported or missing
+		// workloadRef target) has unknown sources, so absence proves nothing.
+		// A workload missing from the cache is the same, but only a
+		// coverage-checking caller is told: the MCP tool reads its references
+		// as none.
 		sourcesKnown = false
 		c.addUnknown(issuesapi.CorrelationUnknownSourcesUnresolved, iss.Group, iss.Kind)
 	}

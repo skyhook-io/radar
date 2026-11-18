@@ -1806,6 +1806,32 @@ func rolloutWorkloadRefPodSpec(rollout *unstructured.Unstructured) (corev1.PodSp
 	return corev1.PodSpec{}, false
 }
 
+// RolloutTemplateSource names the object whose pod template
+// DirectConfigReferences reads for a Rollout that takes its template from
+// spec.workloadRef rather than its own spec.template: the target Deployment
+// or ReplicaSet. ok is false for any other object, including a Rollout with
+// its own template or an unsupported reference.
+func RolloutTemplateSource(obj any) (group, kind string, ok bool) {
+	rollout, isUnstructured := obj.(*unstructured.Unstructured)
+	if !isUnstructured || rollout.GetKind() != "Rollout" || resourceid.GroupFromAPIVersion(rollout.GetAPIVersion()) != "argoproj.io" {
+		return "", "", false
+	}
+	if _, found, err := unstructured.NestedMap(rollout.Object, "spec", "template", "spec"); err == nil && found {
+		return "", "", false
+	}
+	target, err := rollouts.ResolveTemplateTarget(rollout)
+	if err != nil || target.GVR == rollouts.GVR {
+		return "", "", false
+	}
+	switch target.GVR.Resource {
+	case "deployments":
+		return target.GVR.Group, "Deployment", true
+	case "replicasets":
+		return target.GVR.Group, "ReplicaSet", true
+	}
+	return "", "", false
+}
+
 // ConfigReferencesKnown reports whether obj's pod template could be read, so
 // its referenced ConfigMaps and Secrets are known.
 func ConfigReferencesKnown(obj any) bool {

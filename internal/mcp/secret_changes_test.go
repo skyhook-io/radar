@@ -226,4 +226,25 @@ func TestRolloutWorkloadRefCorrelatesReferencedSecret(t *testing.T) {
 	if result := correlate("dangling"); result.NoChanges || len(result.Changes) != 0 || result.Unknown == nil || result.Unknown.Reason != issuesapi.CorrelationUnknownSourcesUnresolved {
 		t.Fatalf("dangling workloadRef Rollout: %+v", result)
 	}
+
+	// A caller who can list Rollouts and Secrets but not Deployments can't
+	// learn which Secret the target Deployment's template names: its template
+	// is not read, and the issue gets no marker either way.
+	ctx := withClusterAdmin(t, "rollout-reader")
+	t.Cleanup(getPermCache().Invalidate)
+	perms := getPermCache().Get("rollout-reader", nil)
+	perms.SetCanI("list", "argoproj.io", "rollouts", "shop", true)
+	perms.SetCanI("list", "", "secrets", "shop", true)
+	perms.SetCanI("list", "", "configmaps", "shop", true)
+	perms.SetCanI("list", "apps", "deployments", "shop", false)
+	denied := issuecorrelation.Correlate(ctx, issuesapi.Issue{Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: "ref"}, correlationOptions(time.Hour), correlationAccess(ctx))
+	if len(denied.Changes) != 0 || denied.NoChanges || denied.Unknown == nil || denied.Unknown.Reason != issuesapi.CorrelationUnknownUserForbidden ||
+		len(denied.Unknown.Kinds) != 1 || denied.Unknown.Kinds[0] != (issuesapi.UncheckedKind{Group: "apps", Kind: "Deployment"}) {
+		t.Fatalf("workloadRef target read without Deployment access: %+v", denied)
+	}
+	resp := issues.ListResponse{Issues: []issuesapi.Issue{{Severity: issuesapi.SeverityCritical, Kind: "Rollout", Group: "argoproj.io", Namespace: "shop", Name: "ref"}}}
+	attachIssueChangeCorrelation(ctx, &resp)
+	if iss := resp.Issues[0]; len(iss.CorrelatedChanges) != 0 || iss.NoRecentChanges != nil {
+		t.Fatalf("issues tool: %+v", iss)
+	}
 }
