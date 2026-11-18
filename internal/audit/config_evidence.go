@@ -141,7 +141,7 @@ func collectConfigEvidence(cache *k8s.ResourceCache, input *bp.CheckInput, names
 			}
 			gvr := schema.GroupVersionResource{Group: res.Group, Version: res.Version, Resource: res.Name}
 			if scope.allows(gvr, "") && dynamic.IsClusterWideSynced(gvr) {
-				if issuers, err := dynamic.ListWatched(gvr); err == nil && len(issuers) == 0 {
+				if issuers, err := dynamic.ListWatchedReadOnly(gvr); err == nil && len(issuers) == 0 {
 					deps.clusterIssuerNamespaces = []string{}
 				}
 			}

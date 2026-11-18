@@ -42,6 +42,7 @@ grant access to the underlying Role or ClusterRole objects.
 |---|---|
 | OpenTelemetry Collector and Instrumentation | Collector configuration and instrumentation environment values can contain inline credentials. Native visibility adds no default caller grants. |
 | Flagger Canary and MetricTemplate | Canary webhook metadata and MetricTemplate provider headers may contain inline credentials. Collection is separately opt-in; native visibility adds no default caller grants. |
+| system-upgrade-controller Plan | `spec.upgrade.envs` and `spec.prepare.envs` may contain inline values, and `spec.secrets` names Secrets mounted into upgrade Jobs. Collection is separately opt-in; native visibility adds no default caller grants. |
 | Secrets Store CSI SecretProviderClass | `spec.parameters` is free-form provider configuration that the driver does not constrain. SecretProviderClassPodStatus (mount state and object versions only) remains readable, so the Pod drawer still shows whether a volume mounted. |
 | External Secrets SecretStore and ClusterSecretStore | Provider authentication can contain plaintext credentials, such as Scaleway `secretKey.value`. ExternalSecret/ClusterExternalSecret remain readable; store inspection requires a separate customer grant. |
 | KEDA TriggerAuthentication and ClusterTriggerAuthentication | `spec.hashiCorpVault.credential.token` may hold a Vault token directly. ScaledObject/ScaledJob remain readable. |

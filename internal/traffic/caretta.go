@@ -808,7 +808,7 @@ func carettaLinksQuery(namespace string, sc clusterScope) string {
 // store the operator configured can hold several clusters; Caretta's own
 // caretta-vm and any store found in the cluster hold this one.
 func (c *CarettaSource) resolveClusterScope(ctx context.Context) (clusterScope, error) {
-	return scopeForMetric(ctx, "caretta_links_observed", "", c.metricsURL != "")
+	return scopeForMetric(ctx, "caretta_links_observed", "", c.metricsURL != "", 0)
 }
 
 func (c *CarettaSource) identityRows(ctx context.Context, query string) ([]map[string]string, error) {

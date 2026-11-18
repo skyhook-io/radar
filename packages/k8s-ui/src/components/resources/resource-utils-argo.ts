@@ -2,6 +2,7 @@
 
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
+import { argoApplicationSetConditionsToGitOpsStatus } from '../../types/gitops'
 
 // ============================================================================
 // ARGOCD STATUS UTILITIES
@@ -241,16 +242,15 @@ export function getArgoApplicationSetAppCount(appSet: any): number {
 }
 
 export function getArgoApplicationSetStatus(appSet: any): StatusBadge {
-  const conditions = appSet.status?.conditions || []
-  const errorCondition = conditions.find((c: any) => c.type === 'ErrorOccurred' && c.status === 'True')
-  if (errorCondition) {
-    return { text: 'Error', color: healthColors.unhealthy, level: 'unhealthy' }
+  const { health } = argoApplicationSetConditionsToGitOpsStatus(
+    appSet.status?.conditions ?? [], appSet.status?.health
+  )
+  switch (health) {
+    case 'Healthy': return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
+    case 'Degraded': return { text: 'Error', color: healthColors.unhealthy, level: 'unhealthy' }
+    case 'Progressing': return { text: 'Progressing', color: healthColors.degraded, level: 'degraded' }
+    default: return { text: health, color: healthColors.unknown, level: 'unknown' }
   }
-  const resourcesUpToDate = conditions.find((c: any) => c.type === 'ResourcesUpToDate')
-  if (resourcesUpToDate?.status === 'True') {
-    return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
-  }
-  return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
 }
 
 export function getArgoAppProjectDescription(project: any): string {

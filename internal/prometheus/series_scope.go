@@ -95,38 +95,39 @@ func (client *Client) ResolvePVCScope(ctx context.Context, namespace string, cla
 
 // ResolveTrafficScope decides the cluster-identity matchers for one traffic
 // metric's series (selector narrows them, e.g. to Beyla's jobs) across the
-// whole store. The map has no namespace of its own, so the
+// whole store, over window (0 for an instant read): the span the traffic
+// queries read, so a cluster whose series stopped minutes ago is still seen. The map has no namespace of its own, so the
 // automatic proof anchors on kube-system, which always runs Pods, or on any
 // namespace the cache holds when it never sees kube-system. On
 // ErrScopeMismatch the isolation still names the proven labels, so a caller
 // can say which cluster the traffic failed to match, and on ErrScopeAmbiguous
 // after a proof it names the labels every ambiguous series already carries.
-func (client *Client) ResolveTrafficScope(ctx context.Context, metric, selector string, cache *k8s.ResourceCache) (string, SeriesIsolation, error) {
-	return client.resolveScope(ctx, trafficAnchorNamespace(cache), trafficScopeProbe(metric, selector), nil, cache)
+func (client *Client) ResolveTrafficScope(ctx context.Context, metric, selector string, window time.Duration, cache *k8s.ResourceCache) (string, SeriesIsolation, error) {
+	return client.resolveScope(ctx, trafficAnchorNamespace(cache), trafficScopeProbe(metric, selector, window), nil, cache)
 }
 
 // TrafficSpansClusters reports whether one traffic metric's series (selector
-// narrows them) carry more than one cluster identity across the whole store,
-// read from the labels ClusterIdentityLabels names. Series without any of
+// narrows them) carry more than one cluster identity across the whole store
+// over window, read from the labels ClusterIdentityLabels names. Series without any of
 // those labels count as one identity of their own.
-func (client *Client) TrafficSpansClusters(ctx context.Context, metric, selector string) (bool, error) {
+func (client *Client) TrafficSpansClusters(ctx context.Context, metric, selector string, window time.Duration) (bool, error) {
 	if client == nil {
 		return false, errors.New("Prometheus client not initialized")
 	}
-	return trafficSpansClusters(ctx, client, metric, selector)
+	return trafficSpansClusters(ctx, client, metric, selector, window)
 }
 
-func trafficSpansClusters(ctx context.Context, q seriesQuerier, metric, selector string) (bool, error) {
-	_, err := readScopePartition(ctx, q, trafficScopeProbe(metric, selector), "")
+func trafficSpansClusters(ctx context.Context, q seriesQuerier, metric, selector string, window time.Duration) (bool, error) {
+	_, err := readScopePartition(ctx, q, trafficScopeProbe(metric, selector, window), "")
 	if errors.Is(err, ErrScopeAmbiguous) {
 		return true, nil
 	}
 	return false, err
 }
 
-func trafficScopeProbe(metric, selector string) scopeProbe {
+func trafficScopeProbe(metric, selector string, window time.Duration) scopeProbe {
 	return scopeProbe{
-		metric: metric, selectors: []string{selector}, singlePartition: true, allowUnlabeledProof: true,
+		metric: metric, selectors: []string{selector}, window: window, singlePartition: true, allowUnlabeledProof: true,
 		unverifiedNote: "Radar couldn't confirm this traffic belongs to this exact cluster (no cluster label it could check)",
 	}
 }

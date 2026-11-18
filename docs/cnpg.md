@@ -17,7 +17,7 @@ A backup destination, a WAL archive and a destination for one ScheduledBackup me
 
 ## Where it lives
 
-CNPG stays inside **Resources**; there is no new global navigation item. When the `postgresql.cnpg.io` CRDs are discovered, the Resources sidebar's CloudNativePG group gains a **Views** block above its exact kinds:
+CNPG stays inside **Resources**; there is no new global navigation item. When the `postgresql.cnpg.io` CRDs are discovered, the Resources sidebar's **Integrations** block lists it as **Databases**, with "CloudNativePG" beneath and the Clusters badge on the row; opened, it lists these destinations, with its other kinds folded under **Other kinds**:
 
 | Destination | Route | Job | Detail home for |
 |---|---|---|---|

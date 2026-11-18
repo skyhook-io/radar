@@ -162,3 +162,36 @@ export function veleroAttentionCount(data: VeleroWorkspaceResponse): VeleroAtten
   const note = partial ? ' Some Velero data could not be read, so there may be more.' : ''
   return { count, lowerBound: partial, title: `${partial ? 'At least ' : ''}${count} in Needs attention.${note}` }
 }
+
+const SCREEN_KINDS = {
+  backups: { kind: 'Backup', coverage: 'backups', noun: ['backup', 'backups'] },
+  schedules: { kind: 'Schedule', coverage: 'schedules', noun: ['schedule', 'schedules'] },
+  restores: { kind: 'Restore', coverage: 'restores', noun: ['restore', 'restores'] },
+  backupstoragelocations: { kind: 'BackupStorageLocation', coverage: 'backupStorageLocations', noun: ['storage location', 'storage locations'] },
+} as const satisfies Record<string, { kind: string; coverage: VeleroWorkspaceKey; noun: readonly [string, string] }>
+
+export type VeleroScreen = keyof typeof SCREEN_KINDS
+
+/**
+ * Each list screen's sidebar badge: the rows Needs attention lists about that
+ * screen's kind, so the screens' badges add up to the Overview's total less
+ * what belongs to no screen (a stopped server, Issues the server capped).
+ */
+export function veleroScreenCounts(data: VeleroWorkspaceResponse): Record<VeleroScreen, VeleroAttentionCount> {
+  const problems = veleroAttention(data, null)
+  const out = {} as Record<VeleroScreen, VeleroAttentionCount>
+  for (const [screen, { kind, coverage, noun }] of Object.entries(SCREEN_KINDS) as [VeleroScreen, (typeof SCREEN_KINDS)[VeleroScreen]][]) {
+    const count = problems.filter((p) => p.subject?.kind === kind).length
+    const partial = readInPart(data.coverage[coverage])
+    if (partial && count === 0) {
+      out[screen] = { count: null, lowerBound: true, title: `Unknown: Radar couldn’t read every ${noun[0]}.` }
+      continue
+    }
+    out[screen] = {
+      count,
+      lowerBound: partial,
+      title: `${partial ? 'At least ' : ''}${count} ${count === 1 ? `${noun[0]} needs` : `${noun[1]} need`} attention.${partial ? ' Some could not be read.' : ''}`,
+    }
+  }
+  return out
+}

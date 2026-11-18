@@ -222,6 +222,18 @@ func TestSourceConformsOnTheFixture(t *testing.T) {
 		w.Partial = true
 		conform(t, w)
 	})
+	for _, group := range []string{"metrics.k8s.io", "argoproj.io", "example.io", "", "apps"} {
+		t.Run("failed discovery group "+group, func(t *testing.T) {
+			w := ownershiptest.Fixture()
+			w.FailedGroups = []string{group}
+			w.Resources = slices.DeleteFunc(w.Resources, func(r ownership.ServedResource) bool {
+				return r.Group == ownership.ArgoApplication.Group && r.Kind == ownership.ArgoApplication.Kind
+			})
+			w.Objects = slices.DeleteFunc(w.Objects, func(o ownershiptest.Object) bool { return o.Ref.GroupKind() == ownership.ArgoApplication })
+			w.Collection[ownership.ArgoApplication] = ownershiptest.Collection{State: ownershiptest.NotCollected, OnDemand: true}
+			conform(t, w)
+		})
+	}
 	t.Run("ambiguous kinds", func(t *testing.T) {
 		w := ownershiptest.Fixture()
 		gc := []string{"delete", "get", "list", "watch"}
