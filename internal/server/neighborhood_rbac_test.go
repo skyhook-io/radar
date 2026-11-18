@@ -10,6 +10,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -627,5 +628,68 @@ func TestNeighborhood_UncollectedRootAnswersWithItsReadCode(t *testing.T) {
 		case !grant && (resp.StatusCode != http.StatusNotFound || body.ErrorCode != ""):
 			t.Errorf("may not get secrets: %d %q, want 404 with no code", resp.StatusCode, body.ErrorCode)
 		}
+	}
+}
+
+// virtualServicesDeniedToRadar installs discovery serving VirtualServices and
+// Services, and a dynamic cache whose list of VirtualServices the API server
+// refuses, as when Radar's identity may not read the kind. watch says whether
+// Radar has tried to collect it.
+func virtualServicesDeniedToRadar(t *testing.T, watch bool) {
+	t.Helper()
+	gvr := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "VirtualServiceList"})
+	dyn.PrependReactor("list", "virtualservices", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", fmt.Errorf("radar may not list virtualservices"))
+	})
+	verbs := []string{"delete", "get", "list", "watch"}
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Version: "v1", Kind: "Service", Name: "services", Namespaced: true, Verbs: verbs},
+		{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: verbs},
+		{Group: gvr.Group, Version: gvr.Version, Kind: "VirtualService", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: verbs},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !watch {
+		return
+	}
+	dc := k8s.GetDynamicResourceCache()
+	_ = dc.EnsureWatching(gvr)
+	for deadline := time.Now().Add(5 * time.Second); dc.Observation(gvr).State != k8score.DynamicObservationDenied; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the denial was never observed: %+v", dc.Observation(gvr))
+		}
+	}
+}
+
+// A root whose kind Radar may not read or doesn't collect says so with the
+// read's code and status, not "not found", and is never answered with a
+// same-named object of another kind.
+func TestNeighborhood_RootKindDeniedToRadarSaysSo(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "bookinfo"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "reviews", Namespace: "bookinfo"}},
+	))
+	for _, tc := range []struct {
+		watch bool
+		want  readreason.Code
+	}{{true, readreason.RadarForbidden}, {false, readreason.RadarKindNotCollected}} {
+		t.Run(string(tc.want), func(t *testing.T) {
+			virtualServicesDeniedToRadar(t, tc.watch)
+			env := newAuthTestServer(t)
+			env.srv.permCache.Set("istio-reader", nil, &auth.UserPermissions{AllowedNamespaces: []string{"bookinfo"}})
+			resp := env.authGet(t, "/api/ai/neighborhood/virtualservice/bookinfo/reviews?group=networking.istio.io&hops=2", "istio-reader", "")
+			var body struct {
+				Error     string          `json:"error"`
+				ErrorCode readreason.Code `json:"error_code"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusServiceUnavailable || body.ErrorCode != tc.want || strings.Contains(body.Error, "not found") {
+				t.Fatalf("got %d %+v, want 503 %s", resp.StatusCode, body, tc.want)
+			}
+		})
 	}
 }

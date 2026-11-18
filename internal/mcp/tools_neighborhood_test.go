@@ -12,6 +12,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -716,5 +717,57 @@ func TestNeighborhoodMCP_PastDeadlineSaysHowToNarrow(t *testing.T) {
 	_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "deployment", Namespace: "default", Name: "nginx", Hops: 2})
 	if err == nil || !strings.Contains(err.Error(), "deadline") || !strings.Contains(err.Error(), "reduce hops (current 2)") {
 		t.Fatalf("past-deadline walk: %v", err)
+	}
+}
+
+// A root whose kind Radar may not read or doesn't collect says so with the
+// read's code, and never suggests a same-named object of another kind.
+func TestNeighborhoodMCP_RootKindDeniedToRadarSaysSo(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "bookinfo"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "reviews", Namespace: "bookinfo"}},
+	)); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	t.Cleanup(func() {
+		k8s.ResetTestState()
+		getPermCache().Invalidate()
+	})
+	gvr := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
+	for _, tc := range []struct {
+		watch bool
+		want  readreason.Code
+	}{{true, readreason.RadarForbidden}, {false, readreason.RadarKindNotCollected}} {
+		t.Run(string(tc.want), func(t *testing.T) {
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "VirtualServiceList"})
+			dyn.PrependReactor("list", "virtualservices", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", fmt.Errorf("radar may not list virtualservices"))
+			})
+			verbs := []string{"delete", "get", "list", "watch"}
+			k8s.ResetTestDynamicState()
+			t.Cleanup(k8s.ResetTestDynamicState)
+			if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+				{Version: "v1", Kind: "Service", Name: "services", Namespaced: true, Verbs: verbs},
+				{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: verbs},
+				{Group: gvr.Group, Version: gvr.Version, Kind: "VirtualService", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: verbs},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.watch {
+				dc := k8s.GetDynamicResourceCache()
+				_ = dc.EnsureWatching(gvr)
+				for deadline := time.Now().Add(5 * time.Second); dc.Observation(gvr).State != k8score.DynamicObservationDenied; time.Sleep(10 * time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Fatalf("the denial was never observed: %+v", dc.Observation(gvr))
+					}
+				}
+			}
+			ctx := withRestrictedUser(t, "istio-reader", []string{"bookinfo"})
+			_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "virtualservice", Group: "networking.istio.io", Namespace: "bookinfo", Name: "reviews", Hops: 2})
+			if code, _ := readErrorCodeOf(err); code != tc.want || strings.Contains(err.Error(), "retry with kind") || strings.Contains(err.Error(), "not found") {
+				t.Fatalf("got %v, want %s", err, tc.want)
+			}
+		})
 	}
 }

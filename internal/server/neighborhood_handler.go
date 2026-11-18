@@ -154,7 +154,7 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(sub.Nodes) == 0 {
 		if sub.RootUnavailable != "" {
-			s.writeReadFailure(w, rawKind, neighborhoodRootFailure(rawKind, sub.RootUnavailable), nil)
+			s.writeReadFailure(w, sanitizeForLog(rawKind), neighborhoodRootFailure(rawKind, sub.RootUnavailable), nil)
 			return
 		}
 		s.writeError(w, http.StatusNotFound, "resource not found in topology")
