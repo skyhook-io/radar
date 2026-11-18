@@ -60,6 +60,7 @@ import (
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/settings"
+	substrateapi "github.com/skyhook-io/radar/internal/substrate"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/updater"
@@ -125,6 +126,10 @@ type Server struct {
 	oidcHandler             *auth.OIDCHandler
 	saveFileFunc            func(defaultFilename string, data []byte) (string, error)
 	saveFileStreamFunc      func(defaultFilename string, r io.Reader) (string, error)
+	// substrate is the Agent Substrate API client, built on first use by
+	// substrateManager; tests inject one.
+	substrate     *substrateapi.Manager
+	substrateOnce sync.Once
 	// newExecutor builds the exec client for pod file transfers. Nil in
 	// production, where the package default is used; tests substitute a fake so
 	// the transfer can be driven end to end without a cluster.
@@ -654,6 +659,19 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/rbac/role/{kind}/{namespace}/{name}", s.handleRBACRole)
 			r.Get("/rbac/namespace/{namespace}", s.handleRBACNamespace)
 			r.Get("/rbac/whoami", s.handleRBACWhoami)
+			// Agent Substrate workspace. The API-tier routes serve only a
+			// local Radar on a private listener; see substrateAPIAllowed.
+			r.Get("/substrate/status", s.handleSubstrateStatus)
+			r.Get("/substrate/connection", s.handleGetSubstrateConnection)
+			r.Put("/substrate/connection", s.handlePutSubstrateConnection)
+			r.Get("/substrate/workspace", s.handleSubstrateWorkspace)
+			r.Get("/substrate/actors", s.handleSubstrateActors)
+			r.Get("/substrate/actors/{atespace}/{name}", s.handleSubstrateActor)
+			r.Get("/substrate/actors/{atespace}/{name}/logs", s.handleSubstrateActorLogs)
+			r.Get("/substrate/workers", s.handleSubstrateWorkers)
+			r.Get("/substrate/templates", s.handleSubstrateTemplates)
+			r.Get("/substrate/templates/{atespace}/{name}", s.handleSubstrateTemplate)
+			r.Get("/substrate/workerpools/{namespace}/{name}", s.handleSubstratePool)
 			r.Get("/cnpg/workspace", s.handleCNPGWorkspace)
 			r.Get("/cnpg/operator", s.handleCNPGOperator)
 			r.Get("/cnpg/operator/status", s.handleCNPGOperatorStatus)
@@ -1541,6 +1559,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		WorkloadImages:              true,
 		DeploymentPause:             true,
 		SubstrateHealthMetrics:      true,
+		SubstrateWorkspace:          true,
 		ResourceIssues:              true,
 		ResourceIssueCoverage:       true,
 		PodEnvironment:              true,

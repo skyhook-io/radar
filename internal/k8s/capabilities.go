@@ -199,6 +199,9 @@ type FeatureCapabilities struct {
 	PodEnvironment         bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
 	PolicyResource         bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory        bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
+	// GET /api/substrate/{status,connection,workspace,actors,workers,templates,pools}
+	// and PUT /api/substrate/connection.
+	SubstrateWorkspace bool `json:"substrateWorkspace"`
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`
