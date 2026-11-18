@@ -793,9 +793,10 @@ Pause is separate from recorded readiness, operational issues and audit findings
 ## `diagnose` evidence limits
 
 Job, JobSet, RayJob and Kueue Workload diagnosis returns cached context,
-related Issues and resource events. Coverage states that Pods, runtime logs,
-metrics and graph-derived relationships were not collected. An empty Issues
-list does not establish runtime health; follow Pod references for runtime evidence.
+related Issues and resource events, with relationships answered as
+`get_resource` answers them. Coverage states that Pods, runtime logs and metrics
+were not collected. An empty Issues list does not establish runtime health;
+follow Pod references for runtime evidence.
 
 For workload `diagnose` responses, `logCoverage.selectedPods` counts pods selected for log requests, not pods whose logs were successfully read. Per-container errors and `logsError` describe failed collection. `logCoverage.totalLines` counts diagnostic-filter output before the aggregate response cap (including fallback tail lines); `shownLines` counts the lines retained after that cap. Neither describes a container's complete log history. `totalPods` and `shownPods` count pods contributing at least one line before and after that cap—not all selected pods or successful empty reads. `eventsTotalGroups`, recent-change coverage/error fields, and log sampling/truncation must remain qualifications even when an agent reports no problem.
 
