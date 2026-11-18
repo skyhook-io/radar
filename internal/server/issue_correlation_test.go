@@ -1,0 +1,597 @@
+package server
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/release"
+	helmtime "helm.sh/helm/v3/pkg/time"
+	admissionv1 "k8s.io/api/admissionregistration/v1"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
+
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/readreason"
+)
+
+// correlationFixture is a shop namespace with a crashlooping Deployment that
+// references a ConfigMap and a Secret, a Service selecting no pods, quota and
+// webhook admission rejections, and a crashlooping workload whose Deployment
+// Radar doesn't hold.
+func correlationFixture(t *testing.T) timeline.EventStore {
+	t.Helper()
+	created := metav1.NewTime(time.Now().Add(-24 * time.Hour))
+	controller := true
+	one := int32(1)
+	four := int32(4)
+	var objs []runtime.Object
+	objs = append(objs,
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", CreationTimestamp: created}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "other", CreationTimestamp: created}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "web-config", Namespace: "shop", CreationTimestamp: created}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "web-creds", Namespace: "shop", CreationTimestamp: created}, Data: map[string][]byte{"token": []byte("x")}},
+		&corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop", CreationTimestamp: created}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "cart", Namespace: "shop", CreationTimestamp: created},
+			Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "nothing"}, Ports: []corev1.ServicePort{{Port: 80}}}},
+	)
+	webSpec := corev1.PodSpec{
+		Volumes: []corev1.Volume{{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: "web-config"}}}}},
+		Containers: []corev1.Container{{Name: "web", Image: "web:2", Env: []corev1.EnvVar{{Name: "TOKEN", ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "web-creds"}, Key: "token"}}}}}},
+	}
+	crashloop := func(name string, cached bool) {
+		if cached {
+			objs = append(objs, &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop", CreationTimestamp: created, UID: types.UID("deploy-" + name)},
+				Spec: appsv1.DeploymentSpec{Replicas: &one, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+					Template: corev1.PodTemplateSpec{Spec: webSpec}},
+				Status: appsv1.DeploymentStatus{Replicas: 1, UpdatedReplicas: 1},
+			})
+		}
+		objs = append(objs,
+			&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: name + "-rs", Namespace: "shop", CreationTimestamp: created, UID: types.UID("rs-" + name),
+				OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: name, UID: types.UID("deploy-" + name), Controller: &controller}}}},
+			&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name + "-rs-1", Namespace: "shop", CreationTimestamp: created, Labels: map[string]string{"app": name},
+				OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: name + "-rs", UID: types.UID("rs-" + name), Controller: &controller}}},
+				Spec: webSpec,
+				Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: "web", RestartCount: 7,
+					State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff", Message: "back-off"}}}}}},
+		)
+	}
+	crashloop("web", true)
+	crashloop("ghost", false)
+	admission := func(name, message string) *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop", CreationTimestamp: created, UID: types.UID("deploy-" + name)},
+			Spec:       appsv1.DeploymentSpec{Replicas: &four, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}}},
+			Status: appsv1.DeploymentStatus{Replicas: 2, UpdatedReplicas: 2, Conditions: []appsv1.DeploymentCondition{{
+				Type: appsv1.DeploymentReplicaFailure, Status: corev1.ConditionTrue, Reason: "FailedCreate", Message: message,
+				LastTransitionTime: metav1.NewTime(time.Now().Add(-9 * time.Minute)),
+			}}},
+		}
+	}
+	objs = append(objs,
+		admission("search", `pods "search-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=2, limited: pods=2`),
+		admission("hooked", `admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`),
+	)
+	useTestResourceCache(t, fake.NewClientset(objs...))
+
+	vwcGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
+	mwcGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}
+	data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&admissionv1.ValidatingWebhookConfiguration{
+		TypeMeta:   metav1.TypeMeta{Kind: "ValidatingWebhookConfiguration", APIVersion: "admissionregistration.k8s.io/v1"},
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-policy", CreationTimestamp: created},
+		Webhooks:   []admissionv1.ValidatingWebhook{{Name: "deny-root.policy.example.com"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{vwcGVR: "ValidatingWebhookConfigurationList", mwcGVR: "MutatingWebhookConfigurationList"},
+		&unstructured.Unstructured{Object: data})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: vwcGVR.Group, Version: "v1", Kind: "ValidatingWebhookConfiguration", Name: vwcGVR.Resource, Verbs: []string{"list", "watch"}},
+		{Group: mwcGVR.Group, Version: "v1", Kind: "MutatingWebhookConfiguration", Name: mwcGVR.Resource, Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	for _, gvr := range []schema.GroupVersionResource{vwcGVR, mwcGVR} {
+		if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil || !k8s.GetDynamicResourceCache().WaitForSync(gvr, 5*time.Second) {
+			t.Fatalf("watch %s: %v", gvr, err)
+		}
+	}
+	store := useMemoryTimeline(t)
+	timeline.SetObservationStartForTest(time.Now().Add(-4 * time.Hour))
+	t.Cleanup(func() { timeline.SetObservationStartForTest(time.Time{}) })
+	return store
+}
+
+// The changes every fixture records unless a test leaves one out.
+// correlationChangesAt is the one time every fixture's changes are dated
+// from, so two fixtures built a moment apart record identical rows.
+var correlationChangesAt = sync.OnceValue(time.Now)
+
+func correlationChanges() map[string]timeline.TimelineEvent {
+	now := correlationChangesAt()
+	update := func(kind, apiVersion, namespace, name, path string, ago time.Duration) timeline.TimelineEvent {
+		return timeline.TimelineEvent{
+			ID: kind + "/" + name, Timestamp: now.Add(-ago), Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+			Kind: kind, APIVersion: apiVersion, Namespace: namespace, Name: name, EventType: timeline.EventTypeUpdate,
+			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: path, OldValue: "a", NewValue: "b"}}},
+		}
+	}
+	return map[string]timeline.TimelineEvent{
+		"web":        update("Deployment", "apps/v1", "shop", "web", "spec.template.spec.containers[web].image", 4*time.Minute),
+		"web-config": update("ConfigMap", "v1", "shop", "web-config", "data.flags", 6*time.Minute),
+		"cart":       update("Service", "v1", "shop", "cart", "spec.selector.app", 3*time.Minute),
+		"compute":    update("ResourceQuota", "v1", "shop", "compute", "spec.hard.pods", 10*time.Minute),
+		"pod-policy": update("ValidatingWebhookConfiguration", "admissionregistration.k8s.io/v1", "", "pod-policy", "webhooks[0].rules", 12*time.Minute),
+	}
+}
+
+func recordChanges(t *testing.T, store timeline.EventStore, except ...string) {
+	t.Helper()
+	for key, e := range correlationChanges() {
+		if slices.Contains(except, key) {
+			continue
+		}
+		appendInformerEvent(t, store, e)
+	}
+}
+
+func appendInformerEvent(t *testing.T, store timeline.EventStore, e timeline.TimelineEvent) {
+	t.Helper()
+	if err := store.Append(t.Context(), e); err != nil {
+		t.Fatalf("append %s: %v", e.ID, err)
+	}
+}
+
+var correlationResources = []string{
+	"/pods", "/configmaps", "/secrets", "/services", "/resourcequotas", "/limitranges", "/events", "/namespaces",
+	"apps/deployments", "apps/replicasets",
+	"admissionregistration.k8s.io/validatingwebhookconfigurations", "admissionregistration.k8s.io/mutatingwebhookconfigurations",
+}
+
+// correlationUser can list and get every fixture resource except those
+// denied, in shop (and cluster-wide for cluster-scoped kinds). A nil
+// namespace list reads every namespace.
+func correlationUser(env *authTestEnv, name string, namespaces []string, denied ...string) {
+	perms := &auth.UserPermissions{AllowedNamespaces: namespaces}
+	for _, gr := range correlationResources {
+		group, resource, _ := strings.Cut(gr, "/")
+		allowed := !slices.Contains(denied, resource)
+		for _, verb := range []string{"list", "get"} {
+			perms.SetCanI(verb, group, resource, "", allowed)
+			perms.SetCanI(verb, group, resource, "shop", allowed)
+		}
+	}
+	env.srv.permCache.Set(name, nil, perms)
+}
+
+func getResourceIssues(t *testing.T, env *authTestEnv, user, path string) (int, ResourceIssuesResponse) {
+	t.Helper()
+	response := env.authGet(t, path, user, "")
+	defer response.Body.Close()
+	var body ResourceIssuesResponse
+	if response.StatusCode == http.StatusOK {
+		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+	}
+	return response.StatusCode, body
+}
+
+// correlated reads the subject's issues, then correlates the one with
+// category, and returns it.
+func correlated(t *testing.T, env *authTestEnv, user, kind, name, group string, category issuesapi.Category) issuesapi.Issue {
+	t.Helper()
+	base := "/api/issues/resource/" + kind + "/shop/" + name + "?group=" + group
+	status, listed := getResourceIssues(t, env, user, base+"&coverage=1")
+	if status != http.StatusOK {
+		t.Fatalf("%s: status %d", base, status)
+	}
+	id := ""
+	for _, iss := range listed.Issues {
+		if iss.Category == category {
+			id = iss.ID
+		}
+	}
+	if id == "" {
+		t.Fatalf("%s: no %s issue in %+v", base, category, listed.Issues)
+	}
+	status, body := getResourceIssues(t, env, user, base+"&correlate="+id)
+	if status != http.StatusOK || body.CorrelationStatus != "" {
+		t.Fatalf("%s correlate: status %d, correlation_status %q", base, status, body.CorrelationStatus)
+	}
+	for _, iss := range body.Issues {
+		if iss.ID == id {
+			if iss.Correlation == nil {
+				t.Fatalf("%s: correlated issue has no correlation: %+v", base, iss)
+			}
+			return iss
+		}
+		if iss.Correlation != nil || len(iss.CorrelatedChanges) > 0 {
+			t.Fatalf("%s: an issue not named was correlated: %+v", base, iss)
+		}
+	}
+	t.Fatalf("%s: correlated issue missing", base)
+	return issuesapi.Issue{}
+}
+
+func changeKinds(iss issuesapi.Issue) []string {
+	var out []string
+	for _, c := range iss.CorrelatedChanges {
+		out = append(out, c.Kind)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+func unknownKinds(iss issuesapi.Issue) []string {
+	if iss.Correlation.Unknown == nil {
+		return nil
+	}
+	var out []string
+	for _, k := range iss.Correlation.Unknown.Kinds {
+		out = append(out, k.Kind)
+	}
+	return out
+}
+
+func TestProxyAuth_IssueCorrelationPerCaller(t *testing.T) {
+	store := correlationFixture(t)
+	recordChanges(t, store)
+	env := newAuthTestServer(t)
+	correlationUser(env, "full", []string{"shop"})
+	correlationUser(env, "deployments-only", []string{"shop"}, "configmaps", "secrets", "services", "resourcequotas", "limitranges",
+		"validatingwebhookconfigurations", "mutatingwebhookconfigurations")
+	correlationUser(env, "no-config", []string{"shop"}, "configmaps", "secrets")
+	correlationUser(env, "no-service", []string{"shop"}, "services")
+	correlationUser(env, "no-quota", []string{"shop"}, "resourcequotas")
+	correlationUser(env, "no-webhook-list", []string{"shop"}, "validatingwebhookconfigurations", "mutatingwebhookconfigurations")
+	correlationUser(env, "other-namespace", []string{"other"})
+
+	webhookKinds := []string{"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"}
+	for _, tc := range []struct {
+		user, kind, name, group string
+		category                issuesapi.Category
+		changes, unknown        []string
+		reason                  issuesapi.CorrelationUnknownReason
+	}{
+		{"full", "Deployment", "web", "apps", issuesapi.CategoryCrashLoop, []string{"ConfigMap", "Deployment"}, nil, ""},
+		{"deployments-only", "Deployment", "web", "apps", issuesapi.CategoryCrashLoop, []string{"Deployment"}, []string{"ConfigMap", "Secret"}, issuesapi.CorrelationUnknownUserForbidden},
+		{"no-config", "Deployment", "web", "apps", issuesapi.CategoryCrashLoop, []string{"Deployment"}, []string{"ConfigMap", "Secret"}, issuesapi.CorrelationUnknownUserForbidden},
+		{"full", "Service", "cart", "", issuesapi.CategoryServiceNoEndpoints, []string{"Service"}, nil, ""},
+		{"no-service", "Service", "cart", "", issuesapi.CategoryServiceNoEndpoints, nil, []string{"Service"}, issuesapi.CorrelationUnknownUserForbidden},
+		{"full", "Deployment", "search", "apps", issuesapi.CategoryQuotaExceeded, []string{"ResourceQuota"}, nil, ""},
+		{"no-quota", "Deployment", "search", "apps", issuesapi.CategoryQuotaExceeded, nil, []string{"ResourceQuota"}, issuesapi.CorrelationUnknownUserForbidden},
+		{"full", "Deployment", "hooked", "apps", issuesapi.CategoryAdmissionWebhookBlocking, []string{"ValidatingWebhookConfiguration"}, nil, ""},
+		{"no-webhook-list", "Deployment", "hooked", "apps", issuesapi.CategoryAdmissionWebhookBlocking, nil, webhookKinds, issuesapi.CorrelationUnknownUserForbidden},
+		{"deployments-only", "Deployment", "hooked", "apps", issuesapi.CategoryAdmissionWebhookBlocking, nil, webhookKinds, issuesapi.CorrelationUnknownUserForbidden},
+	} {
+		t.Run(tc.user+"/"+tc.name, func(t *testing.T) {
+			iss := correlated(t, env, tc.user, tc.kind, tc.name, tc.group, tc.category)
+			if got := changeKinds(iss); !slices.Equal(got, tc.changes) {
+				t.Fatalf("changes from %v, want %v: %+v", got, tc.changes, iss.CorrelatedChanges)
+			}
+			if got := unknownKinds(iss); !slices.Equal(got, tc.unknown) {
+				t.Fatalf("unknown kinds %v, want %v", got, tc.unknown)
+			}
+			if tc.reason != "" && iss.Correlation.Unknown.Reason != tc.reason {
+				t.Fatalf("reason %q, want %q", iss.Correlation.Unknown.Reason, tc.reason)
+			}
+			if iss.NoRecentChanges != nil {
+				t.Fatalf("absence claimed: %+v", iss)
+			}
+		})
+	}
+
+	t.Run("other namespace", func(t *testing.T) {
+		if status, _ := getResourceIssues(t, env, "other-namespace", "/api/issues/resource/Deployment/shop/web?group=apps&correlate=x"); status != http.StatusForbidden {
+			t.Fatalf("status %d, want 403", status)
+		}
+	})
+
+	t.Run("no changes is claimed only when complete", func(t *testing.T) {
+		timeline.ResetStore()
+		if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 1000}); err != nil {
+			t.Fatal(err)
+		}
+		timeline.SetObservationStartForTest(time.Now().Add(-4 * time.Hour))
+		iss := correlated(t, env, "full", "Service", "cart", "", issuesapi.CategoryServiceNoEndpoints)
+		if iss.NoRecentChanges == nil || iss.Correlation.Unknown != nil {
+			t.Fatalf("quiet readable Service: %+v", iss)
+		}
+		if iss.NoRecentChanges.WindowSeconds != int(iss.Correlation.WindowTo.Sub(iss.Correlation.WindowFrom).Seconds()) {
+			t.Fatalf("window_seconds %d doesn't match the window %+v", iss.NoRecentChanges.WindowSeconds, iss.Correlation)
+		}
+	})
+}
+
+// What Radar says about a source the caller can't list is the same whether
+// or not that source changed.
+func TestProxyAuth_IssueCorrelationSameAnswerWhetherHiddenSourceChanged(t *testing.T) {
+	for _, tc := range []struct {
+		hidden, user, kind, name, group string
+		category                        issuesapi.Category
+		denied                          []string
+	}{
+		{"web-config", "no-config", "Deployment", "web", "apps", issuesapi.CategoryCrashLoop, []string{"configmaps", "secrets"}},
+		{"cart", "no-service", "Service", "cart", "", issuesapi.CategoryServiceNoEndpoints, []string{"services"}},
+		{"pod-policy", "no-webhook-list", "Deployment", "hooked", "apps", issuesapi.CategoryAdmissionWebhookBlocking,
+			[]string{"validatingwebhookconfigurations", "mutatingwebhookconfigurations"}},
+	} {
+		t.Run(tc.hidden, func(t *testing.T) {
+			answer := func(changed bool) string {
+				store := correlationFixture(t)
+				if changed {
+					recordChanges(t, store)
+				} else {
+					recordChanges(t, store, tc.hidden)
+				}
+				env := newAuthTestServer(t)
+				correlationUser(env, tc.user, []string{"shop"}, tc.denied...)
+				iss := correlated(t, env, tc.user, tc.kind, tc.name, tc.group, tc.category)
+				// Times that follow the clock the fixture is built from, not the data.
+				iss.LastSeen, iss.FirstSeen, iss.ResourceCreatedAt = time.Time{}, time.Time{}, time.Time{}
+				iss.Correlation.WindowFrom, iss.Correlation.WindowTo, iss.Correlation.ObservedSince = time.Time{}, time.Time{}, time.Time{}
+				data, err := json.Marshal(iss)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(data)
+			}
+			if changed, quiet := answer(true), answer(false); changed != quiet {
+				t.Fatalf("answer depends on the hidden change:\nchanged: %s\nquiet:   %s", changed, quiet)
+			}
+		})
+	}
+}
+
+func TestProxyAuth_IssueCorrelationMissingWorkloadIsUnresolved(t *testing.T) {
+	store := correlationFixture(t)
+	recordChanges(t, store)
+	env := newAuthTestServer(t)
+	correlationUser(env, "full", []string{"shop"})
+	iss := correlated(t, env, "full", "Deployment", "ghost", "apps", issuesapi.CategoryCrashLoop)
+	if iss.NoRecentChanges != nil || iss.Correlation.Unknown == nil || iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownSourcesUnresolved {
+		t.Fatalf("missing workload: %+v", iss.Correlation)
+	}
+}
+
+// complete_since is store-wide: only a caller who reads every namespace gets it.
+func TestProxyAuth_IssueCorrelationCompleteSinceOnlyForAllNamespaces(t *testing.T) {
+	store := correlationFixture(t)
+	recordChanges(t, store)
+	timeline.SetObservationStartForTest(time.Now().Add(-20 * time.Minute))
+	env := newAuthTestServer(t)
+	correlationUser(env, "everywhere", nil)
+	correlationUser(env, "shop-only", []string{"shop"})
+	for _, tc := range []struct {
+		user string
+		want bool
+	}{{"everywhere", true}, {"shop-only", false}} {
+		iss := correlated(t, env, tc.user, "Deployment", "web", "apps", issuesapi.CategoryCrashLoop)
+		history := iss.Correlation.History
+		if history == nil || !history.Incomplete || !slices.Contains(history.Reasons, issuesapi.HistoryObservationStartedLate) {
+			t.Fatalf("%s: history %+v", tc.user, history)
+		}
+		if got := !history.CompleteSince.IsZero(); got != tc.want {
+			t.Fatalf("%s: complete_since sent = %v, want %v", tc.user, got, tc.want)
+		}
+		if iss.Correlation.Unknown == nil || iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete || iss.NoRecentChanges != nil {
+			t.Fatalf("%s: incomplete history must block absence: %+v", tc.user, iss.Correlation.Unknown)
+		}
+		if len(iss.CorrelatedChanges) == 0 {
+			t.Fatalf("%s: recorded changes must still list", tc.user)
+		}
+	}
+}
+
+func TestProxyAuth_IssueCorrelationNotFound(t *testing.T) {
+	store := correlationFixture(t)
+	recordChanges(t, store)
+	env := newAuthTestServer(t)
+	correlationUser(env, "full", []string{"shop"})
+	status, body := getResourceIssues(t, env, "full", "/api/issues/resource/Deployment/shop/web?group=apps&correlate=no-such-issue")
+	if status != http.StatusOK || body.CorrelationStatus != correlationStatusNotFound || len(body.Issues) == 0 {
+		t.Fatalf("status %d, body %+v", status, body)
+	}
+	for _, iss := range body.Issues {
+		if iss.Correlation != nil || len(iss.CorrelatedChanges) > 0 {
+			t.Fatalf("an issue was correlated: %+v", iss)
+		}
+	}
+}
+
+// helmStorage serves one release in shop whose upgrade failed three minutes
+// ago, refusing or failing the read for the users named.
+func helmStorage(t *testing.T, refused, broken string) {
+	t.Helper()
+	revision := func(version int, status release.Status, at time.Time) corev1.Secret {
+		payload, err := json.Marshal(&release.Release{
+			Name: "payments", Namespace: "shop", Version: version,
+			Info:  &release.Info{Status: status, Description: "Upgrade \"payments\" failed: timed out", LastDeployed: helmtime.Time{Time: at}},
+			Chart: &chart.Chart{Metadata: &chart.Metadata{Name: "payments", Version: "1.0." + strconv.Itoa(version)}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "sh.helm.release.v1.payments.v" + strconv.Itoa(version), Namespace: "shop",
+				Labels: map[string]string{"owner": "helm", "name": "payments", "status": status.String(), "version": strconv.Itoa(version)}},
+			Data: map[string][]byte{"release": []byte(base64.StdEncoding.EncodeToString(payload))},
+		}
+	}
+	secrets := []corev1.Secret{
+		revision(1, release.StatusSuperseded, time.Now().Add(-48*time.Hour)),
+		revision(2, release.StatusFailed, time.Now().Add(-3*time.Minute)),
+	}
+	full, err := json.Marshal(corev1.SecretList{TypeMeta: metav1.TypeMeta{Kind: "SecretList", APIVersion: "v1"}, Items: secrets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := metav1.PartialObjectMetadataList{TypeMeta: metav1.TypeMeta{Kind: "PartialObjectMetadataList", APIVersion: "meta.k8s.io/v1"}}
+	for _, s := range secrets {
+		labels.Items = append(labels.Items, metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{Kind: "PartialObjectMetadata", APIVersion: "meta.k8s.io/v1"}, ObjectMeta: s.ObjectMeta})
+	}
+	labelPayload, err := json.Marshal(labels)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch user := r.Header.Get("Impersonate-User"); {
+		case user != "" && user == refused:
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403,"message":"secrets is forbidden"}`))
+			return
+		case user != "" && user == broken:
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"InternalError","code":500,"message":"etcd unavailable"}`))
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/namespaces/shop/secrets") {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.Contains(r.Header.Get("Accept"), "PartialObjectMetadataList") {
+			_, _ = w.Write(labelPayload)
+			return
+		}
+		_, _ = w.Write(full)
+	}))
+	t.Cleanup(server.Close)
+	helm.ResetClient()
+	if err := helm.InitializeWithRESTConfig(&rest.Config{Host: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(helm.ResetClient)
+}
+
+// A native Helm release is composed and correlated from its storage, read as
+// the caller.
+func TestProxyAuth_IssueCorrelationHelmReadAsCaller(t *testing.T) {
+	correlationFixture(t)
+	helmStorage(t, "denied", "broken")
+	env := newAuthTestServer(t)
+	for _, user := range []string{"reader", "denied", "broken"} {
+		correlationUser(env, user, []string{"shop"})
+	}
+	base := "/api/issues/resource/HelmRelease/shop/payments?group=helm.sh"
+
+	status, listed := getResourceIssues(t, env, "reader", base+"&coverage=1")
+	if status != http.StatusOK || len(listed.Issues) != 1 || listed.Issues[0].Kind != "HelmRelease" {
+		t.Fatalf("reader: status %d, issues %+v", status, listed.Issues)
+	}
+	id := listed.Issues[0].ID
+	status, body := getResourceIssues(t, env, "reader", base+"&correlate="+id)
+	if status != http.StatusOK || body.CorrelationStatus != "" {
+		t.Fatalf("reader correlate: %d %+v", status, body)
+	}
+	iss := body.Issues[0]
+	if iss.Correlation == nil || iss.Correlation.Unknown != nil || len(iss.CorrelatedChanges) == 0 || iss.CorrelatedChanges[0].Kind != "HelmRelease" {
+		t.Fatalf("reader: %+v", iss)
+	}
+
+	for _, tc := range []struct {
+		user   string
+		status string
+	}{{"denied", string(readreason.UserForbidden)}, {"broken", string(readreason.ReadError)}} {
+		code, body := getResourceIssues(t, env, tc.user, base+"&correlate="+id)
+		if code != http.StatusOK || body.CorrelationStatus != tc.status || len(body.Issues) != 0 || len(body.Unchecked) != 1 {
+			t.Fatalf("%s: %d %+v", tc.user, code, body)
+		}
+	}
+}
+
+// A switch of the timeline store or cluster during the read fails it.
+func TestCorrelationTimelineIdentityCheck(t *testing.T) {
+	useMemoryTimeline(t)
+	if err := withTimelineIdentity(func() {}); err != nil {
+		t.Fatalf("unchanged identity: %v", err)
+	}
+	err := withTimelineIdentity(func() {
+		timeline.ResetStore()
+		if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err != errReadHandlesChanged {
+		t.Fatalf("store switch: %v, want errReadHandlesChanged", err)
+	}
+	if failure := collectionFailure("issues", err); failure.code != readreason.ConnectionChanged {
+		t.Fatalf("code %q, want connection_changed", failure.code)
+	}
+}
+
+// Shared without authentication: anyone who reaches Radar gets the answer, a
+// page in their browser on another site gets nothing, and the Hub tunnel
+// still gets it.
+func TestIssueCorrelationWithoutAuth(t *testing.T) {
+	store := correlationFixture(t)
+	recordChanges(t, store)
+	srv := New(Config{DevMode: true})
+	handler := srv.Handler()
+	ts := httptest.NewServer(handler)
+	tunnel := httptest.NewServer(cloud.AuthenticatedTunnelHandler(handler))
+	t.Cleanup(func() { ts.Close(); tunnel.Close(); srv.Stop() })
+
+	get := func(base string, crossSite bool, path string) (int, ResourceIssuesResponse) {
+		req, _ := http.NewRequest(http.MethodGet, base+path, nil)
+		if crossSite {
+			req.Header.Set("Sec-Fetch-Site", "cross-site")
+			req.Header.Set("Origin", "https://evil.example")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var body ResourceIssuesResponse
+		if resp.StatusCode == http.StatusOK {
+			_ = json.NewDecoder(resp.Body).Decode(&body)
+		}
+		return resp.StatusCode, body
+	}
+	path := "/api/issues/resource/Service/shop/cart?coverage=1"
+	_, listed := get(ts.URL, false, path)
+	if len(listed.Issues) == 0 {
+		t.Fatal("no issue to correlate")
+	}
+	path = fmt.Sprintf("/api/issues/resource/Service/shop/cart?correlate=%s", listed.Issues[0].ID)
+	if status, body := get(ts.URL, false, path); status != http.StatusOK || body.Issues[0].Correlation == nil || len(body.Issues[0].CorrelatedChanges) == 0 {
+		t.Fatalf("direct read: %d %+v", status, body)
+	}
+	if status, _ := get(ts.URL, true, path); status != http.StatusForbidden {
+		t.Fatalf("cross-site browser read: %d, want 403", status)
+	}
+	if status, body := get(tunnel.URL, true, path); status != http.StatusOK || body.Issues[0].Correlation == nil {
+		t.Fatalf("over the Hub tunnel: %d %+v", status, body)
+	}
+}
