@@ -206,6 +206,9 @@ func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 	}
 	rs = captured
 	ov := ownership.NewView(rs, acc)
+	// Seeded before the answer, whose Deployment Pods and ManagedBy read
+	// ownership, so a subject the cache doesn't hold yet still has them.
+	ov.Seed(fetched)
 	rel, coverage := topology.RelationsAnswer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, provider, dp)
 	if rel == nil {
 		rel = &topology.Relationships{}

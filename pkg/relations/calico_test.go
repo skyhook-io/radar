@@ -56,6 +56,13 @@ func TestAGlobalCalicoPolicyReadsNamespaceLabelsOnlyWhenItSelectsOnThem(t *testi
 	}
 }
 
+// A preDNAT or doNotTrack policy applies to host endpoints only.
+func TestAHostOnlyCalicoPolicySelectsNoWorkload(t *testing.T) {
+	web := labelled(deployment("web", mounts()), map[string]string{"app": "web"})
+	preDNAT := calicoPolicy("projectcalico.org", "GlobalNetworkPolicy", "", "edge", map[string]any{"selector": "all()", "preDNAT": true, "applyOnForward": true})
+	checkSelects(t, CalicoPolicies, []runtime.Object{web, preDNAT}, preDNAT)
+}
+
 func TestStagedCalicoPoliciesPreviewProtectionOnly(t *testing.T) {
 	web := labelled(deployment("web", mounts()), map[string]string{"app": "web"})
 	staged := calicoPolicy("projectcalico.org", "StagedNetworkPolicy", "shop", "next", map[string]any{"selector": "app == 'web'", "stagedAction": "Set"})

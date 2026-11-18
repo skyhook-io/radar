@@ -225,8 +225,8 @@ func TestGatewayRoutesNameGatewaysAndBackendsAcrossNamespaces(t *testing.T) {
 		"rules":      []any{map[string]any{"backendRefs": []any{map[string]any{"name": "web", "namespace": "shop", "port": int64(80)}}}},
 	}), "frontend")
 	objects := []runtime.Object{gw, svc, route}
-	checkFamily(t, GatewayParents, objects, route, resourceid.Ref{Group: "gateway.networking.k8s.io", Kind: "Gateway", Namespace: "infra", Name: "shared"}, "spec.parentRefs")
-	checkFamily(t, GatewayBackends, objects, route, ref("", "Service", "web"), "spec.rules[].backendRefs")
+	checkFamily(t, GatewayParents, objects, route, resourceid.Ref{Group: "gateway.networking.k8s.io", Kind: "Gateway", Namespace: "infra", Name: "shared"}, "spec.parentRefs[]")
+	checkFamily(t, GatewayBackends, objects, route, ref("", "Service", "web"), "spec.rules[].backendRefs[]")
 
 	class := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "gateway.networking.k8s.io/v1", "kind": "GatewayClass", "metadata": map[string]any{"name": "envoy"}}}
 	checkFamily(t, GatewayClasses, []runtime.Object{class, gw}, gw, resourceid.Ref{Group: "gateway.networking.k8s.io", Kind: "GatewayClass", Name: "envoy"}, "spec.gatewayClassName")
@@ -331,7 +331,7 @@ func TestIstioFamiliesNameGatewaysAndServiceHosts(t *testing.T) {
 		"gateways": []any{"istio-system/ingress", "mesh"},
 		"http":     []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "api.backend.svc.cluster.local"}}}}},
 	})
-	checkFamily(t, IstioGateways, []runtime.Object{gw, vs}, vs, resourceid.Ref{Group: "networking.istio.io", Kind: "Gateway", Namespace: "istio-system", Name: "ingress"}, "spec.gateways")
+	checkFamily(t, IstioGateways, []runtime.Object{gw, vs}, vs, resourceid.Ref{Group: "networking.istio.io", Kind: "Gateway", Namespace: "istio-system", Name: "ingress"}, "spec.gateways[]")
 	hosts := IstioServiceHosts("cluster.local")
 	checkFamily(t, hosts, []runtime.Object{svc, vs}, vs, resourceid.Ref{Kind: "Service", Namespace: "backend", Name: "api"}, "spec.http[].route[].destination.host")
 

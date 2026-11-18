@@ -19,9 +19,11 @@ const (
 // traefikNamedRef is the object of kind that raw names by name and
 // namespace, defaulting to obj's. A Traefik kind is named in TraefikGroup,
 // with TraefikLegacyGroup as the alternative, whichever group obj is in.
+// A name with a provider suffix, such as auth@file, is a Traefik identifier
+// rather than an object name, so it names no object.
 func traefikNamedRef(obj *unstructured.Unstructured, raw map[string]any, kind, path string) (PathRef, bool) {
 	name, _ := raw["name"].(string)
-	if name == "" {
+	if name == "" || strings.Contains(name, "@") {
 		return PathRef{}, false
 	}
 	ns, _ := raw["namespace"].(string)

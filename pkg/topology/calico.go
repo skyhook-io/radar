@@ -428,6 +428,9 @@ func calicoPolicyMatchesAllWorkloads(policy *unstructured.Unstructured, definiti
 		selector, valid := netpol.CalicoKubernetesPodSelector(policy)
 		return valid && selector.String() == ""
 	}
+	if netpol.CalicoPolicyHostOnly(policy) {
+		return false
+	}
 	for _, field := range []string{"namespaceSelector", "serviceAccountSelector"} {
 		value, found, err := unstructured.NestedString(policy.Object, "spec", field)
 		if err != nil || (found && !netpol.IsCalicoAllSelector(value)) {
