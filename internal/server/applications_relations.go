@@ -82,7 +82,7 @@ func appAttachmentField(field string) bool {
 
 func appNeedsDisposition(d relations.Disposition) bool {
 	for _, rule := range d.Rules {
-		for _, field := range slices.Concat(rule.References, rule.Referrers) {
+		for _, field := range slices.Concat(rule.ReferenceFields, rule.ReferrerFields) {
 			if appAttachmentField(field) {
 				return true
 			}
@@ -112,10 +112,10 @@ func (b *appRelationBatch) project(d relations.Disposition, source, target resou
 		if !rule.Matches(source.GroupKind(), target.GroupKind()) {
 			continue
 		}
-		for _, field := range rule.References {
+		for _, field := range rule.ReferenceFields {
 			b.add(field, source, target)
 		}
-		for _, field := range rule.Referrers {
+		for _, field := range rule.ReferrerFields {
 			b.add(field, target, source)
 		}
 		return

@@ -21,7 +21,9 @@ import (
 // target of a CrossNamespace family, by reading every namespace the caller
 // may read.
 type Family struct {
-	// Name keys the family's coverage on the wire.
+	// Name identifies the family inside Radar: hosts key its coverage and
+	// its edges by it. Answers on the wire are keyed by the field they fill,
+	// not by family, so a rename changes no payload.
 	Name       string
 	Projection Disposition
 	// Sources are the kinds that declare, in the order answers list them.
@@ -81,9 +83,12 @@ func (f *Family) source(gk resourceid.GroupKind) int {
 }
 
 // Declaration is one target a source declares, and where. Path is the
-// declaring field from the object's root, with [] for each list it passes
-// through, such as spec.template.spec.volumes[].configMap.name; readers
-// compare these spellings, so they are part of the contract.
+// declaring field, with [] for each list it passes through. A reference
+// inside a pod spec is relative to that spec (volumes[].configMap.name,
+// containers[].envFrom[].configMapRef.name), whichever object holds it;
+// other paths start at the object's root (spec.tls[].secretName,
+// spec.scaleTargetRef). Readers compare these spellings, so they are part of
+// the contract.
 type Declaration struct {
 	Target resourceid.Ref
 	Path   string
