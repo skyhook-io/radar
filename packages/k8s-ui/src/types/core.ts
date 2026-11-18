@@ -154,6 +154,9 @@ export interface Capabilities {
   // Which Cloud-connect lane this deployment gets. Optional on the wire:
   // older backends don't advertise it — consumers fall back to wizard links.
   cloudConnect?: CloudConnectCapability
+  // An access check errored, so a false above may be unanswered rather than
+  // denied. Older Radars never send it.
+  checksIncomplete?: boolean
 }
 
 // CloudConnectCapability picks the Cloud funnel's connect lane: 'driver'
