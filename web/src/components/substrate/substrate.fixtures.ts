@@ -101,7 +101,7 @@ export const goldenRow: SubstrateAttention = {
   id: 'goldenSnapshotFailed:sandbox-dev/mcp-browser',
   rule: 'goldenSnapshotFailed',
   severity: 'warning',
-  title: 'sandbox-dev/mcp-browser has no golden snapshot, so every new actor boots cold',
+  title: 'sandbox-dev/mcp-browser has no golden snapshot, so new actors not seeded from a tag start from a cold boot',
   reading: "Substrate's message: warm-up: container browser exited 137. Substrate does not retry a failed build.",
   nextStep: 'Templates are immutable, so fix the cause and create the template again: delete and recreate it, or create it under a new name. Substrate builds a golden snapshot for each new template.',
   subject: { kind: 'ActorTemplate', atespace: 'sandbox-dev', name: 'mcp-browser' },

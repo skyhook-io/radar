@@ -119,16 +119,29 @@ const WAITING_SHORT: Record<NonNullable<SubstrateActorRow['waitingOn']>['on'], s
   unrecorded: 'no worker recorded',
 }
 
-/** The state chip and, beside it on the same line, what the chip leaves out: a crash message, how long, where it waits. */
-function StateCell({ row }: { row: SubstrateActorRow }) {
+/** A crash cause's label in a table cell: short, the same on every row it covers; Substrate's message is on hover. */
+const CAUSE_LABEL: Record<NonNullable<SubstrateActorRow['cause']>, string> = { memoryLimit: 'Memory-limit kill' }
+
+/**
+ * What a state cell says beside its chip, and on hover: a crash's cause label
+ * or message, how long, where it waits. A named cause reads in a few words,
+ * the same on every row; Substrate's whole message is on hover.
+ */
+export function stateCellReading(row: SubstrateActorRow): { text: string; hover: string } {
   // A pending upload shows in the snapshot column; the state cell doesn't say it twice.
-  const raw = stateExtra(row.state, row.reason)
+  const raw = row.state === 'crashed' && row.cause ? CAUSE_LABEL[row.cause] : stateExtra(row.state, row.reason)
   // The badge says "stuck" past Substrate's threshold; this line says only how long.
   const extra = row.state === 'suspended' && raw?.startsWith('upload pending') ? undefined : raw
   const waiting = row.waitingOn ? WAITING_SHORT[row.waitingOn.on] : undefined
   // Where it waits is what the In progress tab is for, so it comes before how long.
   const text = [waiting, extra].filter(Boolean).join(' · ')
-  const hover = [row.reason, row.waitingOn?.reading].filter(Boolean).join(' ')
+  const message = row.state === 'crashed' && row.cause && row.reason ? `Substrate’s message: ${row.reason}.` : row.reason
+  return { text, hover: [message, row.waitingOn?.reading].filter(Boolean).join(' ') }
+}
+
+/** The state chip and, beside it on the same line, what the chip leaves out. */
+function StateCell({ row }: { row: SubstrateActorRow }) {
+  const { text, hover } = stateCellReading(row)
   // The one cell that may take a second line: a crash message or a wait reads whole at 1440.
   // The badge is a crash's one red signal; its message reads neutral, so a different cause stands out by its words.
   // A stuck transition's amber is on its badge, which says "stuck"; the line stays quiet.

@@ -54,6 +54,32 @@ func TestActorReading(t *testing.T) {
 	}
 }
 
+func TestRowCause(t *testing.T) {
+	cases := []struct {
+		name  string
+		actor Actor
+		cause string
+	}{
+		{"memory-limit kill", Actor{State: StateCrashed, Crash: &Crash{Message: "killed for exceeding its memory limit"}}, CauseMemoryLimit},
+		{"memory-limit kill wrapping the exit error", Actor{State: StateCrashed, Crash: &Crash{Message: "killed for exceeding its memory limit: signal: killed"}}, CauseMemoryLimit},
+		{"another crash", Actor{State: StateCrashed, Crash: &Crash{Message: "container agent: exit code 1"}}, ""},
+		{"no message", Actor{State: StateCrashed}, ""},
+		{"not crashed", Actor{State: StateSuspended, Crash: &Crash{Message: "killed for exceeding its memory limit"}}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			row := RowOf(tc.actor, now, ResumeContext{})
+			if row.Cause != tc.cause {
+				t.Errorf("cause = %q, want %q", row.Cause, tc.cause)
+			}
+			// The cause is a label beside the message, never in its place.
+			if tc.actor.Crash != nil && tc.actor.State == StateCrashed && row.Reason != tc.actor.Crash.Message {
+				t.Errorf("reason = %q, want Substrate's message", row.Reason)
+			}
+		})
+	}
+}
+
 func TestGoldenOf(t *testing.T) {
 	tag := &Ref{Atespace: "a", Name: "golden-v1"}
 	tests := []struct {

@@ -85,7 +85,7 @@ export function workerColumns(onOpenSubject: OpenSubject, wide: boolean, grouped
           <span className="inline-flex flex-wrap items-center gap-1.5">
             {usage(w.allocated, w.capacity, 'actors', String)}
             {w.state === 'active' && !w.hasFreeSlot && (
-              <Tooltip content="No actor slot left: Substrate places no new actor here until one suspends."><span><Badge severity="alert" size="sm">Full</Badge></span></Tooltip>
+              <Tooltip content="No actor slot left: Substrate places no new actor on this worker until one suspends. The pool’s own badge says whether any of its workers has room."><span><Badge severity="neutral" size="sm">Full</Badge></span></Tooltip>
             )}
           </span>
           {!wide && <Sub>{usage(w.allocated, w.capacity, 'cpuMillicores', cpuText)} CPU · {usage(w.allocated, w.capacity, 'memoryBytes', bytesText)} <Reserved>reserved</Reserved></Sub>}

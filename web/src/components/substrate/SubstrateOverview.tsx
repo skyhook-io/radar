@@ -294,7 +294,7 @@ export function PoolReadingCell({ p }: { p: SubstratePoolRow }) {
     <>
       <Tooltip content={r.kubernetes ? `${r.meaning} Kubernetes: ${r.kubernetes}.` : r.meaning}><span><Badge severity={r.severity} size="sm" className="whitespace-normal text-left">{r.label}</Badge></span></Tooltip>
       {/* Kubernetes' own verdict earns a line only when it explains a problem. */}
-      {r.kubernetes && r.severity !== 'success' && <Sub>Kubernetes: {r.kubernetes}</Sub>}
+      {r.kubernetes && p.capacity !== 'free' && <Sub>Kubernetes: {r.kubernetes}</Sub>}
     </>
   )
 }

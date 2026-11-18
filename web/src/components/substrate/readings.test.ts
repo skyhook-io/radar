@@ -285,6 +285,42 @@ describe('times, readings and evidence', () => {
   })
 })
 
+describe('pool slots as utilization', () => {
+  it('reads free slots as a neutral fact, and gives emphasis only to a pool that can place nothing new', async () => {
+    const { poolReading } = await import('./readings')
+    expect(poolReading({ capacity: 'free' })).toMatchObject({ label: 'Free actor slots', severity: 'neutral' })
+    // No free slot on any active worker blocks work: the warning of its Needs attention row (poolFull).
+    expect(poolReading({ capacity: 'full' })).toMatchObject({ label: 'No free actor slots', severity: 'warning' })
+  })
+})
+
+describe('the timing that ties a memory-limit kill to the crash', () => {
+  it('states how long before the crash the kill came, and only for a kill tied to it', async () => {
+    const { killTie, killLineLabel } = await import('./readings')
+    const crash = '2026-11-17T15:48:03Z'
+    expect(killTie({ current: true, time: '2026-11-17T15:46:03Z' }, crash)).toBe('2m before this crash')
+    expect(killTie({ current: true, time: '2026-11-17T15:48:02Z' }, crash)).toBe('1s before this crash')
+    expect(killLineLabel({ current: true, time: '2026-11-17T15:46:03Z' }, crash)).toBe('memory-limit kill · 2m before this crash')
+    // An earlier run's kill is never tied to this crash, whatever its timing.
+    expect(killTie({ current: false, time: '2026-11-17T15:46:03Z' }, crash)).toBeUndefined()
+    expect(killLineLabel({ current: false, time: '2026-11-17T15:46:03Z' }, crash)).toBe('memory-limit kill · earlier run')
+    // Without both times there is no evidence to state, so the label claims no tie.
+    expect(killTie({ current: true }, crash)).toBeUndefined()
+    expect(killLineLabel({ current: true }, undefined)).toBe('memory-limit kill')
+    // A kill after the crash ties nothing.
+    expect(killTie({ current: true, time: '2026-11-17T15:49:00Z' }, crash)).toBeUndefined()
+  })
+})
+
+describe('a failed golden snapshot in plain words', () => {
+  it('says new actors start from a cold boot, and which ones', async () => {
+    const { goldenReading } = await import('./readings')
+    const r = goldenReading({ golden: { state: 'failed' } } as Parameters<typeof goldenReading>[0])
+    expect(r.meaning).toContain('new actors not seeded from a tag start from a cold boot, not a prepared snapshot')
+    expect(r.meaning).not.toContain('default boot cold')
+  })
+})
+
 describe('pool reading over a partial read of the workers', () => {
   it('says the active count is a floor when not every worker was read', async () => {
     const { poolReading } = await import('./readings')
