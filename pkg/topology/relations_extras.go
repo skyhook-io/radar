@@ -175,7 +175,7 @@ func (n *neighborhood) scalerManagers(s relations.Session, rel *Relationships) {
 		case ownership.Denied:
 			n.extras.cover("ScalerManagers", relations.Coverage{Narrowed: true})
 		default:
-			n.extras.cover("ScalerManagers", relations.Coverage{NotChecked: []ownership.Gap{{Kind: manager.GroupKind(), Namespace: manager.Namespace}}})
+			n.extras.cover("ScalerManagers", relations.Coverage{NotChecked: []ownership.Gap{{Kind: manager.GroupKind(), Namespace: manager.Namespace, Reason: readreason.UserPermissionCheckFailed}}})
 		}
 	}
 }

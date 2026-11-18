@@ -45,6 +45,11 @@ func TestRelationsExtrasScalerAttributionUsesEmit(t *testing.T) {
 	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}}, "apps", "Deployment")
 	hpa := projectionObject(&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: "hpa", Namespace: "shop", Labels: map[string]string{"scaledobject.keda.sh/name": "autoscale"}}, Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "web"}}}, "autoscaling", "HorizontalPodAutoscaler")
 	s := newProjectionSession(t, dep, hpa)
+	undecided := undecidedKinds{"ScaledObject"}
+	_, extras := RelationsContextAnswer(s, undecided, ownership.Unrestricted(), ownership.NewView(s, undecided), projectionRef(dep), dep, nil, nil)
+	if gaps := extras.Fields["ScalerManagers"].NotChecked; len(gaps) != 1 || gaps[0].Reason != readreason.UserPermissionCheckFailed {
+		t.Fatalf("an unchecked scaler manager's gap = %+v", gaps)
+	}
 	for _, deny := range []bool{false, true} {
 		access := projectionAccess{}
 		if deny {
