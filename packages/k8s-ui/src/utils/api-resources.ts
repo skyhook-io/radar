@@ -1,4 +1,5 @@
 import type { APIResource } from '../types'
+import { splitCamelCase } from './format'
 
 // Group resources by category for sidebar display
 export interface ResourceCategory {
@@ -349,7 +350,7 @@ function sortResources(resources: APIResource[]): APIResource[] {
 }
 
 export function getKindLabel(kind: string): string {
-  return kind.replace(/([A-Z])/g, ' $1').trim()
+  return splitCamelCase(kind)
 }
 
 export function getKindPlural(resource: APIResource): string {

@@ -346,8 +346,9 @@ restarted. The startup line names the path.
 ## Persistent Configuration
 
 Local CLI and Desktop Radar store machine defaults (`config.json`), personal
-preferences (`settings.json`), and per-context integration connections
-(`clusters.json`) under `~/.radar/`.
+preferences (`settings.json`), per-context integration connections
+(`clusters.json`) and Agent Substrate connections (`substrate.json`, see
+[below](#agent-substrate-connection)) under `~/.radar/`.
 Shared OSS installations (in-cluster or authentication-enabled) expose these
 installation settings read-only; configure them through Helm values or startup
 configuration instead. See [installation settings](in-cluster.md#installation-settings)
@@ -850,6 +851,60 @@ or an AI agent, still open port-forwards.
 
 A placeholder `--prometheus-url` does not do the same job: it applies only to the
 launch context, so switching to another context goes back to discovery.
+
+### Agent Substrate connection
+
+Agent Substrate's actors, templates and workers live in its own API server, which
+a local Radar (CLI or Desktop, authentication off, loopback listener) reads once you
+choose who it reads as, from the Connect panel on any Agent Substrate screen. The
+choice is saved per context in `~/.radar/substrate.json`, next to `clusters.json`
+but separate from it. Save it from the Connect panel rather than by hand: the keys
+are values Radar computes. The file is version 1:
+
+```json
+{
+  "version": 1,
+  "contexts": {
+    "<binding>": {
+      "context": "my-cluster",
+      "target": "<fingerprint>",
+      "settings": {
+        "identity": "tokenFile",
+        "tokenFile": "/home/me/.config/ate/token",
+        "atespaces": ["research", "support-bots"],
+        "endpoint": "127.0.0.1:18443",
+        "caFile": "/home/me/.config/ate/ca.pem",
+        "serverName": "api.ate-system.svc"
+      }
+    }
+  }
+}
+```
+
+- **`<binding>`** is the kube context's binding, the same opaque key
+  `clusters.json` uses: the kubeconfig source path and in-file context name (see
+  [Cluster identity and recovery](#cluster-identity-and-recovery)). An entry keyed
+  by the display context name is ignored. `context` is that name, kept for reading
+  the file.
+- **`target`** is an opaque fingerprint of the cluster the settings were saved for
+  (server, CA trust, TLS settings, proxy, user reference). When the context comes to
+  point elsewhere, the settings are not used (`targetChanged`) until saved again.
+- **`settings.identity`** is `shared`, which mints tokens for
+  `ate-system/ate-client` (and allows no `tokenFile`), or `tokenFile`. There is no
+  stored `none`: removing the settings (identity `none` on save) deletes the entry.
+- **`tokenFile`** and **`caFile`** are absolute paths to readable files of at most
+  1 MiB; the CA file must hold a PEM certificate. The file holds paths, never a
+  token, and the token file is read on every call.
+- **`atespaces`** (optional, at most 64 DNS-1123 names, no repeats) are read one by
+  one when the identity may not list atespaces.
+- **`endpoint`** (`host:port`) dials the API directly instead of port-forwarding to
+  Service `ate-system/api`; **`caFile`** and **`serverName`** (a DNS name) apply only
+  with it. With `--disable-auto-port-forward`, set an endpoint.
+
+A context with no entry is not configured. A missing `version` reads as 1, and a
+missing or null `contexts` as empty; a file Radar cannot parse, or of another
+version, is reported (`settingsFile`), not overwritten: fix it or rename it to start
+over. See [substrate.md](substrate.md#connecting-to-substrates-api).
 
 ## Workload metrics overrides by run mode
 

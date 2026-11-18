@@ -14,6 +14,7 @@ import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useResourceCounts } from '../../hooks/useResourceCounts'
 import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
 import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
+import { useSubstrateSidebarWorkspace } from '../substrate/useSubstrateSidebarWorkspace'
 import { isVeleroBackupKind } from '../velero/routes'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
 import { renderResourceKindList, resourceKindListMode, useResourceHostFeatures } from '../../integrations/resourceHosts'
@@ -128,7 +129,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   }, [issuesData])
   const cnpgSidebarWorkspace = useCNPGSidebarWorkspace({ apiResources, namespaces, withMetrics: selectedKind?.group === 'postgresql.cnpg.io' })
   const veleroSidebarWorkspace = useVeleroSidebarWorkspace({ apiResources })
-  const sidebarCategoryWorkspaces = useMergedSidebarWorkspaces(cnpgSidebarWorkspace, veleroSidebarWorkspace)
+  const substrateSidebarWorkspace = useSubstrateSidebarWorkspace({ apiResources })
+  const sidebarCategoryWorkspaces = useMergedSidebarWorkspaces(cnpgSidebarWorkspace, veleroSidebarWorkspace, substrateSidebarWorkspace)
   const workloadWrites = namespaces.length === 0
     ? capabilities?.workloadWrites
     : namespaces.length === 1

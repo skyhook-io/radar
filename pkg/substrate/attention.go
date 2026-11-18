@@ -431,7 +431,7 @@ const (
 	// cannot be edited, but an actor's template can be changed. A snapshot
 	// stamped with the template it was taken under restores only its volumes
 	// under another (Substrate's templateReplaced).
-	CrashedMemoryNextStep = "Move the actors to a higher-memory template, then revert them; there stored snapshots restore volumes only, since they belong to the old template."
+	CrashedMemoryNextStep = "Move the actors to a template with more memory, then revert them; on the new template their stored snapshots restore volumes only."
 	// crashedActorNextStep is crashedNextStep on one actor's own page.
 	crashedActorNextStep = "Fix the cause Substrate's crash message names, then revert this actor to its newest stored generation."
 )
@@ -453,21 +453,21 @@ const (
 // restores under the new template. It names that condition: the actor page
 // also says how the snapshot resumes as things stand.
 func CrashedMemoryActorStep(a Actor) string {
-	const move = "Move this actor to a higher-memory template, then revert it; "
+	const move = "Move this actor to a template with more memory, then revert it; "
 	src := RecoverySource(a)
 	switch {
 	case src == nil:
 		return move + "it has no stored snapshot, so it boots fresh."
 	case src.Fidelity == FidelityVolumes:
-		return move + "there it resumes from its volumes."
+		return move + "on the new template it resumes from its volumes."
 	case src.ActorTemplateUID != "" && src.Fidelity == FidelityMemory:
-		return move + "there it resumes from volumes only; its memory and files belong to the old template."
+		return move + "on the new template it resumes from volumes, without memory or files."
 	case src.ActorTemplateUID != "" && src.Fidelity == FidelityRootFS:
-		return move + "there it resumes from volumes only; its saved files belong to the old template."
+		return move + "on the new template it resumes from volumes, without its saved files."
 	case src.ActorTemplateUID == "" && src.Fidelity == FidelityRootFS:
-		return move + "there it resumes from its saved files."
+		return move + "on the new template it resumes from its saved files."
 	}
-	return move + "there it resumes from its stored snapshot."
+	return move + "on the new template it resumes from its stored snapshot."
 }
 
 // CrashedMemoryCommand is the command of the memory-limit step for a: moving

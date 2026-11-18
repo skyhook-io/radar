@@ -6,6 +6,7 @@ import { useVeleroWorkspace } from '../../api/velero'
 import { useNamespaces } from '../../api/client'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
+import { useSubstrateSidebarWorkspace } from '../substrate/useSubstrateSidebarWorkspace'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
 import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
@@ -37,7 +38,8 @@ export function VeleroView({ namespaces, selectedResource, onOpenResource, onClo
   const plural = detail?.plural
   const selectedKind = useMemo(() => (plural ? { name: plural, kind: VELERO_DETAIL_KINDS[plural].kind, group: VELERO_GROUP } : null), [plural])
   const cnpgSidebar = useCNPGSidebarWorkspace({ apiResources, namespaces })
-  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar)
+  const substrateSidebar = useSubstrateSidebarWorkspace({ apiResources })
+  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar)
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
 
   const [installation, setInstallation] = useVeleroInstallation(query.data?.installations)
