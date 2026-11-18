@@ -77,9 +77,11 @@ func (f *Family) source(gk resourceid.GroupKind) int {
 type Declaration struct {
 	Target resourceid.Ref
 	Path   string
-	// Or are the same reference in other API groups the controller also
-	// resolves it from, in the order it tries them after Target: the
-	// declaration names the first that exists.
+	// Or are the same reference in older API groups the controller may also
+	// resolve it from, in the order it tries them after Target. The
+	// declaration names the first that exists, but one that exists only in
+	// a later group, while an earlier group is served, is reported with
+	// legacy_group_only: a newer controller may no longer read that group.
 	Or []resourceid.Ref
 }
 

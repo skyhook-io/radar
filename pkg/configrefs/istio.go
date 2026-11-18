@@ -91,7 +91,7 @@ func IstioVirtualServiceGateways(vs *unstructured.Unstructured) []PathRef {
 		if name == "" {
 			continue
 		}
-		refs = append(refs, PathRef{Ref: resourceid.NewRef(IstioNetworkingGroup, "Gateway", namespace, name), Path: "spec.gateways"})
+		refs = append(refs, PathRef{Ref: resourceid.NewRef(IstioNetworkingGroup, "Gateway", namespace, name), Path: "spec.gateways[]"})
 	}
 	return refs
 }

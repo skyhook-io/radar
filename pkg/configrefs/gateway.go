@@ -155,7 +155,7 @@ func GatewayRouteParents(route *unstructured.Unstructured) []PathRef {
 		if !ok || name == "" || !GatewayParentIsGateway(m) {
 			continue
 		}
-		refs = append(refs, PathRef{Ref: resourceid.Ref{Group: GatewayAPIGroup, Kind: "Gateway", Namespace: GatewayRefNamespace(m, route.GetNamespace()), Name: name}, Path: "spec.parentRefs"})
+		refs = append(refs, PathRef{Ref: resourceid.Ref{Group: GatewayAPIGroup, Kind: "Gateway", Namespace: GatewayRefNamespace(m, route.GetNamespace()), Name: name}, Path: "spec.parentRefs[]"})
 	}
 	return refs
 }
@@ -175,7 +175,7 @@ func GatewayRouteBackendServices(route *unstructured.Unstructured) []PathRef {
 			if !ok || name == "" || !GatewayBackendIsService(m) {
 				continue
 			}
-			refs = append(refs, PathRef{Ref: resourceid.Ref{Kind: "Service", Namespace: GatewayRefNamespace(m, route.GetNamespace()), Name: name}, Path: "spec.rules[].backendRefs"})
+			refs = append(refs, PathRef{Ref: resourceid.Ref{Kind: "Service", Namespace: GatewayRefNamespace(m, route.GetNamespace()), Name: name}, Path: "spec.rules[].backendRefs[]"})
 		}
 	}
 	return refs
