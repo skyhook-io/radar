@@ -1,12 +1,16 @@
 package cnpg
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	auth "github.com/skyhook-io/radar/internal/auth"
+	integration "github.com/skyhook-io/radar/internal/integration"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -87,5 +91,53 @@ func TestCNPGHAJobSchedulerEvidence(t *testing.T) {
 		if got := cnpgHAJobOf(job, pods...); got.Phase != "active" {
 			t.Fatalf("Job with a running Pod: %+v", got)
 		}
+	}
+}
+
+func TestCNPGHAPrimaryBudgetProtection(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		instances  int
+		mutate     func(*k8s.CNPGPDBTestFixture)
+		denyNodes  bool
+		protection string
+		reason     string
+	}{
+		{"healthy HA", 2, nil, false, "expected", ""},
+		{"single instance", 1, nil, false, "singleInstance", ""},
+		{"primary node cordoned", 2, func(f *k8s.CNPGPDBTestFixture) { f.Nodes["node-1"].Spec.Unschedulable = true }, false, "blocking", "the primary's node is cordoned, draining or not ready"},
+		{"standby left on a cordoned node", 2, func(f *k8s.CNPGPDBTestFixture) { f.Nodes["node-2"].Spec.Unschedulable = true }, false, "blocking", "until that node is uncordoned"},
+		{"nodes unreadable", 2, nil, true, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(k8s.ResetTestState)
+			t.Cleanup(k8s.ResetTestDynamicState)
+			f := k8s.NewCNPGPDBTestFixture(tc.instances)
+			if tc.mutate != nil {
+				tc.mutate(f)
+			}
+			if err := f.Install(""); err != nil {
+				t.Fatal(err)
+			}
+			ok := integration.ReadSource{State: cnpgHAStateOK}
+			resp := CNPGClusterHAResponse{Pods: ok, Nodes: ok, PDBs: activityReader().hAPDBs(context.Background(), k8s.GetResourceCache(), f.Cluster)}
+			if tc.denyNodes {
+				resp.Nodes = cnpgHAClusterDenied(auth.Grant{Verb: "get", Resource: "nodes"})
+			}
+			cnpgHAPrimaryProtection(&resp, k8s.GetResourceCache(), f.Cluster, f.Pods)
+			got := resp
+			var primary *CNPGHAPDB
+			for i := range got.PDBs.Items {
+				if got.PDBs.Items[i].Role == "primary" {
+					primary = &got.PDBs.Items[i]
+				}
+			}
+			if primary == nil {
+				t.Fatalf("primary budget missing: %+v", got.PDBs)
+			}
+			if primary.Protection != tc.protection || !strings.Contains(primary.ProtectionReason, tc.reason) || (tc.reason == "") != (primary.ProtectionReason == "") {
+				t.Fatalf("protection = %q (%q), want %q (%q)", primary.Protection, primary.ProtectionReason, tc.protection, tc.reason)
+			}
+		})
 	}
 }

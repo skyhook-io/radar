@@ -71,6 +71,16 @@ func classifyCNPGPrimaryPDB(pdb *policyv1.PodDisruptionBudget, cluster *unstruct
 	return cnpgPDBExpected, ""
 }
 
+// ClassifyCNPGPrimaryPDB is classifyCNPGPrimaryPDB for the CNPG HA details,
+// which read the inputs as the caller. "none" comes back as "".
+func ClassifyCNPGPrimaryPDB(pdb *policyv1.PodDisruptionBudget, cluster *unstructured.Unstructured, pods []*corev1.Pod, pdbs []*policyv1.PodDisruptionBudget, node func(string) *corev1.Node) (string, string) {
+	verdict, reason := classifyCNPGPrimaryPDB(pdb, cluster, pods, pdbs, node)
+	if verdict == cnpgPDBNone {
+		return "", ""
+	}
+	return string(verdict), reason
+}
+
 func isCNPGPrimaryPDB(pdb *policyv1.PodDisruptionBudget, cluster *unstructured.Unstructured) bool {
 	if pdb == nil || cluster == nil || cluster.GetDeletionTimestamp() != nil || cluster.GetUID() == "" ||
 		pdb.Namespace != cluster.GetNamespace() || pdb.Name != cluster.GetName()+"-primary" ||

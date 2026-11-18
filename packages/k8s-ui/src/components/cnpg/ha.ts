@@ -58,6 +58,21 @@ export interface CNPGHAPDB {
   desiredHealthy: number
   disruptionsAllowed: number
   observed: boolean
+  /** The primary budget read against the Cluster's layout; absent when unknown or from an older Radar. */
+  protection?: 'expected' | 'singleInstance' | 'blocking'
+  protectionReason?: string
+}
+
+function cnpgPDBProtectionText(p: CNPGHAPDB): string {
+  switch (p.protection) {
+    case 'expected':
+      return " — expected. CloudNativePG holds the primary in place; when its node is cordoned or drained, the operator first tries to switch over to a ready standby on a schedulable node. Radar can't see replication state, so it can't confirm that a switchover will succeed."
+    case 'singleInstance':
+      return " — a drain of this instance's node waits: there is no standby. For planned maintenance use spec.nodeMaintenanceWindow with reusePVC: true and expect downtime until the node returns."
+    case 'blocking':
+      return ` — not the normal idle state (${p.protectionReason ?? 'unknown'}); a drain of the primary's node may stall.`
+  }
+  return ''
 }
 
 export interface CNPGHALease extends CNPGHASource {
@@ -251,11 +266,12 @@ export function cnpgPDBFact(pdbs: CNPGClusterHA['pdbs'] | undefined): Fact {
       ? { text: 'None found although spec.enablePDB is on', tone: 'degraded', source: 'PodDisruptionBudgets owned by the Cluster' }
       : { text: 'Disabled (spec.enablePDB: false): node drains are not held back', tone: 'neutral', source: 'Cluster spec' }
   }
-  const parts = pdbs.items.map((p) => `${p.role === 'primary' ? 'primary' : p.role === 'replicas' ? 'standbys' : p.name}: ${p.disruptionsAllowed} disruption${p.disruptionsAllowed === 1 ? '' : 's'} allowed (${p.currentHealthy}/${p.expectedPods} healthy)`)
+  const parts = pdbs.items.map((p) => `${p.role === 'primary' ? 'primary' : p.role === 'replicas' ? 'standbys' : p.name}: ${p.disruptionsAllowed} disruption${p.disruptionsAllowed === 1 ? '' : 's'} allowed (${p.currentHealthy}/${p.expectedPods} healthy)${cnpgPDBProtectionText(p)}`)
   const stale = pdbs.items.some((p) => !p.observed)
+  const atRisk = pdbs.items.some((p) => p.protection === 'singleInstance' || p.protection === 'blocking')
   return {
     text: parts.join(' · '),
-    tone: stale ? 'unknown' : 'neutral',
+    tone: stale ? 'unknown' : atRisk ? 'degraded' : 'neutral',
     source: stale ? 'PodDisruptionBudget status (not yet updated for the latest spec)' : 'PodDisruptionBudget status',
   }
 }
@@ -327,7 +343,10 @@ export function cnpgHASummary(
   const quorum = cnpgQuorumFact(ha.quorum)
   if (quorum.tone === 'degraded' || quorum.tone === 'unhealthy') issues.push('failover quorum does not hold')
   const pdb = cnpgPDBFact(ha.pdbs)
-  if (pdb.tone === 'degraded' || pdb.tone === 'unhealthy') issues.push('disruption budgets missing')
+  const primaryPDB = ha.pdbs.state === 'ok' ? ha.pdbs.items.find((p) => p.role === 'primary') : undefined
+  if (primaryPDB?.protection === 'singleInstance') issues.push("a drain of the primary's node waits")
+  else if (primaryPDB?.protection === 'blocking') issues.push("a drain of the primary's node may stall")
+  else if (pdb.tone === 'degraded' || pdb.tone === 'unhealthy') issues.push('disruption budgets missing')
   for (const [lease, what] of [[ha.primaryLease, 'primary lease'], [ha.operatorLease, 'operator lease']] as const) {
     if (lease.state === 'ok' && lease.expired) issues.push(`${what} expired`)
   }

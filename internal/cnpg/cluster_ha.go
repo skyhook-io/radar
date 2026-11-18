@@ -139,6 +139,12 @@ type CNPGHAPDB struct {
 	// Observed is false when the disruption controller has not caught up with
 	// the budget's current generation; its numbers are then stale.
 	Observed bool `json:"observed"`
+	// Protection reads the primary budget against the Cluster's layout:
+	// expected (healthy HA, the operator moves the primary), singleInstance,
+	// or blocking with ProtectionReason. Empty when unknown, such as when the
+	// caller can't read the Pods or Nodes it rests on.
+	Protection       string `json:"protection,omitempty"`
+	ProtectionReason string `json:"protectionReason,omitempty"`
 }
 
 // CNPGHALease is one Lease. Expired compares renewTime + duration with now.
@@ -239,6 +245,7 @@ func (s *Reader) ClusterHA(callerCtx context.Context, c HAClients, cache *k8s.Re
 
 	resp.Quorum = s.hAQuorum(ctx, callerCtx, c, cluster, pods, resp.Pods.State == cnpgHAStateOK)
 	resp.PDBs = s.hAPDBs(callerCtx, cache, cluster)
+	cnpgHAPrimaryProtection(&resp, cache, cluster, pods)
 	resp.PrimaryLease = s.hAPrimaryLease(ctx, callerCtx, c, cluster, now)
 	resp.OperatorLease = s.hAOperatorLease(ctx, callerCtx, c, cache, now)
 	resp.Jobs = s.hAJobs(callerCtx, cache, cluster)
@@ -773,4 +780,36 @@ func (s *Reader) hACertificates(ctx context.Context, callerCtx context.Context, 
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Secret < out[j].Secret })
 	return out
+}
+
+// cnpgHAPrimaryProtection explains the primary budget with the classifier
+// Issues uses, from what this response read as the caller. Without the
+// caller's Pods and Nodes the answer is unknown and the field stays empty.
+func cnpgHAPrimaryProtection(resp *CNPGClusterHAResponse, cache *k8s.ResourceCache, cluster *unstructured.Unstructured, pods []*corev1.Pod) {
+	if resp.Pods.State != cnpgHAStateOK || resp.Nodes.State != cnpgHAStateOK || resp.PDBs.State != cnpgHAStateOK {
+		return
+	}
+	// Every budget in the namespace: another one selecting the primary matters.
+	all, ok := readableIn[*policyv1.PodDisruptionBudget](cache, "poddisruptionbudgets", cluster.GetNamespace(), labels.Everything())
+	if !ok {
+		return
+	}
+	node := func(name string) *corev1.Node {
+		n, err := cache.Nodes().Get(name)
+		if err != nil {
+			return nil
+		}
+		return n
+	}
+	for i := range resp.PDBs.Items {
+		item := &resp.PDBs.Items[i]
+		if item.Role != "primary" {
+			continue
+		}
+		for _, p := range all {
+			if p.Name == item.Name {
+				item.Protection, item.ProtectionReason = k8s.ClassifyCNPGPrimaryPDB(p, cluster, pods, all, node)
+			}
+		}
+	}
 }
