@@ -19,6 +19,7 @@ import {
   getWorkloadImages,
 } from './resource-utils'
 import { getGitRepositoryUrl, getHelmRepositoryUrl, getOCIRepositoryUrl } from './resource-utils-flux'
+import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
 
 // Cell text styles, matching the classes the cells render with (text-sm /
 // text-xs in the app font). measureText takes a CSS font shorthand.
@@ -40,6 +41,8 @@ const NAME_COPY_BUTTON_PX = 22
 const NAME_TERMINATING_CHIP_PX = 104
 // The audit-findings count beside a name, with its gap.
 const NAME_AUDIT_BADGE_PX = 36
+// A Crossplane pause chip beside a name, besides its label: gap, padding, icon.
+const NAME_PAUSE_CHIP_CHROME_PX = 6 + 12 + 12 + 4
 
 export const NAME_MIN_PX = 200
 export const NAME_MAX_PX = 480
@@ -197,6 +200,11 @@ function nameCellWidth(resource: any, measure: MeasureText, limit: number, ctx: 
   if (meta.deletionTimestamp) width += NAME_TERMINATING_CHIP_PX
   const audit = ctx.auditBadges?.[`${meta.namespace || ''}/${meta.name}`]
   if (audit && audit.danger + audit.warning > 0) width += NAME_AUDIT_BADGE_PX
+  // The same condition the name cell shows the chip under.
+  const pause = isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged'
+    ? getCrossplanePauseState(resource)
+    : null
+  if (pause) width += NAME_PAUSE_CHIP_CHROME_PX + measure(pause === 'requested' ? 'Pause requested' : 'Paused', 'small')
   return width
 }
 

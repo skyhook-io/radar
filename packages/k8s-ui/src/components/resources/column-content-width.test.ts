@@ -59,6 +59,8 @@ describe('measureColumnContent', () => {
     expect(measureColumnContent([deleting], [{ key: 'name' }], ctx, measure).name.content).toBeGreaterThan(plain + 90)
     const audited = measureColumnContent([flagged], [{ key: 'name' }], { ...ctx, auditBadges: { 'default/abc': { danger: 1, warning: 0 } } }, measure)
     expect(audited.name.content).toBeGreaterThan(plain)
+    const paused = { metadata: { name: 'abc', namespace: 'default', annotations: { 'crossplane.io/paused': 'true' } }, status: { conditions: [{ type: 'Synced', status: 'False', reason: 'ReconcilePaused' }] } }
+    expect(measureColumnContent([paused], [{ key: 'name' }], ctx, measure).name.content).toBeGreaterThan(plain + 60)
   })
 
   it('measures what the cell shows for curated grow columns', () => {
