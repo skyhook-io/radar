@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { formatCompactAge, formatCPUString, formatMemoryString, formatRelativeAgeTime, parseCPUToNanocores, parseMemoryToBytes, parseQuantity, parseQuantityToNumber } from './format'
+import { formatCompactAge, formatCPUString, splitCamelCase, formatMemoryString, formatRelativeAgeTime, parseCPUToNanocores, parseMemoryToBytes, parseQuantity, parseQuantityToNumber } from './format'
 
 describe('formatCPUString', () => {
   it('renders exact zero as zero, not a fabricated near-zero', () => {
@@ -203,5 +203,26 @@ describe('parseQuantity', () => {
   it.each(['', 'abcMi', '.', '1.2.3', '5Xi', null, undefined])('cannot read %s', (input) => {
     expect(parseQuantity(input)).toBeNull()
     expect(parseQuantityToNumber(input)).toBe(0)
+  })
+})
+
+describe('splitCamelCase', () => {
+  it.each([
+    ['podIPs', 'pod IPs'],
+    ['hostIP', 'host IP'],
+    ['hostIPs', 'host IPs'],
+    ['podIP', 'pod IP'],
+    ['containerID', 'container ID'],
+    ['imageID', 'image ID'],
+    ['podCIDRs', 'pod CIDRs'],
+    ['CSIDriver', 'CSI Driver'],
+    ['DNSReady', 'DNS Ready'],
+    ['HTTPRoute', 'HTTP Route'],
+    ['observedGeneration', 'observed Generation'],
+    ['DiskPressure', 'Disk Pressure'],
+    ['PersistentVolumeClaim', 'Persistent Volume Claim'],
+    ['ipv4Address', 'ipv4 Address'],
+  ])('%s → %s', (input, out) => {
+    expect(splitCamelCase(input)).toBe(out)
   })
 })

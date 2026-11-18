@@ -9,7 +9,7 @@ export interface WorkspaceScreenProps {
 }
 
 export interface WorkspaceRoute {
-  id: 'cnpg' | 'capacity' | 'velero'
+  id: 'cnpg' | 'capacity' | 'velero' | 'substrate'
   path: string
   label: string
   navView: 'resources' | 'capacity'
