@@ -39,8 +39,14 @@ func initStoreConnected(t *testing.T) timeline.EventStore {
 	return timeline.GetStore()
 }
 
+// watchedLongAgo is when initCache's informers appear to have caught up:
+// before any window a test reads, as for a Radar that has been running.
+var watchedLongAgo = time.Now().Add(-48 * time.Hour)
+
 func initCache(t *testing.T, objs ...runtime.Object) {
 	t.Helper()
+	restore := k8s.SetTestWatchClock(func() time.Time { return watchedLongAgo })
+	defer restore()
 	if err := k8s.InitTestResourceCache(k8sfake.NewSimpleClientset(objs...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}

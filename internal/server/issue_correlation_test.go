@@ -110,7 +110,11 @@ func correlationFixture(t *testing.T) timeline.EventStore {
 		admission("search", `pods "search-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=2, limited: pods=2`),
 		admission("hooked", `admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`),
 	)
+	// The informers appear to have been watching as long as the timeline
+	// below has been recording.
+	restoreClock := k8s.SetTestWatchClock(func() time.Time { return time.Now().Add(-26 * time.Hour) })
 	useTestResourceCache(t, fake.NewClientset(objs...))
+	restoreClock()
 
 	vwcGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
 	mwcGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}
@@ -138,7 +142,8 @@ func correlationFixture(t *testing.T) timeline.EventStore {
 		}
 	}
 	store := useMemoryTimeline(t)
-	// History covers the 24 hours an issue without a first-seen time looks back.
+	// History covers the 24 hours an issue without a first-seen time looks
+	// back.
 	timeline.SetObservationStartForTest(time.Now().Add(-25 * time.Hour))
 	t.Cleanup(func() { timeline.SetObservationStartForTest(time.Time{}) })
 	return store

@@ -1730,7 +1730,11 @@ func (rc *ResourceCache) markInformerCaughtUp(key string) {
 	if rc.informerCaughtUpAt == nil {
 		rc.informerCaughtUpAt = map[string]time.Time{}
 	}
-	rc.informerCaughtUpAt[key] = time.Now()
+	now := time.Now
+	if rc.config.Clock != nil {
+		now = rc.config.Clock
+	}
+	rc.informerCaughtUpAt[key] = now()
 }
 
 // InformerWatchedSince returns when this cache first saw the informer for

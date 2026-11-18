@@ -20,6 +20,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func appendChange(t *testing.T, store timeline.EventStore, e timeline.TimelineEvent) {
@@ -306,7 +307,12 @@ func TestAdmissionBlocker_OnlyClaimsRecordedOrder(t *testing.T) {
 	})
 
 	t.Run("quota not collected", func(t *testing.T) {
-		store := initCorrelationStore(t) // no typed cache: no ResourceQuota informer
+		// Radar collects Deployments but not ResourceQuotas.
+		if err := k8s.InitScopedTestResourceCache(k8sfake.NewSimpleClientset(), map[string]k8score.ResourceScope{k8score.Deployments: {Enabled: true}}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(k8s.ResetTestState)
+		store := initCorrelationStore(t)
 		appendChange(t, store, timeline.TimelineEvent{Timestamp: now.Add(-5 * time.Minute), Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web", EventType: timeline.EventTypeUpdate,
 			Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.replicas", OldValue: int64(3), NewValue: int64(6)}}}})
 		resp := issues.ListResponse{Issues: []issuesapi.Issue{admissionIssue(issuesapi.CategoryQuotaExceeded, "Deployment", "web", quotaMsg, now.Add(-4*time.Minute))}}

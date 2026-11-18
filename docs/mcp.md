@@ -1702,11 +1702,12 @@ The tool emits `no_recent_changes` when the subject's own sources were read with
 
 - the issue's workload (other than an Argo Rollout) is missing from Radar's cache, so its ConfigMaps and Secrets are read as none;
 - Radar doesn't collect, or is still loading, a referenced source's kind in the namespace;
-- Radar started watching a source's or policy's kind after the window began: a custom resource or webhook configuration kind first watched when needed, or a built-in kind whose informer starts only after Radar's first sync (ConfigMaps, Secrets, ResourceQuotas and LimitRanges among them). The endpoint answers `history_incomplete` here, dated from the watch start;
+- Radar's history for the subject's, a source's or the policy's kind starts after the window began: a custom resource or webhook configuration kind first watched when needed, or a built-in kind, whose history counts from when its informer's first list was fully processed, which is always after Radar began recording (later still for the informers deferred until after the first sync, such as ConfigMaps, Secrets, ResourceQuotas and LimitRanges). The endpoint answers `history_incomplete` here, dated from that point;
 - for an admission rejection, reading the policy side failed, the policy can't be identified (the message names none, the named ResourceQuota is gone, no cached webhook configuration declares the webhook), or the caller can't list the policy's kind. The marker then speaks for the subject's side only.
 
 The tool applies these rules before it says anything about an issue:
 
+- A subject kind Radar doesn't collect in the namespace, or is still loading (including an informer whose change handlers haven't finished its first list), gets no `no_recent_changes` and can't anchor an order sentence.
 - A subject kind the caller can't list, or whose permission check fails, is not read: the issue gets no `no_recent_changes` and none of the subject's or its sources' changes, even when the subject has no recorded change. For a workload subject that also means its ConfigMaps and Secrets aren't read, even ones the caller may list, since their names come from the workload's spec. For an admission rejection, changes to a rejecting policy the caller can read are still listed.
 - A Rollout that takes its template from `spec.workloadRef` is read through the target only when the caller can list the target's kind (Deployment or ReplicaSet).
 - A workload's ConfigMaps and Secrets are resolved once and checked before any is read; a source whose kind wasn't checked is not read.

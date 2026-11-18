@@ -33,6 +33,15 @@ func initCorrelationStore(t *testing.T) timeline.EventStore {
 	// The timeline fills only while connected, and get_changes refuses to
 	// answer otherwise.
 	setConnectedForTest(t)
+	// Correlation claims nothing about a subject kind Radar doesn't collect,
+	// so a test that brings no cache of its own gets an empty one, as a
+	// connected Radar always has.
+	if k8s.GetResourceCache() == nil {
+		if err := k8s.InitTestResourceCache(k8sfake.NewSimpleClientset()); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+		t.Cleanup(k8s.ResetTestState)
+	}
 	return timeline.GetStore()
 }
 

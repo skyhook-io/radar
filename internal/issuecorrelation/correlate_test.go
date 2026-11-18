@@ -220,6 +220,8 @@ func initScopedCache(t *testing.T, scopes map[string]k8score.ResourceScope, objs
 			t.Fatal(err)
 		}
 	}
+	restore := k8s.SetTestWatchClock(func() time.Time { return watchedLongAgo })
+	defer restore()
 	if err := k8s.InitScopedTestResourceCache(client, scopes); err != nil {
 		t.Fatalf("InitScopedTestResourceCache: %v", err)
 	}
@@ -1282,4 +1284,75 @@ func TestCorrelate_HandlersStillOnInitialList(t *testing.T) {
 		t.Fatalf("handlers still on the initial list: no_changes=%v unknown=%+v", got.NoChanges, got.Unknown)
 	}
 	once.Do(func() { close(release) })
+}
+
+// While the subject's own change handler is still on its initial list, the
+// subject can't be called unchanged, so no admission order rests on it: not
+// "the ResourceQuota changed last" from a quota edit and a quiet workload, on
+// either surface.
+func TestCorrelate_SubjectStillLoadingStatesNoOrder(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	if err := k8s.InitTestResourceCacheFromConfig(k8score.CacheConfig{
+		Client: k8sfake.NewSimpleClientset(webDeployment(),
+			&corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "shop", CreationTimestamp: metav1.NewTime(time.Now().Add(-24 * time.Hour))}}),
+		ResourceTypes: map[string]bool{k8score.Deployments: true, k8score.ResourceQuotas: true, k8score.ConfigMaps: true, k8score.Secrets: true},
+		Clock:         func() time.Time { return watchedLongAgo },
+		// The Deployment handler holds on its first object until released.
+		OnReceived: func(kind string) {
+			if kind == "Deployment" {
+				<-release
+			}
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	for _, k := range []string{k8score.ResourceQuotas, k8score.ConfigMaps, k8score.Secrets} {
+		waitCaughtUp(t, k)
+	}
+	if _, _, ok := k8s.GetResourceCache().InformerWatchedSince(k8score.Deployments); ok {
+		t.Fatal("the Deployment handler was released early")
+	}
+	store := initStore(t)
+	appendChange(t, store, timeline.TimelineEvent{ID: "quota", Timestamp: time.Now().Add(-3 * time.Minute), Kind: "ResourceQuota", APIVersion: "v1",
+		Namespace: "shop", Name: "compute", EventType: timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.hard.pods", OldValue: "4", NewValue: "3"}}}})
+	iss := webIssue(time.Now().Add(-2 * time.Minute))
+	iss.Category = issuesapi.CategoryQuotaExceeded
+	iss.Message = `pod creation blocked: pods "web-x" is forbidden: exceeded quota: compute, requested: pods=1, used: pods=3, limited: pods=3`
+	lookback := Options{Window: Window{From: time.Now().Add(-time.Hour), To: time.Now(), OpenEnded: true}, MinWindow: 5 * time.Minute}
+	for name, opts := range map[string]Options{"anchored": anchoredOptions(iss), "lookback": lookback} {
+		got := Correlate(context.Background(), iss, opts, Access{})
+		if strings.Contains(got.Timing.TimingSummary, "changed last") || got.NoChanges {
+			t.Fatalf("%s: ordered against a loading subject: timing=%q no_changes=%v", name, got.Timing.TimingSummary, got.NoChanges)
+		}
+	}
+	once.Do(func() { close(release) })
+}
+
+// A critical typed informer also starts after the store began recording, so
+// a window that starts between the store's start and the informer's
+// boundary can't claim the subject didn't change.
+func TestCorrelate_CriticalInformerBoundaryAfterWindowStart(t *testing.T) {
+	if err := k8s.InitTestResourceCache(k8sfake.NewSimpleClientset(webDeployment())); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	boundary, _, ok := k8s.GetResourceCache().InformerWatchedSince(k8score.Deployments)
+	if !ok {
+		t.Fatal("the Deployment informer has no boundary")
+	}
+	initStore(t) // recording since two hours ago
+	iss := webIssue(time.Now().Add(-10 * time.Minute))
+	opts := anchoredOptions(iss)
+	if !timeline.ObservationStart().Before(opts.Window.From) || !opts.Window.From.Before(boundary) {
+		t.Fatalf("setup: want observation start < window start < boundary, got %v, %v, %v", timeline.ObservationStart(), opts.Window.From, boundary)
+	}
+	got := Correlate(context.Background(), iss, opts, Access{})
+	if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete ||
+		!slices.Contains(got.History.Reasons, issuesapi.HistoryObservationStartedLate) {
+		t.Fatalf("critical informer boundary after window start: no_changes=%v unknown=%+v history=%+v", got.NoChanges, got.Unknown, got.History)
+	}
 }

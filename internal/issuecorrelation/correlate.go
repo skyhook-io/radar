@@ -300,18 +300,19 @@ func mergeHistory(a, b issuesapi.HistoryCoverage) issuesapi.HistoryCoverage {
 
 // subjectChanges reads a tracked subject's changes, and a workload's
 // directly referenced ConfigMaps and Secrets. sourcesKnown is false when a
-// source was withheld from the caller or couldn't be determined. obj is the
+// source was withheld from the caller or couldn't be determined, or when
+// Radar doesn't fully hold the subject's own kind yet. obj is the
 // workload whose sources were resolved, or nil, and refs are those sources.
 func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, refs []configrefs.Ref, sourcesKnown bool, err error) {
 	iss := &c.iss
 	q := c.query(c.subjectLimit())
 	if !meaningfulchanges.WorkloadKind(iss.Kind) {
 		q.Namespaces, q.Kinds, q.Name, q.TrackedOnly = []string{iss.Namespace}, []string{iss.Kind}, iss.Name, true
-		if c.opts.CheckCoverage {
-			c.checkCollected(iss.Kind, iss.Group, iss.Namespace)
-		}
+		// A subject kind Radar doesn't fully hold yet can't be said to be
+		// unchanged, on either surface.
+		subjectReady := c.collected(iss.Kind, iss.Group, iss.Namespace)
 		result, err = meaningfulchanges.Recent(c.ctx, q)
-		return result, nil, nil, true, err
+		return result, nil, nil, subjectReady, err
 	}
 	obj = WorkloadObjectFromCache(iss.Kind, iss.Namespace, iss.Name)
 	sourcesKnown = true
@@ -340,11 +341,9 @@ func (c *run) subjectChanges() (result meaningfulchanges.RecentResult, obj any, 
 			}
 		}
 	}
-	if c.opts.CheckCoverage {
-		c.checkCollected(iss.Kind, iss.Group, iss.Namespace)
-	}
+	subjectReady := c.collected(iss.Kind, iss.Group, iss.Namespace)
 	result, withheld, err := meaningfulchanges.RecentForWorkloadSourceRefs(c.ctx, refs, iss.Kind, iss.Namespace, iss.Name, q, c.sourceFilter(decided))
-	return result, obj, refs, sourcesKnown && !withheld, err
+	return result, obj, refs, sourcesKnown && subjectReady && !withheld, err
 }
 
 // sourceFilter admits the subject, which was checked before its sources
