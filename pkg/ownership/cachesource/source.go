@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -141,9 +140,16 @@ func (s *session) Object(ref resourceid.Ref) ownership.ObjectRead {
 	return s.readObject(ref, nil)
 }
 
+// Borrow is Object, also lending the cached object when it is Present.
+func (s *session) Borrow(ref resourceid.Ref) (apiruntime.Object, ownership.ObjectRead) {
+	var borrowed apiruntime.Object
+	read := s.readObject(ref, func(obj apiruntime.Object) { borrowed = obj })
+	return borrowed, read
+}
+
 // readObject is Object, lending the cached object it answered from, when
 // present, to borrow, which must not modify or keep it.
-func (s *session) readObject(ref resourceid.Ref, borrow func(*unstructured.Unstructured)) ownership.ObjectRead {
+func (s *session) readObject(ref resourceid.Ref, borrow func(apiruntime.Object)) ownership.ObjectRead {
 	if ref.Kind == "" || ref.Name == "" {
 		return unavailable(ref, readreason.ReadError)
 	}
@@ -151,12 +157,12 @@ func (s *session) readObject(ref resourceid.Ref, borrow func(*unstructured.Unstr
 		return ownership.ObjectRead{State: ownership.Excluded}
 	}
 	if b, ok := typedKinds[ref.GroupKind()]; ok {
-		return s.typedObject(ref, b)
+		return s.typedObject(ref, b, borrow)
 	}
 	return s.dynamicObject(ref, borrow)
 }
 
-func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin) ownership.ObjectRead {
+func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin, borrow func(apiruntime.Object)) ownership.ObjectRead {
 	if reason, wrong := scopeMismatch(ref, b.Namespaced); wrong {
 		return unavailable(ref, reason)
 	}
@@ -167,10 +173,14 @@ func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin) ownershi
 	case !found:
 		return ownership.ObjectRead{State: ownership.Absent}
 	}
-	return observe(ref, obj)
+	read := observe(ref, obj)
+	if borrow != nil && read.State == ownership.Present {
+		borrow(obj)
+	}
+	return read
 }
 
-func (s *session) dynamicObject(ref resourceid.Ref, borrow func(*unstructured.Unstructured)) ownership.ObjectRead {
+func (s *session) dynamicObject(ref resourceid.Ref, borrow func(apiruntime.Object)) ownership.ObjectRead {
 	if s.catalog.Ambiguous(ref.GroupKind()) {
 		return unavailable(ref, readreason.ReadError)
 	}

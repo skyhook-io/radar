@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 )
 
 func ownedPod(namespace, name string, owners ...metav1.OwnerReference) *corev1.Pod {
@@ -113,6 +114,37 @@ func TestTypedReadableDependentsUsesEveryStoreItsTargetNeeds(t *testing.T) {
 			}
 			if _, ok := rc.ReadableDependents(Pods, []string{"gamma"}, "uid-rs"); name != "cluster-wide" && ok {
 				t.Fatal("a namespace the collector doesn't hold must not read as complete")
+			}
+		})
+	}
+}
+
+func TestTypedReadableIndexedObjectsReadsAnyIndexByEveryKey(t *testing.T) {
+	client := fake.NewClientset(ownedPod("alpha", "a1"), ownedPod("alpha", "a2"), ownedPod("beta", "b1"), ownedPod("gamma", "g1"))
+	for name, cfg := range map[string]CacheConfig{
+		"cluster-wide":         {ResourceTypes: map[string]bool{Pods: true}},
+		"partitioned by space": {ResourceScopes: map[string]ResourceScope{Pods: {Enabled: true, Namespace: "alpha"}}, ResourceScopeNamespaces: map[string][]string{Pods: {"alpha", "beta", "gamma"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg.Client = client
+			rc, err := NewResourceCache(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rc.Stop()
+			for _, c := range []struct {
+				keys []string
+				want []string
+			}{
+				{[]string{"alpha"}, []string{"a1", "a2"}},
+				{[]string{"alpha", "beta"}, []string{"a1", "a2", "b1"}},
+				{[]string{"beta", "alpha", "beta"}, []string{"a1", "a2", "b1"}},
+				{nil, nil},
+			} {
+				got, ok := rc.ReadableIndexedObjects(Pods, nil, cache.NamespaceIndex, c.keys...)
+				if !ok || !slices.Equal(objectNames(got), c.want) {
+					t.Errorf("namespace keys %q = %v, %v; want %v", c.keys, objectNames(got), ok, c.want)
+				}
 			}
 		})
 	}
@@ -235,6 +267,19 @@ func TestDynamicReadableIndexedReadsOnlyItsServingInformers(t *testing.T) {
 	beta, ok := d.ReadableIndexed(gvr, "beta", OwnerUIDIndex, "uid-d")
 	if !ok || !slices.Equal(names(beta), []string{"b"}) {
 		t.Fatalf("beta from the cluster-wide informer = %v, %v; want beta's only", names(beta), ok)
+	}
+	for _, c := range []struct {
+		keys []string
+		want []string
+	}{
+		{[]string{"alpha", "beta"}, []string{"a", "b", "other"}},
+		{[]string{"beta", "alpha", "beta"}, []string{"a", "b", "other"}},
+		{nil, nil},
+	} {
+		got, ok := d.ReadableIndexed(gvr, "", cache.NamespaceIndex, c.keys...)
+		if !ok || !slices.Equal(names(got), c.want) {
+			t.Errorf("namespace keys %q = %v, %v; want %v", c.keys, names(got), ok, c.want)
+		}
 	}
 }
 
