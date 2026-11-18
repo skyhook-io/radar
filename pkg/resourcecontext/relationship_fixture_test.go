@@ -65,13 +65,16 @@ func (a fixtureAccess) CanRead(gk resourceid.GroupKind, ns string) ownership.Dec
 }
 func (fixtureAccess) Namespaces() ([]string, bool) { return nil, true }
 
-// contextFixtureSession holds the subject and the provider's objects; it
-// holds no ownership managers or dependents.
+// contextFixtureSession holds the subject, the provider's objects and any
+// further objects, and reads gaps for the kinds it is given; it holds no
+// ownership managers or dependents.
 type contextFixtureSession struct {
 	ownership.ReadSession
 	subject  resourceid.Ref
 	obj      runtime.Object
 	provider topology.ResourceProvider
+	objects  []runtime.Object
+	gaps     map[resourceid.GroupKind]ownership.Gap
 }
 
 func newContextFixtureSession(subject resourceid.Ref, obj runtime.Object, provider topology.ResourceProvider) *contextFixtureSession {
@@ -127,10 +130,19 @@ func (s *contextFixtureSession) assess(gk resourceid.GroupKind, namespaces []str
 }
 func (s *contextFixtureSession) Indexed(gk resourceid.GroupKind, _ string, _ []string, scope ownership.SearchScope) relations.IndexedRead {
 	out := relations.IndexedRead{Gaps: s.assess(gk, scope.Namespaces)}
-	if s.provider == nil {
+	if gap, ok := s.gaps[gk]; ok {
+		out.Gaps = append(out.Gaps, gap)
 		return out
 	}
 	var objects []runtime.Object
+	for _, o := range s.objects {
+		if o.GetObjectKind().GroupVersionKind().GroupKind() == (schema.GroupKind{Group: gk.Group, Kind: gk.Kind}) {
+			objects = append(objects, o)
+		}
+	}
+	if s.provider == nil {
+		return s.filed(out, gk, objects, scope)
+	}
 	add := func(o runtime.Object) {
 		if o != nil && !reflect.ValueOf(o).IsNil() {
 			objects = append(objects, o)
@@ -205,6 +217,11 @@ func (s *contextFixtureSession) Indexed(gk resourceid.GroupKind, _ string, _ []s
 		out.Gaps = append(out.Gaps, ownership.Gap{Kind: gk, Reason: readreason.ReadError})
 		return out
 	}
+	return s.filed(out, gk, objects, scope)
+}
+
+// filed adds the objects of gk in scope to out, as the cache files them.
+func (s *contextFixtureSession) filed(out relations.IndexedRead, gk resourceid.GroupKind, objects []runtime.Object, scope ownership.SearchScope) relations.IndexedRead {
 	for _, o := range objects {
 		m, e := apimeta.Accessor(o)
 		if e != nil {

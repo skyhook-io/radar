@@ -1,9 +1,15 @@
 package resourcecontext
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -62,6 +68,38 @@ func TestRelationshipOmissionsFollowEachFieldsEvidence(t *testing.T) {
 	for _, o := range omissions("Ingress", "networking.k8s.io", map[string]relations.Coverage{"subject": {SubjectState: "replaced"}}) {
 		if strings.HasPrefix(o.Field, "uses.") || o.Field == "referencedBy" || o.Field == "runsOn" {
 			t.Fatalf("an Ingress's replaced subject marked %s", o.Field)
+		}
+	}
+}
+
+// A Service routed from VirtualServices Radar can't read is unknown on what
+// exposes it, but has no uses to mark: the family's gap also covers the
+// configuration a readable DestinationRule fills, which isn't uses.
+func TestServiceWithUnreadableVirtualServicesMarksNoUses(t *testing.T) {
+	ctx := context.Background()
+	svc := &corev1.Service{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Service"}, ObjectMeta: metav1.ObjectMeta{Name: "reviews", Namespace: "bookinfo"}}
+	rule := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.istio.io/v1", "kind": "DestinationRule",
+		"metadata": map[string]any{"name": "reviews", "namespace": "bookinfo"},
+		"spec":     map[string]any{"host": "reviews"},
+	}}
+	virtualServices := resourceid.GroupKind{Group: "networking.istio.io", Kind: "VirtualService"}
+	subject := resourceid.NewRef("", "Service", "bookinfo", "reviews")
+	session := newContextFixtureSession(subject, svc, nil)
+	session.objects = []runtime.Object{rule}
+	session.gaps = map[resourceid.GroupKind]ownership.Gap{virtualServices: {Kind: virtualServices, Reason: readreason.RadarKindNotCollected}}
+	access := fixtureAccess{ctx: ctx}
+	rel, extras := topology.RelationsContextAnswer(session, access, access, ownership.NewView(session, access), subject, svc, nil, nil)
+	if len(rel.ConfigRefs) != 1 || rel.ConfigRefs[0].Kind != "DestinationRule" || len(extras.Fields["ConfigRefs"].NotChecked) == 0 {
+		t.Fatalf("fixture lost its shape: configRefs %+v, fields %+v", rel.ConfigRefs, extras.Fields)
+	}
+	rc := Build(ctx, svc, Options{Relationships: rel, RelationshipExtras: extras})
+	if !slices.Contains(rc.Omitted, OmittedField{Field: "exposedBy", Reason: OmittedUnavailable}) {
+		t.Fatalf("exposedBy not marked: %+v", rc.Omitted)
+	}
+	for _, o := range rc.Omitted {
+		if strings.HasPrefix(o.Field, "uses") {
+			t.Fatalf("a Service's context marked %s: %+v", o.Field, rc.Omitted)
 		}
 	}
 }
