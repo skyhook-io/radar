@@ -359,8 +359,8 @@ export interface IssueCorrelationUnknown {
 /** Scope of one issue's change correlation (?correlate=). */
 export interface IssueChangeCorrelation {
   /** RFC 3339. An hour before first_seen, whether or not the onset is
-   *  known, until the read; an hour before the read when the issue has no
-   *  first_seen. */
+   *  known, until the read; the 24 hours before the read when the issue has
+   *  no first_seen. */
   window_from: string;
   window_to: string;
   /** When this Radar process started recording changes. */

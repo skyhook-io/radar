@@ -705,7 +705,8 @@ type Issue struct {
 type ChangeCorrelation struct {
 	// WindowFrom and WindowTo bound the changes read: an hour before the
 	// issue was first seen, whether or not its onset is known, until the
-	// read; an hour before the read when the issue has no first-seen time.
+	// read; the 24 hours before the read when the issue has no first-seen
+	// time.
 	WindowFrom time.Time `json:"window_from"`
 	WindowTo   time.Time `json:"window_to"`
 	// ObservedSince is when this Radar process started recording changes.

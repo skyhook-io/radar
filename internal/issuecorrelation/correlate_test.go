@@ -451,9 +451,12 @@ func TestWindowAroundFirstSeen(t *testing.T) {
 			t.Fatalf("issue %+v: window = %+v, want from an hour before first seen", iss, w)
 		}
 	}
-	for _, iss := range []issuesapi.Issue{{}, {OnsetUnknown: true}, {FirstSeen: now.Add(time.Hour)}} {
-		if w := WindowAroundFirstSeen(iss, now); !w.From.Equal(now.Add(-time.Hour)) {
-			t.Fatalf("issue %+v: window = %+v, want the hour before now", iss, w)
+	if w := WindowAroundFirstSeen(issuesapi.Issue{FirstSeen: now.Add(time.Hour)}, now); !w.From.Equal(now.Add(-time.Hour)) {
+		t.Fatalf("first seen in the future: window = %+v, want the hour before now", w)
+	}
+	for _, iss := range []issuesapi.Issue{{}, {OnsetUnknown: true}} {
+		if w := WindowAroundFirstSeen(iss, now); !w.From.Equal(now.Add(-24*time.Hour)) || !w.To.Equal(now) {
+			t.Fatalf("issue %+v: window = %+v, want the last 24 hours", iss, w)
 		}
 	}
 }
@@ -865,4 +868,46 @@ func TestCorrelate_FirstSeenAtObservationStartIsIncomplete(t *testing.T) {
 		!slices.Contains(got.History.Reasons, issuesapi.HistoryObservationStartedLate) {
 		t.Fatalf("first seen at observation start: %+v", got)
 	}
+}
+
+// An issue with no first-seen time looks back 24 hours: a bad image change
+// 61 minutes ago is listed, a quiet day with complete history is "no
+// changes", and history covering only the last 2 hours is incomplete.
+func TestCorrelate_NoFirstSeenLooksBackADay(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	iss := webIssue(time.Time{})
+	iss.OnsetUnknown = true
+	opts := Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, CheckCoverage: true}
+
+	t.Run("change an hour ago", func(t *testing.T) {
+		initCache(t, webDeployment())
+		store := initStore(t)
+		timeline.SetObservationStartForTest(now.Add(-25 * time.Hour))
+		imageAt := now.Add(-61 * time.Minute)
+		appendChange(t, store, specUpdate("Deployment", "web", imageAt, "web:bad"))
+		got := Correlate(context.Background(), iss, opts, Access{})
+		if got.NoChanges || len(got.Changes) != 1 || !changeTime(got.Changes[0]).Equal(imageAt) {
+			t.Fatalf("image change 61 minutes ago: %+v", got)
+		}
+	})
+
+	t.Run("quiet day, complete history", func(t *testing.T) {
+		initCache(t, webDeployment())
+		initStore(t)
+		timeline.SetObservationStartForTest(now.Add(-25 * time.Hour))
+		got := Correlate(context.Background(), iss, opts, Access{})
+		if !got.NoChanges || got.Unknown != nil {
+			t.Fatalf("quiet day: %+v", got)
+		}
+	})
+
+	t.Run("history covers only two hours", func(t *testing.T) {
+		initCache(t, webDeployment())
+		initStore(t)
+		timeline.SetObservationStartForTest(now.Add(-2 * time.Hour))
+		got := Correlate(context.Background(), iss, opts, Access{})
+		if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
+			t.Fatalf("two hours of history: %+v", got)
+		}
+	})
 }

@@ -128,7 +128,8 @@ func correlationFixture(t *testing.T) timeline.EventStore {
 		}
 	}
 	store := useMemoryTimeline(t)
-	timeline.SetObservationStartForTest(time.Now().Add(-4 * time.Hour))
+	// History covers the 24 hours an issue without a first-seen time looks back.
+	timeline.SetObservationStartForTest(time.Now().Add(-25 * time.Hour))
 	t.Cleanup(func() { timeline.SetObservationStartForTest(time.Time{}) })
 	return store
 }
@@ -324,7 +325,7 @@ func TestProxyAuth_IssueCorrelationPerCaller(t *testing.T) {
 		if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 1000}); err != nil {
 			t.Fatal(err)
 		}
-		timeline.SetObservationStartForTest(time.Now().Add(-4 * time.Hour))
+		timeline.SetObservationStartForTest(time.Now().Add(-25 * time.Hour))
 		iss := correlated(t, env, "full", "Service", "cart", "", issuesapi.CategoryServiceNoEndpoints)
 		if iss.NoRecentChanges == nil || iss.Correlation.Unknown != nil {
 			t.Fatalf("quiet readable Service: %+v", iss)
@@ -421,7 +422,7 @@ func TestProxyAuth_IssueCorrelationRolloutWorkloadRefTarget(t *testing.T) {
 		t.Fatalf("watch rollouts: %v", err)
 	}
 	store := useMemoryTimeline(t)
-	timeline.SetObservationStartForTest(time.Now().Add(-4 * time.Hour))
+	timeline.SetObservationStartForTest(time.Now().Add(-25 * time.Hour))
 	t.Cleanup(func() { timeline.SetObservationStartForTest(time.Time{}) })
 	appendInformerEvent(t, store, timeline.TimelineEvent{
 		ID: "secret-write", Timestamp: time.Now().Add(-5 * time.Minute), Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),

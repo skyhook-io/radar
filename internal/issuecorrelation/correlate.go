@@ -513,14 +513,22 @@ func selectAroundFirstSeen(changes []issuesapi.RecentChange, iss issuesapi.Issue
 	return out, more
 }
 
+// unanchoredLookback is the window for an issue with no first-seen time.
+// With nothing to anchor on, it reaches back far enough to hold a bad deploy
+// made hours before the issue was noticed.
+const unanchoredLookback = 24 * time.Hour
+
 // WindowAroundFirstSeen is the anchored window: from an hour before the issue
 // was first seen until now. It anchors on first seen whenever the issue has
 // one, even when the onset itself is unknown or a grouped issue's onsets are
-// mixed, so the window doesn't slide past the changes before it; only an
-// issue with no first-seen time falls back to the hour before now.
+// mixed, so the window doesn't slide past the changes before it. An issue
+// with no first-seen time gets the last 24 hours instead.
 func WindowAroundFirstSeen(iss issuesapi.Issue, now time.Time) Window {
+	if iss.FirstSeen.IsZero() {
+		return Window{From: now.Add(-unanchoredLookback), To: now}
+	}
 	anchor := now
-	if !iss.FirstSeen.IsZero() && iss.FirstSeen.Before(now) {
+	if iss.FirstSeen.Before(now) {
 		anchor = iss.FirstSeen
 	}
 	return Window{From: anchor.Add(-meaningfulchanges.DefaultSince), To: now}
