@@ -35,11 +35,11 @@ import { SUBSTRATE_PATH } from './routes'
 /** Substrate's terms, defined where they first appear on a screen. */
 export const SUBSTRATE_TERMS = {
   actor: 'An agent’s sandboxed process. Substrate runs it on a worker while it works and suspends it to a snapshot when it is idle. Actors live in Substrate’s API, not in Kubernetes.',
-  atespace: 'Substrate’s tenancy boundary for actors and templates. Like a namespace, but kept by Substrate, not Kubernetes.',
+  atespace: 'Substrate’s own scope for actors and templates; not a Kubernetes namespace.',
   worker: 'A worker Pod of a WorkerPool. Substrate places actors on workers; each takes a limited number of actors (its slots).',
   pool: 'A WorkerPool: the Kubernetes object that runs worker Pods of one sandbox class.',
   template: 'An ActorTemplate: the image, resources and snapshot settings every new actor of it starts from.',
-  golden: 'The snapshot Substrate takes of a template once it has warmed up. New actors start from it; without it they boot cold.',
+  golden: 'The prepared starting snapshot a template builds for new actors. Without it, they boot cold.',
   slot: 'Room for one actor on a worker. A worker’s actor limit is its number of slots.',
   snapshot: 'A saved copy of an actor’s state, taken when it suspends. The actor resumes from the newest one that is stored or still on its node.',
 } as const

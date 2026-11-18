@@ -322,6 +322,25 @@ describe('Actor overview', () => {
     }
   })
 
+  it('gives a memory-limit crash both commands of its step, the move then the revert, after the sentence that says what the move drops', () => {
+    const before = state.logs
+    const step = "Move this actor to a template with more memory, then revert it. The move drops its snapshot's memory and files: it restarts from volumes."
+    const move = 'kubectl ate update actor lit-review-0193 -a research --template <new-template>'
+    const revert = 'kubectl ate revert actor lit-review-0193 -a research'
+    state.logs = { actor: { atespace: 'research', name: 'lit-review-0193' }, state: 'crashed', origin: 'lastNode', node: 'ip-10-0-17-21', reasonCode: 'candidates', source: 'all', searched: [], scanned: 900, windowFull: false, lines: [], memoryKill: { time: minutesAgo(22), pod: 'agent-pool-worker-1', limitBytes: 2147483648, current: true, nextStep: step, command: move, thenCommand: revert } }
+    try {
+      const raw = text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={actorDetail()} onOpenSubject={() => {}} /></MemoryRouter>))
+      const html = plain(raw).replace(/<[^>]+>/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      expect(raw.match(/data-command-line/g)?.length).toBeGreaterThanOrEqual(2)
+      const drops = html.indexOf("The move drops its snapshot's memory and files")
+      expect(drops).toBeGreaterThan(-1)
+      expect(drops).toBeLessThan(html.indexOf(move))
+      expect(html.indexOf(move)).toBeLessThan(html.indexOf(revert))
+    } finally {
+      state.logs = before
+    }
+  })
+
   it('does not call an earlier run’s memory-limit kill the cause of this crash', () => {
     const before = state.logs
     try {
@@ -517,7 +536,7 @@ describe('A running actor on a bad worker', () => {
 
 describe('A worker banner’s visible part', () => {
   it('shows the cause and the next step, and folds the mechanics under Details', () => {
-    const reading = 'Its worker Pod is not Ready. It places nothing new there and still records this actor as running. If the Pod is deleted, Substrate marks it crashed.'
+    const reading = 'Its worker Pod is not Ready. It places no new actors there and still records this actor as running. If the Pod is deleted, Substrate marks it crashed.'
     const d = actorDetail({ actor: { ...actorDetail().actor, state: 'running', crash: undefined }, attention: [], workerImpact: { kind: 'unavailable', reading, nextStep: 'Find why the worker Pod is not Ready.', command: 'kubectl describe pod w' } })
     const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={d} /></MemoryRouter>)))
     const details = html.indexOf('Details')
@@ -641,6 +660,29 @@ describe('Needs attention rows', () => {
     expect(html).not.toContain('For the other')
   })
 
+  it('shows a memory-limit remedy’s two commands on their own lines, the move then the revert', async () => {
+    const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
+    const step = 'Move the actors to a template with more memory, then revert them. A snapshot taken under the old template may restore only its volumes.'
+    const move = 'kubectl ate update actor <name> -a <atespace> --template <new-template>'
+    const revert = 'kubectl ate revert actor <name> -a <atespace>'
+    const memory = { cause: 'memoryLimit' as const, nextStep: step, command: move, thenCommand: revert }
+    const commands = (raw: string) => [...raw.matchAll(/<code class="[^"]*">([^<]*)<\/code>/g)].map((m) => m[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>'))
+    // Every crash a memory-limit kill: the row's own step.
+    const all = { ...poolShortRow, rule: 'crashedActors' as const, count: 3, nextStep: step, command: move, thenCommand: revert, groups: [{ subject: { kind: 'ActorTemplate' as const, atespace: 'a', name: 'one' }, count: 3, ...memory }] }
+    let raw = renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[all]} /></MemoryRouter>)
+    expect(commands(raw)).toEqual([move, revert])
+    expect(raw.match(/data-command-line/g)).toHaveLength(2)
+    // What the move drops is in the step itself, ahead of both commands.
+    expect(words(raw).indexOf('may restore only its volumes')).toBeLessThan(words(raw).indexOf('kubectl ate update'))
+    // Split by remedy: the memory groups' step carries both; the rest's general step carries neither.
+    const split = { ...poolShortRow, rule: 'crashedActors' as const, count: 4, nextStep: 'Fix the cause.', command: revert, groups: [
+      { subject: { kind: 'ActorTemplate' as const, atespace: 'a', name: 'one' }, count: 3, ...memory },
+      { subject: { kind: 'ActorTemplate' as const, atespace: 'b', name: 'mixed' }, count: 1 },
+    ] }
+    raw = renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[split]} onOpen={() => {}} /></MemoryRouter>)
+    expect(commands(raw)).toEqual([move, revert])
+  })
+
   it('reads a link’s worker-impact filter and lets it be cleared', () => {
     state.actors = actors()
     const html = screen('/substrate/actors?worker=agent-pool-worker-2&impact=restarted')
@@ -687,9 +729,9 @@ describe('Needs attention rows', () => {
 
   it('shows the next step once, with its command as a chip, and the reading’s first sentence whole', async () => {
     const { SubstrateAttentionList } = await import('./SubstrateAttentionList')
-    const row = { ...poolShortRow, reading: 'Substrate places nothing new on 2 of its workers. Kubernetes reports the pool scaling.', nextStep: 'Read the worker’s log.', command: 'kubectl logs -n agents agent-pool-worker-0' }
+    const row = { ...poolShortRow, reading: 'Substrate places no new actors on 2 of its workers. Kubernetes reports the pool scaling.', nextStep: 'Read the worker’s log.', command: 'kubectl logs -n agents agent-pool-worker-0' }
     const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateAttentionList rows={[row]} /></MemoryRouter>)))
-    expect(html).toContain('Substrate places nothing new on 2 of its workers.')
+    expect(html).toContain('Substrate places no new actors on 2 of its workers.')
     expect(html.match(/Next step:/g)).toHaveLength(1)
     expect(html).toContain('kubectl logs -n agents agent-pool-worker-0')
     expect(html).toContain('aria-label="Copy command"')

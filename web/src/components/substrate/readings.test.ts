@@ -7,6 +7,7 @@ import {
   coverageReason,
   cpuText,
   durableText,
+  memoryRebuildStep,
   resumesWithText,
   revertCommand,
   segmentCount,
@@ -401,5 +402,19 @@ describe('tier readings for a Radar Hub owner, who has no form', () => {
     expect(tierReading({ state: 'failed', code: 'unreachable', reason: 'dial tcp' })).toMatchObject({ title: 'API server unreachable', detail: 'dial tcp' })
     expect(tierReading({ state: 'failed', code: 'unauthenticated' }).nextStep).toBe('Check that the token is current, or choose another identity.')
     expect(tierReading({ state: 'failed', code: 'denied' }).nextStep).toBe('Ask a Substrate owner to grant this identity the viewer role, or choose another identity.')
+  })
+})
+
+describe('a template’s one memory-limit plan', () => {
+  it('is one short action in order, recreate, move, revert, and says what the move may drop', () => {
+    for (const n of [1, 4]) {
+      const step = memoryRebuildStep(n)
+      expect(step.split(/\s+/).length).toBeLessThanOrEqual(25)
+      expect(step.indexOf('Recreate')).toBeLessThan(step.indexOf('move'))
+      expect(step.indexOf('move')).toBeLessThan(step.indexOf('revert'))
+      expect(step).toMatch(/The move may keep only (its snapshot’s|their snapshots’) volumes\.$/)
+    }
+    expect(memoryRebuildStep(1)).toContain('the crashed actor to it, then revert it.')
+    expect(memoryRebuildStep(4)).toContain('the crashed actors to it, then revert them.')
   })
 })

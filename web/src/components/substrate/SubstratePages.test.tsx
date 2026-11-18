@@ -148,6 +148,60 @@ describe('a template whose actors crashed', () => {
   })
 })
 
+describe('a template whose golden actor and actors were both killed over its memory limit', () => {
+  const move = 'kubectl ate update actor <name> -a <atespace> --template <new-template>'
+  const revert = 'kubectl ate revert actor <name> -a <atespace>'
+  const crashRow = (count: number) => ({ id: 'c', rule: 'crashedActors', severity: 'critical', title: 't', reading: 'r', nextStep: 'Fix it.', subject: { kind: 'Actors', filter: { state: 'crashed' } }, count,
+    groups: [{ subject: { kind: 'ActorTemplate', atespace: 'sandbox-dev', name: 'mcp-browser' }, count, cause: 'memoryLimit', nextStep: 'Move the actors to a template with more memory, then revert them. A snapshot taken under the old template may restore only its volumes.', command: move, thenCommand: revert }] })
+  const goldenRow = { id: 'g', rule: 'goldenSnapshotFailed', severity: 'warning', title: 't', reading: 'Its golden actor was killed for exceeding its memory limit before the snapshot was taken. Substrate does not retry a failed build.', nextStep: 'Recreate the template with a higher memory limit; templates can’t be edited.', subject: { kind: 'ActorTemplate', atespace: 'sandbox-dev', name: 'mcp-browser' }, count: 1 }
+  const page = (cause: 'memoryLimit' | undefined, count: number) => {
+    const t = template('mcp-browser')
+    ;(t.template as any).atespace = 'sandbox-dev'
+    ;(t.template as any).golden = { state: 'failed', error: 'GoldenActorCrashed: golden actor crashed: killed for exceeding its memory limit', cause }
+    state.template = ok(t)
+    state.workspace = { ...workspace(), needsAttention: [crashRow(count), goldenRow] }
+    try {
+      return render(<SubstrateTemplatePage template={{ atespace: 'sandbox-dev', name: 'mcp-browser' }} onOpenSubject={() => {}} />, '/substrate/templates/sandbox-dev/mcp-browser?ctx=cluster-B')
+    } finally {
+      state.workspace = undefined
+    }
+  }
+  const words = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ')
+
+  it('leads with the crash callout, and gives one plan there with its two commands in order', () => {
+    const html = page('memoryLimit', 1)
+    const w = words(html)
+    // Lost work first: the red callout comes before the amber golden-snapshot one.
+    expect(html.indexOf('1 of its actors is crashed')).toBeLessThan(html.indexOf('No '))
+    expect(html.indexOf('bg-red-50')).toBeLessThan(html.indexOf('bg-amber-50'))
+    // One plan, one next step: the golden banner points at it rather than offering its own.
+    const plan = 'Recreate the template with a higher memory limit, move the crashed actor to it, then revert it. The move may keep only its snapshot’s volumes.'
+    expect(w).toContain(`Next step: ${plan}`)
+    expect(w.split('Next step:').length - 1).toBe(1)
+    expect(w).not.toContain('Recreate the template with a higher memory limit; templates can’t be edited.')
+    expect(w).toContain('Recreating the template, as the step above says, starts a new golden snapshot build.')
+    expect(w.indexOf(plan)).toBeLessThan(w.indexOf(move))
+    expect(w.indexOf(move)).toBeLessThan(w.indexOf(revert))
+    expect(w.indexOf(revert)).toBeLessThan(w.indexOf('Recreating the template'))
+  })
+
+  it('keeps each callout’s own step when the golden build failed for another reason', () => {
+    const w = words(page(undefined, 3))
+    expect(w).toContain('Next step: Move the actors to a template with more memory, then revert them.')
+    expect(w).toContain('Next step: Recreate the template with a higher memory limit; templates can’t be edited.')
+    expect(w).not.toContain('Recreating the template, as the step above says')
+    expect(w.indexOf('3 of its actors are crashed')).toBeLessThan(w.indexOf('No golden snapshot'))
+  })
+
+  it('defines the golden snapshot where its banner first names it', () => {
+    const t = template('mcp-browser')
+    ;(t.template as any).golden = { state: 'failed', error: 'x' }
+    state.template = ok(t)
+    const raw = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter initialEntries={['/substrate/templates/team/mcp-browser?ctx=cluster-B']}><SubstrateTemplatePage template={{ atespace: 'team', name: 'mcp-browser' }} onOpenSubject={() => {}} /></MemoryRouter></QueryClientProvider>)
+    expect(raw).toMatch(/No <span[^>]*><span[^>]*decoration-dotted[^>]*>golden snapshot<\/span><\/span>: new actors/)
+  })
+})
+
 describe('a template’s banners', () => {
   it('reads each in its row’s tone: no matching pool an alert, a failed golden snapshot a warning', () => {
     const t = template('stranded')

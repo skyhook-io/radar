@@ -1355,10 +1355,12 @@ type substrateMemoryKill struct {
 	// of the actor among the lines read came between them. Otherwise it is
 	// an earlier execution's, a record and not the cause.
 	Current bool `json:"current"`
-	// NextStep and Command are the remedy, the actor page's crash step;
-	// absent unless Current.
-	NextStep string `json:"nextStep,omitempty"`
-	Command  string `json:"command,omitempty"`
+	// NextStep, Command and ThenCommand are the remedy, the actor page's
+	// crash step: move the actor to a new template, then revert it. Absent
+	// unless Current.
+	NextStep    string `json:"nextStep,omitempty"`
+	Command     string `json:"command,omitempty"`
+	ThenCommand string `json:"thenCommand,omitempty"`
 }
 
 // substrateKillCrashWindow bounds how long after a memory-limit kill the
@@ -1385,7 +1387,7 @@ func memoryKillOf(actor model.Actor, lines []substrateLogLine) *substrateMemoryK
 				return later.Kind == model.LogKindLifecycle && substrateExecutionStarts[later.Message] && !later.Time.After(actor.Crash.Time)
 			})
 		if kill.Current {
-			kill.NextStep, kill.Command = model.CrashedMemoryActorStep(actor), model.CrashedMemoryCommand(actor)
+			kill.NextStep, kill.Command, kill.ThenCommand = model.CrashedMemoryActorStep(actor), model.CrashedMemoryCommand(actor), model.RevertCommand(actor)
 		}
 		return kill
 	}

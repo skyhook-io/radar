@@ -59,9 +59,9 @@ describe('WorkerPool placement', () => {
     expect(html).toContain('4 of 16 CPU · 8Gi of 64Gi reserved')
   })
 
-  it('says a worker that takes nothing new has unused slots, not free ones, and when its Pod is Ready', () => {
+  it('says a worker that takes no new actors has unused slots, not free ones, and when its Pod is Ready', () => {
     const html = render(pool([worker(0, { state: 'unavailable' })]))
-    expect(html).toContain('2 of 4 actor slots used · 2 unused · places nothing new')
+    expect(html).toContain('2 of 4 actor slots used · 2 unused · takes no new actors')
     expect(html).not.toContain('2 free')
     expect(html).toContain('Its Pod is Ready, so the worker, not Kubernetes, is refusing work.')
   })

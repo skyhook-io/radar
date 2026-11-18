@@ -469,7 +469,7 @@ func TestMemoryCauseRemedies(t *testing.T) {
 	c := find(t, NeedsAttention(Inputs{Actors: actors, ActorsRead: true, Now: now}), RuleCrashedActors)
 	for _, grp := range c.Groups {
 		memory := grp.Subject.Name == "big"
-		if (grp.Cause == CauseMemoryLimit) != memory || (grp.NextStep == CrashedMemoryNextStep) != memory || (grp.Command == retemplateCommand) != memory {
+		if (grp.Cause == CauseMemoryLimit) != memory || (grp.NextStep == CrashedMemoryNextStep) != memory || (grp.Command == retemplateCommand) != memory || (grp.ThenCommand == revertCommand) != memory {
 			t.Errorf("group %s = %+v", grp.Subject.Name, grp)
 		}
 	}

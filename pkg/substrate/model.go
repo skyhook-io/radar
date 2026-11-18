@@ -18,7 +18,10 @@
 // response's rule: [] when read and empty, absent when not read.
 package substrate
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Ref names an atespaced Substrate resource.
 type Ref struct {
@@ -191,6 +194,9 @@ type Golden struct {
 	// Time is when warm-up ended (ready) or the template last changed (failed).
 	Time  time.Time `json:"time,omitzero"`
 	Error string    `json:"error,omitempty"`
+	// Cause is CauseMemoryLimit when Error says the golden actor was killed
+	// over its memory limit; absent otherwise.
+	Cause string `json:"cause,omitempty"`
 	// Blocked says why a building snapshot cannot progress: noMatchingPool,
 	// when the complete pool list holds no pool its selector matches. Substrate
 	// runs the golden actor like any actor, so with nowhere to place it the
@@ -209,7 +215,11 @@ func GoldenOf(t Template) Golden {
 	case t.GoldenDisabled:
 		return Golden{State: GoldenDisabled}
 	case t.GoldenError != "":
-		return Golden{State: GoldenFailed, Error: t.GoldenError, Time: t.UpdateTime}
+		g := Golden{State: GoldenFailed, Error: t.GoldenError, Time: t.UpdateTime}
+		if strings.Contains(t.GoldenError, memoryLimitMessage) {
+			g.Cause = CauseMemoryLimit
+		}
+		return g
 	case t.GoldenTag != nil:
 		return Golden{State: GoldenReady, Tag: t.GoldenTag, Time: t.GoldenTime}
 	}

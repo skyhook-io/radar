@@ -19,16 +19,18 @@ import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import type { OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectPanel, SubstrateTierBanner, showsConnectPanel } from './SubstrateConnect'
 import { SubstrateStateBar } from './SubstrateStateBar'
-import { OWNERS_ONLY_NOTE, attentionBannerVariant, templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, splitReading, templateFilterValue, tierReading } from './readings'
+import { OWNERS_ONLY_NOTE, attentionBannerVariant, memoryRebuildStep, templateYamlCommand, bytesText, coverageInPart, coverageReason, cpuText, definitiveFailure, withoutReasonCode, fidelityLabel, goldenReading, splitReading, templateFilterValue, tierReading } from './readings'
 import { SUBSTRATE_PATH, SUBSTRATE_SCREENS, substrateActorsPath, substrateTemplatePath } from './routes'
-import { CommandChip, Name, SUBSTRATE_WIDE, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
+import { CommandChip, Name, SUBSTRATE_TERMS, SUBSTRATE_WIDE, SubstrateCoverageNotice, SubstrateHeader, SubstrateSourceLine, Term, Unread, When, WholeNames } from './shared'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 
 /** `named` says what the chip is about, for a place where it stands alone (a page header), not under a Golden snapshot column. */
 export function GoldenBadge({ template, named }: { template: Pick<SubstrateTemplateRow, 'golden' | 'matchingPools' | 'matchingPoolsComplete'>; named?: boolean }) {
   const g = goldenReading(template)
   const label = named && !g.label.startsWith('Can’t') ? `Golden snapshot ${g.label.toLowerCase()}` : g.label
-  return <Tooltip content={g.meaning}><span><Badge severity={g.severity} size="sm" className="whitespace-normal text-left">{label}</Badge></span></Tooltip>
+  // Standing alone, the chip is where a page first names the term: its tooltip defines it first.
+  const tip = named ? `Golden snapshot: ${SUBSTRATE_TERMS.golden.charAt(0).toLowerCase()}${SUBSTRATE_TERMS.golden.slice(1)} ${g.meaning}` : g.meaning
+  return <Tooltip content={tip}><span><Badge severity={g.severity} size="sm" className="whitespace-normal text-left">{label}</Badge></span></Tooltip>
 }
 
 function poolsText(t: SubstrateTemplateRow): { text: string; unknown?: boolean; none?: boolean } {
@@ -207,24 +209,30 @@ function TemplateSpec({ spec, unavailable, template }: { spec?: SubstrateTemplat
 /**
  * A failed golden snapshot: the cause Substrate's row reads from the error,
  * once, then the step. Substrate's own message and that it never retries
- * fold under Details.
+ * fold under Details. With `planAbove`, the crash callout above already holds
+ * the one plan that also fixes this, so the banner says so instead of a
+ * second step.
  */
-function GoldenFailedBanner({ error, row }: { error?: string; row?: SubstrateAttention }) {
+function GoldenFailedBanner({ error, row, planAbove }: { error?: string; row?: SubstrateAttention; planAbove?: boolean }) {
   const message = withoutReasonCode(error ?? '')
   const [lead] = row ? splitReading(row.reading) : []
   // The row's reading leads with Substrate's message when it names no cause; then the message is the lead.
   const cause = lead && !lead.startsWith('Substrate') ? lead : undefined
   return (
     // The tone of its Needs attention row: new actors boot cold, nothing is lost.
-    <AlertBanner variant={row ? attentionBannerVariant(row) : 'warning'} title="No golden snapshot: new actors not seeded from a tag start from a cold boot, not a prepared snapshot" className="">
+    <AlertBanner variant={row ? attentionBannerVariant(row) : 'warning'} title={<>No <Term term="golden">golden snapshot</Term>: new actors not seeded from a tag start from a cold boot, not a prepared snapshot</>} className="">
       <div className="mt-1 break-words text-xs text-theme-text-secondary">
         {cause ?? <>Substrate’s message: <span className="font-medium text-theme-text-primary">{message}</span>.</>}
       </div>
-      <div className="mt-1 text-xs text-theme-text-primary">
-        <span className="font-medium">Next step: </span>
-        {row?.nextStep ?? 'Fix the cause in Substrate’s message, then recreate the template: templates can’t be edited, and each new one gets a golden snapshot build.'}
-        {row?.command && <CommandChip command={row.command} />}
-      </div>
+      {planAbove ? (
+        <div className="mt-1 text-xs text-theme-text-primary">Recreating the template, as the step above says, starts a new golden snapshot build.</div>
+      ) : (
+        <div className="mt-1 text-xs text-theme-text-primary">
+          <span className="font-medium">Next step: </span>
+          {row?.nextStep ?? 'Fix the cause in Substrate’s message, then recreate the template: templates can’t be edited, and each new one gets a golden snapshot build.'}
+          {row?.command && <CommandChip command={row.command} />}
+        </div>
+      )}
       <div className="mt-1.5">
         <FoldSection title="Details" summary="" attention={false}>
           <div className="break-words text-xs text-theme-text-secondary">
@@ -285,6 +293,9 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
   const crashes = workspace.data?.needsAttention
     .find((a) => a.rule === 'crashedActors')
     ?.groups?.find((g) => g.subject?.kind === 'ActorTemplate' && g.subject.atespace === t.atespace && g.subject.name === t.name)
+  // Its golden actor and its actors were both killed over its memory limit: one plan fixes both, so the page offers one step.
+  const oneMemoryPlan = t.golden.state === 'failed' && t.golden.cause === 'memoryLimit' && !!crashes && crashes.count > 0 && crashes.cause === 'memoryLimit'
+  const crashStep = oneMemoryPlan ? memoryRebuildStep(crashes.count) : crashes?.nextStep
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="px-5 pt-4 xl:px-7">
@@ -297,7 +308,7 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
       </div>
       <ScreenBody>
         <RefreshFailedNotice queries={[query]} />
-        {t.golden.state === 'failed' && <GoldenFailedBanner error={t.golden.error} row={goldenRow} />}
+        {/* Lost work leads: the crash callout comes before the golden snapshot's, which only slows new actors. */}
         {crashes && crashes.count > 0 && (
           <AlertBanner variant="error" title={`${crashes.count} of its actors ${crashes.count === 1 ? 'is' : 'are'} crashed`} className="">
             {/* One line: the cause Substrate's messages name, and the way to the actors. */}
@@ -307,15 +318,17 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
                 {crashes.count === 1 ? 'The crashed actor →' : `The ${crashes.count} crashed actors →`}
               </button>
             </div>
-            {crashes.nextStep && (
+            {crashStep && (
               <div className="mt-1 text-xs text-theme-text-primary">
                 <span className="font-medium">Next step: </span>
-                {crashes.nextStep}
+                {crashStep}
                 {crashes.command && <CommandChip command={crashes.command} />}
+                {crashes.command && crashes.thenCommand && <CommandChip command={crashes.thenCommand} />}
               </div>
             )}
           </AlertBanner>
         )}
+        {t.golden.state === 'failed' && <GoldenFailedBanner error={t.golden.error} row={goldenRow} planAbove={oneMemoryPlan} />}
         {/* At risk, nothing lost yet: the alert of its Needs attention row and its golden-snapshot chip. */}
         {pools.none && (
           <AlertBanner variant="alert" title="No pool can run it" message={`No pool’s labels match its worker selector, so no worker can run its actors${t.golden.state === 'building' ? ', and its golden snapshot can’t be built' : ''}.`} className="">

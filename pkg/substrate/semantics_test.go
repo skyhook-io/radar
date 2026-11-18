@@ -200,9 +200,20 @@ func TestServiceVerdictsAddRowsWhereDefinite(t *testing.T) {
 	}
 	in.Service = &Service{Why: "Prometheus is not connected"}
 	for _, c := range Checks(in) {
-		if c.Rule == RuleNodeUploadsOverdue && (c.Ran || c.Why != "Prometheus is not connected") {
+		if c.Rule == RuleNodeUploadsOverdue && (c.Ran || c.Why != "Prometheus is not connected" || c.Collecting) {
 			t.Errorf("unknown without Prometheus: %+v", c)
 		}
+	}
+	// A first collection still running is not a check that could not run: it runs on a later read.
+	in.Service = &Service{Why: "collecting", Collecting: true}
+	for _, c := range Checks(in) {
+		prom := c.Rule == "poolService" || c.Rule == RuleNodeUploadsOverdue
+		if c.Collecting != prom || (prom && (c.Ran || c.Why != "collecting")) {
+			t.Errorf("only the Prometheus checks wait on its first answer: %+v", c)
+		}
+	}
+	if s := SummarizeService(in.Service); s.Read || !s.Collecting {
+		t.Errorf("the summary says the collection is still running: %+v", s)
 	}
 }
 
@@ -250,17 +261,21 @@ func TestNextStepsOfferOnlyWhatCanBeRead(t *testing.T) {
 	}
 	// On the actor's own page, the step follows its own crash and names it.
 	onPage := ActorAttention(rows, actors[0], now)
-	if other := ActorAttention(rows, actors[4], now); other[0].NextStep != crashedActorNextStep || other[0].Command != "kubectl ate revert actor c2 -a a" {
+	if other := ActorAttention(rows, actors[4], now); other[0].NextStep != crashedActorNextStep || other[0].Command != "kubectl ate revert actor c2 -a a" || other[0].ThenCommand != "" {
 		t.Errorf("another cause gets the general step: %+v", other[0])
 	}
-	if onPage[0].NextStep != CrashedMemoryActorStep(actors[0]) || onPage[0].Command != "kubectl ate update actor c -a a --template <new-template>" {
+	// Its two commands, in order: the move, then the revert.
+	if onPage[0].NextStep != CrashedMemoryActorStep(actors[0]) || onPage[0].Command != "kubectl ate update actor c -a a --template <new-template>" || onPage[0].ThenCommand != "kubectl ate revert actor c -a a" {
 		t.Errorf("a memory-limit kill names its remedy: %+v", onPage[0])
 	}
-	if r := find(t, NeedsAttention(Inputs{Actors: actors[:1], ActorsRead: true, Now: now}), RuleCrashedActors); r.NextStep != CrashedMemoryNextStep || r.Command != retemplateCommand || r.Groups[0].Cause != CauseMemoryLimit {
+	if r := find(t, NeedsAttention(Inputs{Actors: actors[:1], ActorsRead: true, Now: now}), RuleCrashedActors); r.NextStep != CrashedMemoryNextStep || r.Command != retemplateCommand || r.ThenCommand != revertCommand || r.Groups[0].Cause != CauseMemoryLimit {
 		t.Errorf("crashes that are all memory-limit kills name the remedy: %+v", r)
 	}
 	if crashed.Groups[0].Cause != "" {
 		t.Errorf("a template group with another crash names no cause: %+v", crashed.Groups)
+	}
+	if crashed.Command != revertCommand || crashed.ThenCommand != "" {
+		t.Errorf("crashes of mixed causes get the revert alone: %+v", crashed)
 	}
 	for _, r := range rows {
 		if n := len(strings.Fields(r.NextStep)); n > 25 || strings.Contains(r.NextStep, "`") {

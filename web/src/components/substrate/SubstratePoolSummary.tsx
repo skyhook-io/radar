@@ -96,14 +96,14 @@ export function NodeRiskLinks({ node }: { node: string }) {
 
 /**
  * A worker's actor slots in words. Free slots are a count, not positions:
- * "18 of 24 actor slots used · 6 free". A worker that takes nothing new has
+ * "18 of 24 actor slots used · 6 free". A worker that takes no new actors has
  * unused slots, not free ones. Unknown capacity stays unknown.
  */
 export function slotsText(w: Pick<SubstrateWorkerRow, 'state' | 'capacity' | 'allocated' | 'actors'>): string {
   const { actors, free, total } = workerSlots(w)
   const used = Math.max(actors.length, w.allocated?.actors ?? 0)
   if (total === undefined) return `${used} ${used === 1 ? 'actor' : 'actors'} · slot capacity unknown`
-  const rest = w.state === 'active' ? `${free} free` : `${free} unused · places nothing new`
+  const rest = w.state === 'active' ? `${free} free` : `${free} unused · takes no new actors`
   return `${used} of ${total} actor slots used · ${rest}`
 }
 
