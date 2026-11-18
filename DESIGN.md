@@ -159,6 +159,15 @@ Use CSS classes from `components.css` for status cells in table rows:
 - `.status-unknown` — gray (uses theme variables)
 - `.status-violet`, `.status-purple`, `.status-orange`, `.status-cyan` — special cases
 
+### Resource Table Column Widths
+Resource tables size their columns from the data (rules in `packages/k8s-ui/src/components/resources/column-sizing.ts`):
+- Most columns keep their curated width (the `w-*` on the column, never narrower than its header).
+- Name, Namespace and Node fit their content: Name to the 95th percentile of its names, 200–480px.
+- Long free text (Event messages, selectors, image lists, URLs, uncurated CRD printer columns) is marked `sizing: 'grow'` on the column and shares the room left over, each up to its longest value.
+- Room beyond that goes to an empty trailing column, not to Name, so the useful columns stay left of the drawer.
+- A column only ever widens while the data set stays the same, so nothing jumps as rows stream in. A width the user drags is saved and kept; "Reset widths" in the column picker undoes it.
+- A cut cell ends in "…" and shows its full text on hover. Use `<TruncatedText>` for a text cell, not `<Tooltip>` around a `truncate` span, which shows a tooltip even when nothing is cut.
+
 ### Cards & Containers
 | Class | Use for |
 |-------|---------|

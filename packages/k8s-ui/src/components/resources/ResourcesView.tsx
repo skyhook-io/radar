@@ -171,7 +171,7 @@ import { ActiveFilterBar } from './ActiveFilterBar'
 import { getIstioGatewayServerCount, getIstioGatewaySelectorString } from './resource-utils-istio'
 import {
   type PrinterColumnDef, type PrinterTable, PRINTER_COLUMN_PREFIX, formatPrinterCell, printerCellSortValue,
-  printerCellTone, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
+  printerCellTone, printerColumnIsText, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
 } from './printer-columns'
 import { SEVERITY_BADGE, SEVERITY_TEXT, healthToSeverity, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { englishPlural, isEnglishPlural, pluralize } from '../../utils/pluralize'
@@ -181,6 +181,9 @@ import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCus
 import { isRolloutActivityVisible } from '../../utils/workload-rollout'
 import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { Tooltip } from '../ui/Tooltip'
+import { TruncatedText } from '../ui/TruncatedText'
+import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, rememberWidths } from './column-sizing'
+import { NAME_MIN_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, workloadImagesText } from './column-content-width'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import type { Issue } from '../issues/types'
 import { issueTitle } from '../issues/severity'
@@ -287,6 +290,12 @@ export interface Column {
   defaultVisible?: boolean // false = hidden by default, shown via column picker
   defaultWidth?: number // default width in px (used for resizable columns)
   minWidth?: number // minimum width in px
+  /** How the column is sized automatically (see column-sizing.ts). Name,
+   *  Namespace and Node fit their content; anything else keeps its width
+   *  unless it says 'grow' — long free text that takes the room left over. */
+  sizing?: ColumnSizingMode
+  /** A grow column's share of the room left over (default 1). */
+  growWeight?: number
 }
 
 type BulkResourceItem = { kind: string; group?: string; namespace: string; name: string }
@@ -325,16 +334,13 @@ function buildCustomColumn(d: CustomColumnDef): ExtraColumn {
     key: customColumnKey(d),
     label: d.path,
     width: 'w-40',
+    sizing: 'grow',
     defaultVisible: true,
     tooltip: d.source === 'label' ? `Label: ${d.path}` : `Annotation: ${d.path}`,
     render: (resource: any) => {
       const v = readCustomColumnValue(resource, d)
       if (!v) return <span className="text-sm text-theme-text-secondary">-</span>
-      return (
-        <Tooltip content={v}>
-          <span className="text-sm text-theme-text-secondary truncate block">{v}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={v} className="text-sm text-theme-text-secondary" />
     },
     getSortValue: (resource: any) => readCustomColumnValue(resource, d),
     getFilterValue: (resource: any) => readCustomColumnValue(resource, d),
@@ -436,6 +442,7 @@ function watchHeaderFont(): void {
   void fonts.ready.then(() => {
     headerLabelWidthCache.clear()
     headerMeasureCtx = undefined // re-created so ctx.font resolves against the loaded face
+    resetCellTextMeasure()
     headerFontEpoch++
     for (const notify of headerFontListeners) notify()
   })
@@ -487,17 +494,6 @@ function headerLabelWidth(label: string): number {
   return width
 }
 
-function snapshotHeaderWidths(container: HTMLElement | null): Record<string, number> | undefined {
-  const ths = container?.querySelectorAll<HTMLElement>('thead th[data-column-key]')
-  if (!ths) return undefined
-  const snapped: Record<string, number> = {}
-  ths.forEach(th => {
-    const key = th.dataset.columnKey
-    if (key) snapped[key] = th.getBoundingClientRect().width
-  })
-  return snapped
-}
-
 /**
  * Header label that carries its own full text in a tooltip when it truncates.
  *
@@ -506,34 +502,11 @@ function snapshotHeaderWidths(container: HTMLElement | null): Record<string, num
  * column the user dragged narrower, and the sort/filter controls sharing the
  * row — whose width depends on their state (an active filter renders padding,
  * an icon and a count). Their rendered width isn't knowable from the column
- * definition, so this reads the element's actual overflow rather than computing
- * it.
- *
- * The Tooltip wrapper stays mounted whether or not the label truncates: swapping
- * it in on overflow would remount the measured span, stranding the
- * ResizeObserver on the detached node so the state could never flip back. It
- * also needs min-w-0 — the wrapper is the flex item in the header row, and an
- * inline-flex box won't shrink below its content unless told to, which would
- * push the sort and filter controls out of the cell.
+ * definition, so TruncatedText reads the element's actual overflow rather than
+ * computing it.
  */
 function HeaderLabel({ label, className }: { label: string; className?: string }) {
-  const ref = useRef<HTMLSpanElement>(null)
-  const [truncated, setTruncated] = useState(false)
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const check = () => setTruncated(el.scrollWidth > el.clientWidth + 0.5)
-    check()
-    if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(check)
-    ro.observe(el)
-    return () => { ro.disconnect() }
-  }, [label])
-  return (
-    <Tooltip content={label} disabled={!truncated} preserveWrapperWhenDisabled wrapperClassName="min-w-0">
-      <span ref={ref} className={clsx('truncate', className)}>{label}</span>
-    </Tooltip>
-  )
+  return <TruncatedText text={label} className={className} />
 }
 
 /**
@@ -697,7 +670,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
     { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template' },
     { key: 'available', label: 'Available', width: 'w-28', tooltip: 'Number of pods available (ready for minReadySeconds)' },
-    { key: 'images', label: 'Images', width: 'w-48' },
+    { key: 'images', label: 'Images', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   daemonsets: [
@@ -708,7 +681,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ready', label: 'Ready', width: 'w-20', tooltip: 'Number of pods that are ready (passing readiness probes)' },
     { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template spec' },
     { key: 'available', label: 'Available', width: 'w-28', tooltip: 'Number of pods available (ready for minReadySeconds duration)' },
-    { key: 'images', label: 'Images', width: 'w-48' },
+    { key: 'images', label: 'Images', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   statefulsets: [
@@ -717,14 +690,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
     { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Pods running the current pod template; a rolling-update partition or OnDelete strategy can intentionally leave pods on an older template' },
-    { key: 'images', label: 'Images', width: 'w-48' },
+    { key: 'images', label: 'Images', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   replicasets: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'ready', label: 'Ready', width: 'w-24' },
-    { key: 'owner', label: 'Owner', width: 'w-48' },
+    { key: 'owner', label: 'Owner', width: 'w-48', sizing: 'grow' },
     { key: 'status', label: 'Status', width: 'w-24', tooltip: 'Active means desired replicas are greater than zero; Old means desired replicas are zero, regardless of Deployment revision' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -732,7 +705,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'type', label: 'Type', width: 'w-28' },
-    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'selector', label: 'Selector', width: 'w-48', sizing: 'grow', growWeight: 2 },
     { key: 'endpoints', label: 'Endpoints', width: 'w-24' },
     { key: 'ports', label: 'Ports', width: 'w-40' },
     { key: 'externalIP', label: 'External', width: 'w-40' },
@@ -752,8 +725,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'class', label: 'Class', width: 'w-24 shrink-0' },
-    { key: 'hosts', label: 'Hosts', width: 'min-w-48' },
-    { key: 'rules', label: 'Rules', width: 'min-w-56' },
+    { key: 'hosts', label: 'Hosts', width: 'min-w-48', sizing: 'grow' },
+    { key: 'rules', label: 'Rules', width: 'min-w-56', sizing: 'grow' },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
     { key: 'address', label: 'Address', width: 'min-w-32' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
@@ -774,7 +747,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   configmaps: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'keys', label: 'Keys', width: 'w-48' },
+    { key: 'keys', label: 'Keys', width: 'w-48', sizing: 'grow', growWeight: 2 },
     { key: 'size', label: 'Size', width: 'w-24', tooltip: 'Estimated size of data values, including decoded binary data. Kubernetes rejects ConfigMaps whose combined data exceeds 1 MiB.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -805,7 +778,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   hpas: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'target', label: 'Target', width: 'w-48' },
+    { key: 'target', label: 'Target', width: 'w-48', sizing: 'grow' },
     { key: 'replicas', label: 'Replicas', width: 'w-32' },
     { key: 'metrics', label: 'Metrics', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
@@ -814,7 +787,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   horizontalpodautoscalers: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'target', label: 'Target', width: 'w-48' },
+    { key: 'target', label: 'Target', width: 'w-48', sizing: 'grow' },
     { key: 'replicas', label: 'Replicas', width: 'w-32' },
     { key: 'metrics', label: 'Metrics', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
@@ -827,7 +800,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'capacity', label: 'Capacity', width: 'w-24' },
     { key: 'storageClass', label: 'Storage Class', width: 'w-40' },
     { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'RWO=ReadWriteOnce (one node, possibly several pods), ROX=ReadOnlyMany (read-only on many nodes), RWX=ReadWriteMany (read-write on many nodes), RWOP=ReadWriteOncePod (one pod only)' },
-    { key: 'volume', label: 'Volume', width: 'w-48' },
+    { key: 'volume', label: 'Volume', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   rollouts: [
@@ -837,7 +810,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Available / Desired replicas' },
     { key: 'strategy', label: 'Strategy', width: 'w-24' },
     { key: 'step', label: 'Step', width: 'w-20', tooltip: 'Current canary step / Total steps' },
-    { key: 'images', label: 'Images', width: 'w-48' },
+    { key: 'images', label: 'Images', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   analysisruns: [
@@ -981,7 +954,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   gatewayclasses: [
     { key: 'name', label: 'Name' },
     { key: 'controller', label: 'Controller', width: 'w-64', tooltip: 'Gateway controller implementation (spec.controllerName)' },
-    { key: 'description', label: 'Description', width: 'w-64' },
+    { key: 'description', label: 'Description', width: 'w-64', sizing: 'grow' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1792,7 +1765,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'value', label: 'Value', width: 'w-24', tooltip: 'Higher values receive scheduling preference; Pods can still be preempted by Pods with higher priority' },
     { key: 'globalDefault', label: 'Global Default', width: 'w-36' },
     { key: 'preemptionPolicy', label: 'Preemption', width: 'w-32' },
-    { key: 'description', label: 'Description', width: 'w-64' },
+    { key: 'description', label: 'Description', width: 'w-64', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   runtimeclasses: [
@@ -1826,8 +1799,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'type', label: 'Type', width: 'w-24' },
     { key: 'reason', label: 'Reason', width: 'w-32' },
-    { key: 'message', label: 'Message', width: 'w-64' },
-    { key: 'object', label: 'Object', width: 'w-48' },
+    { key: 'message', label: 'Message', width: 'w-64', sizing: 'grow', growWeight: 3 },
+    { key: 'object', label: 'Object', width: 'w-48', sizing: 'grow', growWeight: 3 },
     { key: 'count', label: 'Count', width: 'w-20' },
     { key: 'lastSeen', label: 'Last Seen', width: 'w-28' },
   ],
@@ -1837,7 +1810,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   gitrepositories: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'url', label: 'URL', width: 'w-64', sizing: 'grow' },
     { key: 'ref', label: 'Ref', width: 'w-32', tooltip: 'Branch, tag, or semver' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'revision', label: 'Revision', width: 'w-24', tooltip: 'Last fetched commit SHA' },
@@ -1846,7 +1819,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ocirepositories: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'url', label: 'URL', width: 'w-64', sizing: 'grow' },
     { key: 'ref', label: 'Tag', width: 'w-24', tooltip: 'OCI tag or semver' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'revision', label: 'Digest', width: 'w-24' },
@@ -1855,7 +1828,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   helmrepositories: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'url', label: 'URL', width: 'w-64', sizing: 'grow' },
     { key: 'type', label: 'Type', width: 'w-20', tooltip: 'default: Flux fetches a Helm repository index. oci: a registry reference with no reconciliation status of its own' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1877,7 +1850,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'chart', label: 'Chart', width: 'w-40' },
     { key: 'version', label: 'Version', width: 'w-24' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'message', label: 'Message', width: 'w-64', tooltip: 'Last diagnostic message — distinguishes dependency-wait, install/upgrade failure, and test failure' },
+    { key: 'message', label: 'Message', width: 'w-64', sizing: 'grow', tooltip: 'Last diagnostic message — distinguishes dependency-wait, install/upgrade failure, and test failure' },
     { key: 'revision', label: 'Rev', width: 'w-16', tooltip: 'Helm release revision number' },
     { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Deployment time of the currently deployed release, or the last Ready status change when that time is unavailable.' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1899,7 +1872,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'project', label: 'Project', width: 'w-28', tooltip: 'AppProject the app belongs to — bounds which repos and clusters it may deploy to' },
     { key: 'sync', label: 'Sync', width: 'w-24', tooltip: "Whether live resources match Argo's desired manifests; Synced does not mean Healthy" },
     { key: 'health', label: 'Health', width: 'w-24' },
-    { key: 'repo', label: 'Repository', width: 'w-48' },
+    { key: 'repo', label: 'Repository', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   applicationsets: [
@@ -1913,7 +1886,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   appprojects: [
     { key: 'name', label: 'Name' },
-    { key: 'description', label: 'Description', width: 'w-64' },
+    { key: 'description', label: 'Description', width: 'w-64', sizing: 'grow' },
     { key: 'destinations', label: 'Destinations', width: 'w-24', tooltip: 'Allowed cluster/namespace destinations' },
     { key: 'sources', label: 'Sources', width: 'w-20', tooltip: 'Allowed source repositories' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -3267,6 +3240,9 @@ function buildPrinterColumn(def: PrinterColumnDef, index: number, table: Printer
     key: printerColumnKey(def),
     label: def.name,
     width: printerColumnWidth(def),
+    // No curated set says which vendor columns hold long text, so any text
+    // column may take spare room; numbers, booleans and dates keep their width.
+    sizing: printerColumnIsText(def) ? 'grow' : 'exact',
     // Columns in kubectl's `-o wide` tier are declared but not shown by
     // default; the column picker still offers them.
     defaultVisible: (def.priority ?? 0) === 0,
@@ -3290,11 +3266,7 @@ function buildPrinterColumn(def: PrinterColumnDef, index: number, table: Printer
           </Tooltip>
         )
       }
-      return (
-        <Tooltip content={text}>
-          <span className="text-sm text-theme-text-secondary truncate block">{text}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={text} className="text-sm text-theme-text-secondary" />
     },
     getSortValue: (resource: any) => printerCellSortValue(read(resource), def),
     getFilterValue: (resource: any) => formatPrinterCell(read(resource)),
@@ -4108,6 +4080,9 @@ export function ResourcesView({
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(0)
   const [resizeLineX, setResizeLineX] = useState<number | null>(null)
+  // The rendered widths, frozen for the length of a drag (see columnLayoutWidths).
+  const [resizeFrozenWidths, setResizeFrozenWidths] = useState<Record<string, number> | null>(null)
+  const columnLayoutWidthsRef = useRef<Record<string, number>>({})
   const tableContainerRef = useRef<HTMLDivElement>(null)
   const [tableScroller, setTableScroller] = useState<HTMLElement | null>(null)
   const [tableViewportWidth, setTableViewportWidth] = useState(0)
@@ -4400,9 +4375,6 @@ export function ResourcesView({
     return () => { document.removeEventListener('mousedown', handleClick); document.removeEventListener('keydown', handleKey, true) }
   }, [showColumnPicker])
 
-  // Whether any columns have been resized (triggers switch to fixed grid sizes + spacer)
-  const hasResizedColumns = Object.keys(columnWidths).length > 0
-
   // Column resize handlers
   const handleResizeStart = useCallback((e: React.MouseEvent, colKey: string, currentWidth: number) => {
     e.preventDefault()
@@ -4411,9 +4383,10 @@ export function ResourcesView({
     resizeStartX.current = e.clientX
     resizeStartWidth.current = currentWidth
 
-    // On first resize, snapshot all column widths from the DOM to switch to fixed grid sizes
+    // Only the dragged column takes a saved width; the others stay automatic,
+    // held where they are until the drag ends.
     const container = tableContainerRef.current
-    setColumnWidths(prev => Object.keys(prev).length > 0 ? prev : snapshotHeaderWidths(container) ?? prev)
+    setResizeFrozenWidths(columnLayoutWidthsRef.current)
 
     // Show the resize line at the initial position
     const containerRect = container?.getBoundingClientRect()
@@ -4441,6 +4414,7 @@ export function ResourcesView({
     const handleMouseUp = () => {
       resizingColumn.current = null
       setResizeLineX(null)
+      setResizeFrozenWidths(null)
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.style.cursor = ''
@@ -4477,10 +4451,7 @@ export function ResourcesView({
     })
     if (width === 0) return
     const fitted = Math.max(48, Math.ceil(width))
-    setColumnWidths(prev => ({
-      ...(Object.keys(prev).length > 0 ? prev : snapshotHeaderWidths(container)),
-      [colKey]: fitted,
-    }))
+    setColumnWidths(prev => ({ ...prev, [colKey]: fitted }))
   }, [])
 
   // Toggle column visibility
@@ -6109,6 +6080,39 @@ export function ResourcesView({
   }, [allColumns, visibleColumns])
   const columns = visibleTableColumns
 
+  // Automatic column widths (see column-sizing.ts for the rules). Content is
+  // measured over every fetched item, not the filtered rows, so typing a search
+  // or picking a column filter never resizes the table.
+  const sizingKind = useMemo(() => ({
+    plural: normalizeKindToPlural(selectedKind.name, selectedKind.group),
+    cellFilterKind: getCellFilterKind(selectedKind.name, selectedKind.group),
+  }), [selectedKind.name, selectedKind.group])
+  const measuredContent = useMemo(() => {
+    if (!tableActive || !resources?.length) return null
+    const sized = columns.map(col => ({ key: col.key, sizing: col.sizing, growWeight: col.growWeight, getFilterValue: extraColumnsByKey.get(col.key)?.getFilterValue }))
+    const measured = measureColumnContent(resources, sized, { ...sizingKind, auditBadges })
+    const flat: Record<string, number> = {}
+    for (const [key, m] of Object.entries(measured)) {
+      flat[key] = m.content
+      if (m.stretch !== undefined) flat[`${key}\u0000stretch`] = m.stretch
+    }
+    return flat
+  }, [tableActive, resources, columns, extraColumnsByKey, sizingKind, auditBadges, headerFontEpoch])
+
+  // Grow-only while the table shows the same data set — the same kind and
+  // namespace selection, without a reload in between — so rows streaming in or
+  // out never narrow a column (kubectl's RememberWidths). In memory only: the
+  // widths describe one cluster's data, and Radar Hub points one UI at many.
+  const datasetIdentity = `${selectedKindIdentityOf(selectedKind)}\u0000${namespaces.join(',')}`
+  const rememberedContent = useRef<{ identity: string; widths: Record<string, number> } | null>(null)
+  if (!resources) rememberedContent.current = null
+  if (measuredContent) {
+    const previous = rememberedContent.current?.identity === datasetIdentity ? rememberedContent.current.widths : undefined
+    const widths = rememberWidths(previous, measuredContent)
+    if (widths !== previous) rememberedContent.current = { identity: datasetIdentity, widths }
+  }
+  const contentWidths = rememberedContent.current?.identity === datasetIdentity ? rememberedContent.current.widths : undefined
+
   // Phones pin a leading Name column (see PHONE_PINNED_CELL). Cap it at
   // PHONE_NAME_MAX_VW percent of the screen so a width saved on desktop can't
   // make the pinned column cover it; the saved width itself is left alone.
@@ -6122,14 +6126,46 @@ export function ResourcesView({
     return () => window.removeEventListener('resize', onResize)
   }, [isPhone])
   const phoneNameCap = isPhone && columns[0]?.key === 'name' ? Math.round(phoneViewportWidth * PHONE_NAME_MAX_VW / 100) : Infinity
-
-  // Loaded fonts can change header minima without changing the column definitions.
-  // User pins are offset by rendered widths, so a capped phone Name counts at its cap.
-  const pinWidths = useMemo(() => visibleTableColumns.map((column, i) => {
-    const width = columnWidths[column.key] || getColumnMinWidth(column, extraColumnsByKey)
-    return { key: column.key, width: i === 0 && column.key === 'name' ? Math.min(width, phoneNameCap) : width }
-  }), [visibleTableColumns, columnWidths, extraColumnsByKey, headerFontEpoch, phoneNameCap])
   const leadingPinWidth = (compareMode ? COMPARE_COLUMN_WIDTH : 0) + (isCheckboxMode ? CHECKBOX_COLUMN_WIDTH : 0)
+
+  // The width each visible column renders at. One vector feeds the <colgroup>,
+  // the pin offsets and budget, and the table's minimum width, so they agree.
+  const lastLayout = useRef<{ signature: string; widths: Record<string, number> } | null>(null)
+  const columnLayoutWidths = useMemo(() => {
+    const available = tableViewportWidth - leadingPinWidth
+    // While a column is being dragged, every other column holds still:
+    // the drag tracks the pointer from the dragged column's left edge, which
+    // must not move under it. The room is re-shared on release.
+    const frozen = resizeFrozenWidths
+    // Held widths only carry over while nothing but the data changed.
+    const signature = [datasetIdentity, available, columns.map(c => `${c.key}=${columnWidths[c.key] ?? ''}`).join(',')].join('\u0000')
+    const held = lastLayout.current?.signature === signature ? lastLayout.current.widths : undefined
+    const inputs: ColumnLayoutInput[] = columns.map(col => {
+      const spec = columnSizingSpec(col)
+      const minWidth = getColumnMinWidth(col, extraColumnsByKey)
+      const floor = col.key === 'name' ? Math.max(NAME_MIN_PX, minWidth) : minWidth
+      return {
+        key: col.key,
+        mode: spec.mode,
+        floor,
+        userWidth: columnWidths[col.key] || frozen?.[col.key],
+        content: contentWidths?.[col.key],
+        stretch: contentWidths?.[`${col.key}\u0000stretch`],
+        max: spec.max,
+        weight: spec.weight,
+        hold: held?.[col.key],
+      }
+    })
+    const widths = computeColumnLayout(inputs, available)
+    if (!frozen) lastLayout.current = { signature, widths }
+    const first = columns[0]
+    if (first?.key === 'name' && phoneNameCap !== Infinity) widths.name = Math.min(widths.name, phoneNameCap)
+    return widths
+  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, tableViewportWidth, leadingPinWidth, datasetIdentity, extraColumnsByKey, headerFontEpoch, phoneNameCap])
+  columnLayoutWidthsRef.current = columnLayoutWidths
+
+  const pinWidths = useMemo(() => visibleTableColumns.map(column => ({ key: column.key, width: columnLayoutWidths[column.key] })),
+    [visibleTableColumns, columnLayoutWidths])
   const effectivePinnedColumns = useMemo(() => {
     if (!pinnedColumns.length) return []
     const visible = new Set(visibleTableColumns.map(column => column.key))
@@ -6139,8 +6175,6 @@ export function ResourcesView({
   const columnPins = useMemo(() => resolveColumnPins(pinWidths, effectivePinnedColumns, tableViewportWidth, leadingPinWidth),
     [pinWidths, effectivePinnedColumns, tableViewportWidth, leadingPinWidth])
   const activePinnedColumns = useMemo(() => effectivePinnedColumns.slice(0, columnPins.offsets.size), [effectivePinnedColumns, columnPins.offsets.size])
-  // Keep requested pins at fixed widths even while their stickiness is paused.
-  const namePinned = pinnedColumns.includes('name')
   const pinStyles = useMemo(() => {
     const styles = new Map<string, React.CSSProperties>()
     const widths = new Map(pinWidths.map(column => [column.key, column.width]))
@@ -6163,63 +6197,20 @@ export function ResourcesView({
     setColumnOrder(order)
     setPinnedColumns(order.filter(key => pinnedColumns.includes(key)))
   }
-  const hasTableSpacer = hasResizedColumns || namePinned
 
-  // Fixed-width columns can consume the table's flexible space and collapse
-  // the required name column. Keep a real table minimum and let the container
-  // scroll horizontally when the viewport is too narrow.
-  const tableMinWidth = useMemo(() => {
-    const compareColumnWidth = compareMode ? COMPARE_COLUMN_WIDTH : 0
-    const baseMinWidth = columns.reduce((sum, col, i) => {
-      const width = columnWidths[col.key] || getColumnMinWidth(col, extraColumnsByKey)
-      return sum + (i === 0 && col.key === 'name' ? Math.min(width, phoneNameCap) : width)
-    }, compareColumnWidth)
-    const flexibleNameColumn = columns.find(col => col.key === 'name' && !columnWidths[col.key] && !namePinned)
-
-    if (!hasResizedColumns || !flexibleNameColumn) return baseMinWidth
-    return baseMinWidth + getColumnMinWidth(flexibleNameColumn, extraColumnsByKey)
-  }, [columns, columnWidths, compareMode, hasResizedColumns, extraColumnsByKey, headerFontEpoch, phoneNameCap, namePinned])
-
-  // Stable virtuoso components — memoized to avoid remounting the table on every render
-  const virtuosoComponents = useMemo(() => ({
-    Table: React.forwardRef<HTMLTableElement, React.TableHTMLAttributes<HTMLTableElement>>(function VirtuosoTable(props, ref) {
-      return (
-        <table
-          {...props}
-          ref={ref}
-          className="w-full"
-          style={{ ...props.style, tableLayout: 'fixed', minWidth: tableMinWidth }}
-        >
-          <colgroup>
-            {/*
-              Compare-mode adds a leading <th>/<td> per row but isn't part
-              of `columns`. Under table-layout:fixed the <colgroup> must
-              match the actual column count, otherwise the browser pads
-              the missing entry by stealing width from a sized neighbour
-              — typically blowing this narrow column out to ~200px.
-            */}
-            {compareMode && <col style={{ width: COMPARE_COLUMN_WIDTH }} />}
-            {isCheckboxMode && <col style={{ width: '40px' }} />}
-            {columns.map((col, i) => (
-              <col
-                key={col.key}
-                style={{
-                  width: i === 0 && col.key === 'name' && phoneNameCap !== Infinity
-                    ? `min(${columnWidths[col.key] || getColumnMinWidth(col, extraColumnsByKey)}px, ${PHONE_NAME_MAX_VW}vw)`
-                    : columnWidths[col.key]
-                      ? `${columnWidths[col.key]}px`
-                      : col.key === 'name' && !namePinned ? undefined : `${getColumnMinWidth(col, extraColumnsByKey)}px`,
-                }}
-              />
-            ))}
-            {hasTableSpacer && <col />}
-          </colgroup>
-          {props.children}
-        </table>
-      )
-    }),
-    TableRow: VirtuosoTableRow,
-  }), [columns, columnWidths, hasTableSpacer, compareMode, tableMinWidth, isCheckboxMode, extraColumnsByKey, headerFontEpoch, phoneNameCap, namePinned])
+  // Every column has an explicit width, so the table is at least their sum
+  // (and scrolls sideways below it); any room beyond goes to the trailing
+  // spacer column rather than stretching one of them.
+  const tableColumnLayout = useMemo<TableColumnLayout>(() => {
+    const widths = columns.map(col => columnLayoutWidths[col.key])
+    return {
+      widths,
+      keys: columns.map(col => col.key),
+      compareMode: !!compareMode,
+      checkbox: isCheckboxMode,
+      minWidth: leadingPinWidth + widths.reduce((total, w) => total + w, 0),
+    }
+  }, [columns, columnLayoutWidths, compareMode, isCheckboxMode, leadingPinWidth])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -6761,6 +6752,17 @@ export function ResourcesView({
               <div ref={columnPickerPanelRef} role="region" aria-label="Columns" style={columnPickerPosition} className="fixed z-50 bg-theme-surface border border-theme-border rounded-lg shadow-theme-lg py-1 flex flex-col">
                 <div className="shrink-0 px-3 py-2 border-b border-theme-border flex items-center justify-between">
                   <span className="text-xs font-medium text-theme-text-secondary uppercase">Columns</span>
+                  <span className="flex-1" />
+                  {Object.keys(columnWidths).length > 0 && (
+                    <Tooltip content="Columns you resized size themselves to their content again">
+                      <button
+                        onClick={() => setColumnWidths({})}
+                        className="mr-3 text-xs text-theme-text-tertiary hover:text-theme-text-primary"
+                      >
+                        Reset widths
+                      </button>
+                    </Tooltip>
+                  )}
                   <button
                     onClick={resetColumnSettings}
                     className="text-xs text-theme-text-tertiary hover:text-theme-text-primary flex items-center gap-1"
@@ -7082,6 +7084,7 @@ export function ResourcesView({
             </div>
           ) : (
             <MetricsContext.Provider value={metricsLookup}>
+            <TableColumnLayoutContext.Provider value={tableColumnLayout}>
             <TableVirtuoso
               ref={virtuosoRef}
               scrollerRef={captureTableScroller}
@@ -7089,7 +7092,7 @@ export function ResourcesView({
               increaseViewportBy={400}
               overscan={200}
               computeItemKey={(index, resource) => resource.metadata?.uid || `${resource.metadata?.namespace}-${resource.metadata?.name}-${index}`}
-              components={virtuosoComponents}
+              components={VIRTUOSO_TABLE_COMPONENTS}
               fixedHeaderContent={() => (
                 <tr>
                   {compareMode && (
@@ -7341,7 +7344,7 @@ export function ResourcesView({
                       </th>
                     )
                   })}
-                  {hasTableSpacer && <th className="bg-theme-base border-b border-theme-border p-0" />}
+                  <th className="bg-theme-base border-b border-theme-border p-0" />
                 </tr>
               )}
               itemContent={(index, resource) => {
@@ -7364,7 +7367,6 @@ export function ResourcesView({
                     group={selectedKind.group}
                     columns={columns}
                     extraColumnsByKey={extraColumnsByKey}
-                    hasSpacerColumn={hasTableSpacer}
                     pinStyles={pinStyles}
                     isSelected={isSelected}
                     isHighlighted={isHighlighted}
@@ -7391,6 +7393,7 @@ export function ResourcesView({
                 style={{ left: resizeLineX, zIndex: 20 }}
               />
             )}
+            </TableColumnLayoutContext.Provider>
             </MetricsContext.Provider>
           )}
         </div>
@@ -7526,7 +7529,6 @@ interface ResourceRowCellsProps {
   group?: string
   columns: Column[]
   extraColumnsByKey?: Map<string, ExtraColumn>
-  hasSpacerColumn: boolean
   pinStyles?: ReadonlyMap<string, React.CSSProperties>
   isSelected?: boolean
   isHighlighted?: boolean
@@ -7571,7 +7573,7 @@ function rowHighlightClass(
   return 'group-hover/row:bg-theme-surface/50'
 }
 
-const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, pinStyles, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle, findingMatch }: ResourceRowCellsProps) {
+const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, pinStyles, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle, findingMatch }: ResourceRowCellsProps) {
   const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted, isChecked)
   const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
   const onClick = onRowClick ? () => onRowClick(resource, !!isSelected) : undefined
@@ -7664,7 +7666,7 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
           />
         </td>
       ))}
-      {hasSpacerColumn && <td className="border-b-subtle p-0" />}
+      <td className="border-b-subtle p-0" />
     </>
   )
 })
@@ -7674,6 +7676,49 @@ const VirtuosoTableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttribu
     return <tr {...props} ref={ref} className="group/row" />
   }
 )
+
+interface TableColumnLayout {
+  widths: number[]
+  keys: string[]
+  compareMode: boolean
+  checkbox: boolean
+  minWidth: number
+}
+
+// The widths reach the table through context so the Table component keeps one
+// identity: a new component type on each width change would remount the whole
+// table body, losing focus and hover state on every resize or data update.
+const TableColumnLayoutContext = React.createContext<TableColumnLayout>({ widths: [], keys: [], compareMode: false, checkbox: false, minWidth: 0 })
+
+const VirtuosoTable = React.forwardRef<HTMLTableElement, React.TableHTMLAttributes<HTMLTableElement>>(function VirtuosoTable(props, ref) {
+  const layout = useContext(TableColumnLayoutContext)
+  return (
+    <table
+      {...props}
+      ref={ref}
+      className="w-full"
+      style={{ ...props.style, tableLayout: 'fixed', minWidth: layout.minWidth }}
+    >
+      <colgroup>
+        {/*
+          Compare-mode adds a leading <th>/<td> per row but isn't part
+          of `columns`. Under table-layout:fixed the <colgroup> must
+          match the actual column count, otherwise the browser pads
+          the missing entry by stealing width from a sized neighbour
+          — typically blowing this narrow column out to ~200px.
+        */}
+        {layout.compareMode && <col style={{ width: COMPARE_COLUMN_WIDTH }} />}
+        {layout.checkbox && <col style={{ width: CHECKBOX_COLUMN_WIDTH }} />}
+        {layout.keys.map((key, i) => <col key={key} style={{ width: `${layout.widths[i]}px` }} />)}
+        {/* Takes whatever room the columns leave. */}
+        <col />
+      </colgroup>
+      {props.children}
+    </table>
+  )
+})
+
+const VIRTUOSO_TABLE_COMPONENTS = { Table: VirtuosoTable, TableRow: VirtuosoTableRow }
 
 function CopyNameButton({ name }: { name: string }) {
   const [copied, setCopied] = useState(false)
@@ -7726,26 +7771,24 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   // Common columns
   if (column === 'name') {
     const isTerminating = !!meta.deletionTimestamp
-    const nameClass = clsx('text-sm font-medium truncate block', isTerminating ? 'text-theme-text-tertiary line-through' : 'text-theme-text-primary')
+    const nameClass = clsx('text-sm font-medium', isTerminating ? 'text-theme-text-tertiary line-through' : 'text-theme-text-primary')
     const pauseState = isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged' ? getCrossplanePauseState(resource) : null
     const audit = auditBadges?.[`${meta.namespace || ''}/${meta.name}`]
     const auditTotal = audit ? audit.danger + audit.warning : 0
     return (
       <div className="flex items-center gap-1.5 min-w-0">
-        <Tooltip content={meta.name} wrapperClassName={findingMatch || pauseState ? 'min-w-0' : undefined}>
-          {nameHref ? (
+        {nameHref ? (
+          <TruncatedText text={meta.name || ''} className={nameClass}>
             <a
               href={nameHref}
-              className={clsx(nameClass, 'hover:underline focus-visible:underline focus-visible:outline-none rounded-sm')}
+              className="hover:underline focus-visible:underline focus-visible:outline-none rounded-sm"
             >
               {meta.name}
             </a>
-          ) : (
-            <span className={nameClass}>
-              {meta.name}
-            </span>
-          )}
-        </Tooltip>
+          </TruncatedText>
+        ) : (
+          <TruncatedText text={meta.name || ''} className={nameClass} />
+        )}
         <CopyNameButton name={meta.name} />
         <CrossplanePauseChip state={pauseState} compact />
         {findingMatch && (
@@ -7777,11 +7820,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     )
   }
   if (column === 'namespace') {
-    return (
-      <Tooltip content={meta.namespace}>
-        <span className="text-sm text-theme-text-secondary truncate block">{meta.namespace || '-'}</span>
-      </Tooltip>
-    )
+    return <TruncatedText text={meta.namespace || '-'} className="text-sm text-theme-text-secondary" />
   }
   if (column === 'age') {
     if (!meta.creationTimestamp) {
@@ -8776,13 +8815,13 @@ function WorkloadCell({ resource, column, kind }: { resource: any; kind: string;
     case 'images': {
       const images = getWorkloadImages(resource)
       if (images.length === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const display = images.length === 1 ? truncate(images[0], 40) : `${truncate(images[0], 30)} +${images.length - 1}`
+      // Several images: the tooltip lists them all, which the cell can't.
       return (
-        <Tooltip content={images.join('\n')}>
-          <span className="text-sm text-theme-text-secondary truncate">
-            {display}
-          </span>
-        </Tooltip>
+        <TruncatedText
+          text={workloadImagesText(images)}
+          tooltip={images.length > 1 ? images.join('\n') : undefined}
+          className="text-sm text-theme-text-secondary"
+        />
       )
     }
     case 'conditions': {
@@ -8854,13 +8893,13 @@ function DaemonSetCell({ resource, column }: { resource: any; column: string }) 
     case 'images': {
       const images = getWorkloadImages(resource)
       if (images.length === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const display = images.length === 1 ? truncate(images[0], 40) : `${truncate(images[0], 30)} +${images.length - 1}`
+      // Several images: the tooltip lists them all, which the cell can't.
       return (
-        <Tooltip content={images.join('\n')}>
-          <span className="text-sm text-theme-text-secondary truncate">
-            {display}
-          </span>
-        </Tooltip>
+        <TruncatedText
+          text={workloadImagesText(images)}
+          tooltip={images.length > 1 ? images.join('\n') : undefined}
+          className="text-sm text-theme-text-secondary"
+        />
       )
     }
     default:
@@ -8887,8 +8926,7 @@ function ReplicaSetCell({ resource, column }: { resource: any; column: string })
       )
     }
     case 'owner': {
-      const owner = getReplicaSetOwner(resource)
-      return <span className="text-sm text-theme-text-secondary truncate">{owner || '-'}</span>
+      return <TruncatedText text={getReplicaSetOwner(resource) || '-'} className="text-sm text-theme-text-secondary" />
     }
     case 'status': {
       const isActive = isReplicaSetActive(resource)
@@ -8918,14 +8956,7 @@ function ServiceCell({ resource, column }: { resource: any; column: string }) {
       )
     }
     case 'selector': {
-      const selector = getServiceSelector(resource)
-      return (
-        <Tooltip content={selector}>
-          <span className="text-sm text-theme-text-secondary truncate">
-            {selector}
-          </span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getServiceSelector(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'endpoints': {
       // getServiceEndpointsStatus can't see live pods, so it optimistically
@@ -9029,20 +9060,10 @@ function IngressCell({ resource, column }: { resource: any; column: string }) {
       return <span className="text-sm text-theme-text-secondary">{ingressClass || '-'}</span>
     }
     case 'hosts': {
-      const hosts = getIngressHosts(resource)
-      return (
-        <Tooltip content={hosts}>
-          <span className="text-sm text-theme-text-secondary truncate">{hosts}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getIngressHosts(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'rules': {
-      const rules = getIngressRules(resource)
-      return (
-        <Tooltip content={rules}>
-          <span className="text-sm text-theme-text-secondary truncate">{rules}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getIngressRules(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'tls': {
       const hasTLS = hasIngressTLS(resource)
@@ -9070,15 +9091,9 @@ function ConfigMapCell({ resource, column }: { resource: any; column: string }) 
     case 'keys': {
       const { count, preview } = getConfigMapKeys(resource)
       return (
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-theme-text-secondary">{count}</span>
-          {count > 0 && (
-            <Tooltip content={preview}>
-              <span className="text-xs text-theme-text-tertiary truncate">
-                ({preview})
-              </span>
-            </Tooltip>
-          )}
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm text-theme-text-secondary shrink-0">{count}</span>
+          {count > 0 && <TruncatedText text={`(${preview})`} tooltip={preview} className="text-xs text-theme-text-tertiary" />}
         </div>
       )
     }
@@ -9201,8 +9216,7 @@ function CronJobCell({ resource, column }: { resource: any; column: string }) {
 function HPACell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'target': {
-      const target = getHPATarget(resource)
-      return <span className="text-sm text-theme-text-secondary truncate">{target}</span>
+      return <TruncatedText text={getHPATarget(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'replicas': {
       const { current, min, max } = getHPAReplicas(resource)
@@ -9558,11 +9572,7 @@ function PVCCell({ resource, column }: { resource: any; column: string }) {
       return <span className="text-sm text-theme-text-secondary">{modes}</span>
     }
     case 'volume':
-      return (
-        <Tooltip content={resource.spec?.volumeName}>
-          <span className="text-sm text-theme-text-secondary truncate block">{resource.spec?.volumeName || '-'}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={resource.spec?.volumeName || '-'} className="text-sm text-theme-text-secondary" />
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
   }
@@ -9856,12 +9866,7 @@ function GatewayClassCell({ resource, column }: { resource: any; column: string 
       )
     }
     case 'description': {
-      const desc = getGatewayClassDescription(resource)
-      return (
-        <Tooltip content={desc}>
-          <span className="text-sm text-theme-text-secondary truncate block">{desc}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getGatewayClassDescription(resource)} className="text-sm text-theme-text-secondary" />
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -10075,7 +10080,7 @@ function PriorityClassCell({ resource, column }: { resource: any; column: string
       return <span className="text-sm text-theme-text-secondary">{resource.preemptionPolicy || 'PreemptLowerPriority'}</span>
     case 'description':
       return resource.description
-        ? <span className="text-sm text-theme-text-secondary truncate" title={resource.description}>{resource.description}</span>
+        ? <TruncatedText text={resource.description} className="text-sm text-theme-text-secondary" />
         : <span className="text-sm text-theme-text-tertiary">-</span>
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -10139,25 +10144,18 @@ function EventCell({ resource, column }: { resource: any; column: string }) {
         </span>
       )
     case 'message': {
-      const message = resource.message || ''
-      return (
-        <Tooltip content={message}>
-          <span className="text-sm text-theme-text-secondary truncate block max-w-64">
-            {message || '-'}
-          </span>
-        </Tooltip>
-      )
+      return <TruncatedText text={resource.message || '-'} className="text-sm text-theme-text-secondary" />
     }
     case 'object': {
       const obj = resource.involvedObject
       if (!obj) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const objRef = `${obj.kind}/${obj.name}`
+      // The tooltip names the namespace, which the cell leaves out.
       return (
-        <Tooltip content={`${obj.kind}: ${obj.namespace ? obj.namespace + '/' : ''}${obj.name}`}>
-          <span className="text-sm text-theme-text-secondary truncate block">
-            {objRef}
-          </span>
-        </Tooltip>
+        <TruncatedText
+          text={`${obj.kind}/${obj.name}`}
+          tooltip={`${obj.kind}: ${obj.namespace ? obj.namespace + '/' : ''}${obj.name}`}
+          className="text-sm text-theme-text-secondary"
+        />
       )
     }
     case 'count': {
