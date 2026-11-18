@@ -5,8 +5,8 @@ import {
   Badge,
   Collapse,
   CollapseChevron,
-  FoldSection,
   OpenIssueContext,
+  RowDetails,
   RefLink,
   StatusDot,
   Tooltip,
@@ -254,6 +254,7 @@ function AttentionRow({ a, onNavigate }: { a: AgentSandboxAttention; onNavigate:
   const age = attentionAge(a)
   const detail = attentionDetail(a)
   const hasDetails = !!detail || !!a.related || shownRelations(a).length > 0 || !!a.rawDetail
+  const [open, setOpen] = useState(false)
   return (
     <li className="min-w-0 text-sm" data-rule={a.rule}>
       <div className={clsx('break-words font-medium', toneTextClass(severityTone(a.severity)))}>{a.title}</div>
@@ -275,14 +276,12 @@ function AttentionRow({ a, onNavigate }: { a: AgentSandboxAttention; onNavigate:
         <NextStepText a={a} />
       </div>
       {hasDetails && (
-        <FoldSection title="Details" summary="" attention={false}>
-          <div className="space-y-1.5">
-            {detail && <div className="break-words text-xs text-theme-text-secondary">{detail}</div>}
-            {a.related && <RefsLine lead={a.related.lead} refs={a.related.refs} onNavigate={onNavigate} />}
-            <RelationsLine a={a} onNavigate={onNavigate} />
-            {a.rawDetail && <SourceText label={a.rawDetailLabel ?? 'Source’s message'} text={a.rawDetail} />}
-          </div>
-        </FoldSection>
+        <RowDetails open={open} onToggle={() => setOpen((v) => !v)}>
+          {detail && <div className="break-words text-xs text-theme-text-secondary">{detail}</div>}
+          {a.related && <RefsLine lead={a.related.lead} refs={a.related.refs} onNavigate={onNavigate} />}
+          <RelationsLine a={a} onNavigate={onNavigate} />
+          {a.rawDetail && <SourceText label={a.rawDetailLabel ?? 'Source’s message'} text={a.rawDetail} />}
+        </RowDetails>
       )}
     </li>
   )
