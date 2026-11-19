@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -601,10 +602,7 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		return &applicationsResponse{Applications: entry.rows, ArgoClaims: entry.claims}, nil
 	}
 
-	// The build is shared by every caller with this key, so no caller's
-	// request bounds it: each caller waits on its own context, and the build
-	// waits for its slot and runs under budgets of its own.
-	flight := applicationsBuildSF.DoChan(cacheKey, func() (any, error) {
+	return awaitApplicationsBuild(ctx, cacheKey, func() (*applicationsResponse, error) {
 		applicationsCacheMu.Lock()
 		entry, hit := applicationsCache[cacheKey]
 		applicationsCacheMu.Unlock()
@@ -671,6 +669,31 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 			applicationsCacheMu.Unlock()
 		}
 		return &applicationsResponse{Applications: rows, ArgoClaims: claims}, nil
+	})
+}
+
+var errApplicationsBuildFailed = errors.New("the Applications build failed; the server log has the details")
+
+// awaitApplicationsBuild joins the build for key, starting build when none is
+// running, and waits for it on ctx. The build is shared by every caller with
+// this key, so no caller's request bounds it: each caller waits on its own
+// context, and the build waits for its slot and runs under budgets of its own.
+func awaitApplicationsBuild(ctx context.Context, key string, build func() (*applicationsResponse, error)) (*applicationsResponse, error) {
+	flight := applicationsBuildSF.DoChan(key, func() (_ any, err error) {
+		// singleflight rethrows a panic in a channel flight on a goroutine of
+		// its own, which no request's recovery reaches: it would end the
+		// process. Every waiter gets an error instead.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[applications] Applications build panicked: %v\n%s", r, debug.Stack())
+				err = errApplicationsBuildFailed
+			}
+		}()
+		resp, err := build()
+		if err != nil {
+			return nil, err
+		}
+		return resp, nil
 	})
 	select {
 	case res := <-flight:

@@ -359,3 +359,38 @@ func TestApplicationsBuildWhileAManagerKindLoadsIsNotCached(t *testing.T) {
 		t.Fatalf("cached builds after the load = %d, want 1", cached)
 	}
 }
+
+// A build that panics fails every request waiting on it, not the process, and
+// leaves nothing behind: the next request for the same rows builds them.
+func TestApplicationsBuildPanicFailsItsWaiters(t *testing.T) {
+	queuedApplicationsBuildFixture(t)
+	key := fmt.Sprintf("%d|%s", applicationsCacheGeneration, applicationsCacheKeyFor([]string{"prod"}, false))
+	release := make(chan struct{})
+	panicking := func() (*applicationsResponse, error) {
+		<-release
+		panic("build bug")
+	}
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			_, err := awaitApplicationsBuild(context.Background(), key, panicking)
+			errs <- err
+		}()
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	for range 2 {
+		if err := <-errs; !errors.Is(err, errApplicationsBuildFailed) {
+			t.Fatalf("waiter err = %v, want errApplicationsBuildFailed", err)
+		}
+	}
+	if status := listApplicationsStatus(); status != http.StatusOK {
+		t.Fatalf("next request status = %d, want 200", status)
+	}
+	applicationsCacheMu.Lock()
+	cached := len(applicationsCache)
+	applicationsCacheMu.Unlock()
+	if cached != 1 {
+		t.Fatalf("cached builds = %d, want the next request's one", cached)
+	}
+}
