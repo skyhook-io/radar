@@ -5,16 +5,17 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'kind-demo' } }) }))
 
-import { getSandboxStatus } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
+import { getSandboxClaimStatus, getSandboxStatus, getSandboxWarmPoolStatus } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { AgentSandboxLists } from './data'
 import { ClaimsScreen, SandboxesScreen, WarmPoolsScreen, filterSandboxes, poolNotReadyPath, requestedMode, stateMessage } from './AgentSandboxTables'
 import { AgentSandboxGate } from './shared'
-import { NS, PARTIAL, claim, emptyData, liveData, liveSandboxes, read, sandbox, warmPool } from './agentsandbox.fixtures'
+import { NS, PARTIAL, claim, emptyData, liveClaims, liveData, liveSandboxes, read, sandbox, warmPool } from './agentsandbox.fixtures'
 import { liveWorkspace } from './workspace.fixtures'
 import { serverReadings } from './labels'
 import { QueryClient } from '@tanstack/react-query'
 import { kindToPluralWithGroup } from '../../utils/navigation'
 import { agentSandboxListKey } from './data'
+import { readListFilters, withoutColumn } from './listFilters'
 import { SANDBOX_CLAIM_KIND, SANDBOX_KIND, SANDBOX_WARM_POOL_KIND } from './routes'
 
 // The kind lists read the resource list endpoint, with its coverage; the
@@ -183,6 +184,45 @@ describe('Agent Sandbox kind lists', () => {
     expect(html).not.toContain('bad-image')
     const none = page(<SandboxesScreen {...screenProps(liveData())} />, `/resources/sandboxes?pool=${encodeURIComponent(`${NS}/other`)}`)
     expect(none).toContain('No Sandboxes match these filters.')
+  })
+
+  it('applies the Resources page’s status filter, matching the text the standard table filters on', () => {
+    const suspended = page(<SandboxesScreen {...screenProps(liveData())} />, `/resources/sandboxes?filters=${encodeURIComponent('status:Suspended')}`)
+    expect(suspended).toContain('Status: Suspended')
+    const shown = liveSandboxes().map((o) => o.metadata.name).filter((n) => suspended.includes(`>${n}<`))
+    expect(shown).toEqual(liveSandboxes().filter((o) => getSandboxStatus(o).text === 'Suspended').map((o) => o.metadata.name))
+    expect(shown).toEqual(['suspended'])
+    const excluded = page(<SandboxesScreen {...screenProps(liveData())} />, `/resources/sandboxes?filters=${encodeURIComponent('status:exclude:Suspended')}`)
+    expect(excluded).toContain('Status excludes: Suspended')
+    expect(excluded).toContain('>foreign<')
+    expect(excluded).not.toContain('>suspended<')
+
+    const claimText = getSandboxClaimStatus(liveClaims()[0]).text
+    const claims = page(<ClaimsScreen {...screenProps(liveData())} />, `/resources/sandboxclaims?filters=${encodeURIComponent(`status:${claimText}`)}`)
+    expect(claims).toContain('claim-missing-pool')
+    expect(claims).not.toContain('claim-ok')
+    const cold = warmPool('cold', { uid: 'a' })
+    const full = warmPool('full', { uid: 'b', readyReplicas: 2 })
+    const pools = liveData({ warmPools: [cold, full] })
+    const fullText = getSandboxWarmPoolStatus(full).text
+    expect(fullText).not.toBe(getSandboxWarmPoolStatus(cold).text)
+    const poolsHtml = page(<WarmPoolsScreen {...screenProps(pools)} />, `/resources/sandboxwarmpools?filters=${encodeURIComponent(`status:${fullText}`)}`)
+    expect(poolsHtml).toContain('>full<')
+    expect(poolsHtml).not.toContain('>cold<')
+    expect(page(<WarmPoolsScreen {...screenProps(pools)} />, `/resources/sandboxwarmpools?filters=${encodeURIComponent('status:Nope')}`)).toContain('No SandboxWarmPools match these filters.')
+  })
+
+  it('names the Resources filters these lists can’t apply instead of dropping them', () => {
+    const search = `?filters=${encodeURIComponent('status:Suspended|label%3Atier:gold')}&labels=app%3Dx&ownerKind=Deployment&ownerName=web`
+    const { columns, ignored } = readListFilters(search, SANDBOX_KIND)
+    expect(columns).toEqual([{ key: 'status', label: 'Status', values: ['Suspended'], exclude: false }])
+    expect(ignored.map((f) => f.label)).toEqual(['label:tier: gold', 'Labels: app=x', 'Owner: Deployment/web'])
+    const html = page(<SandboxesScreen {...screenProps(liveData())} />, `/resources/sandboxes${search}`)
+    expect(html).toContain('Labels: app=x (not applied here)')
+    expect(html).toContain('Owner: Deployment/web (not applied here)')
+    // Clearing one column keeps the others.
+    expect(withoutColumn(search, 'status').get('filters')).toBe('label%3Atier:gold')
+    expect(withoutColumn(`?filters=status:Suspended`, 'status').has('filters')).toBe(false)
   })
 
   it('narrows each list by name from the Resources page’s search param', () => {
