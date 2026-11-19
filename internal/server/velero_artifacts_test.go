@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -138,6 +139,64 @@ func TestVeleroLogRowsDoNotCapCountsOrSearch(t *testing.T) {
 	}
 }
 
+func TestVeleroLogResponseTextIsBounded(t *testing.T) {
+	line := "level=error msg=" + strings.Repeat("x", 12<<10) + "\n"
+	result, err := decodeVeleroLog(strings.NewReader(strings.Repeat(line, 1000)), map[string]bool{"error": true}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := result.(veleroRunLog)
+	returned := 0
+	for _, l := range got.Lines {
+		returned += len(l.Text)
+	}
+	if returned > maxVeleroLogResponseBytes || len(got.Lines) == 0 || len(got.Lines) == 1000 || !got.Truncated || got.Matched != 1000 || got.Counts["error"] != 1000 {
+		t.Fatalf("returned %d bytes in %d lines: matched %d, truncated %v", returned, len(got.Lines), got.Matched, got.Truncated)
+	}
+}
+
+// Velero issues no download link for a run that is gone or not yet started, so
+// the route answers from the run itself rather than waiting out the timeout.
+func TestVeleroArtifactRoutesAnswerFromTheRunBeforeAskingVelero(t *testing.T) {
+	for name, tc := range map[string]struct {
+		phase string // "" with seed=false: no such run
+		seed  bool
+		want  string
+	}{
+		"deleted run":   {seed: false, want: "Velero Backup not found"},
+		"not started":   {phase: "New", seed: true, want: "has not started this backup yet"},
+		"phase not set": {phase: "", seed: true, want: "has not started this backup yet"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{downloadRequestGVR: "DownloadRequestList", {Group: veleroGroup, Version: "v1", Resource: "backups"}: "BackupList"})
+			if tc.seed {
+				answerVeleroRun(dyn, tc.phase)
+			}
+			if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: veleroGroup, Version: "v1", Kind: "DownloadRequest", Name: "downloadrequests", Namespaced: true, IsCRD: true}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestDynamicState)
+			t.Cleanup(k8s.SetTestLocalMode())
+			srv := New(Config{DevMode: true, ListenAddress: "localhost"})
+			t.Cleanup(srv.Stop)
+			start := time.Now()
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "http://localhost/api/velero/backups/velero/nightly/log", nil))
+			if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), tc.want) {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+			}
+			if time.Since(start) > 2*time.Second {
+				t.Errorf("took %s waiting for a link Velero never issues", time.Since(start))
+			}
+			for _, a := range dyn.Actions() {
+				if a.GetVerb() == "create" {
+					t.Errorf("created a %s for a run Velero cannot serve", a.GetResource().Resource)
+				}
+			}
+		})
+	}
+}
+
 func TestVeleroLogLongLineStopsWithPrefixCoverage(t *testing.T) {
 	prefix := "level=info msg=ok\n"
 	for _, length := range []int{maxVeleroLogLineBytes, maxVeleroLogLineBytes + 1} {
@@ -224,6 +283,7 @@ func TestVeleroArtifactRoutesAndStorageFailures(t *testing.T) {
 					}))
 					t.Cleanup(store.Close)
 					dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{downloadRequestGVR: "DownloadRequestList"})
+					answerVeleroRun(dyn, "Completed")
 					dyn.PrependReactor("get", "downloadrequests", func(k8stesting.Action) (bool, runtime.Object, error) {
 						return true, &unstructured.Unstructured{Object: map[string]any{"apiVersion": "velero.io/v1", "kind": "DownloadRequest", "status": map[string]any{"downloadURL": store.URL + "?signature=secret"}}}, nil
 					})
@@ -285,6 +345,7 @@ func TestVeleroArtifactRoutesRefuseLinkLocalDownloads(t *testing.T) {
 	for _, artifact := range []string{"contents", "log"} {
 		t.Run(artifact, func(t *testing.T) {
 			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{downloadRequestGVR: "DownloadRequestList"})
+			answerVeleroRun(dyn, "Completed")
 			dyn.PrependReactor("get", "downloadrequests", func(k8stesting.Action) (bool, runtime.Object, error) {
 				return true, &unstructured.Unstructured{Object: map[string]any{"apiVersion": "velero.io/v1", "kind": "DownloadRequest", "status": map[string]any{"downloadURL": "http://169.254.169.254/latest?signature=secret"}}}, nil
 			})
@@ -427,6 +488,22 @@ func TestVeleroRestoreContentsRouteReadsTheRestoresOutcome(t *testing.T) {
 			if !reflect.DeepEqual(targets, []string{"RestoreResourceList"}) {
 				t.Fatalf("download requests %v, want the resource list alone", targets)
 			}
+		})
+	}
+}
+
+var veleroRestoreGVR = schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: "restores"}
+
+// answerVeleroRun makes the fake answer a get of any Backup or Restore with a
+// run of that name in phase, as the artifact routes read the run first.
+func answerVeleroRun(dyn *dynamicfake.FakeDynamicClient, phase string) {
+	for resource, kind := range veleroRunKinds {
+		dyn.PrependReactor("get", resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
+			return true, &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "velero.io/v1", "kind": kind,
+				"metadata": map[string]any{"name": a.(k8stesting.GetAction).GetName(), "namespace": a.GetNamespace()},
+				"status":   map[string]any{"phase": phase},
+			}}, nil
 		})
 	}
 }

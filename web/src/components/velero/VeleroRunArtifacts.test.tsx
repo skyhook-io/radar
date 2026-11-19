@@ -223,7 +223,7 @@ describe('Log rows and filters', () => {
     state.fetch.mockResolvedValue(log({ partial: true, truncated: true, decodedBytes: 64 << 20, limit: '64 MiB decoded limit' }))
     await mount(<VeleroRunLog {...props} />)
     await settle(() => host.textContent!.includes('Counts and search cover the first 64.00 MiB'))
-    expect(host.textContent).toContain('first 5,000 matching lines')
+    expect(host.textContent).toContain('Showing the first 1 matching line.')
     expect(host.textContent).toContain('the decoded prefix')
     expect(button('Error').textContent).toBe('Errors + warnings')
     expect([...host.querySelectorAll('[role="tab"]')].some((el) => el.textContent === 'Error≥0')).toBe(true)

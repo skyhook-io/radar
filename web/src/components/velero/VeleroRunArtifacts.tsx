@@ -93,7 +93,8 @@ export function VeleroRunLog({ kind, namespace, name }: RunProps) {
     {query.error && <ArtifactError error={query.error} hasData={!!data} retry={() => void query.refetch()} />}
     {query.isPending && <p className="text-sm text-theme-text-secondary">Loading log…</p>}
     {data?.partial && <Notice>Counts and search cover the first {(data.decodedBytes / (1 << 20)).toFixed(2)} MiB of decoded log ({data.limit}). Later lines were not read.</Notice>}
-    {data?.truncated && <Notice>Showing the first 5,000 matching lines. Counts and search cover {data.partial ? 'the decoded prefix' : 'the whole log'}.</Notice>}
+    {kind === 'restores' && <p className="text-xs text-theme-text-secondary">Velero stores a restore’s log when its main pass ends. Errors from later finalization, such as post-restore hooks, are in the Overview’s messages, not here.</p>}
+    {data?.truncated && <Notice>Showing the first {pluralize(data.lines.length, 'matching line')}. Counts and search cover {data.partial ? 'the decoded prefix' : 'the whole log'}.</Notice>}
     {data && <SectionTable
       title="Run log"
       subtitle={`${data.matched} matching lines`}
