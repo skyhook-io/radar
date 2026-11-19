@@ -97,8 +97,8 @@ func TestMetalLBAdvertisementSummary(t *testing.T) {
 
 func TestMetalLBBGPPeerSummaryOmitsPassword(t *testing.T) {
 	for _, tc := range []struct {
-		name                             string
-		spec                             map[string]any
+		name                           string
+		spec                           map[string]any
 		wantType, wantTarget, wantASNs string
 	}{
 		{"eBGP with port", map[string]any{"myASN": int64(64500), "peerASN": int64(64501), "peerAddress": "172.18.0.5", "peerPort": int64(179)}, "eBGP", "172.18.0.5:179", "local ASN 64500, peer ASN 64501"},
