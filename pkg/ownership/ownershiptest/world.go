@@ -17,10 +17,12 @@ import (
 type World struct {
 	// Resources are what discovery serves.
 	Resources []ownership.ServedResource
-	// Partial: discovery missed some groups, so kinds beyond Resources may
-	// exist.
+	// Partial: discovery failed without identifying every missed group, so
+	// no group can rule out kinds beyond Resources.
 	Partial bool
-	Objects []Object
+	// FailedGroups are the groups a partial response identified as missed.
+	FailedGroups []string
+	Objects      []Object
 	// Collection says how much of each kind Radar holds; a kind not listed is
 	// collected in full.
 	Collection map[resourceid.GroupKind]Collection
@@ -45,6 +47,10 @@ type Object struct {
 	Membership           ownership.MembershipState
 	Members              []resourceid.Ref
 	DestinationNamespace string
+	// Declares are the ConfigMaps, Secrets, PersistentVolumeClaims and
+	// ServiceAccount a Pod, or the pod template of a ReplicaSet, Deployment or
+	// Job, declares. Other kinds ignore it.
+	Declares []resourceid.Ref
 	// Form picks one of the ways a status can say the same thing, such as
 	// an empty list written or left out; a renderer must vary only that,
 	// and Scan ignores it.

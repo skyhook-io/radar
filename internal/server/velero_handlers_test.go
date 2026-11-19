@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -17,65 +16,8 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
-
-// Velero resolves an unset spec.storageLocation to the location marked default.
-// Reading absent as "no location" would drop every backup taken with the default
-// settings out of the list — which is most of them — and leave a storage location
-// page saying nothing depends on it.
-func TestVeleroBackupLocation_AppliesVeleroDefault(t *testing.T) {
-	for _, c := range []struct {
-		name        string
-		spec        map[string]interface{}
-		defaultName string
-		want        string
-	}{
-		{"explicit location", map[string]interface{}{"storageLocation": "dr-replica"}, "primary", "dr-replica"},
-		{"absent uses the location flagged default", map[string]interface{}{}, "primary", "primary"},
-		{"empty uses the location flagged default", map[string]interface{}{"storageLocation": ""}, "primary", "primary"},
-		// Nothing claims the flag: fall back to the conventional name rather than
-		// dropping the backup out of every location's list.
-		{"absent with no flagged default", map[string]interface{}{}, "", "default"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			u := &unstructured.Unstructured{Object: map[string]interface{}{"spec": c.spec}}
-			if got := veleroBackupLocation(u, c.defaultName); got != c.want {
-				t.Errorf("veleroBackupLocation(%v, %q) = %q, want %q", c.spec, c.defaultName, got, c.want)
-			}
-		})
-	}
-}
-
-// The name "default" is a convention, not the contract — the contract is
-// spec.default on the location. An install that renamed its default location
-// would otherwise have every backup taken with default settings attributed to a
-// location that does not exist, and the real one would report holding nothing.
-func TestVeleroDefaultLocationName(t *testing.T) {
-	loc := func(name string, isDefault bool) *unstructured.Unstructured {
-		u := &unstructured.Unstructured{Object: map[string]interface{}{
-			"spec": map[string]interface{}{"default": isDefault},
-		}}
-		u.SetName(name)
-		return u
-	}
-
-	if got := veleroDefaultLocationName([]*unstructured.Unstructured{
-		loc("dr-replica", false), loc("primary", true),
-	}); got != "primary" {
-		t.Errorf("got %q, want the location carrying the flag", got)
-	}
-
-	// None flagged: say so rather than guessing, and let the caller fall back.
-	if got := veleroDefaultLocationName([]*unstructured.Unstructured{
-		loc("a", false), loc("b", false),
-	}); got != "" {
-		t.Errorf("got %q, want empty when no location claims the flag", got)
-	}
-
-	if got := veleroDefaultLocationName(nil); got != "" {
-		t.Errorf("got %q, want empty for no locations", got)
-	}
-}
 
 // A caller who may not list Backups is told so. An empty list would read as "this
 // storage location holds nothing", which on the page someone opens to decide
@@ -114,51 +56,43 @@ func mustReadSource(t *testing.T, path string) string {
 	return string(b)
 }
 
-// Velero retains backups until their TTL expires, so one location can hold
-// thousands. The list is a page and the counts are the location's — the panel
-// reading this renders a chip per entry and prints "N of M", so an uncapped list
-// is both a wall of chips and a response that grows without bound.
-func TestVeleroStoredBackupsIsAPageNotTheWholeLocation(t *testing.T) {
-	if maxStoredBackupsListed <= 0 {
-		t.Fatal("the cap must be positive")
+func TestVeleroStoredBackupsKeepsNewRunsOnACappedPage(t *testing.T) {
+	stored := func(name, phase, created string, times map[string]any) *unstructured.Unstructured {
+		times["phase"] = phase
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "velero.io/v1", "kind": "Backup",
+			"metadata": map[string]any{"name": name, "namespace": "velero", "creationTimestamp": created},
+			"spec":     map[string]any{"storageLocation": "primary"}, "status": times,
+		}}
 	}
-	// Newest-first ordering is what makes truncation safe: the most recent
-	// restorable point is derived from this list, so the newest must survive.
-	resp := VeleroStoredBackupsResponse{}
-	for i := 0; i < maxStoredBackupsListed+50; i++ {
-		resp.Backups = append(resp.Backups, VeleroStoredBackup{
-			Namespace: "velero",
-			Name:      fmt.Sprintf("b-%03d", i),
-			Phase:     "Completed",
-			Completed: fmt.Sprintf("2026-08-%02dT00:00:00Z", 1+(i%27)),
-		})
+	var backups []runtime.Object
+	for i := 0; i < maxStoredBackupsListed; i++ {
+		backups = append(backups, stored(fmt.Sprintf("completed-%03d", i), "Completed", "2026-11-16T00:00:00Z",
+			map[string]any{"completionTimestamp": "2026-11-16T02:00:00Z"}))
 	}
-	total := len(resp.Backups)
-	sort.Slice(resp.Backups, func(i, j int) bool {
-		if resp.Backups[i].Completed != resp.Backups[j].Completed {
-			return resp.Backups[i].Completed > resp.Backups[j].Completed
-		}
-		return resp.Backups[i].Name < resp.Backups[j].Name
-	})
-	newest := resp.Backups[0]
-	resp.Stored = total
-	if len(resp.Backups) > maxStoredBackupsListed {
-		resp.Backups = resp.Backups[:maxStoredBackupsListed]
-		resp.Truncated = true
+	backups = append(backups,
+		stored("rejected", "FailedValidation", "2026-11-19T04:00:00Z", map[string]any{}),
+		stored("running", "InProgress", "2026-11-15T00:00:00Z", map[string]any{"startTimestamp": "2026-11-18T03:00:00Z"}),
+	)
+	seedVeleroDynamic(t, backups...)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"velero"}}
+	allow(perms, veleroGroup, "backups", "velero", true)
+	env.srv.permCache.Set("reader", nil, perms)
+	resp := env.authGet(t, "/api/velero/backupstoragelocations/velero/primary/backups", "reader", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-
-	if !resp.Truncated {
-		t.Error("a location holding more than the cap must report the list as truncated")
+	var got VeleroStoredBackupsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
 	}
-	if resp.Stored != total {
-		t.Errorf("Stored = %d, want %d — the count describes the location, not the page", resp.Stored, total)
+	if !got.Truncated || got.Stored != len(backups) || len(got.Backups) != maxStoredBackupsListed {
+		t.Fatalf("truncated %t, total %d, listed %d", got.Truncated, got.Stored, len(got.Backups))
 	}
-	if len(resp.Backups) != maxStoredBackupsListed {
-		t.Errorf("listed %d, want the cap of %d", len(resp.Backups), maxStoredBackupsListed)
-	}
-	if resp.Backups[0].Name != newest.Name {
-		t.Errorf("newest entry %q did not survive truncation (got %q) — the restorable point is derived from it",
-			newest.Name, resp.Backups[0].Name)
+	if got.Backups[0].Name != "rejected" || got.Backups[1].Name != "running" || got.Restorable != maxStoredBackupsListed {
+		t.Errorf("first two backups %q and %q, completed total %d", got.Backups[0].Name, got.Backups[1].Name, got.Restorable)
 	}
 }
 
@@ -201,8 +135,10 @@ func TestVeleroExpiredDecidesWhatCountsAsARestorePoint(t *testing.T) {
 // The counts on the storage location page, driven through the handler rather
 // than recomputed beside it. Restorable is the number an operator reads to
 // answer "can I restore" — it is wrong if it counts a backup Velero has already
-// aged out, and wrong in the other direction if it misses one taken with the
-// default settings, which is most of them.
+// aged out. Velero writes the resolved location into spec.storageLocation when it
+// first processes a backup (spec.default first, then the server's flag), so a
+// backup without one has not been processed and is not attributed to today's
+// default.
 func TestVeleroStoredBackupsCountsWhatCanActuallyBeRestored(t *testing.T) {
 	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 	future := time.Now().Add(720 * time.Hour).UTC().Format(time.RFC3339)
@@ -231,15 +167,17 @@ func TestVeleroStoredBackupsCountsWhatCanActuallyBeRestored(t *testing.T) {
 		}}
 	}
 
-	// The install that catches the assumption: the default location is not the
-	// one named "default".
+	manual := backup("nightly-manual", "primary", "Completed", future, "2026-08-14T01:00:00Z")
+	manual.SetAnnotations(map[string]string{veleropkg.SubmissionAnnotation: "confirmation-1"})
 	seedVeleroDynamic(t,
 		location("primary", true),
 		location("dr-replica", false),
-		backup("nightly-fresh", "", "Completed", future, "2026-08-16T01:00:00Z"),
-		backup("nightly-aged", "", "Completed", past, "2026-06-01T01:00:00Z"),
-		backup("nightly-broke", "", "Failed", future, "2026-08-15T01:00:00Z"),
+		manual,
+		backup("nightly-fresh", "primary", "Completed", future, "2026-08-16T01:00:00Z"),
+		backup("nightly-aged", "primary", "Completed", past, "2026-06-01T01:00:00Z"),
+		backup("nightly-broke", "primary", "Failed", future, "2026-08-15T01:00:00Z"),
 		backup("dr-copy", "dr-replica", "Completed", future, "2026-08-16T02:00:00Z"),
+		backup("just-submitted", "", "New", "", ""),
 	)
 
 	env := newAuthTestServer(t)
@@ -257,13 +195,16 @@ func TestVeleroStoredBackupsCountsWhatCanActuallyBeRestored(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 
-	// The three backups that named no location belong to "primary" because it
-	// carries spec.default — not to a location called "default".
-	if got.Stored != 3 {
-		t.Errorf("Stored = %d, want 3 — the backups with no location belong to the default one: %+v", got.Stored, got.Backups)
+	if got.Stored != 4 {
+		t.Errorf("Stored = %d, want 4 — the unprocessed backup has no location yet: %+v", got.Stored, got.Backups)
 	}
-	if got.Restorable != 1 {
-		t.Errorf("Restorable = %d, want 1 — only nightly-fresh is Completed and still inside its TTL", got.Restorable)
+	if got.Restorable != 2 {
+		t.Errorf("Restorable = %d, want 2 — only nightly-fresh and nightly-manual are Completed and still inside their TTL", got.Restorable)
+	}
+	for _, b := range got.Backups {
+		if b.Manual != (b.Name == "nightly-manual") {
+			t.Errorf("only the Back up now run is manual: %+v", b)
+		}
 	}
 	// Both counts are the location's, not the page's. The panel prints them
 	// beside Stored, so one derived from a capped list would disagree with the

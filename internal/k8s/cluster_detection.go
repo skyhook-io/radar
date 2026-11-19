@@ -23,24 +23,76 @@ var (
 )
 
 var (
-	cachedServerVersion string
-	serverVersionOnce   = new(sync.Once)
-	serverVersionMu     sync.Mutex
+	serverVersionMu       sync.Mutex
+	cachedServerVersion   string
+	serverVersionInFlight *serverVersionRead
+	serverVersionFailedAt time.Time
 )
 
-// GetServerVersion returns the cached Kubernetes server version.
-// The version is fetched once and cached for the lifetime of the context.
+// serverVersionRetryAfter answers "" without a new read for a while after a
+// failure, so callers during an outage don't each wait out the client timeout.
+const serverVersionRetryAfter = 5 * time.Second
+
+type serverVersionRead struct {
+	done        chan struct{}
+	version     string
+	invalidated bool // guarded by serverVersionMu
+}
+
+// GetServerVersion returns the Kubernetes server version, read once per
+// context. A failed read is not kept: a call after serverVersionRetryAfter asks
+// again, while callers that arrive during a read wait for it instead of
+// starting their own.
 func GetServerVersion() string {
 	serverVersionMu.Lock()
-	defer serverVersionMu.Unlock()
-	serverVersionOnce.Do(func() {
-		if client := GetClient(); client != nil {
-			if v, err := client.Discovery().ServerVersion(); err == nil {
-				cachedServerVersion = v.GitVersion
-			}
+	if cachedServerVersion != "" {
+		defer serverVersionMu.Unlock()
+		return cachedServerVersion
+	}
+	if time.Since(serverVersionFailedAt) < serverVersionRetryAfter {
+		serverVersionMu.Unlock()
+		return ""
+	}
+	if read := serverVersionInFlight; read != nil {
+		serverVersionMu.Unlock()
+		<-read.done
+		return serverVersionOrRetry(read)
+	}
+	read := &serverVersionRead{done: make(chan struct{})}
+	serverVersionInFlight = read
+	serverVersionMu.Unlock()
+
+	if client := GetClient(); client != nil {
+		if v, err := client.Discovery().ServerVersion(); err == nil {
+			read.version = v.GitVersion
 		}
-	})
-	return cachedServerVersion
+	}
+
+	serverVersionMu.Lock()
+	// A context switch during the read invalidated it; don't cache the
+	// previous cluster's version.
+	if serverVersionInFlight == read {
+		serverVersionInFlight = nil
+		cachedServerVersion = read.version
+		if read.version == "" {
+			serverVersionFailedAt = time.Now()
+		}
+	}
+	serverVersionMu.Unlock()
+	close(read.done)
+	return serverVersionOrRetry(read)
+}
+
+// serverVersionOrRetry asks again when a context switch invalidated the read,
+// so no caller gets the previous cluster's version.
+func serverVersionOrRetry(read *serverVersionRead) string {
+	serverVersionMu.Lock()
+	invalidated := read.invalidated
+	serverVersionMu.Unlock()
+	if invalidated {
+		return GetServerVersion()
+	}
+	return read.version
 }
 
 // InvalidateServerVersionCache resets the cached server version.
@@ -49,7 +101,11 @@ func InvalidateServerVersionCache() {
 	serverVersionMu.Lock()
 	defer serverVersionMu.Unlock()
 	cachedServerVersion = ""
-	serverVersionOnce = new(sync.Once)
+	if serverVersionInFlight != nil {
+		serverVersionInFlight.invalidated = true
+	}
+	serverVersionInFlight = nil
+	serverVersionFailedAt = time.Time{}
 }
 
 // ClusterInfo contains detected cluster information

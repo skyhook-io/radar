@@ -172,6 +172,9 @@ func TestAIGetResource_GroupRoutesRelationshipsToKnative(t *testing.T) {
 		knativeSvc,
 	)
 	resources := []k8s.APIResource{
+		{Version: "v1", Kind: "Service", Name: "services", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
+		{Group: "networking.k8s.io", Version: "v1", Kind: "Ingress", Name: "ingresses", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
+
 		{
 			Group:      "serving.knative.dev",
 			Version:    "v1",
