@@ -40,6 +40,8 @@ type SelectorFamily struct {
 type Selector struct {
 	Kind    resourceid.GroupKind
 	Selects []resourceid.GroupKind
+	// SameNamespace narrows reverse reads even when other selectors in the family are global.
+	SameNamespace bool
 	// Selection returns what obj chooses. ok is false when it chooses
 	// nothing; err is set when its selector can't be read.
 	Selection func(obj runtime.Object) (s Selection, ok bool, err error)
@@ -126,7 +128,7 @@ type MatchesAnswer struct {
 // lookup reads objects for an answer whose coverage is c.
 func (v *View) lookup(c *Coverage) Lookup {
 	return func(ref resourceid.Ref) (runtime.Object, bool) {
-		obj, read := v.session.Borrow(ref)
+		obj, read := v.lookupSession.Borrow(ref)
 		switch read.State {
 		case ownership.Present:
 			return obj, true
@@ -222,7 +224,11 @@ func (v *View) SelectedBy(f *SelectorFamily, subject resourceid.Ref, fetched run
 		if !sel.selects(subject.GroupKind()) {
 			continue
 		}
-		s.each(sel.Kind, &a.Coverage, func(o IndexedObject, own *Coverage) func() {
+		search := s
+		if sel.SameNamespace {
+			search = v.newSearch(subject.Namespace, false)
+		}
+		search.each(sel.Kind, &a.Coverage, func(o IndexedObject, own *Coverage) func() {
 			selection, ok, err := sel.Selection(o.Object)
 			if err != nil {
 				own.addGap(ownership.Gap{Kind: sel.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})

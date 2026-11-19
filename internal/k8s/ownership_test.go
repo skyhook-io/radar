@@ -1,8 +1,10 @@
 package k8s
 
 import (
+	goctx "context"
 	"errors"
 	"fmt"
+	"reflect"
 	goruntime "runtime"
 	"slices"
 	"testing"
@@ -21,6 +23,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -172,6 +175,42 @@ func TestAnswerOwnershipWaitsForDiscovery(t *testing.T) {
 		if rel.Ownership == nil || rel.Ownership.UnavailableReason != string(readreason.ClusterConnecting) || len(rel.Children) != 0 {
 			t.Errorf("%s: ownership %+v, children %v; want unavailable while discovery hasn't answered", name, rel.Ownership, rel.Children)
 		}
+	}
+}
+
+// Before discovery answers, as while Radar starts, a resource context says
+// every field a relationship answer fills is unavailable, rather than empty,
+// and still names the Node a Pod's own spec names.
+func TestResourceContextWithoutARelationshipAnswer(t *testing.T) {
+	_, typed, _, deployment := historyFixture(t)
+	previous := ownershipSource
+	ownershipSource = cachesource.New(func() cachesource.Caches { return cachesource.Caches{Typed: typed} })
+	t.Cleanup(func() { ownershipSource = previous })
+	access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+	context := func(obj runtime.Object) *resourcecontext.ResourceContext {
+		rel, _, extras := AnswerResourceContextRelationships(&ResourceCache{ResourceCache: typed}, obj, access, access)
+		if rel != nil || extras == nil {
+			t.Fatalf("no answer for %T: %+v %+v", obj, rel, extras)
+		}
+		return resourcecontext.Build(goctx.Background(), obj, resourcecontext.Options{Relationships: rel, RelationshipExtras: extras})
+	}
+	obj := deployment.DeepCopy()
+	obj.APIVersion, obj.Kind = "apps/v1", "Deployment"
+	rc := context(obj)
+	for _, field := range []string{"exposes", "exposedBy", "selectedBy", "scaledBy", "monitors", "stagedPolicies", "uses"} {
+		if !slices.Contains(rc.Omitted, resourcecontext.OmittedField{Field: field, Reason: resourcecontext.OmittedUnavailable}) {
+			t.Errorf("%s not marked unavailable: %+v", field, rc.Omitted)
+		}
+	}
+	if slices.ContainsFunc(rc.Omitted, func(o resourcecontext.OmittedField) bool {
+		return o.Field == "referencedBy" || o.Field == "runsOn" || o.Field == "backends" || o.Field == "dependents"
+	}) {
+		t.Errorf("a Deployment's context marked a field it doesn't have: %+v", rc.Omitted)
+	}
+	pod := &corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web-a"}, Spec: corev1.PodSpec{NodeName: "worker"}}
+	rc = context(pod)
+	if rc.RunsOn == nil || rc.RunsOn.Name != "worker" || slices.ContainsFunc(rc.Omitted, func(o resourcecontext.OmittedField) bool { return o.Field == "runsOn" }) {
+		t.Fatalf("Pod's Node = %+v, omitted %+v", rc.RunsOn, rc.Omitted)
 	}
 }
 
@@ -388,7 +427,7 @@ func TestRelationshipReadBindsCapturedCache(t *testing.T) {
 		if _, err := BeginOwnershipRead(wrong); !errors.Is(err, ownership.ErrCachesReplaced) {
 			t.Fatalf("wrong cache: %v", err)
 		}
-		answer, _ := AnswerRelationships(wrong, nil, func(*ownership.Catalog) ownership.Access { t.Fatal("access after cache mismatch"); return nil }, nil)
+		answer, _, _ := AnswerRelationships(wrong, nil, func(*ownership.Catalog) ownership.Access { t.Fatal("access after cache mismatch"); return nil }, nil)
 		if answer != nil {
 			t.Fatalf("answer after cache mismatch: %+v", answer)
 		}
@@ -440,13 +479,13 @@ func TestRelationshipSubjectReplacementAndFinalValidation(t *testing.T) {
 	obj.Kind = "Deployment"
 	obj.UID = "new-incarnation"
 	access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
-	rel, coverage := AnswerRelationships(captured, obj, access, access)
+	rel, coverage, _ := AnswerRelationships(captured, obj, access, access)
 	if rel == nil || coverage["subject"].SubjectState != "replaced" || rel.Owner != nil || len(rel.Children)+len(rel.Managers)+len(rel.ConfigRefs) > 0 {
 		t.Fatalf("replaced subject: %+v, %+v", rel, coverage)
 	}
 	obj.UID = deployment.UID
 	obj.ResourceVersion = "new-version"
-	rel, coverage = AnswerRelationships(captured, obj, access, access)
+	rel, coverage, _ = AnswerRelationships(captured, obj, access, access)
 	if rel == nil || coverage["subject"].SubjectState != "" {
 		t.Fatalf("same UID refused: %+v, %+v", rel, coverage)
 	}
@@ -454,8 +493,8 @@ func TestRelationshipSubjectReplacementAndFinalValidation(t *testing.T) {
 		current.Typed = &k8score.ResourceCache{}
 		return ownership.Unrestricted()
 	}
-	rel, coverage = AnswerRelationships(captured, obj, switched, access)
-	if rel != nil || coverage != nil {
+	rel, coverage, _ = AnswerRelationships(captured, obj, switched, access)
+	if rel != nil || !slices.Contains(coverage["answer"].NotChecked, ownership.Gap{Reason: readreason.ConnectionChanged}) {
 		t.Fatalf("published after cache replacement: %+v, %+v", rel, coverage)
 	}
 }
@@ -490,7 +529,7 @@ func TestRelationshipRevisionSplitRequiresReadablePods(t *testing.T) {
 					return historyPodAccess{Access: ownership.Unrestricted(), decision: decision}
 				}
 				traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
-				rel, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, traverse)
+				rel, _, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, traverse)
 				if rel == nil {
 					t.Fatal("answer unavailable")
 				}
@@ -507,6 +546,110 @@ func TestRelationshipRevisionSplitRequiresReadablePods(t *testing.T) {
 	}
 }
 
+// flippingAccess allows the subject's kind on its first check only, and
+// decides later checks as then, as a permission cache entry expiring between
+// two checks would.
+type flippingAccess struct {
+	ownership.Access
+	kind   resourceid.GroupKind
+	checks *int
+	then   ownership.Decision
+}
+
+func (a flippingAccess) CanRead(gk resourceid.GroupKind, namespace string) ownership.Decision {
+	if gk != a.kind {
+		return a.Access.CanRead(gk, namespace)
+	}
+	*a.checks++
+	if *a.checks == 1 {
+		return ownership.Allowed
+	}
+	return a.then
+}
+
+// A drawer subject the answer's own check refuses is answered with no
+// relationships, and its ownership says why, as that check decided. (A
+// resource context reads its subject's kind as the host's read gate did, so
+// its answer doesn't check the subject again.)
+func TestRelationshipAnswerSurvivesAccessChangingMidAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		then   ownership.Decision
+		reason readreason.Code
+	}{
+		{ownership.Denied, readreason.UserForbidden},
+		{ownership.Undecided, readreason.UserPermissionCheckFailed},
+	} {
+		t.Run(fmt.Sprintf("%v", tc.then), func(t *testing.T) {
+			_, typed, source, deployment := historyFixture(t)
+			previous := ownershipSource
+			ownershipSource = source.(*cachesource.Source)
+			t.Cleanup(func() { ownershipSource = previous })
+			obj := deployment.DeepCopy()
+			obj.APIVersion, obj.Kind = "apps/v1", "Deployment"
+			checks := 0
+			access := func(*ownership.Catalog) ownership.Access {
+				return flippingAccess{Access: ownership.Unrestricted(), kind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}, checks: &checks, then: tc.then}
+			}
+			traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+			rel, coverage, extras := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, traverse)
+			if checks < 2 {
+				t.Fatalf("subject checked %d times; the test needs the answer's own check", checks)
+			}
+			if rel == nil || len(rel.Children)+len(rel.OlderRevisions) > 0 || rel.Owner != nil || extras == nil {
+				t.Fatalf("refused subject answered: %+v %+v %+v", rel, coverage, extras)
+			}
+			if rel.Ownership == nil || rel.Ownership.UnavailableReason != string(tc.reason) {
+				t.Fatalf("refused subject's ownership = %+v, want %s", rel.Ownership, tc.reason)
+			}
+			refused := extras.Fields["answer"]
+			if tc.then == ownership.Denied && !refused.Narrowed || tc.then == ownership.Undecided && (len(refused.NotChecked) != 1 || refused.NotChecked[0].Reason != tc.reason) || !reflect.DeepEqual(coverage, extras.Coverage) {
+				t.Fatalf("refused subject's fields = %+v, coverage %+v", extras.Fields, coverage)
+			}
+		})
+	}
+}
+
+// A resource context's subject was read through the host's read gate, so a
+// caller who may read the subject's namespace but has no get grant on its
+// kind still gets what it declares, and ownership still says the kind is
+// withheld. The drawer refuses the same subject, as its own check decides.
+func TestResourceContextReadsItsSubjectAsTheReadGateDid(t *testing.T) {
+	_, typed, source, deployment := historyFixture(t)
+	previous := ownershipSource
+	ownershipSource = source.(*cachesource.Source)
+	t.Cleanup(func() { ownershipSource = previous })
+	obj := deployment.DeepCopy()
+	obj.APIVersion, obj.Kind = "apps/v1", "Deployment"
+	obj.Spec.Template.Spec.ServiceAccountName = "runner"
+	noDeployments := func(*ownership.Catalog) ownership.Access {
+		return historyKindAccess{Access: ownership.Unrestricted(), kind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}}
+	}
+	rel, _, extras := AnswerResourceContextRelationships(&ResourceCache{ResourceCache: typed}, obj, noDeployments, noDeployments)
+	if rel == nil || extras == nil || len(extras.Declarations) != 1 || extras.Declarations[0].Ref.Name != "runner" {
+		t.Fatalf("context answer = %+v, %+v", rel, extras)
+	}
+	if _, refused := extras.Fields["answer"]; refused || rel.Ownership == nil || rel.Ownership.UnavailableReason != string(readreason.UserForbidden) {
+		t.Fatalf("context fields %+v, ownership %+v", extras.Fields, rel.Ownership)
+	}
+	rel, _, extras = AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, noDeployments, noDeployments)
+	if rel == nil || rel.Ownership == nil || rel.Ownership.UnavailableReason != string(readreason.UserForbidden) || len(extras.Declarations) != 0 {
+		t.Fatalf("drawer answer = %+v, %+v", rel, extras)
+	}
+}
+
+// historyKindAccess denies kind and allows the rest.
+type historyKindAccess struct {
+	ownership.Access
+	kind resourceid.GroupKind
+}
+
+func (a historyKindAccess) CanRead(gk resourceid.GroupKind, namespace string) ownership.Decision {
+	if gk == a.kind {
+		return ownership.Denied
+	}
+	return a.Access.CanRead(gk, namespace)
+}
+
 // A fetched Deployment the cache doesn't hold yet still answers what reads its
 // ownership: its ReplicaSets' Pods, as well as its children.
 func TestRelationshipAnswerSeedsAFetchedSubjectTheCacheLacks(t *testing.T) {
@@ -518,7 +661,7 @@ func TestRelationshipAnswerSeedsAFetchedSubjectTheCacheLacks(t *testing.T) {
 	t.Cleanup(func() { ownershipSource = previous })
 	obj := &appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "fresh", UID: "uid-fresh", Annotations: map[string]string{historyRevision: "1"}}}
 	access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
-	rel, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, access)
+	rel, _, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, access)
 	if rel == nil {
 		t.Fatal("answer unavailable")
 	}

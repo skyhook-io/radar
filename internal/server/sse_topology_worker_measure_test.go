@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/loadtest"
+	"github.com/skyhook-io/radar/pkg/topology"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -55,11 +57,16 @@ func TestMeasureConsumerStallPerDebounceFire(t *testing.T) {
 
 	// What the consumer used to pay per debounce fire: a full build, inline.
 	start := time.Now()
-	topo, err := buildFullTopology()
+	opts := topology.DefaultBuildOptions()
+	opts.Namespaces = []string{"loadtest-000"}
+	topo, err := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).Build(opts)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	buildCost := time.Since(start)
+	if len(topo.Nodes) == 0 {
+		t.Fatal("measurement did not build a display topology")
+	}
 
 	// What it pays now: a handoff to the worker. Measured with the worker busy,
 	// which is the case that used to serialize builds behind each other.

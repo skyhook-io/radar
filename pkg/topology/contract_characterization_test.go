@@ -517,7 +517,8 @@ type charCase struct {
 
 func charCases() []charCase {
 	return []charCase{
-		// The SSE broadcaster's relationship cache (internal/server/sse.go buildFullTopology).
+		// The all-namespace relationship graph's options, held fixed for the
+		// parity baseline.
 		{"sse-relationship-cache", charSSEOptions},
 		{"relationship-options", RelationshipBuildOptions},
 		{"resources-default", DefaultBuildOptions},
