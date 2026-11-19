@@ -23,9 +23,9 @@ and scope; it never proves that no external controller or writer exists.
 | Question | Field | Evidence |
 |---|---|---|
 | What owns it / what does it own | `relationships.owner`, `owners`, `children` (REST resource GET); `resourceContext.owner` (AI context) | Owner references |
-| Which managers record it / what a manager records | `relationships.managers`, `manages` (Related Resources → Managed By / Manages) | Recorded membership, plus graph links for other managing controllers (a cert-manager Certificate) |
+| Which managers record it / what a manager records | `relationships.managers`, `manages` (Related Resources → Managed By / Manages) | Recorded membership, plus declared management families for other generators (a cert-manager Certificate) |
 | What manages it, weighed | `relationships.ownership.manager`; `resourceContext.manager` (compact) | Recorded membership and claims, through the controller chain ([below](#what-manages-an-object)) |
-| Legacy manager pointer | `relationships.managedBy` | The manager the object's metadata names, else the topmost object its manages edges reach; still used by workload navigation and older-server manager fallbacks, not a canonical controller-owner answer |
+| Legacy manager pointer | `relationships.managedBy` | The manager the object's metadata names, else the highest readable controller/owner or spec generator, else its own manager fallback; still used by workload navigation, not the weighed GitOps manager answer |
 | Controller and other generators, for agents | `resourceContext.managedBy` | Highest readable controller plus observed non-GitOps spec generators; GitOps/Helm evidence stays in `manager`. See [agent navigation](#the-top-controller). |
 | Where to inspect a list row or search hit next | `summaryContext.managedBy` | One controller-first lead, with `source` identifying its evidence and `omitted` qualifying incomplete reads. See [selection rules](#the-top-controller). |
 | Source hints for request changes | rightsizing `managedBy: {tool, signal}` | Controller owner, GitOps/Helm metadata, `addonmanager` mode ([rightsizing](mcp.md#managedby--source-hints-for-request-changes)) |
@@ -163,15 +163,14 @@ The families so far:
 | `ArgoWorkflowCronWorkflows` | Argo Workflow → CronWorkflow, preferring the controller reference to the cron-workflow label fallback | `management_families.go` |
 | `SealedSecrets` | Bitnami SealedSecrets → the Secret of their own name they produce | `status_families.go` |
 
-`CertificateRoutes` (`compositions.go`) joins a Certificate’s declared output Secret coordinates to Traefik routes and Contour proxies declaring the same Secret. Both endpoints are checked under the caller’s access; the logical Secret is never read or required to exist. The dark projection feeds Certificate `Consumers` and route `ConfigRefs`.
+`CertificateRoutes` (`compositions.go`) joins a Certificate’s declared output Secret coordinates to Traefik routes and Contour proxies declaring the same Secret. Both endpoints are checked under the caller’s access; the logical Secret is never read or required to exist. The projection feeds Certificate `Consumers` and route `ConfigRefs`.
 
 `SealedSecretConsumers` uses the same composition over the SealedSecret’s own namespace/name and `ConfigReferences` declarations, in both directions. It feeds SealedSecret `Consumers` and consumer `ConfigRefs` even when the Secret is absent, uncollected or denied. Ordinary `Referrers` still requires a held, readable target.
 
 A **selector family** (`selectors.go`, `selector_families.go`) is one way objects choose others by labels: the kinds
 that select and how each reads its selector, and the kinds that can be chosen and how a selector sees each (a
 workload is seen as the pods its template makes; a Rollout with a `workloadRef` as its referenced workload's). What a
-match depends on but never lists, such as that template or a Namespace's labels, is read with Radar's identity, as the
-relationship graph reads it (`Lookup`). `Selected(family, selector)` lists what a selector chooses and
+match depends on but never lists, such as that template or a Namespace's labels, is read with Radar's identity, through the cache session (`Lookup`). `Selected(family, selector)` lists what a selector chooses and
 `SelectedBy(family, object)` what chooses an object, through the same search, access checks and coverage as
 `Referrers`. They follow the API's semantics, not the topology view's display rules: an empty NetworkPolicy, Cilium,
 PodDisruptionBudget or monitor selector chooses everything in scope, as a default-deny policy does. Namespaced Calico policy kinds are searched only in the subject's namespace; global kinds are searched separately.
@@ -186,7 +185,7 @@ rather than reading as no match.
 | `DisruptionBudgets` | PodDisruptionBudgets → Deployments, StatefulSets, DaemonSets |
 | `NetworkPolicies` | NetworkPolicies and CiliumNetworkPolicies → Deployments, StatefulSets, DaemonSets; Cilium policies match as Cilium does (`netpol.CiliumSelects`: every spec, label sources, identity labels) |
 | `Monitors` | ServiceMonitors → Services; PodMonitors → workloads; in the namespaces their `namespaceSelector` names |
-| `CalicoPolicies`, `CalicoStagedPolicies` | Calico NetworkPolicies and GlobalNetworkPolicies, and their staged kinds that preview protection → Deployments, StatefulSets, DaemonSets, matched as Calico does (`netpol.CompileCalicoPolicyMatcher`), reading Namespace and ServiceAccount labels, with Radar's identity as the graph does (they decide a match but are never listed), only once a policy's other selectors match; a policy both Calico groups serve is listed once |
+| `CalicoPolicies`, `CalicoStagedPolicies` | Calico NetworkPolicies and GlobalNetworkPolicies, and their staged kinds that preview protection → Deployments, StatefulSets, DaemonSets, matched as Calico does (`netpol.CompileCalicoPolicyMatcher`), reading Namespace and ServiceAccount labels, with Radar's identity (they decide a match but are never listed), only once a policy's other selectors match; a policy both Calico groups serve is listed once |
 
 Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
 families read each reference's fields the same way. Resolution can still differ: topology lists one Traefik group per
@@ -197,8 +196,22 @@ Each declared, selector and composition family carries its Related Resources `Pr
 
 The independent 72-family cutover inventory is `pkg/topology/testdata/relationship-family-inventory.tsv`. Each direction names registered or direct producers, or a reason it does not project. Its notes preserve the remaining held-target differences for synthetic AnalysisRun and Secret/ConfigMap nodes; these are not parity claims. `TestRelationshipFamilyInventoryHasBothDirections` rejects an unaccounted family or unknown producer.
 
-Families are built here while Related Resources still reads the relationship graph; readers switch to the families in
-one change that also removes the graph.
+Related Resources and REST/MCP resource context now read these families from a captured cache session through
+`internal/k8s.AnswerRelationships` / `AnswerResourceContextRelationships`. `pkg/topology.RelationsAnswer` projects
+only the subject's family answers into the existing drawer fields; the context variant also supplies non-wire
+provenance and coverage to `pkg/resourcecontext`. Ownership is applied through the caller's ownership view; context
+uses the owner-only path. Summary manager enrichment and workload history attachments also use the family sources.
+The session rejects a replaced cache rather than answering from another connection.
+
+There is no cluster-wide broadcast relationship graph or AI-context graph fallback. Display topology still builds
+SSE frames, `/api/topology` and MCP `get_topology`. The GitOps tree, REST/MCP neighborhoods and Applications retain
+their own scoped graphs. `ForRelationshipCache` remains a build option for those graph consumers and compatibility
+harnesses; it does not enable a shared relationship cache.
+
+The drawer characterization pins the family answer. Its [accepted differences](../pkg/topology/testdata/characterization/drawer-relationships.md)
+explain every changed class, including the hand-made Crossplane claim/XR fixture without a backlink. New relations
+belong in a family with its field disposition and coverage, then in the family inventory and projection tests; adding
+a display edge alone does not add a drawer or agent relationship.
 
 The cache-source conformance tests check `Indexed` and both answers against the brute-force `Scan` of generated
 worlds whose objects declare references (`ownershiptest.Object.Declares`), and through histories of changes.
@@ -271,22 +284,22 @@ claims need not indicate current reconciliation; native Helm coordinates do not 
 |---|---|
 | `rbac_denied` | The subject or a controller ancestor was unreadable. |
 | `cache_cold` | An owner kind is known to be uncollected or unsynced. Ownership starts no watches; `list_resources` for that kind can activate its on-demand cache. |
-| `unavailable` | A controller walk or observed spec source could not be resolved, the required graph is missing, or management evidence has no eligible lead. Retry is not guaranteed to help. |
+| `unavailable` | A controller walk or observed spec source could not be resolved, the required relation source is unavailable, or management evidence has no eligible lead. Retry is not guaranteed to help. |
 | `budget_exceeded` | The list/search enrichment budget elapsed; other causes can coexist. |
 
 A GitOps fallback may coexist with an incomplete-controller note. Detail can report missing spec evidence after a
-summary already found its controller lead. Denied spec sources remain hidden without relationship-specific notes.
-The graph has no per-kind completeness contract: an unobserved spec relation may have neither a lead nor an omission.
+summary already found its controller lead. Family coverage qualifies unread or narrowed context fields without inspecting denied objects to decide whether they exist.
+Summary enrichment has its own selection and omission rules; a missing spec lead does not establish absence.
 Neither a missing lead nor `manager.state=none` proves unmanaged.
 
-Certificate-targeted unused Secrets participate in relationship graphs, under existing Secret access checks, but remain
+Certificate-targeted unused Secrets participate in family answers, under existing Secret access checks, but remain
 hidden in the normal visual graph. Trivy keeps its scan-time workload projection; label-derived scan identity survives
 failed enrichment, qualified when live scan state could not be checked.
 
 Each REST AI list/search or MCP list/search request gets a three-second optional-enrichment budget, including authorization and queue waits.
 Health and prepared issue counts survive expiry. Saturation or failed preparation can omit issue counts, including in
 Omnibar results; `omitted` distinguishes unknown counts from zero. Omnibar requests `context=status` on REST search:
-cached health and authorized issue counts, without ownership, relationship-graph or live scan-target lookups. Unrequested
+cached health and authorized issue counts, without ownership, relation-family or live scan-target lookups. Unrequested
 navigation fields have no omission note. The default `context=summary` and MCP search retain navigation. Lists share one caller-scoped ownership session.
 Execution and caching details live in [summarycontext](../internal/summarycontext/summarycontext.go),
 [AgentOwnership](../internal/k8s/ownership.go) and [cachesource](../pkg/ownership/cachesource/).

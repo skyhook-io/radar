@@ -163,6 +163,27 @@ func TestResolutionStoppedByAWithheldCandidateNarrows(t *testing.T) {
 	}
 }
 
+// A gap Radar's setup causes names no object, so it reaches a caller who may
+// not read the kind without a check; any other gap still needs the kind.
+func TestSetupGapsInTheSubjectsNamespaceNeedNoKindCheck(t *testing.T) {
+	web := labelled(deployment("web", corev1.PodSpec{}), map[string]string{"app": "web"})
+	for _, tc := range []struct {
+		reason      readreason.Code
+		wantGap     bool
+		wantChecked bool
+	}{
+		{readreason.RadarNamespaceNotCollected, true, false},
+		{readreason.ReadError, false, true},
+	} {
+		access := counting(denies{"Service"})
+		c := allNamespaces{cluster: cluster{objects: []runtime.Object{web}}, gaps: []ownership.Gap{{Kind: kindService, Namespace: refOf(web).Namespace, Reason: tc.reason}}}
+		got := NewView(c, access).SelectedBy(ServiceSelectors, refOf(web), nil)
+		if hasGap := len(got.Coverage.NotChecked) == 1; hasGap != tc.wantGap || (access.asked["Service"] > 0) != tc.wantChecked {
+			t.Errorf("%s: gaps=%v checked=%v; want gap=%v checked=%v", tc.reason, got.Coverage.NotChecked, access.asked["Service"] > 0, tc.wantGap, tc.wantChecked)
+		}
+	}
+}
+
 // partlyCollected holds ServiceMonitors only in the namespaces it names: an
 // all-namespace read reports the rest as one gap naming no namespace.
 type partlyCollected struct {

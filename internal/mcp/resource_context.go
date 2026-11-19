@@ -12,7 +12,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/policyreports"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
-	topo "github.com/skyhook-io/radar/pkg/topology"
 )
 
 // mcpPolicyReportLookupAdapter wraps k8s.GetPolicyReportIndex into the
@@ -207,54 +206,6 @@ func issueRelatedResourceAccess(ctx context.Context) func(issues.Ref) bool {
 func computeMCPAuditSummary(ctx context.Context, cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.AuditSummary {
 	summary, _ := auditcontext.SummarizeResource(cache, group, kind, namespace, name, auditOptions(ctx))
 	return summary
-}
-
-// RelationshipTopologySource returns the host's maintained full relationship
-// graph and its index, or nil while none has been built.
-type RelationshipTopologySource func() (*topo.Topology, *topo.RelationshipsIndex)
-
-var relationshipTopology struct {
-	sync.RWMutex
-	source RelationshipTopologySource
-}
-
-// SetRelationshipTopologySource lets resource context reuse the graph the host
-// already keeps for relationship lookups, instead of holding a second copy of
-// the whole cluster.
-func SetRelationshipTopologySource(source RelationshipTopologySource) {
-	relationshipTopology.Lock()
-	relationshipTopology.source = source
-	relationshipTopology.Unlock()
-}
-
-// mcpTopologyForContext uses a complete relationship graph. Resource context
-// authorizes every emitted reference through its request-scoped checker; a
-// namespace-scoped build would erase explicit cross-namespace dependencies.
-func mcpTopologyForContext() (*topo.Topology, *topo.RelationshipsIndex, topo.ResourceProvider, topo.DynamicProvider, bool) {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil, nil, nil, nil, false
-	}
-	provider := k8s.NewTopologyResourceProvider(cache)
-	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-	relationshipTopology.RLock()
-	source := relationshipTopology.source
-	relationshipTopology.RUnlock()
-	if source != nil {
-		if topology, index := source(); topology != nil {
-			return topology, index, provider, dyn, true
-		}
-	}
-	opts := topo.RelationshipBuildOptions()
-	opts.IncludeSecrets = true
-
-	topology, index, err := summaryCtxTopoMemo.GetWithIndexScoped(cache.Generation(), opts, func() (*topo.Topology, error) {
-		return topo.NewBuilder(provider).WithDynamic(dyn).Build(opts)
-	})
-	if err != nil || topology == nil {
-		return nil, nil, nil, nil, false
-	}
-	return topology, index, provider, dyn, true
 }
 
 // issueSubjectAccess mirrors the REST drawer gate for an issue's own

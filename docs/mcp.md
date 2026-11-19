@@ -775,6 +775,18 @@ docker run -p 127.0.0.1:9280:9280 \
 
 The Docker image's primary use is [in-cluster deployment](in-cluster.md) with a ServiceAccount, where none of these apply.
 
+## References you can't read
+
+A `resourceContext.uses` entry, `runsOn`, an `ingressSummary.tlsSecrets` or `serviceAccountSummary` entry, or a
+Related Resources reference, may carry `state`: `"denied"` when the subject's
+own spec names an object the caller may not read (a pod template's ConfigMaps, Secrets, PVCs and ServiceAccount, a
+Pod's Node, an Ingress's TLS Secrets, a ServiceAccount's Secrets, and, in Related Resources only, the ResourceClaims a
+Pod's spec names and a Calico HostEndpoint's Node), or `"unverified"` when Radar couldn't check the caller's
+access. The name comes from the subject's spec, which the caller reads; Radar never reads the target for it, so
+neither its existence nor its state is known. Treat it as a declared dependency to verify with someone who has access,
+not as a missing or a healthy one. A ResourceClaim a claim template generates is named only in the Pod's status, so it
+stays hidden from a caller who may not read ResourceClaims.
+
 ## Crossplane pause context
 
 `list_resources` summaries, list/search `summaryContext`, and `get_resource`'s `resourceContext` carry optional `crossplanePause` for CRDs (identities in Radar's built-in registry are excluded, including typed objects converted for generic reads): `requested` for the exact `crossplane.io/paused: "true"` annotation, or `acknowledged` when the stored `Synced=False/ReconcilePaused` condition corroborates it. A request alone does not establish that a controller has stopped. Acknowledgement is a recorded observation, not a fresh external check or a claim about child controllers. No timestamp is inferred. An omitted field does not rule out other pause mechanisms.
@@ -784,9 +796,10 @@ Pause is separate from recorded readiness, operational issues and audit findings
 ## `diagnose` evidence limits
 
 Job, JobSet, RayJob and Kueue Workload diagnosis returns cached context,
-related Issues and resource events. Coverage states that Pods, runtime logs,
-metrics and graph-derived relationships were not collected. An empty Issues
-list does not establish runtime health; follow Pod references for runtime evidence.
+related Issues and resource events, with relationships answered as
+`get_resource` answers them. Coverage states that Pods, runtime logs and metrics
+were not collected. An empty Issues list does not establish runtime health;
+follow Pod references for runtime evidence.
 
 For workload `diagnose` responses, `logCoverage.selectedPods` counts pods selected for log requests, not pods whose logs were successfully read. Per-container errors and `logsError` describe failed collection. `logCoverage.totalLines` counts diagnostic-filter output before the aggregate response cap (including fallback tail lines); `shownLines` counts the lines retained after that cap. Neither describes a container's complete log history. `totalPods` and `shownPods` count pods contributing at least one line before and after that cap—not all selected pods or successful empty reads. `eventsTotalGroups`, recent-change coverage/error fields, and log sampling/truncation must remain qualifications even when an agent reports no problem.
 
@@ -1535,7 +1548,7 @@ it does not scale it. These references carry API group and namespace identity,
 are filtered by the caller's reference permissions, and do not establish that
 a controller has successfully reconciled the dependency.
 
-Storage context uses the drawer's cached relationships. A PVC depends on its
+Storage context uses the same caller-scoped Storage family answers as the drawer. A PVC depends on its
 declared PV and StorageClass, including a Pending claim with no volume yet; a PV
 depends on its StorageClass and lists its claim as a dependent; a StorageClass
 lists its PVs and the claims that declare it. For these three kinds the lists
@@ -1564,10 +1577,16 @@ expose their `healthChecks`; a MachineHealthCheck's Cluster is a dependency.
 
 Resource context's `uses` includes declared PodSpec references from regular,
 init and ephemeral containers, projected volumes, image-pull credentials and
-volume-driver credentials. `referencedBy` on core ConfigMaps, Secrets, PVCs and
+volume-driver credentials. It lists each declaration whether or not Radar holds
+the object it names, so `omitted` marks a `uses.*` field only when Radar couldn't
+read the subject's own spec, never because a declared kind isn't collected or is
+still loading. `referencedBy` on core ConfigMaps, Secrets, PVCs and
 ServiceAccounts includes both workload templates and actual Pods, including
 controlled Pods whose admitted spec may differ from the current template.
-ReplicaSet templates remain separate evidence. References are scoped and
+ReplicaSet templates remain separate evidence, except that a ReplicaSet scaled
+to zero, usually a Deployment's revision kept for rollback, is not counted: an
+object only such revisions name reads as unreferenced. `get_resource` on that
+ReplicaSet still lists its own template's `uses`. References are scoped and
 permission-filtered, with field paths and a bounded visible-only count; they
 describe declarations rather than proving a successful mount or active read.
 Capped results round-robin readable resource kinds, preserving examples of
@@ -1580,7 +1599,9 @@ template-generated PVC names are not inferred. An absent omission does not by
 itself establish cache freshness or complete namespace coverage.
 
 Resource context's `ingressSummary.tlsSecrets` lists named TLS Secrets in the
-Ingress's namespace. A Secret's `referencedBy` includes readable Ingresses with
+Ingress's namespace, including ones the caller may not read, which carry
+`state` (see [References you can't read](#references-you-cant-read)). A
+Secret's `referencedBy` includes readable Ingresses with
 the path `spec.tls[].secretName`. Resource-view topology links only observed,
 visible TLS Secrets. Empty Secret names do not resolve controller defaults.
 
@@ -1609,8 +1630,9 @@ the warning's `correlated_changes` show recent edits to the Service, such as a
 selector change.
 
 ServiceAccount `serviceAccountSummary.secretRefs` and
-`serviceAccountSummary.imagePullSecrets` list declared Secret associations,
-filtered by the caller's permissions and capped at 20 references per field.
+`serviceAccountSummary.imagePullSecrets` list the Secrets the ServiceAccount
+declares in each role, capped at 20 references per field; one the caller may not
+read carries `state`, as above.
 A Secret's `referencedBy` includes declaring ServiceAccounts with `secrets[]`
 and `imagePullSecrets[]` paths. When Radar is still loading the Secret's
 namespace's ServiceAccounts, failed to, or doesn't collect them there,
@@ -1747,15 +1769,15 @@ completed Pods are excluded. References are permission-filtered per namespace,
 sorted deterministically and capped at 20. `total` counts only readable Pods;
 `truncated` marks the item cap. This is observed placement in Radar's cache scope,
 not a cluster-wide workload count or a list of potential scheduling candidates.
-When Relationships already collected placement, context reuses that result.
-Unavailable Pod data, including a missing placement provider, records
+The Node's Pods are read once, for both this list and its coverage.
+Unavailable Pod data, including no relationship answer at all, records
 `omitted: [{field: "referencedBy", reason:
 "unavailable"}]`, distinguishing a failed lookup from an observed empty result.
 
 ConfigMap and Secret reverse-reference context uses the same omission when a
 scanned workload or Pod source cannot be read. References from available sources
 remain visible. This projection scans selected built-in workload templates and
-controllerless Pods; absence of an omission does not establish complete consumer
+every Pod, controlled or not; absence of an omission does not establish complete consumer
 coverage or prove that a resource is unused. Storage audit uses its own consumer
 inventory and coverage rules.
 

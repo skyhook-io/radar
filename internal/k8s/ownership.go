@@ -163,20 +163,41 @@ func answerOwnership(source ownership.Source, apply func(*topology.Relationships
 // AnswerRelationships is a fetched object's Related Resources answered from
 // the caches in one session: the relation families projected as the
 // relationship graph's edges are (topology.RelationsAnswer), then ownership,
-// with one ownership view whose searches both share. It answers nil when the
-// caches aren't ready or are replaced mid-answer.
-func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access) (*topology.Relationships, map[string]relations.Coverage) {
+// with one ownership view whose searches both share. When the caches aren't
+// ready or are replaced mid-answer, the relationships are nil and the extras
+// say why (topology.UnansweredRelationships).
+func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
+	return answerRelationships(cache, obj, access, traverse, false)
+}
+
+// AnswerResourceContextRelationships shares the relation session and access
+// policy with drawer answers, but only asks ownership for owner/manager facts.
+// obj must be what the host read for the caller through its resource read
+// gate. The relation families read obj's kind in its namespace as that gate
+// did, so a caller who reads obj by namespace access, without a get grant on
+// its kind, still gets its relationships; ownership reads obj as access does.
+func AnswerResourceContextRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
+	return answerRelationships(cache, obj, access, traverse, true)
+}
+
+func answerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access, contextOnly bool) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
+	unanswered := func(reason readreason.Code) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
+		extras := topology.UnansweredRelationships(reason)
+		return nil, extras.Coverage, extras
+	}
 	session, err := BeginOwnershipRead(cache)
 	if err != nil || len(session.Catalog().DependentKinds()) == 0 {
-		return nil, nil
+		// Not connected, or discovery hasn't answered yet, as while Radar
+		// starts.
+		return unanswered(readreason.ClusterConnecting)
 	}
 	rs, ok := session.(relations.Session)
 	if !ok {
-		return nil, nil
+		return unanswered(readreason.ReadError)
 	}
 	caches, ok := cachesource.SessionCaches(session)
 	if !ok {
-		return nil, nil
+		return unanswered(readreason.ReadError)
 	}
 	provider := NewTopologyResourceProvider(&ResourceCache{ResourceCache: caches.Typed})
 	var dp topology.DynamicProvider
@@ -185,40 +206,60 @@ func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 	}
 	fetched, valid := OwnershipObservation(obj)
 	if !valid {
-		return nil, nil
+		return unanswered(readreason.ReadError)
 	}
 	owner, _ := apimeta.Accessor(obj)
 	acc := access(session.Catalog())
-	if acc.CanRead(fetched.Ref.GroupKind(), fetched.Ref.Namespace) != ownership.Allowed {
+	families := acc
+	if contextOnly {
+		families = topology.ReadSubject(acc, fetched.Ref)
+	}
+	if decision := families.CanRead(fetched.Ref.GroupKind(), fetched.Ref.Namespace); decision != ownership.Allowed {
 		if session.ValidateCaches() != nil {
-			return nil, nil
+			return unanswered(readreason.ConnectionChanged)
 		}
-		return &topology.Relationships{}, nil
+		rel, extras := topology.RefusedRelationships(fetched.Ref, decision)
+		return rel, extras.Coverage, extras
 	}
 	captured, current := relations.CaptureSubject(rs, fetched.Ref, obj)
 	if !current {
 		if session.ValidateCaches() != nil {
-			return nil, nil
+			return unanswered(readreason.ConnectionChanged)
 		}
 		rel := &topology.Relationships{}
 		topology.OwnershipUnavailable(rel, string(readreason.ReadError))
-		return rel, map[string]relations.Coverage{"subject": {SubjectState: "replaced"}}
+		return rel, map[string]relations.Coverage{"subject": {SubjectState: "replaced"}}, &topology.RelationshipExtras{Fields: map[string]relations.Coverage{"subject": {SubjectState: "replaced"}}}
 	}
 	rs = captured
 	ov := ownership.NewView(rs, acc)
 	// Seeded before the answer, whose Deployment Pods and ManagedBy read
 	// ownership, so a subject the cache doesn't hold yet still has them.
 	ov.Seed(fetched)
-	rel, coverage := topology.RelationsAnswer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, provider, dp)
-	if rel == nil {
-		rel = &topology.Relationships{}
+	answer := topology.RelationsAnswerWithExtras
+	if contextOnly {
+		answer = topology.RelationsContextAnswer
 	}
-	topology.ApplyOwnership(rel, ov, fetched)
-	splitHistory(fetched.Ref, owner, acc)(rel, ov, session)
+	rel, extras := answer(rs, families, traverse(session.Catalog()), ov, fetched.Ref, obj, provider, dp)
+	if rel.Ownership != nil {
+		// The answer checks the caller's access to obj again; a decision
+		// that changed since the check above refuses it there, and says why.
+		if session.ValidateCaches() != nil {
+			return unanswered(readreason.ConnectionChanged)
+		}
+		return rel, extras.Coverage, extras
+	}
+	if contextOnly {
+		topology.ApplyOwner(rel, ov, fetched)
+		generators, incomplete := topology.RelationSpecGenerators(rs, acc, ov, fetched.Ref, obj)
+		rel.Managers, rel.OtherManagersIncomplete = generators, incomplete
+	} else {
+		topology.ApplyOwnership(rel, ov, fetched)
+		splitHistory(fetched.Ref, owner, acc)(rel, ov, session)
+	}
 	if session.ValidateCaches() != nil {
-		return nil, nil
+		return unanswered(readreason.ConnectionChanged)
 	}
-	return rel, coverage
+	return rel, extras.Coverage, extras
 }
 
 // OwnershipObservation is what ownership reads from a fetched object, whose
@@ -244,6 +285,7 @@ type AgentOwnership struct {
 	source ownership.Source
 	access func(*ownership.Catalog) ownership.Access
 	view   *ownership.View
+	acc    ownership.Access
 	// session is nil until the first read; failed once it couldn't begin or
 	// its caches were replaced, after which nothing is answered.
 	session ownership.ReadSession
@@ -273,7 +315,8 @@ func (c *AgentOwnership) Of(obj metav1.Object, ref resourceid.Ref) *topology.Con
 			c.failed = true
 			return nil
 		}
-		c.session, c.view = session, ownership.NewView(session, c.access(session.Catalog()))
+		c.session, c.acc = session, c.access(session.Catalog())
+		c.view = ownership.NewView(session, c.acc)
 	}
 	c.view.Seed(fetched)
 	chain := c.view.ControllerChain(fetched.Ref)
@@ -295,14 +338,22 @@ func (c *AgentOwnership) Of(obj metav1.Object, ref resourceid.Ref) *topology.Con
 }
 
 // OtherManagers reads residual spec relations for the resource most recently
-// passed to Of. The bool reports unchecked sources, never denied ones.
-func (c *AgentOwnership) OtherManagers(rel *topology.Relationships, ref resourceid.Ref) ([]topology.ResourceRef, bool) {
+// passed to Of, in Of's session, so a page's rows share one catalog, access and
+// memoized reads. The bool reports unchecked sources, never denied ones.
+func (c *AgentOwnership) OtherManagers(obj runtime.Object, ref resourceid.Ref) ([]topology.ResourceRef, bool) {
 	if c.view == nil || c.failed || c.active != ref {
 		return nil, true
 	}
-	out, incomplete := topology.OtherManagingControllers(rel, c.view, ref)
+	rs, ok := c.session.(relations.Session)
+	if !ok {
+		return nil, true
+	}
+	captured, ok := relations.CaptureSubject(rs, ref, obj)
+	if !ok {
+		return nil, true
+	}
+	out, incomplete := topology.RelationSpecGenerators(captured, c.acc, ownership.NewView(captured, c.acc), ref, obj)
 	if c.session.ValidateCaches() != nil {
-		c.failed = true
 		return nil, true
 	}
 	return out, incomplete

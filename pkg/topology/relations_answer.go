@@ -1,8 +1,10 @@
 package topology
 
 import (
+	"math"
 	"slices"
 	"strings"
+	"sync"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -83,7 +86,20 @@ type neighborhood struct {
 	edges    map[string]bool
 	coverage map[string]relations.Coverage
 	access   ownership.Access
-	decided  map[decisionKey]ownership.Decision
+	// extras is nil for a walk that doesn't collect them, such as the
+	// neighborhood's; everything that records into it tolerates that.
+	extras *RelationshipExtras
+	// unreadable are the subject's declared references the caller may not
+	// read, listed by name.
+	unreadable []ResourceRef
+	decided    map[decisionKey]ownership.Decision
+	// limit is the most objects each Referrers or selector answer of the
+	// answer's views lists, as relations.View.WithLimit takes it.
+	limit int
+	// seeded are the inventory reads the subject's own direct lists take from
+	// a family's answer instead of reading again; they hold only what relates
+	// to the subject.
+	seeded map[resourceid.GroupKind]directRead
 }
 
 // familyNodeID is a node ID parseNodeID can't read, so a node's identity
@@ -103,6 +119,64 @@ func (n *neighborhood) node(r resourceid.Ref) string {
 		n.topo.Nodes = append(n.topo.Nodes, Node{ID: id, Kind: NodeKind(r.Kind), Name: r.Name, Data: map[string]any{"namespace": r.Namespace, "apiVersion": apiVersion}})
 	}
 	return id
+}
+
+// DeclaredState is how a declared reference reads when the caller may not
+// read its target: ResourceStateDenied, or ResourceStateUnverified when the
+// check couldn't be made; empty otherwise.
+func DeclaredState(d relations.Declared) string {
+	switch {
+	case d.State == relations.TargetWithheld:
+		return ResourceStateDenied
+	case d.State == relations.TargetUnread && d.Gap.Reason == readreason.UserPermissionCheckFailed:
+		return ResourceStateUnverified
+	}
+	return ""
+}
+
+// nameUnreadable sets aside the declarations whose targets the caller may not
+// read, to list them by name, and returns the rest of the answer. Their
+// withholding no longer narrows the answer, and a failed check on one is
+// carried by its marker instead of a gap.
+func (n *neighborhood) nameUnreadable(a relations.ReferencesAnswer) relations.ReferencesAnswer {
+	out := relations.ReferencesAnswer{Coverage: a.Coverage}
+	out.Coverage.NotChecked, out.Coverage.Narrowed = nil, false
+	var named []ownership.Gap
+	for _, d := range a.Declared {
+		state := DeclaredState(d)
+		if state == "" {
+			out.Declared = append(out.Declared, d)
+			continue
+		}
+		n.unreadable = append(n.unreadable, ResourceRef{Kind: d.Ref.Kind, Group: d.Ref.Group, Namespace: d.Ref.Namespace, Name: d.Ref.Name, State: state})
+		if state == ResourceStateUnverified {
+			named = append(named, d.Gap)
+		}
+	}
+	for _, gap := range a.Coverage.NotChecked {
+		if !slices.Contains(named, gap) {
+			out.Coverage.NotChecked = append(out.Coverage.NotChecked, gap)
+		}
+	}
+	return out
+}
+
+// listUnreadable adds the subject's unreadable declared references to the
+// fields their kinds fill.
+func (n *neighborhood) listUnreadable(rel *Relationships) {
+	for _, r := range n.unreadable {
+		switch {
+		case r.Group == "" && r.Kind == "ServiceAccount":
+			if rel.ServiceAccount == nil {
+				ref := r
+				rel.ServiceAccount = &ref
+			}
+		case r.Group == "" && r.Kind == "PersistentVolumeClaim":
+			rel.StorageRefs = appendResourceRef(rel.StorageRefs, r)
+		default:
+			rel.ConfigRefs = appendResourceRef(rel.ConfigRefs, r)
+		}
+	}
 }
 
 func (n *neighborhood) edge(from, to resourceid.Ref, e relationEdge) {
@@ -151,7 +225,20 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		}
 		if !routingOnly {
 			refs := v.References(f, subject, obj)
+			if f == relations.ConfigReferences && n.extras != nil && subject == n.extras.Subject {
+				// The subject's own spec names these, and the caller reads the
+				// subject, so the names are shown, marked unreadable, rather
+				// than withheld. Nothing is read about the targets themselves.
+				own := refs
+				if relations.RetiredRevision(obj) {
+					own = v.References(relations.OwnConfigReferences, subject, obj)
+				}
+				n.extras.Declarations = append(n.extras.Declarations, own.Declared...)
+				n.extras.cover("Uses", declarationCoverage(own, gk))
+				refs = n.nameUnreadable(refs)
+			}
 			n.cover(f.Name, refs.Coverage)
+			n.extras.projectReferences(disposition, gk, refs)
 			for _, d := range refs.Declared {
 				if d.State == relations.TargetPresent {
 					if e, ok := edgeFor(f.Name, subject, d.Ref); ok {
@@ -170,6 +257,11 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		}
 		referrers := v.Referrers(f, subject, obj)
 		n.cover(f.Name, referrers.Coverage)
+		n.extras.projectCoverage(disposition, gk, false, referrers.Coverage)
+		if f == relations.ConfigReferences && n.extras != nil && subject == n.extras.Subject {
+			n.extras.Consumers = append(n.extras.Consumers, referrers.Referrers...)
+			n.extras.cover("ReferencedBy", referrers.Coverage)
+		}
 		for _, r := range referrers.Referrers {
 			if e, ok := edgeFor(f.Name, r.Ref, subject); ok {
 				n.edge(r.Ref, subject, e)
@@ -184,6 +276,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		if !routingOnly {
 			chosen := v.Selected(f, subject, obj)
 			n.cover(f.Name, chosen.Coverage)
+			n.extras.projectCoverage(disposition, gk, true, chosen.Coverage)
 			for _, m := range chosen.Matches {
 				if e, ok := projectedEdge(disposition, subject, m); ok {
 					n.edge(subject, m, e)
@@ -192,6 +285,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		}
 		by := v.SelectedBy(f, subject, obj)
 		n.cover(f.Name, by.Coverage)
+		n.extras.projectCoverage(disposition, gk, false, by.Coverage)
 		for _, m := range by.Matches {
 			if e, ok := projectedEdge(disposition, m, subject); ok {
 				n.edge(m, subject, e)
@@ -204,23 +298,72 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 // Related Resources. Traverse is used only for intermediate networking hops;
 // all emitted references, including ownership, use access. Coverage is keyed
 // by family and includes only incomplete answers. Istio's service domain is
-// read from provider's istiod Deployments, as the graph builder reads it.
+// read from provider's istiod Deployments, as the graph builder reads it. A
+// subject access refuses is answered by RefusedRelationships.
 func RelationsAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, provider ResourceProvider, dp DynamicProvider) (*Relationships, map[string]relations.Coverage) {
-	if obj == nil || access.CanRead(subject.GroupKind(), subject.Namespace) != ownership.Allowed {
+	rel, extras := RelationsAnswerWithExtras(session, access, traverse, ov, subject, obj, provider, dp)
+	if extras == nil {
+		return rel, nil
+	}
+	return rel, extras.Coverage
+}
+
+// RelationsAnswerWithExtras also preserves declaration provenance and coverage
+// for in-process consumers. Extras must not be serialized as resource data.
+func RelationsAnswerWithExtras(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, provider ResourceProvider, dp DynamicProvider) (*Relationships, *RelationshipExtras) {
+	return relationsAnswer(session, access, traverse, ov, subject, obj, provider, dp, false)
+}
+
+// RelationsContextAnswer answers context fields without enumerating ownership
+// children that the context does not expose.
+//
+// A host that read the subject for the caller through its resource read gate
+// passes ReadSubject(access, subject), so the subject's relationships don't
+// hang on a get grant the gate didn't ask for.
+func RelationsContextAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, provider ResourceProvider, dp DynamicProvider) (*Relationships, *RelationshipExtras) {
+	return relationsAnswer(session, access, traverse, ov, subject, obj, provider, dp, true)
+}
+
+func relationsAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, provider ResourceProvider, dp DynamicProvider, contextOnly bool) (*Relationships, *RelationshipExtras) {
+	if obj == nil {
 		return &Relationships{}, nil
 	}
-	istioDomain := ""
-	if provider != nil {
-		istioDomain = NewBuilder(provider).istioServiceDomain()
+	if decision := access.CanRead(subject.GroupKind(), subject.Namespace); decision != ownership.Allowed {
+		return RefusedRelationships(subject, decision)
 	}
-	v := relations.NewView(session, access)
-	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access}
-	families, selectors := relations.Families(istioDomain), relations.SelectorFamilies()
+	// Finding Istio's domain reads every Deployment, so it is found only once
+	// a VirtualService or DestinationRule is read.
+	cached := provider
+	istioDomain := sync.OnceValue(func() string {
+		if cached == nil {
+			return ""
+		}
+		return NewBuilder(cached).istioServiceDomain()
+	})
+	limit := relations.DefaultLimit
+	if contextOnly {
+		limit = math.MaxInt
+	}
+	v := relations.NewView(session, access).WithLimit(limit)
+	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access, limit: limit, extras: &RelationshipExtras{Subject: subject, Fields: map[string]relations.Coverage{}, ScalerManagers: map[resourceid.Ref]resourceid.Ref{}}}
+	families, selectors := relations.FamiliesIn(istioDomain), relations.SelectorFamilies()
 	n.node(subject)
+	if contextOnly {
+		n.contextDirectEvidence(session, relations.NewView(session, access), subject, obj)
+	}
 	n.answer(session, v, families, selectors, subject, obj, false)
 	for _, f := range relations.Compositions() {
 		joined := v.Composed(f, subject, obj)
 		n.cover(f.Name, joined.Coverage)
+		if slices.ContainsFunc(f.Producer.Sources, func(s relations.Source) bool { return s.Kind == subject.GroupKind() }) {
+			n.extras.projectCoverage(f.Projection, subject.GroupKind(), true, joined.Coverage)
+		}
+		for _, consumer := range f.Consumers {
+			if (len(f.ConsumerKinds) == 0 || slices.Contains(f.ConsumerKinds, subject.GroupKind())) && slices.ContainsFunc(consumer.Sources, func(s relations.Source) bool { return s.Kind == subject.GroupKind() }) {
+				n.extras.projectCoverage(f.Projection, subject.GroupKind(), false, joined.Coverage)
+				break
+			}
+		}
 		for _, edge := range joined.Edges {
 			if e, ok := projectedEdge(f.Projection, edge.Producer, edge.Consumer); ok {
 				n.edge(edge.Producer, edge.Consumer, e)
@@ -229,7 +372,10 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 	}
 
 	n.management(session, ov, subject)
-	children := ov.Children(subject)
+	children := ownership.ChildrenAnswer{}
+	if !contextOnly || subject.GroupKind() == (resourceid.GroupKind{Group: "cluster.x-k8s.io", Kind: "Cluster"}) {
+		children = ov.Children(subject)
+	}
 	for _, c := range children.Children {
 		n.edge(subject, c.Ref, relationEdge{edge: EdgeManages})
 	}
@@ -257,6 +403,8 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 		rel = &Relationships{}
 	}
 	n.networkEntrypoints(session, access, traverse, subject, obj, istioDomain, rel)
+	n.listUnreadable(rel)
+	n.nameSpecDeclared(obj, rel)
 	if _, all := access.Namespaces(); !all && (subject.GroupKind() == resourceid.GroupKind{Kind: "Node"} || subject.GroupKind() == resourceid.GroupKind{Group: "storage.k8s.io", Kind: "StorageClass"}) {
 		// A Node's Pods and a StorageClass's claims are read only in the
 		// caller's namespaces, so others may be withheld.
@@ -291,7 +439,9 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 			rel.ManagedBy = n.ownManagers(rel, ov, subject)
 		}
 	}
-	return rel, n.coverage
+	n.extras.Coverage = n.coverage
+	n.scalerManagers(session, rel)
+	return rel, n.extras
 }
 
 // topManager climbs from subject while something readable is above it: the
@@ -619,7 +769,7 @@ func (n *neighborhood) knativeServing(session relations.Session, subject resourc
 	}
 }
 
-func (n *neighborhood) fillNodeData(session relations.Session, istioDomain string) {
+func (n *neighborhood) fillNodeData(session relations.Session, istioDomain func() string) {
 	for i := range n.topo.Nodes {
 		node := &n.topo.Nodes[i]
 		ref := resourceRefForNode(node, nil)
@@ -628,7 +778,7 @@ func (n *neighborhood) fillNodeData(session relations.Session, istioDomain strin
 		}
 		r := refIdentity(*ref)
 		if r.Group == "networking.istio.io" && (r.Kind == "VirtualService" || r.Kind == "DestinationRule") {
-			node.Data["istioServiceDomain"] = istioDomain
+			node.Data["istioServiceDomain"] = istioDomain()
 		}
 		if r.Group == "" && (r.Kind == "ConfigMap" || r.Kind == "Secret") {
 			obj, read := n.borrow(session, r)

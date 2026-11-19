@@ -122,8 +122,8 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 
 	// Large clusters without a namespace filter: skip the expensive build entirely.
 	// The frontend shows a "select namespace" prompt instead of a blank graph.
-	// ForRelationshipCache bypasses this guard — internal builds need the full graph
-	// for resource detail "Related Resources" lookups.
+	// ForRelationshipCache bypasses this guard for GitOps trees and neighborhoods
+	// that need full graph facts.
 	if isLargeCluster && len(opts.Namespaces) == 0 && !opts.ForRelationshipCache {
 		perfstats.RecordTopologyBuild(time.Since(start), 0, 0, estimatedNodes)
 		return &Topology{
@@ -141,8 +141,8 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 	// to hang the tab if we render every pod. Collapse the pod tier into
 	// per-workload / per-service counts. Only kicks in for real (non-cache)
 	// namespace-filtered builds — the all-namespace large path already returns
-	// the RequiresNamespaceFilter prompt above, and the relationship cache
-	// needs the full graph.
+	// the RequiresNamespaceFilter prompt above, and internal graph consumers
+	// need the full graph.
 	if estimatedNodes >= SummaryModeThreshold && len(opts.Namespaces) > 0 && !opts.ForRelationshipCache {
 		opts.SummaryMode = true
 	}

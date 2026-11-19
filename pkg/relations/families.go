@@ -412,6 +412,13 @@ var IstioGateways = &Family{
 // with the mesh's domain (configrefs.IstioServiceDomain), which comes from
 // istiod rather than from the objects, so the family is made for it.
 func IstioServiceHosts(domain string) *Family {
+	return IstioServiceHostsIn(func() string { return domain })
+}
+
+// IstioServiceHostsIn is IstioServiceHosts asking for the domain only when it
+// reads a VirtualService or DestinationRule, since finding it reads istiod's
+// Deployment. domain is asked once per object read; memoize it.
+func IstioServiceHostsIn(domain func() string) *Family {
 	index := referrersIndex("istioServiceHosts")
 	index.IndexDeclarations = istioHostCandidates
 	return &Family{
@@ -423,12 +430,12 @@ func IstioServiceHosts(domain string) *Family {
 		CrossNamespace: true,
 		Declared: func(obj runtime.Object, visit func(Declaration)) error {
 			if u, ok := unstructuredOf(obj, kindVirtualService); ok {
-				for _, r := range configrefs.IstioVirtualServiceDestinations(u, domain) {
+				for _, r := range configrefs.IstioVirtualServiceDestinations(u, domain()) {
 					visitPathRef(visit, r)
 				}
 			}
 			if u, ok := unstructuredOf(obj, kindDestinationRule); ok {
-				if r, ok := configrefs.IstioDestinationRuleService(u, domain); ok {
+				if r, ok := configrefs.IstioDestinationRuleService(u, domain()); ok {
 					visitPathRef(visit, r)
 				}
 			}
