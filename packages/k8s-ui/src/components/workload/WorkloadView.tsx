@@ -144,6 +144,8 @@ interface WorkloadViewProps {
   onCancelExpandIntent?: () => void
   /** Initial view tab — 'yaml' opens YAML directly */
   initialTab?: 'detail' | 'yaml'
+  /** The tab an uncontrolled view opens on, extra tabs included. */
+  defaultTab?: string
   /** API group for CRD resources */
   group?: string
 
@@ -339,6 +341,7 @@ interface WorkloadViewProps {
     resource: any
     pods: ResourceRef[]
     selectedPod: string | null
+    onShowEvents?: () => void
     onSelectPod: (name: string | null) => void
     initialContainer: string | null
     onConsumeInitialContainer: () => void
@@ -469,6 +472,7 @@ export function WorkloadView({
   onExpandIntent,
   onCancelExpandIntent,
   initialTab,
+  defaultTab,
   group,
   breadcrumb,
   titlePrefix,
@@ -586,7 +590,7 @@ export function WorkloadView({
   const apiKind = kindProp
 
   // Tab state — controlled or uncontrolled
-  const [internalTab, setInternalTab] = useState<TabType>('overview')
+  const [internalTab, setInternalTab] = useState<TabType>((defaultTab as TabType) ?? 'overview')
   const activeTab = controlledTab ?? internalTab
   const handleSetTab = useCallback((tab: TabType) => {
     setInternalTab(tab)
@@ -1532,6 +1536,7 @@ export function WorkloadView({
             pods: allPods,
             selectedPod,
             onSelectPod: setSelectedPod,
+            onShowEvents: () => handleSetTab('timeline'),
             initialContainer,
             onConsumeInitialContainer: () => setInitialContainer(null),
           })

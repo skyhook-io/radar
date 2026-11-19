@@ -138,6 +138,43 @@ func TestHandleTimelineEvents_Contract(t *testing.T) {
 		}
 	}
 
+	// A kinds filter applies before the limit, so other kinds can't spend it.
+	rr = get("/api/timeline/events?from=" + fromMs + "&to=" + toMs + "&kinds=NoSuchKind&namespaces=default")
+	if events, _ = parseStream(t, rr.Body.String()); len(events) != 0 {
+		t.Fatalf("kinds filter ignored: %d events", len(events))
+	}
+
+	// changes_only spends the limit on changes, not status churn or K8s Events.
+	base2 := base.Add(-30 * time.Second)
+	appendEvent := func(id string, eventType timeline.EventType, source timeline.EventSource, diff *timeline.DiffInfo, at time.Duration) {
+		t.Helper()
+		if err := store.Append(t.Context(), timeline.TimelineEvent{ID: id, Timestamp: base2.Add(at), Source: source, Kind: "Application", Namespace: "changes", Name: id, EventType: eventType, Diff: diff, ClusterContext: k8s.ActiveClusterContext()}); err != nil {
+			t.Fatalf("Append %s: %v", id, err)
+		}
+	}
+	fields := func(paths ...string) *timeline.DiffInfo {
+		out := &timeline.DiffInfo{}
+		for _, p := range paths {
+			out.Fields = append(out.Fields, timeline.FieldChange{Path: p})
+		}
+		return out
+	}
+	appendEvent("spec", timeline.EventTypeUpdate, timeline.SourceInformer, fields("status.health", "spec.source.targetRevision"), 0)
+	appendEvent("synced", timeline.EventTypeUpdate, timeline.SourceInformer, fields("status.sync.revision"), time.Second)
+	appendEvent("status", timeline.EventTypeUpdate, timeline.SourceInformer, fields("status.health"), 2*time.Second)
+	appendEvent("nodiff", timeline.EventTypeUpdate, timeline.SourceInformer, nil, 3*time.Second)
+	appendEvent("k8s", timeline.EventTypeWarning, timeline.SourceK8sEvent, nil, 4*time.Second)
+	rr = get("/api/timeline/events?from=" + fromMs2(base2) + "&to=" + toMs + "&changes_only=true&namespaces=changes")
+	events, end = parseStream(t, rr.Body.String())
+	if len(events) != 2 || events[0].Name != "synced" || events[1].Name != "spec" || end.Truncated {
+		t.Fatalf("changes_only: %+v, end %+v; want synced then spec, not truncated", events, end)
+	}
+	rr = get("/api/timeline/events?from=" + fromMs2(base2) + "&to=" + toMs + "&changes_only=true&limit=1&namespaces=changes")
+	events, end = parseStream(t, rr.Body.String())
+	if len(events) != 1 || events[0].Name != "synced" || !end.Truncated {
+		t.Fatalf("changes_only limit: %+v, end %+v; want newest change, truncated", events, end)
+	}
+
 	// The `to` bound is honored: a window ending before event c excludes it.
 	beforeC := strconv.FormatInt(base.Add(1500*time.Millisecond).UnixMilli(), 10)
 	rr = get("/api/timeline/events?from=" + fromMs + "&to=" + beforeC + "&namespaces=default")
@@ -292,5 +329,40 @@ func TestWriteTimelineQueryError_TimeoutChecksTheDatabase(t *testing.T) {
 	s.writeTimelineQueryError(rr, timedOut)
 	if rr.Code != http.StatusInternalServerError || strings.Contains(rr.Body.String(), "error_code") {
 		t.Fatalf("slow query with a healthy store answered %d %s, want a plain 500", rr.Code, rr.Body.String())
+	}
+}
+
+func fromMs2(at time.Time) string {
+	return strconv.FormatInt(at.Add(-time.Second).UnixMilli(), 10)
+}
+
+func TestHandleTimelineAuthorize(t *testing.T) {
+	s := &Server{}
+	post := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/timeline/authorize", strings.NewReader(body))
+		rr := httptest.NewRecorder()
+		s.handleTimelineAuthorize(rr, req)
+		return rr
+	}
+	// With auth off there's nothing to filter, so answers line up with the request.
+	rr := post(`{"resources":[{"kind":"Deployment","namespace":"a"},{"kind":"Secret","namespace":"b"}]}`)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"allowed":[true,true]`) {
+		t.Fatalf("authorize: %d %s", rr.Code, rr.Body.String())
+	}
+	if rr := post(`not json`); rr.Code != http.StatusBadRequest {
+		t.Fatalf("bad body: %d", rr.Code)
+	}
+	var many strings.Builder
+	many.WriteString(`{"resources":[`)
+	for i := 0; i <= timelineAuthorizeLimit; i++ {
+		if i > 0 {
+			many.WriteString(",")
+		}
+		many.WriteString(`{"kind":"Pod"}`)
+	}
+	many.WriteString(`]}`)
+	if rr := post(many.String()); rr.Code != http.StatusBadRequest {
+		t.Fatalf("over limit: %d", rr.Code)
 	}
 }
