@@ -215,13 +215,11 @@ describe('Delete backup', () => {
     expect(buttons('Delete object')).toHaveLength(1)
   })
 
-  it('leaves out the reviewed-object binding a Radar without it would ignore', () => {
+  it('offers neither delete on a Radar without Delete backup', () => {
     state.support = 'unsupported'
-    render(<VeleroDeleteBackup backup={{ ...backup('Completed'), metadata: { ...backup().metadata, resourceVersion: '7' } }} />)
-    act(() => buttons('Delete object')[0].click())
-    expect(document.body.textContent).toContain('Removes only the Backup object')
-    act(() => buttons('Delete object').at(-1)!.click())
-    expect(state.deleteObject).toHaveBeenCalledWith({ kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly-1' }, expect.anything())
+    render(<VeleroDeleteBackup backup={{ ...unstored('nightly-1') }} />)
+    expect(buttons('Delete object')).toHaveLength(0)
+    expect(buttons('Delete backup')).toHaveLength(0)
   })
 
   it('leaves the refusal to Velero when the location can’t be read', () => {

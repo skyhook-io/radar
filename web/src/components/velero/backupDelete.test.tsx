@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { location, workspace } from './velero.fixtures'
 
 vi.mock('../../api/client', () => ({ useDeleteResource: () => ({}), useCascadeDeletePreview: () => ({}) }))
-const { VeleroObjectDeleteNotice, veleroBackupDeletePath, veleroLocationMissing, veleroObjectDeleteDetails } = await import('./backupDelete')
+const { VELERO_DELETE_OBJECT_DETAILS, VeleroObjectDeleteNotice, veleroBackupDeletePath, veleroLocationMissing } = await import('./backupDelete')
 
 const backup = (phase: string, storageLocation?: string, meta: Record<string, unknown> = {}) => ({
   metadata: { namespace: 'velero', name: 'nightly-1', ...meta },
@@ -53,15 +53,12 @@ describe('how a Velero Backup is deleted', () => {
     expect(veleroBackupDeletePath(backup('New', undefined, { finalizers: ['example.io/hold'] }), input())).toEqual({ kind: 'request' })
   })
 
-  it('falls back to the object on a Radar without Delete backup only for one Velero has finished with, and decides nothing before it loads', () => {
-    expect(veleroBackupDeletePath(backup('Completed', 'default'), input({ deleteBackup: 'unsupported' }))).toEqual({ kind: 'object', reason: 'olderRadar' })
-    for (const phase of ['', 'New', 'Queued', 'ReadyToStart', 'InProgress', 'Finalizing', 'Deleting']) {
-      expect(veleroBackupDeletePath(backup(phase, 'default'), input({ deleteBackup: 'unsupported' })), phase).toEqual({ kind: 'pending' })
+  it('offers nothing on a Radar without Delete backup, and decides nothing before it loads', () => {
+    for (const phase of ['', 'New', 'Completed', 'FailedValidation']) {
+      expect(veleroBackupDeletePath(backup(phase), input({ deleteBackup: 'unsupported' })), phase).toEqual({ kind: 'pending' })
     }
-    expect(veleroBackupDeletePath(backup('Completed', 'default', { finalizers: ['example.io/hold'] }), input({ deleteBackup: 'unsupported' }))).toEqual({ kind: 'pending' })
     expect(veleroBackupDeletePath(backup('New'), input({ deleteBackup: 'unknown' }))).toEqual({ kind: 'pending' })
     expect(veleroBackupDeletePath(undefined, input())).toEqual({ kind: 'pending' })
-    expect(veleroBackupDeletePath(undefined, input({ deleteBackup: 'unsupported' }))).toEqual({ kind: 'pending' })
   })
 
   it('knows a location is missing only where every location in its namespace was read', () => {
@@ -77,8 +74,7 @@ describe('how a Velero Backup is deleted', () => {
 
 describe('the Delete object confirmation', () => {
   it('says one thing for a backup Velero never stored: the object goes, nothing is in storage', () => {
-    expect(veleroObjectDeleteDetails('unstored')).toBe('Deletes the Backup object. Nothing of it is in storage.')
-    expect(veleroObjectDeleteDetails('rejectedNoLocation')).toBe('Deletes the Backup object. Nothing of it is in storage.')
+    expect(VELERO_DELETE_OBJECT_DETAILS).toBe('Deletes the Backup object. Nothing of it is in storage.')
     const unstored = renderToStaticMarkup(<VeleroObjectDeleteNotice reason="unstored" backup={backup('New')} />)
     expect(unstored).toContain('Nothing of this backup is in storage')
     expect(unstored).toContain('never started this backup')
@@ -91,13 +87,5 @@ describe('the Delete object confirmation', () => {
     const queued = backup('New', undefined, { labels: { 'velero.io/schedule-name': 'nightly' } })
     expect(renderToStaticMarkup(<VeleroObjectDeleteNotice reason="unstored" backup={queued} />)).toContain('While it is queued, Velero holds schedule nightly; deleting it removes that hold.')
     expect(renderToStaticMarkup(<VeleroObjectDeleteNotice reason="unstored" backup={backup('New')} />)).not.toContain('holds schedule')
-  })
-
-  it('says only the object goes when this Radar can’t ask Velero, never "permanently"', () => {
-    const details = veleroObjectDeleteDetails('olderRadar')
-    expect(details).toContain('Removes only the Backup object')
-    expect(details).toContain('volume snapshots and uploaded volume data')
-    expect(details).not.toContain('permanently')
-    expect(renderToStaticMarkup(<VeleroObjectDeleteNotice reason="olderRadar" backup={backup('Completed', 'default')} />)).toContain('velero backup delete')
   })
 })

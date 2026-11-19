@@ -7,13 +7,15 @@ import { useRadarFeature } from '../../api/client'
 import { getApiBase } from '../../api/config'
 import { actionDialogResult } from '../../api/actions'
 import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
-import { RUNNING_PHASES, VeleroDeleteObject, veleroBackupDeletePath, veleroLocationMissing } from './backupDelete'
+import { VeleroDeleteObject, veleroBackupDeletePath, veleroLocationMissing } from './backupDelete'
 import { useVeleroBackupDeletion, useVeleroDeleteBackup, useVeleroRuns, useVeleroWorkspace, type VeleroDeletion } from '../../api/velero'
 
 // The generic Delete's hover treatment, on a labelled button like the other header actions.
 const BUTTON =
   'btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium hover:text-red-400 hover:border-red-400/50 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50'
 
+// The phases Velero's backup tracker holds a backup in (pkg/velero.BackupStillRunning).
+const RUNNING = new Set(['InProgress', 'WaitingForPluginOperations', 'WaitingForPluginOperationsPartiallyFailed', 'Finalizing', 'FinalizingPartiallyFailed'])
 const SETTLED = new Set<VeleroDeletion['state']>(['refused', 'failed', 'unknown', 'deleted'])
 // A Restore Velero has not finished: it is still reading the backup.
 const RESTORING = new Set(['', 'New', 'InProgress', 'WaitingForPluginOperations', 'WaitingForPluginOperationsPartiallyFailed', 'Finalizing', 'FinalizingPartiallyFailed'])
@@ -21,7 +23,7 @@ const RESTORING = new Set(['', 'New', 'InProgress', 'WaitingForPluginOperations'
 /** Why Velero would refuse to delete this backup now, from what Radar can see. */
 export function deleteRefusal(backup: any, location: { accessMode?: string; phase?: string } | undefined, serverStopped: boolean, deletionDisabled = false): string | undefined {
   const phase: string = backup?.status?.phase ?? ''
-  if (RUNNING_PHASES.has(phase)) return `This backup is still running (${phase}). Velero deletes a backup only once it has finished.`
+  if (RUNNING.has(phase)) return `This backup is still running (${phase}). Velero deletes a backup only once it has finished.`
   if (serverStopped) return 'The Velero server isn’t running, so nothing would be deleted now. Start it first.'
   if (deletionDisabled) return 'Velero runs with its backup-deletion controller disabled (--restore-only or --disable-controllers=backup-deletion), so it would never process the deletion.'
   const name: string = backup?.spec?.storageLocation ?? ''
@@ -120,7 +122,7 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
     locationMissing: (n) => veleroLocationMissing(workspace.data, namespace, n),
     request: requestState,
   })
-  if (path.kind === 'object') return <VeleroDeleteObject backup={backup} reason={path.reason} preconditions={preconditions === 'supported'} />
+  if (path.kind === 'object') return <VeleroDeleteObject backup={backup} reason={path.reason} />
   if (support !== 'supported') return null
 
   const locationName: string = backup?.spec?.storageLocation ?? ''
