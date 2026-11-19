@@ -50,6 +50,8 @@ type Client struct {
 	workloadAttributionEntries map[string]*workloadAttributionEntry
 	workloadPartition          *workloadPartitionMemo
 	workloadPartitionSF        singleflight.Group
+	viewScopes                 map[string]viewScopeEntry
+	viewScopeSF                singleflight.Group
 	lastDiscoverErr            error
 	lastDiscoverAt             time.Time
 
@@ -970,6 +972,18 @@ func (c *Client) Query(ctx context.Context, query string) (*prom.QueryResult, er
 		return nil, errors.New("prometheus connection was reset")
 	}
 	return p.Query(ctx, query)
+}
+
+// QueryAt is Query evaluated at a fixed time.
+func (c *Client) QueryAt(ctx context.Context, query string, at time.Time) (*prom.QueryResult, error) {
+	if _, _, err := c.EnsureConnected(ctx); err != nil {
+		return nil, err
+	}
+	p := c.getPromClient()
+	if p == nil {
+		return nil, errors.New("prometheus connection was reset")
+	}
+	return p.QueryAt(ctx, query, at)
 }
 
 // QueryPost is Query with the query sent in a POST body rather than the URL.
