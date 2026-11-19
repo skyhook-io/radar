@@ -409,3 +409,67 @@ func TestWalkNeighborhoodEdgesCarryTheGraphsLabels(t *testing.T) {
 		}
 	}
 }
+
+// A HelmRelease's chart chain and a CertificateRequest's issuer, all admitted
+// on the last hop, come back linked and labelled as the graph labels them.
+func TestWalkNeighborhoodLinksChartChainsAndRequestIssuers(t *testing.T) {
+	entry := func(ns, name, group, kind string) map[string]any {
+		return map[string]any{"id": ns + "_" + name + "_" + group + "_" + kind, "v": "v1"}
+	}
+	root := charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "root", nil, nil, map[string]any{"inventory": map[string]any{"entries": []any{
+		entry("flux-system", "web", "helm.toolkit.fluxcd.io", "HelmRelease"),
+		entry("flux-system", "flux-system-web", "source.toolkit.fluxcd.io", "HelmChart"),
+		entry("flux-system", "charts", "source.toolkit.fluxcd.io", "HelmRepository"),
+		entry("shop", "web-tls", "cert-manager.io", "Certificate"),
+		entry("shop", "web-tls-1", "cert-manager.io", "CertificateRequest"),
+		entry("shop", "ca", "cert-manager.io", "Issuer"),
+	}}})
+	release := charUnstructured("helm.toolkit.fluxcd.io/v2", "HelmRelease", "flux-system", "web", nil,
+		map[string]any{"chart": map[string]any{"spec": map[string]any{"chart": "web", "sourceRef": map[string]any{"kind": "HelmRepository", "name": "charts"}}}},
+		map[string]any{"helmChart": "flux-system/flux-system-web"})
+	chart := charUnstructured("source.toolkit.fluxcd.io/v1", "HelmChart", "flux-system", "flux-system-web", nil, map[string]any{"chart": "web", "sourceRef": map[string]any{"kind": "HelmRepository", "name": "charts"}}, nil)
+	repo := charUnstructured("source.toolkit.fluxcd.io/v1", "HelmRepository", "flux-system", "charts", nil, nil, nil)
+	cert := charUnstructured("cert-manager.io/v1", "Certificate", "shop", "web-tls", nil, map[string]any{"issuerRef": map[string]any{"kind": "Issuer", "name": "ca", "group": "cert-manager.io"}}, nil)
+	request := charUnstructured("cert-manager.io/v1", "CertificateRequest", "shop", "web-tls-1", nil, map[string]any{"issuerRef": map[string]any{"kind": "Issuer", "name": "ca", "group": "cert-manager.io"}}, nil, charController("cert-manager.io/v1", "Certificate", "web-tls", string(cert.GetUID())))
+	issuer := charUnstructured("cert-manager.io/v1", "Issuer", "shop", "ca", nil, nil, nil)
+	d := newCharDynamic()
+	d.add("kustomize.toolkit.fluxcd.io", "v1", "Kustomization", "kustomizations", true, root)
+	d.add("helm.toolkit.fluxcd.io", "v2", "HelmRelease", "helmreleases", true, release)
+	d.add("source.toolkit.fluxcd.io", "v1", "HelmChart", "helmcharts", true, chart)
+	d.add("source.toolkit.fluxcd.io", "v1", "HelmRepository", "helmrepositories", true, repo)
+	d.add("cert-manager.io", "v1", "Certificate", "certificates", true, cert)
+	d.add("cert-manager.io", "v1", "CertificateRequest", "certificaterequests", true, request)
+	d.add("cert-manager.io", "v1", "Issuer", "issuers", true, issuer)
+	f := &charFixture{provider: &mockProvider{}, dynamic: d, objects: []charObject{
+		{group: "kustomize.toolkit.fluxcd.io", kind: "Kustomization", resource: "kustomizations", obj: root},
+		{group: "helm.toolkit.fluxcd.io", kind: "HelmRelease", resource: "helmreleases", obj: release},
+		{group: "source.toolkit.fluxcd.io", kind: "HelmChart", resource: "helmcharts", obj: chart},
+		{group: "source.toolkit.fluxcd.io", kind: "HelmRepository", resource: "helmrepositories", obj: repo},
+		{group: "cert-manager.io", kind: "Certificate", resource: "certificates", obj: cert},
+		{group: "cert-manager.io", kind: "CertificateRequest", resource: "certificaterequests", obj: request},
+		{group: "cert-manager.io", kind: "Issuer", resource: "issuers", obj: issuer},
+	}}
+	sub, err := WalkNeighborhood(context.Background(), neighborhoodFixtureSession(t, f), ResourceRef{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "flux-system", Name: "root"}, NeighborhoodOptions{Profile: ProfileAll}, f.provider, f.dynamic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	for _, n := range sub.Nodes {
+		names[n.ID] = n.Name
+	}
+	labels := map[string]string{}
+	for _, e := range sub.Edges {
+		labels[names[e.Source]+" "+string(e.Type)+" "+names[e.Target]] = e.Label
+	}
+	for edge, want := range map[string]string{
+		"charts configures web":             "chart source",
+		"flux-system-web configures web":    "chart reference",
+		"charts configures flux-system-web": "source",
+		"web-tls uses ca":                   "issuer",
+		"web-tls-1 uses ca":                 "issuer",
+	} {
+		if got, ok := labels[edge]; !ok || got != want {
+			t.Errorf("%s: label %q (present %v), want %q; edges %v", edge, got, ok, want, labels)
+		}
+	}
+}
