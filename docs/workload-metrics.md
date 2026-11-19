@@ -411,10 +411,14 @@ shows a matching-in-progress state and refreshes every three seconds.
 
 When identity-checked CPU/memory charts cannot be served, the existing basic charts
 remain in a collapsed **Basic CPU / memory · identity unverified** section
-(the label lists only the affected charts). They do not establish Pod UID,
-historical workload membership, or cluster identity; matching names in a shared
-backend may include another cluster. They never substitute for a verified workload
+(the label lists only the affected charts). They do not establish Pod UID or
+historical workload membership, and they never substitute for a verified workload
 total. Network/storage retain this same older name-matched contract independently.
+Both sections are now kept to this cluster like the
+[other views in a shared store](#other-views-in-a-shared-metrics-store): the label
+reads "matched by cluster label" or "operator declared single-cluster" when they
+are, and keeps "identity unverified" (matching names in a shared backend may
+include another cluster) for unlabeled stores and older Radar.
 HTTP error and coverage ratios are calculated from matching timestamps in the
 returned counters; histogram quantiles remain calculated by the metrics backend.
 Warnings or `isPartial: true` withhold the response; informational annotations
