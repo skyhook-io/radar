@@ -261,10 +261,18 @@ func TestUploadScriptDestinationBecomesDirectoryMidUpload(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, _ = stdin.Write(body)
-		// The temp file exists once the script is reading the body.
-		deadline := time.Now().Add(5 * time.Second)
-		for !hasTempFile(dir) && time.Now().Before(deadline) {
-			time.Sleep(10 * time.Millisecond)
+		// The script creates its temp file before it reads the replaced
+		// file's mode and owner; a destination swapped in that window fails
+		// those reads instead of the commit. Once the temp file holds the
+		// whole body, the script is in cat, waiting for the end of stdin.
+		deadline := time.Now().Add(10 * time.Second)
+		for tempFileSize(dir) != int64(len(body)) {
+			if time.Now().After(deadline) {
+				_ = c.Process.Kill()
+				_ = c.Wait()
+				t.Fatalf("overwrite=%v: the script never received the body", overwrite)
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
 		_ = os.Remove(dest)
 		if err := os.Mkdir(dest, 0o755); err != nil {
@@ -284,14 +292,18 @@ func TestUploadScriptDestinationBecomesDirectoryMidUpload(t *testing.T) {
 	}
 }
 
-func hasTempFile(dir string) bool {
+// tempFileSize is the size of the script's temp file in dir, or -1 while it
+// has none.
+func tempFileSize(dir string) int64 {
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".radar-upload.") {
-			return true
+			if info, err := e.Info(); err == nil {
+				return info.Size()
+			}
 		}
 	}
-	return false
+	return -1
 }
 
 // The mode goes on after the body is written, so a read-only file can be
