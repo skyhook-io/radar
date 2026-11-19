@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -691,6 +692,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// POST: creates a DownloadRequest, which is the only supported way to
 			// read the messages behind a run's error and warning counts.
 			r.Post("/velero/{kind}/{namespace}/{name}/messages", s.handleVeleroRunMessages)
+			r.Post("/velero/{kind}/{namespace}/{name}/contents", s.handleVeleroRunContents)
+			r.Post("/velero/{kind}/{namespace}/{name}/log", s.handleVeleroRunLog)
 			// POST: creates a Backup from the schedule's template, as the caller.
 			r.Post("/velero/schedules/{namespace}/{name}/backup", s.handleVeleroBackupNow)
 			// POST: creates a DeleteBackupRequest, the way Velero deletes a backup.
@@ -1516,43 +1519,45 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 // an older binary simply lacks it.
 func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
-		ApplicationEvidence:      true,
-		ResourceReadCoverage:     true,
-		SearchCoverage:           true,
-		SearchEventContent:       true,
-		YAMLReview:               true,
-		YAMLSchemas:              true,
-		WorkloadImages:           true,
-		DeploymentPause:          true,
-		SubstrateHealthMetrics:   true,
-		ResourceIssues:           true,
-		ResourceIssueCoverage:    true,
-		PodEnvironment:           true,
-		PolicyResource:           true,
-		WorkloadHistory:          true,
-		CNPGWorkspace:            true,
-		CNPGProtectionSetup:      true,
-		VeleroWorkspace:          true,
-		VeleroBackupNow:          true,
-		VeleroRuns:               true,
-		VeleroDeleteBackup:       true,
-		ServiceEndpointSlices:    true,
-		TrafficRecords:           true,
-		GitOpsWriteEvidence:      true,
-		ArgoRollbackSync:         true,
-		ArgoSyncInheritance:      true,
-		ArgoEnableSelfHealOff:    true,
-		AgentSigninCheck:         true,
-		HelmSourceIdentity:       true,
-		HelmInventory:            true,
-		ClusterScopedPlaceholder: true,
-		KueuePendingPosition:     true,
-		RayClusterPods:           true,
-		PodSidecarMarks:          true,
-		KueueQueueWorkloads:      true,
-		PodFileUpload:            true,
-		Vulnerabilities:          true,
-		RuntimeAdvisoryChecks:    true,
+		ApplicationEvidence:         true,
+		ResourceReadCoverage:        true,
+		SearchCoverage:              true,
+		SearchEventContent:          true,
+		YAMLReview:                  true,
+		YAMLSchemas:                 true,
+		WorkloadImages:              true,
+		DeploymentPause:             true,
+		SubstrateHealthMetrics:      true,
+		ResourceIssues:              true,
+		ResourceIssueCoverage:       true,
+		PodEnvironment:              true,
+		PolicyResource:              true,
+		WorkloadHistory:             true,
+		CNPGWorkspace:               true,
+		CNPGProtectionSetup:         true,
+		VeleroWorkspace:             true,
+		VeleroBackupNow:             true,
+		VeleroRuns:                  true,
+		VeleroDeleteBackup:          true,
+		ResourceDeletePreconditions: true,
+		VeleroRunArtifacts:          true,
+		ServiceEndpointSlices:       true,
+		TrafficRecords:              true,
+		GitOpsWriteEvidence:         true,
+		ArgoRollbackSync:            true,
+		ArgoSyncInheritance:         true,
+		ArgoEnableSelfHealOff:       true,
+		AgentSigninCheck:            true,
+		HelmSourceIdentity:          true,
+		HelmInventory:               true,
+		ClusterScopedPlaceholder:    true,
+		KueuePendingPosition:        true,
+		RayClusterPods:              true,
+		PodSidecarMarks:             true,
+		KueueQueueWorkloads:         true,
+		PodFileUpload:               true,
+		Vulnerabilities:             true,
+		RuntimeAdvisoryChecks:       true,
 	}
 }
 
@@ -4568,6 +4573,10 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, result)
 }
 
+// deletePreconditionFailed is the API server's own message when a delete's UID
+// or resourceVersion precondition doesn't match the stored object.
+var deletePreconditionFailed = regexp.MustCompile(`Precondition failed: (UID|ResourceVersion) in precondition`)
+
 // handleDeleteResource deletes a Kubernetes resource
 func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	kind := chi.URLParam(r, "kind")
@@ -4575,6 +4584,12 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	force := r.URL.Query().Get("force") == "true"
 	group := r.URL.Query().Get("group")
+	// Optional: delete only the object the caller reviewed (409 when it changed).
+	uid, resourceVersion := r.URL.Query().Get("uid"), r.URL.Query().Get("resourceVersion")
+	if force && (uid != "" || resourceVersion != "") {
+		s.writeError(w, http.StatusBadRequest, "force cannot be combined with uid or resourceVersion")
+		return
+	}
 
 	auth.AuditLog(r, namespace, name)
 	if !s.requireConnectedForAction(w) {
@@ -4586,11 +4601,13 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := k8s.DeleteResourceWithClient(r.Context(), k8s.DeleteResourceOptions{
-		Kind:      kind,
-		Group:     group,
-		Namespace: namespace,
-		Name:      name,
-		Force:     force,
+		Kind:            kind,
+		Group:           group,
+		Namespace:       namespace,
+		Name:            name,
+		Force:           force,
+		UID:             types.UID(uid),
+		ResourceVersion: resourceVersion,
 	}, client)
 	if err != nil {
 		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
@@ -4602,6 +4619,11 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if apierrors.IsConflict(err) {
+			// A precondition the API server checked, not an admission webhook's 409.
+			if (uid != "" || resourceVersion != "") && deletePreconditionFailed.MatchString(err.Error()) {
+				s.writeError(w, http.StatusConflict, "it changed since you reviewed it, so it was not deleted; review it again")
+				return
+			}
 			s.writeError(w, http.StatusConflict, err.Error())
 			return
 		}

@@ -160,7 +160,7 @@ func TestRelationsContextDeclaredUnreadableTargetIsNamed(t *testing.T) {
 	undecided := undecidedKinds{"Secret"}
 	_, extras = RelationsContextAnswer(s, undecided, ownership.Unrestricted(), ownership.NewView(s, undecided), projectionRef(pod), pod, nil, nil)
 	if !slices.ContainsFunc(extras.Declarations, func(d relations.Declared) bool {
-		return d.Ref.Kind == "Secret" && DeclaredState(d) == ResourceStateUnverified
+		return d.Ref.Kind == "Secret" && DeclaredState(d) == ResourceStateAccessUnverified
 	}) {
 		t.Fatalf("the Secret whose check failed wasn't passed on as unverified: %+v", extras.Declarations)
 	}

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -735,6 +736,66 @@ func TestApplicationsScaleAndJobCompletionBetweenBatchAndRows(t *testing.T) {
 			}
 			if row := rowByName(fresh, tc.workload); exposed(row) != tc.wantExposed {
 				t.Fatalf("rebuilt rows: row %+v, want exposed %v", row, tc.wantExposed)
+			}
+		})
+	}
+}
+
+// loadingElsewhere reads Deployments outside the request's namespaces as
+// still loading.
+type loadingElsewhere struct {
+	relations.Session
+	reads *[]appCountedRead
+}
+
+func (s loadingElsewhere) Indexed(kind resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
+	*s.reads = append(*s.reads, appCountedRead{kind, scope.AllNamespaces})
+	read := s.Session.Indexed(kind, index, keys, scope)
+	if kind.Kind == "Deployment" && scope.AllNamespaces {
+		read.Gaps = append(read.Gaps, ownership.Gap{Kind: kind, Namespace: "other", Reason: readreason.KindSyncPending})
+	}
+	return read
+}
+
+// Istio's mesh domain comes from istiod's Deployment, wherever it runs, so
+// finding it reads Deployments cluster-wide: a request naming namespaces does
+// that only for an Istio object it reads, and otherwise neither reads other
+// namespaces' Deployments nor waits on them loading.
+func TestApplicationsIstioDomainReadOnlyForIstioObjects(t *testing.T) {
+	labels := map[string]string{"app": "api"}
+	istiod := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "istio-system", Name: "istiod", Labels: map[string]string{"app": "istiod"}}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "discovery", Args: []string{"discovery", "--domain=mesh.example"}}}}}}}
+	typed := append(testNamespaces("team", "istio-system"),
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "api"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "api"}, Spec: corev1.ServiceSpec{Selector: labels}},
+		istiod,
+	)
+	virtualService := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "networking.istio.io/v1", "kind": "VirtualService", "metadata": map[string]any{"namespace": "team", "name": "mesh"},
+		"spec": map[string]any{"http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "api.team.svc.mesh.example"}}}}}},
+	}}
+	for _, tc := range []struct {
+		name    string
+		dynamic []*unstructured.Unstructured
+		routed  bool
+	}{
+		{"no Istio objects", nil, false},
+		{"a VirtualService", []*unstructured.Unstructured{virtualService}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useAppFixtureCaches(t, typed, tc.dynamic)
+			session, err := k8s.BeginOwnershipRead(k8s.GetResourceCache())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reads []appCountedRead
+			batch := buildAppRelationBatch(context.Background(), loadingElsewhere{session.(relations.Session), &reads}, []string{"team"})
+			wide := slices.Contains(reads, appCountedRead{resourceid.GroupKind{Group: "apps", Kind: "Deployment"}, true})
+			if wide != tc.routed || batch.loading != tc.routed {
+				t.Fatalf("all-namespace Deployment read %v, loading %v; want both %v: %+v", wide, batch.loading, tc.routed, reads)
+			}
+			rels := batch.relationshipsForRef("apps", "Deployment", "team", "api")
+			if got := rels != nil && len(rels.routeRefs) == 1; got != tc.routed {
+				t.Fatalf("api routes = %+v, want routed through the mesh domain: %v", rels, tc.routed)
 			}
 		})
 	}

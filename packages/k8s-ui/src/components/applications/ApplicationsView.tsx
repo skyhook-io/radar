@@ -124,6 +124,29 @@ function compareEntries(a: AppEntry, b: AppEntry, key: SortKey): number {
   }
 }
 
+// Whatever a host puts here acts by itself. A click would otherwise open the row,
+// and Enter would reach the table's shortcut and open the highlighted one instead.
+// A key the control used is kept from the table too. Anything else still reaches
+// it, so j and k work after clicking something in a row. A row-moving key also
+// takes focus off the control, so the next Enter opens the highlighted row rather
+// than pressing the control on the row it came from.
+const ROW_MOVE_KEYS = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'g', 'G'])
+function RowLeading({ children }: { children: ReactNode }) {
+  if (children == null || children === false) return null
+  return (
+    <span
+      className="inline-flex shrink-0 items-center"
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.defaultPrevented) event.stopPropagation()
+        else if (ROW_MOVE_KEYS.has(event.key) && event.target instanceof HTMLElement) event.target.blur()
+      }}
+    >
+      {children}
+    </span>
+  )
+}
+
 function runtimeSortValue(entry: AppEntry): number {
   return entry.workloadClass === 'job' ? (HEALTH_RANK[entry.health] ?? 0) : entry.readyRatio
 }
@@ -149,6 +172,10 @@ export interface ApplicationsViewProps {
   /** First fetch in flight — render the shape-stable skeleton (pulsing tiles,
    *  rail stubs, table rows) instead of collapsing the chassis. */
   loading?: boolean
+  /** Rendered before the app name. On a folded group `entry` is its first member
+   *  and `group` holds them all. Clicks, Enter and any key the control prevents
+   *  stay in the slot. Other keys still reach the table's shortcuts. */
+  renderRowLeading?: (entry: AppEntry, group?: AppEntry[]) => ReactNode
 }
 
 const APPS_FILTER_SCHEMA = defineFilterSchema({
@@ -161,7 +188,7 @@ const APPS_FILTER_SCHEMA = defineFilterSchema({
   system: { param: 'system', type: 'boolean' },
 })
 
-export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading }: ApplicationsViewProps) {
+export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderRowLeading }: ApplicationsViewProps) {
   // Facets + search + show-system live in the URL (shareable, bookmarkable) via
   // the shared filter-state contract. Sort stays local: it's a compound
   // {key, dir} view-preference, not a result-narrowing filter, so it isn't
@@ -501,6 +528,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[r.health].bar)} />
                           </Tooltip>
                           <CollapseChevron open={r.expanded} className="h-3.5 w-3.5" />
+                          {renderRowLeading && <RowLeading>{renderRowLeading(r.members[0], r.members)}</RowLeading>}
                           <span className="truncate font-semibold text-theme-text-primary">{r.label}</span>
                           {r.workloadClass !== 'job' && <BatchSignalChip signal={firstBatchSignal(r.members.map((m) => m.row))} />}
                           <Tooltip
@@ -580,6 +608,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <Tooltip content={applicationRuntimeLabel([e.row], e.workloadClass, e.health)} delay={150}>
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[e.health].bar)} />
                           </Tooltip>
+                          {renderRowLeading && <RowLeading>{renderRowLeading(e)}</RowLeading>}
                           <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
                           {e.workloadClass !== 'job' && <BatchSignalChip signal={batchSignalForApp(e.row)} />}
                           <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />

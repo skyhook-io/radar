@@ -44,7 +44,7 @@ func TestDeclaredSecretsWithoutAnAnswerTakeTheHostsDecision(t *testing.T) {
 	}{
 		{secretDecider{ownership.Allowed}, ""},
 		{secretDecider{ownership.Denied}, topology.ResourceStateDenied},
-		{secretDecider{ownership.Undecided}, topology.ResourceStateUnverified},
+		{secretDecider{ownership.Undecided}, topology.ResourceStateAccessUnverified},
 		{denyChecker{kind: "Secret", namespace: "a"}, topology.ResourceStateDenied},
 	} {
 		opts := Options{AccessChecker: tc.checker, RelationshipExtras: unanswered}
@@ -95,7 +95,7 @@ func TestDeclaredRefsTakeTheFirstMatchingDeclaration(t *testing.T) {
 	rc := Build(context.Background(), ingress, Options{RelationshipExtras: extras, AccessChecker: secretDecider{ownership.Denied}})
 	want := []ContextRef{
 		{Kind: "Secret", Namespace: "a", Name: "a"},
-		{Kind: "Secret", Namespace: "a", Name: "b", State: topology.ResourceStateUnverified},
+		{Kind: "Secret", Namespace: "a", Name: "b", State: topology.ResourceStateAccessUnverified},
 		{Kind: "Secret", Namespace: "a", Name: "c", State: topology.ResourceStateDenied},
 	}
 	if rc.IngressSummary == nil || !slices.Equal(rc.IngressSummary.TLSSecrets, want) {

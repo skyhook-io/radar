@@ -58,12 +58,21 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 		map[string]any{"group": "apps", "kind": "Deployment", "namespace": "shop", "name": "standalone"},
 		map[string]any{"kind": "Pod", "namespace": "shop", "name": "managed-gap"},
 	}, "status", "resources")
+	appSet := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet", "metadata": map[string]any{"namespace": "argocd", "name": "apps", "uid": "uid-appset"}}}
+	child := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{
+		"namespace": "argocd", "name": "child", "uid": "uid-child",
+		"ownerReferences": []any{map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet", "name": "apps", "uid": "uid-appset", "controller": true}},
+	},
+		"spec":   map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "argocd"}},
+		"status": map[string]any{"reconciledAt": "now", "resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "argocd", "name": "under-app"}}},
+	}}
+	underApp := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "under-app", UID: "uid-under-app", OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Application", Name: "child", UID: "uid-child", Controller: &yes}}}}
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "tls", UID: "uid-tls"}}
 	sealed := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "sealed", UID: "uid-sealed"}}
 	unmanaged := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "unmanaged", UID: "uid-unmanaged"}}
 	cert := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": map[string]any{"namespace": "shop", "name": "tls", "uid": "uid-cert"}, "spec": map[string]any{"secretName": "tls"}}}
 	sealedSpec := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "bitnami.com/v1alpha1", "kind": "SealedSecret", "metadata": map[string]any{"namespace": "shop", "name": "sealed", "uid": "uid-sealed-spec"}}}
-	if err := k8s.InitTestResourceCache(fake.NewClientset(deployment, pod, standalone, missing, managedGap, secret, sealed, unmanaged)); err != nil {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(deployment, pod, standalone, missing, managedGap, secret, sealed, unmanaged, underApp)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetResourceCache)
@@ -71,16 +80,17 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 	appGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 	certGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}
 	sealedGVR := schema.GroupVersionResource{Group: "bitnami.com", Version: "v1alpha1", Resource: "sealedsecrets"}
-	dynamic := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{widgetGVR: "WidgetList", appGVR: "ApplicationList", certGVR: "CertificateList", sealedGVR: "SealedSecretList"}, cr, app, cert, sealedSpec)
+	appSetGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"}
+	dynamic := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{widgetGVR: "WidgetList", appGVR: "ApplicationList", certGVR: "CertificateList", sealedGVR: "SealedSecretList", appSetGVR: "ApplicationSetList"}, cr, app, cert, sealedSpec, appSet, child)
 	var resources []k8s.APIResource
-	for _, r := range []struct{ group, version, kind, name string }{{"", "v1", "Pod", "pods"}, {"apps", "v1", "Deployment", "deployments"}, {"example.io", "v1", "Widget", "widgets"}, {"argoproj.io", "v1alpha1", "Application", "applications"}, {"cert-manager.io", "v1", "Certificate", "certificates"}, {"bitnami.com", "v1alpha1", "SealedSecret", "sealedsecrets"}, {"", "v1", "Secret", "secrets"}, {"", "v1", "ConfigMap", "configmaps"}} {
+	for _, r := range []struct{ group, version, kind, name string }{{"", "v1", "Pod", "pods"}, {"apps", "v1", "Deployment", "deployments"}, {"example.io", "v1", "Widget", "widgets"}, {"argoproj.io", "v1alpha1", "Application", "applications"}, {"argoproj.io", "v1alpha1", "ApplicationSet", "applicationsets"}, {"cert-manager.io", "v1", "Certificate", "certificates"}, {"bitnami.com", "v1alpha1", "SealedSecret", "sealedsecrets"}, {"", "v1", "Secret", "secrets"}, {"", "v1", "ConfigMap", "configmaps"}} {
 		resources = append(resources, k8s.APIResource{Group: r.group, Version: r.version, Kind: r.kind, Name: r.name, Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch", "delete"}})
 	}
 	if err := k8s.InitTestDynamicResourceCache(dynamic, resources); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
-	for _, gvr := range []schema.GroupVersionResource{widgetGVR, appGVR, certGVR, sealedGVR} {
+	for _, gvr := range []schema.GroupVersionResource{widgetGVR, appGVR, certGVR, sealedGVR, appSetGVR} {
 		cache := k8s.GetDynamicResourceCache()
 		if err := cache.EnsureWatching(gvr); err != nil {
 			t.Fatal(err)
@@ -101,6 +111,7 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 		{"operator beats copied labels", pod, "Pod", ownership.Unrestricted(), "Widget", ""},
 		{"denied top", pod, "Pod", summaryAccess{ownership.Unrestricted(), resourceid.GroupKind{Group: "example.io", Kind: "Widget"}}, "Deployment", resourcecontext.OmittedRBACDenied},
 		{"recorded without metadata", standalone, "Deployment", ownership.Unrestricted(), "Application", ""},
+		{"first GitOps manager, not its ApplicationSet", underApp, "Deployment", ownership.Unrestricted(), "Application", ""},
 		{"unserved owner", missing, "Pod", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable},
 		{"GitOps lead beside unknown owner", managedGap, "Pod", ownership.Unrestricted(), "Application", resourcecontext.OmittedUnavailable},
 		{"certificate spec", secret, "Secret", ownership.Unrestricted(), "Certificate", ""},

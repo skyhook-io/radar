@@ -12,61 +12,136 @@ import (
 	// host every one of them would read as unknown.
 	_ "time/tzdata"
 
+	nrcron "github.com/netresearch/go-cron"
 	"github.com/robfig/cron/v3"
 )
 
-// parsedCron is a schedule expression parsed as Velero 1.16–1.18.2 parse it,
-// with robfig/cron v3's standard parser (Velero 1.18.3 moved to a fork that
-// keeps standard expressions compatible).
+// DayMatch is how Velero matches a cron that restricts both day of month and
+// day of week (neither is * or ?). Velero 1.16–1.18.2 parse schedules with
+// robfig/cron v3, which runs on a day matching either field; 1.18.3 and later
+// with netresearch/go-cron, which by default needs both. A cron leaving either
+// field unrestricted runs the same on every version.
+type DayMatch string
+
+const (
+	// DayMatchEither: Velero before 1.18.3; "0 0 1-7 * MON" is days 1–7 and
+	// every Monday.
+	DayMatchEither DayMatch = "either"
+	// DayMatchBoth: Velero 1.18.3 and later; "0 0 1-7 * MON" is the first
+	// Monday of the month.
+	DayMatchBoth DayMatch = "both"
+	// DayMatchUnknown: the server's Velero version is unknown, so times are
+	// estimated with the earlier rule, the earliest either version runs.
+	DayMatchUnknown DayMatch = "unknown"
+)
+
+// starBit is the bit both cron libraries set on a field written as * or ?
+// (a stepped */n clears it). robfig/cron matches days with OR only when
+// neither day field carries it.
+const starBit = 1 << 63
+
+type cronSchedule interface{ Next(time.Time) time.Time }
+
+// parsedCron is a schedule expression parsed as the Velero server parses it:
+// robfig/cron v3's standard parser before 1.18.3, netresearch/go-cron's from
+// 1.18.3, robfig/cron's when the version is unknown.
 type parsedCron struct {
-	sched cron.Schedule
+	sched cronSchedule
 	// zoned is set when the expression names its own zone (CRON_TZ= or TZ=);
 	// otherwise it runs in the Velero server's local zone.
 	zoned bool
 	// fixedDelay: an @every expression adds a duration to its anchor, so its
 	// times do not depend on any zone.
 	fixedDelay bool
+	// dayMatch is set when the expression restricts both day fields, the one
+	// case where Velero versions disagree.
+	dayMatch DayMatch
+	// both is the expression as Velero 1.18.3 and later evaluate it, kept
+	// when dayMatch is unknown; nil when that parser rejects it.
+	both cronSchedule
 }
 
-// parseCron recovers from a parser panic the way Velero's controller does
-// (schedule_controller.go parseCronSchedule): a malformed zone prefix panics
-// inside the parser rather than returning an error.
-func parseCron(expr string) (p parsedCron, err error) {
+// parseCron parses expr as a Velero server applying rule parses it; rule is
+// DayMatchEither, DayMatchBoth or DayMatchUnknown. It recovers from a parser
+// panic the way Velero's controller does (schedule_controller.go
+// parseCronSchedule): a malformed zone prefix panics inside the parser rather
+// than returning an error.
+func parseCron(expr string, rule DayMatch) (p parsedCron, err error) {
 	if strings.TrimSpace(expr) == "" {
 		return p, fmt.Errorf("empty schedule")
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			p, err = parsedCron{}, fmt.Errorf("invalid schedule: %v", r)
-		}
-	}()
-	s, err := cron.ParseStandard(expr)
+	var s cronSchedule
+	if rule == DayMatchBoth {
+		s, err = parseWith(expr, parseNetresearch)
+	} else {
+		s, err = parseWith(expr, parseRobfig)
+	}
 	if err != nil {
 		return parsedCron{}, err
 	}
 	trimmed := strings.TrimSpace(expr)
-	_, fixedDelay := s.(cron.ConstantDelaySchedule)
-	return parsedCron{sched: s, zoned: strings.HasPrefix(trimmed, "CRON_TZ=") || strings.HasPrefix(trimmed, "TZ="), fixedDelay: fixedDelay}, nil
+	p = parsedCron{sched: s, zoned: strings.HasPrefix(trimmed, "CRON_TZ=") || strings.HasPrefix(trimmed, "TZ=")}
+	switch spec := s.(type) {
+	case cron.ConstantDelaySchedule, nrcron.ConstantDelaySchedule:
+		p.fixedDelay = true
+	case *cron.SpecSchedule:
+		if spec.Dom&starBit == 0 && spec.Dow&starBit == 0 {
+			p.dayMatch = rule
+		}
+	case *nrcron.SpecSchedule:
+		if spec.Dom&starBit == 0 && spec.Dow&starBit == 0 {
+			p.dayMatch = rule
+		}
+	}
+	if p.dayMatch == DayMatchUnknown {
+		p.both, _ = parseWith(expr, parseNetresearch)
+	}
+	return p, nil
+}
+
+func parseRobfig(expr string) (cronSchedule, error)      { return cron.ParseStandard(expr) }
+func parseNetresearch(expr string) (cronSchedule, error) { return nrcron.ParseStandard(expr) }
+
+func parseWith(expr string, parse func(string) (cronSchedule, error)) (s cronSchedule, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s, err = nil, fmt.Errorf("invalid schedule: %v", r)
+		}
+	}()
+	return parse(expr)
 }
 
 // next is the first run strictly after t. Without its own zone the expression
 // is evaluated in loc, as the controller evaluates it in its process zone.
 func (p parsedCron) next(t time.Time, loc *time.Location) time.Time {
+	return p.eval(p.sched, t, loc)
+}
+
+// nextBoth is next as Velero 1.18.3 and later evaluate an expression whose
+// dayMatch is unknown; zero when that parser rejects it or it has no time.
+func (p parsedCron) nextBoth(t time.Time, loc *time.Location) time.Time {
+	if p.both == nil {
+		return time.Time{}
+	}
+	return p.eval(p.both, t, loc)
+}
+
+func (p parsedCron) eval(s cronSchedule, t time.Time, loc *time.Location) time.Time {
 	if !p.zoned && loc != nil {
 		t = t.In(loc)
 	}
-	return p.sched.Next(t)
+	return s.Next(t)
 }
 
-// cronGap is the time between the first two runs after t, a cadence estimate
+// cronGap is the time between s's first two runs after t, a cadence estimate
 // used only for the uncertain-zone margin. A cadence that cannot be read falls
 // back to a day.
-func (p parsedCron) cronGap(t time.Time, loc *time.Location) time.Duration {
-	first := p.next(t, loc)
+func (p parsedCron) cronGap(s cronSchedule, t time.Time, loc *time.Location) time.Duration {
+	first := p.eval(s, t, loc)
 	if first.IsZero() {
 		return 24 * time.Hour
 	}
-	second := p.next(first, loc)
+	second := p.eval(s, first, loc)
 	if second.IsZero() || !second.After(first) {
 		return 24 * time.Hour
 	}

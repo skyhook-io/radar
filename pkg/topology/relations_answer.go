@@ -122,14 +122,14 @@ func (n *neighborhood) node(r resourceid.Ref) string {
 }
 
 // DeclaredState is how a declared reference reads when the caller may not
-// read its target: ResourceStateDenied, or ResourceStateUnverified when the
+// read its target: ResourceStateDenied, or ResourceStateAccessUnverified when the
 // check couldn't be made; empty otherwise.
 func DeclaredState(d relations.Declared) string {
 	switch {
 	case d.State == relations.TargetWithheld:
 		return ResourceStateDenied
 	case d.State == relations.TargetUnread && d.Gap.Reason == readreason.UserPermissionCheckFailed:
-		return ResourceStateUnverified
+		return ResourceStateAccessUnverified
 	}
 	return ""
 }
@@ -149,7 +149,7 @@ func (n *neighborhood) nameUnreadable(a relations.ReferencesAnswer) relations.Re
 			continue
 		}
 		n.unreadable = append(n.unreadable, ResourceRef{Kind: d.Ref.Kind, Group: d.Ref.Group, Namespace: d.Ref.Namespace, Name: d.Ref.Name, State: state})
-		if state == ResourceStateUnverified {
+		if state == ResourceStateAccessUnverified {
 			named = append(named, d.Gap)
 		}
 	}
@@ -447,8 +447,9 @@ func relationsAnswer(session relations.Session, access, traverse ownership.Acces
 // topManager climbs from subject while something readable is above it: the
 // top of its controller chain; for an object with no controller reference, its
 // sole owner reference (a CiliumEndpoint's Pod, a CiliumNode's Node) or a
-// NodeClaim's NodePool. It stops below GitOps managers: what manages a
-// workload's Application is ownership.manager's answer, not this one.
+// NodeClaim's NodePool. It stops at the first GitOps manager above subject and
+// names it: what manages that Application, such as an ApplicationSet, is
+// ownership.manager's answer to weigh, not this one.
 func (n *neighborhood) topManager(session relations.Session, ov *ownership.View, subject resourceid.Ref) *ResourceRef {
 	var last *ResourceRef
 	seen := map[resourceid.Ref]bool{subject: true}
@@ -462,15 +463,24 @@ func (n *neighborhood) topManager(session relations.Session, ov *ownership.View,
 			break
 		}
 		seen[next], last, cur = true, &r, next
+		if ownership.IsRecordingManager(next.GroupKind()) {
+			break
+		}
 	}
 	return last
 }
 
 func (n *neighborhood) above(session relations.Session, ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
-	if owner, ok := OwnerAbove(ov, r); ok {
+	if owner, ok := OwnerAboveToManager(ov, r); ok {
 		return owner, true
 	}
 	return n.nodePool(session, r)
+}
+
+// OwnerAboveToManager is OwnerAbove, except that the controller chain ends at
+// the first GitOps manager on it (ControllerChain.ToManager).
+func OwnerAboveToManager(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
+	return ownerAbove(ov, r, ChainOf(ov.ControllerChain(r)).ToManager())
 }
 
 // OwnerAbove returns the highest readable controller ancestor; an object with
@@ -478,7 +488,14 @@ func (n *neighborhood) above(session relations.Session, ov *ownership.View, r re
 // resolves. Display and application climbs share this choice so
 // non-controller ownership follows the same rule.
 func OwnerAbove(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
-	if top := ChainOf(ov.ControllerChain(r)).Top(); top != nil {
+	return ownerAbove(ov, r, ChainOf(ov.ControllerChain(r)))
+}
+
+// ownerAbove answers from chain, r's controller chain as the caller cut it,
+// and falls back to r's own owner references only when the chain doesn't
+// climb past r.
+func ownerAbove(ov *ownership.View, r resourceid.Ref, chain *ControllerChain) (resourceid.Ref, bool) {
+	if top := chain.Top(); top != nil {
 		if id := refIdentity(*top); id != r {
 			return id, true
 		}

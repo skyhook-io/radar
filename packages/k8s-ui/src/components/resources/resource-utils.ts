@@ -4,6 +4,7 @@ import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getVolumeSnapshotColumnValue } from './resource-utils-volumesnapshot'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
+import { FLUX_OPERATOR_GROUP, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
 // Utility functions for resource display in tables
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
@@ -2594,6 +2595,11 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (agentRuntimeValue !== undefined) return agentRuntimeValue
   const planValue = getUpgradePlanColumnValue(resource, column)
   if (planValue !== undefined) return planValue
+  if (_isApiGroup(resource?.apiVersion, FLUX_OPERATOR_GROUP)) {
+    if (column === 'status') return getFluxOperatorStatus(resource).text
+    const fluxOperatorValue = getFluxOperatorColumnValue(kind.toLowerCase(), resource, column)
+    if (fluxOperatorValue !== undefined) return fluxOperatorValue
+  }
   const crdValue = getCRDColumnValue(resource, column)
   if (crdValue !== undefined) return crdValue
   const kindLower = kind.toLowerCase()

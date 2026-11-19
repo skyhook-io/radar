@@ -34,7 +34,7 @@ func TestUsesMarksUnreadableDeclaredTargets(t *testing.T) {
 	if uses == nil || len(uses.ConfigMaps) != 1 || uses.ConfigMaps[0].State != "" {
 		t.Fatalf("configMaps = %+v", uses)
 	}
-	want := []ContextRef{{Kind: "Secret", Namespace: "shop", Name: "web-tls", State: "denied"}, {Kind: "Secret", Namespace: "shop", Name: "web-db", State: "unverified"}}
+	want := []ContextRef{{Kind: "Secret", Namespace: "shop", Name: "web-tls", State: "denied"}, {Kind: "Secret", Namespace: "shop", Name: "web-db", State: "access_unverified"}}
 	if len(uses.Secrets) != 2 || uses.Secrets[0] != want[0] || uses.Secrets[1] != want[1] {
 		t.Fatalf("secrets = %+v, want %+v", uses.Secrets, want)
 	}

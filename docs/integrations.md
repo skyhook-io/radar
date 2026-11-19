@@ -820,6 +820,26 @@ permits the reference or has produced an artifact.
 
 **Diagnosis**: Conditions extracted to issues (Ready=False, Stalled=True, Reconciling=True). Per-resource diff and recent events not yet available for Flux (HelmRelease-installed resources don't carry `last-applied-configuration`; tracked in [#601](https://github.com/skyhook-io/radar/issues/601)).
 
+### Flux Operator
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| FluxInstance | `fluxcd.controlplane.io/v1` | — | Yes | — |
+| FluxReport | `fluxcd.controlplane.io/v1` | — | Yes | — |
+| ResourceSet | `fluxcd.controlplane.io/v1` | — | Yes | — |
+| ResourceSetInputProvider | `fluxcd.controlplane.io/v1` | — | Yes | — |
+
+When the cluster serves FluxReport and the caller can read one, the GitOps page
+shows a collapsed **Flux** card above the table: the distribution version, the
+operator version, controller readiness and per-kind reconciler counts (total,
+failing, suspended), all read from the report. The counts are the operator's
+own, so the card attributes them to it. No readable report means
+no card; Radar never shows zeros for a report it could not read. The status of
+all four kinds reads `Suspended` when the object carries
+`fluxcd.controlplane.io/reconcile: disabled` (they have no `spec.suspend`).
+In a ResourceSetInputProvider URL, user info, every query value and the fragment
+are redacted in its column and drawer; the YAML view and MCP show the object as stored.
+
 ### ArgoCD
 
 | CRD | Group | Topology | Detail View | AI Summary |
@@ -1050,7 +1070,7 @@ When the fault clears, its Issue goes and each covered run that a later run has 
 **Limitations**:
 - **A backup's phase is not its restorability.** A `Completed` backup can sit on an Unavailable storage location or be past its TTL. The BackupStorageLocation page shows stored and restorable counts. Unavailable means it cannot restore now; expired means Velero intends to delete it, so Radar excludes it even if garbage collection has not run yet. A backup counts against a location by its `spec.storageLocation`, which Velero fills when it first processes the backup; one Velero has not processed yet counts against none.
 - **Stalled-run detection depends on the phase.** `WaitingForPluginOperations` is measured against Velero's `spec.itemOperationTimeout`. For `InProgress` and `Finalizing`, that duration is only a yardstick because Velero defines no deadline. Radar reports the distinction and elapsed time without guessing at a cause. If the field is absent, Radar uses Velero's built-in four-hour default; a controller-level override is not visible in the resource.
-- **Fetching run messages needs a live controller and reachable storage.** Radar creates a `DownloadRequest` and follows Velero's pre-signed object-storage URL. A stopped controller or a URL unreachable from Radar returns an explicit error; configure the storage location's `publicUrl` when needed. Data-mover objects (`DataUpload`/`DataDownload`) and full backup logs remain unavailable.
+- **Fetching run messages needs a live controller and reachable storage.** Radar creates a `DownloadRequest` and follows Velero's pre-signed object-storage URL. A stopped controller or a URL unreachable from Radar returns an explicit error; configure the storage location's `publicUrl` when needed. Contents and log tabs use the same mechanism, with explicit size limits and coverage (see [Velero pages](velero.md#contents-and-log)). Data-mover objects (`DataUpload`/`DataDownload`) remain unavailable.
 
 ---
 

@@ -2430,9 +2430,9 @@ func TestBuild_Pod_RunsOnAbsentNodeAndDenials(t *testing.T) {
 	}{
 		{"absent node", nil, nil, allowAllChecker{}, "gone", "", ""},
 		{"denied by the access check", nil, nil, denyChecker{kind: "Node"}, "gone", topology.ResourceStateDenied, ""},
-		{"unchecked by the access check", nil, nil, nodeDecider{ownership.Undecided}, "gone", topology.ResourceStateUnverified, ""},
+		{"unchecked by the access check", nil, nil, nodeDecider{ownership.Undecided}, "gone", topology.ResourceStateAccessUnverified, ""},
 		{"withheld by the answer", &topology.ResourceRef{Kind: "Node", Name: "gone", State: topology.ResourceStateDenied}, nil, allowAllChecker{}, "gone", topology.ResourceStateDenied, ""},
-		{"unverified by the answer", &topology.ResourceRef{Kind: "Node", Name: "gone", State: topology.ResourceStateUnverified}, nil, allowAllChecker{}, "gone", topology.ResourceStateUnverified, ""},
+		{"unverified by the answer", &topology.ResourceRef{Kind: "Node", Name: "gone", State: topology.ResourceStateAccessUnverified}, nil, allowAllChecker{}, "gone", topology.ResourceStateAccessUnverified, ""},
 		{"the Pod couldn't be read", nil, map[string]relations.Coverage{"Node": {NotChecked: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Pod"}, Reason: readreason.ReadError}}}}, allowAllChecker{}, "", "", OmittedUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

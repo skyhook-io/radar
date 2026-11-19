@@ -234,7 +234,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.Manager = managerContext(rel.Ownership.Manager)
 	}
 	if answered && rel.Ownership != nil {
-		chain := rel.ControllerChain.Readable(func(r topology.ResourceRef) bool {
+		chain := rel.ControllerChain.ToManager().Readable(func(r topology.ResourceRef) bool {
 			ref := toContextRef(r)
 			return checkRef(ctx, opts.AccessChecker, &ref)
 		})
@@ -343,7 +343,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 				case ownership.Denied:
 					candidate.State = topology.ResourceStateDenied
 				case ownership.Undecided:
-					candidate.State = topology.ResourceStateUnverified
+					candidate.State = topology.ResourceStateAccessUnverified
 				}
 			}
 			rc.RunsOn = candidate
@@ -1591,7 +1591,7 @@ func declaredRefs(ctx context.Context, ac RefAccessChecker, extras *topology.Rel
 		case ownership.Denied:
 			r.State = topology.ResourceStateDenied
 		case ownership.Undecided:
-			r.State = topology.ResourceStateUnverified
+			r.State = topology.ResourceStateAccessUnverified
 		}
 	}
 	if len(sorted) == 0 {
