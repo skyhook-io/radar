@@ -92,6 +92,7 @@ import { getInferencePoolStatus, getInferenceObjectiveStatus } from '../resource
 import { getVolcanoJobStatus, getVolcanoQueueStatus, getVolcanoPodGroupStatus, getJobFlowStatus, getJobTemplateStatus } from '../resources/resource-utils-volcano'
 import { getKaiQueueStatus, getKaiPodGroupStatus } from '../resources/resource-utils-kai'
 import { getKaitoWorkspaceStatus, getRAGEngineStatus } from '../resources/resource-utils-kaito'
+import { getSandboxClaimStatus, getSandboxStatus, getSandboxWarmPoolStatus, getWorkerPoolStatus, isAgentSandboxExtensionResource, isAgentSandboxResource, isSubstrateResource } from '../resources/resource-utils-agent-runtimes'
 import { getNIMServiceStatus, getNIMCacheStatus, getNIMPipelineStatus } from '../resources/resource-utils-nim'
 import { getAMDDeviceConfigStatus } from '../resources/resource-utils-amd-gpu'
 import { getPyTorchJobStatus, getTFJobStatus, getMPIJobStatus, getTrainJobStatus } from '../resources/resource-utils-kubeflow-training'
@@ -1273,6 +1274,10 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     if (data?.apiVersion?.startsWith('scheduling.volcano.sh/')) return getVolcanoPodGroupStatus(data)
   }
   if (k === 'workspaces' && data?.apiVersion?.startsWith('kaito.sh/')) return getKaitoWorkspaceStatus(data)
+  if (k === 'workerpools' && isSubstrateResource(data)) return getWorkerPoolStatus(data)
+  if (k === 'sandboxes' && isAgentSandboxResource(data)) return getSandboxStatus(data)
+  if (k === 'sandboxclaims' && isAgentSandboxExtensionResource(data)) return getSandboxClaimStatus(data)
+  if (k === 'sandboxwarmpools' && isAgentSandboxExtensionResource(data)) return getSandboxWarmPoolStatus(data)
   if (k === 'workloads' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getKueueWorkloadStatus(data)
   if (k === 'clusterqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getClusterQueueStatus(data)
   if (k === 'localqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getLocalQueueStatus(data)

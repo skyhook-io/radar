@@ -187,6 +187,8 @@ rbac:
     # and resource exclusions below; Kubernetes RBAC cannot subtract Secrets.
     all: false
 
+    agentSandbox: true      # agents.x-k8s.io, extensions.agents.x-k8s.io (Agent Sandbox Sandboxes, SandboxClaims, SandboxTemplates, SandboxWarmPools)
+    agentSubstrate: true    # ate.dev (Agent Substrate WorkerPools, SandboxConfigs, CSIDriverConfigs; actors are not Kubernetes objects)
     antrea: true            # crd.antrea.io (Antrea NetworkPolicy, ClusterNetworkPolicy; read by the NetworkPolicy deny-all check)
     apiRegistration: true   # apiregistration.k8s.io (APIService health for aggregated APIs)
     argo: true              # argoproj.io

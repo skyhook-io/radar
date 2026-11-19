@@ -2,8 +2,10 @@ import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { Search } from 'lucide-react'
 import { Input } from '@skyhook-io/k8s-ui'
 
-export function LargeClusterNamespacePicker({ namespaces, onSelect, ranked = false, renderMeta }: {
+export function LargeClusterNamespacePicker({ namespaces, error, onSelect, ranked = false, renderMeta }: {
   namespaces: { name: string }[] | undefined
+  /** Why the namespace list couldn't be read, when it couldn't. */
+  error?: string | null
   onSelect: (ns: string) => void
   /** Keep the given order (already ranked) instead of sorting by name. */
   ranked?: boolean
@@ -42,7 +44,11 @@ export function LargeClusterNamespacePicker({ namespaces, onSelect, ranked = fal
         />
       </div>
       <div className="max-h-[240px] overflow-y-auto rounded-lg border border-theme-border bg-theme-base">
-        {!namespaces ? (
+        {!namespaces && error ? (
+          <div role="alert" className="px-3 py-6 text-center text-sm text-theme-text-secondary">
+            {error}
+          </div>
+        ) : !namespaces ? (
           <div className="px-3 py-6 text-center text-sm text-theme-text-tertiary">
             Loading namespaces…
           </div>
