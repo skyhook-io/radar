@@ -726,6 +726,8 @@ resource, including core Secrets and these excluded kinds. See the
 
 Deployment, StatefulSet and DaemonSet drawers also run **Check for Java4Shell** under **Vulnerabilities**, with or without Trivy. The check reads the current workload's owned Pods before making registry requests, and shows matches, unassessed containers and a JSON export for that workload. The caller needs read access to the workload kind and list access to Pods in its namespace.
 
+For headless checks, run `radar check java4shell` or `kubectl radar check java4shell`. [Java4Shell CLI flags and exit codes](configuration.md#java4shell-cli)
+
 The check follows the namespace selection, Radar's collection and the caller's list access to Pods and Nodes. It reads image manifests and configs for the registry digests those Pods report. Private lookups follow [image inspection permissions](authentication.md#image-inspection), and images Radar cannot read stay unassessed. The check separately counts images with no declared Java version. Radar checks up to 200 image, platform and credential groups with up to 24 groups from Docker Hub, 200 registry attempts in total, four lookups in flight and a 40-second registry lookup budget. Radar runs one advisory check at a time and shares registry rate-limit backoff with its runtime inventory.
 
 - **By image** (default): one row per running image, however many workloads run it, with its findings by severity, how many have a fix, and the workloads that run it.

@@ -11,11 +11,13 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	corev1 "k8s.io/api/core/v1"
 )
 
 const (
+	Java4ShellCVE              = "CVE-2026-114938"
 	java4ShellVBMILabel        = "feature.node.kubernetes.io/cpu-cpuid.AVX512VBMI"
 	java4ShellRowLimit         = 100
 	java4ShellDockerHubLookups = 24
@@ -54,6 +56,12 @@ type Java4ShellResult struct {
 	Unassessed       map[string]int         `json:"unassessed"`
 	UnassessedRows   []Java4ShellUnassessed `json:"unassessedRows"`
 	UnassessedGroups int                    `json:"unassessedGroups"`
+}
+
+type Java4ShellReport struct {
+	Java4ShellResult
+	Coverage resourceapi.Coverage `json:"coverage"`
+	Workload *resourceid.Ref      `json:"workload,omitempty"`
 }
 
 type Java4ShellUnassessed struct {
@@ -100,6 +108,10 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 		Findings: []Java4ShellFinding{}, Unassessed: map[string]int{},
 		UnassessedRows: []Java4ShellUnassessed{},
 	}
+	pods = slices.Clone(pods)
+	slices.SortFunc(pods, func(a, b Java4ShellPod) int {
+		return cmp.Or(cmp.Compare(a.Pod.Namespace, b.Pod.Namespace), cmp.Compare(a.Pod.Name, b.Pod.Name))
+	})
 	var items []*work
 	byKey := map[string]int{}
 	dockerHubLookups := 0

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"log"
@@ -152,9 +151,6 @@ func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 		}
 		pods = append(pods, images.Java4ShellPod{Pod: pod, Node: node})
 	}
-	slices.SortFunc(pods, func(a, b images.Java4ShellPod) int {
-		return cmp.Or(cmp.Compare(a.Pod.Namespace, b.Pod.Namespace), cmp.Compare(a.Pod.Name, b.Pod.Name))
-	})
 	if !current() {
 		s.writeReadFailure(w, resource, errReadHandlesChanged, &target)
 		return
@@ -191,11 +187,11 @@ func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "private, no-store")
-	s.writeJSON(w, struct {
-		images.Java4ShellResult
-		Coverage resourceapi.Coverage `json:"coverage"`
-		Workload *resourceid.Ref      `json:"workload,omitempty"`
-	}{Java4ShellResult: result, Coverage: target.coverage(plan.read, plan.gaps), Workload: workload})
+	s.writeJSON(w, images.Java4ShellReport{
+		Java4ShellResult: result,
+		Coverage:         target.coverage(plan.read, plan.gaps),
+		Workload:         workload,
+	})
 }
 
 func (s *Server) java4ShellRegistryAccess(r *http.Request, cache *k8s.ResourceCache, pod *corev1.Pod) images.Java4ShellRegistryAccess {
