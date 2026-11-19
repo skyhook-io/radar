@@ -74,22 +74,54 @@ var goldenAppRefs = []ApplicationWorkloadRef{
 	{Kind: "DaemonSet", Namespace: goldenCostNamespace, Name: "agent"},
 }
 
-func costGoldenCases() []costGoldenCase {
+// costGoldenCases runs every compute path; a nil scope calls the unscoped
+// entry points exactly as callers did before scoping existed.
+func costGoldenCases(scope *StoreScope) []costGoldenCase {
 	summary := func(skip bool) func(context.Context, *prom.Client) {
 		return func(ctx context.Context, c *prom.Client) {
-			ComputeCostSummaryFromProm(ctx, c, SummaryOptions{SkipNodeCost: skip})
+			opts := SummaryOptions{SkipNodeCost: skip}
+			if scope != nil {
+				opts.Scope = *scope
+			}
+			ComputeCostSummaryFromProm(ctx, c, opts)
 		}
 	}
 	workloads := func(ctx context.Context, c *prom.Client) {
+		if scope != nil {
+			ComputeWorkloadsFromPromScoped(ctx, c, goldenCostNamespace, nil, *scope)
+			return
+		}
 		ComputeWorkloadsFromProm(ctx, c, goldenCostNamespace, nil)
+	}
+	nodes := func(ctx context.Context, c *prom.Client) {
+		if scope != nil {
+			ComputeNodeCostsScoped(ctx, c, *scope)
+			return
+		}
+		ComputeNodeCosts(ctx, c)
+	}
+	trend := func(ctx context.Context, c *prom.Client) {
+		opts := TrendPromOptions{Range: "24h"}
+		if scope != nil {
+			opts.Scope = *scope
+		}
+		ComputeCostTrendFromProm(ctx, c, opts)
 	}
 	workloadTrend := func(kind string) func(context.Context, *prom.Client) {
 		return func(ctx context.Context, c *prom.Client) {
-			ComputeWorkloadCostTrendFromProm(ctx, c, WorkloadTrendOptions{Range: "24h", Namespace: goldenCostNamespace, Kind: kind, Name: "api"})
+			opts := WorkloadTrendOptions{Range: "24h", Namespace: goldenCostNamespace, Kind: kind, Name: "api"}
+			if scope != nil {
+				opts.Scope = *scope
+			}
+			ComputeWorkloadCostTrendFromProm(ctx, c, opts)
 		}
 	}
 	appTrend := func(ctx context.Context, c *prom.Client) {
-		ComputeApplicationCostTrendFromProm(ctx, c, ApplicationTrendOptions{Range: "24h", Workloads: goldenAppRefs})
+		opts := ApplicationTrendOptions{Range: "24h", Workloads: goldenAppRefs}
+		if scope != nil {
+			opts.ScopeFor = func(string) (StoreScope, string) { return *scope, "" }
+		}
+		ComputeApplicationCostTrendFromProm(ctx, c, opts)
 	}
 	return []costGoldenCase{
 		{name: "summary", run: summary(false)},
@@ -97,10 +129,8 @@ func costGoldenCases() []costGoldenCase {
 		{name: "summary-fallback", failAllocations: true, run: summary(false)},
 		{name: "workloads", run: workloads},
 		{name: "workloads-fallback", failAllocations: true, run: workloads},
-		{name: "nodes", run: func(ctx context.Context, c *prom.Client) { ComputeNodeCosts(ctx, c) }},
-		{name: "trend", run: func(ctx context.Context, c *prom.Client) {
-			ComputeCostTrendFromProm(ctx, c, TrendPromOptions{Range: "24h"})
-		}},
+		{name: "nodes", run: nodes},
+		{name: "trend", run: trend},
 		{name: "workload-trend-deployment", run: workloadTrend("Deployment")},
 		{name: "workload-trend-statefulset", run: workloadTrend("StatefulSet")},
 		{name: "workload-trend-fallback", failAllocations: true, run: workloadTrend("Deployment")},
@@ -145,5 +175,19 @@ func checkCostGolden(t *testing.T, lines []string) {
 }
 
 func TestCostQueriesGolden(t *testing.T) {
-	checkCostGolden(t, costGoldenLines(t, costGoldenCases()))
+	checkCostGolden(t, costGoldenLines(t, costGoldenCases(nil)))
+}
+
+// An unlabeled store's scope filters nothing: the scoped entry points must
+// send the golden queries byte for byte.
+func TestScopedCostQueriesWithEmptyFiltersMatchGolden(t *testing.T) {
+	empty := func(string) string { return "" }
+	for name, scope := range map[string]StoreScope{
+		"zero":         {},
+		"empty-filter": {Filter: empty, Strict: true, ClusterScope: &ClusterScope{State: "unlabeled"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			checkCostGolden(t, costGoldenLines(t, costGoldenCases(&scope)))
+		})
+	}
 }
