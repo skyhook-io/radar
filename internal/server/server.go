@@ -3190,7 +3190,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// Service vs core Service).
 		read := topology.ResourceWithRelationships{Resource: resource}
 		if !objectOnly {
-			read.Relationships = s.relationshipsFor(r, kind, namespace, name, resource)
+			read.Relationships = s.relationshipsFor(r, resource)
 			read.RelatedFindings = issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
 			read.HPADiagnosis = hpaDiagnosisFor(resource)
 		}
@@ -3431,7 +3431,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	response := topology.ResourceWithRelationships{
 		RelatedFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
 		Resource:        resource,
-		Relationships:   s.relationshipsFor(r, kind, namespace, name, resource),
+		Relationships:   s.relationshipsFor(r, resource),
 		HPADiagnosis:    hpaDiagnosisFor(resource),
 	}
 

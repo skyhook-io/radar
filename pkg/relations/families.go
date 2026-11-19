@@ -86,8 +86,9 @@ var Autoscalers = &Family{
 // ClusterTriggerAuthentications a KEDA ScaledObject or ScaledJob's triggers
 // use.
 var KEDAAuthentication = &Family{
-	Name:       "kedaAuthentication",
-	Projection: project("configures", true, "Dependencies,ConfigRefs", "Consumers,Dependents"),
+	ReferrersIndex: referrersIndex("kedaAuthentication"),
+	Name:           "kedaAuthentication",
+	Projection:     project("configures", true, "Dependencies,ConfigRefs", "Consumers,Dependents"),
 	Sources: []Source{
 		{Kind: kindScaledObject},
 		{Kind: resourceid.GroupKind{Group: "keda.sh", Kind: "ScaledJob"}},
@@ -160,6 +161,7 @@ var CertificateSecrets = &Family{
 // GatewayParents is the family of the Gateways a Gateway API route attaches
 // to, which may be in another namespace.
 var GatewayParents = &Family{
+	ReferrersIndex: referrersIndex("gatewayParents"),
 	Name:           "gatewayParents",
 	Projection:     project("routes-to", true, "Gateways", "Backends"),
 	Sources:        gatewayRoutes,
@@ -167,9 +169,7 @@ var GatewayParents = &Family{
 	CrossNamespace: true,
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := obj.(*unstructured.Unstructured); ok {
-			for _, r := range configrefs.GatewayRouteParents(u) {
-				visitPathRef(visit, r)
-			}
+			configrefs.VisitGatewayRouteParents(u, func(r configrefs.PathRef) { visitPathRef(visit, r) })
 		}
 		return nil
 	},
@@ -179,6 +179,7 @@ var GatewayParents = &Family{
 // traffic to, which may be in another namespace. A cross-namespace backend is
 // declared whether or not a ReferenceGrant permits it.
 var GatewayBackends = &Family{
+	ReferrersIndex: referrersIndex("gatewayBackends"),
 	Name:           "gatewayBackends",
 	Projection:     project("routes-to", false, "Backends", "Routes"),
 	Sources:        gatewayRoutes,
@@ -186,9 +187,7 @@ var GatewayBackends = &Family{
 	CrossNamespace: true,
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := obj.(*unstructured.Unstructured); ok {
-			for _, r := range configrefs.GatewayRouteBackendServices(u) {
-				visitPathRef(visit, r)
-			}
+			configrefs.VisitGatewayRouteBackendServices(u, func(r configrefs.PathRef) { visitPathRef(visit, r) })
 		}
 		return nil
 	},
@@ -196,10 +195,11 @@ var GatewayBackends = &Family{
 
 // GatewayClasses is the family of the GatewayClass a Gateway names.
 var GatewayClasses = &Family{
-	Name:       "gatewayClasses",
-	Projection: project("manages", true, "Managers", "Manages"),
-	Sources:    []Source{{Kind: kindGateway}},
-	Targets:    []resourceid.GroupKind{{Group: configrefs.GatewayAPIGroup, Kind: "GatewayClass"}},
+	ReferrersIndex: referrersIndex("gatewayClasses"),
+	Name:           "gatewayClasses",
+	Projection:     project("manages", true, "Managers", "Manages"),
+	Sources:        []Source{{Kind: kindGateway}},
+	Targets:        []resourceid.GroupKind{{Group: configrefs.GatewayAPIGroup, Kind: "GatewayClass"}},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := unstructuredOf(obj, kindGateway); ok {
 			if r, ok := configrefs.GatewayClassOf(u); ok {
@@ -214,8 +214,9 @@ var GatewayClasses = &Family{
 // cert-manager Certificate, CertificateRequest, ACME Order or Challenge
 // names.
 var CertManagerIssuers = &Family{
-	Name:       "certManagerIssuers",
-	Projection: project("uses", false, "Dependencies,ConfigRefs", "Dependents,Consumers"),
+	ReferrersIndex: referrersIndex("certManagerIssuers"),
+	Name:           "certManagerIssuers",
+	Projection:     project("uses", false, "Dependencies,ConfigRefs", "Dependents,Consumers"),
 	Sources: []Source{
 		{Kind: kindCertificate},
 		{Kind: resourceid.GroupKind{Group: configrefs.CertManagerGroup, Kind: "CertificateRequest"}},
@@ -243,8 +244,9 @@ func fluxSource(kind string) resourceid.GroupKind {
 // namespace. An inline HelmRelease also declares the HelmChart the controller
 // recorded for it.
 var FluxSources = &Family{
-	Name:       "fluxSources",
-	Projection: project("configures", true, "Dependencies,ConfigRefs", "Consumers,Dependents"),
+	ScanRationale: "Indexing a Flux object's sourceRef exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
+	Name:          "fluxSources",
+	Projection:    project("configures", true, "Dependencies,ConfigRefs", "Consumers,Dependents"),
 	Sources: []Source{
 		{Kind: resourceid.GroupKind{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}, Targets: []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("ExternalArtifact")}},
 		{Kind: resourceid.GroupKind{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}},
@@ -266,9 +268,10 @@ var FluxSources = &Family{
 // are launched from, whichever provider defines it: a Karpenter provider's,
 // or EKS Auto Mode's NodeClass.
 var NodeClasses = &Family{
-	Name:       "nodeClasses",
-	Projection: project("configures", true, "ConfigRefs", "Consumers"),
-	Sources:    []Source{{Kind: resourceid.GroupKind{Group: karpenter.Group, Kind: "NodePool"}}},
+	ReferrersIndex: referrersIndex("nodeClasses"),
+	Name:           "nodeClasses",
+	Projection:     project("configures", true, "ConfigRefs", "Consumers"),
+	Sources:        []Source{{Kind: resourceid.GroupKind{Group: karpenter.Group, Kind: "NodePool"}}},
 	IsTarget: func(gk resourceid.GroupKind) bool {
 		return karpenter.IsNodeClassKind(gk.Group, gk.Kind) || gk == resourceid.GroupKind{Group: "eks.amazonaws.com", Kind: "NodeClass"}
 	},
@@ -285,6 +288,7 @@ var NodeClasses = &Family{
 // ClusterClasses is the family of the ClusterClass a Cluster API Cluster's
 // topology is built from, which may be in another namespace.
 var ClusterClasses = &Family{
+	ReferrersIndex: referrersIndex("clusterClasses"),
 	Name:           "clusterClasses",
 	Projection:     project("configures", true, "ConfigRefs", "Consumers"),
 	Sources:        []Source{{Kind: resourceid.GroupKind{Group: configrefs.CAPIGroup, Kind: "Cluster"}}},
@@ -329,18 +333,17 @@ var knativeEventSources = func() []Source {
 // such as JobSink, rather than every kind there is, which would make every
 // object's answer depend on Knative's stores.
 var KnativeEventDestinations = &Family{
-	Name:       "knativeEventDestinations",
-	Projection: project("exposes", false, "Backends", "RoutedFrom"),
-	Sources:    knativeEventSources,
+	ReferrersIndex: referrersIndex("knativeEventDestinations"),
+	Name:           "knativeEventDestinations",
+	Projection:     project("exposes", false, "Backends", "RoutedFrom"),
+	Sources:        knativeEventSources,
 	IsTarget: func(gk resourceid.GroupKind) bool {
 		return gk == kindService || gk.Group == "knative.dev" || strings.HasSuffix(gk.Group, ".knative.dev")
 	},
 	CrossNamespace: true,
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := obj.(*unstructured.Unstructured); ok {
-			for _, r := range configrefs.KnativeEventDestinations(u) {
-				visitPathRef(visit, r)
-			}
+			configrefs.VisitKnativeEventDestinations(u, func(r configrefs.PathRef) { visitPathRef(visit, r) })
 		}
 		return nil
 	},
@@ -349,6 +352,7 @@ var KnativeEventDestinations = &Family{
 // KnativeTriggerBrokers is the family of the Broker a Knative Trigger
 // subscribes to, which its brokerRef may name in another namespace.
 var KnativeTriggerBrokers = &Family{
+	ReferrersIndex: referrersIndex("knativeTriggerBrokers"),
 	Name:           "knativeTriggerBrokers",
 	Projection:     project("exposes", true, "RoutedFrom", "Backends"),
 	Sources:        []Source{{Kind: kindTrigger}},
@@ -389,6 +393,7 @@ var (
 // IstioGateways is the family of the Istio Gateways a VirtualService binds
 // to, which may be in another namespace.
 var IstioGateways = &Family{
+	ReferrersIndex: referrersIndex("istioGateways"),
 	Name:           "istioGateways",
 	Projection:     project("exposes", true, "RoutedFrom", "Backends"),
 	Sources:        []Source{{Kind: kindVirtualService}},
@@ -396,9 +401,7 @@ var IstioGateways = &Family{
 	CrossNamespace: true,
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := unstructuredOf(obj, kindVirtualService); ok {
-			for _, r := range configrefs.IstioVirtualServiceGateways(u) {
-				visitPathRef(visit, r)
-			}
+			configrefs.VisitIstioVirtualServiceGateways(u, func(r configrefs.PathRef) { visitPathRef(visit, r) })
 		}
 		return nil
 	},
@@ -409,20 +412,30 @@ var IstioGateways = &Family{
 // with the mesh's domain (configrefs.IstioServiceDomain), which comes from
 // istiod rather than from the objects, so the family is made for it.
 func IstioServiceHosts(domain string) *Family {
+	return IstioServiceHostsIn(func() string { return domain })
+}
+
+// IstioServiceHostsIn is IstioServiceHosts asking for the domain only when it
+// reads a VirtualService or DestinationRule, since finding it reads istiod's
+// Deployment. domain is asked once per object read; memoize it.
+func IstioServiceHostsIn(domain func() string) *Family {
+	index := referrersIndex("istioServiceHosts")
+	index.IndexDeclarations = istioHostCandidates
 	return &Family{
 		Name:           "istioServiceHosts",
+		ReferrersIndex: index,
 		Projection:     project("exposes", false, "Backends", "Routes").whenSource(kindDestinationRule, "configures", false, "Consumers", "ConfigRefs"),
 		Sources:        []Source{{Kind: kindVirtualService}, {Kind: kindDestinationRule}},
 		Targets:        []resourceid.GroupKind{kindService},
 		CrossNamespace: true,
 		Declared: func(obj runtime.Object, visit func(Declaration)) error {
 			if u, ok := unstructuredOf(obj, kindVirtualService); ok {
-				for _, r := range configrefs.IstioVirtualServiceDestinations(u, domain) {
+				for _, r := range configrefs.IstioVirtualServiceDestinations(u, domain()) {
 					visitPathRef(visit, r)
 				}
 			}
 			if u, ok := unstructuredOf(obj, kindDestinationRule); ok {
-				if r, ok := configrefs.IstioDestinationRuleService(u, domain); ok {
+				if r, ok := configrefs.IstioDestinationRuleService(u, domain()); ok {
 					visitPathRef(visit, r)
 				}
 			}
@@ -440,10 +453,11 @@ var (
 // ClusterWorkflowTemplates an Argo Workflow or CronWorkflow uses, through its
 // workflowTemplateRef or a task's or step's templateRef.
 var ArgoWorkflowTemplates = &Family{
-	Name:       "argoWorkflowTemplates",
-	Projection: project("configures", true, "ConfigRefs", "Consumers"),
-	Sources:    []Source{{Kind: kindWorkflow}, {Kind: kindCronWorkflow}},
-	Targets:    []resourceid.GroupKind{{Group: configrefs.ArgoGroup, Kind: "WorkflowTemplate"}, {Group: configrefs.ArgoGroup, Kind: "ClusterWorkflowTemplate"}},
+	ScanRationale: "Indexing a Workflow's workflowTemplateRef and task templateRefs exceeds the per-update admission bar (BenchmarkRelationIndexUpdate).",
+	Name:          "argoWorkflowTemplates",
+	Projection:    project("configures", true, "ConfigRefs", "Consumers"),
+	Sources:       []Source{{Kind: kindWorkflow}, {Kind: kindCronWorkflow}},
+	Targets:       []resourceid.GroupKind{{Group: configrefs.ArgoGroup, Kind: "WorkflowTemplate"}, {Group: configrefs.ArgoGroup, Kind: "ClusterWorkflowTemplate"}},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		fields := []string{"spec"}
 		u, ok := unstructuredOf(obj, kindWorkflow)
