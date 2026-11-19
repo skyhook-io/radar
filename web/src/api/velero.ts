@@ -219,13 +219,13 @@ export interface VeleroRunLogResponse {
   limit?: string
 }
 
-function useVeleroRunArtifact<T>(kind: 'backups' | 'restores', namespace: string, name: string, artifact: 'contents' | 'log' | 'volumes', params: URLSearchParams, read: (request: () => Promise<T>) => Promise<T> = (request) => request()) {
+function useVeleroRunArtifact<T>(kind: 'backups' | 'restores', namespace: string, name: string, artifact: 'contents' | 'log' | 'volumes', params: URLSearchParams) {
   const { guard, gatedKey } = useRadarFeature(artifact === 'volumes' ? 'veleroRunVolumes' : 'veleroRunArtifacts')
   const base = getApiBase()
   const search = params.toString()
   return useQuery<T>({
     queryKey: ['velero', artifact, base, kind, namespace, name, search, ...gatedKey],
-    queryFn: ({ signal }) => guard(() => read(() => fetchJSON<T>(`/velero/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${artifact}?${search}`, { method: 'POST', signal }))),
+    queryFn: ({ signal }) => guard(() => fetchJSON<T>(`/velero/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${artifact}?${search}`, { method: 'POST', signal })),
     enabled: !!namespace && !!name,
     // A tab or filter is the user's request; don't create DownloadRequests on focus or a timer.
     staleTime: 0,
@@ -287,6 +287,8 @@ export interface VeleroRunVolumesResponse {
   volumes: VeleroVolumeRecord[]
   total: number
   truncated: boolean
+  /** The run had finished when Radar read it, just before fetching the file; otherwise Velero may still rewrite the record. */
+  finishedAtRead: boolean
 }
 
 export interface VeleroVolumeOperation {
@@ -315,17 +317,8 @@ export interface VeleroVolumeOperationsResponse {
   operations: VeleroVolumeOperation[]
 }
 
-export interface VeleroRunVolumesRead extends VeleroRunVolumesResponse {
-  /** Whether the run was known to be finished when this read was requested; undefined when that was not known yet. Recorded by the client. */
-  finishedAtRequest?: boolean
-}
-
-/** finishedNow is read as each request starts, so a record requested while the run was in flight stays marked so whenever it resolves. */
-export function useVeleroRunVolumes(kind: 'backups' | 'restores', namespace: string, name: string, finishedNow: () => boolean | undefined) {
-  return useVeleroRunArtifact<VeleroRunVolumesRead>(kind, namespace, name, 'volumes', new URLSearchParams(), async (request) => {
-    const finishedAtRequest = finishedNow()
-    return { ...(await request()), finishedAtRequest }
-  })
+export function useVeleroRunVolumes(kind: 'backups' | 'restores', namespace: string, name: string) {
+  return useVeleroRunArtifact<VeleroRunVolumesResponse>(kind, namespace, name, 'volumes', new URLSearchParams())
 }
 
 export function isVeleroRunFinished(phase: string | undefined): boolean {

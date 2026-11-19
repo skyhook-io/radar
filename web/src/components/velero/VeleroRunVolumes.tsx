@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Badge, Collapse, TimeValue, formatBytes, pluralize } from '@skyhook-io/k8s-ui'
 import { useVeleroRunVolumes, useVeleroVolumeOperations, isVeleroRunFinished, type VeleroVolumeRecord, type VeleroVolumeDetails, type VeleroVolumeOperation } from '../../api/velero'
-import { getApiBase } from '../../api/config'
 import { Notice, SectionTable } from '../workspace/layout'
 import { ArtifactError } from './VeleroRunArtifacts'
 
@@ -20,7 +19,7 @@ function VolumeDetails({ label, info }: { label: string; info?: VeleroVolumeDeta
   const fields = [
     ['Snapshot', info.snapshotHandle], ['Driver', info.driver], ['Snapshot content', info.vscName],
     ['Operation', info.operationID], ['Data mover', info.dataMover], ['Uploader', info.uploaderType],
-    ['Retained snapshot', info.retainedSnapshot], ['Volume group snapshot', info.volumeGroupSnapshotHandle],
+    ['Source snapshot', info.retainedSnapshot], ['Volume group snapshot', info.volumeGroupSnapshotHandle],
     ['Volume type', info.volumeType], ['Zone', info.volumeAZ], ['IOPS', info.iops], ['Phase', info.phase],
     ['Pod', info.podName ? `${info.podNamespace ? info.podNamespace + '/' : ''}${info.podName}` : undefined],
     ['Volume', info.volumeName], ['Node', info.nodeName],
@@ -64,8 +63,7 @@ const coverageText: Record<string, string> = {
 }
 
 export function VeleroRunVolumes({ kind, namespace, name }: { kind: 'backups' | 'restores'; namespace: string; name: string }) {
-  const finishedNow = useRef<boolean | undefined>(undefined)
-  const record = useVeleroRunVolumes(kind, namespace, name, () => finishedNow.current)
+  const record = useVeleroRunVolumes(kind, namespace, name)
   const live = useVeleroVolumeOperations(kind, namespace, name)
   const restore = kind === 'restores'
   const data = record.data
@@ -75,17 +73,10 @@ export function VeleroRunVolumes({ kind, namespace, name }: { kind: 'backups' | 
     return rank(a) - rank(b) || a.localeCompare(b)
   })
   const inFlight = live.data && !isVeleroRunFinished(live.data.runPhase)
-  const source = JSON.stringify([getApiBase(), kind, namespace, name])
-  const finished = isVeleroRunFinished(live.data?.runPhase)
-  useEffect(() => { finishedNow.current = live.data ? finished : undefined })
-  // Opening the tab starts both reads together, so a record requested before
-  // the operations read answered takes that first answer.
-  const [firstLive, setFirstLive] = useState<{ source: string; finished: boolean }>()
-  useEffect(() => {
-    if (live.data && firstLive?.source !== source) setFirstLive({ source, finished })
-  }, [live.data, source, finished, firstLive?.source])
-  const requestedAfterCompletion = data?.finishedAtRequest ?? (firstLive?.source === source ? firstLive.finished : finished)
-  const readBeforeCompletion = !!data && finished && !requestedAfterCompletion
+  // The server says whether the run had finished when it read the record, so
+  // a record read mid-finalization stays provisional however soon the run
+  // completes.
+  const readBeforeCompletion = !!data && !data.finishedAtRead && !inFlight
   const coverage = Object.entries(live.data?.coverage ?? {})
   const complete = coverage.length > 0 && coverage.every(([, value]) => value.state === 'full')
   const recordedNone = data?.total === 0
@@ -94,7 +85,7 @@ export function VeleroRunVolumes({ kind, namespace, name }: { kind: 'backups' | 
       <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold text-theme-text-primary">Recorded volumes</h2><button type="button" className="btn-secondary px-3 py-1.5 text-sm" onClick={() => void record.refetch()}>Refresh record</button></div>
       <p className="text-sm text-theme-text-secondary">{restore ? 'How each volume was to be restored. Velero writes this record before plugin operations finish; it does not record a restore result.' : 'How Velero protected each volume, as recorded with this backup. A reported success does not verify that it can be restored.'}</p>
       {inFlight && <Notice>This run is still in progress. Velero may write or update its volume record later. The volume record does not update with live operations. If this run has finished since you opened or refreshed this tab, refresh the record for final results.</Notice>}
-      {readBeforeCompletion && <Notice>This run is now finished, but the volume record was requested before completion was confirmed. Refresh the record for final results.</Notice>}
+      {readBeforeCompletion && <Notice>The volume record was read before this run finished, and Velero may have updated it since. Refresh the record for final results.</Notice>}
       {record.dataUpdatedAt > 0 && <p className="text-xs text-theme-text-tertiary">Record read: <TimeValue timestamp={new Date(record.dataUpdatedAt).toISOString()} /></p>}
       {record.error && <ArtifactError label="Velero run volumes" error={record.error} hasData={!!data} retry={() => void record.refetch()} />}
       {record.isPending && <p className="text-sm text-theme-text-secondary">Loading volume record…</p>}

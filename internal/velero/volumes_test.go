@@ -88,10 +88,15 @@ func TestVolumeOperationProjection(t *testing.T) {
 			}
 		}
 	}
-	for _, phase := range []string{"New", "Accepted", "Prepared", "InProgress", "Completed", "Failed", "Canceled"} {
-		u := obj("DataUpload", "velero", "op", nil, nil, map[string]any{"phase": phase})
+	// An object no node agent has picked up has no phase; Velero treats it as New.
+	for _, phase := range []string{"", "New", "Accepted", "Prepared", "InProgress", "Completed", "Failed", "Canceled"} {
+		status := map[string]any{"phase": phase}
+		if phase == "" {
+			status = map[string]any{}
+		}
+		u := obj("DataUpload", "velero", "op", nil, nil, status)
 		row := volumeOperation(u, "DataUpload", testNow)
-		want := phase == "New" || phase == "Accepted" || phase == "Prepared" || phase == "InProgress"
+		want := phase == "" || phase == "New" || phase == "Accepted" || phase == "Prepared" || phase == "InProgress"
 		if row.LongRunning != want {
 			t.Fatalf("%s: %+v", phase, row)
 		}

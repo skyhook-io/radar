@@ -261,7 +261,7 @@ func (s *Server) downloadVeleroRunArtifact(ctx context.Context, run veleroRun, a
 	case err == nil:
 	case apierrors.IsForbidden(err):
 		return nil, &veleroArtifactFailure{http.StatusForbidden, "no access to create Velero download requests"}
-	case apierrors.IsInvalid(err) && (suffix == "VolumeInfos" || suffix == "VolumeInfo"):
+	case (suffix == "VolumeInfos" || suffix == "VolumeInfo") && invalidDownloadTarget(err):
 		return nil, &veleroArtifactFailure{http.StatusUnprocessableEntity, "Velero rejected the volume-information DownloadRequest. Its CRD must support " + targetKind + suffix + " (Backup volumes require Velero 1.13+, Restore volumes require 1.14+)."}
 	case apierrors.IsNotFound(err):
 		// No DownloadRequest CRD — Velero is not installed, or predates it.
@@ -526,4 +526,20 @@ func (s *Server) veleroDownloadPolicy() func(net.IP) bool {
 // check. The transport does not use proxies, which would hide that destination.
 func veleroDownloadAddressAllowed(ip net.IP, allowLoopback bool) bool {
 	return ip != nil && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsUnspecified() && !ip.IsMulticast() && (allowLoopback || !ip.IsLoopback())
+}
+
+// invalidDownloadTarget reports the apiserver refusing spec.target.kind, which
+// an older DownloadRequest CRD's enum does for a target it predates. Any other
+// invalid request is not a version question.
+func invalidDownloadTarget(err error) bool {
+	var status apierrors.APIStatus
+	if !apierrors.IsInvalid(err) || !errors.As(err, &status) || status.Status().Details == nil {
+		return false
+	}
+	for _, cause := range status.Status().Details.Causes {
+		if cause.Field == "spec.target.kind" {
+			return true
+		}
+	}
+	return false
 }

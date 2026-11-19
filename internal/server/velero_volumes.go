@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 type veleroVolumeDetails struct {
@@ -53,6 +54,11 @@ type veleroRunVolumes struct {
 	Volumes   []veleroVolumeRecord `json:"volumes"`
 	Total     int                  `json:"total"`
 	Truncated bool                 `json:"truncated"`
+	// FinishedAtRead: the run had finished when Radar read it, just before
+	// asking for the file. Velero rewrites a backup's record when its plugin
+	// operations finish, before the phase leaves Finalizing, so a record read
+	// earlier may be provisional whatever the run's phase is by now.
+	FinishedAtRead bool `json:"finishedAtRead"`
 }
 
 // POST uses the same impersonated DownloadRequest, run-read gate and namespace
@@ -63,9 +69,30 @@ func (s *Server) handleVeleroRunVolumes(w http.ResponseWriter, r *http.Request) 
 	if restore {
 		suffix = "VolumeInfo"
 	}
-	s.handleVeleroRunArtifact(w, r, "volume record", suffix, maxVeleroCompressedBytes, maxVeleroDecodedBytes, func(reader io.Reader) (any, error) {
+	run, ok := s.openVeleroRun(w, r, "volume record")
+	if !ok {
+		return
+	}
+	phase, _, _ := unstructured.NestedString(run.object.Object, "status", "phase")
+	result, failure := s.downloadVeleroRunArtifact(r.Context(), run, "volume record", suffix, maxVeleroCompressedBytes, maxVeleroDecodedBytes, func(reader io.Reader) (any, error) {
 		return decodeVeleroVolumes(reader, restore)
 	})
+	if failure != nil {
+		s.writeError(w, failure.status, failure.message)
+		return
+	}
+	volumes := result.(veleroRunVolumes)
+	volumes.FinishedAtRead = veleroRunFinished(phase)
+	s.writeJSON(w, volumes)
+}
+
+// A run in any other phase may still change what Velero records for it.
+func veleroRunFinished(phase string) bool {
+	switch phase {
+	case "Completed", "PartiallyFailed", "Failed", "FailedValidation", "Deleting":
+		return true
+	}
+	return false
 }
 
 func decodeVeleroVolumes(reader io.Reader, restore bool) (any, error) {

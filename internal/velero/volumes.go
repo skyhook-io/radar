@@ -114,8 +114,10 @@ func volumeOperation(u *unstructured.Unstructured, kind string, now time.Time) V
 	if err != nil {
 		anchor = u.GetCreationTimestamp().Time
 	}
+	// Velero's controllers treat an unset phase as New: the object has not
+	// been picked up yet.
 	switch row.Phase {
-	case "New", "Accepted", "Prepared", "InProgress":
+	case "", "New", "Accepted", "Prepared", "InProgress":
 		row.LongRunning = !anchor.IsZero() && now.Sub(anchor) > 10*time.Minute && row.Completed == ""
 	}
 	if row.LongRunning {

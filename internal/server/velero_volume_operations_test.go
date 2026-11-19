@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -161,11 +162,13 @@ func TestVeleroVolumeOperationsPinAndSharedListener(t *testing.T) {
 	})
 	srv := New(Config{DevMode: true, ListenAddress: "0.0.0.0"})
 	t.Cleanup(srv.Stop)
-	req := httptest.NewRequest(http.MethodGet, "/api/velero/backups/velero/nightly/volume-operations", nil)
+	// An accepted Host, so the refusal is the cross-site check and not the
+	// shared listener's Host guard.
+	req := httptest.NewRequest(http.MethodGet, "http://localhost/api/velero/backups/velero/nightly/volume-operations", nil)
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("cross-site read: %d", rec.Code)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "cross_origin_refused") {
+		t.Fatalf("cross-site read: %d %s", rec.Code, rec.Body.String())
 	}
 }

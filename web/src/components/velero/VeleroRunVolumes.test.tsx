@@ -7,13 +7,16 @@ import { guardRadarFeature, type RadarFeatureSupport } from '../../api/radarFeat
 import type { VeleroRunVolumesResponse, VeleroVolumeOperationsResponse } from '../../api/velero'
 import { setApiBase } from '../../api/config'
 
-const state = vi.hoisted(() => ({ support: 'supported' as RadarFeatureSupport, fetch: vi.fn() }))
+const state = vi.hoisted(() => ({ support: 'supported' as RadarFeatureSupport, supportFor: {} as Record<string, RadarFeatureSupport>, fetch: vi.fn() }))
 vi.mock('../../api/client', async (original) => ({
   ...(await original<typeof import('../../api/client')>()),
-  useRadarFeature: (feature: 'veleroRunVolumes') => ({
-    gatedKey: [state.support],
-    guard: <T,>(request: () => Promise<T>) => guardRadarFeature(feature, state.support, { currentVersion: 'v1.16.0' }, request),
-  }),
+  useRadarFeature: (feature: 'veleroRunVolumes') => {
+    const support = state.supportFor[feature] ?? state.support
+    return {
+      gatedKey: [support],
+      guard: <T,>(request: () => Promise<T>) => guardRadarFeature(feature, support, { currentVersion: 'v1.16.0' }, request),
+    }
+  },
   fetchJSON: (path: string, init: RequestInit) => state.fetch(path, init),
 }))
 
@@ -31,7 +34,7 @@ const record = (patch: Partial<VeleroRunVolumesResponse> = {}): VeleroRunVolumes
     { pvcName: 'moved', method: 'CSISnapshot', snapshotDataMoved: true, snapshotDataMovementInfo: { dataMover: 'velero', operationID: 'op-moved' } },
     { method: 'PodVolumeBackup', result: 'failed', snapshotDataMoved: false, podVolumeInfo: { podName: 'worker', podNamespace: 'app', volumeName: 'data' } },
     { pvcName: 'skipped', snapshotDataMoved: false, skipped: true, skippedReason: 'excluded by policy' },
-  ], total: 5, truncated: false, ...patch,
+  ], total: 5, truncated: false, finishedAtRead: true, ...patch,
 })
 const live = (patch: Partial<VeleroVolumeOperationsResponse> = {}): VeleroVolumeOperationsResponse => ({
   observedAt: '2026-11-15T12:00:00Z', runPhase: 'Completed', coverage: { podVolumeBackups: { state: 'full' }, dataUploads: { state: 'full' } }, operations: [], ...patch,
@@ -48,6 +51,7 @@ async function settle(test: () => boolean) {
 }
 beforeEach(() => {
   state.support = 'supported'
+  state.supportFor = {}
   state.fetch.mockReset()
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -109,8 +113,9 @@ describe('Volumes tab', () => {
     expect(host.textContent).not.toContain('Velero recorded no volumes')
   })
 
+  // A Radar that serves Contents and Log but predates the Volumes routes.
   it('gates both reads on the new capability', async () => {
-    state.support = 'unsupported'
+    state.supportFor = { veleroRunArtifacts: 'supported', veleroRunVolumes: 'unsupported' }
     await mount(); await settle(() => host.textContent!.includes('needs a newer Radar'))
     expect(state.fetch).not.toHaveBeenCalled()
   })
@@ -172,50 +177,43 @@ describe('Volumes tab', () => {
   })
 
   it('marks an in-flight record as provisional and refreshes it explicitly', async () => {
-    respond(record(), live({ runPhase: 'WaitingForPluginOperations' }))
+    respond(record({ finishedAtRead: false }), live({ runPhase: 'WaitingForPluginOperations' }))
     await mount(); await settle(() => host.textContent!.includes('snap-123'))
     expect(host.textContent).toContain('Velero may write or update its volume record later')
     expect(host.textContent).toContain('The volume record does not update with live operations')
     expect(host.textContent).toContain('Record read:')
-    respond(record(), live({ runPhase: 'Completed' }))
+    respond(record({ finishedAtRead: false }), live({ runPhase: 'Completed' }))
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh operations')!.click())
     await settle(() => !host.textContent!.includes('This run is still in progress'))
     expect(host.textContent).not.toContain('The volume record does not update with live operations')
-    expect(host.textContent).toContain('This run is now finished, but the volume record was requested before completion was confirmed')
+    expect(host.textContent).toContain('The volume record was read before this run finished')
     expect(state.fetch.mock.calls.filter(([path]) => path.endsWith('/volumes?'))).toHaveLength(1)
+    respond(record(), live({ runPhase: 'Completed' }))
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh record')!.click())
     await settle(() => state.fetch.mock.calls.filter(([path]) => path.endsWith('/volumes?')).length === 2)
-    await settle(() => !host.textContent!.includes('This run is now finished, but'))
+    await settle(() => !host.textContent!.includes('was read before this run finished'))
   })
 
-  it('keeps the provisional note when a record requested in flight resolves after completion was seen', async () => {
-    let release!: (value: VeleroRunVolumesResponse) => void
-    const held = new Promise<VeleroRunVolumesResponse>((resolve) => { release = resolve })
-    let operations = live({ runPhase: 'InProgress' })
-    state.fetch.mockImplementation((path: string) => path.includes('volume-operations') ? Promise.resolve(operations) : held)
-    await mount(); await settle(() => host.textContent!.includes('This run is still in progress'))
-    operations = live({ runPhase: 'Completed' })
-    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh operations')!.click())
-    await settle(() => !host.textContent!.includes('This run is still in progress'))
-    await act(async () => { release(record()) })
-    await settle(() => host.textContent!.includes('snap-123'))
-    expect(host.textContent).toContain('This run is now finished, but the volume record was requested before completion was confirmed')
-    respond(record(), operations)
-    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh record')!.click())
-    await settle(() => state.fetch.mock.calls.filter(([path]) => path.endsWith('/volumes?')).length === 2)
-    await settle(() => !host.textContent!.includes('This run is now finished, but'))
+  // Velero rewrites a backup's record as its plugin operations finish, so a
+  // record read mid-finalization is provisional even when the first
+  // operations read already sees the run complete.
+  it('keeps a record read before the run finished provisional when operations already show it complete', async () => {
+    respond(record({ finishedAtRead: false }), live({ runPhase: 'Completed' }))
+    await mount(); await settle(() => host.textContent!.includes('snap-123'))
+    expect(host.textContent).toContain('The volume record was read before this run finished')
+    expect(host.textContent).not.toContain('This run is still in progress')
   })
 
   it('keeps the provisional note when a refresh after completion fails', async () => {
-    respond(record(), live({ runPhase: 'InProgress' }))
+    respond(record({ finishedAtRead: false }), live({ runPhase: 'InProgress' }))
     await mount(); await settle(() => host.textContent!.includes('snap-123'))
-    respond(record(), live({ runPhase: 'Completed' }))
+    respond(record({ finishedAtRead: false }), live({ runPhase: 'Completed' }))
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh operations')!.click())
-    await settle(() => host.textContent!.includes('This run is now finished, but'))
+    await settle(() => host.textContent!.includes('was read before this run finished'))
     state.fetch.mockImplementation((path: string) => path.includes('volume-operations') ? Promise.resolve(live()) : Promise.reject(new ApiError('record unavailable', 503)))
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh record')!.click())
     await settle(() => host.textContent!.includes('record unavailable'))
-    expect(host.textContent).toContain('This run is now finished, but the volume record was requested before completion was confirmed')
+    expect(host.textContent).toContain('The volume record was read before this run finished')
   })
 
   it('shows truncation and retries operations independently', async () => {
