@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Activity, BellOff, Bot, Boxes, Braces, Database, GitBranch, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Table2, Undo2, Zap } from 'lucide-react'
+import { Activity, BellOff, Bot, Boxes, Braces, Database, GitBranch, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2, Zap } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -54,9 +54,9 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'velero-workspace',
         icon: HardDrive,
-        title: 'A Velero workspace for backups and restores',
-        description: 'See schedule health and storage, inspect run contents, logs and volume progress, and start a backup from a schedule.',
-        leadDescription: 'Open Backup & restore to see when schedules last succeeded, which storage locations Velero reports as available, and which runs need attention. Open a backup or restore to inspect recorded contents, logs and volume details, including live progress where Velero reports it. Start a backup from a schedule, pause or resume scheduled runs, or request deletion of a stored backup.',
+        title: 'Manage your Velero backups in Radar',
+        description: 'Run backups on demand, manage schedules, and inspect backup and restore contents, logs and per-volume progress.',
+        leadDescription: 'Start a backup on demand, pause or resume schedules, and delete backups through Velero. Spot late schedules and storage problems, then open a backup or restore for its contents, logs and per-volume progress when available.',
         importance: 9,
         path: '/velero',
         cta: 'Open Backup & restore',
@@ -64,15 +64,15 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'relationship-performance',
         icon: Zap,
-        title: 'Lower CPU and memory use',
-        description: 'Radar looks up relationships on demand. In tests on two clusters, in-cluster Radar used 60–69% less CPU and 15–16% less resident memory.',
+        title: 'Up to 69% less CPU and 16% less memory',
+        description: 'In-cluster Radar finds related objects on demand. Applications keep links to Services, routes and scalers on large clusters.',
         importance: 8,
       },
       {
         id: 'running-image-vulnerabilities',
         icon: ShieldAlert,
-        title: 'Find CVEs in running images with Trivy',
-        description: 'Trivy Operator reports show which workloads run affected images, which findings have a fix, and which images still need a scan.',
+        title: 'New Vulnerabilities view',
+        description: 'See CVEs for running images in one place with Trivy Operator. Find affected workloads, available fixes and gaps in scan coverage.',
         importance: 8,
         path: '/checks/vulnerabilities',
         cta: 'Open Vulnerabilities',
@@ -80,7 +80,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'java4shell-check',
         icon: ScanSearch,
-        title: 'Check for Java4Shell on demand',
+        title: 'Check for Java4Shell',
         description: 'Check declared Java versions in running images for CVE-2026-114938. Node CPU features help prioritize workloads. Works without Trivy.',
         importance: 7,
         path: '/checks/vulnerabilities',
@@ -89,7 +89,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'agent-runtime-health',
         icon: Bot,
-        title: 'Support for Agent Sandbox and Agent Substrate',
+        title: 'Agent Sandbox and Agent Substrate',
         description: 'See Sandbox and WorkerPool status and issues. With Prometheus, check WorkerPool capacity and snapshot health on Nodes.',
         importance: 7,
       },
@@ -102,25 +102,16 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         path: '/gitops',
         cta: 'Open GitOps',
       },
-      {
-        id: 'resource-table-sizing',
-        icon: Table2,
-        title: 'Resource tables fit their contents',
-        description: 'Columns size to the data, give names and status badges more room, and hide lower-priority columns when space is tight.',
-        importance: 6,
-        path: '/resources',
-        cta: 'Open Resources',
-      },
     ],
     improvements: [
-      'GitOps rows refresh as Argo CD and Flux resources change',
-      'Live Traffic shows Istio waypoint request rates and errors, and TCP throughput in bytes',
-      'Faster page loads from on-demand YAML editing and graph layout, plus smoother timeline scrolling',
-      'Track per-node upgrade progress in system-upgrade-controller Plans',
-      'Windows Desktop has a new title bar and keeps running if an in-app update fails',
-      'CloudNativePG Checks flag missing backup destinations and disabled WAL archiving',
-      'CSI VolumeSnapshots and Strimzi Kafka clusters have dedicated details and status columns',
-      'Applications keep links to Services, routes and scalers on large clusters',
+      'GitOps refreshes live for Argo CD and Flux, with clearer rollout, auto-sync and managed resource details',
+      'Istio Live Traffic shows waypoint requests and errors, rates for the selected time range, and TCP throughput',
+      'Cached assets and on-demand YAML editing and graph layout speed up page loads. Long timelines scroll more smoothly',
+      'Track node upgrades and spot invalid system-upgrade-controller Plans',
+      'Windows Desktop gains a compact title bar, single-instance launch, safer updates, better PowerShell defaults and fixed zoom shortcuts',
+      'CloudNativePG Checks cover backup destinations, WAL archiving, single instances and deprecated Barman backups',
+      'CSI VolumeSnapshots show readiness and failures. Strimzi shows Kafka cluster and node pool health',
+      'Denser resource tables fit columns to their contents and hide lower-priority columns when space is tight',
     ],
   },
   {
