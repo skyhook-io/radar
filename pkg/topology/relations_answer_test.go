@@ -749,3 +749,48 @@ func TestRelationsAnswerCrossplaneReferenceUsesTheKindsScope(t *testing.T) {
 		}
 	}
 }
+
+// countingDeployments counts how often an answer lists every Deployment.
+type countingDeployments struct {
+	*mockProvider
+	listed *int
+}
+
+func (p countingDeployments) Deployments() ([]*appsv1.Deployment, error) {
+	*p.listed++
+	return p.mockProvider.Deployments()
+}
+
+// Finding Istio's domain lists every Deployment, so an answer looks for it
+// only when it reads a VirtualService or DestinationRule, and then once.
+func TestRelationsAnswerFindsIstioDomainOnlyForIstioObjects(t *testing.T) {
+	cm := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "settings"}}, "", "ConfigMap")
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}}, "", "Service")
+	vs := projectionCR("networking.istio.io", "VirtualService", "shop", "web", map[string]any{"spec": map[string]any{
+		"http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "web"}}}}},
+	}})
+	rule := projectionCR("networking.istio.io", "DestinationRule", "shop", "web", map[string]any{"spec": map[string]any{"host": "web"}})
+	access := ownership.Unrestricted()
+	for _, tc := range []struct {
+		subject runtime.Object
+		objects []runtime.Object
+		want    int
+	}{
+		{cm, []runtime.Object{cm}, 0},
+		{svc, []runtime.Object{svc}, 0},
+		{svc, []runtime.Object{svc, vs, rule}, 1},
+		{vs, []runtime.Object{svc, vs}, 1},
+	} {
+		listed := 0
+		provider := countingDeployments{&mockProvider{}, &listed}
+		s := newProjectionSession(t, tc.objects...)
+		captured, ok := relations.CaptureSubject(s, projectionRef(tc.subject), tc.subject)
+		if !ok {
+			t.Fatal("capture failed")
+		}
+		RelationsAnswer(captured, access, access, ownership.NewView(captured, access), projectionRef(tc.subject), tc.subject, provider, nil)
+		if listed != tc.want {
+			t.Errorf("%s with %d objects listed Deployments %d times, want %d", projectionRef(tc.subject).Kind, len(tc.objects), listed, tc.want)
+		}
+	}
+}

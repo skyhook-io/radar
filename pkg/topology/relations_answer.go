@@ -4,6 +4,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -322,17 +323,22 @@ func relationsAnswer(session relations.Session, access, traverse ownership.Acces
 	if decision := access.CanRead(subject.GroupKind(), subject.Namespace); decision != ownership.Allowed {
 		return RefusedRelationships(subject, decision)
 	}
-	istioDomain := ""
-	if provider != nil {
-		istioDomain = NewBuilder(provider).istioServiceDomain()
-	}
+	// Finding Istio's domain reads every Deployment, so it is found only once
+	// a VirtualService or DestinationRule is read.
+	cached := provider
+	istioDomain := sync.OnceValue(func() string {
+		if cached == nil {
+			return ""
+		}
+		return NewBuilder(cached).istioServiceDomain()
+	})
 	limit := relations.DefaultLimit
 	if contextOnly {
 		limit = math.MaxInt
 	}
 	v := relations.NewView(session, access).WithLimit(limit)
 	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access, limit: limit, extras: &RelationshipExtras{Subject: subject, Fields: map[string]relations.Coverage{}, ScalerManagers: map[resourceid.Ref]resourceid.Ref{}}}
-	families, selectors := relations.Families(istioDomain), relations.SelectorFamilies()
+	families, selectors := relations.FamiliesIn(istioDomain), relations.SelectorFamilies()
 	n.node(subject)
 	if contextOnly {
 		n.contextDirectEvidence(relations.NewView(session, access), subject, obj)
@@ -754,7 +760,7 @@ func (n *neighborhood) knativeServing(session relations.Session, subject resourc
 	}
 }
 
-func (n *neighborhood) fillNodeData(session relations.Session, istioDomain string) {
+func (n *neighborhood) fillNodeData(session relations.Session, istioDomain func() string) {
 	for i := range n.topo.Nodes {
 		node := &n.topo.Nodes[i]
 		ref := resourceRefForNode(node, nil)
@@ -763,7 +769,7 @@ func (n *neighborhood) fillNodeData(session relations.Session, istioDomain strin
 		}
 		r := refIdentity(*ref)
 		if r.Group == "networking.istio.io" && (r.Kind == "VirtualService" || r.Kind == "DestinationRule") {
-			node.Data["istioServiceDomain"] = istioDomain
+			node.Data["istioServiceDomain"] = istioDomain()
 		}
 		if r.Group == "" && (r.Kind == "ConfigMap" || r.Kind == "Secret") {
 			obj, read := n.borrow(session, r)

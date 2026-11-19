@@ -144,7 +144,7 @@ func (a intermediateAccess) CanRead(gk resourceid.GroupKind, ns string) ownershi
 	return a.Access.CanRead(gk, ns)
 }
 
-func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ownership.Access, subject resourceid.Ref, obj runtime.Object, istioDomain string, rel *Relationships) {
+func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ownership.Access, subject resourceid.Ref, obj runtime.Object, istioDomain func() string, rel *Relationships) {
 	services := []resourceid.Ref{}
 	if subject.GroupKind() == (resourceid.GroupKind{Kind: "Service"}) {
 		services = append(services, subject)
@@ -177,7 +177,7 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 			continue
 		}
 		v := relations.NewView(s, intermediateAccess{Access: emit, ref: svc, traverse: traverse}).WithLimit(n.limit)
-		for _, family := range []*relations.Family{relations.IngressBackends, relations.GatewayBackends, relations.IstioServiceHosts(istioDomain), relations.TraefikBackends, relations.ContourBackends} {
+		for _, family := range []*relations.Family{relations.IngressBackends, relations.GatewayBackends, relations.IstioServiceHostsIn(istioDomain), relations.TraefikBackends, relations.ContourBackends} {
 			found := v.Referrers(family, svc, nil)
 			n.cover(family.Name, found.Coverage)
 			n.extras.cover("Entrypoints", found.Coverage)
@@ -194,7 +194,7 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 		// Routes can be private hops to a readable Gateway.
 		for _, composition := range []struct{ backends, parents *relations.Family }{
 			{relations.GatewayBackends, relations.GatewayParents},
-			{relations.IstioServiceHosts(istioDomain), relations.IstioGateways},
+			{relations.IstioServiceHostsIn(istioDomain), relations.IstioGateways},
 		} {
 			routes := relations.NewView(s, traverse).WithLimit(0).Referrers(composition.backends, svc, nil)
 			routes.Coverage.Total = 0
