@@ -412,7 +412,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		sort.Strings(missing)
 		return ViewScope{
 			State: ViewScopeLabelMissing, Withheld: true, Labels: maps.Clone(clusterLabels),
-			Note: fmt.Sprintf("The %s series don't carry this cluster's label %s, so Radar can't tell which of them are this cluster's. Add the label to that metric's scrape, or set --prometheus-cluster-label (Helm traffic.prometheusClusterLabels) to a label every metric carries.", strings.Join(missing, ", "), matchers),
+			Note: fmt.Sprintf("None of the %s series carry this cluster's label %s (they have no cluster label, or another cluster's value), so Radar can't tell which of them are this cluster's. Add the label to that metric's scrape, or set --prometheus-cluster-label (Helm traffic.prometheusClusterLabels) to a label every metric carries.", strings.Join(missing, ", "), matchers),
 		}, nil
 	}
 	scope := ViewScope{State: ViewScopeVerified, Labels: maps.Clone(clusterLabels), Filters: filters, Note: viewScopeVerifiedNote}
