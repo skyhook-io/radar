@@ -163,6 +163,22 @@ func TestVeleroLogAutoPicksProblemsElseEverything(t *testing.T) {
 	}
 }
 
+// Once a matching line does not fit, later ones are counted but not shown,
+// so what the tab calls "the first" matching lines are the first.
+func TestVeleroLogShownLinesAreAPrefix(t *testing.T) {
+	long := "level=error msg=" + strings.Repeat("x", 40<<10) + "\n"
+	short := "level=error msg=short\n"
+	result, err := decodeVeleroLog(strings.NewReader(strings.Repeat(long, (maxVeleroLogResponseBytes>>10)/40)+long+short), map[string]bool{"error": true}, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := result.(veleroRunLog)
+	last := got.Lines[len(got.Lines)-1]
+	if !got.Truncated || last.Number != len(got.Lines) || strings.Contains(last.Text, "short") || got.Matched != len(got.Lines)+2 {
+		t.Fatalf("shown %d lines ending at %d, matched %d, truncated %v", len(got.Lines), last.Number, got.Matched, got.Truncated)
+	}
+}
+
 func TestVeleroLogLineLimitIgnoresTheLineEnding(t *testing.T) {
 	body := "level=info msg=" + strings.Repeat("x", maxVeleroLogLineBytes-len("level=info msg=")) + "\r\nlevel=error msg=after\r\n"
 	result, err := decodeVeleroLog(strings.NewReader(body), map[string]bool{"error": true}, "", false)
@@ -200,6 +216,7 @@ func TestVeleroArtifactRoutesAnswerFromTheRunBeforeAskingVelero(t *testing.T) {
 	}{
 		"deleted run":   {seed: false, want: "Velero Backup not found"},
 		"not started":   {phase: "New", seed: true, want: "has not started this backup yet"},
+		"queued":        {phase: "Queued", seed: true, want: "has not started this backup yet"},
 		"phase not set": {phase: "", seed: true, want: "has not started this backup yet"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -356,13 +373,20 @@ func TestVeleroArtifactRoutesAndStorageFailures(t *testing.T) {
 					srv := New(Config{DevMode: true, ListenAddress: "localhost"})
 					t.Cleanup(srv.Stop)
 					rec := httptest.NewRecorder()
-					srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "http://localhost/api/velero/"+kind+"/velero/nightly/"+artifact, nil))
+					path := "http://localhost/api/velero/" + kind + "/velero/nightly/" + artifact
+					if artifact == "log" {
+						path += "?levels=auto"
+					}
+					srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
 					expected := http.StatusServiceUnavailable
 					if status == http.StatusOK || status == http.StatusNotFound {
 						expected = status
 					}
 					if rec.Code != expected {
 						t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+					}
+					if status == http.StatusOK && artifact == "log" && !strings.Contains(rec.Body.String(), `"levels":["error","warning"]`) {
+						t.Fatalf("levels=auto on a log with a warning: %s", rec.Body.String())
 					}
 					if status == http.StatusNotFound && !strings.Contains(rec.Body.String(), "Velero has no "+map[string]string{"volumes": "volume record", "contents": "contents", "log": "log"}[artifact]+" for this run") {
 						t.Fatalf("missing file: %s", rec.Body.String())
@@ -531,6 +555,15 @@ func TestVeleroRestoreContentsRouteReadsTheRestoresOutcome(t *testing.T) {
 			}
 			if !reflect.DeepEqual(targets, []string{"RestoreResourceList"}) {
 				t.Fatalf("download requests %v, want the resource list alone", targets)
+			}
+			reads := 0
+			for _, a := range dyn.Actions() {
+				if a.GetVerb() == "get" && a.GetResource().Resource == "restores" {
+					reads++
+				}
+			}
+			if reads != 1 {
+				t.Fatalf("read the Restore %d times, want once", reads)
 			}
 		})
 	}

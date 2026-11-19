@@ -194,17 +194,6 @@ func (s *Server) openVeleroRun(w http.ResponseWriter, r *http.Request, artifact 
 		return veleroRun{}, false
 	}
 
-	// Only the Velero server answers a DownloadRequest. When the caller can see
-	// that it is not running, say so now rather than after the full wait.
-	if deployments, read := s.veleroDeployments(r, k8s.GetResourceCache(), namespace); read {
-		if server := veleropkg.ServerConfigFromDeployments(deployments, true); server.Down() {
-			s.writeError(w, http.StatusServiceUnavailable,
-				fmt.Sprintf("The Velero server (Deployment %s in namespace %s) has no pods, and only it can serve the run %s. Start it, then try again.",
-					server.Deployment, namespace, artifact))
-			return veleroRun{}, false
-		}
-	}
-
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
@@ -231,10 +220,24 @@ func (s *Server) openVeleroRun(w http.ResponseWriter, r *http.Request, artifact 
 		s.writeError(w, http.StatusServiceUnavailable, "could not read this Velero "+targetKind)
 		return veleroRun{}, false
 	}
-	if phase, _, _ := unstructured.NestedString(object.Object, "status", "phase"); phase == "" || phase == "New" {
+	// A run not yet started may not have its storage location resolved, and
+	// Velero writes no files for it before it starts.
+	switch phase, _, _ := unstructured.NestedString(object.Object, "status", "phase"); phase {
+	case "", "New", "Queued", "ReadyToStart":
 		s.writeError(w, http.StatusNotFound, "Velero has not started this "+strings.ToLower(targetKind)+" yet, so it has no "+artifact)
 		return veleroRun{}, false
 	}
+	// Only the Velero server answers a DownloadRequest. When the caller can see
+	// that it is not running, say so now rather than after the full wait.
+	if deployments, read := s.veleroDeployments(r, k8s.GetResourceCache(), namespace); read {
+		if server := veleropkg.ServerConfigFromDeployments(deployments, true); server.Down() {
+			s.writeError(w, http.StatusServiceUnavailable,
+				fmt.Sprintf("The Velero server (Deployment %s in namespace %s) has no pods, and only it can serve the run %s. Start it, then try again.",
+					server.Deployment, namespace, artifact))
+			return veleroRun{}, false
+		}
+	}
+
 	return veleroRun{client: client, kind: targetKind, namespace: namespace, name: name, object: object}, true
 }
 
