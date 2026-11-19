@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -23,19 +24,18 @@ import (
 // once; rows only join the resulting target-to-declarer maps.
 type appRelationBatch struct {
 	fields map[string]map[resourceid.Ref][]topology.ResourceRef
-	// exposureIncomplete: Services went unread everywhere; exposureGaps names
-	// the namespaces they went unread in. A Service selects only in its own
-	// namespace, so a workload's exposure is unknown only when its own
+	// services is where Services went unread. A Service selects only in its
+	// own namespace, so a workload's exposure is unknown only when its own
 	// namespace's Services went unread.
-	exposureIncomplete bool
-	exposureGaps       map[string]bool
+	services appUnread
+	// selectable is where each kind a Service can select went unread: a
+	// workload the batch didn't read, though its row's own read found it, had
+	// no selection decided.
+	selectable map[resourceid.GroupKind]*appUnread
 	// exposureUndecided are the objects whose Service selection couldn't be
 	// decided: a lookup their candidate or a selector needed couldn't be
 	// read, or the selector couldn't be evaluated against them.
 	exposureUndecided map[resourceid.Ref]bool
-	// exposureUnread answers for a namespace the Services read didn't name: a
-	// collector holding only some namespaces reports all the others as one gap.
-	exposureUnread func(namespace string) bool
 	// loading: a kind the attachments join was still loading.
 	loading bool
 }
@@ -46,31 +46,29 @@ func appStillLoading(gaps ...ownership.Gap) bool {
 	return slices.ContainsFunc(gaps, func(g ownership.Gap) bool { return g.Reason == readreason.KindSyncPending })
 }
 
-func (b *appRelationBatch) exposureUnknown(namespace string) bool {
-	return b.exposureIncomplete || b.exposureGaps[namespace] || b.exposureUnread != nil && b.exposureUnread(namespace)
+// appUnread is where reads of one kind left its objects unread.
+type appUnread struct {
+	everywhere bool
+	namespaces map[string]bool
+	// others answers for a namespace the read didn't name: a collector
+	// holding only some namespaces reports all the others as one gap.
+	others func(namespace string) bool
 }
 
-func (b *appRelationBatch) undecided(ref resourceid.Ref) {
-	if b.exposureUndecided == nil {
-		b.exposureUndecided = map[resourceid.Ref]bool{}
-	}
-	b.exposureUndecided[ref] = true
-}
-
-func (b *appRelationBatch) noteServiceGaps(session relations.Session, kind resourceid.GroupKind, gaps []ownership.Gap) {
+func (u *appUnread) note(session relations.Session, kind resourceid.GroupKind, gaps []ownership.Gap) {
 	for _, g := range gaps {
 		switch {
 		case g.Namespace != "":
-			if b.exposureGaps == nil {
-				b.exposureGaps = map[string]bool{}
+			if u.namespaces == nil {
+				u.namespaces = map[string]bool{}
 			}
-			b.exposureGaps[g.Namespace] = true
+			u.namespaces[g.Namespace] = true
 		case g.Reason == readreason.RadarNamespaceNotCollected:
-			if b.exposureUnread != nil {
+			if u.others != nil {
 				continue
 			}
 			unread := map[string]bool{}
-			b.exposureUnread = func(namespace string) bool {
+			u.others = func(namespace string) bool {
 				if got, ok := unread[namespace]; ok {
 					return got
 				}
@@ -79,9 +77,20 @@ func (b *appRelationBatch) noteServiceGaps(session relations.Session, kind resou
 				return unread[namespace]
 			}
 		default:
-			b.exposureIncomplete = true
+			u.everywhere = true
 		}
 	}
+}
+
+func (u *appUnread) in(namespace string) bool {
+	return u != nil && (u.everywhere || u.namespaces[namespace] || u.others != nil && u.others(namespace))
+}
+
+func (b *appRelationBatch) undecided(ref resourceid.Ref) {
+	if b.exposureUndecided == nil {
+		b.exposureUndecided = map[resourceid.Ref]bool{}
+	}
+	b.exposureUndecided[ref] = true
 }
 
 func appAttachmentField(field string) bool {
@@ -256,7 +265,13 @@ func buildPlannedAppRelationBatch(ctx context.Context, session relations.Session
 		if r, ok := reads[kind]; ok {
 			return r
 		}
-		r := session.Indexed(kind, "", nil, scope)
+		// A namespaced kind read in named namespaces looks them up in the
+		// namespace index rather than scanning a cluster-wide store.
+		index, keys := "", []string(nil)
+		if namespaced, known := session.Catalog().Scope(kind); known && namespaced && !scope.AllNamespaces {
+			index, keys = cache.NamespaceIndex, namespaces
+		}
+		r := session.Indexed(kind, index, keys, scope)
 		reads[kind] = r
 		b.loading = b.loading || appStillLoading(r.Gaps...)
 		return r
@@ -361,7 +376,17 @@ func buildPlannedAppRelationBatch(ctx context.Context, session relations.Session
 		}
 		candidates := map[resourceid.GroupKind]map[string]*candidateBucket{}
 		for _, selectable := range f.Selectables {
-			for _, o := range objects(selectable.Kind).Objects {
+			read := objects(selectable.Kind)
+			if f == relations.ServiceSelectors {
+				if b.selectable == nil {
+					b.selectable = map[resourceid.GroupKind]*appUnread{}
+				}
+				if b.selectable[selectable.Kind] == nil {
+					b.selectable[selectable.Kind] = &appUnread{}
+				}
+				b.selectable[selectable.Kind].note(session, selectable.Kind, read.Gaps)
+			}
+			for _, o := range read.Objects {
 				c, ok := selectable.Candidate(o.Object, lookupFor(o.Ref, f == relations.ServiceSelectors))
 				if ok {
 					c.Ref = o.Ref
@@ -392,7 +417,7 @@ func buildPlannedAppRelationBatch(ctx context.Context, session relations.Session
 		for _, selector := range f.Selectors {
 			read := objects(selector.Kind)
 			if f == relations.ServiceSelectors {
-				b.noteServiceGaps(session, selector.Kind, read.Gaps)
+				b.services.note(session, selector.Kind, read.Gaps)
 			}
 			for _, o := range read.Objects {
 				if ctx.Err() != nil {
@@ -474,7 +499,7 @@ func buildPlannedAppRelationBatch(ctx context.Context, session relations.Session
 func (b *appRelationBatch) relationshipsForRef(group, kind, ns, name string) *appRelationships {
 	subject := resourceid.NewRef(group, kind, ns, name)
 	field := func(name string) map[string]topology.ResourceRef { return refsByKey(b.fields[name][subject]) }
-	out := &appRelationships{serviceRefs: field("Services"), ingressRefs: field("Ingresses"), routeRefs: field("Routes"), configRefs: field("ConfigRefs"), scalerRefs: field("Scalers"), storageRefs: field("StorageRefs"), pdbRefs: field("PDBs"), networkPolicyRefs: field("NetworkPolicies"), exposureIncomplete: b.exposureUnknown(ns) || b.exposureUndecided[subject]}
+	out := &appRelationships{serviceRefs: field("Services"), ingressRefs: field("Ingresses"), routeRefs: field("Routes"), configRefs: field("ConfigRefs"), scalerRefs: field("Scalers"), storageRefs: field("StorageRefs"), pdbRefs: field("PDBs"), networkPolicyRefs: field("NetworkPolicies"), exposureIncomplete: b.services.in(ns) || b.selectable[subject.GroupKind()].in(ns) || b.exposureUndecided[subject]}
 	out.Configs, out.Scalers, out.Storage, out.PDBs, out.NetworkPolicies = len(out.configRefs), len(out.scalerRefs), len(out.storageRefs), len(out.pdbRefs), len(out.networkPolicyRefs)
 	out.Services = refNames(sortedRefs(out.serviceRefs, 20), 20)
 	out.Ingresses = refNames(sortedRefs(out.ingressRefs, 20), 20)
@@ -483,6 +508,21 @@ func (b *appRelationBatch) relationshipsForRef(group, kind, ns, name string) *ap
 		return nil
 	}
 	return out
+}
+
+// applicationOwnerAbove is topology.OwnerAbove, except that the controller
+// chain ends at the first GitOps manager on it: past one lies a parent such
+// as an ApplicationSet, shared by apps that are separate.
+func applicationOwnerAbove(view *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
+	if chain := view.ControllerChain(r).Chain; len(chain) > 1 {
+		for _, owner := range chain[1:] {
+			if isGitOpsManagerKind(topology.NodeKind(owner.Kind), owner.Group) {
+				return owner, true
+			}
+		}
+		return chain[len(chain)-1], true
+	}
+	return topology.OwnerAbove(view, r)
 }
 
 // applicationStructuralRoot is the object start's application is rooted at,
@@ -496,7 +536,7 @@ func applicationStructuralRoot(session relations.Session, view *ownership.View, 
 		if isGitOpsManagerKind(topology.NodeKind(cur.Kind), cur.Group) {
 			return cur, loading
 		}
-		if next, ok := topology.OwnerAbove(view, cur); ok && !seen[next] {
+		if next, ok := applicationOwnerAbove(view, cur); ok && !seen[next] {
 			cur = next
 			continue
 		}

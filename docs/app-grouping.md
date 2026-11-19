@@ -77,7 +77,9 @@ app keyed `<ns>/JobSet/<name>`; the JobSet is its workload, with lifecycle healt
 from `pkg/jobset`. Member Jobs stay in its graph and open the selected member
 in the JobSet overview.
 
-The climb first follows the controller chain's top. An object with no
+The climb first follows the controller chain to its top, or to the first
+GitOps manager on it (an Application an ApplicationSet controls ends the climb
+at the Application). An object with no
 controller reference climbs to its owner only when it has exactly one owner
 reference and that owner is readable: several owner references are
 garbage-collection dependencies with no primary. Recording managers stop the climb in this order: Argo CD

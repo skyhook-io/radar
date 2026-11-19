@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -357,5 +358,48 @@ func TestApplicationsBuildWhileAManagerKindLoadsIsNotCached(t *testing.T) {
 	applicationsCacheMu.Unlock()
 	if cached != 1 {
 		t.Fatalf("cached builds after the load = %d, want 1", cached)
+	}
+}
+
+// A build that panics after it is admitted fails every request waiting on it
+// with a 500 that doesn't carry the panic, not the process, and leaves its slot
+// free and nothing cached: the next build, of these rows or others, succeeds.
+func TestApplicationsBuildPanicFailsItsWaiters(t *testing.T) {
+	queuedApplicationsBuildFixture(t)
+	t.Cleanup(func() { applicationsBuildTestHooks.joined, applicationsBuildTestHooks.admitted = nil, nil })
+	joined, release := make(chan struct{}, 2), make(chan struct{})
+	applicationsBuildTestHooks.joined = func() { joined <- struct{}{} }
+	applicationsBuildTestHooks.admitted = func() {
+		<-release
+		panic("secret build detail")
+	}
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	for range 2 {
+		go func() {
+			w := httptest.NewRecorder()
+			(&Server{}).handleListApplications(w, httptest.NewRequest(http.MethodGet, "/api/applications?namespaces=prod", nil))
+			responses <- w
+		}()
+	}
+	<-joined
+	<-joined
+	close(release)
+	for range 2 {
+		w := <-responses
+		if w.Code != http.StatusInternalServerError || strings.Contains(w.Body.String(), "secret build detail") {
+			t.Fatalf("waiter answered %d %q, want a 500 without the panic", w.Code, w.Body.String())
+		}
+	}
+	applicationsBuildTestHooks.joined, applicationsBuildTestHooks.admitted = nil, nil
+	if held := len(applicationsBuildSlot); held != 0 {
+		t.Fatalf("the panicked build left the slot held")
+	}
+	assertNoApplicationsCached(t)
+
+	if status := listApplicationsStatus(); status != http.StatusOK {
+		t.Fatalf("retry status = %d, want 200", status)
+	}
+	if _, err := listApplicationsForRequest(context.Background(), nil, false); err != nil {
+		t.Fatalf("another key's build failed: %v", err)
 	}
 }

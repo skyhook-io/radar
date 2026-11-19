@@ -349,3 +349,54 @@ func TestApplicationsBatchNotesKindsStillLoading(t *testing.T) {
 		}
 	}
 }
+
+// unloadedKind reads kind as a store still loading: no objects, one gap.
+type unloadedKind struct {
+	relations.Session
+	kind resourceid.GroupKind
+}
+
+func (s unloadedKind) Indexed(kind resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
+	if kind == s.kind {
+		return relations.IndexedRead{Gaps: []ownership.Gap{{Kind: kind, Reason: readreason.KindSyncPending}}}
+	}
+	return s.Session.Indexed(kind, index, keys, scope)
+}
+
+// A workload the batch couldn't read can't be matched to the Services that
+// select it, so a row built from the workload as its own lister reads it has
+// undecided exposure, not a worker's.
+func TestApplicationsUnreadWorkloadKindLeavesExposureUndecided(t *testing.T) {
+	labels := map[string]string{"app": "api"}
+	useTestResourceCache(t, fake.NewClientset(append(testNamespaces("prod"),
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api"}, Spec: corev1.ServiceSpec{Selector: labels}},
+	)...))
+	restore, err := k8s.SetTestResourceDiscovery(fake.NewClientset().Discovery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	addApplicationTypedDiscovery()
+	cache := k8s.GetResourceCache()
+	for _, tc := range []struct {
+		name    string
+		loading bool
+		want    string
+	}{{"Deployments loaded", false, "service"}, {"Deployments loading", true, "unknown"}} {
+		session, err := k8s.BeginOwnershipRead(cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+		batchSession := session.(relations.Session)
+		if tc.loading {
+			batchSession = unloadedKind{batchSession, resourceid.GroupKind{Group: "apps", Kind: "Deployment"}}
+		}
+		view := ownership.NewView(session, ownership.Unrestricted())
+		inventory := &applicationInventory{batch: buildAppRelationBatch(context.Background(), batchSession, []string{"prod"}), session: session.(relations.Session), owners: view}
+		rows := groupApplications(collectAppWorkloads(context.Background(), cache, []string{"prod"}, inventory, view, false))
+		if row := rowByName(rows, "api"); row == nil || row.WorkloadClass != tc.want || row.Workloads[0].WorkloadClass != tc.want {
+			t.Errorf("%s: row = %+v, want class %s", tc.name, row, tc.want)
+		}
+	}
+}
