@@ -64,7 +64,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'relationship-performance',
         icon: Zap,
-        title: 'Up to 69% less CPU and 16% less memory',
+        title: 'Up to 69% less CPU and 20% less peak heap memory',
         description: 'In-cluster Radar finds related objects on demand. Applications keep links to Services, routes and scalers on large clusters.',
         importance: 8,
       },
