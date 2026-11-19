@@ -1,7 +1,6 @@
-import { LookupFailureNote } from '@skyhook-io/k8s-ui/components/resources/renderers/LookupFailureNote'
 import { VeleroRestoreRenderer as BaseVeleroRestoreRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/VeleroRestoreRenderer'
-import type { ResourceRef } from '@skyhook-io/k8s-ui'
-import { useVeleroRunMessages } from '../../../api/policy'
+import { useOperationalIssuesShown, type ResourceRef } from '@skyhook-io/k8s-ui'
+import { useVeleroRunMessagesFetch, veleroMessagesInIssue } from '../../velero/VeleroRunMessagesHost'
 
 /**
  * Host wrapper adding the messages behind the run's error and warning counts.
@@ -16,20 +15,8 @@ import { useVeleroRunMessages } from '../../../api/policy'
  * object out of storage. Same bargain as the network trace's probes.
  */
 export function VeleroRestoreRenderer({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
-  const namespace = data?.metadata?.namespace ?? ''
-  const name = data?.metadata?.name ?? ''
-  const fetcher = useVeleroRunMessages('restores', namespace, name)
-
-  return (
-    <BaseVeleroRestoreRenderer
-      data={data}
-      onNavigate={onNavigate}
-      messages={{
-        messages: fetcher.data,
-        loading: fetcher.isPending,
-        lookupNote: fetcher.error ? <LookupFailureNote errors={[fetcher.error]} what="the messages behind these counts" /> : undefined,
-        onFetch: namespace && name ? () => fetcher.mutate() : undefined,
-      }}
-    />
-  )
+  const messages = useVeleroRunMessagesFetch('restores', data)
+  // A failed run's messages sit with its issue, which says what is wrong.
+  const inIssue = veleroMessagesInIssue(data, useOperationalIssuesShown())
+  return <BaseVeleroRestoreRenderer data={data} onNavigate={onNavigate} messages={inIssue ? undefined : messages} />
 }

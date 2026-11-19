@@ -172,6 +172,13 @@ interface WorkloadViewProps {
   statusNote?: ReactNode
   /** Leave out the kind badge, for a host whose title prefix already names the kind. */
   hideKindBadge?: boolean
+  /**
+   * With inlineBadges: keep the title on one line, cutting a long name (whole
+   * on hover) rather than wrapping the badges and actions below it. The badges
+   * give way first, wrapping among themselves down to their widest one, then
+   * the name is cut.
+   */
+  truncateName?: boolean
   /** Suppress the standalone back arrow — for embeddings where "back" has no
    *  meaningful target (a single-workload app has no app graph to return to). */
   hideBackButton?: boolean
@@ -351,6 +358,8 @@ interface WorkloadViewProps {
     resource: any
     context: 'drawer' | 'expanded'
     onNavigate?: NavigateToResource
+    /** The resource's operational issues, for a summary that shows them itself. */
+    leadContent?: ReactNode
   }) => ReactNode
   /** Extra tabs for the expanded view (e.g. a domain's own sections). */
   extraTabs?: WorkloadExtraTab[]
@@ -468,6 +477,7 @@ export function WorkloadView({
   renderStatusBadge,
   statusNote,
   hideKindBadge = false,
+  truncateName = false,
   hideBackButton,
   scopeControls,
   compactHeader,
@@ -974,7 +984,10 @@ export function WorkloadView({
   const podEvidenceLoading = resourceLoading || workloadPodsLoading || eventsLoading
   const logsFallbackReady = !renderLogsTab || (!logsTabVisible && !podEvidenceLoading)
   const requestedTab: TabType = activeTab
-  const summaryContext = { kind, apiKind, namespace, name, group, resource, onNavigate: onNavigateToResource }
+  const summaryContext = {
+    kind, apiKind, namespace, name, group, resource, onNavigate: onNavigateToResource,
+    leadContent: renderSummaryForState && (hasOverviewLead ?? hasOperationalIssues) && renderOverviewLeadForState ? renderOverviewLeadForState({ kind, namespace, name }) : undefined,
+  }
   const expandedSummary = expanded && resource ? renderSummaryForState?.({ ...summaryContext, context: 'expanded' }) ?? null : null
   const drawerSummary = !expanded && resource ? renderSummaryForState?.({ ...summaryContext, context: 'drawer' }) ?? null : null
   const tabs: DetailShellTab<TabType>[] = [
@@ -1226,7 +1239,13 @@ export function WorkloadView({
   // ── Expanded (full) mode ─────────────────────────────────────────────────
     const nameAndCopy = (
       <>
-        <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
+        {truncateName ? (
+          <Tooltip content={name} wrapperClassName="min-w-0">
+            <h1 className="min-w-0 text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
+          </Tooltip>
+        ) : (
+          <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
+        )}
         <Tooltip content="Copy name" delay={150}>
           <button
             onClick={() => copyToClipboard(name, 'name')}
@@ -1253,7 +1272,7 @@ export function WorkloadView({
           {namespace && namespace !== '_' && namespaceNote}
         </div>
       }
-      wrapHeader={inlineBadges}
+      wrapHeader={inlineBadges && !truncateName}
       subheader={resourceGone ? undefined : subheader}
       nav={
         breadcrumb || hideBackButton ? undefined : (
@@ -1323,10 +1342,10 @@ export function WorkloadView({
           // the line holds nothing else; the badges wrap below before that.
           return (
             <>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">
+              <div className={clsx('flex items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary', !truncateName && 'flex-wrap')}>
                 {titlePrefix}
                 <div className="flex min-w-0 max-w-full items-center gap-2">{nameAndCopy}</div>
-                {coreBadges}
+                {truncateName ? <span className="flex shrink-[100] flex-wrap items-center gap-x-3 gap-y-1">{coreBadges}</span> : coreBadges}
               </div>
               {extraChips.length > 0 && (
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">{extraChips}</div>

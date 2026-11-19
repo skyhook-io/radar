@@ -64,6 +64,10 @@ export function diagnosticFactLabel(type: string): string {
       return 'Queue';
     case 'kueue_affected_runs':
       return 'Blocked runs';
+    case 'velero_late_schedules':
+      return 'Missed runs';
+    case 'velero_rejected_runs':
+      return 'Rejected runs';
     case 'kueue_admission_check':
       return 'Admission check';
     case 'kueue_provisioning_request':

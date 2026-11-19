@@ -1,5 +1,6 @@
+import type { ReactNode } from 'react'
 import { Clock, Archive } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import {
   getScheduleStatus,
   getScheduleCron,
@@ -9,15 +10,21 @@ import {
   getScheduleValidationErrors,
 } from '../resource-utils-velero'
 import { VeleroPhaseValue } from './velero-cells'
+import { VELERO_SERVER_DEFAULT_RETENTION, veleroDeclaredRetention } from '../../velero/reading'
 import { TimeValue } from '../../ui/ScheduleValue'
 
 interface VeleroScheduleRendererProps {
   data: any
   /** The location every backup this schedule creates will be written to. */
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
+  /**
+   * What the schedule is doing, from a host that can read it. Shown before the
+   * spec: the phase below says only that Velero accepted the schedule.
+   */
+  activity?: ReactNode
 }
 
-export function VeleroScheduleRenderer({ data, onNavigate }: VeleroScheduleRendererProps) {
+export function VeleroScheduleRenderer({ data, onNavigate, activity }: VeleroScheduleRendererProps) {
   const status = data.status || {}
   const conditions = status.conditions || []
 
@@ -25,6 +32,7 @@ export function VeleroScheduleRenderer({ data, onNavigate }: VeleroScheduleRende
   const isPaused = getSchedulePaused(data)
   const template = getScheduleTemplate(data)
   const validationErrors = getScheduleValidationErrors(data)
+  const issueShown = useOperationalIssuesShown()
 
   const templateIncludedNs = template.includedNamespaces || []
   const templateExcludedNs = template.excludedNamespaces || []
@@ -43,8 +51,9 @@ export function VeleroScheduleRenderer({ data, onNavigate }: VeleroScheduleRende
       )}
       {/* Gated on the errors themselves, not on the badge: a paused schedule
           badges as "Paused", which would otherwise hide the validation errors
-          the user needs to fix before resuming. */}
-      {(validationErrors.length > 0 || status.phase === 'FailedValidation') && (
+          the user needs to fix before resuming. A paused schedule raises no
+          issue, so for one the errors appear only here. */}
+      {(validationErrors.length > 0 || status.phase === 'FailedValidation') && !issueShown && (
         <AlertBanner
           variant="error"
           title="Validation Failed"
@@ -55,18 +64,23 @@ export function VeleroScheduleRenderer({ data, onNavigate }: VeleroScheduleRende
         />
       )}
 
+      {activity}
+
       {/* Schedule section */}
       <Section title="Schedule" icon={Clock} defaultExpanded>
         <PropertyList>
-          <Property label="Status" value={
-            <VeleroPhaseValue status={scheduleStatus} phase={status.phase || ''} />
-          } />
+          {/* Enabled only means Velero accepted the schedule; the header already says whether it runs on time. */}
+          {status.phase !== 'Enabled' && (
+            <Property label="Phase" value={
+              <VeleroPhaseValue status={scheduleStatus} phase={status.phase || ''} />
+            } />
+          )}
           <Property label="Cron Schedule" value={
             <span className="font-mono text-sm">{getScheduleCron(data)}</span>
           } />
           <Property label="Last Backup" value={<TimeValue timestamp={data.status?.lastBackup} fallback="Never" />} />
-          <Property label="Paused" value={isPaused ? 'Yes' : 'No'} />
-          <Property label="Use Owner References" value={getScheduleUseOwnerReferences(data) ? 'Yes' : 'No'} />
+          {isPaused && <Property label="Paused" value="Yes" />}
+          {getScheduleUseOwnerReferences(data) && <Property label="Use Owner References" value="Yes" />}
         </PropertyList>
       </Section>
 
@@ -84,9 +98,7 @@ export function VeleroScheduleRenderer({ data, onNavigate }: VeleroScheduleRende
               />
             } />
           )}
-          {template.ttl && (
-            <Property label="TTL" value={template.ttl} />
-          )}
+          <Property label="Kept for" value={veleroDeclaredRetention(template.ttl) ?? VELERO_SERVER_DEFAULT_RETENTION} />
           {templateIncludedNs.length > 0 && (
             <Property label="Included Namespaces" value={
               <div className="flex flex-wrap gap-1">

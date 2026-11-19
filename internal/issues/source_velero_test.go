@@ -36,6 +36,11 @@ type veleroObj struct {
 	// itemOperationTimeout is the budget the backup declares. Empty means the
 	// object carries none, which is the shape most real backups have.
 	itemOperationTimeout string
+	included, excluded   []string
+	labelSelector        map[string]any
+	resourcePolicy       map[string]any
+	// specFlags are further spec fields, set as given.
+	specFlags map[string]any
 }
 
 func (o veleroObj) build(kind string) *unstructured.Unstructured {
@@ -83,6 +88,24 @@ func (o veleroObj) build(kind string) *unstructured.Unstructured {
 	}
 	if o.itemOperationTimeout != "" {
 		spec["itemOperationTimeout"] = o.itemOperationTimeout
+	}
+	for field, vals := range map[string][]string{"includedNamespaces": o.included, "excludedNamespaces": o.excluded} {
+		if len(vals) > 0 {
+			list := make([]any, len(vals))
+			for i, v := range vals {
+				list[i] = v
+			}
+			spec[field] = list
+		}
+	}
+	if o.labelSelector != nil {
+		spec["labelSelector"] = o.labelSelector
+	}
+	if o.resourcePolicy != nil {
+		spec["resourcePolicy"] = o.resourcePolicy
+	}
+	for k, v := range o.specFlags {
+		spec[k] = v
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "velero.io/v1",
@@ -641,5 +664,47 @@ func TestVeleroIssueIdentityIsStable(t *testing.T) {
 	}
 	if first[0].ID != second[0].ID {
 		t.Errorf("issue ID is unstable: %q vs %q", first[0].ID, second[0].ID)
+	}
+}
+
+func TestVeleroAdHocFailureStaysCriticalAndNamesALaterSuccess(t *testing.T) {
+	failed := veleroObj{name: "pre-upgrade", phase: "Failed", createdMinsAgo: 120, included: []string{"shop", "db"}}
+	cases := []struct {
+		name  string
+		later veleroObj
+		named bool
+	}{
+		{"completed after it", veleroObj{name: "retry", phase: "Completed", createdMinsAgo: 60, startedMinsAgo: 59, included: []string{"shop"}}, true},
+		{"a scheduled run after it", veleroObj{name: "nightly-1", schedule: "nightly", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29}, true},
+		{"created before it, queued until after it", veleroObj{name: "queued", phase: "Completed", createdMinsAgo: 180, startedMinsAgo: 60}, true},
+		{"created before it", veleroObj{name: "older", phase: "Completed", createdMinsAgo: 180, startedMinsAgo: 179}, false},
+		{"recreated by backup sync, ran before it", veleroObj{name: "synced", phase: "Completed", createdMinsAgo: 5, startedMinsAgo: 1440}, false},
+		{"partly failed", veleroObj{name: "partial", phase: "PartiallyFailed", createdMinsAgo: 30, startedMinsAgo: 29}, false},
+		{"another installation", veleroObj{name: "elsewhere", namespace: "velero-2", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got *Issue
+			for _, iss := range detectBackups(failed, tc.later) {
+				if iss.Name == "pre-upgrade" {
+					got = &iss
+				}
+			}
+			if got == nil {
+				t.Fatal("the failed ad-hoc backup must stay listed")
+			}
+			if got.Severity != SeverityCritical {
+				t.Fatalf("severity = %v, want critical whatever completed later (%s)", got.Severity, got.Message)
+			}
+			if tc.named && !strings.Contains(got.Cause, tc.later.name) {
+				t.Errorf("the cause should name the later backup: %q", got.Cause)
+			}
+			if !tc.named && got.Cause != "" {
+				t.Errorf("no cause without a later success: %q", got.Cause)
+			}
+			if strings.Contains(got.Message, tc.later.name) {
+				t.Errorf("Velero's message stays Velero's: %q", got.Message)
+			}
+		})
 	}
 }
