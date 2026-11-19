@@ -188,6 +188,32 @@ func BenchmarkApplicationsBatch1000WorkloadsWithPodsAndConfig(b *testing.B) {
 	})
 }
 
+// A request naming one namespace beside a large one it doesn't name.
+func BenchmarkApplicationsBatchOneNamespaceBesideAnother(b *testing.B) {
+	selector := map[string]string{"app": "api"}
+	objects := append(testNamespaces("team", "other"),
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "team"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: selector}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: selector}}}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "team"}, Spec: corev1.ServiceSpec{Selector: selector}},
+	)
+	for i := range 5000 {
+		objects = append(objects, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("service-%d", i), Namespace: "other"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": fmt.Sprintf("app-%d", i)}}})
+	}
+	useApplicationsBenchCache(b, objects)
+	b.ReportAllocs()
+	for range b.N {
+		b.StopTimer()
+		session, err := k8s.BeginOwnershipRead(k8s.GetResourceCache())
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		batch := buildAppRelationBatch(context.Background(), session.(relations.Session), []string{"team"})
+		if len(batch.fields["Services"]) != 1 {
+			b.Fatalf("batch workloads=%d", len(batch.fields["Services"]))
+		}
+	}
+}
+
 func BenchmarkApplicationIdentityReads1000Managers(b *testing.B) {
 	kinds := map[schema.GroupVersionResource]string{}
 	var objects []runtime.Object

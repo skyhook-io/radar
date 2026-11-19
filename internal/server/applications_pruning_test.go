@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/ownership"
@@ -229,8 +230,10 @@ func appFixturePlural(kind string) string {
 // reads, and is evaluated, or provably doesn't: the fixture holds an object
 // for every pair that declares a present target, removing an evaluated pair
 // changes the rows, and adding back a skipped one doesn't.
-func TestApplicationsBatchEvaluatesOnlyWhatRowsRead(t *testing.T) {
-	typed, dynamicObjects := appPruningFixture()
+// useAppFixtureCaches serves typed and dynamic as the cluster, every kind
+// watched and loaded.
+func useAppFixtureCaches(t *testing.T, typed []runtime.Object, dynamicObjects []*unstructured.Unstructured) {
+	t.Helper()
 	useTestResourceCache(t, fake.NewClientset(typed...))
 	kinds := map[schema.GroupVersionResource]string{}
 	var resources []k8s.APIResource
@@ -259,6 +262,11 @@ func TestApplicationsBatchEvaluatesOnlyWhatRowsRead(t *testing.T) {
 			t.Fatalf("watch %v: %v", gvr, err)
 		}
 	}
+}
+
+func TestApplicationsBatchEvaluatesOnlyWhatRowsRead(t *testing.T) {
+	typed, dynamicObjects := appPruningFixture()
+	useAppFixtureCaches(t, typed, dynamicObjects)
 
 	cache := k8s.GetResourceCache()
 	session, err := k8s.BeginOwnershipRead(cache)
@@ -391,4 +399,97 @@ func appRowsDiff(want, got []appRow) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+type appIndexedRead struct {
+	kind  resourceid.GroupKind
+	index string
+	keys  []string
+	all   bool
+}
+
+// appIndexRecorder records each indexed read; unindexed reads every store in
+// full, as the batch once did, so the two can be compared.
+type appIndexRecorder struct {
+	relations.Session
+	reads     *[]appIndexedRead
+	unindexed bool
+}
+
+func (s appIndexRecorder) Indexed(kind resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
+	*s.reads = append(*s.reads, appIndexedRead{kind, index, keys, scope.AllNamespaces})
+	if s.unindexed && index == cache.NamespaceIndex {
+		index, keys = "", nil
+	}
+	return s.Session.Indexed(kind, index, keys, scope)
+}
+
+// A request naming namespaces looks namespaced kinds up in the namespace
+// index rather than scanning cluster-wide stores, and reads the same rows: a
+// cluster-scoped kind and the mesh domain's Deployments are still read whole.
+func TestApplicationsBatchReadsNamedNamespacesThroughTheIndex(t *testing.T) {
+	typed, dynamicObjects := appPruningFixture()
+	labels := map[string]string{"app": "api"}
+	typed = append(typed, testNamespaces("other")...)
+	typed = append(typed,
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "other", Name: "api"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}, Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "api-config"}}}}}}}}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "other", Name: "api"}, Spec: corev1.ServiceSpec{Selector: labels}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "other", Name: "api-config"}},
+	)
+	dynamicObjects = append(dynamicObjects, &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "projectcalico.org/v3", "kind": "GlobalNetworkPolicy", "metadata": map[string]any{"name": "global"},
+		"spec": map[string]any{"selector": "app == 'api'"},
+	}})
+	useAppFixtureCaches(t, typed, dynamicObjects)
+	rc := k8s.GetResourceCache()
+
+	build := func(unindexed bool) ([]appRow, []appIndexedRead) {
+		session, err := k8s.BeginOwnershipRead(rc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reads []appIndexedRead
+		recorder := appIndexRecorder{session.(relations.Session), &reads, unindexed}
+		view := ownership.NewView(session, ownership.Unrestricted())
+		inventory := &applicationInventory{batch: buildAppRelationBatch(context.Background(), recorder, []string{"prod"}), session: session.(relations.Session), owners: view}
+		return groupApplications(collectAppWorkloads(context.Background(), rc, []string{"prod"}, inventory, view, false)), reads
+	}
+	indexed, reads := build(false)
+	whole, _ := build(true)
+	if !reflect.DeepEqual(indexed, whole) {
+		t.Fatalf("rows differ between indexed and whole-store reads:\n%s", appRowsDiff(whole, indexed))
+	}
+	if api := rowByName(indexed, "api"); api == nil || api.Relationships == nil || api.Relationships.NetworkPolicies != 1 || len(api.Relationships.ServiceRefs) != 1 || api.Namespace != "prod" {
+		t.Fatalf("fixture rows don't exercise a scoped and a cluster-scoped read: %+v", api)
+	}
+
+	session, err := k8s.BeginOwnershipRead(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := resourceid.GroupKind{Group: "projectcalico.org", Kind: "GlobalNetworkPolicy"}
+	sawGlobal, sawMesh, indexedKinds := false, false, 0
+	for _, r := range reads {
+		namespaced, known := session.Catalog().Scope(r.kind)
+		switch {
+		case r.all:
+			sawMesh = sawMesh || r.kind == resourceid.GroupKind{Group: "apps", Kind: "Deployment"}
+			if r.index != "" {
+				t.Errorf("all-namespace read of %v used index %q", r.kind, r.index)
+			}
+		case known && namespaced:
+			indexedKinds++
+			if r.index != cache.NamespaceIndex || !slices.Equal(r.keys, []string{"prod"}) {
+				t.Errorf("%v read with index %q keys %v, want the namespace index for prod", r.kind, r.index, r.keys)
+			}
+		default:
+			sawGlobal = sawGlobal || r.kind == global
+			if r.index != "" {
+				t.Errorf("%v (cluster-scoped or not served) read through index %q", r.kind, r.index)
+			}
+		}
+	}
+	if !sawGlobal || !sawMesh || indexedKinds == 0 {
+		t.Fatalf("reads missed the cluster-scoped policy (%v), the mesh domain's Deployments (%v) or any namespaced kind (%d): %+v", sawGlobal, sawMesh, indexedKinds, reads)
+	}
 }

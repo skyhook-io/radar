@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -264,7 +265,13 @@ func buildPlannedAppRelationBatch(ctx context.Context, session relations.Session
 		if r, ok := reads[kind]; ok {
 			return r
 		}
-		r := session.Indexed(kind, "", nil, scope)
+		// A namespaced kind read in named namespaces looks them up in the
+		// namespace index rather than scanning a cluster-wide store.
+		index, keys := "", []string(nil)
+		if namespaced, known := session.Catalog().Scope(kind); known && namespaced && !scope.AllNamespaces {
+			index, keys = cache.NamespaceIndex, namespaces
+		}
+		r := session.Indexed(kind, index, keys, scope)
 		reads[kind] = r
 		b.loading = b.loading || appStillLoading(r.Gaps...)
 		return r
