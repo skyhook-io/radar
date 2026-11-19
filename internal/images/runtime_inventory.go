@@ -179,7 +179,8 @@ type RuntimeInventory struct {
 	// outstanding counts lookups still running, including ones that timed
 	// out: a credential helper can hang without honoring cancellation, and
 	// timed-out lookups must not pile up behind it.
-	outstanding atomic.Int32
+	outstanding      atomic.Int32
+	java4ShellActive atomic.Bool
 
 	mu      sync.Mutex
 	cache   map[string]*list.Element
@@ -251,6 +252,8 @@ func clusterKeychain(c credential, ref name.Reference) (authn.Keychain, string, 
 	return kc, identity, true
 }
 
+type strictRegistryLookupKey struct{}
+
 // registryConfigLookup reads a manifest and its config blob, never layers.
 // Retries are off: a rate-limited registry must not be asked again, and the
 // caller's budget is better spent on other images.
@@ -258,6 +261,9 @@ func registryConfigLookup(guard *guardedTransport) configLookup {
 	return func(ctx context.Context, ref name.Reference, platform v1.Platform, keychain authn.Keychain) (*v1.ConfigFile, string, error) {
 		rt := guard.forLookup()
 		defer rt.closeIdle()
+		if ctx.Value(strictRegistryLookupKey{}) == true {
+			rt.inCluster = true
+		}
 		auth, err := keychain.Resolve(ref.Context())
 		if err != nil {
 			return nil, "", err
@@ -309,16 +315,20 @@ type work struct {
 
 // Inventory reads the declared runtimes of every image the given Pods run.
 func (r *RuntimeInventory) Inventory(ctx context.Context, src PodSource, opts InventoryOptions) Inventory {
+	items := collectWork(src)
+	return shapeInventory(items, r.lookupConfigs(ctx, items, opts.RadarCredentials), opts)
+}
+
+func (r *RuntimeInventory) lookupConfigs(ctx context.Context, items []*work, radarCredentials bool) []configResult {
 	ctx, cancel := context.WithTimeout(ctx, inventoryCallBudget)
 	defer cancel()
 
-	items := collectWork(src)
 	results := make([]configResult, len(items))
 	budget := new(atomic.Int32)
 	budget.Store(maxLookupsPerCall)
 	var wg sync.WaitGroup
 	for i, w := range items {
-		creds := r.credentials(w, opts.RadarCredentials)
+		creds := r.credentials(w, radarCredentials)
 		res, hit, untried := r.fromCache(w, creds)
 		if hit {
 			results[i] = res
@@ -332,7 +342,7 @@ func (r *RuntimeInventory) Inventory(ctx context.Context, src PodSource, opts In
 	}
 	wg.Wait()
 
-	return shapeInventory(items, results, opts)
+	return results
 }
 
 // credentials lists what a lookup may try, in the kubelet's order: each pull
@@ -622,7 +632,7 @@ func collectWork(src PodSource) []*work {
 			}
 			// Name() is fully qualified, so php@sha256:x and
 			// docker.io/library/php@sha256:x are one image.
-			key := ref.Name() + "|" + platform.OS + "/" + platform.Architecture
+			key := imageWorkKey(ref, platform)
 			w := byKey[key]
 			if w == nil {
 				w = &work{key: key, display: c.Image, ref: ref, resolvedFrom: resolvedFrom, platform: platform, platformAssumed: assumed, workloads: map[string]*WorkloadUse{}, pods: map[string]map[string]bool{}}
@@ -670,6 +680,10 @@ func collectWork(src PodSource) []*work {
 	return out
 }
 
+func imageWorkKey(ref name.Reference, platform v1.Platform) string {
+	return ref.Name() + "|" + platform.OS + "/" + platform.Architecture
+}
+
 // runningContainers are the containers that can run alongside the workload:
 // regular containers, restartable (sidecar) init containers and running
 // ephemeral debug containers. One-shot init containers have finished.
@@ -688,7 +702,7 @@ func runningContainers(pod *corev1.Pod) []corev1.Container {
 	}
 	for _, c := range pod.Spec.EphemeralContainers {
 		if running[c.Name] {
-			out = append(out, corev1.Container{Name: c.Name, Image: c.Image})
+			out = append(out, corev1.Container{Name: c.Name, Image: c.Image, Command: c.Command, Args: c.Args, Env: c.Env})
 		}
 	}
 	return out

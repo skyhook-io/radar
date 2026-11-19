@@ -727,6 +727,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/upgrade-readiness", s.handleUpgradeReadiness)
 			// Scanner findings rolled up to the images that run now.
 			r.Get("/vulnerabilities", s.handleVulnerabilities)
+			r.Get("/vulnerabilities/java4shell", s.handleJava4Shell)
 
 			// Network path trace - path-shaped diagnosis for Service /
 			// Ingress / HTTPRoute / GRPCRoute / Gateway. See internal/trace.
@@ -1594,6 +1595,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		KueueQueueWorkloads:      true,
 		PodFileUpload:            true,
 		Vulnerabilities:          true,
+		RuntimeAdvisoryChecks:    true,
 	}
 }
 

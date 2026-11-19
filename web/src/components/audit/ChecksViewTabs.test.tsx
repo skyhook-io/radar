@@ -10,9 +10,10 @@ const vulnerabilityReports: APIResource = {
   namespaced: true, verbs: ['list', 'get'], isCrd: true,
 }
 
-function render(path: string, resources: APIResource[] = []) {
+function render(path: string, resources: APIResource[] = [], runtimeAdvisoryChecks = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } })
   client.setQueryData(['api-resources'], resources)
+  client.setQueryData(['capabilities'], { features: { runtimeAdvisoryChecks } })
   return renderToStaticMarkup(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
@@ -33,12 +34,13 @@ describe('ChecksViewTabs', () => {
     expect(html).not.toContain('role="tab"')
   })
 
-  it('shows Vulnerabilities only where the cluster serves VulnerabilityReports', () => {
+  it('shows Vulnerabilities for scanner reports or the on-demand check', () => {
     expect(render('/checks')).not.toContain('Vulnerabilities')
 
     const html = render('/checks?namespaces=shop', [vulnerabilityReports])
     expect(html).toContain('href="/checks/vulnerabilities?namespaces=shop"')
     expect(html).toContain('Vulnerabilities')
+    expect(render('/checks?namespaces=shop', [], true)).toContain('href="/checks/vulnerabilities?namespaces=shop"')
   })
 
   it('marks Vulnerabilities as the current tab on its route', () => {
