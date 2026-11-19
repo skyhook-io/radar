@@ -149,6 +149,12 @@ func SupportedTrendRange(value string) bool {
 	return value == "" || value == label
 }
 
+// TrendRangeDuration is how far back the named range reaches.
+func TrendRangeDuration(rangeStr string) time.Duration {
+	start, end, _, _ := resolveTrendRange(rangeStr)
+	return end.Sub(start)
+}
+
 // resolveTrendRange returns the start/end/step/label for the named Range.
 func resolveTrendRange(rangeStr string) (start, end time.Time, step time.Duration, label string) {
 	end = time.Now()
