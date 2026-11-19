@@ -259,7 +259,7 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		return nil, err
 	}
 	if allowed[EdgeManages] {
-		graph.ownerEdges(unanswered, objects)
+		graph.ownerEdges(session, unanswered, objects)
 	}
 	displayObjects := make(map[resourceid.Ref]runtime.Object, len(order))
 	for _, r := range order {
@@ -375,29 +375,42 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 }
 
 // ownerEdges links objects to the admitted owners their owner references name,
-// UID included, from the objects already read. It asks about nothing, so it
-// can draw the structure among the last hop's objects, which are never
-// answered.
-func (n *neighborhood) ownerEdges(refs []resourceid.Ref, objects map[resourceid.Ref]runtime.Object) {
+// resolved as ownership resolves any owner reference but against the admitted
+// objects alone. It reads nothing new and asks about nothing, so it can draw
+// the structure among the last hop's objects, which are never answered.
+func (n *neighborhood) ownerEdges(session ownership.ReadSession, refs []resourceid.Ref, objects map[resourceid.Ref]runtime.Object) {
+	admitted := admittedObjects{ReadSession: session, objects: objects}
 	for _, r := range refs {
 		m, err := apimeta.Accessor(objects[r])
 		if err != nil {
 			continue
 		}
+		dependent := ownership.Observe(r, m)
 		for _, ref := range m.GetOwnerReferences() {
-			group := resourceid.GroupFromAPIVersion(ref.APIVersion)
-			// A namespaced object's owner may be cluster-scoped.
-			for _, ns := range slices.Compact([]string{r.Namespace, ""}) {
-				owner := resourceid.NewRef(group, ref.Kind, ns, ref.Name)
-				if o, ok := objects[owner]; ok {
-					if om, err := apimeta.Accessor(o); err == nil && om.GetUID() == ref.UID {
-						n.edge(owner, r, relationEdge{edge: EdgeManages})
-					}
-					break
-				}
+			if owner := ownership.ResolveOwner(admitted, dependent, ref); owner.State == ownership.OwnerFound {
+				n.edge(owner.Ref, r, relationEdge{edge: EdgeManages})
 			}
 		}
 	}
+}
+
+// admittedObjects reads only the objects the walk admitted; any other reads
+// as absent.
+type admittedObjects struct {
+	ownership.ReadSession
+	objects map[resourceid.Ref]runtime.Object
+}
+
+func (a admittedObjects) Object(r resourceid.Ref) ownership.ObjectRead {
+	obj, ok := a.objects[r]
+	if !ok {
+		return ownership.ObjectRead{State: ownership.Absent}
+	}
+	m, err := apimeta.Accessor(obj)
+	if err != nil {
+		return ownership.ObjectRead{State: ownership.Absent}
+	}
+	return ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(r, m)}
 }
 
 func neighborhoodDisposition(d relations.Disposition, allowed map[EdgeType]bool) bool {
