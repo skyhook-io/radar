@@ -131,8 +131,24 @@ func (s *inventorySession) Members(manager resourceid.Ref) ownership.MembersRead
 	return read
 }
 
+// RecordingManagers finds the managers whose current inventory lists ref, as
+// the caches' index does.
+func (s *inventorySession) RecordingManagers(ref resourceid.Ref) ownership.RecordingManagersRead {
+	var read ownership.RecordingManagersRead
+	for manager, u := range s.liveInventory {
+		list, _ := gitops.FluxMembers(u)
+		for _, e := range list.Entries {
+			if resourceid.NewRef(e.Group, e.Kind, e.Namespace, e.Name) == ref {
+				read.Managers = append(read.Managers, ownership.Observe(manager, u))
+			}
+		}
+	}
+	return read
+}
+
 // A manager's members are read from the manager as the walk read it: an
-// inventory the controller rewrote after that read adds no member edge.
+// inventory the controller rewrote after that read adds no member edge, one
+// way or the other.
 func TestWalkNeighborhoodMembersFollowTheReadManager(t *testing.T) {
 	inventory := func(entries ...string) map[string]any {
 		var list []any
@@ -147,7 +163,15 @@ func TestWalkNeighborhoodMembersFollowTheReadManager(t *testing.T) {
 	manager.SetUID("apps")
 	rewritten := manager.DeepCopy()
 	rewritten.Object["status"] = inventory("shop_web_apps_Deployment", "shop_api__Service")
-	sub, err := WalkNeighborhood(context.Background(), &inventorySession{projectionSession: newRecordingProjectionSession(t, dep, svc, manager), liveInventory: map[resourceid.Ref]*unstructured.Unstructured{projectionRef(manager): rewritten}}, refOf(projectionRef(dep)), NeighborhoodOptions{}, nil, nil)
+	for _, hops := range []int{1, 2} {
+		t.Run(fmt.Sprintf("hops=%d", hops), func(t *testing.T) {
+			membersFollowTheReadManager(t, hops, dep, svc, manager, rewritten)
+		})
+	}
+}
+
+func membersFollowTheReadManager(t *testing.T, hops int, dep, svc runtime.Object, manager, rewritten *unstructured.Unstructured) {
+	sub, err := WalkNeighborhood(context.Background(), &inventorySession{projectionSession: newRecordingProjectionSession(t, dep, svc, manager), liveInventory: map[resourceid.Ref]*unstructured.Unstructured{projectionRef(manager): rewritten}}, refOf(projectionRef(dep)), NeighborhoodOptions{Hops: hops}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -31,6 +31,8 @@ type neighborhoodSession struct {
 	access  *neighborhoodAccess
 	objects map[resourceid.Ref]neighborhoodObject
 	indexes map[string]relations.IndexedRead
+	// members are the member lists read from captured managers, each once.
+	members map[resourceid.Ref]ownership.MembersRead
 }
 
 func (s *neighborhoodSession) Borrow(r resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
@@ -115,10 +117,19 @@ func (s *neighborhoodSession) Indexed(gk resourceid.GroupKind, index string, key
 // changed since. A manager the request hasn't read is read as the session
 // reads it.
 func (s *neighborhoodSession) Members(manager resourceid.Ref) ownership.MembersRead {
-	if captured, ok := s.captured(manager); ok {
-		return captured.Members(manager)
+	if read, ok := s.members[manager]; ok {
+		return read
 	}
-	return s.Session.Members(manager)
+	captured, ok := s.captured(manager)
+	if !ok {
+		return s.Session.Members(manager)
+	}
+	read := captured.Members(manager)
+	if s.members == nil {
+		s.members = map[resourceid.Ref]ownership.MembersRead{}
+	}
+	s.members[manager] = read
+	return read
 }
 
 // Membership is Members' state, read the same way.
@@ -127,6 +138,21 @@ func (s *neighborhoodSession) Membership(manager resourceid.Ref) ownership.Membe
 		return captured.Membership(manager)
 	}
 	return s.Session.Membership(manager)
+}
+
+// RecordingManagers keeps, of the managers the caches find listing ref, a
+// manager this request read only if the manager as read lists ref, so the
+// reverse search agrees with Members.
+func (s *neighborhoodSession) RecordingManagers(ref resourceid.Ref) ownership.RecordingManagersRead {
+	read := s.Session.RecordingManagers(ref)
+	read.Managers = slices.DeleteFunc(slices.Clone(read.Managers), func(m ownership.Observation) bool {
+		if o, read := s.objects[m.Ref]; !read || o.read.State != ownership.Present {
+			return false
+		}
+		members := s.Members(m.Ref)
+		return members.Membership != ownership.MembersRecorded || !slices.Contains(members.Members, ref)
+	})
+	return read
 }
 
 func (s *neighborhoodSession) captured(r resourceid.Ref) (relations.Session, bool) {
