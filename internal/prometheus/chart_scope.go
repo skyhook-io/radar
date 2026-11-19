@@ -33,6 +33,17 @@ func ResolverFor(client *Client, cache *k8s.ResourceCache) ChartScopeResolver {
 	}
 }
 
+// BoundResolver is resolve for queries that run on a store handle taken with
+// conn (PromSnapshot, PromForMCPSnapshot): a check made while the client's
+// connection was not conn's is the unknown scope, which withholds.
+func BoundResolver(client *Client, conn ConnectionSnapshot, resolve ChartScopeResolver) ChartScopeResolver {
+	return func(ctx context.Context, req ViewScopeRequest) (ViewScope, error) {
+		return resolveOnConnection(func() bool { return client.ConnectionCurrent(conn) }, func() (ViewScope, error) {
+			return resolve(ctx, req)
+		})
+	}
+}
+
 // ChartScopeSpan is what a chart query reads: the range, the query's own
 // window, and the store's implicit lookback for plain selectors.
 func ChartScopeSpan(chartRange time.Duration, category prom.MetricCategory) time.Duration {

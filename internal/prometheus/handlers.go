@@ -170,10 +170,17 @@ type chartDeps struct {
 	cache   *k8s.ResourceCache
 }
 
-func productionChartDeps(client *Client) chartDeps {
+// productionChartDeps runs a chart's queries on one store handle, and its
+// check only on the connection that handle was taken from.
+func productionChartDeps(ctx context.Context, client *Client) chartDeps {
 	cache := k8s.GetResourceCache()
-	return chartDeps{q: client, resolve: ResolverFor(client, cache), cache: cache}
+	store := client.bindStore(ctx)
+	return chartDeps{q: store, resolve: BoundResolver(client, store.conn, chartResolverFor(client, cache)), cache: cache}
 }
+
+// chartResolverFor builds the charts' check on the client's current
+// connection; tests replace it to move the connection around the check.
+var chartResolverFor = ResolverFor
 
 // errChartQuery wraps a failed store query, which the handlers report as 502;
 // any other error from a chart means the caller left.
@@ -287,7 +294,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := resourceChart(r.Context(), productionChartDeps(client), kind, namespace, name, category, rangeStr, scope)
+	resp, err := resourceChart(r.Context(), productionChartDeps(r.Context(), client), kind, namespace, name, category, rangeStr, scope)
 	if err != nil {
 		writeChartError(w, err)
 		return
@@ -418,7 +425,7 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	resp, err := resourceChart(r.Context(), productionChartDeps(client), kind, "", name, category, r.URL.Query().Get("range"), nil)
+	resp, err := resourceChart(r.Context(), productionChartDeps(r.Context(), client), kind, "", name, category, r.URL.Query().Get("range"), nil)
 	if err != nil {
 		writeChartError(w, err)
 		return
@@ -460,7 +467,7 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := namespaceChart(r.Context(), productionChartDeps(client), namespace, category, r.URL.Query().Get("range"))
+	resp, err := namespaceChart(r.Context(), productionChartDeps(r.Context(), client), namespace, category, r.URL.Query().Get("range"))
 	if err != nil {
 		writeChartError(w, err)
 		return
@@ -526,7 +533,7 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := clusterChart(r.Context(), productionChartDeps(client), category, r.URL.Query().Get("range"))
+	resp, err := clusterChart(r.Context(), productionChartDeps(r.Context(), client), category, r.URL.Query().Get("range"))
 	if err != nil {
 		writeChartError(w, err)
 		return
@@ -659,7 +666,7 @@ func handleHPAMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := hpaChart(r.Context(), productionChartDeps(client), namespace, name, r.URL.Query().Get("range"))
+	resp, err := hpaChart(r.Context(), productionChartDeps(r.Context(), client), namespace, name, r.URL.Query().Get("range"))
 	if err != nil {
 		writeChartError(w, err)
 		return

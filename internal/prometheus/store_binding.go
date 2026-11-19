@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -64,4 +65,11 @@ func (b boundStore) Query(ctx context.Context, query string) (*prom.QueryResult,
 		return nil, errConnectionReset
 	}
 	return b.store.Query(ctx, query)
+}
+
+func (b boundStore) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) (*prom.QueryResult, error) {
+	if b.store == nil {
+		return nil, errConnectionReset
+	}
+	return b.store.QueryRange(ctx, query, start, end, step)
 }

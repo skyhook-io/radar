@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"regexp"
@@ -976,6 +977,75 @@ func TestHandleDiagnoseMetricsScopedQueries(t *testing.T) {
 			}
 			if len(sent) != len(diagnoseMetricsCategories) {
 				t.Errorf("sent %d queries, want %d", len(sent), len(diagnoseMetricsCategories))
+			}
+		})
+	}
+}
+
+// The vitals' check and their queries must describe one backend: when the
+// connection moves from store A to store B during the check, B's approval of
+// unfiltered queries must not send them to A, nor mix in B's answers.
+func TestHandleDiagnoseMetricsCheckOnAMovedConnectionWithholds(t *testing.T) {
+	for _, moved := range []bool{true, false} {
+		name := "unmoved"
+		if moved {
+			name = "moved during the check"
+		}
+		t.Run(name, func(t *testing.T) {
+			setupFakeCacheForDiagnoseTests(t)
+			timeline.ResetStore()
+			t.Cleanup(timeline.ResetStore)
+			storeA := setupFakeProm(t)
+			storeA.rangeBodyFunc = metricsMatrixForRequest("1")
+			storeB := &fakeProm{rangeBodyFunc: metricsMatrixForRequest("2")}
+			srvB := httptest.NewServer(storeB)
+			t.Cleanup(srvB.Close)
+			checks := 0
+			prev := diagnoseScopeResolverFor
+			diagnoseScopeResolverFor = func(*prometheus.Client, *k8s.ResourceCache) prometheus.ChartScopeResolver {
+				return func(_ context.Context, req prometheus.ViewScopeRequest) (prometheus.ViewScope, error) {
+					checks++
+					if moved {
+						prometheus.SetManualURL(srvB.URL)
+					}
+					filters := map[string]string{}
+					for _, m := range req.Metrics {
+						filters[m.Name] = ""
+					}
+					return prometheus.ViewScope{State: prometheus.ViewScopeSingleClusterAsserted, Filters: filters, Note: "asserted"}, nil
+				}
+			}
+			t.Cleanup(func() { diagnoseScopeResolverFor = prev })
+			ctx := withClusterAdmin(t, "admin")
+			grantDiagnoseRead(t, "admin")
+
+			_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+			if m == nil {
+				t.Fatal("diagnose omitted metrics")
+			}
+			if checks != 1 {
+				t.Fatalf("checks = %d, want 1", checks)
+			}
+			storeA.mu.Lock()
+			sentA := len(storeA.rangeParams)
+			storeA.mu.Unlock()
+			storeB.mu.Lock()
+			sentB := len(storeB.rangeParams)
+			storeB.mu.Unlock()
+			if !moved {
+				if m.Error != "" || len(m.Series) != len(diagnoseMetricsCategories) || sentA != len(diagnoseMetricsCategories) {
+					t.Fatalf("unmoved vitals = %+v, sent %d queries", m, sentA)
+				}
+				return
+			}
+			if len(m.Series) != 0 || !strings.HasPrefix(m.Error, "metrics withheld: ") {
+				t.Errorf("series = %d, error = %q; want none and the reason", len(m.Series), m.Error)
+			}
+			if m.ClusterScope == nil || m.ClusterScope.State != prometheus.ViewScopeUnknown {
+				t.Errorf("clusterScope = %+v, want the unknown state", m.ClusterScope)
+			}
+			if sentA != 0 || sentB != 0 {
+				t.Errorf("vitals queries sent after the connection moved: old store %d, new store %d", sentA, sentB)
 			}
 		})
 	}
