@@ -43,10 +43,10 @@ func ChartScopeSpan(chartRange time.Duration, category prom.MetricCategory) time
 	return chartRange + window + chartImplicitLookback
 }
 
-func chartMetrics(kind string, category prom.MetricCategory, subject, anchorLabel string, anchors []string) []ViewMetric {
+func chartMetrics(kind string, category prom.MetricCategory, subject, anchorLabel, anchorNamespace string, anchors []string) []ViewMetric {
 	var out []ViewMetric
 	for _, name := range prom.CategoryMetrics(kind, category) {
-		out = append(out, ViewMetric{Name: name, Subject: subject, AnchorLabel: anchorLabel, AnchorValues: anchors})
+		out = append(out, ViewMetric{Name: name, Subject: subject, AnchorLabel: anchorLabel, AnchorValues: anchors, AnchorNamespace: anchorNamespace})
 	}
 	return out
 }
@@ -54,12 +54,14 @@ func chartMetrics(kind string, category prom.MetricCategory, subject, anchorLabe
 // clusterChartScopeRequest checks the overview's metrics across the whole
 // store. Its anchors are the live Pods of the namespace the Pod-UID proof
 // anchors on, a stable sample of this cluster's Pods that stays cheap on a
-// large cluster.
+// large cluster. The anchor check stays in that namespace, so another
+// cluster's same-named Pod elsewhere can't vouch for this cluster.
 func clusterChartScopeRequest(category prom.MetricCategory, chartRange time.Duration, cache *k8s.ResourceCache) ViewScopeRequest {
-	anchors := NamespacePodAnchors(cache, trafficAnchorNamespace(cache))
+	namespace := trafficAnchorNamespace(cache)
+	anchors := NamespacePodAnchors(cache, namespace)
 	return ViewScopeRequest{
 		View:    "cluster_chart",
-		Metrics: chartMetrics("", category, "", "pod", anchors),
+		Metrics: chartMetrics("", category, "", "pod", namespace, anchors),
 		Span:    ChartScopeSpan(chartRange, category),
 	}
 }
@@ -67,7 +69,7 @@ func clusterChartScopeRequest(category prom.MetricCategory, chartRange time.Dura
 func namespaceChartScopeRequest(namespace string, category prom.MetricCategory, chartRange time.Duration, cache *k8s.ResourceCache) ViewScopeRequest {
 	return ViewScopeRequest{
 		View:      "namespace_chart",
-		Metrics:   chartMetrics("", category, "namespace="+strconv.Quote(namespace), "pod", NamespacePodAnchors(cache, namespace)),
+		Metrics:   chartMetrics("", category, "namespace="+strconv.Quote(namespace), "pod", namespace, NamespacePodAnchors(cache, namespace)),
 		Span:      ChartScopeSpan(chartRange, category),
 		Namespace: namespace,
 	}
@@ -81,7 +83,7 @@ func podChartScopeRequest(namespace, pod string, category prom.MetricCategory, c
 	}
 	return ViewScopeRequest{
 		View:      "pod_chart",
-		Metrics:   chartMetrics("Pod", category, "namespace="+strconv.Quote(namespace)+",pod="+strconv.Quote(pod), "pod", anchors),
+		Metrics:   chartMetrics("Pod", category, "namespace="+strconv.Quote(namespace)+",pod="+strconv.Quote(pod), "pod", namespace, anchors),
 		Span:      ChartScopeSpan(chartRange, category),
 		Namespace: namespace,
 	}
@@ -95,7 +97,7 @@ func PodSetScopeRequest(view string, sel prom.PodSelection, categories []prom.Me
 	req := ViewScopeRequest{View: view, Span: span, Namespace: sel.Namespace}
 	seen := map[string]bool{}
 	for _, category := range categories {
-		for _, m := range chartMetrics("", category, subject, "pod", anchors) {
+		for _, m := range chartMetrics("", category, subject, "pod", sel.Namespace, anchors) {
 			if !seen[m.Name] {
 				seen[m.Name] = true
 				req.Metrics = append(req.Metrics, m)
@@ -117,7 +119,7 @@ func nodeChartScopeRequest(node string, category prom.MetricCategory, chartRange
 	if liveNode(cache, node) {
 		anchors = []string{node}
 	}
-	metrics := chartMetrics("Node", category, subject, "instance", anchors)
+	metrics := chartMetrics("Node", category, subject, "instance", "", anchors)
 	for i := range metrics {
 		metrics[i].AnchorOptionalPort = true
 	}
@@ -126,15 +128,17 @@ func nodeChartScopeRequest(node string, category prom.MetricCategory, chartRange
 
 // hpaChartScopeRequest anchors on the HPA's own name: the weakest anchor,
 // since another cluster's same-named HPA in a same-named namespace matches it.
+// Joined: the chart plots current against desired replicas, so both must come
+// from one cluster.
 func hpaChartScopeRequest(namespace, name string, chartRange time.Duration, cache *k8s.ResourceCache) ViewScopeRequest {
 	subject := "namespace=" + strconv.Quote(namespace) + ",horizontalpodautoscaler=" + strconv.Quote(name)
 	var anchors []string
 	if liveHPA(cache, namespace, name) {
 		anchors = []string{name}
 	}
-	req := ViewScopeRequest{View: "hpa_chart", Span: chartRange + chartImplicitLookback, Namespace: namespace}
+	req := ViewScopeRequest{View: "hpa_chart", Joined: true, Span: chartRange + chartImplicitLookback, Namespace: namespace}
 	for _, metric := range []string{prom.MetricHPACurrentReplicas, prom.MetricHPADesiredReplicas} {
-		req.Metrics = append(req.Metrics, ViewMetric{Name: metric, Subject: subject, AnchorLabel: "horizontalpodautoscaler", AnchorValues: anchors})
+		req.Metrics = append(req.Metrics, ViewMetric{Name: metric, Subject: subject, AnchorLabel: "horizontalpodautoscaler", AnchorValues: anchors, AnchorNamespace: namespace})
 	}
 	return req
 }

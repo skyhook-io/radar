@@ -1,13 +1,16 @@
 import { useEffect, useMemo } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { usePrometheusResourceMetrics, usePrometheusStatus, type PrometheusSeries, type PrometheusTimeRange } from '../../api/client'
+import { ClusterScopeNote } from '@skyhook-io/k8s-ui/components/ui/ClusterScopeNote'
+import { isClusterScopeWithheld } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import { Tooltip } from '../ui/Tooltip'
 
 /**
  * RestartEventLane — vertical markers at each restart event, on a dedicated
  * row below the chart. Markers stay readable when they cluster because they
  * don't overlay the chart waveform. KSM-gated (uses kube_pod_container_status_restarts_total)
- * — silently hidden when Prom isn't connected or the series doesn't exist.
+ * — silently hidden when Prom isn't connected or the series doesn't exist,
+ * but says why when the metrics store couldn't be kept to this cluster.
  */
 export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
   kind: string
@@ -32,6 +35,10 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
   }, [error])
 
   if (!isConnected || isLoading) return null
+  // A withheld answer has no series; hiding the lane would read as "no restarts".
+  if (isClusterScopeWithheld(metrics?.clusterScope)) {
+    return <ClusterScopeNote scope={metrics?.clusterScope} title="Restart history withheld for this cluster" />
+  }
   if (restarts.length === 0) return null
 
   // Position markers within the chart's full time window — not the

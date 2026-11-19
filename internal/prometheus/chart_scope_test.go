@@ -349,7 +349,7 @@ func TestChartScopeRequestsAnchorOnLiveObjects(t *testing.T) {
 		want []string
 	}{
 		{"cluster", clusterChartScopeRequest(prom.CategoryCPU, time.Hour, cache), []string{
-			`container_cpu_usage_seconds_total{pod=~"coredns-1"}[4200s]`,
+			`container_cpu_usage_seconds_total{namespace="kube-system",pod=~"coredns-1"}[4200s]`,
 		}},
 		{"namespace", namespaceChartScopeRequest("shop", prom.CategoryMemory, time.Hour, cache), []string{
 			`container_memory_working_set_bytes{namespace="shop",pod=~"api-1"}[4200s]`,
@@ -386,6 +386,29 @@ func TestChartScopeRequestsAnchorOnLiveObjects(t *testing.T) {
 		if got := identity(req); strings.Contains(got, viewScopeAnchorLabel) {
 			t.Errorf("%s: anchored on an object this cluster doesn't have: %s", name, got)
 		}
+	}
+}
+
+// The HPA chart plots current against desired replicas, so the two must share
+// one cluster identity: with no labels to filter by, current replicas only from
+// cluster a and desired only from cluster b is withheld, not drawn together.
+func TestHPAChartMetricsMustShareOneCluster(t *testing.T) {
+	req, err := normalizeViewScopeRequest(hpaChartScopeRequest("shop", "api", time.Hour, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !req.Joined {
+		t.Fatal("HPA chart request is not joined")
+	}
+	q := &fakeViewQuerier{answer: func(query string) (*prom.QueryResult, error) {
+		return rows(
+			viewRow(prom.MetricHPACurrentReplicas, map[string]string{"cluster": "a"}),
+			viewRow(prom.MetricHPADesiredReplicas, map[string]string{"cluster": "b"}),
+		)
+	}}
+	scope := decide(t, q, req, nil, false)
+	if scope.State != ViewScopeSeveralClusters || !scope.Withheld {
+		t.Fatalf("HPA metrics from different clusters accepted: %+v", scope)
 	}
 }
 
