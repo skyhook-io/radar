@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateFact, SubstrateHealth, SubstrateVerdict } from '../../api/substrateHealth'
@@ -6,7 +5,11 @@ import type { SubstrateFact, SubstrateHealth, SubstrateVerdict } from '../../api
 let health: { data?: SubstrateHealth; error?: Error } = {}
 let connected = true
 
-vi.mock('@skyhook-io/k8s-ui', async (original) => ({ ...await original<typeof import('@skyhook-io/k8s-ui')>(), Tooltip: ({ content, children }: { content: ReactNode; children: ReactNode }) => <span data-tooltip={typeof content === 'string' ? content : ''}>{children}</span> }))
+// Tooltips render their content on hover; the mock puts it in the markup.
+vi.mock('@skyhook-io/k8s-ui', async (orig) => ({
+  ...(await orig<typeof import('@skyhook-io/k8s-ui')>()),
+  Tooltip: ({ content, children }: { content: string; children: React.ReactNode }) => <span data-tooltip={content}>{children}</span>,
+}))
 vi.mock('../../api/client', async (orig) => ({
   ...(await orig<typeof import('../../api/client')>()),
   usePrometheusStatus: () => ({ data: { connected } }),
