@@ -3,6 +3,7 @@ import type { CascadeDetail } from '@skyhook-io/k8s-ui/components/ui/ForceDelete
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import type { ReadGap, ReadGapSet } from '@skyhook-io/k8s-ui/types/read-coverage'
+import type { ClusterScope } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import type { WorkloadHistoryCoverage } from '@skyhook-io/k8s-ui/utils/workload-history-notes'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo } from 'react'
@@ -4090,6 +4091,8 @@ export interface PrometheusRightsizing {
   sampleAvailable: boolean;
   rows: RightsizingRow[];
   reason?: string;
+  /** Absent from older Radar. A withheld scope means no recommendation was computed. */
+  clusterScope?: ClusterScope;
 }
 
 export type RightsizingScanState = "complete" | "partial" | "unavailable";
@@ -4130,6 +4133,8 @@ export interface RightsizingScanResponse {
   workloads: RightsizingScanWorkload[];
   warnings?: { code: string; message: string }[];
   reason?: string;
+  /** Absent from older Radar. A withheld scope means no workload was measured. */
+  clusterScope?: ClusterScope;
 }
 
 // Poll quickly while a discovery run is in flight so the flip to connected
