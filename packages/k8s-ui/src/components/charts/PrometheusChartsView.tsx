@@ -4,6 +4,11 @@ import { BarChart3, Wifi, WifiOff, Loader2 } from "lucide-react";
 import { Collapse, CollapseChevron, useDisclosure } from "../ui/Collapse";
 import { AreaChart } from "./AreaChart";
 import { PaneLoader } from "../ui/PaneLoader";
+import { ClusterScopeNote } from "../ui/ClusterScopeNote";
+import {
+  isClusterScopeWithheld,
+  type ClusterScope,
+} from "../../types/cluster-scope";
 import { MetricsSummary } from "./MetricsSummary";
 import { SeriesLegend } from "./SeriesLegend";
 import type { TimeSeries, ReferenceLine } from "./types";
@@ -127,7 +132,15 @@ export interface PrometheusResourceMetricsResult {
    */
   pods?: number;
   podsTotal?: number;
+  /** How the query was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope | null;
+  /** The store answered only partly: drawn, but samples may be missing. */
+  partial?: boolean;
 }
+
+/** The muted line under a chart drawn from a partial answer. */
+export const PARTIAL_DATA_NOTE =
+  "Partial data: the metrics store answered only in part, so some samples may be missing.";
 
 /**
  * One line under a workload chart saying which pods it covers. Membership is
@@ -198,6 +211,7 @@ export function PrometheusChartsView({
     categories.find((c) => c.key === category) || categories[0];
   const series = metrics?.result?.series ?? [];
   const coverageNote = metrics ? describePodCoverage(metrics) : undefined;
+  const withheld = isClusterScopeWithheld(metrics?.clusterScope);
 
   if (!isSupported) return null;
 
@@ -210,7 +224,8 @@ export function PrometheusChartsView({
 
   if (!showEmptyState) {
     if (!isConnected) return null;
-    if (!metricsLoading && !metricsError && !series.length) return null;
+    if (!metricsLoading && !metricsError && !series.length && !withheld)
+      return null;
   }
 
   if (!isConnected && discovering) {
@@ -295,6 +310,8 @@ export function PrometheusChartsView({
           <div className="flex h-full items-center justify-center text-sm text-red-400">
             Failed to load metrics: {(metricsError as Error).message}
           </div>
+        ) : withheld ? (
+          <ClusterScopeNote scope={metrics?.clusterScope} />
         ) : series.length ? (
           <div className="flex h-full flex-col gap-4">
             <MetricsSummary
@@ -319,6 +336,11 @@ export function PrometheusChartsView({
             )}
             {coverageNote && (
               <p className="text-xs text-theme-text-tertiary">{coverageNote}</p>
+            )}
+            {metrics?.partial && (
+              <p className="text-xs text-theme-text-tertiary">
+                {PARTIAL_DATA_NOTE}
+              </p>
             )}
           </div>
         ) : (

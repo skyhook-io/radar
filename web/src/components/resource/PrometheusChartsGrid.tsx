@@ -3,11 +3,14 @@ import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Loader2, Wifi, WifiOff } from "lucide-react";
 import { Disclosure } from "@skyhook-io/k8s-ui/components/ui/Disclosure";
+import { ClusterScopeNote } from "@skyhook-io/k8s-ui/components/ui/ClusterScopeNote";
+import { isClusterScopeWithheld } from "@skyhook-io/k8s-ui/types/cluster-scope";
 import {
   AreaChart,
   SeriesLegend,
   computeSaturation,
   describePodCoverage,
+  PARTIAL_DATA_NOTE,
   type ReferenceLine,
 } from "@skyhook-io/k8s-ui/components/charts";
 import {
@@ -334,6 +337,8 @@ function MetricsPanel({
           <PanelLoading />
         ) : error ? (
           <PanelError message={(error as Error).message} />
+        ) : isClusterScopeWithheld(metrics?.clusterScope) ? (
+          <ClusterScopeNote scope={metrics?.clusterScope} />
         ) : hasData && series ? (
           <>
             <AreaChart
@@ -348,6 +353,9 @@ function MetricsPanel({
               <div className="mt-1.5">
                 <SeriesLegend series={series} color={category.chartColor} />
               </div>
+            )}
+            {metrics?.partial && (
+              <p className="mt-1.5 text-xs text-theme-text-tertiary">{PARTIAL_DATA_NOTE}</p>
             )}
           </>
         ) : (

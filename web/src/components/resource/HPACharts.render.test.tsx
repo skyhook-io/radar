@@ -75,3 +75,32 @@ describe('HPACharts — access state', () => {
     expect(renderToString(<HPACharts data={hpa} />)).toBe('')
   })
 })
+
+describe('HPACharts — cluster scope', () => {
+  it('says why the replica history is withheld instead of hiding', () => {
+    connected = true
+    metricsResult = {
+      data: {
+        current: { resultType: 'matrix', series: [] },
+        desired: { resultType: 'matrix', series: [] },
+        clusterScope: { state: 'label_missing', note: 'The HPA series lack this cluster\'s label.' },
+      },
+    }
+    const html = renderToString(<HPACharts data={hpa} />)
+    expect(html).toContain('Activity (last 1h)')
+    expect(html).toContain('data-cluster-scope="label_missing"')
+    expect(html).not.toContain('Replicas')
+  })
+
+  it('draws a scoped answer as before and notes a partial one', () => {
+    connected = true
+    metricsResult = { data: { current: series([2, 3]), desired: series([3, 3]), clusterScope: { state: 'scoped_verified', note: 'Matched.' } } }
+    let html = renderToString(<HPACharts data={hpa} />)
+    expect(html).toContain('Replicas')
+    expect(html).not.toContain('data-cluster-scope')
+    expect(html).not.toContain('Partial data')
+    metricsResult = { data: { current: series([2, 3]), desired: series([3, 3]), partial: true } }
+    html = renderToString(<HPACharts data={hpa} />)
+    expect(html).toContain('Partial data')
+  })
+})
