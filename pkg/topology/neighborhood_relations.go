@@ -258,14 +258,18 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	admitted := admittedSession{Session: requestSession, objects: objects, access: admittedAccess{access.decisions}}
 	if allowed[EdgeManages] {
-		graph.ownerEdges(session, unanswered, objects)
+		graph.ownerEdges(admitted, unanswered)
 	}
+	// A grouped Pod's declarations would cost one pass per Pod; the budget
+	// bounds the rest.
+	graph.declaredEdges(admitted, families, slices.DeleteFunc(slices.Clone(unanswered), func(r resourceid.Ref) bool { return grouped[r] != "" }), allowed[EdgeManages])
 	displayObjects := make(map[resourceid.Ref]runtime.Object, len(order))
 	for _, r := range order {
 		displayObjects[r] = objects[r]
 	}
-	nodes, err := neighborhoodDisplayNodes(displayObjects, provider, dp)
+	nodes, displayEdges, err := neighborhoodDisplayNodes(displayObjects, provider, dp)
 	if err != nil {
 		return nil, err
 	}
@@ -310,6 +314,14 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		}
 	}
 
+	// The families don't name a relation's role (a Flux source or chart, a
+	// certificate's issuer); the graph builder labels the same edge with it.
+	labels := map[string]string{}
+	for _, e := range displayEdges {
+		if e.Label != "" {
+			labels[e.Source+"-"+string(e.Type)+"-"+e.Target] = e.Label
+		}
+	}
 	seen := map[string]bool{}
 	podSources := map[resourceid.Ref][]string{}
 	refs := map[string]resourceid.Ref{}
@@ -330,6 +342,9 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		}
 		e.Source, e.Target = source, target
 		e.ID = source + "-" + string(e.Type) + "-" + target
+		if e.Label == "" {
+			e.Label = labels[e.ID]
+		}
 		if !seen[e.ID] {
 			seen[e.ID] = true
 			sub.Edges = append(sub.Edges, e)
@@ -378,10 +393,9 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 // resolved as ownership resolves any owner reference but against the admitted
 // objects alone. It reads nothing new and asks about nothing, so it can draw
 // the structure among the last hop's objects, which are never answered.
-func (n *neighborhood) ownerEdges(session ownership.ReadSession, refs []resourceid.Ref, objects map[resourceid.Ref]runtime.Object) {
-	admitted := admittedObjects{ReadSession: session, objects: objects}
+func (n *neighborhood) ownerEdges(admitted admittedSession, refs []resourceid.Ref) {
 	for _, r := range refs {
-		m, err := apimeta.Accessor(objects[r])
+		m, err := apimeta.Accessor(admitted.objects[r])
 		if err != nil {
 			continue
 		}
@@ -394,23 +408,83 @@ func (n *neighborhood) ownerEdges(session ownership.ReadSession, refs []resource
 	}
 }
 
-// admittedObjects reads only the objects the walk admitted; any other reads
-// as absent.
-type admittedObjects struct {
-	ownership.ReadSession
-	objects map[resourceid.Ref]runtime.Object
+// declaredEdges draws what refs, last-hop objects no hop answered, declare of
+// one another and of the other admitted objects: their families' forward
+// references and, for a GitOps manager, its recorded members. It searches
+// nothing, reads no object the walk didn't admit, and asks no permission the
+// walk didn't already ask, so it can neither add a node nor reveal one.
+func (n *neighborhood) declaredEdges(admitted admittedSession, families []*relations.Family, refs []resourceid.Ref, members bool) {
+	v := relations.NewView(admitted, admitted.access)
+	ov := ownership.NewView(admitted, admitted.access)
+	for _, r := range refs {
+		obj := admitted.objects[r]
+		for _, f := range families {
+			if !f.Covers(r.GroupKind()) {
+				continue
+			}
+			for _, d := range v.References(f, r, obj).Declared {
+				if d.State != relations.TargetPresent {
+					continue
+				}
+				if e, ok := edgeFor(f.Name, r, d.Ref); ok && n.projectFamily(admitted, f.Name, d.Ref) {
+					n.edge(r, d.Ref, e)
+				}
+			}
+		}
+		if members && ownership.IsRecordingManager(r.GroupKind()) {
+			for _, m := range ov.Members(r).Members {
+				n.edge(r, m.Ref, relationEdge{edge: EdgeManages})
+			}
+		}
+	}
 }
 
-func (a admittedObjects) Object(r resourceid.Ref) ownership.ObjectRead {
+// admittedSession reads only the objects the walk admitted: any other reads
+// as absent and no search finds anything. Its access allows only what the
+// walk already allowed.
+type admittedSession struct {
+	relations.Session
+	objects map[resourceid.Ref]runtime.Object
+	access  admittedAccess
+}
+
+func (a admittedSession) Object(r resourceid.Ref) ownership.ObjectRead {
+	_, read := a.Borrow(r)
+	return read
+}
+
+func (a admittedSession) Borrow(r resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
 	obj, ok := a.objects[r]
 	if !ok {
-		return ownership.ObjectRead{State: ownership.Absent}
+		return nil, ownership.ObjectRead{State: ownership.Absent}
 	}
 	m, err := apimeta.Accessor(obj)
 	if err != nil {
-		return ownership.ObjectRead{State: ownership.Absent}
+		return nil, ownership.ObjectRead{State: ownership.Absent}
 	}
-	return ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(r, m)}
+	return obj, ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(r, m)}
+}
+
+func (a admittedSession) Indexed(resourceid.GroupKind, string, []string, ownership.SearchScope) relations.IndexedRead {
+	return relations.IndexedRead{}
+}
+
+func (a admittedSession) DependentCandidates(types.UID, ownership.SearchScope) ownership.DependentCandidatesRead {
+	return ownership.DependentCandidatesRead{}
+}
+
+// admittedAccess answers from the walk's own decisions and denies any kind and
+// namespace it didn't decide.
+type admittedAccess struct {
+	decisions map[resourceid.GroupKind]map[string]ownership.Decision
+}
+
+func (a admittedAccess) Namespaces() ([]string, bool) { return nil, true }
+func (a admittedAccess) CanRead(gk resourceid.GroupKind, ns string) ownership.Decision {
+	if a.decisions[gk][ns] == ownership.Allowed {
+		return ownership.Allowed
+	}
+	return ownership.Denied
 }
 
 func neighborhoodDisposition(d relations.Disposition, allowed map[EdgeType]bool) bool {

@@ -220,7 +220,7 @@ func TestNeighborhoodDisplayDiscoveryOnlyAdmittedKinds(t *testing.T) {
 				}
 			}
 			d := &neighborhoodDiscoveryCounter{DynamicProvider: f.dynamic}
-			nodes, err := neighborhoodDisplayNodes(objects, f.provider, d)
+			nodes, _, err := neighborhoodDisplayNodes(objects, f.provider, d)
 			if err != nil || len(nodes) != len(objects) {
 				t.Fatalf("display: %v %+v", err, nodes)
 			}
@@ -311,7 +311,7 @@ func TestNeighborhoodDisplayPreservesDiscoveryAliasWinner(t *testing.T) {
 		resourceid.NewRef("example.io", "Widgets", "shop", "child"): obj,
 		resourceid.NewRef("apps", "Deployment", "shop", "web"):      dep,
 	}
-	got, err := neighborhoodDisplayNodes(objects, nil, d)
+	got, _, err := neighborhoodDisplayNodes(objects, nil, d)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,6 +359,53 @@ func TestWalkNeighborhoodReadsIstioDomainOnlyForIstioHosts(t *testing.T) {
 		}
 		if p.deploymentLists != tc.lists {
 			t.Errorf("%s: listed Deployments %d times, want %d", tc.root.Kind, p.deploymentLists, tc.lists)
+		}
+	}
+}
+
+// The walk's edges carry the role the graph builder names on the same edge:
+// a Kustomization's source, a Certificate's issuer.
+func TestWalkNeighborhoodEdgesCarryTheGraphsLabels(t *testing.T) {
+	entry := func(ns, name, group, kind string) map[string]any {
+		return map[string]any{"id": ns + "_" + name + "_" + group + "_" + kind, "v": "v1"}
+	}
+	root := charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "root", nil, nil, map[string]any{"inventory": map[string]any{"entries": []any{
+		entry("flux-system", "apps", "kustomize.toolkit.fluxcd.io", "Kustomization"),
+		entry("flux-system", "repo", "source.toolkit.fluxcd.io", "GitRepository"),
+		entry("shop", "web-tls", "cert-manager.io", "Certificate"),
+		entry("", "letsencrypt", "cert-manager.io", "ClusterIssuer"),
+	}}})
+	apps := charUnstructured("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "flux-system", "apps", nil, map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}}, nil)
+	repo := charUnstructured("source.toolkit.fluxcd.io/v1", "GitRepository", "flux-system", "repo", nil, nil, nil)
+	cert := charUnstructured("cert-manager.io/v1", "Certificate", "shop", "web-tls", nil, map[string]any{"issuerRef": map[string]any{"kind": "ClusterIssuer", "name": "letsencrypt", "group": "cert-manager.io"}}, nil)
+	issuer := charUnstructured("cert-manager.io/v1", "ClusterIssuer", "", "letsencrypt", nil, nil, nil)
+	d := newCharDynamic()
+	d.add("kustomize.toolkit.fluxcd.io", "v1", "Kustomization", "kustomizations", true, root, apps)
+	d.add("source.toolkit.fluxcd.io", "v1", "GitRepository", "gitrepositories", true, repo)
+	d.add("cert-manager.io", "v1", "Certificate", "certificates", true, cert)
+	d.add("cert-manager.io", "v1", "ClusterIssuer", "clusterissuers", false, issuer)
+	f := &charFixture{provider: &mockProvider{}, dynamic: d, objects: []charObject{
+		{group: "kustomize.toolkit.fluxcd.io", kind: "Kustomization", resource: "kustomizations", obj: root},
+		{group: "kustomize.toolkit.fluxcd.io", kind: "Kustomization", resource: "kustomizations", obj: apps},
+		{group: "source.toolkit.fluxcd.io", kind: "GitRepository", resource: "gitrepositories", obj: repo},
+		{group: "cert-manager.io", kind: "Certificate", resource: "certificates", obj: cert},
+		{group: "cert-manager.io", kind: "ClusterIssuer", resource: "clusterissuers", obj: issuer},
+	}}
+	sub, err := WalkNeighborhood(context.Background(), neighborhoodFixtureSession(t, f), ResourceRef{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "flux-system", Name: "root"}, NeighborhoodOptions{Profile: ProfileAll}, f.provider, f.dynamic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	for _, n := range sub.Nodes {
+		names[n.ID] = n.Name
+	}
+	labels := map[string]string{}
+	for _, e := range sub.Edges {
+		labels[names[e.Source]+" "+string(e.Type)+" "+names[e.Target]] = e.Label
+	}
+	for edge, want := range map[string]string{"repo configures apps": "source", "web-tls uses letsencrypt": "issuer"} {
+		if got, ok := labels[edge]; !ok || got != want {
+			t.Errorf("%s: label %q (present %v), want %q; edges %v", edge, got, ok, want, labels)
 		}
 	}
 }

@@ -149,7 +149,7 @@ func TestWalkNeighborhoodWithholdsUnqualifiedCoverageBadge(t *testing.T) {
 	t.Cleanup(func() { neighborhoodDisplayPolicyEffect = false })
 	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app", Labels: map[string]string{"app": "web"}}}, "apps", "Deployment")
 	hidden := projectionCR("cilium.io", "CiliumClusterwideNetworkPolicy", "", "hidden", map[string]any{"spec": map[string]any{"endpointSelector": map[string]any{}}})
-	displayed, err := neighborhoodDisplayNodes(map[resourceid.Ref]runtime.Object{projectionRef(dep): dep}, nil, nil)
+	displayed, _, err := neighborhoodDisplayNodes(map[resourceid.Ref]runtime.Object{projectionRef(dep): dep}, nil, nil)
 	if _, ok := displayed[projectionRef(dep)].Data["policyStatus"]; err != nil || !ok {
 		t.Fatalf("the fixture no longer computes a coverage badge: %+v %v", displayed, err)
 	}

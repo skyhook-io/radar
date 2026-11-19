@@ -611,3 +611,57 @@ func TestWalkNeighborhoodLastHopOwnersResolveAsOwnershipDoes(t *testing.T) {
 		t.Errorf("missed the owner a differently cased kind names; manages edges %v", edges)
 	}
 }
+
+// Objects admitted on the last hop are never answered, but what they declare
+// of one another is in hand: a Kustomization's source and a Certificate's
+// issuer come back linked when both ends are admitted, and never to an object
+// the caller may not read.
+func TestWalkNeighborhoodLinksLastHopDeclarations(t *testing.T) {
+	entry := func(ns, name, group, kind string) map[string]any {
+		return map[string]any{"id": ns + "_" + name + "_" + group + "_" + kind, "v": "v1"}
+	}
+	root := projectionCR("kustomize.toolkit.fluxcd.io", "Kustomization", "flux-system", "root", map[string]any{"status": map[string]any{"inventory": map[string]any{"entries": []any{
+		entry("flux-system", "apps", "kustomize.toolkit.fluxcd.io", "Kustomization"),
+		entry("flux-system", "repo", "source.toolkit.fluxcd.io", "GitRepository"),
+		entry("shop", "web-tls", "cert-manager.io", "Certificate"),
+		entry("", "letsencrypt", "cert-manager.io", "ClusterIssuer"),
+	}}}})
+	apps := projectionCR("kustomize.toolkit.fluxcd.io", "Kustomization", "flux-system", "apps", map[string]any{"spec": map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}}})
+	repo := projectionCR("source.toolkit.fluxcd.io", "GitRepository", "flux-system", "repo", map[string]any{})
+	cert := projectionCR("cert-manager.io", "Certificate", "shop", "web-tls", map[string]any{"spec": map[string]any{"issuerRef": map[string]any{"kind": "ClusterIssuer", "name": "letsencrypt", "group": "cert-manager.io"}}})
+	issuer := projectionCR("cert-manager.io", "ClusterIssuer", "", "letsencrypt", map[string]any{})
+	edgesOf := func(sub *Subgraph) map[string]bool {
+		names := map[string]string{}
+		for _, n := range sub.Nodes {
+			names[n.ID] = n.Name
+		}
+		out := map[string]bool{}
+		for _, e := range sub.Edges {
+			out[names[e.Source]+" "+string(e.Type)+" "+names[e.Target]] = true
+		}
+		return out
+	}
+	sub := walkTestNeighborhood(t, newRecordingProjectionSession(t, root, apps, repo, cert, issuer), root, NeighborhoodOptions{Profile: ProfileAll})
+	if len(sub.Nodes) != 5 {
+		t.Fatalf("the fixture no longer admits every member at one hop: %+v", sub.Nodes)
+	}
+	edges := edgesOf(sub)
+	for _, want := range []string{"repo configures apps", "web-tls uses letsencrypt"} {
+		if !edges[want] {
+			t.Errorf("missing %q; edges %v", want, edges)
+		}
+	}
+	hidden := walkTestNeighborhood(t, newRecordingProjectionSession(t, root, apps, repo, cert, issuer), root, NeighborhoodOptions{Profile: ProfileAll, Allow: func(n *Node) bool { return n.Data["resourceKind"] != "ClusterIssuer" }})
+	ids := map[string]bool{}
+	for _, n := range hidden.Nodes {
+		ids[n.ID] = true
+	}
+	for _, e := range hidden.Edges {
+		if !ids[e.Source] || !ids[e.Target] || strings.Contains(e.ID, "letsencrypt") {
+			t.Errorf("linked an object the caller may not read: %s", e.ID)
+		}
+	}
+	if len(hidden.Nodes) != 4 || !edgesOf(hidden)["repo configures apps"] {
+		t.Errorf("withholding the issuer changed the rest: %+v", hidden)
+	}
+}

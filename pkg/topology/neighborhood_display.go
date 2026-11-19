@@ -26,7 +26,8 @@ var neighborhoodDisplayPolicyEffect = false
 
 // The display builder sees only admitted objects. Its edges and synthesized
 // nodes never participate in admission or traversal; the family walk owns both.
-func neighborhoodDisplayNodes(objects map[resourceid.Ref]runtime.Object, provider ResourceProvider, dp DynamicProvider) (map[resourceid.Ref]Node, error) {
+// Its edges are returned only to label the walk's own.
+func neighborhoodDisplayNodes(objects map[resourceid.Ref]runtime.Object, provider ResourceProvider, dp DynamicProvider) (map[resourceid.Ref]Node, []Edge, error) {
 	p := newNeighborhoodDisplayProvider(objects, provider)
 	opts := DefaultBuildOptions()
 	opts.IncludeReplicaSets, opts.IncludeSecrets, opts.ForRelationshipCache = true, true, true
@@ -38,7 +39,7 @@ func neighborhoodDisplayNodes(objects map[resourceid.Ref]runtime.Object, provide
 	}
 	topo, err := NewBuilder(p).WithDynamic(dynamic).Build(opts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := map[resourceid.Ref]Node{}
 	byKey := map[string]resourceid.Ref{}
@@ -53,7 +54,7 @@ func neighborhoodDisplayNodes(objects map[resourceid.Ref]runtime.Object, provide
 		}
 	}
 
-	return out, nil
+	return out, topo.Edges, nil
 }
 
 type neighborhoodDisplayProvider struct {
