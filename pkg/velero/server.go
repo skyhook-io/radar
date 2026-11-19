@@ -127,7 +127,7 @@ func ServerConfigFromDeployments(deployments []*appsv1.Deployment, read bool) Se
 		}
 		cfg.readZone(c)
 		cfg.readFlags(c)
-		if v, ok := imageVersion(c.Image); ok {
+		if v, ok := veleroImageVersion(c.Image); ok {
 			cfg.version = &v
 		}
 		return cfg
@@ -163,18 +163,21 @@ func imageIsVelero(image string) bool {
 	return repo == "velero/velero" || strings.HasSuffix(repo, "/velero/velero")
 }
 
-// imageVersion reads a release from an image's tag: "velero/velero:v1.18.3",
+// veleroImageVersion reads a release from the tag of an image whose
+// repository is named velero: "velero/velero:v1.18.3",
 // "registry.example/velero:1.17.0-debian-12". Only the release counts, so a
 // pre-release such as v1.18.3-rc.1 reads as 1.18.3, which matches what Velero
-// ships in its pre-releases. A digest-only image or a tag that is not a
-// release ("latest", "main") reads as unknown.
-func imageVersion(image string) ([3]int, bool) {
+// ships in its pre-releases. A digest-only image, a tag that is not a release
+// ("latest", "main"), or another repository, whose tag may be its own
+// version, reads as unknown.
+func veleroImageVersion(image string) ([3]int, bool) {
 	ref := image
 	if at := strings.Index(ref, "@"); at >= 0 {
 		ref = ref[:at]
 	}
+	slash := strings.LastIndex(ref, "/")
 	colon := strings.LastIndex(ref, ":")
-	if colon < 0 || colon < strings.LastIndex(ref, "/") {
+	if colon < 0 || colon < slash || ref[slash+1:colon] != "velero" {
 		return [3]int{}, false
 	}
 	tag := strings.TrimPrefix(ref[colon+1:], "v")

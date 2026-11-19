@@ -16,7 +16,7 @@ func serverWithImage(image string) ServerConfig {
 
 func day(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0, 0, 0, time.UTC) }
 
-func TestImageVersion(t *testing.T) {
+func TestVeleroImageVersion(t *testing.T) {
 	cases := []struct {
 		image string
 		want  [3]int
@@ -35,12 +35,15 @@ func TestImageVersion(t *testing.T) {
 		{"velero/velero:main", [3]int{}, false},
 		{"velero/velero:v1.18", [3]int{}, false},
 		{"velero/velero:v1.018.3", [3]int{}, false},
+		{"velero:v1.18.3", [3]int{1, 18, 3}, true},
+		{"mycorp/backup-server:2.1.0", [3]int{}, false},
+		{"mycorp/velero-custom:v1.18.3", [3]int{}, false},
 		{"", [3]int{}, false},
 	}
 	for _, c := range cases {
-		got, ok := imageVersion(c.image)
+		got, ok := veleroImageVersion(c.image)
 		if ok != c.ok || got != c.want {
-			t.Errorf("imageVersion(%q) = %v, %v; want %v, %v", c.image, got, ok, c.want, c.ok)
+			t.Errorf("veleroImageVersion(%q) = %v, %v; want %v, %v", c.image, got, ok, c.want, c.ok)
 		}
 	}
 }
@@ -209,17 +212,29 @@ func TestQuotedCronZoneOnNewerVelero(t *testing.T) {
 }
 
 // On March 8, 2026, New York skips 02:00. netresearch/go-cron runs the
-// schedule at 03:00 that day and robfig/cron waits for the next match, so the
-// later rule's time comes first; that must not shorten the grace.
-func TestLaterRuleFirstAcrossASkippedHourKeepsTheGrace(t *testing.T) {
+// schedule at 03:00 that day and robfig/cron waits for its next match, so the
+// later rule's time comes first: it is the estimate, and the margin runs to
+// the earlier rule's time.
+func TestLaterRuleFirstAcrossASkippedHour(t *testing.T) {
 	s := schedule("dst", "CRON_TZ=America/New_York 0 2 8 3 SUN", lastBackup(day(2026, 3, 7)))
 	unknown := serverWithImage("velero/velero@sha256:0123abcd")
+	newYork, _ := time.LoadLocation("America/New_York")
+	skipped := time.Date(2026, 3, 8, 3, 0, 0, 0, newYork)
 	r := read(s, nil, unknown, day(2026, 3, 7).Add(time.Hour))
-	if r.NextRun == nil || !r.NextRun.After(day(2026, 3, 9)) {
-		t.Fatalf("expected robfig/cron to skip March 8, got next run %v", r.NextRun)
+	if r.State != StateOnSchedule || r.NextRunCertain || r.NextRun == nil || !r.NextRun.Equal(skipped) {
+		t.Fatalf("got %s certain=%v next=%v, want the later rule's %v", r.State, r.NextRunCertain, r.NextRun, skipped)
 	}
-	just := read(s, nil, unknown, r.NextRun.Add(time.Minute))
-	if just.State != StatePossiblyLate || just.Attention {
-		t.Fatalf("a minute past the estimate: got %s attention=%v", just.State, just.Attention)
+	if mid := read(s, nil, unknown, skipped.Add(24*time.Hour)); mid.State != StatePossiblyLate || mid.Attention {
+		t.Fatalf("between the two rules' times: got %s attention=%v", mid.State, mid.Attention)
+	}
+	earlier := read(s, nil, serverWithImage("velero/velero:v1.18.2"), day(2026, 3, 7).Add(time.Hour))
+	if earlier.NextRun == nil || !earlier.NextRun.After(day(2026, 3, 9)) {
+		t.Fatalf("expected robfig/cron to skip March 8, got %v", earlier.NextRun)
+	}
+	if past := read(s, nil, unknown, earlier.NextRun.Add(10*time.Minute)); past.State != StateProbablyLate || !past.Attention {
+		t.Fatalf("past both rules' times: got %s attention=%v", past.State, past.Attention)
+	}
+	if grace := read(s, nil, unknown, earlier.NextRun.Add(time.Minute)); grace.State != StatePossiblyLate {
+		t.Fatalf("within the grace of the later of the two: got %s", grace.State)
 	}
 }

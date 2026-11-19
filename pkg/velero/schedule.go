@@ -336,6 +336,12 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 		r.State, r.Reason, r.Attention = StateAlwaysDue, ReasonNoFutureTime, true
 		return r
 	}
+	// With the version unknown the estimate is the earlier of the two rules'
+	// times. That is usually the earlier rule's, but the libraries treat a
+	// skipped daylight-saving hour differently, so it can be the later's.
+	if later := parsed.nextBoth(anchor, loc); parsed.dayMatch == DayMatchUnknown && !later.IsZero() && later.Before(next) {
+		next = later
+	}
 	nextUTC := next.UTC()
 	// An @every schedule's times do not depend on the zone.
 	timingCertain := (r.Zone.Certain() || parsed.fixedDelay) && parsed.dayMatch != DayMatchUnknown
@@ -389,16 +395,20 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 }
 
 // uncertainMargin is how far past an estimated next run a schedule must be
-// before it is probably late. With DayMatch unknown, next is the earlier
-// rule's time, so the margin runs to the later rule's, and an unknown zone's
+// before it is probably late. With DayMatch unknown, next is the earlier of
+// the two rules' times, so the margin runs to the other, and an unknown zone's
 // cadence is the later rule's, the sparser of the two. When the later rule has
 // no time, 1.18.3 and later treat the schedule as always due and keep
 // submitting it, which keeps lastBackup recent; a schedule past the earlier
 // rule's time is then late on either version.
 func uncertainMargin(z Zone, p parsedCron, anchor, next time.Time, loc *time.Location) time.Duration {
-	var later time.Time
+	var later, latest time.Time
 	if p.dayMatch == DayMatchUnknown {
 		later = p.nextBoth(anchor, loc)
+		latest = p.next(anchor, loc)
+		if later.After(latest) {
+			latest = later
+		}
 	}
 	margin := dueGrace
 	switch {
@@ -412,10 +422,8 @@ func uncertainMargin(z Zone, p parsedCron, anchor, next time.Time, loc *time.Loc
 		}
 		margin = gap + unknownZoneMargin
 	}
-	// The libraries also treat skipped daylight-saving hours differently, so
-	// the later rule's time can come first.
-	if later.After(next) {
-		margin += later.Sub(next)
+	if latest.After(next) {
+		margin += latest.Sub(next)
 	}
 	return margin
 }

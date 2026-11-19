@@ -180,13 +180,13 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
     }
     case 'probablyLate':
       if (serverDown !== null) return `Past its scheduled time.${serverDown}`
-      if (reading.reason === 'dayMatchUnconfirmed') return `Looks late whichever days Velero runs it on. ${VELERO_DAY_MATCH_UNKNOWN}`
+      if (reading.reason === 'dayMatchUnconfirmed') return `Looks late whichever days Velero runs it on. ${VELERO_DAY_MATCH_UNKNOWN}${zoneAlsoUnconfirmed(reading)}`
       return 'Looks late, but Radar couldn’t confirm the Velero server’s time zone.'
     case 'lateOrHeld':
       if (serverDown !== null) return `Past its scheduled time.${serverDown}`
       return 'Past its scheduled time. Radar can’t read this namespace’s backups, so a running backup may be holding it.'
     case 'possiblyLate':
-      if (reading.reason === 'dayMatchUnconfirmed') return `Past its estimated time, but it may not be due yet. ${VELERO_DAY_MATCH_UNKNOWN}`
+      if (reading.reason === 'dayMatchUnconfirmed') return `Past its estimated time, but it may not be due yet. ${VELERO_DAY_MATCH_UNKNOWN}${zoneAlsoUnconfirmed(reading)}`
       return 'Past its estimated time, but Radar couldn’t confirm the Velero server’s time zone, so it may not be due yet.'
     case 'due':
       if (serverDown !== null) return serverDown ? 'Due now, but the Velero server has no pods, so nothing will submit it.' : 'Due now, but nothing submits it until the server starts.'
@@ -257,6 +257,10 @@ export function veleroNextRunText(reading: Pick<VeleroScheduleReading, 'nextRun'
   const past = Date.parse(reading.nextRun) <= Date.now()
   const text = past ? `was due ${formatRelativeAgeTime(reading.nextRun)}` : veleroMomentText(reading.nextRun)
   return reading.nextRunCertain ? text : `~${text}`
+}
+
+function zoneAlsoUnconfirmed(reading: VeleroScheduleReading): string {
+  return veleroZoneConfirmed(reading.zone) ? '' : ' Radar also couldn’t confirm the Velero server’s time zone.'
 }
 
 /** Why a schedule restricting both day fields has no exact next run. */

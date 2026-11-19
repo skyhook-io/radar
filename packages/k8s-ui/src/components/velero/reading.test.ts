@@ -99,6 +99,8 @@ describe('a schedule whose day matching is unknown', () => {
     expect(veleroScheduleReasonText(reading)).toContain(VELERO_DAY_MATCH_UNKNOWN)
     expect(VELERO_DAY_MATCH_UNKNOWN).toContain('1.18.3')
     expect(veleroScheduleReasonText({ ...reading, state: 'probablyLate', attention: true })).toContain(VELERO_DAY_MATCH_UNKNOWN)
+    expect(veleroScheduleReasonText(reading)).not.toContain('time zone')
+    expect(veleroScheduleReasonText({ ...reading, zone: { name: 'UTC', source: 'unknown' } })).toContain('couldn’t confirm the Velero server’s time zone')
   })
 
   it('explains the estimate by the day rule, not by a confirmed zone', () => {
