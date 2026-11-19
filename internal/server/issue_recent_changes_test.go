@@ -7,9 +7,11 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/issuecorrelation"
+	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -300,5 +302,56 @@ func TestIssueRecentChangesWithoutAuth(t *testing.T) {
 	}
 	if status, rows, _ := get(tunnel.URL, true, path); status != http.StatusOK || rows.Changes[id].Change.Kind != "Service" {
 		t.Fatalf("over the Hub tunnel: %d %+v", status, rows)
+	}
+}
+
+// With incomplete history, a caller who can't read every namespace gets no
+// complete_since in the public answer, yet the row pick still uses it: the
+// change is named when it is after the point Radar's history starts, and not
+// when it is before.
+func TestProxyAuth_IssueRecentChangesRestrictedCallerHistoryBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		watchingSince time.Duration
+		wantNamed     bool
+	}{
+		{"history starts before the pick", 5 * time.Minute, true},
+		{"history starts after the pick", 3 * time.Minute, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := correlationFixture(t)
+			recordChanges(t, store)
+			// Radar began recording a few minutes ago; the image change was
+			// recorded 4 minutes ago.
+			timeline.SetObservationStartForTest(correlationChangesAt().Add(-tc.watchingSince))
+			env := newAuthTestServer(t)
+			correlationUser(env, "restricted", []string{"shop"})
+			web := rowRef{"Deployment", "web", "apps", issuesapi.CategoryCrashLoop}
+			id := issueID(t, env, "restricted", web)
+
+			_, body := getResourceIssues(t, env, "restricted", "/api/issues/resource/Deployment/shop/web?group=apps&correlate="+id)
+			var iss *issuesapi.Issue
+			for i := range body.Issues {
+				if body.Issues[i].ID == id {
+					iss = &body.Issues[i]
+				}
+			}
+			if iss == nil || iss.Correlation == nil || iss.Correlation.Unknown == nil ||
+				iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
+				t.Fatalf("setup: want history_incomplete, got %+v", iss)
+			}
+			if iss.Correlation.History == nil || !iss.Correlation.History.Incomplete || !iss.Correlation.History.CompleteSince.IsZero() {
+				t.Fatalf("public history must say incomplete and withhold complete_since: %+v", iss.Correlation.History)
+			}
+
+			_, rows := getRecentChanges(t, env, "restricted", web.param(id))
+			got, named := rows.Changes[id]
+			if named != tc.wantNamed {
+				t.Fatalf("row change named: %v, want %v (%+v)", named, tc.wantNamed, got)
+			}
+			if named && got.Change.EventID != "Deployment/web" {
+				t.Fatalf("named %+v, want the image change", got.Change)
+			}
+		})
 	}
 }
