@@ -2,11 +2,15 @@ package server
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/cache"
@@ -38,6 +42,188 @@ type appRelationBatch struct {
 	exposureUndecided map[resourceid.Ref]bool
 	// loading: a kind the attachments join was still loading.
 	loading bool
+	// evaluated is each workload the batch read, by kind, and dependencies
+	// the objects a workload's selection read besides it (a Rollout's
+	// workloadRef target, nil when absent): the batch's answers hold for a row
+	// only when the row and those objects still have the spec the batch read.
+	evaluated    map[resourceid.GroupKind]map[resourceid.Ref]runtime.Object
+	dependencies map[resourceid.Ref]map[resourceid.Ref]runtime.Object
+}
+
+// appSameSpec reports whether cur has what the batch's rules read of old. An
+// informer replaces an object on every update, so the same pointer is the same
+// version. A typed workload's generation moves with its spec alone, but also
+// with a replica count no rule reads: a moved generation compares the spec
+// without it. A Job is selectable only while it has pods, which only its
+// status says. A custom resource's generation also moves with status when its
+// CRD has no status subresource (Argo Workflows'), so its spec is compared
+// instead.
+func appSameSpec(old, cur runtime.Object) bool {
+	if old == nil || cur == nil {
+		return old == nil && cur == nil
+	}
+	if old == cur {
+		return true
+	}
+	om, err := apimeta.Accessor(old)
+	if err != nil {
+		return false
+	}
+	cm, err := apimeta.Accessor(cur)
+	if err != nil || om.GetUID() != cm.GetUID() {
+		return false
+	}
+	switch o := old.(type) {
+	case *unstructured.Unstructured:
+		c, ok := cur.(*unstructured.Unstructured)
+		// A core PodTemplate, read from the dynamic cache, keeps its data at
+		// the root, not under spec.
+		field := "spec"
+		if o.GetKind() == "PodTemplate" && resourceid.GroupFromAPIVersion(o.GetAPIVersion()) == "" {
+			field = "template"
+		}
+		return ok && appSameValue(o.Object[field], c.Object[field])
+	case *corev1.PodTemplate:
+		c, ok := cur.(*corev1.PodTemplate)
+		return ok && equality.Semantic.DeepEqual(o.Template, c.Template)
+	}
+	if om.GetGeneration() != cm.GetGeneration() && !appSameTypedSpec(old, cur) {
+		return false
+	}
+	if o, ok := old.(*batchv1.Job); ok {
+		c, ok := cur.(*batchv1.Job)
+		return ok && (o.Status.Active > 0) == (c.Status.Active > 0)
+	}
+	return true
+}
+
+// appSameTypedSpec compares two typed workloads' specs, ignoring the replica
+// count of the kinds that scale.
+func appSameTypedSpec(old, cur runtime.Object) bool {
+	switch o := old.(type) {
+	case *appsv1.Deployment:
+		c, ok := cur.(*appsv1.Deployment)
+		if !ok {
+			return false
+		}
+		a, b := o.Spec, c.Spec
+		a.Replicas, b.Replicas = nil, nil
+		return equality.Semantic.DeepEqual(a, b)
+	case *appsv1.StatefulSet:
+		c, ok := cur.(*appsv1.StatefulSet)
+		if !ok {
+			return false
+		}
+		a, b := o.Spec, c.Spec
+		a.Replicas, b.Replicas = nil, nil
+		return equality.Semantic.DeepEqual(a, b)
+	case *appsv1.ReplicaSet:
+		c, ok := cur.(*appsv1.ReplicaSet)
+		if !ok {
+			return false
+		}
+		a, b := o.Spec, c.Spec
+		a.Replicas, b.Replicas = nil, nil
+		return equality.Semantic.DeepEqual(a, b)
+	case *appsv1.DaemonSet:
+		c, ok := cur.(*appsv1.DaemonSet)
+		return ok && equality.Semantic.DeepEqual(o.Spec, c.Spec)
+	case *batchv1.Job:
+		c, ok := cur.(*batchv1.Job)
+		return ok && equality.Semantic.DeepEqual(o.Spec, c.Spec)
+	case *batchv1.CronJob:
+		c, ok := cur.(*batchv1.CronJob)
+		return ok && equality.Semantic.DeepEqual(o.Spec, c.Spec)
+	}
+	return false
+}
+
+// appSameValue compares two decoded JSON values, as unstructured objects hold
+// them, without reflect.DeepEqual's allocations: a Workflow's spec is compared
+// on every status write between the batch's read and the row's.
+func appSameValue(a, b any) bool {
+	switch x := a.(type) {
+	case map[string]any:
+		y, ok := b.(map[string]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for k, v := range x {
+			if w, ok := y[k]; !ok || !appSameValue(v, w) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if !appSameValue(x[i], y[i]) {
+				return false
+			}
+		}
+		return true
+	case nil, string, bool, int64, float64:
+		return a == b
+	default:
+		return reflect.DeepEqual(a, b)
+	}
+}
+
+func (b *appRelationBatch) noteEvaluated(kind resourceid.GroupKind, read relations.IndexedRead) {
+	if !slices.Contains(appWorkloadKinds, kind) {
+		return
+	}
+	if b.evaluated == nil {
+		b.evaluated = map[resourceid.GroupKind]map[resourceid.Ref]runtime.Object{}
+	}
+	objects := make(map[resourceid.Ref]runtime.Object, len(read.Objects))
+	for _, o := range read.Objects {
+		objects[o.Ref] = o.Object
+	}
+	b.evaluated[kind] = objects
+}
+
+// recording is lookup noting what subject's selection read.
+func (b *appRelationBatch) recording(subject resourceid.Ref, lookup relations.Lookup) relations.Lookup {
+	return func(ref resourceid.Ref) (runtime.Object, bool) {
+		obj, found := lookup(ref)
+		if b.dependencies == nil {
+			b.dependencies = map[resourceid.Ref]map[resourceid.Ref]runtime.Object{}
+		}
+		if b.dependencies[subject] == nil {
+			b.dependencies[subject] = map[resourceid.Ref]runtime.Object{}
+		}
+		if !found {
+			obj = nil
+		}
+		b.dependencies[subject][ref] = obj
+		return obj, found
+	}
+}
+
+// evaluatedAsRead reports whether the batch's answers for ref describe obj and
+// what its selection read, as current reads them: the batch read ref's kind
+// and found this spec of it, and each object its selection read is unchanged.
+// A workload created or respecced between the batch's read and the row's has
+// no answer from it.
+func (b *appRelationBatch) evaluatedAsRead(ref resourceid.Ref, obj runtime.Object, current func(resourceid.Ref) runtime.Object) bool {
+	objects, read := b.evaluated[ref.GroupKind()]
+	if !read || obj == nil {
+		return true
+	}
+	evaluated, found := objects[ref]
+	if !found || !appSameSpec(evaluated, obj) {
+		return false
+	}
+	for dep, was := range b.dependencies[ref] {
+		if !appSameSpec(was, current(dep)) {
+			return false
+		}
+	}
+	return true
 }
 
 // appStillLoading reports whether any gap is a kind still loading: rows built
@@ -274,6 +460,7 @@ func buildPlannedAppRelationBatch(ctx context.Context, session relations.Session
 		r := session.Indexed(kind, index, keys, scope)
 		reads[kind] = r
 		b.loading = b.loading || appStillLoading(r.Gaps...)
+		b.noteEvaluated(kind, r)
 		return r
 	}
 	// lookupFor reads what selecting subject needs; for a Service selection,
@@ -387,7 +574,7 @@ func buildPlannedAppRelationBatch(ctx context.Context, session relations.Session
 				b.selectable[selectable.Kind].note(session, selectable.Kind, read.Gaps)
 			}
 			for _, o := range read.Objects {
-				c, ok := selectable.Candidate(o.Object, lookupFor(o.Ref, f == relations.ServiceSelectors))
+				c, ok := selectable.Candidate(o.Object, b.recording(o.Ref, lookupFor(o.Ref, f == relations.ServiceSelectors)))
 				if ok {
 					c.Ref = o.Ref
 					byNamespace := candidates[o.Ref.GroupKind()]
@@ -552,7 +739,9 @@ func applicationStructuralRoot(session relations.Session, view *ownership.View, 
 		}
 		recording := view.RecordingManagers(cur)
 		loading = loading || appStillLoading(recording.Gaps...)
-		// Inventory edges are emitted Argo, Kustomization, then HelmRelease.
+		// When managers of several kinds record cur, the first kind here that
+		// does is the root: Argo CD Application, Flux Kustomization, then Flux
+		// HelmRelease.
 		for _, gk := range []resourceid.GroupKind{{Group: "argoproj.io", Kind: "Application"}, {Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}, {Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}} {
 			var refs []resourceid.Ref
 			for _, m := range recording.Managers {
@@ -602,12 +791,16 @@ type applicationInventory struct {
 	owners  *ownership.View
 	// loading: a manager kind a root was resolved from was still loading.
 	loading bool
+	// unevaluated: a row's workload is one the batch didn't read in this
+	// version.
+	unevaluated bool
 }
 
 // cacheable reports whether every manager and attachment kind the rows were
-// joined from had loaded.
+// joined from had loaded, and the batch read every row's workload as the row
+// did.
 func (a *applicationInventory) cacheable() bool {
-	return !a.loading && !a.batch.loading
+	return !a.loading && !a.batch.loading && !a.unevaluated
 }
 
 func (a *applicationInventory) rootOf(group, kind, ns, name string) (string, string, string, string) {
@@ -620,6 +813,20 @@ func (a *applicationInventory) relationshipsFor(kind, ns, name string, obj any) 
 	group := appWorkloadAPIGroup(kind)
 	if u, ok := obj.(*unstructured.Unstructured); ok {
 		group = resourceid.GroupFromAPIVersion(u.GetAPIVersion())
+	}
+	current := func(ref resourceid.Ref) runtime.Object {
+		o, read := a.session.Borrow(ref)
+		if read.State != ownership.Present {
+			return nil
+		}
+		return o
+	}
+	row, _ := obj.(runtime.Object)
+	if !a.batch.evaluatedAsRead(resourceid.NewRef(group, kind, ns, name), row, current) {
+		// The batch's answers are for another version, or none: its exposure
+		// is undecided, and the next build reads it again.
+		a.unevaluated = true
+		return &appRelationships{exposureIncomplete: true}
 	}
 	return a.batch.relationshipsForRef(group, kind, ns, name)
 }

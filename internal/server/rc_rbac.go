@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
@@ -23,7 +24,7 @@ import (
 type requestScopedChecker struct {
 	s     *Server
 	req   *http.Request
-	cache map[string]bool
+	cache map[string]ownership.Decision
 }
 
 // newRequestScopedChecker returns a checker scoped to a single HTTP request.
@@ -33,7 +34,7 @@ func (s *Server) newRequestScopedChecker(r *http.Request) *requestScopedChecker 
 	return &requestScopedChecker{
 		s:     s,
 		req:   r,
-		cache: make(map[string]bool, 8),
+		cache: make(map[string]ownership.Decision, 8),
 	}
 }
 
@@ -55,7 +56,13 @@ func (s *Server) workloadReadAccess(r *http.Request) func(group, kind, namespace
 //     This is safe because Build only emits refs whose kinds are known to the
 //     topology builder (which itself uses discovery); a kind unknown here is a
 //     temporary discovery-cold state, not a permission bypass vector.
-func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace string) bool {
+func (c *requestScopedChecker) CanRead(ctx context.Context, group, kind, namespace string) bool {
+	return c.DecideRead(ctx, group, kind, namespace) == ownership.Allowed
+}
+
+// DecideRead implements resourcecontext.RefAccessDecider: CanRead's check,
+// Undecided when it couldn't be made.
+func (c *requestScopedChecker) DecideRead(_ context.Context, group, kind, namespace string) ownership.Decision {
 	key := "get|" + group + "|" + kind + "|" + namespace
 	if v, ok := c.cache[key]; ok {
 		return v
@@ -64,14 +71,20 @@ func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace
 	gvrGroup, resource := k8s.LookupResourceGVR(kind, group)
 	if resource == "" {
 		// Unknown kind — passthrough. See doc comment for rationale.
-		c.cache[key] = true
-		return true
+		c.cache[key] = ownership.Allowed
+		return ownership.Allowed
 	}
 
-	allowed := c.s.canRead(c.req, gvrGroup, resource, namespace, "get")
-	c.cache[key] = allowed
-	return allowed
+	decision := ownership.Denied
+	switch allowed, decided := c.s.canReadDecision(c.req, gvrGroup, resource, namespace, "get"); {
+	case !decided:
+		decision = ownership.Undecided
+	case allowed:
+		decision = ownership.Allowed
+	}
+	c.cache[key] = decision
+	return decision
 }
 
 // Compile-time assertion that requestScopedChecker satisfies the contract.
-var _ resourcecontext.RefAccessChecker = (*requestScopedChecker)(nil)
+var _ resourcecontext.RefAccessDecider = (*requestScopedChecker)(nil)

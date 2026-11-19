@@ -755,10 +755,10 @@ func applicationsCacheKeyFor(namespaces []string, canListClusterWorkflowTemplate
 	return permissionMode + strings.Join(ns, ",")
 }
 
-// isGitOpsManagerKind reports whether a node is an in-cluster GitOps manager —
-// the boundary applicationStructuralRoot stops climbing AT. Above a manager lies either a
-// source ref (GitRepository → Kustomization is an EdgeManages edge too) or a
-// parent manager (app-of-apps); climbing THROUGH one would resolve every
+// isGitOpsManagerKind reports whether a kind is an in-cluster GitOps manager —
+// the boundary applicationStructuralRoot stops climbing AT. Above a manager lies
+// its source (a Flux GitRepository) or a parent that records or controls it
+// (app-of-apps, an ApplicationSet); climbing THROUGH one would resolve every
 // installation sharing that source/parent to the same structural root and
 // union-find would merge them all into one app. ownerRef chains — including
 // operator CRs (CNPG Cluster, Strimzi Kafka) — are not managers and keep
@@ -2240,7 +2240,7 @@ func argoApplicationNamespaces(inputs []appWorkloadInput) map[string]map[string]
 // argoCanonicalAtoms extracts tracking-mode-independent atoms from an ArgoCD
 // Application key. ResolveOverlay emits "<ns>/Application/<name>" for tracking-id
 // (tier 3) but "/Application/<name>" (empty ns) for the instance label (tier 4);
-// the in-cluster Application node's structural key is "<argo-ns>/Application/<name>".
+// an in-cluster Application structural root's key is "<argo-ns>/Application/<name>".
 // Namespace-qualified atoms keep distinct same-name Applications separate. The
 // name-only bridge is emitted only when this result set has at most one concrete
 // namespace for that Argo name, so tier-3 and tier-4 tracking modes can still

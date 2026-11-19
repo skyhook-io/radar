@@ -333,7 +333,7 @@ func TestVeleroPartialRunThatIsAlsoStalled(t *testing.T) {
 			if !strings.Contains(got[0].Message, "nothing appearing to advance it") {
 				t.Errorf("message = %q, want it to say the run is not moving", got[0].Message)
 			}
-			if !strings.Contains(got[0].Message, "some items were not processed") {
+			if !strings.Contains(got[0].Message, "some items were not backed up") {
 				t.Errorf("message = %q, want it to keep the partial failure", got[0].Message)
 			}
 		})

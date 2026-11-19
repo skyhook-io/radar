@@ -359,7 +359,7 @@ func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
 	// scope. Replay the dispatch via the shared helper to pin the
 	// end-to-end shape. Topology is nil; managedBy is nil but
 	// issueCount dispatch is what we're pinning here.
-	build := BuilderFromIndexes(context.Background(), nil, namespacedIdx, clusterIdx, nil, nil)
+	build := BuilderFromIndexes(context.Background(), namespacedIdx, clusterIdx, nil, nil)
 	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 1 {
 		t.Errorf("Node hit via builder: got %+v, want IssueCount=1 (was 0 pre-fix)", sc)
 	}
@@ -387,7 +387,7 @@ func TestBuilderFromIndexes_DispatchesByScope(t *testing.T) {
 
 	// Topology is nil — managedBy is nil but issueCount dispatch is
 	// what we're pinning here.
-	build := BuilderFromIndexes(context.Background(), nil, namespacedIdx, clusterIdx, nil, nil)
+	build := BuilderFromIndexes(context.Background(), namespacedIdx, clusterIdx, nil, nil)
 
 	// Cluster-scoped Node hit — must read clusterIdx.
 	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 2 {

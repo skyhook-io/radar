@@ -185,6 +185,9 @@ func TestReplicaSetsScaledToZeroDeclareNothing(t *testing.T) {
 	if got := v.References(ConfigReferences, refOf(old), old); len(got.Declared) != 0 {
 		t.Errorf("a ReplicaSet scaled to zero declares %+v", got.Declared)
 	}
+	if got := v.References(OwnConfigReferences, refOf(old), old); len(got.Declared) != 1 || got.Declared[0].Ref != ref("", "ConfigMap", "settings") {
+		t.Errorf("a ReplicaSet scaled to zero lost its own template: %+v", got.Declared)
+	}
 	got := consumerRefs(v.Referrers(ConfigReferences, ref("", "ConfigMap", "settings"), nil))
 	want := []resourceid.Ref{ref("apps", "ReplicaSet", "web-new"), ref("apps", "ReplicaSet", "web-unset")}
 	if !slices.Equal(got, want) {

@@ -58,6 +58,9 @@ export * from './components/issues'
 // CloudNativePG workspace model (fleet derivation over /api/cnpg/workspace) and summaries
 export * from './components/cnpg'
 
+// Velero workspace wire types, reading copy and the Schedule activity section
+export * from './components/velero'
+
 // Cluster switcher (shared trigger+dropdown for OSS Radar and Radar Hub)
 export * from './components/cluster-switcher'
 

@@ -53,7 +53,7 @@ func TestDisplayEdgesAreFamilyAnswers(t *testing.T) {
 	run := charUnstructured("argoproj.io/v1alpha1", "AnalysisRun", "shop", "checkout-bg-1", nil, nil, map[string]any{"phase": "Running"})
 	objects[resourceid.ResourceKey("argoproj.io", "AnalysisRun", "shop", "checkout-bg-1")] = run
 	session = append(session, run)
-	s := newProjectionSession(t, session...)
+	s := newRecordingProjectionSession(t, session...)
 	answers := map[string]map[string]bool{}
 	answer := func(key string) map[string]bool {
 		if got, ok := answers[key]; ok {
