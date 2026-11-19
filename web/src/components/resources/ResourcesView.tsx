@@ -42,6 +42,8 @@ interface ResourcesViewProps {
   rememberedKindSearch?: (kind: { name: string; group: string }) => string | undefined
   onKindFiltersChange?: (kind: { name: string; group: string }, search: string) => void
   onApplyNamespacesToAllSections?: (namespaces: string[]) => Promise<unknown> | void
+  /** Pixels of the table's right side a drawer covers (see the shared view). */
+  coveredRight?: number
 }
 
 type SelectedKindInfo = { name: string; kind: string; group: string } | null
@@ -77,7 +79,7 @@ function hasResourceCount(counts: Record<string, number> | undefined, key: strin
   return Object.prototype.hasOwnProperty.call(counts ?? {}, key)
 }
 
-export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange, onClearNamespaces, rememberedKindSearch, onKindFiltersChange, onApplyNamespacesToAllSections }: ResourcesViewProps) {
+export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange, onClearNamespaces, rememberedKindSearch, onKindFiltersChange, onApplyNamespacesToAllSections, coveredRight }: ResourcesViewProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const { connection } = useConnection()
@@ -385,6 +387,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       rememberedKindSearch={rememberedKindSearch}
       onKindFiltersChange={onKindFiltersChange}
       onApplyNamespacesToAllSections={onApplyNamespacesToAllSections}
+      coveredRight={coveredRight}
       // Injected data
       apiResources={apiResources}
       // Lightweight counts for sidebar (replaces 233 parallel queries)

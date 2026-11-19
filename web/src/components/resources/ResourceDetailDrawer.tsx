@@ -26,6 +26,8 @@ interface ResourceDetailDrawerProps {
   headerHeight?: number
   /** Right inset in px so the drawer sits beside a docked side panel (AI), not under it. */
   rightInset?: number
+  /** The drawer's width in px whenever it settles (see the shared drawer). */
+  onWidthChange?: (width: number) => void
 }
 
 export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {

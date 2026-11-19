@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { type ColumnLayoutInput, computeColumnLayout, layoutColumns, percentile, rememberWidths } from './column-sizing'
+import { type ColumnLayoutInput, computeColumnLayout, coveredTableWidth, layoutColumns, percentile, rememberWidths } from './column-sizing'
 
 // Name as the table builds it: yields last, here no further than its content (fully protected).
 const name = (content: number, min = content): ColumnLayoutInput => ({ key: 'name', mode: 'fit', floor: 200, max: 480, content, min, yieldRank: 4 })
@@ -239,6 +239,35 @@ describe('rememberWidths', () => {
     const narrower = rememberWidths(first, { name: 250, message: 400 })
     expect(narrower).toBe(first)
     expect(rememberWidths(first, { name: 320, message: 400 })).toEqual({ name: 320, message: 500 })
+  })
+})
+
+describe('coveredTableWidth', () => {
+  it('is 0 without a cover', () => {
+    expect(coveredTableWidth(1600, 0, 0, 0)).toBe(0)
+    expect(coveredTableWidth(1600, 15, 0, 40)).toBe(0)
+  })
+
+  it('hides the covered width, less the scrollbar the cover hides first', () => {
+    expect(coveredTableWidth(1600, 0, 550, 0)).toBe(550)
+    expect(coveredTableWidth(1585, 15, 550, 0)).toBe(535)
+    // A cover narrower than the scrollbar hides no column.
+    expect(coveredTableWidth(1585, 15, 10, 0)).toBe(0)
+  })
+
+  it('is ignored when it would leave no room beyond the fixed leading columns', () => {
+    expect(coveredTableWidth(600, 0, 600, 0)).toBe(0)
+    expect(coveredTableWidth(600, 0, 560, 40)).toBe(0)
+    expect(coveredTableWidth(600, 0, 559, 40)).toBe(559)
+  })
+
+  it('lays the columns out for the uncovered width, giving way in the same order', () => {
+    const columns = [name(300, 250), { ...exact('status', 160), min: 120 }, { ...exact('age', 96), min: 60 }]
+    expect(total(computeColumnLayout(columns, 1600))).toBe(1600)
+    // Drawer open: the same columns laid out for what it leaves visible.
+    expect(total(computeColumnLayout(columns, 1600 - coveredTableWidth(1600, 0, 1000, 0)))).toBe(600)
+    // Short of room: the curated columns give way to their content before Name does.
+    expect(computeColumnLayout(columns, 1600 - coveredTableWidth(1600, 0, 1150, 0))).toEqual({ name: 270, status: 120, age: 60 })
   })
 })
 
