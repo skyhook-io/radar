@@ -1571,16 +1571,19 @@ func declaredRefs(ctx context.Context, ac RefAccessChecker, extras *topology.Rel
 		omitted.add(field, OmittedBudgetExceeded)
 		sorted = sorted[:limit]
 	}
-	for i := range sorted {
-		r := &sorted[i]
-		target := resourceid.NewRef(r.Group, r.Kind, r.Namespace, r.Name)
-		var declared *relations.Declared
-		if extras != nil {
-			if j := slices.IndexFunc(extras.Declarations, func(d relations.Declared) bool { return d.Ref == target }); j >= 0 {
-				declared = &extras.Declarations[j]
+	var declarations map[resourceid.Ref]*relations.Declared
+	if extras != nil && len(sorted) > 0 {
+		declarations = make(map[resourceid.Ref]*relations.Declared, len(extras.Declarations))
+		for j := range extras.Declarations {
+			d := &extras.Declarations[j]
+			if _, seen := declarations[d.Ref]; !seen {
+				declarations[d.Ref] = d
 			}
 		}
-		if declared != nil {
+	}
+	for i := range sorted {
+		r := &sorted[i]
+		if declared, ok := declarations[resourceid.NewRef(r.Group, r.Kind, r.Namespace, r.Name)]; ok {
 			r.State = topology.DeclaredState(*declared)
 			continue
 		}
