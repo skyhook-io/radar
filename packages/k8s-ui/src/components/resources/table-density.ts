@@ -5,6 +5,8 @@
 export const TABLE_DENSITY = {
   /** Body cells and column headers. */
   cellClass: 'px-3.5 py-2.5',
+  /** cellClass's vertical padding alone, for the compare and select columns. */
+  cellYClass: 'py-2.5',
   /** cellClass's horizontal padding, both sides, in px. */
   cellPaddingX: 28,
   /** The toolbar row above the table, and its search input's vertical padding. */

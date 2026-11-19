@@ -419,7 +419,7 @@ const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
   'cpu', 'memory', 'containers',
 ])
 
-// The header row is px-4 with a `truncate` label, under table-layout:fixed with
+// The header row is padded (TABLE_DENSITY.cellClass) around a `truncate` label, under table-layout:fixed with
 // explicit <col> widths — so a column narrower than its own heading clips to
 // "ADDRESS T…" and stays clipped at every viewport size, because only the Name
 // column flexes. Deriving a floor from the label keeps a declared w-* from
@@ -7404,7 +7404,7 @@ export function ResourcesView({
                       // `w-9` is a hint the browser absorbs into leftover
                       // row width on an icon-only column.
                       style={{ ...COMPARE_COLUMN_STYLE, ...phonePinnedLeft(compareMode, isCheckboxMode, 'compare'), ...(pinStyles.size ? { position: 'sticky', left: 0, zIndex: 6 } : {}) }}
-                      className={clsx('px-2 py-3 text-xs font-medium uppercase tracking-wide bg-theme-base border-b border-r-subtle border-theme-border text-center text-skyhook-400', PHONE_PINNED_HEAD)}
+                      className={clsx('px-2 text-xs font-medium uppercase tracking-wide bg-theme-base border-b border-r-subtle border-theme-border text-center text-skyhook-400', TABLE_DENSITY.cellYClass, PHONE_PINNED_HEAD)}
                       title="Compare mode"
                     >
                       <GitCompare className="w-3.5 h-3.5 inline-block opacity-70" />
@@ -7413,7 +7413,7 @@ export function ResourcesView({
                   {isCheckboxMode && (
                     <th
                       style={{ ...phonePinnedLeft(compareMode, isCheckboxMode, 'checkbox'), ...(pinStyles.size ? { position: 'sticky', left: compareMode ? COMPARE_COLUMN_WIDTH : 0, zIndex: 6 } : {}) }}
-                      className={clsx('bg-theme-surface border-b border-theme-border w-10 text-center px-0 py-3', PHONE_PINNED_HEAD)}>
+                      className={clsx('bg-theme-surface border-b border-theme-border w-10 text-center px-0', TABLE_DENSITY.cellYClass, PHONE_PINNED_HEAD)}>
                       <input
                         type="checkbox"
                         checked={allVisibleChecked}
@@ -7903,7 +7903,7 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
           onClick={onClick}
           onMouseEnter={onMouseEnter}
           style={{ ...COMPARE_COLUMN_STYLE, ...phonePinnedLeft(compareMode, showCheckbox, 'compare'), ...fixedLeading(0) }}
-          className={clsx('px-2 py-3 border-b-subtle cursor-pointer text-center align-middle transition-colors', rowHighlight, PHONE_PINNED_CELL, pinnedHover)}
+          className={clsx('px-2 border-b-subtle cursor-pointer text-center align-middle transition-colors', TABLE_DENSITY.cellYClass, rowHighlight, PHONE_PINNED_CELL, pinnedHover)}
         >
           {pickedSide ? (
             <span
@@ -7926,7 +7926,7 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
       {showCheckbox && (
         <td
           style={{ ...phonePinnedLeft(compareMode, showCheckbox, 'checkbox'), ...fixedLeading(compareMode ? COMPARE_COLUMN_WIDTH : 0) }}
-          className={clsx('border-b-subtle text-center px-0 py-3 w-10 cursor-pointer transition-colors', rowHighlight, PHONE_PINNED_CELL, pinnedHover)}
+          className={clsx('border-b-subtle text-center px-0 w-10 cursor-pointer transition-colors', TABLE_DENSITY.cellYClass, rowHighlight, PHONE_PINNED_CELL, pinnedHover)}
           onClick={(e) => { e.stopPropagation(); onRowCheckToggle?.(resource) }}
         >
           <input
