@@ -52,6 +52,7 @@ export const RADAR_FEATURES = {
   veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
   veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },
   veleroSchedulePause: { label: 'Pause and resume Velero schedules', flag: 'veleroSchedulePause', flagShippedWithEndpoint: true },
+  veleroRunVolumes: { label: 'Velero run volumes', flag: 'veleroRunVolumes', flagShippedWithEndpoint: true },
   veleroRunArtifacts: { label: 'Velero run contents and log', flag: 'veleroRunArtifacts', flagShippedWithEndpoint: true },
   veleroRuns: { label: 'Velero backup and restore lists', flag: 'veleroRuns', flagShippedWithEndpoint: true },
   veleroDeleteBackup: { label: 'Delete a Velero backup', flag: 'veleroDeleteBackup', flagShippedWithEndpoint: true },

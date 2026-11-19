@@ -12,9 +12,9 @@ const actionSeverity = (action: string) => action === 'failed' ? 'error' : actio
 const levels: VeleroLogLevel[] = ['error', 'warning', 'info', 'debug', 'other']
 const inputClass = 'rounded-lg border border-theme-border bg-theme-elevated px-3 py-1.5 text-sm text-theme-text-primary'
 
-function ArtifactError({ error, retry, hasData }: { error: Error; retry: () => void; hasData: boolean }) {
+export function ArtifactError({ error, retry, hasData, label = 'Velero run contents and log' }: { error: Error; retry: () => void; hasData: boolean; label?: string }) {
   const upgrade = getRadarUpgradeRequirement(error)
-  return <Notice>{hasData && <div>The last refresh failed; the previous result is shown below.</div>}{upgrade ? <>{radarUpgradeHeadline('Velero run contents and log')}<div>{radarUpgradeDetail(upgrade)}</div><RadarUpgradeAction requirement={upgrade} /></> : <>{error.message} <button type="button" className="btn-secondary px-2 py-1" onClick={retry}>Retry</button></>}</Notice>
+  return <Notice>{hasData && <div>The last refresh failed; the previous result is shown below.</div>}{upgrade ? <>{radarUpgradeHeadline(label)}<div>{radarUpgradeDetail(upgrade)}</div><RadarUpgradeAction requirement={upgrade} /></> : <>{error.message} <button type="button" className="btn-secondary px-2 py-1" onClick={retry}>Retry</button></>}</Notice>
 }
 
 export function VeleroRunContents({ kind, namespace, name }: RunProps) {

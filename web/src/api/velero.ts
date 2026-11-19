@@ -250,8 +250,8 @@ export interface VeleroRunLogResponse {
   levels: VeleroLogLevel[]
 }
 
-function useVeleroRunArtifact<T>(kind: 'backups' | 'restores', namespace: string, name: string, artifact: 'contents' | 'log', params: URLSearchParams) {
-  const { guard, gatedKey } = useRadarFeature('veleroRunArtifacts')
+function useVeleroRunArtifact<T>(kind: 'backups' | 'restores', namespace: string, name: string, artifact: 'contents' | 'log' | 'volumes', params: URLSearchParams) {
+  const { guard, gatedKey } = useRadarFeature(artifact === 'volumes' ? 'veleroRunVolumes' : 'veleroRunArtifacts')
   const base = getApiBase()
   const search = params.toString()
   return useQuery<T>({
@@ -272,4 +272,106 @@ export function useVeleroRunContents(kind: 'backups' | 'restores', namespace: st
 
 export function useVeleroRunLog(kind: 'backups' | 'restores', namespace: string, name: string, levels: string, q: string) {
   return useVeleroRunArtifact<VeleroRunLogResponse>(kind, namespace, name, 'log', new URLSearchParams({ levels, q }))
+}
+
+export interface VeleroVolumeDetails {
+  snapshotHandle?: string
+  size?: number
+  incrementalSize?: number
+  driver?: string
+  vscName?: string
+  operationID?: string
+  readyToUse?: boolean
+  volumeGroupSnapshotHandle?: string
+  dataMover?: string
+  uploaderType?: string
+  retainedSnapshot?: string
+  volumeType?: string
+  volumeAZ?: string
+  iops?: string
+  volumeName?: string
+  podName?: string
+  podNamespace?: string
+  nodeName?: string
+  phase?: string
+}
+
+export interface VeleroVolumeRecord {
+  pvcName?: string
+  pvcNamespace?: string
+  pvName?: string
+  method?: string
+  snapshotDataMoved: boolean
+  preserveLocalSnapshot?: boolean
+  result?: string
+  skipped?: boolean
+  skippedReason?: string
+  started?: string
+  completed?: string
+  csiSnapshotInfo?: VeleroVolumeDetails
+  snapshotDataMovementInfo?: VeleroVolumeDetails
+  nativeSnapshotInfo?: VeleroVolumeDetails
+  podVolumeInfo?: VeleroVolumeDetails
+}
+
+export interface VeleroRunVolumesResponse {
+  volumes: VeleroVolumeRecord[]
+  total: number
+  truncated: boolean
+  /** The run had finished when Radar read it, just before fetching the file; otherwise Velero may still rewrite the record. */
+  finishedAtRead: boolean
+}
+
+export interface VeleroVolumeOperation {
+  kind: string
+  name: string
+  pod?: string
+  podNamespace?: string
+  volume?: string
+  pvc?: string
+  pvcNamespace?: string
+  node?: string
+  phase?: string
+  bytesDone?: number
+  bytesTotal?: number
+  message?: string
+  started?: string
+  completed?: string
+  longRunning: boolean
+  nodeAgent?: 'running' | 'notRunning' | 'unknown'
+}
+
+export interface VeleroVolumeOperationsResponse {
+  observedAt: string
+  runPhase: string
+  coverage: Record<string, import('@skyhook-io/k8s-ui').VeleroKindCoverage>
+  operations: VeleroVolumeOperation[]
+}
+
+export function useVeleroRunVolumes(kind: 'backups' | 'restores', namespace: string, name: string) {
+  return useVeleroRunArtifact<VeleroRunVolumesResponse>(kind, namespace, name, 'volumes', new URLSearchParams())
+}
+
+export function isVeleroRunFinished(phase: string | undefined): boolean {
+  return phase !== undefined && ['Completed', 'Failed', 'PartiallyFailed', 'FailedValidation', 'Deleting'].includes(phase)
+}
+
+export function useVeleroVolumeOperations(kind: 'backups' | 'restores', namespace: string, name: string) {
+  const { guard, gatedKey } = useRadarFeature('veleroRunVolumes')
+  const base = getApiBase()
+  return useQuery<VeleroVolumeOperationsResponse>({
+    queryKey: ['velero', 'volume-operations', base, kind, namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<VeleroVolumeOperationsResponse>(`/velero/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/volume-operations`, signal)),
+    enabled: !!namespace && !!name,
+    staleTime: 10_000,
+    refetchInterval: (query) => {
+      const data = query.state.data
+      if (!data) return false
+      // Velero leaves finished operation objects in place, so only an
+      // unfinished one, a run still going or a kind still loading needs polling.
+      const settled = (phase?: string) => phase === 'Completed' || phase === 'Failed' || phase === 'Canceled'
+      return data.operations.some((row) => !settled(row.phase)) || Object.values(data.coverage).some((coverage) => coverage.state === 'syncing') || !isVeleroRunFinished(data.runPhase) ? 10_000 : false
+    },
+    retry: shouldRetryRadarQuery,
+  })
 }

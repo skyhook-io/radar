@@ -321,13 +321,16 @@ func TestVeleroContentsSizeLimitNeverReturnsPartialCounts(t *testing.T) {
 
 func TestVeleroArtifactRoutesAndStorageFailures(t *testing.T) {
 	for _, kind := range []string{"backups", "restores"} {
-		for _, artifact := range []string{"contents", "log"} {
+		for _, artifact := range []string{"contents", "log", "volumes"} {
 			for _, status := range []int{http.StatusOK, http.StatusNotFound, http.StatusForbidden, http.StatusTemporaryRedirect} {
 				t.Run(fmt.Sprintf("%s/%s/%d", kind, artifact, status), func(t *testing.T) {
 					store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						w.Header().Set("Location", "https://never-follow.invalid/?signature=secret")
 						w.WriteHeader(status)
 						body := `{"v1/Namespace":["empty"]}`
+						if artifact == "volumes" {
+							body = `[]`
+						}
 						if artifact == "log" {
 							body = "level=warning msg=hello\n"
 						}
@@ -345,6 +348,12 @@ func TestVeleroArtifactRoutesAndStorageFailures(t *testing.T) {
 						suffix := "ResourceList"
 						if artifact == "log" {
 							suffix = "Log"
+						}
+						if artifact == "volumes" {
+							suffix = "VolumeInfos"
+							if kind == "restores" {
+								suffix = "VolumeInfo"
+							}
 						}
 						run := "Backup"
 						if kind == "restores" {
@@ -379,7 +388,7 @@ func TestVeleroArtifactRoutesAndStorageFailures(t *testing.T) {
 					if status == http.StatusOK && artifact == "log" && !strings.Contains(rec.Body.String(), `"levels":["error","warning"]`) {
 						t.Fatalf("levels=auto on a log with a warning: %s", rec.Body.String())
 					}
-					if status == http.StatusNotFound && !strings.Contains(rec.Body.String(), "Velero has no "+artifact+" for this run") {
+					if status == http.StatusNotFound && !strings.Contains(rec.Body.String(), "Velero has no "+map[string]string{"volumes": "volume record", "contents": "contents", "log": "log"}[artifact]+" for this run") {
 						t.Fatalf("missing file: %s", rec.Body.String())
 					}
 					if strings.Contains(rec.Body.String(), "secret") {
@@ -401,7 +410,7 @@ func TestVeleroArtifactRoutesAndStorageFailures(t *testing.T) {
 }
 
 func TestVeleroArtifactRoutesRefuseLinkLocalDownloads(t *testing.T) {
-	for _, artifact := range []string{"contents", "log"} {
+	for _, artifact := range []string{"contents", "log", "volumes"} {
 		t.Run(artifact, func(t *testing.T) {
 			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{downloadRequestGVR: "DownloadRequestList"})
 			answerVeleroRun(dyn, "Completed")
@@ -431,7 +440,7 @@ func TestVeleroArtifactRoutesRefuseLinkLocalDownloads(t *testing.T) {
 }
 
 func TestVeleroArtifactsGates(t *testing.T) {
-	for _, artifact := range []string{"contents", "log"} {
+	for _, artifact := range []string{"contents", "log", "volumes"} {
 		env := newAuthTestServer(t)
 		perms := &auth.UserPermissions{AllowedNamespaces: []string{"velero"}}
 		perms.SetCanI("get", veleroGroup, "backups", "velero", true)
@@ -456,7 +465,7 @@ func TestVeleroArtifactsGates(t *testing.T) {
 func TestVeleroArtifactsSharedListenerRejectsCrossSite(t *testing.T) {
 	srv := New(Config{DevMode: true, ListenAddress: "0.0.0.0"})
 	t.Cleanup(srv.Stop)
-	for _, artifact := range []string{"contents", "log"} {
+	for _, artifact := range []string{"contents", "log", "volumes"} {
 		req := httptest.NewRequest(http.MethodPost, "http://localhost/api/velero/backups/velero/nightly/"+artifact, nil)
 		req.Header.Set("Origin", "https://untrusted.invalid")
 		req.Header.Set("Sec-Fetch-Site", "cross-site")

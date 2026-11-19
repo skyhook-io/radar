@@ -206,6 +206,7 @@ type FeatureCapabilities struct {
 	VeleroWorkspace     bool `json:"veleroWorkspace"`
 	VeleroBackupNow     bool `json:"veleroBackupNow"`     // POST /api/velero/schedules/{namespace}/{name}/backup
 	VeleroSchedulePause bool `json:"veleroSchedulePause"` // POST /api/velero/schedules/{namespace}/{name}/{pause|resume}
+	VeleroRunVolumes    bool `json:"veleroRunVolumes"`    // Run volume record and current operations
 	VeleroRunArtifacts  bool `json:"veleroRunArtifacts"`  // POST /api/velero/{backups|restores}/{namespace}/{name}/{contents|log}
 	VeleroRuns          bool `json:"veleroRuns"`          // GET /api/velero/runs/{backups|restores}
 	// POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion
