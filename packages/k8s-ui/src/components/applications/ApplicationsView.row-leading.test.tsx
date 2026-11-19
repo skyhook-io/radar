@@ -108,6 +108,20 @@ describe('ApplicationsView renderRowLeading', () => {
     expect(highlighted()).toBe(1)
   })
 
+  it('moves focus off the control when a key moves the highlight, so Enter opens that row', () => {
+    const pressed = vi.fn()
+    const { host, onSelect } = show([app('checkout'), app('orders')], { renderRowLeading: star(pressed) })
+    const control = rowOf(host, 'checkout').querySelector('[data-testid="star"]') as HTMLElement
+    act(() => control.focus())
+    act(() => { control.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true, cancelable: true })) })
+    expect(document.activeElement).not.toBe(control)
+    // A real Enter goes to whatever has focus.
+    const focused = (document.activeElement ?? document.body) as HTMLElement
+    act(() => { focused.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })) })
+    expect(onSelect).toHaveBeenCalledWith('shop/checkout')
+    expect(pressed).not.toHaveBeenCalled()
+  })
+
   it('leaves no gap when the host has nothing for a row', () => {
     const { host } = show([app('checkout')], { renderRowLeading: () => null })
     const withSlot = rowOf(host, 'checkout').innerHTML

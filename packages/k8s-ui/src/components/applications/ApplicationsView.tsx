@@ -127,7 +127,10 @@ function compareEntries(a: AppEntry, b: AppEntry, key: SortKey): number {
 // Whatever a host puts here acts by itself. A click would otherwise open the row,
 // and Enter would reach the table's shortcut and open the highlighted one instead.
 // A key the control used is kept from the table too. Anything else still reaches
-// it, so j and k work after clicking something in a row.
+// it, so j and k work after clicking something in a row. A row-moving key also
+// takes focus off the control, so the next Enter opens the highlighted row rather
+// than pressing the control on the row it came from.
+const ROW_MOVE_KEYS = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'g', 'G'])
 function RowLeading({ children }: { children: ReactNode }) {
   if (children == null || children === false) return null
   return (
@@ -136,6 +139,7 @@ function RowLeading({ children }: { children: ReactNode }) {
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.defaultPrevented) event.stopPropagation()
+        else if (ROW_MOVE_KEYS.has(event.key) && event.target instanceof HTMLElement) event.target.blur()
       }}
     >
       {children}
