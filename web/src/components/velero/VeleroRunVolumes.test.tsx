@@ -91,7 +91,7 @@ describe('Volumes tab', () => {
     for (const text of ['Native snapshot', 'CSI snapshot', 'Copy to the bucket (data mover)', 'File-system backup', 'excluded by policy', 'ebs.csi.aws.com', '1 KB', 'op-moved', 'Succeeded', 'Failed']) expect(host.textContent).toContain(text)
     const skipped = [...host.querySelectorAll('tr')].find((row) => row.textContent!.includes('excluded by policy'))!
     expect(skipped.textContent).toContain('None (skipped)')
-    const csi = [...host.querySelectorAll('tr')].find((row) => row.textContent!.includes('ebs.csi.aws.com'))!
+    const csi = [...host.querySelectorAll('tr')].find((row) => row.textContent!.includes('CSI snapshot') && !row.textContent!.includes('data mover'))!
     expect(csi.textContent).toContain('Not recorded')
     expect(csi.textContent).not.toContain('Succeeded')
     const native = [...host.querySelectorAll('tr')].find((row) => row.textContent!.includes('snap-123'))!
