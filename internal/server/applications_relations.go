@@ -552,7 +552,9 @@ func applicationStructuralRoot(session relations.Session, view *ownership.View, 
 		}
 		recording := view.RecordingManagers(cur)
 		loading = loading || appStillLoading(recording.Gaps...)
-		// Inventory edges are emitted Argo, Kustomization, then HelmRelease.
+		// When managers of several kinds record cur, the first kind here that
+		// does is the root: Argo CD Application, Flux Kustomization, then Flux
+		// HelmRelease.
 		for _, gk := range []resourceid.GroupKind{{Group: "argoproj.io", Kind: "Application"}, {Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}, {Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}} {
 			var refs []resourceid.Ref
 			for _, m := range recording.Managers {

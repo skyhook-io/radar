@@ -83,7 +83,9 @@ at the Application). An object with no
 controller reference climbs to its owner only when it has exactly one owner
 reference and that owner is readable: several owner references are
 garbage-collection dependencies with no primary. Recording managers stop the climb in this order: Argo CD
-Application, Flux Kustomization, Flux HelmRelease. Within one kind, the recording
+Application, Flux Kustomization, Flux HelmRelease. That order only breaks a tie
+between managers whose status lists record the workload; §4's cascade, which
+puts Flux first, ranks the manager labels a workload carries instead. Within one kind, the recording
 manager the workload's own metadata names wins (an Argo CD tracking ID or instance
 label, or Flux labels; a copied tracking ID names nothing), and otherwise the
 sorted-first one, so the key doesn't depend on read order. A local HelmRelease without readable inventory retains
@@ -159,7 +161,9 @@ A workload flows left-to-right; each layer answers part of the question.
 
 When ownership cannot connect two roots, `pkg/subject` consolidates them
 from the workload's labels, walking signals in strict precedence — the **first**
-(lowest-numbered) that matches wins. The ranking is **"how strongly does this
+(lowest-numbered) that matches wins. This ranks the labels and annotations a
+workload carries, Flux first; it isn't §2's order among managers whose status
+lists record the workload, which puts Argo CD first. The ranking is **"how strongly does this
 signal indicate the release unit"**: a GitOps/Helm manager *is* a release unit (it
 deploys a set of workloads together), so it outranks any membership label.
 
