@@ -1751,8 +1751,9 @@ Controller and spec-generator references appear separately in `managedBy` below.
 
 ### `managedBy` — the top controller
 
-List/search `summaryContext.managedBy` is one inspection lead: highest readable controller, then an observed spec
-generator, then eligible GitOps/Helm evidence. For example, a TiDB Pod can lead through its StatefulSet to a summary
+List/search `summaryContext.managedBy` is one inspection lead: highest readable controller, up to the first GitOps
+manager above the object (an Application, not its ApplicationSet), then an observed spec generator, then eligible
+GitOps/Helm evidence. For example, a TiDB Pod can lead through its StatefulSet to a summary
 reference with `kind: TidbCluster`, `group: pingcap.com`, and `source: native`.
 
 Follow the lead with `get_resource` or `diagnose`. Detail `resourceContext.managedBy` lists controller/spec references,

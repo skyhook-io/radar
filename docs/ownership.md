@@ -269,7 +269,8 @@ to an operator CR that Radar does not draw. Only `controller: true` extends the 
 
 List/search summaries choose one inspection lead, in order:
 
-1. The highest readable controller ancestor.
+1. The highest readable controller ancestor, up to the first GitOps manager above the object (an Argo CD Application,
+   not the ApplicationSet that controls it), as every Managed By answer stops.
 2. An observed spec generator, such as a Certificate targeting its Secret, when the controller chain is settled.
    Owner references, display shortcuts, GitOps/Helm managers and GatewayClass are excluded from this step.
 3. An eligible `View.Manager` lead: `agree`, `listed` or `shared`; or a matching non-copied, non-weak `claimed` lead
