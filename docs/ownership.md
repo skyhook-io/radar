@@ -203,10 +203,12 @@ provenance and coverage to `pkg/resourcecontext`. Ownership is applied through t
 uses the owner-only path. Summary manager enrichment and workload history attachments also use the family sources.
 The session rejects a replaced cache rather than answering from another connection.
 
-There is no cluster-wide broadcast relationship graph or AI-context graph fallback. Display topology still builds
-SSE frames, `/api/topology` and MCP `get_topology`. The GitOps tree, REST/MCP neighborhoods and Applications retain
-their own scoped graphs. `ForRelationshipCache` remains a build option for those graph consumers and compatibility
-harnesses; it does not enable a shared relationship cache.
+There is no cluster-wide broadcast relationship graph or AI-context graph fallback, and nothing builds the
+relationship graph. Display topology still builds SSE frames, `/api/topology` and MCP `get_topology`. The GitOps tree
+builds its own scoped topology; REST/MCP neighborhoods walk the relation families and use the display builder only to
+present the objects they admitted. Both set `ForRelationshipCache`, which does not enable a shared relationship cache.
+Applications builds no graph: its rows come from ownership and one request-local family batch
+([app grouping](app-grouping.md)).
 
 The drawer characterization pins the family answer. Its [accepted differences](../pkg/topology/testdata/characterization/drawer-relationships.md)
 explain every changed class, including the hand-made Crossplane claim/XR fixture without a backlink. New relations
