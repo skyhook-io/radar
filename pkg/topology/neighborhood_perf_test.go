@@ -342,23 +342,31 @@ func (p *deploymentCountingProvider) Deployments() ([]*appsv1.Deployment, error)
 	return p.mockProvider.Deployments()
 }
 
-// Istio's service domain is read from every cached Deployment; a walk whose
-// profile can't reach Istio's service hosts doesn't pay for it.
+// Istio's service domain is read from every cached Deployment, so a walk reads
+// it only once it decodes a VirtualService or DestinationRule, and only once.
 func TestWalkNeighborhoodReadsIstioDomainOnlyForIstioHosts(t *testing.T) {
-	f := charCluster()
 	for _, tc := range []struct {
 		root  ResourceRef
+		istio bool
 		lists int
 	}{
-		{ResourceRef{Kind: "NetworkPolicy", Group: "networking.k8s.io", Namespace: "shop", Name: "default-deny"}, 0},
-		{ResourceRef{Kind: "Service", Namespace: "shop", Name: "web"}, 1},
+		{ResourceRef{Kind: "NetworkPolicy", Group: "networking.k8s.io", Namespace: "shop", Name: "default-deny"}, false, 0},
+		{ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"}, false, 0},
+		{ResourceRef{Kind: "Service", Namespace: "shop", Name: "web"}, false, 0},
+		{ResourceRef{Kind: "Service", Namespace: "shop", Name: "web"}, true, 1},
 	} {
+		f := charCluster()
+		if tc.istio {
+			vs := charUnstructured("networking.istio.io/v1", "VirtualService", "shop", "web", nil, map[string]any{"hosts": []any{"web"}, "http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "web"}}}}}}, nil)
+			f.dynamic.add("networking.istio.io", "v1", "VirtualService", "virtualservices", true, vs)
+			f.objects = append(f.objects, charObject{group: "networking.istio.io", kind: "VirtualService", resource: "virtualservices", obj: vs})
+		}
 		p := &deploymentCountingProvider{mockProvider: f.provider}
 		if _, err := WalkNeighborhood(context.Background(), neighborhoodFixtureSession(t, f), tc.root, NeighborhoodOptions{}, p, f.dynamic); err != nil {
 			t.Fatal(err)
 		}
 		if p.deploymentLists != tc.lists {
-			t.Errorf("%s: listed Deployments %d times, want %d", tc.root.Kind, p.deploymentLists, tc.lists)
+			t.Errorf("%s (istio %v): listed Deployments %d times, want %d", tc.root.Kind, tc.istio, p.deploymentLists, tc.lists)
 		}
 	}
 }

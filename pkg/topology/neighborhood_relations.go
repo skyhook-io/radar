@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -85,13 +86,15 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	allowed := edgeTypesForProfile(opts.Profile, rootNode.Kind)
 	rootOnly := rootOnlyEdgeTypes(opts.Profile, rootNode.Kind)
 	families := []*relations.Family{}
-	domain := ""
-	// The domain is read from every cached Deployment; only Istio's service
-	// hosts need it.
-	if provider != nil && neighborhoodDisposition(relations.IstioServiceHosts("").Projection, allowed) {
-		domain = NewBuilder(provider).istioServiceDomain()
-	}
-	for _, f := range relations.Families(domain) {
+	// Finding Istio's domain reads every Deployment, so it is found only once
+	// the walk reads a VirtualService or DestinationRule.
+	domain := sync.OnceValue(func() string {
+		if provider == nil {
+			return ""
+		}
+		return NewBuilder(provider).istioServiceDomain()
+	})
+	for _, f := range relations.FamiliesIn(domain) {
 		if neighborhoodDisposition(f.Projection, allowed) {
 			families = append(families, f)
 		}
