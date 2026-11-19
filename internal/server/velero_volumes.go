@@ -122,6 +122,10 @@ func decodeVeleroVolumes(reader io.Reader, restore bool) (any, error) {
 			return nil, errNotAResultsFile
 		}
 		row := raw.veleroVolumeRecord
+		// Velero names every volume it records by PVC, PV or pod volume.
+		if row.PVCName == "" && row.PVName == "" && raw.PVBInfo == nil && raw.PVRInfo == nil {
+			return nil, errNotAResultsFile
+		}
 		row.Method, row.Started, row.Completed, row.PodVolumeInfo = raw.BackupMethod, raw.StartTimestamp, raw.CompletionTimestamp, raw.PVBInfo
 		if restore {
 			row.Method, row.PodVolumeInfo = raw.RestoreMethod, raw.PVRInfo

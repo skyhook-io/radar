@@ -14,7 +14,7 @@ function volumeMethod(row: VeleroVolumeRecord, restore: boolean) {
   }
 }
 
-const resultLabels: Record<string, string> = { succeeded: 'Succeeded', failed: 'Failed' }
+const resultLabels = new Map([['succeeded', 'Succeeded'], ['failed', 'Failed']])
 
 function VolumeDetails({ label, info }: { label: string; info?: VeleroVolumeDetails }) {
   if (!info) return null
@@ -78,7 +78,10 @@ export function VeleroRunVolumes({ kind, namespace, name }: { kind: 'backups' | 
   // The server says whether the run had finished when it read the record, so
   // a record read mid-finalization stays provisional however soon the run
   // completes.
-  const readBeforeCompletion = !!data && !data.finishedAtRead && !inFlight
+  // The record's own read decides whether it is final; the operations read
+  // (which can be older) only chooses the wording.
+  const finalRecord = !!data?.finishedAtRead
+  const readBeforeCompletion = !!data && !finalRecord && !inFlight
   const coverage = Object.entries(live.data?.coverage ?? {})
   const complete = coverage.length > 0 && coverage.every(([, value]) => value.state === 'full')
   const recordedNone = data?.total === 0
@@ -86,8 +89,8 @@ export function VeleroRunVolumes({ kind, namespace, name }: { kind: 'backups' | 
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold text-theme-text-primary">Recorded volumes</h2><button type="button" className="btn-secondary px-3 py-1.5 text-sm" onClick={() => void record.refetch()}>Refresh record</button></div>
       <p className="text-sm text-theme-text-secondary">{restore ? 'How each volume was to be restored. Velero writes this record before plugin operations finish; it does not record a restore result.' : 'How Velero protected each volume, as recorded with this backup. A reported success does not verify that it can be restored.'}</p>
-      {inFlight && <Notice>This run is still in progress. Velero may write or update its volume record later. The volume record does not update with live operations. If this run has finished since you opened or refreshed this tab, refresh the record for final results.</Notice>}
-      {readBeforeCompletion && <Notice>The volume record was read before this run finished, and Velero may have updated it since. Refresh the record for final results.</Notice>}
+      {inFlight && !finalRecord && <Notice>This run is still in progress. Velero may write or update its volume record later. The volume record does not update with live operations. If this run has finished since you opened or refreshed this tab, refresh the record for final results.</Notice>}
+      {readBeforeCompletion && <Notice>{live.data ? 'The volume record was read before this run finished, and Velero may have updated it since.' : 'The volume record was read while this run was in progress, and Velero may update it.'} Refresh the record for final results.</Notice>}
       {record.dataUpdatedAt > 0 && <p className="text-xs text-theme-text-tertiary">Record read: <TimeValue timestamp={new Date(record.dataUpdatedAt).toISOString()} /></p>}
       {record.error && <ArtifactError label="Velero run volumes" error={record.error} hasData={!!data} retry={() => void record.refetch()} />}
       {record.isPending && <p className="text-sm text-theme-text-secondary">Loading volume record…</p>}
@@ -99,7 +102,7 @@ export function VeleroRunVolumes({ kind, namespace, name }: { kind: 'backups' | 
         columns={[
           { header: 'Volume', cell: (row) => <div className="space-y-1 break-all">{row.pvcName && <div>PVC {row.pvcNamespace ? row.pvcNamespace + '/' : ''}{row.pvcName}</div>}{row.pvName && <div className="text-xs text-theme-text-secondary">PV {row.pvName}</div>}{!row.pvcName && !row.pvName && <div>{row.podVolumeInfo?.podName ? `${row.podVolumeInfo.podNamespace || ''}/${row.podVolumeInfo.podName} · ${row.podVolumeInfo.volumeName || 'Volume not recorded'}` : 'Not recorded'}</div>}</div> },
           { header: 'Method', cell: (row) => <div className="space-y-1">{volumeMethod(row, restore)}{row.method === 'CSISnapshot' && row.preserveLocalSnapshot !== undefined && <div className="text-xs text-theme-text-secondary">Local snapshot retained: {row.preserveLocalSnapshot ? 'Yes' : 'No'}</div>}</div> },
-          ...(!restore ? [{ header: 'Result', cell: (row: VeleroVolumeRecord) => <div className="space-y-1">{row.skipped ? <><Badge severity="neutral">Skipped</Badge><div>{row.skippedReason || 'Reason not recorded'}</div></> : row.result ? <Badge severity={row.result === 'failed' ? 'error' : row.result === 'succeeded' ? 'success' : 'neutral'}>{resultLabels[row.result] ?? row.result}</Badge> : 'Not recorded'}</div> }] : []),
+          ...(!restore ? [{ header: 'Result', cell: (row: VeleroVolumeRecord) => <div className="space-y-1">{row.skipped ? <><Badge severity="neutral">Skipped</Badge><div>{row.skippedReason || 'Reason not recorded'}</div></> : row.result ? <Badge severity={row.result === 'failed' ? 'error' : row.result === 'succeeded' ? 'success' : 'neutral'}>{resultLabels.get(row.result) ?? row.result}</Badge> : 'Not recorded'}</div> }] : []),
           { header: 'Recorded details', cell: (row) => <div className="space-y-2"><VolumeDetails label="Native snapshot" info={row.nativeSnapshotInfo} /><VolumeDetails label="CSI snapshot" info={row.csiSnapshotInfo} /><VolumeDetails label="Data mover" info={row.snapshotDataMovementInfo} /><VolumeDetails label="File-system copy" info={row.podVolumeInfo} />{!row.nativeSnapshotInfo && !row.csiSnapshotInfo && !row.snapshotDataMovementInfo && !row.podVolumeInfo && 'Not recorded'}</div> },
         ]}
         rows={data.volumes.map((row, index) => ({ ...row, index }))}

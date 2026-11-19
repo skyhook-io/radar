@@ -72,15 +72,18 @@ describe('Volumes tab', () => {
     expect(state.fetch.mock.calls.some(([path]) => path.endsWith('/volume-operations'))).toBe(true)
   })
 
-  it.each(['inFlight', 'retainedOperations', 'completedEmpty', 'syncing'] as const)('polls operations only when needed: %s', async (scenario) => {
+  // Velero keeps finished operation objects, so they alone don't keep a
+  // finished run polling.
+  it.each(['inFlight', 'activeOperation', 'retainedOperations', 'completedEmpty', 'syncing'] as const)('polls operations only when needed: %s', async (scenario) => {
     vi.useFakeTimers()
-    respond(record(), live({ runPhase: scenario === 'inFlight' ? 'InProgress' : 'Completed', coverage: { dataUploads: { state: scenario === 'syncing' ? 'syncing' : 'full' } }, operations: scenario === 'retainedOperations' ? [{ kind: 'DataUpload', name: 'done', phase: 'Completed', longRunning: false }] : [] }))
+    const operations = scenario === 'retainedOperations' ? [{ kind: 'DataUpload', name: 'done', phase: 'Completed', longRunning: false }] : scenario === 'activeOperation' ? [{ kind: 'DataUpload', name: 'copying', phase: 'InProgress', longRunning: false }] : []
+    respond(record(), live({ runPhase: scenario === 'inFlight' ? 'InProgress' : 'Completed', coverage: { dataUploads: { state: scenario === 'syncing' ? 'syncing' : 'full' } }, operations }))
     await mount()
     await act(async () => { await vi.advanceTimersByTimeAsync(50) })
     expect(host.textContent).toContain('snap-123')
     await act(async () => { await vi.advanceTimersByTimeAsync(10_050) })
     expect(state.fetch.mock.calls.filter(([path]) => path.endsWith('/volumes?'))).toHaveLength(1)
-    expect(state.fetch.mock.calls.filter(([path]) => path.endsWith('/volume-operations'))).toHaveLength(scenario === 'completedEmpty' ? 1 : 2)
+    expect(state.fetch.mock.calls.filter(([path]) => path.endsWith('/volume-operations'))).toHaveLength(scenario === 'completedEmpty' || scenario === 'retainedOperations' ? 1 : 2)
   })
 
   it('shows all methods, explicit outcomes, skipped reasons and unknown CSI results', async () => {
@@ -204,6 +207,20 @@ describe('Volumes tab', () => {
     await mount(); await settle(() => host.textContent!.includes('snap-123'))
     expect(host.textContent).toContain('The volume record was read before this run finished')
     expect(host.textContent).not.toContain('This run is still in progress')
+  })
+
+  it('trusts a final record over an older operations read', async () => {
+    respond(record({ finishedAtRead: true }), live({ runPhase: 'Finalizing' }))
+    await mount(); await settle(() => host.textContent!.includes('snap-123'))
+    expect(host.textContent).not.toContain('This run is still in progress')
+    expect(host.textContent).not.toContain('was read before this run finished')
+  })
+
+  it('says a provisional record was read in flight when operations could not be read', async () => {
+    state.fetch.mockImplementation((path: string) => path.includes('volume-operations') ? Promise.reject(new ApiError('operations denied', 403)) : Promise.resolve(record({ finishedAtRead: false })))
+    await mount(); await settle(() => host.textContent!.includes('operations denied'))
+    expect(host.textContent).toContain('The volume record was read while this run was in progress')
+    expect(host.textContent).not.toContain('read before this run finished')
   })
 
   it('keeps the provisional note when a refresh after completion fails', async () => {

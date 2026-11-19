@@ -338,7 +338,10 @@ export function useVeleroVolumeOperations(kind: 'backups' | 'restores', namespac
     refetchInterval: (query) => {
       const data = query.state.data
       if (!data) return false
-      return data.operations.length > 0 || Object.values(data.coverage).some((coverage) => coverage.state === 'syncing') || !isVeleroRunFinished(data.runPhase) ? 10_000 : false
+      // Velero leaves finished operation objects in place, so only an
+      // unfinished one, a run still going or a kind still loading needs polling.
+      const settled = (phase?: string) => phase === 'Completed' || phase === 'Failed' || phase === 'Canceled'
+      return data.operations.some((row) => !settled(row.phase)) || Object.values(data.coverage).some((coverage) => coverage.state === 'syncing') || !isVeleroRunFinished(data.runPhase) ? 10_000 : false
     },
     retry: shouldRetryRadarQuery,
   })

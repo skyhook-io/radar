@@ -540,7 +540,7 @@ func invalidDownloadTarget(err error) bool {
 		return false
 	}
 	for _, cause := range status.Status().Details.Causes {
-		if cause.Field == "spec.target.kind" {
+		if cause.Field == "spec.target.kind" && cause.Type == metav1.CauseTypeFieldValueNotSupported {
 			return true
 		}
 	}

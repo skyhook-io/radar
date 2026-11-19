@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -72,7 +73,8 @@ func TestVeleroVolumeRecords(t *testing.T) {
 }
 
 func TestVeleroVolumesRejectMalformedAndIncompleteRecords(t *testing.T) {
-	for _, body := range []string{`null`, `{}`, `[`, `[null]`, `[{}] {}`} {
+	// [{}] names no volume, so it is not a record Velero wrote.
+	for _, body := range []string{`null`, `{}`, `[`, `[null]`, `[{}] {}`, `[{}]`, `[{"backupMethod":"CSISnapshot"}]`} {
 		if _, err := decodeVeleroVolumes(strings.NewReader(body), false); err == nil {
 			t.Errorf("accepted %s", body)
 		}
@@ -80,7 +82,7 @@ func TestVeleroVolumesRejectMalformedAndIncompleteRecords(t *testing.T) {
 }
 
 func TestVeleroVolumesCountBeyondRowLimit(t *testing.T) {
-	body := "[" + strings.Repeat(`{"backupMethod":"NativeSnapshot"},`, maxVeleroArtifactRows) + `{"skipped":true,"skippedReason":"late"}]`
+	body := "[" + strings.Repeat(`{"pvcName":"data","backupMethod":"NativeSnapshot"},`, maxVeleroArtifactRows) + `{"pvName":"late","skipped":true,"skippedReason":"late"}]`
 	result, err := decodeVeleroVolumes(strings.NewReader(body), false)
 	if err != nil {
 		t.Fatal(err)
@@ -109,8 +111,12 @@ func TestVeleroVolumesUnsupportedDownloadTarget(t *testing.T) {
 		t.Cleanup(other.Stop)
 		rec := httptest.NewRecorder()
 		other.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/velero/"+kind+"/velero/nightly/volumes", nil))
-		if rec.Code == http.StatusUnprocessableEntity || strings.Contains(rec.Body.String(), "CRD must support") {
-			t.Fatalf("an unrelated rejection read as an old CRD: %d %s", rec.Code, rec.Body.String())
+		created := false
+		for _, a := range dyn.Actions() {
+			created = created || a.GetVerb() == "create"
+		}
+		if !created || rec.Code != http.StatusServiceUnavailable || strings.Contains(rec.Body.String(), "CRD must support") {
+			t.Fatalf("an unrelated rejection read as an old CRD (create attempted %v): %d %s", created, rec.Code, rec.Body.String())
 		}
 
 		dyn = dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
@@ -142,7 +148,17 @@ func TestVeleroVolumeRecordSaysWhetherTheRunHadFinished(t *testing.T) {
 	for phase, want := range map[string]bool{"Finalizing": false, "WaitingForPluginOperations": false, "InProgress": false, "Completed": true, "PartiallyFailed": true} {
 		t.Run(phase, func(t *testing.T) {
 			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{downloadRequestGVR: "DownloadRequestList"})
+			// The run completes while the file is fetched: what counts is the
+			// phase read before asking for it.
 			answerVeleroRun(dyn, phase)
+			first := true
+			dyn.PrependReactor("get", "backups", func(k8stesting.Action) (bool, runtime.Object, error) {
+				if first {
+					first = false
+					return false, nil, nil
+				}
+				return true, &unstructured.Unstructured{Object: map[string]any{"apiVersion": "velero.io/v1", "kind": "Backup", "metadata": map[string]any{"name": "nightly", "namespace": "velero"}, "status": map[string]any{"phase": "Completed"}}}, nil
+			})
 			dyn.PrependReactor("create", "downloadrequests", func(a k8stesting.Action) (bool, runtime.Object, error) {
 				a.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured).SetName("dr")
 				return false, nil, nil
@@ -166,7 +182,7 @@ func TestVeleroVolumeRecordSaysWhetherTheRunHadFinished(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 				t.Fatal(err)
 			}
-			if got.FinishedAtRead != want || got.Total != 1 {
+			if !strings.Contains(rec.Body.String(), fmt.Sprintf(`"finishedAtRead":%v`, want)) || got.FinishedAtRead != want || got.Total != 1 {
 				t.Fatalf("finishedAtRead = %v, want %v: %+v", got.FinishedAtRead, want, got)
 			}
 		})
