@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
-import { CertaintyGlyph, PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input, usePhoneLayout } from '@skyhook-io/k8s-ui'
+import { CertaintyGlyph, PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input, TABLE_DENSITY, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { clsx } from 'clsx'
 import { useHelmInventory, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
@@ -255,7 +255,7 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
         {activeTab === 'releases' ? (
           <>
             {/* Releases Toolbar */}
-            <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
+            <div className={clsx('flex items-center gap-4 border-b border-theme-border bg-theme-surface/50 shrink-0', TABLE_DENSITY.toolbarClass)}>
               <div className="flex-1 relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
                 <Input
@@ -263,7 +263,7 @@ export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmVi
                   placeholder="Search releases..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className={clsx('w-full max-w-md pl-10 pr-4 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500', TABLE_DENSITY.searchClass)}
                 />
               </div>
             </div>
@@ -608,7 +608,7 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
             : 'hover:bg-theme-surface/50'
       )}
     >
-      <td className="px-4 py-3 phone:px-3">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'phone:px-3')}>
         <div className="flex min-w-0 items-center gap-2 phone:flex-wrap phone:gap-y-1">
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
           <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:max-w-[calc(100%-1.5rem)] phone:shrink-0">{release.name}</span>
@@ -617,17 +617,17 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
         </div>
         <span className="hidden truncate pl-6 text-xs text-theme-text-tertiary phone:block">{release.namespace}</span>
       </td>
-      <td className="px-4 py-3 w-[18%] phone:hidden">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'w-[18%] phone:hidden')}>
         <Tooltip content={release.namespace}>
           <span className="block truncate text-sm text-theme-text-secondary">{release.namespace}</span>
         </Tooltip>
       </td>
-      <td className="px-4 py-3 w-[22%] phone:hidden">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'w-[22%] phone:hidden')}>
         <Tooltip content={chart.tooltip}>
           <span className={clsx('text-sm truncate block', chart.known ? 'text-theme-text-secondary' : 'text-theme-text-tertiary')}>{chart.text}</span>
         </Tooltip>
       </td>
-      <td className="px-4 py-3 w-24 hidden xl:table-cell">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'w-24 hidden xl:table-cell')}>
         {release.appVersion ? (
           <span className="text-sm text-theme-text-secondary">{release.appVersion}</span>
         ) : release.appVersions?.length ? (
@@ -640,7 +640,7 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
           </Tooltip>
         )}
       </td>
-      <td className="px-4 py-3 w-40 phone:w-[6.5rem] phone:px-3">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'w-40 phone:w-[6.5rem] phone:px-3')}>
         <div className="flex flex-wrap items-center gap-1">
           <Tooltip content={UNREAD_FROM_HELM}>
             <span className={clsx('badge', SEVERITY_BADGE.neutral)}>Unknown</span>
@@ -654,10 +654,10 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
       </td>
       {showHelmColumns && (
         <>
-          <td className="px-4 py-3 w-16 phone:hidden">
+          <td className={clsx(TABLE_DENSITY.cellClass, 'w-16 phone:hidden')}>
             <CertaintyGlyph certainty="unknown" title={UNREAD_FROM_HELM} />
           </td>
-          <td className="px-4 py-3 w-24 phone:hidden">
+          <td className={clsx(TABLE_DENSITY.cellClass, 'w-24 phone:hidden')}>
             <CertaintyGlyph certainty="unknown" title={UNREAD_FROM_HELM} />
           </td>
         </>
@@ -695,7 +695,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
             : 'hover:bg-theme-surface/50'
       )}
     >
-      <td className="px-4 py-3 phone:px-3">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'phone:px-3')}>
         <div className="flex min-w-0 items-center gap-2 phone:flex-wrap phone:gap-y-1">
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
           <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:max-w-[calc(100%-1.5rem)] phone:shrink-0">{release.name}</span>
@@ -713,19 +713,19 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
         </div>
         <span className="hidden truncate pl-6 text-xs text-theme-text-tertiary phone:block">{release.namespace}</span>
       </td>
-      <td className="px-4 py-3 w-[18%] phone:hidden">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'w-[18%] phone:hidden')}>
         <Tooltip content={release.namespace}>
           <span className="block truncate text-sm text-theme-text-secondary">{release.namespace}</span>
         </Tooltip>
       </td>
-      <td className="px-4 py-3 w-[22%] phone:hidden">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'w-[22%] phone:hidden')}>
         <Tooltip content={`${release.chart}-${release.chartVersion}`}>
           <span className="text-sm text-theme-text-secondary truncate block">
             {release.chart}-{release.chartVersion}
           </span>
         </Tooltip>
       </td>
-      <td className="px-4 py-3 w-24 hidden xl:table-cell">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'w-24 hidden xl:table-cell')}>
         {release.appVersion ? (
           <span className="text-sm text-theme-text-secondary">{release.appVersion}</span>
         ) : (
@@ -734,7 +734,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           </Tooltip>
         )}
       </td>
-      <td className="px-4 py-3 w-40 phone:w-[6.5rem] phone:px-3">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'w-40 phone:w-[6.5rem] phone:px-3')}>
         {isHelmReleaseActionable(release.status) ? (
           <Tooltip content="Click row to view rollback / history / logs and recover">
             <span
@@ -755,10 +755,10 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           </span>
         )}
       </td>
-      <td className="px-4 py-3 w-16 phone:hidden">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'w-16 phone:hidden')}>
         <span className="text-sm text-theme-text-secondary">{release.revision}</span>
       </td>
-      <td className="px-4 py-3 w-24 phone:hidden">
+      <td className={clsx(TABLE_DENSITY.cellClass, 'w-24 phone:hidden')}>
         <Tooltip content={release.updated}>
           <span className="text-sm text-theme-text-secondary">
             {formatAge(release.updated)}

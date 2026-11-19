@@ -60,6 +60,7 @@ export type { SummaryTone } from "./SummaryTile";
 export { Facet, FacetSection, FacetButton } from "./Facet";
 export type { FacetTone } from "./Facet";
 export { SortableTh, TH_CLASS } from "./SortableTh";
+export { TABLE_DENSITY } from "./table-density";
 export type { SortDir } from "./SortableTh";
 export { DistributionBar, DistributionLegendChip } from "./DistributionBar";
 export type { DistributionSegment } from "./DistributionBar";

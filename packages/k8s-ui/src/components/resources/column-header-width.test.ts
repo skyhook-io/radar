@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { SKIP_FILTER_COLUMNS, getColumnHeaderWidth, getColumnMinWidth, type Column } from './ResourcesView'
 import { getCellFilterValue } from './resource-utils'
-import { TABLE_DENSITY } from './table-density'
+import { TABLE_DENSITY } from '../ui/table-density'
 
 // The header row is padded (TABLE_DENSITY.cellClass) around a `truncate` label, under table-layout:fixed with
 // explicit <col> widths. A column narrower than its own heading clips to

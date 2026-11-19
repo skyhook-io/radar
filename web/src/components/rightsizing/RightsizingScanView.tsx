@@ -37,6 +37,8 @@ import {
 } from './presentation'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
+import { clsx } from 'clsx'
+import { TABLE_DENSITY } from '@skyhook-io/k8s-ui'
 
 export const RIGHTSIZING_SCAN_DESCRIPTION =
   'Find CPU and memory requests to increase, reduce, or review. Radar never changes them.'
@@ -396,7 +398,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
                   />
                 ) : (
                   <div>
-                    <div className="grid grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] gap-3 border-b border-theme-border px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+                    <div className="grid grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] gap-3 border-b border-theme-border px-3.5 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
                       <span>Workload / container</span>
                       <span>CPU request</span>
                       <span>Memory request</span>
@@ -796,7 +798,7 @@ function ScanResultRow({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="grid w-full grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] items-center gap-3 px-4 py-3 text-left hover:bg-theme-hover/50"
+        className={clsx('grid w-full grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] items-center gap-3 text-left hover:bg-theme-hover/50', TABLE_DENSITY.cellClass)}
       >
         <div className="min-w-0">
           <div className="flex items-center gap-2">

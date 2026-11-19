@@ -35,6 +35,7 @@ import {
   type ResourceStatusFacet,
 } from './insights-helpers'
 import { DriftPanel } from './DriftPanel'
+import { TABLE_DENSITY } from '../../ui/table-density'
 
 interface GitOpsStatusStripProps {
   insight?: GitOpsInsight | null
@@ -1138,7 +1139,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 border-b border-theme-border bg-theme-base/40 px-4 py-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 border-b border-theme-border bg-theme-base/40 px-3.5 py-2">
               <ResSortHeader label="Resource" sortKey="name" sort={sort} onSort={onSort} />
               <ResSortHeader label="Sync" sortKey="sync" sort={sort} onSort={onSort} />
               <ResSortHeader label="Health" sortKey="health" sort={sort} onSort={onSort} />
@@ -1466,7 +1467,7 @@ function ChangeRow({
           across rows regardless of how long "Open <Kind> <name> →" is. With
           an `auto` last column, each row's 1fr column got a different
           residual width, pushing the badges to inconsistent offsets. */}
-      <div className="grid w-full grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 px-4 py-3 text-sm">
+      <div className={clsx('grid w-full grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 text-sm', TABLE_DENSITY.cellClass)}>
         <button
           type="button"
           onClick={handleRowClick}

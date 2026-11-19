@@ -46,7 +46,7 @@ import { getCrossplanePauseState, isComposite, isManagedResource } from './resou
 import { getPodGpuCount } from '../../utils/extended-resources'
 import { getCRDColumnValue } from './resource-utils-crd'
 import { getMachineNodeRef } from './resource-utils-capi'
-import { TABLE_DENSITY } from './table-density'
+import { TABLE_DENSITY } from '../ui/table-density'
 
 // Cell text styles, matching the classes the cells render with (text-sm /
 // text-xs in the app font). measureText takes a CSS font shorthand.

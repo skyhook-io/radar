@@ -184,7 +184,7 @@ import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessContr
 import { Tooltip } from '../ui/Tooltip'
 import { TruncatedText } from '../ui/TruncatedText'
 import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, layoutColumns, rememberWidths } from './column-sizing'
-import { TABLE_DENSITY } from './table-density'
+import { TABLE_DENSITY } from '../ui/table-density'
 import { type CellWidth, type UsageLabel, NAME_MAX_PX, NAME_MIN_PX, NAME_PROTECTED_MAX_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, usageLabelWidth, workloadImagesText, shortValueMin } from './column-content-width'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import type { Issue } from '../issues/types'
