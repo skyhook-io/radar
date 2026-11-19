@@ -113,7 +113,7 @@ func TestJava4ShellKeepsPlacementSeparateFromImageEvidence(t *testing.T) {
 	}
 	anotherWorkload := newTarget("other-app", digest, "amd64", nil)
 	pods = append(pods, anotherWorkload)
-	got, err := fakeInventory(f).CheckJava4Shell(context.Background(), pods, func(pod *corev1.Pod) resourceid.Ref {
+	got, err := fakeInventory(f).CheckJava4Shell(context.Background(), pods, func(_ context.Context, pod *corev1.Pod) resourceid.Ref {
 		workload := "web"
 		if pod == anotherWorkload.Pod {
 			workload = "another-workload"
@@ -161,6 +161,42 @@ func TestJava4ShellNeverDialsRadarLoopback(t *testing.T) {
 	}
 }
 
+func TestJava4ShellBoundsUnassessedRowsAndKeepsTotals(t *testing.T) {
+	baseImage := "registry.example/team/base"
+	digest := baseImage + "@sha256:" + strings.Repeat("a", 64)
+	f := &fakeLookup{configs: map[string]*v1.ConfigFile{refKey(t, digest): {}}}
+	targets := make([]Java4ShellPod, 0, java4ShellRowLimit+4)
+	node := &corev1.Node{Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{Architecture: "amd64", OperatingSystem: "linux"}}}
+	add := func(name, workload, imageID string) {
+		pod := runningPod("team", name, "node", workload, map[string][2]string{"app": {baseImage + ":1", imageID}})
+		pod.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
+		targets = append(targets, Java4ShellPod{Pod: pod, Node: node})
+	}
+	for i := range java4ShellRowLimit + 2 {
+		name := fmt.Sprintf("base-%03d", i)
+		add(name, name, digest)
+	}
+	add("java-1", "java", "")
+	add("java-2", "java", "")
+	var firstWorkload string
+	result, err := fakeInventory(f).CheckJava4Shell(context.Background(), targets, func(_ context.Context, p *corev1.Pod) resourceid.Ref {
+		workload := p.Labels["workload"]
+		if firstWorkload == "" {
+			firstWorkload = workload
+		}
+		return resourceid.NewRef("apps", "Deployment", p.Namespace, workload)
+	}, nil)
+	if err != nil || result.UnassessedGroups != java4ShellRowLimit+3 || len(result.UnassessedRows) != java4ShellRowLimit ||
+		result.Unassessed["no_java_declaration"] != java4ShellRowLimit+2 || result.Unassessed["image_identity_unknown"] != 2 {
+		t.Fatalf("wrong unassessed totals: groups=%d rows=%d reasons=%+v, err=%v", result.UnassessedGroups, len(result.UnassessedRows), result.Unassessed, err)
+	}
+	row := result.UnassessedRows[0]
+	if row.Workload.Name != "java" || row.Container != "app" || row.Image != baseImage+":1" || row.Digest != "" ||
+		row.Reason != "image_identity_unknown" || row.Pods != 2 || firstWorkload != "java" || f.calls.Load() != 1 {
+		t.Fatalf("wrong priority, grouping or lookup count: %+v, first owner=%q, calls=%d", row, firstWorkload, f.calls.Load())
+	}
+}
+
 func TestJava4ShellScopesAndRevalidatesPrivateRegistryAccess(t *testing.T) {
 	digest := "registry.example/team/java@sha256:" + strings.Repeat("a", 64)
 	ref := refKey(t, digest)
@@ -177,7 +213,9 @@ func TestJava4ShellScopesAndRevalidatesPrivateRegistryAccess(t *testing.T) {
 		errs:    map[string]error{ref + "|anonymous": unauthorized()},
 	}
 	inventory := fakeInventory(f)
-	workloadFor := func(p *corev1.Pod) resourceid.Ref { return resourceid.NewRef("", "Pod", p.Namespace, p.Name) }
+	workloadFor := func(_ context.Context, p *corev1.Pod) resourceid.Ref {
+		return resourceid.NewRef("", "Pod", p.Namespace, p.Name)
+	}
 	accessFor := func(p *corev1.Pod) Java4ShellRegistryAccess {
 		if p == allowed {
 			return Java4ShellRegistryAccess{PullSecrets: []*corev1.Secret{secret}}
@@ -186,7 +224,9 @@ func TestJava4ShellScopesAndRevalidatesPrivateRegistryAccess(t *testing.T) {
 	}
 	got, err := inventory.CheckJava4Shell(context.Background(), pods, workloadFor, accessFor)
 	if err != nil || got.Matches != 1 || got.Unassessed[StatusAuthRequired] != 1 ||
-		len(got.Findings) != 1 || got.Findings[0].Workload.Namespace != allowed.Namespace {
+		len(got.Findings) != 1 || got.Findings[0].Workload.Namespace != allowed.Namespace ||
+		len(got.UnassessedRows) != 1 || got.UnassessedRows[0].Workload.Namespace != denied.Namespace ||
+		got.UnassessedRows[0].Reason != StatusAuthRequired || got.UnassessedRows[0].Pods != 1 {
 		t.Fatalf("private read crossed Pod scope or did not succeed: %+v, %v", got, err)
 	}
 

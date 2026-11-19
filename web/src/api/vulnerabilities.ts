@@ -189,12 +189,23 @@ export interface Java4ShellFinding {
 
 export const JAVA4SHELL_CVE = 'CVE-2026-114938'
 
+export interface Java4ShellUnassessed {
+  workload: VulnerabilityWorkloadRef
+  container: string
+  image: string
+  digest?: string
+  reason: string
+  pods: number
+}
+
 export interface Java4ShellResult {
   findings: Java4ShellFinding[]
   containers: number
   matches: number
   findingGroups: number
   unassessed: Record<string, number>
+  unassessedRows: Java4ShellUnassessed[]
+  unassessedGroups: number
   coverage: ResourceReadCoverage
 }
 

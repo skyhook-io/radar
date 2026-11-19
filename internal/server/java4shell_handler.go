@@ -116,8 +116,8 @@ func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 	accessCtx, cancelAccess := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancelAccess()
 	accessRequest := r.WithContext(accessCtx)
-	result, err := images.DefaultRuntimeInventory(k8s.IsInCluster()).CheckJava4Shell(r.Context(), pods, func(pod *corev1.Pod) resourceid.Ref {
-		return s.java4ShellWorkload(r, cache, pod)
+	result, err := images.DefaultRuntimeInventory(k8s.IsInCluster()).CheckJava4Shell(r.Context(), pods, func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
+		return s.java4ShellWorkload(r.WithContext(ctx), cache, pod)
 	}, func(pod *corev1.Pod) images.Java4ShellRegistryAccess {
 		if accessCtx.Err() != nil || !current() {
 			return images.Java4ShellRegistryAccess{}
@@ -188,7 +188,8 @@ func (s *Server) java4ShellWorkload(r *http.Request, cache *k8s.ResourceCache, p
 	fallback := resourceid.NewRef("", "Pod", pod.Namespace, pod.Name)
 	allowed := func(kind, group string) bool {
 		resolvedGroup, resource, clusterScoped, ok := k8s.ResolveChangeGVR(kind, group)
-		return ok && !clusterScoped && resolvedGroup == group && s.canRead(r, resolvedGroup, resource, pod.Namespace, "list")
+		return ok && !clusterScoped && resolvedGroup == group && r.Context().Err() == nil &&
+			s.canRead(r, resolvedGroup, resource, pod.Namespace, "list")
 	}
 	owner := metav1.GetControllerOfNoCopy(pod)
 	if owner == nil || !allowed(owner.Kind, resourceid.GroupFromAPIVersion(owner.APIVersion)) {

@@ -1,11 +1,15 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { TimeValue } from '@skyhook-io/k8s-ui'
+import { Download } from 'lucide-react'
+import { Collapse, CollapseChevron, TimeValue, useDisclosure } from '@skyhook-io/k8s-ui'
 import { JAVA4SHELL_CVE, useJava4ShellCheck, type Java4ShellFinding, type Java4ShellResult } from '../../api/vulnerabilities'
 import type { SelectedResource } from '../../types'
+import { triggerDownload } from '@skyhook-io/k8s-ui/utils/download'
 import { resourceCoverageNotice, resourceNarrowedNotice } from '@skyhook-io/k8s-ui/utils/resource-coverage'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import { resourceRefKey } from '@skyhook-io/k8s-ui/utils/resource-refs'
 import { ImageName } from '../vulnerabilities/parts'
+import { Tooltip } from '../ui/Tooltip'
 
 const advisoryURL = 'https://www.oracle.com/security-alerts/cspunov2026.html#AppendixJAVA'
 
@@ -19,6 +23,7 @@ interface Java4ShellPanelProps {
 
 export function Java4ShellPanel({ namespaces, context, connected, trivySearch, onNavigateToResource }: Java4ShellPanelProps) {
   const { data, dataUpdatedAt, isFetching, error, refetch } = useJava4ShellCheck(namespaces, context)
+  const checkedAt = new Date(dataUpdatedAt).toISOString()
   return (
     <section aria-label="Java4Shell check" className="rounded-xl border border-theme-border bg-theme-surface p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -33,38 +38,53 @@ export function Java4ShellPanel({ namespaces, context, connected, trivySearch, o
             {trivySearch && <Link className="text-accent-text hover:underline" to={{ search: trivySearch }}>Find in Trivy reports</Link>}
           </div>
         </div>
-        <button
-          type="button"
-          className="btn-brand shrink-0 px-3 py-1.5 text-xs font-medium"
-          onClick={() => void refetch()}
-          disabled={!connected || isFetching}
-        >
-          {isFetching ? 'Checking workloads…' : data ? 'Run check again' : 'Check for Java4Shell'}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {data && (
+            <button
+              type="button"
+              className="btn-secondary inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium"
+              onClick={() => triggerDownload(
+                JSON.stringify({ cve: JAVA4SHELL_CVE, checkedAt, ...data }, null, 2),
+                'application/json',
+                `java4shell-${checkedAt.replace(/[:.]/g, '-')}.json`,
+              )}
+            >
+              <Download className="h-3.5 w-3.5" /> Download JSON
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn-brand shrink-0 px-3 py-1.5 text-xs font-medium"
+            onClick={() => void refetch()}
+            disabled={!connected || isFetching}
+          >
+            {isFetching ? 'Checking workloads…' : data ? 'Run check again' : 'Check for Java4Shell'}
+          </button>
+        </div>
       </div>
       {isFetching && <p role="status" className="mt-3 text-xs text-theme-text-secondary">Reading running Pods and image metadata. This can take up to 40 seconds after the Pods are read.</p>}
       {error && <p role="alert" className="mt-3 text-xs text-warning-text">{error.message}{data && ' Showing the previous result.'}</p>}
-      {data && <Java4ShellResults data={data} checkedAt={new Date(dataUpdatedAt).toISOString()} onOpen={onNavigateToResource} />}
+      {data && <Java4ShellResults data={data} checkedAt={checkedAt} onOpen={onNavigateToResource} />}
     </section>
   )
 }
 
 const reasonLabels: Record<string, string> = {
-  image_identity_unknown: 'missing a running image digest',
-  version_unknown: 'with unsupported Java versions',
-  platform_unknown: 'with unknown image platforms',
-  auth_required: 'with images Radar could not authenticate to read',
-  not_found: 'with missing or private images',
-  blocked: 'with registry addresses Radar could not reach',
-  rate_limited: 'limited by the registry',
-  error: 'with failed registry reads',
-  not_checked: 'beyond the check limit',
+  image_identity_unknown: 'Running image digest unavailable',
+  version_unknown: 'Unrecognized Java version',
+  platform_unknown: 'Image platform unknown',
+  auth_required: 'Registry authentication required',
+  not_found: 'Image missing or private',
+  blocked: 'Registry address blocked',
+  rate_limited: 'Registry rate limit',
+  error: 'Registry read failed',
+  not_checked: 'Check limit reached',
+  no_java_declaration: 'Image declares no Java version',
 }
 
 function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult; checkedAt: string; onOpen: (resource: SelectedResource) => void }) {
   const missingDeclaration = data.unassessed.no_java_declaration ?? 0
-  const reasons = Object.entries(data.unassessed).filter(([reason]) => reason !== 'no_java_declaration').sort((a, b) => b[1] - a[1])
-  const unassessed = reasons.reduce((count, [, n]) => count + n, 0)
+  const unassessed = Object.values(data.unassessed).reduce((count, n) => count + n, 0)
   const coverage = resourceCoverageNotice(data.coverage, 'Pods') ?? resourceNarrowedNotice(data.coverage)
   const namespaces = data.coverage.read?.namespaces
   const scope = namespaces?.names && namespaces.names.length <= 3
@@ -83,7 +103,7 @@ function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult
       ? 'Radar found no running containers in the scope it read'
       : missingDeclaration === data.containers
         ? 'Images checked declared no Java version'
-        : unassessed + missingDeclaration === data.containers
+        : unassessed === data.containers
           ? 'Radar could not assess the Java version of any running container'
           : 'No matches among containers whose declared Java version Radar could assess'
   return (
@@ -93,9 +113,9 @@ function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult
         <p className="text-theme-text-tertiary">Checked <TimeValue timestamp={checkedAt} /> · {scope}</p>
       </div>
       {coverage && <p className="text-warning-text">{coverage}</p>}
-      {unassessed > 0 && (
+      {unassessed > missingDeclaration && (
         <p className="text-theme-text-secondary">
-          Java version unassessed in {pluralize(unassessed, 'container')} ({reasons.map(([reason, count]) => `${count} ${reasonLabels[reason] ?? reason}`).join(', ')}).
+          Java version unassessed in {pluralize(unassessed - missingDeclaration, 'container')}.
         </p>
       )}
       {missingDeclaration > 0 && (
@@ -122,8 +142,7 @@ function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult
                     <tr key={JSON.stringify([row.container, row.digest, row.version])} className="align-top">
                       {index === 0 && (
                         <th rowSpan={rows.length} scope="rowgroup" className="px-3 py-2 font-medium">
-                          <button type="button" onClick={() => onOpen(row.workload)} className="text-left text-accent-text hover:underline">{row.workload.name}</button>
-                          <div className="text-theme-text-tertiary">{row.workload.kind} · {row.workload.namespace}</div>
+                          <WorkloadLink workload={row.workload} onOpen={onOpen} />
                         </th>
                       )}
                       <td className="px-3 py-2">
@@ -149,6 +168,73 @@ function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult
       {data.findingGroups > data.findings.length && (
         <p className="text-theme-text-secondary">Showing {data.findings.length} of {data.findingGroups} matching workload and image groups. Narrow the namespace scope to see more.</p>
       )}
+      {data.unassessedGroups > 0 && <UnassessedDetails data={data} onOpen={onOpen} />}
+    </div>
+  )
+}
+
+function WorkloadLink({ workload, onOpen }: { workload: Java4ShellFinding['workload']; onOpen: (resource: SelectedResource) => void }) {
+  return (
+    <>
+      <button type="button" onClick={() => onOpen(workload)} className="text-left text-accent-text hover:underline">{workload.name}</button>
+      <div className="text-theme-text-tertiary">{workload.kind} · {workload.namespace}</div>
+    </>
+  )
+}
+
+function UnassessedDetails({ data, onOpen }: { data: Java4ShellResult; onOpen: (resource: SelectedResource) => void }) {
+  const [open, setOpen] = useState(false)
+  const { panelId, buttonProps } = useDisclosure(open)
+  const { unassessedRows, unassessedGroups } = data
+  const reasonTotals = Object.entries(data.unassessed).sort(([, a], [, b]) => b - a)
+  return (
+    <div>
+      <button {...buttonProps} type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1.5 py-1 font-medium text-accent-text hover:underline">
+        <CollapseChevron open={open} className="h-3.5 w-3.5" />
+        Unassessed containers
+      </button>
+      <Collapse open={open} id={panelId} mountLazily>
+        {reasonTotals.length > 1 && (
+          <ul aria-label="Totals by reason" className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-theme-text-secondary">
+            {reasonTotals.map(([reason, count]) => (
+              <li key={reason}>{reasonLabels[reason] ?? reason} · <span className="tabular-nums">{count}</span></li>
+            ))}
+          </ul>
+        )}
+        <div role="region" aria-label="Unassessed containers by workload" tabIndex={0} className="mt-1 max-h-64 overflow-auto rounded-lg border border-theme-border">
+          <table className="w-full min-w-[32rem] text-left">
+            <thead className="sticky top-0 bg-theme-elevated text-theme-text-secondary">
+              <tr>
+                <th scope="col" className="px-3 py-2 font-medium">Workload</th>
+                <th scope="col" className="px-3 py-2 font-medium">Container</th>
+                <th scope="col" className="px-3 py-2 font-medium">Reason</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium">Pods</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-theme-border border-t border-theme-border">
+              {unassessedRows.map(row => (
+                <tr key={JSON.stringify([resourceRefKey(row.workload), row.container, row.image, row.digest, row.reason])} className="align-top">
+                  <th scope="row" className="px-3 py-2 font-medium"><WorkloadLink workload={row.workload} onOpen={onOpen} /></th>
+                  <td className="px-3 py-2">
+                    <div className="text-theme-text-primary">{row.container}</div>
+                    <div className="max-w-48 truncate text-theme-text-tertiary"><ImageName image={row.image} /></div>
+                    {row.digest && (
+                      <Tooltip content={row.digest}>
+                        <span className="font-mono text-theme-text-tertiary">{row.digest.replace(/^sha256:/, '').slice(0, 12)}</span>
+                      </Tooltip>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-theme-text-secondary">{reasonLabels[row.reason] ?? row.reason}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-theme-text-secondary">{row.pods}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {unassessedGroups > unassessedRows.length && (
+          <p className="mt-2 text-theme-text-secondary">Showing {unassessedRows.length} of {unassessedGroups} workload or Pod groups. Narrow the namespace scope to see more.</p>
+        )}
+      </Collapse>
     </div>
   )
 }

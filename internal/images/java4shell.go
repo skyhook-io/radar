@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -46,11 +47,22 @@ type Java4ShellFinding struct {
 }
 
 type Java4ShellResult struct {
-	Findings      []Java4ShellFinding `json:"findings"`
-	Containers    int                 `json:"containers"`
-	Matches       int                 `json:"matches"`
-	FindingGroups int                 `json:"findingGroups"`
-	Unassessed    map[string]int      `json:"unassessed"`
+	Findings         []Java4ShellFinding    `json:"findings"`
+	Containers       int                    `json:"containers"`
+	Matches          int                    `json:"matches"`
+	FindingGroups    int                    `json:"findingGroups"`
+	Unassessed       map[string]int         `json:"unassessed"`
+	UnassessedRows   []Java4ShellUnassessed `json:"unassessedRows"`
+	UnassessedGroups int                    `json:"unassessedGroups"`
+}
+
+type Java4ShellUnassessed struct {
+	Workload  resourceid.Ref `json:"workload"`
+	Container string         `json:"container"`
+	Image     string         `json:"image"`
+	Digest    string         `json:"digest,omitempty"`
+	Reason    string         `json:"reason"`
+	Pods      int            `json:"pods"`
 }
 
 type java4ShellContainer struct {
@@ -59,6 +71,7 @@ type java4ShellContainer struct {
 	image              string
 	lookup             int
 	reportedHash       string
+	unassessedReason   string
 	platformAssumed    bool
 	cpu                string
 	mitigationDeclared bool
@@ -69,16 +82,24 @@ type java4ShellGroup struct {
 	container, digest, java string
 }
 
+type java4ShellUnassessedGroup struct {
+	workload                         resourceid.Ref
+	container, image, digest, reason string
+}
+
 // CheckJava4Shell shares registry reads only among Pods with the same image,
 // platform and credential grant. The caller authorizes and captures the
 // credentials for each Pod before a private read.
-func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4ShellPod, workloadFor func(*corev1.Pod) resourceid.Ref, accessFor func(*corev1.Pod) Java4ShellRegistryAccess) (Java4ShellResult, error) {
+func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4ShellPod, workloadFor func(context.Context, *corev1.Pod) resourceid.Ref, accessFor func(*corev1.Pod) Java4ShellRegistryAccess) (Java4ShellResult, error) {
 	if !r.java4ShellActive.CompareAndSwap(false, true) {
 		return Java4ShellResult{}, ErrJava4ShellBusy
 	}
 	defer r.java4ShellActive.Store(false)
 
-	out := Java4ShellResult{Findings: []Java4ShellFinding{}, Unassessed: map[string]int{}}
+	out := Java4ShellResult{
+		Findings: []Java4ShellFinding{}, Unassessed: map[string]int{},
+		UnassessedRows: []Java4ShellUnassessed{},
+	}
 	var items []*work
 	byKey := map[string]int{}
 	dockerHubLookups := 0
@@ -107,11 +128,20 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 				continue
 			}
 			out.Containers++
+			c := java4ShellContainer{pod: pod, container: container.Name, image: status.Image}
 			ref, source, ok := imageRef(container.Image, status.ImageID)
 			if !ok || source != "digest" {
-				out.Unassessed["image_identity_unknown"]++
+				if c.image == "" {
+					c.image = container.Image
+				}
+				c.unassessedReason = "image_identity_unknown"
+				containers = append(containers, c)
 				continue
 			}
+			if c.image == "" {
+				c.image = ref.Context().Name()
+			}
+			c.reportedHash = ref.Identifier()
 			if !accessChecked && accessFor != nil {
 				access = accessFor(pod)
 				var scope strings.Builder
@@ -134,7 +164,8 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 			if !exists {
 				onDockerHub := ref.Context().RegistryStr() == name.DefaultRegistry
 				if len(items) >= maxLookupsPerCall || (onDockerHub && dockerHubLookups >= java4ShellDockerHubLookups) {
-					out.Unassessed[StatusNotChecked]++
+					c.unassessedReason = StatusNotChecked
+					containers = append(containers, c)
 					continue
 				}
 				if onDockerHub {
@@ -145,30 +176,42 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 				items = append(items, &work{key: key, ref: ref, platform: platform, advisory: true,
 					secrets: secrets, radarCredentials: access.RadarCredentials})
 			}
-			image := status.Image
-			if image == "" {
-				image = ref.Context().Name()
-			}
-			containers = append(containers, java4ShellContainer{
-				pod: pod, container: container.Name, image: image, lookup: i, reportedHash: ref.Identifier(),
-				platformAssumed: assumed, cpu: cpu, mitigationDeclared: java4ShellMitigationDeclared(container),
-			})
+			c.lookup = i
+			c.platformAssumed = assumed
+			c.cpu = cpu
+			c.mitigationDeclared = java4ShellMitigationDeclared(container)
+			containers = append(containers, c)
 		}
 	}
 
 	results := r.lookupConfigs(context.WithValue(ctx, strictRegistryLookupKey{}, true), items, false)
 	groups := map[java4ShellGroup]*Java4ShellFinding{}
 	workloads := map[*corev1.Pod]resourceid.Ref{}
-	for _, c := range containers {
+	resolveWorkload := func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
+		workload, resolved := workloads[pod]
+		if !resolved {
+			workload = resourceid.NewRef("", "Pod", pod.Namespace, pod.Name)
+			if workloadFor != nil && ctx.Err() == nil {
+				workload = workloadFor(ctx, pod)
+			}
+			workloads[pod] = workload
+		}
+		return workload
+	}
+	for i := range containers {
+		c := &containers[i]
+		if c.unassessedReason != "" {
+			continue
+		}
 		res := results[c.lookup]
 		if res.status != StatusOK {
-			out.Unassessed[res.status]++
+			c.unassessedReason = res.status
 			continue
 		}
 		// An image index can point at several platform manifests. Without
 		// verified placement, only an exact manifest digest is evidence.
 		if c.platformAssumed && c.reportedHash != res.digest {
-			out.Unassessed["platform_unknown"]++
+			c.unassessedReason = "platform_unknown"
 			continue
 		}
 		version := ""
@@ -179,22 +222,18 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 			}
 		}
 		if version == "" {
-			out.Unassessed["no_java_declaration"]++
+			c.unassessedReason = "no_java_declaration"
 			continue
 		}
 		affected, fixedIn, known := java4ShellVersion(version)
 		if !known {
-			out.Unassessed["version_unknown"]++
+			c.unassessedReason = "version_unknown"
 			continue
 		}
 		if !affected {
 			continue
 		}
-		workload, resolved := workloads[c.pod]
-		if !resolved {
-			workload = workloadFor(c.pod)
-			workloads[c.pod] = workload
-		}
+		workload := resolveWorkload(ctx, c.pod)
 		key := java4ShellGroup{workload: workload, container: c.container, digest: c.reportedHash, java: version}
 		row := groups[key]
 		if row == nil {
@@ -231,7 +270,54 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 	})
 	out.FindingGroups = len(out.Findings)
 	out.Findings = out.Findings[:min(out.FindingGroups, java4ShellRowLimit)]
+
+	// A cluster full of images without Java metadata can need many owner
+	// permission checks. Fall back to the visible Pod once the budget expires.
+	detailsCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	unassessed := map[java4ShellUnassessedGroup]int{}
+	for _, missingDeclaration := range []bool{false, true} {
+		for _, c := range containers {
+			if c.unassessedReason == "" || (c.unassessedReason == "no_java_declaration") != missingDeclaration {
+				continue
+			}
+			out.Unassessed[c.unassessedReason]++
+			key := java4ShellUnassessedGroup{
+				workload: resolveWorkload(detailsCtx, c.pod), container: c.container, image: c.image,
+				digest: c.reportedHash, reason: c.unassessedReason,
+			}
+			unassessed[key]++
+		}
+	}
+	for key, count := range unassessed {
+		out.UnassessedRows = append(out.UnassessedRows, Java4ShellUnassessed{
+			Workload: key.workload, Container: key.container, Image: key.image, Digest: key.digest, Reason: key.reason, Pods: count,
+		})
+	}
+	slices.SortFunc(out.UnassessedRows, func(a, b Java4ShellUnassessed) int {
+		return cmp.Or(
+			cmp.Compare(unassessedPriority(a.Reason), unassessedPriority(b.Reason)),
+			cmp.Compare(b.Pods, a.Pods),
+			strings.Compare(a.Workload.Namespace, b.Workload.Namespace),
+			strings.Compare(a.Workload.Name, b.Workload.Name),
+			strings.Compare(a.Workload.Kind, b.Workload.Kind),
+			strings.Compare(a.Workload.Group, b.Workload.Group),
+			strings.Compare(a.Container, b.Container),
+			strings.Compare(a.Image, b.Image),
+			strings.Compare(a.Digest, b.Digest),
+			strings.Compare(a.Reason, b.Reason),
+		)
+	})
+	out.UnassessedGroups = len(out.UnassessedRows)
+	out.UnassessedRows = out.UnassessedRows[:min(out.UnassessedGroups, java4ShellRowLimit)]
 	return out, nil
+}
+
+func unassessedPriority(reason string) int {
+	if reason == "no_java_declaration" {
+		return 1
+	}
+	return 0
 }
 
 func java4ShellPlacement(node *corev1.Node) (v1.Platform, bool, string) {
