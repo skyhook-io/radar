@@ -19,6 +19,7 @@ export {
   normalizeFluxKustomization,
   normalizeFluxHelmRelease,
   buildFluxSourceUrlMap,
+  isGitOpsCountGroup,
 } from './GitOpsTableView'
 export type {
   GitOpsTableViewProps,

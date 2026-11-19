@@ -228,3 +228,48 @@ export function useVeleroBackupDeletion(namespace: string, name: string, uid: st
     },
   })
 }
+export interface VeleroRunContentsResponse {
+  groups: { kind: string; count: number; matched: number; items: { namespace: string; name: string; action?: string }[] }[]
+  total: number
+  matched: number
+  namespaces: string[]
+  actions: Record<string, number>
+  truncated: boolean
+}
+
+export type VeleroLogLevel = 'error' | 'warning' | 'info' | 'debug' | 'other'
+export interface VeleroRunLogResponse {
+  lines: { number: number; level: VeleroLogLevel; text: string }[]
+  counts: Record<VeleroLogLevel, number>
+  matched: number
+  truncated: boolean
+  partial: boolean
+  decodedBytes: number
+  limit?: string
+  /** The levels the lines were selected from; with levels=auto, the server's choice. */
+  levels: VeleroLogLevel[]
+}
+
+function useVeleroRunArtifact<T>(kind: 'backups' | 'restores', namespace: string, name: string, artifact: 'contents' | 'log', params: URLSearchParams) {
+  const { guard, gatedKey } = useRadarFeature('veleroRunArtifacts')
+  const base = getApiBase()
+  const search = params.toString()
+  return useQuery<T>({
+    queryKey: ['velero', artifact, base, kind, namespace, name, search, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<T>(`/velero/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${artifact}?${search}`, { method: 'POST', signal })),
+    enabled: !!namespace && !!name,
+    // A tab or filter is the user's request; don't create DownloadRequests on focus or a timer.
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
+  })
+}
+
+export function useVeleroRunContents(kind: 'backups' | 'restores', namespace: string, name: string, filters: { q: string; action: string; namespace: string }) {
+  return useVeleroRunArtifact<VeleroRunContentsResponse>(kind, namespace, name, 'contents', new URLSearchParams(filters))
+}
+
+export function useVeleroRunLog(kind: 'backups' | 'restores', namespace: string, name: string, levels: string, q: string) {
+  return useVeleroRunArtifact<VeleroRunLogResponse>(kind, namespace, name, 'log', new URLSearchParams({ levels, q }))
+}

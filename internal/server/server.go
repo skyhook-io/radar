@@ -693,6 +693,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// POST: creates a DownloadRequest, which is the only supported way to
 			// read the messages behind a run's error and warning counts.
 			r.Post("/velero/{kind}/{namespace}/{name}/messages", s.handleVeleroRunMessages)
+			r.Post("/velero/{kind}/{namespace}/{name}/contents", s.handleVeleroRunContents)
+			r.Post("/velero/{kind}/{namespace}/{name}/log", s.handleVeleroRunLog)
 			// POST: creates a Backup from the schedule's template, as the caller.
 			r.Post("/velero/schedules/{namespace}/{name}/backup", s.handleVeleroBackupNow)
 			// POST: sets spec.paused as the caller, as `velero schedule pause|unpause` does.
@@ -1584,6 +1586,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		VeleroRuns:                  true,
 		VeleroDeleteBackup:          true,
 		ResourceDeletePreconditions: true,
+		VeleroRunArtifacts:          true,
 		ServiceEndpointSlices:       true,
 		TrafficRecords:              true,
 		GitOpsWriteEvidence:         true,
