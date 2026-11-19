@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { VELERO_FAILED_PHASES, veleroCadenceText, veleroDeclaredRetention, veleroDeclaredTtl, veleroPlainReason, veleroReasonNextStep, veleroScheduleBadge } from './reading'
+import { VELERO_DAY_MATCH_UNKNOWN, VELERO_FAILED_PHASES, veleroCadenceText, veleroDeclaredRetention, veleroDeclaredTtl, veleroNextRunTitle, veleroPlainReason, veleroReasonNextStep, veleroScheduleBadge, veleroScheduleReasonText } from './reading'
+import type { VeleroScheduleReading } from './types'
 
 describe('veleroPlainReason', () => {
   it('says what the common object-store failures mean', () => {
@@ -78,6 +79,35 @@ describe('veleroScheduleBadge', () => {
 
   it('keeps a healthy state out of green when the zone is not confirmed', () => {
     expect(veleroScheduleBadge({ ...base, state: 'onSchedule', zone: { name: 'UTC+02:00', source: 'inferred' } }).tone).toBe('unknown')
+  })
+
+  it('keeps a healthy state out of green when the days it runs on are not confirmed', () => {
+    expect(veleroScheduleBadge({ ...base, state: 'onSchedule', dayMatch: 'unknown' }).tone).toBe('unknown')
+    expect(veleroScheduleBadge({ ...base, state: 'onSchedule', dayMatch: 'both' }).tone).toBe('healthy')
+  })
+})
+
+describe('a schedule whose day matching is unknown', () => {
+  const reading = {
+    namespace: 'velero', name: 'monthly', created: '2026-10-01T00:00:00Z', cron: '0 0 1-7 * MON',
+    zone: { name: 'UTC', source: 'serverDefault' }, state: 'possiblyLate', reason: 'dayMatchUnconfirmed', attention: false,
+    nextRun: '2026-11-03T00:00:00Z', nextRunCertain: false, dayMatch: 'unknown',
+    runs: { read: 'full', kept: 0 }, location: {}, ttl: '', includedNamespaces: [], excludedNamespaces: [],
+  } satisfies VeleroScheduleReading
+
+  it('says why it may not be due, naming both Velero rules', () => {
+    expect(veleroScheduleReasonText(reading)).toContain(VELERO_DAY_MATCH_UNKNOWN)
+    expect(VELERO_DAY_MATCH_UNKNOWN).toContain('1.18.3')
+    expect(veleroScheduleReasonText({ ...reading, state: 'probablyLate', attention: true })).toContain(VELERO_DAY_MATCH_UNKNOWN)
+  })
+
+  it('explains the estimate by the day rule, not by a confirmed zone', () => {
+    const title = veleroNextRunTitle(reading) ?? ''
+    expect(title).toContain(VELERO_DAY_MATCH_UNKNOWN)
+    expect(title).not.toContain('runs in UTC')
+    const bothUnknown = veleroNextRunTitle({ ...reading, zone: { name: 'UTC', source: 'unknown' } }) ?? ''
+    expect(bothUnknown).toContain(VELERO_DAY_MATCH_UNKNOWN)
+    expect(bothUnknown).toContain('zone')
   })
 })
 

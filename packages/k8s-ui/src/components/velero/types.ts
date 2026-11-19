@@ -54,6 +54,14 @@ export type VeleroScheduleReason =
   | 'validationPending'
   | 'serverDown'
   | 'locationReadOnly'
+  | 'dayMatchUnconfirmed'
+
+/**
+ * pkg/velero DayMatch: how Velero matches a cron restricting both day of month
+ * and day of week. "either" before 1.18.3, "both" from 1.18.3, "unknown" when
+ * Radar couldn't read the server's version.
+ */
+export type VeleroDayMatch = 'either' | 'both' | 'unknown'
 
 /** pkg/velero ScheduleRun: one Backup a Schedule submitted. */
 export interface VeleroRun {
@@ -110,8 +118,10 @@ export interface VeleroScheduleReading {
   lastSubmitted?: string
   /** When the controller will next submit a run. Absent when not evaluated (paused, disabled, rejected, unvalidated, unparseable or skip-pending) and when the cron has no future time. */
   nextRun?: string
-  /** nextRun is exact: evaluated in the zone the controller uses, or an @every schedule, whose times do not depend on the zone. */
+  /** nextRun is exact: evaluated in the zone the controller uses, or an @every schedule, whose times do not depend on the zone, and dayMatch is not "unknown". */
   nextRunCertain: boolean
+  /** Set only when the cron restricts both day of month and day of week, where Velero versions disagree on which days it runs. */
+  dayMatch?: VeleroDayMatch
   /** Scheduled times that passed with no submission, when late; capped at 100 (100 means at least 100). */
   missedRuns?: number
   blocker?: VeleroRun

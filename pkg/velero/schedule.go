@@ -90,6 +90,10 @@ const (
 	// ReasonServerDown: the Velero server Deployment has no pods
 	// (status.replicas is 0), which explains a late or unvalidated schedule.
 	ReasonServerDown ScheduleReason = "serverDown"
+	// ReasonDayMatchUnconfirmed: the cron restricts both day fields and the
+	// server's Velero version is unknown, so Radar cannot say which days it
+	// runs on (DayMatch).
+	ReasonDayMatchUnconfirmed ScheduleReason = "dayMatchUnconfirmed"
 )
 
 // RunsRead says whether a Schedule's backups were read.
@@ -174,8 +178,14 @@ type ScheduleReading struct {
 	NextRun *time.Time `json:"nextRun,omitempty"`
 	// NextRunCertain: NextRun is exact, because it is evaluated in the zone
 	// the controller uses, or the schedule is @every, whose times do not
-	// depend on the zone. False without NextRun: no time was given.
+	// depend on the zone, and DayMatch is not unknown. False without NextRun:
+	// no time was given.
 	NextRunCertain bool `json:"nextRunCertain"`
+	// DayMatch is how the server's Velero matches this cron's days when it
+	// restricts both day of month and day of week; absent when it leaves
+	// either unrestricted, where every Velero version runs it the same, and
+	// when it cannot be parsed.
+	DayMatch DayMatch `json:"dayMatch,omitempty"`
 	// MissedRuns counts scheduled times that passed with no submission, when
 	// the schedule is late, up to 100 (100 means at least 100); absent when
 	// none. Velero does not catch up on them.
@@ -275,7 +285,8 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	runs := runsOf(s.GetName(), in.Backups)
 	r.Runs = summarizeRuns(runs, in.BackupsRead, in.WithRecent)
 
-	parsed, perr := parseCron(r.Cron)
+	parsed, perr := parseCron(r.Cron, in.Server.dayMatch())
+	r.DayMatch = parsed.dayMatch
 	r.Zone = scheduleZone(r.Cron, parsed, perr, in.Server, s.GetName(), r.LastSubmitted, runs)
 
 	switch {
@@ -327,7 +338,7 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	}
 	nextUTC := next.UTC()
 	// An @every schedule's times do not depend on the zone.
-	timingCertain := r.Zone.Certain() || parsed.fixedDelay
+	timingCertain := (r.Zone.Certain() || parsed.fixedDelay) && parsed.dayMatch != DayMatchUnknown
 	r.NextRun, r.NextRunCertain = &nextUTC, timingCertain
 	r.Blocker = blockerOf(runs)
 
@@ -336,8 +347,13 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 		return r
 	}
 	if !timingCertain {
+		uncertainReason := ReasonZoneUnconfirmed
+		if parsed.dayMatch == DayMatchUnknown {
+			uncertainReason = ReasonDayMatchUnconfirmed
+		}
+		margin, bounded := uncertainMargin(r.Zone, parsed, anchor, next, loc)
 		switch {
-		case in.Now.After(next.Add(uncertainMargin(r.Zone, parsed, anchor, loc))):
+		case bounded && in.Now.After(next.Add(margin)):
 			if r.Blocker != nil {
 				r.State = StateHeld
 				r.Reason, r.Attention = heldReason(r.Blocker, in.Now)
@@ -349,9 +365,9 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 				r.State, r.Reason, r.Attention = StateLateOrHeld, ReasonBackupsUnread, true
 				return r
 			}
-			r.State, r.Reason, r.Attention = StateProbablyLate, ReasonZoneUnconfirmed, true
+			r.State, r.Reason, r.Attention = StateProbablyLate, uncertainReason, true
 		default:
-			r.State, r.Reason = StatePossiblyLate, ReasonZoneUnconfirmed
+			r.State, r.Reason = StatePossiblyLate, uncertainReason
 		}
 		return r
 	}
@@ -373,11 +389,27 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	return r
 }
 
-func uncertainMargin(z Zone, p parsedCron, anchor time.Time, loc *time.Location) time.Duration {
-	if z.Source == ZoneInferred {
-		return inferredZoneMargin + dueGrace
+// uncertainMargin is how far past an estimated next run a schedule must be
+// before it is probably late. With DayMatch unknown, next is the earlier
+// rule's time, so the margin runs to the later rule's; bounded is false when
+// that rule has no time, which Velero 1.18.3 and later treat as always due.
+func uncertainMargin(z Zone, p parsedCron, anchor, next time.Time, loc *time.Location) (margin time.Duration, bounded bool) {
+	switch {
+	case z.Certain():
+		margin = dueGrace
+	case z.Source == ZoneInferred:
+		margin = inferredZoneMargin + dueGrace
+	default:
+		margin = p.cronGap(anchor, loc) + unknownZoneMargin
 	}
-	return p.cronGap(anchor, loc) + unknownZoneMargin
+	if p.dayMatch == DayMatchUnknown {
+		later := p.nextBoth(anchor, loc)
+		if later.IsZero() {
+			return 0, false
+		}
+		margin += later.Sub(next)
+	}
+	return margin, true
 }
 
 func heldReason(b *ScheduleRun, now time.Time) (ScheduleReason, bool) {
