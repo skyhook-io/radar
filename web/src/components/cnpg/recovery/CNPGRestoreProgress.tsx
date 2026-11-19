@@ -3,7 +3,7 @@ import { Badge, StatusDot, formatAge, toneTextClass, type HealthLevel, formatGra
 import { useCNPGRecovery, type CNPGContainerState, type CNPGRecoveryResponse, type CNPGRecoverySpec } from '../../../api/cnpg-recovery'
 import { buildWorkloadPath } from '../../../utils/navigation'
 import { observeRestore, restoreNextSteps, type RestoreBackupDeclared, type RestoreNextStep, type RestoreNextStepId, type RestoreObservation } from './restoreModel'
-import { useWorkspaceNavigate } from '../../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../../workspace/useWorkspaceNavigate'
 
 /**
  * The restore observer: the recovery snapshot of one Cluster and where its

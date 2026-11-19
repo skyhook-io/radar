@@ -3,7 +3,7 @@ import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
 import { toneTextClass } from '@skyhook-io/k8s-ui'
 import { useLocation } from 'react-router-dom'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { cnpgClusterProblemsPath, cnpgWithinDetail } from './paths'
 import type { CNPGRuntimeInstance } from '../../api/cnpg'
 

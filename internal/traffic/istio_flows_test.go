@@ -22,7 +22,7 @@ type istioRawSeries struct {
 }
 
 var (
-	istioSumByRe  = regexp.MustCompile(`^sum by \(([^)]*)\) \(rate\(([a-z_]+)\{([^}]*)\}\[5m\]\)\)$`)
+	istioSumByRe  = regexp.MustCompile(`^sum by \(([^)]*)\) \(rate\(([a-z_]+)\{([^}]*)\}\[([0-9a-z]+)\]\)\)$`)
 	istioCountRe  = regexp.MustCompile(`^count\(([a-z_]+)\{([^}]*)\}\)$`)
 	promMatcherRe = regexp.MustCompile(`([a-z_]+)(=~|!=|=)"([^"]*)"`)
 )
@@ -296,7 +296,7 @@ func TestIstioGetFlows_PairFiguresAreNotCopiedOntoEachSeries(t *testing.T) {
 func TestIstioGetFlows_RatesRoundRatherThanTruncate(t *testing.T) {
 	raw := []istioRawSeries{
 		{"istio_requests_total", istioLabels("reviews", "http", "200"), 1.9},
-		{"istio_tcp_connections_opened_total", map[string]string{
+		{"istio_tcp_received_bytes_total", map[string]string{
 			"source_workload": "frontend", "source_workload_namespace": "shop",
 			"destination_workload": "db", "destination_workload_namespace": "shop",
 			"destination_service_name": "db", "reporter": "destination",
@@ -313,8 +313,8 @@ func TestIstioGetFlows_RatesRoundRatherThanTruncate(t *testing.T) {
 	if got["http"] != 2 {
 		t.Errorf("http connections for 1.9 req/s = %d, want 2", got["http"])
 	}
-	if got["tcp"] != 3 {
-		t.Errorf("tcp connections for 2.7 conn/s = %d, want 3", got["tcp"])
+	if got["tcp"] != 0 {
+		t.Errorf("tcp connections for byte activity = %d, want 0", got["tcp"])
 	}
 }
 
@@ -326,7 +326,8 @@ func TestIstioGetFlows_FailedSubqueriesAreReportedNotZeroed(t *testing.T) {
 		fail   string
 	}{
 		{"error rates", `istio_requests_total{reporter=~"destination|waypoint", response_code`, "5xx error rates"},
-		{"tcp", "istio_tcp_connections_opened_total", "TCP connections"},
+		{"tcp received", "istio_tcp_received_bytes_total", "TCP traffic"},
+		{"tcp sent", "istio_tcp_sent_bytes_total", "TCP traffic"},
 		{"request bytes", "istio_request_bytes_sum", "bytes"},
 		{"response bytes", "istio_response_bytes_sum", "bytes"},
 	} {
@@ -345,7 +346,7 @@ func TestIstioGetFlows_FailedSubqueriesAreReportedNotZeroed(t *testing.T) {
 			// Missing figures are about the edges shown; missing TCP edges are
 			// traffic that may not be shown at all.
 			want := WarningPartial
-			if tc.name == "tcp" {
+			if strings.HasPrefix(tc.name, "tcp ") {
 				want = WarningTransient
 			}
 			if resp.WarningKind != want {
@@ -371,17 +372,19 @@ func TestIstioGetFlows_NoPrometheus(t *testing.T) {
 func TestIstioGetFlows_EmptyResultWarnsOnlyWhenTheGapCouldExplainIt(t *testing.T) {
 	// A TCP-only mesh whose TCP query failed has no HTTP flows either; without
 	// the warning it reads as idle.
-	resp, err := newTestIstio(fakeIstioProm(nil, map[string]error{"istio_tcp_connections_opened_total": errors.New("timeout")})).
-		GetFlows(context.Background(), DefaultFlowOptions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(resp.Warning, "TCP connections") {
-		t.Errorf("warning = %q, want the failed TCP query named", resp.Warning)
+	for _, metric := range []string{istioTCPMetric, "istio_tcp_sent_bytes_total"} {
+		resp, err := newTestIstio(fakeIstioProm(nil, map[string]error{metric: errors.New("timeout")})).
+			GetFlows(context.Background(), DefaultFlowOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(resp.Warning, "TCP traffic") || resp.WarningKind != WarningTransient {
+			t.Errorf("%s: warning = %q (%s), want the failed TCP query named and retried", metric, resp.Warning, resp.WarningKind)
+		}
 	}
 
 	// A failed 5xx query qualifies edges; with none there is nothing to qualify.
-	resp, err = newTestIstio(fakeIstioProm(nil, map[string]error{`response_code=~"5.."`: errors.New("timeout")})).
+	resp, err := newTestIstio(fakeIstioProm(nil, map[string]error{`response_code=~"5.."`: errors.New("timeout")})).
 		GetFlows(context.Background(), DefaultFlowOptions())
 	if err != nil {
 		t.Fatal(err)

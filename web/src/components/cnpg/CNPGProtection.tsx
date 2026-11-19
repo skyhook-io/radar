@@ -30,7 +30,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { CNPGWorkspaceHeader, CoverageNotice, clusterResource, coverageEmpty, cnpgResource, type CNPGScreenProps } from './shared'
 import { BreakText, FilterChips, Mono, namespaceChip, PathText, ScreenBody, SectionTable, Segments, Sub } from '../workspace/layout'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { cnpgClusterFullPath } from './paths'
 import { currentPageLabel } from '../../utils/page-links'
 

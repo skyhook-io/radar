@@ -3,7 +3,7 @@ import { Workflow } from 'lucide-react'
 import { countLabel, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import { useLoggingPipeline } from '../../api/loggingPipeline'
 import type { SidebarWorkspaceArgs } from '../../integrations/sidebarWorkspaces'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 
 const LOGGING_GROUP = 'logging.banzaicloud.io'
 // The sidebar category api-resources assigns to the Logging operator's group.

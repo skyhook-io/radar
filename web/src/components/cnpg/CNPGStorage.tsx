@@ -40,7 +40,7 @@ import { buildResizeManifest, cnpgFloorTone, cnpgInstanceDiskTone, cnpgSharedExp
 import { formatBytes } from './lsn'
 import { cnpgDimensionPath, cnpgWithinDetail } from './paths'
 import type { CNPGRestoreSourceState } from './recovery/restoreModel'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { useLocation } from 'react-router-dom'
 import { GrantText, Notice, RefreshFailedNotice } from '../workspace/layout'
 

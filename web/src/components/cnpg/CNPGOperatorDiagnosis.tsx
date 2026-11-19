@@ -3,7 +3,7 @@ import { Badge, formatAge, type CNPGFleet } from '@skyhook-io/k8s-ui'
 import type { CNPGOperatorDiagnosis, CNPGOperatorReconcilePod, CNPGReadCoverage } from '../../api/cnpg-recovery'
 import { buildWorkloadPath } from '../../utils/navigation'
 import { GrantText, Mono, Sub } from '../workspace/layout'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (

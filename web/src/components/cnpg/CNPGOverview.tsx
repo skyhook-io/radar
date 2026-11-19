@@ -25,7 +25,7 @@ import { cnpgInstancePillLabel, cnpgPillsToShow, cnpgRowStatus } from './fleetSt
 import { BreakText, FilterChips, ScreenEmptyState } from '../workspace/layout'
 import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../workspace/table'
 import { sameSelectedResource } from '../../utils/drawer-trail'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { useCNPGOperations } from './operations/store'
 import { latestCNPGOperation } from './operations/presentation'
 import { CNPGFleetOperation } from './operations/CNPGFleetOperation'

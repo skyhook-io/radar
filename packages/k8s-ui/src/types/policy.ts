@@ -159,6 +159,8 @@ export interface VeleroStoredBackupsResponse {
     phase?: string
     expiration?: string
     completed?: string
+    /** Created by Radar's Back up now from a schedule; absent from a Radar before it was reported. */
+    manual?: boolean
   }>
   /** How many reached Completed and are still inside their retention — the rest
    *  are stored here but are not something to restore from. Counted over the

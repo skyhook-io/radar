@@ -5,15 +5,16 @@ export interface WorkspaceEvent { kind: string; group?: string; operation?: 'add
 export interface WorkspaceInvalidation {
   id: string
   matches: (event: WorkspaceEvent) => boolean
-  queryKey: readonly unknown[]
+  queryKeys: readonly (readonly unknown[])[]
 }
 
 export const workspaceInvalidations: WorkspaceInvalidation[] = [
-  { id: 'cnpg', matches: e => !!e.group?.endsWith('.cnpg.io'), queryKey: ['cnpg', 'workspace'] },
+  { id: 'cnpg', matches: e => !!e.group?.endsWith('.cnpg.io'), queryKeys: [['cnpg', 'workspace']] },
+  { id: 'velero', matches: e => e.group === 'velero.io', queryKeys: [['velero', 'workspace'], ['velero', 'schedule-activity']] },
   // Pod events don't refetch: each refetch rescans every pod against every
   // route, and Job churn deletes pods every few seconds. The mounted page
   // polls for pod changes.
-  { id: 'logging', matches: e => e.group === 'logging.banzaicloud.io', queryKey: ['logging', 'pipeline'] },
+  { id: 'logging', matches: e => e.group === 'logging.banzaicloud.io', queryKeys: [['logging', 'pipeline']] },
 ]
 
 export function pendingInvalidations(events: WorkspaceEvent[]): WorkspaceInvalidation[] {

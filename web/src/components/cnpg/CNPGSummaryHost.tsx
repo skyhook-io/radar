@@ -47,7 +47,7 @@ import { restoreBackupDeclared } from './recovery/restoreModel'
 import { useConnection } from '../../context/ConnectionContext'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RefreshFailedNotice } from '../workspace/layout'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { CNPGOperatorConditions } from './CNPGOperatorConditions'
 
 interface SummaryContext {

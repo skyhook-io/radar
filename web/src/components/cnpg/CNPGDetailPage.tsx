@@ -20,7 +20,7 @@ import { CNPG_CLUSTER_TAB_ORDER, cnpgDimensionTab } from './paths'
 import { currentPageLabel } from '../../utils/page-links'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { ScreenEmptyState } from '../workspace/layout'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 
 // Set by drill-downs; Esc then goes back to that page instead of the home view.
 interface ReturnState {

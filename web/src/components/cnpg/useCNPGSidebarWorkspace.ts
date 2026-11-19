@@ -1,23 +1,15 @@
 import { useMemo } from 'react'
-import { Database, FileCheck2, Settings2, ShieldCheck, Waypoints } from 'lucide-react'
+import { Database } from 'lucide-react'
 import { applyCNPGDisk, applyCNPGFleetMetrics, buildCNPGFleet, type CNPGDiskReading, type CNPGFleet, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../../types'
 import { useCNPGWorkspace } from '../../api/cnpg'
 import { useRadarFeature } from '../../api/client'
 import { useCNPGFleetDisk } from '../../api/cnpg-storage'
 import { useCNPGFleetMetrics } from '../../api/cnpg-history'
-import { CNPG_SCREENS, type CNPGScreen } from './routes'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { CNPG_CLUSTER_KIND, CNPG_SCREENS, cnpgClusterKindListMode, type CNPGScreen } from './routes'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 
 export const CNPG_SIDEBAR_CATEGORY = 'CloudNativePG'
-
-const ICONS: Record<CNPGScreen, SidebarCategoryWorkspace['destinations'][number]['icon']> = {
-  overview: Database,
-  protection: ShieldCheck,
-  declarations: FileCheck2,
-  pooling: Waypoints,
-  operator: Settings2,
-}
 
 export function cnpgDiscovered(apiResources: APIResource[] | undefined): boolean {
   return !!apiResources?.some((r) => r.group === 'postgresql.cnpg.io')
@@ -109,6 +101,11 @@ export function useCNPGSidebarWorkspace({
   const navigate = useWorkspaceNavigate()
   const available = cnpgDiscovered(apiResources)
   const { fleet } = useCNPGFleet(namespaces, available, withMetrics)
+  const { support } = useRadarFeature('cnpgWorkspace')
+  // Clusters is the Cluster kind's list only where its Resources route renders
+  // the Clusters view; elsewhere, and until capabilities load, the kind keeps
+  // its generic table under Other kinds.
+  const clustersIsKindList = cnpgClusterKindListMode(CNPG_CLUSTER_KIND, support, false) === 'view'
   const nsKey = namespaces.join(',')
 
   return useMemo(() => {
@@ -118,7 +115,7 @@ export function useCNPGSidebarWorkspace({
       return {
         id: s.id,
         label: s.label,
-        icon: ICONS[s.id],
+        kind: s.id === 'overview' && clustersIsKindList ? CNPG_CLUSTER_KIND : undefined,
         count,
         countLowerBound: lowerBound,
         countTitle: title,
@@ -127,12 +124,18 @@ export function useCNPGSidebarWorkspace({
         onSelect: () => navigate(s.path),
       }
     })
+    // Every screen counts clusters, and Clusters counts each one that needs attention once, so it is the total.
+    const clusters = destinations.find((d) => d.id === 'overview')
     return {
       [CNPG_SIDEBAR_CATEGORY]: {
+        label: 'Databases',
+        icon: Database,
+        count: clusters?.count,
+        countLowerBound: clusters?.countLowerBound,
+        countTitle: clusters?.countTitle,
         destinations,
-        defaultKindsCollapsed: !!active,
         scopeNote: nsKey ? `Counts for namespace ${nsKey.split(',').join(', ')}` : undefined,
       },
     }
-  }, [available, fleet, withMetrics, active?.screen, active?.child?.label, active?.child?.title, navigate, nsKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [available, fleet, withMetrics, clustersIsKindList, active?.screen, active?.child?.label, active?.child?.title, navigate, nsKey]) // eslint-disable-line react-hooks/exhaustive-deps
 }

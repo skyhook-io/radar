@@ -60,6 +60,9 @@ export * from './components/cnpg'
 // Log shipping pipeline (/api/logging/pipeline) view helpers
 export * from './components/logging'
 
+// Velero workspace wire types, reading copy and the Schedule activity section
+export * from './components/velero'
+
 // Cluster switcher (shared trigger+dropdown for OSS Radar and Radar Hub)
 export * from './components/cluster-switcher'
 

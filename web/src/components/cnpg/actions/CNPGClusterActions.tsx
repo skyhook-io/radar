@@ -24,7 +24,7 @@ import {
   type StandbyChoice,
 } from './actionModel'
 import { cnpgDetailPath } from '../routes'
-import { useWorkspaceNavigate } from '../../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../../workspace/useWorkspaceNavigate'
 import { useCNPGFleet } from '../useCNPGSidebarWorkspace'
 import { RefreshFailedNotice } from '../../workspace/layout'
 import { assessRestoreSources } from '../recovery/restoreModel'

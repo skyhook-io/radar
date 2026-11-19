@@ -26,6 +26,7 @@ import { CostView } from './components/cost/CostView'
 import { AuditView } from './components/audit/AuditView'
 import { IssuesPane } from './components/issues/IssuesPane'
 import { GitOpsView } from './components/gitops/GitOpsView'
+import { gitopsTableChange } from './components/gitops/gitopsRowEvents'
 import { ApplicationsView } from './components/applications/ApplicationsView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './components/portforward/PortForwardManager'
@@ -38,7 +39,7 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
-import { resourceExpandedPath, resourceKindListTitle } from './integrations/resourceHosts'
+import { resourceExpandedPath, resourceKindListNamespaceFilterTooltip, resourceKindListTitle, useResourceHostFeatures } from './integrations/resourceHosts'
 import { workspaceContextSwitchSearch, workspaceForPath, workspaceForView, workspaceLabels } from './integrations/workspaceRoutes'
 import { WorkspaceScreen } from './integrations/workspaceScreens'
 import { pendingInvalidations, type WorkspaceInvalidation } from './integrations/workspaceInvalidations'
@@ -54,6 +55,7 @@ import { NoClusterAccessBanner } from './components/NoClusterAccessBanner'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
 import { RadarUpgradeProvider } from './context/RadarUpgrade'
 import { UserMenu } from './components/UserMenu'
+import { COMMUNITY_SLACK_URL } from './components/community'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './components/whats-new/WhatsNew'
@@ -65,7 +67,7 @@ import { useProductHuntRailEntry } from './components/product-hunt/useProductHun
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAuditBadges, useClusterInfo, useCapabilities } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
@@ -135,7 +137,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'logging' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'velero' | 'logging' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Views that have been laid out for phone width (640px and below). The rest
 // keep their desktop width on a phone and scroll sideways; add a view here in
@@ -199,6 +201,8 @@ const CRASH_LABELS = {
 //     browsing filter.
 //   - A cluster-scoped resource kind (Nodes, PVs, ClusterRoles…) has no
 //     namespace at all.
+//   - A kind whose own list ignores the filter (Velero's lists read every
+//     installation, since Velero keeps its objects in its own namespace).
 // The pick itself is preserved so it re-applies when the user returns to a
 // namespaced view.
 function namespaceFilterDisabled(
@@ -206,6 +210,7 @@ function namespaceFilterDisabled(
   pathname: string,
   search = '',
   apiResources?: APIResource[],
+  kindListTooltip?: (kind: { name: string; group: string }) => string | undefined,
 ): { disabled: boolean; tooltip?: string } {
   if (
     view === 'cost' &&
@@ -235,6 +240,8 @@ function namespaceFilterDisabled(
     const kindSlug = segments[1]
     const group = new URLSearchParams(search).get('apiGroup') || ''
     const match = kindSlug ? findAPIResourceForRoute(apiResources, kindSlug, group) : undefined
+    const listTooltip = match ? kindListTooltip?.({ name: match.name, group: match.group }) : undefined
+    if (listTooltip) return { disabled: true, tooltip: listTooltip }
     if (match && !match.namespaced) {
       return {
         disabled: true,
@@ -290,6 +297,7 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
   }
 
   if (view === 'checks' && pathSegments[1] === 'upgrade') return 'Upgrade impact'
+  if (view === 'checks' && pathSegments[1] === 'vulnerabilities') return 'Vulnerabilities'
 
   // The landing view reads "Overview" rather than "Home" in the tab.
   const workspace = workspaceForView(view)
@@ -441,6 +449,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const mainView = getViewFromPath(location.pathname)
   const activeWorkspace = workspaceForView(mainView)
   const upgradeReadinessRoute = location.pathname.startsWith('/checks/upgrade')
+  // Checks sub-routes a Cloud host's fleet Checks pages don't have, so they
+  // render here even when the host takes over /checks.
+  const localChecksRoute = upgradeReadinessRoute || location.pathname.startsWith('/checks/vulnerabilities')
 
   // Opt-in usage data. Embedded hosts own their own consent, so Radar never asks there.
   const usageData = useUsageData(!navCustomization.embedded)
@@ -452,7 +463,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // View-aware namespace scope: disabled on cluster-scoped surfaces so the
   // chip isn't a dead control next to the cluster switcher.
-  const namespaceFilter = namespaceFilterDisabled(mainView, location.pathname, location.search, navApiResources)
+  // A kind whose own list ignores the filter (Velero's) disables it too, once that list is what shows.
+  const hostFeatures = useResourceHostFeatures()
+  const { isPending: capabilitiesPending } = useCapabilities()
+  const namespaceFilter = namespaceFilterDisabled(mainView, location.pathname, location.search, navApiResources,
+    (kind) => resourceKindListNamespaceFilterTooltip(kind, hostFeatures, capabilitiesPending))
 
   // One URL-derived tab title for every view (see radarPageTitle). Driving it
   // from the URL — not the mounted component. Off unless the host opts in
@@ -589,7 +604,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // The host's URL for the CURRENT view, if taken over. Drives the redirect
   // effect and the "Opening…" splash.
   const viewTakeoverHref =
-    (mainView === 'issues' || mainView === 'gitops' || mainView === 'checks') && !upgradeReadinessRoute
+    (mainView === 'issues' || mainView === 'gitops' || mainView === 'checks') && !localChecksRoute
       ? takeover[mainView]
       : undefined
   useEffect(() => {
@@ -926,7 +941,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '', logging: '',
+    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '', velero: '', logging: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -1045,7 +1060,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const hideGroupHeader = namespaces.length === 1 && effectiveGroupingMode === 'namespace'
 
   // Fetch available namespaces
-  const { data: availableNamespaces } = useNamespaces()
+  const { data: availableNamespaces, error: availableNamespacesError } = useNamespaces()
 
   // This tab's namespace pick plus the picker's source list (see
   // utils/namespacePick). Loaded eagerly so the picker can render its current
@@ -1138,8 +1153,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const workspaceInvalidationPendingRef = useRef(new Set<WorkspaceInvalidation>())
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
+    gitopsRowsChanged: boolean   // Argo/Flux row and source kinds → GitOps table rows
+    gitopsCountsChanged: boolean // add/delete in a GitOps group → GitOps table totals
     timer: number | null
-  }>({ updatedKinds: new Set(), timer: null })
+  }>({ updatedKinds: new Set(), gitopsRowsChanged: false, gitopsCountsChanged: false, timer: null })
   const timelineInvalidationRef = useRef<{ timer: number | null }>({ timer: null })
 
   const handleK8sEvent = useCallback((event: K8sEvent) => {
@@ -1183,6 +1200,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     const slow = slowInvalidationRef.current
     if (!structural || applicationWorkload) slow.updatedKinds.add(kind)
+    const gitops = gitopsTableChange(event.kind, event.group, event.operation)
+    if (gitops.rows) slow.gitopsRowsChanged = true
+    if (gitops.counts) slow.gitopsCountsChanged = true
 
     // FAST tier — membership-sensitive + cheap, bounded 3s latency.
     if (fast.timer === null) {
@@ -1219,7 +1239,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
         for (const due of workspaceInvalidationPendingRef.current) {
-          queryClient.invalidateQueries({ queryKey: due.queryKey })
+          for (const queryKey of due.queryKeys) queryClient.invalidateQueries({ queryKey })
         }
         workspaceInvalidationPendingRef.current.clear()
         fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
@@ -1228,7 +1248,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     // SLOW tier — throttle expensive status churn. Workload membership changes
     // also pass through here so the Applications refetch lands after its cache TTL.
-    if ((!structural || applicationWorkload) && slow.timer === null) {
+    if ((!structural || applicationWorkload || gitops.rows || gitops.counts) && slow.timer === null) {
       slow.timer = window.setTimeout(() => {
         const s = slowInvalidationRef.current
         for (const k of s.updatedKinds) {
@@ -1237,8 +1257,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         if ([...s.updatedKinds].some((k) => ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(k))) {
           queryClient.invalidateQueries({ queryKey: ['applications'] })
         }
+        if (s.gitopsRowsChanged) queryClient.invalidateQueries({ queryKey: ['gitops-rows-main'] })
+        if (s.gitopsCountsChanged) queryClient.invalidateQueries({ queryKey: ['gitops-resource-counts'] })
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }) // health reflects status updates
-        slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
+        slowInvalidationRef.current = { updatedKinds: new Set(), gitopsRowsChanged: false, gitopsCountsChanged: false, timer: null }
       }, 15000)
     }
   }, [queryClient])
@@ -1252,7 +1274,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
     if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
     fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
-    slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
+    slowInvalidationRef.current = { updatedKinds: new Set(), gitopsRowsChanged: false, gitopsCountsChanged: false, timer: null }
     timelineInvalidationRef.current = { timer: null }
   }, [])
 
@@ -1274,7 +1296,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
       if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
       fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
-      slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
+      slowInvalidationRef.current = { updatedKinds: new Set(), gitopsRowsChanged: false, gitopsCountsChanged: false, timer: null }
       timelineInvalidationRef.current = { timer: null }
 
       // Close any open drawers/overlays — old cluster's resources don't exist on the new one
@@ -1786,7 +1808,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // backend stamps on each node (data.auditKey). Only badge-worthy findings
   // reach the graph; the raw auditDanger/auditWarning property names remain at
   // this compatibility boundary while the node presents them as High/Medium.
-  const audit = useAudit(namespaces)
+  // Only badge-worthy findings, small next to the full scan (they grow with
+  // broken references, not with the cluster), so they stay loaded app-wide: a
+  // view that badges resources has them on arrival.
+  const audit = useAuditBadges(namespaces)
   const auditSeverityMap = useMemo(
     () => buildAuditSeverityMap(audit.data?.findings, audit.data?.checks),
     [audit.data?.findings, audit.data?.checks],
@@ -1869,6 +1894,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           accountSlot={<UserMenu variant="rail" pinned={navRailEffectivePinned} />}
           whatsNew={whatsNewStatus.available ? { unread: whatsNewStatus.unread, onOpen: openWhatsNew } : undefined}
           productHunt={productHuntRailEntry}
+          communityUrl={COMMUNITY_SLACK_URL}
         />
       )}
       {/* `relative` makes this column the containing block for the absolute
@@ -1973,6 +1999,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             onToggleTheme={toggleTheme}
             onShowDiagnostics={() => setShowDiagnostics(true)}
             onShowWhatsNew={whatsNewStatus.available ? openWhatsNew : undefined}
+            onOpenCommunity={() => openExternal(COMMUNITY_SLACK_URL)}
             onOpenResource={(hit) => navigateToResourceList(searchHitToSelectedResource(hit))}
           />
         </div>
@@ -2221,6 +2248,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                     <div className="relative">
                       <LargeClusterNamespacePicker
                         namespaces={availableNamespaces}
+                        error={availableNamespacesError?.message}
                         onSelect={(ns) => {
                           setNamespaces([ns])
                           setActiveNamespace.mutate({ namespaces: [ns] })
@@ -2352,6 +2380,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             initialTimeRange={(searchParams.get('time') as '5m' | '30m' | '1h' | '6h' | '24h' | 'all') || undefined}
             requiresNamespaceFilter={topology?.requiresNamespaceFilter && namespaces.length === 0}
             availableNamespaces={availableNamespaces}
+            availableNamespacesError={availableNamespacesError?.message}
             onNamespaceSelect={(ns) => {
               setNamespaces([ns])
               setActiveNamespace.mutate({ namespaces: [ns] })
@@ -2446,7 +2475,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
         {/* Checks detail view. Cloud can take over fleet best practices while
             the target-specific upgrade route continues to render locally. */}
-        {!viewsSyncGated && mainView === 'checks' && (!isViewTakenOver('checks') || upgradeReadinessRoute) && (
+        {!viewsSyncGated && mainView === 'checks' && (!isViewTakenOver('checks') || localChecksRoute) && (
           <AuditView
             namespaces={namespaces}
             onNavigateToResource={navigateToResourceList}
@@ -2634,7 +2663,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {helpOverlay.shouldRender && <ShortcutHelpOverlay isOpen={helpOverlay.isOpen} onClose={() => setShowHelp(false)} currentView={mainView} />}
 
       {/* Diagnostics overlay */}
-      {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} focus={diagnosticsFocus} onClose={() => { setShowDiagnostics(false); setDiagnosticsFocus(undefined) }} />}
+      {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} focus={diagnosticsFocus} communityUrl={embedded ? undefined : COMMUNITY_SLACK_URL} onClose={() => { setShowDiagnostics(false); setDiagnosticsFocus(undefined) }} />}
 
       <AboutDialog
         info={aboutInfo}

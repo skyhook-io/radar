@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit, useIssues, fetchResourceList, isListTooLargeError, isUnretryableReadError } from '../../api/client'
+import { fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAuditBadges, useIssues, fetchResourceList, isListTooLargeError, isUnretryableReadError } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import { ISSUE_SEVERITY_RANK } from '@skyhook-io/k8s-ui'
 import type { Issue, AuditBadgeMessage } from '@skyhook-io/k8s-ui'
@@ -13,6 +13,7 @@ import { getSecretStoreProviderType } from '@skyhook-io/k8s-ui'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useResourceCounts } from '../../hooks/useResourceCounts'
 import { useSidebarCategoryWorkspaces } from '../../integrations/sidebarWorkspaces'
+import { isVeleroBackupKind } from '../velero/routes'
 import { renderResourceKindList, resourceKindListMode, useResourceHostFeatures } from '../../integrations/resourceHosts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
@@ -161,7 +162,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // kind shared across groups doesn't bleed findings across the two lists. Only
   // "badge-worthy" findings count (reference-integrity / lifecycle) — posture
   // and best-practice nags fire near-universally and would just be noise.
-  const audit = useAudit(namespaces)
+  const audit = useAuditBadges(namespaces)
   const auditBadges = useMemo(() => {
     if (!selectedKind || !audit.data?.findings) return undefined
     const wantGroup = selectedKind.group
@@ -345,9 +346,9 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const [createDialogYaml, setCreateDialogYaml] = useState('')
   const [createDialogTitle, setCreateDialogTitle] = useState<string | undefined>()
 
-  const handleCreateResource = useCallback((kind: { name: string; kind: string; group: string } | null) => {
+  const handleCreateResource = useCallback((kind: SelectedKindInfo, initialYaml?: string) => {
     if (kind?.kind) {
-      setCreateDialogYaml(getSkeletonYaml(kind.kind, kind.group))
+      setCreateDialogYaml(initialYaml ?? getSkeletonYaml(kind.kind, kind.group))
       setCreateDialogTitle(`Create ${kind.kind}`)
     } else {
       setCreateDialogYaml('')
@@ -426,7 +427,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       onCreateResource={handleCreateResource}
       renderKindView={renderKindView}
       // Bulk operations
-      onBulkDelete={(items, options) => bulkDeleteMutation.mutate({ items, force: options?.force }, { onSuccess: results => { if (!results.some(({ result }) => result.outcomeUnknown)) options?.onSuccess?.() } })}
+      // A Velero backup is deleted one at a time, through Velero (Delete backup in its drawer).
+      onBulkDelete={isVeleroBackupKind(selectedKind?.name, selectedKind?.group) ? undefined : (items, options) => bulkDeleteMutation.mutate({ items, force: options?.force }, { onSuccess: results => { if (!results.some(({ result }) => result.outcomeUnknown)) options?.onSuccess?.() } })}
       isBulkDeleting={bulkDeleteMutation.isPending}
       onBulkRestart={canBulkRestartSelectedKind ? (items, options) => bulkRestartMutation.mutate({ items }, { onSuccess: options?.onSuccess }) : undefined}
       isBulkRestarting={canBulkRestartSelectedKind && bulkRestartMutation.isPending}

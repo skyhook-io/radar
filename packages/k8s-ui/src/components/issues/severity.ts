@@ -5,6 +5,7 @@ import {
   TONE_FILL_CLASS,
   TONE_HEADER_BAND_CLASS,
   TONE_RAIL_CLASS,
+  TONE_ROW_HOVER_CLASS,
   TONE_SOLID_CLASS,
   TONE_TEXT_CLASS,
   type SeverityTone,
@@ -39,6 +40,7 @@ export const ISSUE_SEVERITY_BADGE_CLASS: Record<IssueSeverity, string> = {
 export const ISSUE_SEVERITY_TEXT_CLASS = byTone(TONE_TEXT_CLASS);
 export const ISSUE_SEVERITY_FILL_CLASS = byTone(TONE_FILL_CLASS);
 export const ISSUE_SEVERITY_RAIL_CLASS = byTone(TONE_RAIL_CLASS);
+export const ISSUE_SEVERITY_ROW_HOVER_CLASS = byTone(TONE_ROW_HOVER_CLASS);
 export const ISSUE_SEVERITY_SOLID_CLASS = byTone(TONE_SOLID_CLASS);
 export const ISSUE_SEVERITY_HEADER_BAND_CLASS = byTone(TONE_HEADER_BAND_CLASS);
 
@@ -143,13 +145,15 @@ export function categoryLabel(category: string): string {
 }
 
 // Reasons filed under a category whose label names a different operation:
-// CNPG archiving and an unanswered scheduled run sit under backup_failed.
+// CNPG archiving, an unanswered scheduled run, and Velero restores and
+// rejected specs sit under backup_failed.
 const REASON_TITLE: Record<string, string> = {
   NodeCertificateExpiry: 'Node certificates need attention',
   FlaggerCanaryFailed: "Canary rollout failed",
   LoggingOutputProblem: "Log output has problems",
   LoggingFlowProblem: "Log flow has problems",
   LoggingFlowInactive: "Log flow inactive",
+  UpgradePlanInvalid: "Upgrade Plan is not valid",
   InvalidSchedule: 'Scheduling error reported',
   UnparseableSchedule: 'Scheduling error reported',
   UnParseableCronJobSchedule: 'Scheduling error reported',
@@ -162,6 +166,21 @@ const REASON_TITLE: Record<string, string> = {
   CNPGInstanceReadinessMismatch: "Instance Pods contradict Cluster readiness",
   CNPGPrimaryLabelMismatch: "Primary Pod label contradicts Cluster status",
   CNPGScheduledRunNoBackup: "No successful backup since a scheduled run",
+  BackupPartiallyFailed: 'Backup partially failed',
+  BackupValidationFailed: 'Backup rejected by Velero',
+  RestoreFailed: 'Restore failed',
+  RestorePartiallyFailed: 'Restore partially failed',
+  RestoreValidationFailed: 'Restore rejected by Velero',
+  ScheduleValidationFailed: 'Schedule rejected by Velero',
+  BackupRepositoryNotReady: 'Backup repository not ready',
+  VeleroRunStalled: 'Velero run not progressing',
+  VeleroServerNotRunning: 'Velero server not running',
+  VeleroScheduleLate: 'Velero schedule late',
+  VeleroScheduleCannotRun: 'Velero schedule cannot run',
+  VeleroScheduleHeld: 'Velero schedule held',
+  VeleroScheduleNotValidated: 'Velero schedule not validated',
+  VeleroLocationValidationOverdue: 'Storage location validation overdue',
+  BackupRepositoryMaintenanceFailed: 'Repository maintenance failing',
   KueueAdmissionCheckRejected: 'Admission check rejected the run',
   KueueClusterQueueInactive: 'ClusterQueue admits nothing',
   KueueClusterQueueMissing: 'ClusterQueue missing',

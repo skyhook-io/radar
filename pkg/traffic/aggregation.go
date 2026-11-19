@@ -68,6 +68,7 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 					Source:           f.Source,
 					Destination:      f.Destination,
 					Protocol:         f.Protocol,
+					BytesByProtocol:  make(map[string]ProtocolBytes),
 					Port:             f.Port,
 					LastSeen:         f.LastSeen,
 					DirectionUnknown: f.DirectionUnknown,
@@ -86,6 +87,10 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 		agg.FlowCount++
 		agg.BytesSent += f.BytesSent
 		agg.BytesRecv += f.BytesRecv
+		volume := agg.BytesByProtocol[f.Protocol]
+		volume.BytesSent += f.BytesSent
+		volume.BytesRecv += f.BytesRecv
+		agg.BytesByProtocol[f.Protocol] = volume
 		agg.Connections += f.Connections
 		agg.RequestCount += RoundRate(f.RequestRate)
 		// RoundRate, not a bare round: it returns 0 for a zero rate, so it never

@@ -32,7 +32,7 @@ import {
   type RestoreSource,
   type RestoreTarget,
 } from './restoreModel'
-import { useWorkspaceNavigate } from '../../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../../workspace/useWorkspaceNavigate'
 
 /** Where the restore was started from; decides the default source. */
 export type CNPGRestoreEntry = { kind: 'cluster'; name: string } | { kind: 'backup'; name: string } | { kind: 'objectStore'; name: string }

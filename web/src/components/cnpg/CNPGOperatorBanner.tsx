@@ -3,7 +3,7 @@ import { AlertBanner } from '@skyhook-io/k8s-ui'
 import { useCNPGOperatorStatus } from '../../api/cnpg'
 import { cnpgScreenPath } from './routes'
 import { cnpgOperatorBannerModel } from './operatorStatus'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 
 /**
  * Shown above CNPG status while the operator that watches these namespaces is

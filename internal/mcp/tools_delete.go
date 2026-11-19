@@ -56,26 +56,29 @@ type deleteConfirmation struct {
 }
 
 type deleteResourceResult struct {
-	Summary                    string                        `json:"summary,omitempty"`
-	Status                     string                        `json:"status"`
-	DryRun                     bool                          `json:"dry_run"`
-	Kind                       string                        `json:"kind"`
-	Group                      string                        `json:"group"`
-	Namespace                  string                        `json:"namespace"`
-	Name                       string                        `json:"name"`
-	UID                        types.UID                     `json:"uid"`
-	ResourceVersion            string                        `json:"resourceVersion"`
-	Generation                 int64                         `json:"generation"`
-	Propagation                metav1.DeletionPropagation    `json:"propagation"`
-	Confirm                    string                        `json:"confirm,omitempty"`
-	Finalizers                 *[]string                     `json:"finalizers,omitempty"`
-	DeletionTimestamp          string                        `json:"deletionTimestamp,omitempty"`
-	Cascade                    map[string]any                `json:"cascade,omitempty"`
-	Message                    string                        `json:"message"`
-	FinalizerGuidance          string                        `json:"finalizerGuidance,omitempty"`
-	NamespaceFinalizers        *[]string                     `json:"namespaceFinalizers,omitempty"`
-	NamespaceFinalizerGuidance string                        `json:"namespaceFinalizerGuidance,omitempty"`
-	Observation                *k8score.DeleteResourceResult `json:"observation,omitempty"`
+	Summary                    string                     `json:"summary,omitempty"`
+	Status                     string                     `json:"status"`
+	DryRun                     bool                       `json:"dry_run"`
+	Kind                       string                     `json:"kind"`
+	Group                      string                     `json:"group"`
+	Namespace                  string                     `json:"namespace"`
+	Name                       string                     `json:"name"`
+	UID                        types.UID                  `json:"uid"`
+	ResourceVersion            string                     `json:"resourceVersion"`
+	Generation                 int64                      `json:"generation"`
+	Propagation                metav1.DeletionPropagation `json:"propagation"`
+	Confirm                    string                     `json:"confirm,omitempty"`
+	Finalizers                 *[]string                  `json:"finalizers,omitempty"`
+	DeletionTimestamp          string                     `json:"deletionTimestamp,omitempty"`
+	Cascade                    map[string]any             `json:"cascade,omitempty"`
+	Message                    string                     `json:"message"`
+	FinalizerGuidance          string                     `json:"finalizerGuidance,omitempty"`
+	NamespaceFinalizers        *[]string                  `json:"namespaceFinalizers,omitempty"`
+	NamespaceFinalizerGuidance string                     `json:"namespaceFinalizerGuidance,omitempty"`
+	// Guidance is what deleting this kind does beyond removing the object,
+	// when that differs from what its name suggests.
+	Guidance    string                        `json:"guidance,omitempty"`
+	Observation *k8score.DeleteResourceResult `json:"observation,omitempty"`
 }
 
 type deleteDependentCounts struct {
@@ -83,6 +86,10 @@ type deleteDependentCounts struct {
 	Total  int            `json:"total"`
 	Basis  string         `json:"basis"`
 }
+
+// Velero's backup sync recreates a Backup object from object storage, and its
+// files and volume snapshots are deleted only through a DeleteBackupRequest.
+const veleroBackupDeleteGuidance = "Deleting a Velero Backup object does not delete the backup: its files stay in object storage, its volume snapshots stay with the provider, and Velero's backup sync recreates the object. To delete the backup, apply a DeleteBackupRequest in the same namespace (apiVersion velero.io/v1, spec.backupName set to this backup; Velero adds the labels), as `velero backup delete` does."
 
 func handleDeleteResource(ctx context.Context, req *mcp.CallToolRequest, input deleteResourceInput) (_ *mcp.CallToolResult, _ any, retErr error) {
 	ctx, cancel := context.WithTimeout(ctx, deleteCallTimeout)
@@ -274,6 +281,9 @@ func handleDeleteResource(ctx context.Context, req *mcp.CallToolRequest, input d
 			if len(finalizers) > 0 {
 				result.NamespaceFinalizerGuidance = "Namespace lifecycle finalizers may keep this Namespace deleting until its contents are cleaned up. Inspect status.conditions and remaining contents; this tool does not clear namespace lifecycle finalizers."
 			}
+		}
+		if gvr.Group == "velero.io" && gvr.Resource == "backups" {
+			result.Guidance = veleroBackupDeleteGuidance
 		}
 		if token == "" {
 			result.Message = "Impact preview unavailable; no confirmation token was issued. " + result.Message + " Inspect cascade.reason and cascade.unavailableReason before retrying; this tool requires caller-readable impact. Use the UI or kubectl if Radar cannot provide it."

@@ -7,7 +7,7 @@ import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useTheme } from '../../context/ThemeContext'
 import { CNPGIntervalBanner, useCNPGIntervalParams } from './CNPGTrends'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { cnpgClusterProblemsPath, cnpgWithinDetail } from './paths'
 
 function logsPath(namespace: string, name: string) {

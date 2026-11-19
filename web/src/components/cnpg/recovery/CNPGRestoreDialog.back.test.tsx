@@ -14,7 +14,7 @@ vi.mock('../../../api/client', () => ({ useResources: () => ({ data: [] }) }))
 vi.mock('../../../api/cnpg-recovery', () => ({ useCNPGRestoreCapability: () => ({ data: { allowed: true } }) }))
 vi.mock('../../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: state.context } }) }))
 vi.mock('../../ui/Toast', () => ({ useToast: () => ({ showSuccess: state.toast }) }))
-vi.mock('../../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => vi.fn() }))
+vi.mock('../../workspace/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => vi.fn() }))
 vi.mock('../../shared/CreateResourceDialog', () => ({ CreateResourceDialog: (props: any) => { state.editor = props; return <pre>{props.initialYaml}</pre> } }))
 vi.mock('@skyhook-io/k8s-ui', async (original) => ({
   ...(await original<typeof import('@skyhook-io/k8s-ui')>()),

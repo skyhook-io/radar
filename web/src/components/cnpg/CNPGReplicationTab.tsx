@@ -21,7 +21,7 @@ import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { Card, ProxyDenied, SourceState } from './runtimeParts'
 import { cnpgRuntimeMeasured } from './runtimeModel'
 import { buildWorkloadPath } from '../../utils/navigation'
-import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { Notice, RefreshFailedNotice } from '../workspace/layout'
 
 /**

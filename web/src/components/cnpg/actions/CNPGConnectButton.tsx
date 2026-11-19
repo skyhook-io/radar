@@ -7,7 +7,7 @@ import { CNPGConnectSection, DialogPortal, Tooltip, type ResourceRef, type Navig
 import { buildWorkloadPath, refToSelectedResource } from '../../../utils/navigation'
 import { useCNPGFleet } from '../useCNPGSidebarWorkspace'
 import { Notice, RefreshFailedNotice } from '../../workspace/layout'
-import { useWorkspaceNavigate } from '../../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../../workspace/useWorkspaceNavigate'
 
 // A link can ask for the dialog (the restore "Next steps") with this param;
 // the button opens it and drops the param, so closing it and following a link

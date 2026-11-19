@@ -23,7 +23,7 @@ func appTestObject(group, kind, namespace, name string) ownershiptest.Object {
 	return ownershiptest.Object{Ref: resourceid.NewRef(group, kind, namespace, name), APIVersion: version, UID: types.UID(group + "/" + kind + "/" + namespace + "/" + name)}
 }
 
-func appManagerView(t *testing.T, objects ...ownershiptest.Object) *ownership.View {
+func appManagerSession(t *testing.T, objects ...ownershiptest.Object) ownership.ReadSession {
 	t.Helper()
 	world := ownershiptest.World{Objects: objects}
 	seen := map[resourceid.GroupKind]bool{}
@@ -40,7 +40,11 @@ func appManagerView(t *testing.T, objects ...ownershiptest.Object) *ownership.Vi
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ownership.NewView(session, ownership.Unrestricted())
+	return session
+}
+
+func appManagerView(t *testing.T, objects ...ownershiptest.Object) *ownership.View {
+	return ownership.NewView(appManagerSession(t, objects...), ownership.Unrestricted())
 }
 
 // The Applications build answers each workload's source from the caches'

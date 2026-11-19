@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useWorkspaceNavigate } from '../../../hooks/useWorkspaceNavigate'
+import { useWorkspaceNavigate } from '../../workspace/useWorkspaceNavigate'
 import { cnpgDetailPath } from '../routes'
 import { ActionConfirmDialog, CNPGSchedulePreviewFacts, FactGrid, Tooltip, useDebouncedValue } from '@skyhook-io/k8s-ui'
 import { useCNPGAction, useCNPGScheduleCapabilities, useCNPGSchedulePreview, type CNPGScheduleActionName } from '../../../api/cnpg'
