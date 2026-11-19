@@ -1,0 +1,79 @@
+suite: Substrate installation connection
+templates:
+  - deployment.yaml
+tests:
+  - it: enables caller reads with the default direct endpoint and live cluster trust
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RADAR_SUBSTRATE_API, value: enabled}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RADAR_SUBSTRATE_ENDPOINT, value: 'api.ate-system.svc:443'}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RADAR_SUBSTRATE_SERVER_NAME, value: api.ate-system.svc}
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RADAR_SUBSTRATE_CA_FILE}
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: substrate-ca}
+          any: true
+  - it: operator can disable API access for everyone
+    set:
+      substrate.api.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RADAR_SUBSTRATE_API, value: disabled}
+  - it: mounts the selected public CA key read-only and joins fallback atespaces
+    set:
+      substrate.api.endpoint: api.example.com:8443
+      substrate.api.serverName: api.example.com
+      substrate.api.atespaces: [team-a, team-b]
+      substrate.api.caConfigMap: {name: substrate-trust, key: roots.pem}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RADAR_SUBSTRATE_ENDPOINT, value: 'api.example.com:8443'}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RADAR_SUBSTRATE_SERVER_NAME, value: api.example.com}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RADAR_SUBSTRATE_CA_FILE, value: /etc/radar/substrate-ca/ca.crt}
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: RADAR_SUBSTRATE_ATESPACES, value: 'team-a,team-b'}
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: substrate-ca, mountPath: /etc/radar/substrate-ca, readOnly: true}
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: substrate-ca
+            configMap:
+              name: substrate-trust
+              items: [{key: roots.pem, path: ca.crt}]
+  - it: rejects port zero
+    set:
+      substrate.api.endpoint: api.example.com:0
+    asserts:
+      - failedTemplate: {}
+  - it: rejects a port beyond TCP range
+    set:
+      substrate.api.endpoint: api.example.com:65536
+    asserts:
+      - failedTemplate: {}
+  - it: rejects empty DNS labels in a TLS server name
+    set:
+      substrate.api.serverName: a..b
+    asserts:
+      - failedTemplate: {}
+  - it: rejects an invalid atespace name
+    set:
+      substrate.api.atespaces: [bad_name]
+    asserts:
+      - failedTemplate: {}

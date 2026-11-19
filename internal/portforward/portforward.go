@@ -34,6 +34,7 @@ const (
 	OwnerPrometheus Owner = "prometheus"
 	OwnerTraffic    Owner = "traffic"
 	OwnerCost       Owner = "cost"
+	OwnerSubstrate  Owner = "substrate"
 	// EstablishTimeout lets compound discovery flows budget for each managed tunnel attempt.
 	EstablishTimeout = 10 * time.Second
 )

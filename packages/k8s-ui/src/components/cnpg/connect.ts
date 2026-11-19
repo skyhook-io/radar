@@ -1,5 +1,6 @@
 import { cnpgHASourceText, type CNPGClusterHA } from './ha'
 import { getCNPGClusterIsReplica } from '../resources/resource-utils-cnpg'
+import { shellWord } from '../../utils/shell'
 
 /** The port CloudNativePG gives PostgreSQL and PgBouncer when a Service template sets none. */
 export const CNPG_DEFAULT_PORT = 5432
@@ -125,10 +126,6 @@ export function cnpgConnectionURI(ep: CNPGConnectEndpoint, info: CNPGConnectInfo
   const user = encodeURIComponent(info.owner.value ?? '<user>')
   const db = encodeURIComponent(info.database.value ?? '<database>')
   return `postgresql://${user}:<password>@${ep.host}:${ep.port}/${db}`
-}
-
-function shellWord(v: string): string {
-  return /^[A-Za-z0-9_.@%+=:,/-]+$/.test(v) ? v : `'${v.replace(/'/g, `'\\''`)}'`
 }
 
 /** psql prompts for the password; nothing secret is put on the command line. */

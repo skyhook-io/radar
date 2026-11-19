@@ -8,7 +8,7 @@ import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
 import { effectivePolicyTypeNames } from '../../utils/network-policy'
-import { formatCPUString, formatMemoryString, formatBytes, formatCompactAge } from '../../utils/format'
+import { formatCPUString, formatMemoryString, formatBytes, formatCompactAge, splitCamelCase } from '../../utils/format'
 import { pluralize } from '../../utils/pluralize'
 import type { WorkloadPodInfo } from '../../types/core'
 import { getArgoRolloutStepNumber, getObservedGeneration, getWorkloadRolloutActivity, isArgoRolloutResource, isRolloutActivityVisible, rolloutActivityBadge, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
@@ -1603,7 +1603,7 @@ export function getNodeConditions(node: any): { problems: string[]; healthy: boo
     // Other conditions are problems when True
     if (lifecycle.problems.includes(cond.type) && cond.status === 'True') {
       // Format: "DiskPressure" -> "Disk Pressure"
-      const formatted = cond.type.replace(/([A-Z])/g, ' $1').trim()
+      const formatted = splitCamelCase(cond.type)
       problems.push(formatted)
     }
   }
