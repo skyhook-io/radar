@@ -6,6 +6,7 @@ import { renderToString } from 'react-dom/server'
 // pass while the real predicate sent a denial down the silent-hide path, which
 // is the failure this component exists to prevent.
 import { ApiError } from '../../api/client'
+import { PARTIAL_DATA_NOTE } from '@skyhook-io/k8s-ui/components/charts'
 
 const forbidden = new ApiError('forbidden', 403)
 let metricsResult: { data?: unknown; error?: unknown } = {}
@@ -102,5 +103,17 @@ describe('HPACharts — cluster scope', () => {
     metricsResult = { data: { current: series([2, 3]), desired: series([3, 3]), partial: true } }
     html = renderToString(<HPACharts data={hpa} />)
     expect(html).toContain('Partial data')
+  })
+
+  // A shard that didn't answer may hold all the history, so an empty partial
+  // answer says so instead of hiding like an HPA KSM never reported.
+  it('notes an empty partial answer instead of hiding', () => {
+    connected = true
+    metricsResult = { data: { current: { resultType: 'matrix', series: [] }, desired: { resultType: 'matrix', series: [] }, partial: true } }
+    const html = renderToString(<HPACharts data={hpa} />)
+    expect(html).toContain('Activity (last 1h)')
+    expect(html).toContain('No replica history in a partial answer')
+    expect(html).toContain(PARTIAL_DATA_NOTE)
+    expect(html).not.toContain('Replicas')
   })
 })
