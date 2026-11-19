@@ -1,6 +1,7 @@
 package relations
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -237,5 +239,89 @@ func TestAnAcrossSyncingGapIsKeptAsRead(t *testing.T) {
 	got := NewView(syncingThenReady{cluster: cluster{objects: []runtime.Object{svc, monitor}}, reads: &reads}, namespaceAccess{namespace: "apps"}).SelectedBy(Monitors, refOf(svc), svc)
 	if got.Coverage.Complete() {
 		t.Errorf("a syncing kind read as complete: %+v", got)
+	}
+}
+
+// collectedIn holds Secrets only in the namespaces it names, in stores with
+// the registered indexes: an all-namespace read reports the rest as one gap
+// naming no namespace.
+type collectedIn struct {
+	registeredStores
+	collected []string
+}
+
+func (c collectedIn) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
+	if gk != kindSecret {
+		return c.registeredStores.Indexed(gk, index, keys, scope)
+	}
+	var gaps []ownership.Gap
+	held := ownership.SearchScope{Namespaces: c.collected}
+	if !scope.AllNamespaces {
+		held.Namespaces = nil
+		for _, ns := range scope.Namespaces {
+			if slices.Contains(c.collected, ns) {
+				held.Namespaces = append(held.Namespaces, ns)
+			} else {
+				gaps = append(gaps, ownership.Gap{Kind: gk, Namespace: ns, Reason: readreason.RadarNamespaceNotCollected})
+			}
+		}
+	} else {
+		gaps = append(gaps, ownership.Gap{Kind: gk, Reason: readreason.RadarNamespaceNotCollected})
+	}
+	r := c.registeredStores.Indexed(gk, index, keys, held)
+	r.Gaps = append(gaps, r.Gaps...)
+	return r
+}
+
+// readsRecorded records each read made of a Session and how many objects
+// it returned.
+type readsRecorded struct {
+	Session
+	reads *[]recordedRead
+}
+
+type recordedRead struct {
+	index   string
+	keys    []string
+	scope   ownership.SearchScope
+	objects int
+}
+
+func (r readsRecorded) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
+	read := r.Session.Indexed(gk, index, keys, scope)
+	*r.reads = append(*r.reads, recordedRead{index: index, keys: keys, scope: scope, objects: len(read.Objects)})
+	return read
+}
+
+// Where Radar collects a kind in only some namespaces, an across answer reads
+// where the caller's namespaces are collected for the gaps alone: it reads
+// none of their objects, so the index still bounds what the answer reads.
+func TestAnAcrossCoverageReadReadsNoObjects(t *testing.T) {
+	secret := func(namespace, name, reflects string) runtime.Object {
+		m := metav1.ObjectMeta{Namespace: namespace, Name: name}
+		if reflects != "" {
+			m.Annotations = map[string]string{configrefs.ReflectsAnnotation: reflects}
+		}
+		return typed(&corev1.Secret{ObjectMeta: m}, "", "v1", "Secret")
+	}
+	objects := []runtime.Object{secret("team", "registry", ""), secret("team", "copy", "team/registry"), secret("shop", "registry", "team/registry")}
+	for i := range 100 {
+		objects = append(objects, secret("team", fmt.Sprintf("unrelated-%d", i), ""))
+	}
+	var reads []recordedRead
+	s := readsRecorded{Session: collectedIn{registeredStores: newRegisteredStores(t, objects), collected: []string{"shop", "team"}}, reads: &reads}
+	got := NewView(s, namespaceAccess{namespace: "team"}).Referrers(Reflections, refOf(objects[0]), nil)
+	if len(got.Referrers) != 1 || got.Referrers[0].Ref != refOf(objects[1]) || !got.Coverage.Complete() || !got.Coverage.Narrowed {
+		t.Fatalf("got %+v; want team/copy, complete and narrowed", got)
+	}
+	read := 0
+	for _, r := range reads {
+		read += r.objects
+		if !r.scope.AllNamespaces && (len(r.keys) != 0 || r.objects != 0) {
+			t.Errorf("the coverage read of %v passed keys %q and read %d objects; want none", r.scope.Namespaces, r.keys, r.objects)
+		}
+	}
+	if read != 2 {
+		t.Errorf("the answer read %d objects; want only the 2 the index holds for the subject", read)
 	}
 }
