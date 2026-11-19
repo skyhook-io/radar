@@ -31,10 +31,13 @@ import {
   costIntegrationUnavailableMessage,
   costRateLabels,
   costSourceLabel,
+  costWithheldScope,
   isCostDiscoveryPending,
 } from './source'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { CostConnectionAction } from './CostConnectionAction'
+import { ClusterScopeNote } from '@skyhook-io/k8s-ui/components/ui/ClusterScopeNote'
+import type { ClusterScope } from '@skyhook-io/k8s-ui/types/cluster-scope'
 
 type ApplicationCostState =
   | 'loading'
@@ -136,6 +139,8 @@ export function ApplicationCostTab({
     state === 'deployment_configuration_error' ||
     state === 'metrics_settings_error' ||
     state === 'cost_settings_error' ||
+    state === 'cluster_scope' ||
+    state === 'partial_data' ||
     state === 'history_unsupported' ||
     state === 'load_error'
   ) {
@@ -153,7 +158,14 @@ export function ApplicationCostTab({
       )
     }
     const refusal = crossOriginRefusalMessage(currentQuery.error) ?? crossOriginRefusalMessage(trendQuery.error)
-    return <ApplicationCostUnavailable state={state} message={refusal} settingsAvailable={settingsAvailable} />
+    return (
+      <ApplicationCostUnavailable
+        state={state}
+        message={refusal}
+        settingsAvailable={settingsAvailable}
+        withheld={costWithheldScope(currentQuery.data) ?? costWithheldScope(trendQuery.data)}
+      />
+    )
   }
 
   const current = currentQuery.data
@@ -409,7 +421,9 @@ export function getApplicationCostState(
     reason === 'configuration_mismatch' ||
     reason === 'deployment_configuration_error' ||
     reason === 'metrics_settings_error' ||
-    reason === 'cost_settings_error'
+    reason === 'cost_settings_error' ||
+    reason === 'cluster_scope' ||
+    reason === 'partial_data'
   )
     return reason
   if (queryError) return 'load_error'
@@ -525,6 +539,8 @@ function reasonLabel(reason?: CostUnavailableReason) {
   if (reason === 'deployment_configuration_error') return 'Radar configuration is invalid'
   if (reason === 'metrics_settings_error') return 'Saved metrics settings need review'
   if (reason === 'cost_settings_error') return 'Saved cost settings need review'
+  if (reason === 'cluster_scope') return 'Withheld: shared metrics store'
+  if (reason === 'partial_data') return 'Partial answer from the metrics store'
   return 'No workload cost metrics'
 }
 
@@ -564,10 +580,12 @@ function ApplicationCostUnavailable({
   state,
   message,
   settingsAvailable,
+  withheld,
 }: {
   state: CostUnavailableReason | 'load_error'
   message?: string
   settingsAvailable: boolean
+  withheld?: ClusterScope
 }) {
   const text =
     message ??
@@ -587,7 +605,11 @@ function ApplicationCostUnavailable({
     <div className="flex h-full min-h-[320px] items-center justify-center">
       <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
         <Coins className="h-8 w-8 text-theme-text-tertiary/50" />
-        <div className="text-sm">{text}</div>
+        {state === 'cluster_scope' && withheld ? (
+          <ClusterScopeNote scope={withheld} title="Costs withheld for this cluster" className="text-left" />
+        ) : (
+          <div className="text-sm">{text}</div>
+        )}
         <CostConnectionAction reason={state} />
       </div>
     </div>

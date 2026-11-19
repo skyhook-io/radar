@@ -25,10 +25,13 @@ import {
   costIntegrationUnavailableMessage,
   costRateLabels,
   costSourceLabel,
+  costWithheldScope,
   isCostDiscoveryPending,
 } from './source'
 import { useNavCustomization } from '../../context/NavCustomization'
+import type { ClusterScope } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import { CostConnectionAction } from './CostConnectionAction'
+import { ClusterScopeNote } from '@skyhook-io/k8s-ui/components/ui/ClusterScopeNote'
 
 type WorkloadCostState =
   | 'loading'
@@ -103,6 +106,8 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
     state === 'deployment_configuration_error' ||
     state === 'metrics_settings_error' ||
     state === 'cost_settings_error' ||
+    state === 'cluster_scope' ||
+    state === 'partial_data' ||
     state === 'history_unsupported' ||
     state === 'load_error'
   ) {
@@ -119,7 +124,13 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
         />
       )
     }
-    return <WorkloadCostUnavailable state={state} settingsAvailable={settingsAvailable} />
+    return (
+      <WorkloadCostUnavailable
+        state={state}
+        settingsAvailable={settingsAvailable}
+        withheld={costWithheldScope(currentQuery.data) ?? costWithheldScope(trendQuery.data)}
+      />
+    )
   }
 
   const current = currentQuery.data?.current
@@ -259,6 +270,9 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
         memoryUsageAvailable={current?.memoryUsageAvailable ?? false}
         window={source === 'kubecost' ? currentWindow : undefined}
       />
+      {currentQuery.data?.efficiencyUnavailable && (
+        <ClusterScopeNote scope={currentQuery.data.usageClusterScope} title="Usage withheld for this cluster" />
+      )}
 
       <div className="text-xs text-theme-text-tertiary">
         {costSourceLabel(source)} &middot; {costFreshnessLabel(source, source === 'kubecost' ? currentWindow : '1h', currentQuery.data?.dataThrough)}.{' '}
@@ -315,7 +329,9 @@ export function getWorkloadCostState(
     reason === 'configuration_mismatch' ||
     reason === 'deployment_configuration_error' ||
     reason === 'metrics_settings_error' ||
-    reason === 'cost_settings_error'
+    reason === 'cost_settings_error' ||
+    reason === 'cluster_scope' ||
+    reason === 'partial_data'
   )
     return reason
   if (queryError) return 'load_error'
@@ -359,9 +375,11 @@ function WorkloadCostDiscovering({
 function WorkloadCostUnavailable({
   state,
   settingsAvailable,
+  withheld,
 }: {
   state: CostUnavailableReason | 'load_error'
   settingsAvailable: boolean
+  withheld?: ClusterScope
 }) {
   const message =
     costIntegrationUnavailableMessage(state, settingsAvailable) ??
@@ -381,7 +399,11 @@ function WorkloadCostUnavailable({
     <div className="flex h-full min-h-[320px] items-center justify-center">
       <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
         <Coins className="h-8 w-8 text-theme-text-tertiary/50" />
-        <div className="text-sm">{message}</div>
+        {state === 'cluster_scope' && withheld ? (
+          <ClusterScopeNote scope={withheld} title="Costs withheld for this cluster" className="text-left" />
+        ) : (
+          <div className="text-sm">{message}</div>
+        )}
         <CostConnectionAction reason={state} />
       </div>
     </div>
