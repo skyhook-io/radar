@@ -15,7 +15,7 @@ const nodes: APIResource = { group: '', version: 'v1', kind: 'Node', name: 'node
 // and GPU nodes (the GPU column shows): together a little wider than 1456px.
 const node = (i: number) => ({
   apiVersion: 'v1', kind: 'Node',
-  metadata: { name: `ip-10-0-${i}-17.ec2.internal-pool-general-purpose-amd64-${i}`, uid: `n${i}`, creationTimestamp: '2026-01-01T00:00:00Z' },
+  metadata: { name: `ip-10-0-${i}-17.ec2.internal-pool-general-purpose-amd64-${i}`, uid: `n${i}`, creationTimestamp: '2026-01-01T00:00:00Z', labels: { team: 'platform-infrastructure-and-reliability' } },
   status: { conditions: [{ type: 'Ready', status: 'True' }], nodeInfo: { kubeletVersion: 'v1.31.2' }, allocatable: { cpu: '4', memory: '16Gi', pods: '110', 'nvidia.com/gpu': '8' }, capacity: { 'nvidia.com/gpu': '8' } },
 })
 // The table's room in a maximized 1920px window with Radar's default sidebars.
@@ -36,8 +36,10 @@ async function renderAt(windowWidth: number) {
   // Every low-priority column kept, as a user who turned them on would have
   // them: the table can't make room by leaving columns out.
   localStorage.setItem('radar-columns-nodes', JSON.stringify({
-    visible: ['name', 'status', 'roles', 'cpu', 'memory', 'pods', 'conditions', 'taints', 'version', 'age'],
+    visible: ['name', 'status', 'roles', 'cpu', 'memory', 'pods', 'conditions', 'taints', 'version', 'age', 'label:team'],
     hidden: [], kept: ['roles', 'pods', 'taints', 'version'], widthsVersion: 2,
+    // A label column too, so the default columns plus it are wider than the room.
+    custom: [{ source: 'label', path: 'team' }],
   }))
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: windowWidth })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)

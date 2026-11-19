@@ -46,6 +46,7 @@ import { getCrossplanePauseState, isComposite, isManagedResource } from './resou
 import { getPodGpuCount } from '../../utils/extended-resources'
 import { getCRDColumnValue } from './resource-utils-crd'
 import { getMachineNodeRef } from './resource-utils-capi'
+import { TABLE_DENSITY } from './table-density'
 
 // Cell text styles, matching the classes the cells render with (text-sm /
 // text-xs in the app font). measureText takes a CSS font shorthand.
@@ -68,7 +69,7 @@ export type CellFont = keyof typeof CELL_FONTS
 /** Width of `text` in `font`, in px; may stop counting once past `limit`. */
 export type MeasureText = (text: string, font: CellFont, limit?: number) => number
 
-export const CELL_PADDING_PX = 32 // px-4 on both sides
+export const CELL_PADDING_PX = TABLE_DENSITY.cellPaddingX
 // The copy button that sits beside every name: gap-1.5 + p-0.5 around a w-3 icon.
 const NAME_COPY_BUTTON_PX = 22
 // The Terminating chip beside a deleting resource's name, besides its label:
