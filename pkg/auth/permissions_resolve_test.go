@@ -239,11 +239,18 @@ func TestResolve_DistinctConnectionsAndIdentitiesDoNotShare(t *testing.T) {
 func TestResolve_InvalidateStartsANewDiscovery(t *testing.T) {
 	pc := NewPermissionCache()
 	release := make(chan struct{})
-	defer close(release)
-	go pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
-		<-release
-		return &UserPermissions{AllowedNamespaces: []string{"stale"}}, true
-	})
+	earlier := make(chan struct{})
+	defer func() {
+		close(release)
+		<-earlier
+	}()
+	go func() {
+		defer close(earlier)
+		pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
+			<-release
+			return &UserPermissions{AllowedNamespaces: []string{"stale"}}, true
+		})
+	}()
 	waitForWaiters(t, pc, "alice", nil, "1", 1)
 	pc.Invalidate()
 

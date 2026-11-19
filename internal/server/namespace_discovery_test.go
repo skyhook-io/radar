@@ -21,15 +21,17 @@ import (
 
 // discoveryAPI stands in for the apiserver's SubjectAccessReview endpoint
 // during namespace discovery. It counts discoveries by their first review, the
-// cluster-wide pod list check, and holds every review until gate closes.
+// cluster-wide pod list check, signals each on arrived, and holds every review
+// until gate closes.
 type discoveryAPI struct {
 	client      *kubernetes.Clientset
 	discoveries atomic.Int32
+	arrived     chan struct{}
 }
 
 func newDiscoveryAPI(t *testing.T, gate <-chan struct{}, decide func(authv1.ResourceAttributes) (allowed, fail bool)) *discoveryAPI {
 	t.Helper()
-	api := &discoveryAPI{}
+	api := &discoveryAPI{arrived: make(chan struct{}, 64)}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/apis/authorization.k8s.io/v1/subjectaccessreviews" {
 			http.NotFound(w, r)
@@ -43,6 +45,7 @@ func newDiscoveryAPI(t *testing.T, gate <-chan struct{}, decide func(authv1.Reso
 		attrs := *review.Spec.ResourceAttributes
 		if attrs.Resource == "pods" && attrs.Namespace == "" && attrs.Verb == "list" {
 			api.discoveries.Add(1)
+			api.arrived <- struct{}{}
 		}
 		if gate != nil {
 			select {
@@ -79,12 +82,23 @@ func (api *discoveryAPI) install(t *testing.T) {
 	t.Cleanup(func() { k8s.SetTestClient(previous) })
 }
 
-// waitForDiscoveries waits until n discoveries reached the apiserver, or a
-// short while when fewer arrive.
+// waitForDiscoveries gives n unshared discoveries time to reach the
+// apiserver. A shared discovery's count doesn't depend on it: a request that
+// misses the run finds its answer cached.
 func (api *discoveryAPI) waitForDiscoveries(n int32) {
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for api.discoveries.Load() < n && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// awaitDiscovery blocks until a discovery reaches the apiserver.
+func (api *discoveryAPI) awaitDiscovery(t *testing.T) {
+	t.Helper()
+	select {
+	case <-api.arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no discovery reached the apiserver")
 	}
 }
 
@@ -186,43 +200,38 @@ func TestGetUserNamespaces_SharedDiscoveryErrorFailsClosed(t *testing.T) {
 	}
 }
 
-// A request that ends while discovery is still running fails closed, and a
-// request that gives up doesn't fail another waiting on the same discovery.
-func TestGetUserNamespaces_CanceledRequestDoesNotFailOthers(t *testing.T) {
+// A request that gives up while another waits fails closed and leaves the
+// shared discovery running for the one still waiting.
+func TestGetUserNamespaces_RequestGivingUpKeepsTheSharedDiscovery(t *testing.T) {
 	gate := make(chan struct{})
 	api := newDiscoveryAPI(t, gate, allowOnly())
 	api.install(t)
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	user := &auth.User{Username: "reader"}
 
-	ctx, cancel := context.WithCancel(auth.ContextWithUser(context.Background(), user))
 	type result struct {
 		namespaces []string
 		failed     bool
 	}
-	leader := make(chan result, 1)
-	go func() {
-		r := httptest.NewRequest(http.MethodGet, "/api/resources/pods", nil).WithContext(ctx)
-		ns, failed := s.getUserNamespacesWithStatus(r, nil)
-		leader <- result{ns, failed}
-	}()
-	api.waitForDiscoveries(1)
-	follower := make(chan result, 1)
+	waiting := make(chan result, 1)
 	go func() {
 		ns, failed := s.getUserNamespacesWithStatus(requestWithUser(http.MethodGet, "/api/resources/pods", user), nil)
-		follower <- result{ns, failed}
+		waiting <- result{ns, failed}
 	}()
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	if got := <-leader; !got.failed || got.namespaces == nil || len(got.namespaces) != 0 {
-		t.Fatalf("canceled request = %#v, want a fail-closed []", got)
+	api.awaitDiscovery(t)
+
+	ctx, cancel := context.WithTimeout(auth.ContextWithUser(context.Background(), user), 50*time.Millisecond)
+	defer cancel()
+	r := httptest.NewRequest(http.MethodGet, "/api/resources/pods", nil).WithContext(ctx)
+	if ns, failed := s.getUserNamespacesWithStatus(r, nil); !failed || ns == nil || len(ns) != 0 {
+		t.Fatalf("the request that gave up = %#v, failed = %v; want a fail-closed []", ns, failed)
 	}
 	close(gate)
-	if got := <-follower; got.failed || got.namespaces != nil {
+	if got := <-waiting; got.failed || got.namespaces != nil {
 		t.Fatalf("waiting request = %#v, want every namespace", got)
 	}
 	if d := api.discoveries.Load(); d != 1 {
-		t.Fatalf("discoveries = %d, want 1", d)
+		t.Fatalf("discoveries = %d, want the request that gave up to have joined the shared one", d)
 	}
 }
 
@@ -230,13 +239,16 @@ func TestGetUserNamespaces_CanceledRequestDoesNotFailOthers(t *testing.T) {
 // never joins a discovery sent over the previous connection.
 func TestGetUserNamespaces_ReconnectStartsANewDiscovery(t *testing.T) {
 	gate := make(chan struct{})
-	defer close(gate)
 	old := newDiscoveryAPI(t, gate, allowOnly())
 	old.install(t)
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	user := &auth.User{Username: "reader"}
-	go s.getUserNamespacesWithStatus(requestWithUser(http.MethodGet, "/api/resources/pods", user), nil)
-	old.waitForDiscoveries(1)
+	earlier := make(chan struct{})
+	go func() {
+		defer close(earlier)
+		s.getUserNamespacesWithStatus(requestWithUser(http.MethodGet, "/api/resources/pods", user), nil)
+	}()
+	old.awaitDiscovery(t)
 
 	fresh := newDiscoveryAPI(t, nil, func(authv1.ResourceAttributes) (bool, bool) { return false, false })
 	t.Cleanup(k8s.ReconnectTestClient(fresh.client))
@@ -246,6 +258,8 @@ func TestGetUserNamespaces_ReconnectStartsANewDiscovery(t *testing.T) {
 	defer cancel()
 	r := httptest.NewRequest(http.MethodGet, "/api/resources/pods", nil).WithContext(ctx)
 	got, failed := s.getUserNamespacesWithStatus(r, nil)
+	close(gate)
+	<-earlier
 	if failed || got == nil || len(got) != 0 {
 		t.Fatalf("namespaces = %#v, failed = %v; want the new cluster's []", got, failed)
 	}
@@ -268,7 +282,7 @@ func TestGetUserNamespaces_LateDiscoveryKeepsTheNewConnectionsEntry(t *testing.T
 		got, _ := s.getUserNamespacesWithStatus(requestWithUser(http.MethodGet, "/api/resources/pods", user), nil)
 		late <- got
 	}()
-	old.waitForDiscoveries(1)
+	old.awaitDiscovery(t)
 
 	fresh := newDiscoveryAPI(t, nil, allowOnly([]string{}...))
 	t.Cleanup(k8s.ReconnectTestClient(fresh.client))

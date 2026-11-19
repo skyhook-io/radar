@@ -21,16 +21,17 @@ import (
 
 // discoveryAPI stands in for the apiserver during namespace discovery: it
 // lists team-a and team-b, answers SubjectAccessReviews from decide, counts
-// discoveries by their first review (the cluster-wide pod list check), and
-// holds every review until gate closes.
+// discoveries by their first review (the cluster-wide pod list check),
+// signals each on arrived, and holds every review until gate closes.
 type discoveryAPI struct {
 	client      *kubernetes.Clientset
 	discoveries atomic.Int32
+	arrived     chan struct{}
 }
 
 func newDiscoveryAPI(t *testing.T, gate <-chan struct{}, decide func(authorizationv1.ResourceAttributes) (allowed, fail bool)) *discoveryAPI {
 	t.Helper()
-	api := &discoveryAPI{}
+	api := &discoveryAPI{arrived: make(chan struct{}, 64)}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -50,6 +51,7 @@ func newDiscoveryAPI(t *testing.T, gate <-chan struct{}, decide func(authorizati
 		attrs := *review.Spec.ResourceAttributes
 		if attrs.Resource == "pods" && attrs.Namespace == "" && attrs.Verb == "list" {
 			api.discoveries.Add(1)
+			api.arrived <- struct{}{}
 		}
 		if gate != nil {
 			select {
@@ -90,12 +92,23 @@ func (api *discoveryAPI) install(t *testing.T) {
 	t.Cleanup(getPermCache().Invalidate)
 }
 
-// waitForDiscoveries waits until n discoveries reached the apiserver, or a
-// short while when fewer arrive.
+// waitForDiscoveries gives n unshared discoveries time to reach the
+// apiserver. A shared discovery's count doesn't depend on it: a call that
+// misses the run finds its answer cached.
 func (api *discoveryAPI) waitForDiscoveries(n int32) {
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for api.discoveries.Load() < n && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// awaitDiscovery blocks until a discovery reaches the apiserver.
+func (api *discoveryAPI) awaitDiscovery(t *testing.T) {
+	t.Helper()
+	select {
+	case <-api.arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no discovery reached the apiserver")
 	}
 }
 
@@ -193,15 +206,45 @@ func TestResolveUserPerms_SharedDiscoveryErrorFailsClosed(t *testing.T) {
 	}
 }
 
+// A tool call that gives up while another waits fails closed and leaves the
+// shared discovery running for the one still waiting.
+func TestResolveUserPerms_CallGivingUpKeepsTheSharedDiscovery(t *testing.T) {
+	gate := make(chan struct{})
+	api := newDiscoveryAPI(t, gate, allowOnly())
+	api.install(t)
+	waiting := make(chan *pkgauth.UserPermissions, 1)
+	go func() {
+		_, perms := resolveUserPerms(userContext("reader"))
+		waiting <- perms
+	}()
+	api.awaitDiscovery(t)
+
+	ctx, cancel := context.WithTimeout(userContext("reader"), 50*time.Millisecond)
+	defer cancel()
+	if _, perms, failed := resolveUserPermsWithStatus(ctx); !failed || perms.AllowedNamespaces == nil || len(perms.AllowedNamespaces) != 0 {
+		t.Fatalf("the call that gave up: perms = %#v, failed = %v; want a fail-closed []", perms, failed)
+	}
+	close(gate)
+	if got := <-waiting; got == nil || got.AllowedNamespaces != nil {
+		t.Fatal("the waiting call didn't get every namespace")
+	}
+	if d := api.discoveries.Load(); d != 1 {
+		t.Fatalf("discoveries = %d, want the call that gave up to have joined the shared one", d)
+	}
+}
+
 // A same-name reconnect can reach a different cluster, so a tool call after
 // it never joins a discovery sent over the previous connection.
 func TestResolveUserPerms_ReconnectStartsANewDiscovery(t *testing.T) {
 	gate := make(chan struct{})
-	defer close(gate)
 	old := newDiscoveryAPI(t, gate, allowOnly())
 	old.install(t)
-	go resolveUserPerms(userContext("reader"))
-	old.waitForDiscoveries(1)
+	earlier := make(chan struct{})
+	go func() {
+		defer close(earlier)
+		resolveUserPerms(userContext("reader"))
+	}()
+	old.awaitDiscovery(t)
 
 	fresh := newDiscoveryAPI(t, nil, allowOnly([]string{}...))
 	t.Cleanup(k8s.ReconnectTestClient(fresh.client))
@@ -210,6 +253,8 @@ func TestResolveUserPerms_ReconnectStartsANewDiscovery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(userContext("reader"), 5*time.Second)
 	defer cancel()
 	_, perms, failed := resolveUserPermsWithStatus(ctx)
+	close(gate)
+	<-earlier
 	if failed || perms.AllowedNamespaces == nil || len(perms.AllowedNamespaces) != 0 {
 		t.Fatalf("perms = %#v, failed = %v; want the new cluster's []", perms, failed)
 	}
@@ -230,7 +275,7 @@ func TestResolveUserPerms_LateDiscoveryKeepsTheNewConnectionsEntry(t *testing.T)
 		_, perms := resolveUserPerms(userContext("reader"))
 		late <- perms
 	}()
-	old.waitForDiscoveries(1)
+	old.awaitDiscovery(t)
 
 	fresh := newDiscoveryAPI(t, nil, allowOnly([]string{}...))
 	t.Cleanup(k8s.ReconnectTestClient(fresh.client))
