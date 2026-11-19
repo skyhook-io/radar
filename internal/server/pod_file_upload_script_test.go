@@ -253,6 +253,8 @@ func TestUploadScriptDestinationBecomesDirectoryMidUpload(t *testing.T) {
 		body := []byte("new body")
 		cmd := podFileUploadCommand(dir, "a", overwrite, int64(len(body)))
 		c := exec.Command(cmd[0], cmd[1:]...)
+		var stderr bytes.Buffer
+		c.Stderr = &stderr
 		stdin, err := c.StdinPipe()
 		if err != nil {
 			t.Fatal(err)
@@ -260,6 +262,8 @@ func TestUploadScriptDestinationBecomesDirectoryMidUpload(t *testing.T) {
 		if err := c.Start(); err != nil {
 			t.Fatal(err)
 		}
+		exited := make(chan error, 1)
+		go func() { exited <- c.Wait() }()
 		_, _ = stdin.Write(body)
 		// The script creates its temp file before it reads the replaced
 		// file's mode and owner; a destination swapped in that window fails
@@ -267,10 +271,15 @@ func TestUploadScriptDestinationBecomesDirectoryMidUpload(t *testing.T) {
 		// whole body, the script is in cat, waiting for the end of stdin.
 		deadline := time.Now().Add(10 * time.Second)
 		for tempFileSize(dir) != int64(len(body)) {
+			select {
+			case err := <-exited:
+				t.Fatalf("overwrite=%v: the script exited before it received the body: %v (stderr %q)", overwrite, err, stderr.String())
+			default:
+			}
 			if time.Now().After(deadline) {
 				_ = c.Process.Kill()
-				_ = c.Wait()
-				t.Fatalf("overwrite=%v: the script never received the body", overwrite)
+				<-exited
+				t.Fatalf("overwrite=%v: the script never received the body (stderr %q)", overwrite, stderr.String())
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
@@ -279,10 +288,10 @@ func TestUploadScriptDestinationBecomesDirectoryMidUpload(t *testing.T) {
 			t.Fatal(err)
 		}
 		_ = stdin.Close()
-		err = c.Wait()
+		err = <-exited
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) || exitErr.ExitCode() != uploadExitNotRegular {
-			t.Errorf("overwrite=%v: %v, want exit %d", overwrite, err, uploadExitNotRegular)
+			t.Errorf("overwrite=%v: %v, want exit %d (stderr %q)", overwrite, err, uploadExitNotRegular, stderr.String())
 		}
 		entries, _ := os.ReadDir(dest)
 		if len(entries) != 0 {
