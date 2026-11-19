@@ -114,7 +114,7 @@ func TestReferrerIndexIncludesAlternativesAndDeduplicatesKeys(t *testing.T) {
 	}
 	for _, group := range []string{"traefik.io", "traefik.containo.us"} {
 		target := resourceid.NewRef(group, "TraefikService", "shared", "app")
-		if !slices.Contains(keys, ReferrerKey(target)) {
+		if !slices.Contains(keys, target.Key()) {
 			t.Errorf("missing %s", group)
 		}
 	}
@@ -129,7 +129,7 @@ func TestReferrerIndexDeduplicatesManyKeys(t *testing.T) {
 		t.Fatalf("%d keys; want each of the 500 Services once", len(keys))
 	}
 	for i := range 500 {
-		if !slices.Contains(keys, ReferrerKey(resourceid.NewRef("", "Service", "shared", fmt.Sprintf("service-%d", i)))) {
+		if !slices.Contains(keys, resourceid.NewRef("", "Service", "shared", fmt.Sprintf("service-%d", i)).Key()) {
 			t.Fatalf("missing service-%d", i)
 		}
 	}
@@ -146,7 +146,7 @@ func TestIstioIndexIsIndependentOfMeshDomain(t *testing.T) {
 		for _, domain := range []string{"", "cluster.local", "custom.internal"} {
 			f := IstioServiceHosts(domain)
 			keys, err := f.IndexFunc()(dr)
-			if err != nil || !slices.Contains(keys, ReferrerKey(target)) {
+			if err != nil || !slices.Contains(keys, target.Key()) {
 				t.Errorf("host %s domain %s: %q, %v", host, domain, keys, err)
 			}
 		}
@@ -161,7 +161,7 @@ type referrerReads struct {
 
 func (s *referrerReads) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
 	if index == GatewayParents.ReferrersIndex.Name {
-		if want := []string{ReferrerKey(s.target), unreadReferrerKey}; !slices.Equal(keys, want) {
+		if want := []string{s.target.Key(), unreadReferrerKey}; !slices.Equal(keys, want) {
 			s.t.Errorf("referrers read %q; want only the subject's key and unread sources, %q", keys, want)
 		}
 	}
@@ -265,7 +265,7 @@ func TestAPartlyUnreadSourceIsIndexedForEverySearch(t *testing.T) {
 	if err := store.Add(cm); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{ReferrerKey(target), unreadReferrerKey} {
+	for _, key := range []string{target.Key(), unreadReferrerKey} {
 		if got, _ := store.ByIndex(f.ReferrersIndex.Name, key); len(got) != 1 {
 			t.Errorf("%q holds %d objects; want the partly read source", key, len(got))
 		}

@@ -13,19 +13,16 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// ReferrerKey is the key a family's index files its sources under for a
-// target they may name.
-func ReferrerKey(target resourceid.Ref) string {
-	return target.Group + "\x00" + target.Kind + "\x00" + target.Namespace + "\x00" + target.Name
-}
-
+// referrersIndex files a family's sources under the key of each target they
+// may name.
 func referrersIndex(name string) *ReferrersIndex {
-	return &ReferrersIndex{Name: "relations/" + name, Key: ReferrerKey}
+	return &ReferrersIndex{Name: "relations/" + name, Key: resourceid.Ref.Key}
 }
 
 // unreadReferrerKey files a source whose declarations couldn't all be read.
 // Every reverse search reads it too, so the read error reaches the answer as a
-// gap: returning it from the index function would panic the store instead.
+// gap: returning it from the index function would panic the store instead. No
+// resource key can equal it: those have three "|".
 const unreadReferrerKey = "\x00unread"
 
 // IndexFunc files every alternative a declaration can resolve to. Discovery,
