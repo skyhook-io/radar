@@ -350,9 +350,9 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const [createDialogYaml, setCreateDialogYaml] = useState('')
   const [createDialogTitle, setCreateDialogTitle] = useState<string | undefined>()
 
-  const handleCreateResource = useCallback((kind: { name: string; kind: string; group: string } | null) => {
+  const handleCreateResource = useCallback((kind: SelectedKindInfo, initialYaml?: string) => {
     if (kind?.kind) {
-      setCreateDialogYaml(getSkeletonYaml(kind.kind, kind.group))
+      setCreateDialogYaml(initialYaml ?? getSkeletonYaml(kind.kind, kind.group))
       setCreateDialogTitle(`Create ${kind.kind}`)
     } else {
       setCreateDialogYaml('')

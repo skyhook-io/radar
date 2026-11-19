@@ -124,11 +124,13 @@ func (s scanSession) Indexed(gk resourceid.GroupKind, index string, keys []strin
 		gap(gk, "", readreason.ReadError)
 	case served:
 		read, ok := s.readable(dependentKind{gk: gk, namespaced: namespaced}, scope, namespaces, gap)
-		if !ok || index != cache.NamespaceIndex && index != "" {
+		if !ok {
 			break
 		}
+		// Another index only narrows what the caller evaluates, so every
+		// readable object stands in for what it files under keys.
 		for _, o := range s.byKind[gk] {
-			if read(o) && (index == "" || slices.Contains(keys, o.Ref.Namespace)) {
+			if read(o) && (index != cache.NamespaceIndex || slices.Contains(keys, o.Ref.Namespace)) {
 				r.Objects = append(r.Objects, relations.IndexedObject{Ref: o.Ref, Object: APIObject(o)})
 			}
 		}

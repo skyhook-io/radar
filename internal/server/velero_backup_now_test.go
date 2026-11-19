@@ -219,7 +219,7 @@ func TestVeleroBackupNowSubmissionIdentity(t *testing.T) {
 }
 
 func TestVeleroBackupNowRefusesDisabledController(t *testing.T) {
-	for _, flags := range [][]string{{"--restore-only"}, {"--disable-controllers=backup"}} {
+	for _, flags := range [][]string{{"--restore-only"}, {"--disable-controllers=backup"}, {"--disable-controllers=backup-queue"}} {
 		t.Run(strings.Join(flags, " "), func(t *testing.T) {
 			srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
 			seedVeleroActionServer(t, 1, flags...)

@@ -22,13 +22,17 @@ type VeleroStoredBackup struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	Phase     string `json:"phase,omitempty"`
-	// Expiration is when Velero will delete this backup. A location full of
+	// Expiration is when the backup becomes eligible for garbage collection. A location full of
 	// backups that all expire next week is a different answer to "what can I
 	// restore" than one that keeps them for a year.
 	Expiration string `json:"expiration,omitempty"`
-	// Completed is when the backup finished — the point in time a restore from
-	// it would return to.
+	// Completed is the backup's status.completionTimestamp, when it finished.
+	// Objects are captured throughout the run, so it is not one point in time
+	// a restore returns to.
 	Completed string `json:"completed,omitempty"`
+	orderTime string
+	// Manual: created by Radar's Back up now from a schedule.
+	Manual bool `json:"manual,omitempty"`
 }
 
 // maxStoredBackupsListed bounds the list, not the counts. Velero keeps every
@@ -133,6 +137,14 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		b.Phase, _, _ = unstructured.NestedString(u.Object, "status", "phase")
 		b.Expiration, _, _ = unstructured.NestedString(u.Object, "status", "expiration")
 		b.Completed, _, _ = unstructured.NestedString(u.Object, "status", "completionTimestamp")
+		b.orderTime = b.Completed
+		if b.orderTime == "" {
+			b.orderTime, _, _ = unstructured.NestedString(u.Object, "status", "startTimestamp")
+			if b.orderTime == "" {
+				b.orderTime = u.GetCreationTimestamp().UTC().Format(time.RFC3339)
+			}
+		}
+		_, b.Manual = u.GetAnnotations()[veleropkg.SubmissionAnnotation]
 		if b.Phase == "Completed" {
 			if veleroExpired(b.Expiration) {
 				resp.Expired++
@@ -142,13 +154,11 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		}
 		resp.Backups = append(resp.Backups, b)
 	}
-	// Newest first: the question is almost always "what is the most recent thing
-	// I can restore from". The cap below depends on this order — the most recent
-	// restorable point is derived from this list, so the newest entries must be
-	// the ones that survive truncation.
+	// A rejected or queued run has no completion time, but it may be the newest
+	// evidence that this location stopped accepting backups.
 	sort.Slice(resp.Backups, func(i, j int) bool {
-		if resp.Backups[i].Completed != resp.Backups[j].Completed {
-			return resp.Backups[i].Completed > resp.Backups[j].Completed
+		if resp.Backups[i].orderTime != resp.Backups[j].orderTime {
+			return resp.Backups[i].orderTime > resp.Backups[j].orderTime
 		}
 		return resp.Backups[i].Name < resp.Backups[j].Name
 	})

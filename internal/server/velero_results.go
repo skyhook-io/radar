@@ -165,7 +165,7 @@ func (s *Server) handleVeleroRunMessages(w http.ResponseWriter, r *http.Request)
 	if deployments, read := s.veleroDeployments(r, k8s.GetResourceCache(), namespace); read {
 		if server := veleropkg.ServerConfigFromDeployments(deployments, true); server.Down() {
 			s.writeError(w, http.StatusServiceUnavailable,
-				fmt.Sprintf("The Velero server (Deployment %s in namespace %s) has no running replicas, and only it can serve these messages. Start it, then try again.",
+				fmt.Sprintf("The Velero server (Deployment %s in namespace %s) has no pods, and only it can serve these messages. Start it, then try again.",
 					server.Deployment, namespace))
 			return
 		}

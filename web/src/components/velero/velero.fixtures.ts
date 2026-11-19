@@ -49,7 +49,7 @@ export function workspace(overrides: Partial<VeleroWorkspaceResponse> = {}): Vel
     installed: true,
     context: 'kind-radar-velero-demo',
     coverage: { schedules: full, backups: full, backupStorageLocations: full, restores: full, backupRepositories: full },
-    installations: [{ namespace: 'velero', server: { source: 'deployment', timeZone: 'UTC', defaultLocation: 'default', validationFrequencySeconds: 60 }, defaultLocation: 'default', defaultSource: 'spec', unassignedBackups: 0 }],
+    installations: [{ namespace: 'velero', server: { source: 'deployment', timeZone: 'UTC', defaultLocation: 'default', validationFrequencySeconds: 60 }, defaultLocation: 'default', defaultSource: 'spec' }],
     schedules: [schedule()],
     locations: [location()],
     issues: [],

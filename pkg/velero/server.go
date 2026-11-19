@@ -18,9 +18,9 @@ const (
 	// ServerFromDeployment: the server Deployment was read and its rollout is
 	// complete, so its template is what the running controller uses.
 	ServerFromDeployment ServerSource = "deployment"
-	// ServerRolling: a rollout is in progress; the running controller may still
+	// ServerRolloutInProgress: a rollout is in progress; the running controller may still
 	// use the previous template, so nothing is taken from it.
-	ServerRolling ServerSource = "rolloutInProgress"
+	ServerRolloutInProgress ServerSource = "rolloutInProgress"
 	// ServerNotFound: Deployments in the namespace were read and none runs
 	// `velero server`.
 	ServerNotFound ServerSource = "notFound"
@@ -38,6 +38,11 @@ const (
 // Radar could establish it. A field is set only when its effective value is
 // known: a TZ supplied through envFrom or valueFrom, or a flag built from
 // $(VAR) expansion, leaves it unset rather than guessed.
+//
+// Build it with ServerConfigFromDeployments. Its JSON is for display: the
+// resolved zone and whether the flags were read are not encoded, so a
+// ServerConfig decoded from JSON (or written as a literal) reports
+// FlagsKnown() false and resolves no zone.
 type ServerConfig struct {
 	Source     ServerSource `json:"source"`
 	Deployment string       `json:"deployment,omitempty"`
@@ -51,10 +56,22 @@ type ServerConfig struct {
 	// recurring validation.
 	ValidationFrequencySeconds *int64 `json:"validationFrequencySeconds,omitempty"`
 	// SchedulingDisabled: --restore-only or --disable-controllers removes the
-	// schedule controller, so no Schedule runs.
+	// schedule controller, so no Schedule runs. In JSON it is sent, true or
+	// false, only when the flags were read (FlagsKnown); absent means unknown.
 	SchedulingDisabled bool `json:"schedulingDisabled,omitempty"`
-	// BackupsDisabled is independent of scheduling: manual Backups need the backup controller too.
+	// BackupsDisabled: the backup or backup-queue controller is removed
+	// (--restore-only, or --disable-controllers naming either), so no Backup
+	// runs, manual or scheduled; independent of scheduling. Encoded as
+	// SchedulingDisabled is.
 	BackupsDisabled bool `json:"backupsDisabled,omitempty"`
+	// DeletionDisabled: the backup-deletion controller is removed
+	// (--restore-only or --disable-controllers=backup-deletion), so no
+	// DeleteBackupRequest is processed. Encoded as SchedulingDisabled is.
+	DeletionDisabled bool `json:"deletionDisabled,omitempty"`
+	// GCDisabled: the gc controller is removed (--restore-only or
+	// --disable-controllers=gc), so expired backups are not deleted. Encoded
+	// as SchedulingDisabled is.
+	GCDisabled bool `json:"gcDisabled,omitempty"`
 	// ScheduleSkipImmediately is --schedule-skip-immediately, what the
 	// controller does with a Schedule whose spec.skipImmediately is unset; nil
 	// when the flags could not be read.
@@ -69,9 +86,10 @@ type ServerConfig struct {
 	flagsSet bool
 }
 
-// Down reports that the server Deployment was read and has no running replica
-// (scaled to zero, or its pods cannot be created), so nothing new submits
-// scheduled backups or validates locations.
+// Down reports that the server Deployment was read and has no pods
+// (status.replicas is 0: scaled to zero, or its pods cannot be created), so
+// nothing submits scheduled backups or validates locations. A Pending or
+// crash-looping pod still counts, so such a server is not Down.
 func (c ServerConfig) Down() bool { return c.Replicas != nil && *c.Replicas == 0 }
 
 // FlagsKnown reports whether the server's flags were read in full.
@@ -105,7 +123,7 @@ func ServerConfigFromDeployments(deployments []*appsv1.Deployment, read bool) Se
 		replicas, ready := d.Status.Replicas, d.Status.ReadyReplicas
 		cfg := ServerConfig{Source: ServerFromDeployment, Deployment: d.Name, Replicas: &replicas, ReadyReplicas: &ready}
 		if !rolloutComplete(d) {
-			cfg.Source = ServerRolling
+			cfg.Source = ServerRolloutInProgress
 			return cfg
 		}
 		cfg.readZone(c)
@@ -154,7 +172,9 @@ func rolloutComplete(d *appsv1.Deployment) bool {
 }
 
 func (cfg *ServerConfig) readZone(c corev1.Container) {
-	for _, e := range c.Env {
+	// A name repeated in env takes its last entry, as the kubelet does.
+	for i := len(c.Env) - 1; i >= 0; i-- {
+		e := c.Env[i]
 		if e.Name != "TZ" {
 			continue
 		}
@@ -186,7 +206,9 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 			return
 		}
 	}
+	// A repeated flag takes its last value, as pflag does.
 	freq := defaultValidationFrequency
+	restoreOnly := false
 	skipImmediately := false
 	cfg.DefaultLocation = defaultLocationName
 	for i := 0; i < len(tokens); i++ {
@@ -233,22 +255,40 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 			}
 			skipImmediately = v
 		case "restore-only":
-			if !hasValue || value == "true" {
-				cfg.SchedulingDisabled = true
-				cfg.BackupsDisabled = true
+			// Velero's server.go disables the backup, schedule,
+			// backup-deletion and gc controllers (among others) in this mode.
+			on := true
+			if hasValue {
+				b, err := strconv.ParseBool(value)
+				if err != nil {
+					return
+				}
+				on = b
 			}
+			restoreOnly = on
 		case "disable-controllers":
+			// A repeated slice flag adds to the list, as pflag's StringSlice does.
 			if v, ok := takeValue(); ok {
 				for ctl := range strings.SplitSeq(v, ",") {
-					if strings.TrimSpace(ctl) == "backup" {
+					switch strings.TrimSpace(ctl) {
+					case "backup", "backup-queue":
+						// The backup controller starts only backups the
+						// queue controller has made ready.
 						cfg.BackupsDisabled = true
-					}
-					if strings.TrimSpace(ctl) == "schedule" {
+					case "schedule":
 						cfg.SchedulingDisabled = true
+					case "backup-deletion":
+						cfg.DeletionDisabled = true
+					case "gc":
+						cfg.GCDisabled = true
 					}
 				}
 			}
 		}
+	}
+	if restoreOnly {
+		cfg.SchedulingDisabled, cfg.BackupsDisabled = true, true
+		cfg.DeletionDisabled, cfg.GCDisabled = true, true
 	}
 	secs := int64(freq / time.Second)
 	cfg.ValidationFrequencySeconds = &secs
@@ -256,15 +296,20 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 	cfg.flagsSet = true
 }
 
-// BackupsDisabled is absent when the effective flags could not be established.
+// MarshalJSON sends the controller flags (schedulingDisabled,
+// backupsDisabled, deletionDisabled, gcDisabled) only when the effective flags
+// were established, so their absence means unknown, not false.
 func (c ServerConfig) MarshalJSON() ([]byte, error) {
 	type config ServerConfig
-	var disabled *bool
+	var scheduling, backups, deletion, gc *bool
 	if c.FlagsKnown() {
-		disabled = &c.BackupsDisabled
+		scheduling, backups, deletion, gc = &c.SchedulingDisabled, &c.BackupsDisabled, &c.DeletionDisabled, &c.GCDisabled
 	}
 	return json.Marshal(struct {
 		config
-		BackupsDisabled *bool `json:"backupsDisabled,omitempty"`
-	}{config: config(c), BackupsDisabled: disabled})
+		SchedulingDisabled *bool `json:"schedulingDisabled,omitempty"`
+		BackupsDisabled    *bool `json:"backupsDisabled,omitempty"`
+		DeletionDisabled   *bool `json:"deletionDisabled,omitempty"`
+		GCDisabled         *bool `json:"gcDisabled,omitempty"`
+	}{config: config(c), SchedulingDisabled: scheduling, BackupsDisabled: backups, DeletionDisabled: deletion, GCDisabled: gc})
 }

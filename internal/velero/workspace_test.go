@@ -219,6 +219,11 @@ func TestRunsFilterBeforeCapAndReasons(t *testing.T) {
 			if resp.Runs[0].Reason != "preferred" {
 				t.Fatal(resp.Runs[0])
 			}
+			match.SetAnnotations(map[string]string{domain.SubmissionAnnotation: "confirmation-1"})
+			resp = reader.Runs(t.Context(), RunsKey(kind), "velero", RunsFilter{Schedule: "nightly", Backup: "source"})
+			if resp.Runs[0].Manual != (kind == "backups") {
+				t.Fatalf("only a Backup from Back up now is manual: %+v", resp.Runs[0])
+			}
 		})
 	}
 }
@@ -234,7 +239,7 @@ func TestScheduleActivityBackupControllerFact(t *testing.T) {
 		}}, true
 	}
 	response, readable, found := reader.ScheduleActivity(t.Context(), "velero", "nightly")
-	if !readable || !found || !response.BackupsDisabled || response.ServerStopped || response.Reading.State == domain.StateSchedulingDisabled {
+	if !readable || !found || response.BackupsDisabled == nil || !*response.BackupsDisabled || response.ServerStopped || response.Reading.State == domain.StateSchedulingDisabled {
 		t.Fatalf("%+v read=%v found=%v", response, readable, found)
 	}
 }

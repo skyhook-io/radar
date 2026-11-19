@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
@@ -94,6 +95,35 @@ func TestVeleroRestoreRejectedByAnUnavailableLocation(t *testing.T) {
 	got := detect(unavailableLocation("primary"), restore)
 	if len(got) != 1 || len(got[0].AffectedRefs) != 1 || got[0].AffectedRefs[0].Kind != "Restore" {
 		t.Fatalf("got %+v, want the restore under the location", got)
+	}
+}
+
+func TestVeleroRejectedRunRollupSurvivesKindFilter(t *testing.T) {
+	location := unavailableLocation("primary")
+	location.Object["status"].(map[string]any)["lastValidationTime"] = time.Now().UTC().Format(time.RFC3339)
+	backup := rejected("nightly", unavailable("primary"))
+	restore := veleroReadingObj("Restore", "restore-payments", veleroNow, nil, nil,
+		map[string]any{"phase": "FailedValidation", "validationErrors": []any{"The BSL primary is unavailable, cannot retrieve the backup"}})
+	restoreGVR := veleroGVR("restores")
+	p := &fakeProvider{
+		dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+			veleroBSLGVR: {location}, veleroBackupGVR: {backup}, restoreGVR: {restore},
+		},
+		kinds: map[schema.GroupVersionResource]string{
+			veleroBSLGVR: "BackupStorageLocation", veleroBackupGVR: "Backup", restoreGVR: "Restore",
+		},
+	}
+	for _, kind := range []string{"Backup", "Restore", "BackupStorageLocation"} {
+		t.Run(kind, func(t *testing.T) {
+			got := Compose(p, Filters{Kinds: []string{kind}, Grouped: true})
+			if len(got) != 1 || got[0].Reason != ReasonVeleroBSLUnavailable {
+				t.Fatalf("want one unavailable location, got %v", reasonsOf(got))
+			}
+			refs := got[0].AffectedRefs
+			if len(refs) != 2 || refs[0].Name != backup.GetName() || refs[1].Name != restore.GetName() {
+				t.Errorf("affected runs = %+v, want both the rejected Backup and Restore", refs)
+			}
+		})
 	}
 }
 

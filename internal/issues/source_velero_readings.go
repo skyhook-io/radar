@@ -112,12 +112,15 @@ func detectVeleroReadingIssues(p Provider, bslGVR schema.GroupVersionResource, l
 
 		schedules, schedulesKnown := read("Schedule", ns)
 		backups, backupsKnown := read("Backup", ns)
+		var bySchedule map[string][]*unstructured.Unstructured
 		if !schedulesKnown || !backupsKnown {
 			schedules = nil
+		} else if len(schedules) > 0 {
+			bySchedule = veleropkg.BackupsBySchedule(backups)
 		}
 		scheduleGVR := gvrs["Schedule"]
 		for _, s := range schedules {
-			reading := veleropkg.ReadSchedule(veleropkg.ScheduleInput{Schedule: s, Backups: backups, BackupsRead: true, Server: server, DefaultLocation: defaultLocation, Now: now})
+			reading := veleropkg.ReadSchedule(veleropkg.ScheduleInput{Schedule: s, Backups: bySchedule[s.GetName()], BackupsRead: true, Server: server, DefaultLocation: defaultLocation, Locations: byNS[ns], Now: now})
 			if server.Down() && reading.Attention && reading.State == veleropkg.StateLate {
 				lateWhileDown = append(lateWhileDown, Ref{Group: VeleroGroup, Kind: "Schedule", Namespace: ns, Name: s.GetName()})
 				continue
@@ -127,16 +130,23 @@ func detectVeleroReadingIssues(p Provider, bslGVR schema.GroupVersionResource, l
 				continue
 			}
 			iss := veleroStateIssue(scheduleGVR, "Schedule", ns, s.GetName(), severity, reason, message, s.GetCreationTimestamp().Time)
+			if reason == ReasonVeleroScheduleHeld && server.FlagsKnown() && server.BackupsDisabled {
+				iss.Cause = "The Velero server has disabled a controller required to start backups."
+				iss.Action = "Enable the backup and backup-queue controllers on the Velero server, or pause the schedule if backups are intentionally disabled."
+			}
 			iss.RequiredReads = append([]EvidenceRead{
 				{Group: VeleroGroup, Resource: "schedules", Namespace: ns, Verb: "list"},
 				{Group: VeleroGroup, Resource: "backups", Namespace: ns, Verb: "list"},
 			}, serverReads...)
+			if reading.Reason == veleropkg.ReasonLocationReadOnly {
+				iss.RequiredReads = append(iss.RequiredReads, EvidenceRead{Group: VeleroGroup, Resource: "backupstoragelocations", Namespace: ns, Verb: "list"})
+			}
 			out = append(out, iss)
 		}
 		if server.Down() {
 			iss := newConditionIssue(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, "Deployment", ns, server.Deployment,
 				SeverityCritical, ReasonVeleroServerNotRunning,
-				fmt.Sprintf("The Velero server Deployment %s has no running replicas, so no scheduled backup is submitted and no storage location is validated.", server.Deployment),
+				fmt.Sprintf("The Velero server Deployment %s has no pods, so no scheduled backup is submitted and no storage location is validated.", server.Deployment),
 				time.Time{}, false, "", time.Time{})
 			iss.FirstSeen, iss.LastSeen = time.Time{}, now
 			iss.RequiredReads = serverReads
@@ -165,11 +175,15 @@ func veleroScheduleIssueFor(r veleropkg.ScheduleReading, server veleropkg.Server
 	}
 	switch r.State {
 	case veleropkg.StateCannotRun:
+		if r.Reason == veleropkg.ReasonLocationReadOnly {
+			return ReasonVeleroScheduleCannotRun, SeverityCritical,
+				fmt.Sprintf("Its storage location %s is read-only, so Velero rejects every backup this schedule submits. Point the schedule at a writable location, or set the location back to ReadWrite.", r.Location.Name), true
+		}
 		return ReasonVeleroScheduleCannotRun, SeverityCritical,
 			"This schedule's name is longer than 63 characters, too long for the label Velero puts on its backups, so Velero submits no runs. Recreate it with a shorter name.", true
 	case veleropkg.StateAlwaysDue:
 		return ReasonVeleroScheduleCannotRun, SeverityCritical,
-			"This cron expression has no future time, so Velero treats the schedule as always due and submits a new backup whenever the previous one has started.", true
+			"This cron expression has no future time, so Velero treats the schedule as always due and submits a new backup whenever none of its backups is waiting to start or running.", true
 	case veleropkg.StateLate:
 		since := "since the schedule was created"
 		if r.LastSubmitted != nil {

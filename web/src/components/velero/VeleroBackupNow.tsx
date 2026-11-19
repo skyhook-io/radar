@@ -52,13 +52,15 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
   const template = (open ? reviewed.template : schedule?.spec?.template) ?? {}
   const selection = selectionText(template, 'All namespaces')
   const location: string = template.storageLocation || reading?.location?.name || ''
+  // Velero rejects a backup to a ReadOnly location; the user may still want the attempt on record.
+  const readOnly = !!reading?.location?.readOnly && location === reading.location.name
   const unavailable =
     name.length > MAX_LABEL_VALUE
       ? 'This schedule’s name is longer than 63 characters, so Velero cannot label a backup from it and the backup would fail.'
-      : reading?.state === 'cannotRun'
+      : reading?.state === 'cannotRun' && reading.reason !== 'locationReadOnly'
         ? veleroScheduleReasonText(reading)
         : server?.backupsDisabled
-          ? 'Velero runs with backups disabled (restore-only), so it would not run this backup.'
+          ? 'Velero runs with its backup controller disabled (--restore-only or --disable-controllers), so it would not run this backup.'
           : activity.data?.serverStopped || reading?.reason === 'serverDown'
             ? 'The Velero server isn’t running, so nothing would be backed up now. Start it first.'
             : !resourceVersion
@@ -131,6 +133,9 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
             <p className="text-warning-text">This schedule changed while this was open. Close it and review the schedule again.</p>
           )}
           {!changed && unavailable && <p className="text-warning-text">{unavailable}</p>}
+          {!changed && !unavailable && readOnly && (
+            <p className="text-warning-text">Storage location {location} is read-only, so Velero will reject this backup.</p>
+          )}
         </div>
       </ConfirmDialog>
     </>

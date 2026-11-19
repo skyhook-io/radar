@@ -142,7 +142,7 @@ describe('what a storage location holds', () => {
         ]}
       />,
     )
-    expect(html).toContain('not something to plan a recovery around')
+    expect(html).toContain('eligible for garbage collection')
     // Not "cannot be restored": Velero would still restore it until the
     // collector removes it, so the panel states the intent, not a false absence.
     expect(html).not.toContain('no longer a restore point')

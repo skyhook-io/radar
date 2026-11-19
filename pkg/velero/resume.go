@@ -59,7 +59,7 @@ type ResumeOutlook struct {
 	NextRun        *time.Time `json:"nextRun,omitempty"`
 	NextRunCertain bool       `json:"nextRunCertain,omitempty"`
 	// Blocker is the run that holds a due run.
-	Blocker *Run `json:"blocker,omitempty"`
+	Blocker *ScheduleRun `json:"blocker,omitempty"`
 }
 
 // DescribeResume says what resuming in.Schedule does when the resume writes
@@ -92,11 +92,14 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 	case StateRejected:
 		return ResumeOutlook{Outcome: ResumeWontRun, Reason: ResumeReasonRejected, Summary: "Velero rejects this schedule, so resuming runs nothing until it is fixed."}
 	case StateCannotRun:
-		return ResumeOutlook{Outcome: ResumeWontRun, Reason: ReasonNameTooLong, Summary: "This schedule's name is longer than 63 characters, so every run Velero submits fails."}
+		if r.Reason == ReasonLocationReadOnly {
+			return ResumeOutlook{Outcome: ResumeWontRun, Reason: string(ReasonLocationReadOnly), Summary: "Its storage location " + r.Location.Name + " is read-only, so Velero rejects every backup this schedule submits."}
+		}
+		return ResumeOutlook{Outcome: ResumeWontRun, Reason: string(ReasonNameTooLong), Summary: "This schedule's name is longer than 63 characters, so every run Velero submits fails."}
 	case StateAlwaysDue:
 		// Before any skip: Velero would consume it, find no next time and
 		// submit at once anyway.
-		return ResumeOutlook{Outcome: ResumeRunsRepeatedly, Reason: ReasonNoFutureTime, Summary: "This schedule's cron expression has no future time, so once resumed Velero submits runs immediately and repeatedly until the cron is fixed. Skipping does not prevent it."}
+		return ResumeOutlook{Outcome: ResumeRunsRepeatedly, Reason: string(ReasonNoFutureTime), Summary: "This schedule's cron expression has no future time, so once resumed Velero submits runs immediately and repeatedly until the cron is fixed. Skipping does not prevent it."}
 	case StateOnSchedule:
 		if r.NextRunCertain {
 			return ResumeOutlook{Outcome: ResumeWaits, Summary: "No run is due, so Velero submits the next one at its scheduled time.", NextRun: r.NextRun, NextRunCertain: true}
@@ -146,7 +149,7 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 		out.Reason = ResumeReasonNotEvaluated
 		out.Summary = "Radar cannot evaluate this schedule's cron expression, so Velero may submit a run as soon as it resumes."
 	case !in.BackupsRead:
-		out.Reason = ReasonBackupsUnread
+		out.Reason = string(ReasonBackupsUnread)
 		out.Summary = "A run is due. Radar could not read this schedule's backups, so one still in progress may hold it; otherwise Velero submits it at once."
 	default:
 		out.Outcome, out.Summary = ResumeRunsNow, "A run is due, so Velero submits it as soon as the schedule resumes."

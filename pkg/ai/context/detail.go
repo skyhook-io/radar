@@ -41,7 +41,7 @@ func minifyDetailUnstructured(obj map[string]any) map[string]any {
 }
 
 // redactUnstructuredSecrets redacts inline secret-shaped values in a CRD's
-// spec/status. Core Secret bodies are handled structurally elsewhere; this is
+// spec/status, and in a core PodTemplate's template. Core Secret bodies are handled structurally elsewhere; this is
 // the only value-level pass that reaches arbitrary CRD specs (e.g. a Traefik
 // Middleware basicAuth user) before they go to an LLM.
 func redactUnstructuredSecrets(obj map[string]any) {
@@ -51,6 +51,9 @@ func redactUnstructuredSecrets(obj map[string]any) {
 	}
 	if status, ok := obj["status"]; ok {
 		RedactInlineSecrets(status)
+	}
+	if template, ok := obj["template"]; ok {
+		RedactInlineSecrets(template)
 	}
 	redactSecretFindings(obj)
 }

@@ -80,12 +80,12 @@ func TestDescribeResume(t *testing.T) {
 		{name: "an explicit choice needs no flag", s: paused(), server: flagUnread, now: at("12:10"), skip: new(false), outcome: ResumeRunsNow, due: true},
 		{name: "scheduling disabled runs nothing", s: paused(), server: serverWithArgs("--disable-controllers=schedule"), now: at("12:10"), outcome: ResumeNothing},
 		{name: "nothing due waits, skip or not", s: paused(), now: at("11:30"), skip: new(true), outcome: ResumeWaits},
-		{name: "unread backups may hide a hold", s: paused(), unread: true, now: at("12:10"), outcome: ResumeMayRunNow, reason: ReasonBackupsUnread, due: true},
+		{name: "unread backups may hide a hold", s: paused(), unread: true, now: at("12:10"), outcome: ResumeMayRunNow, reason: string(ReasonBackupsUnread), due: true},
 		// A paused schedule is never validated; Velero validates it on resume.
 		{name: "paused from creation is validated on resume", s: paused(phase("")), now: at("12:10"), outcome: ResumeRunsNow, due: true},
 		{name: "an old rejection of a fixed cron no longer counts", s: paused(phase("FailedValidation")), now: at("12:10"), outcome: ResumeRunsNow, due: true},
 		{name: "an invalid cron is rejected again", s: schedule("bad", "not a cron", specField("paused", true), phase("FailedValidation")), now: at("12:10"), outcome: ResumeWontRun, reason: ResumeReasonRejected},
-		{name: "a name too long never runs", s: schedule(strings.Repeat("a", 64), "0 * * * *", specField("paused", true)), now: at("12:10"), outcome: ResumeWontRun, reason: ReasonNameTooLong},
+		{name: "a name too long never runs", s: schedule(strings.Repeat("a", 64), "0 * * * *", specField("paused", true)), now: at("12:10"), outcome: ResumeWontRun, reason: string(ReasonNameTooLong)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -117,6 +117,15 @@ func TestDescribeResume(t *testing.T) {
 		}
 	})
 
+	t.Run("a schedule writing to a read-only location won't run once resumed", func(t *testing.T) {
+		readOnly := location("default", func(o map[string]any) { o["spec"].(map[string]any)["accessMode"] = "ReadOnly" })
+		in := ScheduleInput{Schedule: schedule("nightly", "0 * * * *", specField("paused", true)), BackupsRead: true, Server: utcServer, DefaultLocation: "default", Locations: []*unstructured.Unstructured{readOnly}, Now: at("12:10")}
+		got := DescribeResume(in, nil)
+		if got.Outcome != ResumeWontRun || got.Reason != string(ReasonLocationReadOnly) || !strings.Contains(got.Summary, "read-only") {
+			t.Fatalf("got %+v", got)
+		}
+	})
+
 	t.Run("an @every schedule waits whatever the zone", func(t *testing.T) {
 		every := schedule("every", "@every 1h", specField("paused", true), lastBackup(at("11:00")))
 		got := DescribeResume(ScheduleInput{Schedule: every, BackupsRead: true, Server: ServerConfigFromDeployments(nil, false), Now: at("11:30")}, nil)
@@ -129,7 +138,7 @@ func TestDescribeResume(t *testing.T) {
 		never := schedule("never", "0 0 31 2 *", specField("paused", true))
 		for _, skip := range []*bool{nil, new(false), new(true)} {
 			got := DescribeResume(ScheduleInput{Schedule: never, BackupsRead: true, Server: utcServer, Now: at("12:10")}, skip)
-			if got.Outcome != ResumeRunsRepeatedly || got.Reason != ReasonNoFutureTime || got.Due || !strings.Contains(got.Summary, "repeatedly") {
+			if got.Outcome != ResumeRunsRepeatedly || got.Reason != string(ReasonNoFutureTime) || got.Due || !strings.Contains(got.Summary, "repeatedly") {
 				t.Fatalf("skip=%v: got %+v", deref(skip), got)
 			}
 		}

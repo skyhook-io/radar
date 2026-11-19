@@ -15,7 +15,7 @@ export interface KindListProps {
   inspected: SelectedResource | null
   onInspect: (resource: SelectedResource) => void
   onClearNamespaces: () => void
-  onCreate: (kind: HostKind) => void
+  onCreate: (kind: HostKind, initialYaml?: string) => void
 }
 type ExclusiveDetailSlot = 'summary' | 'destination' | 'logs'
 export interface ResourceHost {

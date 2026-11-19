@@ -11,6 +11,8 @@ import {
   VELERO_NONE_KEPT,
   VELERO_RUNS_UNKNOWN,
   veleroNewestSuccessfulText,
+  VELERO_MANUAL_RUN,
+  VELERO_MANUAL_RUN_TITLE,
   veleroNextRunText,
   veleroLocalTime,
   veleroNextRunTitle,
@@ -66,10 +68,11 @@ function RunLine({ run, namespace, onNavigate }: { run: VeleroRun; namespace: st
     <span className="inline-flex items-center gap-2">
       <VeleroRunPhase phase={run.phase} />
       <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.ranAt)}</span>
+      {run.manual && <span className="text-xs text-theme-text-secondary">{VELERO_MANUAL_RUN}</span>}
     </span>
   )
   return (
-    <Tooltip content={`${run.name} · ${veleroLocalTime(run.ranAt)}`}>
+    <Tooltip content={`${run.name} · ${veleroLocalTime(run.ranAt)}${run.manual ? ` · ${VELERO_MANUAL_RUN_TITLE}` : ''}`}>
       {onNavigate ? (
         <button type="button" onClick={() => onNavigate(veleroBackupRef(namespace, run.name))} aria-label={`Open backup ${run.name}`} className="rounded hover:bg-theme-hover">
           {content}

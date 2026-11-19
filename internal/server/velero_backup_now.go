@@ -17,7 +17,7 @@ import (
 	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
 
-const veleroSubmissionAnnotation = "radar.skyhook.io/submission"
+const veleroSubmissionAnnotation = veleropkg.SubmissionAnnotation
 
 var (
 	veleroSubmissionID = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
@@ -30,11 +30,16 @@ type VeleroBackupNowRequest struct {
 	// ResourceVersion of the Schedule shown in the confirmation. A schedule
 	// edited since is refused, so the backup is the one that was reviewed.
 	ResourceVersion string `json:"resourceVersion"`
-	Submission      string `json:"submission"`
+	// Submission identifies one confirmation: 8–64 letters, digits or hyphens,
+	// stored on the Backup as the radar.skyhook.io/submission annotation. A
+	// Backup that already has the requested name answers the request only when
+	// its annotation matches; otherwise the name is taken (409).
+	Submission string `json:"submission"`
 	// Name the confirmation chose for the backup, <schedule>-<14 digits>.
-	// Repeating a request whose answer was lost returns the backup it already
-	// created instead of starting another. Optional; the server names it
-	// otherwise.
+	// Optional; the server names it otherwise. A request whose answer was lost
+	// is safe to repeat only with the same name and submission: it then
+	// returns the backup already created instead of starting another. Without
+	// a name each request creates a new backup.
 	Name string `json:"name,omitempty"`
 }
 
@@ -47,7 +52,8 @@ type VeleroBackupNowResponse struct {
 // handleVeleroBackupNow creates a Backup from a Schedule's template, as
 // `velero backup create --from-schedule` does.
 //
-//	POST /api/velero/schedules/{namespace}/{name}/backup   {"resourceVersion": "..."}
+//	POST /api/velero/schedules/{namespace}/{name}/backup
+//	{"resourceVersion": "...", "submission": "...", "name": "<schedule>-<14 digits>"}
 //
 // Read and create both run as the caller, so the apiserver decides: reading
 // the Schedule needs `get schedules`, creating the run needs `create backups`.
@@ -120,7 +126,7 @@ func (s *Server) handleVeleroBackupNow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if server.FlagsKnown() && server.BackupsDisabled {
-			s.writeError(w, http.StatusConflict, "The Velero backup controller is disabled (--restore-only or --disable-controllers=backup); enable it before backing up.")
+			s.writeError(w, http.StatusConflict, "Velero's backup controller is disabled (--restore-only, or --disable-controllers naming backup or backup-queue); enable it before backing up.")
 			return
 		}
 	}

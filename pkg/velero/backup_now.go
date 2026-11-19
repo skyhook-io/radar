@@ -21,7 +21,8 @@ const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
 // pkg/cmd/cli/backup/create.go): the schedule's template as its spec, the
 // template's labels (else the schedule's own) plus the schedule-name label,
 // the schedule's annotations, an owner reference when the schedule asks for
-// one, and the name <schedule>-<UTC timestamp>.
+// one, a resource policy referenced as a ConfigMap, and the name
+// <schedule>-<UTC timestamp>.
 //
 // The schedule-name label makes it one of the schedule's runs: Velero holds
 // the schedule's next run while it is in progress, and Radar counts it among
@@ -37,6 +38,12 @@ func BackupFromSchedule(schedule *unstructured.Unstructured, now time.Time) (*un
 	}
 	if !found {
 		template = map[string]any{}
+	}
+	// FromSchedule rebuilds the policy reference as a ConfigMap by name,
+	// whatever kind the template wrote (BackupBuilder.ResourcePolicies).
+	if policy, ok := template["resourcePolicy"].(map[string]any); ok {
+		name, _ := policy["name"].(string)
+		template["resourcePolicy"] = map[string]any{"kind": "configmap", "name": name}
 	}
 
 	labels := map[string]string{}

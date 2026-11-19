@@ -79,14 +79,16 @@ type ZoneSource string
 const (
 	// ZoneFromCron: the expression names its zone (CRON_TZ= or TZ=).
 	ZoneFromCron ZoneSource = "cron"
-	// ZoneFromServer: the Velero server Deployment sets TZ to a literal value.
+	// ZoneFromServer: the Velero server Deployment sets TZ to a literal zone
+	// other than UTC.
 	ZoneFromServer ZoneSource = "server"
-	// ZoneServerDefault: the Deployment sets no TZ, so the server runs in UTC
-	// (Velero's image carries no local zone).
+	// ZoneServerDefault: the server runs in UTC, because the Deployment sets
+	// no TZ (Velero's image carries no local zone) or sets TZ=UTC.
 	ZoneServerDefault ZoneSource = "serverDefault"
-	// ZoneInferred: an offset read from the name of the schedule's newest
-	// backup, which Velero formats in its local time. An offset carries no
-	// daylight-saving rules.
+	// ZoneInferred: an offset read from the name of the controller's
+	// submission matching status.lastBackup, which Velero formats in its local
+	// time. Manual and CLI backups (named in UTC) and backups recreated by
+	// sync are not used. An offset carries no daylight-saving rules.
 	ZoneInferred ZoneSource = "inferred"
 	// ZoneUnknown: none of the above could be read; times are estimated in UTC.
 	ZoneUnknown ZoneSource = "unknown"
