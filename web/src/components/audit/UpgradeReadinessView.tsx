@@ -44,7 +44,6 @@ import { getUpgradePlanStatus, isDistributionUpgradePlan, upgradePlanTarget } fr
 import { isLowerBound } from '@skyhook-io/k8s-ui/utils/resource-coverage'
 import type { ResourceCoverage } from '@skyhook-io/k8s-ui/types/resource-coverage'
 import { ChecksViewTabs } from './ChecksViewTabs'
-import { TABLE_DENSITY } from '@skyhook-io/k8s-ui'
 
 interface UpgradeReadinessViewProps {
   namespaces: string[]
@@ -505,7 +504,7 @@ function CheckRow({ check, onNavigateToResource }: { check: UpgradeReadinessChec
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className={clsx('grid w-full cursor-pointer items-center gap-3 text-left transition-colors hover:bg-theme-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20 md:grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] md:gap-4', TABLE_DENSITY.cellClass)}
+        className={clsx('grid w-full cursor-pointer items-center gap-3 text-left transition-colors hover:bg-theme-hover/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-theme-text-primary/20 md:grid-cols-[minmax(230px,0.9fr)_minmax(320px,1.6fr)_160px] md:gap-4', 'px-3.5 py-2.5' /* TABLE_DENSITY.cellClass in k8s-ui */)}
       >
         <div className="flex min-w-0 items-center gap-2.5">
           <Icon className={clsx('h-4 w-4 shrink-0', meta.iconClass)} />

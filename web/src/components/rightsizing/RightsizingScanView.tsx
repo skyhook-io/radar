@@ -38,7 +38,6 @@ import {
 import { useNavCustomization } from '../../context/NavCustomization'
 import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
 import { clsx } from 'clsx'
-import { TABLE_DENSITY } from '@skyhook-io/k8s-ui'
 
 export const RIGHTSIZING_SCAN_DESCRIPTION =
   'Find CPU and memory requests to increase, reduce, or review. Radar never changes them.'
@@ -798,7 +797,7 @@ function ScanResultRow({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className={clsx('grid w-full grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] items-center gap-3 text-left hover:bg-theme-hover/50', TABLE_DENSITY.cellClass)}
+        className={clsx('grid w-full grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] items-center gap-3 text-left hover:bg-theme-hover/50', 'px-3.5 py-2.5' /* TABLE_DENSITY.cellClass in k8s-ui */)}
       >
         <div className="min-w-0">
           <div className="flex items-center gap-2">

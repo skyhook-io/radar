@@ -1139,7 +1139,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 border-b border-theme-border bg-theme-base/40 px-3.5 py-2">
+            <div className={clsx('grid grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 border-b border-theme-border bg-theme-base/40 py-2', TABLE_DENSITY.cellXClass)}>
               <ResSortHeader label="Resource" sortKey="name" sort={sort} onSort={onSort} />
               <ResSortHeader label="Sync" sortKey="sync" sort={sort} onSort={onSort} />
               <ResSortHeader label="Health" sortKey="health" sort={sort} onSort={onSort} />
