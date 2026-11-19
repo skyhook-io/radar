@@ -39,6 +39,9 @@ const (
 	// diagnoseMetricsMaxErrorBytes keeps an error-only field inside the byte
 	// budget; backend errors echo operator-supplied URLs of any length.
 	diagnoseMetricsMaxErrorBytes = 1024
+	// diagnoseMetricsMaxIncompleteBytes bounds each category's incomplete
+	// note; like the queries it sits outside the sample budget.
+	diagnoseMetricsMaxIncompleteBytes = 256
 )
 
 // DiagnoseMetricsEnabled decides whether diagnose collects workload vitals at
@@ -105,8 +108,14 @@ type diagnoseMetricSeries struct {
 	// agreeing samples or two lonely ones, and the window and step cannot
 	// settle it because a range query returns nothing for an evaluation with
 	// no data.
-	ObservedSamples int           `json:"observedSamples,omitempty"`
-	Series          []prom.Series `json:"series"`
+	ObservedSamples int `json:"observedSamples,omitempty"`
+	// Incomplete marks a category the store answered only in part (a
+	// partial response or warnings, such as a shard that did not answer):
+	// the values may be understated. IncompleteNote says what the store
+	// reported.
+	Incomplete     bool          `json:"incomplete,omitempty"`
+	IncompleteNote string        `json:"incompleteNote,omitempty"`
+	Series         []prom.Series `json:"series"`
 }
 
 func diagnoseMetricsSince(sinceSeconds *int64) time.Duration {
@@ -322,6 +331,10 @@ func queryPodSetCategory(ctx context.Context, p *prom.Client, sel prom.PodSelect
 		return out, err
 	}
 	out.Query = query
+	if result.Annotations.Partial || len(result.Annotations.Warnings) > 0 {
+		out.Incomplete = true
+		out.IncompleteNote = incompleteNote(result.Annotations)
+	}
 	out.Series = result.Series
 	if out.Series == nil {
 		out.Series = []prom.Series{}
@@ -334,6 +347,20 @@ func queryPodSetCategory(ctx context.Context, p *prom.Client, sel prom.PodSelect
 		out.Series[i].DataPoints = collapseConstantRuns(out.Series[i].DataPoints)
 	}
 	return out, nil
+}
+
+// incompleteNote says why a category's answer is incomplete, bounded and
+// with URLs redacted since store warnings can quote the backend.
+func incompleteNote(a prom.QueryAnnotations) string {
+	msg := "the metrics store answered only in part, so values may be understated"
+	if len(a.Warnings) > 0 {
+		msg += ": " + strings.Join(a.Warnings, "; ")
+	}
+	msg = prom.RedactURLs(msg)
+	if len(msg) <= diagnoseMetricsMaxIncompleteBytes {
+		return msg
+	}
+	return msg[:diagnoseMetricsMaxIncompleteBytes-len("…")] + "…"
 }
 
 // collapseConstantRuns drops the interior of an evenly spaced run of equal

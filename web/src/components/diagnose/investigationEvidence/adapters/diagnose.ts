@@ -942,12 +942,18 @@ function addDiagnoseMetrics(
       !nonEmptyString(entry.unit) ||
       !Array.isArray(rawSeries) ||
       !series ||
-      series.length !== rawSeries.length
+      series.length !== rawSeries.length ||
+      (entry.incomplete !== undefined && typeof entry.incomplete !== "boolean") ||
+      (entry.incompleteNote !== undefined &&
+        typeof entry.incompleteNote !== "string")
     ) {
       invalidPayload(builder, source, "Workload metrics");
       continue;
     }
     const label = DIAGNOSE_METRICS_LABELS[entry.category];
+    // The store answered this category only in part: what it returned may
+    // understate the workload, so the card and the limitations say so.
+    const incomplete = entry.incomplete === true;
     const data: InvestigationMetricsEvidence = {
       type: "metrics",
       origin: "diagnose",
@@ -978,12 +984,21 @@ function addDiagnoseMetrics(
           series.length === 0 ? "No samples in the window" : podsLabel,
           windowLabel,
           partial ? "partial pod set" : undefined,
+          incomplete ? "store answered in part" : undefined,
         ]
           .filter((part): part is string => Boolean(part))
           .join(" · "),
         data,
       },
     );
+    if (incomplete) {
+      builder.limit(
+        source,
+        "Workload metrics",
+        `${label}: ${nonEmptyString(entry.incompleteNote) ? entry.incompleteNote : "the metrics store answered only in part"}`,
+        "truncated",
+      );
+    }
   }
   if (nonEmptyString(value.error)) {
     builder.limit(source, "Workload metrics", value.error, "error");

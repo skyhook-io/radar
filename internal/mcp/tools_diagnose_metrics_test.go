@@ -525,6 +525,61 @@ func TestHandleDiagnoseMetricsKeepsOtherSeriesWhenOneCategoryFails(t *testing.T)
 	}
 }
 
+// A category the store answered only in part is kept but marked, so an
+// understated value never passes for a complete one.
+func TestHandleDiagnoseMetricsMarksIncompleteCategories(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	f := setupFakeProm(t)
+	full := metricsMatrixForRequest("1")
+	f.rangeBodyFunc = func(params url.Values) string {
+		body := full(params)
+		q := params.Get("query")
+		switch {
+		case strings.Contains(q, "container_memory_working_set_bytes"):
+			return strings.Replace(body, `{"status":"success",`, `{"status":"success","warnings":["store shard eu-2 did not answer: http://user:pw@thanos.internal:10901/api"],`, 1)
+		case strings.Contains(q, "kube_pod_container_status_restarts_total"):
+			return strings.Replace(body, `{"status":"success",`, `{"status":"success","isPartial":true,`, 1)
+		}
+		return body
+	}
+	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
+
+	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+	if m == nil || m.Error != "" || len(m.Series) != len(diagnoseMetricsCategories) {
+		t.Fatalf("metrics = %+v; want every category kept", m)
+	}
+	byCategory := map[string]diagnoseMetricSeries{}
+	for _, s := range m.Series {
+		byCategory[s.Category] = s
+	}
+	if cpu := byCategory["cpu"]; cpu.Incomplete || cpu.IncompleteNote != "" {
+		t.Errorf("cpu = %+v; a complete answer is not marked", cpu)
+	}
+	mem := byCategory["memory"]
+	if !mem.Incomplete || !strings.Contains(mem.IncompleteNote, "may be understated") || !strings.Contains(mem.IncompleteNote, "eu-2 did not answer") {
+		t.Errorf("memory = %+v; want marked with the store's warning", mem)
+	}
+	if strings.Contains(mem.IncompleteNote, "pw@") || strings.Contains(mem.IncompleteNote, "thanos.internal") {
+		t.Errorf("memory note leaks the backend: %q", mem.IncompleteNote)
+	}
+	if r := byCategory["restarts"]; !r.Incomplete || !strings.Contains(r.IncompleteNote, "answered only in part") {
+		t.Errorf("restarts = %+v; want a partial answer marked", r)
+	}
+	if len(mem.Series) == 0 {
+		t.Error("an incomplete category still carries what the store returned")
+	}
+}
+
+func TestIncompleteNoteIsBounded(t *testing.T) {
+	note := incompleteNote(prom.QueryAnnotations{Warnings: []string{strings.Repeat("w", 2000)}})
+	if len(note) > diagnoseMetricsMaxIncompleteBytes {
+		t.Fatalf("note is %d bytes, over %d", len(note), diagnoseMetricsMaxIncompleteBytes)
+	}
+}
+
 func TestHandleDiagnoseMetricsReportsFailedContainerFilterFallback(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	timeline.ResetStore()
