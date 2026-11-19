@@ -567,21 +567,19 @@ func (a flippingAccess) CanRead(gk resourceid.GroupKind, namespace string) owner
 	return a.then
 }
 
-// A subject the answer's own check refuses is answered with no relationships,
-// and its ownership says why, as that check decided.
+// A drawer subject the answer's own check refuses is answered with no
+// relationships, and its ownership says why, as that check decided. (A
+// resource context reads its subject's kind as the host's read gate did, so
+// its answer doesn't check the subject again.)
 func TestRelationshipAnswerSurvivesAccessChangingMidAnswer(t *testing.T) {
 	for _, tc := range []struct {
-		contextOnly bool
-		then        ownership.Decision
-		reason      readreason.Code
+		then   ownership.Decision
+		reason readreason.Code
 	}{
-		{false, ownership.Denied, readreason.UserForbidden},
-		{true, ownership.Denied, readreason.UserForbidden},
-		{false, ownership.Undecided, readreason.UserPermissionCheckFailed},
-		{true, ownership.Undecided, readreason.UserPermissionCheckFailed},
+		{ownership.Denied, readreason.UserForbidden},
+		{ownership.Undecided, readreason.UserPermissionCheckFailed},
 	} {
-		contextOnly := tc.contextOnly
-		t.Run(fmt.Sprintf("context=%v/%v", contextOnly, tc.then), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%v", tc.then), func(t *testing.T) {
 			_, typed, source, deployment := historyFixture(t)
 			previous := ownershipSource
 			ownershipSource = source.(*cachesource.Source)
@@ -593,11 +591,7 @@ func TestRelationshipAnswerSurvivesAccessChangingMidAnswer(t *testing.T) {
 				return flippingAccess{Access: ownership.Unrestricted(), kind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}, checks: &checks, then: tc.then}
 			}
 			traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
-			answer := AnswerRelationships
-			if contextOnly {
-				answer = AnswerResourceContextRelationships
-			}
-			rel, coverage, extras := answer(&ResourceCache{ResourceCache: typed}, obj, access, traverse)
+			rel, coverage, extras := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, traverse)
 			if checks < 2 {
 				t.Fatalf("subject checked %d times; the test needs the answer's own check", checks)
 			}
@@ -613,6 +607,47 @@ func TestRelationshipAnswerSurvivesAccessChangingMidAnswer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A resource context's subject was read through the host's read gate, so a
+// caller who may read the subject's namespace but has no get grant on its
+// kind still gets what it declares, and ownership still says the kind is
+// withheld. The drawer refuses the same subject, as its own check decides.
+func TestResourceContextReadsItsSubjectAsTheReadGateDid(t *testing.T) {
+	_, typed, source, deployment := historyFixture(t)
+	previous := ownershipSource
+	ownershipSource = source.(*cachesource.Source)
+	t.Cleanup(func() { ownershipSource = previous })
+	obj := deployment.DeepCopy()
+	obj.APIVersion, obj.Kind = "apps/v1", "Deployment"
+	obj.Spec.Template.Spec.ServiceAccountName = "runner"
+	noDeployments := func(*ownership.Catalog) ownership.Access {
+		return historyKindAccess{Access: ownership.Unrestricted(), kind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}}
+	}
+	rel, _, extras := AnswerResourceContextRelationships(&ResourceCache{ResourceCache: typed}, obj, noDeployments, noDeployments)
+	if rel == nil || extras == nil || len(extras.Declarations) != 1 || extras.Declarations[0].Ref.Name != "runner" {
+		t.Fatalf("context answer = %+v, %+v", rel, extras)
+	}
+	if _, refused := extras.Fields["answer"]; refused || rel.Ownership == nil || rel.Ownership.UnavailableReason != string(readreason.UserForbidden) {
+		t.Fatalf("context fields %+v, ownership %+v", extras.Fields, rel.Ownership)
+	}
+	rel, _, extras = AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, noDeployments, noDeployments)
+	if rel == nil || rel.Ownership == nil || rel.Ownership.UnavailableReason != string(readreason.UserForbidden) || len(extras.Declarations) != 0 {
+		t.Fatalf("drawer answer = %+v, %+v", rel, extras)
+	}
+}
+
+// historyKindAccess denies kind and allows the rest.
+type historyKindAccess struct {
+	ownership.Access
+	kind resourceid.GroupKind
+}
+
+func (a historyKindAccess) CanRead(gk resourceid.GroupKind, namespace string) ownership.Decision {
+	if gk == a.kind {
+		return ownership.Denied
+	}
+	return a.Access.CanRead(gk, namespace)
 }
 
 // A fetched Deployment the cache doesn't hold yet still answers what reads its

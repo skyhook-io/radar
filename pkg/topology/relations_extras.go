@@ -341,3 +341,25 @@ func AnswerFields(gk resourceid.GroupKind) map[string]bool {
 	set(gk == resourceid.GroupKind{Group: "serving.knative.dev", Kind: "Service"} || gk == resourceid.GroupKind{Kind: "Service"}, "Services", "Backends")
 	return out
 }
+
+// ReadSubject is access reading subject's kind in subject's namespace as
+// allowed, for a host that read subject for the caller through a resource
+// read gate, which decides every object of a kind in one namespace alike:
+// what it allowed for subject, it allows for them. A caller who reads subject
+// by namespace access, without a get grant on its kind, then still gets its
+// relationships; what they name of other kinds is read as access reads it.
+func ReadSubject(access ownership.Access, subject resourceid.Ref) ownership.Access {
+	return readSubject{Access: access, subject: subject}
+}
+
+type readSubject struct {
+	ownership.Access
+	subject resourceid.Ref
+}
+
+func (a readSubject) CanRead(kind resourceid.GroupKind, namespace string) ownership.Decision {
+	if kind == a.subject.GroupKind() && namespace == a.subject.Namespace {
+		return ownership.Allowed
+	}
+	return a.Access.CanRead(kind, namespace)
+}

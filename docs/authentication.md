@@ -40,7 +40,9 @@ Ownership answers (owners, children, and which GitOps manager manages an object)
 REST AI context and MCP additionally require exact-kind `get` access for ownership and manager references, so their
 answers can be narrower than the UI's. A manager the caller can't read contributes no evidence; a name in the object's
 own metadata stays as a `withheld` claim, and the answer says it is `narrowed`. These reference checks do not support
-`resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object).
+`resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object). The object's own
+relationships (what it routes to, declares or selects) need only the access that opened it, so a route you read through
+namespace access lists its readable backends even without a `get` grant on its kind; each reference still needs one.
 
 Related Resources, the AI resource context and MCP `get_resource` name the ConfigMaps, Secrets, PVCs and ServiceAccount
 a readable object's pod template references, an Ingress's TLS Secrets and a ServiceAccount's Secrets, even when you

@@ -316,6 +316,10 @@ func RelationsAnswerWithExtras(session relations.Session, access, traverse owner
 
 // RelationsContextAnswer answers context fields without enumerating ownership
 // children that the context does not expose.
+//
+// A host that read the subject for the caller through its resource read gate
+// passes ReadSubject(access, subject), so the subject's relationships don't
+// hang on a get grant the gate didn't ask for.
 func RelationsContextAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, provider ResourceProvider, dp DynamicProvider) (*Relationships, *RelationshipExtras) {
 	return relationsAnswer(session, access, traverse, ov, subject, obj, provider, dp, true)
 }

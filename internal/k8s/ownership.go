@@ -172,6 +172,10 @@ func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 
 // AnswerResourceContextRelationships shares the relation session and access
 // policy with drawer answers, but only asks ownership for owner/manager facts.
+// obj must be what the host read for the caller through its resource read
+// gate. The relation families read obj's kind in its namespace as that gate
+// did, so a caller who reads obj by namespace access, without a get grant on
+// its kind, still gets its relationships; ownership reads obj as access does.
 func AnswerResourceContextRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
 	return answerRelationships(cache, obj, access, traverse, true)
 }
@@ -206,7 +210,11 @@ func answerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 	}
 	owner, _ := apimeta.Accessor(obj)
 	acc := access(session.Catalog())
-	if decision := acc.CanRead(fetched.Ref.GroupKind(), fetched.Ref.Namespace); decision != ownership.Allowed {
+	families := acc
+	if contextOnly {
+		families = topology.ReadSubject(acc, fetched.Ref)
+	}
+	if decision := families.CanRead(fetched.Ref.GroupKind(), fetched.Ref.Namespace); decision != ownership.Allowed {
 		if session.ValidateCaches() != nil {
 			return unanswered(readreason.ConnectionChanged)
 		}
@@ -231,7 +239,7 @@ func answerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 	if contextOnly {
 		answer = topology.RelationsContextAnswer
 	}
-	rel, extras := answer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, provider, dp)
+	rel, extras := answer(rs, families, traverse(session.Catalog()), ov, fetched.Ref, obj, provider, dp)
 	if rel.Ownership != nil {
 		// The answer checks the caller's access to obj again; a decision
 		// that changed since the check above refuses it there, and says why.
