@@ -480,12 +480,7 @@ func (n *neighborhood) above(session relations.Session, ov *ownership.View, r re
 // OwnerAboveToManager is OwnerAbove, except that the controller chain ends at
 // the first GitOps manager on it (ControllerChain.ToManager).
 func OwnerAboveToManager(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
-	if top := ChainOf(ov.ControllerChain(r)).ToManager().Top(); top != nil {
-		if id := refIdentity(*top); id != r {
-			return id, true
-		}
-	}
-	return OwnerAbove(ov, r)
+	return ownerAbove(ov, r, ChainOf(ov.ControllerChain(r)).ToManager())
 }
 
 // OwnerAbove returns the highest readable controller ancestor; an object with
@@ -493,7 +488,14 @@ func OwnerAboveToManager(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, 
 // resolves. Display and application climbs share this choice so
 // non-controller ownership follows the same rule.
 func OwnerAbove(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
-	if top := ChainOf(ov.ControllerChain(r)).Top(); top != nil {
+	return ownerAbove(ov, r, ChainOf(ov.ControllerChain(r)))
+}
+
+// ownerAbove answers from chain, r's controller chain as the caller cut it,
+// and falls back to r's own owner references only when the chain doesn't
+// climb past r.
+func ownerAbove(ov *ownership.View, r resourceid.Ref, chain *ControllerChain) (resourceid.Ref, bool) {
+	if top := chain.Top(); top != nil {
 		if id := refIdentity(*top); id != r {
 			return id, true
 		}
