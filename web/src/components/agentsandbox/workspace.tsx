@@ -45,19 +45,38 @@ const sentenceCase = (t: string) => (t ? `${t[0].toUpperCase()}${t.slice(1)}` : 
  * How long a row's state has lasted, beside its title, from the server's
  * `since`. For most rules `since` is the latest condition transition Radar
  * can see, and a condition keeps its transition time when only its reason
- * changes, so the state began no earlier: the age is a ceiling, shown "≤1d".
+ * changes, so the state began no earlier: the age is a ceiling, shown "≤1d 2h".
  * The controller's row is a real status flip, so its age is exact. Nothing
  * without `since`; creation time would claim more than Radar knows.
  */
 export function attentionAge(a: AgentSandboxAttention, now = Date.now()): { text: string; tip: string } | undefined {
   const at = a.since ? Date.parse(a.since) : NaN
   if (!Number.isFinite(at) || now <= at) return undefined
-  const d = formatDuration(now - at)
-  if (a.rule === 'controllerNotRunning') return { text: d, tip: `Not running for ${d}, since its Available condition turned False.` }
+  if (a.rule === 'controllerNotRunning') {
+    const d = formatDuration(now - at)
+    return { text: d, tip: `Not running for ${d}, since its Available condition turned False.` }
+  }
+  const d = ceilingDuration(now - at)
   return {
     text: `≤${d}`,
     tip: `Began at most ${d} ago. Radar sees when the condition last changed; Kubernetes keeps that time when only the reason changes, so this state may have begun later.`,
   }
+}
+
+const MINUTE = 60_000
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
+
+/**
+ * A duration rounded up, never down, since it is shown as an upper bound:
+ * 90 minutes is "1h 30m", 61m 10s is "1h 2m", a day and an hour and a bit is "1d 2h".
+ */
+export function ceilingDuration(ms: number): string {
+  const up = (unit: number) => Math.ceil(ms / unit) * unit
+  if (ms < MINUTE) return formatDuration(up(1000))
+  if (ms < HOUR) return formatDuration(up(MINUTE))
+  const rounded = ms < DAY ? up(MINUTE) : up(HOUR)
+  return formatDuration(rounded, true).replace(/ 0[hm]$/, '')
 }
 
 /** A row's title: the server's, which carries no elapsed time. */
