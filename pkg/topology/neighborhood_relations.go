@@ -136,6 +136,9 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	grouped := map[resourceid.Ref]string{}
 	jobUIDs := map[string]types.UID{}
 
+	// lineage is the root and what it manages, directly or through what it
+	// manages: its ReplicaSets and their Pods.
+	lineage := map[resourceid.Ref]bool{subject: true}
 	// unanswered is the last hop's admissions, which no hop asks about;
 	// answered, the other objects answered with only the followed relations.
 	var unanswered, answered []resourceid.Ref
@@ -188,6 +191,7 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 			priority int
 		}
 		pending := map[resourceid.Ref]int{}
+		descends := map[resourceid.Ref]bool{}
 		frontierSet := make(map[resourceid.Ref]bool, len(frontier))
 		for _, r := range frontier {
 			frontierSet[r] = true
@@ -214,7 +218,9 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 				if included[other] || !access.allowed(other) {
 					continue
 				}
-				priority := neighborhoodPriority(e.Type, other, target == other)
+				own := e.Type == EdgeManages && target == other && lineage[r]
+				descends[other] = descends[other] || own
+				priority := neighborhoodPriority(e.Type, other, target == other, own)
 				if prior, ok := pending[other]; !ok || priority < prior {
 					pending[other] = priority
 				}
@@ -270,6 +276,7 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 				continue
 			}
 			included[r], objects[r] = true, obj
+			lineage[r] = descends[c.ref]
 			for _, alias := range access.aliases(r) {
 				included[alias] = true
 			}
@@ -575,26 +582,36 @@ func neighborhoodDisposition(d relations.Disposition, allowed map[EdgeType]bool)
 
 // neighborhoodPriority orders a hop's candidates for the node budget: what
 // manages the frontier object, what exposes or routes to it, its policies, its
-// other attachments, then what it manages, and replicas last. downstream: r is
-// the edge's target. A controller or GitOps manager can own hundreds of
-// objects; they must not crowd out its parent, Service, policy or source.
-func neighborhoodPriority(edge EdgeType, r resourceid.Ref, downstream bool) int {
-	if r.Group == "" && r.Kind == "Pod" || r.Group == "apps" && r.Kind == "ReplicaSet" && downstream {
-		return 5
-	}
-	switch edge {
-	case EdgeManages:
-		if downstream {
-			return 4
+// other attachments, then what it manages, and replicas last; and of what is
+// managed and the replicas, the root's own descendants (own) before a
+// neighbor's. downstream: r is the edge's target. A controller or GitOps
+// manager can own hundreds of objects; they must not crowd out its parent,
+// Service, policy or source, and an operator a root's owner reaches must not
+// crowd out the root's own Pods.
+func neighborhoodPriority(edge EdgeType, r resourceid.Ref, downstream, own bool) int {
+	replica := r.Group == "" && r.Kind == "Pod" || r.Group == "apps" && r.Kind == "ReplicaSet" && downstream
+	if !replica {
+		switch edge {
+		case EdgeManages:
+			if !downstream {
+				return 0
+			}
+		case EdgeExposes, EdgeRoutesTo:
+			return 1
+		case EdgeProtects:
+			return 2
+		default:
+			return 3
 		}
-		return 0
-	case EdgeExposes, EdgeRoutesTo:
-		return 1
-	case EdgeProtects:
-		return 2
-	default:
-		return 3
 	}
+	rank := 4
+	if replica {
+		rank = 5
+	}
+	if !own {
+		rank += 2
+	}
+	return rank
 }
 
 type neighborhoodAccess struct {

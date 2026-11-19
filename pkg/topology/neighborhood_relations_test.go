@@ -786,3 +786,29 @@ func TestWalkNeighborhoodNodeNamesTheVersionRead(t *testing.T) {
 		t.Errorf("the walk's own node for the kind names %v", got)
 	}
 }
+
+// The root's own descendants come before what a neighbor manages: a
+// Deployment whose operator manages dozens of objects still shows its own
+// ReplicaSet's Pod within the budget.
+func TestWalkNeighborhoodBudgetKeepsTheRootsOwnPods(t *testing.T) {
+	controller := true
+	install := projectionCR("operator.example.io", "Installation", "", "default", map[string]any{})
+	install.SetUID("install")
+	byInstall := []metav1.OwnerReference{{APIVersion: "operator.example.io/v1", Kind: "Installation", Name: "default", UID: "install", Controller: &controller}}
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "controllers", Namespace: "calico-system", UID: "dep", OwnerReferences: byInstall}}, "apps", "Deployment")
+	rs := projectionObject(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "controllers-1", Namespace: "calico-system", UID: "rs", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "controllers", UID: "dep", Controller: &controller}}}}, "apps", "ReplicaSet")
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "controllers-1-a", Namespace: "calico-system", UID: "pod", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "controllers-1", UID: "rs", Controller: &controller}}}}, "", "Pod")
+	objects := []runtime.Object{install, dep, rs, pod}
+	for i := 0; i < 30; i++ {
+		objects = append(objects, projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("cm-%02d", i), Namespace: "calico-system", UID: types.UID(fmt.Sprint("cm", i)), OwnerReferences: byInstall}}, "", "ConfigMap"))
+	}
+	sub := walkTestNeighborhood(t, newProjectionSession(t, objects...), dep, NeighborhoodOptions{Hops: 2})
+	if !sub.Truncated || len(sub.Nodes) != neighborhoodDefaultMaxNodes {
+		t.Fatalf("the fixture no longer fills the budget: truncated=%v nodes=%d", sub.Truncated, len(sub.Nodes))
+	}
+	for _, want := range []string{"Installation/default", "ReplicaSet/controllers-1", "Pod/controllers-1-a"} {
+		if !slices.ContainsFunc(sub.Nodes, func(n Node) bool { return string(n.Kind)+"/"+n.Name == want }) {
+			t.Errorf("the operator's objects crowded out %s", want)
+		}
+	}
+}
