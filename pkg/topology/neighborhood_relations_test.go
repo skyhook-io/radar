@@ -828,3 +828,79 @@ func TestWalkNeighborhoodBudgetKeepsAnOwningPod(t *testing.T) {
 		t.Errorf("kept %s/%s, want the owning Pod", sub.Nodes[1].Kind, sub.Nodes[1].Name)
 	}
 }
+
+// What the last hop's objects compose through coordinates neither holds is
+// drawn too: a SealedSecret and the Deployment mounting its Secret are linked
+// at one hop, from a Secret root or from a manager listing both before the
+// Secret exists.
+func TestWalkNeighborhoodLinksLastHopCompositions(t *testing.T) {
+	sealed := projectionCR("bitnami.com", "SealedSecret", "shop", "creds", map[string]any{})
+	secret := projectionObject(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "shop"}}, "", "Secret")
+	volumes := []corev1.Volume{{Name: "creds", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "creds"}}}}
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "web"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Volumes: volumes}}}}, "apps", "Deployment")
+	manager := projectionCR("kustomize.toolkit.fluxcd.io", "Kustomization", "flux-system", "apps", map[string]any{"status": map[string]any{"inventory": map[string]any{"entries": []any{
+		map[string]any{"id": "shop_creds_bitnami.com_SealedSecret", "v": "v1"},
+		map[string]any{"id": "shop_web_apps_Deployment", "v": "v1"},
+	}}}})
+	composed := func(t *testing.T, sub *Subgraph) {
+		t.Helper()
+		names := map[string]string{}
+		for _, n := range sub.Nodes {
+			names[n.ID] = string(n.Kind) + "/" + n.Name
+		}
+		if !slices.ContainsFunc(sub.Edges, func(e Edge) bool {
+			return e.Type == EdgeConfigures && names[e.Source] == "SealedSecret/creds" && names[e.Target] == "Deployment/web"
+		}) {
+			t.Errorf("missing SealedSecret configures Deployment; nodes %v edges %+v", names, sub.Edges)
+		}
+	}
+	t.Run("secret root", func(t *testing.T) {
+		sub := walkTestNeighborhood(t, newProjectionSession(t, secret, sealed, dep), secret, NeighborhoodOptions{})
+		if len(sub.Nodes) != 3 {
+			t.Fatalf("the fixture no longer admits the SealedSecret and Deployment at one hop: %+v", sub.Nodes)
+		}
+		composed(t, sub)
+	})
+	t.Run("manager root before the secret exists", func(t *testing.T) {
+		sub := walkTestNeighborhood(t, newRecordingProjectionSession(t, manager, sealed, dep), manager, NeighborhoodOptions{Profile: ProfileAll})
+		if len(sub.Nodes) != 3 {
+			t.Fatalf("the fixture no longer admits both members at one hop: %+v", sub.Nodes)
+		}
+		composed(t, sub)
+	})
+}
+
+// The last hop's Knative relations are drawn as well: a Revision's
+// KnativeService and the private Service its revision fronts, both reached at
+// the second hop, come back linked.
+func TestWalkNeighborhoodLinksLastHopKnativeServing(t *testing.T) {
+	controller := true
+	owner := func(apiVersion, kind, name, uid string) []metav1.OwnerReference {
+		return []metav1.OwnerReference{{APIVersion: apiVersion, Kind: kind, Name: name, UID: types.UID(uid), Controller: &controller}}
+	}
+	ksvc := projectionCR("serving.knative.dev", "Service", "shop", "hello", map[string]any{"status": map[string]any{"traffic": []any{map[string]any{"revisionName": "hello-00001"}}}})
+	ksvc.SetUID("ksvc")
+	config := projectionCR("serving.knative.dev", "Configuration", "shop", "hello", map[string]any{})
+	config.SetUID("config")
+	config.SetOwnerReferences(owner("serving.knative.dev/v1", "Service", "hello", "ksvc"))
+	rev := projectionCR("serving.knative.dev", "Revision", "shop", "hello-00001", map[string]any{})
+	rev.SetUID("rev")
+	rev.SetOwnerReferences(owner("serving.knative.dev/v1", "Configuration", "hello", "config"))
+	sks := projectionCR("networking.internal.knative.dev", "ServerlessService", "shop", "hello-00001", map[string]any{})
+	sks.SetUID("sks")
+	sks.SetOwnerReferences(owner("serving.knative.dev/v1", "Revision", "hello-00001", "rev"))
+	private := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "hello-00001-private", Namespace: "shop", UID: "private", OwnerReferences: owner("networking.internal.knative.dev/v1", "ServerlessService", "hello-00001", "sks")}}, "", "Service")
+	sub := walkTestNeighborhood(t, newProjectionSession(t, ksvc, config, rev, sks, private), rev, NeighborhoodOptions{Hops: 2})
+	names := map[string]string{}
+	for _, n := range sub.Nodes {
+		names[n.ID] = string(n.Kind) + "/" + n.Name
+	}
+	if len(sub.Nodes) != 5 {
+		t.Fatalf("the fixture no longer reaches every object at two hops: %v", names)
+	}
+	if !slices.ContainsFunc(sub.Edges, func(e Edge) bool {
+		return e.Type == EdgeExposes && names[e.Source] == string(KindKnativeService)+"/hello" && names[e.Target] == "Service/hello-00001-private"
+	}) {
+		t.Errorf("missing KnativeService exposes its private Service; nodes %v edges %+v", names, sub.Edges)
+	}
+}

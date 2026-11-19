@@ -118,6 +118,15 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 			unfollowedFamilies = append(unfollowedFamilies, f)
 		}
 	}
+	var compositions, unfollowedCompositions []*relations.Composition
+	for _, f := range relations.Compositions() {
+		if neighborhoodDisposition(f.Projection, allowed) {
+			compositions = append(compositions, f)
+			if !neighborhoodDisposition(f.Projection, followed) {
+				unfollowedCompositions = append(unfollowedCompositions, f)
+			}
+		}
+	}
 	var frontierSelectors, unfollowedSelectors []*relations.SelectorFamily
 	for _, f := range selectors {
 		if neighborhoodDisposition(f.Projection, followed) {
@@ -311,8 +320,8 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	individual := func(refs []resourceid.Ref) []resourceid.Ref {
 		return slices.DeleteFunc(slices.Clone(refs), func(r resourceid.Ref) bool { return grouped[r] != "" })
 	}
-	graph.declaredEdges(admitted, families, selectors, individual(unanswered), allowed[EdgeManages])
-	graph.declaredEdges(admitted, unfollowedFamilies, unfollowedSelectors, individual(answered), false)
+	graph.declaredEdges(admitted, lastHop{families, selectors, compositions, allowed[EdgeManages], allowed[EdgeExposes]}, individual(unanswered))
+	graph.declaredEdges(admitted, lastHop{families: unfollowedFamilies, selectors: unfollowedSelectors, compositions: unfollowedCompositions}, individual(answered))
 	displayObjects := make(map[resourceid.Ref]runtime.Object, len(order))
 	for _, r := range order {
 		displayObjects[r] = objects[r]
@@ -461,18 +470,30 @@ func (n *neighborhood) ownerEdges(admitted admittedSession, refs []resourceid.Re
 	}
 }
 
+// lastHop is what declaredEdges draws: the families' forward references, the
+// selections, the compositions and, with members, a GitOps manager's recorded
+// members; with knative, Knative Serving's links.
+type lastHop struct {
+	families     []*relations.Family
+	selectors    []*relations.SelectorFamily
+	compositions []*relations.Composition
+	members      bool
+	knative      bool
+}
+
 // declaredEdges draws what refs declare of one another and of the other
 // admitted objects: their families' forward references, the admitted objects
-// their selectors choose and, for a GitOps manager, its recorded members. It
-// reads no object the walk didn't admit, searches only the admitted objects,
-// and asks no permission the walk didn't already ask, so it can neither add a
-// node nor reveal one.
-func (n *neighborhood) declaredEdges(admitted admittedSession, families []*relations.Family, selectors []*relations.SelectorFamily, refs []resourceid.Ref, members bool) {
+// their selectors choose, the admitted objects they compose with through
+// coordinates neither holds, Knative Serving's links and, for a GitOps
+// manager, its recorded members. It reads no object the walk didn't admit,
+// searches only the admitted objects, and asks no permission the walk didn't
+// already ask, so it can neither add a node nor reveal one.
+func (n *neighborhood) declaredEdges(admitted admittedSession, draw lastHop, refs []resourceid.Ref) {
 	v := relations.NewView(admitted, admitted.access)
 	ov := ownership.NewView(admitted, admitted.access)
 	for _, r := range refs {
 		obj := admitted.objects[r]
-		for _, f := range families {
+		for _, f := range draw.families {
 			if !f.Covers(r.GroupKind()) {
 				continue
 			}
@@ -485,7 +506,7 @@ func (n *neighborhood) declaredEdges(admitted admittedSession, families []*relat
 				}
 			}
 		}
-		for _, f := range selectors {
+		for _, f := range draw.selectors {
 			if !f.Covers(r.GroupKind()) {
 				continue
 			}
@@ -495,10 +516,25 @@ func (n *neighborhood) declaredEdges(admitted admittedSession, families []*relat
 				}
 			}
 		}
-		if members && ownership.IsRecordingManager(r.GroupKind()) {
+		for _, f := range draw.compositions {
+			for _, e := range v.Composed(f, r, obj).Edges {
+				if edge, ok := projectedEdge(f.Projection, e.Producer, e.Consumer); ok {
+					n.edge(e.Producer, e.Consumer, edge)
+				}
+			}
+		}
+		if draw.members && ownership.IsRecordingManager(r.GroupKind()) {
 			for _, m := range ov.Members(r).Members {
 				n.edge(r, m.Ref, relationEdge{edge: EdgeManages})
 			}
+		}
+		if draw.knative {
+			// Knative's links read through the neighborhood's own access;
+			// here that is the walk's decisions alone.
+			walk := n.access
+			n.access = admitted.access
+			n.knativeServing(admitted, r, obj)
+			n.access = walk
 		}
 	}
 }
