@@ -91,3 +91,11 @@ type Gap struct {
 	Namespace string
 	Reason    readreason.Code
 }
+
+// FromRadarSetup reports a gap Radar's own setup causes: a kind or namespace
+// it doesn't collect, or one its identity can't read. Such a gap names no
+// object, so namespace access decides who is told of it.
+func (g Gap) FromRadarSetup() bool {
+	action, _ := readreason.ActionFor(g.Reason)
+	return action == readreason.ActionRadarConfig
+}

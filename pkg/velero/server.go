@@ -42,7 +42,7 @@ const (
 // Build it with ServerConfigFromDeployments. Its JSON is for display: the
 // resolved zone and whether the flags were read are not encoded, so a
 // ServerConfig decoded from JSON (or written as a literal) reports
-// FlagsKnown() false and resolves no zone.
+// FlagsKnown() false and resolves no zone and no version.
 type ServerConfig struct {
 	Source     ServerSource `json:"source"`
 	Deployment string       `json:"deployment,omitempty"`
@@ -80,6 +80,9 @@ type ServerConfig struct {
 
 	zone     *time.Location
 	flagsSet bool
+	// version is the server image's release (major, minor, patch); nil when
+	// its tag is not one.
+	version *[3]int
 }
 
 // Down reports that the server Deployment was read and has no pods
@@ -124,6 +127,9 @@ func ServerConfigFromDeployments(deployments []*appsv1.Deployment, read bool) Se
 		}
 		cfg.readZone(c)
 		cfg.readFlags(c)
+		if v, ok := veleroImageVersion(c.Image); ok {
+			cfg.version = &v
+		}
 		return cfg
 	}
 	return ServerConfig{Source: ServerNotFound}
@@ -155,6 +161,55 @@ func imageIsVelero(image string) bool {
 		repo = repo[:colon]
 	}
 	return repo == "velero/velero" || strings.HasSuffix(repo, "/velero/velero")
+}
+
+// veleroImageVersion reads a release from the tag of an image whose
+// repository is named velero: "velero/velero:v1.18.3",
+// "registry.example/velero:1.17.0-debian-12". Only the release counts, so a
+// pre-release such as v1.18.3-rc.1 reads as 1.18.3, which matches what Velero
+// ships in its pre-releases. A digest-only image, a tag that is not a release
+// ("latest", "main"), or another repository, whose tag may be its own
+// version, reads as unknown.
+func veleroImageVersion(image string) ([3]int, bool) {
+	ref := image
+	if at := strings.Index(ref, "@"); at >= 0 {
+		ref = ref[:at]
+	}
+	slash := strings.LastIndex(ref, "/")
+	colon := strings.LastIndex(ref, ":")
+	if colon < 0 || colon < slash || ref[slash+1:colon] != "velero" {
+		return [3]int{}, false
+	}
+	tag := strings.TrimPrefix(ref[colon+1:], "v")
+	if i := strings.IndexAny(tag, "-+"); i >= 0 {
+		tag = tag[:i]
+	}
+	parts := strings.Split(tag, ".")
+	if len(parts) != 3 {
+		return [3]int{}, false
+	}
+	var v [3]int
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || (len(part) > 1 && part[0] == '0') {
+			return [3]int{}, false
+		}
+		v[i] = n
+	}
+	return v, true
+}
+
+// dayMatch is the rule the server's Velero applies to a cron restricting both
+// day fields: netresearch/go-cron's from 1.18.3, robfig/cron's before.
+func (c ServerConfig) dayMatch() DayMatch {
+	if c.version == nil {
+		return DayMatchUnknown
+	}
+	v := *c.version
+	if v[0] > 1 || (v[0] == 1 && (v[1] > 18 || (v[1] == 18 && v[2] >= 3))) {
+		return DayMatchBoth
+	}
+	return DayMatchEither
 }
 
 func rolloutComplete(d *appsv1.Deployment) bool {

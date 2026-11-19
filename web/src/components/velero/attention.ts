@@ -12,14 +12,33 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
 import { VELERO_GROUP } from './routes'
-import { VELERO_CHECK_HELD_BACKUP, VELERO_CHECK_SERVER, VELERO_SHORTEN_NAME, VELERO_START_SERVER, VELERO_WRITABLE_LOCATION, inInstallation, namesAndMore, veleroIssueProblem } from './shared'
+import { VELERO_CHECK_HELD_BACKUP, VELERO_CHECK_SERVER, VELERO_DELETE_OBJECT, VELERO_SHORTEN_NAME, VELERO_START_SERVER, VELERO_WRITABLE_LOCATION, inInstallation, namesAndMore, veleroIssueProblem } from './shared'
 
 export function readInPart(cov: VeleroKindCoverage | undefined): boolean {
   return !cov || INCOMPLETE_COVERAGE_STATES.has(cov.state)
 }
 
+/**
+ * What the Velero views can say about deleting objects. `deleteObject`: the
+ * connected Radar binds a delete to the reviewed object
+ * (resourceDeletePreconditions) and reports schedule runs' storageLocation,
+ * both of which Delete object rests on.
+ */
+export interface VeleroAttentionOptions {
+  deleteObject?: boolean
+}
+
+/**
+ * Whether the run holding a schedule is one Velero never started and gave no
+ * location, whose page offers Delete object (backupDelete.tsx).
+ */
+function unstoredBlocker(s: Partial<Pick<VeleroScheduleReading, 'blocker'>>, opts: VeleroAttentionOptions): boolean {
+  const b = s.blocker
+  return !!opts.deleteObject && !!b && (!b.phase || b.phase === 'New') && !b.storageLocation
+}
+
 /** What to do about a schedule that needs attention, in one plain line. */
-export function veleroScheduleNextStep(s: Pick<VeleroScheduleReading, 'state' | 'reason'>): string | undefined {
+export function veleroScheduleNextStep(s: Pick<VeleroScheduleReading, 'state' | 'reason'> & Partial<Pick<VeleroScheduleReading, 'blocker'>>, opts: VeleroAttentionOptions = {}): string | undefined {
   if (s.reason === 'serverDown') return VELERO_START_SERVER
   switch (s.state) {
     case 'cannotRun':
@@ -29,7 +48,9 @@ export function veleroScheduleNextStep(s: Pick<VeleroScheduleReading, 'state' | 
     case 'rejected':
       return 'Fix what Velero rejected in the schedule; Velero validates it again when it changes'
     case 'held':
-      return VELERO_CHECK_HELD_BACKUP
+      return unstoredBlocker(s, opts)
+        ? `Check that the Velero server is running with its backup controller enabled, or open the queued backup and use ${VELERO_DELETE_OBJECT}: nothing of it is in storage.`
+        : VELERO_CHECK_HELD_BACKUP
     case 'late':
     case 'probablyLate':
     case 'lateOrHeld':
@@ -40,15 +61,18 @@ export function veleroScheduleNextStep(s: Pick<VeleroScheduleReading, 'state' | 
   return undefined
 }
 
-function scheduleProblem(s: VeleroScheduleReading, serverShown: boolean): WorkspaceProblem {
+function scheduleProblem(s: VeleroScheduleReading, serverShown: boolean, opts: VeleroAttentionOptions): WorkspaceProblem {
   const tone = veleroScheduleTone(s)
   return {
     id: `schedule:${s.namespace}/${s.name}`,
     category: 'schedule',
     title: veleroScheduleStateLabel(s.state),
     detail: veleroScheduleReasonText(s, { serverShown }),
-    nextStep: veleroScheduleNextStep(s),
+    nextStep: veleroScheduleNextStep(s, opts),
     subject: { kind: 'Schedule', group: VELERO_GROUP, namespace: s.namespace, name: s.name },
+    ...(s.state === 'held' && s.blocker
+      ? { related: { lead: 'Queued backup:', refs: [{ kind: 'Backup', group: VELERO_GROUP, namespace: s.namespace, name: s.blocker.name }] } }
+      : {}),
     source: 'reading',
     tone: tone === 'healthy' ? 'neutral' : tone,
   }
@@ -109,7 +133,7 @@ function locationProblem(l: VeleroLocationReading): WorkspaceProblem {
  * their own; storage a stopped server leaves unchecked is not listed. An
  * unavailable location's issue names the runs Velero rejected because of it.
  */
-export function veleroAttention(data: VeleroWorkspaceResponse, installation: string | null): WorkspaceProblem[] {
+export function veleroAttention(data: VeleroWorkspaceResponse, installation: string | null, opts: VeleroAttentionOptions = {}): WorkspaceProblem[] {
   const issues = installation === null ? data.issues : data.issues.filter((i) => (i.namespace ?? '') === installation)
   const down = data.installations.filter((i) => (installation === null || i.namespace === installation) && i.server.replicas === 0)
   const downIn = new Set(down.map((i) => i.namespace))
@@ -125,7 +149,7 @@ export function veleroAttention(data: VeleroWorkspaceResponse, installation: str
   return [
     ...down.map((i) => serverProblem(i.namespace, i.server.deployment, schedules.filter((s) => s.namespace === i.namespace && lateWhileDown(s)))),
     ...disabled.map((d) => backupsDisabledProblem(d.installation.namespace, d.installation.server.deployment, d.schedules)),
-    ...schedules.filter((s) => !lateWhileDown(s) && !heldWhileDisabled(s)).map((s) => scheduleProblem(s, downIn.has(s.namespace))),
+    ...schedules.filter((s) => !lateWhileDown(s) && !heldWhileDisabled(s)).map((s) => scheduleProblem(s, downIn.has(s.namespace), opts)),
     ...inInstallation(data.locations, installation)
       .filter((l) => l.attention && !(l.reason === 'serverDown' && downIn.has(l.namespace)))
       .map(locationProblem),
@@ -139,11 +163,11 @@ export function veleroAttention(data: VeleroWorkspaceResponse, installation: str
  * in it), then Velero's Issues about it or naming it among the runs a fault
  * rejected. Each says what to do next.
  */
-export function veleroObjectProblems(data: VeleroWorkspaceResponse, kind: string, namespace: string, name: string): WorkspaceProblem[] {
+export function veleroObjectProblems(data: VeleroWorkspaceResponse, kind: string, namespace: string, name: string, opts: VeleroAttentionOptions = {}): WorkspaceProblem[] {
   const out: WorkspaceProblem[] = []
   if (kind === 'Schedule') {
     const s = data.schedules.find((r) => r.namespace === namespace && r.name === name)
-    if (s?.attention) out.push({ ...scheduleProblem(s, false), title: `Schedule ${veleroScheduleStateLabel(s.state).toLowerCase()}` })
+    if (s?.attention) out.push({ ...scheduleProblem(s, false, opts), title: `Schedule ${veleroScheduleStateLabel(s.state).toLowerCase()}` })
   }
   if (kind === 'BackupStorageLocation') {
     const l = data.locations.find((r) => r.namespace === namespace && r.name === name)

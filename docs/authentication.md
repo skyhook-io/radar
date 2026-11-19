@@ -40,7 +40,18 @@ Ownership answers (owners, children, and which GitOps manager manages an object)
 REST AI context and MCP additionally require exact-kind `get` access for ownership and manager references, so their
 answers can be narrower than the UI's. A manager the caller can't read contributes no evidence; a name in the object's
 own metadata stays as a `withheld` claim, and the answer says it is `narrowed`. These reference checks do not support
-`resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object).
+`resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object). The object's own
+relationships (what it routes to, declares or selects) need only the access that opened it: its kind in its namespace
+counts as readable for them, so a route you read through namespace access lists its readable backends even without a
+`get` grant on its kind. Every reference the answer emits still needs its own `get` check.
+
+Related Resources, the AI resource context and MCP `get_resource` name the ConfigMaps, Secrets, PVCs and ServiceAccount
+a readable object's pod template references, a Pod's Node, an Ingress's TLS Secrets and a ServiceAccount's Secrets, and
+Related Resources also the ResourceClaims a Pod's spec names and a Calico HostEndpoint's Node, even when you
+can't read them, since the object's own YAML already shows those names. Such a reference carries `state: "denied"` (or `"access_unverified"` when Radar couldn't check your access), says
+nothing about whether the object exists or its state, and opens nothing. Workload history never follows it. Objects
+Radar finds by searching, such as a policy or monitor elsewhere that selects the object, are still withheld when you
+can't read them; the answer says only that something related was withheld.
 
 Relationship answers (what uses a ConfigMap, what a selector matches, what routes to a Service) follow the same
 namespace rule. A search that spans namespaces, such as a ServiceMonitor's with `namespaceSelector: any`, matches

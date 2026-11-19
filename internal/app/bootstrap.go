@@ -656,9 +656,6 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	srv := server.New(serverCfg)
-	if cfg.MCPEnabled {
-		mcppkg.SetRelationshipTopologySource(srv.RelationshipTopology)
-	}
 	return srv
 }
 

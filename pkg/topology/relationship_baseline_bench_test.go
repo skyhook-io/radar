@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// The benchmarks in this file record what the all-namespace relationship
-// graph costs today, on the same fixtures the cache-index layer that replaces
-// it is measured on. They change no behavior; docs/loadtest.md lists how to
-// run them and the baselines they produced.
+// The benchmarks in this file measure the all-namespace relationship graph
+// as a baseline for the family path, on the same fixtures. They change no
+// behavior; docs/loadtest.md lists how to run them and the baselines they
+// produced.
 //
 // Fixtures: L is the field census (fieldShape: 191,504 objects, 29,455 Pods);
 // XL scales every kind by 10/3, about 98,000 Pods.
@@ -112,13 +112,12 @@ func drawerSubjects(p *mockProvider) []struct {
 	}
 }
 
-// BenchmarkDrawerRelationships is one drawer's Related Resources read from the
-// shared graph, two ways:
+// BenchmarkDrawerRelationships measures drawer answers read from the graph,
+// two ways:
 //   - shared-index: auth off, the graph's cached index answers the lookup;
-//   - per-user-copy: auth on, where the server copies the whole graph, strips
+//   - per-user-copy: auth on, copying the whole graph, stripping
 //     the nodes in namespaces the user may not list and rebuilds the index for
-//     that one request (relationshipTopologyForUser and cloneTopology in
-//     internal/server). The user here may list half the namespaces and every
+//     that one request. The user here may list half the namespaces and every
 //     cluster-scoped kind; a user denied some of those also has them stripped
 //     before the index is rebuilt.
 func BenchmarkDrawerRelationships(b *testing.B) {

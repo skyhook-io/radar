@@ -1,8 +1,9 @@
 // Command relparity connects to a cluster as Radar does and answers every
 // cached object's Related Resources two ways: from the all-namespace
-// relationship graph and from the relation families in pkg/relations. It
-// reports every field where the two answers differ, how long each answer
-// took, and what the graph costs to build and hold. It only reads the cluster.
+// relationship graph, and from the relation families in pkg/relations, which
+// the drawer answers from. It reports every field where
+// the two answers differ, how long each answer took, and what the graph
+// costs to build and hold. It only reads the cluster.
 package main
 
 import (
@@ -119,9 +120,8 @@ func (n namespacesAccess) CanRead(_ resourceid.GroupKind, namespace string) owne
 }
 func (n namespacesAccess) Namespaces() ([]string, bool) { return n, false }
 
-// userGraph is the graph relationshipTopologyForUser gives a user who may
-// read namespaces and every cluster-scoped kind: a copy without the nodes in
-// other namespaces.
+// userGraph strips a graph to what a user may read, for parity comparisons:
+// the named namespaces and every cluster-scoped kind.
 func userGraph(shared *topology.Topology, namespaces []string) *topology.Topology {
 	copied := *shared
 	copied.Nodes = append([]topology.Node(nil), shared.Nodes...)
@@ -136,8 +136,8 @@ func userGraph(shared *topology.Topology, namespaces []string) *topology.Topolog
 	return &copied
 }
 
-// withholdNamespaces is withholdDirectLookups for that user: the direct
-// reads' Pods and claims outside their namespaces go.
+// withholdNamespaces drops related objects outside namespaces from a graph
+// answer, for parity comparisons.
 func withholdNamespaces(rel *topology.Relationships, namespaces []string) {
 	rel.Pods = slices.DeleteFunc(rel.Pods, func(p topology.ResourceRef) bool { return !slices.Contains(namespaces, p.Namespace) })
 	rel.Consumers = slices.DeleteFunc(rel.Consumers, func(c topology.ResourceRef) bool {
@@ -332,7 +332,7 @@ func main() {
 	}
 	afterAnswer := func(access func(*ownership.Catalog) ownership.Access) func(subject) measuredAnswer {
 		return func(s subject) measuredAnswer {
-			rel, coverage := k8s.AnswerRelationships(cache, s.obj, access, access)
+			rel, coverage, _ := k8s.AnswerRelationships(cache, s.obj, access, access)
 			if rel == nil {
 				log.Fatalf("family answer unavailable for %s", s.ref.Key())
 			}
