@@ -40,7 +40,26 @@ Ownership answers (owners, children, and which GitOps manager manages an object)
 REST AI context and MCP additionally require exact-kind `get` access for ownership and manager references, so their
 answers can be narrower than the UI's. A manager the caller can't read contributes no evidence; a name in the object's
 own metadata stays as a `withheld` claim, and the answer says it is `narrowed`. These reference checks do not support
-`resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object).
+`resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object). The object's own
+relationships (what it routes to, declares or selects) need only the access that opened it: its kind in its namespace
+counts as readable for them, so a route you read through namespace access lists its readable backends even without a
+`get` grant on its kind. Every reference the answer emits still needs its own `get` check.
+
+Related Resources, the AI resource context and MCP `get_resource` name the ConfigMaps, Secrets, PVCs and ServiceAccount
+a readable object's pod template references, a Pod's Node, an Ingress's TLS Secrets and a ServiceAccount's Secrets, and
+Related Resources also the ResourceClaims a Pod's spec names and a Calico HostEndpoint's Node, even when you
+can't read them, since the object's own YAML already shows those names. Such a reference carries `state: "denied"` (or `"access_unverified"` when Radar couldn't check your access), says
+nothing about whether the object exists or its state, and opens nothing. Workload history never follows it. Objects
+Radar finds by searching, such as a policy or monitor elsewhere that selects the object, are still withheld when you
+can't read them; the answer says only that something related was withheld.
+
+Relationship answers (what uses a ConfigMap, what a selector matches, what routes to a Service) follow the same
+namespace rule. A search that spans namespaces, such as a ServiceMonitor's with `namespaceSelector: any`, matches
+against Radar's cache first and then drops what you may not read, and the answer says it is `narrowed`. It never
+returns the identities or bodies of what it dropped, but because you can write your own selectors, the mark can
+reveal whether hidden cached objects match one: whether something in a namespace you can't see carries those labels.
+A `narrowed` mark is not proof of a match, since a namespace Radar couldn't read also narrows the answer. If that is
+too much for your setup, run a Radar instance per trust boundary, as described above.
 
 Deletion-impact previews fetch the root as the caller and use caller-readable ownership data. Permission and collection gaps make the result partial; remote or unknown GitOps destinations expose no local inventory. See [Shared deletion preview](mcp.md#shared-deletion-preview). Policy coverage metadata is filtered alongside its referenced workloads; it does not reveal names from hidden namespaces.
 
@@ -117,6 +136,12 @@ Two things still hold on a shared listener without authentication:
    - connecting the cluster to Radar Cloud, which outlasts the request, needs an
      explicit acknowledgement.
 
+The browser request guard also covers `/metrics` and `/debug/pprof/*`. It refuses
+`Sec-Fetch-Site: cross-site` and `same-site`. Headerless requests still pass that
+guard, including browser requests over plain HTTP to non-localhost addresses;
+the listener's authentication and profiling policy still apply. See
+[Profiling](configuration.md#profiling) for diagnostic access.
+
 ## Auth Modes
 
 | Mode | Flag | When to Use |
@@ -167,7 +192,14 @@ Groups can arrive as one comma-separated header or as one header per group, as p
 
 The user menu always shows a **Logout** button. Clicking it clears Radar's session cookie. On its own, that isn't enough to switch users: your proxy re-injects the identity header on the next request and signs the same user back in.
 
-To make logout actually switch users, point Radar at your proxy's sign-out URL with `--auth-proxy-logout-url` (or `auth.proxy.logoutURL` in Helm) — e.g. oauth2-proxy's `/oauth2/sign_out`. Radar then redirects the browser there after clearing its own cookie, so the upstream session is torn down too. When unset, the menu shows a note that the proxy may re-authenticate automatically.
+To make logout actually switch users, use one or both of these:
+
+- **The proxy's sign-out URL:** `--auth-proxy-logout-url` (or `auth.proxy.logoutURL` in Helm), e.g. oauth2-proxy's `/oauth2/sign_out`. Radar redirects the browser there after clearing its own cookie, so the proxy ends its session.
+- **The proxy's session cookies:** `--auth-proxy-logout-cookies` (or `auth.proxy.logoutCookies` in Helm), a list of cookie names where `*` matches any characters, e.g. `_oauth2_proxy*`. Logout deletes every matching cookie the browser sends, whether it was set for Radar's host or a parent domain, at `/` or on a path down to Radar's base path. The next request then goes back through the proxy's sign-in. Use it when the proxy has no sign-out URL, or when its sign-out URL leaves cookies behind on Radar's host. Each matching cookie adds one `Set-Cookie` header per parent domain and path, so list only the proxy's session cookies: behind nginx, a long hostname, a deep base path and many matches can exceed its default 4 KB response header buffer. Radar can only delete cookies the browser sends to Radar's address, and deleting them doesn't revoke them on the proxy: a copy taken from the browser keeps working until it expires.
+
+If the proxy signs people in through a single sign-on provider that remembers them, the next sign-in can still happen without a password. Only that provider's own sign-out changes that.
+
+When neither is set, the menu shows a note that the proxy may sign the user back in automatically.
 
 > **Note:** HTTP Basic Auth has no reliable logout mechanism — browsers cache credentials and resend them. If you need user-switching, prefer a proxy with a real sign-out endpoint (oauth2-proxy, Authelia) over plain Basic Auth.
 
@@ -574,6 +606,7 @@ Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contain
 | User header (proxy) | `--auth-user-header` | `auth.proxy.userHeader` | `X-Forwarded-User` |
 | Groups header (proxy) | `--auth-groups-header` | `auth.proxy.groupsHeader` | `X-Forwarded-Groups` |
 | Proxy logout URL (proxy) | `--auth-proxy-logout-url` | `auth.proxy.logoutURL` | — |
+| Proxy logout cookies (proxy) | `--auth-proxy-logout-cookies` | `auth.proxy.logoutCookies` | — |
 | OIDC issuer | `--auth-oidc-issuer` | `auth.oidc.issuerURL` | — |
 | OIDC internal issuer | `--auth-oidc-internal-issuer` | `auth.oidc.internalIssuerURL` | — |
 | OIDC authorization URL | `--auth-oidc-authorization-url` | `auth.oidc.authorizationURL` | — |

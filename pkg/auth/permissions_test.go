@@ -483,3 +483,27 @@ func TestSubjectCanI_WithGroups(t *testing.T) {
 		t.Errorf("groups not passed to SAR: got %v", capturedGroups)
 	}
 }
+
+// Kubernetes compares a username and each group as whole strings, so moving a
+// separator byte between them names a different identity.
+func TestCacheKey_SeparatorInNamesDoesNotCollide(t *testing.T) {
+	pairs := [][2]struct {
+		user   string
+		groups []string
+	}{
+		{{"alice", []string{"team\x00prod"}}, {"alice\x00team", []string{"prod"}}},
+		{{"alice", []string{"a\x00b"}}, {"alice", []string{"a", "b"}}},
+		{{"a\x00b", nil}, {"a", []string{"b\x00"}}},
+	}
+	for _, p := range pairs {
+		if cacheKey(p[0].user, p[0].groups) == cacheKey(p[1].user, p[1].groups) {
+			t.Errorf("%q %q and %q %q share a key", p[0].user, p[0].groups, p[1].user, p[1].groups)
+		}
+	}
+
+	pc := NewPermissionCache()
+	pc.Set("alice", []string{"team\x00prod"}, &UserPermissions{})
+	if pc.Get("alice\x00team", []string{"prod"}) != nil {
+		t.Error("one identity read another's cached permissions")
+	}
+}

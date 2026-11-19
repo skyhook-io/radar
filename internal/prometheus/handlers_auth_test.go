@@ -62,6 +62,8 @@ func (f *authFakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body = authMatrixBody
 		}
 		_, _ = w.Write([]byte(body))
+	case "/api/v1/label/__name__/values":
+		_, _ = w.Write([]byte(`{"status":"success","data":[]}`))
 	default:
 		http.NotFound(w, r)
 	}
@@ -173,6 +175,8 @@ var metricsMatrix = []struct {
 	{"raw range query", "/prometheus/query?query=up", gateCall{"", "pods", "", "list"}},
 	{"raw instant query", "/prometheus/query?query=up&type=instant", gateCall{"", "pods", "", "list"}},
 	{"hpa", "/prometheus/hpa/alpha/web", gateCall{"autoscaling", "horizontalpodautoscalers", "alpha", "get"}},
+	{"substrate workerpool", "/prometheus/substrate/workerpools/alpha/pool", gateCall{"ate.dev", "workerpools", "alpha", "get"}},
+	{"substrate node", "/prometheus/substrate/nodes/worker-1", gateCall{"", "nodes", "", "get"}},
 }
 
 func TestMetricsRoutes_NoGatePassesThrough(t *testing.T) {

@@ -157,7 +157,7 @@ func TestPackagesHelmReadStopsWithItsRequest(t *testing.T) {
 	defer cancel()
 	done := make(chan []SourceError, 1)
 	go func() {
-		_, errs := collectHelmReleases(ctx, []string{"shop"}, nil)
+		_, errs := collectHelmReleases(ctx, []string{"shop"}, nil, helm.NamespaceStatusScope{})
 		done <- errs
 	}()
 	select {

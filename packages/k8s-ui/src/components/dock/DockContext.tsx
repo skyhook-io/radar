@@ -16,6 +16,8 @@ export interface DockTab {
   podName?: string
   containerName?: string
   containers?: string[]
+  /** Logs: which of `containers` are init containers, labelled in the selector. */
+  initContainers?: string[]
   /** Terminal: run this command instead of a shell (one argv element, e.g. "psql"). */
   shell?: string
   /** Terminal: a short line shown in the toolbar, e.g. what the session is connected to. */
@@ -253,6 +255,7 @@ export function useOpenLogs() {
     podName: string
     containers: string[]
     containerName?: string
+    initContainers?: string[]
     orgId?: string
     clusterId?: string
     clusterName?: string
@@ -268,6 +271,7 @@ export function useOpenLogs() {
       podName: opts.podName,
       containerName: opts.containerName,
       containers: opts.containers,
+      initContainers: opts.initContainers,
       orgId: opts.orgId,
       clusterId: opts.clusterId,
       clusterName: opts.clusterName,

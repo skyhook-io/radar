@@ -19,6 +19,15 @@ import (
 // answering from decide and recording every review's resource attributes.
 func fakeSARServer(t *testing.T, decide func(authv1.ResourceAttributes) bool) *[]authv1.ResourceAttributes {
 	t.Helper()
+	client, reviews := fakeSARClient(t, decide)
+	previousClient := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previousClient) })
+	return reviews
+}
+
+// fakeSARClient is fakeSARServer without installing the client.
+func fakeSARClient(t *testing.T, decide func(authv1.ResourceAttributes) bool) (*kubernetes.Clientset, *[]authv1.ResourceAttributes) {
+	t.Helper()
 	reviews := &[]authv1.ResourceAttributes{}
 	var mu sync.Mutex
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,9 +63,7 @@ func fakeSARServer(t *testing.T, decide func(authv1.ResourceAttributes) bool) *[
 	if err != nil {
 		t.Fatalf("build Kubernetes client: %v", err)
 	}
-	previousClient := k8s.SetTestClient(client)
-	t.Cleanup(func() { k8s.SetTestClient(previousClient) })
-	return reviews
+	return client, reviews
 }
 
 func TestPrometheusAuthGate_NoAuthPassesThrough(t *testing.T) {

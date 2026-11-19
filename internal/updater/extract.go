@@ -2,6 +2,7 @@ package updater
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -35,4 +36,23 @@ func findInExtracted(dir string, match func(os.DirEntry) bool) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no matching file found in extracted contents")
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }

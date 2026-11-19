@@ -3,6 +3,27 @@
 # All grant rows mean get/list/watch on full objects, not redacted projections.
 # Existing grants are preserved; withhold does not revoke rights from other roles.
 entries:
+  - group: ""
+    resources: ["podtemplates"]
+    scope: Namespaced
+    collection: ""
+    decision: withhold
+    reason: "Pod templates can contain inline container credentials; relationship collection adds no caller grants, and native visibility adds no default caller grant."
+    source: "k8s.io/api/core/v1 (PodTemplate.template.spec.containers[].env)"
+  - group: "eks.amazonaws.com"
+    resources: ["nodeclasses"]
+    scope: Cluster
+    collection: "karpenter"
+    decision: existing
+    reason: "Covered by the existing Karpenter group-wide cluster-read rule and its existing collection/tier gates."
+    source: "deploy/helm/radar/templates/cloud-rbac-cluster-read.yaml"
+  - group: "sinks.knative.dev"
+    resources: ["jobsinks"]
+    scope: Namespaced
+    collection: "knative"
+    decision: withhold
+    reason: "New collection dependency; default caller grant withheld pending review of inline Job configuration. Relationship collection adds no caller grants."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks); pkg/relations/kinds.go (JobSink dependency)"
   - group: "opentelemetry.io"
     resources: ["opentelemetrycollectors", "instrumentations"]
     scope: Namespaced
@@ -17,6 +38,13 @@ entries:
     decision: withhold
     reason: "Canary webhooks and MetricTemplate provider headers can contain inline credentials. Native visibility adds no caller grants."
     source: "https://github.com/fluxcd/flagger/tree/c781cdc199d44cf84e21e90aedd8ff14c1df450e/pkg/apis/flagger/v1beta1"
+  - group: "upgrade.cattle.io"
+    resources: ["plans"]
+    scope: Namespaced
+    collection: "systemUpgrade"
+    decision: withhold
+    reason: "spec.upgrade.envs and spec.prepare.envs can carry inline values, and spec.secrets names Secrets mounted into upgrade Jobs. Native visibility adds no caller grants."
+    source: "https://github.com/rancher/system-upgrade-controller/tree/v0.21.0/pkg/apis/upgrade.cattle.io/v1"
   - group: "secrets-store.csi.x-k8s.io"
     resources: ["secretproviderclasses"]
     scope: Namespaced
@@ -31,6 +59,20 @@ entries:
     decision: grant
     reason: "Mount state only: Pod and class names, node, target path and provider object IDs/versions. No secret values or provider parameters."
     source: "https://github.com/kubernetes-sigs/secrets-store-csi-driver/tree/v1.6.1/apis/v1"
+  - group: "snapshot.storage.k8s.io"
+    resources: ["volumesnapshots"]
+    scope: Namespaced
+    collection: "volumeSnapshots"
+    decision: grant
+    reason: "Source PVC or content name, class name, readiness, restore size and the controller's error message, which the API asks not to carry sensitive information."
+    source: "https://github.com/kubernetes-csi/external-snapshotter/blob/v8.6.0/client/apis/volumesnapshot/v1/types.go"
+  - group: "snapshot.storage.k8s.io"
+    resources: ["volumesnapshotcontents", "volumesnapshotclasses"]
+    scope: Cluster
+    collection: "volumeSnapshots"
+    decision: grant
+    reason: "Driver, deletion policy, storage handles and bound snapshot reference, like the PersistentVolumes and StorageClasses cluster read already grants. Class parameters name CSI credential Secrets but do not hold their values."
+    source: "https://github.com/kubernetes-csi/external-snapshotter/blob/v8.6.0/client/apis/volumesnapshot/v1/types.go"
   - group: "core.strimzi.io"
     resources: ["strimzipodsets"]
     scope: Namespaced
@@ -45,6 +87,20 @@ entries:
     decision: existing
     reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
     source: "internal/k8s/dynamic_cache.go; existing cloud-rbac-cluster-read.yaml"
+  - group: "kafka.strimzi.io"
+    resources: ["kafkas"]
+    scope: Namespaced
+    collection: "strimzi"
+    decision: withhold
+    reason: "Broker configuration and listener authentication settings can contain credentials; the drawer adds no caller grants."
+    source: "https://strimzi.io/docs/operators/1.2.0/configuring.html#type-Kafka-reference"
+  - group: "kafka.strimzi.io"
+    resources: ["kafkanodepools"]
+    scope: Namespaced
+    collection: "strimzi"
+    decision: withhold
+    reason: "Pool templates and JVM options can embed credentials; the drawer adds no caller grants."
+    source: "https://strimzi.io/docs/operators/1.2.0/configuring.html#type-KafkaNodePool-reference"
   - group: "kafka.strimzi.io"
     resources: ["kafkaconnects"]
     scope: Namespaced
@@ -801,6 +857,13 @@ entries:
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "fluxcd.controlplane.io"
+    resources: ["fluxinstances","fluxreports","resourcesets","resourcesetinputproviders"]
+    scope: Namespaced
+    collection: "fluxOperator"
+    decision: grant
+    reason: "Operational configuration and status. FluxInstance patches and ResourceSet inputs are plain configuration; credentials are referenced by Secret name."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks); flux-operator v1 CRD schemas"
   - group: "source.toolkit.fluxcd.io"
     resources: ["gitrepositories","helmrepositories","ocirepositories","helmcharts","buckets","externalartifacts"]
     scope: Namespaced
@@ -885,3 +948,31 @@ entries:
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "packages/k8s-ui/src/components/resources/ResourcesView.tsx (curated columns)"
+  - group: "agents.x-k8s.io"
+    resources: ["sandboxes"]
+    scope: Namespaced
+    collection: "agentSandbox"
+    decision: withhold
+    reason: "A Sandbox carries a full Pod template, whose environment values can contain inline credentials. Native visibility adds no caller grants."
+    source: "https://github.com/kubernetes-sigs/agent-sandbox/tree/v1.0.11/api/v1beta1"
+  - group: "extensions.agents.x-k8s.io"
+    resources: ["sandboxclaims", "sandboxtemplates", "sandboxwarmpools"]
+    scope: Namespaced
+    collection: "agentSandbox"
+    decision: withhold
+    reason: "SandboxTemplates carry Pod templates and SandboxClaims inject inline environment values; both can contain credentials. Native visibility adds no caller grants."
+    source: "https://github.com/kubernetes-sigs/agent-sandbox/tree/v1.0.11/extensions/api/v1beta1"
+  - group: "ate.dev"
+    resources: ["workerpools"]
+    scope: Namespaced
+    collection: "agentSubstrate"
+    decision: withhold
+    reason: "Pool templates and status hold no credential fields; granting Radar Cloud callers new reads is a separate review. Native visibility adds no caller grants."
+    source: "https://github.com/agent-substrate/substrate/tree/a46464663fa076221ae059e1fd4a273edd2d8b09/api/infra/k8s/ate/v1"
+  - group: "ate.dev"
+    resources: ["sandboxconfigs", "csidriverconfigs"]
+    scope: Cluster
+    collection: "agentSubstrate"
+    decision: withhold
+    reason: "Cluster-scoped runtime configuration: sandbox asset locations and CSI driver endpoints and TLS settings. Native visibility adds no caller grants."
+    source: "https://github.com/agent-substrate/substrate/tree/a46464663fa076221ae059e1fd4a273edd2d8b09/api/infra/k8s/ate/v1"

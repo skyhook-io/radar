@@ -106,7 +106,7 @@ const ARGO_CD_KINDS = new Set(['applications', 'applicationsets', 'appprojects']
 
 // getGitOpsResourceStatus dispatches sync/health extraction by kind. Argo
 // Applications read from .status (rich operationState + sync state); Argo
-// ApplicationSets read their own generator conditions; Flux kinds read
+// ApplicationSets read their controller health or generator conditions; Flux kinds read
 // .status.conditions + .spec.suspend. Returns null if the resource has
 // no recognizable status (e.g. just-created, status not yet populated).
 export function getGitOpsResourceStatus(kind: string, resource: any): GitOpsStatus | null {
@@ -125,7 +125,8 @@ export function getGitOpsResourceStatus(kind: string, resource: any): GitOpsStat
   // Unknown.
   if (kind === 'applicationsets') {
     return argoApplicationSetConditionsToGitOpsStatus(
-      (resource?.status?.conditions ?? []) as FluxCondition[]
+      (resource?.status?.conditions ?? []) as FluxCondition[],
+      resource?.status?.health
     )
   }
   if (tool === 'argo') return null

@@ -23,24 +23,76 @@ var (
 )
 
 var (
-	cachedServerVersion string
-	serverVersionOnce   = new(sync.Once)
-	serverVersionMu     sync.Mutex
+	serverVersionMu       sync.Mutex
+	cachedServerVersion   string
+	serverVersionInFlight *serverVersionRead
+	serverVersionFailedAt time.Time
 )
 
-// GetServerVersion returns the cached Kubernetes server version.
-// The version is fetched once and cached for the lifetime of the context.
+// serverVersionRetryAfter answers "" without a new read for a while after a
+// failure, so callers during an outage don't each wait out the client timeout.
+const serverVersionRetryAfter = 5 * time.Second
+
+type serverVersionRead struct {
+	done        chan struct{}
+	version     string
+	invalidated bool // guarded by serverVersionMu
+}
+
+// GetServerVersion returns the Kubernetes server version, read once per
+// context. A failed read is not kept: a call after serverVersionRetryAfter asks
+// again, while callers that arrive during a read wait for it instead of
+// starting their own.
 func GetServerVersion() string {
 	serverVersionMu.Lock()
-	defer serverVersionMu.Unlock()
-	serverVersionOnce.Do(func() {
-		if client := GetClient(); client != nil {
-			if v, err := client.Discovery().ServerVersion(); err == nil {
-				cachedServerVersion = v.GitVersion
-			}
+	if cachedServerVersion != "" {
+		defer serverVersionMu.Unlock()
+		return cachedServerVersion
+	}
+	if time.Since(serverVersionFailedAt) < serverVersionRetryAfter {
+		serverVersionMu.Unlock()
+		return ""
+	}
+	if read := serverVersionInFlight; read != nil {
+		serverVersionMu.Unlock()
+		<-read.done
+		return serverVersionOrRetry(read)
+	}
+	read := &serverVersionRead{done: make(chan struct{})}
+	serverVersionInFlight = read
+	serverVersionMu.Unlock()
+
+	if client := GetClient(); client != nil {
+		if v, err := client.Discovery().ServerVersion(); err == nil {
+			read.version = v.GitVersion
 		}
-	})
-	return cachedServerVersion
+	}
+
+	serverVersionMu.Lock()
+	// A context switch during the read invalidated it; don't cache the
+	// previous cluster's version.
+	if serverVersionInFlight == read {
+		serverVersionInFlight = nil
+		cachedServerVersion = read.version
+		if read.version == "" {
+			serverVersionFailedAt = time.Now()
+		}
+	}
+	serverVersionMu.Unlock()
+	close(read.done)
+	return serverVersionOrRetry(read)
+}
+
+// serverVersionOrRetry asks again when a context switch invalidated the read,
+// so no caller gets the previous cluster's version.
+func serverVersionOrRetry(read *serverVersionRead) string {
+	serverVersionMu.Lock()
+	invalidated := read.invalidated
+	serverVersionMu.Unlock()
+	if invalidated {
+		return GetServerVersion()
+	}
+	return read.version
 }
 
 // InvalidateServerVersionCache resets the cached server version.
@@ -49,7 +101,11 @@ func InvalidateServerVersionCache() {
 	serverVersionMu.Lock()
 	defer serverVersionMu.Unlock()
 	cachedServerVersion = ""
-	serverVersionOnce = new(sync.Once)
+	if serverVersionInFlight != nil {
+		serverVersionInFlight.invalidated = true
+	}
+	serverVersionInFlight = nil
+	serverVersionFailedAt = time.Time{}
 }
 
 // ClusterInfo contains detected cluster information
@@ -133,40 +189,37 @@ func GetClusterPlatform(ctx context.Context) (string, error) {
 		return "nkp", nil
 	}
 
-	var nodes []corev1.Node
+	var node *corev1.Node
 	cache := GetResourceCache()
 	if cache != nil {
 		if nodeLister := cache.Nodes(); nodeLister != nil {
 			nodeList, err := nodeLister.List(labels.Everything())
 			if err == nil && len(nodeList) > 0 {
+				node = nodeList[0]
 				for _, n := range nodeList {
-					nodes = append(nodes, *n)
+					if k8score.DetectNodePlatform(*n) != "unknown" {
+						node = n
+						break
+					}
 				}
 			}
 		}
 	}
 
 	// Fallback to direct API if cache unavailable
-	if client := GetClient(); len(nodes) == 0 && client != nil {
-		nodeList, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{
-			Limit: 1,
-		})
-		if err != nil {
+	if client := GetClient(); node == nil && client != nil {
+		nodeList, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
+		if err != nil || len(nodeList.Items) == 0 {
 			return detectPlatformFallback(ctx)
 		}
-		if len(nodeList.Items) == 0 {
-			return detectPlatformFallback(ctx)
-		}
-		nodes = nodeList.Items
+		node = &nodeList.Items[0]
 	}
 
-	if len(nodes) == 0 {
+	if node == nil {
 		return detectPlatformFallback(ctx)
 	}
 
-	node := nodes[0]
-
-	platform := k8score.DetectNodePlatform(node)
+	platform := k8score.DetectNodePlatform(*node)
 	if platform != "unknown" {
 		if platform == "gke" {
 			if isAutopilot, _ := IsGKEAutopilot(ctx); isAutopilot {

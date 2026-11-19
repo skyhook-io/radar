@@ -248,6 +248,12 @@ allocation sites and sizes; they are not raw dumps of cached resource contents.
 The diagnostics overlay and generated bug reports use `/api/diagnostics`,
 which remains available independently of profiling.
 
+`/metrics` and `/debug/pprof/*` refuse browser requests whose `Sec-Fetch-Site`
+header is `cross-site` or `same-site`, including a page on another localhost
+port. Open the diagnostic URL directly or use a command-line client. Requests
+without that header remain allowed by this guard; browsers generally omit it
+over plain HTTP to non-localhost addresses. This guard is not authentication.
+
 ## Desktop Window Behavior
 
 On macOS, closing the Radar window hides the app rather than quitting it. The
@@ -268,6 +274,24 @@ release its cluster access, quit explicitly.
 On Linux and Windows, closing the window always quits. Neither gives Radar
 anything to reopen from — no Dock, and Wails v2 ships no tray icon — so hiding
 there would leave a running process with no way to reach it.
+
+## Linux desktop rendering
+
+On some NVIDIA systems, the desktop app may flash black when switching views or show black icons. To fix it, quit the app and launch it with this setting:
+
+```bash
+WEBKIT_DMABUF_RENDERER_FORCE_SHM=0 radar-desktop
+```
+
+For an AppImage:
+
+```bash
+WEBKIT_DMABUF_RENDERER_FORCE_SHM=0 ./radar-desktop_*_linux_amd64.AppImage
+```
+
+This setting applies only to that launch. If the window opens black or the app closes, launch normally to return to the default.
+
+For the separate [upstream NVIDIA crash](https://bugs.webkit.org/show_bug.cgi?id=327542), run `kubectl radar` and open the printed URL in your browser.
 
 ## AI Investigations Agent CLI
 
@@ -948,6 +972,8 @@ The pick belongs to the browser tab. Picking in one tab doesn't change your othe
 The pick narrows Radar's own views only, and only because the UI sends it with each request. An API read that names no namespace (`?namespace=` / `?namespaces=`) never inherits a remembered pick: it returns everything you're allowed to see, within the `--namespace-scope` pin when one is set. So the same user reading through another client — AI tools over MCP, Radar Cloud's fleet-wide views and background pollers, or `curl` — is never quietly narrowed to a namespace picked while browsing. A few UI surfaces deliberately cover all your namespaces regardless of the pick: the namespace list in the ⌘K palette, the **My permissions** dialog, and the standalone Cost view (which disables the picker). Home's Cost Insights card follows the pick.
 
 Until you make a pick, local sessions default to the namespace set on the kubeconfig context (kubectl parity — the same namespace `kubectl` would use, including one set via `kubectl config set-context` or `kubens`). An explicit `--namespace` / `--namespaces` flag outranks the kubeconfig value, and contexts without either default to **All namespaces**. Once you pick namespaces or explicitly choose **All namespaces**, that choice is what new tabs start from for the context and the kubeconfig value is no longer consulted.
+
+The picker's list comes from a live namespace LIST. When that LIST fails for a reason other than RBAC (a timeout right after switching clusters, while caches are still loading, is the usual one), Radar answers from its namespace cache once that has synced, and otherwise with only the context and `--namespace` namespaces. Either way the response carries `listFailed`: the UI asks again until a LIST succeeds (after 3s, backing off to 30s), and doesn't drop a tab's pick by a list that may lag a namespace created moments ago.
 
 When Radar starts with `--namespace-scope`, the picker controls the process-wide cache scope instead of just a view filter, so it is one setting for every tab and every user. Namespaced informer caches are pinned to one namespace while cluster-scoped resources remain cluster-wide. Local/no-auth sessions can switch the scoped namespace, which rebuilds the cache in place. Auth-enabled and Radar Cloud sessions lock the picker to the startup namespace so one user cannot reshape the shared backend cache for everyone.
 

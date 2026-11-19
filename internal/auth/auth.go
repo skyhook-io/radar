@@ -43,6 +43,7 @@ var (
 	CreateSessionCookie      = pkgauth.CreateSessionCookie
 	ParseSessionCookie       = pkgauth.ParseSessionCookie
 	ClearSessionCookie       = pkgauth.ClearSessionCookie
+	ClearProxyCookies        = pkgauth.ClearProxyCookies
 	CloudRoleFromGroups      = pkgauth.CloudRoleFromGroups
 	CloudRoleFromContext     = pkgauth.CloudRoleFromContext
 	ForwardedIdentityAllowed = pkgauth.ForwardedIdentityAllowed

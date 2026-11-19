@@ -25,6 +25,14 @@ describe('cronToHuman', () => {
     ['0 9 * * 1-5', 'Weekdays at 9:00'],
     ['0 9 * * MON-FRI', 'Weekdays at 9:00'],
     ['30 14 * * 1-5', 'Weekdays at 14:30'],
+    // A literal time with minutes, daily or on one weekday.
+    ['15 1 * * *', 'Daily at 1:15'],
+    ['0 2 * * 0', 'Weekly on Sunday at 2:00'],
+    ['30 23 * * SAT', 'Weekly on Saturday at 23:30'],
+    // Lists, ranges and out-of-range numbers are not one time.
+    ['0 1,13 * * 0', '0 1,13 * * 0'],
+    ['0 2 * * 1,3', '0 2 * * 1,3'],
+    ['70 2 * * *', '70 2 * * *'],
     // Constrained step-minute must NOT claim an unconstrained interval — these run
     // only in a window, so we fall back to the raw cron rather than mislead.
     ['*/5 9 * * *', '*/5 9 * * *'],

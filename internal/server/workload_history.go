@@ -15,8 +15,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -420,30 +420,16 @@ func resolveWorkloadKind(resource, group string) (kind, resolvedGroup string, ok
 	return "", "", false
 }
 
-// workloadAttachments are the resources attached to the workload right now,
-// from the cached topology the detail view's relationships use. The live
-// object, when there is one, keeps a CRD whose kind collides with another's
-// (a Volcano Job and a batch Job) on its own topology node.
+// workloadAttachments are the resources attached to the captured workload
+// under the drawer's access policy, limited to its own namespace.
 func (s *Server) workloadAttachments(r *http.Request, key resourceid.Ref, obj metav1.Object) []resourceid.Ref {
-	if s.broadcaster == nil {
+	o, ok := obj.(runtime.Object)
+	if !ok {
 		return nil
 	}
-	cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex()
-	if cachedTopo == nil {
-		return nil
-	}
-	if auth.UserFromContext(r.Context()) != nil {
-		cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
-		relIdx = nil
-	}
-	var object any
-	if obj != nil {
-		object = obj
-	}
-	rel := topology.GetRelationshipsWithObject(key.Kind, key.Namespace, key.Name, object, cachedTopo,
-		k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
-		k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
-	return attachedRefs(rel, key.Namespace)
+	o = o.DeepCopyObject()
+	k8s.SetTypeMeta(o)
+	return attachedRefs(s.relationshipsFor(r, o), key.Namespace)
 }
 
 // attachedRefs lists the resources whose own history belongs with a
@@ -462,7 +448,10 @@ func attachedRefs(rel *topology.Relationships, namespace string) []resourceid.Re
 		rel.Services, rel.Ingresses, rel.Routes, rel.ConfigRefs, rel.Scalers, rel.PDBs, rel.NetworkPolicies, rel.StagedPolicies, rel.StorageRefs,
 	} {
 		for _, ref := range list {
-			if ref.Namespace != namespace || ref.Kind == "" || ref.Name == "" {
+			// A reference named only because the workload's spec declares it
+			// carries a State; its target's history is the caller's to read
+			// only if they may read the target.
+			if ref.Namespace != namespace || ref.Kind == "" || ref.Name == "" || ref.State != "" {
 				continue
 			}
 			group := ref.Group

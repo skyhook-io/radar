@@ -243,7 +243,7 @@ func issueReadFailureClass(err error) string {
 // against its namespace, and the rest are still read, so one failing namespace
 // can't hide the issues of the others.
 func listIssueReleasesWithClients(ctx context.Context, client kubernetes.Interface, labelsClient metadata.Interface, contextName string, namespaces []string) ([]HelmRelease, error) {
-	return listReleaseRows(ctx, contextName, namespaces, false, true, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+	return listReleaseRows(ctx, contextName, namespaces, false, nil, true, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
 		snapshot, skipped, err := helmIssueStorageSnapshot(ctx, client, labelsClient, namespace)
 		if err != nil {
 			return nil, err

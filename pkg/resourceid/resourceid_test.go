@@ -14,6 +14,24 @@ func TestResourceKey_GroupAware(t *testing.T) {
 	}
 }
 
+// Keys are stored, compared and split by "|" across Radar, so their bytes are
+// the contract: each part in order, empty ones included.
+func TestResourceKeyJoinsPartsWithPipes(t *testing.T) {
+	for _, tc := range []struct {
+		group, kind, namespace, name, want string
+	}{
+		{"", "Service", "prod", "api", "|Service|prod|api"},
+		{"serving.knative.dev", "Service", "prod", "api", "serving.knative.dev|Service|prod|api"},
+		{"", "Node", "", "node-a", "|Node||node-a"},
+		{"cert-manager.io", "ClusterIssuer", "", "ca", "cert-manager.io|ClusterIssuer||ca"},
+		{"", "", "", "", "|||"},
+	} {
+		if got := ResourceKey(tc.group, tc.kind, tc.namespace, tc.name); got != tc.want {
+			t.Errorf("ResourceKey(%q, %q, %q, %q) = %q; want %q", tc.group, tc.kind, tc.namespace, tc.name, got, tc.want)
+		}
+	}
+}
+
 // TestGroupForBuiltinKind pins the (Kind→Group) table. Drift between this table
 // and the actual API group a consumer scans would silently mis-key resources.
 func TestGroupForBuiltinKind(t *testing.T) {

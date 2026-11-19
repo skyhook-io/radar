@@ -19,6 +19,7 @@ export {
   normalizeFluxKustomization,
   normalizeFluxHelmRelease,
   buildFluxSourceUrlMap,
+  isGitOpsCountGroup,
 } from './GitOpsTableView'
 export type {
   GitOpsTableViewProps,
@@ -64,3 +65,4 @@ export type {
 export { GitOpsHealthSourceNotice, healthSourceNoticeKind, hasRadarFinding, APP_TREE_HEALTH_NOTICE, APP_TREE_NO_FINDINGS_NOTICE, REMOTE_DESTINATION_NOTICE, REMOTE_FLUX_TARGET_NOTICE } from './GitOpsHealthSourceNotice'
 export { hasHealthSettingsHint } from './GitOpsHealthSourceNotice'
 export { radarHealthNote, RADAR_HEALTH_NOTE } from './health-provenance'
+export { FluxReportCard } from './FluxReportCard'

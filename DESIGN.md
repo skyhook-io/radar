@@ -159,6 +159,21 @@ Use CSS classes from `components.css` for status cells in table rows:
 - `.status-unknown` — gray (uses theme variables)
 - `.status-violet`, `.status-purple`, `.status-orange`, `.status-cyan` — special cases
 
+### Resource Table Column Widths
+Resource tables size their columns from the data (rules in `packages/k8s-ui/src/components/resources/column-sizing.ts`):
+- Cells and column headers are `px-3.5 py-2.5`, the toolbar row above the table `px-4 py-2.5` with a `py-1.5` search input. These come from `TABLE_DENSITY` in `packages/k8s-ui/src/components/ui/table-density.ts`, shared by the sortable header (`TH_CLASS`), the Applications and GitOps toolbars and the GitOps insight rows, repeated in web/ for Helm releases and the Upgrade readiness and Rightsizing rows (radar-app supports older k8s-ui releases), and read by the Resources table's column-width measuring (`CELL_PADDING_PX`, the header padding): change density there, never in a cell's class list, and update the web/ copies with it (`HELM_CELL` in `HelmView.tsx`, the row classes in `UpgradeReadinessView.tsx` and `RightsizingScanView.tsx`).
+- Most columns keep their curated width (the `w-*` on the column, never narrower than its header).
+- Name fits its longest name, 200–480px and at most half the table's width. It is the last column to give way when the table is short, and only down to the width three quarters of its names need, and never holds more than 320px: only names wider than that are cut, and only when the alternative is scrolling sideways. When the table is still short, Name goes on to the width half its names need, but only when that ends the scrolling altogether; a table that would need more than that scrolls instead, with the columns where the first rules left them, since a Name column that cuts most names no longer does its job. Below 1920px no other column goes under its content to avoid scrolling: a usage bar without its limit or an Event without its message is worse than scrolling. Events' Name gets no such protection — the Object column already names the object — and gives way first.
+- Namespace and Node fit the 95th percentile of their values, so one outlier doesn't set the width.
+- Short values that are useless cut — status badges, enums, the name of a referenced object — are marked `sizing: 'fit'` on the column and fit their longest value (up to 400px, and at least the curated width) while there is room; when the table is short they give way to the curated width, or below it to what their heading and longest value need when that is less. Each needs a reader of what its cell shows, badge padding included, in `column-content-width.ts`.
+- Long free text (Event messages, selectors, image lists, URLs, uncurated CRD printer columns) is marked `sizing: 'grow'` on the column. Grow columns and the fit columns' longer values share the room left over by weight, each up to its longest value.
+- Room beyond that is spread over every column in proportion to its width, so the table fills the screen and keeps its proportions.
+- When the table is short of room, grow columns are already at their floor; then Node shrinks toward its header (its values cut, with the full value on hover); then curated columns shrink toward their content (never below their header) where Radar knows what their cells show — the CPU and Memory bars down to their "used / limit" label; then Namespace toward its header, and the short-value fit columns no further than their curated width (or their longest value, if narrower), so they cut no more than before; then Name toward the 75th percentile of its names (at most 320px); then the table scrolls. From a 1920px-wide window up (a maximized 1080p screen with Radar's default sidebars) the table never scrolls sideways: past those bounds every column gives way, in the same order, to its heading and Name to 200px. A column that can never offer a filter (Containers, CPU, Memory, GPU, Restarts…) reserves no room for the filter button in its header.
+- A few low-priority columns per kind (`dropOrder` on the column: Pods' Node; Nodes' Roles, Taints, Version and Pods; Deployments' Up-to-date; DaemonSets' Up-to-date and Available; Services' External; Ingresses' Address; PVCs' Volume; Velero Backups' Duration; InferenceServices' Mode) are left out while the table is short of room — kubectl's `-o wide` in reverse. Which ones go is decided by the room the table still lacks once every column has given back what it can without a value being cut (Name down to the width three quarters of its names need); the give-way order above then runs on the columns that remain. They come back when there is room, stay in the column picker marked "Hidden to fit" (the Columns button shows how many), and a column the user turns on, pins, sorts or filters by is never left out. Uncurated printer columns never drop: kubectl already hid their `-o wide` tier.
+- Namespace is left out while the namespace picker narrows the list to one namespace; GPU shows while a listed Pod or Node requests GPUs. Neither changes the user's saved column choice.
+- While the data set stays the same, measured content only widens and shared room stays with the column that had it, so columns rarely move as rows stream in (a column can still give room back when a fit column's 95th percentile grows). A width the user drags is saved and kept (from settings saved by older versions, which saved every column's width on the first drag, only Name's width is kept); "Reset widths" in the column picker undoes it.
+- A cut cell ends in "…" and shows its full text on hover. Use `<TruncatedText>` for a text cell, not `<Tooltip>` around a `truncate` span, which shows a tooltip even when nothing is cut.
+
 ### Cards & Containers
 | Class | Use for |
 |-------|---------|
@@ -340,6 +355,9 @@ Table status cell:   .status-healthy / .status-degraded / .status-unhealthy
 
 // Primary action button
 <button className="btn-brand px-4 py-2 text-sm font-medium">Deploy</button>
+
+// A Resources table cell (padding from TABLE_DENSITY.cellClass)
+<td className={clsx('border-b-subtle', TABLE_DENSITY.cellClass)}>…</td>
 
 // Status in a table cell
 <span className="badge status-healthy">Running</span>
