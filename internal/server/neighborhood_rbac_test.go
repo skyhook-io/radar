@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -706,8 +707,9 @@ func TestNeighborhood_RootKindDeniedToRadarSaysSo(t *testing.T) {
 }
 
 // widgetsUnwatched installs discovery serving Widgets, a custom kind nothing
-// has watched yet, and one Widget in shop. hold fails every list but the access
-// check's, so the watch never syncs.
+// has watched yet, and one Widget in shop. hold fails every list of Widgets but a
+// namespace's access check (the fake keeps no limit on a cluster-wide list),
+// so the watch starts but never syncs.
 func widgetsUnwatched(t *testing.T, hold bool) schema.GroupVersionResource {
 	t.Helper()
 	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
@@ -857,6 +859,47 @@ func TestNeighborhood_StartsEveryUncollectedRootCandidate(t *testing.T) {
 	for _, gvr := range []schema.GroupVersionResource{first, second} {
 		if !slices.Contains(watched, gvr) {
 			t.Errorf("%s was never started; watched %v", gvr, watched)
+		}
+	}
+}
+
+// One candidate's slow access check can't keep another from starting: with
+// the first kind's check outlasting the wait, the second kind's watch is
+// still started, by the cache's own check, after the request has answered.
+func TestNeighborhood_SlowRootCandidateStartDoesNotStarveAnother(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}))
+	slow := schema.GroupVersionResource{Group: "a.example.io", Version: "v1", Resource: "widgets"}
+	other := schema.GroupVersionResource{Group: "b.example.io", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{slow: "WidgetList", other: "WidgetList"})
+	var delayed atomic.Bool
+	dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		// The first list of the slow kind is its access check.
+		if a.GetResource().Group == slow.Group && delayed.CompareAndSwap(false, true) {
+			time.Sleep(k8score.ObjectReadSyncWait + time.Second)
+		}
+		return false, nil, nil
+	})
+	verbs := []string{"delete", "get", "list", "watch"}
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: verbs},
+		{Group: slow.Group, Version: slow.Version, Kind: "Widget", Name: slow.Resource, Namespaced: true, IsCRD: true, Verbs: verbs},
+		{Group: other.Group, Version: other.Version, Kind: "Widget", Name: other.Resource, Namespaced: true, IsCRD: true, Verbs: verbs},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("widget-reader", nil, &auth.UserPermissions{AllowedNamespaces: []string{"shop"}})
+	resp := env.authGet(t, "/api/ai/neighborhood/widget/shop/w1", "widget-reader", "")
+	resp.Body.Close()
+	if !delayed.Load() {
+		t.Fatal("the slow kind's access check never ran")
+	}
+	dc := k8s.GetDynamicResourceCache()
+	for deadline := time.Now().Add(10 * time.Second); !slices.Contains(dc.GetWatchedResources(), other); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s was never started; watched %v", other, dc.GetWatchedResources())
 		}
 	}
 }

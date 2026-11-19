@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -89,10 +90,9 @@ func collectRootKinds(ctx context.Context, caches cachesource.Caches, roots []re
 	type watch struct {
 		gvr       schema.GroupVersionResource
 		namespace string
+		err       error
 	}
-	// Every watch starts before any is waited for, so one slow to load
-	// can't keep another, of the same kind in another group, from starting.
-	var started []watch
+	var watches []watch
 	for _, r := range roots {
 		if isTypedKind(r.GroupKind()) {
 			continue
@@ -101,21 +101,30 @@ func collectRootKinds(ctx context.Context, caches cachesource.Caches, roots []re
 		if !ok || ShouldBypassDynamicInformer(gvr) {
 			continue
 		}
-		tried = true
-		if err := caches.Dynamic.EnsureWatchingContext(bounded, gvr, r.Namespace); err != nil {
-			if code, ok := CollectorErrorCode(err); ok {
-				codes = append(codes, code)
-			} else if bounded.Err() != nil && ctx.Err() == nil {
-				// Starting the watch outlasted the bound: it goes on in the
-				// cache, or a retry starts it once discovery is done.
-				codes = append(codes, readreason.KindSyncPending)
-			}
+		watches = append(watches, watch{gvr: gvr, namespace: r.Namespace})
+	}
+	// Every watch starts at once, and before any is waited for, so one slow
+	// to start or to load can't keep another, of the same kind in another
+	// group, from starting.
+	var wg sync.WaitGroup
+	for i := range watches {
+		wg.Go(func() {
+			watches[i].err = caches.Dynamic.EnsureWatchingContext(bounded, watches[i].gvr, watches[i].namespace)
+		})
+	}
+	wg.Wait()
+	for _, w := range watches {
+		if w.err == nil {
+			caches.Dynamic.WaitForSyncContext(bounded, w.gvr, w.namespace)
 			continue
 		}
-		started = append(started, watch{gvr, r.Namespace})
+		if code, ok := CollectorErrorCode(w.err); ok {
+			codes = append(codes, code)
+		} else if bounded.Err() != nil && ctx.Err() == nil {
+			// Starting the watch outlasted the bound: it goes on in the
+			// cache, or a retry starts it once discovery is done.
+			codes = append(codes, readreason.KindSyncPending)
+		}
 	}
-	for _, w := range started {
-		caches.Dynamic.WaitForSyncContext(bounded, w.gvr, w.namespace)
-	}
-	return tried, codes
+	return len(watches) > 0, codes
 }
