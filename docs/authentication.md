@@ -45,7 +45,7 @@ relationships (what it routes to, declares or selects) need only the access that
 namespace access lists its readable backends even without a `get` grant on its kind; each reference still needs one.
 
 Related Resources, the AI resource context and MCP `get_resource` name the ConfigMaps, Secrets, PVCs and ServiceAccount
-a readable object's pod template references, an Ingress's TLS Secrets and a ServiceAccount's Secrets, even when you
+a readable object's pod template references, a Pod's Node, an Ingress's TLS Secrets and a ServiceAccount's Secrets, even when you
 can't read them, since the object's own YAML already shows those names. Such a reference carries `state: "denied"` (or `"unverified"` when Radar couldn't check your access), says
 nothing about whether the object exists or its state, and opens nothing. Workload history never follows it. Objects
 Radar finds by searching, such as a policy or monitor elsewhere that selects the object, are still withheld when you

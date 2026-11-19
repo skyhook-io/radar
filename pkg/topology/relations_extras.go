@@ -189,8 +189,10 @@ func (n *neighborhood) scalerManagers(s relations.Session, rel *Relationships) {
 func (n *neighborhood) contextDirectEvidence(session relations.Session, v *relations.View, subject resourceid.Ref, obj runtime.Object) {
 	v.WithLimit(math.MaxInt)
 	if relations.PodPlacement.Covers(subject.GroupKind()) {
+		// The Pod's spec names its Node, which the context lists whatever
+		// was read of it, as it lists the Pod's other declarations.
 		refs := v.References(relations.PodPlacement, subject, obj)
-		n.extras.cover("Node", refs.Coverage)
+		n.extras.cover("Node", declarationCoverage(refs, subject.GroupKind()))
 		consumers := v.Referrers(relations.PodPlacement, subject, obj)
 		n.extras.Consumers = append(n.extras.Consumers, consumers.Referrers...)
 		n.extras.cover("ReferencedBy", consumers.Coverage)

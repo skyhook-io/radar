@@ -135,9 +135,9 @@ func TestRelationsAnswerDirectAccess(t *testing.T) {
 	s := newProjectionSession(t, pod)
 	denied := projectionAccess{denied: []string{"ServiceAccount", "Node", "ResourceClaim"}}
 	rel := projectionAnswer(t, s, pod, denied, ownership.Unrestricted())
-	// The Pod's own spec names its ServiceAccount, so it is listed, marked;
-	// the Node and ResourceClaims stay hidden.
-	if rel.ServiceAccount == nil || *rel.ServiceAccount != (ResourceRef{Kind: "ServiceAccount", Namespace: "shop", Name: "sa", State: ResourceStateDenied}) || rel.Node != nil || len(rel.ResourceClaims) > 0 {
+	// The Pod's own spec names its ServiceAccount and its Node, so they are
+	// listed, marked; ResourceClaims stay hidden.
+	if rel.ServiceAccount == nil || *rel.ServiceAccount != (ResourceRef{Kind: "ServiceAccount", Namespace: "shop", Name: "sa", State: ResourceStateDenied}) || rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "node", State: ResourceStateDenied}) || len(rel.ResourceClaims) > 0 {
 		t.Fatalf("hidden spec references: %+v", rel)
 	}
 	for _, read := range s.reads {
@@ -791,6 +791,40 @@ func TestRelationsAnswerFindsIstioDomainOnlyForIstioObjects(t *testing.T) {
 		RelationsAnswer(captured, access, access, ownership.NewView(captured, access), projectionRef(tc.subject), tc.subject, provider, nil)
 		if listed != tc.want {
 			t.Errorf("%s with %d objects listed Deployments %d times, want %d", projectionRef(tc.subject).Kind, len(tc.objects), listed, tc.want)
+		}
+	}
+}
+
+// A Pod's Node is named by its spec, so a caller who may open the Pod but
+// not read Nodes still sees which Node, marked, in the drawer and the
+// context alike; one whose check failed sees it unverified.
+func TestRelationsAnswerNamesAPodsUnreadableNode(t *testing.T) {
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod"}, Spec: corev1.PodSpec{NodeName: "worker"}}, "", "Pod")
+	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}}, "", "Node")
+	for _, tc := range []struct {
+		access ownership.Access
+		want   string
+	}{
+		{projectionAccess{}, ""},
+		{projectionAccess{denied: []string{"Node"}}, ResourceStateDenied},
+		{undecidedKinds{"Node"}, ResourceStateUnverified},
+	} {
+		for name, answer := range map[string]func(relations.Session, ownership.Access, ownership.Access, *ownership.View, resourceid.Ref, runtime.Object, ResourceProvider, DynamicProvider) (*Relationships, *RelationshipExtras){"drawer": RelationsAnswerWithExtras, "context": RelationsContextAnswer} {
+			s := newProjectionSession(t, pod, node)
+			rel, extras := answer(s, tc.access, tc.access, ownership.NewView(s, tc.access), projectionRef(pod), pod, nil, nil)
+			if rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "worker", State: tc.want}) {
+				t.Errorf("%s %T: node = %+v, want worker %q", name, tc.access, rel.Node, tc.want)
+			}
+			if c, ok := extras.Fields["Node"]; ok {
+				t.Errorf("%s %T: the Node a spec names marked its field: %+v", name, tc.access, c)
+			}
+			if tc.want != "" {
+				for _, read := range s.reads {
+					if read.Kind == "Node" {
+						t.Errorf("%s %T: read the Node the caller may not read", name, tc.access)
+					}
+				}
+			}
 		}
 	}
 }

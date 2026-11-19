@@ -526,7 +526,8 @@ func TestDrawerFamiliesUseRequestAccess(t *testing.T) {
 	answer(objects[1])
 	answer(objects[3])
 	perms.SetCanI("list", "", "nodes", "", false)
-	if rel := answer(objects[1]); rel.Node != nil {
+	// The Pod's spec names its Node, so it is listed, marked.
+	if rel := answer(objects[1]); rel.Node == nil || *rel.Node != (topology.ResourceRef{Kind: "Node", Name: "node", State: topology.ResourceStateDenied}) {
 		t.Fatalf("denied Node = %+v", rel.Node)
 	}
 	perms.SetCanI("list", "storage.k8s.io", "storageclasses", "", true)

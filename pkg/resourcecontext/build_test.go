@@ -23,7 +23,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -2403,6 +2406,8 @@ func TestBuild_Service_WorkloadBreakdown(t *testing.T) {
 
 // A Pod's Node is named from its spec when the relation answer, complete,
 // found no such Node: a Pod left on a deleted Node is when the name matters.
+// One the caller may not read is still named, marked; only an answer that
+// couldn't read the Pod itself leaves runsOn to its omission.
 func TestBuild_Pod_RunsOnAbsentNodeAndDenials(t *testing.T) {
 	pod := readyPod("api-1", "prod", map[string]string{"app": "api"}, true)
 	pod.Spec.NodeName = "gone"
@@ -2416,25 +2421,44 @@ func TestBuild_Pod_RunsOnAbsentNodeAndDenials(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name    string
+		node    *topology.ResourceRef
 		fields  map[string]relations.Coverage
 		checker RefAccessChecker
 		runsOn  string
+		state   string
 		reason  OmittedReason
 	}{
-		{"absent node", nil, allowAllChecker{}, "gone", ""},
-		{"denied by the access check", nil, denyChecker{kind: "Node"}, "", OmittedRBACDenied},
-		{"withheld by the answer", map[string]relations.Coverage{"Node": {Narrowed: true}}, allowAllChecker{}, "", OmittedRBACDenied},
+		{"absent node", nil, nil, allowAllChecker{}, "gone", "", ""},
+		{"denied by the access check", nil, nil, denyChecker{kind: "Node"}, "gone", topology.ResourceStateDenied, ""},
+		{"unchecked by the access check", nil, nil, nodeDecider{ownership.Undecided}, "gone", topology.ResourceStateUnverified, ""},
+		{"withheld by the answer", &topology.ResourceRef{Kind: "Node", Name: "gone", State: topology.ResourceStateDenied}, nil, allowAllChecker{}, "gone", topology.ResourceStateDenied, ""},
+		{"unverified by the answer", &topology.ResourceRef{Kind: "Node", Name: "gone", State: topology.ResourceStateUnverified}, nil, allowAllChecker{}, "gone", topology.ResourceStateUnverified, ""},
+		{"the Pod couldn't be read", nil, map[string]relations.Coverage{"Node": {NotChecked: []ownership.Gap{{Kind: resourceid.GroupKind{Kind: "Pod"}, Reason: readreason.ReadError}}}}, allowAllChecker{}, "", "", OmittedUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			extras := &topology.RelationshipExtras{Fields: tc.fields}
-			rc := Build(context.Background(), pod, Options{Tier: TierBasic, AccessChecker: tc.checker, Relationships: &topology.Relationships{}, RelationshipExtras: extras})
-			got := ""
+			rc := Build(context.Background(), pod, Options{Tier: TierBasic, AccessChecker: tc.checker, Relationships: &topology.Relationships{Node: tc.node}, RelationshipExtras: extras})
+			got, state := "", ""
 			if rc.RunsOn != nil {
-				got = rc.RunsOn.Name
+				got, state = rc.RunsOn.Name, rc.RunsOn.State
 			}
-			if got != tc.runsOn || omittedRunsOn(rc) != tc.reason {
-				t.Fatalf("runsOn %q omitted %q, want %q omitted %q", got, omittedRunsOn(rc), tc.runsOn, tc.reason)
+			if got != tc.runsOn || state != tc.state || omittedRunsOn(rc) != tc.reason {
+				t.Fatalf("runsOn %q (%q) omitted %q, want %q (%q) omitted %q", got, state, omittedRunsOn(rc), tc.runsOn, tc.state, tc.reason)
 			}
 		})
 	}
+
+}
+
+// nodeDecider decides every Node as decision and allows the rest.
+type nodeDecider struct{ decision ownership.Decision }
+
+func (d nodeDecider) CanRead(ctx context.Context, group, kind, namespace string) bool {
+	return d.DecideRead(ctx, group, kind, namespace) == ownership.Allowed
+}
+func (d nodeDecider) DecideRead(_ context.Context, _, kind, _ string) ownership.Decision {
+	if kind == "Node" {
+		return d.decision
+	}
+	return ownership.Allowed
 }

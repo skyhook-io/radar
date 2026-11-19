@@ -20,6 +20,20 @@ import (
 // object narrows the answer and a check that couldn't be made leaves it
 // incomplete; the gap names no namespace.
 func (n *neighborhood) allowed(r resourceid.Ref) bool {
+	switch n.decide(r) {
+	case ownership.Allowed:
+		return true
+	case ownership.Undecided:
+		n.cover("special", relations.Coverage{NotChecked: []ownership.Gap{{Kind: r.GroupKind(), Reason: readreason.UserPermissionCheckFailed}}})
+	default:
+		n.cover("special", relations.Coverage{Narrowed: true})
+	}
+	return false
+}
+
+// decide is the caller's access to r's kind in r's namespace, asked once per
+// answer.
+func (n *neighborhood) decide(r resourceid.Ref) ownership.Decision {
 	key := decisionKey{r.GroupKind(), r.Namespace}
 	d, seen := n.decided[key]
 	if !seen {
@@ -29,15 +43,25 @@ func (n *neighborhood) allowed(r resourceid.Ref) bool {
 		}
 		n.decided[key] = d
 	}
-	switch d {
-	case ownership.Allowed:
-		return true
-	case ownership.Undecided:
-		n.cover("special", relations.Coverage{NotChecked: []ownership.Gap{{Kind: r.GroupKind(), Reason: readreason.UserPermissionCheckFailed}}})
-	default:
-		n.cover("special", relations.Coverage{Narrowed: true})
+	return d
+}
+
+// namePodNode lists the Node a Pod's spec names when the caller may not read
+// Nodes, marked, as the subject's own declared references are: the caller
+// reads the name with the Pod. Nothing is read about the Node.
+func (n *neighborhood) namePodNode(obj runtime.Object, rel *Relationships) {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok || pod.Spec.NodeName == "" || rel.Node != nil {
+		return
 	}
-	return false
+	state := ResourceStateDenied
+	switch n.decide(resourceid.NewRef("", "Node", "", pod.Spec.NodeName)) {
+	case ownership.Allowed:
+		return
+	case ownership.Undecided:
+		state = ResourceStateUnverified
+	}
+	rel.Node = &ResourceRef{Kind: "Node", Name: pod.Spec.NodeName, State: state}
 }
 
 type decisionKey struct {

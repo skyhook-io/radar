@@ -404,6 +404,7 @@ func relationsAnswer(session relations.Session, access, traverse ownership.Acces
 	}
 	n.networkEntrypoints(session, access, traverse, subject, obj, istioDomain, rel)
 	n.listUnreadable(rel)
+	n.namePodNode(obj, rel)
 	if _, all := access.Namespaces(); !all && (subject.GroupKind() == resourceid.GroupKind{Kind: "Node"} || subject.GroupKind() == resourceid.GroupKind{Group: "storage.k8s.io", Kind: "StorageClass"}) {
 		// A Node's Pods and a StorageClass's claims are read only in the
 		// caller's namespaces, so others may be withheld.
