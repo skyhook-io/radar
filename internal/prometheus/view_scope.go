@@ -65,18 +65,22 @@ const (
 // and AnchorValues are this cluster's live object names for it.
 // AnchorNamespace, when set, restricts the anchor check to that namespace, so
 // another cluster's same-named object in a different namespace cannot vouch
-// for this cluster's; set it for namespaced objects. AnchorOptionalPort lets
-// an anchor value carry a ":<port>" suffix, as node-exporter's instance label
-// does when it holds the node's name. Foreign, when set, guards a view that
-// sums the metric over a namespace or the cluster; see ForeignCheck.
+// for this cluster's; set it for namespaced objects. AnchorNamespaceExported
+// also accepts the namespace in exported_namespace (with namespace then
+// naming the exporter's own), as a scrape that renamed a clashing namespace
+// label leaves it. AnchorOptionalPort lets an anchor value carry a ":<port>"
+// suffix, as node-exporter's instance label does when it holds the node's
+// name. Foreign, when set, guards a view that sums the metric over a
+// namespace or the cluster; see ForeignCheck.
 type ViewMetric struct {
-	Name               string
-	Subject            string
-	AnchorLabel        string
-	AnchorValues       []string
-	AnchorNamespace    string
-	AnchorOptionalPort bool
-	Foreign            ForeignCheck
+	Name                    string
+	Subject                 string
+	AnchorLabel             string
+	AnchorValues            []string
+	AnchorNamespace         string
+	AnchorNamespaceExported bool
+	AnchorOptionalPort      bool
+	Foreign                 ForeignCheck
 }
 
 // ForeignCheck names the kube-state-metrics series that list the objects a
@@ -213,6 +217,9 @@ func normalizeViewScopeRequest(req ViewScopeRequest) (ViewScopeRequest, error) {
 		m.AnchorValues = BoundViewAnchors(m.AnchorValues)
 		if m.AnchorLabel == "" || len(m.AnchorValues) == 0 {
 			m.AnchorNamespace = ""
+		}
+		if m.AnchorNamespace == "" {
+			m.AnchorNamespaceExported = false
 		}
 		foreign, err := normalizeForeignCheck(m.Foreign)
 		if err != nil {
@@ -390,7 +397,7 @@ func viewScopeKey(generation, epoch uint64, config prom.WorkloadMetricsScope, be
 	}
 	write("view", req.View, strconv.FormatBool(req.Joined), req.Namespace, promSeconds(req.Span))
 	for _, m := range req.Metrics {
-		write(append([]string{"metric", m.Name, m.Subject, m.AnchorLabel, m.AnchorNamespace, strconv.FormatBool(m.AnchorOptionalPort)}, m.AnchorValues...)...)
+		write(append([]string{"metric", m.Name, m.Subject, m.AnchorLabel, m.AnchorNamespace, strconv.FormatBool(m.AnchorNamespaceExported), strconv.FormatBool(m.AnchorOptionalPort)}, m.AnchorValues...)...)
 		if f := m.Foreign; f.Reference != "" {
 			foreign := []string{"foreign", f.Reference, strconv.FormatBool(f.NamespaceExported)}
 			for _, k := range f.Keys {

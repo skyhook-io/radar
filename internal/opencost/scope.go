@@ -74,28 +74,35 @@ func (p PromCost) resolver() prometheuspkg.ChartScopeResolver {
 }
 
 // costSubject is what one endpoint's check is narrowed to and anchored on.
+// anchorNamespace is where its pods and replicaSets live: the anchor checks
+// stay there, so another cluster's same-named object elsewhere can't vouch
+// for this cluster.
 type costSubject struct {
-	namespace   string
-	pods        []string
-	nodes       []string
-	replicaSets []string
-	volumes     []string
+	namespace       string
+	anchorNamespace string
+	pods            []string
+	nodes           []string
+	replicaSets     []string
+	volumes         []string
 }
 
 func clusterCostSubject(cache *k8s.ResourceCache) costSubject {
+	anchorNamespace, pods := prometheuspkg.ClusterPodAnchors(cache)
 	return costSubject{
-		pods:    prometheuspkg.ClusterPodAnchors(cache),
-		nodes:   prometheuspkg.NodeAnchors(cache),
-		volumes: prometheuspkg.PersistentVolumeAnchors(cache),
+		anchorNamespace: anchorNamespace,
+		pods:            pods,
+		nodes:           prometheuspkg.NodeAnchors(cache),
+		volumes:         prometheuspkg.PersistentVolumeAnchors(cache),
 	}
 }
 
 func namespaceCostSubject(cache *k8s.ResourceCache, namespace string) costSubject {
 	return costSubject{
-		namespace:   namespace,
-		pods:        prometheuspkg.NamespacePodAnchors(cache, namespace),
-		nodes:       prometheuspkg.NodeAnchors(cache),
-		replicaSets: prometheuspkg.NamespaceReplicaSetAnchors(cache, namespace),
+		namespace:       namespace,
+		anchorNamespace: namespace,
+		pods:            prometheuspkg.NamespacePodAnchors(cache, namespace),
+		nodes:           prometheuspkg.NodeAnchors(cache),
+		replicaSets:     prometheuspkg.NamespaceReplicaSetAnchors(cache, namespace),
 	}
 }
 
@@ -113,14 +120,15 @@ func costViewMetric(name string, s costSubject) prometheuspkg.ViewMetric {
 	case pkgopencost.MetricPVHourlyCost, pkgopencost.MetricPVCapacityBytes, pkgopencost.MetricPVClaimRef:
 		return prometheuspkg.ViewMetric{Name: name, AnchorLabel: "persistentvolume", AnchorValues: s.volumes}
 	case pkgopencost.MetricReplicaSetOwner:
-		return prometheuspkg.ViewMetric{Name: name, Subject: namespaced, AnchorLabel: "replicaset", AnchorValues: s.replicaSets}
+		return prometheuspkg.ViewMetric{Name: name, Subject: namespaced, AnchorLabel: "replicaset", AnchorValues: s.replicaSets, AnchorNamespace: s.anchorNamespace}
 	case pkgopencost.MetricCPUUsage, pkgopencost.MetricMemoryWorkingSet, pkgopencost.MetricPodOwner:
-		return prometheuspkg.ViewMetric{Name: name, Subject: namespaced, AnchorLabel: "pod", AnchorValues: s.pods}
+		return prometheuspkg.ViewMetric{Name: name, Subject: namespaced, AnchorLabel: "pod", AnchorValues: s.pods, AnchorNamespace: s.anchorNamespace}
 	}
 	// OpenCost's allocations and cost totals carry the Pod's namespace in
 	// namespace or, when the scrape renamed it, exported_namespace. A subject
-	// can't say "either", so they are checked across the whole store.
-	return prometheuspkg.ViewMetric{Name: name, AnchorLabel: "pod", AnchorValues: s.pods}
+	// can't say "either", so they are checked across the whole store; their
+	// anchor check accepts either label.
+	return prometheuspkg.ViewMetric{Name: name, AnchorLabel: "pod", AnchorValues: s.pods, AnchorNamespace: s.anchorNamespace, AnchorNamespaceExported: true}
 }
 
 func costScopeRequest(view string, metrics []string, s costSubject, span time.Duration) prometheuspkg.ViewScopeRequest {
@@ -210,7 +218,8 @@ func trendSpan(rangeStr string) time.Duration {
 // Trend is the per-namespace cost trend.
 func (p PromCost) Trend(ctx context.Context, opts pkgopencost.TrendPromOptions) *pkgopencost.CostTrendResponse {
 	cache := k8s.GetResourceCache()
-	subject := costSubject{pods: prometheuspkg.ClusterPodAnchors(cache), nodes: prometheuspkg.NodeAnchors(cache)}
+	anchorNamespace, pods := prometheuspkg.ClusterPodAnchors(cache)
+	subject := costSubject{anchorNamespace: anchorNamespace, pods: pods, nodes: prometheuspkg.NodeAnchors(cache)}
 	scope, reason := p.resolveCostScope(ctx, "cost_trend", pkgopencost.TrendMetrics(), nil, subject, trendSpan(opts.Range))
 	if reason != "" {
 		return &pkgopencost.CostTrendResponse{Available: false, Reason: reason, Range: opts.Range, ClusterScope: scope.ClusterScope}

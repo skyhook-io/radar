@@ -332,6 +332,21 @@ func checkCostRequests(t *testing.T, ep costEndpoint, requests []prometheuspkg.V
 			if (!namespaced || req.Namespace == "") && m.Subject != "" {
 				t.Errorf("%s subject %q, want the whole store", m.Name, m.Subject)
 			}
+			// Anchor checks stay where the anchors live: the endpoint's
+			// namespace, or the cluster-wide anchor namespace.
+			wantAnchorNS := req.Namespace
+			if wantAnchorNS == "" {
+				wantAnchorNS, _ = prometheuspkg.ClusterPodAnchors(k8s.GetResourceCache())
+			}
+			if label == "node" || label == "persistentvolume" {
+				wantAnchorNS = ""
+			}
+			if m.AnchorNamespace != wantAnchorNS {
+				t.Errorf("%s anchor namespace %q, want %q", m.Name, m.AnchorNamespace, wantAnchorNS)
+			}
+			if wantExported := label == "pod" && !namespaced; m.AnchorNamespaceExported != wantExported {
+				t.Errorf("%s accepts exported_namespace=%v, want %v", m.Name, m.AnchorNamespaceExported, wantExported)
+			}
 		}
 	}
 }

@@ -73,10 +73,12 @@ func summedPodMetrics(metrics []ViewMetric) []ViewMetric {
 }
 
 // ClusterPodAnchors names the live Pods of the namespace the Pod-UID proof
-// anchors on: a stable sample of this cluster's Pods for a check across the
-// whole store, cheap on a large cluster.
-func ClusterPodAnchors(cache *k8s.ResourceCache) []string {
-	return NamespacePodAnchors(cache, trafficAnchorNamespace(cache))
+// anchors on, and that namespace: a stable sample of this cluster's Pods for
+// a check across the whole store, cheap on a large cluster. Its anchor check
+// belongs in that namespace (ViewMetric.AnchorNamespace).
+func ClusterPodAnchors(cache *k8s.ResourceCache) (namespace string, pods []string) {
+	namespace = trafficAnchorNamespace(cache)
+	return namespace, NamespacePodAnchors(cache, namespace)
 }
 
 // clusterChartScopeRequest checks the overview's metrics across the whole
@@ -84,8 +86,7 @@ func ClusterPodAnchors(cache *k8s.ResourceCache) []string {
 // namespace, so another cluster's same-named Pod elsewhere can't vouch for
 // this cluster.
 func clusterChartScopeRequest(category prom.MetricCategory, chartRange time.Duration, cache *k8s.ResourceCache) ViewScopeRequest {
-	namespace := trafficAnchorNamespace(cache)
-	anchors := ClusterPodAnchors(cache)
+	namespace, anchors := ClusterPodAnchors(cache)
 	return ViewScopeRequest{
 		View:    "cluster_chart",
 		Metrics: summedPodMetrics(chartMetrics("", category, "", "pod", namespace, anchors)),
