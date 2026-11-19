@@ -18,11 +18,18 @@ import (
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
-// reviewAPI stands in for the apiserver's SubjectAccessReview endpoint,
-// answering from decide and counting the reviews it received.
-func reviewAPI(t *testing.T, decide func(authorizationv1.ResourceAttributes) bool) (*kubernetes.Clientset, *atomic.Int32) {
+// reviewServer stands in for the apiserver's SubjectAccessReview endpoint. It
+// counts the reviews it receives, signals each on arrived before answering
+// from decide, and decide may hold the answer.
+type reviewServer struct {
+	client  *kubernetes.Clientset
+	reviews atomic.Int32
+	arrived chan struct{}
+}
+
+func newReviewServer(t *testing.T, decide func(authorizationv1.ResourceAttributes) bool) *reviewServer {
 	t.Helper()
-	var reviews atomic.Int32
+	api := &reviewServer{arrived: make(chan struct{}, 64)}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/apis/authorization.k8s.io/v1/subjectaccessreviews" {
 			http.NotFound(w, r)
@@ -33,7 +40,8 @@ func reviewAPI(t *testing.T, decide func(authorizationv1.ResourceAttributes) boo
 			http.Error(w, "bad review", http.StatusBadRequest)
 			return
 		}
-		reviews.Add(1)
+		api.reviews.Add(1)
+		api.arrived <- struct{}{}
 		review.Status.Allowed = decide(*review.Spec.ResourceAttributes)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(review)
@@ -47,28 +55,44 @@ func reviewAPI(t *testing.T, decide func(authorizationv1.ResourceAttributes) boo
 	if err != nil {
 		t.Fatalf("build Kubernetes client: %v", err)
 	}
-	return client, &reviews
+	api.client = client
+	return api
 }
 
-// accessReviewUser installs a review API and a cached permissions entry with
-// no verdicts for the user, so every check below sends a review.
-func accessReviewUser(t *testing.T, decide func(authorizationv1.ResourceAttributes) bool) (context.Context, *atomic.Int32) {
+// awaitReviews blocks until n reviews reached the apiserver.
+func (api *reviewServer) awaitReviews(t *testing.T, n int) {
 	t.Helper()
-	client, reviews := reviewAPI(t, decide)
-	previous := k8s.SetTestClient(client)
-	t.Cleanup(func() { k8s.SetTestClient(previous) })
-	return withTestUserPerms(t, "reader", []string{"viewers"}, nil), reviews
+	for i := 0; i < n; i++ {
+		select {
+		case <-api.arrived:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%d of %d reviews reached the apiserver", i, n)
+		}
+	}
 }
 
-// Tool calls asking the same question at once share one review.
+// accessReviewUser installs a review server and a cached permissions entry
+// with no verdicts for the user, so every check below sends a review.
+func accessReviewUser(t *testing.T, decide func(authorizationv1.ResourceAttributes) bool) (context.Context, *reviewServer) {
+	t.Helper()
+	api := newReviewServer(t, decide)
+	previous := k8s.SetTestClient(api.client)
+	t.Cleanup(func() { k8s.SetTestClient(previous) })
+	return withTestUserPerms(t, "reader", []string{"viewers"}, nil), api
+}
+
+// Tool calls asking the same question at once share one review. The count
+// holds however the calls interleave: a call that misses the review finds its
+// verdict cached.
 func TestCanReadInNamespaceDecision_ConcurrentChecksShareOneReview(t *testing.T) {
 	release := make(chan struct{})
-	ctx, reviews := accessReviewUser(t, func(authorizationv1.ResourceAttributes) bool {
+	ctx, api := accessReviewUser(t, func(authorizationv1.ResourceAttributes) bool {
 		<-release
 		return true
 	})
+	const n = 8
 	var wg sync.WaitGroup
-	results := make([]bool, 8)
+	results := make([]bool, n)
 	for i := range results {
 		wg.Add(1)
 		go func() {
@@ -76,7 +100,12 @@ func TestCanReadInNamespaceDecision_ConcurrentChecksShareOneReview(t *testing.T)
 			results[i], _ = canReadInNamespaceDecision(ctx, "", "nodes", "", "list")
 		}()
 	}
-	time.Sleep(50 * time.Millisecond)
+	api.awaitReviews(t, 1)
+	// Gives unshared calls, if any, time to send their own reviews.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for api.reviews.Load() < n && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 	close(release)
 	wg.Wait()
 	for i, ok := range results {
@@ -84,36 +113,36 @@ func TestCanReadInNamespaceDecision_ConcurrentChecksShareOneReview(t *testing.T)
 			t.Fatalf("caller %d denied", i)
 		}
 	}
-	if n := reviews.Load(); n != 1 {
-		t.Fatalf("reviews = %d, want one shared review", n)
+	if got := api.reviews.Load(); got != 1 {
+		t.Fatalf("reviews = %d, want one shared review", got)
 	}
 }
 
-// A call that gives up doesn't fail the others waiting on the same review.
-func TestCanReadInNamespaceDecision_CanceledLeaderDoesNotFailFollowers(t *testing.T) {
+// A call that gives up while another waits leaves the shared review running
+// for the one still waiting.
+func TestCanReadInNamespaceDecision_CallGivingUpKeepsTheSharedReview(t *testing.T) {
 	release := make(chan struct{})
-	userCtx, _ := accessReviewUser(t, func(authorizationv1.ResourceAttributes) bool {
+	userCtx, api := accessReviewUser(t, func(authorizationv1.ResourceAttributes) bool {
 		<-release
 		return true
 	})
-	ctx, cancel := context.WithCancel(userCtx)
-	leader := make(chan struct{})
-	go func() {
-		defer close(leader)
-		canReadInNamespaceDecision(ctx, "", "nodes", "", "list")
-	}()
-	time.Sleep(20 * time.Millisecond)
-	follower := make(chan [2]bool, 1)
+	waiting := make(chan [2]bool, 1)
 	go func() {
 		allowed, decided := canReadInNamespaceDecision(userCtx, "", "nodes", "", "list")
-		follower <- [2]bool{allowed, decided}
+		waiting <- [2]bool{allowed, decided}
 	}()
-	time.Sleep(20 * time.Millisecond)
-	cancel()
+	api.awaitReviews(t, 1)
+	ctx, cancel := context.WithTimeout(userCtx, 50*time.Millisecond)
+	defer cancel()
+	if allowed, decided := canReadInNamespaceDecision(ctx, "", "nodes", "", "list"); allowed || decided {
+		t.Fatalf("the call that gave up allowed=%v decided=%v, want a non-authoritative denial", allowed, decided)
+	}
 	close(release)
-	<-leader
-	if got := <-follower; !got[0] || !got[1] {
-		t.Fatalf("follower allowed=%v decided=%v, want allowed", got[0], got[1])
+	if got := <-waiting; !got[0] || !got[1] {
+		t.Fatalf("waiting call allowed=%v decided=%v, want allowed", got[0], got[1])
+	}
+	if got := api.reviews.Load(); got != 1 {
+		t.Fatalf("reviews = %d, want the call that gave up to have joined the shared review", got)
 	}
 }
 
@@ -143,33 +172,77 @@ func TestCanReadInNamespaceDecision_CallerDeadlineEndsTheWait(t *testing.T) {
 	}
 }
 
-// A call whose permissions entry was replaced while another call's review ran
-// keeps the shared answer, so its next identical check sends no review.
-func TestCanReadInNamespaceDecision_JoinerKeepsSharedAnswer(t *testing.T) {
+// A review that takes longer than REST's cap still answers a call whose own
+// context allows the wait: sharing reviews added no budget of its own.
+func TestCanReadInNamespaceDecision_SlowAllowWithinTheCallersDeadline(t *testing.T) {
+	const delay = 12 * time.Second
+	client := newReviewServer(t, func(authorizationv1.ResourceAttributes) bool { return true }).client
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous) })
+	userCtx := withTestUserPerms(t, "reader", nil, nil)
+	original := subjectCanI
+	subjectCanI = func(ctx context.Context, _ kubernetes.Interface, _ string, _ []string, _, _, _, _ string) (bool, error) {
+		select {
+		case <-time.After(delay):
+			return true, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	t.Cleanup(func() { subjectCanI = original })
+
+	ctx, cancel := context.WithTimeout(userCtx, delay+10*time.Second)
+	defer cancel()
+	if allowed, decided := canReadInNamespaceDecision(ctx, "", "secrets", "team", "get"); !allowed || !decided {
+		t.Fatalf("allowed=%v decided=%v, want the slow allow", allowed, decided)
+	}
+}
+
+// A call holding the entry that replaced an expired one never joins a review
+// started for the old entry: after a revocation it gets the apiserver's new
+// denial, and the old review's allow never lands in the new entry.
+func TestCanReadInNamespaceDecision_NewEntryNeverJoinsAnOldReview(t *testing.T) {
 	release := make(chan struct{})
-	ctx, reviews := accessReviewUser(t, func(authorizationv1.ResourceAttributes) bool {
-		<-release
-		return true
+	var revoked, held atomic.Bool
+	ctx, api := accessReviewUser(t, func(authorizationv1.ResourceAttributes) bool {
+		allowed := !revoked.Load()
+		if held.CompareAndSwap(false, true) {
+			<-release
+		}
+		return allowed
 	})
-	var wg sync.WaitGroup
-	ask := func() {
-		defer wg.Done()
-		canReadInNamespaceDecision(ctx, "", "nodes", "", "list")
-	}
-	wg.Add(1)
-	go ask()
-	time.Sleep(50 * time.Millisecond)
+	before := make(chan bool, 1)
+	go func() {
+		allowed, _ := canReadInNamespaceDecision(ctx, "", "secrets", "team", "get")
+		before <- allowed
+	}()
+	api.awaitReviews(t, 1)
+
+	revoked.Store(true)
+	getPermCache().Invalidate()
 	getPermCache().Set("reader", []string{"viewers"}, &pkgauth.UserPermissions{})
-	wg.Add(1)
-	go ask()
-	time.Sleep(50 * time.Millisecond)
-	close(release)
-	wg.Wait()
-	if ok, _ := canReadInNamespaceDecision(ctx, "", "nodes", "", "list"); !ok {
-		t.Fatal("denied after the shared review allowed")
+	after := make(chan [2]bool, 1)
+	go func() {
+		allowed, decided := canReadInNamespaceDecision(ctx, "", "secrets", "team", "get")
+		after <- [2]bool{allowed, decided}
+	}()
+	select {
+	case got := <-after:
+		if got[0] || !got[1] {
+			t.Errorf("after the revocation allowed=%v decided=%v, want the new denial", got[0], got[1])
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("the new entry's call joined the review started for the expired entry")
 	}
-	if n := reviews.Load(); n != 1 {
-		t.Fatalf("reviews = %d, want the joiner to reuse the shared answer", n)
+	close(release)
+	if !<-before {
+		t.Fatal("the old entry's call lost its own review's allow")
+	}
+	if v, ok := getPermCache().Get("reader", []string{"viewers"}).CanI("get", "", "secrets", "team"); !ok || v {
+		t.Fatalf("new entry cached=%v allowed=%v, want the new denial", ok, v)
+	}
+	if got := api.reviews.Load(); got != 2 {
+		t.Fatalf("reviews = %d, want one per entry", got)
 	}
 }
 
@@ -177,7 +250,7 @@ func TestCanReadInNamespaceDecision_JoinerKeepsSharedAnswer(t *testing.T) {
 // never joins a review sent over the previous connection.
 func TestCanReadInNamespaceDecision_ReconnectStartsANewReview(t *testing.T) {
 	release := make(chan struct{})
-	ctx, _ := accessReviewUser(t, func(authorizationv1.ResourceAttributes) bool {
+	ctx, api := accessReviewUser(t, func(authorizationv1.ResourceAttributes) bool {
 		<-release
 		return true
 	})
@@ -186,10 +259,10 @@ func TestCanReadInNamespaceDecision_ReconnectStartsANewReview(t *testing.T) {
 		defer close(first)
 		canReadInNamespaceDecision(ctx, "", "nodes", "", "list")
 	}()
-	time.Sleep(50 * time.Millisecond)
+	api.awaitReviews(t, 1)
 
-	newClient, newReviews := reviewAPI(t, func(authorizationv1.ResourceAttributes) bool { return false })
-	t.Cleanup(k8s.ReconnectTestClient(newClient))
+	fresh := newReviewServer(t, func(authorizationv1.ResourceAttributes) bool { return false })
+	t.Cleanup(k8s.ReconnectTestClient(fresh.client))
 	getPermCache().Invalidate()
 	getPermCache().Set("reader", []string{"viewers"}, &pkgauth.UserPermissions{})
 
@@ -201,8 +274,8 @@ func TestCanReadInNamespaceDecision_ReconnectStartsANewReview(t *testing.T) {
 	if allowed || !decided {
 		t.Fatalf("allowed=%v decided=%v, want the new cluster's denial", allowed, decided)
 	}
-	if n := newReviews.Load(); n != 1 {
-		t.Fatalf("reviews on the new connection = %d, want 1", n)
+	if got := fresh.reviews.Load(); got != 1 {
+		t.Fatalf("reviews on the new connection = %d, want 1", got)
 	}
 	if v, ok := getPermCache().Get("reader", []string{"viewers"}).CanI("list", "", "nodes", ""); !ok || v {
 		t.Fatalf("cached=%v allowed=%v, want the new cluster's denial cached", ok, v)
@@ -210,14 +283,15 @@ func TestCanReadInNamespaceDecision_ReconnectStartsANewReview(t *testing.T) {
 }
 
 // Identities whose names differ only in where a separator byte falls are
-// different subjects to Kubernetes and never share a review.
+// different subjects to Kubernetes and never share a review: both reviews
+// reach the apiserver while each is held.
 func TestCanReadInNamespaceDecision_DistinctIdentitiesDoNotShare(t *testing.T) {
 	release := make(chan struct{})
-	client, reviews := reviewAPI(t, func(authorizationv1.ResourceAttributes) bool {
+	api := newReviewServer(t, func(authorizationv1.ResourceAttributes) bool {
 		<-release
 		return true
 	})
-	previous := k8s.SetTestClient(client)
+	previous := k8s.SetTestClient(api.client)
 	t.Cleanup(func() { k8s.SetTestClient(previous) })
 	contexts := []context.Context{
 		withTestUserPerms(t, "alice", []string{"team\x00prod"}, nil),
@@ -231,18 +305,15 @@ func TestCanReadInNamespaceDecision_DistinctIdentitiesDoNotShare(t *testing.T) {
 			canReadInNamespaceDecision(ctx, "", "nodes", "", "list")
 		}()
 	}
-	time.Sleep(50 * time.Millisecond)
+	api.awaitReviews(t, 2)
 	close(release)
 	wg.Wait()
-	if n := reviews.Load(); n != 2 {
-		t.Fatalf("reviews = %d, want one per identity", n)
-	}
 }
 
 // A review that panics fails its callers closed, caches nothing, and leaves
 // the process running.
 func TestCanReadInNamespaceDecision_PanickingReviewFailsClosed(t *testing.T) {
-	client, _ := reviewAPI(t, func(authorizationv1.ResourceAttributes) bool { return true })
+	client := newReviewServer(t, func(authorizationv1.ResourceAttributes) bool { return true }).client
 	previous := k8s.SetTestClient(client)
 	t.Cleanup(func() { k8s.SetTestClient(previous) })
 	ctx := withTestUserPerms(t, "reader", nil, nil)

@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"log"
-	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -89,16 +88,7 @@ type PermissionCache struct {
 	// flights holds the discoveries Resolve is running, keyed by identity and
 	// connection. Guarded by mu, so joining a run and finding its cached
 	// answer can't interleave.
-	flights map[string]*permissionFlight
-}
-
-// permissionFlight is one discovery shared by the callers that missed the
-// cache for the same identity and connection while it ran.
-type permissionFlight struct {
-	done    chan struct{}
-	cancel  context.CancelFunc
-	waiters int
-	perms   *UserPermissions // nil when the discovery couldn't decide; written before done closes
+	flights map[string]*flight[discovery]
 }
 
 // cacheKey builds the composite cache key for an identity. The verdicts stored
@@ -280,65 +270,44 @@ func (pc *PermissionCache) Resolve(ctx context.Context, username string, groups 
 	}
 	f := pc.flights[flightKey]
 	if f == nil {
-		// The run outlives the caller that started it, so it doesn't take that
-		// caller's cancellation; it ends when no caller waits for it.
-		runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-		f = &permissionFlight{done: make(chan struct{}), cancel: cancel}
+		f = startFlight(ctx, &pc.mu, "permission discovery", func(ctx context.Context) discovery {
+			perms, cacheable := discover(ctx)
+			return discovery{perms, cacheable}
+		}, func(f *flight[discovery], d discovery) discovery {
+			if d.perms != nil && d.cacheable && pc.flights[flightKey] == f {
+				if live := pc.liveLocked(key); live != nil {
+					d.perms = live
+				} else {
+					pc.setLocked(key, d.perms)
+				}
+			}
+			pc.detachLocked(flightKey, f)
+			return d
+		})
 		if pc.flights == nil {
-			pc.flights = make(map[string]*permissionFlight)
+			pc.flights = make(map[string]*flight[discovery])
 		}
 		pc.flights[flightKey] = f
-		go pc.runFlight(runCtx, key, flightKey, f, discover)
+	} else {
+		f.join()
 	}
-	f.waiters++
 	pc.mu.Unlock()
 
-	select {
-	case <-f.done:
-		return f.perms, f.perms != nil
-	case <-ctx.Done():
-		pc.mu.Lock()
-		f.waiters--
-		if f.waiters == 0 {
-			f.cancel()
-			pc.detachLocked(flightKey, f)
-		}
-		pc.mu.Unlock()
+	d, ok := f.await(ctx, &pc.mu, func() { pc.detachLocked(flightKey, f) })
+	if !ok || d.perms == nil {
 		return nil, false
 	}
+	return d.perms, true
 }
 
-func (pc *PermissionCache) runFlight(ctx context.Context, key, flightKey string, f *permissionFlight, discover func(context.Context) (*UserPermissions, bool)) {
-	defer f.cancel()
-	perms, cacheable := runDiscovery(ctx, discover)
-	pc.mu.Lock()
-	if perms != nil && cacheable && pc.flights[flightKey] == f {
-		if live := pc.liveLocked(key); live != nil {
-			perms = live
-		} else {
-			pc.setLocked(key, perms)
-		}
-	}
-	pc.detachLocked(flightKey, f)
-	f.perms = perms
-	pc.mu.Unlock()
-	close(f.done)
-}
-
-// runDiscovery runs discover on the flight's own goroutine, where a panic
-// would end the process instead of failing the callers waiting on it.
-func runDiscovery(ctx context.Context, discover func(context.Context) (*UserPermissions, bool)) (perms *UserPermissions, cacheable bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("[auth] permission discovery panicked: %v\n%s", r, debug.Stack())
-			perms, cacheable = nil, false
-		}
-	}()
-	return discover(ctx)
+// discovery is what one discover run produced.
+type discovery struct {
+	perms     *UserPermissions
+	cacheable bool
 }
 
 // detachLocked stops new callers from joining f, with pc.mu held.
-func (pc *PermissionCache) detachLocked(flightKey string, f *permissionFlight) {
+func (pc *PermissionCache) detachLocked(flightKey string, f *flight[discovery]) {
 	if pc.flights[flightKey] == f {
 		delete(pc.flights, flightKey)
 	}

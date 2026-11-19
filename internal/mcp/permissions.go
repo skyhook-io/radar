@@ -3,14 +3,11 @@ package mcp
 import (
 	"context"
 	"log"
-	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
-	"golang.org/x/sync/singleflight"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -367,12 +364,10 @@ func checkNamespaceAccess(ctx context.Context, namespace string) bool {
 // subjectCanI is overridden in tests to bypass the live apiserver call.
 var subjectCanI = pkgauth.SubjectCanI
 
-// accessReviews collapses identical access reviews in flight at once.
-var accessReviews singleflight.Group
-
-// accessReviewTimeout caps a review shared by the callers asking the same
-// question at once; each caller still stops waiting when its own call ends.
-const accessReviewTimeout = 10 * time.Second
+// accessReviews collapses identical access reviews in flight at once. A review
+// carries no cap of its own: each tool call waits as long as its own context
+// allows, as it did when it sent the review itself.
+var accessReviews pkgauth.AccessReviews
 
 // canReadClusterScopedKind authorizes a single (verb, kind) cluster-scoped
 // read for the calling user via SubjectAccessReview. Mirrors Server.canRead
@@ -420,58 +415,22 @@ func canReadInNamespaceDecision(ctx context.Context, group, resource, namespace,
 	if user == nil {
 		return true, true
 	}
-	if perms != nil {
-		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
-			return v, true
-		}
-	}
-	client, generation := k8s.GetClientWithGeneration()
-	if client == nil {
-		log.Printf("[mcp] canReadInNamespace: no K8s client, denying %s on %s/%s in %q for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(user.Username))
-		return false, false
-	}
-	type verdict struct{ allowed, authoritative bool }
 	// Keyed by connection generation, not context name: a reconnect under the
 	// same name can reach a different cluster, and the review must run on the
 	// client its key names.
-	key := pkgauth.IdentityCacheKey(user.Username, user.Groups) + strings.Join([]string{strconv.FormatUint(generation, 10), verb, group, resource, namespace}, "\x00")
-	review := accessReviews.DoChan(key, func() (v any, err error) {
-		// The review runs on its own goroutine, where a panic would end the
-		// process instead of failing one tool call.
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("[mcp] access review panicked: %v\n%s", r, debug.Stack())
-				v, err = verdict{}, nil
-			}
-		}()
-		// Callers that didn't start the review share it, so it runs on its own
-		// clock rather than the first caller's: a SubjectAccessReview is a POST,
-		// which the client's request deadlines leave unbounded.
-		reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), accessReviewTimeout)
-		defer cancel()
-		allowed, err := subjectCanI(reviewCtx, client, user.Username, user.Groups, namespace, group, resource, verb)
+	client, generation := k8s.GetClientWithGeneration()
+	return accessReviews.Decide(ctx, user, perms, strconv.FormatUint(generation, 10), verb, group, resource, namespace, func(ctx context.Context) (bool, bool) {
+		if client == nil {
+			log.Printf("[mcp] canReadInNamespace: no K8s client, denying %s on %s/%s in %q for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(user.Username))
+			return false, false
+		}
+		allowed, err := subjectCanI(ctx, client, user.Username, user.Groups, namespace, group, resource, verb)
 		if err != nil {
 			log.Printf("[mcp] canReadInNamespace SAR failed for %s on %s/%s in %q: %v", k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), err)
-			return verdict{}, nil
+			return false, false
 		}
-		if perms != nil {
-			perms.SetCanI(verb, group, resource, namespace, allowed)
-		}
-		return verdict{allowed, true}, nil
+		return allowed, true
 	})
-	select {
-	case r := <-review:
-		v := r.Val.(verdict)
-		// A caller that joined another's review keeps the answer in its own
-		// permissions too; after a cache expiry they can be different entries.
-		if v.authoritative && perms != nil {
-			perms.SetCanI(verb, group, resource, namespace, v.allowed)
-		}
-		return v.allowed, v.authoritative
-	case <-ctx.Done():
-		// This caller gave up; the review carries on for the others.
-		return false, false
-	}
 }
 
 // filterNamespacesByCanRead returns the subset of `namespaces` where the
