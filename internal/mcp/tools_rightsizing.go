@@ -212,6 +212,9 @@ type rightsizingResponse struct {
 	Truncated                  bool                                   `json:"truncated,omitempty"`
 	TotalWorkloads             *int                                   `json:"totalWorkloads,omitempty"`
 	Guidance                   []string                               `json:"guidance,omitempty"`
+	// ClusterScope says how the queries were kept to this cluster in a shared
+	// metrics store; its note is the reason when recommendations were withheld.
+	ClusterScope *prometheuspkg.ClusterScope `json:"clusterScope,omitempty"`
 }
 
 type rightsizingNextCall struct {
@@ -309,6 +312,10 @@ func rightsizingWorkloadScope(ctx context.Context, input getRightsizingInput) (*
 		}
 	}
 
+	return toJSONResult(workloadScopeResponse(resp, input))
+}
+
+func workloadScopeResponse(resp prometheuspkg.RightsizingResponse, input getRightsizingInput) rightsizingResponse {
 	// keepAll: the caller named one workload, so every row is the answer it
 	// asked for — a handful of rows, and omitting any of them invites the agent
 	// to report the remainder as the whole container set.
@@ -325,6 +332,7 @@ func rightsizingWorkloadScope(ctx context.Context, input getRightsizingInput) (*
 		SampleAvailable: &sampleAvailable,
 		OwnerCoverage:   resp.OwnerCoverage,
 		Warnings:        resp.Warnings,
+		ClusterScope:    resp.ClusterScope,
 		Reason:          rightsizingReasonCode(resp.Reason),
 		ScannedAt:       time.Now().UTC().Format(time.RFC3339),
 		Workloads: []rightsizingWorkloadDTO{{
@@ -356,7 +364,7 @@ func rightsizingWorkloadScope(ctx context.Context, input getRightsizingInput) (*
 		needsManualReview: rowGaps(out.Workloads).needsManualReview,
 		workloadsShown:    true,
 	})
-	return toJSONResult(out)
+	return out
 }
 
 // workloadScopeState settles what a workload-scope answer claims about itself.
@@ -467,7 +475,8 @@ func rightsizingScanScope(ctx context.Context, input getRightsizingInput, scope 
 		Reason:                  scan.Reason,
 		// Counters are always emitted: "0 of 1 batches succeeded" is precisely
 		// the case a reader needs, and omitempty would hide it.
-		Coverage: newRightsizingCoverage(coverage),
+		Coverage:     newRightsizingCoverage(coverage),
+		ClusterScope: scan.ClusterScope,
 	}
 	// scope="cluster" resolves to whatever this identity can list, or to the
 	// server's --namespace pin. Without naming that set the caller cannot tell
@@ -1003,6 +1012,10 @@ func rightsizingReasonCode(reason string) string {
 		return "no_usage_samples"
 	case prometheuspkg.ReasonPodInventoryUnreadable:
 		return "pod_inventory_unreadable"
+	case prometheuspkg.ReasonClusterScopeWithheld:
+		return prometheuspkg.ScanReasonClusterScopeWithheld
+	case prometheuspkg.ReasonRightsizingPartialData:
+		return "partial_data"
 	default:
 		return reason
 	}
@@ -1016,6 +1029,10 @@ func rightsizingRemediation(scope, reason string) string {
 	}
 
 	switch rightsizingReasonCode(reason) {
+	case prometheuspkg.ScanReasonClusterScopeWithheld:
+		return "The metrics store holds series Radar can't attribute to this cluster, so recommendations were withheld rather than computed from other clusters' Pods. clusterScope.note says why and what to configure. Report this as no answer, never as workloads needing no change."
+	case "partial_data":
+		return "Prometheus answered the usage queries only partially (a store or shard did not respond), so no recommendation was computed from the incomplete samples. Retry once the metrics backend is healthy."
 	case "pod_inventory_unreadable":
 		return "Restore Radar access to list pods for this workload, then retry; current pod OOM status is unknown."
 	case "prometheus_unavailable":
