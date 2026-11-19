@@ -152,6 +152,7 @@ type veleroRun struct {
 	kind      string
 	namespace string
 	name      string
+	object    *unstructured.Unstructured
 }
 
 type veleroArtifactFailure struct {
@@ -212,7 +213,29 @@ func (s *Server) openVeleroRun(w http.ResponseWriter, r *http.Request, artifact 
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return veleroRun{}, false
 	}
-	return veleroRun{client: client, kind: targetKind, namespace: namespace, name: name}, true
+	// Read the run itself as the caller. Velero issues no download link for a
+	// run that is gone or that it has not started, so either would otherwise
+	// wait out the full timeout and read as a silent controller.
+	object, err := client.Resource(schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: kindParam}).
+		Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
+	switch {
+	case err == nil:
+	case apierrors.IsNotFound(err):
+		s.writeError(w, http.StatusNotFound, "Velero "+targetKind+" not found")
+		return veleroRun{}, false
+	case apierrors.IsForbidden(err):
+		s.writeError(w, http.StatusForbidden, "no access to this Velero "+targetKind)
+		return veleroRun{}, false
+	default:
+		log.Printf("[velero] Failed to read %s %s/%s: %v", targetKind, sanitizeForLog(namespace), sanitizeForLog(name), err)
+		s.writeError(w, http.StatusServiceUnavailable, "could not read this Velero "+targetKind)
+		return veleroRun{}, false
+	}
+	if phase, _, _ := unstructured.NestedString(object.Object, "status", "phase"); phase == "" || phase == "New" {
+		s.writeError(w, http.StatusNotFound, "Velero has not started this "+strings.ToLower(targetKind)+" yet, so it has no "+artifact)
+		return veleroRun{}, false
+	}
+	return veleroRun{client: client, kind: targetKind, namespace: namespace, name: name, object: object}, true
 }
 
 // downloadVeleroRunArtifact asks Velero for one of the run's files and decodes it.
@@ -277,8 +300,8 @@ func (s *Server) downloadVeleroRunArtifact(ctx context.Context, run veleroRun, a
 		// varies by distribution (OADP does not call it `velero`), so pointing
 		// at one would be a guess dressed as a fact.
 		return nil, &veleroArtifactFailure{http.StatusServiceUnavailable,
-			fmt.Sprintf("Velero did not answer within %s. The Velero controller in namespace %s serves the run %s — check that it is running.",
-				downloadRequestTimeout, namespace, artifact)}
+			fmt.Sprintf("Velero issued no download link within %s. The Velero controller in namespace %s issues it — check that it is running. Velero also issues none when the run's backup or its storage location no longer exists.",
+				downloadRequestTimeout, namespace)}
 	}
 
 	results, err := fetchVeleroArtifact(ctx, downloadURL, s.veleroDownloadPolicy(), compressedLimit, decodedLimit, decode)

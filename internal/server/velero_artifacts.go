@@ -3,7 +3,6 @@ package server
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,9 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 const (
@@ -24,6 +21,9 @@ const (
 	maxVeleroDecodedBytes    = 64 << 20
 	maxVeleroLogLineBytes    = 64 << 10
 	maxVeleroArtifactRows    = 5000
+	// Bounds the log text one response carries; the row cap alone would allow
+	// 5,000 lines of up to 64 KiB each.
+	maxVeleroLogResponseBytes = 8 << 20
 )
 
 var (
@@ -96,7 +96,7 @@ func (s *Server) handleVeleroRunContents(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	restore := run.kind == "Restore"
-	warnedOnly := restore && s.veleroRestoreSettledWithoutErrors(r.Context(), run)
+	warnedOnly := restore && veleroRestoreSettledWithoutErrors(run.object)
 	result, failure := s.downloadVeleroRunArtifact(r.Context(), run, "contents", "ResourceList", maxVeleroCompressedBytes, maxVeleroDecodedBytes, func(reader io.Reader) (any, error) {
 		return decodeVeleroContents(reader, restore, filter, warnedOnly)
 	})
@@ -118,8 +118,6 @@ func veleroRestoreAction(action string) bool {
 	return false
 }
 
-var veleroRestoreGVR = schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: "restores"}
-
 // veleroRestoreSettledWithoutErrors reports a Restore in a terminal phase whose
 // status counts no errors. Velero records an item it did not explicitly
 // create, update or skip as failed once any warning or error was reported for
@@ -128,9 +126,8 @@ var veleroRestoreGVR = schema.GroupVersionResource{Group: veleroGroup, Version: 
 // restore runs its counts still grow, and with any error the entries cannot be
 // told apart, so the list then stands as Velero wrote it, as it does when the
 // Restore cannot be read.
-func (s *Server) veleroRestoreSettledWithoutErrors(ctx context.Context, run veleroRun) bool {
-	restore, err := run.client.Resource(veleroRestoreGVR).Namespace(run.namespace).Get(ctx, run.name, metav1.GetOptions{})
-	if err != nil {
+func veleroRestoreSettledWithoutErrors(restore *unstructured.Unstructured) bool {
+	if restore == nil {
 		return false
 	}
 	phase, _, _ := unstructured.NestedString(restore.Object, "status", "phase")
@@ -334,7 +331,7 @@ func decodeVeleroLog(reader io.Reader, levels map[string]bool, query string) (an
 		out.Counts[level] = 0
 	}
 	buf := bufio.NewReaderSize(reader, maxVeleroLogLineBytes+2)
-	number := 0
+	number, returned := 0, 0
 	for {
 		line, err := buf.ReadSlice('\n')
 		if errors.Is(err, bufio.ErrBufferFull) || len(bytes.TrimSuffix(line, []byte{'\n'})) > maxVeleroLogLineBytes {
@@ -361,8 +358,9 @@ func decodeVeleroLog(reader io.Reader, levels map[string]bool, query string) (an
 			out.Counts[level]++
 			if levels[level] && (query == "" || strings.Contains(strings.ToLower(text), query)) {
 				out.Matched++
-				if len(out.Lines) < maxVeleroArtifactRows {
+				if len(out.Lines) < maxVeleroArtifactRows && returned+len(text) <= maxVeleroLogResponseBytes {
 					out.Lines = append(out.Lines, veleroLogLine{Number: number, Level: level, Text: text})
+					returned += len(text)
 				} else {
 					out.Truncated = true
 				}
