@@ -82,7 +82,7 @@ Deleting the object stays possible as a low-level operation (`DELETE /api/resour
 | Value | Source | When it cannot be read |
 |---|---|---|
 | Schedule state | The Schedule, its Backups (by `velero.io/schedule-name`), and the installation's server configuration, against Velero's controller (`schedule_controller.go`, v1.18.2) | Backups unread: runs are `unknown`, and a missed run reads **late or held** |
-| Next run | `cron.Next(max(lastBackup or creationTimestamp, lastSkipped))`, robfig/cron v3 as Velero uses it | The zone below decides whether it is exact |
+| Next run | `cron.Next(max(lastBackup or creationTimestamp, lastSkipped))` with the server's cron library: robfig/cron v3 before Velero 1.18.3, netresearch/go-cron from 1.18.3 (the version is the tag of the server image, when its repository is named `velero`). They differ only when the cron restricts both day of month and day of week: before 1.18.3 a day matching either runs it, from 1.18.3 only a day matching both (`dayMatch`), so `0 0 31 2 MON` is always due on 1.18.3 | The zone below decides whether it is exact. A cron restricting both day fields on a server whose version is unknown (unread, mid-rollout, a digest-only or non-release tag) is an estimate at the earlier of the two rules' times, probably late only past the other (reason `dayMatchUnconfirmed`) |
 | Zone | `CRON_TZ=`/`TZ=` in the expression; else the Velero server Deployment's literal `TZ` with its rollout complete (none set, or `TZ=UTC`, → UTC, source `serverDefault`) | Inferred only from the controller submission matching `status.lastBackup` (name timestamp minus lastBackup, rounded to 15 minutes; creation within a minute of lastBackup): an estimate, prefixed `~`. Newer UTC-named CLI and Back up now runs never supply the zone. Nothing: UTC, marked unknown |
 | Newest run, newest successful run | The schedule's Backups Velero still keeps (TTL deletes older ones) | "Unknown" when the namespace's Backups are unread; never "none" |
 | Default storage location | A location with `spec.default`; else the server's `--default-backup-storage-location` (an explicitly empty flag means no default, and a backup naming no location fails) | "unknown" when neither can be read |
@@ -111,9 +111,9 @@ First match wins.
 | Skip pending | `spec.skipImmediately` is set; the controller moves its anchor on the next pass | No |
 | Held | Due, and a run of the schedule is `""`, `New` or `InProgress` (the controller's skip rule) | When the run has not started for 10 minutes; a long `InProgress` run is the stalled-run Issue's |
 | Late | Past the next run by 5 minutes, zone certain, Backups read, nothing holding it. Counts the scheduled times that passed; Velero does not catch up | Yes |
-| Probably late | Past it, zone not certain: inferred zone by 2 hours, unknown zone by the cadence plus a day | Yes |
+| Probably late | Past it, zone or day matching not certain: inferred zone by 2 hours, unknown zone by the cadence plus a day; with day matching unknown, also past the later rule's time | Yes |
 | Late or held | As Late, but the namespace's Backups are unread, so a hidden run may hold it | Yes |
-| Possibly late | Past the estimated run within the uncertain margin | No |
+| Possibly late | Past the estimated run within the uncertain margin (reason `zoneUnconfirmed` or `dayMatchUnconfirmed`) | No |
 | Due | Within the 5-minute grace | No |
 | On schedule | Otherwise | No |
 
@@ -141,7 +141,7 @@ Velero passes the object store's and the network's errors through as it gets the
 
 ## Schedule badges
 
-A schedule's badge (lists, the page's title, the Overview's Schedules table) is its state, with three readings for a schedule otherwise on schedule: one **due** within its grace while the server runs reads **On schedule** (its next run reads "due now"), since Velero submits it on its next pass; one whose newest run failed, partially failed or was rejected reads **Last run failed**; and one whose zone Radar has not confirmed (inferred or unknown) reads On schedule in grey, not green.
+A schedule's badge (lists, the page's title, the Overview's Schedules table) is its state, with three readings for a schedule otherwise on schedule: one **due** within its grace while the server runs reads **On schedule** (its next run reads "due now"), since Velero submits it on its next pass; one whose newest run failed, partially failed or was rejected reads **Last run failed**; and one whose zone Radar has not confirmed (inferred or unknown), or whose day matching is unknown, reads On schedule in grey, not green.
 
 The Overview's server reads **running** only when a replica is ready, and **not ready** when it has replicas but none is.
 
