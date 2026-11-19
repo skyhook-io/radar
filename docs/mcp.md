@@ -1767,15 +1767,15 @@ completed Pods are excluded. References are permission-filtered per namespace,
 sorted deterministically and capped at 20. `total` counts only readable Pods;
 `truncated` marks the item cap. This is observed placement in Radar's cache scope,
 not a cluster-wide workload count or a list of potential scheduling candidates.
-When Relationships already collected placement, context reuses that result.
-Unavailable Pod data, including a missing placement provider, records
+The Node's Pods are read once, for both this list and its coverage.
+Unavailable Pod data, including no relationship answer at all, records
 `omitted: [{field: "referencedBy", reason:
 "unavailable"}]`, distinguishing a failed lookup from an observed empty result.
 
 ConfigMap and Secret reverse-reference context uses the same omission when a
 scanned workload or Pod source cannot be read. References from available sources
 remain visible. This projection scans selected built-in workload templates and
-controllerless Pods; absence of an omission does not establish complete consumer
+every Pod, controlled or not; absence of an omission does not establish complete consumer
 coverage or prove that a resource is unused. Storage audit uses its own consumer
 inventory and coverage rules.
 
