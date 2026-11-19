@@ -49,13 +49,22 @@ const pickerRow = (key: string) => document.querySelector<HTMLElement>(`[data-co
 it('leaves low-priority columns out while the table is short of room, lowest first, and brings them back', async () => {
   await render()
   expect(headers()).toEqual(expect.arrayContaining(['taints', 'roles', 'version', 'pods', 'conditions']))
-  // Short of room: Taints goes first, then Roles; Conditions never drops.
+  // Short of room: Roles goes first (it reads "worker" on most nodes), then
+  // Taints, Version and Pods, in that order; Conditions never drops.
   await resize(1000)
-  expect(headers()).not.toContain('taints')
+  expect(headers()).not.toContain('roles')
   expect(headers()).toContain('conditions')
   expect(tableWidth()).toBeLessThanOrEqual(1000)
-  const dropped = ['taints', 'roles', 'version', 'pods'].filter(key => !headers().includes(key))
-  expect(dropped[0]).toBe('taints')
+  const order = ['roles', 'taints', 'version', 'pods']
+  const dropped = order.filter(key => !headers().includes(key))
+  expect(dropped).toEqual(order.slice(0, dropped.length))
+  // Narrowing step by step, the first column to go is Roles, alone.
+  let firstDropped: string[] = []
+  for (let room = 1600; room >= 900 && !firstDropped.length; room -= 10) {
+    await resize(room)
+    firstDropped = order.filter(key => !headers().includes(key))
+  }
+  expect(firstDropped).toEqual(['roles'])
   // Room again: every column is back.
   await resize(1600)
   expect(headers()).toEqual(expect.arrayContaining(['taints', 'roles', 'version', 'pods']))
@@ -64,20 +73,20 @@ it('leaves low-priority columns out while the table is short of room, lowest fir
 it('shows a column hidden to fit in the picker, and keeps it once the user turns it on', async () => {
   await render()
   await resize(1000)
-  expect(headers()).not.toContain('taints')
+  expect(headers()).not.toContain('roles')
   act(() => { host.querySelector<HTMLButtonElement>('button[aria-label="Configure columns"]')!.click() })
-  const row = pickerRow('taints')
+  const row = pickerRow('roles')
   expect(row.textContent).toContain('Hidden to fit')
   const box = row.querySelector<HTMLInputElement>('input[type="checkbox"]')!
   expect(box.checked).toBe(false)
   await act(async () => { box.click() })
-  expect(headers()).toContain('taints')
-  expect(JSON.parse(localStorage.getItem('radar-columns-nodes')!).kept).toEqual(['taints'])
+  expect(headers()).toContain('roles')
+  expect(JSON.parse(localStorage.getItem('radar-columns-nodes')!).kept).toEqual(['roles'])
   // Turning it off hides it, as any column.
-  await act(async () => { pickerRow('taints').querySelector<HTMLInputElement>('input[type="checkbox"]')!.click() })
-  expect(headers()).not.toContain('taints')
+  await act(async () => { pickerRow('roles').querySelector<HTMLInputElement>('input[type="checkbox"]')!.click() })
+  expect(headers()).not.toContain('roles')
   expect(JSON.parse(localStorage.getItem('radar-columns-nodes')!).kept).toEqual([])
-  expect(JSON.parse(localStorage.getItem('radar-columns-nodes')!).visible).not.toContain('taints')
+  expect(JSON.parse(localStorage.getItem('radar-columns-nodes')!).visible).not.toContain('roles')
 })
 
 it('never leaves out a column the table is sorted by', async () => {
