@@ -186,27 +186,42 @@ func (s countingIndexedSession) Indexed(gk resourceid.GroupKind, index string, k
 	return s.projectionSession.Indexed(gk, index, keys, scope)
 }
 
-// The drawer reads a Node's Pods and a StorageClass's volumes once, for the
-// relationship projection; only the AI context also reads the full inventories
-// it reports coverage for.
-func TestDrawerAnswerSkipsContextOnlyInventories(t *testing.T) {
+// A Node's Pods and a StorageClass's volumes and claims are whole
+// inventories, so each answer reads each one once: the AI context's direct
+// lists take what its coverage read matched, and list the same objects.
+func TestAnswersReadEachInventoryOnce(t *testing.T) {
 	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node"}}, "", "Node")
 	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "shop"}, Spec: corev1.PodSpec{NodeName: "node"}}, "", "Pod")
 	class := projectionObject(&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fast"}}, "storage.k8s.io", "StorageClass")
-	pv := projectionObject(&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: "fast"}}, "", "PersistentVolume")
-	access := ownership.Unrestricted()
+	fast := "fast"
+	pv := projectionObject(&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: fast}}, "", "PersistentVolume")
+	pvc := projectionObject(&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "shop"}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &fast}}, "", "PersistentVolumeClaim")
 	for _, tc := range []struct {
 		subject runtime.Object
-		related runtime.Object
-		kind    string
-	}{{node, pod, "Pod"}, {class, pv, "PersistentVolume"}} {
-		reads := func(answer func(relations.Session, ownership.Access, ownership.Access, *ownership.View, resourceid.Ref, runtime.Object, ResourceProvider, DynamicProvider) (*Relationships, *RelationshipExtras)) int {
-			s := countingIndexedSession{newProjectionSession(t, tc.subject, tc.related), map[string]int{}}
-			answer(s, access, access, ownership.NewView(s, access), projectionRef(tc.subject), tc.subject, nil, nil)
-			return s.reads[tc.kind]
-		}
-		if drawer, context := reads(RelationsAnswerWithExtras), reads(RelationsContextAnswer); drawer >= context {
-			t.Fatalf("%s: drawer read %s %d times, context %d", projectionRef(tc.subject).Kind, tc.kind, drawer, context)
+		related []runtime.Object
+		kinds   []string
+		listed  func(*Relationships) int
+	}{
+		{node, []runtime.Object{pod}, []string{"Pod"}, func(r *Relationships) int { return len(r.Pods) }},
+		{class, []runtime.Object{pv, pvc}, []string{"PersistentVolume", "PersistentVolumeClaim"}, func(r *Relationships) int { return len(r.Consumers) }},
+	} {
+		for _, restricted := range []bool{false, true} {
+			access := projectionAccess{}
+			if restricted {
+				access.namespaces = []string{"shop"}
+			}
+			for name, answer := range map[string]func(relations.Session, ownership.Access, ownership.Access, *ownership.View, resourceid.Ref, runtime.Object, ResourceProvider, DynamicProvider) (*Relationships, *RelationshipExtras){"drawer": RelationsAnswerWithExtras, "context": RelationsContextAnswer} {
+				s := countingIndexedSession{newProjectionSession(t, append([]runtime.Object{tc.subject}, tc.related...)...), map[string]int{}}
+				rel, _ := answer(s, access, access, ownership.NewView(s, access), projectionRef(tc.subject), tc.subject, nil, nil)
+				for _, kind := range tc.kinds {
+					if s.reads[kind] != 1 {
+						t.Errorf("%s %s (restricted=%v) read %s %d times", name, projectionRef(tc.subject).Kind, restricted, kind, s.reads[kind])
+					}
+				}
+				if got := tc.listed(rel); got != len(tc.related) {
+					t.Errorf("%s %s (restricted=%v) listed %d of %d", name, projectionRef(tc.subject).Kind, restricted, got, len(tc.related))
+				}
+			}
 		}
 	}
 }

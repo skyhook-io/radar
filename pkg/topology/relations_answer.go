@@ -96,6 +96,10 @@ type neighborhood struct {
 	// limit is the most objects each Referrers or selector answer of the
 	// answer's views lists, as relations.View.WithLimit takes it.
 	limit int
+	// seeded are the inventory reads the subject's own direct lists take from
+	// a family's answer instead of reading again; they hold only what relates
+	// to the subject.
+	seeded map[resourceid.GroupKind]directRead
 }
 
 // familyNodeID is a node ID parseNodeID can't read, so a node's identity
@@ -341,7 +345,7 @@ func relationsAnswer(session relations.Session, access, traverse ownership.Acces
 	families, selectors := relations.FamiliesIn(istioDomain), relations.SelectorFamilies()
 	n.node(subject)
 	if contextOnly {
-		n.contextDirectEvidence(relations.NewView(session, access), subject, obj)
+		n.contextDirectEvidence(session, relations.NewView(session, access), subject, obj)
 	}
 	n.answer(session, v, families, selectors, subject, obj, false)
 	for _, f := range relations.Compositions() {

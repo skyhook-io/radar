@@ -76,6 +76,9 @@ type relationDirectProvider struct {
 // function), so a Node's Pods are checked once they match the Node, not
 // every Pod in every namespace first.
 func (p *relationDirectProvider) objects(gk resourceid.GroupKind) ([]runtime.Object, error) {
+	if read, ok := p.n.seeded[gk]; ok {
+		return read.objects, read.err
+	}
 	namespaces, all := p.n.access.Namespaces()
 	scope := ownership.SearchScope{Namespaces: namespaces, AllNamespaces: all, IncludeClusterScoped: true}
 	index, keys := "", []string(nil)

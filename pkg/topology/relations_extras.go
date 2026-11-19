@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"fmt"
 	"slices"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -180,7 +181,12 @@ func (n *neighborhood) scalerManagers(s relations.Session, rel *Relationships) {
 	}
 }
 
-func (n *neighborhood) contextDirectEvidence(v *relations.View, subject resourceid.Ref, obj runtime.Object) {
+// contextDirectEvidence reads what the context lists of a Node's Pods and a
+// volume's or StorageClass's storage, with its coverage. A Node's Pods and a
+// StorageClass's volumes and claims are whole inventories, so the answer's
+// direct lists take the objects this read matched (seedDirect) rather than
+// reading the inventory again, and both describe one read.
+func (n *neighborhood) contextDirectEvidence(session relations.Session, v *relations.View, subject resourceid.Ref, obj runtime.Object) {
 	v.WithLimit(math.MaxInt)
 	if relations.PodPlacement.Covers(subject.GroupKind()) {
 		refs := v.References(relations.PodPlacement, subject, obj)
@@ -188,6 +194,7 @@ func (n *neighborhood) contextDirectEvidence(v *relations.View, subject resource
 		consumers := v.Referrers(relations.PodPlacement, subject, obj)
 		n.extras.Consumers = append(n.extras.Consumers, consumers.Referrers...)
 		n.extras.cover("ReferencedBy", consumers.Coverage)
+		n.seedDirect(session, consumers, relations.PodPlacement.Sources)
 	}
 	if relations.Storage.Covers(subject.GroupKind()) {
 		refs := v.References(relations.Storage, subject, obj)
@@ -204,6 +211,44 @@ func (n *neighborhood) contextDirectEvidence(v *relations.View, subject resource
 		// per-family output cap. Its coverage must describe that same inventory.
 		consumers := v.Referrers(relations.Storage, subject, obj)
 		n.extras.cover("Dependents", consumers.Coverage)
+		if subject.GroupKind() == (resourceid.GroupKind{Group: "storage.k8s.io", Kind: "StorageClass"}) {
+			n.seedDirect(session, consumers, relations.Storage.Sources)
+		}
+	}
+}
+
+// directRead is what a direct list reads of one kind's inventory.
+type directRead struct {
+	objects []runtime.Object
+	err     error
+}
+
+// seedDirect makes a referrers answer the answer's direct read of each source
+// kind: the objects it matched, and an error where it couldn't read the kind.
+func (n *neighborhood) seedDirect(session relations.Session, a relations.ReferrersAnswer, sources []relations.Source) {
+	if n.seeded == nil {
+		n.seeded = map[resourceid.GroupKind]directRead{}
+	}
+	for _, source := range sources {
+		read := directRead{}
+		for _, gap := range a.Coverage.NotChecked {
+			if gap.Kind == source.Kind || gap.Kind == (resourceid.GroupKind{}) {
+				read.err = fmt.Errorf("%s: %s", source.Kind.Kind, gap.Reason)
+				n.cover("direct", relations.Coverage{NotChecked: []ownership.Gap{gap}})
+				break
+			}
+		}
+		n.seeded[source.Kind] = read
+	}
+	for _, r := range a.Referrers {
+		read, ok := n.seeded[r.Ref.GroupKind()]
+		if !ok {
+			continue
+		}
+		if obj, got := session.Borrow(r.Ref); got.State == ownership.Present {
+			read.objects = append(read.objects, obj)
+			n.seeded[r.Ref.GroupKind()] = read
+		}
 	}
 }
 
