@@ -106,6 +106,38 @@ func TestNeedsAttentionGoldenFailed(t *testing.T) {
 	}
 }
 
+// A failed golden build's actor (named the template's UID, in its atespace)
+// is the template's finding, not a crashed actor to move and revert; an
+// ordinary crash of the same template still is.
+func TestFailedGoldenBuilderIsTheTemplatesFinding(t *testing.T) {
+	templates := []Template{{Atespace: "dev", Name: "browser", UID: "uid-browser", GoldenError: "WarmupFailed: memory limit exceeded", UpdateTime: ago(25 * time.Minute)}}
+	builder := Actor{Atespace: "dev", Name: "uid-browser", Template: Ref{"dev", "browser"}, State: StateCrashed, Crash: &Crash{Message: "memory limit exceeded", Time: ago(26 * time.Minute)}}
+	ordinary := Actor{Atespace: "dev", Name: "session-1", Template: Ref{"dev", "browser"}, State: StateCrashed, Crash: &Crash{Message: "exit status 1", Time: ago(time.Minute)}}
+
+	rows := NeedsAttention(Inputs{Templates: templates, TemplatesRead: true, Actors: []Actor{builder}, ActorsRead: true, Now: now})
+	if got := rules(rows); !slices.Equal(got, []string{"goldenSnapshotFailed:dev/browser"}) {
+		t.Errorf("builder only: rows %v, want just the template's", got)
+	}
+	if page := ActorAttention(rows, builder, templates, now); len(page) != 1 || page[0].Rule != RuleGoldenFailed || strings.Contains(page[0].NextStep, "revert") {
+		t.Errorf("the builder's page points at its template: %+v", page)
+	}
+
+	rows = NeedsAttention(Inputs{Templates: templates, TemplatesRead: true, Actors: []Actor{builder, ordinary}, ActorsRead: true, Now: now})
+	r := find(t, rows, RuleCrashedActors)
+	if r.Count != 1 || r.Sample[0].Name != "session-1" {
+		t.Errorf("only the ordinary actor is crashed: %+v", r)
+	}
+	if page := ActorAttention(rows, ordinary, templates, now); len(page) != 1 || page[0].Rule != RuleCrashedActors {
+		t.Errorf("the ordinary actor's page keeps its crash row: %+v", page)
+	}
+
+	// Without the templates read, the builder can't be told from any actor.
+	rows = NeedsAttention(Inputs{Actors: []Actor{builder}, ActorsRead: true, Now: now})
+	if find(t, rows, RuleCrashedActors).Count != 1 {
+		t.Errorf("templates unread: the builder counts as crashed")
+	}
+}
+
 func TestNeedsAttentionNoMatchingPool(t *testing.T) {
 	templates := []Template{
 		{Atespace: "a", Name: "gpu", WorkerSelector: map[string]string{"class": "gpu"}},
@@ -406,23 +438,23 @@ func TestActorAttentionUsesRulePredicates(t *testing.T) {
 	if slices.Contains(find(t, rows, RuleCrashedActors).Sample, oldest.Ref()) {
 		t.Fatal("fixture: the oldest crash should fall outside the sample")
 	}
-	if got := rules(ActorAttention(rows, oldest, now)); !slices.Equal(got, []string{RuleCrashedActors}) {
+	if got := rules(ActorAttention(rows, oldest, nil, now)); !slices.Equal(got, []string{RuleCrashedActors}) {
 		t.Errorf("a crashed actor beyond the sample = %v", got)
 	}
 	fresh := Actor{Atespace: "a", Name: "c24", State: StateRunning}
-	if got := ActorAttention(rows, fresh, now); len(got) != 0 {
+	if got := ActorAttention(rows, fresh, nil, now); len(got) != 0 {
 		t.Errorf("the fresh read wins: an actor running now is not crashed: %v", rules(got))
 	}
 	old := Actor{Atespace: "a", Name: "x", State: StateRunning, Assignment: &Assignment{Worker: "w", Epoch: 4}}
-	if got := rules(ActorAttention(rows, old, now)); !slices.Equal(got, []string{"workerRestarting:w"}) {
+	if got := rules(ActorAttention(rows, old, nil, now)); !slices.Equal(got, []string{"workerRestarting:w"}) {
 		t.Errorf("an actor from before the restart = %v", got)
 	}
 	current := Actor{Atespace: "a", Name: "y", State: StateRunning, Assignment: &Assignment{Worker: "w", Epoch: 5}}
-	if got := ActorAttention(rows, current, now); len(got) != 0 {
+	if got := ActorAttention(rows, current, nil, now); len(got) != 0 {
 		t.Errorf("an actor of the current epoch is not covered: %v", rules(got))
 	}
 	onU := Actor{Atespace: "a", Name: "z", State: StateCrashed, Assignment: &Assignment{Worker: "u"}}
-	if got := rules(ActorAttention(rows, onU, now)); !slices.Equal(got, []string{RuleCrashedActors, "workerUnavailable:u"}) {
+	if got := rules(ActorAttention(rows, onU, nil, now)); !slices.Equal(got, []string{RuleCrashedActors, "workerUnavailable:u"}) {
 		t.Errorf("an actor on an unavailable worker = %v", got)
 	}
 }

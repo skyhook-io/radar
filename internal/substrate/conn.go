@@ -344,17 +344,42 @@ type bearerCreds struct {
 	source tokenSource
 	mu     sync.Mutex
 	last   string
+	// failed is why the last token could not be had on this side, before
+	// Substrate was asked: gRPC keeps only a credential error's code and
+	// text, so classify matches the text to recover the cause.
+	failed *TierError
 }
 
 func (b *bearerCreds) GetRequestMetadata(ctx context.Context, _ ...string) (map[string]string, error) {
 	t, err := b.source.token(ctx)
 	if err != nil {
+		var local *TierError
+		if errors.As(err, &local) {
+			b.mu.Lock()
+			b.failed = local
+			b.mu.Unlock()
+			return nil, status.Error(codes.Unauthenticated, local.Message)
+		}
 		return nil, err
 	}
 	b.mu.Lock()
-	b.last = t
+	b.last, b.failed = t, nil
 	b.mu.Unlock()
 	return map[string]string{"authorization": "Bearer " + t}, nil
+}
+
+// localFailure is the cause recorded for a credential error whose text gRPC
+// returned as msg, if that is where it came from.
+func (b *bearerCreds) localFailure(msg string) *TierError {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.failed != nil && strings.Contains(msg, b.failed.Message) {
+		return b.failed
+	}
+	return nil
 }
 
 func (b *bearerCreds) RequireTransportSecurity() bool { return true }
@@ -398,14 +423,14 @@ func (s *sharedToken) token(ctx context.Context) (string, error) {
 	}
 	t, expires, err := mintShared(ctx, s.client, s.clock())
 	if err != nil {
-		msg := fmt.Sprintf("cannot mint a token for %s/%s", SystemNamespace, ClientServiceAccount)
+		msg := fmt.Sprintf("Radar cannot create a token for %s/%s with this kubeconfig context", SystemNamespace, ClientServiceAccount)
 		switch {
 		case apierrors.IsForbidden(err):
-			msg += ": Kubernetes denied create serviceaccounts/token in " + SystemNamespace
+			return "", &TierError{Code: CodeMintDenied, Message: msg + ": Kubernetes denied create serviceaccounts/token in " + SystemNamespace}
 		case apierrors.IsNotFound(err):
-			msg += ": the ServiceAccount does not exist"
+			return "", &TierError{Code: CodeNotInstalled, Message: msg + ": the ServiceAccount does not exist, so Substrate isn't installed as kubectl ate expects"}
 		}
-		return "", status.Error(codes.Unauthenticated, msg)
+		return "", &TierError{Code: CodeFailed, Message: msg + ": " + err.Error()}
 	}
 	s.current, s.expires = t, expires
 	return s.current, nil
@@ -441,11 +466,11 @@ type fileToken struct{ path string }
 func (f *fileToken) token(context.Context) (string, error) {
 	data, err := os.ReadFile(f.path)
 	if err != nil {
-		return "", status.Error(codes.Unauthenticated, fmt.Sprintf("cannot read token file %s", f.path))
+		return "", &TierError{Code: CodeInvalidSettings, Message: fmt.Sprintf("Radar cannot read the token file %s", f.path)}
 	}
 	t := strings.TrimSpace(string(data))
 	if t == "" {
-		return "", status.Error(codes.Unauthenticated, fmt.Sprintf("token file %s is empty", f.path))
+		return "", &TierError{Code: CodeInvalidSettings, Message: fmt.Sprintf("the token file %s is empty", f.path)}
 	}
 	return t, nil
 }

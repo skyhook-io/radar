@@ -909,7 +909,7 @@ func TestSubstrateLogScanSkipsOversizedLines(t *testing.T) {
 	huge := `{"message":"` + strings.Repeat("x", 3<<20) + `"}`
 	body := strings.Join([]string{line("before"), huge, line("after")}, "\n") + "\n"
 	filter, _ := model.NewLogFilter(model.Ref{Atespace: "research", Name: "lit-0201"}, "", "")
-	lines, scanned, err := filterSubstrateLog(strings.NewReader(body), filter, 10)
+	lines, _, scanned, err := filterSubstrateLog(strings.NewReader(body), filter, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1032,19 +1032,23 @@ func TestSubstrateKnownEmptyVersusUnknown(t *testing.T) {
 func TestSubstratePoolEvidenceGatesNegativeClaims(t *testing.T) {
 	for _, tc := range []struct {
 		state            string
+		clusterWide      bool
 		usable, complete bool
 	}{
-		{integration.KindCoverageFull, true, true},
-		{integration.KindCoverageNotInstalled, true, true},
-		{integration.KindCoveragePartial, true, false},
-		{integration.KindCoverageSyncing, false, false},
-		{integration.KindCoverageUncached, false, false},
-		{integration.KindCoverageDenied, false, false},
-		{integration.KindCoverageError, false, false},
+		{integration.KindCoverageFull, true, true, true},
+		// Every pool in a namespace pin, or in the caller's namespaces, is not
+		// every pool a cluster-wide template may match.
+		{integration.KindCoverageFull, false, true, false},
+		{integration.KindCoverageNotInstalled, false, true, true},
+		{integration.KindCoveragePartial, true, true, false},
+		{integration.KindCoverageSyncing, true, false, false},
+		{integration.KindCoverageUncached, true, false, false},
+		{integration.KindCoverageDenied, true, false, false},
+		{integration.KindCoverageError, true, false, false},
 	} {
-		in := substrateInputs(nil, nil, integration.KindCoverage{State: tc.state}, time.Now())
+		in := (&Server{}).substrateInputs(nil, nil, nil, integration.KindCoverage{State: tc.state}, tc.clusterWide, time.Now())
 		if in.PoolsUsable != tc.usable || in.PoolsComplete != tc.complete {
-			t.Errorf("%s: usable %v complete %v", tc.state, in.PoolsUsable, in.PoolsComplete)
+			t.Errorf("%s (cluster-wide %v): usable %v complete %v", tc.state, tc.clusterWide, in.PoolsUsable, in.PoolsComplete)
 		}
 	}
 	s := substrateTestServer(t, substrateapi.Kube{})
@@ -1249,11 +1253,11 @@ func TestSubstrateActorLogsFromLastNode(t *testing.T) {
 	connectFake(t, s, f, fullToken)
 	setPods := func(pods ...*corev1.Pod) {
 		prev := substrateWorkerPodsOn
-		substrateWorkerPodsOn = func(node string) []*corev1.Pod {
+		substrateWorkerPodsOn = func(node string) ([]*corev1.Pod, bool) {
 			if node != "node-1" {
 				t.Errorf("searched node %s, want the actor's assigned node", node)
 			}
-			return pods
+			return pods, true
 		}
 		t.Cleanup(func() { substrateWorkerPodsOn = prev })
 	}
@@ -1311,6 +1315,30 @@ func TestSubstrateActorLogsFromLastNode(t *testing.T) {
 		nodeGone(false)
 		resp := read()
 		if resp.ReasonCode != "noWorkerPods" || !strings.Contains(resp.Reason, "is gone") {
+			t.Errorf("resp = %+v", resp)
+		}
+	})
+	t.Run("Pods the caller may not list are neither searched nor named", func(t *testing.T) {
+		setPods(workerPod("hidden", "agent-pool-h", "node-1"), workerPod("agents", "agent-pool-old", "node-1"))
+		useLogs(map[string]string{"agents/agent-pool-old": actorLine("research", "lit-0193", "agent", "mine")})
+		prev := substratePodsListable
+		substratePodsListable = func(_ *Server, _ *http.Request, ns string) bool { return ns != "hidden" }
+		t.Cleanup(func() { substratePodsListable = prev })
+		resp := read()
+		if resp.ReasonCode != "candidates" || len(resp.Searched) != 1 || resp.Searched[0].Namespace != "agents" || strings.Contains(fmt.Sprint(resp), "agent-pool-h") {
+			t.Errorf("resp = %+v", resp)
+		}
+		setPods(workerPod("hidden", "agent-pool-h", "node-1"))
+		if resp := read(); resp.ReasonCode != "denied" || len(resp.Searched) != 0 || strings.Contains(fmt.Sprint(resp), "agent-pool-h") {
+			t.Errorf("only hidden Pods: %+v", resp)
+		}
+	})
+	t.Run("none found in a cache without every namespace's Pods proves nothing", func(t *testing.T) {
+		prev := substrateWorkerPodsOn
+		substrateWorkerPodsOn = func(string) ([]*corev1.Pod, bool) { return nil, false }
+		t.Cleanup(func() { substrateWorkerPodsOn = prev })
+		nodeGone(false)
+		if resp := read(); resp.ReasonCode != "podsNotCollected" || strings.Contains(resp.Reason, "is gone") {
 			t.Errorf("resp = %+v", resp)
 		}
 	})
@@ -1446,10 +1474,10 @@ func TestSubstratePoolCountsWorkerPods(t *testing.T) {
 		}
 		return p
 	}
-	substrateNamespaceWorkerPods = func(ns string) []*corev1.Pod {
+	substrateNamespaceWorkerPods = func(ns string) ([]*corev1.Pod, bool) {
 		other := ready("other-0", true, false)
 		other.Labels[substrateWorkerPodLabel] = "other-pool"
-		return []*corev1.Pod{ready("w-0", true, false), ready("w-1", false, false), ready("w-2", true, true), other}
+		return []*corev1.Pod{ready("w-0", true, false), ready("w-1", false, false), ready("w-2", true, true), other}, true
 	}
 	t.Cleanup(func() { substrateNamespaceWorkerPods = prev })
 	pools := []model.Pool{{Namespace: "agents", Name: "agent-pool", Ready: 3}, {Namespace: "agents", Name: "empty-pool"}}
@@ -1460,7 +1488,14 @@ func TestSubstratePoolCountsWorkerPods(t *testing.T) {
 	if got := pools[1].Pods; got == nil || *got != (model.PoolPods{}) {
 		t.Errorf("a pool with no Pods counts 0 when Pods were read: %+v", got)
 	}
-	substrateNamespaceWorkerPods = func(string) []*corev1.Pod { return nil }
+	// The lister answers nil for a namespace with no worker Pods left.
+	substrateNamespaceWorkerPods = func(string) ([]*corev1.Pod, bool) { return nil, true }
+	gone := []model.Pool{{Namespace: "agents", Name: "agent-pool", Ready: 3}}
+	s.withPoolPods(httptest.NewRequest(http.MethodGet, "/", nil), gone)
+	if gone[0].Pods == nil || *gone[0].Pods != (model.PoolPods{}) || gone[0].ReadyWorkers() != 0 {
+		t.Errorf("a read namespace with no worker Pods counts 0: %+v", gone[0])
+	}
+	substrateNamespaceWorkerPods = func(string) ([]*corev1.Pod, bool) { return nil, false }
 	unread := []model.Pool{{Namespace: "agents", Name: "agent-pool", Ready: 3}}
 	s.withPoolPods(httptest.NewRequest(http.MethodGet, "/", nil), unread)
 	if unread[0].Pods != nil || unread[0].ReadyWorkers() != 3 {
@@ -1710,7 +1745,108 @@ func TestSubstrateActorLogsWorkerRecords(t *testing.T) {
 	if all := read("all"); len(all.Lines) != 3 || all.MemoryKill == nil {
 		t.Errorf("all = %+v", all.Lines)
 	}
-	if containers := read("containers"); len(containers.Lines) != 1 || containers.MemoryKill != nil {
-		t.Errorf("containers = %+v", containers.Lines)
+	// The verdict is the same whichever source is shown.
+	if containers := read("containers"); len(containers.Lines) != 1 || containers.MemoryKill == nil || containers.MemoryKill.Time != worker.MemoryKill.Time || containers.MemoryKill.Current != worker.MemoryKill.Current {
+		t.Errorf("containers = %+v, kill %+v", containers.Lines, containers.MemoryKill)
 	}
+}
+
+// A kill, then a restart, then an unrelated crash: the restart rules the kill
+// out, and the Worker view, which drops lifecycle lines, says the same.
+func TestSubstrateMemoryKillVerdictIgnoresTheLogFilter(t *testing.T) {
+	s := substrateTestServer(t, substrateapi.Kube{})
+	f := defaultFake()
+	f.actors[0].Metadata.Uid = "uid-0201"
+	f.actors[0].Status.State = ateapi.ActorState_ACTOR_STATE_CRASHED
+	crash := time.Date(2026, 11, 17, 15, 52, 0, 0, time.UTC)
+	f.actors[0].Status.Crash = &ateapi.ActorCrash{Message: "exit status 1", CrashTime: timestamppb.New(crash)}
+	connectFake(t, s, f, fullToken)
+	labels := `"labels":{"ate.atespace":"research","ate.actor.name":"lit-0201"`
+	log := strings.Join([]string{
+		`2026-11-17T15:48:11Z {"time":"2026-11-17T15:48:11Z","level":"WARN","msg":"Killing a sandbox over its memory limit","ate.atespace":"research","ate.actor.name":"lit-0201","ate.actor.uid":"uid-0201","memoryLimitBytes":2147483648}`,
+		`2026-11-17T15:49:00Z {"message":"Actor restored",` + labels + `}}`,
+		`2026-11-17T15:51:59Z {"message":"panic: unrelated",` + labels + `,"ate.actor.container.name":"agent"}}`,
+	}, "\n")
+	prev := k8s.SetTestClient(podLogClient(t, "agents", "agent-pool-abc", log))
+	t.Cleanup(func() { k8s.SetTestClient(prev) })
+	for _, source := range []string{"all", "worker", "containers", "lifecycle"} {
+		var resp substrateLogsResponse
+		if rec := call(t, s, s.handleSubstrateActorLogs, substrateCall{path: "/logs?source=" + source, params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &resp); rec.Code != http.StatusOK {
+			t.Fatalf("%s: logs = %d %s", source, rec.Code, rec.Body)
+		}
+		if resp.MemoryKill == nil || resp.MemoryKill.Current {
+			t.Errorf("%s: kill = %+v, want an earlier run's, not this crash's", source, resp.MemoryKill)
+		}
+	}
+}
+
+// A worker's Pod facts come from Kubernetes, so they follow the caller's Pod
+// access, not their Substrate identity: in a namespace where they may not list
+// Pods the worker stays listed, its Pod unknown.
+func TestSubstrateWorkerPodFactsFollowPodAccess(t *testing.T) {
+	s := substrateTestServer(t, substrateapi.Kube{})
+	connectFake(t, s, defaultFake(), fullToken)
+	var asked []string
+	prev := substrateWorkerPods
+	substrateWorkerPods = func(workers []model.Worker) model.WorkerPods {
+		out := model.WorkerPods{}
+		for _, w := range workers {
+			asked = append(asked, w.Namespace+"/"+w.Pod)
+			out[w.Namespace+"/"+w.Pod] = model.WorkerPod{Ready: true, HasIP: true}
+		}
+		return out
+	}
+	t.Cleanup(func() { substrateWorkerPods = prev })
+	allow := func(ok bool) {
+		prev := substratePodsListable
+		substratePodsListable = func(_ *Server, _ *http.Request, ns string) bool { return ok || ns != "agents" }
+		t.Cleanup(func() { substratePodsListable = prev })
+	}
+
+	allow(true)
+	var detail substrateActorDetail
+	call(t, s, s.handleSubstrateActor, substrateCall{path: "/a", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
+	if detail.Worker == nil || detail.Worker.PodReady == nil || !slices.Contains(asked, "agents/agent-pool-abc") {
+		t.Fatalf("with Pod access the worker's Pod is read: %+v, asked %v", detail.Worker, asked)
+	}
+
+	asked = nil
+	allow(false)
+	var workers substrateWorkersResponse
+	call(t, s, s.handleSubstrateWorkers, substrateCall{path: "/api/substrate/workers"}, &workers)
+	detail = substrateActorDetail{}
+	call(t, s, s.handleSubstrateActor, substrateCall{path: "/a", params: map[string]string{"atespace": "research", "name": "lit-0201"}}, &detail)
+	if slices.ContainsFunc(asked, func(p string) bool { return strings.HasPrefix(p, "agents/") }) {
+		t.Errorf("Pods in a namespace the caller may not list were read: %v", asked)
+	}
+	if len(workers.Workers) == 0 || detail.Worker == nil || detail.Worker.PodReady != nil {
+		t.Errorf("the worker stays, its Pod unknown: workers %d, row %+v", len(workers.Workers), detail.Worker)
+	}
+}
+
+// A wrong TLS server name fails the handshake, which gRPC reports as
+// Unavailable; it reads as a certificate problem, not an unreachable server.
+// A token file that can't be read is a setting to fix here, not Substrate
+// rejecting the identity.
+func TestSubstrateConnectionFailuresSayWhere(t *testing.T) {
+	t.Run("handshake", func(t *testing.T) {
+		s := substrateTestServer(t, substrateapi.Kube{})
+		endpoint, caFile := startFakeSubstrate(t, defaultFake())
+		saveTestSettings(t, s, &substrateapi.Settings{Identity: substrateapi.IdentityTokenFile, TokenFile: tokenFile(t, fullToken), Endpoint: endpoint, CAFile: caFile, ServerName: "not-the-api.example"})
+		if tier := settledStatus(t, s).APITier; tier.Code != substrateapi.CodeTLS {
+			t.Errorf("wrong server name = %s %q, want tls", tier.Code, tier.Reason)
+		}
+	})
+	t.Run("token file", func(t *testing.T) {
+		s := substrateTestServer(t, substrateapi.Kube{})
+		endpoint, caFile := startFakeSubstrate(t, defaultFake())
+		path := tokenFile(t, fullToken)
+		saveTestSettings(t, s, &substrateapi.Settings{Identity: substrateapi.IdentityTokenFile, TokenFile: path, Endpoint: endpoint, CAFile: caFile})
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if tier := settledStatus(t, s).APITier; tier.Code != substrateapi.CodeInvalidSettings || strings.Contains(tier.Reason, "Substrate did not accept") {
+			t.Errorf("unreadable token file = %s %q, want invalidSettings", tier.Code, tier.Reason)
+		}
+	})
 }

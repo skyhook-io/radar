@@ -446,6 +446,8 @@ function logGap(logs: SubstrateActorLogs, actor: SubstrateActorDetail['actor']):
       return `No worker Pod runs on ${node} now: the one it ran in is gone, and its lines with it.`
     case 'denied':
       return `You may not read the logs of the worker Pods on ${node}.`
+    case 'podsNotCollected':
+      return `Radar doesn’t hold Pods in every namespace, so it can’t search the worker Pods on ${node}.`
     case 'noMatch':
       return `None of the ${searched} worker ${searched === 1 ? 'Pod' : 'Pods'} on ${node} holds its lines${logs.windowFull ? ' within the part Radar scanned' : ''}.`
     case 'noWorker':
@@ -461,7 +463,7 @@ function logGap(logs: SubstrateActorLogs, actor: SubstrateActorDetail['actor']):
  */
 type LogsRead = { data?: SubstrateActorLogs; isLoading: boolean; error: unknown; isRefetchError?: boolean; dataUpdatedAt?: number }
 
-export function ActorLogsBody({ actor, logs, compact }: { actor: SubstrateActorDetail['actor']; logs: LogsRead; compact?: boolean }) {
+export function ActorLogsBody({ actor, logs, compact, killNoticeAbove }: { actor: SubstrateActorDetail['actor']; logs: LogsRead; compact?: boolean; killNoticeAbove?: boolean }) {
   const lineId = useId()
   // A refresh that says the log can't be read any more replaces the lines kept from before.
   const data = definitiveFailure(substrateErrorCode(logs.error)) ? undefined : logs.data
@@ -495,7 +497,7 @@ export function ActorLogsBody({ actor, logs, compact }: { actor: SubstrateActorD
             Candidates from {pods.length === 1 ? <span className="font-mono">{pods[0]}</span> : `${pods.length} worker Pods`} on <span className="font-mono">{data.node}</span>, the node it last ran on{crashedAt ? <>, before it crashed <When iso={crashedAt} /></> : ''}: Substrate doesn’t record which Pod it ran in{pods.length > 1 ? ', so each line names its Pod' : ''}.
           </p>
         )}
-        {kill && !compact && (
+        {kill && !compact && !killNoticeAbove && (
           <p className="text-sm text-theme-text-secondary">
             {kill.current
               ? <>{at >= 0 ? 'Marked below: the worker’s memory-limit kill' : 'The worker’s log records a memory-limit kill'}{tie ? `, ${tie}` : ''}.</>
