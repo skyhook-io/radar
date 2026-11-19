@@ -71,7 +71,13 @@ func singleIssueRowChange(t *testing.T, env *authTestEnv, user string, ref rowRe
 		if iss.ID != id {
 			continue
 		}
-		change, ok := issuecorrelation.RowChange(iss)
+		// The answer's history is the caller's filtered copy; the fixture's
+		// history is complete, so it decides the same as the server's own.
+		var history issuesapi.HistoryCoverage
+		if iss.Correlation != nil && iss.Correlation.History != nil {
+			history = *iss.Correlation.History
+		}
+		change, ok := issuecorrelation.RowChange(iss, history)
 		return IssueRowChange{FirstSeen: iss.FirstSeen, ResourceCreatedAt: iss.ResourceCreatedAt, Change: change}, ok
 	}
 	return IssueRowChange{}, false

@@ -277,7 +277,7 @@ func TestCorrelate_AnchoredSelectionKeepsTheTrigger(t *testing.T) {
 	}
 	// The collapsed row names the trigger, never a later repair.
 	iss.CorrelatedChanges = got.Changes
-	row, ok := RowChange(iss)
+	row, ok := RowChange(iss, got.History)
 	if !ok || !changeTime(row).Equal(trigger) || row.EventID == "" {
 		t.Fatalf("row change %+v (ok %v), want the trigger at %s with its event id", row, ok, utc(trigger))
 	}

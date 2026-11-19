@@ -18,12 +18,18 @@ import (
 // A row names nothing when part of the answer couldn't be read (a source the
 // caller can't list, a failed read, sources Radar couldn't identify or isn't
 // collecting): that part may hold a newer change, and the row has no room to
-// say so. Incomplete history is the exception: what Radar no longer holds or
-// never saw is older than anything it recorded, so the newest recorded change
-// stands.
-func RowChange(iss issuesapi.Issue) (issuesapi.RecentChange, bool) {
-	if iss.Correlation != nil && iss.Correlation.Unknown != nil && iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
-		return issuesapi.RecentChange{}, false
+// say so. With incomplete history the pick stands only when it is at or after
+// history's complete-since boundary, so every change Radar may have missed is
+// older. history is the correlation's own coverage, before it is filtered for
+// the caller: the boundary differs per kind (a ConfigMap watch can start after
+// the Deployment's), and the merged boundary is the latest of them.
+func RowChange(iss issuesapi.Issue, history issuesapi.HistoryCoverage) (issuesapi.RecentChange, bool) {
+	historyGap := false
+	if iss.Correlation != nil && iss.Correlation.Unknown != nil {
+		if iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
+			return issuesapi.RecentChange{}, false
+		}
+		historyGap = true
 	}
 	var pick issuesapi.RecentChange
 	found := false
@@ -38,6 +44,9 @@ func RowChange(iss issuesapi.Issue) (issuesapi.RecentChange, bool) {
 		}
 	}
 	if !found {
+		return issuesapi.RecentChange{}, false
+	}
+	if historyGap && (history.CompleteSince.IsZero() || changeTime(pick).Before(history.CompleteSince)) {
 		return issuesapi.RecentChange{}, false
 	}
 	return rowFields(pick), true

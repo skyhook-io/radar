@@ -58,9 +58,11 @@ func (s *Server) correlationAccess(r *http.Request, helmReleases []helm.HelmRele
 }
 
 // correlateResourceIssue correlates the issue with id in place and returns
-// the envelope's correlation_status: empty when it was found. An error means
-// the timeline store or cluster connection changed during the read.
-func (s *Server) correlateResourceIssue(r *http.Request, related []issues.Issue, id string, helmReleases []helm.HelmRelease) (string, error) {
+// the envelope's correlation_status: empty when it was found. history is the
+// correlation's coverage before it is filtered for the caller, for the row
+// pick (issuecorrelation.RowChange); it never leaves the server. An error
+// means the timeline store or cluster connection changed during the read.
+func (s *Server) correlateResourceIssue(r *http.Request, related []issues.Issue, id string, helmReleases []helm.HelmRelease) (status string, history issuesapi.HistoryCoverage, err error) {
 	index := -1
 	for i := range related {
 		if related[i].ID == id {
@@ -69,7 +71,7 @@ func (s *Server) correlateResourceIssue(r *http.Request, related []issues.Issue,
 		}
 	}
 	if index < 0 {
-		return correlationStatusNotFound, nil
+		return correlationStatusNotFound, history, nil
 	}
 	iss := &related[index]
 	now := time.Now()
@@ -80,10 +82,10 @@ func (s *Server) correlateResourceIssue(r *http.Request, related []issues.Issue,
 	if err := withTimelineIdentity(func() {
 		result = issuecorrelation.Correlate(r.Context(), *iss, opts, access)
 	}); err != nil {
-		return "", err
+		return "", history, err
 	}
 	if !result.Eligible {
-		return "", nil
+		return "", history, nil
 	}
 	if result.Timing.Changed {
 		iss.IssueTiming, iss.IssueTimingBasis, iss.TimingSummary = result.Timing.IssueTiming, result.Timing.IssueTimingBasis, result.Timing.TimingSummary
@@ -109,7 +111,7 @@ func (s *Server) correlateResourceIssue(r *http.Request, related []issues.Issue,
 		Unknown:       result.Unknown,
 		History:       meaningfulchanges.HistoryCoverageFor(result.History, s.callerReadsAllNamespaces(r)),
 	}
-	return "", nil
+	return "", result.History, nil
 }
 
 // helmCorrelationStatus is the envelope's status when the issue named by

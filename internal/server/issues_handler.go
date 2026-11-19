@@ -369,6 +369,9 @@ type resourceIssuesRead struct {
 	// correlationStatus is the envelope's correlation_status per correlated
 	// id; empty for an id that was found.
 	correlationStatus map[string]string
+	// correlationHistory is each correlated id's history coverage before it
+	// is filtered for the caller; server-side only.
+	correlationHistory map[string]issuesapi.HistoryCoverage
 }
 
 // readResourceIssues is the per-resource issues read shared by the
@@ -460,7 +463,7 @@ func (s *Server) readResourceIssues(r *http.Request, provider *issues.CacheProvi
 	read.related, read.unchecked, read.evidenceWithheld = related, unchecked, evidenceWithheld
 	read.nativeHelm, read.subjectCache = nativeHelm, subjectCache
 	for _, id := range correlate {
-		status, err := s.correlateResourceIssue(r, related, id, helmReleases)
+		status, history, err := s.correlateResourceIssue(r, related, id, helmReleases)
 		if err != nil {
 			return read, err
 		}
@@ -468,9 +471,9 @@ func (s *Server) readResourceIssues(r *http.Request, provider *issues.CacheProvi
 			status = helmStatus
 		}
 		if read.correlationStatus == nil {
-			read.correlationStatus = map[string]string{}
+			read.correlationStatus, read.correlationHistory = map[string]string{}, map[string]issuesapi.HistoryCoverage{}
 		}
-		read.correlationStatus[id] = status
+		read.correlationStatus[id], read.correlationHistory[id] = status, history
 	}
 	return read, nil
 }
