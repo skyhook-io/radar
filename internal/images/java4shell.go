@@ -21,6 +21,15 @@ const (
 	java4ShellVBMILabel        = "feature.node.kubernetes.io/cpu-cpuid.AVX512VBMI"
 	java4ShellRowLimit         = 100
 	java4ShellDockerHubLookups = 24
+	javaHomeDeclaredReason     = "java_home_declared"
+	noJavaDeclarationReason    = "no_java_declaration"
+)
+
+const (
+	unassessedJavaHomePriority = iota
+	unassessedOtherPriority
+	unassessedNoDeclarationPriority
+	unassessedPriorityCount
 )
 
 var ErrJava4ShellBusy = errors.New("a Java4Shell check is already running")
@@ -237,7 +246,10 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 			}
 		}
 		if version == "" {
-			c.unassessedReason = "no_java_declaration"
+			c.unassessedReason = noJavaDeclarationReason
+			if res.javaHomeDeclared {
+				c.unassessedReason = javaHomeDeclaredReason
+			}
 			continue
 		}
 		affected, fixedIn, known := java4ShellVersion(version)
@@ -291,9 +303,9 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 	detailsCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	unassessed := map[java4ShellUnassessedGroup]int{}
-	for _, missingDeclaration := range []bool{false, true} {
+	for priority := range unassessedPriorityCount {
 		for _, c := range containers {
-			if c.unassessedReason == "" || (c.unassessedReason == "no_java_declaration") != missingDeclaration {
+			if c.unassessedReason == "" || unassessedPriority(c.unassessedReason) != priority {
 				continue
 			}
 			out.Unassessed[c.unassessedReason]++
@@ -329,10 +341,14 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 }
 
 func unassessedPriority(reason string) int {
-	if reason == "no_java_declaration" {
-		return 1
+	switch reason {
+	case javaHomeDeclaredReason:
+		return unassessedJavaHomePriority
+	case noJavaDeclarationReason:
+		return unassessedNoDeclarationPriority
+	default:
+		return unassessedOtherPriority
 	}
-	return 0
 }
 
 func java4ShellPlacement(node *corev1.Node) (v1.Platform, bool, string) {

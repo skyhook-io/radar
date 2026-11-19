@@ -104,3 +104,19 @@ func TestJava4ShellCLIRefusesUnreadablePodScope(t *testing.T) {
 		t.Fatalf("denied scope reported as readable: %+v, %v, %v", report, err, kube.Actions())
 	}
 }
+
+func TestJava4ShellCLIPrintsJavaHomeAsUnassessed(t *testing.T) {
+	report := images.Java4ShellReport{Java4ShellResult: images.Java4ShellResult{
+		Containers: 1,
+		Unassessed: map[string]int{"java_home_declared": 1},
+	}}
+	var output bytes.Buffer
+	if err := writeJava4ShellCheck(&output, "table", report); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Java version could not be assessed", "Image sets JAVA_HOME. Java version unknown"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("expected %q in %s", want, output.String())
+		}
+	}
+}
