@@ -73,6 +73,10 @@ func (v *View) newSearchIn(namespaces []string) search {
 	return search{v: v, across: true, scope: scope, readable: scope, index: cache.NamespaceIndex, keys: namespaces}
 }
 
+// needsKindAccess reports a gap the caller is told of only if they may read
+// its kind; one Radar's setup causes names no object.
+func needsKindAccess(g ownership.Gap) bool { return !g.FromRadarSetup() }
+
 // each asks relate about every object of gk in the search and emits those
 // that relate and the caller may read. relate records into its own coverage
 // and returns how to emit the object, or nil when it doesn't relate; what it
@@ -81,7 +85,7 @@ func (v *View) newSearchIn(namespaces []string) search {
 // resolution), if the caller may read it.
 func (s search) each(gk resourceid.GroupKind, c *Coverage, relate func(o IndexedObject, c *Coverage) (emit func())) {
 	read := s.v.session.Indexed(gk, s.index, s.keys, s.scope)
-	if len(read.Gaps) > 0 && (s.across || s.v.mayRead(gk, s.namespace, c)) {
+	if len(read.Gaps) > 0 && (s.across || !slices.ContainsFunc(read.Gaps, needsKindAccess) || s.v.mayRead(gk, s.namespace, c)) {
 		s.keepGaps(gk, read.Gaps, c)
 	}
 	for _, o := range read.Objects {

@@ -82,10 +82,11 @@ func (c Coverage) Complete() bool {
 // not safe for concurrent use, and its answers hold only if the session's
 // ValidateCaches passes once they are built.
 type View struct {
-	session Session
-	access  ownership.Access
-	limit   int
-	decided map[accessKey]ownership.Decision
+	session       Session
+	lookupSession Session
+	access        ownership.Access
+	limit         int
+	decided       map[accessKey]ownership.Decision
 }
 
 type accessKey struct {
@@ -101,7 +102,14 @@ const DefaultLimit = 500
 // DefaultLimit objects per Referrers, Selected, SelectedBy or Composed
 // answer.
 func NewView(s Session, access ownership.Access) *View {
-	return &View{session: s, access: access, limit: DefaultLimit, decided: map[accessKey]ownership.Decision{}}
+	return &View{session: s, lookupSession: s, access: access, limit: DefaultLimit, decided: map[accessKey]ownership.Decision{}}
+}
+
+// WithAuxiliarySession supplies non-emitted selector inputs such as Namespace
+// labels. Emission reads still use the original session and Access.
+func (v *View) WithAuxiliarySession(s Session) *View {
+	v.lookupSession = s
+	return v
 }
 
 // WithLimit sets, on v itself, the most objects a Referrers, Selected,

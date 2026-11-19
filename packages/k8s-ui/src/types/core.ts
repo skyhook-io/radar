@@ -681,6 +681,13 @@ export interface ResourceRef {
   namespace: string
   name: string
   group?: string  // API group for CRDs (e.g., 'cert-manager.io')
+  /**
+   * Set when the subject's own spec names this object but the viewer may not
+   * read it ('denied'), or Radar couldn't check ('unverified'). Only the name
+   * is known: not whether it exists, nor its state. Absent means no qualifier
+   * was recorded, not that the object exists.
+   */
+  state?: 'denied' | 'unverified'
 }
 
 // Computed relationships for a resource
