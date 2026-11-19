@@ -308,6 +308,53 @@ func TestChartsPartialAnswersAreMarked(t *testing.T) {
 	}
 }
 
+// An empty partial answer is still partial, and the container-filter retry
+// keeps whichever of its two answers was incomplete.
+func TestChartsEmptyPartialAnswersStayMarked(t *testing.T) {
+	resolve, _ := scopeStoreResolver(nil, func(string) []map[string]string { return nil })
+	partialEmpty := &prom.QueryResult{ResultType: "matrix", Annotations: prom.QueryAnnotations{Partial: true}}
+	cases := []struct {
+		name              string
+		primary, fallback *prom.QueryResult
+		wantSeries        int
+	}{
+		{"both empty, primary partial", partialEmpty, &prom.QueryResult{ResultType: "matrix"}, 0},
+		{"both empty, fallback partial", &prom.QueryResult{ResultType: "matrix"}, partialEmpty, 0},
+		{"fallback drawn, primary partial", partialEmpty, &prom.QueryResult{ResultType: "matrix", Series: []prom.Series{vec(map[string]string{}, 1)}}, 1},
+		{"fallback drawn with a warning", &prom.QueryResult{ResultType: "matrix"}, &prom.QueryResult{ResultType: "matrix", Series: []prom.Series{vec(map[string]string{}, 1)}, Annotations: prom.QueryAnnotations{Warnings: []string{"shard down"}}}, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			store := &twoClusterStore{answer: func(query string) (*prom.QueryResult, error) {
+				if strings.Contains(query, "container!=''") {
+					return c.primary, nil
+				}
+				return c.fallback, nil
+			}}
+			r, err := resourceChart(context.Background(), chartDeps{q: store, resolve: resolve}, "Pod", "shop", "api-1", prom.CategoryCPU, "1h", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(store.queries) != 2 {
+				t.Fatalf("queries = %v, want the primary and the fallback", store.queries)
+			}
+			if !r.Partial || len(r.Result.Series) != c.wantSeries {
+				t.Errorf("partial = %v, series = %d; want partial with %d series", r.Partial, len(r.Result.Series), c.wantSeries)
+			}
+		})
+	}
+	t.Run("empty partial without a fallback", func(t *testing.T) {
+		store := &twoClusterStore{answer: func(string) (*prom.QueryResult, error) { return partialEmpty, nil }}
+		r, err := resourceChart(context.Background(), chartDeps{q: store, resolve: resolve}, "Pod", "shop", "api-1", prom.CategoryNetworkRX, "1h", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !r.Partial || len(r.Result.Series) != 0 {
+			t.Errorf("partial = %v, series = %d; want an empty partial answer", r.Partial, len(r.Result.Series))
+		}
+	})
+}
+
 func TestChartsCallerLeavingDuringScopeCheck(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

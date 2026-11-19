@@ -9,6 +9,8 @@ let connected = false
 const ranges: string[] = []
 const charts: { seriesLabels?: string[]; referenceLines?: unknown[] }[] = []
 let workload: WorkloadMetrics
+const drawnMetrics = { unit: 'cores', result: { series: [{ labels: { pod: 'web-0' }, dataPoints: [{ timestamp: 100, value: 1 }, { timestamp: 160, value: 2 }] }] } }
+let resourceMetrics: Record<string, unknown> = drawnMetrics
 
 vi.mock('../../api/client', async (importActual) => ({
   ...(await importActual<typeof import('../../api/client')>()),
@@ -17,7 +19,7 @@ vi.mock('../../api/client', async (importActual) => ({
   usePrometheusConnect: () => ({ mutate: vi.fn(), isPending: false }),
   usePrometheusResourceMetrics: (_kind: string, _ns: string, _name: string, _category: string, range: string) => {
     ranges.push(range)
-    return { data: { unit: 'cores', result: { series: [{ labels: { pod: 'web-0' }, dataPoints: [{ timestamp: 100, value: 1 }, { timestamp: 160, value: 2 }] }] } } }
+    return { data: resourceMetrics }
   },
 }))
 vi.mock('../../api/workloadMetrics', () => ({ useWorkloadMetrics: () => ({ data: workload }) }))
@@ -29,6 +31,7 @@ vi.mock('@skyhook-io/k8s-ui/components/charts', async (importActual) => ({
 }))
 
 const { PrometheusChartsGrid } = await import('./PrometheusChartsGrid')
+const { PARTIAL_DATA_NOTE } = await import('@skyhook-io/k8s-ui/components/charts')
 const resource = { spec: { template: { spec: { containers: [{ resources: { requests: { cpu: '100m' }, limits: { cpu: '200m' } } }] } } } }
 const render = (url = '/workloads/Deployment/demo/web?tab=metrics', embedded = false) => renderToString(
   <MemoryRouter initialEntries={[url]}><NavCustomizationProvider value={embedded ? { embedded: true } : {}}>
@@ -40,6 +43,7 @@ beforeEach(() => {
   connected = false
   ranges.length = 0
   charts.length = 0
+  resourceMetrics = drawnMetrics
   workload = { state: 'available', sources: [], pods: 1, podsTotal: 1, start: 100, end: 160, stepSeconds: 60, rateWindowSeconds: 300, history: {}, comparison: {}, panels: {} }
 })
 
@@ -89,6 +93,15 @@ describe('Expanded metrics recovery and scope', () => {
     expect(charts.map((chart) => chart.seriesLabels)).toContainEqual(['Requests / sec'])
     expect(charts.map((chart) => chart.seriesLabels)).toContainEqual(['p50', 'p95'])
     expect(charts.map((chart) => chart.seriesLabels)).toContainEqual(['Workload', 'Maximum Pod'])
+  })
+  it('notes a partial answer with no samples instead of claiming no data', () => {
+    connected = true
+    resourceMetrics = { unit: 'cores', result: { series: [] }, partial: true }
+    const html = render()
+    expect(html).toContain('No samples in a partial answer')
+    expect(html).toContain(PARTIAL_DATA_NOTE)
+    resourceMetrics = { unit: 'cores', result: { series: [] } }
+    expect(render()).not.toContain(PARTIAL_DATA_NOTE)
   })
   it('retains template references on verified current-Pod charts', () => {
     connected = true

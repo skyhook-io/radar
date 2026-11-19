@@ -97,4 +97,11 @@ describe("PrometheusChartsView cluster scope", () => {
     expect(renderView(result({ result: withSeries, partial: true }))).toContain(PARTIAL_DATA_NOTE);
     expect(renderView(result({ result: withSeries }))).not.toContain(PARTIAL_DATA_NOTE);
   });
+
+  it("notes a partial answer with no samples instead of claiming no data", () => {
+    const html = renderView(result({ result: { series: [] }, partial: true }));
+    expect(html).toContain(PARTIAL_DATA_NOTE);
+    expect(html).not.toContain("No data for this time range");
+    expect(renderView(result({ result: { series: [] }, partial: true }), false)).toContain(PARTIAL_DATA_NOTE);
+  });
 });

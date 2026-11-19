@@ -359,7 +359,7 @@ function MetricsPanel({
             )}
           </>
         ) : (
-          <PanelNoData hint={metrics?.hint} />
+          <PanelNoData hint={metrics?.hint} partial={metrics?.partial} />
         )}
       </div>
     </section>
@@ -414,10 +414,13 @@ function PanelError({ message }: { message: string }) {
   );
 }
 
-function PanelNoData({ hint }: { hint?: string }) {
+function PanelNoData({ hint, partial }: { hint?: string; partial?: boolean }) {
   return (
     <div className="flex flex-col items-center justify-center h-[240px] text-theme-text-tertiary text-xs px-3 text-center">
-      No data
+      {partial ? "No samples in a partial answer" : "No data"}
+      {partial && (
+        <span className="text-theme-text-quaternary mt-1 max-w-xs">{PARTIAL_DATA_NOTE}</span>
+      )}
       {hint && (
         <span className="text-theme-text-quaternary mt-1 max-w-xs">{hint}</span>
       )}

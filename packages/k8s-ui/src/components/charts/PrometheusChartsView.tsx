@@ -224,7 +224,13 @@ export function PrometheusChartsView({
 
   if (!showEmptyState) {
     if (!isConnected) return null;
-    if (!metricsLoading && !metricsError && !series.length && !withheld)
+    if (
+      !metricsLoading &&
+      !metricsError &&
+      !series.length &&
+      !withheld &&
+      !metrics?.partial
+    )
       return null;
   }
 
@@ -346,11 +352,24 @@ export function PrometheusChartsView({
         ) : (
           <div className="flex h-full flex-col items-center justify-center text-theme-text-tertiary">
             <BarChart3 className="mb-2 h-8 w-8 opacity-40" />
-            <p className="text-sm">No data for this time range</p>
-            <p className="mt-1 text-xs text-theme-text-quaternary">
-              Try a different time range or check that metrics are being
-              collected
-            </p>
+            {/* A partial answer with no samples is not "no data": the missing
+                part of the store may hold all of it. */}
+            {metrics?.partial ? (
+              <>
+                <p className="text-sm">No samples in a partial answer</p>
+                <p className="mt-1 max-w-lg text-center text-xs text-theme-text-quaternary">
+                  {PARTIAL_DATA_NOTE}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm">No data for this time range</p>
+                <p className="mt-1 text-xs text-theme-text-quaternary">
+                  Try a different time range or check that metrics are being
+                  collected
+                </p>
+              </>
+            )}
             {/* An empty chart is where the pod set matters most: it separates
                 "these pods reported nothing" from "we charted the wrong pods". */}
             {coverageNote && (
