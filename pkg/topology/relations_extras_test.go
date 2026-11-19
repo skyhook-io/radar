@@ -2,6 +2,8 @@ package topology
 
 import (
 	"encoding/json"
+	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"testing"
@@ -353,5 +355,34 @@ func TestRelationsRetiredRevisionDeclaresOnlyForItsContext(t *testing.T) {
 	}
 	if len(rel.ConfigRefs) != 0 {
 		t.Fatalf("Related Resources drew a retired revision's Secret: %+v", rel.ConfigRefs)
+	}
+}
+
+// The AI context lists every entrypoint, also through a Service the caller
+// may not read, as it lists every other relation; the drawer keeps its cap.
+func TestRelationsContextListsEveryEntrypoint(t *testing.T) {
+	labels := map[string]string{"app": "web"}
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}}}, "apps", "Deployment")
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: corev1.ServiceSpec{Selector: labels}}, "", "Service")
+	objects := []runtime.Object{dep, svc}
+	const ingresses = relations.DefaultLimit + 1
+	for i := range ingresses {
+		objects = append(objects, projectionObject(&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("front-%03d", i), Namespace: "shop"}, Spec: networkingv1.IngressSpec{DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "web"}}}}, "networking.k8s.io", "Ingress"))
+	}
+	s := newProjectionSession(t, objects...)
+	for _, hidden := range []bool{false, true} {
+		emit := projectionAccess{}
+		if hidden {
+			emit.denied = []string{"Service"}
+		}
+		traverse := ownership.Unrestricted()
+		rel, extras := RelationsContextAnswer(s, emit, traverse, ownership.NewView(s, emit), projectionRef(dep), dep, nil, nil)
+		if len(rel.Ingresses) != ingresses || slices.ContainsFunc(slices.Collect(maps.Values(extras.Fields)), func(c relations.Coverage) bool { return c.Truncated }) {
+			t.Fatalf("hidden=%v: context listed %d Ingresses, fields %+v", hidden, len(rel.Ingresses), extras.Fields)
+		}
+		rel, extras = RelationsAnswerWithExtras(s, emit, traverse, ownership.NewView(s, emit), projectionRef(dep), dep, nil, nil)
+		if len(rel.Ingresses) != relations.DefaultLimit || !extras.Fields["Entrypoints"].Truncated {
+			t.Fatalf("hidden=%v: drawer listed %d Ingresses, fields %+v", hidden, len(rel.Ingresses), extras.Fields)
+		}
 	}
 }

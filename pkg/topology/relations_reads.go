@@ -176,7 +176,7 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 		if traverse.CanRead(svc.GroupKind(), svc.Namespace) != ownership.Allowed {
 			continue
 		}
-		v := relations.NewView(s, intermediateAccess{Access: emit, ref: svc, traverse: traverse})
+		v := relations.NewView(s, intermediateAccess{Access: emit, ref: svc, traverse: traverse}).WithLimit(n.limit)
 		for _, family := range []*relations.Family{relations.IngressBackends, relations.GatewayBackends, relations.IstioServiceHosts(istioDomain), relations.TraefikBackends, relations.ContourBackends} {
 			found := v.Referrers(family, svc, nil)
 			n.cover(family.Name, found.Coverage)

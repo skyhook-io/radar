@@ -92,6 +92,9 @@ type neighborhood struct {
 	// read, listed by name.
 	unreadable []ResourceRef
 	decided    map[decisionKey]ownership.Decision
+	// limit is the most objects each Referrers or selector answer of the
+	// answer's views lists, as relations.View.WithLimit takes it.
+	limit int
 }
 
 // familyNodeID is a node ID parseNodeID can't read, so a node's identity
@@ -323,11 +326,12 @@ func relationsAnswer(session relations.Session, access, traverse ownership.Acces
 	if provider != nil {
 		istioDomain = NewBuilder(provider).istioServiceDomain()
 	}
-	v := relations.NewView(session, access)
+	limit := relations.DefaultLimit
 	if contextOnly {
-		v.WithLimit(math.MaxInt)
+		limit = math.MaxInt
 	}
-	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access, extras: &RelationshipExtras{Subject: subject, Fields: map[string]relations.Coverage{}, ScalerManagers: map[resourceid.Ref]resourceid.Ref{}}}
+	v := relations.NewView(session, access).WithLimit(limit)
+	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access, limit: limit, extras: &RelationshipExtras{Subject: subject, Fields: map[string]relations.Coverage{}, ScalerManagers: map[resourceid.Ref]resourceid.Ref{}}}
 	families, selectors := relations.Families(istioDomain), relations.SelectorFamilies()
 	n.node(subject)
 	if contextOnly {
