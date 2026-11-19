@@ -1152,7 +1152,17 @@ func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider
 		if extras != nil {
 			key := resourceid.NewRef(ref.Group, ref.Kind, ref.Namespace, ref.Name)
 			if manager, ok := extras.ScalerManagers[key]; ok {
-				entry.ManagedBy = &ContextRef{Kind: manager.Kind, Group: manager.Group, Namespace: manager.Namespace, Name: manager.Name}
+				// Named by the scaler's metadata, not the subject's spec, so
+				// checked like any other emitted reference.
+				candidate := &ContextRef{Kind: manager.Kind, Group: manager.Group, Namespace: manager.Namespace, Name: manager.Name}
+				switch decideRef(ctx, ac, candidate) {
+				case ownership.Allowed:
+					entry.ManagedBy = candidate
+				case ownership.Undecided:
+					omitted.add("scaledBy.managedBy", OmittedUnavailable)
+				default:
+					omitted.add("scaledBy.managedBy", OmittedRBACDenied)
+				}
 			}
 		}
 		out = append(out, entry)

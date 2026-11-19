@@ -2462,3 +2462,56 @@ func (d nodeDecider) DecideRead(_ context.Context, _, kind, _ string) ownership.
 	}
 	return ownership.Allowed
 }
+
+// A scaler's manager is named by the scaler's own metadata, so the context
+// checks it like every reference it emits: listed when the caller may read
+// it, otherwise left out and the field marked.
+func TestBuild_ScalerManagerIsCheckedLikeEveryReference(t *testing.T) {
+	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "horizontalpodautoscaler/prod/api-hpa")
+	scaler := resourceid.NewRef("autoscaling", "HorizontalPodAutoscaler", "prod", "api-hpa")
+	manager := resourceid.NewRef("keda.sh", "ScaledObject", "prod", "api")
+	for _, tc := range []struct {
+		decision ownership.Decision
+		listed   bool
+		reason   OmittedReason
+	}{
+		{ownership.Allowed, true, ""},
+		{ownership.Denied, false, OmittedRBACDenied},
+		{ownership.Undecided, false, OmittedUnavailable},
+	} {
+		rel := topology.GetRelationshipsWithObject(topology.KindForGVK("Deployment", "apps"), "prod", "api", deploy, topo, mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}}, nil, nil)
+		extras := &topology.RelationshipExtras{ScalerManagers: map[resourceid.Ref]resourceid.Ref{scaler: manager}}
+		rc := Build(context.Background(), deploy, Options{Tier: TierBasic, Relationships: rel, RelationshipExtras: extras, AccessChecker: kindDecider{kind: "ScaledObject", decision: tc.decision}, Provider: mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}}})
+		if len(rc.ScaledBy) != 1 {
+			t.Fatalf("%v: scaledBy = %+v", tc.decision, rc.ScaledBy)
+		}
+		if listed := rc.ScaledBy[0].ManagedBy != nil; listed != tc.listed {
+			t.Errorf("%v: managedBy = %+v", tc.decision, rc.ScaledBy[0].ManagedBy)
+		}
+		marked := OmittedReason("")
+		for _, o := range rc.Omitted {
+			if o.Field == "scaledBy.managedBy" {
+				marked = o.Reason
+			}
+		}
+		if marked != tc.reason {
+			t.Errorf("%v: scaledBy.managedBy omitted %q, want %q", tc.decision, marked, tc.reason)
+		}
+	}
+}
+
+// kindDecider decides kind as decision and allows the rest.
+type kindDecider struct {
+	kind     string
+	decision ownership.Decision
+}
+
+func (d kindDecider) CanRead(ctx context.Context, group, kind, namespace string) bool {
+	return d.DecideRead(ctx, group, kind, namespace) == ownership.Allowed
+}
+func (d kindDecider) DecideRead(_ context.Context, _, kind, _ string) ownership.Decision {
+	if kind == d.kind {
+		return d.decision
+	}
+	return ownership.Allowed
+}
