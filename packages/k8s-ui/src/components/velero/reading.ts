@@ -86,7 +86,7 @@ export function veleroZoneConfirmed(zone: VeleroZone): boolean {
  * fail, and only in green when its zone is confirmed.
  */
 export function veleroScheduleBadge(
-  reading: Pick<VeleroScheduleReading, 'state' | 'attention'> & Partial<Pick<VeleroScheduleReading, 'reason' | 'zone' | 'runs'>>,
+  reading: Pick<VeleroScheduleReading, 'state' | 'attention'> & Partial<Pick<VeleroScheduleReading, 'reason' | 'zone' | 'runs' | 'dayMatch'>>,
 ): { label: string; tone: HealthLevel; detail?: string } {
   const onSchedule = reading.state === 'onSchedule' || (reading.state === 'due' && reading.reason !== 'serverDown')
   if (!onSchedule) return { label: veleroScheduleStateLabel(reading.state), tone: veleroScheduleTone(reading) }
@@ -94,7 +94,8 @@ export function veleroScheduleBadge(
   if (newest && VELERO_FAILED_PHASES.has(newest.phase ?? '')) {
     return { label: 'Last run failed', tone: 'alert', detail: `Its newest run, ${newest.name}, ${newest.phase === 'FailedValidation' ? 'was rejected' : newest.phase === 'Failed' ? 'failed' : 'partially failed'}.` }
   }
-  return { label: STATE_LABEL.onSchedule, tone: reading.zone && !veleroZoneConfirmed(reading.zone) ? 'unknown' : 'healthy' }
+  const unconfirmed = (reading.zone && !veleroZoneConfirmed(reading.zone)) || reading.dayMatch === 'unknown'
+  return { label: STATE_LABEL.onSchedule, tone: unconfirmed ? 'unknown' : 'healthy' }
 }
 
 /** A moment relative to now: "in 3h" for the future, "3h ago" for the past. */
@@ -179,11 +180,13 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
     }
     case 'probablyLate':
       if (serverDown !== null) return `Past its scheduled time.${serverDown}`
+      if (reading.reason === 'dayMatchUnconfirmed') return `Looks late whichever days Velero runs it on. ${VELERO_DAY_MATCH_UNKNOWN}${zoneAlsoUnconfirmed(reading)}`
       return 'Looks late, but Radar couldn’t confirm the Velero server’s time zone.'
     case 'lateOrHeld':
       if (serverDown !== null) return `Past its scheduled time.${serverDown}`
       return 'Past its scheduled time. Radar can’t read this namespace’s backups, so a running backup may be holding it.'
     case 'possiblyLate':
+      if (reading.reason === 'dayMatchUnconfirmed') return `Past its estimated time, but it may not be due yet. ${VELERO_DAY_MATCH_UNKNOWN}${zoneAlsoUnconfirmed(reading)}`
       return 'Past its estimated time, but Radar couldn’t confirm the Velero server’s time zone, so it may not be due yet.'
     case 'due':
       if (serverDown !== null) return serverDown ? 'Due now, but the Velero server has no pods, so nothing will submit it.' : 'Due now, but nothing submits it until the server starts.'
@@ -256,12 +259,22 @@ export function veleroNextRunText(reading: Pick<VeleroScheduleReading, 'nextRun'
   return reading.nextRunCertain ? text : `~${text}`
 }
 
-export function veleroNextRunTitle(reading: Pick<VeleroScheduleReading, 'nextRun' | 'nextRunCertain' | 'zone'>): string | undefined {
+function zoneAlsoUnconfirmed(reading: VeleroScheduleReading): string {
+  return veleroZoneConfirmed(reading.zone) ? '' : ' Radar also couldn’t confirm the Velero server’s time zone.'
+}
+
+/** Why a schedule restricting both day fields has no exact next run. */
+export const VELERO_DAY_MATCH_UNKNOWN =
+  'Radar couldn’t read the Velero server’s version: Velero 1.18.3 and later run this schedule only on days matching both its day of month and day of week, earlier versions on days matching either.'
+
+export function veleroNextRunTitle(
+  reading: Pick<VeleroScheduleReading, 'nextRun' | 'nextRunCertain' | 'zone'> & Partial<Pick<VeleroScheduleReading, 'dayMatch'>>,
+): string | undefined {
   if (!reading.nextRun) return undefined
   const at = veleroLocalTime(reading.nextRun)
-  return reading.nextRunCertain
-    ? at
-    : `${at} · an estimate: ${veleroZoneDetail(reading.zone)}`
+  if (reading.nextRunCertain) return at
+  const why = [reading.dayMatch === 'unknown' ? VELERO_DAY_MATCH_UNKNOWN : '', veleroZoneConfirmed(reading.zone) ? '' : veleroZoneDetail(reading.zone)]
+  return `${at} · an estimate: ${why.filter(Boolean).join(' ')}`
 }
 
 /** The namespace's Backups were not read: no access, still syncing, not watched by Radar, or a read error. */

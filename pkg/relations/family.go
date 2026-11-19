@@ -38,13 +38,17 @@ type Family struct {
 	// namespace, as a Gateway API route may name a Gateway.
 	CrossNamespace bool
 	// ReferrersIndex, when set, finds the sources that may name a target
-	// through a store index keyed by the target, in every namespace, instead
-	// of reading every source in scope: for a family whose references cross
-	// namespaces and are sparse, as Reflector mirrors are. An index costs work
-	// on every update and relist of its source kind, so a busy kind such as
-	// Pods (whose Node lookups are rare) scans instead. What each source found
-	// declares is still evaluated.
+	// through a store index keyed by the target alone, instead of reading
+	// every source in scope. What each source found declares is still
+	// evaluated. An index costs work on every update and relist of its source
+	// kind, so a family whose reverse search reads every namespace has one
+	// only where that cost is within the admission bar
+	// (BenchmarkRelationIndexUpdate); otherwise ScanRationale says why it
+	// scans.
 	ReferrersIndex *ReferrersIndex
+	// ScanRationale says why a family without a ReferrersIndex reads every
+	// source in scope for a reverse search.
+	ScanRationale string
 	// Declared visits what obj declares, each with the path declaring it.
 	// It returns an error when part of obj couldn't be read, after visiting
 	// what could.
@@ -56,6 +60,11 @@ type Family struct {
 type ReferrersIndex struct {
 	Name string
 	Key  func(target resourceid.Ref) string
+	// IndexDeclarations, when set, is what the index files a source under
+	// instead of Declared: a superset of its declarations, for a family whose
+	// resolution depends on request-time state, as an Istio host's service
+	// domain does. Each candidate is still evaluated with Declared.
+	IndexDeclarations func(runtime.Object, func(Declaration)) error
 }
 
 // Source is a kind that declares. Targets narrows the family's Targets to
@@ -331,10 +340,12 @@ func (v *View) resolvesTo(candidates []resourceid.Ref, subject resourceid.Ref, c
 // subject as the host read it, or nil: a subject the host read that the
 // cache doesn't hold yet leaves the answer incomplete rather than empty.
 //
-// Objects are read through the namespace index every store keeps and
-// evaluated as asked, rather than kept in an index of every
-// declaration: for config references on a Pod store such an index cost
-// about 1.4 KB a Pod and made a relist about five times as long.
+// Candidates come from the family's index when it has one. Without one, a
+// namespaced subject of a family that isn't CrossNamespace reads its own
+// namespace through the namespace index, and any other subject, a scan its
+// family's ScanRationale accepts, reads every source of each kind in the
+// store. Every candidate is re-evaluated as asked, including
+// alternative-group and mesh-domain resolution.
 func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Object) ReferrersAnswer {
 	var a ReferrersAnswer
 	if !f.target(subject.GroupKind()) {
@@ -345,9 +356,9 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 	}
 	// A namespaced target's sources are in its namespace; a cluster-scoped
 	// one's, or a CrossNamespace family's, can be anywhere.
-	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace || f.ReferrersIndex != nil)
+	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace)
 	if f.ReferrersIndex != nil {
-		s.index, s.keys = f.ReferrersIndex.Name, []string{f.ReferrersIndex.Key(subject)}
+		s.index, s.keys = f.ReferrersIndex.Name, []string{f.ReferrersIndex.Key(subject), unreadReferrerKey}
 	}
 	for _, source := range f.Sources {
 		if !source.declares(subject.GroupKind()) {

@@ -59,6 +59,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { useToast } from '../ui/Toast'
 import { useContextSwitchFlow } from '../useContextSwitchFlow'
+import { FluxOperatorCard } from './FluxOperatorCard'
 import { useDestinationCluster } from './useDestinationCluster'
 import { destinationToast } from './destination-toast'
 
@@ -137,6 +138,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   const { connection } = useConnection()
   const namespacesParam = namespaces.join(',')
   const { data: apiResources, isLoading: apiResourcesLoading } = useAPIResources()
+  const fluxReportsServed = !!apiResources?.some((r) => r.name === 'fluxreports' && r.group === 'fluxcd.controlplane.io')
 
   const argoSync = useArgoSync()
   const argoRefresh = useArgoRefresh()
@@ -337,6 +339,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   return (
     <>
       <SharedGitOpsTableView
+        headerSlot={fluxReportsServed ? <FluxOperatorCard available refetchInterval={GITOPS_ROWS_REFRESH_INTERVAL_MS} /> : undefined}
         rows={rowsQuery.data?.rows ?? []}
         coverageStatus={rowsQuery.data?.coverageStatus ?? 'unknown'}
         loading={apiResourcesLoading || countsQuery.isLoading || rowsQuery.isLoading || coldRetrying}

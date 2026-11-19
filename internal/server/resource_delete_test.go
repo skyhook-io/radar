@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -85,6 +86,55 @@ func TestDeleteResourceHandler(t *testing.T) {
 				if a.GetVerb() == "patch" {
 					t.Fatal("normal delete patched finalizers")
 				}
+			}
+		})
+	}
+}
+
+// The reviewed UID and resourceVersion reach the API server as preconditions;
+// a conflict (the object changed since review) is 409, and force can't be bound.
+func TestDeleteResourceHandlerBindsToTheReviewedObject(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "held", "namespace": "demo", "uid": "original", "resourceVersion": "9"}}}
+	for _, tc := range []struct {
+		name, query string
+		deleteErr   error
+		status      int
+		wantRV      string
+		wantMessage string
+	}{
+		{name: "bound", query: "?uid=original&resourceVersion=8", status: http.StatusOK, wantRV: "8"},
+		{name: "changed since review", query: "?uid=original&resourceVersion=8", deleteErr: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "held", fmt.Errorf("Precondition failed: ResourceVersion in precondition: 8, ResourceVersion in object meta: 9")), status: http.StatusConflict, wantRV: "8", wantMessage: "changed since you reviewed it"},
+		{name: "a webhook quoting the phrase keeps its own words", query: "?uid=original&resourceVersion=8", deleteErr: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "held", fmt.Errorf("Precondition failed: the change window is closed")), status: http.StatusConflict, wantRV: "8", wantMessage: "the change window is closed"},
+		{name: "a webhook's conflict keeps its own words", query: "?uid=original&resourceVersion=8", deleteErr: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "held", fmt.Errorf("policy holds this object")), status: http.StatusConflict, wantRV: "8", wantMessage: "policy holds this object"},
+		{name: "force can't be bound", query: "?force=true&resourceVersion=8", status: http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj.DeepCopy())
+			var got *metav1.Preconditions
+			dyn.PrependReactor("delete", "configmaps", func(a clienttesting.Action) (bool, runtime.Object, error) {
+				got = a.(clienttesting.DeleteActionImpl).DeleteOptions.Preconditions
+				return true, nil, tc.deleteErr
+			})
+			if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Version: "v1", Kind: "ConfigMap", Name: "configmaps", Namespaced: true}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestDynamicState)
+			previous := k8s.GetConnectionStatus()
+			k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+			t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+			router := chi.NewRouter()
+			s := &Server{}
+			router.Delete("/api/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
+			res := httptest.NewRecorder()
+			router.ServeHTTP(res, httptest.NewRequest(http.MethodDelete, "/api/resources/configmaps/demo/held"+tc.query, nil))
+			if res.Code != tc.status {
+				t.Fatalf("status %d: %s", res.Code, res.Body.String())
+			}
+			if tc.wantMessage != "" && !strings.Contains(res.Body.String(), tc.wantMessage) {
+				t.Errorf("body %s, want %q", res.Body.String(), tc.wantMessage)
+			}
+			if tc.wantRV != "" && (got == nil || got.ResourceVersion == nil || *got.ResourceVersion != tc.wantRV || got.UID == nil || *got.UID != "original") {
+				t.Fatalf("preconditions %+v", got)
 			}
 		})
 	}
