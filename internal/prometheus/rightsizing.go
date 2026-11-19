@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -61,7 +62,7 @@ const (
 // would be reported as a clean result by whichever one was missed.
 func IsWithheldRecommendationReason(reason string) bool {
 	switch reason {
-	case ReasonHPAEvidenceUnavailable, ReasonOOMEvidenceUnavailable:
+	case ReasonHPAEvidenceUnavailable, ReasonOOMEvidenceUnavailable, ScanReasonClusterScopeWithheld:
 		return true
 	}
 	return false
@@ -169,6 +170,9 @@ type RightsizingResponse struct {
 	// caller cannot tell an absence of evidence from an absent query — and
 	// a scan of the same workload, whose queries did answer, contradicts it.
 	Warnings []RightsizingScanWarning `json:"warnings,omitempty"`
+	// ClusterScope is how the queries were kept to this cluster in a store
+	// that may hold several; absent when no check ran.
+	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
 }
 
 const (
@@ -255,9 +259,15 @@ func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (
 		}, nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// The cluster scope check shares the queries' budget.
+	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return computeRightsizing(ctx, client, kind, namespace, name, workload), nil
+	cache := k8s.GetResourceCache()
+	scope, err := client.ResolveViewScope(queryCtx, singleRightsizingScopeRequest(kind, namespace, workload, cache), cache)
+	if err != nil && ctx.Err() != nil {
+		return RightsizingResponse{}, ctx.Err()
+	}
+	return computeRightsizing(queryCtx, client, kind, namespace, name, workload, scope), nil
 }
 
 // specReplicas defaults a nil replica count to 1, matching the apiserver: a
@@ -659,15 +669,29 @@ type terminationEvidence struct {
 	OOM bool
 }
 
-func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, namespace, name string, workload rightsizingWorkload) RightsizingResponse {
-	selection, coverage := workloadSelection(ctx, client, kind, namespace, name, workload.podNames)
+// computeRightsizing sizes one workload with the queries kept to this cluster
+// by scope. A zero scope leaves every selector unfiltered.
+func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, namespace, name string, workload rightsizingWorkload, scope ViewScope) RightsizingResponse {
+	var clusterScope *ClusterScope
+	if scope.State != "" {
+		clusterScope = scope.Wire()
+	}
+	if scope.Withheld {
+		return RightsizingResponse{
+			Kind: kind, Namespace: namespace, Name: name, Window: "7d", Source: "radar",
+			Replicas: workload.replicas, ScaledToZero: workload.scaledToZero, ManagedBy: workload.managedBy,
+			Rows: []RightsizingRow{}, Reason: ReasonClusterScopeWithheld, ClusterScope: clusterScope,
+		}
+	}
+	client = strictRightsizingQuerier{client}
+	selection, coverage := workloadSelection(ctx, client, kind, namespace, name, workload.podNames, scope)
 	queries := buildRightsizingQueries(namespace, selection)
 	results := runRightsizingQueries(ctx, client, queries)
 	expected := int(rightsizingWindow / rightsizingStep)
 	resp := RightsizingResponse{
 		Kind: kind, Namespace: namespace, Name: name, Window: "7d", Source: "radar",
 		OwnerCoverage: coverage, Replicas: workload.replicas, ScaledToZero: workload.scaledToZero, ManagedBy: workload.managedBy,
-		Rows: make([]RightsizingRow, 0, len(workload.containers)*2),
+		Rows: make([]RightsizingRow, 0, len(workload.containers)*2), ClusterScope: clusterScope,
 	}
 	for _, container := range workload.containers {
 		for _, resourceName := range []string{"cpu", "memory"} {
@@ -684,7 +708,10 @@ func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, na
 		}
 	}
 	if !resp.SampleAvailable {
-		if results["cpu_stat"].err != nil || results["cpu_coverage"].err != nil || results["memory_stat"].err != nil || results["memory_coverage"].err != nil {
+		usage := []error{results["cpu_stat"].err, results["cpu_coverage"].err, results["memory_stat"].err, results["memory_coverage"].err}
+		if slices.ContainsFunc(usage, isIncompleteAnswer) {
+			resp.Reason = ReasonRightsizingPartialData
+		} else if slices.ContainsFunc(usage, func(err error) bool { return err != nil }) {
 			resp.Reason = ReasonRightsizingQueriesFailed
 		} else if workload.liveInventoryUnavailable && coverage == OwnerCoverageCurrentPods {
 			// Without retained ownership the selection falls back to the current
@@ -740,28 +767,29 @@ func evidenceQueryWarnings(results map[string]queryOutcome) []RightsizingScanWar
 type metricSelection struct {
 	join       string
 	podPattern string
+	scope      ViewScope
 }
 
-func workloadSelection(ctx context.Context, client rightsizingQuerier, kind, namespace, name string, podNames []string) (metricSelection, OwnerCoverage) {
-	owner := ownerSelection(kind, namespace, name)
+func workloadSelection(ctx context.Context, client rightsizingQuerier, kind, namespace, name string, podNames []string, scope ViewScope) (metricSelection, OwnerCoverage) {
+	owner := ownerSelection(kind, namespace, name, scope)
 	if owner != "" {
 		probe := fmt.Sprintf(`sum(count_over_time((%s)[7d:5m]))`, owner)
 		if result, err := client.Query(ctx, probe); err == nil && firstValue(result) != nil && *firstValue(result) > 0 {
-			return metricSelection{join: fmt.Sprintf(`* on (namespace,pod) group_left() (%s)`, owner)}, OwnerCoverageKSMHistory
+			return metricSelection{join: fmt.Sprintf(`* on (namespace,pod) group_left() (%s)`, owner), scope: scope}, OwnerCoverageKSMHistory
 		}
 	}
 	if len(podNames) == 0 {
-		return metricSelection{podPattern: "a^"}, OwnerCoverageCurrentPods
+		return metricSelection{podPattern: "a^", scope: scope}, OwnerCoverageCurrentPods
 	}
 	escaped := make([]string, 0, len(podNames))
 	for _, podName := range podNames {
 		escaped = append(escaped, prom.EscapeRegexMeta(prom.SanitizeLabelValue(podName)))
 	}
-	return metricSelection{podPattern: fmt.Sprintf("^(%s)$", strings.Join(escaped, "|"))}, OwnerCoverageCurrentPods
+	return metricSelection{podPattern: fmt.Sprintf("^(%s)$", strings.Join(escaped, "|")), scope: scope}, OwnerCoverageCurrentPods
 }
 
-func ownerSelection(kind, namespace, name string) string {
-	query, _ := (prom.WorkloadHistory{Kind: kind, Namespace: namespace, Name: name, Scope: prom.WorkloadMetricsScope{SingleCluster: true}}).OwnerQuery()
+func ownerSelection(kind, namespace, name string, scope ViewScope) string {
+	query, _ := (prom.WorkloadHistory{Kind: kind, Namespace: namespace, Name: name}).OwnerQueryFor(scope.Filter)
 	return query
 }
 
@@ -771,12 +799,13 @@ func buildRightsizingQueries(namespace string, selection metricSelection) map[st
 	if selection.podPattern != "" {
 		podMatcher = fmt.Sprintf(`,pod=~"%s"`, selection.podPattern)
 	}
-	cpu := fmt.Sprintf(`max by (container) (rate(container_cpu_usage_seconds_total{namespace="%s"%s,container!="",container!="POD"}[5m]) %s)`, ns, podMatcher, selection.join)
-	memory := fmt.Sprintf(`max by (container) (container_memory_working_set_bytes{namespace="%s"%s,container!="",container!="POD"} %s)`, ns, podMatcher, selection.join)
-	throttled := fmt.Sprintf(`sum by (container) (rate(container_cpu_cfs_throttled_periods_total{namespace="%s"%s,container!="",container!="POD"}[5m]) %s)`, ns, podMatcher, selection.join)
-	periods := fmt.Sprintf(`sum by (container) (rate(container_cpu_cfs_periods_total{namespace="%s"%s,container!="",container!="POD"}[5m]) %s)`, ns, podMatcher, selection.join)
-	restarts := fmt.Sprintf(`max by (namespace,pod,container) (kube_pod_container_status_restarts_total{namespace="%s"%s,container!=""} %s)`, ns, podMatcher, selection.join)
-	terminations := fmt.Sprintf(`max by (namespace,pod,container,reason) (kube_pod_container_status_last_terminated_timestamp{namespace="%s"%s,container!=""} * on (namespace,pod,container) group_left(reason) max by (namespace,pod,container,reason) (kube_pod_container_status_last_terminated_reason{namespace="%s"%s,container!=""}) %s)`, ns, podMatcher, ns, podMatcher, selection.join)
+	f := func(metric string) string { return scopeMatchers(selection.scope, metric) }
+	cpu := fmt.Sprintf(`max by (container) (rate(container_cpu_usage_seconds_total{namespace="%s"%s,container!="",container!="POD"%s}[5m]) %s)`, ns, podMatcher, f(metricCPUUsage), selection.join)
+	memory := fmt.Sprintf(`max by (container) (container_memory_working_set_bytes{namespace="%s"%s,container!="",container!="POD"%s} %s)`, ns, podMatcher, f(metricMemoryWorkingSet), selection.join)
+	throttled := fmt.Sprintf(`sum by (container) (rate(container_cpu_cfs_throttled_periods_total{namespace="%s"%s,container!="",container!="POD"%s}[5m]) %s)`, ns, podMatcher, f(metricThrottledPeriods), selection.join)
+	periods := fmt.Sprintf(`sum by (container) (rate(container_cpu_cfs_periods_total{namespace="%s"%s,container!="",container!="POD"%s}[5m]) %s)`, ns, podMatcher, f(metricCFSPeriods), selection.join)
+	restarts := fmt.Sprintf(`max by (namespace,pod,container) (kube_pod_container_status_restarts_total{namespace="%s"%s,container!=""%s} %s)`, ns, podMatcher, f(metricRestarts), selection.join)
+	terminations := fmt.Sprintf(`max by (namespace,pod,container,reason) (kube_pod_container_status_last_terminated_timestamp{namespace="%s"%s,container!=""%s} * on (namespace,pod,container) group_left(reason) max by (namespace,pod,container,reason) (kube_pod_container_status_last_terminated_reason{namespace="%s"%s,container!=""%s}) %s)`, ns, podMatcher, f(metricTerminatedAt), ns, podMatcher, f(metricTerminatedReason), selection.join)
 	return map[string]string{
 		"cpu_stat":            fmt.Sprintf(`quantile_over_time(0.95, (%s)[7d:5m])`, cpu),
 		"cpu_peak":            fmt.Sprintf(`quantile_over_time(0.99, (%s)[7d:5m])`, cpu),
