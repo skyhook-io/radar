@@ -288,21 +288,104 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
 		return
 	}
-	rawKind := chi.URLParam(r, "kind")
 	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
 	if namespace == "_" { // cluster-scoped sentinel
 		namespace = ""
 	}
-	group := r.URL.Query().Get("group")
+	correlateID := r.URL.Query().Get("correlate")
+	var correlate []string
+	if correlateID != "" {
+		correlate = []string{correlateID}
+	}
+	read, err := s.readResourceIssues(r, provider, resourceIssuesTarget{
+		rawKind:   chi.URLParam(r, "kind"),
+		group:     r.URL.Query().Get("group"),
+		namespace: namespace,
+		name:      chi.URLParam(r, "name"),
+	}, correlate)
+	if err != nil {
+		s.writeReadFailure(w, read.kind, err, nil)
+		return
+	}
+	group, kind, name := read.target.group, read.kind, read.target.name
+	if !(r.URL.Query().Get("coverage") == "1" || correlateID != "") {
+		s.writeJSON(w, read.related)
+		return
+	}
+	withheld := ResourceIssuesWithheld{Issues: len(read.evidenceWithheld)}
+	withheld.Issues += s.clusterScopedSubjectIssuesWithheld(r, provider, read.related, group, kind, namespace, name)
+	coverage := resourceIssuesCoverageOK
+	if !read.nativeHelm {
+		coverage = resourceIssuesCoverage(kind, group, namespace)
+	}
+	resp := ResourceIssuesResponse{
+		Issues:            read.related,
+		Coverage:          coverage,
+		Unchecked:         read.unchecked,
+		CorrelationStatus: read.correlationStatus[correlateID],
+	}
+	if kind == "CronJob" && (group == "batch" || group == "") && namespace != "" && s.canRead(r, "", "events", namespace, "list") {
+		resp.SchedulingReport = k8s.GetCronJobSchedulingEvidence(namespace, name)
+	}
+	if kind == "Node" && group == "" && namespace == "" && s.canRead(r, "", "nodes", "", "list") {
+		resp.NodeCertificateReport = provider.NodeCertificateReport(name)
+	}
+	if withheld.Issues > 0 {
+		resp.Withheld = &withheld
+	}
+	if result := k8s.GetCachedPermissionResult(); result != nil {
+		var namespaces []string
+		if namespace != "" {
+			namespaces = []string{namespace}
+		}
+		resp.Visibility = k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(namespaces))
+	}
+	if k8s.GetResourceCache() != read.subjectCache {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+		return
+	}
+	s.writeJSON(w, resp)
+}
+
+// resourceIssuesTarget names the resource a per-resource issues read is
+// about, as the route spells it: kind may be a plural or a Kind, and an
+// empty namespace is a cluster-scoped resource.
+type resourceIssuesTarget struct {
+	rawKind, group, namespace, name string
+}
+
+// resourceIssuesRead is one per-resource issues read before the envelope is
+// built.
+type resourceIssuesRead struct {
+	target resourceIssuesTarget
+	// kind is the canonical Kind the route's kind resolved to; on a failed
+	// read it names the resource the failure is about.
+	kind             string
+	related          []issues.Issue
+	unchecked        []issuesapi.UncheckedSource
+	evidenceWithheld map[string]bool
+	nativeHelm       bool
+	subjectCache     *k8s.ResourceCache
+	// correlationStatus is the envelope's correlation_status per correlated
+	// id; empty for an id that was found.
+	correlationStatus map[string]string
+}
+
+// readResourceIssues is the per-resource issues read shared by the
+// per-resource route and the batched row-changes route: the drawer's
+// preflight on the resource, the scoped composition with its per-row gates,
+// and the correlation of each id in correlate. The error is a read failure
+// to report as is, the preflight's or a changed connection.
+func (s *Server) readResourceIssues(r *http.Request, provider *issues.CacheProvider, target resourceIssuesTarget, correlate []string) (resourceIssuesRead, error) {
+	rawKind, group, namespace, name := target.rawKind, target.group, target.namespace, target.name
+	read := resourceIssuesRead{target: target, kind: rawKind}
 
 	// Authorize exactly like the resource drawer's GET (preflightResourceGet):
 	// cluster-scoped get-SAR (fails closed), namespace access, and the
 	// per-namespace Secret get-SAR — so this can't surface issues for a resource
 	// the caller couldn't open in the drawer.
 	if failure := s.preflightResourceGet(r, normalizeKind(rawKind), namespace, name, group); failure != nil {
-		s.writeReadFailure(w, rawKind, failure, nil)
-		return
+		return read, failure
 	}
 
 	// RelatedIssues matches by canonical Kind (EqualFold). Resolve the route's
@@ -333,8 +416,6 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		namespaces = []string{namespace}
 	}
 
-	correlateID := r.URL.Query().Get("correlate")
-	envelope := r.URL.Query().Get("coverage") == "1" || correlateID != ""
 	// Native Helm releases are a synthetic kind discovery doesn't serve, so
 	// the singular and plural route names are matched here.
 	nativeHelm := issues.KindFilterIncludes([]string{rawKind}, "HelmRelease", "helmreleases") && group == issues.NativeHelmGroup && namespace != ""
@@ -369,56 +450,29 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 			},
 		}, group, kind, namespace, name)
 	}
+	read.kind = kind
 	if k8s.GetResourceCache() != subjectCache {
-		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
-		return
+		return read, errReadHandlesChanged
 	}
 	if related == nil {
 		related = []issues.Issue{}
 	}
-	if !envelope {
-		s.writeJSON(w, related)
-		return
-	}
-	withheld := ResourceIssuesWithheld{Issues: len(evidenceWithheld)}
-	withheld.Issues += s.clusterScopedSubjectIssuesWithheld(r, provider, related, group, kind, namespace, name)
-	coverage := resourceIssuesCoverageOK
-	if !nativeHelm {
-		coverage = resourceIssuesCoverage(kind, group, namespace)
-	}
-	resp := ResourceIssuesResponse{
-		Issues:    related,
-		Coverage:  coverage,
-		Unchecked: unchecked,
-	}
-	if correlateID != "" {
-		status, err := s.correlateResourceIssue(r, related, correlateID, helmReleases)
+	read.related, read.unchecked, read.evidenceWithheld = related, unchecked, evidenceWithheld
+	read.nativeHelm, read.subjectCache = nativeHelm, subjectCache
+	for _, id := range correlate {
+		status, err := s.correlateResourceIssue(r, related, id, helmReleases)
 		if err != nil {
-			s.writeCollectionFailure(w, kind, err)
-			return
+			return read, err
 		}
 		if status == correlationStatusNotFound && helmStatus != "" {
 			status = helmStatus
 		}
-		resp.CorrelationStatus = status
+		if read.correlationStatus == nil {
+			read.correlationStatus = map[string]string{}
+		}
+		read.correlationStatus[id] = status
 	}
-	if kind == "CronJob" && (group == "batch" || group == "") && namespace != "" && s.canRead(r, "", "events", namespace, "list") {
-		resp.SchedulingReport = k8s.GetCronJobSchedulingEvidence(namespace, name)
-	}
-	if kind == "Node" && group == "" && namespace == "" && s.canRead(r, "", "nodes", "", "list") {
-		resp.NodeCertificateReport = provider.NodeCertificateReport(name)
-	}
-	if withheld.Issues > 0 {
-		resp.Withheld = &withheld
-	}
-	if result := k8s.GetCachedPermissionResult(); result != nil {
-		resp.Visibility = k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(namespaces))
-	}
-	if k8s.GetResourceCache() != subjectCache {
-		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
-		return
-	}
-	s.writeJSON(w, resp)
+	return read, nil
 }
 
 // ResourceIssuesResponse is /api/issues/resource with ?coverage=1.
