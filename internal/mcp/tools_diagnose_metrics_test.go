@@ -7,6 +7,8 @@ import (
 	"math"
 	"net/url"
 	"reflect"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -819,5 +821,107 @@ func TestDiagnoseMetricsPreservesPodResolutionErrors(t *testing.T) {
 	}
 	if len(f.rangeParams) != 0 {
 		t.Fatalf("queried unresolved Pod membership: %v", f.rangeParams)
+	}
+}
+
+var scopeMetricPattern = regexp.MustCompile(`"radar_metric", "([^"]+)"`)
+
+// scopeRows answers a cluster scope check with the given cluster label values
+// for every metric it asks about.
+func scopeRows(query string, clusters ...string) string {
+	var rows []string
+	for _, m := range scopeMetricPattern.FindAllStringSubmatch(query, -1) {
+		for _, c := range clusters {
+			rows = append(rows, `{"metric":{"radar_metric":"`+m[1]+`","cluster":"`+c+`"},"value":[1700000000,"1"]}`)
+		}
+	}
+	return `{"status":"success","data":{"resultType":"vector","result":[` + strings.Join(rows, ",") + `]}}`
+}
+
+// In a store that holds several clusters and no label proven to be this
+// one, the vitals say why they are missing instead of charting a mix.
+func TestHandleDiagnoseMetricsWithheldInASharedStore(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	f := setupFakeProm(t)
+	f.rangeBodyFunc = metricsMatrixForRequest("1")
+	f.queryBodyFunc = func(params url.Values) string {
+		if q := params.Get("query"); strings.HasPrefix(q, "label_replace(topk(2") {
+			return scopeRows(q, "a", "b")
+		}
+		return ""
+	}
+	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
+
+	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+	if m == nil {
+		t.Fatal("diagnose omitted metrics")
+	}
+	if len(m.Series) != 0 || !strings.HasPrefix(m.Error, "metrics withheld: ") || !strings.Contains(m.Error, "several clusters") {
+		t.Fatalf("series = %d, error = %q; want none and the reason", len(m.Series), m.Error)
+	}
+	if m.ClusterScope == nil || m.ClusterScope.State != prometheus.ViewScopeSeveralClusters {
+		t.Fatalf("clusterScope = %+v", m.ClusterScope)
+	}
+	if len(f.rangeParams) != 0 {
+		t.Fatalf("withheld vitals sent %d data queries", len(f.rangeParams))
+	}
+}
+
+// A configured cluster label that every vitals metric reads back is on every
+// selector; a store with no labels gets today's queries unchanged.
+func TestHandleDiagnoseMetricsScopedQueries(t *testing.T) {
+	sel := prom.SelectPods("alpha", []string{"cart-abc123"})
+	for _, tc := range []struct {
+		name      string
+		configure bool
+		want      func(prom.MetricCategory) string
+	}{
+		{name: "configured label", configure: true, want: func(cat prom.MetricCategory) string {
+			return prom.BuildScopedQueryFiltered(sel, cat, prom.AggregateTotal, true, func(string) string { return `cluster="a"` })
+		}},
+		{name: "unlabeled store", want: func(cat prom.MetricCategory) string {
+			return prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, true)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupFakeCacheForDiagnoseTests(t)
+			timeline.ResetStore()
+			t.Cleanup(timeline.ResetStore)
+			f := setupFakeProm(t)
+			f.rangeBodyFunc = metricsMatrixForRequest("1")
+			if tc.configure {
+				if err := prometheus.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "a"}}, ""); err != nil {
+					t.Fatal(err)
+				}
+				f.queryBodyFunc = func(params url.Values) string {
+					if q := params.Get("query"); strings.HasPrefix(q, "label_replace(count by") {
+						return scopeRows(q, "a")
+					}
+					return ""
+				}
+			}
+			ctx := withClusterAdmin(t, "admin")
+			grantDiagnoseRead(t, "admin")
+
+			_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+			if m == nil || m.Error != "" || len(m.Series) != len(diagnoseMetricsCategories) {
+				t.Fatalf("metrics = %+v", m)
+			}
+			var sent []string
+			for _, p := range f.rangeParams {
+				sent = append(sent, p.Get("query"))
+			}
+			for _, cat := range diagnoseMetricsCategories {
+				if !slices.Contains(sent, tc.want(cat)) {
+					t.Errorf("%s: query not sent: %s\nsent: %q", cat, tc.want(cat), sent)
+				}
+			}
+			if len(sent) != len(diagnoseMetricsCategories) {
+				t.Errorf("sent %d queries, want %d", len(sent), len(diagnoseMetricsCategories))
+			}
+		})
 	}
 }

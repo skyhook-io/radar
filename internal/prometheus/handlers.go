@@ -149,11 +149,50 @@ type ResourceMetricsResponse struct {
 	// distinct from a kind that has no pod scope at all, such as a Node.
 	Pods      *int `json:"pods,omitempty"`
 	PodsTotal int  `json:"podsTotal,omitempty"`
+	// ClusterScope is how the query was kept to this cluster in a store that
+	// may hold several; when it withholds, Result has no series and its note
+	// says why.
+	ClusterScope *ClusterScope `json:"clusterScope,omitempty"`
+	// Partial marks an answer the store returned with a partial or warning
+	// flag: drawn, but possibly missing samples.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // restMaxScopePods caps the pod list a chart query names, bounding the regex
 // the chart sends.
 const restMaxScopePods = 500
+
+// chartDeps are what a chart needs beyond its request: the store, the scope
+// check and the resource cache that anchors it.
+type chartDeps struct {
+	q       RangeQuerier
+	resolve ChartScopeResolver
+	cache   *k8s.ResourceCache
+}
+
+func productionChartDeps(client *Client) chartDeps {
+	cache := k8s.GetResourceCache()
+	return chartDeps{q: client, resolve: ResolverFor(client, cache), cache: cache}
+}
+
+// errChartQuery wraps a failed store query, which the handlers report as 502;
+// any other error from a chart means the caller left.
+type errChartQuery struct{ err error }
+
+func (e errChartQuery) Error() string { return e.err.Error() }
+
+func chartRangeDuration(rangeStr string) time.Duration {
+	return timeRanges[normalizeTimeRange(rangeStr)].duration
+}
+
+// writeChartError answers a chart failure: 502 for a failed store query,
+// nothing when the caller left.
+func writeChartError(w http.ResponseWriter, err error) {
+	var queryErr errChartQuery
+	if errors.As(err, &queryErr) {
+		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+queryErr.Error())
+	}
+}
 
 // handleResourceMetrics returns Prometheus metrics for a specific resource.
 // Query params: category (cpu|memory|network_rx|network_tx|filesystem, default: cpu), range (10m|30m|1h|...|14d, default: 1h)
@@ -206,16 +245,11 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rangeStr := r.URL.Query().Get("range")
-	start, end, step := parseTimeRange(rangeStr)
 
 	// A Pod is named exactly and a Node has no pods; a workload's pods are
 	// resolved by ownership, never guessed from the workload's name.
 	var scope *PodScope
-	var query, fallback string
-	if strings.EqualFold(kind, "Pod") || strings.EqualFold(kind, "Node") {
-		query = prom.BuildQuery(kind, namespace, name, category)
-		fallback = prom.BuildQueryNoContainerFilter(kind, namespace, name, category)
-	} else {
+	if !strings.EqualFold(kind, "Pod") && !strings.EqualFold(kind, "Node") {
 		cache := k8s.GetResourceCache()
 		if cache == nil {
 			writeError(w, http.StatusServiceUnavailable, "cluster cache not ready")
@@ -247,31 +281,53 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		scope = &resolved
-		query = prom.BuildScopedQuery(resolved.Selection, category, prom.AggregatePerPod, true)
-		fallback = prom.BuildScopedQuery(resolved.Selection, category, prom.AggregatePerPod, false)
 	}
-	if query == "" {
+	if resourceChartQuery(kind, namespace, name, category, scope)(true, nil) == "" {
 		writeError(w, http.StatusBadRequest, "cannot build query for "+kind+"/"+string(category))
 		return
 	}
 
-	result, err := client.QueryRange(r.Context(), query, start, end, step)
+	resp, err := resourceChart(r.Context(), productionChartDeps(client), kind, namespace, name, category, rangeStr, scope)
 	if err != nil {
-		log.Printf("[prometheus] Query failed for %q/%q/%q (%q): %v", kind, namespace, name, category, err)
-		errorlog.Record("prometheus", "error", "query failed for %q/%q/%q (%q): %v", kind, namespace, name, category, err)
-		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
+		writeChartError(w, err)
 		return
 	}
+	writeJSON(w, http.StatusOK, resp)
+}
 
-	result, query, err = QueryWithContainerFilterFallback(r.Context(), client, result, query, category, start, end, step,
-		func() string { return fallback },
-		fmt.Sprintf("Primary query empty for %q/%q/%q (%q)", kind, namespace, name, category))
-	if err != nil {
-		errorlog.Record("prometheus", "error", "fallback query failed for %q/%q/%q (%q): %v", kind, namespace, name, category, err)
-		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
-		return
+// resourceChartQuery builds a Pod's, a Node's or a resolved workload's query.
+func resourceChartQuery(kind, namespace, name string, category prom.MetricCategory, scope *PodScope) func(bool, prom.ClusterFilter) string {
+	if scope != nil {
+		return func(filterContainer bool, filter prom.ClusterFilter) string {
+			return prom.BuildScopedQueryFiltered(scope.Selection, category, prom.AggregatePerPod, filterContainer, filter)
+		}
 	}
+	return func(filterContainer bool, filter prom.ClusterFilter) string {
+		return prom.BuildQueryFiltered(kind, namespace, name, category, filterContainer, filter)
+	}
+}
 
+// resourceChartScopeRequest is the scope check for one resource chart, or
+// false for a workload that controls no Pods: its query matches nothing, so
+// nothing can mix.
+func resourceChartScopeRequest(kind, namespace, name string, category prom.MetricCategory, chartRange time.Duration, scope *PodScope, cache *k8s.ResourceCache) (ViewScopeRequest, bool) {
+	switch {
+	case scope != nil:
+		if scope.Selection.IsEmpty() {
+			return ViewScopeRequest{}, false
+		}
+		return PodSetScopeRequest("workload_chart", scope.Selection, []prom.MetricCategory{category}, ChartScopeSpan(chartRange, category)), true
+	case strings.EqualFold(kind, "Node"):
+		return nodeChartScopeRequest(name, category, chartRange, cache), true
+	default:
+		return podChartScopeRequest(namespace, name, category, chartRange, cache), true
+	}
+}
+
+// resourceChart charts one Pod, Node or resolved workload kept to this
+// cluster.
+func resourceChart(ctx context.Context, d chartDeps, kind, namespace, name string, category prom.MetricCategory, rangeStr string, scope *PodScope) (ResourceMetricsResponse, error) {
+	start, end, step := parseTimeRange(rangeStr)
 	resp := ResourceMetricsResponse{
 		Kind:      kind,
 		Namespace: namespace,
@@ -279,22 +335,42 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 		Category:  category,
 		Unit:      prom.CategoryUnitForKind(kind, category),
 		Range:     rangeStr,
-		Result:    result,
 	}
 	if scope != nil {
 		pods := len(scope.CurrentPods)
 		resp.Pods = &pods
 		resp.PodsTotal = scope.CurrentTotal
 	}
+	var view ViewScope
+	if req, ok := resourceChartScopeRequest(kind, namespace, name, category, chartRangeDuration(rangeStr), scope, d.cache); ok {
+		var err error
+		if view, err = ResolveChartScope(ctx, d.resolve, req); err != nil {
+			return resp, err
+		}
+	}
+	resp.ClusterScope = ClusterScopeOf(view)
+	if view.Withheld {
+		resp.Result = emptyChartResult()
+		return resp, nil
+	}
+
+	answer, err := QueryScopedChart(ctx, d.q, view, category, resourceChartQuery(kind, namespace, name, category, scope), start, end, step,
+		fmt.Sprintf("Primary query empty for %q/%q/%q (%q)", kind, namespace, name, category))
+	if err != nil {
+		log.Printf("[prometheus] Query failed for %q/%q/%q (%q): %v", kind, namespace, name, category, err)
+		errorlog.Record("prometheus", "error", "query failed for %q/%q/%q (%q): %v", kind, namespace, name, category, err)
+		return resp, errChartQuery{err}
+	}
+	resp.Result, resp.Partial = answer.Result, answer.Partial
 	// Include the PromQL query when results are empty so users can diagnose
 	// label mismatches or missing metrics in their Prometheus instance.
-	if len(result.Series) == 0 {
-		resp.Query = query
+	if len(answer.Result.Series) == 0 {
+		resp.Query = answer.Query
 		resp.Hint = detectCRIDockerHint(kind, namespace, name)
-		log.Printf("[prometheus] Empty result for %q/%q/%q (%q), query: %q", kind, namespace, name, category, query)
-		errorlog.Record("prometheus", "warning", "empty result for %q/%q/%q (%q), query: %q", kind, namespace, name, category, query)
+		log.Printf("[prometheus] Empty result for %q/%q/%q (%q), query: %q", kind, namespace, name, category, answer.Query)
+		errorlog.Record("prometheus", "warning", "empty result for %q/%q/%q (%q), query: %q", kind, namespace, name, category, answer.Query)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp, nil
 }
 
 // handleClusterScopedResourceMetrics handles metrics for cluster-scoped resources (e.g. Node).
@@ -337,46 +413,28 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	query := prom.BuildQuery(kind, "", name, category)
-	if query == "" {
+	if prom.BuildQuery(kind, "", name, category) == "" {
 		writeError(w, http.StatusBadRequest, "cannot build query for "+kind+"/"+string(category))
 		return
 	}
 
-	rangeStr := r.URL.Query().Get("range")
-	start, end, step := parseTimeRange(rangeStr)
-
-	result, err := client.QueryRange(r.Context(), query, start, end, step)
+	resp, err := resourceChart(r.Context(), productionChartDeps(client), kind, "", name, category, r.URL.Query().Get("range"), nil)
 	if err != nil {
-		log.Printf("[prometheus] Query failed for %q/%q (%q): %v", kind, name, category, err)
-		errorlog.Record("prometheus", "error", "query failed for %q/%q (%q): %v", kind, name, category, err)
-		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
+		writeChartError(w, err)
 		return
-	}
-
-	resp := ResourceMetricsResponse{
-		Kind:     kind,
-		Name:     name,
-		Category: category,
-		Unit:     prom.CategoryUnitForKind(kind, category),
-		Range:    rangeStr,
-		Result:   result,
-	}
-	if len(result.Series) == 0 {
-		resp.Query = query
-		log.Printf("[prometheus] Empty result for %q/%q (%q), query: %q", kind, name, category, query)
-		errorlog.Record("prometheus", "warning", "empty result for %q/%q (%q), query: %q", kind, name, category, query)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 // NamespaceMetricsResponse is the response shape for namespace-level metrics.
 type NamespaceMetricsResponse struct {
-	Namespace string              `json:"namespace"`
-	Category  prom.MetricCategory `json:"category"`
-	Unit      string              `json:"unit"`
-	Range     string              `json:"range"`
-	Result    *prom.QueryResult   `json:"result"`
+	Namespace    string              `json:"namespace"`
+	Category     prom.MetricCategory `json:"category"`
+	Unit         string              `json:"unit"`
+	Range        string              `json:"range"`
+	Result       *prom.QueryResult   `json:"result"`
+	ClusterScope *ClusterScope       `json:"clusterScope,omitempty"`
+	Partial      bool                `json:"partial,omitempty"`
 }
 
 // handleNamespaceMetrics returns aggregate metrics for a namespace.
@@ -397,47 +455,52 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 		category = prom.CategoryCPU
 	}
 
-	query := prom.BuildNamespaceQuery(namespace, category)
-	if query == "" {
+	if prom.BuildNamespaceQuery(namespace, category) == "" {
 		writeError(w, http.StatusBadRequest, "unsupported category for namespace: "+string(category))
 		return
 	}
 
-	rangeStr := r.URL.Query().Get("range")
-	start, end, step := parseTimeRange(rangeStr)
+	resp, err := namespaceChart(r.Context(), productionChartDeps(client), namespace, category, r.URL.Query().Get("range"))
+	if err != nil {
+		writeChartError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
 
-	result, err := client.QueryRange(r.Context(), query, start, end, step)
+func namespaceChart(ctx context.Context, d chartDeps, namespace string, category prom.MetricCategory, rangeStr string) (NamespaceMetricsResponse, error) {
+	start, end, step := parseTimeRange(rangeStr)
+	resp := NamespaceMetricsResponse{Namespace: namespace, Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}
+	view, err := ResolveChartScope(ctx, d.resolve, namespaceChartScopeRequest(namespace, category, chartRangeDuration(rangeStr), d.cache))
+	if err != nil {
+		return resp, err
+	}
+	resp.ClusterScope = ClusterScopeOf(view)
+	if view.Withheld {
+		resp.Result = emptyChartResult()
+		return resp, nil
+	}
+	build := func(filterContainer bool, filter prom.ClusterFilter) string {
+		return prom.BuildNamespaceQueryFiltered(namespace, category, filterContainer, filter)
+	}
+	answer, err := QueryScopedChart(ctx, d.q, view, category, build, start, end, step, fmt.Sprintf("Namespace query empty for %q (%q)", namespace, category))
 	if err != nil {
 		log.Printf("[prometheus] Namespace query failed for %q (%q): %v", namespace, category, err)
 		errorlog.Record("prometheus", "error", "namespace query failed for %q (%q): %v", namespace, category, err)
-		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
-		return
+		return resp, errChartQuery{err}
 	}
-
-	result, _, err = QueryWithContainerFilterFallback(r.Context(), client, result, query, category, start, end, step,
-		func() string { return prom.BuildNamespaceQueryNoContainerFilter(namespace, category) },
-		fmt.Sprintf("Namespace query empty for %q (%q)", namespace, category))
-	if err != nil {
-		errorlog.Record("prometheus", "error", "namespace fallback query failed for %q (%q): %v", namespace, category, err)
-		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, NamespaceMetricsResponse{
-		Namespace: namespace,
-		Category:  category,
-		Unit:      prom.CategoryUnit(category),
-		Range:     rangeStr,
-		Result:    result,
-	})
+	resp.Result, resp.Partial = answer.Result, answer.Partial
+	return resp, nil
 }
 
 // ClusterMetricsResponse is the response shape for cluster-level metrics.
 type ClusterMetricsResponse struct {
-	Category prom.MetricCategory `json:"category"`
-	Unit     string              `json:"unit"`
-	Range    string              `json:"range"`
-	Result   *prom.QueryResult   `json:"result"`
+	Category     prom.MetricCategory `json:"category"`
+	Unit         string              `json:"unit"`
+	Range        string              `json:"range"`
+	Result       *prom.QueryResult   `json:"result"`
+	ClusterScope *ClusterScope       `json:"clusterScope,omitempty"`
+	Partial      bool                `json:"partial,omitempty"`
 }
 
 // handleClusterMetrics returns aggregate metrics for the entire cluster.
@@ -458,38 +521,42 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 		category = prom.CategoryCPU
 	}
 
-	query := prom.BuildClusterQuery(category)
-	if query == "" {
+	if prom.BuildClusterQuery(category) == "" {
 		writeError(w, http.StatusBadRequest, "unsupported category for cluster: "+string(category))
 		return
 	}
 
-	rangeStr := r.URL.Query().Get("range")
-	start, end, step := parseTimeRange(rangeStr)
+	resp, err := clusterChart(r.Context(), productionChartDeps(client), category, r.URL.Query().Get("range"))
+	if err != nil {
+		writeChartError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
 
-	result, err := client.QueryRange(r.Context(), query, start, end, step)
+func clusterChart(ctx context.Context, d chartDeps, category prom.MetricCategory, rangeStr string) (ClusterMetricsResponse, error) {
+	start, end, step := parseTimeRange(rangeStr)
+	resp := ClusterMetricsResponse{Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}
+	view, err := ResolveChartScope(ctx, d.resolve, clusterChartScopeRequest(category, chartRangeDuration(rangeStr), d.cache))
+	if err != nil {
+		return resp, err
+	}
+	resp.ClusterScope = ClusterScopeOf(view)
+	if view.Withheld {
+		resp.Result = emptyChartResult()
+		return resp, nil
+	}
+	build := func(filterContainer bool, filter prom.ClusterFilter) string {
+		return prom.BuildClusterQueryFiltered(category, filterContainer, filter)
+	}
+	answer, err := QueryScopedChart(ctx, d.q, view, category, build, start, end, step, fmt.Sprintf("Cluster query empty (%q)", category))
 	if err != nil {
 		log.Printf("[prometheus] Cluster query failed (%q): %v", category, err)
 		errorlog.Record("prometheus", "error", "cluster query failed (%q): %v", category, err)
-		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
-		return
+		return resp, errChartQuery{err}
 	}
-
-	result, _, err = QueryWithContainerFilterFallback(r.Context(), client, result, query, category, start, end, step,
-		func() string { return prom.BuildClusterQueryNoContainerFilter(category) },
-		fmt.Sprintf("Cluster query empty (%q)", category))
-	if err != nil {
-		errorlog.Record("prometheus", "error", "cluster fallback query failed (%q): %v", category, err)
-		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, ClusterMetricsResponse{
-		Category: category,
-		Unit:     prom.CategoryUnit(category),
-		Range:    rangeStr,
-		Result:   result,
-	})
+	resp.Result, resp.Partial = answer.Result, answer.Partial
+	return resp, nil
 }
 
 // RawQueryResponse is the response shape for raw PromQL. It carries the
@@ -565,11 +632,13 @@ func boundRawResult(result *prom.QueryResult, query string, isRange bool) RawQue
 }
 
 type HPAMetricsResponse struct {
-	Namespace string            `json:"namespace"`
-	Name      string            `json:"name"`
-	Range     string            `json:"range"`
-	Current   *prom.QueryResult `json:"current"`
-	Desired   *prom.QueryResult `json:"desired"`
+	Namespace    string            `json:"namespace"`
+	Name         string            `json:"name"`
+	Range        string            `json:"range"`
+	Current      *prom.QueryResult `json:"current"`
+	Desired      *prom.QueryResult `json:"desired"`
+	ClusterScope *ClusterScope     `json:"clusterScope,omitempty"`
+	Partial      bool              `json:"partial,omitempty"`
 }
 
 // handleHPAMetrics returns the current and desired replica series for one
@@ -590,32 +659,43 @@ func handleHPAMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rangeStr := r.URL.Query().Get("range")
-	start, end, step := parseTimeRange(rangeStr)
-	currentQuery, desiredQuery := prom.BuildHPAReplicasQueries(namespace, name)
+	resp, err := hpaChart(r.Context(), productionChartDeps(client), namespace, name, r.URL.Query().Get("range"))
+	if err != nil {
+		writeChartError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
 
-	current, err := client.QueryRange(r.Context(), currentQuery, start, end, step)
+func hpaChart(ctx context.Context, d chartDeps, namespace, name, rangeStr string) (HPAMetricsResponse, error) {
+	start, end, step := parseTimeRange(rangeStr)
+	resp := HPAMetricsResponse{Namespace: namespace, Name: name, Range: rangeStr}
+	view, err := ResolveChartScope(ctx, d.resolve, hpaChartScopeRequest(namespace, name, chartRangeDuration(rangeStr), d.cache))
+	if err != nil {
+		return resp, err
+	}
+	resp.ClusterScope = ClusterScopeOf(view)
+	if view.Withheld {
+		resp.Current, resp.Desired = emptyChartResult(), emptyChartResult()
+		return resp, nil
+	}
+	currentQuery, desiredQuery := prom.BuildHPAReplicasQueriesFiltered(namespace, name, view.Filter)
+
+	current, err := d.q.QueryRange(ctx, currentQuery, start, end, step)
 	if err != nil {
 		log.Printf("[prometheus] HPA current replicas query failed for %q/%q: %v", namespace, name, err)
 		errorlog.Record("prometheus", "error", "hpa current replicas query failed for %q/%q: %v", namespace, name, err)
-		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
-		return
+		return resp, errChartQuery{err}
 	}
-	desired, err := client.QueryRange(r.Context(), desiredQuery, start, end, step)
+	desired, err := d.q.QueryRange(ctx, desiredQuery, start, end, step)
 	if err != nil {
 		log.Printf("[prometheus] HPA desired replicas query failed for %q/%q: %v", namespace, name, err)
 		errorlog.Record("prometheus", "error", "hpa desired replicas query failed for %q/%q: %v", namespace, name, err)
-		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
-		return
+		return resp, errChartQuery{err}
 	}
-
-	writeJSON(w, http.StatusOK, HPAMetricsResponse{
-		Namespace: namespace,
-		Name:      name,
-		Range:     rangeStr,
-		Current:   current,
-		Desired:   desired,
-	})
+	resp.Current, resp.Desired = current, desired
+	resp.Partial = incompleteResult(current) || incompleteResult(desired)
+	return resp, nil
 }
 
 const criDockerHint = "This pod's node uses the Docker container runtime (cri-docker), which is known to cause missing pod and namespace labels in cAdvisor metrics. " +

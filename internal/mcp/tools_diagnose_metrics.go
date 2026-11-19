@@ -13,6 +13,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -82,6 +83,10 @@ type diagnoseMetrics struct {
 	OmittedPods int                    `json:"omittedPods,omitempty"`
 	Series      []diagnoseMetricSeries `json:"series"`
 	Error       string                 `json:"error,omitempty"`
+	// ClusterScope says how the queries were kept to this cluster in a
+	// metrics store several clusters may share; when it withholds, Error
+	// carries its reason.
+	ClusterScope *prometheus.ClusterScope `json:"clusterScope,omitempty"`
 }
 
 type diagnoseMetricsWindow struct {
@@ -201,6 +206,17 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 		out.Error = "metrics omitted: no pods could be attributed to the workload"
 		return out
 	}
+	view, err := prometheus.ResolveChartScope(budgetCtx, prometheus.ResolverFor(client, k8s.GetResourceCache()),
+		prometheus.PodSetScopeRequest("diagnose_vitals", scope.Selection, diagnoseMetricsCategories, prometheus.ChartScopeSpan(since, prom.CategoryRestarts)))
+	if err != nil {
+		out.Error = fmt.Sprintf("metrics omitted: %s budget exceeded before all queries answered", diagnoseMetricsBudget)
+		return out
+	}
+	out.ClusterScope = prometheus.ClusterScopeOf(view)
+	if view.Withheld {
+		out.Error = boundDiagnoseMetricsError("metrics withheld: " + view.Note)
+		return out
+	}
 
 	type categoryResult struct {
 		series diagnoseMetricSeries
@@ -212,7 +228,7 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 		wg.Add(1)
 		go func(i int, cat prom.MetricCategory) {
 			defer wg.Done()
-			s, err := queryPodSetCategory(budgetCtx, p, scope.Selection, cat, start, now, step)
+			s, err := queryPodSetCategory(budgetCtx, p, scope.Selection, cat, start, now, step, view.Filter)
 			results[i] = categoryResult{series: s, err: err}
 		}(i, cat)
 	}
@@ -292,15 +308,15 @@ func diagnoseMetricsPointBudget(envelope *diagnoseMetrics) int {
 // queryPodSetCategory runs one category over the pod set, sharing the curated
 // HTTP metrics handler's container-filter fallback for clusters whose cAdvisor
 // lacks the label.
-func queryPodSetCategory(ctx context.Context, p *prom.Client, sel prom.PodSelection, cat prom.MetricCategory, start, end time.Time, step time.Duration) (diagnoseMetricSeries, error) {
+func queryPodSetCategory(ctx context.Context, p *prom.Client, sel prom.PodSelection, cat prom.MetricCategory, start, end time.Time, step time.Duration, filter prom.ClusterFilter) (diagnoseMetricSeries, error) {
 	out := diagnoseMetricSeries{Category: string(cat), Unit: prom.CategoryUnit(cat)}
-	query := prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, true)
+	query := prom.BuildScopedQueryFiltered(sel, cat, prom.AggregateTotal, true, filter)
 	result, err := p.QueryRange(ctx, query, start, end, step)
 	if err != nil {
 		return out, err
 	}
 	result, query, err = prometheus.QueryWithContainerFilterFallback(ctx, p, result, query, cat, start, end, step,
-		func() string { return prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, false) },
+		func() string { return prom.BuildScopedQueryFiltered(sel, cat, prom.AggregateTotal, false, filter) },
 		fmt.Sprintf("diagnose metrics empty for %q", cat))
 	if err != nil {
 		return out, err

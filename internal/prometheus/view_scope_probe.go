@@ -175,18 +175,24 @@ func viewAnchorMatchers(m ViewMetric) []viewMatcher {
 	for i, v := range m.AnchorValues {
 		names[i] = regexp.QuoteMeta(v)
 	}
+	pattern := strings.Join(names, "|")
+	if m.AnchorOptionalPort {
+		pattern = "(" + pattern + ")(:[0-9]+)?"
+	}
 	var out []viewMatcher
 	if m.AnchorNamespace != "" {
 		out = append(out, viewMatcher{label: "namespace", op: "=", value: m.AnchorNamespace})
 	}
-	return append(out, viewMatcher{label: m.AnchorLabel, op: "=~", value: strings.Join(names, "|")})
+	return append(out, viewMatcher{label: m.AnchorLabel, op: "=~", value: pattern})
 }
 
 // viewAnchorSubject is the subject's part the anchor check still needs: a
 // matcher every anchor already satisfies (the Pod list the anchors were
 // drawn from, the anchor namespace) selects nothing more, so leaving it out
 // keeps the check's meaning (this cluster's objects exist in that metric
-// inside the view's selection) without repeating it.
+// inside the view's selection) without repeating it. An anchor with an
+// optional port matches more than its names, so it vouches for no subject
+// matcher on its label.
 func viewAnchorSubject(m ViewMetric, subject []viewMatcher) []viewMatcher {
 	var out []viewMatcher
 	for _, sm := range subject {
@@ -197,7 +203,7 @@ func viewAnchorSubject(m ViewMetric, subject []viewMatcher) []viewMatcher {
 		if sm.label == "namespace" && sm.op == "=" && m.AnchorNamespace != "" && sm.value == m.AnchorNamespace {
 			continue
 		}
-		if sm.label == m.AnchorLabel && allAnchorsMatch(sm, m.AnchorValues) {
+		if sm.label == m.AnchorLabel && !m.AnchorOptionalPort && allAnchorsMatch(sm, m.AnchorValues) {
 			continue
 		}
 		out = append(out, sm)
