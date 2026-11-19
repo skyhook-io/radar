@@ -15,7 +15,7 @@ describe('defaultDrawerWidth', () => {
   it('grows a little into the room beyond what the list needs, up to 700 / 900', () => {
     expect(defaultDrawerWidth('pods', content(1920))).toBe(644)
     expect(defaultDrawerWidth('pods', content(2560))).toBe(700)
-    // Report kinds start wider but leave the list the same reserve.
+    // Report kinds start wider; once they grow, they leave the list the same reserve.
     expect(defaultDrawerWidth('vulnerabilityreports', content(1920))).toBe(750)
     expect(defaultDrawerWidth('vulnerabilityreports', content(2560))).toBe(900)
     for (const w of [1920, 2160, 2560]) {
@@ -33,10 +33,7 @@ describe('defaultDrawerWidth', () => {
     expect(at2560 / content(2560)).toBeLessThan(0.4)
   })
 
-  it('keeps wide kinds at least as wide as the rest, and wider until the room is ample', () => {
-    for (const w of [1280, 1680, 1920, 2560, 3840]) {
-      expect(defaultDrawerWidth('PolicyReports', content(w))).toBeGreaterThanOrEqual(defaultDrawerWidth('deployments', content(w)))
-    }
+  it('keeps wide kinds wider than the rest at every width', () => {
     for (const w of [1280, 1680, 1920, 2560, 3840]) {
       expect(defaultDrawerWidth('PolicyReports', content(w))).toBeGreaterThan(defaultDrawerWidth('deployments', content(w)))
     }
