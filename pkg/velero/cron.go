@@ -133,15 +133,15 @@ func (p parsedCron) eval(s cronSchedule, t time.Time, loc *time.Location) time.T
 	return s.Next(t)
 }
 
-// cronGap is the time between the first two runs after t, a cadence estimate
+// cronGap is the time between s's first two runs after t, a cadence estimate
 // used only for the uncertain-zone margin. A cadence that cannot be read falls
 // back to a day.
-func (p parsedCron) cronGap(t time.Time, loc *time.Location) time.Duration {
-	first := p.next(t, loc)
+func (p parsedCron) cronGap(s cronSchedule, t time.Time, loc *time.Location) time.Duration {
+	first := p.eval(s, t, loc)
 	if first.IsZero() {
 		return 24 * time.Hour
 	}
-	second := p.next(first, loc)
+	second := p.eval(s, first, loc)
 	if second.IsZero() || !second.After(first) {
 		return 24 * time.Hour
 	}

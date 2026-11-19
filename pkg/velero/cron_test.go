@@ -154,11 +154,15 @@ func TestImpossibleDayWithAWeekdayFollowsTheServerVersion(t *testing.T) {
 	if r := read(s(), nil, unknown, now); r.State != StateOnSchedule || r.NextRunCertain || r.DayMatch != DayMatchUnknown {
 		t.Fatalf("unknown: got %s certain=%v dayMatch=%q", r.State, r.NextRunCertain, r.DayMatch)
 	}
-	// Past February's Mondays the earlier rule would have run it, but 1.18.3
-	// never would, so it is never probably late.
+	// 1.18.3 would have kept submitting it, keeping lastBackup recent; with
+	// nothing submitted since January, February's Mondays passed on either
+	// version.
 	past := read(schedule("feb", "0 0 31 2 MON", lastBackup(day(2026, 1, 31))), nil, unknown, now)
-	if past.State != StatePossiblyLate || past.Reason != ReasonDayMatchUnconfirmed || past.Attention {
+	if past.State != StateProbablyLate || past.Reason != ReasonDayMatchUnconfirmed || !past.Attention {
 		t.Fatalf("unknown, past the earlier rule: got %s reason=%q attention=%v", past.State, past.Reason, past.Attention)
+	}
+	if r := read(schedule("feb", "0 0 31 2 MON", lastBackup(day(2026, 2, 2))), nil, unknown, day(2026, 2, 9).Add(time.Minute)); r.State != StatePossiblyLate || r.Attention {
+		t.Fatalf("unknown, within the grace of the earlier rule's time: got %s attention=%v", r.State, r.Attention)
 	}
 }
 
@@ -177,10 +181,45 @@ func TestOneUnrestrictedDayFieldStaysCertain(t *testing.T) {
 }
 
 func TestZoneAndDayMatchUncertaintyCombine(t *testing.T) {
+	// After October 5 both rules ran it by November 2, which with a known zone
+	// is probably late by November 15 (above). With the zone unknown too, the
+	// zone's margin is the later rule's cadence (November 2 to December 7)
+	// plus a day, on top of the span between the rules.
+	octUnknownZone := read(schedule("monthly", "0 0 1-7 * MON", lastBackup(day(2026, 10, 5))), nil, ServerConfig{Source: ServerUnread}, now)
+	if octUnknownZone.State != StatePossiblyLate || octUnknownZone.Attention {
+		t.Fatalf("unknown zone and version within both margins: got %s attention=%v", octUnknownZone.State, octUnknownZone.Attention)
+	}
+	if r := read(schedule("monthly", "0 0 1-7 * MON", lastBackup(day(2026, 10, 5))), nil, ServerConfig{Source: ServerUnread}, day(2026, 12, 10)); r.State != StateProbablyLate || !r.Attention {
+		t.Fatalf("unknown zone and version past both margins: got %s attention=%v", r.State, r.Attention)
+	}
+
 	// Neither the zone nor the version known: the day rule is the reason, and
 	// the margin still includes the zone's.
 	r := read(schedule("monthly", "0 0 1-7 * MON", lastBackup(day(2026, 11, 2))), nil, ServerConfig{Source: ServerUnread}, now)
 	if r.State != StatePossiblyLate || r.Reason != ReasonDayMatchUnconfirmed || r.NextRunCertain || r.Zone.Source != ZoneUnknown {
 		t.Fatalf("got %s reason=%q certain=%v zone=%s", r.State, r.Reason, r.NextRunCertain, r.Zone.Source)
+	}
+}
+
+func TestQuotedCronZoneOnNewerVelero(t *testing.T) {
+	r := read(schedule("berlin", `CRON_TZ="Europe/Berlin" 0 2 * * *`, lastBackup(now.Add(-time.Hour))), nil, serverWithImage("velero/velero:v1.18.3"), now)
+	if r.State != StateOnSchedule || r.Zone != (Zone{Name: "Europe/Berlin", Source: ZoneFromCron}) || !r.NextRunCertain {
+		t.Fatalf("got %s zone=%+v certain=%v", r.State, r.Zone, r.NextRunCertain)
+	}
+}
+
+// On March 8, 2026, New York skips 02:00. netresearch/go-cron runs the
+// schedule at 03:00 that day and robfig/cron waits for the next match, so the
+// later rule's time comes first; that must not shorten the grace.
+func TestLaterRuleFirstAcrossASkippedHourKeepsTheGrace(t *testing.T) {
+	s := schedule("dst", "CRON_TZ=America/New_York 0 2 8 3 SUN", lastBackup(day(2026, 3, 7)))
+	unknown := serverWithImage("velero/velero@sha256:0123abcd")
+	r := read(s, nil, unknown, day(2026, 3, 7).Add(time.Hour))
+	if r.NextRun == nil || !r.NextRun.After(day(2026, 3, 9)) {
+		t.Fatalf("expected robfig/cron to skip March 8, got next run %v", r.NextRun)
+	}
+	just := read(s, nil, unknown, r.NextRun.Add(time.Minute))
+	if just.State != StatePossiblyLate || just.Attention {
+		t.Fatalf("a minute past the estimate: got %s attention=%v", just.State, just.Attention)
 	}
 }

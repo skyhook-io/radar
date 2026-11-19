@@ -103,9 +103,9 @@ First match wins.
 | Skip pending | `spec.skipImmediately` is set; the controller moves its anchor on the next pass | No |
 | Held | Due, and a run of the schedule is `""`, `New` or `InProgress` (the controller's skip rule) | When the run has not started for 10 minutes; a long `InProgress` run is the stalled-run Issue's |
 | Late | Past the next run by 5 minutes, zone certain, Backups read, nothing holding it. Counts the scheduled times that passed; Velero does not catch up | Yes |
-| Probably late | Past it, zone not certain: inferred zone by 2 hours, unknown zone by the cadence plus a day | Yes |
+| Probably late | Past it, zone or day matching not certain: inferred zone by 2 hours, unknown zone by the cadence plus a day; with day matching unknown, also past the later rule's time | Yes |
 | Late or held | As Late, but the namespace's Backups are unread, so a hidden run may hold it | Yes |
-| Possibly late | Past the estimated run within the uncertain margin | No |
+| Possibly late | Past the estimated run within the uncertain margin (reason `zoneUnconfirmed` or `dayMatchUnconfirmed`) | No |
 | Due | Within the 5-minute grace | No |
 | On schedule | Otherwise | No |
 
@@ -133,7 +133,7 @@ Velero passes the object store's and the network's errors through as it gets the
 
 ## Schedule badges
 
-A schedule's badge (lists, the page's title, the Overview's Schedules table) is its state, with three readings for a schedule otherwise on schedule: one **due** within its grace while the server runs reads **On schedule** (its next run reads "due now"), since Velero submits it on its next pass; one whose newest run failed, partially failed or was rejected reads **Last run failed**; and one whose zone Radar has not confirmed (inferred or unknown) reads On schedule in grey, not green.
+A schedule's badge (lists, the page's title, the Overview's Schedules table) is its state, with three readings for a schedule otherwise on schedule: one **due** within its grace while the server runs reads **On schedule** (its next run reads "due now"), since Velero submits it on its next pass; one whose newest run failed, partially failed or was rejected reads **Last run failed**; and one whose zone Radar has not confirmed (inferred or unknown), or whose day matching is unknown, reads On schedule in grey, not green.
 
 The Overview's server reads **running** only when a replica is ready, and **not ready** when it has replicas but none is.
 

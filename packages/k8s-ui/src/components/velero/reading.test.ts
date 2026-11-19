@@ -89,7 +89,7 @@ describe('veleroScheduleBadge', () => {
 
 describe('a schedule whose day matching is unknown', () => {
   const reading = {
-    namespace: 'velero', name: 'monthly', created: '2026-10-01T00:00:00Z', cron: '0 0 1-7 * MON',
+    namespace: 'velero', name: 'monthly', created: '2026-10-01T00:00:00Z', cron: '0 0 1-7 * MON', lastSubmitted: '2026-11-02T00:00:00Z',
     zone: { name: 'UTC', source: 'serverDefault' }, state: 'possiblyLate', reason: 'dayMatchUnconfirmed', attention: false,
     nextRun: '2026-11-03T00:00:00Z', nextRunCertain: false, dayMatch: 'unknown',
     runs: { read: 'full', kept: 0 }, location: {}, ttl: '', includedNamespaces: [], excludedNamespaces: [],

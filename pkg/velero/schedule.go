@@ -351,9 +351,8 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 		if parsed.dayMatch == DayMatchUnknown {
 			uncertainReason = ReasonDayMatchUnconfirmed
 		}
-		margin, bounded := uncertainMargin(r.Zone, parsed, anchor, next, loc)
 		switch {
-		case bounded && in.Now.After(next.Add(margin)):
+		case in.Now.After(next.Add(uncertainMargin(r.Zone, parsed, anchor, next, loc))):
 			if r.Blocker != nil {
 				r.State = StateHeld
 				r.Reason, r.Attention = heldReason(r.Blocker, in.Now)
@@ -391,25 +390,34 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 
 // uncertainMargin is how far past an estimated next run a schedule must be
 // before it is probably late. With DayMatch unknown, next is the earlier
-// rule's time, so the margin runs to the later rule's; bounded is false when
-// that rule has no time, which Velero 1.18.3 and later treat as always due.
-func uncertainMargin(z Zone, p parsedCron, anchor, next time.Time, loc *time.Location) (margin time.Duration, bounded bool) {
+// rule's time, so the margin runs to the later rule's, and an unknown zone's
+// cadence is the later rule's, the sparser of the two. When the later rule has
+// no time, 1.18.3 and later treat the schedule as always due and keep
+// submitting it, which keeps lastBackup recent; a schedule past the earlier
+// rule's time is then late on either version.
+func uncertainMargin(z Zone, p parsedCron, anchor, next time.Time, loc *time.Location) time.Duration {
+	var later time.Time
+	if p.dayMatch == DayMatchUnknown {
+		later = p.nextBoth(anchor, loc)
+	}
+	margin := dueGrace
 	switch {
 	case z.Certain():
-		margin = dueGrace
 	case z.Source == ZoneInferred:
-		margin = inferredZoneMargin + dueGrace
+		margin += inferredZoneMargin
 	default:
-		margin = p.cronGap(anchor, loc) + unknownZoneMargin
-	}
-	if p.dayMatch == DayMatchUnknown {
-		later := p.nextBoth(anchor, loc)
-		if later.IsZero() {
-			return 0, false
+		gap := p.cronGap(p.sched, anchor, loc)
+		if !later.IsZero() {
+			gap = max(gap, p.cronGap(p.both, anchor, loc))
 		}
+		margin = gap + unknownZoneMargin
+	}
+	// The libraries also treat skipped daylight-saving hours differently, so
+	// the later rule's time can come first.
+	if later.After(next) {
 		margin += later.Sub(next)
 	}
-	return margin, true
+	return margin
 }
 
 func heldReason(b *ScheduleRun, now time.Time) (ScheduleReason, bool) {
@@ -453,6 +461,10 @@ func scheduleZone(expr string, p parsedCron, perr error, server ServerConfig, na
 func cronZoneName(expr string) string {
 	head, _, _ := strings.Cut(strings.TrimSpace(expr), " ")
 	_, zone, _ := strings.Cut(head, "=")
+	// netresearch/go-cron (Velero 1.18.3 and later) accepts a quoted zone.
+	if len(zone) >= 2 && (zone[0] == '"' || zone[0] == '\'') && zone[len(zone)-1] == zone[0] {
+		zone = zone[1 : len(zone)-1]
+	}
 	return zone
 }
 
