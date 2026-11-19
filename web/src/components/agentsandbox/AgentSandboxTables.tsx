@@ -21,6 +21,7 @@ import { CANT_SCHEDULE, notReadyMembers, objectKey, schedulerReason, type Server
 import type { KindRead } from './data'
 import { readInNamespace, readItems } from './data'
 import { AGENT_SANDBOX_EXTENSIONS_GROUP, AGENT_SANDBOX_GROUP, SANDBOXES_PATH, SANDBOX_CLAIM_KIND, SANDBOX_KIND, SANDBOX_WARM_POOL_KIND } from './routes'
+import { useListFilters } from './listFilters'
 import {
   AGENT_SANDBOX_WIDE,
   AgentSandboxCoverageNotice,
@@ -507,6 +508,13 @@ function useNameSearch(): [string, (value: string) => void] {
   return [params.get('search') ?? '', set]
 }
 
+/** What an empty list says when its filters, not the cluster, emptied it. */
+function noMatchText(noun: string, search: string, narrowed: boolean, read: KindRead): string | undefined {
+  if (read.state !== 'read' || read.items.length > 0) return undefined
+  if (narrowed) return `No ${noun} match these filters.`
+  return search.trim() ? `No ${noun} match this search.` : undefined
+}
+
 function NameSearch({ value, onChange, noun, id }: { value: string; onChange: (value: string) => void; noun: string; id: string }) {
   return <SearchBox value={value} onChange={onChange} scope="resources" shortcutId={id} placeholder={`Search ${noun} by name`} className="w-72 max-w-full" />
 }
@@ -521,12 +529,15 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
     p.delete(key)
     setParams(p, { replace: true })
   }
+  const listFilters = useListFilters(SANDBOX_KIND)
   const chips = [
     ...(pool ? [{ label: `Warm pool: ${pool.slice(pool.indexOf('/') + 1)}`, onClear: () => clear('pool') }] : []),
     ...(state ? [{ label: 'Not ready', onClear: () => clear('state') }] : []),
+    ...listFilters.chips,
   ]
-  const sandboxes = useMemo(() => filterByName(filterSandboxes(data.sandboxes, pool, state), search), [data.sandboxes, pool, state, search])
-  const filtered = (chips.length > 0 || !!search.trim()) && sandboxes.state === 'read' && sandboxes.items.length === 0
+  const { apply } = listFilters
+  const sandboxes = useMemo(() => filterByName(apply(filterSandboxes(data.sandboxes, pool, state)), search), [data.sandboxes, pool, state, search, apply])
+  const filtered = (!!pool || !!state || listFilters.narrows || !!search.trim()) && sandboxes.state === 'read' && sandboxes.items.length === 0
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <AgentSandboxHeader title="Sandboxes" namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_KIND.kind} />} />
@@ -541,15 +552,16 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
 
 export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, inspected, onCreate, server }: AgentSandboxScreenProps & { onCreate?: () => void; server?: ServerReadings }) {
   const [search, setSearch] = useNameSearch()
-  const claims = useMemo(() => filterByName(data.claims, search), [data.claims, search])
-  const filtered = !!search.trim() && claims.state === 'read' && claims.items.length === 0
+  const { apply, narrows, chips } = useListFilters(SANDBOX_CLAIM_KIND)
+  const claims = useMemo(() => filterByName(apply(data.claims), search), [data.claims, search, apply])
+  const empty = noMatchText('SandboxClaims', search, narrows, claims)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <AgentSandboxHeader title="Claims" namespaces={namespaces} onClearNamespaces={onClearNamespaces} actions={<CreateButton onCreate={onCreate} label={SANDBOX_CLAIM_KIND.kind} />} />
+      <AgentSandboxHeader title="Claims" namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_CLAIM_KIND.kind} />} />
       <ScreenBody>
         <NameSearch value={search} onChange={setSearch} noun="claims" id="agent-sandbox-claims-search" />
         <AgentSandboxCoverageNotice data={data} kinds={['claims', 'warmPools']} />
-        <ClaimsTable read={claims} warmPools={data.warmPools} onInspect={onInspect} inspected={inspected} server={server} empty={filtered ? 'No SandboxClaims match this search.' : undefined} />
+        <ClaimsTable read={claims} warmPools={data.warmPools} onInspect={onInspect} inspected={inspected} server={server} empty={empty} />
       </ScreenBody>
     </div>
   )
@@ -557,15 +569,16 @@ export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, i
 
 export function WarmPoolsScreen({ data, namespaces, onClearNamespaces, onInspect, inspected, onCreate, server }: AgentSandboxScreenProps & { onCreate?: () => void; server?: ServerReadings }) {
   const [search, setSearch] = useNameSearch()
-  const pools = useMemo(() => filterByName(data.warmPools, search), [data.warmPools, search])
-  const filtered = !!search.trim() && pools.state === 'read' && pools.items.length === 0
+  const { apply, narrows, chips } = useListFilters(SANDBOX_WARM_POOL_KIND)
+  const pools = useMemo(() => filterByName(apply(data.warmPools), search), [data.warmPools, search, apply])
+  const empty = noMatchText('SandboxWarmPools', search, narrows, pools)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <AgentSandboxHeader title="Warm pools" namespaces={namespaces} onClearNamespaces={onClearNamespaces} actions={<CreateButton onCreate={onCreate} label={SANDBOX_WARM_POOL_KIND.kind} />} />
+      <AgentSandboxHeader title="Warm pools" namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_WARM_POOL_KIND.kind} />} />
       <ScreenBody>
         <NameSearch value={search} onChange={setSearch} noun="warm pools" id="agent-sandbox-warm-pools-search" />
         <AgentSandboxCoverageNotice data={data} kinds={['warmPools', 'claims']} />
-        <WarmPoolsTable read={pools} claims={readItems(data.claims)} claimsRead={data.claims} onInspect={onInspect} inspected={inspected} server={server} empty={filtered ? 'No SandboxWarmPools match this search.' : undefined} />
+        <WarmPoolsTable read={pools} claims={readItems(data.claims)} claimsRead={data.claims} onInspect={onInspect} inspected={inspected} server={server} empty={empty} />
       </ScreenBody>
     </div>
   )
