@@ -489,7 +489,8 @@ type lastHop struct {
 // searches only the admitted objects, and asks no permission the walk didn't
 // already ask, so it can neither add a node nor reveal one.
 func (n *neighborhood) declaredEdges(admitted admittedSession, draw lastHop, refs []resourceid.Ref) {
-	v := relations.NewView(admitted, admitted.access)
+	// The admitted objects bound every answer here, so none is paged.
+	v := relations.NewView(admitted, admitted.access).WithLimit(0)
 	ov := ownership.NewView(admitted, admitted.access)
 	for _, r := range refs {
 		obj := admitted.objects[r]

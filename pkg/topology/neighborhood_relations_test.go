@@ -904,3 +904,82 @@ func TestWalkNeighborhoodLinksLastHopKnativeServing(t *testing.T) {
 		t.Errorf("missing KnativeService exposes its private Service; nodes %v edges %+v", names, sub.Edges)
 	}
 }
+
+// The last-hop pass is bounded by what the walk admitted, not by a relation
+// answer's page: a SealedSecret whose Secret 507 grouped Pods mount links to
+// both groups, the one past the first 500 Pods included.
+func TestWalkNeighborhoodLastHopCompositionsReachEveryGroup(t *testing.T) {
+	controller := true
+	owned := []metav1.OwnerReference{{APIVersion: "example.io/v1", Kind: "App", Name: "web", UID: "app", Controller: &controller}}
+	root := projectionCR("example.io", "App", "shop", "web", map[string]any{})
+	root.SetUID("app")
+	sealed := projectionCR("bitnami.com", "SealedSecret", "shop", "creds", map[string]any{})
+	sealed.SetOwnerReferences(owned)
+	spec := corev1.PodSpec{Volumes: []corev1.Volume{{Name: "creds", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "creds"}}}}}
+	objects := []runtime.Object{root, sealed}
+	for group, count := range map[string]int{"a": 501, "b": 6} {
+		for i := 0; i < count; i++ {
+			name := fmt.Sprintf("%s-%03d", group, i)
+			objects = append(objects, projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "shop", UID: types.UID(name), Labels: map[string]string{"app": group}, OwnerReferences: owned}, Spec: spec}, "", "Pod"))
+		}
+	}
+	sub := walkTestNeighborhood(t, newProjectionSession(t, objects...), root, NeighborhoodOptions{MaxNodes: 4})
+	groups := map[string]string{}
+	for _, n := range sub.Nodes {
+		if n.Kind == KindPodGroup {
+			groups[n.ID] = n.Name
+		}
+	}
+	if len(sub.Nodes) != 4 || len(groups) != 2 {
+		t.Fatalf("the fixture no longer admits the SealedSecret and both groups: %+v", sub.Nodes)
+	}
+	linked := map[string]bool{}
+	for _, e := range sub.Edges {
+		if e.Type == EdgeConfigures && strings.HasPrefix(e.Source, "sealedsecret/") && groups[e.Target] != "" {
+			linked[groups[e.Target]] = true
+		}
+	}
+	for _, g := range []string{"a", "b"} {
+		if !linked[g] {
+			t.Errorf("the SealedSecret isn't linked to group %s; edges %+v", g, sub.Edges)
+		}
+	}
+}
+
+// The last hop's Knative links ask nothing new: a controller's private
+// Service, with Knative Services the caller may not read, gets the same
+// answer whether a Knative Service fronting it exists or not, with no
+// permission question about Knative Services and no omission.
+func TestWalkNeighborhoodLastHopKnativeAsksNothingNew(t *testing.T) {
+	controller := true
+	root := projectionCR("example.io", "Controller", "shop", "web", map[string]any{})
+	root.SetUID("ctl")
+	private := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "hello-00001-private", Namespace: "shop", UID: "private", OwnerReferences: []metav1.OwnerReference{{APIVersion: "example.io/v1", Kind: "Controller", Name: "web", UID: "ctl", Controller: &controller}}}}, "", "Service")
+	ksvc := projectionCR("serving.knative.dev", "Service", "shop", "hello", map[string]any{"status": map[string]any{"traffic": []any{map[string]any{"revisionName": "hello-00001"}}}})
+	var answers []string
+	for _, present := range []bool{false, true} {
+		objects := []runtime.Object{root, private}
+		if present {
+			objects = append(objects, ksvc)
+		}
+		var askedKnative int
+		sub := walkTestNeighborhood(t, newProjectionSession(t, objects...), root, NeighborhoodOptions{Allow: func(n *Node) bool {
+			knative := strings.HasPrefix(n.Data["apiVersion"].(string), "serving.knative.dev/")
+			if knative {
+				askedKnative++
+			}
+			return !knative
+		}})
+		if len(sub.Nodes) != 2 {
+			t.Fatalf("the fixture no longer admits the private Service at one hop: %+v", sub.Nodes)
+		}
+		if askedKnative != 0 || sub.RBACDenied != 0 {
+			t.Errorf("knative present=%v: asked about Knative Services %d times, RBACDenied %d", present, askedKnative, sub.RBACDenied)
+		}
+		body, _ := json.Marshal(sub)
+		answers = append(answers, string(body))
+	}
+	if answers[0] != answers[1] {
+		t.Errorf("a hidden Knative Service changed the answer:\n%s\n%s", answers[0], answers[1])
+	}
+}
