@@ -4831,7 +4831,10 @@ function deleteResourceNotification(result: DeleteResourceResult): { message: st
   return { message: "Resource deleted", type: "success" };
 }
 
-export function useDeleteResource() {
+export function useDeleteResource(options?: {
+  /** Runs after any outcome, even when the caller unmounted meanwhile. */
+  onSettled?: () => void;
+}) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -4882,6 +4885,7 @@ export function useDeleteResource() {
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
+    onSettled: () => options?.onSettled?.(),
   });
 }
 

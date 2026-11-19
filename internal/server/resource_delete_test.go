@@ -100,9 +100,11 @@ func TestDeleteResourceHandlerBindsToTheReviewedObject(t *testing.T) {
 		deleteErr   error
 		status      int
 		wantRV      string
+		wantMessage string
 	}{
 		{name: "bound", query: "?uid=original&resourceVersion=8", status: http.StatusOK, wantRV: "8"},
-		{name: "changed since review", query: "?uid=original&resourceVersion=8", deleteErr: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "held", fmt.Errorf("precondition failed")), status: http.StatusConflict, wantRV: "8"},
+		{name: "changed since review", query: "?uid=original&resourceVersion=8", deleteErr: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "held", fmt.Errorf("Precondition failed: ResourceVersion in precondition: 8, ResourceVersion in object meta: 9")), status: http.StatusConflict, wantRV: "8", wantMessage: "changed since you reviewed it"},
+		{name: "a webhook's conflict keeps its own words", query: "?uid=original&resourceVersion=8", deleteErr: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "held", fmt.Errorf("policy holds this object")), status: http.StatusConflict, wantRV: "8", wantMessage: "policy holds this object"},
 		{name: "force can't be bound", query: "?force=true&resourceVersion=8", status: http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -127,8 +129,8 @@ func TestDeleteResourceHandlerBindsToTheReviewedObject(t *testing.T) {
 			if res.Code != tc.status {
 				t.Fatalf("status %d: %s", res.Code, res.Body.String())
 			}
-			if tc.status == http.StatusConflict && !strings.Contains(res.Body.String(), "changed since you reviewed it") {
-				t.Errorf("a refused bound delete says why: %s", res.Body.String())
+			if tc.wantMessage != "" && !strings.Contains(res.Body.String(), tc.wantMessage) {
+				t.Errorf("body %s, want %q", res.Body.String(), tc.wantMessage)
 			}
 			if tc.wantRV != "" && (got == nil || got.ResourceVersion == nil || *got.ResourceVersion != tc.wantRV || got.UID == nil || *got.UID != "original") {
 				t.Fatalf("preconditions %+v", got)

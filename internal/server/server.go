@@ -4653,7 +4653,8 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if apierrors.IsConflict(err) {
-			if uid != "" || resourceVersion != "" {
+			// A precondition the API server checked, not an admission webhook's 409.
+			if (uid != "" || resourceVersion != "") && strings.Contains(err.Error(), "Precondition failed") {
 				s.writeError(w, http.StatusConflict, "it changed since you reviewed it, so it was not deleted; review it again")
 				return
 			}

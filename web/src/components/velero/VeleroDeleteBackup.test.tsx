@@ -184,8 +184,10 @@ describe('Delete backup', () => {
     expect(text).toContain('Nothing of this backup is in storage')
     expect(text).not.toContain('permanently delete')
     expect(text).not.toContain('Force delete')
+    // A run that never started owns nothing for Kubernetes to cascade to.
+    expect(text).not.toContain('preview is partial')
     act(() => buttons('Delete object').at(-1)!.click())
-    expect(state.deleteObject).toHaveBeenCalledWith({ kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly-1', uid: 'uid-nightly-1', resourceVersion: '41' }, expect.anything())
+    expect(state.deleteObject).toHaveBeenCalledWith({ kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly-1', uid: 'uid-nightly-1', resourceVersion: '41' })
   })
 
   it('offers neither delete until its deletion requests are read, and only follows one that is open', () => {
@@ -199,12 +201,14 @@ describe('Delete backup', () => {
     expect(document.body.textContent).toContain('Deleting…')
   })
 
-  it('withholds Delete object when a refresh of its deletion requests failed', () => {
+  it('says the status is unreadable, and offers neither delete, when a refresh of its deletion requests failed', () => {
     state.workspace = workspace({ accessMode: 'ReadWrite', phase: 'Available' })
-    state.deletion = { state: 'unknown' }
+    state.deletion = { state: 'refused', request: 'nightly-1-x' }
     state.deletionError = new Error('HTTP 503')
     render(<VeleroDeleteBackup backup={unstored('nightly-1')} />)
     expect(buttons('Delete object')).toHaveLength(0)
+    expect(buttons('Delete backup')).toHaveLength(0)
+    expect(document.body.textContent).toContain('Deletion requested')
   })
 
   it('offers Delete object, not Delete backup again, after Velero refused the request', () => {

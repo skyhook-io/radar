@@ -62,7 +62,8 @@ import { RunMessages } from './VeleroRunMessagesHost'
 import { VeleroBackupDeletionRow } from './VeleroDeleteBackup'
 import { Expires, FAILED, Outcome, RunCounts, RunOutcome, RunsReadNotice, When, durationText, expired, runViewOptions, runsEmpty, useRunView } from './runs'
 import { VELERO_DETAIL_KINDS, veleroDetailPath } from './routes'
-import { VELERO_MESSAGE_LABEL, VELERO_WIDE, VeleroName, restoreTargets, selectionText, veleroResource, type RestoreSelection } from './shared'
+import { VELERO_DELETE_OBJECT, VELERO_MESSAGE_LABEL, VELERO_WIDE, VeleroName, restoreTargets, selectionText, veleroResource, type RestoreSelection } from './shared'
+import { useVeleroDeleteObjectReason } from './backupDelete'
 import { OutcomeCell, RestoreIntoCell, StartedCell } from './VeleroRunLists'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { veleroObjectProblems } from './attention'
@@ -214,13 +215,19 @@ function CountsText({ errors, warnings }: { errors: number; warnings: number }) 
  * issues the detail view found stand in when the Velero workspace isn't read
  * or holds nothing for it (it keeps the newest 50 issues per installation).
  */
-function PageLead({ kind, namespace, name, leadContent, onNavigate }: { kind: string; namespace: string; name: string; leadContent?: ReactNode; onNavigate?: NavigateToResource }) {
+function PageLead({ kind, namespace, name, resource, leadContent, onNavigate }: { kind: string; namespace: string; name: string; resource?: any; leadContent?: ReactNode; onNavigate?: NavigateToResource }) {
   const workspace = useWorkspace()
   const navigate = useWorkspaceNavigate()
   const [params] = useSearchParams()
   const issuesTakenOver = !!useNavCustomization().fleetTakeoverHref?.('issues')
   const deleteObject = useRadarFeature('resourceDeletePreconditions').support === 'supported'
-  const problems = workspace.data ? veleroObjectProblems(workspace.data, kind, namespace, name, { deleteObject }) : []
+  // Velero won't act on a deletion request for this backup: its own fault's next step names the delete that works.
+  const deleteObjectReason = useVeleroDeleteObjectReason(kind === 'Backup' ? resource : undefined)
+  const problems = (workspace.data ? veleroObjectProblems(workspace.data, kind, namespace, name, { deleteObject }) : []).map((p) =>
+    deleteObjectReason && p.subject.kind === 'Backup' && p.subject.name === name && p.nextStep
+      ? { ...p, nextStep: `${p.nextStep.replace(/\.$/, '')}; to remove this backup, use ${VELERO_DELETE_OBJECT} (nothing of it is in storage)` }
+      : p,
+  )
   if (problems.length === 0) return <>{leadContent}</>
   return (
     <OpenIssueContext.Provider value={issuesTakenOver ? undefined : (p) => navigate(issuesPathForSubject(p.subject, params.get('namespaces')))}>
@@ -1041,7 +1048,7 @@ export function renderVeleroSummary({ apiKind, resource, context, onNavigate, le
   return (
     <SummaryPlaceContext.Provider value={{ drawer: context === 'drawer', plural: apiKind, namespace, name }}>
       <div className="space-y-4 p-4">
-        <PageLead kind={VELERO_DETAIL_KINDS[apiKind].kind} namespace={namespace} name={name} leadContent={leadContent} onNavigate={onNavigate} />
+        <PageLead kind={VELERO_DETAIL_KINDS[apiKind].kind} namespace={namespace} name={name} resource={resource} leadContent={leadContent} onNavigate={onNavigate} />
         {body}
       </div>
     </SummaryPlaceContext.Provider>

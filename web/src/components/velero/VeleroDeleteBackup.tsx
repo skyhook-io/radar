@@ -114,12 +114,11 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
   // Where Velero would never act on a request, Delete object takes Delete backup's place.
   // A failed refresh leaves older data behind; for Delete object that reads as unknown.
   const requestState = support !== 'supported' ? 'none' : !deletion.data && !deletion.error ? 'unknown' : deletion.error || (started && !(state && SETTLED.has(state))) ? 'open' : 'none'
-  const path = veleroBackupDeletePath(backup, {
-    deleteBackup: support,
-    preconditions,
-    locationMissing: (n) => veleroLocationMissing(workspace.data, namespace, n),
-    request: requestState,
-  })
+  const pathInput = { deleteBackup: support, preconditions, locationMissing: (n: string) => veleroLocationMissing(workspace.data, namespace, n) }
+  const path = veleroBackupDeletePath(backup, { ...pathInput, request: requestState })
+  // A backup only Delete object could remove, whose requests can't be read now:
+  // say so rather than fall back to a Delete backup Velero would refuse.
+  const objectUnreadable = !!deletion.error && veleroBackupDeletePath(backup, { ...pathInput, request: 'none' }).kind === 'object'
   if (path.kind === 'object') return <VeleroDeleteObject backup={backup} reason={path.reason} />
   if (support !== 'supported') return null
 
@@ -147,8 +146,8 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
 
   // Asked, and not settled: follow it. A status Radar can't read is said as
   // such; it is never a reason to offer the deletion again.
-  if ((deletion.error && !deletion.data) || (started && !(state && SETTLED.has(state)))) {
-    const unreadable = deletion.error && !deletion.data
+  if ((deletion.error && !deletion.data) || objectUnreadable || (started && !(state && SETTLED.has(state)))) {
+    const unreadable = deletion.error && (!deletion.data || objectUnreadable)
     const tooltip = unreadable
       ? started
         ? `Velero was asked to delete this backup, but Radar can’t read how it is going: ${deletion.error.message}`

@@ -3,7 +3,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, Trash2 } from 'lucide-react'
 import { AlertBanner, ForceDeleteConfirmDialog, type VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
 import type { RadarFeatureSupport } from '../../api/radarFeatures'
-import { useCascadeDeletePreview, useDeleteResource } from '../../api/client'
+import { useDeleteResource, useRadarFeature } from '../../api/client'
+import { useVeleroBackupDeletion, useVeleroWorkspace } from '../../api/velero'
 import { VELERO_BACKUP_KIND, VELERO_GROUP } from './routes'
 import { VELERO_DELETE_BUTTON, VELERO_DELETE_OBJECT } from './shared'
 
@@ -91,18 +92,26 @@ export function VeleroObjectDeleteNotice({ reason, backup }: { reason: VeleroObj
 
 /**
  * Delete object, in the Backup header where Delete backup otherwise is: the
- * generic delete (DELETE /api/resources/..., with its usual preview) bound to
- * the object the user reviewed, so a backup Velero picked up meanwhile is
- * refused (409) rather than deleted. No Force delete: these Backups carry no
- * finalizer to strip.
+ * generic delete (DELETE /api/resources/...) bound to the object the user
+ * reviewed, so a backup Velero picked up meanwhile is refused (409) rather
+ * than deleted. No Force delete: these Backups carry no finalizer to strip.
+ * No dependents preview either: the only objects Velero owns by a Backup are
+ * its PodVolumeBackups and DataUploads, which it creates while the backup
+ * runs, and these never ran (Velero v1.18.2 podvolume/backupper.go,
+ * backup/actions/csi/pvc_action.go).
  */
 export function VeleroDeleteObject({ backup, reason }: { backup: any; reason: VeleroObjectDeleteReason }) {
   const namespace: string = backup?.metadata?.namespace ?? ''
   const name: string = backup?.metadata?.name ?? ''
   const [reviewed, setReviewed] = useState<{ uid: string; resourceVersion: string } | null>(null)
-  const deleteResource = useDeleteResource()
   const queryClient = useQueryClient()
-  const preview = useCascadeDeletePreview(VELERO_BACKUP_KIND.name, namespace, name, VELERO_GROUP, reviewed !== null)
+  // Deleted, refused (it changed since review) or failed: show the backup as it is now, even if this button is gone by then.
+  const deleteResource = useDeleteResource({
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['resource'] })
+      void queryClient.invalidateQueries({ queryKey: ['velero'] })
+    },
+  })
   return (
     <>
       <button
@@ -119,18 +128,14 @@ export function VeleroDeleteObject({ backup, reason }: { backup: any; reason: Ve
         onClose={() => setReviewed(null)}
         onConfirm={() => {
           if (!reviewed) return
-          deleteResource.mutate(
-            {
-              kind: VELERO_BACKUP_KIND.name,
-              group: VELERO_GROUP,
-              namespace,
-              name,
-              uid: reviewed.uid,
-              resourceVersion: reviewed.resourceVersion,
-            },
-            // Deleted, refused (it changed since review) or failed: show the backup as it is now. Toasts come from the mutation.
-            { onSettled: () => { void queryClient.invalidateQueries({ queryKey: ['resource'] }); void queryClient.invalidateQueries({ queryKey: ['velero'] }) } },
-          )
+          deleteResource.mutate({
+            kind: VELERO_BACKUP_KIND.name,
+            group: VELERO_GROUP,
+            namespace,
+            name,
+            uid: reviewed.uid,
+            resourceVersion: reviewed.resourceVersion,
+          })
           setReviewed(null)
         }}
         resourceName={name}
@@ -138,11 +143,6 @@ export function VeleroDeleteObject({ backup, reason }: { backup: any; reason: Ve
         namespaceName={namespace}
         resourceData={backup}
         isLoading={deleteResource.isPending}
-        cascadeDetail={preview.data}
-        cascadeDependents={preview.data?.dependents}
-        cascadeLoading={preview.isFetching}
-        cascadeRootResolved={preview.data?.rootResolved}
-        cascadePreviewFailed={preview.isError}
         actionLabel={VELERO_DELETE_OBJECT}
         details={VELERO_DELETE_OBJECT_DETAILS}
         notice={<VeleroObjectDeleteNotice reason={reason} backup={backup} />}
@@ -150,4 +150,28 @@ export function VeleroDeleteObject({ backup, reason }: { backup: any; reason: Ve
       />
     </>
   )
+}
+
+/**
+ * Why Delete object is offered for this Backup, or undefined: the header's
+ * decision for surfaces that only name the action (the page's next step). It
+ * reads the same features, workspace and deletion requests, so it agrees with
+ * the header once they are loaded.
+ */
+export function useVeleroDeleteObjectReason(backup: any): VeleroObjectDeleteReason | undefined {
+  const deleteBackup = useRadarFeature('veleroDeleteBackup').support
+  const preconditions = useRadarFeature('resourceDeletePreconditions').support
+  const workspaceSupport = useRadarFeature('veleroWorkspace').support
+  const namespace: string = backup?.metadata?.namespace ?? ''
+  const workspace = useVeleroWorkspace({ enabled: !!backup && deleteBackup === 'supported' && workspaceSupport === 'supported' })
+  const deletion = useVeleroBackupDeletion(namespace, backup?.metadata?.name ?? '', backup?.metadata?.uid ?? '', !!backup && deleteBackup === 'supported')
+  const settled = deletion.data && ['refused', 'failed', 'unknown', 'deleted'].includes(deletion.data.state)
+  const request = deletion.error ? 'open' : !deletion.data ? 'unknown' : deletion.data.request && !settled ? 'open' : 'none'
+  const path = veleroBackupDeletePath(backup, {
+    deleteBackup,
+    preconditions,
+    locationMissing: (n) => veleroLocationMissing(workspace.data, namespace, n),
+    request,
+  })
+  return path.kind === 'object' ? path.reason : undefined
 }
