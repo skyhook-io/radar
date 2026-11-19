@@ -220,6 +220,7 @@ export interface FeatureCapabilities {
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
   vulnerabilities?: boolean
+  runtimeAdvisoryChecks?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

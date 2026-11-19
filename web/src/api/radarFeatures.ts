@@ -82,6 +82,7 @@ export const RADAR_FEATURES = {
   agentSigninCheck: { label: 'Agent sign-in checks', flag: 'agentSigninCheck', flagShippedWithEndpoint: true },
   podFileUpload: { label: 'Pod file uploads', flag: 'podFileUpload', flagShippedWithEndpoint: true },
   vulnerabilities: { label: 'Vulnerability views', flag: 'vulnerabilities', flagShippedWithEndpoint: true },
+  runtimeAdvisoryChecks: { label: 'Java4Shell checks', flag: 'runtimeAdvisoryChecks', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES

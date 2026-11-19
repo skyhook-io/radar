@@ -30,7 +30,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"golang.org/x/sync/singleflight"
-	authv1 "k8s.io/api/authorization/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -735,6 +734,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/upgrade-readiness", s.handleUpgradeReadiness)
 			// Scanner findings rolled up to the images that run now.
 			r.Get("/vulnerabilities", s.handleVulnerabilities)
+			r.Get("/vulnerabilities/java4shell", s.handleJava4Shell)
 
 			// Network path trace - path-shaped diagnosis for Service /
 			// Ingress / HTTPRoute / GRPCRoute / Gateway. See internal/trace.
@@ -864,49 +864,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
-			imageHandlers := images.NewHandlers(func(r *http.Request, namespace string) (bool, bool) {
-				if auth.UserFromContext(r.Context()) != nil && s.permCache == nil {
-					return false, false
-				}
-				return s.canReadDecision(r, "", "pods", namespace, "get")
-			}, func(r *http.Request, namespace string) (bool, bool) {
-				if auth.UserFromContext(r.Context()) == nil || s.permCache == nil {
-					return false, false
-				}
-				return s.grantDecision(r, Grant{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace})
-			}, func(r *http.Request, namespace, secretName string) (bool, bool) {
-				user := auth.UserFromContext(r.Context())
-				if user == nil || s.permCache == nil {
-					return false, false
-				}
-				if allowed, authoritative := s.grantDecision(r, Grant{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace}); allowed && authoritative {
-					return true, true
-				}
-				perms := s.permCache.Get(user.Username, user.Groups)
-				key := "secrets/" + secretName
-				if perms != nil {
-					if allowed, ok := perms.CanI("get", "", key, namespace); ok {
-						return allowed, true
-					}
-				}
-				client := k8s.GetClient()
-				if client == nil {
-					return false, false
-				}
-				// Include Name so resourceNames-restricted Secret grants apply.
-				status, err := pkgauth.ReviewSubjectAccess(r.Context(), client, user.Username, user.Groups, authv1.ResourceAttributes{
-					Verb: "get", Resource: "secrets", Namespace: namespace, Name: secretName,
-				})
-				if err != nil {
-					log.Printf("[images] Failed to authorize pull secret %s/%s: %v", k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(secretName), err)
-					return false, false
-				}
-				authoritative := status.EvaluationError == ""
-				if authoritative && perms != nil {
-					perms.SetCanI("get", "", key, namespace, status.Allowed)
-				}
-				return status.Allowed, authoritative
-			})
+			imageHandlers := images.NewHandlers(s.imagePodReadDecision, s.imageExecDecision, s.imagePullSecretDecision)
 			imageHandlers.RegisterRoutes(r)
 
 			// Prometheus metrics routes. Every metrics read runs with Radar's
@@ -1606,6 +1564,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		KueueQueueWorkloads:         true,
 		PodFileUpload:               true,
 		Vulnerabilities:             true,
+		RuntimeAdvisoryChecks:       true,
 	}
 }
 
