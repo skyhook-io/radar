@@ -817,3 +817,20 @@ func TestDeleteCascadeWarnsForDependentStorage(t *testing.T) {
 		t.Fatalf("dependent storage warning missing: %+v", preview)
 	}
 }
+
+// A Velero Backup object is not the backup: the preview says how Velero deletes one.
+func TestDeleteResourcePreviewExplainsVeleroBackups(t *testing.T) {
+	setConnectedForTest(t)
+	gvr := schema.GroupVersionResource{Group: "velero.io", Version: "v1", Resource: "backups"}
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "velero.io/v1", "kind": "Backup", "metadata": map[string]any{"name": "nightly-1", "namespace": "velero", "uid": "uid", "resourceVersion": "1"}}}
+	dyn := setupDeletionResource(t, gvr, "BackupList", k8s.APIResource{Group: "velero.io", Version: "v1", Kind: "Backup", Name: "backups", Namespaced: true, IsCRD: true}, obj).(*dynamicfake.FakeDynamicClient)
+	dyn.PrependReactor("delete", "backups", func(clienttesting.Action) (bool, runtime.Object, error) { return true, nil, nil })
+	res, _, err := handleDeleteResource(context.Background(), nil, deleteResourceInput{Kind: "Backup", Group: "velero.io", Namespace: "velero", Name: "nightly-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeToolResult(t, res)
+	if guidance, _ := got["guidance"].(string); !strings.Contains(guidance, "DeleteBackupRequest") || !strings.Contains(guidance, "spec.backupName") || strings.Contains(guidance, "velero.io/backup-uid") {
+		t.Fatalf("guidance = %q", guidance)
+	}
+}

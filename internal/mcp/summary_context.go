@@ -4,23 +4,18 @@
 // The shared core (issue index, kind canonicalization, managedBy
 // resolution, per-row scope dispatch) lives in
 // internal/summarycontext. This file is the MCP-specific wrapper — it
-// reuses the host’s indexed relationship graph, or the shared detail memo
-// when standalone, and otherwise just plumbs arguments through.
+// supplies caller access to the shared family reader.
 
 package mcp
 
 import (
 	"context"
-	"time"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/pkg/ownership"
-	"github.com/skyhook-io/radar/pkg/topology"
 )
-
-var summaryTopologyGate = summarycontext.NewBudgetGate(1)
 
 // newResourceSummaryContextBuilder assembles the per-request closure for MCP
 // list_resources. A missing typed cache returns nil; WithBudget turns that into
@@ -39,9 +34,7 @@ func newResourceSummaryContextBuilder(ctx context.Context, namespaces []string) 
 		return nil
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
-	return summarycontext.BuilderFromIndexes(ctx, func() summarycontext.IndexedTopology {
-		return summarycontext.WithinContext(ctx, summaryTopologyGate, buildSummaryContextTopology)
-	}, idx, idx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
+	return summarycontext.BuilderFromIndexes(ctx, idx, idx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
 }
 
 // newSearchSummaryContextBuilder is the MCP search variant. Mirrors
@@ -61,18 +54,7 @@ func newSearchSummaryContextBuilder(ctx context.Context, scanNamespaces []string
 	if scanNamespaces != nil {
 		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: issueClusterScopedAccess(ctx), CanReadRelated: issueRelatedResourceAccess(ctx), CanReadSubject: issueSubjectAccess(ctx), CanReadEvidence: issueEvidenceAccess(ctx)})
 	}
-	return summarycontext.BuilderFromIndexes(ctx, func() summarycontext.IndexedTopology {
-		return summarycontext.WithinContext(ctx, summaryTopologyGate, buildSummaryContextTopology)
-	}, namespacedIdx, clusterIdx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
-}
-
-// summaryCtxTopoMemo is the standalone-host fallback shared by detail and
-// summaries. The server supplies its maintained relationship graph instead.
-var summaryCtxTopoMemo = topology.NewMemoizer(5 * time.Second)
-
-func buildSummaryContextTopology() summarycontext.IndexedTopology {
-	graph, index, _, _, _ := mcpTopologyForContext()
-	return summarycontext.IndexedTopology{Topology: graph, Index: index}
+	return summarycontext.BuilderFromIndexes(ctx, namespacedIdx, clusterIdx, summaryRefReader(ctx), summaryAgentOwnership(ctx))
 }
 
 // summaryRefReader is the caller's access to a reference a summary names, as

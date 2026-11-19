@@ -416,6 +416,22 @@ func (c *ControllerChain) Readable(readable func(ResourceRef) bool) *ControllerC
 	return c
 }
 
+// ToManager is c cut at the first GitOps manager above the resource
+// (ownership.IsRecordingManager), which settles it: past one lies a parent
+// such as an ApplicationSet, shared by apps that are separate. A chain with
+// no GitOps manager above the resource is c.
+func (c *ControllerChain) ToManager() *ControllerChain {
+	if c == nil {
+		return nil
+	}
+	for i := 1; i < len(c.Refs); i++ {
+		if ownership.IsRecordingManager(refIdentity(c.Refs[i]).GroupKind()) {
+			return &ControllerChain{Refs: c.Refs[:i+1]}
+		}
+	}
+	return c
+}
+
 // Top is the highest object the walk read above the resource, nil when the
 // resource has no controller the caller reads.
 func (c *ControllerChain) Top() *ResourceRef {

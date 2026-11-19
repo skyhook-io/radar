@@ -82,6 +82,11 @@ type DeleteResourceOptions struct {
 	Namespace string
 	Name      string
 	Force     bool // Force delete with grace period 0
+	// UID and ResourceVersion, when set, bind the delete to the object the
+	// caller reviewed: the API server refuses it (a conflict) when the object
+	// was replaced or changed since.
+	UID             types.UID
+	ResourceVersion string
 }
 
 // ApplyResourceOptions contains options for creating or applying a resource.
@@ -635,8 +640,18 @@ func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts Del
 	// Background propagation avoids legacy defaults that orphan a Job's Pods.
 	background := metav1.DeletePropagationBackground
 	deleteOpts := metav1.DeleteOptions{PropagationPolicy: &background}
-	if uid != "" {
+	if opts.UID != "" {
+		reviewed := opts.UID
+		deleteOpts.Preconditions = &metav1.Preconditions{UID: &reviewed}
+	} else if uid != "" {
 		deleteOpts.Preconditions = &metav1.Preconditions{UID: &uid}
+	}
+	if opts.ResourceVersion != "" {
+		if deleteOpts.Preconditions == nil {
+			deleteOpts.Preconditions = &metav1.Preconditions{}
+		}
+		rv := opts.ResourceVersion
+		deleteOpts.Preconditions.ResourceVersion = &rv
 	}
 	if readErr == nil {
 		// Only GC finalizers record a policy to preserve; Background has no finalizer.

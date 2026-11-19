@@ -1016,3 +1016,39 @@ func TestMinify_DetailPrunesWorkloadStatusNoise(t *testing.T) {
 		t.Error("conditions should be kept in Deployment status")
 	}
 }
+
+func TestMinify_EnvSanitizationCoversPodTemplate(t *testing.T) {
+	typed := &corev1.PodTemplate{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "PodTemplate"},
+		ObjectMeta: metav1.ObjectMeta{Name: "rollout-template", Namespace: "default"},
+		Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+			Containers:     []corev1.Container{{Name: "app", Env: []corev1.EnvVar{{Name: "DB_PASSWORD", Value: "template-secret"}, {Name: "APP_MODE", Value: "production"}}}},
+			InitContainers: []corev1.Container{{Name: "init", Env: []corev1.EnvVar{{Name: "CLIENT_SECRET", Value: "init-secret"}}}},
+		}},
+	}
+	content, err := runtime.DefaultUnstructuredConverter.ToUnstructured(typed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, level := range []VerbosityLevel{LevelDetail, LevelCompact} {
+		typedOut, err := Minify(typed, level)
+		if err != nil {
+			t.Fatalf("Minify PodTemplate level=%d failed: %v", level, err)
+		}
+		for name, raw := range map[string]any{"typed": typedOut, "unstructured": MinifyUnstructured(&unstructured.Unstructured{Object: runtime.DeepCopyJSON(content)}, level)} {
+			data, _ := json.Marshal(raw)
+			output := string(data)
+			for _, leaked := range []string{"template-secret", "init-secret"} {
+				if contains(output, leaked) {
+					t.Errorf("%s PodTemplate leaked %q at level=%d: %s", name, leaked, level, output)
+				}
+			}
+			if !contains(output, "DB_PASSWORD") {
+				t.Errorf("%s PodTemplate env name missing at level=%d: %s", name, level, output)
+			}
+			if level == LevelDetail && !contains(output, "production") {
+				t.Errorf("%s PodTemplate safe env value missing at Detail: %s", name, output)
+			}
+		}
+	}
+}

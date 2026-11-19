@@ -633,17 +633,12 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		families: s.readablePolicyReportFamilies(r, namespace),
 	}
 
-	if topo, index, prov, dyn, ok := s.topologyForContext(); ok {
-		opts.RelIndex = index
-		opts.Topology = topo
-		opts.Provider = prov
-		opts.DynamicProv = dyn
-		// Relationships are computed inside Build via GetRelationshipsWithObject,
-		// which applies the same KindForGVK pseudo-kind remap we used to do
-		// here. Pre-computing in the handler doubled the work whenever the
-		// lookup returned nil (no edges): handler call returned nil, Build's
-		// `rel == nil && opts.Topology != nil` fallback re-ran the identical
-		// scan. Leaving opts.Relationships unset is the canonical path.
+	access := func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }
+	traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+	opts.Relationships, _, opts.RelationshipExtras = k8s.AnswerResourceContextRelationships(cache, obj, access, traverse)
+	if cache != nil {
+		opts.Provider = k8s.NewTopologyResourceProvider(cache)
+		opts.DynamicProv = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 	}
 	opts.OpenTelemetryAutoInstrumentation, opts.OpenTelemetryAutoInstrumentationUnavailable = k8s.OpenTelemetryAutoInstrumentationForObject(obj, func(group, resource, namespace, verb string) bool {
 		return (namespace == "" || len(s.getUserNamespaces(r, []string{namespace})) > 0) && s.canRead(r, group, resource, namespace, verb)
@@ -657,42 +652,6 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	}
 
 	return resourcecontext.Build(r.Context(), obj, opts)
-}
-
-// topologyForContext uses the complete relationship graph the broadcaster
-// already keeps for drawer lookups, so resource context never holds a second
-// copy of the cluster. The resource context checker gates each target,
-// including other namespaces. Before that graph exists it builds one through
-// the memo. Returns ok=false when the cache is not available.
-func (s *Server) topologyForContext() (*topology.Topology, *topology.RelationshipsIndex, topology.ResourceProvider, topology.DynamicProvider, bool) {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil, nil, nil, nil, false
-	}
-	provider := k8s.NewTopologyResourceProvider(cache)
-	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-	if topo, index := s.RelationshipTopology(); topo != nil {
-		return topo, index, provider, dyn, true
-	}
-	opts := topology.RelationshipBuildOptions()
-	opts.IncludeSecrets = true
-
-	topo, index, err := s.topoMemo.GetWithIndexScoped(cache.Generation(), opts, func() (*topology.Topology, error) {
-		return topology.NewBuilder(provider).WithDynamic(dyn).Build(opts)
-	})
-	if err != nil || topo == nil {
-		return nil, nil, nil, nil, false
-	}
-	return topo, index, provider, dyn, true
-}
-
-// RelationshipTopology returns the broadcaster's full relationship graph and
-// its index, or nil before it has been built.
-func (s *Server) RelationshipTopology() (*topology.Topology, *topology.RelationshipsIndex) {
-	if s == nil || s.broadcaster == nil {
-		return nil, nil
-	}
-	return s.broadcaster.GetCachedTopologyWithIndex()
 }
 
 // computeIssueSummaryForResource rolls up per-resource issue-composer rows

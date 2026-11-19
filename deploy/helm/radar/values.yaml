@@ -187,6 +187,8 @@ rbac:
     # and resource exclusions below; Kubernetes RBAC cannot subtract Secrets.
     all: false
 
+    agentSandbox: true      # agents.x-k8s.io, extensions.agents.x-k8s.io (Agent Sandbox Sandboxes, SandboxClaims, SandboxTemplates, SandboxWarmPools)
+    agentSubstrate: true    # ate.dev (Agent Substrate WorkerPools, SandboxConfigs, CSIDriverConfigs; actors are not Kubernetes objects)
     antrea: true            # crd.antrea.io (Antrea NetworkPolicy, ClusterNetworkPolicy; read by the NetworkPolicy deny-all check)
     apiRegistration: true   # apiregistration.k8s.io (APIService health for aggregated APIs)
     argo: true              # argoproj.io
@@ -207,6 +209,7 @@ rbac:
     externalDns: true       # externaldns.k8s.io
     externalSecrets: true   # external-secrets.io
     flux: true              # *.toolkit.fluxcd.io
+    fluxOperator: true      # fluxcd.controlplane.io (FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider)
     gatewayApi: true        # gateway.networking.k8s.io
     gcpMonitoring: true     # monitoring.googleapis.com
     grafana: true           # monitoring.grafana.com, tempo/loki/grafana.integreatly.org
@@ -234,6 +237,7 @@ rbac:
     nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
     flagger: false         # Opt in to get/list/watch flagger.app Canaries and MetricTemplates. No default collection expansion.
+    systemUpgrade: false   # Opt in to get/list/watch upgrade.cattle.io Plans (system-upgrade-controller). Plans can carry env values.
     opentelemetry: true     # opentelemetry.io
     prometheus: true        # monitoring.coreos.com
     reflector: true         # reflector.v1.k8s.emberstack.com
@@ -247,6 +251,7 @@ rbac:
     velero: true            # velero.io
     verticalPodAutoscaler: true  # autoscaling.k8s.io (VPA — granted by default; no-op on clusters where VPA isn't installed)
     volcano: true           # batch.volcano.sh, scheduling.volcano.sh, flow.volcano.sh, bus.volcano.sh
+    volumeSnapshots: true   # snapshot.storage.k8s.io (CSI VolumeSnapshots, VolumeSnapshotContents, VolumeSnapshotClasses)
 
   # Additional CRD API groups for custom/unlisted CRDs
   # Example: ["mycompany.io", "custom.example.com"]

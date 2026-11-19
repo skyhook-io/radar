@@ -20,7 +20,7 @@ describe('MCP setup in read-only mode', () => {
     setBasename('/radar')
     try {
       const url = mcpEndpointUrl(true)
-      const html = renderToStaticMarkup(<MCPSetupDialog open helmTools readOnly applicationEvidenceAvailable mcpUrl={url} onClose={() => {}} />)
+      const html = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools readOnly applicationEvidenceAvailable mcpUrl={url} onClose={() => {}} />)
       expect(html).toContain(`claude mcp add --transport http radar ${url}`)
       expect(html).toContain(`codex mcp add radar --url ${url}`)
       expect(html).toContain('/radar/mcp-readonly')
@@ -37,7 +37,7 @@ describe('MCP setup in read-only mode', () => {
   })
 
   it('explains disabled exec without including it in the available tool count', () => {
-    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools execTools={false} mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools execTools={false} mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
     expect(html).toContain('apply_resource')
     expect(html).toContain('in_cluster')
     expect(html).toContain('exec_pod')
@@ -47,14 +47,21 @@ describe('MCP setup in read-only mode', () => {
   })
 
   it('does not suggest an unsupported flag when the capability is absent', () => {
-    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
     expect(html).not.toContain('exec_pod')
     expect(html).not.toContain('curl_service')
     expect(html).not.toContain('--mcp-exec-tools')
   })
 
+  it('lists list_vulnerabilities only where Trivy reports are served', () => {
+    const without = renderToStaticMarkup(<MCPSetupDialog open helmTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    expect(without).not.toContain('list_vulnerabilities')
+    const withReports = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    expect(withReports).toContain('list_vulnerabilities')
+  })
+
   it('shows exec without enabling HTTP', () => {
-    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools execTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools execTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
     expect(html).toContain('exec_pod')
     expect(html).not.toContain('curl_service')
     expect(html).toContain(`${MCP_TOOL_CATALOG.length - 2} tools`)
@@ -62,21 +69,21 @@ describe('MCP setup in read-only mode', () => {
   })
 
   it('hides exec in read-only mode even if exec is requested', () => {
-    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools readOnly execTools mcpUrl={mcpEndpointUrl(true)} onClose={() => {}} />)
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools readOnly execTools mcpUrl={mcpEndpointUrl(true)} onClose={() => {}} />)
     expect(html).not.toContain('exec_pod')
     expect(html).not.toContain('curl_service')
     expect(html).toContain(`${MCP_TOOL_CATALOG.filter((tool) => !tool.write && !tool.localOnly).length} tools`)
   })
 
   it('keeps the full catalog in default mode', () => {
-    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools applicationEvidenceAvailable mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools applicationEvidenceAvailable mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
     expect(html).toContain('apply_resource')
     expect(html).toContain('in_cluster')
     expect(html).toContain('collect_application_evidence')
   })
 
   it('hides local-only tools unless the server advertises availability', () => {
-    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    const html = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
     expect(html).toContain('apply_resource')
     expect(html).not.toContain('collect_application_evidence')
   })
@@ -85,7 +92,7 @@ describe('MCP setup in read-only mode', () => {
 describe('MCP setup prompt tip', () => {
   it('tips to name Radar under the client setups, as plain text, without the in-Radar link when no handler is given', () => {
     const host = document.createElement('div')
-    host.innerHTML = renderToStaticMarkup(<MCPSetupDialog open helmTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+    host.innerHTML = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
     const tip = [...host.querySelectorAll('p')].find((p) => p.textContent?.startsWith('Tip:'))
     expect(tip?.textContent).toBe(
       "Tip: name Radar in your prompt so your agent uses Radar instead of kubectl, e.g. Use Radar to find what's broken in my cluster and why.",
@@ -135,7 +142,7 @@ describe('MCP setup prompt tip', () => {
     document.body.appendChild(host)
     const root = createRoot(host)
     try {
-      act(() => root.render(<MCPSetupDialog open helmTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />))
+      act(() => root.render(<MCPSetupDialog open helmTools vulnerabilityTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />))
       const endpoint = [...host.querySelectorAll('code')].find((c) => c.textContent === mcpEndpointUrl())!
       const copy = endpoint.closest('.relative')!.querySelector('button')!
       await act(async () => copy.click())
@@ -149,11 +156,11 @@ describe('MCP setup prompt tip', () => {
 })
 
 it('shows HTTP independently of exec', () => {
- const html = renderToStaticMarkup(<MCPSetupDialog open helmTools httpTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+ const html = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools httpTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
  expect(html).toContain('curl_service')
  expect(html).not.toContain('exec_pod')
  expect(html).toContain(`${MCP_TOOL_CATALOG.length - 2} tools`)
- const readOnly = renderToStaticMarkup(<MCPSetupDialog open helmTools readOnly httpTools mcpUrl={mcpEndpointUrl(true)} onClose={() => {}} />)
+ const readOnly = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools readOnly httpTools mcpUrl={mcpEndpointUrl(true)} onClose={() => {}} />)
  expect(readOnly).not.toContain('curl_service')
 })
 
@@ -166,6 +173,6 @@ it('hides disabled Helm writes while retaining release reads and other writes', 
 })
 
 it('shows registered Helm tools independently of target namespace permissions', () => {
-  const html = renderToStaticMarkup(<MCPSetupDialog open helmTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
+  const html = renderToStaticMarkup(<MCPSetupDialog open helmTools vulnerabilityTools mcpUrl={mcpEndpointUrl()} onClose={() => {}} />)
   expect(html).toContain('manage_helm')
 })

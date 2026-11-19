@@ -1,5 +1,5 @@
 import { RelatedFindingsSection } from './RelatedFindingsSection'
-import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
+import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
@@ -37,6 +37,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
+import { SUBSTRATE_GROUP } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import { CronJobSchedulingContext, CronJobSchedulingDetails } from './CronJobSchedulingEvidence'
 import { NodeCertificateContext, NodeCertificateDetails, nodeCertificateContextVisible } from './NodeCertificateEvidence'
@@ -139,8 +140,12 @@ import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
 import { NodeDrainStatus } from './NodeDrainStatus'
+import { SubstrateHealthCharts } from '../resource/SubstrateHealthCharts'
+import { SubstrateVerdictLine } from '../resource/SubstrateVerdictLine'
+import { useAPIResources } from '../../api/apiResources'
 import { recordUsageEvent } from '../../api/usage-data'
 import { issueResourceOpener } from './issueResourceOpener'
+import { isVeleroBackupKind } from '../velero/routes'
 
 type TabType = WorkloadTabType
 
@@ -295,6 +300,7 @@ interface WorkloadViewProps {
   statusNote?: ReactNode
   onRefresh?: () => Promise<unknown>
   hideKindBadge?: boolean
+  truncateName?: boolean
 }
 
 interface ImageTargetOwnershipContext {
@@ -429,10 +435,14 @@ function useActionsBarProps(
       className?: string
     }) => <PortForwardButton type={type} namespace={ns} name={n} className={className} />,
     renderDiagnose: decorateResourceDiagnose(renderDiagnose),
-    onDelete: (
-      params: Parameters<typeof deleteMutation.mutate>[0],
-      callbacks?: { onSuccess?: () => void },
-    ) => deleteMutation.mutate(params, { onSuccess: result => { if (!result.outcomeUnknown) callbacks?.onSuccess?.() } }),
+    // Deleting a Velero Backup object leaves the backup in storage and Velero
+    // recreates the object; the Velero host offers Delete backup instead.
+    onDelete: isVeleroBackupKind(kind, group)
+      ? undefined
+      : (
+          params: Parameters<typeof deleteMutation.mutate>[0],
+          callbacks?: { onSuccess?: () => void },
+        ) => deleteMutation.mutate(params, { onSuccess: result => { if (!result.outcomeUnknown) callbacks?.onSuccess?.() } }),
     isDeleting: deleteMutation.isPending,
     onDeletePreviewOpenChange: setDeletePreviewOpen,
     cascadeDetail: cascadePreview,
@@ -634,6 +644,11 @@ export function WorkloadView({
   // The fetched resource's own group, once it has loaded: the route's group is
   // '' whenever a link left ?apiGroup out.
   const identityGroup = resource?.apiVersion ? resourceGroup : effectiveGroup
+  const isNode = apiKind === 'nodes' && !effectiveGroup
+  const isSubstrateWorkerPool = apiKind === 'workerpools' && effectiveGroup === SUBSTRATE_GROUP
+  // Substrate's node charts are asked of Prometheus only on a cluster that serves it.
+  const { data: apiResources } = useAPIResources()
+  const servesSubstrate = isNode && apiResources?.some(r => r.group === SUBSTRATE_GROUP && r.name === 'workerpools') === true
   const batchKind = pluralToKind(apiKind)
   const batchExecution = supportsBatchExecution(batchKind, apiKind, effectiveGroup, resource?.apiVersion)
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
@@ -1317,14 +1332,25 @@ export function WorkloadView({
         renderRelatedYaml={(ref) => (
           <RelatedResourceYaml key={`${ref.kind}/${ref.namespace}/${ref.name}`} target={ref} />
         )}
-        renderMetricsTab={({ kind, namespace: ns, name: n }) => (
-          <MetricsTabContent
-            kind={kind}
-            namespace={ns}
-            name={n}
-            resource={resource}
-            expanded={expanded}
+        renderMetricsTab={({ kind, namespace: ns, name: n }) => isSubstrateWorkerPool ? (
+          <SubstrateHealthCharts
+            target={{ kind: 'workerpool', namespace: ns, name: n }}
+            standalone
+            collapsible={!expanded}
+            workerPods={typeof resource?.status?.replicas === 'number' ? resource.status.replicas : undefined}
           />
+        ) : (
+          <>
+            <MetricsTabContent
+              kind={kind}
+              namespace={ns}
+              name={n}
+              resource={resource}
+              expanded={expanded}
+              fill={!(isNode && servesSubstrate)}
+            />
+            {isNode && servesSubstrate && <div className="pt-4"><SubstrateHealthCharts target={{ kind: 'node', name: n }} collapsible={!expanded} /></div>}
+          </>
         )}
         renderCostTab={({ kind, namespace: ns, name: n }) => (
           <div className="space-y-4">
@@ -1354,16 +1380,23 @@ export function WorkloadView({
           />
         )}
         isMetricsAvailable={(kind, res) =>
-          isPrometheusSupported(kind) && !(kind === 'Pod' && res?.status?.phase === 'Pending')
+          isSubstrateWorkerPool || (isPrometheusSupported(kind) && !(kind === 'Pod' && res?.status?.phase === 'Pending'))
         }
         isCostAvailable={(kind) => isOpenCostWorkloadKind(kind)}
         onDuplicate={handleDuplicate}
         onDownload={desktopDownload}
         actionsBarProps={actionsBarProps}
         rendererOverrides={resourceRendererOverrides}
-        renderOverviewIntro={apiKind === 'nodes' && !effectiveGroup && resource?.metadata?.uid
-          ? () => <NodeDrainStatus name={name} nodeUID={resource.metadata.uid} />
-          : undefined}
+        renderOverviewIntro={isSubstrateWorkerPool
+          ? ({ namespace: ns, name: n }) => <SubstrateVerdictLine target={{ kind: 'workerpool', namespace: ns, name: n }} onOpenMetrics={expanded ? () => handleTabChange('metrics') : undefined} />
+          : isNode && resource?.metadata?.uid
+            ? () => (
+              <div className="space-y-3">
+                <NodeDrainStatus name={name} nodeUID={resource.metadata.uid} />
+                {servesSubstrate && <SubstrateVerdictLine target={{ kind: 'node', name }} onOpenMetrics={expanded ? () => handleTabChange('metrics') : undefined} />}
+              </div>
+            )
+            : undefined}
         renderOverviewExtra={({ kind: k, namespace: ns, name: n, group: g, context }) => {
           // Network entry kinds (Service/Ingress/Route/Gateway) ARE the diagnosis
           // target: DiagnoseInlineSection renders in the drawer, no hint. Workload
@@ -1402,7 +1435,7 @@ export function WorkloadView({
             renderDetailSection={({ issue }) => {
               if (schedulingEvidence?.state === 'reported' && issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason) return <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} />
               if (certificateEvidence && issue.kind === 'Node' && issue.reason === 'NodeCertificateExpiry') return <NodeCertificateDetails evidence={certificateEvidence} onViewTimeline={viewCertificateReport} includeOriginalReport={false} />
-              return null
+              return resourceIssueDetail({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, { issue, resource })
             }}
             compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: identityGroup }}
@@ -2231,14 +2264,18 @@ function MetricsTabContent({
   name,
   resource,
   expanded,
+  fill = true,
 }: {
   kind: string
   namespace: string
   name: string
   resource: any
   expanded: boolean
+  /** False when content follows, so the tab scrolls everything as one. */
+  fill?: boolean
 }) {
   if (expanded) {
+    if (!fill) return <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} fill={false} />
     return (
       <div className="flex flex-col h-full">
         <div className="flex-1 min-h-0">

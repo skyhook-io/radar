@@ -33,8 +33,7 @@ type rendered struct {
 	caches  Caches
 }
 
-// worldDiscovery serves a World's resources, failing one group when the World
-// says discovery was partial.
+// worldDiscovery serves a World's resources and discovery coverage.
 type worldDiscovery struct {
 	discovery.DiscoveryInterface
 	lists []*metav1.APIResourceList
@@ -59,9 +58,13 @@ func newWorldDiscovery(w ownershiptest.World) *worldDiscovery {
 		list.APIResources = append(list.APIResources, metav1.APIResource{Name: r.Resource, Kind: r.Kind, Namespaced: r.Namespaced, Verbs: r.Verbs})
 	}
 	if w.Partial {
-		d.err = &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{
-			{Group: "metrics.k8s.io", Version: "v1beta1"}: errors.New("service unavailable"),
-		}}
+		d.err = errors.New("discovery interrupted")
+	} else if len(w.FailedGroups) > 0 {
+		failed := map[schema.GroupVersion]error{}
+		for _, group := range w.FailedGroups {
+			failed[schema.GroupVersion{Group: group, Version: "v1"}] = errors.New("service unavailable")
+		}
+		d.err = &discovery.ErrGroupDiscoveryFailed{Groups: failed}
 	}
 	return d
 }
@@ -104,6 +107,7 @@ func apiObject(t testing.TB, o ownershiptest.Object) (runtime.Object, bool) {
 			t.Fatal(err)
 		}
 		setMeta(t, obj, o)
+		ownershiptest.ApplyDeclarations(obj, o.Declares)
 		return obj, true
 	}
 	u := &unstructured.Unstructured{}
@@ -115,6 +119,7 @@ func apiObject(t testing.TB, o ownershiptest.Object) (runtime.Object, bool) {
 	case ownership.FluxHelmRelease, ownership.FluxKustomization:
 		renderFluxManager(u, o)
 	}
+	ownershiptest.ApplyDeclarations(u, o.Declares)
 	return u, false
 }
 
