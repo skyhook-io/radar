@@ -1012,3 +1012,26 @@ func TestRelationsAnswerManagedByStopsAtTheFirstGitOpsManager(t *testing.T) {
 		t.Errorf("a chain without a GitOps manager: ManagedBy %+v", rel.ManagedBy)
 	}
 }
+
+// A controller chain cut at its first GitOps manager is settled there, so
+// what stopped the walk past it no longer qualifies it.
+func TestControllerChainToManager(t *testing.T) {
+	deployment := ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "argocd", Name: "web"}
+	app := ResourceRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "web"}
+	set := ResourceRef{Kind: "ApplicationSet", Group: "argoproj.io", Namespace: "argocd", Name: "apps"}
+	cut := (&ControllerChain{Refs: []ResourceRef{deployment, app, set}, Stop: "unknown", Reason: readreason.KindSyncPending}).ToManager()
+	if !slices.Equal(cut.Refs, []ResourceRef{deployment, app}) || cut.Stop != "" || cut.Reason != "" {
+		t.Fatalf("cut = %+v", cut)
+	}
+	plain := &ControllerChain{Refs: []ResourceRef{deployment, set}, Stop: "unknown"}
+	if got := plain.ToManager(); got != plain {
+		t.Fatalf("a chain without a GitOps manager changed: %+v", got)
+	}
+	self := &ControllerChain{Refs: []ResourceRef{app, set}}
+	if got := self.ToManager(); got != self {
+		t.Fatalf("a GitOps manager's own chain was cut: %+v", got)
+	}
+	if (*ControllerChain)(nil).ToManager() != nil {
+		t.Fatal("nil chain")
+	}
+}

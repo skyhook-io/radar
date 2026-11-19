@@ -478,16 +478,12 @@ func (n *neighborhood) above(session relations.Session, ov *ownership.View, r re
 }
 
 // OwnerAboveToManager is OwnerAbove, except that the controller chain ends at
-// the first GitOps manager on it (ownership.IsRecordingManager): past one lies
-// a parent such as an ApplicationSet, shared by apps that are separate.
+// the first GitOps manager on it (ControllerChain.ToManager).
 func OwnerAboveToManager(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
-	if chain := ov.ControllerChain(r).Chain; len(chain) > 1 {
-		for _, owner := range chain[1:] {
-			if ownership.IsRecordingManager(owner.GroupKind()) {
-				return owner, true
-			}
+	if top := ChainOf(ov.ControllerChain(r)).ToManager().Top(); top != nil {
+		if id := refIdentity(*top); id != r {
+			return id, true
 		}
-		return chain[len(chain)-1], true
 	}
 	return OwnerAbove(ov, r)
 }

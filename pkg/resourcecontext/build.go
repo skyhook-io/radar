@@ -234,7 +234,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.Manager = managerContext(rel.Ownership.Manager)
 	}
 	if answered && rel.Ownership != nil {
-		chain := rel.ControllerChain.Readable(func(r topology.ResourceRef) bool {
+		chain := rel.ControllerChain.ToManager().Readable(func(r topology.ResourceRef) bool {
 			ref := toContextRef(r)
 			return checkRef(ctx, opts.AccessChecker, &ref)
 		})

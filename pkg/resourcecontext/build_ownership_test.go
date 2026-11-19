@@ -3,6 +3,7 @@ package resourcecontext
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -330,5 +331,47 @@ func TestBuildManagedByStopsBelowAnOwnerTheHostMayNotShow(t *testing.T) {
 	}
 	if note != OmittedRBACDenied {
 		t.Fatalf("managedBy note %q, want rbac_denied", note)
+	}
+}
+
+// A context's managedBy names the first GitOps manager above the object, as
+// Related Resources and Applications do, not the parent that controls it;
+// what stopped the walk past it doesn't qualify the answer. manager is
+// unchanged.
+func TestBuild_ManagedByStopsAtTheFirstGitOpsManager(t *testing.T) {
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web"}}
+	app := topology.ResourceRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "web"}
+	set := topology.ResourceRef{Kind: "ApplicationSet", Group: "argoproj.io", Namespace: "argocd", Name: "apps"}
+	manager := &topology.ManagerAnswer{State: "agree", Lead: &app}
+	for _, tc := range []struct {
+		name    string
+		chain   *topology.ControllerChain
+		checker RefAccessChecker
+		want    []ContextRef
+		reason  OmittedReason
+	}{
+		{"to the Application", &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "Deployment", Group: "apps", Namespace: "argocd", Name: "web"}, app, set}}, allowAllChecker{}, []ContextRef{toContextRef(app)}, ""},
+		{"past an unknown owner above it", &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "Deployment", Group: "apps", Namespace: "argocd", Name: "web"}, app, set}, Stop: "unknown"}, allowAllChecker{}, []ContextRef{toContextRef(app)}, ""},
+		{"an Application the caller can't read", &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "Deployment", Group: "apps", Namespace: "argocd", Name: "web"}, app, set}}, denyChecker{kind: "Application", group: "argoproj.io", namespace: "argocd"}, nil, OmittedRBACDenied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rel := &topology.Relationships{ControllerChain: tc.chain, Ownership: &topology.OwnershipCoverage{Manager: manager}}
+			rc := Build(context.Background(), deployment, Options{Tier: TierBasic, Relationships: rel, AccessChecker: tc.checker})
+			if !slices.Equal(rc.ManagedBy, tc.want) {
+				t.Fatalf("managedBy = %+v, want %+v", rc.ManagedBy, tc.want)
+			}
+			marked := OmittedReason("")
+			for _, o := range rc.Omitted {
+				if o.Field == "managedBy" {
+					marked = o.Reason
+				}
+			}
+			if marked != tc.reason {
+				t.Fatalf("managedBy omitted %q, want %q", marked, tc.reason)
+			}
+			if rc.Manager == nil || rc.Manager.Lead == nil || rc.Manager.Lead.Name != "web" {
+				t.Fatalf("manager = %+v", rc.Manager)
+			}
+		})
 	}
 }
