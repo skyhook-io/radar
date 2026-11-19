@@ -7,7 +7,7 @@ export const DRAWER_MIN_WIDTH = 520
 const DRAWER_MAX_SHARE = 0.7
 
 const BASE_WIDTH = 550
-const WIDE_EXTRA = 200
+const WIDE_WIDTH = 750
 // Kept for the view behind: the Resources kind list (224–288px) plus a table's
 // Name, Namespace and two status columns at their minimum widths (~700px). The
 // drawer only grows into room beyond that, so up to ~1700px windows it stays at
@@ -18,6 +18,7 @@ const LIST_RESERVE = 1000
 // Past this a drawer's label/value rows only get sparser; a user who wants more
 // width wants the full page.
 const BASE_CAP = 900
+const WIDE_CAP = 1100
 
 const WIDE_KINDS = new Set([
   'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
@@ -39,7 +40,8 @@ export function clampDrawerWidth(width: number, available: number): number {
 }
 
 export function defaultDrawerWidth(kind: string, available: number): number {
-  const grown = Math.min(BASE_CAP, Math.max(BASE_WIDTH, available - LIST_RESERVE))
-  const width = isWideDrawerKind(kind) ? grown + WIDE_EXTRA : grown
-  return clampDrawerWidth(width, available)
+  // Report kinds start wider, but grow into the same spare room: the list
+  // behind keeps its reserve either way.
+  const [base, cap] = isWideDrawerKind(kind) ? [WIDE_WIDTH, WIDE_CAP] : [BASE_WIDTH, BASE_CAP]
+  return clampDrawerWidth(Math.min(cap, Math.max(base, available - LIST_RESERVE)), available)
 }

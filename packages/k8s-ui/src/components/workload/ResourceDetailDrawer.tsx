@@ -97,10 +97,12 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
 
   useLayoutEffect(() => {
     measureAvailable()
-    const parent = containerRef.current?.offsetParent
-    if (parent && typeof ResizeObserver !== 'undefined') {
+    // The host, or while the drawer sits in a hidden (display: none) host and
+    // has no offsetParent, its parent, whose size changes when it is shown.
+    const target = containerRef.current?.offsetParent ?? containerRef.current?.parentElement
+    if (target && typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(measureAvailable)
-      ro.observe(parent)
+      ro.observe(target)
       return () => ro.disconnect()
     }
     window.addEventListener('resize', measureAvailable)
@@ -234,7 +236,11 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
 
   // Width animates during expand/collapse, but snaps during manual resize and
   // when the user prefers reduced motion.
-  const animateWidth = !isResizing && !prefersReducedMotion
+  // Width animates only for expand/collapse. A width that follows the room
+  // (first measurement, a window resize) or a kind's default snaps: a host that
+  // lays its content out around the drawer moves at once, and an animated edge
+  // would cover what it laid out as visible.
+  const animateWidth = transitioning && !isResizing && !prefersReducedMotion
 
   // During the pre-mount frames (transitioning but not yet armed) hold the frame
   // at its START width so the width transition fires only once the incoming
