@@ -63,11 +63,15 @@ const (
 // subject (empty for cluster-wide); AnchorLabel is the label the metric is
 // keyed by (pod, node, replicaset, persistentvolume, horizontalpodautoscaler)
 // and AnchorValues are this cluster's live object names for it.
+// AnchorNamespace, when set, restricts the anchor check to that namespace, so
+// another cluster's same-named object in a different namespace cannot vouch
+// for this cluster's; set it for namespaced objects.
 type ViewMetric struct {
-	Name         string
-	Subject      string
-	AnchorLabel  string
-	AnchorValues []string
+	Name            string
+	Subject         string
+	AnchorLabel     string
+	AnchorValues    []string
+	AnchorNamespace string
 }
 
 // ViewScopeRequest describes one view's check. Span is what the view's
@@ -152,6 +156,9 @@ func normalizeViewScopeRequest(req ViewScopeRequest) (ViewScopeRequest, error) {
 		}
 		seen[m.Name] = true
 		m.AnchorValues = BoundViewAnchors(m.AnchorValues)
+		if m.AnchorLabel == "" || len(m.AnchorValues) == 0 {
+			m.AnchorNamespace = ""
+		}
 		metrics[i] = m
 	}
 	req.Metrics = metrics
@@ -287,7 +294,7 @@ func viewScopeKey(generation, epoch uint64, config prom.WorkloadMetricsScope, be
 	}
 	write("view", req.View, strconv.FormatBool(req.Joined), req.Namespace, promSeconds(req.Span))
 	for _, m := range req.Metrics {
-		write(append([]string{"metric", m.Name, m.Subject, m.AnchorLabel}, m.AnchorValues...)...)
+		write(append([]string{"metric", m.Name, m.Subject, m.AnchorLabel, m.AnchorNamespace}, m.AnchorValues...)...)
 	}
 	when := "live"
 	if !live {
@@ -504,6 +511,9 @@ func viewIdentityQuery(metrics []ViewMetric, keys []string, span time.Duration, 
 				names[i] = regexp.QuoteMeta(v)
 			}
 			anchor := m.AnchorLabel + "=~" + strconv.Quote(strings.Join(names, "|"))
+			if m.AnchorNamespace != "" {
+				anchor = "namespace=" + strconv.Quote(m.AnchorNamespace) + "," + anchor
+			}
 			parts = append(parts, viewTagged(viewScopeAnchorLabel, m.Name, "count(count_over_time("+vectorSelector(m.Name, withScope(m.Subject, anchor))+window+"))"))
 		}
 	}

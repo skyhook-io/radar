@@ -280,6 +280,49 @@ func TestViewScopeQueryShape(t *testing.T) {
 	}
 }
 
+// An anchor restricted to a namespace must not let a same-named object in
+// another namespace (possibly another cluster's) vouch for this cluster.
+func TestViewScopeAnchorNamespace(t *testing.T) {
+	m := ViewMetric{Name: "container_cpu_usage_seconds_total", AnchorLabel: "pod", AnchorValues: []string{"agent-0"}, AnchorNamespace: `kube-"system`}
+	got := viewIdentityQuery([]ViewMetric{m}, []string{"cluster"}, time.Hour, true)
+	if !strings.Contains(got, `{namespace="kube-\"system",pod=~"agent-0"}`) {
+		t.Fatalf("anchor count lacks the namespace matcher: %s", got)
+	}
+
+	withNS, err := normalizeViewScopeRequest(ViewScopeRequest{View: "v", Metrics: []ViewMetric{m}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	without := m
+	without.AnchorNamespace = ""
+	withoutNS, err := normalizeViewScopeRequest(ViewScopeRequest{View: "v", Metrics: []ViewMetric{without}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := m
+	other.AnchorNamespace = "payments"
+	otherNS, err := normalizeViewScopeRequest(ViewScopeRequest{View: "v", Metrics: []ViewMetric{other}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := func(req ViewScopeRequest) string {
+		return viewScopeKey(1, 1, prom.WorkloadMetricsScope{}, "", false, req, true, time.Time{})
+	}
+	if key(withNS) == key(withoutNS) || key(withNS) == key(otherNS) {
+		t.Fatal("anchor namespace must be part of the cache key")
+	}
+
+	// Without anchors to check, the namespace means nothing and is dropped.
+	bare := ViewMetric{Name: "kube_pod_info", AnchorNamespace: "shop"}
+	norm, err := normalizeViewScopeRequest(ViewScopeRequest{View: "v", Metrics: []ViewMetric{bare}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if norm.Metrics[0].AnchorNamespace != "" {
+		t.Fatalf("anchor namespace kept without anchors: %+v", norm.Metrics[0])
+	}
+}
+
 func TestViewScopeSpanBucketNeverShrinks(t *testing.T) {
 	for span, want := range map[time.Duration]time.Duration{
 		0:                               5 * time.Minute,
