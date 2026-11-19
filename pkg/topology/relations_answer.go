@@ -122,14 +122,14 @@ func (n *neighborhood) node(r resourceid.Ref) string {
 }
 
 // DeclaredState is how a declared reference reads when the caller may not
-// read its target: ResourceStateDenied, or ResourceStateUnverified when the
+// read its target: ResourceStateDenied, or ResourceStateAccessUnverified when the
 // check couldn't be made; empty otherwise.
 func DeclaredState(d relations.Declared) string {
 	switch {
 	case d.State == relations.TargetWithheld:
 		return ResourceStateDenied
 	case d.State == relations.TargetUnread && d.Gap.Reason == readreason.UserPermissionCheckFailed:
-		return ResourceStateUnverified
+		return ResourceStateAccessUnverified
 	}
 	return ""
 }
@@ -149,7 +149,7 @@ func (n *neighborhood) nameUnreadable(a relations.ReferencesAnswer) relations.Re
 			continue
 		}
 		n.unreadable = append(n.unreadable, ResourceRef{Kind: d.Ref.Kind, Group: d.Ref.Group, Namespace: d.Ref.Namespace, Name: d.Ref.Name, State: state})
-		if state == ResourceStateUnverified {
+		if state == ResourceStateAccessUnverified {
 			named = append(named, d.Gap)
 		}
 	}

@@ -922,7 +922,7 @@ func TestRelationsAnswerNamesAPodsUnreadableNode(t *testing.T) {
 	}{
 		{projectionAccess{}, ""},
 		{projectionAccess{denied: []string{"Node"}}, ResourceStateDenied},
-		{undecidedKinds{"Node"}, ResourceStateUnverified},
+		{undecidedKinds{"Node"}, ResourceStateAccessUnverified},
 	} {
 		for name, answer := range map[string]func(relations.Session, ownership.Access, ownership.Access, *ownership.View, resourceid.Ref, runtime.Object, ResourceProvider, DynamicProvider) (*Relationships, *RelationshipExtras){"drawer": RelationsAnswerWithExtras, "context": RelationsContextAnswer} {
 			s := newProjectionSession(t, pod, node)
@@ -951,7 +951,7 @@ func TestRelationsAnswerNamesAPodsUnreadableNode(t *testing.T) {
 func TestRelationsAnswerNamesSpecDeclaredHostAndClaimRefs(t *testing.T) {
 	endpoint := projectionCR("crd.projectcalico.org", "HostEndpoint", "", "host", map[string]any{"spec": map[string]any{"node": "worker"}})
 	s := newProjectionSession(t, endpoint)
-	if rel := projectionAnswer(t, s, endpoint, undecidedKinds{"Node"}, ownership.Unrestricted()); rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "worker", State: ResourceStateUnverified}) {
+	if rel := projectionAnswer(t, s, endpoint, undecidedKinds{"Node"}, ownership.Unrestricted()); rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "worker", State: ResourceStateAccessUnverified}) {
 		t.Fatalf("unchecked HostEndpoint Node: %+v", rel.Node)
 	}
 	declared, generated := "declared", "generated-0"
@@ -964,7 +964,7 @@ func TestRelationsAnswerNamesSpecDeclaredHostAndClaimRefs(t *testing.T) {
 	for _, tc := range []struct {
 		access ownership.Access
 		state  string
-	}{{projectionAccess{denied: []string{"ResourceClaim"}}, ResourceStateDenied}, {undecidedKinds{"ResourceClaim"}, ResourceStateUnverified}} {
+	}{{projectionAccess{denied: []string{"ResourceClaim"}}, ResourceStateDenied}, {undecidedKinds{"ResourceClaim"}, ResourceStateAccessUnverified}} {
 		rel := projectionAnswer(t, s, pod, tc.access, ownership.Unrestricted())
 		if want := []ResourceRef{{Kind: "ResourceClaim", Group: "resource.k8s.io", Namespace: "shop", Name: "declared", State: tc.state}}; !slices.Equal(rel.ResourceClaims, want) {
 			t.Errorf("%T: resource claims %+v, want %+v", tc.access, rel.ResourceClaims, want)

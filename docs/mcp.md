@@ -781,7 +781,7 @@ A `resourceContext.uses` entry, `runsOn`, an `ingressSummary.tlsSecrets` or `ser
 Related Resources reference, may carry `state`: `"denied"` when the subject's
 own spec names an object the caller may not read (a pod template's ConfigMaps, Secrets, PVCs and ServiceAccount, a
 Pod's Node, an Ingress's TLS Secrets, a ServiceAccount's Secrets, and, in Related Resources only, the ResourceClaims a
-Pod's spec names and a Calico HostEndpoint's Node), or `"unverified"` when Radar couldn't check the caller's
+Pod's spec names and a Calico HostEndpoint's Node), or `"access_unverified"` when Radar couldn't check the caller's
 access. The name comes from the subject's spec, which the caller reads; Radar never reads the target for it, so
 neither its existence nor its state is known. Treat it as a declared dependency to verify with someone who has access,
 not as a missing or a healthy one. A ResourceClaim a claim template generates is named only in the Pod's status, so it

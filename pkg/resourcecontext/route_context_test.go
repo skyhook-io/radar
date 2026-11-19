@@ -167,7 +167,7 @@ func TestReadSubjectKeepsAFailedCheckOnAnotherKind(t *testing.T) {
 	session := newContextFixtureSession(subject, dep, nil)
 	rel, extras := topology.RelationsContextAnswer(session, topology.ReadSubject(caller, subject), ownership.Unrestricted(), ownership.NewView(session, caller), subject, dep, nil, nil)
 	rc := Build(ctx, dep, Options{Relationships: rel, RelationshipExtras: extras})
-	if rc.Uses == nil || !slices.Equal(rc.Uses.Secrets, []ContextRef{{Kind: "Secret", Namespace: "shop", Name: "registry", State: topology.ResourceStateUnverified}}) {
+	if rc.Uses == nil || !slices.Equal(rc.Uses.Secrets, []ContextRef{{Kind: "Secret", Namespace: "shop", Name: "registry", State: topology.ResourceStateAccessUnverified}}) {
 		t.Fatalf("uses = %+v", rc.Uses)
 	}
 

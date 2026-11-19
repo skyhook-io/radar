@@ -59,7 +59,7 @@ func (n *neighborhood) nameSpecDeclared(obj runtime.Object, rel *Relationships) 
 		case ownership.Allowed:
 			return ""
 		case ownership.Undecided:
-			return ResourceStateUnverified
+			return ResourceStateAccessUnverified
 		}
 		return ResourceStateDenied
 	}
