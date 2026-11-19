@@ -169,6 +169,14 @@ type RefAccessChecker interface {
 	CanRead(ctx context.Context, group, kind, namespace string) bool
 }
 
+// RefAccessDecider is a RefAccessChecker that also says when a check couldn't
+// be made, so a name the subject's own spec declares reads unverified rather
+// than denied. CanRead is DecideRead's Allowed.
+type RefAccessDecider interface {
+	RefAccessChecker
+	DecideRead(ctx context.Context, group, kind, namespace string) ownership.Decision
+}
+
 // Build produces a ResourceContext for obj at the requested tier.
 //
 // Returns nil when obj is nil. Returns a zero-value (.Tier-only)
@@ -894,7 +902,9 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
 		secrets = append(secrets, ContextRef{Kind: "Secret", Namespace: ref.Namespace, Name: ref.Name})
 	}
-	out.TLSSecrets = declaredRefs(ctx, ac, extras, secrets, "ingressSummary.tlsSecrets", omitted)
+	// Uncapped: every TLS Secret is in the Ingress's namespace, so however
+	// many there are, the access check asks about one kind in one namespace.
+	out.TLSSecrets = declaredRefs(ctx, ac, extras, secrets, 0, "ingressSummary.tlsSecrets", omitted)
 
 	if out.Class == "" && len(out.Addresses) == 0 && len(out.BackendServices) == 0 && len(out.TLSSecrets) == 0 && len(out.Warnings) == 0 {
 		return nil
@@ -917,8 +927,8 @@ func buildServiceAccountSummary(ctx context.Context, obj runtime.Object, ac RefA
 		}
 	}
 	summary := &ServiceAccountSummary{
-		SecretRefs:       declaredRefs(ctx, ac, extras, secrets, "serviceAccountSummary.secretRefs", omitted),
-		ImagePullSecrets: declaredRefs(ctx, ac, extras, pulls, "serviceAccountSummary.imagePullSecrets", omitted),
+		SecretRefs:       declaredRefs(ctx, ac, extras, secrets, maxReferencedByItems, "serviceAccountSummary.secretRefs", omitted),
+		ImagePullSecrets: declaredRefs(ctx, ac, extras, pulls, maxReferencedByItems, "serviceAccountSummary.imagePullSecrets", omitted),
 	}
 	if len(summary.SecretRefs) == 0 && len(summary.ImagePullSecrets) == 0 {
 		return nil
@@ -1530,17 +1540,18 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 }
 
 // declaredRefs lists the references the subject's own spec declares, deduped
-// and capped at maxReferencedByItems. One the caller may not read is still
+// and, with a limit above zero, capped at it. One the caller may not read is still
 // listed by name, with the state the relationship answer gave its
-// declaration, or, for a declaration the answer doesn't hold, denied when ac
-// refuses its kind there. Nothing is read about the targets.
-func declaredRefs(ctx context.Context, ac RefAccessChecker, extras *topology.RelationshipExtras, refs []ContextRef, field string, omitted *omittedTracker) []ContextRef {
+// declaration, or, for a declaration the answer doesn't hold, the state ac's
+// decision gives: denied when it refuses the kind there, unverified when the
+// check couldn't be made. Nothing is read about the targets.
+func declaredRefs(ctx context.Context, ac RefAccessChecker, extras *topology.RelationshipExtras, refs []ContextRef, limit int, field string, omitted *omittedTracker) []ContextRef {
 	key := func(r ContextRef) string { return resourceid.ResourceKey(r.Group, r.Kind, r.Namespace, r.Name) }
 	sorted := slices.SortedFunc(slices.Values(refs), func(a, b ContextRef) int { return strings.Compare(key(a), key(b)) })
 	sorted = slices.CompactFunc(sorted, func(a, b ContextRef) bool { return key(a) == key(b) })
-	if len(sorted) > maxReferencedByItems {
+	if limit > 0 && len(sorted) > limit {
 		omitted.add(field, OmittedBudgetExceeded)
-		sorted = sorted[:maxReferencedByItems]
+		sorted = sorted[:limit]
 	}
 	for i := range sorted {
 		r := &sorted[i]
@@ -1551,11 +1562,15 @@ func declaredRefs(ctx context.Context, ac RefAccessChecker, extras *topology.Rel
 				declared = &extras.Declarations[j]
 			}
 		}
-		switch {
-		case declared != nil:
+		if declared != nil {
 			r.State = topology.DeclaredState(*declared)
-		case !checkRef(ctx, ac, r):
+			continue
+		}
+		switch decideRef(ctx, ac, r) {
+		case ownership.Denied:
 			r.State = topology.ResourceStateDenied
+		case ownership.Undecided:
+			r.State = topology.ResourceStateUnverified
 		}
 	}
 	if len(sorted) == 0 {
@@ -1838,6 +1853,18 @@ func checkRef(ctx context.Context, ac RefAccessChecker, r *ContextRef) bool {
 		return true
 	}
 	return ac.CanRead(ctx, r.Group, r.Kind, r.Namespace)
+}
+
+// decideRef is checkRef's decision, telling a check that couldn't be made
+// from a refusal when ac can.
+func decideRef(ctx context.Context, ac RefAccessChecker, r *ContextRef) ownership.Decision {
+	if d, ok := ac.(RefAccessDecider); ok && r != nil {
+		return d.DecideRead(ctx, r.Group, r.Kind, r.Namespace)
+	}
+	if checkRef(ctx, ac, r) {
+		return ownership.Allowed
+	}
+	return ownership.Denied
 }
 
 // gateContainerCompletionSplit requires access to both resources that establish
