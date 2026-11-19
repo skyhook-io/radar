@@ -62,6 +62,11 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 	// Use path.Clean (POSIX) not filepath.Clean — the path runs inside a Linux
 	// container, but filepath is OS-specific and converts to backslashes on Windows.
 	dirPath = path.Clean(dirPath)
+	// find and ls read a leading dash as an option, never a path.
+	if !path.IsAbs(dirPath) {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Not an absolute path: %s", dirPath))
+		return
+	}
 
 	client := s.getClientForRequest(r)
 	config := s.getConfigForRequest(r)
@@ -72,11 +77,11 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 
 	// Use find to list files — provides type, size, timestamp, permissions
 	// -maxdepth 1 lists only immediate children (like ls)
-	// Output format: type\tsize\ttimestamp\tpermissions\tpath
+	// Output format: type\tsize\ttimestamp\tpermissions\tpath, one entry per
+	// NUL, since a file name can hold a newline but never a NUL.
 	// Wrap in sh -c so the shell resolves PATH — direct exec via the container
 	// runtime can fail to find binaries that are available through the shell's PATH.
-	findCmd := fmt.Sprintf("find %s -maxdepth 1 -printf '%%y\\t%%s\\t%%T@\\t%%m\\t%%p\\n'", shellQuote(dirPath))
-	cmd := []string{"/bin/sh", "-c", findCmd}
+	cmd := podFileListFindCommand(dirPath)
 
 	req := client.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -319,6 +324,10 @@ func (s *Server) openPodFileForRequest(w http.ResponseWriter, r *http.Request) *
 		// Nothing here can frame the file — read it as raw bytes and hope it is
 		// small, which is all a container this bare is likely to hold.
 		content, catErr := s.downloadWithCat(r, namespace, podName, container, filePath)
+		if errors.Is(catErr, errPodFileCatTooLarge) {
+			s.writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("This file is larger than %d MiB, the most Radar can download from a container without tar or a shell.", podFileCatMaxBytes>>20))
+			return nil
+		}
 		if catErr != nil {
 			if isCommandNotFound(catErr.Error()) {
 				s.writeError(w, http.StatusInternalServerError, "Container lacks 'tar' and 'cat' commands. Cannot download files from distroless containers.")
@@ -736,25 +745,77 @@ func (s *Server) downloadWithCat(r *http.Request, namespace, podName, container,
 		return nil, err
 	}
 
-	var stdout, stderr bytes.Buffer
-	err = exec.StreamWithContext(r.Context(), remotecommand.StreamOptions{
-		Stdout: &stdout,
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	stdout := &podFileCatBuffer{max: podFileCatMaxBytes, overflow: cancel}
+	var stderr bytes.Buffer
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: stdout,
 		Stderr: &stderr,
 	})
+	if stdout.overflowed() {
+		return nil, errPodFileCatTooLarge
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%v: %s", err, stderr.String())
 	}
 
-	return stdout.Bytes(), nil
+	return stdout.bytes(), nil
 }
 
-// parseFindOutput parses the output of find -printf '%y\t%s\t%T@\t%m\t%p\n'
+// podFileCatMaxBytes bounds the bare-cat download, which holds the whole file
+// in Radar's memory because it can't learn the size up front or stream it.
+var podFileCatMaxBytes = 100 << 20
+
+var errPodFileCatTooLarge = errors.New("file larger than the no-shell download limit")
+
+// podFileCatBuffer stops the read once it passes max: overflow cancels the
+// exec, so nothing past the limit is kept.
+type podFileCatBuffer struct {
+	mu       sync.Mutex
+	buf      bytes.Buffer
+	max      int
+	over     bool
+	overflow func()
+}
+
+func (b *podFileCatBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.over || b.buf.Len()+len(p) > b.max {
+		if !b.over {
+			b.over = true
+			b.overflow()
+		}
+		return 0, errPodFileCatTooLarge
+	}
+	return b.buf.Write(p)
+}
+
+func (b *podFileCatBuffer) overflowed() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.over
+}
+
+func (b *podFileCatBuffer) bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Bytes()
+}
+
+func podFileListFindCommand(dirPath string) []string {
+	return []string{"/bin/sh", "-c", fmt.Sprintf("find %s -maxdepth 1 -printf '%%y\\t%%s\\t%%T@\\t%%m\\t%%p\\0'", shellQuote(dirPath))}
+}
+
+// parseFindOutput parses the output of find -printf '%y\t%s\t%T@\t%m\t%p\0'.
+// Only entries directly inside dirPath are kept, so a file name can never pass
+// itself off as some other path.
 func parseFindOutput(output, dirPath string) ([]*images.FileNode, int) {
 	var nodes []*images.FileNode
 	totalFiles := 0
 
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
+	for _, line := range strings.Split(output, "\x00") {
 		if line == "" {
 			continue
 		}
@@ -769,8 +830,7 @@ func parseFindOutput(output, dirPath string) ([]*images.FileNode, int) {
 		perms := parts[3]
 		filePath := parts[4]
 
-		// Skip the directory itself
-		if filePath == dirPath || filePath == "." {
+		if filePath == dirPath || path.Dir(filePath) != dirPath {
 			continue
 		}
 
@@ -847,6 +907,9 @@ func parseLSOutput(output, dirPath string) []*images.FileNode {
 		}
 
 		nodePath := path.Join(dirPath, name)
+		if strings.Contains(name, "/") || path.Dir(nodePath) != dirPath {
+			continue
+		}
 
 		node := &images.FileNode{
 			Name:        name,
