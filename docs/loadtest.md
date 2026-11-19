@@ -147,7 +147,7 @@ Baseline (Apple M1 Pro, 8 cores, Go 1.26, November 2026):
 
 Radar doesn't keep the index of Pods by Node: a Node's Pods are asked for rarely, and reading every Pod is what
 the relationship read does today, while the index would cost every relist. An index of a busy kind earns its
-keep only when its question is frequent; the Reflector index (`ReflectsIndex`) files only mirrors, so it holds
+keep only when its question is frequent; the Reflector index (`Reflections`' `ReferrersIndex`) files only mirrors, so it holds
 next to nothing.
 
 The synthetic fixtures carry more references per Pod than most clusters, so the graph is larger than in a
