@@ -253,7 +253,9 @@ func runRightsizingScan(ctx context.Context, scope RightsizingScanScope, client 
 		return resp
 	}
 	resolve := func(ctx context.Context, workloads []scanWorkload) (ViewScope, error) {
-		return client.ResolveViewScope(ctx, scanRightsizingScopeRequest(workloads, cache, at), cache)
+		return resolveOnConnection(func() bool { return client.ConnectionCurrent(querier.conn) }, func() (ViewScope, error) {
+			return resolveRightsizingScope(ctx, client, scanRightsizingScopeRequest(workloads, cache, at), cache)
+		})
 	}
 	return computeRightsizingScanProgress(ctx, querier, resolve, workloads, resp, publish)
 }

@@ -262,12 +262,23 @@ func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (
 	// The cluster scope check shares the queries' budget.
 	queryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	// The queries run on one store handle and the check must describe that
+	// handle's backend.
 	cache := k8s.GetResourceCache()
-	scope, err := client.ResolveViewScope(queryCtx, singleRightsizingScopeRequest(kind, namespace, workload, cache), cache)
+	store := client.bindStore(queryCtx)
+	scope, err := resolveOnConnection(func() bool { return client.ConnectionCurrent(store.conn) }, func() (ViewScope, error) {
+		return resolveRightsizingScope(queryCtx, client, singleRightsizingScopeRequest(kind, namespace, workload, cache), cache)
+	})
 	if err != nil && ctx.Err() != nil {
 		return RightsizingResponse{}, ctx.Err()
 	}
-	return computeRightsizing(queryCtx, client, kind, namespace, name, workload, scope), nil
+	return computeRightsizing(queryCtx, store, kind, namespace, name, workload, scope), nil
+}
+
+// resolveRightsizingScope decides rightsizing's cluster scope on the client's
+// current connection; tests replace it to move the connection mid-check.
+var resolveRightsizingScope = func(ctx context.Context, client *Client, req ViewScopeRequest, cache *k8s.ResourceCache) (ViewScope, error) {
+	return client.ResolveViewScope(ctx, req, cache)
 }
 
 // specReplicas defaults a nil replica count to 1, matching the apiserver: a
