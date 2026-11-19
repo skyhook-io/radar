@@ -20,6 +20,12 @@ afterEach(async () => {
 })
 
 describe('Deletion preview states', () => {
+  it('shows the host’s notice first', async () => {
+    await act(async () => root.render(<ForceDeleteConfirmDialog {...base} resourceKind="Backup" notice={<p>Nothing of this backup is in storage</p>} />))
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('Nothing of this backup is in storage')
+    expect(text.indexOf('Nothing of this backup')).toBeLessThan(text.indexOf('Force delete'))
+  })
   it('states the namespace-wide deletion consequence without relying on topology', async () => {
     await act(async () => root.render(<ForceDeleteConfirmDialog {...base} resourceKind="Namespace" resourceName="demo" namespaceName="" cascadeRootResolved={false} />))
     expect(document.body.textContent).toContain('delete the namespace "demo" and all resources in it')

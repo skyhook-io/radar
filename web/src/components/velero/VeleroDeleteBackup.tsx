@@ -7,6 +7,8 @@ import { useRadarFeature } from '../../api/client'
 import { getApiBase } from '../../api/config'
 import { actionDialogResult } from '../../api/actions'
 import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
+import { useVeleroBackupDeletePath } from './backupDelete'
+import { VELERO_BACKUP_KIND } from './routes'
 import { useVeleroBackupDeletion, useVeleroDeleteBackup, useVeleroRuns, useVeleroWorkspace, type VeleroDeletion } from '../../api/velero'
 
 // The generic Delete's hover treatment, on a labelled button like the other header actions.
@@ -97,6 +99,8 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
   const restores = useVeleroRuns('restores', namespace, { backup: name }, { enabled: support === 'supported' && reviewing !== null && !!namespace && !!name })
   const request = deletion.data?.request ?? deleteBackup.data?.request
   const started = !!request || backup?.status?.phase === 'Deleting'
+  // Where Velero would never act on a request, the header's Delete object is offered instead.
+  const path = useVeleroBackupDeletePath(VELERO_BACKUP_KIND.name, VELERO_BACKUP_KIND.group, backup)
 
   const state = deletion.data?.state
   // Announced once, and only for a request sent from this browser session: a
@@ -111,6 +115,7 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
   }, [queryClient, request, state, name, namespace, deletion.data?.errors])
 
   if (support !== 'supported' || !namespace || !name || !uid) return null
+  if (path.kind === 'object' && !started) return null
 
   const locationName: string = backup?.spec?.storageLocation ?? ''
   const location = workspace.data?.locations.find((l) => l.namespace === namespace && l.name === locationName)

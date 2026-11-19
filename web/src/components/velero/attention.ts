@@ -19,7 +19,7 @@ export function readInPart(cov: VeleroKindCoverage | undefined): boolean {
 }
 
 /** What to do about a schedule that needs attention, in one plain line. */
-export function veleroScheduleNextStep(s: Pick<VeleroScheduleReading, 'state' | 'reason'>): string | undefined {
+export function veleroScheduleNextStep(s: Pick<VeleroScheduleReading, 'state' | 'reason'> & Partial<Pick<VeleroScheduleReading, 'blocker'>>): string | undefined {
   if (s.reason === 'serverDown') return VELERO_START_SERVER
   switch (s.state) {
     case 'cannotRun':
@@ -28,8 +28,15 @@ export function veleroScheduleNextStep(s: Pick<VeleroScheduleReading, 'state' | 
       return 'Change the cron expression to one with a future time'
     case 'rejected':
       return 'Fix what Velero rejected in the schedule; Velero validates it again when it changes'
-    case 'held':
+    case 'held': {
+      // A run Velero never started and gave no location holds nothing in
+      // storage, so its page offers Delete object.
+      const b = s.blocker
+      if (b && (!b.phase || b.phase === 'New') && !b.storageLocation) {
+        return `Check that the Velero server is running with its backup controller enabled, or delete the queued backup ${b.name}: nothing of it is in storage.`
+      }
       return VELERO_CHECK_HELD_BACKUP
+    }
     case 'late':
     case 'probablyLate':
     case 'lateOrHeld':

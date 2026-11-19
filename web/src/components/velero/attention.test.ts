@@ -156,6 +156,10 @@ describe('Velero next steps', () => {
     }
     expect(veleroScheduleNextStep({ state: 'late', reason: 'serverDown' })).toContain('Start the Velero server')
     expect(veleroScheduleNextStep({ state: 'held' })).toContain('backup controller enabled')
+    // Delete object is offered only for a queued run Velero never gave a location.
+    const queued = { name: 'nightly-20261119010000', phase: 'New', created: '', ranAt: '' }
+    expect(veleroScheduleNextStep({ state: 'held', blocker: queued })).toContain('or delete the queued backup nightly-20261119010000: nothing of it is in storage')
+    expect(veleroScheduleNextStep({ state: 'held', blocker: { ...queued, storageLocation: 'default' } })).not.toContain('delete')
     expect(veleroIssueNextStep({ reason: 'VeleroScheduleHeld' })).toBe(veleroScheduleNextStep({ state: 'held' }))
   })
 })

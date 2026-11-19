@@ -93,6 +93,8 @@ interface ResourceActionsBarProps {
   cascadeDetail?: CascadeDetail
   cascadeRootResolved?: boolean
   cascadePreviewFailed?: boolean
+  /** What the host knows about deleting this object that the preview can't, shown first in the confirmation. */
+  deleteNotice?: React.ReactNode
 
   // Workload restart
   onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
@@ -191,7 +193,7 @@ export function ResourceActionsBar({
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
-  onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
+  onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed, deleteNotice,
   onRestart, isRestarting,
   onPauseDeployment, onResumeDeployment, isPausingDeployment, isResumingDeployment,
   onLoadImages, onSetImages, isSettingImages, imageOwnership,
@@ -752,6 +754,7 @@ export function ResourceActionsBar({
         cascadeLoading={cascadeLoading}
         cascadeRootResolved={cascadeRootResolved}
         cascadePreviewFailed={cascadePreviewFailed}
+        notice={deleteNotice}
       />
 
       {onLoadImages && onSetImages && (

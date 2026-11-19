@@ -165,6 +165,13 @@ describe('Delete backup', () => {
     expect(buttons('Delete backup').at(-1)!.disabled).toBe(false)
   })
 
+  // Velero would refuse a request for it; the header's Delete object is offered instead.
+  it('steps aside for a backup Velero never stored', () => {
+    state.workspace = workspace({ accessMode: 'ReadWrite', phase: 'Available' })
+    render(<VeleroDeleteBackup backup={{ metadata: { namespace: 'velero', name: 'nightly-1', uid: 'uid-1' }, spec: {}, status: { phase: 'New' } }} />)
+    expect(buttons('Delete backup')).toHaveLength(0)
+  })
+
   it('leaves the refusal to Velero when the location can’t be read', () => {
     expect(deleteRefusal(backup(), undefined, false)).toBeUndefined()
   })

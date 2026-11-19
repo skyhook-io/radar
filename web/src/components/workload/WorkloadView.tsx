@@ -145,7 +145,7 @@ import { SubstrateVerdictLine } from '../resource/SubstrateVerdictLine'
 import { useAPIResources } from '../../api/apiResources'
 import { recordUsageEvent } from '../../api/usage-data'
 import { issueResourceOpener } from './issueResourceOpener'
-import { isVeleroBackupKind } from '../velero/routes'
+import { VeleroObjectDeleteNotice, genericDeleteOffered, useVeleroBackupDeletePath } from '../velero/backupDelete'
 
 type TabType = WorkloadTabType
 
@@ -320,6 +320,7 @@ function useActionsBarProps(
   group: string | undefined,
   cascadeEnabled: boolean,
   nodeUID: string,
+  deleteOffered: boolean,
 ) {
   const [deletePreviewOpen, setDeletePreviewOpen] = useState(false)
   const { showCopied } = useToast()
@@ -435,8 +436,9 @@ function useActionsBarProps(
     }) => <PortForwardButton type={type} namespace={ns} name={n} className={className} />,
     renderDiagnose: decorateResourceDiagnose(renderDiagnose),
     // Deleting a Velero Backup object leaves the backup in storage and Velero
-    // recreates the object; the Velero host offers Delete backup instead.
-    onDelete: isVeleroBackupKind(kind, group)
+    // recreates the object; the Velero host offers Delete backup instead,
+    // except where Velero would never act on that request.
+    onDelete: !deleteOffered
       ? undefined
       : (
           params: Parameters<typeof deleteMutation.mutate>[0],
@@ -871,6 +873,7 @@ export function WorkloadView({
   )
   const updateResource = useUpdateResource()
   const previewResources = usePreviewResources()
+  const veleroDelete = useVeleroBackupDeletePath(apiKind, effectiveGroup, resource)
   const baseActionsBarProps = useActionsBarProps(
     apiKind,
     namespace,
@@ -878,6 +881,7 @@ export function WorkloadView({
     effectiveGroup,
     !resourceLoading && Boolean(resource),
     apiKind === 'nodes' && !effectiveGroup ? resource?.metadata?.uid ?? '' : '',
+    genericDeleteOffered(apiKind, effectiveGroup, veleroDelete),
   )
   const desktopDownload = useDesktopDownload()
 
@@ -1145,6 +1149,7 @@ export function WorkloadView({
       onCompareTo,
       onCompareAcrossClusters,
       imageOwnership,
+      deleteNotice: veleroDelete.kind === 'object' ? <VeleroObjectDeleteNotice reason={veleroDelete.reason} backup={resource} /> : undefined,
     }),
     [
       baseActionsBarProps,
@@ -1152,6 +1157,8 @@ export function WorkloadView({
       imageOwnership,
       onCompareTo,
       onCompareAcrossClusters,
+      veleroDelete,
+      resource,
     ],
   )
   const handleOpenApplication = useCallback(

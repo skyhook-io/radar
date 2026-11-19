@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, type ReactNode } from 'react'
 import { Loader2 } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -48,6 +48,8 @@ interface ForceDeleteConfirmDialogProps {
   cascadePreviewFailed?: boolean
   cascadeDetail?: CascadeDetail
   resourceData?: unknown
+  /** The host's word on this deletion, shown first. */
+  notice?: ReactNode
 }
 
 export function ForceDeleteConfirmDialog({
@@ -64,6 +66,7 @@ export function ForceDeleteConfirmDialog({
   cascadeDetail,
   cascadePreviewFailed,
   resourceData,
+  notice,
 }: ForceDeleteConfirmDialogProps) {
   const [forceDelete, setForceDelete] = useState(false)
   const orphaning = cascadeDetail?.propagation === 'Orphan' && !forceDelete
@@ -95,6 +98,7 @@ export function ForceDeleteConfirmDialog({
       confirmDisabled={cascadeLoading}
     >
       <div className="flex flex-col gap-3 pb-1">
+        {notice}
         {cascadeLoading && (
           <div className="flex items-center gap-2 text-xs text-theme-text-tertiary">
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
