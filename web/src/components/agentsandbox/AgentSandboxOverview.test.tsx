@@ -1,14 +1,14 @@
 import type { ComponentProps, ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'kind-demo' } }) }))
 
 import { RadarFeatureUnsupportedError } from '../../api/radarFeatures'
 import type { AgentSandboxAttention, AgentSandboxWorkspaceResponse } from '../../api/agentSandbox'
 import { AgentSandboxOverview, NOTHING_IN_WHAT_WAS_READ, NOTHING_NEEDS_ATTENTION, overviewFacts } from './AgentSandboxOverview'
-import { AgentSandboxWorkspaceGate, attentionAge, attentionDetail, attentionTitle, sidebarCount } from './workspace'
+import { AgentSandboxWorkspaceGate, attentionAge, attentionDetail, attentionTitle, ceilingDuration, sidebarCount } from './workspace'
 import { emptyWorkspace, liveAttention, liveWorkspace, minutesAgo } from './workspace.fixtures'
 
 // renderToStaticMarkup escapes apostrophes; compare against the text a reader sees.
@@ -141,6 +141,9 @@ describe('Agent Sandbox overview, from the server summary', () => {
   })
 
   it('branches on the rule: a slow state says how long and that Issues raise it later; a stalled one is the Issue', () => {
+    // The ceiling rounds up, so the clock must not move between the fixture and the reading.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-11-18T12:00:00Z') })
+    onTestFinished(() => void vi.useRealTimers())
     const base = liveAttention().find((a) => a.id.endsWith('/bad-image'))!
     const slow: AgentSandboxAttention = { ...base, rule: 'slow', severity: 'warning', title: 'Still starting', reading: 'Pod exists with phase: Pending', rawDetail: undefined, since: minutesAgo(12), issue: false }
     expect(attentionTitle(slow)).toBe('Still starting')
@@ -150,13 +153,27 @@ describe('Agent Sandbox overview, from the server summary', () => {
     expect(attentionAge(stalled)?.text).toBe('≤45m')
     expect(attentionDetail(stalled)).toBe('Pod exists with phase: Pending')
     // Any row with a known start says how long; one without says nothing.
-    // A ceiling, said as one: "≤1h", with why on hover. None without since, never the creation time.
+    // A ceiling, said as one and never rounded down: 90 minutes is "≤1h 30m", with why on hover. None without since, never the creation time.
     const aged = attentionAge({ ...base, since: minutesAgo(90) })
-    expect(aged?.text).toBe('≤1h')
-    expect(aged?.tip).toContain('at most 1h ago')
+    expect(aged?.text).toBe('≤1h 30m')
+    expect(aged?.tip).toContain('at most 1h 30m ago')
     expect(attentionAge(base)).toBeUndefined()
     // The controller's Available=False is a real flip: exact.
     expect(attentionAge({ ...base, rule: 'controllerNotRunning', since: minutesAgo(20) })?.text).toBe('20m')
+  })
+
+  it('rounds an age ceiling up, so the bound never understates', () => {
+    const s = 1000
+    const m = 60 * s
+    const h = 60 * m
+    expect(ceilingDuration(12 * m)).toBe('12m')
+    expect(ceilingDuration(12 * m + 1)).toBe('13m')
+    expect(ceilingDuration(59 * m + 30 * s)).toBe('1h')
+    expect(ceilingDuration(61 * m + 10 * s)).toBe('1h 2m')
+    expect(ceilingDuration(2 * h)).toBe('2h')
+    expect(ceilingDuration(25 * h + 1)).toBe('1d 2h')
+    expect(ceilingDuration(24 * h)).toBe('1d')
+    expect(ceilingDuration(500)).toBe('1s')
   })
 
   it('shows each row compactly: title, one line, the next step; the reading and the source’s words fold under Details', () => {
@@ -185,9 +202,11 @@ describe('Agent Sandbox overview, from the server summary', () => {
   })
 
   it('says how long a state has lasted as a ceiling, in words', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-11-18T12:00:00Z') })
+    onTestFinished(() => void vi.useRealTimers())
     const base = liveAttention().find((a) => a.id.endsWith('/bad-image'))!
     const html = overview(liveWorkspace({ attention: [{ ...base, since: minutesAgo(90) }], attentionTotal: 1 }))
-    expect(html).toContain('began ≤1h ago')
+    expect(html).toContain('began ≤1h 30m ago')
   })
 
   it('says how many claims an empty reserve leaves without a warm sandbox, and only what the server counted', () => {
