@@ -2,15 +2,23 @@ package cachesource
 
 import (
 	"cmp"
+	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"reflect"
 	"slices"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -344,6 +352,49 @@ func (betaUndecided) CanRead(_ resourceid.GroupKind, namespace string) ownership
 }
 func (betaUndecided) Namespaces() ([]string, bool) { return nil, true }
 
+// A store without the index never answers, however long it loads, so a read
+// by it is a read error, with keys or without, for a typed kind and for a
+// dynamic one watched cluster-wide or namespace by namespace.
+func TestIndexedReadByMissingIndexIsAReadError(t *testing.T) {
+	assertReadError := func(t *testing.T, s relations.Session, gk resourceid.GroupKind) {
+		t.Helper()
+		for _, keys := range [][]string{{"key"}, nil} {
+			got := s.Indexed(gk, "missing", keys, ownership.InNamespace("alpha"))
+			if len(got.Objects) != 0 || len(got.Gaps) == 0 {
+				t.Fatalf("%v, keys %q: %+v; want a gap, never a complete empty answer", gk, keys, got)
+			}
+			for _, g := range got.Gaps {
+				if g.Reason != readreason.ReadError {
+					t.Errorf("%v, keys %q: gap %+v; want %s", gk, keys, g, readreason.ReadError)
+				}
+			}
+		}
+	}
+	t.Run("cluster-wide", func(t *testing.T) {
+		f := newFixture(t, k8score.CacheConfig{}, nil)
+		f.watch(t, widgets)
+		s := begin(t, f.source()).(relations.Session)
+		for _, gk := range []resourceid.GroupKind{{Kind: "Pod"}, widgetKind} {
+			assertReadError(t, s, gk)
+		}
+	})
+	t.Run("by namespace", func(t *testing.T) {
+		f := newFixture(t, k8score.CacheConfig{}, func(f *fixture) {
+			f.dynamic.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				if a.GetNamespace() == "" {
+					return true, nil, apierrors.NewForbidden(widgets.GroupResource(), "", errors.New("namespace scoped"))
+				}
+				return false, nil, nil
+			})
+		})
+		if err := f.caches.Dynamic.EnsureWatchingContext(context.Background(), widgets, "alpha"); err != nil {
+			t.Fatal(err)
+		}
+		waitUntil(t, "alpha ready", func() bool { return f.caches.Dynamic.IsNamespaceSynced(widgets, "alpha") })
+		assertReadError(t, begin(t, f.source()).(relations.Session), widgetKind)
+	})
+}
+
 // A kind discovery doesn't serve reads as empty when discovery covered its
 // group, even with another group failing, and as a gap when its own group
 // failed; the scan oracle agrees.
@@ -370,4 +421,110 @@ func TestIndexedJudgesAnUnservedKindByItsGroup(t *testing.T) {
 			}
 		}
 	}
+}
+
+// onlyIn may read only the namespaces it names.
+type onlyIn []string
+
+func (n onlyIn) CanRead(_ resourceid.GroupKind, namespace string) ownership.Decision {
+	if slices.Contains(n, namespace) {
+		return ownership.Allowed
+	}
+	return ownership.Denied
+}
+func (n onlyIn) Namespaces() ([]string, bool) { return n, false }
+
+// secretReads counts the Secrets a session's reads return.
+type secretReads struct {
+	relations.Session
+	read *int
+}
+
+func (s secretReads) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
+	r := s.Session.Indexed(gk, index, keys, scope)
+	if gk.Kind == "Secret" {
+		*s.read += len(r.Objects)
+	}
+	return r
+}
+
+// With Secrets collected in only some namespaces, a cross-namespace answer
+// for a caller limited to a collected one reads that namespace's Secrets at
+// most once: by the index not at all, and by a scan once, the check of what
+// the caller's namespaces hold reading none of them.
+func TestAnAcrossAnswerReadsTheCallersNamespaceOnce(t *testing.T) {
+	f := newFixture(t, k8score.CacheConfig{ResourceScopes: map[string]k8score.ResourceScope{
+		k8score.Pods:    {Enabled: true},
+		k8score.Secrets: {Enabled: true, Namespace: "alpha"},
+	}}, func(f *fixture) {
+		for i := range 1000 {
+			if err := f.typed.Tracker().Add(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: fmt.Sprintf("s-%04d", i)}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	waitUntil(t, "Secrets loaded", func() bool { return f.caches.Typed.KindReadinessFor(k8score.Secrets) == k8score.KindReady })
+	held, ok := f.caches.Typed.ReadableIndexedObjects(k8score.Secrets, []string{"alpha"}, "")
+	if !ok || len(held) < 1000 {
+		t.Fatalf("alpha holds %d Secrets, %v", len(held), ok)
+	}
+	subject := ref("", "Secret", "alpha", "s-0000")
+	scan := *relations.Reflections
+	scan.ReferrersIndex = nil
+	for _, tc := range []struct {
+		family *relations.Family
+		want   int
+	}{{relations.Reflections, 0}, {&scan, len(held)}} {
+		read := 0
+		s := secretReads{Session: begin(t, f.source()).(relations.Session), read: &read}
+		got := relations.NewView(s, onlyIn{"alpha"}).WithLimit(0).Referrers(tc.family, subject, nil)
+		if len(got.Referrers) != 0 || !got.Coverage.Complete() {
+			t.Fatalf("indexed %t: %+v; want a complete answer with no referrers", tc.family.ReferrersIndex != nil, got)
+		}
+		if read != tc.want {
+			t.Errorf("indexed %t: read %d Secrets; want %d", tc.family.ReferrersIndex != nil, read, tc.want)
+		}
+	}
+}
+
+// A read by an index with no keys reads no object but reports the gaps the
+// same read with keys does, for a typed kind and a dynamic one, each held in
+// only one of the namespaces asked about.
+func TestAnIndexReadWithNoKeysReportsOnlyGaps(t *testing.T) {
+	scope := ownership.SearchScope{Namespaces: []string{"alpha", "beta"}}
+	check := func(t *testing.T, s relations.Session, gk resourceid.GroupKind) {
+		t.Helper()
+		keyed := s.Indexed(gk, cache.NamespaceIndex, scope.Namespaces, scope)
+		none := s.Indexed(gk, cache.NamespaceIndex, nil, scope)
+		if len(keyed.Objects) == 0 || len(none.Objects) != 0 || len(none.Gaps) == 0 || !reflect.DeepEqual(keyed.Gaps, none.Gaps) {
+			t.Errorf("%v: keyed %d objects, gaps %+v; no keys %d objects, gaps %+v; want objects only with keys and the same gaps", gk, len(keyed.Objects), keyed.Gaps, len(none.Objects), none.Gaps)
+		}
+	}
+	t.Run("typed", func(t *testing.T) {
+		f := newFixture(t, k8score.CacheConfig{ResourceScopes: map[string]k8score.ResourceScope{
+			k8score.Pods:    {Enabled: true},
+			k8score.Secrets: {Enabled: true, Namespace: "alpha"},
+		}}, func(f *fixture) {
+			if err := f.typed.Tracker().Add(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "s"}}); err != nil {
+				t.Fatal(err)
+			}
+		})
+		waitUntil(t, "Secrets loaded", func() bool { return f.caches.Typed.KindReadinessFor(k8score.Secrets) == k8score.KindReady })
+		check(t, begin(t, f.source()).(relations.Session), resourceid.GroupKind{Kind: "Secret"})
+	})
+	t.Run("dynamic", func(t *testing.T) {
+		f := newFixture(t, k8score.CacheConfig{}, func(f *fixture) {
+			f.dynamic.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				if a.GetNamespace() == "" {
+					return true, nil, apierrors.NewForbidden(widgets.GroupResource(), "", errors.New("namespace scoped"))
+				}
+				return false, nil, nil
+			})
+		})
+		if err := f.caches.Dynamic.EnsureWatchingContext(context.Background(), widgets, "alpha"); err != nil {
+			t.Fatal(err)
+		}
+		waitUntil(t, "alpha ready", func() bool { return f.caches.Dynamic.IsNamespaceSynced(widgets, "alpha") })
+		check(t, begin(t, f.source()).(relations.Session), widgetKind)
+	})
 }

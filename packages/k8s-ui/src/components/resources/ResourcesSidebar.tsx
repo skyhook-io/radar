@@ -36,7 +36,6 @@ export interface PinnedItem {
 export interface SidebarCategoryDestination {
   id: string
   label: string
-  icon?: ComponentType<{ className?: string }>
   /** Problem count. `undefined` renders no badge; `null` renders the unknown dash. */
   count?: number | null
   /** The count was taken over data read only in part: rendered "≥N", and a zero is unknown rather than none. */
@@ -45,13 +44,27 @@ export interface SidebarCategoryDestination {
   active?: boolean
   /** The object currently open under this destination, nested beneath it. */
   child?: { label: string; title?: string }
+  /** The kind whose list this destination is. While that kind is selected the
+   *  destination is highlighted, and the kind is not listed again under Other kinds. */
+  kind?: SelectedKindInfo
   onSelect: () => void
 }
 
+/**
+ * An integration with screens of its own. It is listed under Integrations, one
+ * row until opened, named by the job it does with the tool beneath (the
+ * category name), and opens to its destinations with its remaining kinds
+ * folded under "Other kinds".
+ */
 export interface SidebarCategoryWorkspace {
   destinations: SidebarCategoryDestination[]
-  /** Kinds start collapsed under a "Resource kinds" disclosure until the user opens them. */
-  defaultKindsCollapsed?: boolean
+  /** The job the integration does, e.g. "Backups". Defaults to the category name. */
+  label?: string
+  icon?: ComponentType<{ className?: string }>
+  /** What needs attention across the integration, on its row. Same rendering as a destination's count. */
+  count?: number | null
+  countLowerBound?: boolean
+  countTitle?: string
   /** Explains what the destination counts are scoped to. */
   scopeNote?: string
 }
@@ -79,6 +92,9 @@ export interface ResourcesSidebarProps {
   /** Task destinations keyed by category name (e.g. "CloudNativePG"). A category
    *  with a workspace stays visible even when it has no resources. */
   categoryWorkspaces?: Record<string, SidebarCategoryWorkspace>
+  /** Called after a destination is chosen, as onSelectedKindChange is after a
+   *  kind: a host showing the sidebar in a drawer closes it. */
+  onDestinationSelected?: () => void
   /** Display settings held by the parent, for a sidebar that unmounts between
    *  uses (the phone drawer) and should not reset them each time it opens. */
   displayState?: SidebarDisplayState
@@ -95,7 +111,12 @@ export interface SidebarDisplayState {
 
 // Persisted across remounts so collapsed categories survive tab switches
 let persistedExpandedCategories: Set<string> | null = null
-// Per-category "Resource kinds" disclosure, once the user has toggled it.
+// One integration is open at a time. Opening another folds it; leaving for
+// other kinds does not, so the way back is one click. Undefined until the
+// sidebar first mounts in this page load.
+let persistedOpenIntegration: string | null | undefined
+
+// Per-integration "Other kinds" disclosure, once the user has toggled it.
 const persistedKindsOpen = new Map<string, boolean>()
 const COUNT_UNAVAILABLE_MESSAGE = 'Count unavailable. Open to view resources.'
 
@@ -126,11 +147,13 @@ export function sidebarDestinationsMatching(
   resources: Pick<APIResource, 'group'>[],
   destinations: SidebarCategoryDestination[],
   term: string,
+  label?: string,
 ): SidebarCategoryDestination[] {
   const normalized = term.trim().toLowerCase()
   if (!normalized) return destinations
-  if (categoryName.toLowerCase().includes(normalized) || resources.some((r) => r.group.toLowerCase().includes(normalized))) return destinations
-  return destinations.filter((d) => d.label.toLowerCase().includes(normalized))
+  if (categoryName.toLowerCase().includes(normalized) || label?.toLowerCase().includes(normalized) || resources.some((r) => r.group.toLowerCase().includes(normalized))) return destinations
+  // A destination is also found by the kind it lists ("BackupStorageLocation" finds Storage locations).
+  return destinations.filter((d) => [d.label, d.kind?.kind, d.kind?.name].some((s) => s?.toLowerCase().includes(normalized)))
 }
 
 export function resourceMatchesSidebarFilter(resource: Pick<APIResource, 'kind' | 'name' | 'group'>, term: string): boolean {
@@ -262,6 +285,7 @@ export function ResourcesSidebar({
   onNavigate,
   basePath,
   onKindNavigated,
+  onDestinationSelected,
   categoryWorkspaces,
   displayState,
   onDisplayStateChange,
@@ -275,6 +299,10 @@ export function ResourcesSidebar({
       const path = `${basePath}/${kind.name}${kind.group ? `?apiGroup=${kind.group}` : ''}`
       onNavigate(path)
     }
+  }
+  const selectDestination = (d: SidebarCategoryDestination) => {
+    d.onSelect()
+    onDestinationSelected?.()
   }
 
   // --- Sidebar-local state ---
@@ -320,16 +348,19 @@ export function ResourcesSidebar({
     ? { name: '', kind: '', group: '\u0000' }
     : selectedKind ?? { name: 'pods', kind: 'Pod', group: '' }
 
+  const isSelectedKind = (k: Pick<SelectedKindInfo, 'name' | 'group'>) =>
+    !activeDestinationCategory && k.name === effectiveSelectedKind.name && k.group === effectiveSelectedKind.group
+  const destinationActive = (d: SidebarCategoryDestination) => !!d.active || (!!d.kind && isSelectedKind(d.kind))
+  const claimedByDestination = (categoryName: string, r: Pick<APIResource, 'name' | 'group'>) =>
+    !!categoryWorkspaces?.[categoryName]?.destinations.some(d => d.kind?.name === r.name && d.kind?.group === r.group)
+
   const [kindsOpenOverrides, setKindsOpenOverrides] = useState<Map<string, boolean>>(() => new Map(persistedKindsOpen))
+  // Other kinds start folded, and open on their own when one of them is selected.
   const kindsOpen = (categoryName: string) => {
-    const ws = categoryWorkspaces?.[categoryName]
-    if (!ws) return true
+    if (!categoryWorkspaces?.[categoryName]) return true
     const override = kindsOpenOverrides.get(categoryName)
     if (override !== undefined) return override
-    const selectedHere = !activeDestinationCategory && categories?.find(c => c.name === categoryName)?.resources.some(
-      r => r.name === effectiveSelectedKind.name && r.group === effectiveSelectedKind.group,
-    )
-    return selectedHere || !ws.defaultKindsCollapsed
+    return !!categories?.find(c => c.name === categoryName)?.resources.some(r => isSelectedKind(r) && !claimedByDestination(categoryName, r))
   }
   const toggleKinds = (categoryName: string) => {
     const next = !kindsOpen(categoryName)
@@ -342,6 +373,26 @@ export function ResourcesSidebar({
     if (!apiResources) return null
     return categorizeResources(apiResources)
   }, [apiResources])
+
+  // The integration on screen: one of its destinations is, or one of its kinds is selected.
+  const activeIntegration = useMemo(() => {
+    for (const [name, ws] of Object.entries(categoryWorkspaces ?? {})) {
+      if (ws.destinations.some(destinationActive)) return name
+      if (categories?.find(c => c.name === name)?.resources.some(isSelectedKind)) return name
+    }
+    return null
+  }, [categoryWorkspaces, categories, activeDestinationCategory, effectiveSelectedKind.name, effectiveSelectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Moving between a workspace's pages and Resources remounts the sidebar. It
+  // starts as the previous one was left and opens the integration now on screen
+  // two frames later: a panel mounted open has no closed style to animate from.
+  const [openIntegration, setOpenIntegration] = useState<string | null>(() =>
+    persistedOpenIntegration === undefined ? activeIntegration : persistedOpenIntegration)
+  useEffect(() => { persistedOpenIntegration = openIntegration }, [openIntegration])
+  useEffect(() => {
+    if (!activeIntegration) return
+    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => setOpenIntegration(activeIntegration)) })
+    return () => cancelAnimationFrame(frame)
+  }, [activeIntegration])
 
   // Auto-expand the sidebar category containing the selected kind
   const lastAutoExpandedKind = useRef<string | null>(null)
@@ -449,11 +500,8 @@ export function ResourcesSidebar({
       return { ...category, total, totalLabel, visibleResources }
     })
 
-    // Sort: the category whose workspace is open first, then categories with
-    // resources, empty ones at bottom
+    // Sort: categories with resources first, empty ones at the bottom.
     const sorted = withTotals.sort((a, b) => {
-      if (a.name === activeDestinationCategory) return -1
-      if (b.name === activeDestinationCategory) return 1
       if (a.total === 0 && b.total > 0) return 1
       if (a.total > 0 && b.total === 0) return -1
       return 0
@@ -481,7 +529,7 @@ export function ResourcesSidebar({
         if (categoryMatches || rawGroupMatches) return category
         const matchingResources = category.visibleResources.filter((resource: APIResource) => resourceMatchesSidebarFilter(resource, term))
         const ws = categoryWorkspaces?.[category.name]
-        const matchingViews = ws ? sidebarDestinationsMatching(category.name, category.resources, ws.destinations, term) : []
+        const matchingViews = ws ? sidebarDestinationsMatching(category.name, category.resources, ws.destinations, term, ws.label) : []
         if (matchingResources.length === 0 && matchingViews.length === 0) return null
         return {
           ...category,
@@ -510,23 +558,38 @@ export function ResourcesSidebar({
     })
   }
 
+  // Integrations are listed in their own block under Favorites, by job name.
+  const integrationLabel = (name: string) => categoryWorkspaces?.[name]?.label ?? name
+  const integrationCategories = useMemo(
+    () => (filteredCategories ?? []).filter(c => categoryWorkspaces?.[c.name]).sort((a, b) => integrationLabel(a.name).localeCompare(integrationLabel(b.name))),
+    [filteredCategories, categoryWorkspaces], // eslint-disable-line react-hooks/exhaustive-deps
+  )
+  const plainCategories = filteredCategories?.filter(c => !categoryWorkspaces?.[c.name]) ?? null
+  const integrationOpen = (name: string) => isKindFiltering || openIntegration === name
+  const otherKinds = (category: { name: string; visibleResources: APIResource[] }) =>
+    sortByGroup(category.visibleResources).filter(r => !claimedByDestination(category.name, r))
+
   const visibleResults = useMemo(() => {
     const results: ({ type: 'kind'; kind: SelectedKindInfo } | { type: 'view'; category: string; destination: SidebarCategoryDestination })[] = []
     if (favoritesExpanded) {
       for (const kind of pinned) results.push({ type: 'kind', kind })
     }
-    for (const cat of filteredCategories ?? []) {
-      if (!effectiveExpandedCategories.has(cat.name)) continue
-      const workspace = categoryWorkspaces?.[cat.name]
-      for (const destination of workspace ? sidebarDestinationsMatching(cat.name, cat.resources, workspace.destinations, kindFilter) : []) {
+    for (const cat of integrationCategories) {
+      if (!integrationOpen(cat.name)) continue
+      const workspace = categoryWorkspaces![cat.name]
+      for (const destination of sidebarDestinationsMatching(cat.name, cat.resources, workspace.destinations, kindFilter, workspace.label)) {
         results.push({ type: 'view', category: cat.name, destination })
       }
       if (isKindFiltering || kindsOpen(cat.name)) {
-        for (const kind of workspace ? sortByGroup(cat.visibleResources) : cat.visibleResources) results.push({ type: 'kind', kind })
+        for (const kind of otherKinds(cat)) results.push({ type: 'kind', kind })
       }
     }
+    for (const cat of plainCategories ?? []) {
+      if (!effectiveExpandedCategories.has(cat.name)) continue
+      for (const kind of cat.visibleResources) results.push({ type: 'kind', kind })
+    }
     return results
-  }, [favoritesExpanded, pinned, filteredCategories, effectiveExpandedCategories, kindsOpenOverrides, categoryWorkspaces, activeDestinationCategory, isKindFiltering, kindFilter]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [favoritesExpanded, pinned, integrationCategories, plainCategories, openIntegration, effectiveExpandedCategories, kindsOpenOverrides, categoryWorkspaces, activeDestinationCategory, isKindFiltering, kindFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   // Reset highlight when the filter or kind list changes
@@ -562,7 +625,7 @@ export function ResourcesSidebar({
       setHighlightedIndex(prev => Math.max(prev - 1, 0))
     } else if (e.key === 'Enter' && highlightedResult) {
       e.preventDefault()
-      if (highlightedResult.type === 'view') highlightedResult.destination.onSelect()
+      if (highlightedResult.type === 'view') selectDestination(highlightedResult.destination)
       else selectKind(highlightedResult.kind)
       setHighlightedIndex(-1)
       setKindFilter('')
@@ -670,14 +733,105 @@ export function ResourcesSidebar({
             </div>
           </Collapse>
         </div>
-        {filteredCategories ? (
+        {integrationCategories.length > 0 && (
+          <div className="mb-2">
+            <div className="px-2 py-1.5 text-xs font-medium text-theme-text-tertiary uppercase tracking-wide">Integrations</div>
+            <div className="space-y-0.5">
+              {integrationCategories.map((category) => {
+                const workspace = categoryWorkspaces![category.name]
+                const open = integrationOpen(category.name)
+                const label = workspace.label ?? category.name
+                const panelId = disclosurePanelId(categoryPanelBase, category.name)
+                const Icon = workspace.icon
+                return (
+                  <div key={category.name}>
+                    <div className="flex items-center min-w-0">
+                      <button
+                        aria-expanded={open}
+                        aria-controls={panelId}
+                        aria-label={`${open ? 'Collapse' : 'Expand'} ${label}`}
+                        onClick={() => setOpenIntegration(open ? null : category.name)}
+                        className="p-1 rounded text-theme-text-tertiary hover:text-theme-text-secondary shrink-0"
+                      >
+                        <CollapseChevron open={open} className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={() => {
+                          const first = workspace.destinations[0]
+                          // Opening waits for the page: set here, it would be the
+                          // state the remounted sidebar starts from, already open.
+                          if (!first || destinationActive(first)) setOpenIntegration(category.name)
+                          else selectDestination(first)
+                        }}
+                        title={rawCRDGroupTitle(category.resources)}
+                        className="flex-1 flex items-center gap-2 pl-1 pr-2 xl:pr-3 py-1.5 rounded-lg text-sm min-w-0 font-medium text-theme-text-primary hover:bg-theme-elevated"
+                      >
+                        {Icon && <Icon className="w-4 h-4 shrink-0" />}
+                        <span className="flex-1 min-w-0 text-left leading-tight">
+                          <span className="block truncate">{label}</span>
+                          {workspace.label && <span className="block truncate text-xs font-normal text-theme-text-tertiary">{category.name}</span>}
+                        </span>
+                        <AttentionCount count={workspace.count} lowerBound={workspace.countLowerBound} title={workspace.countTitle} />
+                      </button>
+                    </div>
+                    <Collapse open={open} id={panelId}>
+                      <IntegrationContents
+                        workspace={workspace}
+                        destinations={sidebarDestinationsMatching(category.name, category.resources, workspace.destinations, kindFilter, workspace.label)}
+                        isActive={destinationActive}
+                        onSelect={selectDestination}
+                        isPinned={(k) => isPinned(k.name, k.group)}
+                        onTogglePin={(k) => togglePin({ name: k.name, kind: k.kind, group: k.group })}
+                        highlightedId={highlightedResult?.type === 'view' && highlightedResult.category === category.name ? highlightedResult.destination.id : undefined}
+                        highlightedRef={highlightedRef}
+                        otherKindsCount={otherKinds(category).length}
+                        filtering={isKindFiltering}
+                        kindsOpen={isKindFiltering || kindsOpen(category.name)}
+                        onToggleKinds={() => toggleKinds(category.name)}
+                        kindsPanelId={disclosurePanelId(categoryPanelBase, `${category.name}-kinds`)}
+                      />
+                      <Collapse open={isKindFiltering || kindsOpen(category.name)} id={disclosurePanelId(categoryPanelBase, `${category.name}-kinds`)}>
+                        <div className="space-y-0.5 pl-4">
+                          {otherKinds(category).map((resource, index, list) => {
+                            const resourceIsPinned = isPinned(resource.name, resource.group)
+                            const isResourceSelected = isSelectedKind(resource)
+                            const highlighted = isKindHighlighted(resource.name, resource.group)
+                            const groupLabel = groupHeaderBefore(list, index)
+                            return (
+                              <div key={`${resource.group}/${resource.name}`}>
+                                {groupLabel && (
+                                  <div className="pl-6 pr-2 pt-1.5 pb-0.5 text-[10.5px] font-mono text-theme-text-tertiary truncate" title={groupLabel}>{groupLabel}</div>
+                                )}
+                                <ResourceTypeButton
+                                  ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
+                                  resource={resource}
+                                  count={counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? null}
+                                  coverage={resourceCoverage?.[resource.group ? `${resource.group}/${resource.kind}` : resource.kind]}
+                                  isSelected={isResourceSelected && !resourceIsPinned}
+                                  isHighlighted={highlighted}
+                                  isForbidden={forbiddenKinds.has(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)}
+                                  isPinned={resourceIsPinned}
+                                  onTogglePin={() => togglePin({ name: resource.name, kind: resource.kind, group: resource.group })}
+                                  onClick={() => selectKind({ name: resource.name, kind: resource.kind, group: resource.group })}
+                                  indent
+                                />
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </Collapse>
+                    </Collapse>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+        {plainCategories ? (
           // Dynamic categories from API
-          filteredCategories.map((category) => {
+          plainCategories.map((category) => {
             const isExpanded = effectiveExpandedCategories.has(category.name)
             const rawGroupTitle = rawCRDGroupTitle(category.resources)
-            const workspace = categoryWorkspaces?.[category.name]
-            const showKinds = isKindFiltering || kindsOpen(category.name)
-            const views = workspace ? sidebarDestinationsMatching(category.name, category.resources, workspace.destinations, kindFilter) : []
             return (
               <div key={category.name} className="mb-2">
                 <button
@@ -695,22 +849,8 @@ export function ResourcesSidebar({
                   )}
                 </button>
                 <Collapse open={isExpanded} id={disclosurePanelId(categoryPanelBase, category.name)}>
-                  {workspace && views.length > 0 && (
-                    <WorkspaceDestinations
-                      workspace={workspace}
-                      highlightedId={highlightedResult?.type === 'view' && highlightedResult.category === category.name ? highlightedResult.destination.id : undefined}
-                      highlightedRef={highlightedRef}
-                      destinations={views}
-                      filtering={isKindFiltering}
-                      hasKinds={category.visibleResources.length > 0}
-                      kindsOpen={showKinds}
-                      onToggleKinds={() => toggleKinds(category.name)}
-                      kindsPanelId={disclosurePanelId(categoryPanelBase, `${category.name}-kinds`)}
-                    />
-                  )}
-                  <Collapse open={showKinds} id={disclosurePanelId(categoryPanelBase, `${category.name}-kinds`)}>
                   <div className="space-y-0.5">
-                    {(workspace ? sortByGroup(category.visibleResources) : category.visibleResources).map((resource, index, list) => {
+                    {category.visibleResources.map((resource) => {
                       const resourceIsPinned = isPinned(resource.name, resource.group)
                       const isResourceSelected =
                         (effectiveSelectedKind.name === resource.name && effectiveSelectedKind.group === resource.group) ||
@@ -718,13 +858,9 @@ export function ResourcesSidebar({
                       // If the resource is pinned, let the Favorites section own the highlight
                       const showSelected = isResourceSelected && !resourceIsPinned
                       const highlighted = isKindHighlighted(resource.name, resource.group)
-                      const groupLabel = workspace ? groupHeaderBefore(list, index) : null
                       return (
-                      <div key={`${resource.group}/${resource.name}`}>
-                      {groupLabel && (
-                        <div className="pl-6 pr-2 pt-1.5 pb-0.5 text-[10.5px] font-mono text-theme-text-tertiary truncate" title={groupLabel}>{groupLabel}</div>
-                      )}
                       <ResourceTypeButton
+                        key={`${resource.group}/${resource.name}`}
                         ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
                         resource={resource}
                         count={counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? null}
@@ -735,13 +871,10 @@ export function ResourcesSidebar({
                         isPinned={resourceIsPinned}
                         onTogglePin={() => togglePin({ name: resource.name, kind: resource.kind, group: resource.group })}
                         onClick={() => selectKind({ name: resource.name, kind: resource.kind, group: resource.group })}
-                        indent={!!workspace}
                       />
-                      </div>
                       )
                     })}
                   </div>
-                  </Collapse>
                 </Collapse>
               </div>
             )
@@ -844,13 +977,37 @@ function groupHeaderBefore(resources: APIResource[], index: number): string | nu
   return group || 'core'
 }
 
-// While the sidebar is filtered, `destinations` are the views that match and
-// the kinds below are forced open, so they get a label rather than a toggle.
-function WorkspaceDestinations({
+function AttentionCount({ count, lowerBound, title }: { count?: number | null; lowerBound?: boolean; title?: string }) {
+  if (count === null || (count === 0 && lowerBound)) {
+    return (
+      <Tooltip content={title ?? COUNT_UNAVAILABLE_MESSAGE} position="left">
+        <span className="text-xs py-0.5 rounded text-center font-mono w-8 bg-theme-elevated text-theme-text-disabled shrink-0">–</span>
+      </Tooltip>
+    )
+  }
+  if (count === undefined || count <= 0) return null
+  return (
+    <Tooltip content={title ?? `${count}`} position="left">
+      <span className={clsx('text-xs py-0.5 rounded text-center font-mono status-degraded shrink-0', lowerBound ? 'min-w-8 px-1' : 'w-8')}>
+        {lowerBound && certaintyGlyph('lower_bound')}
+        {count}
+      </span>
+    </Tooltip>
+  )
+}
+
+// An open integration: its destinations, then its remaining kinds folded under
+// "Other kinds". While the sidebar is filtered, `destinations` are the ones
+// that match and the kinds are forced open, so they get a label, not a toggle.
+function IntegrationContents({
   workspace,
   destinations,
+  isActive,
+  onSelect,
+  isPinned,
+  onTogglePin,
+  otherKindsCount,
   filtering,
-  hasKinds,
   kindsOpen,
   onToggleKinds,
   kindsPanelId,
@@ -858,55 +1015,64 @@ function WorkspaceDestinations({
   highlightedRef,
 }: {
   workspace: SidebarCategoryWorkspace
-  highlightedId?: string
-  highlightedRef: React.RefObject<HTMLButtonElement | null>
   destinations: SidebarCategoryDestination[]
+  isActive: (d: SidebarCategoryDestination) => boolean
+  onSelect: (d: SidebarCategoryDestination) => void
+  isPinned: (kind: SelectedKindInfo) => boolean
+  onTogglePin: (kind: SelectedKindInfo) => void
+  otherKindsCount: number
   filtering: boolean
-  hasKinds: boolean
   kindsOpen: boolean
   onToggleKinds: () => void
   kindsPanelId: string
+  highlightedId?: string
+  highlightedRef: React.RefObject<HTMLButtonElement | null>
 }) {
   return (
-    <div className="space-y-0.5">
-      <div className="pl-5 pr-2 pt-0.5 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Views</div>
+    <div className="space-y-0.5 pt-0.5">
       {destinations.map((d) => {
-        const Icon = d.icon
+        const active = isActive(d)
+        const pinned = !!d.kind && isPinned(d.kind)
         return (
           <div key={d.id}>
             <button
               ref={highlightedId === d.id ? highlightedRef : undefined}
-              onClick={d.onSelect}
-              aria-current={d.active && !d.child ? 'page' : undefined}
+              onClick={() => onSelect(d)}
+              aria-current={active && !d.child ? 'page' : undefined}
               className={clsx(
-                'w-full flex items-center gap-2 pl-5 xl:pl-6 pr-2 xl:pr-3 py-1.5 rounded-lg text-sm transition-colors min-w-0',
-                d.active && !d.child
+                'w-full flex items-center gap-2 pl-9 xl:pl-10 pr-2 xl:pr-3 py-1.5 rounded-lg text-sm transition-colors min-w-0 group/kind',
+                active && !d.child
                   ? 'selection-strong selection-text'
                   : highlightedId === d.id
                     ? 'bg-theme-hover text-theme-text-primary'
-                    : d.active
+                    : active
                       ? 'text-theme-text-primary font-medium hover:bg-theme-elevated'
                       : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary',
               )}
             >
-              {Icon && <Icon className="w-4 h-4 shrink-0" />}
               <span className="flex-1 text-left truncate">{d.label}</span>
-              {d.count === null || (d.count === 0 && d.countLowerBound) ? (
-                <Tooltip content={d.countTitle ?? COUNT_UNAVAILABLE_MESSAGE} position="left">
-                  <span className="text-xs py-0.5 rounded text-center font-mono w-8 bg-theme-elevated text-theme-text-disabled">–</span>
-                </Tooltip>
-              ) : d.count !== undefined && d.count > 0 ? (
-                <Tooltip content={d.countTitle ?? `${d.count}`} position="left">
-                  <span className={clsx('text-xs py-0.5 rounded text-center font-mono status-degraded', d.countLowerBound ? 'min-w-8 px-1' : 'w-8')}>
-                    {d.countLowerBound && certaintyGlyph('lower_bound')}
-                    {d.count}
-                  </span>
-                </Tooltip>
-              ) : null}
+              {d.kind && (
+                // A destination that is a kind's list takes the kind's place, favorites included.
+                <span
+                  role="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onTogglePin(d.kind!)
+                  }}
+                  className={clsx(
+                    'p-0.5 rounded transition-all hover:bg-theme-hover shrink-0',
+                    pinned ? 'text-theme-text-secondary' : 'opacity-0 group-hover/kind:opacity-100 text-theme-text-disabled',
+                  )}
+                  title={pinned ? 'Unpin from favorites' : 'Pin to favorites'}
+                >
+                  <Pin className={clsx('w-3 h-3', pinned && 'fill-current')} />
+                </span>
+              )}
+              <AttentionCount count={d.count} lowerBound={d.countLowerBound} title={d.countTitle} />
             </button>
             {d.child && (
               <div
-                className="ml-10 xl:ml-11 mr-1 my-0.5 pl-2 pr-2 py-1 rounded-md text-xs font-medium truncate selection-strong selection-text border-l-2 border-skyhook-500"
+                className="ml-12 xl:ml-14 mr-1 my-0.5 pl-2 pr-2 py-1 rounded-md text-xs font-medium truncate selection-strong selection-text border-l-2 border-skyhook-500"
                 title={d.child.title ?? d.child.label}
                 aria-current="page"
               >
@@ -917,19 +1083,19 @@ function WorkspaceDestinations({
         )
       })}
       {workspace.scopeNote && (
-        <div className="pl-6 pr-2 pt-0.5 text-[11px] text-theme-text-tertiary">{workspace.scopeNote}</div>
+        <div className="pl-10 pr-2 pt-0.5 text-[11px] text-theme-text-tertiary">{workspace.scopeNote}</div>
       )}
-      {filtering ? (
-        hasKinds && <div className="pl-5 pr-2 pt-2 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Resource kinds</div>
+      {otherKindsCount === 0 ? null : filtering ? (
+        <div className="pl-9 xl:pl-10 pr-2 pt-2 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Other kinds</div>
       ) : (
         <button
           aria-expanded={kindsOpen}
           aria-controls={kindsPanelId}
           onClick={onToggleKinds}
-          className="w-full flex items-center gap-1.5 pl-5 pr-2 pt-2 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-secondary"
+          className="w-full flex items-center gap-1.5 pl-9 xl:pl-10 pr-2 pt-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-secondary"
         >
           <CollapseChevron open={kindsOpen} className="w-3 h-3" />
-          <span>Resource kinds</span>
+          <span>Other kinds ({otherKindsCount})</span>
         </button>
       )}
     </div>

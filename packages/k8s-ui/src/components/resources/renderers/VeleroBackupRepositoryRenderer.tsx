@@ -1,5 +1,5 @@
 import { Database, Clock } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import {
   getBackupRepositoryStatus,
   getBackupRepositoryType,
@@ -25,15 +25,16 @@ export function VeleroBackupRepositoryRenderer({ data, onNavigate }: VeleroBacku
   const status = data.status || {}
   const repoStatus = getBackupRepositoryStatus(data)
   const message = getBackupRepositoryMessage(data)
+  const issueShown = useOperationalIssuesShown()
   const volumeNamespace = getBackupRepositoryVolumeNamespace(data)
   const location = getBackupRepositoryLocation(data)
 
   return (
     <>
-      {/* The reason, not just the state. A repository that is not ready means
+      {/* The reason, not just the state, when no issue describes it above. A repository that is not ready means
           volume backups for its namespace are not being written, and Velero puts
           that consequence nowhere on the object. */}
-      {repoStatus.level === 'unhealthy' && (
+      {repoStatus.level === 'unhealthy' && !issueShown && (
         <AlertBanner
           variant="error"
           title="Repository Not Ready"
