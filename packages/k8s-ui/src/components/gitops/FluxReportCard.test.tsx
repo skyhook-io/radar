@@ -16,7 +16,7 @@ const render = (s: FluxReportSummary, open = true) => renderToString(<FluxReport
 describe('FluxReportCard', () => {
   it('sums Flux up in one line', () => {
     const line = render(summary(), false)
-    // The operator writes zeros for a kind it can't list, so the count is its claim.
+    // The count is the operator's own, so the line attributes it.
     expect(line).toContain('Flux v2.7.5 · 5 of 5 controllers ready · Flux Operator reports 0 failing')
     // Ready's lastTransitionTime moves only when Ready flips, not on each report.
     expect(line).not.toContain('reported ')
@@ -32,6 +32,12 @@ describe('FluxReportCard', () => {
 
   it('shows the operator version without an installer name', () => {
     expect(render(summary({ managedBy: undefined }))).toContain('operator v0.62.1')
+  })
+
+  it('keeps the installer apart from the operator version', () => {
+    const html = render(summary({ managedBy: 'flux bootstrap' }))
+    expect(html).toContain('>installed by flux bootstrap<')
+    expect(html).toContain('>operator v0.62.1<')
   })
 
   it('opens on first render when the browser kept it open', () => {
@@ -65,6 +71,6 @@ describe('FluxReportCard', () => {
     expect(html).toContain('Also: GitRepository 1')
     expect(html).toContain('>Total<')
     expect(html).not.toContain('>Running<')
-    expect(html).toContain('a kind it can&#x27;t list reads as zero')
+    expect(html).toContain('Counts as Flux Operator reports them.')
   })
 })

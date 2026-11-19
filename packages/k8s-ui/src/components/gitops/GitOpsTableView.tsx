@@ -580,15 +580,18 @@ export function GitOpsTableView({
   // be hidden behind a "nothing here" screen.
   if (totalGitOps === 0 && allRowsInput.length === 0 && !loading && !hasGlobalNamespaceFilter && !hasUnavailableGitOpsCounts && coverageStatus !== 'partial') {
     return (
-      <div className="flex h-full min-h-0 flex-1 items-start justify-center bg-theme-base px-4 pb-4 pt-[22vh]">
-        <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">
-          <GitBranch className="mx-auto h-8 w-8 text-theme-text-tertiary" />
-          <h2 className="mt-3 text-base font-semibold text-theme-text-primary">
-            {emptyStateTitle ?? 'No GitOps resources detected'}
-          </h2>
-          <p className="mt-1 text-sm text-theme-text-secondary">
-            {emptyStateBody ?? 'No ArgoCD Applications or FluxCD resources were found.'}
-          </p>
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-auto bg-theme-base">
+        {headerSlot}
+        <div className="flex flex-1 items-start justify-center px-4 pb-4 pt-[22vh]">
+          <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">
+            <GitBranch className="mx-auto h-8 w-8 text-theme-text-tertiary" />
+            <h2 className="mt-3 text-base font-semibold text-theme-text-primary">
+              {emptyStateTitle ?? 'No GitOps resources detected'}
+            </h2>
+            <p className="mt-1 text-sm text-theme-text-secondary">
+              {emptyStateBody ?? 'No ArgoCD Applications or FluxCD resources were found.'}
+            </p>
+          </div>
         </div>
       </div>
     )

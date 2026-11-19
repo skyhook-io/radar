@@ -60,11 +60,8 @@ export function FluxReportCard({
       <Collapse open={open} id={disclosure.panelId}>
         <div className="space-y-3 border-t border-theme-border px-3 py-3">
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-theme-text-secondary">
-            {summary.managedBy ? (
-              <span>installed by {summary.managedBy} {summary.operatorVersion ?? ''}</span>
-            ) : (
-              summary.operatorVersion && <span>operator {summary.operatorVersion}</span>
-            )}
+            {summary.managedBy && <span>installed by {summary.managedBy}</span>}
+            {summary.operatorVersion && <span>operator {summary.operatorVersion}</span>}
             {instance && (
               <span>
                 FluxInstance{' '}
@@ -131,7 +128,7 @@ export function FluxReportCard({
                   Also: {summary.also.map((a) => `${a.kind} ${a.total}`).join(', ')}
                 </div>
               )}
-              <div className="mt-1 text-xs text-theme-text-tertiary">Counts as Flux Operator reports them; a kind it can't list reads as zero.</div>
+              <div className="mt-1 text-xs text-theme-text-tertiary">Counts as Flux Operator reports them.</div>
             </div>
           </div>
         </div>

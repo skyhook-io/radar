@@ -31,4 +31,9 @@ describe('GitOpsTableView coverage', () => {
     // A full-height empty state under the card would overflow the scroll area.
     expect(render({ counts, headerSlot: <div>flux-card-slot</div> })).not.toMatch(/class="flex h-full flex-col items-center/)
   })
+  it('keeps the host header slot when there are no GitOps resources yet', () => {
+    const html = render({ headerSlot: <div>flux-card-slot</div> })
+    expect(html).toContain('flux-card-slot')
+    expect(html).toContain('No GitOps resources detected')
+  })
 })

@@ -168,7 +168,7 @@ export function FluxReportRenderer({ data }: Props) {
             ))}
           </tbody>
         </table>
-        <p className="mt-1 text-xs text-theme-text-tertiary">Counts as Flux Operator reports them; a kind it can't list reads as zero.</p>
+        <p className="mt-1 text-xs text-theme-text-tertiary">Counts as Flux Operator reports them.</p>
       </Section>
       <ConditionsSection conditions={data.status?.conditions} />
     </>

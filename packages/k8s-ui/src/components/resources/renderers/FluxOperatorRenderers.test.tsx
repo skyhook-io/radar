@@ -28,7 +28,7 @@ describe('Flux Operator drawers', () => {
     }} />))
     for (const want of ['v2.7.5', 'flux-operator', 'v0.62.1', 'v1.33.4+k3s1', 'helm-controller', 'v1.4.5', 'HelmRelease', '143', 'Reconcilers', '>Total<']) expect(html).toContain(want)
     expect(html).not.toContain('>Running<')
-    expect(html).toContain('a kind it can&#x27;t list reads as zero')
+    expect(html).toContain('Counts as Flux Operator reports them.')
   })
 
   it('ResourceSet: inputs, providers, dependencies, inventory', () => {

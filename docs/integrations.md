@@ -784,8 +784,8 @@ permits the reference or has produced an artifact.
 When the cluster serves FluxReport and the caller can read one, the GitOps page
 shows a collapsed **Flux** card above the table: the distribution version, the
 operator version, controller readiness and per-kind reconciler counts (total,
-failing, suspended), all read from the report. The operator records zero for a
-kind it can't list, so the counts are attributed to it. No readable report means
+failing, suspended), all read from the report. The counts are the operator's
+own, so the card attributes them to it. No readable report means
 no card; Radar never shows zeros for a report it could not read. The status of
 all four kinds reads `Suspended` when the object carries
 `fluxcd.controlplane.io/reconcile: disabled` (they have no `spec.suspend`).
