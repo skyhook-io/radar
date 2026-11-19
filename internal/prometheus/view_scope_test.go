@@ -510,3 +510,78 @@ func TestHistoricalPartitionMemoChecksConnectionEpoch(t *testing.T) {
 		t.Fatalf("unlabeled proof crossed a connection epoch: %+v err=%v queries=%d", proof, err, store.count())
 	}
 }
+
+func TestResolveViewScopePinnedTimesDoNotShareDecisions(t *testing.T) {
+	store := &viewScopeStore{answer: func(string) []byte {
+		return attributionEvidence([]prom.Series{viewRow(cpuMetric.Name, nil)}, "")
+	}}
+	c := newViewScopeClient(t, store)
+	pinned := time.Now().Add(-24 * time.Hour).Truncate(time.Minute).Add(10 * time.Second)
+	for i, at := range []time.Time{pinned, pinned.Add(40 * time.Second)} {
+		req := ViewScopeRequest{View: "test", Metrics: []ViewMetric{cpuMetric}, Span: time.Hour, At: at}
+		if _, err := c.ResolveViewScope(context.Background(), req, nil); err != nil {
+			t.Fatal(err)
+		}
+		if store.count() != i+1 {
+			t.Fatalf("pinned check %d reused another evaluation time's decision: %d queries", i, store.count())
+		}
+	}
+}
+
+func TestResolveViewScopeSupersededConnectionIsUnknown(t *testing.T) {
+	release := make(chan struct{})
+	store := &viewScopeStore{answer: func(string) []byte {
+		<-release
+		return attributionEvidence([]prom.Series{viewRow(cpuMetric.Name, nil)}, "")
+	}}
+	c := newViewScopeClient(t, store)
+	done := make(chan ViewScope, 1)
+	go func() {
+		scope, _ := c.ResolveViewScope(context.Background(), ViewScopeRequest{View: "test", Metrics: []ViewMetric{cpuMetric}}, nil)
+		done <- scope
+	}()
+	waitFor(t, "check to start", func() bool { return store.count() == 1 })
+	c.mu.Lock()
+	c.connectionEpoch++
+	c.mu.Unlock()
+	close(release)
+	if scope := <-done; scope.State != ViewScopeUnknown || !scope.Withheld {
+		t.Fatalf("superseded connection's decision reached the caller: %+v", scope)
+	}
+	if len(c.viewScopes) != 0 {
+		t.Fatalf("superseded decision cached: %d", len(c.viewScopes))
+	}
+}
+
+func TestResolveViewScopeLeaderDeadlineDoesNotFailWaiters(t *testing.T) {
+	release := make(chan struct{})
+	store := &viewScopeStore{answer: func(string) []byte {
+		<-release
+		return attributionEvidence([]prom.Series{viewRow(cpuMetric.Name, nil)}, "")
+	}}
+	c := newViewScopeClient(t, store)
+	req := ViewScopeRequest{View: "test", Metrics: []ViewMetric{cpuMetric}}
+	leaderCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	leader := make(chan error, 1)
+	go func() {
+		_, err := c.ResolveViewScope(leaderCtx, req, nil)
+		leader <- err
+	}()
+	waitFor(t, "check to start", func() bool { return store.count() == 1 })
+	waiter := make(chan ViewScope, 1)
+	go func() {
+		scope, _ := c.ResolveViewScope(context.Background(), req, nil)
+		waiter <- scope
+	}()
+	if err := <-leader; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("leader err = %v", err)
+	}
+	close(release)
+	if scope := <-waiter; scope.State != ViewScopeUnlabeled {
+		t.Fatalf("waiter failed with the leader's deadline: %+v", scope)
+	}
+	if store.count() != 1 {
+		t.Fatalf("waiter did not share the flight: %d queries", store.count())
+	}
+}

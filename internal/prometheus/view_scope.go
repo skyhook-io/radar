@@ -53,6 +53,10 @@ const (
 	viewScopeUnscopedTTL    = time.Minute
 	viewScopeMinSpan        = 5 * time.Minute
 	viewScopeLiveSlack      = 2 * time.Minute
+	// The shared check outlives any one caller's deadline so a waiter with
+	// time left is not failed by a leader that had little; each caller still
+	// returns on its own cancellation.
+	viewScopeFlightTimeout = 20 * time.Second
 )
 
 // ViewMetric is one metric a view reads. Subject narrows it to the view's
@@ -209,18 +213,17 @@ func (c *Client) ResolveViewScope(ctx context.Context, req ViewScopeRequest, cac
 		return scope, nil
 	}
 	ch := c.viewScopeSF.DoChan(key, func() (any, error) {
-		flightCtx := context.WithoutCancel(ctx)
-		if deadline, ok := ctx.Deadline(); ok {
-			var cancel context.CancelFunc
-			flightCtx, cancel = context.WithDeadline(flightCtx, deadline)
-			defer cancel()
-		}
+		flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), viewScopeFlightTimeout)
+		defer cancel()
 		scope, err := c.decideViewScopeFor(flightCtx, req, at, config, configured, cache)
 		if err != nil {
 			if flightCtx.Err() == nil {
 				errorlog.Record("prometheus", "warning", "cluster scope check for %s failed: %v", req.View, err)
 			}
 			return scope, nil
+		}
+		if !c.viewScopeConnectionCurrent(generation, epoch) {
+			return unknownViewScope(), nil
 		}
 		if ttl := viewScopeTTL(scope); ttl > 0 {
 			c.storeViewScope(key, scope, ttl, generation, epoch)
@@ -288,7 +291,7 @@ func viewScopeKey(generation, epoch uint64, config prom.WorkloadMetricsScope, be
 	}
 	when := "live"
 	if !live {
-		when = strconv.FormatInt(at.Truncate(time.Minute).Unix(), 10)
+		when = strconv.FormatInt(at.UnixNano(), 10)
 	}
 	return fmt.Sprintf("%d#%d#%s#%s", generation, epoch, when, hex.EncodeToString(h.Sum(nil)))
 }
@@ -301,6 +304,12 @@ func (c *Client) cachedViewScope(key string, now time.Time) (ViewScope, bool) {
 		return ViewScope{}, false
 	}
 	return entry.scope.clone(), true
+}
+
+func (c *Client) viewScopeConnectionCurrent(generation, epoch uint64) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return !c.retired && c.discoveryGen == generation && c.connectionEpoch == epoch
 }
 
 func (c *Client) storeViewScope(key string, scope ViewScope, ttl time.Duration, generation, epoch uint64) {
