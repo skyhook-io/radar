@@ -11,7 +11,7 @@ import { resourceRefKey } from '@skyhook-io/k8s-ui/utils/resource-refs'
 import { ImageName } from '../vulnerabilities/parts'
 import { Tooltip } from '../ui/Tooltip'
 
-const advisoryURL = 'https://www.oracle.com/security-alerts/cspunov2026.html#AppendixJAVA'
+const advisoryURL = 'https://github.com/advisories/GHSA-6g7j-4xh3-xq2q'
 
 interface Java4ShellPanelProps {
   namespaces: string[]
