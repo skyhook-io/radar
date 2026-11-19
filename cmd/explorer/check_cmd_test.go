@@ -79,6 +79,12 @@ func TestJava4ShellCLIListsScopedPodsAndResolvesWorkloads(t *testing.T) {
 		decoded.Containers != result.Containers || decoded.Unassessed[row.Reason] != 1 {
 		t.Fatalf("invalid report JSON: %s (%v)", output.String(), err)
 	}
+	output.Reset()
+	if err := writeJava4ShellCheck(&output, "table", result); err != nil ||
+		!strings.Contains(output.String(), "Java version could not be assessed") ||
+		!strings.Contains(output.String(), "image identity unknown") {
+		t.Fatalf("invalid report table: %s (%v)", output.String(), err)
+	}
 }
 
 func TestJava4ShellCLIRefusesUnreadablePodScope(t *testing.T) {

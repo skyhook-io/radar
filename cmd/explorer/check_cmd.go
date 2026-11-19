@@ -11,6 +11,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -30,7 +31,7 @@ import (
 )
 
 const (
-	java4ShellCommandBudget  = time.Minute
+	java4ShellPodListBudget  = 30 * time.Second
 	java4ShellMetadataBudget = 5 * time.Second
 	java4ShellPodLimit       = 50000
 )
@@ -119,8 +120,6 @@ func runJava4ShellCheck(kubeconfig, contextName, namespace string, allNamespaces
 
 	ctx, stop := signalContext()
 	defer stop()
-	ctx, cancel := context.WithTimeout(ctx, java4ShellCommandBudget)
-	defer cancel()
 	return checkJava4Shell(ctx, client, namespace)
 }
 
@@ -138,7 +137,8 @@ func checkJava4Shell(ctx context.Context, client kubernetes.Interface, namespace
 	podPages := pager.New(func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
 		return client.CoreV1().Pods(namespace).List(ctx, options)
 	})
-	if err := podPages.EachListItemWithAlloc(ctx, metav1.ListOptions{
+	listCtx, cancelList := context.WithTimeout(ctx, java4ShellPodListBudget)
+	listErr := podPages.EachListItemWithAlloc(listCtx, metav1.ListOptions{
 		FieldSelector: "status.phase!=Succeeded,status.phase!=Failed",
 	}, func(obj runtime.Object) error {
 		pod := obj.(*corev1.Pod)
@@ -153,8 +153,10 @@ func checkJava4Shell(ctx context.Context, client kubernetes.Interface, namespace
 			nodes[pod.Spec.NodeName] = nil
 		}
 		return nil
-	}); err != nil {
-		return images.Java4ShellReport{}, fmt.Errorf("list Pods: %w", err)
+	})
+	cancelList()
+	if listErr != nil {
+		return images.Java4ShellReport{}, fmt.Errorf("list Pods: %w", listErr)
 	}
 
 	if len(nodes) > 0 {
@@ -253,13 +255,30 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 		}{CVE: images.Java4ShellCVE, CheckedAt: time.Now().UTC(), Java4ShellReport: report})
 	}
 
-	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	var table bytes.Buffer
+	w := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
 	scope := "all namespaces"
 	if report.Coverage.Scope.Namespaces != nil {
 		scope = "namespace " + report.Coverage.Scope.Namespaces.Names[0]
 	}
 	fmt.Fprintf(w, "Java4Shell (%s) · %s\n", images.Java4ShellCVE, scope)
-	fmt.Fprintf(w, "%d running containers checked · %d with a declared Java version in an affected range\n", report.Containers, report.Matches)
+	unassessed := 0
+	for _, count := range report.Unassessed {
+		unassessed += count
+	}
+	noDeclaration := report.Unassessed["no_java_declaration"]
+	switch {
+	case report.Matches > 0:
+		fmt.Fprintf(w, "%d running containers · %d with a declared Java version in an affected range\n", report.Containers, report.Matches)
+	case report.Containers == 0:
+		fmt.Fprintln(w, "No running containers in the requested scope")
+	case noDeclaration == report.Containers:
+		fmt.Fprintf(w, "Images for all %d running containers declared no Java version\n", report.Containers)
+	case unassessed == report.Containers:
+		fmt.Fprintf(w, "Java version could not be assessed in any of the %d running containers\n", report.Containers)
+	default:
+		fmt.Fprintf(w, "No matches among the %d containers whose declared Java version could be assessed\n", report.Containers-unassessed)
+	}
 	if len(report.Findings) > 0 {
 		fmt.Fprintln(w, "\nNAMESPACE\tWORKLOAD\tCONTAINER\tDECLARED JAVA\tUPSTREAM FIX\tPODS\tVBMI PODS\tCPU UNKNOWN\tMITIGATION DECLARED")
 		for _, row := range report.Findings {
@@ -278,19 +297,30 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 	if len(report.Unassessed) > 0 {
 		fmt.Fprintln(w, "\nUnassessed containers")
 		for _, reason := range slices.Sorted(maps.Keys(report.Unassessed)) {
-			fmt.Fprintf(w, "%d\t%s\n", report.Unassessed[reason], reason)
+			fmt.Fprintf(w, "%d\t%s\n", report.Unassessed[reason], checkReasonLabel(reason))
 		}
 		fmt.Fprintln(w, "\nNAMESPACE\tWORKLOAD\tCONTAINER\tIMAGE\tREASON\tPODS")
 		for _, row := range report.UnassessedRows {
 			workload := checkTableValue(row.Workload.Kind + "/" + row.Workload.Name)
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\n", row.Workload.Namespace, workload,
-				row.Container, checkTableValue(row.Image), row.Reason, row.Pods)
+				row.Container, checkTableValue(row.Image), checkReasonLabel(row.Reason), row.Pods)
 		}
 		if report.UnassessedGroups > len(report.UnassessedRows) {
 			fmt.Fprintf(w, "Showing %d of %d unassessed groups\n", len(report.UnassessedRows), report.UnassessedGroups)
 		}
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	_, err := table.WriteTo(out)
+	return err
+}
+
+func checkReasonLabel(reason string) string {
+	if reason == "no_java_declaration" {
+		return "Image declares no Java version"
+	}
+	return strings.ReplaceAll(reason, "_", " ")
 }
 
 func checkTableValue(text string) string {
