@@ -1,5 +1,5 @@
 import { RelatedFindingsSection } from './RelatedFindingsSection'
-import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
+import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
@@ -145,6 +145,7 @@ import { SubstrateVerdictLine } from '../resource/SubstrateVerdictLine'
 import { useAPIResources } from '../../api/apiResources'
 import { recordUsageEvent } from '../../api/usage-data'
 import { issueResourceOpener } from './issueResourceOpener'
+import { isVeleroBackupKind } from '../velero/routes'
 
 type TabType = WorkloadTabType
 
@@ -299,6 +300,7 @@ interface WorkloadViewProps {
   statusNote?: ReactNode
   onRefresh?: () => Promise<unknown>
   hideKindBadge?: boolean
+  truncateName?: boolean
 }
 
 interface ImageTargetOwnershipContext {
@@ -432,10 +434,14 @@ function useActionsBarProps(
       className?: string
     }) => <PortForwardButton type={type} namespace={ns} name={n} className={className} />,
     renderDiagnose: decorateResourceDiagnose(renderDiagnose),
-    onDelete: (
-      params: Parameters<typeof deleteMutation.mutate>[0],
-      callbacks?: { onSuccess?: () => void },
-    ) => deleteMutation.mutate(params, { onSuccess: result => { if (!result.outcomeUnknown) callbacks?.onSuccess?.() } }),
+    // Deleting a Velero Backup object leaves the backup in storage and Velero
+    // recreates the object; the Velero host offers Delete backup instead.
+    onDelete: isVeleroBackupKind(kind, group)
+      ? undefined
+      : (
+          params: Parameters<typeof deleteMutation.mutate>[0],
+          callbacks?: { onSuccess?: () => void },
+        ) => deleteMutation.mutate(params, { onSuccess: result => { if (!result.outcomeUnknown) callbacks?.onSuccess?.() } }),
     isDeleting: deleteMutation.isPending,
     onDeletePreviewOpenChange: setDeletePreviewOpen,
     cascadeDetail: cascadePreview,
@@ -1426,7 +1432,7 @@ export function WorkloadView({
             renderDetailSection={({ issue }) => {
               if (schedulingEvidence?.state === 'reported' && issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason) return <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} />
               if (certificateEvidence && issue.kind === 'Node' && issue.reason === 'NodeCertificateExpiry') return <NodeCertificateDetails evidence={certificateEvidence} onViewTimeline={viewCertificateReport} includeOriginalReport={false} />
-              return null
+              return resourceIssueDetail({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, { issue, resource })
             }}
             compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: identityGroup }}

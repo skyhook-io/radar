@@ -9,7 +9,7 @@ import { CNPGDrawerTrailBack } from './CNPGDrawerTrail'
 import { CNPGInvestigationAction } from './CNPGClusterTabs'
 import { renderCNPGSummary } from './CNPGSummaryHost'
 import { renderCNPGHeaderActions } from './actions/renderCNPGHeaderActions'
-import { CNPG_DETAIL_KINDS, cnpgClusterKindListMode, cnpgDetailKindFor, cnpgDetailPath } from './routes'
+import { CNPG_CLUSTER_KIND, CNPG_DETAIL_KINDS, cnpgClusterKindListMode, cnpgDetailKindFor, cnpgDetailPath } from './routes'
 import type { DetailSlots, HostResource, KindListProps, ResourceHost } from '../../integrations/resourceHost'
 import { kindToPluralWithGroup } from '../../utils/navigation'
 import { CNPGObjectStoreRenderer } from '../resources/renderers/CNPGObjectStoreRenderer'
@@ -22,7 +22,7 @@ import {
 } from '../resources/renderers/CNPGDeclarativeRenderer'
 
 export const cnpgHost = {
-  clusterKind: { name: 'clusters', kind: 'Cluster', group: 'postgresql.cnpg.io' },
+  clusterKind: CNPG_CLUSTER_KIND,
 
   expandedPath(resource: HostResource, context?: string, tab?: 'yaml'): string | null {
     const plural = cnpgDetailKindFor(kindToPluralWithGroup(resource.kind, resource.group ?? ''), resource.group)

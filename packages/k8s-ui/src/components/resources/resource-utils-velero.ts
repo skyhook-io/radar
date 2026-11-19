@@ -131,32 +131,12 @@ export function getBackupQueuePosition(resource: any): number | null {
   return typeof pos === 'number' ? pos : null
 }
 
-// The name a Backup carries, applying Velero's fallback by name only. Callers
-// that hold the location list should prefer resolveBackupStorageLocation, which
-// applies Velero's actual rule.
+// The location a Backup targets, or '' when Velero has not assigned one yet.
+// Velero writes the resolved location into spec.storageLocation when it first
+// processes the backup, so an unset field is not "today's default": the default
+// can change before then. Same rule as LocationOf in pkg/velero.
 export function getBackupStorageLocation(resource: any): string {
-  return resource.spec?.storageLocation || 'default'
-}
-
-// Velero resolves an unset spec.storageLocation to whichever location carries
-// spec.default — a flag, not a name. The literal name "default" is only the
-// fallback when nothing claims the flag, and an install that renamed its
-// default location has no such object at all: the health lookup finds nothing
-// and the link points at a name that does not exist.
-//
-// Mirrors the server-side resolution behind the stored-backups endpoint so the
-// two cannot disagree about which location holds a backup.
-export function getVeleroDefaultLocationName(locations: any[] | undefined): string {
-  for (const l of locations ?? []) {
-    if (l?.spec?.default === true && l?.metadata?.name) return l.metadata.name
-  }
-  return ''
-}
-
-export function resolveBackupStorageLocation(resource: any, locations: any[] | undefined): string {
-  const declared = resource?.spec?.storageLocation
-  if (declared) return declared
-  return getVeleroDefaultLocationName(locations) || 'default'
+  return resource?.spec?.storageLocation || ''
 }
 
 export function getBackupIncludedNamespaces(resource: any): string[] {
