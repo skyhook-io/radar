@@ -394,25 +394,25 @@ describe('tier readings for a Radar Hub owner, who has no form', () => {
     expect(`${r.detail} ${r.nextStep}`).not.toMatch(noForm)
   })
 
-  it('says Radar couldn’t reach or verify the API server from inside the cluster, with the server’s reason', () => {
-    const tls = tierReading({ state: 'failed', code: 'tls', identity: owner, reason: 'x509: certificate signed by unknown authority' })
+  it('says Radar couldn’t reach or verify the API server it dials from inside the cluster, with the server’s reason', () => {
+    const tls = tierReading({ state: 'failed', code: 'tls', identity: owner, endpoint: 'api.ate-system.svc:443', reason: 'x509: certificate signed by unknown authority' })
     expect(tls.detail).toBe('Radar couldn’t verify api.ate-system.svc:443 from inside the cluster. x509: certificate signed by unknown authority')
-    expect(tls.command).toBe('kubectl -n ate-system get svc api')
-    const down = tierReading({ state: 'failed', code: 'unreachable', identity: owner, reason: 'dial tcp: connection refused' })
-    expect(down.detail).toBe('Radar couldn’t reach api.ate-system.svc:443 from inside the cluster. dial tcp: connection refused')
+    expect(tls.nextStep).toContain('substrate.api.caConfigMap')
+    const down = tierReading({ state: 'failed', code: 'unreachable', identity: owner, endpoint: 'substrate.internal:8443', reason: 'dial tcp: connection refused' })
+    expect(down.detail).toBe('Radar couldn’t reach substrate.internal:8443 from inside the cluster. dial tcp: connection refused')
     expect(down.command).toBe('kubectl -n ate-system get pods')
     for (const r of [tls, down]) expect(`${r.detail} ${r.nextStep}`).not.toMatch(noForm)
   })
 
-  it('says Substrate refused the shared identity and that an operator must grant it', () => {
-    for (const code of ['unauthenticated', 'denied'] as const) {
-      const r = tierReading({ state: 'failed', code, identity: owner })
-      expect(r.title).toBe('Substrate refused the shared identity')
-      expect(r.detail).toContain('it isn’t granted in this install')
-      expect(r.nextStep).toContain('Substrate operator to grant it')
-      expect(r.nextStep).toContain('this Radar can’t read Substrate as it stands')
-      expect(`${r.detail} ${r.nextStep}`).not.toMatch(noForm)
-    }
+  it('tells a token Substrate didn’t accept from a read it denied', () => {
+    const rejected = tierReading({ state: 'failed', code: 'unauthenticated', identity: owner })
+    expect(rejected.title).toBe('Substrate didn’t accept the shared identity’s token')
+    expect(rejected.nextStep).toContain('audience api.ate-system.svc')
+    expect(rejected.nextStep).toContain('A role grant won’t fix this')
+    const denied = tierReading({ state: 'failed', code: 'denied', identity: owner })
+    expect(denied.title).toBe('Substrate refused the shared identity')
+    expect(denied.nextStep).toContain('Substrate operator to grant it the viewer role')
+    for (const r of [rejected, denied]) expect(`${r.detail} ${r.nextStep}`).not.toMatch(noForm)
   })
 
   it('points a local Radar’s readings at its form in Settings', () => {

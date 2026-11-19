@@ -50,6 +50,20 @@ type Settings struct {
 // MaxScopedAtespaces bounds Settings.Atespaces.
 const MaxScopedAtespaces = 64
 
+// ExpandHome expands a leading ~/ to the home directory of the user running
+// Radar, as the shell did when the file was written there (kubectl create
+// token … > ~/ate.token); a local Radar's settings name files on its machine.
+func ExpandHome(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	return filepath.Join(home, path[2:])
+}
+
 // Validate checks the settings before they are saved. File checks read the
 // file only to prove it is usable; nothing read is returned.
 func (s Settings) Validate() error { return s.validate(true) }

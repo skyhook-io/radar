@@ -361,6 +361,11 @@ func crashedActors(in Inputs) []Attention {
 		if a.State != StateCrashed {
 			continue
 		}
+		// A failed golden build's actor is its template's row: moving or
+		// reverting it leaves the template's terminal error in place.
+		if in.TemplatesRead && failedGoldenBuilder(a, in.Templates) != nil {
+			continue
+		}
 		crashed = append(crashed, a)
 		key := a.Template.Atespace + "/" + a.Template.Name
 		byTemplate[key]++
@@ -502,13 +507,14 @@ func forActor(command string, a Actor) string {
 	return strings.NewReplacer("<name>", a.Name, "<atespace>", a.Atespace).Replace(command)
 }
 
-// stuckNextStep follows what each state holds: resuming and suspending actors
-// keep a worker; reverting and deleting ones have none to read.
+// stuckNextStep follows what each state holds: a resume or suspend continues
+// only on the next call; a revert or delete is the API server's to finish,
+// whether or not the actor still holds a worker.
 var stuckNextStep = map[string]string{
 	StateResuming:   "Resume each again: Substrate continues an unfinished resume only on the next resume call. If it stalls again, read its worker's log.",
 	StateSuspending: "Suspend each again: Substrate continues an unfinished suspend only on the next suspend call. If it stalls again, read its worker's log.",
-	StateReverting:  "Read the Substrate API server's log for the revert; a reverting actor has no worker.",
-	StateDeleting:   "Read the Substrate API server's log for the delete; a deleting actor has no worker.",
+	StateReverting:  "Read the Substrate API server's log for the revert.",
+	StateDeleting:   "Read the Substrate API server's log for the delete.",
 }
 
 // stuckActorNextStep is stuckNextStep on one actor's own page.
@@ -753,6 +759,25 @@ func goldenFailed(in Inputs) []Attention {
 		})
 	}
 	return out
+}
+
+// GoldenBuilderOf returns the template a builds the golden snapshot of:
+// Substrate creates that actor in the template's atespace, named the
+// template's UID.
+func GoldenBuilderOf(a Actor, templates []Template) *Template {
+	for i := range templates {
+		if t := &templates[i]; t.UID != "" && t.UID == a.Name && t.Atespace == a.Atespace {
+			return t
+		}
+	}
+	return nil
+}
+
+func failedGoldenBuilder(a Actor, templates []Template) *Template {
+	if t := GoldenBuilderOf(a, templates); t != nil && GoldenOf(*t).State == GoldenFailed {
+		return t
+	}
+	return nil
 }
 
 // GoldenMessage is a golden snapshot error without Substrate's reason code:
@@ -1280,11 +1305,20 @@ func Checks(in Inputs) []Check {
 
 // ActorAttention returns the rows that cover actor a, judged by each rule's
 // own predicate on a, which may be fresher than the read the rows came from.
-// Fleet-level rows about templates' golden snapshots and about pools name no
-// actor and are not returned.
-func ActorAttention(rows []Attention, a Actor, now time.Time) []Attention {
+// Fleet-level rows about pools name no actor and are not returned; a golden
+// snapshot's row is returned only to the actor that failed to build it, in
+// place of the crash row.
+func ActorAttention(rows []Attention, a Actor, templates []Template, now time.Time) []Attention {
 	out := []Attention{}
+	builds := failedGoldenBuilder(a, templates)
 	for _, r := range rows {
+		if builds != nil && r.Rule == RuleGoldenFailed && r.Subject.Atespace == builds.Atespace && r.Subject.Name == builds.Name {
+			out = append(out, r)
+			continue
+		}
+		if builds != nil && r.Rule == RuleCrashedActors {
+			continue
+		}
 		if !covers(r, a, now) {
 			continue
 		}

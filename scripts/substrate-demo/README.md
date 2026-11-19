@@ -377,7 +377,9 @@ recreates a Pod when its script or its readiness probe changes. Recreating a
 Pod no crashed actor ran on leaves the crash lines alone.
 
 `up` refuses to touch a same-named namespace, SandboxConfig or Pod without the
-label. `down` deletes the namespace and the labelled SandboxConfigs. A
+label. `down` deletes the labelled fixtures and SandboxConfigs, then the
+namespace only if every kind listable there shows nothing else in it (a
+listing that fails keeps it). A
 Terminating fixture Pod is force-deleted first: the kubelet does not shorten a
 grace period already running, and the draining Pod's would hold the namespace
 open for a day.

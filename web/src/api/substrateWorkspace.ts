@@ -919,9 +919,10 @@ export interface SubstrateActorLogs {
    * Pod on that node now (the one it ran in is gone). workerPodGone: its
    * assigned worker's Pod no longer exists. denied: no readable worker Pod.
    * noMatch: Pods searched, none holds its lines. candidates: lines found on
-   * the last node.
+   * the last node. podsNotCollected: Radar doesn't hold Pods in every
+   * namespace, so the node can't be searched.
    */
-  reasonCode?: 'noWorker' | 'nodeGone' | 'noWorkerPods' | 'workerPodGone' | 'denied' | 'noMatch' | 'candidates'
+  reasonCode?: 'noWorker' | 'nodeGone' | 'noWorkerPods' | 'workerPodGone' | 'denied' | 'noMatch' | 'candidates' | 'podsNotCollected'
   reason?: string
   source: SubstrateLogSource
   /** Newest lines, oldest first, each with the Pod it came from. */

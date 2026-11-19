@@ -9,6 +9,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"math/big"
 	"slices"
 	"strings"
@@ -189,9 +191,17 @@ func TestSharedTokenDeniedIsReadable(t *testing.T) {
 	c := fake.NewClientset()
 	var requests []*authv1.TokenRequest
 	tokenReactor(c, time.Now, &requests, apierrors.NewForbidden(schema.GroupResource{Resource: "serviceaccounts/token"}, ClientServiceAccount, errors.New("cannot create")))
-	_, err := (&sharedToken{client: c}).token(context.Background())
-	code, msg := classify(err, nil)
-	if code != CodeUnauthenticated || !strings.Contains(msg, "Kubernetes denied create serviceaccounts/token in "+SystemNamespace) {
+	creds := &bearerCreds{source: &sharedToken{client: c}}
+	_, err := creds.GetRequestMetadata(context.Background())
+	// gRPC returns a credential error as a status with its text; the cause is
+	// Kubernetes', not Substrate rejecting the identity.
+	st, _ := status.FromError(err)
+	code, msg := classify(status.Error(st.Code(), "transport: per-RPC creds failed due to error: "+st.Message()), creds)
+	if code != CodeMintDenied || !strings.Contains(msg, "Kubernetes denied create serviceaccounts/token in "+SystemNamespace) {
 		t.Errorf("denied TokenRequest = %s %q", code, msg)
+	}
+	// A real rejection by Substrate, with the same code, stays Substrate's.
+	if code, _ := classify(status.Error(codes.Unauthenticated, "token audience mismatch"), creds); code != CodeUnauthenticated {
+		t.Errorf("Substrate's own rejection = %s", code)
 	}
 }

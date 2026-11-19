@@ -137,10 +137,9 @@ function LogsTab({ detail }: { detail: SubstrateActorDetail }) {
   const containers = detail.template?.containers ?? []
   const filtered = hidesWorkerRecords(view, container)
   const logs = useSubstrateActorLogs(detail.actor, { source: view, container: view === 'lifecycle' || view === 'worker' ? undefined : container || undefined, tailLines: 500 })
-  // A view that leaves out the worker's records can hide a memory-limit kill; its own small read says whether it does.
-  const workerRecords = useSubstrateActorLogs(filtered ? detail.actor : null, { source: 'worker', tailLines: 500 })
   const data = logs.data
-  const hiddenKill = filtered && data && !data.memoryKill ? workerRecords.data?.memoryKill : undefined
+  // The server weighs a memory-limit kill on every source, so a view that leaves out the worker's records still knows of one.
+  const hiddenKill = filtered ? data?.memoryKill : undefined
   return (
     <TabBody>
       <div className="flex flex-wrap items-center gap-3">
@@ -172,7 +171,7 @@ function LogsTab({ detail }: { detail: SubstrateActorDetail }) {
         )}
       </div>
       {hiddenKill && <HiddenKillNotice kill={hiddenKill} crashTime={detail.actor.state === 'crashed' ? detail.actor.crash?.time : undefined} onShowAll={() => { setView('all'); setContainer('') }} />}
-      <ActorLogsBody actor={detail.actor} logs={logs} />
+      <ActorLogsBody actor={detail.actor} logs={logs} killNoticeAbove={!!hiddenKill} />
       <p className="text-xs text-theme-text-tertiary">
         Lines from worker Pods that are gone are lost with them. While the actor runs, <span className="whitespace-nowrap font-mono">{logsCommand(detail.actor)}</span> shows the same lines.
       </p>
