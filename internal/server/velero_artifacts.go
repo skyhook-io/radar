@@ -124,8 +124,7 @@ func veleroRestoreAction(action string) bool {
 // it (pkg/restore/restore.go restoreItem's deferred status, v1.18.2), so on
 // such a restore every "failed" entry was reported only with warnings. While a
 // restore runs its counts still grow, and with any error the entries cannot be
-// told apart, so the list then stands as Velero wrote it, as it does when the
-// Restore cannot be read.
+// told apart, so the list then stands as Velero wrote it.
 func veleroRestoreSettledWithoutErrors(restore *unstructured.Unstructured) bool {
 	if restore == nil {
 		return false
@@ -343,12 +342,14 @@ type veleroLogSelection struct {
 	returned  int
 }
 
+// add keeps the first matching lines that fit: once one does not, later
+// lines are only counted, so the lines returned are always a prefix.
 func (sel *veleroLogSelection) add(line veleroLogLine, query string) {
 	if !sel.levels[line.Level] || (query != "" && !strings.Contains(strings.ToLower(line.Text), query)) {
 		return
 	}
 	sel.matched++
-	if len(sel.lines) < maxVeleroArtifactRows && sel.returned+len(line.Text) <= maxVeleroLogResponseBytes {
+	if !sel.truncated && len(sel.lines) < maxVeleroArtifactRows && sel.returned+len(line.Text) <= maxVeleroLogResponseBytes {
 		sel.lines = append(sel.lines, line)
 		sel.returned += len(line.Text)
 	} else {
