@@ -190,6 +190,13 @@ export interface FeatureCapabilities {
   workloadHistory?: boolean
   cnpgWorkspace?: boolean
   cnpgProtectionSetup?: boolean
+  veleroWorkspace?: boolean
+  /** POST /api/velero/schedules/{namespace}/{name}/backup */
+  veleroBackupNow?: boolean
+  /** GET /api/velero/runs/{backups|restores} */
+  veleroRuns?: boolean
+  /** POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion */
+  veleroDeleteBackup?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
