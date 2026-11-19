@@ -3281,7 +3281,7 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   trainjobs: ['trainer.kubeflow.org'],
 }
 
-function getColumnsForKind(kind: string, group?: string): Column[] {
+export function getColumnsForKind(kind: string, group?: string): Column[] {
   // Ahead of the curated lookup: a provider ships one CRD per service, so a
   // managed resource routinely collides with a curated plural (acm's
   // Certificate, s3's Service). Resolving the collision the other way would
