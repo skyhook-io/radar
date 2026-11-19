@@ -80,7 +80,7 @@ func detectWarmPoolTemplateMissing(p Provider, poolGVR schema.GroupVersionResour
 		if !templates.ok || templates.names[name] {
 			continue
 		}
-		message := fmt.Sprintf("The pool names SandboxTemplate %s, which doesn't exist in %s, so it can't create sandboxes and its claims can't bind.", name, ns)
+		message := fmt.Sprintf("The pool names SandboxTemplate %s, which doesn't exist in %s, so it can't create or replenish sandboxes, and claims that find no ready warm sandbox can't bind.", name, ns)
 		iss := newConditionIssue(poolGVR, "SandboxWarmPool", ns, pool.GetName(), SeverityWarning, agentsandbox.ReasonTemplateNotFound, message, time.Time{}, false, "", pool.GetCreationTimestamp().Time)
 		iss.RequiredReads = []EvidenceRead{
 			{Group: agentSandboxExtensionsGroup, Resource: poolGVR.Resource, Namespace: ns, Verb: "list"},

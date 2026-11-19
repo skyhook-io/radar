@@ -618,7 +618,9 @@ func (b *builder) claimRow(u *unstructured.Unstructured) *Attention {
 			row.NextStep = fmt.Sprintf("Create SandboxWarmPool %s in %s, or point the claim at an existing pool", pool, ns)
 			return &row
 		}
-		if pool := ClaimWarmPool(u); pool != "" && templatePresence == Absent {
+		// The controller adopts a ready warm sandbox before it looks up the
+		// template, so a stocked pool still serves claims without one.
+		if pool := ClaimWarmPool(u); pool != "" && templatePresence == Absent && b.reserveEmpty(ns, pool) {
 			t := WarmPoolTemplate(b.pools[ns+"/"+pool])
 			row.Rule, row.Severity, row.Reason, row.Issue = RuleCannotBind, SeverityWarning, ReasonTemplateNotFound, false
 			row.Title = claimTitles["TemplateNotFound"]
@@ -689,7 +691,7 @@ func (b *builder) poolRow(u *unstructured.Unstructured) (*Attention, []string) {
 			// A warning, as its Issue and every other Ready=False Issue are.
 			row.Rule, row.Severity, row.Reason, row.Issue = RuleTemplateMissing, SeverityWarning, ReasonTemplateNotFound, true
 			row.Title = "Template not found"
-			row.Reading = fmt.Sprintf("The pool names SandboxTemplate %s, which doesn’t exist in %s, so it can’t create sandboxes and its claims can’t bind.", t, ns)
+			row.Reading = fmt.Sprintf("The pool names SandboxTemplate %s, which doesn’t exist in %s, so it can’t create or replenish sandboxes, and claims that find no ready warm sandbox can’t bind.", t, ns)
 			row.NextStep = fmt.Sprintf("Create SandboxTemplate %s in %s, or point the pool at an existing template", t, ns)
 			return &row, nil
 		}
@@ -708,20 +710,26 @@ func (b *builder) poolRow(u *unstructured.Unstructured) (*Attention, []string) {
 		r health.AgentSandboxReadiness
 	}
 	var notReady []member
+	refilling := false
 	for _, m := range members {
 		r := health.ReadAgentSandbox(m)
 		if r.Verdict.Level == health.LevelHealthy {
 			continue
 		}
-		// A member still within its start-up time means the pool is refilling.
 		start := m.GetCreationTimestamp().Time
 		if r.SinceKnown {
 			start = r.Since
 		}
 		if start.IsZero() || now.Sub(start) < SlowAfter {
-			return nil, nil
+			refilling = true
+			continue
 		}
 		notReady = append(notReady, member{m, r})
+	}
+	// Members still within their start-up time mean the pool is refilling,
+	// unless an older member is stuck beside them.
+	if refilling && len(notReady) == 0 {
+		return nil, nil
 	}
 	ready, _ := nestedCount(u.Object, "status", "readyReplicas")
 	desired, _ := nestedCount(u.Object, "spec", "replicas")
