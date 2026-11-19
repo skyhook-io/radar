@@ -161,6 +161,7 @@ Use CSS classes from `components.css` for status cells in table rows:
 
 ### Resource Table Column Widths
 Resource tables size their columns from the data (rules in `packages/k8s-ui/src/components/resources/column-sizing.ts`):
+- Cells and column headers are `px-3.5 py-2.5`, the toolbar row above the table `px-4 py-2.5` with a `py-1.5` search input. These come from `TABLE_DENSITY` in `packages/k8s-ui/src/components/ui/table-density.ts`, shared by the sortable header (`TH_CLASS`), the Applications and GitOps toolbars and the GitOps insight rows, repeated in web/ for Helm releases and the Upgrade readiness and Rightsizing rows (radar-app supports older k8s-ui releases), and read by the Resources table's column-width measuring (`CELL_PADDING_PX`, the header padding): change density there, never in a cell's class list, and update the web/ copies with it (`HELM_CELL` in `HelmView.tsx`, the row classes in `UpgradeReadinessView.tsx` and `RightsizingScanView.tsx`).
 - Most columns keep their curated width (the `w-*` on the column, never narrower than its header).
 - Name fits its longest name, 200–480px and at most half the table's width. It is the last column to give way when the table is short, and only down to the width three quarters of its names need, and never holds more than 320px: only names wider than that are cut, and only when the alternative is scrolling sideways. When the table is still short, Name goes on to the width half its names need, but only when that ends the scrolling altogether; a table that would need more than that scrolls instead, with the columns where the first rules left them, since a Name column that cuts most names no longer does its job. Below 1920px no other column goes under its content to avoid scrolling: a usage bar without its limit or an Event without its message is worse than scrolling. Events' Name gets no such protection — the Object column already names the object — and gives way first.
 - Namespace and Node fit the 95th percentile of their values, so one outlier doesn't set the width.
@@ -354,6 +355,9 @@ Table status cell:   .status-healthy / .status-degraded / .status-unhealthy
 
 // Primary action button
 <button className="btn-brand px-4 py-2 text-sm font-medium">Deploy</button>
+
+// A Resources table cell (padding from TABLE_DENSITY.cellClass)
+<td className={clsx('border-b-subtle', TABLE_DENSITY.cellClass)}>…</td>
 
 // Status in a table cell
 <span className="badge status-healthy">Running</span>

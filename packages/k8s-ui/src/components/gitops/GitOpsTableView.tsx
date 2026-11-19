@@ -32,6 +32,7 @@ import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { FacetSection, FacetButton } from '../ui/Facet'
 import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
+import { TABLE_DENSITY } from '../ui/table-density'
 import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
@@ -743,7 +744,7 @@ export function GitOpsTableView({
           </div>
         )}
 
-        <div className="shrink-0 border-b border-theme-border bg-theme-surface/70 px-4 py-3">
+        <div className={clsx('shrink-0 border-b border-theme-border bg-theme-surface/70', TABLE_DENSITY.toolbarClass)}>
           <StatusDistribution rows={filteredRows} />
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <div className="relative w-full max-w-md">
