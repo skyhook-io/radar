@@ -976,3 +976,152 @@ func TestRelationsAnswerNamesSpecDeclaredHostAndClaimRefs(t *testing.T) {
 		}
 	}
 }
+
+// Managed By climbs the controller chain to the first GitOps manager above
+// the subject and names it, as Applications groups a workload under its
+// Application: past one lies a parent, such as an ApplicationSet, shared by
+// apps that are separate. A GitOps manager's own Managed By is still its
+// parent, and a chain without one climbs to its top.
+func TestRelationsAnswerManagedByStopsAtTheFirstGitOpsManager(t *testing.T) {
+	controller := true
+	ref := func(apiVersion, kind, name, uid string) []metav1.OwnerReference {
+		return []metav1.OwnerReference{{APIVersion: apiVersion, Kind: kind, Name: name, UID: types.UID(uid), Controller: &controller}}
+	}
+	set := projectionCR("argoproj.io", "ApplicationSet", "argocd", "apps", map[string]any{})
+	set.SetUID("set")
+	app := projectionCR("argoproj.io", "Application", "argocd", "web", map[string]any{})
+	app.SetUID("app")
+	app.SetOwnerReferences(ref("argoproj.io/v1", "ApplicationSet", "apps", "set"))
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web", UID: "deployment", OwnerReferences: ref("argoproj.io/v1", "Application", "web", "app")}}, "apps", "Deployment")
+	for _, tc := range []struct {
+		subject runtime.Object
+		want    ResourceRef
+	}{
+		{deployment, ResourceRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "web"}},
+		{app, ResourceRef{Kind: "ApplicationSet", Group: "argoproj.io", Namespace: "argocd", Name: "apps"}},
+	} {
+		s := newProjectionSession(t, set, app, deployment)
+		rel := projectionAnswer(t, s, tc.subject, ownership.Unrestricted(), ownership.Unrestricted())
+		if len(rel.ManagedBy) != 1 || refIdentity(rel.ManagedBy[0]) != refIdentity(tc.want) {
+			t.Errorf("%s: ManagedBy %+v, want %+v", projectionRef(tc.subject).Kind, rel.ManagedBy, tc.want)
+		}
+	}
+	plain := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "plain", UID: "plain", OwnerReferences: ref("argoproj.io/v1", "ApplicationSet", "apps", "set")}}, "apps", "Deployment")
+	s := newProjectionSession(t, set, plain)
+	if rel := projectionAnswer(t, s, plain, ownership.Unrestricted(), ownership.Unrestricted()); len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Name != "apps" {
+		t.Errorf("a chain without a GitOps manager: ManagedBy %+v", rel.ManagedBy)
+	}
+
+	// Flux, and Applications nested in an Application: each names the first
+	// manager above it, whatever its kind.
+	kustomization := projectionCR("kustomize.toolkit.fluxcd.io", "Kustomization", "flux", "infra", map[string]any{})
+	kustomization.SetUID("ks")
+	release := projectionCR("helm.toolkit.fluxcd.io", "HelmRelease", "flux", "web", map[string]any{})
+	release.SetUID("hr")
+	release.SetOwnerReferences(ref("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "infra", "ks"))
+	fluxed := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "flux", Name: "web", UID: "fluxed", OwnerReferences: ref("helm.toolkit.fluxcd.io/v1", "HelmRelease", "web", "hr")}}, "apps", "Deployment")
+	outer := projectionCR("argoproj.io", "Application", "argocd", "outer", map[string]any{})
+	outer.SetUID("outer")
+	outer.SetOwnerReferences(ref("argoproj.io/v1", "ApplicationSet", "apps", "set"))
+	inner := projectionCR("argoproj.io", "Application", "argocd", "inner", map[string]any{})
+	inner.SetUID("inner")
+	inner.SetOwnerReferences(ref("argoproj.io/v1", "Application", "outer", "outer"))
+	nested := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "nested", UID: "nested", OwnerReferences: ref("argoproj.io/v1", "Application", "inner", "inner")}}, "apps", "Deployment")
+	for _, tc := range []struct {
+		subject runtime.Object
+		want    string
+	}{
+		{fluxed, "HelmRelease/web"},
+		{release, "Kustomization/infra"},
+		{nested, "Application/inner"},
+		{inner, "Application/outer"},
+	} {
+		s := newProjectionSession(t, kustomization, release, fluxed, set, outer, inner, nested)
+		rel := projectionAnswer(t, s, tc.subject, ownership.Unrestricted(), ownership.Unrestricted())
+		if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Kind+"/"+rel.ManagedBy[0].Name != tc.want {
+			t.Errorf("%s: ManagedBy %+v, want %s", projectionRef(tc.subject).Name, rel.ManagedBy, tc.want)
+		}
+	}
+
+	// A link the caller can't read below the manager ends the climb there:
+	// the manager above it is never named past it.
+	rs := projectionObject(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web-1", UID: "rs", OwnerReferences: ref("apps/v1", "Deployment", "web", "deployment")}}, "apps", "ReplicaSet")
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web-1-a", UID: "pod", OwnerReferences: ref("apps/v1", "ReplicaSet", "web-1", "rs")}}, "", "Pod")
+	s = newProjectionSession(t, set, app, deployment, rs, pod)
+	if rel := projectionAnswer(t, s, pod, projectionAccess{denied: []string{"ReplicaSet"}}, ownership.Unrestricted()); len(rel.ManagedBy) != 0 {
+		t.Errorf("climbed past a ReplicaSet the caller can't read: ManagedBy %+v", rel.ManagedBy)
+	}
+}
+
+// A controller chain cut at its first GitOps manager is settled there, so
+// what stopped the walk past it no longer qualifies it.
+func TestControllerChainToManager(t *testing.T) {
+	deployment := ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "argocd", Name: "web"}
+	app := ResourceRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "web"}
+	set := ResourceRef{Kind: "ApplicationSet", Group: "argoproj.io", Namespace: "argocd", Name: "apps"}
+	cut := (&ControllerChain{Refs: []ResourceRef{deployment, app, set}, Stop: "unknown", Reason: readreason.KindSyncPending}).ToManager()
+	if !slices.Equal(cut.Refs, []ResourceRef{deployment, app}) || cut.Stop != "" || cut.Reason != "" {
+		t.Fatalf("cut = %+v", cut)
+	}
+	plain := &ControllerChain{Refs: []ResourceRef{deployment, set}, Stop: "unknown"}
+	if got := plain.ToManager(); got != plain {
+		t.Fatalf("a chain without a GitOps manager changed: %+v", got)
+	}
+	self := &ControllerChain{Refs: []ResourceRef{app, set}}
+	if got := self.ToManager(); got != self {
+		t.Fatalf("a GitOps manager's own chain was cut: %+v", got)
+	}
+	if (*ControllerChain)(nil).ToManager() != nil {
+		t.Fatal("nil chain")
+	}
+	release := ResourceRef{Kind: "HelmRelease", Group: "helm.toolkit.fluxcd.io", Namespace: "flux", Name: "web"}
+	kustomization := ResourceRef{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "flux", Name: "infra"}
+	inner := ResourceRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "inner"}
+	for _, tc := range []struct {
+		chain, want []ResourceRef
+	}{
+		{[]ResourceRef{deployment, release, kustomization}, []ResourceRef{deployment, release}},
+		{[]ResourceRef{release, kustomization}, []ResourceRef{release, kustomization}},
+		{[]ResourceRef{deployment, inner, app, set}, []ResourceRef{deployment, inner}},
+		{[]ResourceRef{inner, app, set}, []ResourceRef{inner, app}},
+	} {
+		if got := (&ControllerChain{Refs: tc.chain}).ToManager(); !slices.Equal(got.Refs, tc.want) {
+			t.Errorf("ToManager(%v) = %v, want %v", tc.chain, got.Refs, tc.want)
+		}
+	}
+}
+
+// Both climbs fall back to the object's own owner references when its
+// controller chain doesn't climb past it.
+func TestOwnerAboveFallsBackToOwnerReferences(t *testing.T) {
+	controller := true
+	set := projectionCR("argoproj.io", "ApplicationSet", "argocd", "apps", map[string]any{})
+	set.SetUID("set")
+	app := projectionCR("argoproj.io", "Application", "argocd", "web", map[string]any{})
+	app.SetUID("app")
+	app.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "argoproj.io/v1", Kind: "ApplicationSet", Name: "apps", UID: "set", Controller: &controller}})
+	managed := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web", UID: "managed", OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1", Kind: "Application", Name: "web", UID: "app", Controller: &controller}}}}, "apps", "Deployment")
+	ownerless := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "alone", UID: "alone"}}, "apps", "Deployment")
+	owned := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "settings", UID: "settings", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "alone", UID: "alone"}}}}, "", "ConfigMap")
+	view := ownership.NewView(newProjectionSession(t, set, app, managed, ownerless, owned), ownership.Unrestricted())
+	for _, tc := range []struct {
+		name           string
+		subject        runtime.Object
+		top, toManager string
+		climbs         bool
+	}{
+		{"ownerless", ownerless, "", "", false},
+		{"sole owner reference", owned, "alone", "alone", true},
+		{"controller chain through a manager", managed, "apps", "web", true},
+	} {
+		r := projectionRef(tc.subject)
+		top, ok := OwnerAbove(view, r)
+		if ok != tc.climbs || top.Name != tc.top {
+			t.Errorf("%s: OwnerAbove = %v %v, want %q %v", tc.name, top, ok, tc.top, tc.climbs)
+		}
+		manager, ok := OwnerAboveToManager(view, r)
+		if ok != tc.climbs || manager.Name != tc.toManager {
+			t.Errorf("%s: OwnerAboveToManager = %v %v, want %q %v", tc.name, manager, ok, tc.toManager, tc.climbs)
+		}
+	}
+}

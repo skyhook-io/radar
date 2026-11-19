@@ -25,8 +25,8 @@ and scope; it never proves that no external controller or writer exists.
 | What owns it / what does it own | `relationships.owner`, `owners`, `children` (REST resource GET); `resourceContext.owner` (AI context) | Owner references |
 | Which managers record it / what a manager records | `relationships.managers`, `manages` (Related Resources → Managed By / Manages) | Recorded membership, plus declared management families for other generators (a cert-manager Certificate) |
 | What manages it, weighed | `relationships.ownership.manager`; `resourceContext.manager` (compact) | Recorded membership and claims, through the controller chain ([below](#what-manages-an-object)) |
-| Legacy manager pointer | `relationships.managedBy` | The manager the object's metadata names, else the highest readable controller/owner or spec generator, else its own manager fallback; still used by workload navigation, not the weighed GitOps manager answer |
-| Controller and other generators, for agents | `resourceContext.managedBy` | Highest readable controller plus observed non-GitOps spec generators; GitOps/Helm evidence stays in `manager`. See [agent navigation](#the-top-controller). |
+| Legacy manager pointer | `relationships.managedBy` | The manager the object's metadata names, else the highest readable controller/owner, stopping at the first GitOps manager above the object (an Argo CD Application, not the ApplicationSet that controls it), or spec generator, else its own manager fallback; still used by workload navigation, not the weighed GitOps manager answer |
+| Controller and other generators, for agents | `resourceContext.managedBy` | Highest readable controller, stopping at the first GitOps manager above the object as `relationships.managedBy` does, plus observed non-GitOps spec generators; GitOps/Helm evidence stays in `manager`. See [agent navigation](#the-top-controller). |
 | Where to inspect a list row or search hit next | `summaryContext.managedBy` | One controller-first lead, with `source` identifying its evidence and `omitted` qualifying incomplete reads. See [selection rules](#the-top-controller). |
 | Source hints for request changes | rightsizing `managedBy: {tool, signal}` | Controller owner, GitOps/Helm metadata, `addonmanager` mode ([rightsizing](mcp.md#managedby--source-hints-for-request-changes)) |
 
@@ -269,13 +269,16 @@ to an operator CR that Radar does not draw. Only `controller: true` extends the 
 
 List/search summaries choose one inspection lead, in order:
 
-1. The highest readable controller ancestor.
+1. The highest readable controller ancestor, up to the first GitOps manager above the object (an Argo CD Application,
+   not the ApplicationSet that controls it), as every Managed By answer stops.
 2. An observed spec generator, such as a Certificate targeting its Secret, when the controller chain is settled.
    Owner references, display shortcuts, GitOps/Helm managers and GatewayClass are excluded from this step.
 3. An eligible `View.Manager` lead: `agree`, `listed` or `shared`; or a matching non-copied, non-weak `claimed` lead
    checked `recorded`, `omitted` or `unreadable`. Native Helm also accepts `not-recording` with release namespace/name.
 
-Detail `managedBy` retains the highest controller and observed spec generators; `manager` carries GitOps/Helm evidence.
+Detail `managedBy` retains the highest controller, up to the first GitOps manager above the object (an Argo CD
+Application, not the ApplicationSet that controls it), and observed spec generators; `manager` carries GitOps/Helm
+evidence.
 Summary `source: native` identifies a controller/spec relation, even for GitOps API kinds. Native references include
 `group` unless they match a built-in kind and group. A lead grants no edit authority or exclusivity. Retained Flux/Helm
 claims need not indicate current reconciliation; native Helm coordinates do not verify release existence.

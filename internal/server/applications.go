@@ -764,15 +764,7 @@ func applicationsCacheKeyFor(namespaces []string, canListClusterWorkflowTemplate
 // operator CRs (CNPG Cluster, Strimzi Kafka) — are not managers and keep
 // climbing to the topmost owner.
 func isGitOpsManagerKind(kind topology.NodeKind, group string) bool {
-	switch kind {
-	case topology.KindApplication:
-		return group == "argoproj.io"
-	case topology.KindKustomization:
-		return group == "kustomize.toolkit.fluxcd.io"
-	case topology.KindHelmRelease:
-		return group == "helm.toolkit.fluxcd.io"
-	}
-	return false
+	return ownership.IsRecordingManager(resourceid.GroupKind{Group: group, Kind: string(kind)})
 }
 
 func isAppRouteKind(kind string) bool {

@@ -192,7 +192,7 @@ func builderFromIndexes(ctx context.Context, namespacedIdx, clusterIdx *IssueInd
 			managedBy, scanned = trivyScanTarget(k8s.GetResourceCache(), u, canRead)
 		} else if m, ok := source.(metav1.Object); ok && owners != nil {
 			ref := resourceid.Ref{Group: group, Kind: kind, Namespace: namespace, Name: name}
-			chain := owners.Of(m, ref)
+			chain := owners.Of(m, ref).ToManager()
 			if top := chain.Top(); top != nil {
 				managedBy = resourcecontext.ControllerSummary(*top)
 			} else if chain == nil || chain.Stop != "" || len(chain.Refs) > 0 {
