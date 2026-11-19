@@ -64,7 +64,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'relationship-performance',
         icon: Zap,
-        title: 'Up to 69% less CPU and 20% less peak heap memory',
+        title: 'Radar now uses up to 69% less CPU and 20% less peak heap memory',
         description: 'Resource neighborhoods respond faster. Applications show Services, routes and scalers even on large clusters.',
         importance: 8,
       },
@@ -78,6 +78,13 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         cta: 'Open Vulnerabilities',
       },
       {
+        id: 'agent-runtime-health',
+        icon: Bot,
+        title: 'Agent Sandbox and Agent Substrate',
+        description: 'See Sandbox and WorkerPool status and issues. With Prometheus, check WorkerPool capacity and snapshot health on Nodes.',
+        importance: 7,
+      },
+      {
         id: 'java4shell-check',
         icon: ScanSearch,
         title: 'Check for Java4Shell',
@@ -85,13 +92,6 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         importance: 7,
         path: '/checks/vulnerabilities',
         cta: 'Open Java4Shell check',
-      },
-      {
-        id: 'agent-runtime-health',
-        icon: Bot,
-        title: 'Agent Sandbox and Agent Substrate',
-        description: 'See Sandbox and WorkerPool status and issues. With Prometheus, check WorkerPool capacity and snapshot health on Nodes.',
-        importance: 7,
       },
       {
         id: 'flux-operator',
