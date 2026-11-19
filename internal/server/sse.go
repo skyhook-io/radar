@@ -567,10 +567,7 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 				return
 			}
 
-			// Broadcast K8s event immediately for important events
-			if change.Kind == "Event" || change.Operation == "delete" ||
-				(change.Kind == "Pod" && change.Operation != "update") ||
-				change.Diff != nil { // Also broadcast updates with meaningful diffs
+			if streamsChangeFrame(change) {
 				// Resolve the GVR for per-kind authorization. The dynamic cache
 				// stamps the exact GVR on the change (disambiguates CRD kind
 				// collisions); the typed cache leaves it empty, so resolve from
@@ -614,6 +611,29 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 			}
 		}
 	}
+}
+
+// gitopsChangeGroups are the API groups whose adds refresh the GitOps table's
+// rows and totals. An add carries no diff, so without this a new Application or
+// Kustomization would wait for the table's poll.
+var gitopsChangeGroups = map[string]bool{
+	"argoproj.io":                    true,
+	"source.toolkit.fluxcd.io":       true,
+	"kustomize.toolkit.fluxcd.io":    true,
+	"helm.toolkit.fluxcd.io":         true,
+	"notification.toolkit.fluxcd.io": true,
+}
+
+// streamsChangeFrame reports whether a change is sent as a k8s_event frame.
+// Every frame is still gated per client by clientCanSeeChange.
+func streamsChangeFrame(change k8s.ResourceChange) bool {
+	switch {
+	case change.Kind == "Event", change.Operation == "delete", change.Diff != nil:
+		return true
+	case change.Operation == "add":
+		return change.Kind == "Pod" || gitopsChangeGroups[change.Group]
+	}
+	return false
 }
 
 func resourceChangeEventData(change k8s.ResourceChange, group string) map[string]any {
