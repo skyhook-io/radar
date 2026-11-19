@@ -1,10 +1,12 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -92,12 +94,35 @@ func (api *discoveryAPI) install(t *testing.T) {
 	t.Cleanup(getPermCache().Invalidate)
 }
 
-// waitForDiscoveries gives n unshared discoveries time to reach the
-// apiserver. A shared discovery's count doesn't depend on it: a call that
-// misses the run finds its answer cached.
-func (api *discoveryAPI) waitForDiscoveries(n int32) {
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for api.discoveries.Load() < n && time.Now().Before(deadline) {
+// sharedWaiters counts the goroutines waiting on shared permission runs. A
+// caller that joins a run sends nothing to the apiserver; its goroutine parked
+// in the run's await is the only sign that it joined.
+func sharedWaiters() int {
+	buf := make([]byte, 1<<16)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return bytes.Count(buf[:n], []byte("radar/pkg/auth.(*flight[...]).await("))
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+// awaitSharedWaiters waits until n more callers wait on shared permission runs
+// than at baseline. It reports an error rather than stopping the test, so the
+// caller still releases whatever holds the runs.
+func awaitSharedWaiters(t *testing.T, baseline, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := sharedWaiters() - baseline
+		if got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("%d callers wait on shared permission runs, want %d", got, n)
+			return
+		}
 		time.Sleep(time.Millisecond)
 	}
 }
@@ -145,6 +170,7 @@ func TestResolveUserPerms_ConcurrentMissesShareOneDiscovery(t *testing.T) {
 			const n = 8
 			got := make([]*pkgauth.UserPermissions, n)
 			failed := make([]bool, n)
+			baseline := sharedWaiters()
 			var wg sync.WaitGroup
 			for i := range got {
 				wg.Add(1)
@@ -153,7 +179,7 @@ func TestResolveUserPerms_ConcurrentMissesShareOneDiscovery(t *testing.T) {
 					_, got[i], failed[i] = resolveUserPermsWithStatus(userContext("reader", "viewers"))
 				}()
 			}
-			api.waitForDiscoveries(n)
+			awaitSharedWaiters(t, baseline, n)
 			close(gate)
 			wg.Wait()
 
@@ -183,6 +209,7 @@ func TestResolveUserPerms_SharedDiscoveryErrorFailsClosed(t *testing.T) {
 	api.install(t)
 
 	const n = 4
+	baseline := sharedWaiters()
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
 		wg.Add(1)
@@ -194,9 +221,12 @@ func TestResolveUserPerms_SharedDiscoveryErrorFailsClosed(t *testing.T) {
 			}
 		}()
 	}
-	api.waitForDiscoveries(n)
+	awaitSharedWaiters(t, baseline, n)
 	close(gate)
 	wg.Wait()
+	if d := api.discoveries.Load(); d != 1 {
+		t.Fatalf("discoveries = %d, want 1 shared by %d tool calls", d, n)
+	}
 	if getPermCache().Get("reader", nil) != nil {
 		t.Fatal("a failed discovery was cached")
 	}

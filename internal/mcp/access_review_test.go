@@ -81,9 +81,7 @@ func accessReviewUser(t *testing.T, decide func(authorizationv1.ResourceAttribut
 	return withTestUserPerms(t, "reader", []string{"viewers"}, nil), api
 }
 
-// Tool calls asking the same question at once share one review. The count
-// holds however the calls interleave: a call that misses the review finds its
-// verdict cached.
+// Tool calls asking the same question at once share one review.
 func TestCanReadInNamespaceDecision_ConcurrentChecksShareOneReview(t *testing.T) {
 	release := make(chan struct{})
 	ctx, api := accessReviewUser(t, func(authorizationv1.ResourceAttributes) bool {
@@ -91,6 +89,7 @@ func TestCanReadInNamespaceDecision_ConcurrentChecksShareOneReview(t *testing.T)
 		return true
 	})
 	const n = 8
+	baseline := sharedWaiters()
 	var wg sync.WaitGroup
 	results := make([]bool, n)
 	for i := range results {
@@ -100,12 +99,7 @@ func TestCanReadInNamespaceDecision_ConcurrentChecksShareOneReview(t *testing.T)
 			results[i], _ = canReadInNamespaceDecision(ctx, "", "nodes", "", "list")
 		}()
 	}
-	api.awaitReviews(t, 1)
-	// Gives unshared calls, if any, time to send their own reviews.
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for api.reviews.Load() < n && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
+	awaitSharedWaiters(t, baseline, n)
 	close(release)
 	wg.Wait()
 	for i, ok := range results {

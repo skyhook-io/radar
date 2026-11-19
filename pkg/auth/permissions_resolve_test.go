@@ -361,3 +361,43 @@ func TestResolve_UncacheableAnswerIsNotCached(t *testing.T) {
 		t.Fatal("an uncacheable answer was cached")
 	}
 }
+
+// A discovery all its callers left, finishing after a successor cached a
+// newer answer, never replaces it.
+func TestResolve_AbandonedDiscoveryNeverReplacesItsSuccessor(t *testing.T) {
+	pc := NewPermissionCache()
+	release := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	abandoned := make(chan bool, 1)
+	go func() {
+		// The discovery has its answer; only its completion is held.
+		_, ok := pc.Resolve(ctx, "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
+			<-release
+			return &UserPermissions{AllowedNamespaces: nil}, true
+		})
+		abandoned <- ok
+	}()
+	waitForWaiters(t, pc, "alice", nil, "1", 1)
+	pc.mu.Lock()
+	var old *flight[discovery]
+	for _, f := range pc.flights {
+		old = f
+	}
+	pc.mu.Unlock()
+	cancel()
+	if <-abandoned {
+		t.Fatal("the caller that left got an answer")
+	}
+
+	fresh, ok := pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
+		return &UserPermissions{AllowedNamespaces: []string{}}, true
+	})
+	if !ok {
+		t.Fatal("the successor's discovery failed")
+	}
+	close(release)
+	<-old.done
+	if pc.Get("alice", nil) != fresh {
+		t.Fatal("the abandoned discovery replaced its successor's entry")
+	}
+}

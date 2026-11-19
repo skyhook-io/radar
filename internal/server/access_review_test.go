@@ -28,6 +28,7 @@ func TestCanReadUserDecision_ConcurrentChecksShareOneReview(t *testing.T) {
 		<-release
 		return true
 	})
+	baseline := sharedWaiters()
 	var wg sync.WaitGroup
 	results := make([]bool, 8)
 	for i := range results {
@@ -37,7 +38,7 @@ func TestCanReadUserDecision_ConcurrentChecksShareOneReview(t *testing.T) {
 			results[i], _ = s.canReadUserDecision(context.Background(), user, "", "nodes", "", "list")
 		}()
 	}
-	time.Sleep(50 * time.Millisecond)
+	awaitSharedWaiters(t, baseline, len(results))
 	close(release)
 	wg.Wait()
 	for i, ok := range results {
@@ -50,31 +51,36 @@ func TestCanReadUserDecision_ConcurrentChecksShareOneReview(t *testing.T) {
 	}
 }
 
-// A caller that gives up doesn't fail the others waiting on the same review.
+// A caller that gives up doesn't fail the others waiting on the same review,
+// even the caller that started it.
 func TestCanReadUserDecision_CanceledLeaderDoesNotFailFollowers(t *testing.T) {
 	release := make(chan struct{})
-	s, user, _ := accessReviewServer(t, func(authv1.ResourceAttributes) bool {
+	s, user, reviews := accessReviewServer(t, func(authv1.ResourceAttributes) bool {
 		<-release
 		return true
 	})
+	baseline := sharedWaiters()
 	ctx, cancel := context.WithCancel(context.Background())
 	leader := make(chan struct{})
 	go func() {
 		defer close(leader)
 		s.canReadUserDecision(ctx, user, "", "nodes", "", "list")
 	}()
-	time.Sleep(20 * time.Millisecond)
+	awaitSharedWaiters(t, baseline, 1)
 	follower := make(chan [2]bool, 1)
 	go func() {
 		allowed, decided := s.canReadUserDecision(context.Background(), user, "", "nodes", "", "list")
 		follower <- [2]bool{allowed, decided}
 	}()
-	time.Sleep(20 * time.Millisecond)
+	awaitSharedWaiters(t, baseline, 2)
 	cancel()
-	close(release)
 	<-leader
+	close(release)
 	if got := <-follower; !got[0] || !got[1] {
 		t.Fatalf("follower allowed=%v decided=%v, want allowed", got[0], got[1])
+	}
+	if len(*reviews) != 1 {
+		t.Fatalf("reviews = %d, want the follower to have kept the leader's review", len(*reviews))
 	}
 }
 
@@ -270,6 +276,7 @@ func TestCanReadUserDecision_DistinctIdentitiesDoNotShare(t *testing.T) {
 		{Username: "alice", Groups: []string{"team\x00prod"}},
 		{Username: "alice\x00team", Groups: []string{"prod"}},
 	}
+	baseline := sharedWaiters()
 	var wg sync.WaitGroup
 	for _, u := range users {
 		wg.Add(1)
@@ -278,7 +285,7 @@ func TestCanReadUserDecision_DistinctIdentitiesDoNotShare(t *testing.T) {
 			s.canReadUserDecision(context.Background(), u, "", "nodes", "", "list")
 		}()
 	}
-	time.Sleep(50 * time.Millisecond)
+	awaitSharedWaiters(t, baseline, len(users))
 	close(release)
 	wg.Wait()
 	if len(*reviews) != 2 {

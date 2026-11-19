@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -82,12 +84,35 @@ func (api *discoveryAPI) install(t *testing.T) {
 	t.Cleanup(func() { k8s.SetTestClient(previous) })
 }
 
-// waitForDiscoveries gives n unshared discoveries time to reach the
-// apiserver. A shared discovery's count doesn't depend on it: a request that
-// misses the run finds its answer cached.
-func (api *discoveryAPI) waitForDiscoveries(n int32) {
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for api.discoveries.Load() < n && time.Now().Before(deadline) {
+// sharedWaiters counts the goroutines waiting on shared permission runs. A
+// caller that joins a run sends nothing to the apiserver; its goroutine parked
+// in the run's await is the only sign that it joined.
+func sharedWaiters() int {
+	buf := make([]byte, 1<<16)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return bytes.Count(buf[:n], []byte("radar/pkg/auth.(*flight[...]).await("))
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+// awaitSharedWaiters waits until n more callers wait on shared permission runs
+// than at baseline. It reports an error rather than stopping the test, so the
+// caller still releases whatever holds the runs.
+func awaitSharedWaiters(t *testing.T, baseline, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := sharedWaiters() - baseline
+		if got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("%d callers wait on shared permission runs, want %d", got, n)
+			return
+		}
 		time.Sleep(time.Millisecond)
 	}
 }
@@ -133,6 +158,7 @@ func TestGetUserNamespaces_ConcurrentMissesShareOneDiscovery(t *testing.T) {
 			const n = 8
 			got := make([][]string, n)
 			failed := make([]bool, n)
+			baseline := sharedWaiters()
 			var wg sync.WaitGroup
 			for i := range got {
 				wg.Add(1)
@@ -141,7 +167,7 @@ func TestGetUserNamespaces_ConcurrentMissesShareOneDiscovery(t *testing.T) {
 					got[i], failed[i] = s.getUserNamespacesWithStatus(requestWithUser(http.MethodGet, "/api/resources/pods", user), nil)
 				}()
 			}
-			api.waitForDiscoveries(n)
+			awaitSharedWaiters(t, baseline, n)
 			close(gate)
 			wg.Wait()
 
@@ -177,6 +203,7 @@ func TestGetUserNamespaces_SharedDiscoveryErrorFailsClosed(t *testing.T) {
 	user := &auth.User{Username: "reader"}
 
 	const n = 4
+	baseline := sharedWaiters()
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
 		wg.Add(1)
@@ -188,9 +215,12 @@ func TestGetUserNamespaces_SharedDiscoveryErrorFailsClosed(t *testing.T) {
 			}
 		}()
 	}
-	api.waitForDiscoveries(n)
+	awaitSharedWaiters(t, baseline, n)
 	close(gate)
 	wg.Wait()
+	if d := api.discoveries.Load(); d != 1 {
+		t.Fatalf("discoveries = %d, want 1 shared by %d requests", d, n)
+	}
 	if s.permCache.Get(user.Username, user.Groups) != nil {
 		t.Fatal("a failed discovery was cached")
 	}

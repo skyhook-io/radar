@@ -148,6 +148,47 @@ func TestAccessReviews_LastCallerLeavingCancelsTheReview(t *testing.T) {
 	}
 }
 
+// A review all its callers left, finishing after a successor recorded a newer
+// verdict in the same entry, never overwrites that verdict.
+func TestAccessReviews_AbandonedReviewNeverOverwritesItsSuccessor(t *testing.T) {
+	var a AccessReviews
+	perms := &UserPermissions{}
+	release := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	abandoned := make(chan [2]bool, 1)
+	go func() {
+		// The apiserver has allowed; only the review's completion is held.
+		allowed, decided := decide(&a, ctx, perms, func(context.Context) (bool, bool) {
+			<-release
+			return true, true
+		})
+		abandoned <- [2]bool{allowed, decided}
+	}()
+	waitForReviewers(t, &a, 1)
+	a.mu.Lock()
+	var old *flight[reviewVerdict]
+	for _, f := range a.flights {
+		old = f
+	}
+	a.mu.Unlock()
+	cancel()
+	if got := <-abandoned; got[0] || got[1] {
+		t.Fatalf("the caller that left allowed=%v decided=%v, want a non-authoritative denial", got[0], got[1])
+	}
+
+	allowed, decided := decide(&a, context.Background(), perms, func(context.Context) (bool, bool) {
+		return false, true
+	})
+	if allowed || !decided {
+		t.Fatalf("the successor allowed=%v decided=%v, want its denial", allowed, decided)
+	}
+	close(release)
+	<-old.done
+	if v, ok := perms.CanI("list", "", "nodes", ""); !ok || v {
+		t.Fatalf("cached=%v allowed=%v, want the successor's denial kept", ok, v)
+	}
+}
+
 // A shared review has no deadline of its own: a slow verdict reaches a caller
 // whose own context allows the wait.
 func TestAccessReviews_ReviewKeepsTheCallersBudget(t *testing.T) {

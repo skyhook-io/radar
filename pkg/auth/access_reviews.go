@@ -67,8 +67,10 @@ func (a *AccessReviews) Decide(ctx context.Context, user *User, perms *UserPermi
 		}, func(f *flight[reviewVerdict], v reviewVerdict) reviewVerdict {
 			// Only a real apiserver verdict is cached: a transient failure
 			// fails this check closed but must not deny the tuple for the
-			// entry's lifetime.
-			if v.authoritative && perms != nil {
+			// entry's lifetime. A review its callers all left may finish after
+			// a successor recorded a newer verdict in the same entry, so only
+			// the key's current review records.
+			if v.authoritative && perms != nil && a.flights[k] == f {
 				perms.SetCanI(verb, group, resource, namespace, v.allowed)
 			}
 			a.detachLocked(k, f)
