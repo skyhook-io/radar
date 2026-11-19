@@ -120,7 +120,7 @@ describe('Agent Sandbox overview, from the server summary', () => {
 
   it('puts the scheduler’s verdict plainly beside the server’s reading', () => {
     const pool = liveAttention().find((a) => a.rule === 'reserveBelowTarget')!
-    expect(attentionDetail(pool)).toBe('Its 2 sandboxes can’t be scheduled. No sandbox is ready in reserve, so a new claim can’t take a warm one and waits for a sandbox to start. Scheduler: all nodes have reached their Pod limit.')
+    expect(attentionDetail(pool)).toBe('Its 2 sandboxes can’t be scheduled. No sandbox is ready in reserve, so a new claim waits for one to finish starting. Scheduler: all nodes have reached their Pod limit.')
   })
 
   it('links "See in Issues" only on rows Radar’s Issues list too', () => {
@@ -212,11 +212,11 @@ describe('Agent Sandbox overview, from the server summary', () => {
   it('says how many claims an empty reserve leaves without a warm sandbox, and only what the server counted', () => {
     const pool = liveAttention().find((a) => a.rule === 'reserveBelowTarget')!
     const one = (w: AgentSandboxAttention['waitingClaims']) => row(overview(liveWorkspace({ attention: [{ ...pool, waitingClaims: w }], attentionTotal: 1 })), 'Warm reserve below target')
-    expect(one({ count: 2, lowerBound: false })).toContain('2 claims can’t take a warm sandbox')
-    expect(one({ count: 1, lowerBound: true })).toContain('at least 1 claim can’t take a warm sandbox')
+    expect(one({ count: 2, lowerBound: false })).toContain('2 claims waiting with no warm sandbox ready')
+    expect(one({ count: 1, lowerBound: true })).toContain('at least 1 claim waiting with no warm sandbox ready')
     // Not read: nothing said, never "no claim".
     const unread = one(undefined)
-    expect(unread).not.toContain('can’t take a warm sandbox')
+    expect(unread).not.toContain('waiting with no warm sandbox ready')
     expect(unread).not.toContain('no claim waits')
     // From the claim's side: the empty pool it waits on, linked.
     const claim: AgentSandboxAttention = {
@@ -225,7 +225,7 @@ describe('Agent Sandbox overview, from the server summary', () => {
       relations: [{ role: 'warmPool', ref: pool.subject, presence: 'present' }], emptyPool: pool.subject, issue: true,
     }
     const html = row(overview(liveWorkspace({ attention: [claim], attentionTotal: 1 })), 'Still binding')
-    expect(html).toMatch(/can’t take a warm sandbox: warm pool <button[^>]*>warm<\/button> has none ready/)
+    expect(html).toMatch(/waiting: warm pool <button[^>]*>warm<\/button> has no sandbox ready/)
     // The pool is named once, not again as a relation under Details.
     expect(html.match(/>warm<\/button>/g)).toHaveLength(1)
   })

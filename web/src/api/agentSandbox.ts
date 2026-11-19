@@ -94,7 +94,7 @@ export interface AgentSandboxAttention {
   issue: boolean
   /**
    * On a warm pool's reserve row when no sandbox in it is ready: its unbound
-   * claims still in progress, which can't take a warm sandbox. Absent when
+   * claims still in progress, waiting while none is ready. Absent when
    * none of the namespace's claims were read.
    */
   waitingClaims?: AgentSandboxCount
