@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
@@ -84,6 +86,13 @@ func collectRootKinds(ctx context.Context, caches cachesource.Caches, roots []re
 	}
 	bounded, cancel := context.WithTimeout(ctx, k8score.ObjectReadSyncWait)
 	defer cancel()
+	type watch struct {
+		gvr       schema.GroupVersionResource
+		namespace string
+	}
+	// Every watch starts before any is waited for, so one slow to load
+	// can't keep another, of the same kind in another group, from starting.
+	var started []watch
 	for _, r := range roots {
 		if isTypedKind(r.GroupKind()) {
 			continue
@@ -103,7 +112,10 @@ func collectRootKinds(ctx context.Context, caches cachesource.Caches, roots []re
 			}
 			continue
 		}
-		caches.Dynamic.WaitForSyncContext(bounded, gvr, r.Namespace)
+		started = append(started, watch{gvr, r.Namespace})
+	}
+	for _, w := range started {
+		caches.Dynamic.WaitForSyncContext(bounded, w.gvr, w.namespace)
 	}
 	return tried, codes
 }

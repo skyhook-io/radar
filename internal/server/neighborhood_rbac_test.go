@@ -814,3 +814,43 @@ func TestNeighborhood_UnwatchedRootDuringDiscoveryAnswersWithinTheBound(t *testi
 		t.Errorf("answered after %s, want about %s", elapsed, k8score.ObjectReadSyncWait)
 	}
 }
+
+// Every uncollected root candidate's watch is started before any is waited
+// for: one kind served by two API groups, asked about without a group, starts
+// both watches even when neither loads within the wait, so a retry can tell
+// the two apart.
+func TestNeighborhood_StartsEveryUncollectedRootCandidate(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}))
+	first := schema.GroupVersionResource{Group: "a.example.io", Version: "v1", Resource: "widgets"}
+	second := schema.GroupVersionResource{Group: "b.example.io", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{first: "WidgetList", second: "WidgetList"})
+	dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if l, ok := a.(k8stesting.ListActionImpl); ok && l.ListOptions.Limit == 1 {
+			return false, nil, nil
+		}
+		return true, nil, apierrors.NewInternalError(fmt.Errorf("the API server is busy"))
+	})
+	verbs := []string{"delete", "get", "list", "watch"}
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: verbs},
+		{Group: first.Group, Version: first.Version, Kind: "Widget", Name: first.Resource, Namespaced: true, IsCRD: true, Verbs: verbs},
+		{Group: second.Group, Version: second.Version, Kind: "Widget", Name: second.Resource, Namespaced: true, IsCRD: true, Verbs: verbs},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("widget-reader", nil, &auth.UserPermissions{AllowedNamespaces: []string{"shop"}})
+	resp := env.authGet(t, "/api/ai/neighborhood/widget/shop/w1", "widget-reader", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("got %d, want 503 while neither watch has loaded", resp.StatusCode)
+	}
+	watched := k8s.GetDynamicResourceCache().GetWatchedResources()
+	for _, gvr := range []schema.GroupVersionResource{first, second} {
+		if !slices.Contains(watched, gvr) {
+			t.Errorf("%s was never started; watched %v", gvr, watched)
+		}
+	}
+}
