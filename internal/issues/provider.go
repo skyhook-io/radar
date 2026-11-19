@@ -788,6 +788,19 @@ func (p *CacheProvider) ListDynamic(gvr schema.GroupVersionResource, namespace s
 	return p.dynamic.List(gvr, namespace)
 }
 
+// NamespaceDeployments are a namespace's Deployments where Radar holds them in
+// full; read=false otherwise, so an empty list is never mistaken for none.
+func (p *CacheProvider) NamespaceDeployments(namespace string) ([]*appsv1.Deployment, bool) {
+	if p == nil || p.cache == nil || p.cache.Deployments() == nil {
+		return nil, false
+	}
+	if !p.cache.AssessKindRead("deployments", []string{namespace}).Complete {
+		return nil, false
+	}
+	deployments, err := p.cache.Deployments().Deployments(namespace).List(labels.Everything())
+	return deployments, err == nil
+}
+
 func (p *CacheProvider) DynamicNamespaceSynced(gvr schema.GroupVersionResource, namespace string) bool {
 	return p.dynamic != nil && p.dynamic.IsNamespaceSynced(gvr, namespace)
 }
