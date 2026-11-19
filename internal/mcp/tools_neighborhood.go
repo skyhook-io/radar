@@ -123,7 +123,7 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 	case errors.Is(err, ownership.ErrNotConnected):
 		return nil, nil, readErrorf(readreason.ClusterConnecting, "Radar is still connecting to the cluster or discovering its resource kinds, so it can't answer the neighborhood yet; retry shortly.")
 	case errors.Is(err, context.DeadlineExceeded):
-		return nil, nil, fmt.Errorf("the neighborhood didn't finish before the deadline; narrow it: reduce hops (current %d), lower max_nodes (current %d), or use profile auto", opts.Hops, opts.MaxNodes)
+		return nil, nil, &timeoutError{msg: fmt.Sprintf("the neighborhood didn't finish before the deadline; narrow it: reduce hops (current %d), lower max_nodes (current %d), or use profile auto", opts.Hops, opts.MaxNodes)}
 	default:
 		return nil, nil, fmt.Errorf("failed to answer neighborhood: %w", err)
 	}

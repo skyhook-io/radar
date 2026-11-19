@@ -1,9 +1,11 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"testing"
 	"time"
@@ -821,5 +823,25 @@ func TestNeighborhoodMCP_UnwatchedCustomRootStartsItsWatch(t *testing.T) {
 				t.Fatalf("got %v %v, want the Widget's neighborhood", result, err)
 			}
 		})
+	}
+}
+
+// A neighborhood cut off by its deadline is logged as a timeout, as REST logs
+// none, not as a failed call carrying its error text.
+func TestNeighborhoodMCP_TimeoutIsNotLoggedAsAnError(t *testing.T) {
+	setupSecretRefCacheMCP(t)
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	call := logToolCall("get_neighborhood", handleGetNeighborhood)
+	if _, _, err := call(ctx, nil, getNeighborhoodInput{Kind: "deployment", Namespace: "default", Name: "nginx"}); err == nil {
+		t.Fatal("a walk past its deadline answered")
+	}
+	out := logs.String()
+	if !strings.Contains(out, "TIMEOUT") || !strings.Contains(out, "level=warn component=mcp tool=get_neighborhood") || strings.Contains(out, "level=error") || strings.Contains(out, "narrow it") {
+		t.Fatalf("timeout logged as a failure:\n%s", out)
 	}
 }

@@ -52,6 +52,11 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		}
 		subject, object = r, obj
 	}
+	// Every read refuses once ctx ends, so a root read past the deadline
+	// would look absent.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if object == nil {
 		if len(unavailable) > 0 {
 			sub.RootUnavailable = readreason.Primary(unavailable)
@@ -362,6 +367,9 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	sub.Nodes = stampAuditKeys(sub.Nodes)
 	if access.denied {
 		sub.RBACDenied = 1
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return sub, nil
 }

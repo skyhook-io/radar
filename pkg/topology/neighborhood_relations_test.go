@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -541,4 +542,39 @@ func TestWalkNeighborhoodLinksOwnersWithinTheLastHop(t *testing.T) {
 	if len(sub.Nodes) != 5 {
 		t.Fatalf("the fixture no longer reaches every object at one hop: %+v", sub.Nodes)
 	}
+}
+
+// slowStatusProvider answers a status lookup only once ctx has ended, as a
+// provider stalled past the request's deadline would.
+type slowStatusProvider struct {
+	*mockProvider
+	ctx context.Context
+}
+
+func (p slowStatusProvider) GetResourceStatus(string, string, string) *ResourceStatus {
+	<-p.ctx.Done()
+	return nil
+}
+
+// A deadline that passes while the walk is still working, whether reading the
+// root or assembling the answer, is the deadline, never an absent root or a
+// finished answer.
+func TestWalkNeighborhoodDeadlineDuringTheWork(t *testing.T) {
+	root := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "web"}}, "apps", "Deployment")
+	t.Run("authorizing the root", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		opts := NeighborhoodOptions{Allow: func(*Node) bool { <-ctx.Done(); return true }}
+		if sub, err := WalkNeighborhood(ctx, newProjectionSession(t, root), refOf(projectionRef(root)), opts, nil, nil); err != context.DeadlineExceeded {
+			t.Fatalf("got %+v, %v; want %v", sub, err, context.DeadlineExceeded)
+		}
+	})
+	t.Run("assembling the answer", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		provider := slowStatusProvider{mockProvider: &mockProvider{}, ctx: ctx}
+		if sub, err := WalkNeighborhood(ctx, newProjectionSession(t, root), refOf(projectionRef(root)), NeighborhoodOptions{}, provider, nil); err != context.DeadlineExceeded {
+			t.Fatalf("got %+v, %v; want %v", sub, err, context.DeadlineExceeded)
+		}
+	})
 }
