@@ -264,25 +264,34 @@ type veleroRunLog struct {
 	Partial      bool            `json:"partial"`
 	DecodedBytes int64           `json:"decodedBytes"`
 	Limit        string          `json:"limit,omitempty"`
+	// Levels are the levels the lines were selected from; with levels=auto,
+	// the selection the server made.
+	Levels []string `json:"levels"`
 }
 
 var veleroLogLevels = []string{"error", "warning", "info", "debug", "other"}
 
+// levels=auto returns errors and warnings when the log has any and every
+// line otherwise, so a view opening on "problems, else everything" needs one
+// download rather than two.
 func (s *Server) handleVeleroRunLog(w http.ResponseWriter, r *http.Request) {
 	levels := map[string]bool{}
 	requested := "error,warning"
 	if r.URL.Query().Has("levels") {
 		requested = r.URL.Query().Get("levels")
 	}
-	for _, level := range strings.Split(requested, ",") {
-		if !slices.Contains(veleroLogLevels, level) {
-			s.writeError(w, http.StatusBadRequest, "levels must be error, warning, info, debug or other")
-			return
+	auto := requested == "auto"
+	if !auto {
+		for _, level := range strings.Split(requested, ",") {
+			if !slices.Contains(veleroLogLevels, level) {
+				s.writeError(w, http.StatusBadRequest, "levels must be auto, or error, warning, info, debug or other")
+				return
+			}
+			levels[level] = true
 		}
-		levels[level] = true
 	}
 	s.handleVeleroRunArtifact(w, r, "log", "Log", maxVeleroCompressedBytes, maxVeleroDecodedBytes, func(reader io.Reader) (any, error) {
-		return decodeVeleroLog(reader, levels, strings.ToLower(r.URL.Query().Get("q")))
+		return decodeVeleroLog(reader, levels, strings.ToLower(r.URL.Query().Get("q")), auto)
 	})
 }
 
@@ -325,16 +334,46 @@ func veleroLogLevel(line string) string {
 	}
 }
 
-func decodeVeleroLog(reader io.Reader, levels map[string]bool, query string) (any, error) {
+// veleroLogSelection collects the lines one level selection returns.
+type veleroLogSelection struct {
+	levels    map[string]bool
+	lines     []veleroLogLine
+	matched   int
+	truncated bool
+	returned  int
+}
+
+func (sel *veleroLogSelection) add(line veleroLogLine, query string) {
+	if !sel.levels[line.Level] || (query != "" && !strings.Contains(strings.ToLower(line.Text), query)) {
+		return
+	}
+	sel.matched++
+	if len(sel.lines) < maxVeleroArtifactRows && sel.returned+len(line.Text) <= maxVeleroLogResponseBytes {
+		sel.lines = append(sel.lines, line)
+		sel.returned += len(line.Text)
+	} else {
+		sel.truncated = true
+	}
+}
+
+func decodeVeleroLog(reader io.Reader, levels map[string]bool, query string, auto bool) (any, error) {
 	out := veleroRunLog{Lines: []veleroLogLine{}, Counts: map[string]int{}}
 	for _, level := range veleroLogLevels {
 		out.Counts[level] = 0
 	}
+	selections := []*veleroLogSelection{{levels: levels}}
+	if auto {
+		every := map[string]bool{}
+		for _, level := range veleroLogLevels {
+			every[level] = true
+		}
+		selections = []*veleroLogSelection{{levels: map[string]bool{"error": true, "warning": true}}, {levels: every}}
+	}
 	buf := bufio.NewReaderSize(reader, maxVeleroLogLineBytes+2)
-	number, returned := 0, 0
+	number := 0
 	for {
 		line, err := buf.ReadSlice('\n')
-		if errors.Is(err, bufio.ErrBufferFull) || len(bytes.TrimSuffix(line, []byte{'\n'})) > maxVeleroLogLineBytes {
+		if errors.Is(err, bufio.ErrBufferFull) || len(bytes.TrimSuffix(bytes.TrimSuffix(line, []byte{'\n'}), []byte{'\r'})) > maxVeleroLogLineBytes {
 			out.Partial, out.Limit = true, "64 KiB line limit"
 			break
 		}
@@ -356,18 +395,25 @@ func decodeVeleroLog(reader io.Reader, levels map[string]bool, query string) (an
 			text := strings.TrimSuffix(strings.TrimSuffix(string(line), "\n"), "\r")
 			level := veleroLogLevel(text)
 			out.Counts[level]++
-			if levels[level] && (query == "" || strings.Contains(strings.ToLower(text), query)) {
-				out.Matched++
-				if len(out.Lines) < maxVeleroArtifactRows && returned+len(text) <= maxVeleroLogResponseBytes {
-					out.Lines = append(out.Lines, veleroLogLine{Number: number, Level: level, Text: text})
-					returned += len(text)
-				} else {
-					out.Truncated = true
-				}
+			for _, sel := range selections {
+				sel.add(veleroLogLine{Number: number, Level: level, Text: text}, query)
 			}
 		}
 		if err == io.EOF {
 			break
+		}
+	}
+	chosen := selections[0]
+	if auto && out.Counts["error"]+out.Counts["warning"] == 0 {
+		chosen = selections[1]
+	}
+	if len(chosen.lines) > 0 {
+		out.Lines = chosen.lines
+	}
+	out.Matched, out.Truncated = chosen.matched, chosen.truncated
+	for _, level := range veleroLogLevels {
+		if chosen.levels[level] {
+			out.Levels = append(out.Levels, level)
 		}
 	}
 	return out, nil

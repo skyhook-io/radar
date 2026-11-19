@@ -67,15 +67,15 @@ export function VeleroRunContents({ kind, namespace, name }: RunProps) {
 export function VeleroRunLog({ kind, namespace, name }: RunProps) {
   const [text, setText] = useState('')
   const [q, setQuery] = useState('')
-  // null until the first answer: a run with errors or warnings opens on them,
-  // and a clean run opens on every level rather than an empty view.
+  // Until the user picks levels, the server chooses (levels=auto): a run with
+  // errors or warnings opens on them, a clean run on every level, in one
+  // download.
   const [chosen, setSelected] = useState<string | null>(null)
-  const selected = chosen ?? 'problems'
   const [wrap, setWrap] = useState(true)
-  const requested = selected === 'all' ? levels.join(',') : selected === 'problems' ? 'error,warning' : selected
+  const requested = chosen === null ? 'auto' : chosen === 'all' ? levels.join(',') : chosen === 'problems' ? 'error,warning' : chosen
   const query = useVeleroRunLog(kind, namespace, name, requested, q)
   const data = query.data
-  if (chosen === null && data) setSelected(data.counts.error + data.counts.warning > 0 ? 'problems' : 'all')
+  const selected = chosen ?? (data?.levels.includes('info') ? 'all' : 'problems')
   const count = (level: VeleroLogLevel) => data ? `${data.partial ? '≥' : ''}${data.counts[level]}` : undefined
   return <div className="space-y-3 p-4">
     <div className="flex flex-wrap items-center gap-2">

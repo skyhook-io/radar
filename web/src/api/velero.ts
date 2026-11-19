@@ -217,6 +217,8 @@ export interface VeleroRunLogResponse {
   partial: boolean
   decodedBytes: number
   limit?: string
+  /** The levels the lines were selected from; with levels=auto, the server's choice. */
+  levels: VeleroLogLevel[]
 }
 
 function useVeleroRunArtifact<T>(kind: 'backups' | 'restores', namespace: string, name: string, artifact: 'contents' | 'log' | 'volumes', params: URLSearchParams) {
