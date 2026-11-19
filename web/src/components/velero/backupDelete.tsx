@@ -5,7 +5,7 @@ import { AlertBanner, ForceDeleteConfirmDialog, type VeleroWorkspaceResponse } f
 import type { RadarFeatureSupport } from '../../api/radarFeatures'
 import { useCascadeDeletePreview, useDeleteResource } from '../../api/client'
 import { VELERO_BACKUP_KIND, VELERO_GROUP } from './routes'
-import { VELERO_DELETE_OBJECT } from './shared'
+import { VELERO_DELETE_BUTTON, VELERO_DELETE_OBJECT } from './shared'
 
 /**
  * How a Velero Backup is deleted from Radar:
@@ -89,9 +89,6 @@ export function VeleroObjectDeleteNotice({ reason, backup }: { reason: VeleroObj
   return <AlertBanner variant="info" title="Nothing of this backup is in storage" message={`${why}${held}`} className="mb-0" />
 }
 
-const OBJECT_BUTTON =
-  'btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium hover:text-red-400 hover:border-red-400/50 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50'
-
 /**
  * Delete object, in the Backup header where Delete backup otherwise is: the
  * generic delete (DELETE /api/resources/..., with its usual preview) bound to
@@ -112,7 +109,7 @@ export function VeleroDeleteObject({ backup, reason }: { backup: any; reason: Ve
         type="button"
         disabled={deleteResource.isPending}
         onClick={() => setReviewed({ uid: backup?.metadata?.uid ?? '', resourceVersion: backup?.metadata?.resourceVersion ?? '' })}
-        className={OBJECT_BUTTON}
+        className={VELERO_DELETE_BUTTON}
       >
         {deleteResource.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Trash2 className="h-3.5 w-3.5" aria-hidden />}
         {VELERO_DELETE_OBJECT}
@@ -131,8 +128,8 @@ export function VeleroDeleteObject({ backup, reason }: { backup: any; reason: Ve
               uid: reviewed.uid,
               resourceVersion: reviewed.resourceVersion,
             },
-            // Refused (it changed since review) or failed: show the backup as it is now. The toast comes from the mutation's meta.
-            { onError: () => { void queryClient.invalidateQueries({ queryKey: ['resource'] }); void queryClient.invalidateQueries({ queryKey: ['velero'] }) } },
+            // Deleted, refused (it changed since review) or failed: show the backup as it is now. Toasts come from the mutation.
+            { onSettled: () => { void queryClient.invalidateQueries({ queryKey: ['resource'] }); void queryClient.invalidateQueries({ queryKey: ['velero'] }) } },
           )
           setReviewed(null)
         }}
