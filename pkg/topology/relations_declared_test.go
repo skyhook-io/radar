@@ -87,7 +87,7 @@ func TestDeclaredReferencesMarkEachKindAndAFailedCheck(t *testing.T) {
 		t.Fatalf("storageRefs = %+v", rel.StorageRefs)
 	}
 	rel, extras, _ := declaredAnswer(t, undecidedKinds{"Secret"}, true)
-	if !slices.Contains(rel.ConfigRefs, ResourceRef{Kind: "Secret", Namespace: "shop", Name: "web-tls", State: ResourceStateUnverified}) {
+	if !slices.Contains(rel.ConfigRefs, ResourceRef{Kind: "Secret", Namespace: "shop", Name: "web-tls", State: ResourceStateAccessUnverified}) {
 		t.Fatalf("configRefs = %+v, want the Secret unverified", rel.ConfigRefs)
 	}
 	for field, c := range extras.Fields {

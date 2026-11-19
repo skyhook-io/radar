@@ -204,7 +204,8 @@ type ContextRef struct {
 	Name      string `json:"name"`
 	// State qualifies a reference the subject declares, as
 	// topology.ResourceRef.State does: "denied" when the caller may not read
-	// the target, or "unverified" when the check couldn't be made. The
+	// the target, or "access_unverified" when Radar couldn't check the
+	// caller's access to it. The
 	// target's existence and state are unknown then. Empty means no qualifier
 	// was recorded, which is not proof the target exists.
 	State string `json:"state,omitempty"`
