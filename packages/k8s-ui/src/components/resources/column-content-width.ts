@@ -21,11 +21,27 @@ import {
   getPodRestarts,
   getPodStatus,
   getReplicaSetOwner,
+  getServiceEndpointsStatus,
+  getServicePorts,
   getServiceSelector,
+  getServiceStatus,
   getWorkloadImages,
   getWorkloadProblems,
 } from './resource-utils'
+import { getArgoApplicationHealth, getArgoApplicationSync } from './resource-utils-argo'
+import { getResourceSlicePool } from './resource-utils-dra'
 import { getGitRepositoryUrl, getHelmRepositoryUrl, getOCIRepositoryUrl } from './resource-utils-flux'
+import {
+  getEC2NodeClassStatus,
+  getNodeClaimNodeName,
+  getNodeClaimNodePoolRef,
+  getNodePoolDisruptionPolicy,
+  getNodePoolLimits,
+  getNodePoolNodeClassRef,
+  getNodePoolStatus,
+} from './resource-utils-karpenter'
+import { getClusterQueueCohort, getKueueWorkloadAdmittedBy, getLocalQueueClusterQueue } from './resource-utils-kueue'
+import { getBackupExpiry } from './resource-utils-velero'
 import { getCrossplanePauseState, isComposite, isManagedResource } from './resource-utils-crossplane'
 import { getPodGpuCount } from '../../utils/extended-resources'
 import { getCRDColumnValue } from './resource-utils-crd'
@@ -93,7 +109,10 @@ const NODE_MAX_PX = 400
 // line is easier to read in the drawer, and the room is worth more to the
 // columns after it, which a very wide column would push under the drawer.
 export const GROW_MAX_PX = 960
-const FIT_DEFAULT_MAX_PX = 400
+// A short value — a status badge, an enum, a referenced object's name — is useless
+// cut, so a column flagged fit sizes to its longest one. Past this it is not
+// short any more, and the cell cuts it like any other.
+const SHORT_VALUE_MAX_PX = 400
 
 // ---------------------------------------------------------------------------
 // Text measurement
@@ -168,6 +187,8 @@ export interface ColumnSizingSpec {
   keep?: boolean
   /** When room is short, lower ranks give way first (see ColumnLayoutInput). */
   yieldRank?: number
+  /** fit: size to the longest value instead of the 95th percentile. */
+  longest?: boolean
 }
 
 export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
@@ -190,16 +211,35 @@ export function columnSizingSpec(col: SizableColumn): ColumnSizingSpec {
     // Node is worth showing but is the first to give way when room is short.
     case 'node': return { mode: 'fit', max: NODE_MAX_PX, weight: 1, yieldRank: 1 }
   }
-  if (col.sizing === 'fit') return { mode: 'fit', max: FIT_DEFAULT_MAX_PX, weight: 1 }
+  // A column flagged fit holds short values (see SHORT_VALUE_MAX_PX), which
+  // have no outliers worth trimming: one failing NodePool among a hundred
+  // Ready ones still needs its whole badge. When room is short it gives way
+  // with Namespace, but no further than its curated width.
+  if (col.sizing === 'fit') return { mode: 'fit', max: SHORT_VALUE_MAX_PX, longest: true }
   return { mode: 'exact' }
 }
 
-export type CellWidth = (resource: any, measure: MeasureText, limit: number) => number
+/**
+ * How far a short-value fit column (sizing: 'fit') may give way when the table
+ * is short of room: to its curated width, so it cuts no more than before, or
+ * to its heading and content when those need less than that.
+ */
+export function shortValueMin(floor: number, heading: number, content: number): number {
+  return Math.min(floor, Math.max(heading, content))
+}
+
+export type CellWidth = (resource: any, measure: MeasureText, limit: number, ctx?: ContentContext) => number
 const text = (read: (resource: any) => string | null | undefined, font: CellFont = 'body'): CellWidth =>
   (resource, measure, limit) => measure(read(resource) || '-', font, limit)
 
-// Display text of the cells a curated kind sizes automatically (grow columns,
-// and a fit column whose cell shows something other than getCellFilterValue).
+// A cell that is one .badge holding the label.
+const badge = (label: (resource: any) => string | null | undefined): CellWidth =>
+  (resource, measure, limit) => measure(label(resource) || '-', 'badge', limit) + BADGE_CHROME_PX
+// The status badge of a kind whose cell shows getCellFilterValue's status text.
+const kindStatusBadge = (plural: string): CellWidth => badge(r => getCellFilterValue(r, 'status', plural))
+
+// What the cells a curated kind flags as grow or fit show, where it differs
+// from getCellFilterValue's text: other text, or a badge's padding around it.
 // Keyed `${plural}:${column}`.
 const workloadImages = text(r => workloadImagesText(getWorkloadImages(r)))
 const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
@@ -229,6 +269,34 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
   'appprojects:description': text(getArgoAppProjectDescription),
   'gatewayclasses:description': text(getGatewayClassDescription),
   'priorityclasses:description': text(r => r.description),
+
+  // fit
+  'services:type': badge(r => getServiceStatus(r).text),
+  // An audit finding replaces the badge with "No endpoints", as the cell does.
+  'services:endpoints': (r, measure, limit, ctx) => {
+    const audit = ctx?.auditBadges?.[`${r?.metadata?.namespace || ''}/${r?.metadata?.name}`]
+    const label = audit && audit.danger + audit.warning > 0 ? 'No endpoints' : getServiceEndpointsStatus(r).status
+    return measure(label, 'badge', limit) + BADGE_CHROME_PX
+  },
+  'services:ports': text(getServicePorts),
+  'events:reason': text(r => r.reason, 'medium'),
+  'nodepools:status': badge(r => getNodePoolStatus(r).text),
+  'nodepools:nodeClass': text(getNodePoolNodeClassRef),
+  'nodepools:limits': text(getNodePoolLimits),
+  'nodepools:disruption': text(getNodePoolDisruptionPolicy),
+  'nodeclaims:nodePool': text(getNodeClaimNodePoolRef),
+  'nodeclaims:nodeName': text(getNodeClaimNodeName),
+  'ec2nodeclasses:status': badge(r => getEC2NodeClassStatus(r).text),
+  'resourceslices:pool': text(getResourceSlicePool),
+  'clusterqueues:status': kindStatusBadge('clusterqueues'),
+  'clusterqueues:cohort': text(getClusterQueueCohort),
+  'localqueues:status': kindStatusBadge('localqueues'),
+  'localqueues:clusterQueue': text(getLocalQueueClusterQueue),
+  'workloads:admittedBy': text(getKueueWorkloadAdmittedBy),
+  'jobsets:status': kindStatusBadge('jobsets'),
+  'applications:sync': badge(r => getArgoApplicationSync(r).status),
+  'applications:health': badge(r => getArgoApplicationHealth(r).status),
+  'backups:expiry': text(getBackupExpiry),
   // A CAPI Machine's node is status.nodeRef, not the Pod-style spec.nodeName.
   'machines:node': text(getMachineNodeRef),
 }
@@ -238,8 +306,6 @@ const CURATED_CELL_WIDTHS: Record<string, CellWidth> = {
 // table is too narrow; an exact column without a reader here never shrinks
 // below its curated width, because its content is unknown. Keyed
 // `${plural}:${column}`, or `*:${column}` for a cell every kind renders alike.
-const badge = (label: (resource: any) => string | null | undefined): CellWidth =>
-  (resource, measure, limit) => measure(label(resource) || '-', 'badge', limit) + BADGE_CHROME_PX
 const age: CellWidth = (resource, measure) => {
   const created = resource?.metadata?.creationTimestamp
   return measure(created ? formatAge(created) : '-', 'body')
@@ -308,7 +374,7 @@ export function exactContentReader(plural: string, column: string): CellWidth | 
   return EXACT_CELL_WIDTHS[`${plural}:${column}`] ?? EXACT_CELL_WIDTHS[`*:${column}`]
 }
 
-/** Whether a curated grow column has its own display-text reader (tested for drift). */
+/** Whether a curated grow or fit column has its own reader of what its cell shows (tested for drift). */
 export function hasCuratedCellWidth(plural: string, column: string): boolean {
   return `${plural}:${column}` in CURATED_CELL_WIDTHS
 }
@@ -358,7 +424,7 @@ function cellWidthReader(col: ContentColumn, ctx: ContentContext): CellWidth {
 }
 
 export interface MeasuredContent {
-  /** grow, exact and Name: the longest value; other fit columns: the 95th percentile. Padding included. */
+  /** grow, exact, Name and flagged fit columns: the longest value; Namespace and Node: the 95th percentile. Padding included. */
   content: number
   /** fit only: its longest value, which it may grow to from the room left over. */
   stretch?: number
@@ -394,11 +460,15 @@ export function measureColumnContent(
     }
     const read = cellWidthReader(col, ctx)
     const limit = (spec.max ?? Infinity) - CELL_PADDING_PX
-    if (spec.mode === 'fit' && spec.keep) {
+    if (spec.mode === 'fit' && spec.longest) {
+      let longest = 0
+      for (const item of items) longest = Math.max(longest, safeWidth(read, item, measure, limit, ctx))
+      result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
+    } else if (spec.mode === 'fit' && spec.keep) {
       const widths = new Array<number>(items.length)
       let longest = 0
       for (let i = 0; i < items.length; i++) {
-        widths[i] = safeWidth(read, items[i], measure, limit)
+        widths[i] = safeWidth(read, items[i], measure, limit, ctx)
         if (widths[i] > longest) longest = widths[i]
       }
       result[col.key] = {
@@ -410,7 +480,7 @@ export function measureColumnContent(
       const widths = new Array<number>(items.length)
       let longest = 0
       for (let i = 0; i < items.length; i++) {
-        widths[i] = safeWidth(read, items[i], measure, limit)
+        widths[i] = safeWidth(read, items[i], measure, limit, ctx)
         if (widths[i] > longest) longest = widths[i]
       }
       result[col.key] = {
@@ -420,7 +490,7 @@ export function measureColumnContent(
     } else {
       let longest = 0
       for (const item of items) {
-        const w = safeWidth(read, item, measure, limit)
+        const w = safeWidth(read, item, measure, limit, ctx)
         if (w > longest) longest = w
       }
       result[col.key] = { content: Math.ceil(longest) + CELL_PADDING_PX }
@@ -431,9 +501,9 @@ export function measureColumnContent(
 
 // A reader that throws on an odd object must not take the table down; that
 // cell just doesn't count toward the width.
-function safeWidth(read: CellWidth, item: any, measure: MeasureText, limit: number): number {
+function safeWidth(read: CellWidth, item: any, measure: MeasureText, limit: number, ctx?: ContentContext): number {
   try {
-    return read(item, measure, limit)
+    return read(item, measure, limit, ctx)
   } catch {
     return 0
   }
