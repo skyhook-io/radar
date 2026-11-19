@@ -286,7 +286,7 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 		return
 	}
 	if !kind.Namespaced {
-		q.gap(gk, "", unansweredReason(s.caches.Dynamic, versions, ""))
+		q.gap(gk, "", s.indexedReason(s.caches.Dynamic, versions, "", index))
 		return
 	}
 	var watchedByNamespace []string
@@ -298,7 +298,7 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 	if len(watchedByNamespace) == 0 {
 		// Each version's one informer serves every namespace and none can
 		// answer, so the kind's state is the same in each: one gap.
-		q.gapEverywhere(gk, true, unansweredReason(s.caches.Dynamic, versions, ""))
+		q.gapEverywhere(gk, true, s.indexedReason(s.caches.Dynamic, versions, "", index))
 		return
 	}
 	namespaces := q.namespaces
@@ -343,7 +343,19 @@ func (s *session) readNamespace(q *search, gk resourceid.GroupKind, versions []s
 			return
 		}
 	}
-	q.gap(gk, namespace, unansweredReason(obs, versions, namespace))
+	q.gap(gk, namespace, s.indexedReason(obs, versions, namespace, index))
+}
+
+// indexedReason says why none of versions answered a read by index in
+// namespace. A store without the index never answers, however long it loads:
+// that is a read error. Otherwise it is unansweredReason.
+func (s *session) indexedReason(obs observer, versions []schema.GroupVersionResource, namespace, index string) readreason.Code {
+	for _, gvr := range versions {
+		if s.caches.Dynamic.LacksIndex(gvr, namespace, index) {
+			return readreason.ReadError
+		}
+	}
+	return unansweredReason(obs, versions, namespace)
 }
 
 // unwatchedReason reports a kind none of whose served versions is watched,

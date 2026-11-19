@@ -105,10 +105,16 @@ with the path declaring it. The `View` answers every family the same way:
   may read (`ownership.GapCoversReadable`).
 - A declaration counts only if its kind is one of the family's targets and its source may declare that kind (an HPA
   doesn't scale a DaemonSet).
-- A family whose sources are many and in every namespace can find a target's referrers through a store index
-  keyed by the target (`ReferrersIndex`) instead of reading every source; what each one declares is still
-  evaluated. Only `Reflections` does: an index of a busy kind costs every relist
-  ([measurements](loadtest.md#relationship-cost-baselines)).
+- Every family whose reverse question reads every namespace (a `CrossNamespace` family, or a cluster-scoped target)
+  either keeps a store index keyed by the referenced object alone (`ReferrersIndex`), so a read costs the number of
+  referrers rather than the number of sources, or says in `ScanRationale` why it scans: an index costs work on every
+  update and relist of its source kind, and one is kept only where that cost is within the per-update bar
+  (`BenchmarkRelationIndexUpdate`; [measurements](loadtest.md#relationship-cost-baselines)). An index files every
+  alternative API group a declaration can resolve to, and Istio host keys are a superset that doesn't depend on the
+  mesh domain; each referrer found is still evaluated as asked. Index registration is generated from the family
+  registry by the resource each source kind is served as (pinned by a test to the built-in table or the CRD fallback
+  catalog), so every served version and scope of it takes the index without asking discovery. A read of a store that
+  lacks the index, typed or dynamic, reports `read_error`, never a complete empty answer.
 - A declaration may name alternatives (`Declaration.Or`): the same reference in another API group its controller also
   reads, in the order it tries them, as Traefik 2.10 tries `traefik.io` and then `traefik.containo.us`. `References`
   names the first that exists, and `Referrers` counts a declaration only for the target it resolves to. A candidate
@@ -148,7 +154,7 @@ The families so far:
 | `ContourBackends` | Contour HTTPProxies → the Services they send to and the HTTPProxies they include or their TCP proxy delegates to, in any namespace | `contour.go` |
 | `ContourSecrets` | Contour HTTPProxies → the Secrets they read for TLS and validation | `contour.go` |
 | `PodPlacement` | Pods → the Node they run on (a finished Pod runs nowhere); a Node's Pods are read from every Pod | `status_families.go` |
-| `Reflections` | Reflector mirrors (Secrets, ConfigMaps) → the source their `reflects` annotation names, in any namespace; a source's mirrors come from `ReflectsIndex` | `status_families.go` |
+| `Reflections` | Reflector mirrors (Secrets, ConfigMaps) → the source their `reflects` annotation names, in any namespace; a source's mirrors come from the family's index | `status_families.go` |
 | `Storage` | PersistentVolumeClaims → their PersistentVolume and StorageClass; PersistentVolumes → their claim and StorageClass | `status_families.go` |
 | `MachineNodes` | Karpenter NodeClaims and Cluster API Machines → the Node their status records | `status_families.go` |
 | `AnalysisRuns` | Argo Rollouts → the AnalysisRuns their status points at | `status_families.go` |
@@ -168,7 +174,9 @@ match depends on but never lists, such as that template or a Namespace's labels,
 relationship graph reads it (`Lookup`). `Selected(family, selector)` lists what a selector chooses and
 `SelectedBy(family, object)` what chooses an object, through the same search, access checks and coverage as
 `Referrers`. They follow the API's semantics, not the topology view's display rules: an empty NetworkPolicy, Cilium,
-PodDisruptionBudget or monitor selector chooses everything in scope, as a default-deny policy does. A match Radar
+PodDisruptionBudget or monitor selector chooses everything in scope, as a default-deny policy does. Namespaced Calico policy kinds are searched only in the subject's namespace; global kinds are searched separately.
+Compiled Calico matchers are shared through a bounded 4096-entry LRU keyed by UID, resourceVersion and kind;
+objects without a UID or version bypass it. A match Radar
 can't judge, such as a Cilium selector on Namespace labels, leaves the answer incomplete (`filter_eval_failed`)
 rather than reading as no match.
 

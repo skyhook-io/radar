@@ -135,7 +135,9 @@ func (s search) keepReadableGaps(gk resourceid.GroupKind, c *Coverage) {
 		return
 	}
 	scope := ownership.SearchScope{Namespaces: s.readable.Namespaces}
-	for _, g := range s.v.session.Indexed(gk, cache.NamespaceIndex, s.readable.Namespaces, scope).Gaps {
+	// No keys: only the gaps are wanted, and a read by an index with no keys
+	// reads no objects, where the namespaces as keys would read them all.
+	for _, g := range s.v.session.Indexed(gk, cache.NamespaceIndex, nil, scope).Gaps {
 		if ownership.GapCoversReadable(s.v.access, s.v.session.Catalog(), g, scope) {
 			c.addGap(g)
 		} else {
