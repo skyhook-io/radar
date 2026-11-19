@@ -85,7 +85,7 @@ const (
 	// RuleSlow: in progress past SlowAfter; an advisory, never an Issue.
 	RuleSlow Rule = "slow"
 	// RuleCannotBind: a claim the controller reports it can't bind, or one
-	// whose warm pool or template Radar read in full and did not find.
+	// whose warm pool Radar read in full and did not find.
 	RuleCannotBind         Rule = "cannotBind"
 	RuleTemplateMissing    Rule = "templateMissing"
 	RuleReserveBelowTarget Rule = "reserveBelowTarget"
@@ -618,17 +618,10 @@ func (b *builder) claimRow(u *unstructured.Unstructured) *Attention {
 			row.NextStep = fmt.Sprintf("Create SandboxWarmPool %s in %s, or point the claim at an existing pool", pool, ns)
 			return &row
 		}
-		// The controller adopts a ready warm sandbox before it looks up the
-		// template, so a stocked pool still serves claims without one.
-		if pool := ClaimWarmPool(u); pool != "" && templatePresence == Absent && b.reserveEmpty(ns, pool) {
-			t := WarmPoolTemplate(b.pools[ns+"/"+pool])
-			row.Rule, row.Severity, row.Reason, row.Issue = RuleCannotBind, SeverityWarning, ReasonTemplateNotFound, false
-			row.Title = claimTitles["TemplateNotFound"]
-			row.Reading = fmt.Sprintf("Its warm pool %s names SandboxTemplate %s, which doesn’t exist in %s.", pool, t, ns)
-			row.NextStep = "Create the SandboxTemplate the warm pool names, or fix the pool’s template reference"
-			row.Related = &Related{Lead: "The warm pool:", Refs: []Ref{poolRef(ns, pool)}}
-			return &row
-		}
+		// A missing template is not Radar's to call on the claim: the
+		// controller adopts a warm member before it looks the template up,
+		// falling back to one not yet ready, so even an empty-looking pool may
+		// bind it. Only the controller's own TemplateNotFound says it can't.
 	}
 	p := ProgressOf(r, now)
 	if p == ProgressOnTime {
@@ -691,7 +684,7 @@ func (b *builder) poolRow(u *unstructured.Unstructured) (*Attention, []string) {
 			// A warning, as its Issue and every other Ready=False Issue are.
 			row.Rule, row.Severity, row.Reason, row.Issue = RuleTemplateMissing, SeverityWarning, ReasonTemplateNotFound, true
 			row.Title = "Template not found"
-			row.Reading = fmt.Sprintf("The pool names SandboxTemplate %s, which doesn’t exist in %s, so it can’t create or replenish sandboxes, and claims that find no ready warm sandbox can’t bind.", t, ns)
+			row.Reading = fmt.Sprintf("The pool names SandboxTemplate %s, which doesn’t exist in %s, so it can’t create or replenish sandboxes, and claims that find no warm sandbox to adopt can’t bind.", t, ns)
 			row.NextStep = fmt.Sprintf("Create SandboxTemplate %s in %s, or point the pool at an existing template", t, ns)
 			return &row, nil
 		}
