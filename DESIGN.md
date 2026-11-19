@@ -307,7 +307,7 @@ The curve everywhere is `CSS_EASE` = `cubic-bezier(0.32, 0.72, 0, 1)` (fast out 
 Desktop-first tool. Most views assume 1100px+ viewport. Key patterns:
 - Topology graph fills available space
 - Resource tables truncate columns at narrower widths
-- Drawers overlay from the right. The resource drawer starts at 550px (750px for wide report kinds) and grows only into room beyond a 1000px reserve for the list behind, capped at 900px (1100px for report kinds) — `packages/k8s-ui/src/components/workload/drawer-width.ts`
+- Drawers overlay from the right. The resource drawer starts at 550px (750px for wide report kinds) and grows only into room beyond an 1100px reserve for the list behind, capped at 700px (900px for report kinds) — `packages/k8s-ui/src/components/workload/drawer-width.ts`
 - Bottom dock (terminal/logs) collapses vertically
 
 ## 10. Agent Quick Reference

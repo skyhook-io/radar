@@ -8,17 +8,16 @@ const DRAWER_MAX_SHARE = 0.7
 
 const BASE_WIDTH = 550
 const WIDE_WIDTH = 750
-// Kept for the view behind: the Resources kind list (224–288px) plus a table's
-// Name, Namespace and two status columns at their minimum widths (~700px). The
-// drawer only grows into room beyond that, so up to ~1700px windows it stays at
-// 550. The table spreads leftover room over all its columns, so on wide screens
-// its later columns sit under the drawer whatever this reserve, unless the
-// table lays itself out for the part the drawer leaves visible.
-const LIST_RESERVE = 1000
-// Past this a drawer's label/value rows only get sparser; a user who wants more
-// width wants the full page.
-const BASE_CAP = 900
-const WIDE_CAP = 1100
+// Kept for the view behind: the Resources kind list (224–288px) plus most of a
+// table's leading columns. The drawer only grows into room beyond that, so up
+// to ~1800px windows it stays at 550 (650 at 1920). The table spreads leftover
+// room over all its columns, so on wide screens its later columns sit under
+// the drawer whatever this reserve.
+const LIST_RESERVE = 1100
+// The drawer is opened for a look, not worked in: past these a user who wants
+// more room wants the full page.
+const BASE_CAP = 700
+const WIDE_CAP = 900
 
 const WIDE_KINDS = new Set([
   'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',

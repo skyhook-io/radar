@@ -6,22 +6,22 @@ const content = (windowWidth: number) => windowWidth - 176
 
 describe('defaultDrawerWidth', () => {
   it('keeps 550 / 750 until the list behind has room to spare', () => {
-    for (const w of [1280, 1366, 1440, 1680]) {
+    for (const w of [1280, 1366, 1440, 1680, 1760]) {
       expect(defaultDrawerWidth('pods', content(w))).toBe(550)
       expect(defaultDrawerWidth('vulnerabilityreports', content(w))).toBe(750)
     }
   })
 
-  it('grows into the room beyond what the list needs', () => {
-    expect(defaultDrawerWidth('pods', content(1920))).toBe(744)
-    expect(defaultDrawerWidth('pods', content(2560))).toBe(900)
+  it('grows a little into the room beyond what the list needs, up to 700 / 900', () => {
+    expect(defaultDrawerWidth('pods', content(1920))).toBe(644)
+    expect(defaultDrawerWidth('pods', content(2560))).toBe(700)
     // Report kinds start wider but leave the list the same reserve.
     expect(defaultDrawerWidth('vulnerabilityreports', content(1920))).toBe(750)
-    expect(defaultDrawerWidth('vulnerabilityreports', content(2560))).toBe(1100)
+    expect(defaultDrawerWidth('vulnerabilityreports', content(2560))).toBe(900)
     for (const w of [1920, 2160, 2560]) {
       for (const kind of ['pods', 'policyreports']) {
         const width = defaultDrawerWidth(kind, content(w))
-        expect(width === 550 || width === 750 || content(w) - width >= 1000).toBe(true)
+        expect(width === 550 || width === 750 || content(w) - width >= 1100).toBe(true)
       }
     }
   })
@@ -37,7 +37,7 @@ describe('defaultDrawerWidth', () => {
     for (const w of [1280, 1680, 1920, 2560, 3840]) {
       expect(defaultDrawerWidth('PolicyReports', content(w))).toBeGreaterThanOrEqual(defaultDrawerWidth('deployments', content(w)))
     }
-    for (const w of [1280, 1680, 1920, 2560]) {
+    for (const w of [1280, 1680, 1920, 2560, 3840]) {
       expect(defaultDrawerWidth('PolicyReports', content(w))).toBeGreaterThan(defaultDrawerWidth('deployments', content(w)))
     }
   })
