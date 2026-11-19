@@ -1,6 +1,8 @@
 package topology
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"testing"
@@ -1182,5 +1184,39 @@ func TestRelationsAnswerPlacesATrackedApplication(t *testing.T) {
 				t.Fatalf("ManagedBy = %+v, want %+v", rel.ManagedBy, want)
 			}
 		})
+	}
+}
+
+// A caller who may read only one of two same-named Applications that record
+// the object gets the readable one's namespace, and the answer, ownership
+// included, is the same byte for byte whether the hidden one exists or not:
+// it never says one is there.
+func TestRelationsAnswerPlacesATrackedApplicationWithoutRevealingAHiddenOne(t *testing.T) {
+	tracking := map[string]string{"argocd.argoproj.io/tracking-id": "own-share-a:apps/Deployment:own-share/guestbook-ui"}
+	readable := resourceid.NewRef("argoproj.io", "Application", "argocd", "own-share-a")
+	hidden := resourceid.NewRef("argoproj.io", "Application", "teams", "own-share-a")
+	caller := projectionAccess{namespaces: []string{"own-share", "argocd"}}
+	answer := func(recorders ...resourceid.Ref) []byte {
+		s, dep := trackedSession(t, nil, tracking, recorders...)
+		captured, ok := relations.CaptureSubject(s, projectionRef(dep), dep)
+		if !ok {
+			t.Fatal("capture failed")
+		}
+		ov := ownership.NewView(captured, caller)
+		rel, _ := RelationsAnswer(captured, caller, caller, ov, projectionRef(dep), dep, nil, nil)
+		m, _ := apimeta.Accessor(dep)
+		ApplyOwnership(rel, ov, ownership.Observe(projectionRef(dep), m))
+		if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Namespace != "argocd" {
+			t.Fatalf("recorders %v: ManagedBy %+v, want argocd/own-share-a", recorders, rel.ManagedBy)
+		}
+		raw, err := json.Marshal(rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	with, without := answer(readable, hidden), answer(readable)
+	if !bytes.Equal(with, without) {
+		t.Fatalf("the hidden Application changed the answer:\nwith    %s\nwithout %s", with, without)
 	}
 }
