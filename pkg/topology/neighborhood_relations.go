@@ -3,6 +3,7 @@ package topology
 import (
 	"cmp"
 	"context"
+	"maps"
 	"slices"
 	"strings"
 
@@ -95,6 +96,23 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 			selectors = append(selectors, f)
 		}
 	}
+	// Beyond the root, a relation the walk won't follow isn't searched: it
+	// could add no node, and a denied lookup in it would report an omission
+	// from an answer it couldn't change. What the admitted objects declare in
+	// it is drawn at the end from the objects already read.
+	followed := maps.Clone(allowed)
+	for e := range rootOnly {
+		delete(followed, e)
+	}
+	var frontierFamilies, unfollowedFamilies []*relations.Family
+	for _, f := range families {
+		if neighborhoodDisposition(f.Projection, followed) {
+			frontierFamilies = append(frontierFamilies, f)
+		} else {
+			unfollowedFamilies = append(unfollowedFamilies, f)
+		}
+	}
+	frontierSelectors := slices.DeleteFunc(slices.Clone(selectors), func(f *relations.SelectorFamily) bool { return !neighborhoodDisposition(f.Projection, followed) })
 	v := relations.NewView(session, access).WithAuxiliarySession(neighborhoodAuxiliarySession{requestSession}).WithLimit(0)
 	ov := ownership.NewView(session, access)
 	objects := map[resourceid.Ref]runtime.Object{subject: object}
@@ -109,8 +127,9 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	grouped := map[resourceid.Ref]string{}
 	jobUIDs := map[string]types.UID{}
 
-	// unanswered is the last hop's admissions, which no hop asks about.
-	var unanswered []resourceid.Ref
+	// unanswered is the last hop's admissions, which no hop asks about;
+	// answered, the other objects answered with only the followed relations.
+	var unanswered, answered []resourceid.Ref
 	for hop := 0; hop < hops; hop++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -118,9 +137,14 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		unanswered = nil
 		for _, r := range frontier {
 			obj := objects[r]
-			graph.answer(session, v, families, selectors, r, obj, false)
+			edges, fs, ss := allowed, families, selectors
+			if r != subject {
+				edges, fs, ss = followed, frontierFamilies, frontierSelectors
+				answered = append(answered, r)
+			}
+			graph.answer(session, v, fs, ss, r, obj, false)
 			for _, f := range relations.Compositions() {
-				if !neighborhoodDisposition(f.Projection, allowed) {
+				if !neighborhoodDisposition(f.Projection, edges) {
 					continue
 				}
 				for _, e := range v.Composed(f, r, obj).Edges {
@@ -129,7 +153,7 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 					}
 				}
 			}
-			if allowed[EdgeManages] {
+			if edges[EdgeManages] {
 				graph.management(session, ov, r)
 				for _, c := range ov.Children(r).Children {
 					graph.edge(r, c.Ref, relationEdge{edge: EdgeManages})
@@ -139,10 +163,10 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 				}
 				graph.crossplane(session, ov, r, obj)
 			}
-			if allowed[EdgeProtects] {
+			if edges[EdgeProtects] {
 				graph.healthChecks(ov, r, ov.Children(r))
 			}
-			if allowed[EdgeExposes] {
+			if edges[EdgeExposes] {
 				graph.knativeServing(session, r, obj)
 			}
 		}
@@ -264,7 +288,11 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	}
 	// A grouped Pod's declarations would cost one pass per Pod; the budget
 	// bounds the rest.
-	graph.declaredEdges(admitted, families, slices.DeleteFunc(slices.Clone(unanswered), func(r resourceid.Ref) bool { return grouped[r] != "" }), allowed[EdgeManages])
+	individual := func(refs []resourceid.Ref) []resourceid.Ref {
+		return slices.DeleteFunc(slices.Clone(refs), func(r resourceid.Ref) bool { return grouped[r] != "" })
+	}
+	graph.declaredEdges(admitted, families, individual(unanswered), allowed[EdgeManages])
+	graph.declaredEdges(admitted, unfollowedFamilies, individual(answered), false)
 	displayObjects := make(map[resourceid.Ref]runtime.Object, len(order))
 	for _, r := range order {
 		displayObjects[r] = objects[r]

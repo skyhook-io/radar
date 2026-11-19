@@ -665,3 +665,47 @@ func TestWalkNeighborhoodLinksLastHopDeclarations(t *testing.T) {
 		t.Errorf("withholding the issuer changed the rest: %+v", hidden)
 	}
 }
+
+// A relation the profile doesn't follow from a node can't make the answer
+// incomplete: a GitOps root's managed Deployment mounting a Secret the caller
+// may not read gives the same answer, and no omission, as when the caller may.
+func TestWalkNeighborhoodExcludedRelationReportsNoOmission(t *testing.T) {
+	root := projectionCR("kustomize.toolkit.fluxcd.io", "Kustomization", "flux-system", "apps", map[string]any{"status": map[string]any{"inventory": map[string]any{"entries": []any{
+		map[string]any{"id": "shop_web_apps_Deployment", "v": "v1"},
+	}}}})
+	volumes := []corev1.Volume{{Name: "key", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "key"}}}}
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "web"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Volumes: volumes}}}}, "apps", "Deployment")
+	secret := projectionObject(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "key", Namespace: "shop"}}, "", "Secret")
+	var answers []string
+	for _, readable := range []bool{true, false} {
+		sub := walkTestNeighborhood(t, newRecordingProjectionSession(t, root, dep, secret), root, NeighborhoodOptions{Hops: 2, Allow: func(n *Node) bool { return readable || n.Data["resourceKind"] != "Secret" }})
+		if sub.RBACDenied != 0 {
+			t.Errorf("secrets readable=%v: an excluded relation reported an omission", readable)
+		}
+		body, _ := json.Marshal(sub)
+		answers = append(answers, string(body))
+	}
+	if answers[0] != answers[1] {
+		t.Errorf("the Secret's readability changed the answer:\n%s\n%s", answers[0], answers[1])
+	}
+	if !strings.Contains(answers[0], `"name":"web"`) {
+		t.Fatalf("the fixture no longer reaches the Deployment: %s", answers[0])
+	}
+	// When the Secret is admitted on its own, as a member, the Deployment's
+	// mount of it is still drawn.
+	root.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{
+		map[string]any{"id": "shop_web_apps_Deployment", "v": "v1"},
+		map[string]any{"id": "shop_key__Secret", "v": "v1"},
+	}}}
+	sub := walkTestNeighborhood(t, newRecordingProjectionSession(t, root, dep, secret), root, NeighborhoodOptions{Hops: 2})
+	names := map[string]string{}
+	for _, n := range sub.Nodes {
+		names[n.ID] = n.Name
+	}
+	mounted := slices.ContainsFunc(sub.Edges, func(e Edge) bool {
+		return e.Type == EdgeConfigures && names[e.Source] == "key" && names[e.Target] == "web"
+	})
+	if !mounted {
+		t.Errorf("an admitted Secret's mount was not drawn: %+v", sub.Edges)
+	}
+}
