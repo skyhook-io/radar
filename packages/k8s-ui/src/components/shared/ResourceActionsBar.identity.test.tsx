@@ -62,3 +62,21 @@ describe('resource actions use the loaded API group', () => {
   })
 
 })
+
+describe('delete as the host presents it', () => {
+  const bar = (presentation?: { label: string }) =>
+    renderToString(
+      <ResourceActionsBar
+        resource={{ kind: 'backups', name: 'nightly-1', namespace: 'velero' }}
+        data={{ apiVersion: 'velero.io/v1', metadata: { name: 'nightly-1', namespace: 'velero' } }}
+        onDelete={noop}
+        deletePresentation={presentation}
+      />,
+    )
+  it('is a labelled button when the host names it, and the icon otherwise', () => {
+    const labelled = bar({ label: 'Delete object' })
+    expect(labelled).toMatch(/>Delete object<\/button>/)
+    expect(labelled).not.toContain('aria-label="Delete resource"')
+    expect(bar()).toContain('aria-label="Delete resource"')
+  })
+})

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { VeleroObjectDeleteNotice, genericDeleteOffered, veleroBackupDeletePath, veleroLocationMissing } from './backupDelete'
+import { VeleroObjectDeleteNotice, genericDeleteOffered, veleroBackupDeletePath, veleroLocationMissing, veleroObjectDeletePresentation } from './backupDelete'
 import { location, workspace } from './velero.fixtures'
 
 const backup = (phase: string, storageLocation?: string) => ({
@@ -57,8 +57,13 @@ describe('how a Velero Backup is deleted', () => {
   })
 })
 
-describe('the generic delete confirmation for a Velero Backup', () => {
-  it('says nothing is in storage when Velero never stored the backup', () => {
+describe('the Delete object confirmation', () => {
+  it('says one thing for a backup Velero never stored: the object goes, nothing is in storage', () => {
+    for (const [reason, b] of [['unstored', backup('New')], ['rejectedNoLocation', backup('FailedValidation', 'gone')]] as const) {
+      const p = veleroObjectDeletePresentation(reason, b)
+      expect(p).toMatchObject({ label: 'Delete object', details: 'Deletes the Backup object. Nothing of it is in storage.', allowForce: false })
+      expect(p.details).not.toContain('permanently')
+    }
     const unstored = renderToStaticMarkup(<VeleroObjectDeleteNotice reason="unstored" backup={backup('New')} />)
     expect(unstored).toContain('Nothing of this backup is in storage')
     expect(unstored).toContain('never started this backup')
@@ -66,9 +71,16 @@ describe('the generic delete confirmation for a Velero Backup', () => {
     expect(rejected).toContain('its storage location gone doesn’t exist')
   })
 
-  it('says what stays behind when this Radar can’t ask Velero', () => {
-    const html = renderToStaticMarkup(<VeleroObjectDeleteNotice reason="olderRadar" backup={backup('Completed', 'default')} />)
-    expect(html).toContain('This deletes only the Backup object')
-    expect(html).toContain('brings the object back')
+  it('says a schedule’s queued run frees the schedule', () => {
+    const queued = { ...backup('New'), metadata: { namespace: 'velero', name: 'nightly-1', labels: { 'velero.io/schedule-name': 'nightly' } } }
+    expect(renderToStaticMarkup(<VeleroObjectDeleteNotice reason="unstored" backup={queued} />)).toContain('Once it’s gone, schedule nightly submits its next run.')
+    expect(renderToStaticMarkup(<VeleroObjectDeleteNotice reason="unstored" backup={backup('New')} />)).not.toContain('submits its next run')
+  })
+
+  it('says only the object goes when this Radar can’t ask Velero, never "permanently"', () => {
+    const p = veleroObjectDeletePresentation('olderRadar', backup('Completed', 'default'))
+    expect(p).toMatchObject({ label: 'Delete object', allowForce: false })
+    expect(p.details).toBe('Removes only the Backup object. Any data it stored stays in object storage, and Velero’s backup sync can bring the object back.')
+    expect(renderToStaticMarkup(<VeleroObjectDeleteNotice reason="olderRadar" backup={backup('Completed', 'default')} />)).toContain('velero backup delete')
   })
 })

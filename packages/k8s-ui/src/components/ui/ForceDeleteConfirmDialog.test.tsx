@@ -20,6 +20,14 @@ afterEach(async () => {
 })
 
 describe('Deletion preview states', () => {
+  it('takes the host’s action name and consequence line, and can leave out Force delete', async () => {
+    await act(async () => root.render(<ForceDeleteConfirmDialog {...base} resourceKind="Backup" actionLabel="Delete object" details="Deletes the Backup object. Nothing of it is in storage." allowForce={false} />))
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('Deletes the Backup object. Nothing of it is in storage.')
+    expect(text).not.toContain('permanently delete')
+    expect(text).not.toContain('Force delete')
+    expect([...document.querySelectorAll('button')].some(b => b.textContent === 'Delete object')).toBe(true)
+  })
   it('shows the host’s notice first', async () => {
     await act(async () => root.render(<ForceDeleteConfirmDialog {...base} resourceKind="Backup" notice={<p>Nothing of this backup is in storage</p>} />))
     const text = document.body.textContent ?? ''

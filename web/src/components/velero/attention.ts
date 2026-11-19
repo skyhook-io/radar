@@ -12,10 +12,19 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
 import { VELERO_GROUP } from './routes'
-import { VELERO_CHECK_HELD_BACKUP, VELERO_CHECK_SERVER, VELERO_SHORTEN_NAME, VELERO_START_SERVER, VELERO_WRITABLE_LOCATION, inInstallation, namesAndMore, veleroIssueProblem } from './shared'
+import { VELERO_CHECK_HELD_BACKUP, VELERO_CHECK_SERVER, VELERO_DELETE_OBJECT, VELERO_SHORTEN_NAME, VELERO_START_SERVER, VELERO_WRITABLE_LOCATION, inInstallation, namesAndMore, veleroIssueProblem } from './shared'
 
 export function readInPart(cov: VeleroKindCoverage | undefined): boolean {
   return !cov || INCOMPLETE_COVERAGE_STATES.has(cov.state)
+}
+
+/**
+ * The run holding a schedule when Velero never started it and gave it no
+ * location: its page offers Delete object (backupDelete.tsx).
+ */
+function unstoredBlocker(s: Partial<Pick<VeleroScheduleReading, 'blocker'>>): VeleroScheduleReading['blocker'] | undefined {
+  const b = s.blocker
+  return b && (!b.phase || b.phase === 'New') && !b.storageLocation ? b : undefined
 }
 
 /** What to do about a schedule that needs attention, in one plain line. */
@@ -28,15 +37,10 @@ export function veleroScheduleNextStep(s: Pick<VeleroScheduleReading, 'state' | 
       return 'Change the cron expression to one with a future time'
     case 'rejected':
       return 'Fix what Velero rejected in the schedule; Velero validates it again when it changes'
-    case 'held': {
-      // A run Velero never started and gave no location holds nothing in
-      // storage, so its page offers Delete object.
-      const b = s.blocker
-      if (b && (!b.phase || b.phase === 'New') && !b.storageLocation) {
-        return `Check that the Velero server is running with its backup controller enabled, or delete the queued backup ${b.name}: nothing of it is in storage.`
-      }
-      return VELERO_CHECK_HELD_BACKUP
-    }
+    case 'held':
+      return unstoredBlocker(s)
+        ? `Check that the Velero server is running with its backup controller enabled, or open the queued backup and use ${VELERO_DELETE_OBJECT}: nothing of it is in storage.`
+        : VELERO_CHECK_HELD_BACKUP
     case 'late':
     case 'probablyLate':
     case 'lateOrHeld':
@@ -56,6 +60,9 @@ function scheduleProblem(s: VeleroScheduleReading, serverShown: boolean): Worksp
     detail: veleroScheduleReasonText(s, { serverShown }),
     nextStep: veleroScheduleNextStep(s),
     subject: { kind: 'Schedule', group: VELERO_GROUP, namespace: s.namespace, name: s.name },
+    ...(s.state === 'held' && unstoredBlocker(s)
+      ? { related: { lead: 'Queued backup:', refs: [{ kind: 'Backup', group: VELERO_GROUP, namespace: s.namespace, name: unstoredBlocker(s)!.name }] } }
+      : {}),
     source: 'reading',
     tone: tone === 'healthy' ? 'neutral' : tone,
   }

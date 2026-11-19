@@ -50,6 +50,12 @@ interface ForceDeleteConfirmDialogProps {
   resourceData?: unknown
   /** The host's word on this deletion, shown first. */
   notice?: ReactNode
+  /** Replaces the generic consequence line. */
+  details?: string
+  /** Offer Force delete. Default true. */
+  allowForce?: boolean
+  /** The action's name, for the title and the confirm button (default "Delete"). */
+  actionLabel?: string
 }
 
 export function ForceDeleteConfirmDialog({
@@ -67,6 +73,9 @@ export function ForceDeleteConfirmDialog({
   cascadePreviewFailed,
   resourceData,
   notice,
+  details,
+  allowForce = true,
+  actionLabel,
 }: ForceDeleteConfirmDialogProps) {
   const [forceDelete, setForceDelete] = useState(false)
   const orphaning = cascadeDetail?.propagation === 'Orphan' && !forceDelete
@@ -87,12 +96,12 @@ export function ForceDeleteConfirmDialog({
       open={open}
       onClose={handleClose}
       onConfirm={handleConfirm}
-      title="Delete Resource"
+      title={actionLabel ?? 'Delete Resource'}
       message={`Are you sure you want to delete "${resourceName}"?`}
-      details={isNamespace ? `This will permanently delete the namespace "${resourceName}" and all resources in it.` : isCRD ? `This deletes the CRD and ALL its instances across the cluster, including those not shown here.` : namespaceName
+      details={details ?? (isNamespace ? `This will permanently delete the namespace "${resourceName}" and all resources in it.` : isCRD ? `This deletes the CRD and ALL its instances across the cluster, including those not shown here.` : namespaceName
         ? `This will permanently delete the ${resourceKind} "${resourceName}" from the "${namespaceName}" namespace.`
-        : `This will permanently delete the cluster-scoped ${resourceKind} "${resourceName}".`}
-      confirmLabel={forceDelete ? 'Force Delete' : 'Delete'}
+        : `This will permanently delete the cluster-scoped ${resourceKind} "${resourceName}".`)}
+      confirmLabel={forceDelete ? 'Force Delete' : actionLabel ?? 'Delete'}
       variant="danger"
       isLoading={isLoading}
       confirmDisabled={cascadeLoading}
@@ -153,7 +162,7 @@ export function ForceDeleteConfirmDialog({
         {!cascadeLoading && !cascadePreviewFailed && cascadeDetail?.notEnumerated?.map(item => <p key={item} className="text-xs text-theme-text-secondary">Not enumerated: {item}.</p>)}
         <CrossplaneDeleteNotice resources={[resourceData]} force={forceDelete} />
 
-        <label className="flex items-center gap-2 text-sm text-theme-text-secondary">
+        {allowForce && <label className="flex items-center gap-2 text-sm text-theme-text-secondary">
           <input
             type="checkbox"
             checked={forceDelete}
@@ -161,7 +170,7 @@ export function ForceDeleteConfirmDialog({
             className="w-4 h-4 rounded border-theme-border bg-theme-base text-red-600 focus:ring-red-500 focus:ring-offset-0"
           />
           <span>Force delete (strips finalizers and bypasses grace period)</span>
-        </label>
+        </label>}
       </div>
     </ConfirmDialog>
   )

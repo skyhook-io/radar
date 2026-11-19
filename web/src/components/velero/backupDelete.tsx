@@ -1,8 +1,9 @@
-import { AlertBanner, type VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
+import { AlertBanner, type DeletePresentation, type VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
 import type { RadarFeatureSupport } from '../../api/radarFeatures'
 import { useRadarFeature } from '../../api/client'
 import { useVeleroWorkspace } from '../../api/velero'
 import { isVeleroBackupKind } from './routes'
+import { VELERO_DELETE_OBJECT } from './shared'
 
 /**
  * How a Velero Backup is deleted from Radar:
@@ -80,29 +81,42 @@ export function useVeleroBackupDeletePath(kind: string | undefined, group: strin
   return veleroBackupDeletePath(backup, support, (name) => veleroLocationMissing(workspace.data, namespace, name))
 }
 
-/** What the generic delete confirmation says first for a Velero Backup deleted as an object. */
+/**
+ * How the header presents Delete object for a Velero Backup: a labelled
+ * button, one consequence line, the reason it isn't Delete backup, and no
+ * Force delete (these Backups carry no finalizer worth stripping).
+ */
+export function veleroObjectDeletePresentation(reason: VeleroObjectDeleteReason, backup: any): DeletePresentation {
+  return {
+    label: VELERO_DELETE_OBJECT,
+    details:
+      reason === 'olderRadar'
+        ? 'Removes only the Backup object. Any data it stored stays in object storage, and Velero’s backup sync can bring the object back.'
+        : 'Deletes the Backup object. Nothing of it is in storage.',
+    notice: <VeleroObjectDeleteNotice reason={reason} backup={backup} />,
+    allowForce: false,
+  }
+}
+
+/** Why this is Delete object and not Delete backup, said first in the confirmation. */
 export function VeleroObjectDeleteNotice({ reason, backup }: { reason: VeleroObjectDeleteReason; backup: any }) {
-  const location: string = backup?.spec?.storageLocation ?? ''
   if (reason === 'olderRadar') {
     return (
       <AlertBanner
         variant="warning"
-        title="This deletes only the Backup object"
-        message="This Radar can’t ask Velero to delete a backup. Deleting the object leaves the backup’s files in object storage and its volume snapshots with the provider, and Velero’s backup sync brings the object back. To delete the backup itself, use velero backup delete."
+        title="This Radar can’t ask Velero to delete a backup"
+        message="To delete the backup and its data, use velero backup delete."
         className="mb-0"
       />
     )
   }
+  const location: string = backup?.spec?.storageLocation ?? ''
+  const schedule: string | undefined = backup?.metadata?.labels?.['velero.io/schedule-name']
   const why =
     reason === 'unstored'
-      ? 'Velero never started this backup and gave it no storage location, so nothing of it is in storage.'
-      : `Velero rejected this backup before it ran, and ${location ? `its storage location ${location} doesn’t exist` : 'it has no storage location'}, so nothing of it is in storage.`
-  return (
-    <AlertBanner
-      variant="info"
-      title="Nothing of this backup is in storage"
-      message={`${why} Velero won’t act on a deletion request for it, so this deletes the Backup object itself. Nothing brings it back.`}
-      className="mb-0"
-    />
-  )
+      ? 'Velero never started this backup and gave it no storage location, so it won’t act on a deletion request for it.'
+      : `Velero rejected this backup before it ran, and ${location ? `its storage location ${location} doesn’t exist` : 'it has no storage location'}, so it won’t act on a deletion request for it.`
+  // A queued run holds its schedule: Velero submits nothing new while it is New.
+  const next = reason === 'unstored' && schedule ? ` Once it’s gone, schedule ${schedule} submits its next run.` : ''
+  return <AlertBanner variant="info" title="Nothing of this backup is in storage" message={`${why}${next}`} className="mb-0" />
 }

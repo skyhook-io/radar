@@ -145,7 +145,7 @@ import { SubstrateVerdictLine } from '../resource/SubstrateVerdictLine'
 import { useAPIResources } from '../../api/apiResources'
 import { recordUsageEvent } from '../../api/usage-data'
 import { issueResourceOpener } from './issueResourceOpener'
-import { VeleroObjectDeleteNotice, genericDeleteOffered, useVeleroBackupDeletePath } from '../velero/backupDelete'
+import { genericDeleteOffered, useVeleroBackupDeletePath, veleroObjectDeletePresentation } from '../velero/backupDelete'
 
 type TabType = WorkloadTabType
 
@@ -1149,7 +1149,7 @@ export function WorkloadView({
       onCompareTo,
       onCompareAcrossClusters,
       imageOwnership,
-      deleteNotice: veleroDelete.kind === 'object' ? <VeleroObjectDeleteNotice reason={veleroDelete.reason} backup={resource} /> : undefined,
+      deletePresentation: veleroDelete.kind === 'object' ? veleroObjectDeletePresentation(veleroDelete.reason, resource) : undefined,
     }),
     [
       baseActionsBarProps,
