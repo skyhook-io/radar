@@ -1,6 +1,8 @@
 package k8score
 
 import (
+	"fmt"
+	"log"
 	"slices"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -128,12 +130,20 @@ func (rc *ResourceCache) ReadableIndexedObjects(resource string, namespaces []st
 }
 
 // readIndex reads the objects indexer files under any of keys, which are
-// sorted and distinct, each once; an empty index reads every object. One of k8score's own indexes answers every
-// key from one hold of the store's lock; any other is read key by key.
+// sorted and distinct, each once; an empty index reads every object. One of
+// k8score's own indexes answers every key from one hold of the store's lock;
+// any other is read key by key, deduplicating only when several keys hold
+// objects.
 func readIndex(indexer cache.Indexer, index string, keys []string) ([]any, error) {
 	switch {
 	case index == "":
 		return indexer.List(), nil
+	case indexer.GetIndexers()[index] == nil:
+		// Index registration is generated and pinned by tests, so only a code
+		// bug reads a store by an index it lacks; the caller reports a read error,
+		// with keys or without.
+		log.Printf("[k8score] Store lacks index %q", index)
+		return nil, fmt.Errorf("index %q is missing", index)
 	case len(keys) == 0:
 		return nil, nil
 	case len(keys) == 1:
@@ -141,13 +151,28 @@ func readIndex(indexer cache.Indexer, index string, keys []string) ([]any, error
 	case multiKeyIndexes[index]:
 		return indexer.Index(index, indexQuery(keys))
 	}
-	var items []any
-	seen := map[string]bool{}
+	buckets := make([][]any, 0, 2)
 	for _, key := range keys {
 		found, err := indexer.ByIndex(index, key)
 		if err != nil {
 			return nil, err
 		}
+		if len(found) > 0 {
+			buckets = append(buckets, found)
+		}
+	}
+	switch len(buckets) {
+	case 0:
+		return nil, nil
+	case 1:
+		// A bucket holds each object once, so only objects from several
+		// buckets need deduplicating; the relation indexes' unread bucket is
+		// almost always empty.
+		return buckets[0], nil
+	}
+	var items []any
+	seen := map[string]bool{}
+	for _, found := range buckets {
 		for _, item := range found {
 			if k, err := cache.MetaNamespaceKeyFunc(item); err == nil && !seen[k] {
 				seen[k] = true
@@ -177,8 +202,9 @@ type indexQuery []string
 // from one key to another during the read is found under one of them; any
 // other index, such as the namespace index, is read key by key. namespace "" reads only a
 // cluster-wide informer, which holds every namespace of a namespaced
-// resource. ok is also false when the serving informers lack the index. The
-// objects are the cached ones: callers must not modify or keep them.
+// resource. ok is also false when the serving informers lack the index
+// (LacksIndex). The objects are the cached ones: callers must not modify or
+// keep them.
 func (d *DynamicResourceCache) ReadableIndexed(gvr schema.GroupVersionResource, namespace, index string, keys ...string) (objs []*unstructured.Unstructured, ok bool) {
 	entries, ok := d.servedEntries(gvr, namespace)
 	if !ok {
@@ -197,4 +223,21 @@ func (d *DynamicResourceCache) ReadableIndexed(gvr schema.GroupVersionResource, 
 		}
 	}
 	return objs, true
+}
+
+// LacksIndex reports whether an informer serving gvr in namespace doesn't
+// file its objects by index, so ReadableIndexed by it fails however long the
+// caller waits, unlike a read of an informer still loading. The empty index
+// reads every object and is never lacking.
+func (d *DynamicResourceCache) LacksIndex(gvr schema.GroupVersionResource, namespace, index string) bool {
+	if index == "" {
+		return false
+	}
+	entries, _ := d.servedEntries(gvr, namespace)
+	for _, e := range entries {
+		if e.informer.GetIndexer().GetIndexers()[index] == nil {
+			return true
+		}
+	}
+	return false
 }

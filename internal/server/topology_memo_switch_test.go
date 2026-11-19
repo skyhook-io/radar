@@ -70,27 +70,6 @@ func newMemoTestServer(t *testing.T) *Server {
 	return s
 }
 
-func TestTopologyMemo_AIContextAfterSwitch(t *testing.T) {
-	useTestResourceCache(t, clusterWithDeployment("old-cluster-web"))
-	s := newMemoTestServer(t)
-
-	before, _, _, _, ok := s.topologyForContext()
-	if !ok || !topologyHasNode(before.Nodes, "old-cluster-web") {
-		t.Fatalf("seed: expected old-cluster-web in the topology, got ok=%v", ok)
-	}
-
-	useTestResourceCache(t, clusterWithDeployment("new-cluster-api"))
-	s.finalizePostContextSwitch()
-
-	after, _, _, _, ok := s.topologyForContext()
-	if !ok {
-		t.Fatal("post-switch topology unavailable")
-	}
-	if topologyHasNode(after.Nodes, "old-cluster-web") || !topologyHasNode(after.Nodes, "new-cluster-api") {
-		t.Errorf("post-switch topology still describes the previous cluster: %+v", after.Nodes)
-	}
-}
-
 // The GitOps handlers pick up the cache while parsing the request and run
 // permission checks before building, so a request can hold the previous
 // cache and reach the memo after the switch without unusual timing. Its

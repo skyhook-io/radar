@@ -106,8 +106,9 @@ func NodeClassRefForNodeClaim(claim *unstructured.Unstructured) (NodeClassRef, b
 }
 
 func nodeClassRef(obj *unstructured.Unstructured, fields ...string) (NodeClassRef, bool) {
-	ref, found, err := unstructured.NestedMap(obj.Object, fields...)
-	if err != nil || !found {
+	raw, found, err := unstructured.NestedFieldNoCopy(obj.Object, fields...)
+	ref, isMap := raw.(map[string]any)
+	if err != nil || !found || !isMap {
 		return NodeClassRef{}, false
 	}
 	kind, _ := ref["kind"].(string)

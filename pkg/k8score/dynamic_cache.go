@@ -24,6 +24,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/skyhook-io/radar/pkg/relations"
 )
 
 var ErrResourceNotFound = errors.New("resource not found")
@@ -678,6 +680,7 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 	}
 	maps.Copy(indexers, gitopsMembersIndexers[gvr.GroupResource()])
 	maps.Copy(indexers, kueueQueueIndexers[gvr.GroupResource()])
+	maps.Copy(indexers, relations.ReferrerIndexers[gvr.GroupResource()])
 	for name := range informer.GetIndexer().GetIndexers() {
 		delete(indexers, name)
 	}
