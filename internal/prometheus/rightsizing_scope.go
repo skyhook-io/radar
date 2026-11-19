@@ -47,20 +47,30 @@ var rightsizingMetricNames = []string{
 	metricCPUUsage, metricMemoryWorkingSet, metricThrottledPeriods, metricCFSPeriods,
 }
 
+// rightsizingAnchors are this cluster's live objects the anchor checks look
+// for, each set from one namespace: names alone, across namespaces, would let
+// another cluster's same-named object elsewhere vouch for this cluster.
+type rightsizingAnchors struct {
+	podNamespace        string
+	pods                []string
+	replicaSetNamespace string
+	replicaSets         []string
+}
+
 // rightsizingScopeRequest checks every metric over the subject's namespaces.
-// Pod-keyed metrics are anchored on this cluster's Pods there, ReplicaSet
-// ownership on its ReplicaSets; ReplicaSet ownership is read only when a
-// Deployment is sized.
-func rightsizingScopeRequest(subject, proofNamespace string, deployments bool, pods, replicaSets []string, at time.Time) ViewScopeRequest {
-	pods = BoundViewAnchors(pods)
+// Pod-keyed metrics are anchored on this cluster's Pods, ReplicaSet ownership
+// on its ReplicaSets; ReplicaSet ownership is read only when a Deployment is
+// sized.
+func rightsizingScopeRequest(subject, proofNamespace string, deployments bool, anchors rightsizingAnchors, at time.Time) ViewScopeRequest {
+	pods := BoundViewAnchors(anchors.pods)
 	req := ViewScopeRequest{View: rightsizingScopeView, Joined: true, Span: rightsizingScopeSpan, At: at, Namespace: proofNamespace}
 	for _, name := range rightsizingMetricNames {
-		m := ViewMetric{Name: name, Subject: subject, AnchorLabel: "pod", AnchorValues: pods}
+		m := ViewMetric{Name: name, Subject: subject, AnchorLabel: "pod", AnchorValues: pods, AnchorNamespace: anchors.podNamespace}
 		if name == metricReplicaSetOwner {
 			if !deployments {
 				continue
 			}
-			m.AnchorLabel, m.AnchorValues = "replicaset", BoundViewAnchors(replicaSets)
+			m.AnchorLabel, m.AnchorValues, m.AnchorNamespace = "replicaset", BoundViewAnchors(anchors.replicaSets), anchors.replicaSetNamespace
 		}
 		req.Metrics = append(req.Metrics, m)
 	}
@@ -68,30 +78,48 @@ func rightsizingScopeRequest(subject, proofNamespace string, deployments bool, p
 }
 
 func singleRightsizingScopeRequest(kind, namespace string, workload rightsizingWorkload, cache *k8s.ResourceCache) ViewScopeRequest {
-	pods := append(append([]string(nil), workload.podNames...), NamespacePodAnchors(cache, namespace)...)
-	deployment := strings.EqualFold(kind, "Deployment")
-	var replicaSets []string
-	if deployment {
-		replicaSets = NamespaceReplicaSetAnchors(cache, namespace)
+	anchors := rightsizingAnchors{
+		podNamespace: namespace,
+		pods:         append(append([]string(nil), workload.podNames...), NamespacePodAnchors(cache, namespace)...),
 	}
-	return rightsizingScopeRequest("namespace="+strconv.Quote(namespace), namespace, deployment, pods, replicaSets, time.Time{})
+	deployment := strings.EqualFold(kind, "Deployment")
+	if deployment {
+		anchors.replicaSetNamespace = namespace
+		anchors.replicaSets = NamespaceReplicaSetAnchors(cache, namespace)
+	}
+	return rightsizingScopeRequest("namespace="+strconv.Quote(namespace), namespace, deployment, anchors, time.Time{})
 }
 
 // scanRightsizingScopeRequest covers the union of a scan's namespaces, so one
 // decision holds for every batch.
 func scanRightsizingScopeRequest(workloads []scanWorkload, cache *k8s.ResourceCache, at time.Time) ViewScopeRequest {
+	return scanRightsizingScopeRequestFrom(workloads, func(namespace string) []string {
+		return NamespacePodAnchors(cache, namespace)
+	}, func(namespace string) []string {
+		return NamespaceReplicaSetAnchors(cache, namespace)
+	}, at)
+}
+
+func scanRightsizingScopeRequestFrom(workloads []scanWorkload, podsIn, replicaSetsIn func(string) []string, at time.Time) ViewScopeRequest {
 	namespaces := batchNamespaces(workloads)
-	var pods, replicaSets []string
-	for _, namespace := range namespaces {
-		pods = append(pods, NamespacePodAnchors(cache, namespace)...)
-	}
+	var anchors rightsizingAnchors
+	anchors.podNamespace, anchors.pods = firstAnchoredNamespace(namespaces, podsIn)
 	deployments := hasScanKind(workloads, "Deployment")
 	if deployments {
-		for _, namespace := range namespaces {
-			replicaSets = append(replicaSets, NamespaceReplicaSetAnchors(cache, namespace)...)
+		anchors.replicaSetNamespace, anchors.replicaSets = firstAnchoredNamespace(namespaces, replicaSetsIn)
+	}
+	return rightsizingScopeRequest(labelRegexMatcher("namespace", namespaces), "", deployments, anchors, at)
+}
+
+// firstAnchoredNamespace is the first of the sorted namespaces holding any
+// live object, with those objects' names.
+func firstAnchoredNamespace(namespaces []string, objectsIn func(string) []string) (string, []string) {
+	for _, namespace := range namespaces {
+		if names := objectsIn(namespace); len(names) > 0 {
+			return namespace, names
 		}
 	}
-	return rightsizingScopeRequest(labelRegexMatcher("namespace", namespaces), "", deployments, pods, replicaSets, at)
+	return "", nil
 }
 
 // scopeMatchers is ",<matchers>" for a metric the scope filters, else "", so

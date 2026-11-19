@@ -116,7 +116,7 @@ func TestRightsizingCurrentPodsFallbackIsScoped(t *testing.T) {
 
 func TestRightsizingLabeledOwnershipUnlabeledAnchoredUsage(t *testing.T) {
 	cadvisor := []string{metricCPUUsage, metricMemoryWorkingSet, metricThrottledPeriods, metricCFSPeriods}
-	req, err := normalizeViewScopeRequest(rightsizingScopeRequest(`namespace="payments"`, "payments", true, []string{"api-1"}, []string{"api-6c"}, time.Time{}))
+	req, err := normalizeViewScopeRequest(rightsizingScopeRequest(`namespace="payments"`, "payments", true, rightsizingAnchors{"payments", []string{"api-1"}, "payments", []string{"api-6c"}}, time.Time{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestRightsizingPartialAnswersAreUnavailable(t *testing.T) {
 
 func TestRightsizingScopeRequestShape(t *testing.T) {
 	at := time.Unix(1700000000, 0)
-	req := rightsizingScopeRequest(`namespace="payments"`, "payments", true, []string{"api-2", "api-1"}, []string{"api-6c"}, at)
+	req := rightsizingScopeRequest(`namespace="payments"`, "payments", true, rightsizingAnchors{"payments", []string{"api-2", "api-1"}, "payments", []string{"api-6c"}}, at)
 	if !req.Joined || req.Span != 7*24*time.Hour+10*time.Minute || !req.At.Equal(at) || req.Namespace != "payments" || req.View != "rightsizing" {
 		t.Fatalf("request = %+v", req)
 	}
@@ -228,14 +228,14 @@ func TestRightsizingScopeRequestShape(t *testing.T) {
 		if m.Name == metricReplicaSetOwner {
 			wantLabel, wantValues = "replicaset", []string{"api-6c"}
 		}
-		if m.AnchorLabel != wantLabel || !slices.Equal(m.AnchorValues, wantValues) {
-			t.Errorf("%s anchors %s=%v", m.Name, m.AnchorLabel, m.AnchorValues)
+		if m.AnchorLabel != wantLabel || !slices.Equal(m.AnchorValues, wantValues) || m.AnchorNamespace != "payments" {
+			t.Errorf("%s anchors %s=%v in %q", m.Name, m.AnchorLabel, m.AnchorValues, m.AnchorNamespace)
 		}
 	}
 	if _, err := normalizeViewScopeRequest(req); err != nil {
 		t.Fatal(err)
 	}
-	noDeployments := rightsizingScopeRequest(`namespace="payments"`, "payments", false, nil, nil, at)
+	noDeployments := rightsizingScopeRequest(`namespace="payments"`, "payments", false, rightsizingAnchors{}, at)
 	for _, m := range noDeployments.Metrics {
 		if m.Name == metricReplicaSetOwner {
 			t.Error("ReplicaSet ownership checked though no Deployment is sized")
@@ -251,6 +251,43 @@ func TestRightsizingScopeRequestShape(t *testing.T) {
 	}
 	if slices.ContainsFunc(scan.Metrics, func(m ViewMetric) bool { return m.Name == metricReplicaSetOwner }) {
 		t.Error("scan without Deployments checks ReplicaSet ownership")
+	}
+}
+
+// A scan's anchors come from one namespace, never names flattened across its
+// namespaces: otherwise another cluster's same-named Pod in a different
+// namespace could vouch for this cluster's.
+func TestRightsizingScanAnchorsOneNamespace(t *testing.T) {
+	live := map[string][]string{"infra": {"agent-0"}, "payments": {"api-1"}, "web": {"web-1"}}
+	liveRS := map[string][]string{"payments": {"api-6c"}, "web": {"web-7d"}}
+	scan := scanRightsizingScopeRequestFrom([]scanWorkload{
+		scanTestWorkload("Deployment", "web", "web", "web"),
+		scanTestWorkload("DaemonSet", "infra", "agent", "agent"),
+		scanTestWorkload("Deployment", "payments", "api", "api"),
+		scanTestWorkload("StatefulSet", "empty", "db", "db"),
+	}, func(ns string) []string { return live[ns] }, func(ns string) []string { return liveRS[ns] }, time.Time{})
+	for _, m := range scan.Metrics {
+		wantLabel, wantNS, wantValues := "pod", "infra", []string{"agent-0"}
+		if m.Name == metricReplicaSetOwner {
+			wantLabel, wantNS, wantValues = "replicaset", "payments", []string{"api-6c"}
+		}
+		if m.AnchorLabel != wantLabel || m.AnchorNamespace != wantNS || !slices.Equal(m.AnchorValues, wantValues) {
+			t.Errorf("%s anchors %s=%v in %q, want %s=%v in %q", m.Name, m.AnchorLabel, m.AnchorValues, m.AnchorNamespace, wantLabel, wantValues, wantNS)
+		}
+		if m.Subject != `namespace=~"^(empty|infra|payments|web)$"` {
+			t.Errorf("%s subject %q", m.Name, m.Subject)
+		}
+	}
+	if !slices.ContainsFunc(scan.Metrics, func(m ViewMetric) bool { return m.Name == metricReplicaSetOwner }) {
+		t.Error("scan with Deployments skips ReplicaSet ownership")
+	}
+	req, err := normalizeViewScopeRequest(scan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := viewIdentityQuery(req.Metrics[:1], []string{"cluster"}, req.Span, true)
+	if !strings.Contains(identity, `namespace="infra",pod=~"agent-0"`) {
+		t.Fatalf("anchor count not kept to its namespace: %s", identity)
 	}
 }
 
