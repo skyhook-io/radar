@@ -122,6 +122,20 @@ describe('a failed template', () => {
   })
 })
 
+describe('a crashed golden-build actor', () => {
+  it('gives its template’s step, with no revert or move', () => {
+    state.context = 'cluster-B'
+    const golden = { id: 'goldenSnapshotFailed:research/langgraph-research', rule: 'goldenSnapshotFailed', severity: 'warning', title: 't', reading: 'r', nextStep: 'Recreate the template with a higher memory limit; templates can’t be edited.', subject: { kind: 'ActorTemplate', atespace: 'research', name: 'langgraph-research' }, count: 1 }
+    state.actor = ok(actorDetail({ attention: [golden] } as Partial<SubstrateActorDetail>))
+    const html = render(<SubstrateActorPage actor={{ atespace: 'research', name: 'lit-review-0193' }} onOpenSubject={() => {}} />, '/substrate/actors/research/lit-review-0193?ctx=cluster-B')
+    expect(html).toContain('This actor built research / langgraph-research’s golden snapshot')
+    expect(html).toContain('Recreate the template with a higher memory limit')
+    expect(html).not.toContain('kubectl ate revert')
+    expect(html).not.toContain('kubectl ate update')
+    expect(html.split('Recreate the template with a higher memory limit').length - 1).toBe(1)
+  })
+})
+
 describe('a template whose actors crashed', () => {
   it('says how many of its actors crashed and why, beside the memory it sets', () => {
     const t = template('langgraph-research')

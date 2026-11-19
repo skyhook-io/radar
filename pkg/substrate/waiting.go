@@ -186,9 +186,18 @@ func WorkerImpactKind(a Actor, w Worker) string {
 func WorkerImpactOf(a Actor, w Worker, pods WorkerPods) *WorkerImpact {
 	switch WorkerImpactKind(a, w) {
 	case ImpactRestarted:
+		step, command := "Revert it to its newest stored generation now; Substrate marks it crashed when it reconciles the worker anyway.", forActor(revertCommand, a)
+		// Substrate refuses a revert while a delete runs, and one is already
+		// running for a reverting actor.
+		switch a.State {
+		case StateDeleting:
+			step, command = "Nothing to recover: the delete in progress removes it.", ""
+		case StateReverting:
+			step, command = "Nothing to do: the revert in progress returns it to its newest stored generation.", ""
+		}
 		return &WorkerImpact{Kind: ImpactRestarted,
-			NextStep: "Revert it to its newest stored generation now; Substrate marks it crashed when it reconciles the worker anyway.",
-			Command:  forActor(revertCommand, a),
+			NextStep: step,
+			Command:  command,
 			Reading: fmt.Sprintf(
 				"Its worker process restarted (epoch %d; this actor ran under %d), so its sandbox is gone. Substrate marks it crashed when it reconciles the worker; until then it may still show %s.",
 				w.RegisteredEpoch, a.Assignment.Epoch, a.State)}

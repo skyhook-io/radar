@@ -7,6 +7,10 @@ describe('withKubectlTarget', () => {
     expect(withKubectlTarget(revert, { context: 'staging' })).toBe(`${revert} --context staging`)
     expect(withKubectlTarget(revert, { context: "it's prod" })).toBe(`${revert} --context 'it'\\''s prod'`)
   })
+  it('names the kubeconfig file and a direct endpoint Radar reads through', () => {
+    expect(withKubectlTarget(revert, { context: 'dev', kubeconfig: '/home/me/.kube/staging', endpoint: '127.0.0.1:18443' }))
+      .toBe(`${revert} --kubeconfig /home/me/.kube/staging --context dev --endpoint 127.0.0.1:18443`)
+  })
   it('asks for the context where Radar cannot know the reader’s', () => {
     expect(withKubectlTarget(revert, { context: null })).toBe(`${revert} --context <context>`)
   })

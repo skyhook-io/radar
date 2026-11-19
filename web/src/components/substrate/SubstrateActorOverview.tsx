@@ -47,7 +47,13 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
   const tie = kill ? killTie(kill, actor.crash?.time) : undefined
   // The worker's log names the cause and its remedy; without it, Substrate's own crash row says what to do.
   const crashedRow = detail.attention.find((a) => a.rule === 'crashedActors')
-  const step = kill?.current && kill.nextStep
+  // This actor built its template's golden snapshot, and that build failed
+  // for good: the template's row is the step. Moving or reverting the actor
+  // leaves the template's error in place, so neither is offered.
+  const goldenRow = detail.attention.find((a) => a.rule === 'goldenSnapshotFailed')
+  const step = goldenRow
+    ? { text: `This actor built ${refText(actor.template)}’s golden snapshot, and the build failed; Substrate doesn’t retry it, and reverting or moving this actor won’t either. ${goldenRow.nextStep}`, command: undefined, thenCommand: undefined }
+    : kill?.current && kill.nextStep
     ? { text: kill.nextStep, command: kill.command, thenCommand: kill.thenCommand }
     : crashedRow
       ? { text: crashedRow.nextStep, command: crashedRow.command, thenCommand: crashedRow.thenCommand }
@@ -73,8 +79,8 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
     details.push(<p key="earlier">Earlier run: a memory-limit kill was recorded{kill.time && <> <When iso={kill.time} /></>} in <span className="font-mono">{kill.pod}</span>; Radar can’t tie it to this crash.</p>)
   }
   // What a revert keeps and drops stays with the crash, folded: the step above already says to wait for a pending upload.
-  if (recovery) details.push(<p key="recovery"><RecoveryText recovery={recovery} newest={detail.row.newestSnapshot?.generation} /></p>)
-  if (recovery && recovery.discarded.length > 0) {
+  if (recovery && !goldenRow) details.push(<p key="recovery"><RecoveryText recovery={recovery} newest={detail.row.newestSnapshot?.generation} /></p>)
+  if (recovery && !goldenRow && recovery.discarded.length > 0) {
     details.push(
       <ul key="discarded" className="list-disc space-y-0.5 pl-4">
         {recovery.discarded.map((d) => (
@@ -119,7 +125,7 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
         <div className="mt-1.5 break-words text-xs text-theme-text-primary">
           <span className="font-medium">Next step: </span>
           {step.text}
-          {pending.length > 0 && <> To keep generation {pending[0].generation}, wait for its upload to finish before reverting.</>}
+          {pending.length > 0 && !goldenRow && <> To keep generation {pending[0].generation}, wait for its upload to finish before reverting.</>}
           {step.command && <CommandChip command={step.command} />}
           {step.command && step.thenCommand && <CommandChip command={step.thenCommand} />}
         </div>
@@ -436,7 +442,7 @@ export function LogHandoff({ actor }: { actor: SubstrateActorDetail['actor'] }) 
 /** What a log read could not give, in product terms, from the server's reason code. */
 function logGap(logs: SubstrateActorLogs, actor: SubstrateActorDetail['actor']): string {
   const node = logs.node ? `node ${logs.node}` : 'its node'
-  const searched = logs.searched.length
+  const searched = logs.searched.filter((p) => p.outcome !== 'denied').length
   switch (logs.reasonCode) {
     case 'workerPodGone':
       return `The worker Pod ${logs.worker?.pod ?? ''} is gone; Substrate still lists the worker, so its lines went with the Pod.`
@@ -563,7 +569,8 @@ export function SubstrateActorOverview({
   /** Opens the Logs tab, or the page at it from the drawer. */
   onShowLogs?: () => void
 }) {
-  const others = detail.attention.filter((a) => a.rule !== 'crashedActors')
+  // A crashed golden-build actor's crash banner carries its template's row.
+  const others = detail.attention.filter((a) => a.rule !== 'crashedActors' && !(a.rule === 'goldenSnapshotFailed' && detail.actor.state === 'crashed'))
   return (
     <div className="space-y-4">
       {detail.actor.state === 'crashed' && <CrashBanner detail={detail} onOpenSubject={onOpenSubject} />}

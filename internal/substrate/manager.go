@@ -545,7 +545,7 @@ func (m *Manager) Call(ctx context.Context, fn func(ctx context.Context, client 
 	}
 	if err != nil {
 		code, msg := classify(err, c.creds)
-		if connectionLevel(code) {
+		if connectionLevel(code) || c.creds.credentialFailed(err) {
 			m.dropIf(c)
 			tier.State, tier.Code, tier.Reason = TierFailed, code, msg
 			return tier, "", ""

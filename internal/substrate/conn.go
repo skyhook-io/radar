@@ -368,6 +368,13 @@ func (b *bearerCreds) GetRequestMetadata(ctx context.Context, _ ...string) (map[
 	return map[string]string{"authorization": "Bearer " + t}, nil
 }
 
+// credentialFailed: err is a token this side could not get, so no read can
+// succeed until that changes, whatever its code.
+func (b *bearerCreds) credentialFailed(err error) bool {
+	st, ok := status.FromError(err)
+	return ok && st.Code() == codes.Unauthenticated && b.localFailure(st.Message()) != nil
+}
+
 // localFailure is the cause recorded for a credential error whose text gRPC
 // returned as msg, if that is where it came from.
 func (b *bearerCreds) localFailure(msg string) *TierError {
@@ -427,6 +434,8 @@ func (s *sharedToken) token(ctx context.Context) (string, error) {
 		switch {
 		case apierrors.IsForbidden(err):
 			return "", &TierError{Code: CodeMintDenied, Message: msg + ": Kubernetes denied create serviceaccounts/token in " + SystemNamespace}
+		case apierrors.IsUnauthorized(err):
+			return "", &TierError{Code: CodeMintDenied, Message: msg + ": Kubernetes did not accept this context's credentials"}
 		case apierrors.IsNotFound(err):
 			return "", &TierError{Code: CodeNotInstalled, Message: msg + ": the ServiceAccount does not exist, so Substrate isn't installed as kubectl ate expects"}
 		}
