@@ -16,10 +16,7 @@ import (
 func TestExpiredBudgetPreservesHealthAndPreparedIssues(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	build := BuilderFromIndexes(ctx, func() IndexedTopology {
-		t.Fatal("expired enrichment loaded the graph")
-		return IndexedTopology{}
-	}, &IssueIndex{counts: map[string]int{issueIndexKey("", "Pod", "shop", "web"): 7}}, nil, nil, nil)
+	build := BuilderFromIndexes(ctx, &IssueIndex{counts: map[string]int{issueIndexKey("", "Pod", "shop", "web"): 7}}, nil, nil, nil)
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Status: corev1.PodStatus{Phase: corev1.PodFailed}}
 	got := build(pod, nil, "", "Pod", "shop", "web")
 	if got == nil || got.Health == "" || got.IssueCount != 7 || got.ManagedBy != nil {
@@ -62,7 +59,7 @@ func TestBudgetStartsAtFirstRow(t *testing.T) {
 	build, stop := WithBudget(context.Background(), func(ctx context.Context) Builder {
 		called = true
 		deadline, _ = ctx.Deadline()
-		return BuilderFromIndexes(ctx, nil, nil, nil, nil, nil)
+		return BuilderFromIndexes(ctx, nil, nil, nil, nil)
 	})
 	defer stop()
 	if called {
@@ -85,7 +82,7 @@ func TestSlowPreparationDoesNotDisableOtherCallers(t *testing.T) {
 	defer stopSlow()
 	slow(&corev1.Pod{}, nil, "", "Pod", "shop", "web")
 	fast, stopFast := WithBudget(context.Background(), func(ctx context.Context) Builder {
-		return BuilderFromIndexes(ctx, nil, &IssueIndex{counts: map[string]int{issueIndexKey("", "Pod", "shop", "web"): 7}}, nil, nil, nil)
+		return BuilderFromIndexes(ctx, &IssueIndex{counts: map[string]int{issueIndexKey("", "Pod", "shop", "web"): 7}}, nil, nil, nil)
 	})
 	defer stopFast()
 	got := fast(&corev1.Pod{}, nil, "", "Pod", "shop", "web")
@@ -124,7 +121,7 @@ func TestExpiredTrivyBudgetPreservesScanLabels(t *testing.T) {
 	cancel()
 	report := &unstructured.Unstructured{}
 	report.SetLabels(map[string]string{"trivy-operator.resource.kind": "ReplicaSet", "trivy-operator.resource.name": "web-old"})
-	build := BuilderFromIndexes(ctx, nil, nil, nil, nil, nil)
+	build := BuilderFromIndexes(ctx, nil, nil, nil, nil)
 	got := build(nil, report, aicontext.TrivyGroup, "VulnerabilityReport", "shop", "report")
 	if got.Scanned == nil || got.Scanned.Name != "web-old" || got.Scanned.Replicas != nil || got.Scanned.Missing {
 		t.Fatalf("scan metadata lost or live state invented: %+v", got.Scanned)

@@ -33,6 +33,12 @@ func projectionOwnedAnswer(t *testing.T, s *projectionSession, obj runtime.Objec
 	ApplyOwnership(rel, ov, ownership.Observe(projectionRef(obj), m))
 	return rel
 }
+
+// readableRefs leaves out references listed by name only, marked unreadable.
+func readableRefs(refs []ResourceRef) []ResourceRef {
+	return slices.DeleteFunc(slices.Clone(refs), func(r ResourceRef) bool { return r.State != "" })
+}
+
 func requireProjectionRefs(t *testing.T, got []ResourceRef, want ...runtime.Object) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -151,7 +157,10 @@ func TestRelationsAnswerSealedSecretConsumers(t *testing.T) {
 				if obj == sealed {
 					requireProjectionRefs(t, rel.Consumers, d)
 				} else {
-					requireProjectionRefs(t, rel.ConfigRefs, sealed)
+					requireProjectionRefs(t, readableRefs(rel.ConfigRefs), sealed)
+					if !slices.Contains(rel.ConfigRefs, ResourceRef{Kind: "Secret", Namespace: "shop", Name: "db", State: ResourceStateDenied}) {
+						t.Fatalf("the mounted Secret isn't named: %+v", rel.ConfigRefs)
+					}
 				}
 				answers = append(answers, rel, cov)
 			}
@@ -168,9 +177,9 @@ func TestRelationsAnswerSealedSecretConsumers(t *testing.T) {
 					t.Fatalf("borrowed denied Secret: %v", r)
 				}
 			}
-			requireProjectionRefs(t, projectionAnswer(t, s, wrong, access, traverse).ConfigRefs)
+			requireProjectionRefs(t, readableRefs(projectionAnswer(t, s, wrong, access, traverse).ConfigRefs))
 			requireProjectionRefs(t, projectionAnswer(t, s, sealed, projectionAccess{denied: []string{"Secret", "Deployment"}}, traverse).Consumers)
-			requireProjectionRefs(t, projectionAnswer(t, s, d, projectionAccess{denied: []string{"Secret", "SealedSecret"}}, traverse).ConfigRefs)
+			requireProjectionRefs(t, readableRefs(projectionAnswer(t, s, d, projectionAccess{denied: []string{"Secret", "SealedSecret"}}, traverse).ConfigRefs))
 		}
 	}
 	// The composition itself never asks for the intermediate, including when

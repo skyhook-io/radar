@@ -956,6 +956,8 @@ The volume filter uses request rate: setting it above zero hides TCP-only edges.
 
 ### What Radar Shows
 
+**Velero views** (the Overview at `/velero`, under the Velero category in the Resources sidebar, and Radar's own lists for the Schedule and BackupStorageLocation kinds): what needs attention, every schedule read against Velero's controller (next run, late or held, newest and newest successful run), and each storage location with the backups targeting it and the schedules writing to it. The Schedule drawer adds a Schedule activity section with recent runs. A Backup's drawer offers **Delete backup**, which asks Velero to delete it through a DeleteBackupRequest; the generic Delete, which would only remove the object, is not offered. Sources, certainty and states: [velero.md](velero.md).
+
 **Backup Detail View:**
 - Phase with color-coded badge, start/completion timestamps, duration
 - Progress bar during in-progress backups (items backed up percentage)
@@ -1001,16 +1003,32 @@ Velero reports every outcome through `status.phase` and has no `status.condition
 | `BackupStorageLocationUnavailable` | `BSL.status.phase == Unavailable` | critical |
 | `BackupRepositoryNotReady` | `BackupRepository.status.phase == NotReady` | warning |
 | `VeleroRunStalled` | a `Backup` or `Restore` still in `InProgress`, `WaitingForPluginOperations` or `Finalizing` whose `status.startTimestamp` is older than its `spec.itemOperationTimeout` (Velero's built-in four hours when it declares none). `Deleting` is excluded — its `startTimestamp` belongs to the original run. The message is worded per phase: see the limitation below | warning |
+| `BackupRepositoryMaintenanceFailed` | the newest entry in a usable (not NotReady) `BackupRepository`'s `status.recentMaintenance` has `result: Failed`. Its maintenance Jobs crash-loop in Velero's namespace with nothing else naming the repository | warning |
+| `VeleroServerNotRunning` | the Velero server Deployment (the one running `velero server`) is readable and has no pods. Filed on the Deployment | critical |
+| `VeleroScheduleLate` | the Velero views' **Late** reading: past the next run by 5 minutes with the zone certain and the namespace's Backups read, while the server runs. Critical from three missed scheduled times | warning / critical |
+| `VeleroScheduleCannotRun` | **Cannot run** (name over 63 characters, or its storage location is `ReadOnly`, so Velero rejects every backup; that finding reaches only a caller who may list storage locations there, since namespace access does not authorize them) or **Always due** (a cron with no future time) | critical |
+| `VeleroScheduleHeld` | **Held** by a run Velero has not started for 10 minutes, unless the server is down | warning |
+| `VeleroScheduleNotValidated` | not validated 5 minutes after creation, unless the server is down | warning |
+| `VeleroLocationValidationOverdue` | a location's validation is overdue or never happened, unless the server is down | warning |
 
-They roll up under three categories, split by what you'd go and look at: `backup_failed` for runs that already have an outcome, `backup_target_unavailable` for the location/repository kinds, and `backup_stalled` for `VeleroRunStalled`. A run with no verdict is not a failed run — it has no error to read, only a controller to check — and calling it one puts "Backup failed" above a message saying it is still in progress.
+The last six are readings, from the same rules as the Velero views (`pkg/velero`), raised only when certain: a schedule is judged only with its namespace's Backups read in full, and "probably late" (zone not confirmed) or "late or held" stay readings on the Velero views. While the server is down its consequences (held runs, overdue validation) are not raised again; late schedules are, since each is a backup that will not exist. Each records the reads it rests on (`RequiredReads`: schedules, backups and the namespace's Deployments). Like the other Velero Issues, they are shown to a caller with access to the namespace; Radar checks namespaced evidence at namespace granularity, and per kind only for the kinds the authentication model lists (Secrets and a few others). The Velero views check each kind exactly.
 
-**Supersession.** Velero retains failed `Backup` objects until their TTL expires, so a raw phase-to-issue mapping would keep one bad night red for days. Backups group by the `velero.io/schedule-name` label; only the newest run that already has an outcome raises an issue (the two `*PartiallyFailed` phases count — the partial failure is a fact even though Velero is still finalizing), a later `Completed` clears the series, and an in-progress run neither clears nor raises. Ad-hoc (unlabelled) backups are their own series, so nothing supersedes them. Restores get no supersession — they are one-off operator actions, not a recurring series.
+They roll up under three categories, split by what you'd go and look at: `backup_failed` for runs that already have an outcome, `backup_target_unavailable` for the location/repository kinds, and `backup_stalled` for `VeleroRunStalled`, a stopped server and schedules that are late, held or not validated. A run with no verdict is not a failed run — it has no error to read, only a controller to check — and calling it one puts "Backup failed" above a message saying it is still in progress.
+
+**Supersession.** Velero retains failed `Backup` objects until their TTL expires, so a raw phase-to-issue mapping would keep one bad night red for days. Backups group by the `velero.io/schedule-name` label; only the newest run that already has an outcome raises an issue (the two `*PartiallyFailed` phases count — the partial failure is a fact even though Velero is still finalizing), a later `Completed` clears the series, and an in-progress run neither clears nor raises. Ad-hoc (unlabelled) backups are their own series, so nothing clears them, and a failed or rejected one stays critical. When a `Completed` backup in the same Velero namespace started after it was created, its Cause names that backup as context, without judging whether it saved the same data. The start time is what counts, since backup sync recreates an old backup with a new creation time, and a backup created earlier but queued until after the failure still saved its data later. A schedule's run created with Back up now carries the schedule label, so it supersedes the schedule's failures like any run. Restores get no supersession — they are one-off operator actions, not a recurring series.
+
+<a id="one-fault-one-issue"></a>**One fault, one issue.** A stopped server stops every schedule, and an unavailable location fails every run that writes to it, so a cluster with a hundred schedules would otherwise raise a hundred and one Issues for one fault. The fault's own Issue names what it covers as affected resources (the Issues page's *Missed runs* and *Rejected runs*), and those raise nothing of their own while it lasts, as a Kueue queue's Issue covers the runs it blocks:
+
+- **Stopped server:** every schedule that is **Late** in that namespace while the Deployment has no pods. Lateness from before the outage is included: the schedule is missing backups and nothing runs it until the server starts. A schedule wrong for another reason (cannot run, rejected, held while the server runs) stays its own Issue, and while the server can't be read lateness is its own Issue too.
+- **Unavailable location:** a Backup or Restore in `FailedValidation` whose only validation error is Velero's own statement that this location is unavailable (`backup can't be created because BackupStorageLocation <name> is in Unavailable status.` or `The BSL <name> is unavailable, cannot retrieve the backup`). Any other error, another location, or a run that failed later (`Failed`, `PartiallyFailed`) stays its own Issue: depending on a location is not being failed by it.
+
+When the fault clears, its Issue goes and each covered run that a later run has not superseded is raised again on its own. The covered resources are redacted to what the caller can read, with no count of the rest; they also make the fault's Issue appear on each covered resource, so a schedule's drawer shows the stopped server.
 
 **A paused Schedule is not an issue.** Pausing is operator intent; the Schedule list and detail view show the state without adding queue noise.
 
 **Namespace attribution.** Issues attribute to the Velero object's own namespace (`velero`, or `kommander` on NKP). They are therefore admin-visible, but *not* visible to a user whose namespace view-filter excludes the Velero namespace — including one scoped only to the namespace whose data was lost. Surfacing a failure against the *protected* namespaces needs the protection-coverage model and is not part of this.
 
-**What is not detected yet.** Every detection above is driven by something Velero wrote — a phase, or in the stalled case a `startTimestamp` measured against the run's own budget. Radar does not yet detect the *absence* of a run: a schedule that quietly stopped firing (controller down, wrong cron, schedule deleted) leaves its last run `Completed`, so no issue is raised even though backups have silently stopped. That needs the schedule cadence modelled against Velero's real controller semantics (a due run is *skipped* while a prior backup is in flight), which is tracked separately. **Treat "no Velero issues" as "nothing Velero recorded looks wrong", not as "backups are healthy."**
+**What is not an Issue.** A run's *absence* is raised only when Radar is certain of it: a stopped server, a late schedule with its zone known and its Backups read, a schedule that cannot run, a held run, a schedule never validated (the readings above). Estimates — "probably late" under an unconfirmed zone, "late or held" when Backups were not read — stay readings on the [Velero views](velero.md). Whether a namespace or workload is covered by any schedule at all is not modelled. **Treat "no Velero issues" as "nothing Radar can be sure of looks wrong", not as "every workload is backed up."**
 
 ### Supported CRDs
 
@@ -1024,7 +1042,7 @@ They roll up under three categories, split by what you'd go and look at: `backup
 | BackupRepository | `velero.io/v1` | — | Yes | Yes | — |
 
 **Limitations**:
-- **A backup's phase is not its restorability.** A `Completed` backup can sit on an Unavailable storage location or be past its TTL. The BackupStorageLocation page shows stored and restorable counts. Unavailable means it cannot restore now; expired means Velero intends to delete it, so Radar excludes it even if garbage collection has not run yet.
+- **A backup's phase is not its restorability.** A `Completed` backup can sit on an Unavailable storage location or be past its TTL. The BackupStorageLocation page shows stored and restorable counts. Unavailable means it cannot restore now; expired means Velero intends to delete it, so Radar excludes it even if garbage collection has not run yet. A backup counts against a location by its `spec.storageLocation`, which Velero fills when it first processes the backup; one Velero has not processed yet counts against none.
 - **Stalled-run detection depends on the phase.** `WaitingForPluginOperations` is measured against Velero's `spec.itemOperationTimeout`. For `InProgress` and `Finalizing`, that duration is only a yardstick because Velero defines no deadline. Radar reports the distinction and elapsed time without guessing at a cause. If the field is absent, Radar uses Velero's built-in four-hour default; a controller-level override is not visible in the resource.
 - **Fetching run messages needs a live controller and reachable storage.** Radar creates a `DownloadRequest` and follows Velero's pre-signed object-storage URL. A stopped controller or a URL unreachable from Radar returns an explicit error; configure the storage location's `publicUrl` when needed. Data-mover objects (`DataUpload`/`DataDownload`) and full backup logs remain unavailable.
 
@@ -2005,8 +2023,9 @@ coverage on affected resource pages and counts, rather than a healthy answer.
 ClusterQueue findings appear only in views not narrowed to namespaces.
 
 `diagnose` on Job, JobSet, RayJob or Kueue Workload returns cached context,
-related Issues and resource events. It collects no Pods, runtime logs, metrics
-or relationship graph. Follow Workload references for admission and Pods for
+related Issues and resource events, with relationships answered as
+`get_resource` answers them. It collects no Pods, runtime logs or metrics.
+Follow Workload references for admission and Pods for
 runtime diagnosis. An empty Issues list does not establish runtime health;
 undecided Workloads, unrecognized reasons and MultiKueue handoff are not covered.
 

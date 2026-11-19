@@ -1,8 +1,9 @@
 package configrefs
 
 import (
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // KEDAAuthenticationReferences extracts trigger authentication declarations.
@@ -12,7 +13,7 @@ func KEDAAuthenticationReferences(scaler *unstructured.Unstructured) []resourcei
 	if scaler == nil || resourceid.GroupFromAPIVersion(scaler.GetAPIVersion()) != "keda.sh" || scaler.GetKind() != "ScaledObject" && scaler.GetKind() != "ScaledJob" {
 		return nil
 	}
-	triggers, _, _ := unstructured.NestedSlice(scaler.Object, "spec", "triggers")
+	triggers, _, _ := borrowedSlice(scaler.Object, "spec", "triggers")
 	seen := map[resourceid.Ref]bool{}
 	var refs []resourceid.Ref
 	for _, value := range triggers {

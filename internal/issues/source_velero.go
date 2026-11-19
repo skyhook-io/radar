@@ -194,6 +194,20 @@ var veleroPartialPhases = map[string]bool{
 	"WaitingForPluginOperationsPartiallyFailed": true,
 }
 
+// DetectVelero returns the rows the Problems surface raises for these Velero
+// objects (Kind → objects), sorted as it sorts them. It reads nothing, so a
+// caller that read the objects with the user's own access gets only rows that
+// access covers, without composing every other source in the cluster.
+func DetectVelero(byKind map[string][]*unstructured.Unstructured) []Issue {
+	var out []Issue
+	for kind, items := range byKind {
+		out = append(out, detectVeleroIssues(schema.GroupVersionResource{Group: VeleroGroup}, kind, items, nil)...)
+	}
+	out = foldVeleroLocationRejections(out)
+	out, _ = finalizeShapedIssues(out, Filters{}, true, true)
+	return out
+}
+
 // detectVeleroIssues turns one GVR's worth of Velero objects into Issues. It
 // takes the whole list rather than one object at a time because supersession is
 // a property of the series, not of a single backup.
@@ -239,6 +253,10 @@ func detectVeleroIssues(gvr schema.GroupVersionResource, kind string, items []*u
 // backup is a one-off run and nothing later supersedes it. Within a group only
 // the newest *decided* run is considered: if it succeeded, the group is clear;
 // otherwise that one run drives the issue and the older failures stay quiet.
+//
+// An ad-hoc backup that failed stays critical. When a backup in the same
+// Velero namespace completed after it, its cause names that backup as
+// context; whether it saved what the failed one was meant to is not judged.
 func veleroBackupIssues(gvr schema.GroupVersionResource, kind string, items []*unstructured.Unstructured) []Issue {
 	groups := map[string][]*unstructured.Unstructured{}
 	var order []string
@@ -251,17 +269,52 @@ func veleroBackupIssues(gvr schema.GroupVersionResource, kind string, items []*u
 	}
 
 	var out []Issue
+	successes := newestVeleroSuccessByNamespace(items)
 	for _, key := range order {
 		newest := newestDecidedVeleroRun(groups[key])
 		if newest == nil {
 			continue
 		}
-		if iss, ok := veleroRunIssue(gvr, kind, newest,
-			ReasonVeleroBackupFailed, ReasonVeleroBackupPartiallyFailed, ReasonVeleroBackupValidationFailed); ok {
-			out = append(out, iss)
+		iss, ok := veleroRunIssue(gvr, kind, newest,
+			ReasonVeleroBackupFailed, ReasonVeleroBackupPartiallyFailed, ReasonVeleroBackupValidationFailed)
+		if !ok {
+			continue
 		}
+		if iss.Severity == SeverityCritical && newest.GetLabels()[veleroScheduleLabel] == "" {
+			if later, ok := successes[newest.GetNamespace()]; ok && later.started.After(veleroRunTime(newest)) {
+				iss.Cause = "A later backup, " + later.name + ", completed in this Velero namespace; check that it saved what this one was meant to."
+			}
+		}
+		out = append(out, iss)
 	}
 	return append(out, veleroStalledRunIssues(gvr, kind, items)...)
+}
+
+// newestVeleroSuccessByNamespace is, per Velero namespace, the Completed
+// backup that started last. The start time, not the creation time, is when
+// its data was saved: backup sync recreates an old backup's object with a new
+// creation time but keeps the status it was stored with.
+func newestVeleroSuccessByNamespace(items []*unstructured.Unstructured) map[string]veleroSuccess {
+	out := map[string]veleroSuccess{}
+	for _, u := range items {
+		if veleroPhase(u) != "Completed" {
+			continue
+		}
+		started, _, _ := unstructured.NestedString(u.Object, "status", "startTimestamp")
+		t, err := time.Parse(time.RFC3339, started)
+		if err != nil {
+			continue
+		}
+		if best, ok := out[u.GetNamespace()]; !ok || t.After(best.started) {
+			out[u.GetNamespace()] = veleroSuccess{name: u.GetName(), started: t}
+		}
+	}
+	return out
+}
+
+type veleroSuccess struct {
+	name    string
+	started time.Time
 }
 
 // veleroStalledRunIssues reports runs that are still in flight long past the
@@ -418,13 +471,16 @@ func veleroRunIssue(gvr schema.GroupVersionResource, kind string, u *unstructure
 		}
 	case phase == "Failed":
 		severity, reason = SeverityCritical, failedReason
-		message = veleroFailureMessage(u, "phase Failed")
+		message = veleroFailureMessage(u, "Velero recorded no reason")
 	case veleroPartialPhases[phase]:
 		// Partial failure is a warning, not critical: some of the data made it.
 		// It must still surface — "partially failed" is where silent data loss
 		// hides, because the run looks like it worked.
 		severity, reason = SeverityWarning, partialReason
-		detail := "phase " + phase + " — some items were not processed"
+		detail := "some items were not restored"
+		if kind == "Backup" {
+			detail = "some items were not backed up — do not assume this backup is complete"
+		}
 		// Two of these three phases are still executing: Velero is finalizing or
 		// waiting on plugin operations while already carrying a partial failure.
 		// One of those wedged forever is exactly what the stall check exists to
@@ -433,7 +489,7 @@ func veleroRunIssue(gvr schema.GroupVersionResource, kind string, u *unstructure
 		// already raises, so it is neither duplicated nor lost.
 		if veleroInFlightPartialPhases[phase] {
 			if over, stalled := veleroStalledFor(u); stalled {
-				detail += ", and it has been in flight " + formatVeleroDuration(over) + " with nothing appearing to advance it"
+				detail += "; it has been in flight " + formatVeleroDuration(over) + " with nothing appearing to advance it"
 			}
 		}
 		message = veleroFailureMessage(u, detail)
@@ -505,6 +561,9 @@ func veleroRepositoryIssues(gvr schema.GroupVersionResource, kind string, items 
 	var out []Issue
 	for _, u := range items {
 		if veleroPhase(u) != "NotReady" {
+			if iss, ok := veleroMaintenanceIssue(gvr, kind, u); ok {
+				out = append(out, iss)
+			}
 			continue
 		}
 		message := veleroFailureMessage(u, "backup repository is NotReady — filesystem and data-mover backups to it will fail")
@@ -512,6 +571,52 @@ func veleroRepositoryIssues(gvr schema.GroupVersionResource, kind string, items 
 			SeverityWarning, ReasonVeleroRepositoryNotReady, message, u.GetCreationTimestamp().Time))
 	}
 	return out
+}
+
+// veleroMaintenanceIssue: the newest maintenance run Velero recorded for a
+// repository failed. Maintenance (pruning and compacting the repository) runs
+// as a Job in Velero's namespace; when it keeps failing, the Job's pods show up
+// as a generic crash loop with nothing saying which repository suffers. A
+// NotReady repository already raises its own Issue, so this is raised only
+// for one Velero still reports usable.
+func veleroMaintenanceIssue(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) (Issue, bool) {
+	runs, _, _ := unstructured.NestedSlice(u.Object, "status", "recentMaintenance")
+	type run struct {
+		result, message string
+		start           time.Time
+	}
+	var all []run
+	for _, r := range runs {
+		m, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		result, _, _ := unstructured.NestedString(m, "result")
+		message, _, _ := unstructured.NestedString(m, "message")
+		started, _, _ := unstructured.NestedString(m, "startTimestamp")
+		at, _ := time.Parse(time.RFC3339, started)
+		all = append(all, run{result: result, message: strings.TrimSpace(message), start: at})
+	}
+	if len(all) == 0 {
+		return Issue{}, false
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].start.Before(all[j].start) })
+	newest := all[len(all)-1]
+	if newest.result != "Failed" {
+		return Issue{}, false
+	}
+	failed := 0
+	for _, r := range all {
+		if r.result == "Failed" {
+			failed++
+		}
+	}
+	message := fmt.Sprintf("Velero's last maintenance of this repository failed (%d of the last %d runs).", failed, len(all))
+	if newest.message != "" {
+		message += " " + newest.message
+	}
+	message += fmt.Sprintf(" Maintenance runs as Jobs in namespace %s; without it the repository is not pruned or checked.", u.GetNamespace())
+	return veleroStateIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, ReasonVeleroRepositoryMaintenanceFails, message, u.GetCreationTimestamp().Time), true
 }
 
 func veleroPhase(u *unstructured.Unstructured) string {

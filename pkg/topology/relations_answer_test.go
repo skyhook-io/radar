@@ -41,16 +41,32 @@ func projectionObject(obj runtime.Object, group, kind string) runtime.Object {
 }
 func newProjectionSession(t testing.TB, objects ...runtime.Object) *projectionSession {
 	t.Helper()
-	w := ownershiptest.World{}
+	return projectionSessionOf(t, false, objects)
+}
+
+// newRecordingProjectionSession is newProjectionSession with each GitOps
+// manager's recorded member list.
+func newRecordingProjectionSession(t testing.TB, objects ...runtime.Object) *projectionSession {
+	t.Helper()
+	return projectionSessionOf(t, true, objects)
+}
+
+func projectionSessionOf(t testing.TB, recordMembers bool, objects []runtime.Object, served ...ownership.ServedResource) *projectionSession {
+	t.Helper()
+	w := ownershiptest.World{Resources: served}
 	s := &projectionSession{objects: map[resourceid.Ref]runtime.Object{}}
 	seen := map[resourceid.GroupKind]bool{}
 	for _, obj := range objects {
 		ref := projectionRef(obj)
 		m, _ := apimeta.Accessor(obj)
 		s.objects[ref] = obj
-		w.Objects = append(w.Objects, ownershiptest.Object{Ref: ref, UID: m.GetUID(), APIVersion: obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), ResourceVersion: m.GetResourceVersion(), OwnerReferences: m.GetOwnerReferences(), Labels: m.GetLabels(), Annotations: m.GetAnnotations()})
+		observation := ownershiptest.Object{Ref: ref, UID: m.GetUID(), APIVersion: obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), ResourceVersion: m.GetResourceVersion(), OwnerReferences: m.GetOwnerReferences(), Labels: m.GetLabels(), Annotations: m.GetAnnotations()}
+		if recordMembers {
+			recordGitOpsMembers(&observation, obj)
+		}
+		w.Objects = append(w.Objects, observation)
 		if !seen[ref.GroupKind()] {
-			w.Resources = append(w.Resources, ownership.ServedResource{Group: ref.Group, Version: "v1", Kind: ref.Kind, Resource: ref.Kind + "s", Namespaced: ref.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
+			w.Resources = append(w.Resources, ownership.ServedResource{Group: ref.Group, Version: obj.GetObjectKind().GroupVersionKind().Version, Kind: ref.Kind, Resource: ref.Kind + "s", Namespaced: ref.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
 			seen[ref.GroupKind()] = true
 		}
 	}
@@ -135,7 +151,10 @@ func TestRelationsAnswerDirectAccess(t *testing.T) {
 	s := newProjectionSession(t, pod)
 	denied := projectionAccess{denied: []string{"ServiceAccount", "Node", "ResourceClaim"}}
 	rel := projectionAnswer(t, s, pod, denied, ownership.Unrestricted())
-	if rel.ServiceAccount != nil || rel.Node != nil || len(rel.ResourceClaims) > 0 {
+	// The Pod's own spec names its ServiceAccount, its Node and its
+	// ResourceClaim, so they are listed, marked.
+	if rel.ServiceAccount == nil || *rel.ServiceAccount != (ResourceRef{Kind: "ServiceAccount", Namespace: "shop", Name: "sa", State: ResourceStateDenied}) || rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "node", State: ResourceStateDenied}) ||
+		!slices.Equal(rel.ResourceClaims, []ResourceRef{{Kind: "ResourceClaim", Group: "resource.k8s.io", Namespace: "shop", Name: "claim", State: ResourceStateDenied}}) {
 		t.Fatalf("hidden spec references: %+v", rel)
 	}
 	for _, read := range s.reads {
@@ -268,7 +287,7 @@ func TestRelationsAnswerDeviceAndHostAccess(t *testing.T) {
 	endpoint := projectionCR("projectcalico.org", "HostEndpoint", "", "host", map[string]any{"spec": map[string]any{"node": "hidden"}})
 	s = newProjectionSession(t, endpoint)
 	rel = projectionAnswer(t, s, endpoint, projectionAccess{denied: []string{"Node"}}, ownership.Unrestricted())
-	if rel.Node != nil {
+	if rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "hidden", State: ResourceStateDenied}) {
 		t.Fatalf("hidden HostEndpoint Node: %+v", rel.Node)
 	}
 }
@@ -744,6 +763,118 @@ func TestRelationsAnswerCrossplaneReferenceUsesTheKindsScope(t *testing.T) {
 	for _, r := range s.reads {
 		if r.Kind == "Bucket" && r.Namespace == "" {
 			t.Fatalf("probed a namespaced Bucket cluster-wide: %v", r)
+		}
+	}
+}
+
+// countingDeployments counts how often an answer lists every Deployment.
+type countingDeployments struct {
+	*mockProvider
+	listed *int
+}
+
+func (p countingDeployments) Deployments() ([]*appsv1.Deployment, error) {
+	*p.listed++
+	return p.mockProvider.Deployments()
+}
+
+// Finding Istio's domain lists every Deployment, so an answer looks for it
+// only when it reads a VirtualService or DestinationRule, and then once.
+func TestRelationsAnswerFindsIstioDomainOnlyForIstioObjects(t *testing.T) {
+	cm := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "settings"}}, "", "ConfigMap")
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}}, "", "Service")
+	vs := projectionCR("networking.istio.io", "VirtualService", "shop", "web", map[string]any{"spec": map[string]any{
+		"http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "web"}}}}},
+	}})
+	rule := projectionCR("networking.istio.io", "DestinationRule", "shop", "web", map[string]any{"spec": map[string]any{"host": "web"}})
+	access := ownership.Unrestricted()
+	for _, tc := range []struct {
+		subject runtime.Object
+		objects []runtime.Object
+		want    int
+	}{
+		{cm, []runtime.Object{cm}, 0},
+		{svc, []runtime.Object{svc}, 0},
+		{svc, []runtime.Object{svc, vs, rule}, 1},
+		{vs, []runtime.Object{svc, vs}, 1},
+	} {
+		listed := 0
+		provider := countingDeployments{&mockProvider{}, &listed}
+		s := newProjectionSession(t, tc.objects...)
+		captured, ok := relations.CaptureSubject(s, projectionRef(tc.subject), tc.subject)
+		if !ok {
+			t.Fatal("capture failed")
+		}
+		RelationsAnswer(captured, access, access, ownership.NewView(captured, access), projectionRef(tc.subject), tc.subject, provider, nil)
+		if listed != tc.want {
+			t.Errorf("%s with %d objects listed Deployments %d times, want %d", projectionRef(tc.subject).Kind, len(tc.objects), listed, tc.want)
+		}
+	}
+}
+
+// A Pod's Node is named by its spec, so a caller who may open the Pod but
+// not read Nodes still sees which Node, marked, in the drawer and the
+// context alike; one whose check failed sees it unverified.
+func TestRelationsAnswerNamesAPodsUnreadableNode(t *testing.T) {
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod"}, Spec: corev1.PodSpec{NodeName: "worker"}}, "", "Pod")
+	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}}, "", "Node")
+	for _, tc := range []struct {
+		access ownership.Access
+		want   string
+	}{
+		{projectionAccess{}, ""},
+		{projectionAccess{denied: []string{"Node"}}, ResourceStateDenied},
+		{undecidedKinds{"Node"}, ResourceStateUnverified},
+	} {
+		for name, answer := range map[string]func(relations.Session, ownership.Access, ownership.Access, *ownership.View, resourceid.Ref, runtime.Object, ResourceProvider, DynamicProvider) (*Relationships, *RelationshipExtras){"drawer": RelationsAnswerWithExtras, "context": RelationsContextAnswer} {
+			s := newProjectionSession(t, pod, node)
+			rel, extras := answer(s, tc.access, tc.access, ownership.NewView(s, tc.access), projectionRef(pod), pod, nil, nil)
+			if rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "worker", State: tc.want}) {
+				t.Errorf("%s %T: node = %+v, want worker %q", name, tc.access, rel.Node, tc.want)
+			}
+			if c, ok := extras.Fields["Node"]; ok {
+				t.Errorf("%s %T: the Node a spec names marked its field: %+v", name, tc.access, c)
+			}
+			if tc.want != "" {
+				for _, read := range s.reads {
+					if read.Kind == "Node" {
+						t.Errorf("%s %T: read the Node the caller may not read", name, tc.access)
+					}
+				}
+			}
+		}
+	}
+}
+
+// What a spec names is listed, marked, also when the caller's check on it
+// couldn't be made: a HostEndpoint's Node and a Pod's declared ResourceClaim.
+// A claim a template generates is named only in the Pod's status, so it
+// stays hidden from a caller who may not read ResourceClaims.
+func TestRelationsAnswerNamesSpecDeclaredHostAndClaimRefs(t *testing.T) {
+	endpoint := projectionCR("crd.projectcalico.org", "HostEndpoint", "", "host", map[string]any{"spec": map[string]any{"node": "worker"}})
+	s := newProjectionSession(t, endpoint)
+	if rel := projectionAnswer(t, s, endpoint, undecidedKinds{"Node"}, ownership.Unrestricted()); rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "worker", State: ResourceStateUnverified}) {
+		t.Fatalf("unchecked HostEndpoint Node: %+v", rel.Node)
+	}
+	declared, generated := "declared", "generated-0"
+	pod := projectionObject(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod"},
+		Spec:       corev1.PodSpec{ResourceClaims: []corev1.PodResourceClaim{{Name: "a", ResourceClaimName: &declared}, {Name: "b", ResourceClaimTemplateName: &generated}}},
+		Status:     corev1.PodStatus{ResourceClaimStatuses: []corev1.PodResourceClaimStatus{{Name: "b", ResourceClaimName: &generated}}},
+	}, "", "Pod")
+	s = newProjectionSession(t, pod)
+	for _, tc := range []struct {
+		access ownership.Access
+		state  string
+	}{{projectionAccess{denied: []string{"ResourceClaim"}}, ResourceStateDenied}, {undecidedKinds{"ResourceClaim"}, ResourceStateUnverified}} {
+		rel := projectionAnswer(t, s, pod, tc.access, ownership.Unrestricted())
+		if want := []ResourceRef{{Kind: "ResourceClaim", Group: "resource.k8s.io", Namespace: "shop", Name: "declared", State: tc.state}}; !slices.Equal(rel.ResourceClaims, want) {
+			t.Errorf("%T: resource claims %+v, want %+v", tc.access, rel.ResourceClaims, want)
+		}
+		for _, read := range s.reads {
+			if read.Kind == "ResourceClaim" {
+				t.Errorf("%T: read a ResourceClaim the caller may not read", tc.access)
+			}
 		}
 	}
 }

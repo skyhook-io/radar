@@ -89,7 +89,7 @@ func TestIssueCountsRetainKueueInventoryCoverage(t *testing.T) {
 	for _, count := range []int{0, 2} {
 		idx.counts[issueIndexKey("batch", "Job", "team", "train")] = count
 		for _, navigation := range []bool{false, true} {
-			build := builderFromIndexes(context.Background(), nil, idx, nil, nil, nil, navigation)
+			build := builderFromIndexes(context.Background(), idx, nil, nil, nil, navigation)
 			got := build(nil, nil, "batch", "Job", "team", "train")
 			if got == nil || got.IssueCount != count || len(got.Omitted) != 1 || got.Omitted[0].Field != "issueCount" || got.Omitted[0].Reason != resourcecontext.OmittedUnavailable {
 				t.Fatalf("unknown count read as exact: %+v", got)

@@ -38,7 +38,7 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
-import { resourceExpandedPath, resourceKindListTitle } from './integrations/resourceHosts'
+import { resourceExpandedPath, resourceKindListNamespaceFilterTooltip, resourceKindListTitle, useResourceHostFeatures } from './integrations/resourceHosts'
 import { workspaceContextSwitchSearch, workspaceForPath, workspaceForView, workspaceLabels } from './integrations/workspaceRoutes'
 import { WorkspaceScreen } from './integrations/workspaceScreens'
 import { currentPageLabel } from './utils/page-links'
@@ -65,7 +65,7 @@ import { useProductHuntRailEntry } from './components/product-hunt/useProductHun
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAuditBadges, useClusterInfo } from './api/client'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAuditBadges, useClusterInfo, useCapabilities } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
@@ -135,7 +135,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'velero' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Views that have been laid out for phone width (640px and below). The rest
 // keep their desktop width on a phone and scroll sideways; add a view here in
@@ -199,6 +199,8 @@ const CRASH_LABELS = {
 //     browsing filter.
 //   - A cluster-scoped resource kind (Nodes, PVs, ClusterRoles…) has no
 //     namespace at all.
+//   - A kind whose own list ignores the filter (Velero's lists read every
+//     installation, since Velero keeps its objects in its own namespace).
 // The pick itself is preserved so it re-applies when the user returns to a
 // namespaced view.
 function namespaceFilterDisabled(
@@ -206,6 +208,7 @@ function namespaceFilterDisabled(
   pathname: string,
   search = '',
   apiResources?: APIResource[],
+  kindListTooltip?: (kind: { name: string; group: string }) => string | undefined,
 ): { disabled: boolean; tooltip?: string } {
   if (
     view === 'cost' &&
@@ -235,6 +238,8 @@ function namespaceFilterDisabled(
     const kindSlug = segments[1]
     const group = new URLSearchParams(search).get('apiGroup') || ''
     const match = kindSlug ? findAPIResourceForRoute(apiResources, kindSlug, group) : undefined
+    const listTooltip = match ? kindListTooltip?.({ name: match.name, group: match.group }) : undefined
+    if (listTooltip) return { disabled: true, tooltip: listTooltip }
     if (match && !match.namespaced) {
       return {
         disabled: true,
@@ -456,7 +461,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // View-aware namespace scope: disabled on cluster-scoped surfaces so the
   // chip isn't a dead control next to the cluster switcher.
-  const namespaceFilter = namespaceFilterDisabled(mainView, location.pathname, location.search, navApiResources)
+  // A kind whose own list ignores the filter (Velero's) disables it too, once that list is what shows.
+  const hostFeatures = useResourceHostFeatures()
+  const { isPending: capabilitiesPending } = useCapabilities()
+  const namespaceFilter = namespaceFilterDisabled(mainView, location.pathname, location.search, navApiResources,
+    (kind) => resourceKindListNamespaceFilterTooltip(kind, hostFeatures, capabilitiesPending))
 
   // One URL-derived tab title for every view (see radarPageTitle). Driving it
   // from the URL — not the mounted component. Off unless the host opts in
@@ -940,7 +949,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '',
+    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '', velero: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -1150,6 +1159,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     timer: number | null
   }>({ changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
   const cnpgInvalidationPendingRef = useRef(false)
+  const veleroInvalidationPendingRef = useRef(false)
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     timer: number | null
@@ -1182,6 +1192,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
     if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
+    if (event.group === 'velero.io') veleroInvalidationPendingRef.current = true
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1235,6 +1246,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         if (cnpgInvalidationPendingRef.current) {
           cnpgInvalidationPendingRef.current = false
           queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
+        }
+        if (veleroInvalidationPendingRef.current) {
+          veleroInvalidationPendingRef.current = false
+          queryClient.invalidateQueries({ queryKey: ['velero', 'workspace'] })
+          queryClient.invalidateQueries({ queryKey: ['velero', 'schedule-activity'] })
         }
         fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)

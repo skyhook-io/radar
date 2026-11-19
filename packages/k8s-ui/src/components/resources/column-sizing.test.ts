@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { type ColumnLayoutInput, computeColumnLayout, coveredTableWidth, percentile, rememberWidths } from './column-sizing'
+import { type ColumnLayoutInput, computeColumnLayout, coveredTableWidth, layoutColumns, percentile, rememberWidths } from './column-sizing'
 
 // Name as the table builds it: yields last, here no further than its content (fully protected).
 const name = (content: number, min = content): ColumnLayoutInput => ({ key: 'name', mode: 'fit', floor: 200, max: 480, content, min, yieldRank: 4 })
@@ -268,5 +268,45 @@ describe('coveredTableWidth', () => {
     expect(total(computeColumnLayout(columns, 1600 - coveredTableWidth(1600, 0, 1000, 0)))).toBe(600)
     // Short of room: the curated columns give way to their content before Name does.
     expect(computeColumnLayout(columns, 1600 - coveredTableWidth(1600, 0, 1150, 0))).toEqual({ name: 270, status: 120, age: 60 })
+  })
+})
+
+describe('layoutColumns', () => {
+  // Pods-like: Name 400 (yields to 300), Status exact 160 (content 120), Node fit 220 (cuts to 90), GPU 80, Age 96.
+  const cols = (): ColumnLayoutInput[] => [
+    name(400, 300),
+    { ...exact('status', 160), min: 120 },
+    { key: 'node', mode: 'fit', floor: 90, content: 220, min: 90, yieldRank: 1, dropOrder: 1 },
+    { ...exact('gpu', 80), dropOrder: 2 },
+    exact('age', 96),
+  ]
+  // Starting widths 400 + 160 + 220 + 80 + 96 = 956; given back without cutting: Name 100, Status 40.
+
+  it('drops nothing while giving back without cutting covers the shortfall', () => {
+    expect(layoutColumns(cols(), 816).dropped).toEqual([])
+    // The passes run as before (Node, first to give way, is cut to its heading):
+    // dropping is only for what give-back without cutting can't cover.
+    expect(layoutColumns(cols(), 816).widths).toEqual({ name: 400, status: 150, node: 90, gpu: 80, age: 96 })
+  })
+
+  it('drops low-priority columns, lowest first, before any value is cut', () => {
+    // 815: one pixel short without cutting, so Node drops instead of being cut.
+    const one = layoutColumns(cols(), 815)
+    expect(one.dropped).toEqual(['node'])
+    expect(one.widths).not.toHaveProperty('node')
+    expect(total(one.widths)).toBe(815)
+    // Short by more than Node: GPU goes too.
+    expect(layoutColumns(cols(), 560).dropped).toEqual(['node', 'gpu'])
+  })
+
+  it('never drops a column the user sized, and drops nothing before layout', () => {
+    const sized = cols().map(c => c.key === 'node' ? { ...c, userWidth: 220 } : c)
+    expect(layoutColumns(sized, 700).dropped).toEqual(['gpu'])
+    expect(layoutColumns(cols(), 0).dropped).toEqual([])
+  })
+
+  it('brings dropped columns back when there is room', () => {
+    expect(layoutColumns(cols(), 560).dropped).toEqual(['node', 'gpu'])
+    expect(layoutColumns(cols(), 1200).dropped).toEqual([])
   })
 })
