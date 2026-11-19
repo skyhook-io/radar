@@ -18,6 +18,7 @@ import (
 	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	velerosvc "github.com/skyhook-io/radar/internal/velero"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
 
@@ -224,8 +225,8 @@ func TestVeleroWorkspace_DeniedBackupsLeaveRunsUnknownAndWithholdTheirIssues(t *
 	if hasVeleroIssue(got, "Backup", "adhoc-broken") {
 		t.Error("an issue on a Backup the caller cannot list was returned")
 	}
-	if got.Locations[0].Backups != nil || got.Installations[0].UnassignedBackups != nil {
-		t.Errorf("backup counts must stay unknown: %+v %+v", got.Locations[0].Backups, got.Installations[0].UnassignedBackups)
+	if got.Locations[0].Backups != nil {
+		t.Errorf("backup counts must stay unknown: %+v", got.Locations[0].Backups)
 	}
 }
 
@@ -524,6 +525,46 @@ func TestVeleroRuns_VeleroOnlyReader(t *testing.T) {
 			t.Errorf("a run from an unreadable namespace: %+v", r)
 		}
 	}
+
+	t.Run("open a listed backup", func(t *testing.T) {
+		row := got.Runs[0]
+		path := "/api/resources/backups/" + row.Namespace + "/" + row.Name
+		perms.SetCanI("get", veleroGroup, "backups", row.Namespace, false)
+		denied := env.authGet(t, path+"?group=velero.io", "velero-only", "")
+		denied.Body.Close()
+		if denied.StatusCode != http.StatusForbidden {
+			t.Fatalf("list-only reader got %d", denied.StatusCode)
+		}
+		perms.SetCanI("get", veleroGroup, "backups", row.Namespace, true)
+		detail := env.authGet(t, path+"?group=velero.io", "velero-only", "")
+		defer detail.Body.Close()
+		var result struct {
+			Resource        unstructured.Unstructured
+			Relationships   json.RawMessage
+			RelatedFindings json.RawMessage
+		}
+		if err := json.NewDecoder(detail.Body).Decode(&result); err != nil || detail.StatusCode != http.StatusOK ||
+			result.Resource.GetName() != row.Name || result.Resource.GetNamespace() != row.Namespace ||
+			result.Relationships != nil || result.RelatedFindings != nil {
+			t.Fatalf("detail returned %d, %+v, %v", detail.StatusCode, result, err)
+		}
+		for _, group := range []string{"postgresql.cnpg.io", ""} {
+			resp := env.authGet(t, path+"?group="+group, "velero-only", "")
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Errorf("backup group %q got %d", group, resp.StatusCode)
+			}
+		}
+		pinNamespaceScope(t)
+		pinned := env.authGet(t, path+"?group=velero.io", "velero-only", "")
+		defer pinned.Body.Close()
+		var refusal struct {
+			Code string `json:"error_code"`
+		}
+		if err := json.NewDecoder(pinned.Body).Decode(&refusal); err != nil || pinned.StatusCode != http.StatusForbidden || refusal.Code != string(readreason.UserNamespaceNotVisible) {
+			t.Errorf("pinned detail returned %d, %+v, %v", pinned.StatusCode, refusal, err)
+		}
+	})
 
 	for _, path := range []string{"/api/velero/runs/backups?schedule=absent", "/api/velero/runs/restores?backup=absent"} {
 		resp := env.authGet(t, path, "velero-only", "")

@@ -6,6 +6,7 @@ import {
   RadarUpgradeAction,
   Tooltip,
   getRadarUpgradeRequirement,
+  hasLabelSelectorTerms,
   issueTitle,
   radarUpgradeDetail,
   radarUpgradeHeadline,
@@ -94,8 +95,8 @@ export function selectionText(spec: any, emptyMeans: string, kind: 'backup' | 'r
   // `*` in an include list is everything; in an exclude list it drops the whole scope, which narrows.
   const narrowed =
     RESOURCE_FILTERS.some((field) => list(spec?.[field]).some((v) => (field.startsWith('included') ? v !== '*' : !injected(field).includes(v)))) ||
-    !!spec?.labelSelector ||
-    list(spec?.orLabelSelectors).length > 0
+    hasLabelSelectorTerms(spec?.labelSelector) ||
+    (Array.isArray(spec?.orLabelSelectors) && spec.orLabelSelectors.length > 0 && spec.orLabelSelectors.every(hasLabelSelectorTerms))
   return { text, narrowed }
 }
 
@@ -275,6 +276,8 @@ function rejectedRuns(issue: VeleroIssue): WorkspaceProblem['related'] {
 export const VELERO_START_SERVER = 'Start the Velero server Deployment, or find out why its pods don’t run'
 export const VELERO_CHECK_SERVER = 'Check that the Velero server is running, and read its logs'
 export const VELERO_SHORTEN_NAME = 'Recreate the schedule with a name of 63 characters or fewer'
+export const VELERO_WRITABLE_LOCATION = 'Point the schedule at a writable storage location, or set its location back to ReadWrite'
+export const VELERO_CHECK_HELD_BACKUP = 'Check that the Velero server is running with its backup controller enabled, and inspect its logs for the queued backup.'
 
 // The next step for each Velero Issue whose message Radar doesn't recognise.
 const ISSUE_NEXT_STEP: Record<string, string> = {
@@ -291,7 +294,7 @@ const ISSUE_NEXT_STEP: Record<string, string> = {
   VeleroRunStalled: VELERO_CHECK_SERVER,
   VeleroServerNotRunning: VELERO_START_SERVER,
   VeleroScheduleLate: 'Check that the Velero server is running with its schedule controller, and read its logs',
-  VeleroScheduleHeld: 'Find out why its backup hasn’t started, or delete that backup',
+  VeleroScheduleHeld: VELERO_CHECK_HELD_BACKUP,
   VeleroScheduleNotValidated: VELERO_CHECK_SERVER,
   VeleroLocationValidationOverdue: VELERO_CHECK_SERVER,
 }
@@ -303,11 +306,13 @@ const ISSUE_NEXT_STEP: Record<string, string> = {
 export function veleroIssueNextStep(issue: Pick<VeleroIssue, 'action' | 'message' | 'reason'>): string | undefined {
   const action = issue.action?.trim()
   if (action) return action
+  if (issue.reason === 'VeleroScheduleCannotRun') {
+    if (/63 characters/.test(issue.message ?? '')) return VELERO_SHORTEN_NAME
+    if (/is read-only/.test(issue.message ?? '')) return VELERO_WRITABLE_LOCATION
+  }
   const fromMessage = veleroReasonNextStep(issue.message)
   if (fromMessage) return fromMessage
-  if (issue.reason === 'VeleroScheduleCannotRun') {
-    return /63 characters/.test(issue.message ?? '') ? VELERO_SHORTEN_NAME : 'Change the cron expression to one with a future time'
-  }
+  if (issue.reason === 'VeleroScheduleCannotRun') return 'Change the cron expression to one with a future time'
   return issue.reason ? ISSUE_NEXT_STEP[issue.reason] : undefined
 }
 

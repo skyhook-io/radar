@@ -28,6 +28,7 @@ func TestCodeWireValues(t *testing.T) {
 		NamespaceNotFound:          "namespace_not_found",
 		NamespaceRequired:          "namespace_required",
 		ObjectNotFound:             "object_not_found",
+		LegacyGroupOnly:            "legacy_group_only",
 		ListTooLarge:               "list_too_large",
 		FilterEvalFailed:           "filter_eval_failed",
 		FindingsScanIncomplete:     "findings_scan_incomplete",

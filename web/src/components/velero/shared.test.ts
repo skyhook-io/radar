@@ -53,6 +53,14 @@ describe('a Velero selection', () => {
     expect(selectionText({ ...processedBackup, includedNamespaceScopedResources: ['*'], includedClusterScopedResources: ['*'] }, '').narrowed).toBe(false)
   })
 
+  it('only marks label selection as narrowed when its selectors restrict the objects', () => {
+    const byApp = { matchLabels: { app: 'api' } }
+    const byTier = { matchExpressions: [{ key: 'tier', operator: 'Exists' }] }
+    expect(selectionText({ orLabelSelectors: [byApp, byTier] }, 'All namespaces').narrowed).toBe(true)
+    expect(selectionText({ orLabelSelectors: [byApp, {}] }, 'All namespaces').narrowed).toBe(false)
+    expect(selectionText({ labelSelector: {} }, 'All namespaces').narrowed).toBe(false)
+  })
+
   it('counts a restore exclusion on a backup, where Velero does not add it', () => {
     expect(selectionText({ excludedResources: ['nodes'] }, '').narrowed).toBe(true)
   })

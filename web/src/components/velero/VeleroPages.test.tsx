@@ -35,6 +35,7 @@ vi.mock('../../api/policy', async (importOriginal) => ({
 const { parseVeleroRoute, veleroDetailKindFor, veleroDetailPath } = await import('./routes')
 const { VeleroBackupRestores, VeleroLocationBackups, locationState, renderVeleroSummary } = await import('./VeleroPages')
 const { VeleroBackups } = await import('./VeleroRunLists')
+const { runsEmpty } = await import('./runs')
 const { VeleroScheduleStateBadge } = await import('@skyhook-io/k8s-ui')
 const { veleroResourceHost } = await import('./host')
 
@@ -146,14 +147,14 @@ describe('The composed Overview', () => {
     expect(html).toContain('Not verified')
   })
 
-  it('names a restore Velero finished from the backup, where the answer is not a certain no', () => {
+  it('names a previous restore separately from the current storage location’s availability', () => {
     state.workspace = workspace()
     const done = { phase: 'Completed', startTimestamp: hoursAgo(5), completionTimestamp: hoursAgo(5) }
     const backup = { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default' }, status: done }
     const restore = (name: string, phase: string, completed?: string) => ({ namespace: 'velero', name, uid: name, phase, completed, errors: 0, warnings: 0 })
     state.runsBy = { 'restores:b': runsOf([restore('r-failed', 'Failed', hoursAgo(1)), restore('r-ok', 'PartiallyFailed', hoursAgo(2)), restore('r-old', 'Completed', hoursAgo(3))]) }
     const html = plainText(page('backups', backup))
-    expect(html).toContain('Restored before: r-ok · partially failed · 2h ago')
+    expect(html).toContain('Previous restore from this backup name: r-ok · partially failed · 2h ago')
     expect(html).not.toContain('Not verified')
     state.runsBy = { 'restores:b': runsOf([restore('r-failed', 'Failed', hoursAgo(1))]) }
     expect(page('backups', backup)).toContain('Not verified — Velero never tests a restore')
@@ -161,8 +162,48 @@ describe('The composed Overview', () => {
     state.workspace = workspace({ locations: [location({ name: 'default', phase: 'Unavailable' })] })
     const unavailable = page('backups', backup)
     expect(unavailable).toContain('No: its storage location is unavailable')
-    expect(unavailable).not.toContain('Restored before')
+    expect(plainText(unavailable)).toContain('Previous restore from this backup name: r-ok · completed')
     state.runsBy = {}
+  })
+
+  it('reads a restore from a backup being deleted as uncertain: Velero would still try', () => {
+    state.workspace = workspace()
+    const backup = { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default' }, status: { phase: 'Deleting', startTimestamp: hoursAgo(5) } }
+    const html = plainText(page('backups', backup))
+    expect(html).toContain('Uncertain: it is being deleted')
+    expect(html).not.toContain('No: it is being deleted')
+  })
+
+  it('says a backup on an unavailable location can’t be restored, even while it is being deleted', () => {
+    state.workspace = workspace({ locations: [location({ name: 'default', phase: 'Unavailable' })] })
+    const backup = { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default' }, status: { phase: 'Deleting', startTimestamp: hoursAgo(5) } }
+    const html = plainText(page('backups', backup))
+    expect(html).toContain('No: its storage location is unavailable')
+    expect(html).not.toContain('Uncertain')
+  })
+
+  it('says a Back up now run was made by hand from its schedule', () => {
+    state.workspace = workspace()
+    const backup = {
+      metadata: { namespace: 'velero', name: 'nightly-20261118120000', labels: { 'velero.io/schedule-name': 'nightly' }, annotations: { 'radar.skyhook.io/submission': 'confirmation-1' } },
+      spec: { storageLocation: 'default' },
+      status: { phase: 'Completed', startTimestamp: hoursAgo(2), completionTimestamp: hoursAgo(2) },
+    }
+    expect(plainText(page('backups', backup))).toContain('Back up now, from schedule nightly')
+  })
+
+  it('says deletion requests remain pending while deletion is disabled', () => {
+    const ws = workspace()
+    state.workspace = { ...ws, installations: [{ ...ws.installations[0], server: { ...ws.installations[0].server, gcDisabled: false, deletionDisabled: true } }] }
+    const backup = { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default' }, status: { phase: 'Completed', startTimestamp: hoursAgo(50), completionTimestamp: hoursAgo(49), expiration: hoursAgo(1) } }
+    expect(plainText(page('backups', backup))).toContain('Past its retention. The backup-deletion controller is disabled, so deletion requests remain pending.')
+  })
+
+  it('says expired backups stay while Velero’s garbage collection is disabled', () => {
+    const ws = workspace()
+    state.workspace = { ...ws, installations: [{ ...ws.installations[0], server: { ...ws.installations[0].server, gcDisabled: true } }] }
+    const backup = { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default' }, status: { phase: 'Completed', startTimestamp: hoursAgo(50), completionTimestamp: hoursAgo(49), expiration: hoursAgo(1) } }
+    expect(plainText(page('backups', backup))).toContain('Past its retention, but Velero’s garbage collection is disabled')
   })
 
   it('says a rejected backup backed up nothing, and neither keeps nor restores anything', () => {
@@ -182,8 +223,16 @@ describe('The composed Overview', () => {
     const done = { phase: 'Completed', startTimestamp: hoursAgo(1), completionTimestamp: hoursAgo(1) }
     expect(page('backups', { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'dr' }, status: done })).toContain('No: its storage location is unavailable')
     expect(page('backups', { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'gone' }, status: done })).toContain('No: its storage location doesn’t exist')
-    expect(page('backups', { metadata: { namespace: 'velero', name: 'b' }, spec: {}, status: { phase: 'Failed', startTimestamp: hoursAgo(1) } })).toContain('No: it did not complete')
-    expect(page('backups', { metadata: { namespace: 'velero', name: 'b' }, spec: {}, status: { phase: 'InProgress', startTimestamp: hoursAgo(1) } })).toContain('No: it hasn’t finished')
+  })
+
+  it('distinguishes an unstarted run, a started failure and incomplete post-processing', () => {
+    state.workspace = workspace()
+    const summary = (phase: string, startTimestamp?: string) => plainText(page('backups', { metadata: { namespace: 'velero', name: 'b' }, spec: {}, status: { phase, startTimestamp } }))
+    expect(summary('New')).toContain('Not yet: Velero hasn’t started the backup.')
+    expect(summary('Failed', hoursAgo(1))).toContain('Some contents may have reached storage.')
+    for (const phase of ['InProgress', 'WaitingForPluginOperations', 'FinalizingPartiallyFailed']) {
+      expect(summary(phase, hoursAgo(1))).toContain('Wait for the backup to finish. Its stored contents may still be incomplete.')
+    }
   })
 
   it('leads with Velero’s issue as a plain banner, with its next step', () => {
@@ -358,11 +407,24 @@ describe('The composed Overview', () => {
     expect(plain).toMatch(/Every 1m · last sync attempt/)
   })
 
+  it('marks a Back up now run among a location’s backups', () => {
+    state.stored = { backups: [{ namespace: 'velero', name: 'nightly-1', phase: 'Completed', manual: true }, { namespace: 'velero', name: 'nightly-0', phase: 'Completed' }], restorable: 2, expired: 0, stored: 2 }
+    const html = renderToStaticMarkup(<MemoryRouter><VeleroLocationBackups namespace="velero" name="dr" /></MemoryRouter>)
+    expect(html.match(/>manual</g)).toHaveLength(1)
+  })
+
   it('lists a location’s backups with the failed ones a segment away', () => {
     state.stored = { backups: [{ namespace: 'velero', name: 'x', phase: 'Failed' }, { namespace: 'velero', name: 'y', phase: 'Completed' }, { namespace: 'velero', name: 'z', phase: 'PartiallyFailed' }], restorable: 1, expired: 0, stored: 3 }
     const html = plainWords(renderToStaticMarkup(<MemoryRouter><VeleroLocationBackups namespace="velero" name="dr" /></MemoryRouter>))
     expect(html).toContain('3 · 1 completed · 0 expired · 2 failed')
     expect(html).toMatch(/Failed 2/)
+  })
+
+  it('scopes a zero failure count to the backups shown when the location was clipped', () => {
+    state.stored = { backups: [{ namespace: 'velero', name: 'recent', phase: 'Completed' }], restorable: 200, expired: 0, stored: 201, truncated: true }
+    const html = plainWords(renderToStaticMarkup(<MemoryRouter><VeleroLocationBackups namespace="velero" name="dr" /></MemoryRouter>))
+    expect(html).toContain('Failed 0 shown')
+    expect(html).toContain('0 failed among the newest 1')
   })
 })
 
@@ -403,6 +465,17 @@ describe('The Backups list', () => {
     expect(html).toMatch(/text-red[^"]*">1 error</)
     expect(html).not.toContain('0 warnings')
     expect(html).toContain('<span class="min-w-0 truncate">nightly-20261117</span><span class="shrink-0">041210</span>')
+  })
+
+  it('marks a Back up now run as manual, and says an empty search was over the newest runs when the list was cut', () => {
+    state.runs = { ...response([{ ...run('nightly-20261117041210', 'Completed', 'nightly'), manual: true }]), total: 6000, truncated: true }
+    const html = text(render('/resources/backups?apiGroup=velero.io'))
+    expect(html).toContain('schedule nightly')
+    expect(html).toMatch(/ · manual/)
+    type RunsData = Parameters<typeof runsEmpty>[0]['data']
+    const cut = { ...response([run('a', 'Completed')]), total: 6000, truncated: true } as unknown as RunsData
+    expect(runsEmpty({ data: cut, isPending: false, error: null }, 'backups', 'No backups match')).toBe('No backups match in the newest 1.')
+    expect(runsEmpty({ data: response([run('a', 'Completed')]) as unknown as RunsData, isPending: false, error: null }, 'backups', 'No backups match')).toBe('No backups match.')
   })
 
   it('takes no label filter from a link: a schedule’s runs are on its page', () => {

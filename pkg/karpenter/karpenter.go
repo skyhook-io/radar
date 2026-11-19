@@ -84,6 +84,13 @@ const (
 	RelationshipLabel    RelationshipSource = "label"
 )
 
+// IsNodeClassKind reports whether group and kind name a Karpenter provider's
+// NodeClass, such as EC2NodeClass in karpenter.k8s.aws: each provider
+// defines its own.
+func IsNodeClassKind(group, kind string) bool {
+	return strings.Contains(group, "karpenter") && strings.HasSuffix(kind, "NodeClass")
+}
+
 func NodeClassRefForNodePool(pool *unstructured.Unstructured) (NodeClassRef, bool) {
 	if pool == nil {
 		return NodeClassRef{}, false

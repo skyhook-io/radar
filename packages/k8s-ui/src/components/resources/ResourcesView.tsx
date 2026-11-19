@@ -1,8 +1,10 @@
 import { CRDVersionsCell } from './renderers/crd-cells'
 import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
+import { getVolumeSnapshotColumnValue, getVolumeSnapshotSortValue } from './resource-utils-volumesnapshot'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { getAgentRuntimeSortValue } from './resource-utils-agent-runtimes'
 import { UPGRADE_PLAN_GROUP, getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 import type { ResourceCoverage } from '../../types/resource-coverage'
 import { resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from '../../utils/resource-coverage'
@@ -149,7 +151,6 @@ import {
   getRoleRuleCount,
   formatAge,
   formatDuration,
-  truncate,
   getCellFilterValue,
   parseColumnFilters,
   serializeColumnFilters,
@@ -171,7 +172,7 @@ import { ActiveFilterBar } from './ActiveFilterBar'
 import { getIstioGatewayServerCount, getIstioGatewaySelectorString } from './resource-utils-istio'
 import {
   type PrinterColumnDef, type PrinterTable, PRINTER_COLUMN_PREFIX, formatPrinterCell, printerCellSortValue,
-  printerCellTone, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
+  printerCellTone, printerColumnIsText, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
 } from './printer-columns'
 import { SEVERITY_BADGE, SEVERITY_TEXT, healthToSeverity, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { englishPlural, isEnglishPlural, pluralize } from '../../utils/pluralize'
@@ -181,6 +182,9 @@ import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCus
 import { isRolloutActivityVisible } from '../../utils/workload-rollout'
 import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { Tooltip } from '../ui/Tooltip'
+import { TruncatedText } from '../ui/TruncatedText'
+import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, rememberWidths } from './column-sizing'
+import { type CellWidth, type UsageLabel, NAME_MAX_PX, NAME_MIN_PX, NAME_PROTECTED_MAX_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, usageLabelWidth, workloadImagesText, shortValueMin } from './column-content-width'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import type { Issue } from '../issues/types'
 import { issueTitle } from '../issues/severity'
@@ -205,6 +209,7 @@ import { InferencePoolCell, InferenceObjectiveCell } from './renderers/inference
 import { VolcanoJobCell, VolcanoQueueCell, VolcanoPodGroupCell, JobFlowCell, JobTemplateCell } from './renderers/volcano-cells'
 import { KaiQueueCell, KaiPodGroupCell } from './renderers/kai-cells'
 import { KaitoWorkspaceCell, RAGEngineCell } from './renderers/kaito-cells'
+import { SandboxCell, SandboxClaimCell, SandboxWarmPoolCell, WorkerPoolCell } from './renderers/agent-runtime-cells'
 import { NIMServiceCell, NIMCacheCell, NIMPipelineCell } from './renderers/nim-cells'
 import { AMDDeviceConfigCell } from './renderers/amd-gpu-cells'
 import { PyTorchJobCell, TFJobCell, MPIJobCell, TrainJobCell } from './renderers/kubeflow-training-cells'
@@ -266,6 +271,11 @@ export const SKIP_FILTER_COLUMNS = new Set([
   // status.summary. Listing them here stops the header reserving room for a
   // button that can never render.
   'critical', 'high', 'medium', 'low', 'pass', 'fail', 'warn', 'error', 'skip',
+  // The same for Pods' and Nodes' Containers, CPU, Memory, GPU and Pods
+  // columns: their cells draw from container statuses, metrics and resource
+  // requests, getCellFilterValue has no case for them, and no Pod, Node or
+  // Volcano Job carries a status or spec field of those names.
+  'containers', 'cpu', 'memory', 'gpu', 'pods',
 ])
 
 // Namespace/node cardinality scales with cluster size, not kind enum size;
@@ -287,6 +297,15 @@ export interface Column {
   defaultVisible?: boolean // false = hidden by default, shown via column picker
   defaultWidth?: number // default width in px (used for resizable columns)
   minWidth?: number // minimum width in px
+  /** How the column is sized automatically (see column-sizing.ts). Name,
+   *  Namespace and Node fit their content; anything else keeps its width
+   *  unless it says 'fit' — short values (status badges, enums, names) that are
+   *  useless cut, sized to the longest — or 'grow' — long free text that
+   *  takes the room left over. Either needs a reader of what its cell shows
+   *  in column-content-width.ts. */
+  sizing?: ColumnSizingMode
+  /** A grow column's share of the room left over (default 1). */
+  growWeight?: number
 }
 
 type BulkResourceItem = { kind: string; group?: string; namespace: string; name: string }
@@ -325,16 +344,13 @@ function buildCustomColumn(d: CustomColumnDef): ExtraColumn {
     key: customColumnKey(d),
     label: d.path,
     width: 'w-40',
+    sizing: 'grow',
     defaultVisible: true,
     tooltip: d.source === 'label' ? `Label: ${d.path}` : `Annotation: ${d.path}`,
     render: (resource: any) => {
       const v = readCustomColumnValue(resource, d)
       if (!v) return <span className="text-sm text-theme-text-secondary">-</span>
-      return (
-        <Tooltip content={v}>
-          <span className="text-sm text-theme-text-secondary truncate block">{v}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={v} className="text-sm text-theme-text-secondary" />
     },
     getSortValue: (resource: any) => readCustomColumnValue(resource, d),
     getFilterValue: (resource: any) => readCustomColumnValue(resource, d),
@@ -370,6 +386,15 @@ const CHECKBOX_COLUMN_WIDTH = 40
 const PHONE_PINNED_CELL = 'phone:sticky phone:left-[var(--pin-left)] phone:z-[1] phone:bg-theme-surface'
 const PHONE_PINNED_HEAD = 'phone:sticky phone:left-[var(--pin-left)] phone:z-[3]'
 const PHONE_NAME_MAX_VW = 45
+// The most of the table's width Name may hold on to (see columnLayoutWidths).
+const NAME_VIEWPORT_SHARE = 0.5
+// Room a column shrunk to its heading keeps beyond the measured heading.
+const HEADER_SHRINK_SLACK_PX = 6
+// From a 1080p window up (maximized, Radar's default sidebars), a table never
+// scrolls sideways: columns give way to their headings and Name to
+// NAME_MIN_PX before it would. Narrower windows keep the gentler rules and may
+// scroll rather than cut most names.
+export const MUST_FIT_WINDOW_PX = 1920
 function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean | undefined, column: 'compare' | 'checkbox' | 'name'): React.CSSProperties {
   const compare = compareMode ? COMPARE_COLUMN_WIDTH : 0
   const checkbox = showCheckbox ? CHECKBOX_COLUMN_WIDTH : 0
@@ -382,6 +407,7 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
   'connectCluster', 'connectorClass', 'connectorTasks',
   'kafkaVersion', 'kafkaWarnings', 'kafkaPools', 'kafkaListeners', 'poolKafka', 'poolRoles', 'poolReplicas',
+  'snapshotSource', 'restoreSize', 'snapshotClass', 'snapshotContent', 'snapshotTaken', 'snapshotRef', 'snapshotDriver', 'deletionPolicy', 'defaultClass',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -436,6 +462,7 @@ function watchHeaderFont(): void {
   void fonts.ready.then(() => {
     headerLabelWidthCache.clear()
     headerMeasureCtx = undefined // re-created so ctx.font resolves against the loaded face
+    resetCellTextMeasure()
     headerFontEpoch++
     for (const notify of headerFontListeners) notify()
   })
@@ -487,17 +514,6 @@ function headerLabelWidth(label: string): number {
   return width
 }
 
-function snapshotHeaderWidths(container: HTMLElement | null): Record<string, number> | undefined {
-  const ths = container?.querySelectorAll<HTMLElement>('thead th[data-column-key]')
-  if (!ths) return undefined
-  const snapped: Record<string, number> = {}
-  ths.forEach(th => {
-    const key = th.dataset.columnKey
-    if (key) snapped[key] = th.getBoundingClientRect().width
-  })
-  return snapped
-}
-
 /**
  * Header label that carries its own full text in a tooltip when it truncates.
  *
@@ -506,34 +522,11 @@ function snapshotHeaderWidths(container: HTMLElement | null): Record<string, num
  * column the user dragged narrower, and the sort/filter controls sharing the
  * row — whose width depends on their state (an active filter renders padding,
  * an icon and a count). Their rendered width isn't knowable from the column
- * definition, so this reads the element's actual overflow rather than computing
- * it.
- *
- * The Tooltip wrapper stays mounted whether or not the label truncates: swapping
- * it in on overflow would remount the measured span, stranding the
- * ResizeObserver on the detached node so the state could never flip back. It
- * also needs min-w-0 — the wrapper is the flex item in the header row, and an
- * inline-flex box won't shrink below its content unless told to, which would
- * push the sort and filter controls out of the cell.
+ * definition, so TruncatedText reads the element's actual overflow rather than
+ * computing it.
  */
 function HeaderLabel({ label, className }: { label: string; className?: string }) {
-  const ref = useRef<HTMLSpanElement>(null)
-  const [truncated, setTruncated] = useState(false)
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const check = () => setTruncated(el.scrollWidth > el.clientWidth + 0.5)
-    check()
-    if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(check)
-    ro.observe(el)
-    return () => { ro.disconnect() }
-  }, [label])
-  return (
-    <Tooltip content={label} disabled={!truncated} preserveWrapperWhenDisabled wrapperClassName="min-w-0">
-      <span ref={ref} className={clsx('truncate', className)}>{label}</span>
-    </Tooltip>
-  )
+  return <TruncatedText text={label} className={className} />
 }
 
 /**
@@ -547,7 +540,11 @@ export function isColumnSortable(col: Column, extras?: Map<string, ExtraColumn>)
 }
 
 export function getColumnMinWidth(col: Column, extras?: Map<string, ExtraColumn>): number {
-  const declared = declaredColumnWidth(col)
+  return Math.max(declaredColumnWidth(col), getColumnHeaderWidth(col, extras))
+}
+
+/** The room a column's heading needs: label, padding, and the sort and filter controls. */
+export function getColumnHeaderWidth(col: Column, extras?: Map<string, ExtraColumn>): number {
   // A column-filter button also sits in this row, but whether one renders
   // depends on the distinct values in the data (isColumnFilterableByDistinctCount),
   // which isn't knowable here — those columns stay ~20px tighter than ideal.
@@ -559,7 +556,7 @@ export function getColumnMinWidth(col: Column, extras?: Map<string, ExtraColumn>
   const affordance = (isColumnSortable(col, extras) ? HEADER_SORT_AFFORDANCE_PX : 0)
     + (SKIP_FILTER_COLUMNS.has(col.key) ? 0 : HEADER_FILTER_AFFORDANCE_PX)
   const headerFloor = HEADER_PADDING_PX + headerLabelWidth(col.label) + affordance
-  return Math.max(declared, Math.min(Math.ceil(headerFloor), HEADER_FLOOR_MAX_PX))
+  return Math.min(Math.ceil(headerFloor), HEADER_FLOOR_MAX_PX)
 }
 
 function declaredColumnWidth(col: Column): number {
@@ -631,6 +628,34 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'poolReplicas', label: 'Replicas', width: 'w-28 shrink-0', tooltip: 'Node IDs Strimzi assigned / desired replicas. Not a count of running Pods.' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
+  volumesnapshots: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-36 shrink-0', tooltip: 'Readiness the CSI driver reports. Ready to use does not establish application consistency or a tested restore.' },
+    { key: 'snapshotSource', label: 'Source', width: 'min-w-40', tooltip: 'The PVC to snapshot, or the content a pre-provisioned snapshot names.' },
+    { key: 'restoreSize', label: 'Restore Size', width: 'w-28 shrink-0', tooltip: 'Minimum size of a volume restored from this snapshot. Empty when the driver did not report it.' },
+    { key: 'snapshotClass', label: 'Class', width: 'w-44 shrink-0' },
+    { key: 'snapshotContent', label: 'Bound Content', width: 'min-w-40', tooltip: 'The VolumeSnapshotContent the controller bound. Empty until binding succeeds.' },
+    { key: 'snapshotTaken', label: 'Taken', width: 'w-24 shrink-0', tooltip: 'When the storage system cut the snapshot, as the driver reports it.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  volumesnapshotcontents: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'status', label: 'Status', width: 'w-36 shrink-0', tooltip: 'Readiness the CSI driver reports for the snapshot on the storage system.' },
+    { key: 'snapshotRef', label: 'Volume Snapshot', width: 'min-w-40' },
+    { key: 'snapshotDriver', label: 'Driver', width: 'w-48 shrink-0' },
+    { key: 'deletionPolicy', label: 'Deletion Policy', width: 'w-32 shrink-0', tooltip: 'Delete removes the storage snapshot with its VolumeSnapshot; Retain keeps it.' },
+    { key: 'restoreSize', label: 'Restore Size', width: 'w-28 shrink-0' },
+    { key: 'snapshotClass', label: 'Class', width: 'w-44 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  volumesnapshotclasses: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'snapshotDriver', label: 'Driver', width: 'w-56 shrink-0' },
+    { key: 'deletionPolicy', label: 'Deletion Policy', width: 'w-32 shrink-0', tooltip: 'Policy for contents created from this class: Delete removes the storage snapshot with its VolumeSnapshot; Retain keeps it.' },
+    { key: 'defaultClass', label: 'Default', width: 'w-24 shrink-0', tooltip: 'Used for snapshots of this driver that name no class.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
   opentelemetrycollectors: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
@@ -697,7 +722,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
     { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template' },
     { key: 'available', label: 'Available', width: 'w-28', tooltip: 'Number of pods available (ready for minReadySeconds)' },
-    { key: 'images', label: 'Images', width: 'w-48' },
+    { key: 'images', label: 'Images', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   daemonsets: [
@@ -708,7 +733,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ready', label: 'Ready', width: 'w-20', tooltip: 'Number of pods that are ready (passing readiness probes)' },
     { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template spec' },
     { key: 'available', label: 'Available', width: 'w-28', tooltip: 'Number of pods available (ready for minReadySeconds duration)' },
-    { key: 'images', label: 'Images', width: 'w-48' },
+    { key: 'images', label: 'Images', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   statefulsets: [
@@ -717,24 +742,24 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
     { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Pods running the current pod template; a rolling-update partition or OnDelete strategy can intentionally leave pods on an older template' },
-    { key: 'images', label: 'Images', width: 'w-48' },
+    { key: 'images', label: 'Images', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   replicasets: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'ready', label: 'Ready', width: 'w-24' },
-    { key: 'owner', label: 'Owner', width: 'w-48' },
+    { key: 'owner', label: 'Owner', width: 'w-48', sizing: 'grow' },
     { key: 'status', label: 'Status', width: 'w-24', tooltip: 'Active means desired replicas are greater than zero; Old means desired replicas are zero, regardless of Deployment revision' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   services: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'type', label: 'Type', width: 'w-28' },
-    { key: 'selector', label: 'Selector', width: 'w-48' },
-    { key: 'endpoints', label: 'Endpoints', width: 'w-24' },
-    { key: 'ports', label: 'Ports', width: 'w-40' },
+    { key: 'type', label: 'Type', width: 'w-28', sizing: 'fit' },
+    { key: 'selector', label: 'Selector', width: 'w-48', sizing: 'grow', growWeight: 2 },
+    { key: 'endpoints', label: 'Endpoints', width: 'w-24', sizing: 'fit' },
+    { key: 'ports', label: 'Ports', width: 'w-40', sizing: 'fit' },
     { key: 'externalIP', label: 'External', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -752,8 +777,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'class', label: 'Class', width: 'w-24 shrink-0' },
-    { key: 'hosts', label: 'Hosts', width: 'min-w-48' },
-    { key: 'rules', label: 'Rules', width: 'min-w-56' },
+    { key: 'hosts', label: 'Hosts', width: 'min-w-48', sizing: 'grow' },
+    { key: 'rules', label: 'Rules', width: 'min-w-56', sizing: 'grow' },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
     { key: 'address', label: 'Address', width: 'min-w-32' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
@@ -774,7 +799,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   configmaps: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'keys', label: 'Keys', width: 'w-48' },
+    { key: 'keys', label: 'Keys', width: 'w-48', sizing: 'grow', growWeight: 2 },
     { key: 'size', label: 'Size', width: 'w-24', tooltip: 'Estimated size of data values, including decoded binary data. Kubernetes rejects ConfigMaps whose combined data exceeds 1 MiB.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -805,7 +830,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   hpas: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'target', label: 'Target', width: 'w-48' },
+    { key: 'target', label: 'Target', width: 'w-48', sizing: 'grow' },
     { key: 'replicas', label: 'Replicas', width: 'w-32' },
     { key: 'metrics', label: 'Metrics', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
@@ -814,7 +839,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   horizontalpodautoscalers: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'target', label: 'Target', width: 'w-48' },
+    { key: 'target', label: 'Target', width: 'w-48', sizing: 'grow' },
     { key: 'replicas', label: 'Replicas', width: 'w-32' },
     { key: 'metrics', label: 'Metrics', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
@@ -827,7 +852,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'capacity', label: 'Capacity', width: 'w-24' },
     { key: 'storageClass', label: 'Storage Class', width: 'w-40' },
     { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'RWO=ReadWriteOnce (one node, possibly several pods), ROX=ReadOnlyMany (read-only on many nodes), RWX=ReadWriteMany (read-write on many nodes), RWOP=ReadWriteOncePod (one pod only)' },
-    { key: 'volume', label: 'Volume', width: 'w-48' },
+    { key: 'volume', label: 'Volume', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   rollouts: [
@@ -837,7 +862,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Available / Desired replicas' },
     { key: 'strategy', label: 'Strategy', width: 'w-24' },
     { key: 'step', label: 'Step', width: 'w-20', tooltip: 'Current canary step / Total steps' },
-    { key: 'images', label: 'Images', width: 'w-48' },
+    { key: 'images', label: 'Images', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   analysisruns: [
@@ -981,16 +1006,16 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   gatewayclasses: [
     { key: 'name', label: 'Name' },
     { key: 'controller', label: 'Controller', width: 'w-64', tooltip: 'Gateway controller implementation (spec.controllerName)' },
-    { key: 'description', label: 'Description', width: 'w-64' },
+    { key: 'description', label: 'Description', width: 'w-64', sizing: 'grow' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   nodepools: [
     { key: 'name', label: 'Name' },
-    { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'nodeClass', label: 'Node Class', width: 'w-36' },
-    { key: 'limits', label: 'Limits', width: 'w-36', tooltip: 'Configured provisioning ceilings — not what the pool has provisioned. Concurrent provisioning can exceed them during rapid scale-out, and a limit does not remove nodes already running.' },
-    { key: 'disruption', label: 'Disruption', width: 'w-40', tooltip: 'Which nodes Karpenter may consolidate; budgets and timing controls can still prevent removal or replacement' },
+    { key: 'status', label: 'Status', width: 'w-24', sizing: 'fit' },
+    { key: 'nodeClass', label: 'Node Class', width: 'w-36', sizing: 'fit' },
+    { key: 'limits', label: 'Limits', width: 'w-36', sizing: 'fit', tooltip: 'Configured provisioning ceilings — not what the pool has provisioned. Concurrent provisioning can exceed them during rapid scale-out, and a limit does not remove nodes already running.' },
+    { key: 'disruption', label: 'Disruption', width: 'w-40', sizing: 'fit', tooltip: 'Which nodes Karpenter may consolidate; budgets and timing controls can still prevent removal or replacement' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   nodeclaims: [
@@ -999,13 +1024,13 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'instanceType', label: 'Instance Type', width: 'w-32' },
     { key: 'capacityType', label: 'Capacity', width: 'w-24', tooltip: 'Spot or On-Demand' },
     { key: 'zone', label: 'Zone', width: 'w-28' },
-    { key: 'nodePool', label: 'Node Pool', width: 'w-32' },
-    { key: 'nodeName', label: 'Node', width: 'w-40' },
+    { key: 'nodePool', label: 'Node Pool', width: 'w-32', sizing: 'fit' },
+    { key: 'nodeName', label: 'Node', width: 'w-40', sizing: 'fit' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ec2nodeclasses: [
     { key: 'name', label: 'Name' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-24', sizing: 'fit' },
     { key: 'ami', label: 'AMI', width: 'w-36', tooltip: 'AMI selector alias or ID' },
     { key: 'role', label: 'IAM Role', width: 'w-48' },
     { key: 'volumeSize', label: 'Volume', width: 'w-24', tooltip: 'Root volume size' },
@@ -1045,7 +1070,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   resourceslices: [
     { key: 'name', label: 'Name' },
     { key: 'driver', label: 'Driver', width: 'w-44' },
-    { key: 'pool', label: 'Pool', width: 'w-36', tooltip: "Pools are identified by driver and pool name. The scheduler needs a complete set of slices at the pool's highest generation before allocating from it." },
+    { key: 'pool', label: 'Pool', width: 'w-36', sizing: 'fit', tooltip: "Pools are identified by driver and pool name. The scheduler needs a complete set of slices at the pool's highest generation before allocating from it." },
     { key: 'node', label: 'Node', width: 'w-44', tooltip: "Node providing this slice's devices. A dash means node access is described by a node selector, all-nodes access, or per-device node selection." },
     { key: 'devices', label: 'Devices', width: 'w-24', tooltip: 'Devices published in this slice, including devices already allocated. This is not a count of free devices or the whole pool.' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1066,8 +1091,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   clusterqueues: [
     { key: 'name', label: 'Name' },
-    { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'cohort', label: 'Cohort', width: 'w-32', tooltip: 'Queues in this cohort can share unused quota, subject to borrowing and lending limits' },
+    { key: 'status', label: 'Status', width: 'w-24', sizing: 'fit' },
+    { key: 'cohort', label: 'Cohort', width: 'w-32', sizing: 'fit', tooltip: 'Queues in this cohort can share unused quota, subject to borrowing and lending limits' },
     { key: 'pendingWorkloads', label: 'Pending', width: 'w-24', tooltip: 'Workloads in this ClusterQueue waiting for admission, across namespaces; inspect workload status for the blocker' },
     { key: 'reservingWorkloads', label: 'Reserving', width: 'w-24', tooltip: 'Workloads holding a quota reservation in this ClusterQueue, admitted ones included, so it is not added to Admitted' },
     { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24', tooltip: 'Unfinished workloads admitted through this ClusterQueue, across namespaces; admission does not mean their pods are running' },
@@ -1077,8 +1102,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   localqueues: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'clusterQueue', label: 'Cluster Queue', width: 'w-40' },
+    { key: 'status', label: 'Status', width: 'w-24', sizing: 'fit' },
+    { key: 'clusterQueue', label: 'Cluster Queue', width: 'w-40', sizing: 'fit' },
     { key: 'pendingWorkloads', label: 'Pending', width: 'w-24', tooltip: 'Workloads submitted to this LocalQueue that are waiting for ClusterQueue admission' },
     { key: 'reservingWorkloads', label: 'Reserving', width: 'w-24', tooltip: 'Workloads from this LocalQueue holding a quota reservation, admitted ones included, so it is not added to Admitted' },
     { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24', tooltip: 'Unfinished workloads from this LocalQueue admitted to its ClusterQueue; their pods may still be waiting to run' },
@@ -1089,7 +1114,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'queueName', label: 'Queue', width: 'w-36' },
-    { key: 'admittedBy', label: 'Admitted By', width: 'w-36', tooltip: 'Admitting ClusterQueue' },
+    { key: 'admittedBy', label: 'Admitted By', width: 'w-36', sizing: 'fit', tooltip: 'Admitting ClusterQueue' },
     { key: 'priority', label: 'Priority', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1161,7 +1186,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   jobsets: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-28', sizing: 'fit' },
     { key: 'replicatedJobs', label: 'Repl. Jobs', width: 'w-24', tooltip: 'Number of replicated job templates' },
     { key: 'ready', label: 'Ready', width: 'w-20' },
     { key: 'succeeded', label: 'Succeeded', width: 'w-24' },
@@ -1289,6 +1314,41 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'queue', label: 'Queue', width: 'w-32' },
     { key: 'minMember', label: 'Min Member', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  substrateworkerpools: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-48' },
+    { key: 'workers', label: 'Workers', width: 'w-24', tooltip: 'Ready worker Pods / desired. Workers are Pods, not actor slots: each hosts many actors in turn.' },
+    { key: 'sandboxClass', label: 'Sandbox', width: 'w-24', tooltip: 'Sandbox runtime family the workers run (gVisor or microVM)' },
+    { key: 'sandboxConfig', label: 'Config', width: 'w-44', tooltip: 'SandboxConfig the controller resolved for this pool; an arrow marks a switch it is still confirming.' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  agentsandboxes: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-36' },
+    { key: 'operatingMode', label: 'Requested', width: 'w-36', tooltip: 'Requested operating mode (spec.operatingMode). Status is what the controller observed.' },
+    { key: 'sandboxNode', label: 'Node', width: 'w-44' },
+    { key: 'expires', label: 'Expires', width: 'w-28', tooltip: 'shutdownTime: when the controller tears the sandbox down' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  agentsandboxclaims: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-44' },
+    { key: 'warmPool', label: 'Warm pool', width: 'w-40' },
+    { key: 'claimedSandbox', label: 'Sandbox', width: 'w-44' },
+    { key: 'expires', label: 'Expires', width: 'w-28', tooltip: 'lifecycle.shutdownTime: when the claim and its sandbox expire' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  agentsandboxwarmpools: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'warmReady', label: 'Ready', width: 'w-20', tooltip: 'Ready, unclaimed sandboxes / desired' },
+    { key: 'template', label: 'Template', width: 'w-44' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   kaitoworkspaces: [
@@ -1792,7 +1852,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'value', label: 'Value', width: 'w-24', tooltip: 'Higher values receive scheduling preference; Pods can still be preempted by Pods with higher priority' },
     { key: 'globalDefault', label: 'Global Default', width: 'w-36' },
     { key: 'preemptionPolicy', label: 'Preemption', width: 'w-32' },
-    { key: 'description', label: 'Description', width: 'w-64' },
+    { key: 'description', label: 'Description', width: 'w-64', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   runtimeclasses: [
@@ -1822,12 +1882,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   events: [
-    { key: 'name', label: 'Name' },
+    // An Event's name is the involved object's name plus a hash, and Object
+    // already names the object (`kubectl get events` doesn't print NAME at
+    // all), so it gets no protection: it gives way first when room is short.
+    { key: 'name', label: 'Name', sizing: 'fit' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'type', label: 'Type', width: 'w-24' },
-    { key: 'reason', label: 'Reason', width: 'w-32' },
-    { key: 'message', label: 'Message', width: 'w-64' },
-    { key: 'object', label: 'Object', width: 'w-48' },
+    { key: 'reason', label: 'Reason', width: 'w-32', sizing: 'fit' },
+    { key: 'message', label: 'Message', width: 'w-64', sizing: 'grow', growWeight: 3 },
+    { key: 'object', label: 'Object', width: 'w-48', sizing: 'grow', growWeight: 3 },
     { key: 'count', label: 'Count', width: 'w-20' },
     { key: 'lastSeen', label: 'Last Seen', width: 'w-28' },
   ],
@@ -1837,7 +1900,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   gitrepositories: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'url', label: 'URL', width: 'w-64', sizing: 'grow' },
     { key: 'ref', label: 'Ref', width: 'w-32', tooltip: 'Branch, tag, or semver' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'revision', label: 'Revision', width: 'w-24', tooltip: 'Last fetched commit SHA' },
@@ -1846,7 +1909,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ocirepositories: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'url', label: 'URL', width: 'w-64', sizing: 'grow' },
     { key: 'ref', label: 'Tag', width: 'w-24', tooltip: 'OCI tag or semver' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'revision', label: 'Digest', width: 'w-24' },
@@ -1855,7 +1918,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   helmrepositories: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'url', label: 'URL', width: 'w-64', sizing: 'grow' },
     { key: 'type', label: 'Type', width: 'w-20', tooltip: 'default: Flux fetches a Helm repository index. oci: a registry reference with no reconciliation status of its own' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1877,7 +1940,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'chart', label: 'Chart', width: 'w-40' },
     { key: 'version', label: 'Version', width: 'w-24' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'message', label: 'Message', width: 'w-64', tooltip: 'Last diagnostic message — distinguishes dependency-wait, install/upgrade failure, and test failure' },
+    { key: 'message', label: 'Message', width: 'w-64', sizing: 'grow', tooltip: 'Last diagnostic message — distinguishes dependency-wait, install/upgrade failure, and test failure' },
     { key: 'revision', label: 'Rev', width: 'w-16', tooltip: 'Helm release revision number' },
     { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Deployment time of the currently deployed release, or the last Ready status change when that time is unavailable.' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1897,9 +1960,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'project', label: 'Project', width: 'w-28', tooltip: 'AppProject the app belongs to — bounds which repos and clusters it may deploy to' },
-    { key: 'sync', label: 'Sync', width: 'w-24', tooltip: "Whether live resources match Argo's desired manifests; Synced does not mean Healthy" },
-    { key: 'health', label: 'Health', width: 'w-24' },
-    { key: 'repo', label: 'Repository', width: 'w-48' },
+    { key: 'sync', label: 'Sync', width: 'w-24', sizing: 'fit', tooltip: "Whether live resources match Argo's desired manifests; Synced does not mean Healthy" },
+    { key: 'health', label: 'Health', width: 'w-24', sizing: 'fit' },
+    { key: 'repo', label: 'Repository', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   applicationsets: [
@@ -1913,7 +1976,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   appprojects: [
     { key: 'name', label: 'Name' },
-    { key: 'description', label: 'Description', width: 'w-64' },
+    { key: 'description', label: 'Description', width: 'w-64', sizing: 'grow' },
     { key: 'destinations', label: 'Destinations', width: 'w-24', tooltip: 'Allowed cluster/namespace destinations' },
     { key: 'sources', label: 'Sources', width: 'w-20', tooltip: 'Allowed source repositories' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -2054,7 +2117,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'storageLocation', label: 'Storage', width: 'w-36', tooltip: "The backup's storage location. A completed backup still needs this location reachable to restore from." },
     { key: 'namespaces', label: 'Scope', width: 'w-24', tooltip: 'Included namespaces (* = all)' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
-    { key: 'expiry', label: 'Expires', width: 'w-24', tooltip: "When Velero's retention makes this backup eligible for cleanup. Expired means Velero intends to delete it, not that it is gone — and not that a restore will work." },
+    { key: 'expiry', label: 'Expires', width: 'w-24', sizing: 'fit', tooltip: "When Velero's retention makes this backup eligible for cleanup. Expired means Velero intends to delete it, not that it is gone — and not that a restore will work." },
     { key: 'errors', label: 'Errors', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -2819,6 +2882,14 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   podgroup: { 'scheduling.volcano.sh': 'volcanopodgroups', 'scheduling.run.ai': 'kaipodgroups' },
   podgroups: { 'scheduling.volcano.sh': 'volcanopodgroups', 'scheduling.run.ai': 'kaipodgroups' },
   workspace: { 'kaito.sh': 'kaitoworkspaces' },
+  workerpool: { 'ate.dev': 'substrateworkerpools' },
+  workerpools: { 'ate.dev': 'substrateworkerpools' },
+  sandbox: { 'agents.x-k8s.io': 'agentsandboxes' },
+  sandboxes: { 'agents.x-k8s.io': 'agentsandboxes' },
+  sandboxclaim: { 'extensions.agents.x-k8s.io': 'agentsandboxclaims' },
+  sandboxclaims: { 'extensions.agents.x-k8s.io': 'agentsandboxclaims' },
+  sandboxwarmpool: { 'extensions.agents.x-k8s.io': 'agentsandboxwarmpools' },
+  sandboxwarmpools: { 'extensions.agents.x-k8s.io': 'agentsandboxwarmpools' },
   workspaces: { 'kaito.sh': 'kaitoworkspaces' },
   services: { 'serving.knative.dev': 'knativeservices' },
   configurations: { 'serving.knative.dev': 'knativeconfigurations' },
@@ -2994,6 +3065,9 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   kafkaconnectors: ['kafka.strimzi.io'],
   kafkas: ['kafka.strimzi.io'],
   kafkanodepools: ['kafka.strimzi.io'],
+  volumesnapshots: ['snapshot.storage.k8s.io'],
+  volumesnapshotcontents: ['snapshot.storage.k8s.io'],
+  volumesnapshotclasses: ['snapshot.storage.k8s.io'],
   opentelemetrycollectors: ['opentelemetry.io'],
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
@@ -3176,6 +3250,10 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   inferenceobjectives: ['inference.networking.x-k8s.io', 'llm-d.ai'],
   jobsets: ['jobset.x-k8s.io'],
   kaitoworkspaces: ['kaito.sh'],
+  substrateworkerpools: ['ate.dev'],
+  agentsandboxes: ['agents.x-k8s.io'],
+  agentsandboxclaims: ['extensions.agents.x-k8s.io'],
+  agentsandboxwarmpools: ['extensions.agents.x-k8s.io'],
   ragengines: ['kaito.sh'],
   admissionchecks: ['kueue.x-k8s.io'],
   clusterqueues: ['kueue.x-k8s.io'],
@@ -3267,6 +3345,9 @@ function buildPrinterColumn(def: PrinterColumnDef, index: number, table: Printer
     key: printerColumnKey(def),
     label: def.name,
     width: printerColumnWidth(def),
+    // No curated set says which vendor columns hold long text, so any text
+    // column may take spare room; numbers, booleans and dates keep their width.
+    sizing: printerColumnIsText(def) ? 'grow' : 'exact',
     // Columns in kubectl's `-o wide` tier are declared but not shown by
     // default; the column picker still offers them.
     defaultVisible: (def.priority ?? 0) === 0,
@@ -3290,11 +3371,7 @@ function buildPrinterColumn(def: PrinterColumnDef, index: number, table: Printer
           </Tooltip>
         )
       }
-      return (
-        <Tooltip content={text}>
-          <span className="text-sm text-theme-text-secondary truncate block">{text}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={text} className="text-sm text-theme-text-secondary" />
     },
     getSortValue: (resource: any) => printerCellSortValue(read(resource), def),
     getFilterValue: (resource: any) => formatPrinterCell(read(resource)),
@@ -3334,6 +3411,31 @@ function columnsForKindWithPrinter(
     ...printerColumns,
     { key: 'age', label: 'Age', width: 'w-24' },
   ]
+}
+
+// Records saved since columns sized themselves carry this.
+export const COLUMN_WIDTHS_VERSION = 2
+// The narrowest a user can make a column (dragging, fitting, or a saved
+// width): its content truncates with an ellipsis.
+export const MIN_USER_COLUMN_WIDTH_PX = 48
+
+/**
+ * The saved column widths to apply: finite, positive numbers only, at least
+ * MIN_USER_COLUMN_WIDTH_PX. A record
+ * saved before columns sized themselves (`fromBeforeSizing`) keeps only Name's:
+ * back then the first drag on a table saved the width of every visible column,
+ * so its other widths are mostly ones the user never chose, and keeping them
+ * would freeze the table as it was. Those columns size themselves again.
+ */
+export function savedColumnWidths(widths: unknown, fromBeforeSizing: boolean): Record<string, number> {
+  if (!widths || typeof widths !== 'object') return {}
+  const kept: Record<string, number> = {}
+  for (const [key, width] of Object.entries(widths as Record<string, unknown>)) {
+    if (typeof width !== 'number' || !Number.isFinite(width) || width <= 0) continue
+    if (fromBeforeSizing && key !== 'name') continue
+    kept[key] = Math.max(MIN_USER_COLUMN_WIDTH_PX, width)
+  }
+  return kept
 }
 
 /**
@@ -3409,6 +3511,9 @@ function filterHostExtras(
   })
 }
 
+// Columns the data can show on its own (see gpuInData).
+const DATA_SHOWN_COLUMNS = new Set(['gpu'])
+
 // localStorage helpers for column settings
 const COLUMN_SETTINGS_PREFIX = 'radar-columns-'
 const CHECKBOX_VISIBILITY_KEY = 'radar-resource-checkboxes'
@@ -3440,6 +3545,12 @@ interface ColumnSettings {
   /** Full display order, including hidden columns. Older saves omit Name. */
   order?: string[]
   pinned?: string[]
+  /** Columns shown by the data (GPU) that the user hid. Absent on blobs written
+   *  before GPU followed the data. */
+  hidden?: string[]
+  /** COLUMN_WIDTHS_VERSION when written since columns sized themselves; absent
+   *  before (see savedColumnWidths). */
+  widthsVersion?: number
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -3461,8 +3572,8 @@ function saveColumnSettings(kind: string, group: string | undefined, settings: C
 const SORT_SETTINGS_PREFIX = 'radar-sort-'
 
 // Kept apart from the column record on purpose: a column record's existence
-// is read as "the user chose columns" (GPU auto-show stands down, the
-// stale-defaults migration is skipped), and a sort alone is not that choice.
+// is read as "the user chose columns" (its visible set replaces the kind's
+// defaults), and a sort alone is not that choice.
 function loadSavedSort(kind: string, group?: string): { column: string; direction: 'asc' | 'desc' } | null {
   try {
     const raw = localStorage.getItem(SORT_SETTINGS_PREFIX + columnSettingsKey(kind, group))
@@ -4003,6 +4114,7 @@ export function ResourcesView({
   const [showInactiveReplicaSets, setShowInactiveReplicaSets] = useState(initialFilters.showInactive)
   // Column visibility and resize state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set())
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set())
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [columnOrder, setColumnOrder] = useState<string[] | null>(null)
   const [pinnedColumns, setPinnedColumns] = useState<string[]>([])
@@ -4108,6 +4220,9 @@ export function ResourcesView({
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(0)
   const [resizeLineX, setResizeLineX] = useState<number | null>(null)
+  // The rendered widths, frozen for the length of a drag (see columnLayoutWidths).
+  const [resizeFrozenWidths, setResizeFrozenWidths] = useState<Record<string, number> | null>(null)
+  const columnLayoutWidthsRef = useRef<Record<string, number>>({})
   const tableContainerRef = useRef<HTMLDivElement>(null)
   const [tableScroller, setTableScroller] = useState<HTMLElement | null>(null)
   const [tableViewportWidth, setTableViewportWidth] = useState(0)
@@ -4230,13 +4345,6 @@ export function ResourcesView({
   // was one the user hid rather than one never shown.
   const knownColumnKeys = useRef<Set<string>>(new Set())
   const knownColumnKeysKind = useRef('')
-  // Whether the user has a persisted column blob for this kind — data-driven
-  // column defaults (GPU auto-show) must never override explicit user choices.
-  const hadSavedColumnSettings = useRef(false)
-  // Kinds where GPU auto-show already fired this mount. Firing is one-shot:
-  // without this, hiding the auto-shown column re-triggers the effect (it
-  // depends on visibleColumns) and instantly reverts the user's hide.
-  const gpuAutoShownKinds = useRef<Set<string>>(new Set())
   useEffect(() => {
     // The table's own settings: nothing to load (or clear) while a kind view replaces it.
     if (!tableActive) return
@@ -4248,7 +4356,6 @@ export function ResourcesView({
     // prevents that cross-kind write.
     isColumnSettingsLoaded.current = false
     const saved = loadColumnSettings(selectedKind.name, selectedKind.group)
-    hadSavedColumnSettings.current = !!saved
     // Reconstruct the effective column list locally rather than reading
     // `allColumns` — keying this effect to the kind (not allColumns) keeps
     // runtime custom-column add/remove from re-running it and clobbering the
@@ -4307,22 +4414,29 @@ export function ResourcesView({
       if (isStaleDefaults) {
         clearColumnSettings(selectedKind.name, selectedKind.group)
         knownColumnKeys.current = new Set()
-        hadSavedColumnSettings.current = false
         setVisibleColumns(getDefaultVisibleColumns(effective))
+        setHiddenColumns(new Set())
         setColumnWidths({})
         setColumnOrder(null)
         setPinnedColumns([])
       } else {
         const restoredVisible = mergeSavedVisibleColumns(saved.visible, extraKeys, builtPrinterColumns, effective, savedKnown)
+        const savedHidden = Array.isArray(saved.hidden) ? saved.hidden.filter((k): k is string => typeof k === 'string') : undefined
+        // Blobs from before GPU followed the data hold the GPU column as the
+        // old one-shot auto-show left it; let it follow the data instead.
+        if (!savedHidden) for (const key of DATA_SHOWN_COLUMNS) restoredVisible.delete(key)
         setVisibleColumns(restoredVisible)
-        setColumnWidths(saved.widths || {})
+        setHiddenColumns(new Set(savedHidden ?? []))
+        setColumnWidths(savedColumnWidths(saved.widths, saved.widthsVersion !== COLUMN_WIDTHS_VERSION))
         const savedOrder = sanitizeColumnOrder(saved.order)
         // Older settings reorder only columns after Name. Convert once to a full order.
         setColumnOrder(Array.isArray(saved.pinned) ? savedOrder : applyColumnOrder(effective, savedOrder).map(column => column.key))
-        setPinnedColumns(sanitizePinnedColumns(saved.pinned).filter(key => restoredVisible.has(key)))
+        // A pin on a column the data shows (GPU) is kept; the column may be on screen.
+        setPinnedColumns(sanitizePinnedColumns(saved.pinned).filter(key => restoredVisible.has(key) || DATA_SHOWN_COLUMNS.has(key)))
       }
     } else {
       setVisibleColumns(getDefaultVisibleColumns(effective))
+      setHiddenColumns(new Set())
       setColumnWidths({})
       setColumnOrder(null)
       setPinnedColumns([])
@@ -4349,12 +4463,11 @@ export function ResourcesView({
       known: Array.from(knownColumnKeys.current),
       order: columnOrder ?? undefined,
       pinned: pinnedColumns,
+      hidden: Array.from(hiddenColumns),
+      widthsVersion: COLUMN_WIDTHS_VERSION,
     })
-    // A persisted blob blocks GPU auto-show from here on — same rule in-session
-    // as across sessions, so a later data refresh can't override user choices.
-    hadSavedColumnSettings.current = true
     // allColumnKeysSig, not allColumnKeys: see the memo above.
-  }, [visibleColumns, columnWidths, customColumns, columnOrder, pinnedColumns, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
+  }, [visibleColumns, hiddenColumns, columnWidths, customColumns, columnOrder, pinnedColumns, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
 
   // Close column picker on outside click or Escape
   useLayoutEffect(() => {
@@ -4400,9 +4513,6 @@ export function ResourcesView({
     return () => { document.removeEventListener('mousedown', handleClick); document.removeEventListener('keydown', handleKey, true) }
   }, [showColumnPicker])
 
-  // Whether any columns have been resized (triggers switch to fixed grid sizes + spacer)
-  const hasResizedColumns = Object.keys(columnWidths).length > 0
-
   // Column resize handlers
   const handleResizeStart = useCallback((e: React.MouseEvent, colKey: string, currentWidth: number) => {
     e.preventDefault()
@@ -4411,9 +4521,10 @@ export function ResourcesView({
     resizeStartX.current = e.clientX
     resizeStartWidth.current = currentWidth
 
-    // On first resize, snapshot all column widths from the DOM to switch to fixed grid sizes
+    // Only the dragged column takes a saved width; the others stay automatic,
+    // held where they are until the drag ends.
     const container = tableContainerRef.current
-    setColumnWidths(prev => Object.keys(prev).length > 0 ? prev : snapshotHeaderWidths(container) ?? prev)
+    setResizeFrozenWidths(columnLayoutWidthsRef.current)
 
     // Show the resize line at the initial position
     const containerRect = container?.getBoundingClientRect()
@@ -4422,14 +4533,13 @@ export function ResourcesView({
     }
 
     const handleMouseMove = (me: MouseEvent) => {
-      if (!resizingColumn.current) return
+      // Read now, not in the updater: a mouseup batched with this move clears
+      // the ref before React applies the update.
+      const key = resizingColumn.current
+      if (!key) return
       const diff = me.clientX - resizeStartX.current
-
-      // Allow shrinking to a small minimum — content truncates with ellipsis
-      const minW = 48
-
-      const newWidth = Math.max(minW, resizeStartWidth.current + diff)
-      setColumnWidths(prev => ({ ...prev, [resizingColumn.current!]: newWidth }))
+      const newWidth = Math.max(MIN_USER_COLUMN_WIDTH_PX, resizeStartWidth.current + diff)
+      setColumnWidths(prev => ({ ...prev, [key]: newWidth }))
       // Update resize line position, clamped to the constrained width
       const rect = container?.getBoundingClientRect()
       if (rect) {
@@ -4441,6 +4551,7 @@ export function ResourcesView({
     const handleMouseUp = () => {
       resizingColumn.current = null
       setResizeLineX(null)
+      setResizeFrozenWidths(null)
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
       document.body.style.cursor = ''
@@ -4476,27 +4587,10 @@ export function ResourcesView({
       copy.remove()
     })
     if (width === 0) return
-    const fitted = Math.max(48, Math.ceil(width))
-    setColumnWidths(prev => ({
-      ...(Object.keys(prev).length > 0 ? prev : snapshotHeaderWidths(container)),
-      [colKey]: fitted,
-    }))
+    const fitted = Math.max(MIN_USER_COLUMN_WIDTH_PX, Math.ceil(width))
+    setColumnWidths(prev => ({ ...prev, [colKey]: fitted }))
   }, [])
 
-  // Toggle column visibility
-  const toggleColumnVisibility = useCallback((colKey: string) => {
-    // A hidden column has no pin to surprise the user when it is shown again.
-    setPinnedColumns(prev => prev.filter(key => key !== colKey))
-    setVisibleColumns(prev => {
-      const next = new Set(prev)
-      if (next.has(colKey)) {
-        next.delete(colKey)
-      } else {
-        next.add(colKey)
-      }
-      return next
-    })
-  }, [])
 
   // Reset column settings to defaults (also drops user-added custom columns)
   const resetColumnSettings = useCallback(() => {
@@ -4505,6 +4599,7 @@ export function ResourcesView({
     setCustomColumns([])
     const customKeys = new Set(builtCustomColumns.map(c => c.key))
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
+    setHiddenColumns(new Set())
     setColumnWidths({})
     setColumnOrder(null)
     setPinnedColumns([])
@@ -4512,9 +4607,6 @@ export function ResourcesView({
     setSortDirection(null)
     saveSavedSort(selectedKind.name, selectedKind.group, null)
     isColumnSettingsLoaded.current = false
-    // Back to data-driven defaults: re-arm GPU auto-show for this kind.
-    hadSavedColumnSettings.current = false
-    gpuAutoShownKinds.current.delete(selectedKind.name.toLowerCase())
   }, [selectedKind.name, selectedKind.group, allColumns, builtCustomColumns])
 
   // Add a user-defined label/annotation column (dedupe by key) and show it.
@@ -5346,27 +5438,17 @@ export function ResourcesView({
   const selectedQueryMatchesKind = resourceQueryMatchesSelectedKind(selectedQuery, selectedKind)
   const resources = selectedQueryMatchesKind ? selectedQuery?.data : undefined
 
-  // Auto-surface the GPU column the first time GPU-bearing rows load for a kind
-  // the user has never customized — a static default can't know whether the
-  // cluster has GPUs, and hiding the signal on GPU clusters buries the point.
-  // The resulting save persists it; explicit user hides are never overridden
-  // (hadSavedColumnSettings guard).
-  useEffect(() => {
-    if (hadSavedColumnSettings.current) return
+  // The GPU column shows while any listed Pod (or Node) has GPUs, and not
+  // otherwise — a static default can't know whether the cluster, or the
+  // namespaces picked, have any. The user's own choice wins either way: a
+  // column they turned on stays, one they turned off stays off (hiddenColumns).
+  const gpuInData = useMemo(() => {
     const kindLower = selectedKind.name.toLowerCase()
-    if (kindLower !== 'pods' && kindLower !== 'nodes') return
-    if (gpuAutoShownKinds.current.has(kindLower)) return
-    if (visibleColumns.size === 0 || visibleColumns.has('gpu')) return
     const rows = (resources as any[] | undefined) ?? []
-    if (rows.length === 0) return
-    const hasGpu = kindLower === 'pods'
-      ? rows.some(r => getPodGpuCount(r) > 0)
-      : rows.some(r => getNodeGpuCount(r) > 0)
-    if (hasGpu) {
-      gpuAutoShownKinds.current.add(kindLower)
-      setVisibleColumns(prev => new Set([...prev, 'gpu']))
-    }
-  }, [resources, selectedKind.name, visibleColumns])
+    if (kindLower === 'pods') return rows.some(r => getPodGpuCount(r) > 0)
+    if (kindLower === 'nodes') return rows.some(r => getNodeGpuCount(r) > 0)
+    return false
+  }, [resources, selectedKind.name])
 
   // Label/annotation keys present on the loaded rows — powers the
   // add-custom-column autocomplete so users don't type keys blind. Sampled
@@ -5611,10 +5693,14 @@ export function ResourcesView({
       if (column === 'poolReplicas') return Number.isInteger(resource.status?.replicas) ? resource.status.replicas : -1
       return strimziClusterValue
     }
+    const volumeSnapshotValue = getVolumeSnapshotSortValue(resource, column)
+    if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
     const otelValue = getOpenTelemetryColumnValue(resource, column)
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
     if (flaggerValue !== undefined) return flaggerValue
+    const agentRuntimeValue = getAgentRuntimeSortValue(resource, column)
+    if (agentRuntimeValue !== undefined) return agentRuntimeValue
     const planValue = getUpgradePlanColumnValue(resource, column)
     if (planValue !== undefined) return planValue
 
@@ -6108,11 +6194,116 @@ export function ResourcesView({
   const handleRowMouseEnter = useCallback(() => setHighlightedIndex(-1), [])
 
   // Filter columns by visibility
-  const visibleTableColumns = useMemo(() => {
-    if (visibleColumns.size === 0) return allColumns.filter(c => c.defaultVisible !== false)
-    return allColumns.filter(c => visibleColumns.has(c.key))
-  }, [allColumns, visibleColumns])
+  // Namespace says nothing when the namespace picker narrows the list to one,
+  // so it is left out then, whatever the saved choice — which still applies
+  // as soon as more than one namespace is in scope. Read from the pick, not
+  // the rows, so it doesn't come and go as rows stream in.
+  const singleNamespaceInScope = namespaces.length === 1
+  const dataShownColumns = useMemo(() => {
+    const shown = new Set<string>()
+    const kindLower = selectedKind.name.toLowerCase()
+    if (gpuInData && (kindLower === 'pods' || kindLower === 'nodes') && !hiddenColumns.has('gpu')) shown.add('gpu')
+    return shown
+  }, [gpuInData, selectedKind.name, hiddenColumns])
+  // What the column picker shows as on: the saved choice, plus columns the data shows.
+  const pickerVisibleColumns = useMemo(() => {
+    if (!dataShownColumns.size) return visibleColumns
+    return new Set([...visibleColumns, ...dataShownColumns])
+  }, [visibleColumns, dataShownColumns])
+  const visibleTableColumns = useMemo(() => allColumns.filter(c => {
+    if (c.key === 'namespace' && singleNamespaceInScope) return false
+    if (dataShownColumns.has(c.key)) return true
+    if (visibleColumns.size === 0) return c.defaultVisible !== false
+    return visibleColumns.has(c.key)
+  }), [allColumns, visibleColumns, dataShownColumns, singleNamespaceInScope])
   const columns = visibleTableColumns
+
+  const toggleColumnVisibility = useCallback((colKey: string) => {
+    const shown = pickerVisibleColumns.has(colKey)
+    const dataShown = DATA_SHOWN_COLUMNS.has(colKey)
+    // A hidden column has no pin to surprise the user when it is shown again.
+    setPinnedColumns(prev => prev.filter(key => key !== colKey))
+    // Turning a data-shown column back on while the data would show it just
+    // lets the data decide again; only turning it on without such data makes
+    // it a column the user keeps.
+    const keepShown = !shown && !(dataShown && gpuInData)
+    setVisibleColumns(prev => {
+      const next = new Set(prev)
+      if (keepShown) next.add(colKey)
+      else next.delete(colKey)
+      return next
+    })
+    // Remember hiding a column the data would show, so the data doesn't bring it back.
+    if (dataShown) {
+      setHiddenColumns(prev => {
+        const next = new Set(prev)
+        if (shown) next.add(colKey)
+        else next.delete(colKey)
+        return next
+      })
+    }
+  }, [pickerVisibleColumns, gpuInData])
+
+  // Automatic column widths (see column-sizing.ts for the rules). Content is
+  // measured over every fetched item, not the filtered rows, so typing a search
+  // or picking a column filter never resizes the table.
+  const sizingKind = useMemo(() => ({
+    plural: normalizeKindToPlural(selectedKind.name, selectedKind.group),
+    cellFilterKind: getCellFilterKind(selectedKind.name, selectedKind.group),
+  }), [selectedKind.name, selectedKind.group])
+  // Measured in a deferred render, from one snapshot of everything the
+  // measurement reads: a pass over a very large list must not hold up the
+  // render that shows an update, whether the rows, the printer cells, the
+  // metrics or the audit badges changed. Only a pass over the rows on screen is
+  // remembered (see contentWidths), so a stale one never sticks.
+  const measureInputs = useMemo(() => ({
+    tableActive, resources, columns, extraColumnsByKey, sizingKind, auditBadges, metricsLookup, kindName: selectedKind.name, headerFontEpoch,
+  }), [tableActive, resources, columns, extraColumnsByKey, sizingKind, auditBadges, metricsLookup, selectedKind.name, headerFontEpoch])
+  const measuring = useDeferredValue(measureInputs)
+  const measuredContent = useMemo(() => {
+    const { resources: rows, columns: cols, extraColumnsByKey: extras, metricsLookup: metrics } = measuring
+    if (!measuring.tableActive || !rows?.length) return null
+    // The CPU and Memory bars show metrics, not resource data: their labels are
+    // measured from the metrics the cells read, so the columns shrink no
+    // further than the "used / limit" label.
+    const kindLower = measuring.kindName.toLowerCase()
+    const usage = (kind: 'cpu' | 'memory'): CellWidth => (resource, measure) => usageLabelWidth(
+      kindLower === 'pods'
+        ? podUsageLabel(resource, metrics.pods.get(`${resource.metadata?.namespace}/${resource.metadata?.name}`), kind)
+        : nodeUsageLabel(metrics.nodes.get(resource.metadata?.name), kind),
+      measure,
+    )
+    const hostCellWidths = kindLower === 'pods' || kindLower === 'nodes' ? { cpu: usage('cpu'), memory: usage('memory') } : undefined
+    const sized = cols.map(col => ({ key: col.key, sizing: col.sizing, growWeight: col.growWeight, getFilterValue: extras.get(col.key)?.getFilterValue }))
+    const measured = measureColumnContent(rows, sized, { ...measuring.sizingKind, auditBadges: measuring.auditBadges, hostCellWidths })
+    const flat: Record<string, number> = {}
+    for (const [key, m] of Object.entries(measured)) {
+      flat[key] = m.content
+      if (m.stretch !== undefined) flat[`${key}\u0000stretch`] = m.stretch
+      if (m.yieldTo !== undefined) flat[`${key}\u0000yieldTo`] = m.yieldTo
+      if (m.fitTo !== undefined) flat[`${key}\u0000fitTo`] = m.fitTo
+    }
+    return flat
+  }, [measuring])
+
+  // Grow-only while the table shows the same data set — the same kind and
+  // namespace selection, without a reload in between — so rows streaming in or
+  // out never narrow a column (kubectl's RememberWidths). In memory only: the
+  // widths describe one cluster's data, and Radar Hub points one UI at many.
+  // The font epoch is part of it: widths measured against the fallback face
+  // must not outlive the web font's arrival.
+  const datasetIdentity = `${selectedKindIdentityOf(selectedKind)}\u0000${namespaces.join(',')}\u0000${headerFontEpoch}`
+  // Kept in refs and written only after commit, so a render React discards
+  // never leaves its widths behind for the next one.
+  const rememberedContent = useRef<{ identity: string; widths: Record<string, number> } | null>(null)
+  const previousContent = resources && rememberedContent.current?.identity === datasetIdentity ? rememberedContent.current.widths : undefined
+  // Remembered only when the snapshot measured is the current one: rows alone
+  // aren't enough, since the same rows measured in the fallback font must not
+  // be kept under the web font's epoch.
+  const contentWidths = measuredContent && measuring === measureInputs ? rememberWidths(previousContent, measuredContent) : previousContent
+  useLayoutEffect(() => {
+    rememberedContent.current = contentWidths ? { identity: datasetIdentity, widths: contentWidths } : null
+  }, [contentWidths, datasetIdentity])
 
   // Phones pin a leading Name column (see PHONE_PINNED_CELL). Cap it at
   // PHONE_NAME_MAX_VW percent of the screen so a width saved on desktop can't
@@ -6126,15 +6317,107 @@ export function ResourcesView({
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [isPhone])
+  // The no-scroll rule is defined by the window's width, which can cross the
+  // threshold while the table's own room stays the same.
+  const [mustFitWindow, setMustFitWindow] = useState(() => typeof window !== 'undefined' && window.innerWidth >= MUST_FIT_WINDOW_PX)
+  useEffect(() => {
+    const onResize = () => setMustFitWindow(window.innerWidth >= MUST_FIT_WINDOW_PX)
+    onResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   const phoneNameCap = isPhone && columns[0]?.key === 'name' ? Math.round(phoneViewportWidth * PHONE_NAME_MAX_VW / 100) : Infinity
-
-  // Loaded fonts can change header minima without changing the column definitions.
-  // User pins are offset by rendered widths, so a capped phone Name counts at its cap.
-  const pinWidths = useMemo(() => visibleTableColumns.map((column, i) => {
-    const width = columnWidths[column.key] || getColumnMinWidth(column, extraColumnsByKey)
-    return { key: column.key, width: i === 0 && column.key === 'name' ? Math.min(width, phoneNameCap) : width }
-  }), [visibleTableColumns, columnWidths, extraColumnsByKey, headerFontEpoch, phoneNameCap])
   const leadingPinWidth = (compareMode ? COMPARE_COLUMN_WIDTH : 0) + (isCheckboxMode ? CHECKBOX_COLUMN_WIDTH : 0)
+
+  // The width each visible column renders at. One vector feeds the <colgroup>,
+  // the pin offsets and budget, and the table's minimum width, so they agree.
+  const lastLayout = useRef<{ signature: string; widths: Record<string, number> } | null>(null)
+  const availableWidth = tableViewportWidth - leadingPinWidth
+  // Held widths only carry over while nothing but the data changed.
+  const layoutSignature = [datasetIdentity, availableWidth, columns.map(c => `${c.key}=${columnWidths[c.key] ?? ''}`).join(',')].join('\u0000')
+  const columnLayoutWidths = useMemo(() => {
+    // While a column is being dragged, every other column holds still:
+    // the drag tracks the pointer from the dragged column's left edge, which
+    // must not move under it. The room is re-shared on release.
+    const frozen = resizeFrozenWidths
+    const held = lastLayout.current?.signature === layoutSignature ? lastLayout.current.widths : undefined
+    // Name holds the width of its longest name, up to NAME_MAX_PX but never
+    // more than NAME_VIEWPORT_SHARE of the table, so on a narrow window or a
+    // phone it can't push every other column off screen.
+    const nameMax = availableWidth > 0
+      ? Math.max(NAME_MIN_PX, Math.min(NAME_MAX_PX, Math.floor(availableWidth * NAME_VIEWPORT_SHARE)))
+      : NAME_MAX_PX
+    // The heading's measured width runs a pixel or two short of the rendered
+    // one (sub-pixel tracking, the filter button's padding). That never showed
+    // while columns sat at their curated widths; a column shrunk right down to
+    // its heading would cut it ("NO…"), so it keeps a few pixels in hand.
+    const headerShrinkWidth = (col: Column) => getColumnHeaderWidth(col, extraColumnsByKey) + HEADER_SHRINK_SLACK_PX
+    const inputs: ColumnLayoutInput[] = columns.map(col => {
+      const spec = columnSizingSpec(col)
+      const minWidth = getColumnMinWidth(col, extraColumnsByKey)
+      const isName = col.key === 'name'
+      const floor = isName ? Math.max(NAME_MIN_PX, minWidth) : minWidth
+      const content = contentWidths?.[col.key]
+      return {
+        key: col.key,
+        mode: spec.mode,
+        floor,
+        // When room is short: exact columns may shrink to their content
+        // (never below their heading), but only where the content is known;
+        // short-value fit columns to their curated width, or their content
+        // when that is narrower; Node and Namespace to their heading, cutting
+        // values; Name, last, to the 75th percentile of its names (never below
+        // NAME_MIN_PX, never above the width it holds or NAME_PROTECTED_MAX_PX).
+        min: spec.mode === 'exact'
+          ? content !== undefined ? Math.max(headerShrinkWidth(col), content) : undefined
+          : spec.longest
+            ? content !== undefined ? shortValueMin(floor, headerShrinkWidth(col), content) : undefined
+          : spec.keep
+            ? content !== undefined
+              ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000yieldTo`] ?? content, content, nameMax, NAME_PROTECTED_MAX_PX))
+              : undefined
+            // An unprotected Name (Events) yields to its floor, NAME_MIN_PX.
+            : spec.mode === 'fit' && !isName ? headerShrinkWidth(col) : undefined,
+        yieldRank: spec.yieldRank,
+        // Past `min`: Name to its median, only when that ends the scrolling;
+        // from MUST_FIT_WINDOW_PX up, every column to its heading and Name to
+        // NAME_MIN_PX.
+        fitMin: spec.keep && content !== undefined
+          ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000fitTo`] ?? content, content, nameMax, NAME_PROTECTED_MAX_PX))
+          : undefined,
+        hardMin: isName ? NAME_MIN_PX : headerShrinkWidth(col),
+        userWidth: columnWidths[col.key] || frozen?.[col.key],
+        content,
+        stretch: contentWidths?.[`${col.key}\u0000stretch`],
+        max: isName ? nameMax : spec.max,
+        weight: spec.weight,
+        hold: held?.[col.key],
+      }
+    })
+    // The phone cap goes into the layout, so the room it frees counts when
+    // deciding whether the table can fit, and again after it, since leftover
+    // room is spread over every column regardless of its max.
+    const capped = (v: number | undefined) => v === undefined ? undefined : Math.min(v, phoneNameCap)
+    const capName = columns[0]?.key === 'name' && phoneNameCap !== Infinity
+    const laidOut = capName
+      ? inputs.map(c => c.key !== 'name' ? c : {
+        ...c, floor: Math.min(c.floor, phoneNameCap), max: capped(c.max ?? Infinity), content: capped(c.content),
+        min: capped(c.min), fitMin: capped(c.fitMin), hardMin: capped(c.hardMin), hold: capped(c.hold), userWidth: capped(c.userWidth),
+      })
+      : inputs
+    const widths = computeColumnLayout(laidOut, availableWidth, {
+      mustFit: mustFitWindow,
+    })
+    if (capName) widths.name = Math.min(widths.name, phoneNameCap)
+    return widths
+  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap, mustFitWindow])
+  useLayoutEffect(() => {
+    columnLayoutWidthsRef.current = columnLayoutWidths
+    if (!resizeFrozenWidths) lastLayout.current = { signature: layoutSignature, widths: columnLayoutWidths }
+  }, [columnLayoutWidths, layoutSignature, resizeFrozenWidths])
+
+  const pinWidths = useMemo(() => visibleTableColumns.map(column => ({ key: column.key, width: columnLayoutWidths[column.key] })),
+    [visibleTableColumns, columnLayoutWidths])
   const effectivePinnedColumns = useMemo(() => {
     if (!pinnedColumns.length) return []
     const visible = new Set(visibleTableColumns.map(column => column.key))
@@ -6144,8 +6427,6 @@ export function ResourcesView({
   const columnPins = useMemo(() => resolveColumnPins(pinWidths, effectivePinnedColumns, tableViewportWidth, leadingPinWidth),
     [pinWidths, effectivePinnedColumns, tableViewportWidth, leadingPinWidth])
   const activePinnedColumns = useMemo(() => effectivePinnedColumns.slice(0, columnPins.offsets.size), [effectivePinnedColumns, columnPins.offsets.size])
-  // Keep requested pins at fixed widths even while their stickiness is paused.
-  const namePinned = pinnedColumns.includes('name')
   const pinStyles = useMemo(() => {
     const styles = new Map<string, React.CSSProperties>()
     const widths = new Map(pinWidths.map(column => [column.key, column.width]))
@@ -6168,63 +6449,19 @@ export function ResourcesView({
     setColumnOrder(order)
     setPinnedColumns(order.filter(key => pinnedColumns.includes(key)))
   }
-  const hasTableSpacer = hasResizedColumns || namePinned
 
-  // Fixed-width columns can consume the table's flexible space and collapse
-  // the required name column. Keep a real table minimum and let the container
-  // scroll horizontally when the viewport is too narrow.
-  const tableMinWidth = useMemo(() => {
-    const compareColumnWidth = compareMode ? COMPARE_COLUMN_WIDTH : 0
-    const baseMinWidth = columns.reduce((sum, col, i) => {
-      const width = columnWidths[col.key] || getColumnMinWidth(col, extraColumnsByKey)
-      return sum + (i === 0 && col.key === 'name' ? Math.min(width, phoneNameCap) : width)
-    }, compareColumnWidth)
-    const flexibleNameColumn = columns.find(col => col.key === 'name' && !columnWidths[col.key] && !namePinned)
-
-    if (!hasResizedColumns || !flexibleNameColumn) return baseMinWidth
-    return baseMinWidth + getColumnMinWidth(flexibleNameColumn, extraColumnsByKey)
-  }, [columns, columnWidths, compareMode, hasResizedColumns, extraColumnsByKey, headerFontEpoch, phoneNameCap, namePinned])
-
-  // Stable virtuoso components — memoized to avoid remounting the table on every render
-  const virtuosoComponents = useMemo(() => ({
-    Table: React.forwardRef<HTMLTableElement, React.TableHTMLAttributes<HTMLTableElement>>(function VirtuosoTable(props, ref) {
-      return (
-        <table
-          {...props}
-          ref={ref}
-          className="w-full"
-          style={{ ...props.style, tableLayout: 'fixed', minWidth: tableMinWidth }}
-        >
-          <colgroup>
-            {/*
-              Compare-mode adds a leading <th>/<td> per row but isn't part
-              of `columns`. Under table-layout:fixed the <colgroup> must
-              match the actual column count, otherwise the browser pads
-              the missing entry by stealing width from a sized neighbour
-              — typically blowing this narrow column out to ~200px.
-            */}
-            {compareMode && <col style={{ width: COMPARE_COLUMN_WIDTH }} />}
-            {isCheckboxMode && <col style={{ width: '40px' }} />}
-            {columns.map((col, i) => (
-              <col
-                key={col.key}
-                style={{
-                  width: i === 0 && col.key === 'name' && phoneNameCap !== Infinity
-                    ? `min(${columnWidths[col.key] || getColumnMinWidth(col, extraColumnsByKey)}px, ${PHONE_NAME_MAX_VW}vw)`
-                    : columnWidths[col.key]
-                      ? `${columnWidths[col.key]}px`
-                      : col.key === 'name' && !namePinned ? undefined : `${getColumnMinWidth(col, extraColumnsByKey)}px`,
-                }}
-              />
-            ))}
-            {hasTableSpacer && <col />}
-          </colgroup>
-          {props.children}
-        </table>
-      )
-    }),
-    TableRow: VirtuosoTableRow,
-  }), [columns, columnWidths, hasTableSpacer, compareMode, tableMinWidth, isCheckboxMode, extraColumnsByKey, headerFontEpoch, phoneNameCap, namePinned])
+  // Every column has an explicit width that together fill the room, so the
+  // table is at least their sum and scrolls sideways below it.
+  const tableColumnLayout = useMemo<TableColumnLayout>(() => {
+    const widths = columns.map(col => columnLayoutWidths[col.key])
+    return {
+      widths,
+      keys: columns.map(col => col.key),
+      compareMode: !!compareMode,
+      checkbox: isCheckboxMode,
+      minWidth: leadingPinWidth + widths.reduce((total, w) => total + w, 0),
+    }
+  }, [columns, columnLayoutWidths, compareMode, isCheckboxMode, leadingPinWidth])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -6767,6 +7004,17 @@ export function ResourcesView({
               <div ref={columnPickerPanelRef} role="region" aria-label="Columns" style={columnPickerPosition} className="fixed z-50 bg-theme-surface border border-theme-border rounded-lg shadow-theme-lg py-1 flex flex-col">
                 <div className="shrink-0 px-3 py-2 border-b border-theme-border flex items-center justify-between">
                   <span className="text-xs font-medium text-theme-text-secondary uppercase">Columns</span>
+                  <span className="flex-1" />
+                  {Object.keys(columnWidths).length > 0 && (
+                    <Tooltip content="Columns you resized size themselves to their content again">
+                      <button
+                        onClick={() => setColumnWidths({})}
+                        className="mr-3 text-xs text-theme-text-tertiary hover:text-theme-text-primary"
+                      >
+                        Reset widths
+                      </button>
+                    </Tooltip>
+                  )}
                   <button
                     onClick={resetColumnSettings}
                     className="text-xs text-theme-text-tertiary hover:text-theme-text-primary flex items-center gap-1"
@@ -6778,13 +7026,14 @@ export function ResourcesView({
                 </div>
                 <p className="shrink-0 px-3 pt-2 pb-1 text-xs text-theme-text-tertiary">
                   {columnPins.paused.length ? 'Some pins scroll until there is more room.' : 'Pinned columns stay visible as you scroll.'}
+                  {singleNamespaceInScope && allColumns.some(c => c.key === 'namespace') && ' Namespace is left out while one namespace is selected.'}
                 </p>
                 {/* Column list scrolls; the add-column footer stays pinned so
                     its input isn't pushed below the fold on kinds with many columns. */}
                 <div className="overflow-y-auto flex-1 min-h-0">
                 <ColumnPickerList
                   columns={allColumns}
-                  visibleColumns={visibleColumns}
+                  visibleColumns={pickerVisibleColumns}
                   customColumnKeys={customColumnKeySet}
                   onToggle={toggleColumnVisibility}
                   onRemoveCustom={removeCustomColumn}
@@ -7088,6 +7337,7 @@ export function ResourcesView({
             </div>
           ) : (
             <MetricsContext.Provider value={metricsLookup}>
+            <TableColumnLayoutContext.Provider value={tableColumnLayout}>
             <TableVirtuoso
               ref={virtuosoRef}
               scrollerRef={captureTableScroller}
@@ -7095,7 +7345,7 @@ export function ResourcesView({
               increaseViewportBy={400}
               overscan={200}
               computeItemKey={(index, resource) => resource.metadata?.uid || `${resource.metadata?.namespace}-${resource.metadata?.name}-${index}`}
-              components={virtuosoComponents}
+              components={VIRTUOSO_TABLE_COMPONENTS}
               fixedHeaderContent={() => (
                 <tr>
                   {compareMode && (
@@ -7347,7 +7597,6 @@ export function ResourcesView({
                       </th>
                     )
                   })}
-                  {hasTableSpacer && <th className="bg-theme-base border-b border-theme-border p-0" />}
                 </tr>
               )}
               itemContent={(index, resource) => {
@@ -7370,7 +7619,6 @@ export function ResourcesView({
                     group={selectedKind.group}
                     columns={columns}
                     extraColumnsByKey={extraColumnsByKey}
-                    hasSpacerColumn={hasTableSpacer}
                     pinStyles={pinStyles}
                     isSelected={isSelected}
                     isHighlighted={isHighlighted}
@@ -7397,6 +7645,7 @@ export function ResourcesView({
                 style={{ left: resizeLineX, zIndex: 20 }}
               />
             )}
+            </TableColumnLayoutContext.Provider>
             </MetricsContext.Provider>
           )}
         </div>
@@ -7532,7 +7781,6 @@ interface ResourceRowCellsProps {
   group?: string
   columns: Column[]
   extraColumnsByKey?: Map<string, ExtraColumn>
-  hasSpacerColumn: boolean
   pinStyles?: ReadonlyMap<string, React.CSSProperties>
   isSelected?: boolean
   isHighlighted?: boolean
@@ -7577,7 +7825,7 @@ function rowHighlightClass(
   return 'group-hover/row:bg-theme-surface/50'
 }
 
-const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, pinStyles, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle, findingMatch }: ResourceRowCellsProps) {
+const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, pinStyles, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle, findingMatch }: ResourceRowCellsProps) {
   const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted, isChecked)
   const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
   const onClick = onRowClick ? () => onRowClick(resource, !!isSelected) : undefined
@@ -7670,7 +7918,6 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
           />
         </td>
       ))}
-      {hasSpacerColumn && <td className="border-b-subtle p-0" />}
     </>
   )
 })
@@ -7681,24 +7928,71 @@ const VirtuosoTableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttribu
   }
 )
 
+interface TableColumnLayout {
+  widths: number[]
+  keys: string[]
+  compareMode: boolean
+  checkbox: boolean
+  minWidth: number
+}
+
+// The widths reach the table through context so the Table component keeps one
+// identity: a new component type on each width change would remount the whole
+// table body, losing focus and hover state on every resize or data update.
+const TableColumnLayoutContext = React.createContext<TableColumnLayout>({ widths: [], keys: [], compareMode: false, checkbox: false, minWidth: 0 })
+
+const VirtuosoTable = React.forwardRef<HTMLTableElement, React.TableHTMLAttributes<HTMLTableElement>>(function VirtuosoTable(props, ref) {
+  const layout = useContext(TableColumnLayoutContext)
+  return (
+    <table
+      {...props}
+      ref={ref}
+      // Exactly the columns' sum: the layout already fills the room, and a
+      // table wider than its columns would have the browser re-share the
+      // difference, moving columns the layout holds still (a drag, saved widths).
+      style={{ ...props.style, tableLayout: 'fixed', width: layout.minWidth }}
+    >
+      <colgroup>
+        {/*
+          Compare-mode adds a leading <th>/<td> per row but isn't part
+          of `columns`. Under table-layout:fixed the <colgroup> must
+          match the actual column count, otherwise the browser pads
+          the missing entry by stealing width from a sized neighbour
+          — typically blowing this narrow column out to ~200px.
+        */}
+        {layout.compareMode && <col style={{ width: COMPARE_COLUMN_WIDTH }} />}
+        {layout.checkbox && <col style={{ width: CHECKBOX_COLUMN_WIDTH }} />}
+        {layout.keys.map((key, i) => <col key={key} style={{ width: `${layout.widths[i]}px` }} />)}
+      </colgroup>
+      {props.children}
+    </table>
+  )
+})
+
+const VIRTUOSO_TABLE_COMPONENTS = { Table: VirtuosoTable, TableRow: VirtuosoTableRow }
+
 function CopyNameButton({ name }: { name: string }) {
   const [copied, setCopied] = useState(false)
   if (!name) return null
+  // Gives up its room, gap included, before the name does: in a tight column
+  // the name matters more than a button that only shows on hover.
   return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation()
-        void copyText(name).then((didCopy) => {
-          if (!didCopy) return
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        })
-      }}
-      className="shrink-0 p-0.5 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover/row:opacity-100 transition-opacity"
-      title="Copy name"
-    >
-      {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-    </button>
+    <span className="flex shrink-[1000] min-w-0 overflow-hidden">
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          void copyText(name).then((didCopy) => {
+            if (!didCopy) return
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          })
+        }}
+        className="ml-1.5 shrink-0 p-0.5 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover/row:opacity-100 transition-opacity"
+        title="Copy name"
+      >
+        {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+      </button>
+    </span>
   )
 }
 
@@ -7732,27 +8026,27 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   // Common columns
   if (column === 'name') {
     const isTerminating = !!meta.deletionTimestamp
-    const nameClass = clsx('text-sm font-medium truncate block', isTerminating ? 'text-theme-text-tertiary line-through' : 'text-theme-text-primary')
+    const nameClass = clsx('text-sm font-medium', isTerminating ? 'text-theme-text-tertiary line-through' : 'text-theme-text-primary')
     const pauseState = isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged' ? getCrossplanePauseState(resource) : null
     const audit = auditBadges?.[`${meta.namespace || ''}/${meta.name}`]
     const auditTotal = audit ? audit.danger + audit.warning : 0
     return (
       <div className="flex items-center gap-1.5 min-w-0">
-        <Tooltip content={meta.name} wrapperClassName={findingMatch || pauseState ? 'min-w-0' : undefined}>
+        <span className="flex items-center min-w-0">
           {nameHref ? (
-            <a
-              href={nameHref}
-              className={clsx(nameClass, 'hover:underline focus-visible:underline focus-visible:outline-none rounded-sm')}
-            >
-              {meta.name}
-            </a>
+            <TruncatedText text={meta.name || ''} className={nameClass}>
+              <a
+                href={nameHref}
+                className="hover:underline focus-visible:underline focus-visible:outline-none rounded-sm"
+              >
+                {meta.name}
+              </a>
+            </TruncatedText>
           ) : (
-            <span className={nameClass}>
-              {meta.name}
-            </span>
+            <TruncatedText text={meta.name || ''} className={nameClass} />
           )}
-        </Tooltip>
-        <CopyNameButton name={meta.name} />
+          <CopyNameButton name={meta.name} />
+        </span>
         <CrossplanePauseChip state={pauseState} compact />
         {findingMatch && (
           <Tooltip content={findingMatch.text}>
@@ -7783,11 +8077,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     )
   }
   if (column === 'namespace') {
-    return (
-      <Tooltip content={meta.namespace}>
-        <span className="text-sm text-theme-text-secondary truncate block">{meta.namespace || '-'}</span>
-      </Tooltip>
-    )
+    return <TruncatedText text={meta.namespace || '-'} className="text-sm text-theme-text-secondary" />
   }
   if (column === 'age') {
     if (!meta.creationTimestamp) {
@@ -7840,6 +8130,11 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (strimziClusterValue !== undefined) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{strimziClusterValue || '-'}</span>
+  }
+  const volumeSnapshotValue = getVolumeSnapshotColumnValue(resource, column)
+  if (volumeSnapshotValue !== undefined) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{volumeSnapshotValue || '-'}</span>
   }
   if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
@@ -8093,6 +8388,15 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <KaiQueueCell resource={resource} column={column} />
     case 'kaipodgroups':
       return <KaiPodGroupCell resource={resource} column={column} />
+    // Agent runtimes
+    case 'substrateworkerpools':
+      return <WorkerPoolCell resource={resource} column={column} />
+    case 'agentsandboxes':
+      return <SandboxCell resource={resource} column={column} />
+    case 'agentsandboxclaims':
+      return <SandboxClaimCell resource={resource} column={column} />
+    case 'agentsandboxwarmpools':
+      return <SandboxWarmPoolCell resource={resource} column={column} />
     // KAITO
     case 'kaitoworkspaces':
       return <KaitoWorkspaceCell resource={resource} column={column} />
@@ -8628,27 +8932,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       if (!m) return <span className="text-sm text-theme-text-tertiary">-</span>
       const label = isCPU ? 'CPU' : 'Memory'
       const format = isCPU ? formatCPU : formatMemoryShort
-
-      // Multi-container pods (and any pod with a pod-level budget) carry a
-      // per-container breakdown; other single-container pods fall back to the
-      // pod-level fields as one synthetic container so the logic is uniform.
-      const list: ContainerResourceMetrics[] = (m.containers && m.containers.length > 0)
-        ? m.containers
-        : [{
-            name: resource.spec?.containers?.[0]?.name ?? resource.metadata?.name ?? '',
-            cpu: m.cpu, cpuRequest: m.cpuRequest, cpuLimit: m.cpuLimit,
-            memory: m.memory, memoryRequest: m.memoryRequest, memoryLimit: m.memoryLimit,
-          }]
-
-      // The pod totals already carry any pod-level value (overlaid server-side
-      // with exact quantity parsing); spec.resources only says whether one is set.
-      const podLevel = resource.spec?.resources
-      const podRequest = podLevel?.requests?.[kind] ? (isCPU ? m.cpuRequest : m.memoryRequest) : undefined
-      const podLimit = podLevel?.limits?.[kind] ? (isCPU ? m.cpuLimit : m.memoryLimit) : undefined
-      const { mode, totalUsage, denom, markerPct, unlimitedCount } = podAggregate(list, kind, {
-        request: podRequest,
-        limit: podLimit,
-      })
+      const { list, podRequest, podLimit, mode, totalUsage, denom, markerPct, unlimitedCount } = podUsage(resource, m, kind)
       if (totalUsage === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
 
       // Pod-vs-node context: how full the pod's node is (the risk signal) and
@@ -8782,13 +9066,13 @@ function WorkloadCell({ resource, column, kind }: { resource: any; kind: string;
     case 'images': {
       const images = getWorkloadImages(resource)
       if (images.length === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const display = images.length === 1 ? truncate(images[0], 40) : `${truncate(images[0], 30)} +${images.length - 1}`
+      // Several images: the tooltip lists them all, which the cell can't.
       return (
-        <Tooltip content={images.join('\n')}>
-          <span className="text-sm text-theme-text-secondary truncate">
-            {display}
-          </span>
-        </Tooltip>
+        <TruncatedText
+          text={workloadImagesText(images)}
+          tooltip={images.length > 1 ? images.join('\n') : undefined}
+          className="text-sm text-theme-text-secondary"
+        />
       )
     }
     case 'conditions': {
@@ -8860,13 +9144,13 @@ function DaemonSetCell({ resource, column }: { resource: any; column: string }) 
     case 'images': {
       const images = getWorkloadImages(resource)
       if (images.length === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const display = images.length === 1 ? truncate(images[0], 40) : `${truncate(images[0], 30)} +${images.length - 1}`
+      // Several images: the tooltip lists them all, which the cell can't.
       return (
-        <Tooltip content={images.join('\n')}>
-          <span className="text-sm text-theme-text-secondary truncate">
-            {display}
-          </span>
-        </Tooltip>
+        <TruncatedText
+          text={workloadImagesText(images)}
+          tooltip={images.length > 1 ? images.join('\n') : undefined}
+          className="text-sm text-theme-text-secondary"
+        />
       )
     }
     default:
@@ -8893,8 +9177,7 @@ function ReplicaSetCell({ resource, column }: { resource: any; column: string })
       )
     }
     case 'owner': {
-      const owner = getReplicaSetOwner(resource)
-      return <span className="text-sm text-theme-text-secondary truncate">{owner || '-'}</span>
+      return <TruncatedText text={getReplicaSetOwner(resource) || '-'} className="text-sm text-theme-text-secondary" />
     }
     case 'status': {
       const isActive = isReplicaSetActive(resource)
@@ -8924,14 +9207,7 @@ function ServiceCell({ resource, column }: { resource: any; column: string }) {
       )
     }
     case 'selector': {
-      const selector = getServiceSelector(resource)
-      return (
-        <Tooltip content={selector}>
-          <span className="text-sm text-theme-text-secondary truncate">
-            {selector}
-          </span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getServiceSelector(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'endpoints': {
       // getServiceEndpointsStatus can't see live pods, so it optimistically
@@ -9035,20 +9311,10 @@ function IngressCell({ resource, column }: { resource: any; column: string }) {
       return <span className="text-sm text-theme-text-secondary">{ingressClass || '-'}</span>
     }
     case 'hosts': {
-      const hosts = getIngressHosts(resource)
-      return (
-        <Tooltip content={hosts}>
-          <span className="text-sm text-theme-text-secondary truncate">{hosts}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getIngressHosts(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'rules': {
-      const rules = getIngressRules(resource)
-      return (
-        <Tooltip content={rules}>
-          <span className="text-sm text-theme-text-secondary truncate">{rules}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getIngressRules(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'tls': {
       const hasTLS = hasIngressTLS(resource)
@@ -9076,15 +9342,9 @@ function ConfigMapCell({ resource, column }: { resource: any; column: string }) 
     case 'keys': {
       const { count, preview } = getConfigMapKeys(resource)
       return (
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-theme-text-secondary">{count}</span>
-          {count > 0 && (
-            <Tooltip content={preview}>
-              <span className="text-xs text-theme-text-tertiary truncate">
-                ({preview})
-              </span>
-            </Tooltip>
-          )}
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm text-theme-text-secondary shrink-0">{count}</span>
+          {count > 0 && <TruncatedText text={`(${preview})`} className="text-xs text-theme-text-tertiary" />}
         </div>
       )
     }
@@ -9207,8 +9467,7 @@ function CronJobCell({ resource, column }: { resource: any; column: string }) {
 function HPACell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'target': {
-      const target = getHPATarget(resource)
-      return <span className="text-sm text-theme-text-secondary truncate">{target}</span>
+      return <TruncatedText text={getHPATarget(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'replicas': {
       const { current, min, max } = getHPAReplicas(resource)
@@ -9285,6 +9544,47 @@ export function readContainer(c: ContainerResourceMetrics, kind: 'cpu' | 'memory
   }
   const pct = denom > 0 ? (usage / denom) * 100 : -1
   return { usage, limit, request, yardstick, denom, pct }
+}
+
+// A pod's usage of one resource as its cell shows it (see podAggregate).
+function podUsage(resource: any, m: TopPodMetrics, kind: 'cpu' | 'memory') {
+  const isCPU = kind === 'cpu'
+  // Multi-container pods (and any pod with a pod-level budget) carry a
+  // per-container breakdown; other single-container pods fall back to the
+  // pod-level fields as one synthetic container so the logic is uniform.
+  const list: ContainerResourceMetrics[] = (m.containers && m.containers.length > 0)
+    ? m.containers
+    : [{
+        name: resource.spec?.containers?.[0]?.name ?? resource.metadata?.name ?? '',
+        cpu: m.cpu, cpuRequest: m.cpuRequest, cpuLimit: m.cpuLimit,
+        memory: m.memory, memoryRequest: m.memoryRequest, memoryLimit: m.memoryLimit,
+      }]
+  // The pod totals already carry any pod-level value (overlaid server-side
+  // with exact quantity parsing); spec.resources only says whether one is set.
+  const podLevel = resource.spec?.resources
+  const podRequest = podLevel?.requests?.[kind] ? (isCPU ? m.cpuRequest : m.memoryRequest) : undefined
+  const podLimit = podLevel?.limits?.[kind] ? (isCPU ? m.cpuLimit : m.memoryLimit) : undefined
+  return { list, podRequest, podLimit, ...podAggregate(list, kind, { request: podRequest, limit: podLimit }) }
+}
+
+// The text a usage cell shows, for measuring its column (column-content-width).
+function podUsageLabel(resource: any, m: TopPodMetrics | undefined, kind: 'cpu' | 'memory'): UsageLabel | null {
+  if (!m) return null
+  const { mode, totalUsage, denom, unlimitedCount } = podUsage(resource, m, kind)
+  if (totalUsage === 0) return null
+  const format = kind === 'cpu' ? formatCPU : formatMemoryShort
+  if (mode === 'limit' || mode === 'request') {
+    return { used: format(totalUsage), total: format(denom), percent: `${Math.round(denom > 0 ? (totalUsage / denom) * 100 : 0)}%` }
+  }
+  return { usage: format(totalUsage), tag: mode === 'partial' ? `${unlimitedCount} unbounded` : 'no limit' }
+}
+
+function nodeUsageLabel(m: TopNodeMetrics | undefined, kind: 'cpu' | 'memory'): UsageLabel | null {
+  const used = kind === 'cpu' ? m?.cpu : m?.memory
+  const total = kind === 'cpu' ? m?.cpuAllocatable : m?.memoryAllocatable
+  if (!m || !used) return null
+  const format = kind === 'cpu' ? formatCPU : formatMemoryShort
+  return { used: format(used), total: format(total ?? 0), percent: `${Math.round(total ? (used / total) * 100 : 0)}%` }
 }
 
 interface PodAggregate {
@@ -9564,11 +9864,7 @@ function PVCCell({ resource, column }: { resource: any; column: string }) {
       return <span className="text-sm text-theme-text-secondary">{modes}</span>
     }
     case 'volume':
-      return (
-        <Tooltip content={resource.spec?.volumeName}>
-          <span className="text-sm text-theme-text-secondary truncate block">{resource.spec?.volumeName || '-'}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={resource.spec?.volumeName || '-'} className="text-sm text-theme-text-secondary" />
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
   }
@@ -9599,11 +9895,12 @@ function RolloutCell({ resource, column }: { resource: any; column: string }) {
     case 'images': {
       const images = getWorkloadImages(resource)
       if (images.length === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const display = images.length === 1 ? truncate(images[0], 40) : `${truncate(images[0], 30)} +${images.length - 1}`
       return (
-        <Tooltip content={images.join('\n')}>
-          <span className="text-sm text-theme-text-secondary truncate">{display}</span>
-        </Tooltip>
+        <TruncatedText
+          text={workloadImagesText(images)}
+          tooltip={images.length > 1 ? images.join('\n') : undefined}
+          className="text-sm text-theme-text-secondary"
+        />
       )
     }
     default:
@@ -9862,12 +10159,7 @@ function GatewayClassCell({ resource, column }: { resource: any; column: string 
       )
     }
     case 'description': {
-      const desc = getGatewayClassDescription(resource)
-      return (
-        <Tooltip content={desc}>
-          <span className="text-sm text-theme-text-secondary truncate block">{desc}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getGatewayClassDescription(resource)} className="text-sm text-theme-text-secondary" />
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -10081,7 +10373,7 @@ function PriorityClassCell({ resource, column }: { resource: any; column: string
       return <span className="text-sm text-theme-text-secondary">{resource.preemptionPolicy || 'PreemptLowerPriority'}</span>
     case 'description':
       return resource.description
-        ? <span className="text-sm text-theme-text-secondary truncate" title={resource.description}>{resource.description}</span>
+        ? <TruncatedText text={resource.description} className="text-sm text-theme-text-secondary" />
         : <span className="text-sm text-theme-text-tertiary">-</span>
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -10145,25 +10437,18 @@ function EventCell({ resource, column }: { resource: any; column: string }) {
         </span>
       )
     case 'message': {
-      const message = resource.message || ''
-      return (
-        <Tooltip content={message}>
-          <span className="text-sm text-theme-text-secondary truncate block max-w-64">
-            {message || '-'}
-          </span>
-        </Tooltip>
-      )
+      return <TruncatedText text={resource.message || '-'} className="text-sm text-theme-text-secondary" />
     }
     case 'object': {
       const obj = resource.involvedObject
       if (!obj) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const objRef = `${obj.kind}/${obj.name}`
+      // The tooltip names the namespace, which the cell leaves out.
       return (
-        <Tooltip content={`${obj.kind}: ${obj.namespace ? obj.namespace + '/' : ''}${obj.name}`}>
-          <span className="text-sm text-theme-text-secondary truncate block">
-            {objRef}
-          </span>
-        </Tooltip>
+        <TruncatedText
+          text={`${obj.kind}/${obj.name}`}
+          tooltip={`${obj.kind}: ${obj.namespace ? obj.namespace + '/' : ''}${obj.name}`}
+          className="text-sm text-theme-text-secondary"
+        />
       )
     }
     case 'count': {

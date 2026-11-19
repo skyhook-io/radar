@@ -15,10 +15,11 @@ import (
 // none: usually it is a Deployment's old revision. A Deployment scaled to
 // zero still declares through its own template.
 var ConfigReferences = &Family{
-	Name: "configReferences",
+	Name:       "configReferences",
+	Projection: project("configures", true, "ConfigRefs", "Consumers").whenTarget(kindPVC, "uses", true, "StorageRefs", "Consumers").whenTarget(resourceid.GroupKind{Kind: "ServiceAccount"}, "configures", true, "ServiceAccount", "Consumers"),
 	Sources: []Source{
 		{Kind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}},
-		{Kind: resourceid.GroupKind{Group: configrefs.ArgoRolloutsGroup, Kind: "Rollout"}},
+		{Kind: resourceid.GroupKind{Group: configrefs.ArgoGroup, Kind: "Rollout"}},
 		{Kind: resourceid.GroupKind{Group: "apps", Kind: "StatefulSet"}},
 		{Kind: resourceid.GroupKind{Group: "apps", Kind: "DaemonSet"}},
 		{Kind: resourceid.GroupKind{Group: "batch", Kind: "CronJob"}},

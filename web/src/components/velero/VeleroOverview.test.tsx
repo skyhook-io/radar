@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import type { VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
-import { VELERO_NOTHING_NEEDS_ATTENTION, VeleroOverview, type VeleroNamespaceList } from './VeleroOverview'
+import { VELERO_NOTHING_IN_WHAT_WAS_READ, VELERO_NOTHING_NEEDS_ATTENTION, VeleroOverview, type VeleroNamespaceList } from './VeleroOverview'
 import { VeleroSchedules } from './VeleroSchedules'
 import { hoursAgo, location, schedule, workspace } from './velero.fixtures'
 
@@ -41,7 +41,7 @@ describe('Velero overview', () => {
 
   it('shows each schedule’s protection below Needs attention, so a healthy installation has evidence', () => {
     // Backup sync recreated this run's object: created 2h ago, expiring a day later, while the schedule keeps runs 30 days.
-    const run = { name: 'nightly-1', phase: 'Completed', created: hoursAgo(2), ranAt: hoursAgo(2), expires: new Date(Date.parse(hoursAgo(2)) + 24 * 3_600_000).toISOString() }
+    const run = { name: 'nightly-1', phase: 'Completed', created: hoursAgo(2), ranAt: hoursAgo(2), expiration: new Date(Date.parse(hoursAgo(2)) + 24 * 3_600_000).toISOString() }
     const html = text(renderOverview(workspace({
       schedules: [schedule({ ttl: '720h0m0s', runs: { read: 'full', kept: 1, newest: run, newestCompleted: run } }), schedule({ name: 'weekly', runs: { read: 'full', kept: 1, newest: run, newestCompleted: run } })],
       locations: [location({ phase: 'Unavailable' })],
@@ -109,7 +109,7 @@ describe('Velero overview', () => {
       coverage: { schedules: { state: 'full' }, backups: { state: 'denied' }, backupStorageLocations: { state: 'full' }, restores: { state: 'full' }, backupRepositories: { state: 'full' } },
       schedules: [schedule({ runs: { read: 'unknown', kept: 0 } })],
     })))
-    expect(html).toContain('Unknown — no access to backups')
+    expect(html).toContain('Unknown — backups were not read')
     expect(html).not.toContain('None among the backups Velero still keeps')
     expect(html).toContain('Radar couldn’t read some of the Velero data on this screen')
   })
@@ -181,7 +181,7 @@ describe('Velero overview', () => {
 
   it('never reads unread backups as no successful backup', () => {
     const html = text(render(workspace({ schedules: [schedule({ runs: { read: 'unknown', kept: 0 } })] })))
-    expect(html).toContain('unknown — no access to backups')
+    expect(html).toContain('unknown — backups were not read')
     expect(html).not.toContain('none kept</dd>')
   })
 
@@ -194,7 +194,7 @@ describe('Velero overview', () => {
     expect(html).toContain('Velero server not running')
     expect(html.indexOf('Velero server not running')).toBeLessThan(html.indexOf('late-one'))
     // Named once, in its own row: the late schedule below it doesn't repeat the cause.
-    expect(html).not.toContain('The Velero server has no running replicas, so nothing submits backups.')
+    expect(html).not.toContain('The Velero server has no pods, so nothing submits backups.')
     expect(html).not.toContain('Deployment velero in velero')
   })
 
@@ -266,7 +266,7 @@ describe('Velero overview', () => {
 })
 
 describe('Velero overview coverage', () => {
-  const two = (overrides = {}) => workspace({ schedules: [schedule({ includedNamespaces: ['shop'] }), schedule({ name: 'weekly', state: 'paused', paused: true, includedNamespaces: ['db-*'] })], ...overrides })
+  const two = (overrides = {}) => workspace({ schedules: [schedule({ includedNamespaces: ['shop'] }), schedule({ name: 'weekly', state: 'paused', includedNamespaces: ['db-*'] })], ...overrides })
 
   it('names the namespaces no schedule selects, leaving out Kubernetes’ own and Velero’s', () => {
     const html = text(renderOverview(two(), ['shop', 'db-main', 'web', 'kube-system', 'velero']))
@@ -279,6 +279,27 @@ describe('Velero overview coverage', () => {
     const partial = two({ coverage: { ...workspace().coverage, schedules: { state: 'partial' } } })
     expect(text(renderOverview(partial, ['shop']))).toContain('unknown, Radar can’t read every schedule')
     expect(text(renderOverview(two(), 'error'))).toContain('unknown, Radar couldn’t list namespaces')
+    expect(text(renderOverview(two(), []))).toContain('unknown, Radar listed no namespaces')
+  })
+
+  it('says a schedule whose namespace selection Velero refuses selects nothing', () => {
+    const data = workspace({ schedules: [schedule({ name: 'mixed', includedNamespaces: ['*', 'payments'] }), schedule({ name: 'fine', includedNamespaces: ['shop'] })] })
+    const html = text(renderOverview(data, ['shop', 'payments']))
+    expect(html).toMatch(/Selects nothing:<\/span> <span[^>]*><span><button[^>]*>mixed<\/button>: it includes “\*” beside other namespaces<\/span> — Velero refuses this namespace selection, so it backs up nothing/)
+    expect(html).toMatch(/Namespaces not in any schedule<\/span><\/span>:<\/span> <span[^>]*>payments</)
+  })
+
+  it('marks the newest successful backup when Back up now made it', () => {
+    const manual = { name: 'nightly-2', phase: 'Completed', created: hoursAgo(1), ranAt: hoursAgo(1), completed: hoursAgo(1), manual: true }
+    const data = workspace({ schedules: [schedule({ runs: { read: 'full', kept: 2, newest: manual, newestCompleted: manual } })] })
+    expect(text(renderOverview(data, ['shop']))).toMatch(/1h ago(<!-- -->)?, (<!-- -->)?manual/)
+  })
+
+  it('does not say nothing needs attention while the server Deployment is unread', () => {
+    const unread = workspace({ installations: [{ ...workspace().installations[0], server: { source: 'unread' } }] })
+    const html = text(renderOverview(unread, ['shop']))
+    expect(html).toContain(VELERO_NOTHING_IN_WHAT_WAS_READ)
+    expect(html).not.toContain(VELERO_NOTHING_NEEDS_ATTENTION)
   })
 
   it('lists paused schedules as information, outside Needs attention', () => {

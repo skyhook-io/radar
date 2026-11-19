@@ -990,3 +990,46 @@ func TestUnconfirmedHelmImagesNeverOfferCleanup(t *testing.T) {
 		}
 	}
 }
+
+// Agent Substrate's controller holds sandboxconfig.ate.dev/workerpool-protection
+// on a SandboxConfig while a WorkerPool uses it.
+func TestSubstrateSandboxConfigFinalizerOwner(t *testing.T) {
+	const key = "sandboxconfig.ate.dev/workerpool-protection"
+	for _, tc := range []struct {
+		name   string
+		status corev1.ContainerStatus
+		want   string
+	}{
+		{"healthy", corev1.ContainerStatus{Ready: true}, "ate-controller is healthy (1 pod ready)"},
+		{"crashing", corev1.ContainerStatus{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}, "ate-controller is CrashLoopBackOff"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(k8s.ResetResourceCache)
+			identity := map[string]string{"app": "ate-controller"}
+			deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "ate-controller", Namespace: "ate-system"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: identity}}}
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ate-controller-0", Namespace: "ate-system", Labels: identity}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{tc.status}}}
+			scopes := map[string]k8score.ResourceScope{"pods": {Enabled: true}, "deployments": {Enabled: true}, "statefulsets": {Enabled: true}, "daemonsets": {Enabled: true}}
+			if err := k8s.InitScopedTestResourceCache(fake.NewClientset(deployment, pod), scopes); err != nil {
+				t.Fatal(err)
+			}
+			p := NewCacheProvider()
+			if got := p.FinalizerOwnerStatus(key, Ref{Group: "ate.dev", Kind: "SandboxConfig"}, nil).Text; !strings.Contains(got, tc.want) {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+			// The same key on another project's object names no owner.
+			if got := p.FinalizerOwnerStatus(key, Ref{Group: "example.com", Kind: "SandboxConfig"}, nil).Text; strings.Contains(got, "ate-controller") {
+				t.Fatalf("another group must not resolve to ate-controller: %q", got)
+			}
+			// Unreadable controller Pods: the state is unknown, never healthy or missing.
+			observation := p.FinalizerOwnerStatus(key, Ref{Group: "ate.dev", Kind: "SandboxConfig"}, func(_, resource, _ string) bool { return resource != "pods" })
+			if observation.Running || observation.NotFound || !strings.Contains(observation.Text, "ate-controller state unknown") {
+				t.Fatalf("hidden controller Pods must read as unknown: %+v", observation)
+			}
+			// Cleanup is never offered: the controller's release depends on every WorkerPool's status.
+			problem := k8s.Detection{Group: "ate.dev", Kind: "SandboxConfig", Severity: "critical", TerminatingFinalizers: []string{key}, TerminatingRemovals: map[string]issuesapi.FinalizerRemoval{key: {Finalizer: key, PatchResource: []byte(`{}`)}}}
+			if problem = enrichTerminatingProblem(problem, p, nil, map[string]finalizerObservation{}); problem.ConditionalCleanup != nil {
+				t.Fatalf("cleanup must not be offered: %+v", problem.ConditionalCleanup)
+			}
+		})
+	}
+}

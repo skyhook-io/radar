@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
@@ -19,6 +20,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -201,7 +203,7 @@ func TestSplitHistoryCostsNothingForAnOwnerWithoutHistory(t *testing.T) {
 		goruntime.ReadMemStats(&after)
 		return (after.TotalAlloc - before.TotalAlloc) / answers
 	}
-	without, with := bytes(nil), bytes(splitHistory(subject, rs))
+	without, with := bytes(nil), bytes(splitHistory(subject, rs, nil))
 	if with > without+without/20 {
 		t.Fatalf("the split adds %d bytes to an answer of %d; a ReplicaSet keeps no history", with-without, without)
 	}
@@ -219,7 +221,7 @@ func TestSplitHistoryReadsTheSessionsCache(t *testing.T) {
 	)
 	subject := resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}
 	rel := &topology.Relationships{}
-	answerOwnership(source, topology.ApplyOwnership, splitHistory(subject, deployment), rel, ownership.Observe(subject, deployment), func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
+	answerOwnership(source, topology.ApplyOwnership, splitHistory(subject, deployment, nil), rel, ownership.Observe(subject, deployment), func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
 	if want := []topology.ResourceRef{historyChild("web-1"), historyChild("web-3")}; !slices.Equal(rel.Children, want) {
 		t.Errorf("children %v, want %v: the live revision and one still holding a Pod", rel.Children, want)
 	}
@@ -232,7 +234,7 @@ func TestSplitHistoryReadsTheSessionsCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	rel = &topology.Relationships{Children: []topology.ResourceRef{historyChild("web-2")}}
-	splitHistory(subject, deployment)(rel, ownership.NewView(scripted, ownership.Unrestricted()), scripted)
+	splitHistory(subject, deployment, nil)(rel, ownership.NewView(scripted, ownership.Unrestricted()), scripted)
 	if len(rel.OlderRevisions) != 0 {
 		t.Errorf("a session over other caches moved %v; only the typed cache it reads can say", rel.OlderRevisions)
 	}
@@ -365,5 +367,165 @@ func TestAnswerLiveManagerPreservesCallerAccess(t *testing.T) {
 				t.Fatalf("manager access = %+v", answer)
 			}
 		}
+	}
+}
+
+func TestRelationshipReadBindsCapturedCache(t *testing.T) {
+	_, typed, source, _ := historyFixture(t)
+	previous := ownershipSource
+	ownershipSource = source.(*cachesource.Source)
+	t.Cleanup(func() { ownershipSource = previous })
+	captured := &ResourceCache{ResourceCache: typed}
+	session, err := BeginOwnershipRead(captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caches, ok := cachesource.SessionCaches(session)
+	if !ok || caches.Typed != typed {
+		t.Fatalf("session caches = %+v, %v", caches, ok)
+	}
+	for _, wrong := range []*ResourceCache{nil, {ResourceCache: &k8score.ResourceCache{}}} {
+		if _, err := BeginOwnershipRead(wrong); !errors.Is(err, ownership.ErrCachesReplaced) {
+			t.Fatalf("wrong cache: %v", err)
+		}
+		answer, _ := AnswerRelationships(wrong, nil, func(*ownership.Catalog) ownership.Access { t.Fatal("access after cache mismatch"); return nil }, nil)
+		if answer != nil {
+			t.Fatalf("answer after cache mismatch: %+v", answer)
+		}
+	}
+}
+
+func TestRelationshipCaptureIncludesManagerStatus(t *testing.T) {
+	_, _, source, _ := historyFixture(t)
+	session, err := source.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"namespace": "gitops", "name": "web", "uid": "application"},
+		"status": map[string]any{
+			"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "shop", "name": "web"}},
+			"sync":      map[string]any{"comparedTo": map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "shop"}}},
+		},
+	}}
+	ref := resourceid.NewRef("argoproj.io", "Application", "gitops", "web")
+	captured, ok := relations.CaptureSubject(session.(relations.Session), ref, manager)
+	if !ok {
+		t.Fatal("capture failed")
+	}
+	members := captured.Members(ref)
+	if members.Manager.State != ownership.Present || members.Membership != ownership.MembersRecorded || len(members.Members) != 1 || members.Members[0].Name != "web" {
+		t.Fatalf("captured status not used: %+v", members)
+	}
+	// The cache can't read the Application, so the capture must not hide that.
+	if read := captured.Object(ref); read.State == ownership.Present {
+		t.Fatalf("a subject the cache can't read reads as present: %+v", read)
+	}
+}
+
+func TestRelationshipSubjectReplacementAndFinalValidation(t *testing.T) {
+	_, typed, source, deployment := historyFixture(t)
+	session, err := source.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := cachesource.SessionCaches(session)
+	previous := ownershipSource
+	ownershipSource = cachesource.New(func() cachesource.Caches { return current })
+	t.Cleanup(func() { ownershipSource = previous })
+	captured := &ResourceCache{ResourceCache: typed}
+	obj := deployment.DeepCopy()
+	obj.APIVersion = "apps/v1"
+	obj.Kind = "Deployment"
+	obj.UID = "new-incarnation"
+	access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+	rel, coverage := AnswerRelationships(captured, obj, access, access)
+	if rel == nil || coverage["subject"].SubjectState != "replaced" || rel.Owner != nil || len(rel.Children)+len(rel.Managers)+len(rel.ConfigRefs) > 0 {
+		t.Fatalf("replaced subject: %+v, %+v", rel, coverage)
+	}
+	obj.UID = deployment.UID
+	obj.ResourceVersion = "new-version"
+	rel, coverage = AnswerRelationships(captured, obj, access, access)
+	if rel == nil || coverage["subject"].SubjectState != "" {
+		t.Fatalf("same UID refused: %+v, %+v", rel, coverage)
+	}
+	switched := func(*ownership.Catalog) ownership.Access {
+		current.Typed = &k8score.ResourceCache{}
+		return ownership.Unrestricted()
+	}
+	rel, coverage = AnswerRelationships(captured, obj, switched, access)
+	if rel != nil || coverage != nil {
+		t.Fatalf("published after cache replacement: %+v, %+v", rel, coverage)
+	}
+}
+
+type historyPodAccess struct {
+	ownership.Access
+	decision ownership.Decision
+}
+
+func (a historyPodAccess) CanRead(gk resourceid.GroupKind, namespace string) ownership.Decision {
+	if gk == (resourceid.GroupKind{Kind: "Pod"}) && namespace == "shop" {
+		return a.decision
+	}
+	return a.Access.CanRead(gk, namespace)
+}
+
+func TestRelationshipRevisionSplitRequiresReadablePods(t *testing.T) {
+	for _, decision := range []ownership.Decision{ownership.Denied, ownership.Undecided, ownership.Allowed} {
+		for _, withPod := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%v/pod=%v", decision, withPod), func(t *testing.T) {
+				objects := []runtime.Object{historyReplicaSet("web-1", "1", 0, 0)}
+				if withPod {
+					objects = append(objects, historyPod("web-1-a", "web-1"))
+				}
+				_, typed, source, deployment := historyFixture(t, objects...)
+				previous := ownershipSource
+				ownershipSource = source.(*cachesource.Source)
+				t.Cleanup(func() { ownershipSource = previous })
+				obj := deployment.DeepCopy()
+				obj.APIVersion, obj.Kind = "apps/v1", "Deployment"
+				access := func(*ownership.Catalog) ownership.Access {
+					return historyPodAccess{Access: ownership.Unrestricted(), decision: decision}
+				}
+				traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+				rel, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, traverse)
+				if rel == nil {
+					t.Fatal("answer unavailable")
+				}
+				older := decision == ownership.Allowed && !withPod
+				if older {
+					if len(rel.Children) != 0 || !slices.Equal(rel.OlderRevisions, []topology.ResourceRef{historyChild("web-1")}) {
+						t.Fatalf("readable empty Pods: children %v, older %v", rel.Children, rel.OlderRevisions)
+					}
+				} else if !slices.Equal(rel.Children, []topology.ResourceRef{historyChild("web-1")}) || len(rel.OlderRevisions) != 0 {
+					t.Fatalf("children %v, older %v; want unsplit ReplicaSet", rel.Children, rel.OlderRevisions)
+				}
+			})
+		}
+	}
+}
+
+// A fetched Deployment the cache doesn't hold yet still answers what reads its
+// ownership: its ReplicaSets' Pods, as well as its children.
+func TestRelationshipAnswerSeedsAFetchedSubjectTheCacheLacks(t *testing.T) {
+	rs := historyReplicaSet("fresh-1", "1", 1, 1)
+	rs.OwnerReferences[0].Name, rs.OwnerReferences[0].UID = "fresh", "uid-fresh"
+	_, typed, source, _ := historyFixture(t, rs, historyPod("fresh-1-a", "fresh-1"))
+	previous := ownershipSource
+	ownershipSource = source.(*cachesource.Source)
+	t.Cleanup(func() { ownershipSource = previous })
+	obj := &appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "fresh", UID: "uid-fresh", Annotations: map[string]string{historyRevision: "1"}}}
+	access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+	rel, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, access)
+	if rel == nil {
+		t.Fatal("answer unavailable")
+	}
+	if !slices.ContainsFunc(rel.Children, func(r topology.ResourceRef) bool { return r.Name == "fresh-1" }) {
+		t.Fatalf("children: %+v", rel.Children)
+	}
+	if len(rel.Pods) != 1 || rel.Pods[0].Name != "fresh-1-a" {
+		t.Fatalf("pods: %+v", rel.Pods)
 	}
 }

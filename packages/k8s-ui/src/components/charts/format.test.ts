@@ -18,6 +18,14 @@ describe('formatMetricValue', () => {
   })
 })
 
+describe('averaged counts', () => {
+  it('keeps fractional averages instead of rounding them to a whole count', () => {
+    expect(formatMetricValue(1.5, 'avgCount')).toBe('1.5')
+    expect(formatMetricValue(12.5, 'avgCount')).toBe('12.5')
+    expect(formatMetricValue(3, 'avgCount')).toBe('3')
+  })
+})
+
 describe('time axis labels', () => {
   // Day boundaries depend on the local zone; pin one with a DST change. The
   // expected strings come from the same Intl calls, so any locale passes.

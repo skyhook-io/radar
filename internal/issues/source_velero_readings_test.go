@@ -240,6 +240,61 @@ func TestVeleroScheduleThatCanNeverRun(t *testing.T) {
 	}
 }
 
+func TestVeleroScheduleWritingToAReadOnlyLocation(t *testing.T) {
+	schedule := veleroReadingObj("Schedule", "nightly", veleroNow.Add(-time.Hour), nil,
+		map[string]any{"schedule": "0 * * * *", "template": map[string]any{}}, map[string]any{"phase": "Enabled"})
+	location := veleroLocation(time.Second)
+	location.Object["spec"].(map[string]any)["accessMode"] = "ReadOnly"
+	got := byReason(veleroReadings(t, []*unstructured.Unstructured{schedule}, location, []*appsv1.Deployment{veleroServerDeployment(1)}, true, true))
+	iss, ok := got[ReasonVeleroScheduleCannotRun]
+	if !ok || iss.Severity != SeverityCritical || !strings.Contains(iss.Message, "read-only") || !hasRead(iss, VeleroGroup, "backupstoragelocations") {
+		t.Fatalf("got %v, want a critical cannot-run issue resting on the location", got)
+	}
+	if len(got) != 1 {
+		t.Errorf("the read-only location raises nothing of its own: %v", got)
+	}
+	// It names the location and its access mode, so a caller who can't list
+	// storage locations doesn't get it, not even in a degraded form.
+	noLocations := func(read EvidenceRead) bool { return !ExactEvidenceRead(read) }
+	if _, shown := ForEvidence(iss, noLocations, false); shown {
+		t.Error("the read-only finding reached a caller who can't read storage locations")
+	}
+	if _, shown := ForEvidence(iss, func(EvidenceRead) bool { return true }, false); !shown {
+		t.Error("a caller who can read every input must get the finding")
+	}
+}
+
+func TestVeleroHeldScheduleNamesDisabledBackupProcessingWhenKnown(t *testing.T) {
+	objects := hourlyLastRan(4 * time.Hour)
+	objects[0].Object["spec"].(map[string]any)["schedule"] = "@every 1h"
+	objects[1].Object["status"] = map[string]any{"phase": "New"}
+	deployment := veleroServerDeployment(1)
+	server := &deployment.Spec.Template.Spec.Containers[0]
+	server.Args = append(server.Args, "--disable-controllers=backup-queue")
+	for _, tc := range []struct {
+		name       string
+		deployRead bool
+	}{
+		{"known disabled", true},
+		{"server unread", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := byReason(veleroReadings(t, objects, veleroLocation(time.Second), []*appsv1.Deployment{deployment}, tc.deployRead, true))
+			held, ok := got[ReasonVeleroScheduleHeld]
+			if !ok || !strings.Contains(held.Message, objects[1].GetName()) {
+				t.Fatalf("missing held backup: %+v", got)
+			}
+			if tc.deployRead {
+				if !hasRead(held, "apps", "deployments") || !strings.Contains(held.Cause, "disabled") || !strings.Contains(held.Action, "backup-queue") {
+					t.Errorf("missing cause, action or deployment evidence: %+v", held)
+				}
+			} else if held.Cause != "" || held.Action != "" {
+				t.Errorf("unread server supplied a cause or action: %+v", held)
+			}
+		})
+	}
+}
+
 func TestVeleroValidationOverdueWhileTheServerRuns(t *testing.T) {
 	got := byReason(veleroReadings(t, nil, veleroLocation(time.Hour), []*appsv1.Deployment{veleroServerDeployment(1)}, true, true))
 	iss, ok := got[ReasonVeleroLocationValidationOverdue]
