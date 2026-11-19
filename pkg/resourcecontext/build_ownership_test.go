@@ -353,6 +353,7 @@ func TestBuild_ManagedByStopsAtTheFirstGitOpsManager(t *testing.T) {
 		{"to the Application", &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "Deployment", Group: "apps", Namespace: "argocd", Name: "web"}, app, set}}, allowAllChecker{}, []ContextRef{toContextRef(app)}, ""},
 		{"past an unknown owner above it", &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "Deployment", Group: "apps", Namespace: "argocd", Name: "web"}, app, set}, Stop: "unknown"}, allowAllChecker{}, []ContextRef{toContextRef(app)}, ""},
 		{"an Application the caller can't read", &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "Deployment", Group: "apps", Namespace: "argocd", Name: "web"}, app, set}}, denyChecker{kind: "Application", group: "argoproj.io", namespace: "argocd"}, nil, OmittedRBACDenied},
+		{"a link the caller can't read below the Application", &topology.ControllerChain{Refs: []topology.ResourceRef{{Kind: "Pod", Namespace: "argocd", Name: "web-1-a"}, {Kind: "ReplicaSet", Group: "apps", Namespace: "argocd", Name: "web-1"}, {Kind: "Deployment", Group: "apps", Namespace: "argocd", Name: "web"}, app, set}}, denyChecker{kind: "ReplicaSet", group: "apps", namespace: "argocd"}, nil, OmittedRBACDenied},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rel := &topology.Relationships{ControllerChain: tc.chain, Ownership: &topology.OwnershipCoverage{Manager: manager}}

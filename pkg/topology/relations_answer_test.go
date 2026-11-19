@@ -1011,6 +1011,46 @@ func TestRelationsAnswerManagedByStopsAtTheFirstGitOpsManager(t *testing.T) {
 	if rel := projectionAnswer(t, s, plain, ownership.Unrestricted(), ownership.Unrestricted()); len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Name != "apps" {
 		t.Errorf("a chain without a GitOps manager: ManagedBy %+v", rel.ManagedBy)
 	}
+
+	// Flux, and Applications nested in an Application: each names the first
+	// manager above it, whatever its kind.
+	kustomization := projectionCR("kustomize.toolkit.fluxcd.io", "Kustomization", "flux", "infra", map[string]any{})
+	kustomization.SetUID("ks")
+	release := projectionCR("helm.toolkit.fluxcd.io", "HelmRelease", "flux", "web", map[string]any{})
+	release.SetUID("hr")
+	release.SetOwnerReferences(ref("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "infra", "ks"))
+	fluxed := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "flux", Name: "web", UID: "fluxed", OwnerReferences: ref("helm.toolkit.fluxcd.io/v1", "HelmRelease", "web", "hr")}}, "apps", "Deployment")
+	outer := projectionCR("argoproj.io", "Application", "argocd", "outer", map[string]any{})
+	outer.SetUID("outer")
+	outer.SetOwnerReferences(ref("argoproj.io/v1", "ApplicationSet", "apps", "set"))
+	inner := projectionCR("argoproj.io", "Application", "argocd", "inner", map[string]any{})
+	inner.SetUID("inner")
+	inner.SetOwnerReferences(ref("argoproj.io/v1", "Application", "outer", "outer"))
+	nested := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "nested", UID: "nested", OwnerReferences: ref("argoproj.io/v1", "Application", "inner", "inner")}}, "apps", "Deployment")
+	for _, tc := range []struct {
+		subject runtime.Object
+		want    string
+	}{
+		{fluxed, "HelmRelease/web"},
+		{release, "Kustomization/infra"},
+		{nested, "Application/inner"},
+		{inner, "Application/outer"},
+	} {
+		s := newProjectionSession(t, kustomization, release, fluxed, set, outer, inner, nested)
+		rel := projectionAnswer(t, s, tc.subject, ownership.Unrestricted(), ownership.Unrestricted())
+		if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Kind+"/"+rel.ManagedBy[0].Name != tc.want {
+			t.Errorf("%s: ManagedBy %+v, want %s", projectionRef(tc.subject).Name, rel.ManagedBy, tc.want)
+		}
+	}
+
+	// A link the caller can't read below the manager ends the climb there:
+	// the manager above it is never named past it.
+	rs := projectionObject(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web-1", UID: "rs", OwnerReferences: ref("apps/v1", "Deployment", "web", "deployment")}}, "apps", "ReplicaSet")
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web-1-a", UID: "pod", OwnerReferences: ref("apps/v1", "ReplicaSet", "web-1", "rs")}}, "", "Pod")
+	s = newProjectionSession(t, set, app, deployment, rs, pod)
+	if rel := projectionAnswer(t, s, pod, projectionAccess{denied: []string{"ReplicaSet"}}, ownership.Unrestricted()); len(rel.ManagedBy) != 0 {
+		t.Errorf("climbed past a ReplicaSet the caller can't read: ManagedBy %+v", rel.ManagedBy)
+	}
 }
 
 // A controller chain cut at its first GitOps manager is settled there, so
@@ -1033,5 +1073,20 @@ func TestControllerChainToManager(t *testing.T) {
 	}
 	if (*ControllerChain)(nil).ToManager() != nil {
 		t.Fatal("nil chain")
+	}
+	release := ResourceRef{Kind: "HelmRelease", Group: "helm.toolkit.fluxcd.io", Namespace: "flux", Name: "web"}
+	kustomization := ResourceRef{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "flux", Name: "infra"}
+	inner := ResourceRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "inner"}
+	for _, tc := range []struct {
+		chain, want []ResourceRef
+	}{
+		{[]ResourceRef{deployment, release, kustomization}, []ResourceRef{deployment, release}},
+		{[]ResourceRef{release, kustomization}, []ResourceRef{release, kustomization}},
+		{[]ResourceRef{deployment, inner, app, set}, []ResourceRef{deployment, inner}},
+		{[]ResourceRef{inner, app, set}, []ResourceRef{inner, app}},
+	} {
+		if got := (&ControllerChain{Refs: tc.chain}).ToManager(); !slices.Equal(got.Refs, tc.want) {
+			t.Errorf("ToManager(%v) = %v, want %v", tc.chain, got.Refs, tc.want)
+		}
 	}
 }
