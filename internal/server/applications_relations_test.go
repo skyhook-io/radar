@@ -400,3 +400,85 @@ func TestApplicationsUnreadWorkloadKindLeavesExposureUndecided(t *testing.T) {
 		}
 	}
 }
+
+// A workload created or changed after the batch read its kind, and before the
+// rows read it, has no selection the batch decided for it: its exposure is
+// undecided and the build isn't cached, so a rebuild classifies it.
+func TestApplicationsWorkloadChangedBetweenBatchAndRows(t *testing.T) {
+	labels := map[string]string{"app": "api"}
+	deployment := func(generation int64, labels map[string]string) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api", UID: "api", Generation: generation}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}}}
+	}
+	statusWritten := deployment(1, labels)
+	statusWritten.Status.ReadyReplicas = 3
+	for _, tc := range []struct {
+		name      string
+		before    *appsv1.Deployment
+		after     *appsv1.Deployment
+		wantClass string
+	}{
+		{"created", nil, deployment(1, labels), "unknown"},
+		{"template relabelled", deployment(1, map[string]string{"app": "other"}), deployment(2, labels), "unknown"},
+		// A status write leaves the spec the batch evaluated, and its answer.
+		{"status written", deployment(1, labels), statusWritten, "service"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objects := append(testNamespaces("prod"), &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api"}, Spec: corev1.ServiceSpec{Selector: labels}})
+			if tc.before != nil {
+				objects = append(objects, tc.before)
+			}
+			client := fake.NewClientset(objects...)
+			useTestResourceCache(t, client)
+			restore, err := k8s.SetTestResourceDiscovery(fake.NewClientset().Discovery())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(restore)
+			addApplicationTypedDiscovery()
+			cache := k8s.GetResourceCache()
+			rows := func(batch *appRelationBatch, session ownership.ReadSession) ([]appRow, bool) {
+				view := ownership.NewView(session, ownership.Unrestricted())
+				inventory := &applicationInventory{batch: batch, session: session.(relations.Session), owners: view}
+				return groupApplications(collectAppWorkloads(context.Background(), cache, []string{"prod"}, inventory, view, false)), inventory.cacheable()
+			}
+			session, err := k8s.BeginOwnershipRead(cache)
+			if err != nil {
+				t.Fatal(err)
+			}
+			batch := buildAppRelationBatch(context.Background(), session.(relations.Session), []string{"prod"})
+
+			if tc.before == nil {
+				_, err = client.AppsV1().Deployments("prod").Create(context.Background(), tc.after, metav1.CreateOptions{})
+			} else {
+				_, err = client.AppsV1().Deployments("prod").Update(context.Background(), tc.after, metav1.UpdateOptions{})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				d, err := cache.Deployments().Deployments("prod").Get("api")
+				if err == nil && d.Generation == tc.after.Generation && d.Status.ReadyReplicas == tc.after.Status.ReadyReplicas && d.Spec.Template.Labels["app"] == "api" {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("the Deployment never reached the lister: %v", err)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+
+			got, cacheable := rows(batch, session)
+			if row := rowByName(got, "api"); row == nil || row.WorkloadClass != tc.wantClass || cacheable != (tc.wantClass != "unknown") {
+				t.Fatalf("rows over a batch read before the change: row %+v cacheable %v, want %s", row, cacheable, tc.wantClass)
+			}
+			fresh, err := k8s.BeginOwnershipRead(cache)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, cacheable = rows(buildAppRelationBatch(context.Background(), fresh.(relations.Session), []string{"prod"}), fresh)
+			if row := rowByName(got, "api"); row == nil || row.WorkloadClass != "service" || !cacheable {
+				t.Fatalf("rebuilt rows: row %+v cacheable %v, want service and cacheable", row, cacheable)
+			}
+		})
+	}
+}

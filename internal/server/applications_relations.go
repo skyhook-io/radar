@@ -7,8 +7,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
@@ -38,6 +40,54 @@ type appRelationBatch struct {
 	exposureUndecided map[resourceid.Ref]bool
 	// loading: a kind the attachments join was still loading.
 	loading bool
+	// evaluated is the version of each workload the batch read, by kind: its
+	// answers hold for a row only when the row read that same version.
+	evaluated map[resourceid.GroupKind]map[resourceid.Ref]appWorkloadVersion
+}
+
+// appWorkloadVersion identifies one incarnation of a workload's spec. The
+// generation moves with the spec (pod template, references) and not with
+// status writes, which would otherwise make every busy workload look changed.
+type appWorkloadVersion struct {
+	uid        types.UID
+	generation int64
+}
+
+func appVersionOf(obj any) (appWorkloadVersion, bool) {
+	m, err := apimeta.Accessor(obj)
+	if err != nil {
+		return appWorkloadVersion{}, false
+	}
+	return appWorkloadVersion{uid: m.GetUID(), generation: m.GetGeneration()}, true
+}
+
+func (b *appRelationBatch) noteEvaluated(kind resourceid.GroupKind, read relations.IndexedRead) {
+	if !slices.Contains(appWorkloadKinds, kind) {
+		return
+	}
+	if b.evaluated == nil {
+		b.evaluated = map[resourceid.GroupKind]map[resourceid.Ref]appWorkloadVersion{}
+	}
+	versions := map[resourceid.Ref]appWorkloadVersion{}
+	for _, o := range read.Objects {
+		if v, ok := appVersionOf(o.Object); ok {
+			versions[o.Ref] = v
+		}
+	}
+	b.evaluated[kind] = versions
+}
+
+// evaluatedAsRead reports whether the batch's answers for ref describe obj: the
+// batch read ref's kind and found this incarnation of it. A workload created
+// or changed between the batch's read and the row's has no answer from it.
+func (b *appRelationBatch) evaluatedAsRead(ref resourceid.Ref, obj any) bool {
+	versions, read := b.evaluated[ref.GroupKind()]
+	if !read || obj == nil {
+		return true
+	}
+	v, ok := appVersionOf(obj)
+	evaluated, found := versions[ref]
+	return ok && found && evaluated == v
 }
 
 // appStillLoading reports whether any gap is a kind still loading: rows built
@@ -274,6 +324,7 @@ func buildPlannedAppRelationBatch(ctx context.Context, session relations.Session
 		r := session.Indexed(kind, index, keys, scope)
 		reads[kind] = r
 		b.loading = b.loading || appStillLoading(r.Gaps...)
+		b.noteEvaluated(kind, r)
 		return r
 	}
 	// lookupFor reads what selecting subject needs; for a Service selection,
@@ -604,12 +655,16 @@ type applicationInventory struct {
 	owners  *ownership.View
 	// loading: a manager kind a root was resolved from was still loading.
 	loading bool
+	// unevaluated: a row's workload is one the batch didn't read in this
+	// version.
+	unevaluated bool
 }
 
 // cacheable reports whether every manager and attachment kind the rows were
-// joined from had loaded.
+// joined from had loaded, and the batch read every row's workload as the row
+// did.
 func (a *applicationInventory) cacheable() bool {
-	return !a.loading && !a.batch.loading
+	return !a.loading && !a.batch.loading && !a.unevaluated
 }
 
 func (a *applicationInventory) rootOf(group, kind, ns, name string) (string, string, string, string) {
@@ -622,6 +677,12 @@ func (a *applicationInventory) relationshipsFor(kind, ns, name string, obj any) 
 	group := appWorkloadAPIGroup(kind)
 	if u, ok := obj.(*unstructured.Unstructured); ok {
 		group = resourceid.GroupFromAPIVersion(u.GetAPIVersion())
+	}
+	if !a.batch.evaluatedAsRead(resourceid.NewRef(group, kind, ns, name), obj) {
+		// The batch's answers are for another version, or none: its exposure
+		// is undecided, and the next build reads it again.
+		a.unevaluated = true
+		return &appRelationships{exposureIncomplete: true}
 	}
 	return a.batch.relationshipsForRef(group, kind, ns, name)
 }

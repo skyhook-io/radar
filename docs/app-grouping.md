@@ -92,8 +92,9 @@ sorted-first one, so the key doesn't depend on read order. A local HelmRelease w
 its matching origin labels ahead of recorded managers. Attachments come from
 one request-local family batch; the ten-second row cache is shared, and each
 caller's access filters its copy afterward. A build that read a GitOps manager
-or attachment kind still loading is answered but not cached, so the next
-request regroups its rows once the kind has loaded. Cold builds share one process-wide
+or attachment kind still loading, or found a workload the attachment pass hadn't
+read in that version (created, or its spec changed, in between), is answered
+but not cached, so the next request regroups its rows. Cold builds share one process-wide
 slot.
 
 The weaker labels (`part-of`, `name`) are a fallback for loose/raw workloads, not
