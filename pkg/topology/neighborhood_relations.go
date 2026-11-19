@@ -11,6 +11,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -112,7 +113,14 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 			unfollowedFamilies = append(unfollowedFamilies, f)
 		}
 	}
-	frontierSelectors := slices.DeleteFunc(slices.Clone(selectors), func(f *relations.SelectorFamily) bool { return !neighborhoodDisposition(f.Projection, followed) })
+	var frontierSelectors, unfollowedSelectors []*relations.SelectorFamily
+	for _, f := range selectors {
+		if neighborhoodDisposition(f.Projection, followed) {
+			frontierSelectors = append(frontierSelectors, f)
+		} else {
+			unfollowedSelectors = append(unfollowedSelectors, f)
+		}
+	}
 	v := relations.NewView(session, access).WithAuxiliarySession(neighborhoodAuxiliarySession{requestSession}).WithLimit(0)
 	ov := ownership.NewView(session, access)
 	objects := map[resourceid.Ref]runtime.Object{subject: object}
@@ -282,7 +290,7 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	admitted := admittedSession{Session: requestSession, objects: objects, access: admittedAccess{access.decisions}}
+	admitted := newAdmittedSession(requestSession, objects, access.decisions)
 	if allowed[EdgeManages] {
 		graph.ownerEdges(admitted, unanswered)
 	}
@@ -291,8 +299,8 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	individual := func(refs []resourceid.Ref) []resourceid.Ref {
 		return slices.DeleteFunc(slices.Clone(refs), func(r resourceid.Ref) bool { return grouped[r] != "" })
 	}
-	graph.declaredEdges(admitted, families, individual(unanswered), allowed[EdgeManages])
-	graph.declaredEdges(admitted, unfollowedFamilies, individual(answered), false)
+	graph.declaredEdges(admitted, families, selectors, individual(unanswered), allowed[EdgeManages])
+	graph.declaredEdges(admitted, unfollowedFamilies, unfollowedSelectors, individual(answered), false)
 	displayObjects := make(map[resourceid.Ref]runtime.Object, len(order))
 	for _, r := range order {
 		displayObjects[r] = objects[r]
@@ -436,12 +444,13 @@ func (n *neighborhood) ownerEdges(admitted admittedSession, refs []resourceid.Re
 	}
 }
 
-// declaredEdges draws what refs, last-hop objects no hop answered, declare of
-// one another and of the other admitted objects: their families' forward
-// references and, for a GitOps manager, its recorded members. It searches
-// nothing, reads no object the walk didn't admit, and asks no permission the
-// walk didn't already ask, so it can neither add a node nor reveal one.
-func (n *neighborhood) declaredEdges(admitted admittedSession, families []*relations.Family, refs []resourceid.Ref, members bool) {
+// declaredEdges draws what refs declare of one another and of the other
+// admitted objects: their families' forward references, the admitted objects
+// their selectors choose and, for a GitOps manager, its recorded members. It
+// reads no object the walk didn't admit, searches only the admitted objects,
+// and asks no permission the walk didn't already ask, so it can neither add a
+// node nor reveal one.
+func (n *neighborhood) declaredEdges(admitted admittedSession, families []*relations.Family, selectors []*relations.SelectorFamily, refs []resourceid.Ref, members bool) {
 	v := relations.NewView(admitted, admitted.access)
 	ov := ownership.NewView(admitted, admitted.access)
 	for _, r := range refs {
@@ -459,6 +468,16 @@ func (n *neighborhood) declaredEdges(admitted admittedSession, families []*relat
 				}
 			}
 		}
+		for _, f := range selectors {
+			if !f.Covers(r.GroupKind()) {
+				continue
+			}
+			for _, m := range v.Selected(f, r, obj).Matches {
+				if e, ok := projectedEdge(selectorEdges[f.Name], r, m); ok {
+					n.edge(r, m, e)
+				}
+			}
+		}
 		if members && ownership.IsRecordingManager(r.GroupKind()) {
 			for _, m := range ov.Members(r).Members {
 				n.edge(r, m.Ref, relationEdge{edge: EdgeManages})
@@ -468,12 +487,25 @@ func (n *neighborhood) declaredEdges(admitted admittedSession, families []*relat
 }
 
 // admittedSession reads only the objects the walk admitted: any other reads
-// as absent and no search finds anything. Its access allows only what the
+// as absent, a search of a namespace or of every object finds only admitted
+// ones, and any other search finds nothing. Its access allows only what the
 // walk already allowed.
 type admittedSession struct {
 	relations.Session
 	objects map[resourceid.Ref]runtime.Object
+	byKind  map[resourceid.GroupKind][]relations.IndexedObject
 	access  admittedAccess
+}
+
+func newAdmittedSession(session relations.Session, objects map[resourceid.Ref]runtime.Object, decisions map[resourceid.GroupKind]map[string]ownership.Decision) admittedSession {
+	byKind := map[resourceid.GroupKind][]relations.IndexedObject{}
+	for r, obj := range objects {
+		byKind[r.GroupKind()] = append(byKind[r.GroupKind()], relations.IndexedObject{Ref: r, Object: obj})
+	}
+	for _, objs := range byKind {
+		slices.SortFunc(objs, func(a, b relations.IndexedObject) int { return strings.Compare(a.Ref.Key(), b.Ref.Key()) })
+	}
+	return admittedSession{Session: session, objects: objects, byKind: byKind, access: admittedAccess{decisions}}
 }
 
 func (a admittedSession) Object(r resourceid.Ref) ownership.ObjectRead {
@@ -493,8 +525,19 @@ func (a admittedSession) Borrow(r resourceid.Ref) (runtime.Object, ownership.Obj
 	return obj, ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(r, m)}
 }
 
-func (a admittedSession) Indexed(resourceid.GroupKind, string, []string, ownership.SearchScope) relations.IndexedRead {
-	return relations.IndexedRead{}
+func (a admittedSession) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
+	if index != "" && index != cache.NamespaceIndex {
+		return relations.IndexedRead{}
+	}
+	var read relations.IndexedRead
+	for _, o := range a.byKind[gk] {
+		ns := o.Ref.Namespace
+		inScope := ns == "" && scope.IncludeClusterScoped || ns != "" && (scope.AllNamespaces || slices.Contains(scope.Namespaces, ns))
+		if inScope && (index == "" || slices.Contains(keys, ns)) {
+			read.Objects = append(read.Objects, o)
+		}
+	}
+	return read
 }
 
 func (a admittedSession) DependentCandidates(types.UID, ownership.SearchScope) ownership.DependentCandidatesRead {

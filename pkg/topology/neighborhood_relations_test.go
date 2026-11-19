@@ -709,3 +709,37 @@ func TestWalkNeighborhoodExcludedRelationReportsNoOmission(t *testing.T) {
 		t.Errorf("an admitted Secret's mount was not drawn: %+v", sub.Edges)
 	}
 }
+
+// What a last-hop object selects among the other admitted objects is drawn
+// too, from the objects already read: a controller's Service and the
+// Deployment it exposes, both owned and admitted at one hop, come back linked,
+// and drawing the link reads nothing.
+func TestWalkNeighborhoodLinksLastHopSelections(t *testing.T) {
+	controller := true
+	owner := []metav1.OwnerReference{{APIVersion: "example.io/v1", Kind: "App", Name: "web", UID: "app", Controller: &controller}}
+	root := projectionCR("example.io", "App", "shop", "web", map[string]any{})
+	root.SetUID("app")
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "dep", OwnerReferences: owner}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}}}}}, "apps", "Deployment")
+	walk := func(app string) (*Subgraph, int) {
+		svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "svc", OwnerReferences: owner}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": app}}}, "", "Service")
+		s := newProjectionSession(t, root, svc, dep)
+		return walkTestNeighborhood(t, s, root, NeighborhoodOptions{}), len(s.reads)
+	}
+	sub, reads := walk("web")
+	_, unmatchedReads := walk("other")
+	if len(sub.Nodes) != 3 {
+		t.Fatalf("the fixture no longer admits the Service and Deployment at one hop: %+v", sub.Nodes)
+	}
+	names := map[string]string{}
+	for _, n := range sub.Nodes {
+		names[n.ID] = string(n.Kind) + "/" + n.Name
+	}
+	if !slices.ContainsFunc(sub.Edges, func(e Edge) bool {
+		return e.Type == EdgeExposes && names[e.Source] == "Service/web" && names[e.Target] == "Deployment/web"
+	}) {
+		t.Errorf("missing Service exposes Deployment; edges %+v", sub.Edges)
+	}
+	if reads != unmatchedReads {
+		t.Errorf("drawing the selection read %d objects", reads-unmatchedReads)
+	}
+}
