@@ -277,6 +277,12 @@ export const VELERO_START_SERVER = 'Start the Velero server Deployment, or find 
 export const VELERO_CHECK_SERVER = 'Check that the Velero server is running, and read its logs'
 export const VELERO_SHORTEN_NAME = 'Recreate the schedule with a name of 63 characters or fewer'
 export const VELERO_WRITABLE_LOCATION = 'Point the schedule at a writable storage location, or set its location back to ReadWrite'
+/** A Velero header delete (Delete backup, Delete object): the generic Delete's hover treatment, on a labelled button like the other header actions. */
+export const VELERO_DELETE_BUTTON =
+  'btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium hover:text-red-400 hover:border-red-400/50 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50'
+
+/** The name of the action offered for a Backup Velero never stored (backupDelete.tsx), wherever it is named. */
+export const VELERO_DELETE_OBJECT = 'Delete object'
 export const VELERO_CHECK_HELD_BACKUP = 'Check that the Velero server is running with its backup controller enabled, and inspect its logs for the queued backup.'
 
 // The next step for each Velero Issue whose message Radar doesn't recognise.

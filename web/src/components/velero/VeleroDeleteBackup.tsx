@@ -7,11 +7,10 @@ import { useRadarFeature } from '../../api/client'
 import { getApiBase } from '../../api/config'
 import { actionDialogResult } from '../../api/actions'
 import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
+import { VeleroDeleteObject, veleroBackupDeletePath, veleroLocationMissing } from './backupDelete'
+import { VELERO_DELETE_BUTTON } from './shared'
 import { useVeleroBackupDeletion, useVeleroDeleteBackup, useVeleroRuns, useVeleroWorkspace, type VeleroDeletion } from '../../api/velero'
 
-// The generic Delete's hover treatment, on a labelled button like the other header actions.
-const BUTTON =
-  'btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium hover:text-red-400 hover:border-red-400/50 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50'
 
 // The phases Velero's backup tracker holds a backup in (pkg/velero.BackupStillRunning).
 const RUNNING = new Set(['InProgress', 'WaitingForPluginOperations', 'WaitingForPluginOperationsPartiallyFailed', 'Finalizing', 'FinalizingPartiallyFailed'])
@@ -97,6 +96,7 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
   const restores = useVeleroRuns('restores', namespace, { backup: name }, { enabled: support === 'supported' && reviewing !== null && !!namespace && !!name })
   const request = deletion.data?.request ?? deleteBackup.data?.request
   const started = !!request || backup?.status?.phase === 'Deleting'
+  const preconditions = useRadarFeature('resourceDeletePreconditions').support
 
   const state = deletion.data?.state
   // Announced once, and only for a request sent from this browser session: a
@@ -110,7 +110,17 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
     if (state === 'failed') showApiError(`Deleting backup ${name} failed`, `${PARTLY} ${(deletion.data?.errors ?? []).join('; ')}`)
   }, [queryClient, request, state, name, namespace, deletion.data?.errors])
 
-  if (support !== 'supported' || !namespace || !name || !uid) return null
+  if (!namespace || !name || !uid) return null
+  // Where Velero would never act on a request, Delete object takes Delete backup's place.
+  // A failed refresh leaves older data behind; for Delete object that reads as unknown.
+  const requestState = support !== 'supported' ? 'none' : !deletion.data && !deletion.error ? 'unknown' : deletion.error || (started && !(state && SETTLED.has(state))) ? 'open' : 'none'
+  const pathInput = { deleteBackup: support, preconditions, locationMissing: (n: string) => veleroLocationMissing(workspace.data, namespace, n) }
+  const path = veleroBackupDeletePath(backup, { ...pathInput, request: requestState })
+  // A backup only Delete object could remove, whose requests can't be read now:
+  // say so rather than fall back to a Delete backup Velero would refuse.
+  const objectUnreadable = !!deletion.error && veleroBackupDeletePath(backup, { ...pathInput, request: 'none' }).kind === 'object'
+  if (path.kind === 'object') return <VeleroDeleteObject backup={backup} reason={path.reason} />
+  if (support !== 'supported') return null
 
   const locationName: string = backup?.spec?.storageLocation ?? ''
   const location = workspace.data?.locations.find((l) => l.namespace === namespace && l.name === locationName)
@@ -136,8 +146,8 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
 
   // Asked, and not settled: follow it. A status Radar can't read is said as
   // such; it is never a reason to offer the deletion again.
-  if ((deletion.error && !deletion.data) || (started && !(state && SETTLED.has(state)))) {
-    const unreadable = deletion.error && !deletion.data
+  if ((deletion.error && !deletion.data) || objectUnreadable || (started && !(state && SETTLED.has(state)))) {
+    const unreadable = deletion.error && (!deletion.data || objectUnreadable)
     const tooltip = unreadable
       ? started
         ? `Velero was asked to delete this backup, but Radar can’t read how it is going: ${deletion.error.message}`
@@ -149,7 +159,7 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
       <Tooltip content={tooltip} position="bottom">
         <span>
           {unreadable ? (
-            <Badge severity="warning">{started ? 'Deletion requested' : 'Deletion status unreadable'}</Badge>
+            <Badge severity="warning">{started && !objectUnreadable ? 'Deletion requested' : 'Deletion status unreadable'}</Badge>
           ) : (
             <Badge severity="neutral">
               <Loader2 className="mr-1 inline h-3 w-3 animate-spin" aria-hidden />
@@ -161,13 +171,16 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
     )
   }
 
+  // Until the deletion requests are read, which delete applies is not known.
+  if (path.kind === 'pending') return null
+
   const open = () => {
     deleteBackup.reset()
     setReviewing(uid)
   }
 
   const button = (
-    <button type="button" onClick={open} disabled={unavailable !== undefined} className={BUTTON}>
+    <button type="button" onClick={open} disabled={unavailable !== undefined} className={VELERO_DELETE_BUTTON}>
       <Trash2 className="h-3.5 w-3.5" aria-hidden />
       Delete backup
     </button>
