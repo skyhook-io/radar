@@ -12,6 +12,10 @@ import { AgentSandboxGate } from './shared'
 import { NS, PARTIAL, claim, emptyData, liveData, liveSandboxes, read, sandbox, warmPool } from './agentsandbox.fixtures'
 import { liveWorkspace } from './workspace.fixtures'
 import { serverReadings } from './labels'
+import { QueryClient } from '@tanstack/react-query'
+import { kindToPluralWithGroup } from '../../utils/navigation'
+import { agentSandboxListKey } from './data'
+import { SANDBOX_CLAIM_KIND, SANDBOX_KIND, SANDBOX_WARM_POOL_KIND } from './routes'
 
 // The kind lists read the resource list endpoint, with its coverage; the
 // Overview's tests are in AgentSandboxOverview.test.tsx.
@@ -181,6 +185,24 @@ describe('Agent Sandbox kind lists', () => {
     expect(none).toContain('No Sandboxes match these filters.')
   })
 
+  it('narrows each list by name from the Resources page’s search param', () => {
+    const sandboxes = page(<SandboxesScreen {...screenProps(liveData())} />, '/resources/sandboxes?search=BAD')
+    expect(sandboxes).toContain('bad-image')
+    expect(sandboxes).not.toContain('foreign')
+    expect(page(<SandboxesScreen {...screenProps(liveData())} />, '/resources/sandboxes?search=nothing-here')).toContain('No Sandboxes match these filters.')
+    const claims = page(<ClaimsScreen {...screenProps(liveData())} />, '/resources/sandboxclaims?search=ok')
+    expect(claims).toContain('claim-ok')
+    expect(claims).not.toContain('claim-missing-pool')
+    expect(page(<ClaimsScreen {...screenProps(liveData())} />, '/resources/sandboxclaims?search=nothing-here')).toContain('No SandboxClaims match this search.')
+    const data = liveData({ warmPools: [warmPool('alpha', { uid: 'a' }), warmPool('beta', { uid: 'b' })] })
+    const pools = page(<WarmPoolsScreen {...screenProps(data)} />, '/resources/sandboxwarmpools?search=alp')
+    expect(pools).toContain('alpha')
+    expect(pools).not.toContain('beta')
+    expect(page(<WarmPoolsScreen {...screenProps(data)} />, '/resources/sandboxwarmpools?search=nothing-here')).toContain('No SandboxWarmPools match this search.')
+    // The box shows the search it applies.
+    expect(sandboxes).toMatch(/value="BAD"/)
+  })
+
   it('colors a row as the server’s Needs attention row about it, so a state reads the same on the Overview', () => {
     // A claim that can't bind is a warning in the reading, the row and Issues alike.
     const claims = page(<ClaimsScreen {...screenProps(liveData())} server={serverReadings(liveWorkspace())} />)
@@ -229,5 +251,28 @@ describe('Agent Sandbox kind lists', () => {
     expect(page(<SandboxesScreen {...screenProps(liveData({ sandboxes: DENIED }))} />)).toContain('Unknown: no access to Sandboxes here.')
     expect(page(<ClaimsScreen {...screenProps(emptyData())} />)).toContain('No SandboxClaims found in the requested scope.')
     expect(page(<WarmPoolsScreen {...screenProps(emptyData({ warmPools: read([], PARTIAL) }))} />)).toContain('No SandboxWarmPools found in the namespaces Radar could read.')
+  })
+})
+
+describe('Agent Sandbox list queries', () => {
+  it('are refreshed by what refreshes resource lists: writes, and live events for their kind', () => {
+    for (const kind of [SANDBOX_KIND, SANDBOX_CLAIM_KIND, SANDBOX_WARM_POOL_KIND]) {
+      const client = new QueryClient()
+      const key = agentSandboxListKey(kind, NS)
+      const stale = () => client.getQueryState(key)?.isInvalidated
+      client.setQueryData(key, { items: [], coverage: { status: 'unknown' } })
+      // A live event invalidates ['resources', plural], the plural the event's kind and group map to.
+      void client.invalidateQueries({ queryKey: ['resources', kindToPluralWithGroup(kind.kind, kind.group)] })
+      expect(stale()).toBe(true)
+      client.setQueryData(key, { items: [], coverage: { status: 'unknown' } })
+      void client.invalidateQueries({ queryKey: ['resources'] })
+      expect(stale()).toBe(true)
+      // Another kind's event leaves it alone.
+      client.setQueryData(key, { items: [], coverage: { status: 'unknown' } })
+      void client.invalidateQueries({ queryKey: ['resources', 'pods'] })
+      expect(stale()).toBe(false)
+      // The standard list's key for the same kind (group in the third place) is a different entry.
+      expect(client.getQueryData(['resources', kind.name, kind.group, [NS]])).toBeUndefined()
+    }
   })
 })

@@ -74,6 +74,15 @@ function isDenied(error: unknown): boolean {
 
 const REFRESH_MS = 30_000
 
+/**
+ * Under the `['resources', plural]` prefix that writes and live events
+ * invalidate. The 'agent-sandbox' segment sits where the standard list keys
+ * hold the group, which is never that, so neither reads the other's entry.
+ */
+export function agentSandboxListKey(kind: { name: string; group: string }, nsKey: string) {
+  return ['resources', kind.name, 'agent-sandbox', kind.group, nsKey] as const
+}
+
 /** The three listed kinds, read with the namespace filter applied. */
 export function useAgentSandboxLists({
   namespaces,
@@ -88,7 +97,7 @@ export function useAgentSandboxLists({
   const intervals = useMemo(() => KINDS.map(() => createListRefetchInterval(REFRESH_MS)), [])
   const queries = useQueries({
     queries: KINDS.map(([, kind], i) => ({
-      queryKey: ['agent-sandbox', kind.name, kind.group, nsKey],
+      queryKey: agentSandboxListKey(kind, nsKey),
       queryFn: ({ signal }: { signal: AbortSignal }) => fetchResourceList<any>(kind.name, { namespaces: nsKey ? nsKey.split(',') : [], group: kind.group, signal }),
       enabled: enabled && served(apiResources, kind),
       staleTime: REFRESH_MS,
