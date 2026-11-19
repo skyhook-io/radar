@@ -100,7 +100,7 @@ func TestVeleroLogFormatsAndFilters(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := decodeVeleroLog(bytes.NewReader(body), map[string]bool{"error": true, "warning": true}, "")
+		result, err := decodeVeleroLog(bytes.NewReader(body), map[string]bool{"error": true, "warning": true}, "", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -108,7 +108,7 @@ func TestVeleroLogFormatsAndFilters(t *testing.T) {
 		if got.Counts["error"] != 1 || got.Counts["warning"] != 1 || got.Counts["debug"] != 1 || got.Counts["other"] != 2 || len(got.Lines) != 2 || got.Partial {
 			t.Fatalf("%s: %+v", file, got)
 		}
-		filtered, err := decodeVeleroLog(bytes.NewReader(body), map[string]bool{"error": true}, "permission denied")
+		filtered, err := decodeVeleroLog(bytes.NewReader(body), map[string]bool{"error": true}, "permission denied", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +121,7 @@ func TestVeleroLogFormatsAndFilters(t *testing.T) {
 
 func TestVeleroLogRowsDoNotCapCountsOrSearch(t *testing.T) {
 	body := strings.Repeat("level=info msg=ok\n", maxVeleroArtifactRows+1) + "level=error msg=late-failure\n"
-	result, err := decodeVeleroLog(strings.NewReader(body), map[string]bool{"info": true, "error": true}, "")
+	result, err := decodeVeleroLog(strings.NewReader(body), map[string]bool{"info": true, "error": true}, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestVeleroLogRowsDoNotCapCountsOrSearch(t *testing.T) {
 	if len(got.Lines) != maxVeleroArtifactRows || got.Counts["error"] != 1 || !got.Truncated || got.Partial {
 		t.Fatalf("capped: %+v", got)
 	}
-	result, err = decodeVeleroLog(strings.NewReader(body), map[string]bool{"error": true}, "late-failure")
+	result, err = decodeVeleroLog(strings.NewReader(body), map[string]bool{"error": true}, "late-failure", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,9 +139,44 @@ func TestVeleroLogRowsDoNotCapCountsOrSearch(t *testing.T) {
 	}
 }
 
+// levels=auto answers in one download what the tab opens on: errors and
+// warnings when the log has any, every line otherwise.
+func TestVeleroLogAutoPicksProblemsElseEverything(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body   string
+		levels []string
+		lines  int
+	}{
+		"with problems": {"level=info msg=a\nlevel=warning msg=b\nlevel=debug msg=c\nlevel=error msg=d\n", []string{"error", "warning"}, 2},
+		"clean":         {"level=info msg=a\nlevel=debug msg=b\nplain line\n", veleroLogLevels, 3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := decodeVeleroLog(strings.NewReader(tc.body), nil, "", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := result.(veleroRunLog)
+			if !reflect.DeepEqual(got.Levels, tc.levels) || len(got.Lines) != tc.lines || got.Matched != tc.lines {
+				t.Fatalf("%+v", got)
+			}
+		})
+	}
+}
+
+func TestVeleroLogLineLimitIgnoresTheLineEnding(t *testing.T) {
+	body := "level=info msg=" + strings.Repeat("x", maxVeleroLogLineBytes-len("level=info msg=")) + "\r\nlevel=error msg=after\r\n"
+	result, err := decodeVeleroLog(strings.NewReader(body), map[string]bool{"error": true}, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.(veleroRunLog); got.Partial || got.Counts["error"] != 1 {
+		t.Fatalf("a 64 KiB CRLF line was read as over the limit: %+v", got)
+	}
+}
+
 func TestVeleroLogResponseTextIsBounded(t *testing.T) {
 	line := "level=error msg=" + strings.Repeat("x", 12<<10) + "\n"
-	result, err := decodeVeleroLog(strings.NewReader(strings.Repeat(line, 1000)), map[string]bool{"error": true}, "")
+	result, err := decodeVeleroLog(strings.NewReader(strings.Repeat(line, 1000)), map[string]bool{"error": true}, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +236,7 @@ func TestVeleroLogLongLineStopsWithPrefixCoverage(t *testing.T) {
 	prefix := "level=info msg=ok\n"
 	for _, length := range []int{maxVeleroLogLineBytes, maxVeleroLogLineBytes + 1} {
 		body := prefix + "level=debug msg=" + strings.Repeat("x", length-len("level=debug msg=")) + "\nlevel=error msg=after\n"
-		result, err := decodeVeleroLog(strings.NewReader(body), map[string]bool{"error": true}, "")
+		result, err := decodeVeleroLog(strings.NewReader(body), map[string]bool{"error": true}, "", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -240,7 +275,7 @@ func TestVeleroArtifactGzipCaps(t *testing.T) {
 				t.Fatal(err)
 			}
 			store := serveResults(t, zipped.Bytes())
-			result, err := fetchVeleroArtifact(context.Background(), store.URL, localVeleroDownloadPolicy, maxVeleroCompressedBytes, maxVeleroDecodedBytes, func(r io.Reader) (any, error) { return decodeVeleroLog(r, map[string]bool{"error": true}, "") })
+			result, err := fetchVeleroArtifact(context.Background(), store.URL, localVeleroDownloadPolicy, maxVeleroCompressedBytes, maxVeleroDecodedBytes, func(r io.Reader) (any, error) { return decodeVeleroLog(r, map[string]bool{"error": true}, "", false) })
 			if err != nil {
 				t.Fatal(err)
 			}
