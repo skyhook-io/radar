@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import type { WorkspaceScreenProps } from '../../integrations/workspaceRoute'
 import { useAPIResources } from '../../api/apiResources'
@@ -9,6 +9,7 @@ import { currentPageLabel } from '../../utils/page-links'
 import { refToSelectedResource } from '../../utils/navigation'
 import { encodeDrawerTrail } from '../../utils/drawer-trail'
 import type { SelectedResource } from '../../types'
+import { useCNPGKubectlContext } from '../cnpg/useCNPGKubectlContext'
 import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
 import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
@@ -33,7 +34,7 @@ import { SubstrateOverview } from './SubstrateOverview'
 import { SubstratePoolPage } from './SubstratePoolPage'
 import { SubstrateTemplatePage, SubstrateTemplatesScreen } from './SubstrateTemplates'
 import { SubstrateWorkersScreen } from './SubstrateWorkers'
-import { SubstrateScreenGate } from './shared'
+import { KubectlTargetContext, SubstrateScreenGate } from './shared'
 import { substrateDiscovered, useSubstrateSidebarWorkspace } from './useSubstrateSidebarWorkspace'
 
 /**
@@ -88,6 +89,8 @@ export function SubstrateView({ namespaces, selectedResource, onOpenResource, on
   const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar)
   const selectedKind = route.pool ? SUBSTRATE_WORKERPOOL_KIND : null
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
+  const kubectlContext = useCNPGKubectlContext()
+  const kubectlTarget = useMemo(() => ({ context: kubectlContext?.name ?? null }), [kubectlContext?.name])
 
   const openActor = decodeActorParam(params.get(ACTOR_DRAWER_PARAM))
   const setActorDrawer = useCallback(
@@ -160,9 +163,11 @@ export function SubstrateView({ namespaces, selectedResource, onOpenResource, on
   })()
 
   return (
-    <WorkspaceFrame namespaces={namespaces} categoryWorkspaces={sidebarWorkspace} selectedKind={selectedKind} compactNavigation={compactNavigation}>
-      {screen}
-      <SubstrateActorDrawer actor={route.actor ? null : openActor} onClose={() => setActorDrawer(null)} onOpenFull={openFull} onOpenSubject={openSubject} />
-    </WorkspaceFrame>
+    <KubectlTargetContext.Provider value={kubectlTarget}>
+      <WorkspaceFrame namespaces={namespaces} categoryWorkspaces={sidebarWorkspace} selectedKind={selectedKind} compactNavigation={compactNavigation}>
+        {screen}
+        <SubstrateActorDrawer actor={route.actor ? null : openActor} onClose={() => setActorDrawer(null)} onOpenFull={openFull} onOpenSubject={openSubject} />
+      </WorkspaceFrame>
+    </KubectlTargetContext.Provider>
   )
 }

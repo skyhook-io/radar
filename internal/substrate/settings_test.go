@@ -158,3 +158,24 @@ func TestInstallationEnvironment(t *testing.T) {
 		t.Fatalf("CA: %+v", c)
 	}
 }
+
+// The recommended setup writes the token with the shell's ~/ate.token; the
+// form takes the same path.
+func TestExpandHomeMatchesTheShell(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if got := ExpandHome("~/ate.token"); got != filepath.Join(home, "ate.token") {
+		t.Errorf("~/ate.token = %q", got)
+	}
+	for _, p := range []string{"/abs/ate.token", "relative/ate.token", "~other/ate.token", ""} {
+		if got := ExpandHome(p); got != p {
+			t.Errorf("%q changed to %q", p, got)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(home, "ate.token"), []byte("t"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := (Settings{Identity: IdentityTokenFile, TokenFile: ExpandHome("~/ate.token")}).Validate(); err != nil {
+		t.Errorf("the expanded recommended path validates: %v", err)
+	}
+}

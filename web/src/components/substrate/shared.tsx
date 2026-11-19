@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import { createContext, useContext, type ReactNode } from 'react'
+import { shellWord } from '@skyhook-io/k8s-ui/utils/shell'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { Bot, Info } from 'lucide-react'
 import {
@@ -301,12 +302,32 @@ export function When({ iso, hint, prefix, held }: { iso: string; hint?: string; 
 }
 
 /**
+ * The kubeconfig context a copied command targets: its name on a local Radar,
+ * null where Radar can't know the reader's (in-cluster, Hub). Without a
+ * provider, commands are shown as written.
+ */
+export const KubectlTargetContext = createContext<{ context: string | null } | undefined>(undefined)
+
+const CHANGES_STATE = /^kubectl ate (revert|update|resume|suspend|delete) /
+
+/**
+ * A kubectl ate command that changes an actor, aimed at the cluster on screen:
+ * the reader's shell may point at another, where a same-named actor would be
+ * changed instead. Where the context is unknown, a <context> to fill in.
+ */
+export function withKubectlTarget(command: string, target: { context: string | null } | undefined): string {
+  if (!target || !CHANGES_STATE.test(command) || /\s--context[\s=]/.test(command)) return command
+  return `${command} --context ${target.context ? shellWord(target.context) : '<context>'}`
+}
+
+/**
  * A shell command a next step names, as a code chip with a copy button, on a
  * line of its own under the step: it never wraps, inside itself or into the
  * sentence; a command wider than its container scrolls. A command with
  * <placeholders> is a template to fill in, and says so after it.
  */
-export function CommandChip({ command }: { command: string }) {
+export function CommandChip({ command: written }: { command: string }) {
+  const command = withKubectlTarget(written, useContext(KubectlTargetContext))
   const holes = [...new Set(command.match(/<[^<>\s]+>/g) ?? [])]
   return (
     <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5" data-command-line>

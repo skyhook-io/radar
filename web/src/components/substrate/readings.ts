@@ -478,25 +478,24 @@ const NO_FORM_READING: Partial<Record<SubstrateCode, Omit<TierReading, 'detail'>
   tls: {
     title: 'Radar couldn’t verify Substrate’s API server',
     tone: 'unhealthy',
-    detail: 'Radar couldn’t verify api.ate-system.svc:443 from inside the cluster.',
+    detail: 'Radar couldn’t verify {endpoint} from inside the cluster.',
     withReason: true,
-    nextStep: 'Check Substrate’s API Service and its Pods.',
-    command: 'kubectl -n ate-system get svc api',
+    nextStep: 'Ask your operator to check the certificate Radar trusts for it: the cluster’s trust bundle for Substrate, or the substrate.api.caConfigMap and serverName Helm values.',
   },
   unreachable: {
     title: 'Radar couldn’t reach Substrate’s API server',
     tone: 'unhealthy',
-    detail: 'Radar couldn’t reach api.ate-system.svc:443 from inside the cluster.',
+    detail: 'Radar couldn’t reach {endpoint} from inside the cluster.',
     withReason: true,
     nextStep: 'Check that Substrate’s API server Pods are running.',
     command: 'kubectl -n ate-system get pods',
   },
   unauthenticated: {
-    title: 'Substrate refused the shared identity',
+    title: 'Substrate didn’t accept the shared identity’s token',
     tone: 'unhealthy',
-    detail: 'Substrate refused ate-system/ate-client: it isn’t granted in this install.',
+    detail: 'Substrate didn’t accept the token Radar created for ate-system/ate-client: it checks who issued a token and for which audience, before any role.',
     withReason: true,
-    nextStep: 'Ask a Substrate operator to grant it; until then, this Radar can’t read Substrate as it stands.',
+    nextStep: 'Ask a Substrate operator to check that its API server trusts this cluster’s ServiceAccount tokens for the audience api.ate-system.svc. A role grant won’t fix this.',
   },
   denied: {
     title: 'Substrate refused the shared identity',
@@ -526,7 +525,8 @@ export function tierReading(tier: SubstrateAPITier, { inSettings = false }: { in
   if (noForm) {
     // The plain state is Radar's; the server's own words follow as its reason.
     const { withReason, ...reading } = noForm
-    return { ...reading, detail: withReason && tier.reason ? `${noForm.detail} ${tier.reason}` : noForm.detail ?? tier.reason ?? '' }
+    const own = noForm.detail?.replace('{endpoint}', tier.endpoint ?? 'Substrate’s API server')
+    return { ...reading, detail: withReason && tier.reason ? `${own} ${tier.reason}` : own ?? tier.reason ?? '' }
   }
   const code = tier.code ?? (tier.state === 'notConfigured' ? 'notConfigured' : undefined)
   const known = code ? CODE_READING[code] : undefined

@@ -3,6 +3,7 @@ package substrate
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -83,12 +84,22 @@ func classify(err error, creds *bearerCreds) (string, string) {
 	if !ok {
 		return CodeFailed, creds.scrub(err.Error())
 	}
+	if st.Code() == codes.Unauthenticated {
+		if local := creds.localFailure(st.Message()); local != nil {
+			return local.Code, creds.scrub(local.Message)
+		}
+	}
 	msg := creds.scrub(st.Message())
 	if len(msg) > 400 {
 		msg = msg[:400] + "…"
 	}
 	switch st.Code() {
 	case codes.Unavailable, codes.DeadlineExceeded:
+		// gRPC reports a failed TLS handshake (a wrong CA or server name) as
+		// Unavailable; the endpoint answered, so it is the certificate.
+		if tlsHandshakeFailed(st.Message()) {
+			return CodeTLS, "Radar couldn't verify Substrate's API server: " + msg
+		}
 		return CodeUnreachable, "Substrate's API is unreachable: " + msg
 	case codes.Unauthenticated:
 		return CodeUnauthenticated, "Substrate did not accept Radar's identity: " + msg
@@ -100,11 +111,15 @@ func classify(err error, creds *bearerCreds) (string, string) {
 	return CodeFailed, "Substrate's API failed the read: " + msg
 }
 
+func tlsHandshakeFailed(msg string) bool {
+	return strings.Contains(msg, "authentication handshake failed") || strings.Contains(msg, "x509:") || strings.Contains(msg, "tls: ")
+}
+
 // connectionLevel codes mean no read can succeed until the connection or
 // identity changes.
 func connectionLevel(code string) bool {
 	switch code {
-	case CodeUnreachable, CodeUnauthenticated, CodeTLS, CodeNotInstalled, CodeNotConfigured:
+	case CodeUnreachable, CodeUnauthenticated, CodeTLS, CodeNotInstalled, CodeNotConfigured, CodeMintDenied, CodeInvalidSettings:
 		return true
 	}
 	return false

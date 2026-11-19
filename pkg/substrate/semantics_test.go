@@ -104,7 +104,7 @@ func TestMissingTemplateNeedsACompleteTemplateRead(t *testing.T) {
 	templates := []Template{{Atespace: "a", Name: "t"}}
 	in := Inputs{Actors: actors, ActorsRead: true, Templates: templates, TemplatesRead: true, TemplatesComplete: true, Now: now}
 	r := find(t, NeedsAttention(in), "missingTemplate:a/gone")
-	if r.Count != 1 || len(ActorAttention([]Attention{r}, actors[0], now)) != 1 || len(ActorAttention([]Attention{r}, actors[1], now)) != 0 {
+	if r.Count != 1 || len(ActorAttention([]Attention{r}, actors[0], nil, now)) != 1 || len(ActorAttention([]Attention{r}, actors[1], nil, now)) != 0 {
 		t.Errorf("row = %+v", r)
 	}
 	in.TemplatesComplete = false
@@ -217,8 +217,9 @@ func TestServiceVerdictsAddRowsWhereDefinite(t *testing.T) {
 	}
 }
 
-// A crashed or reverting actor has no worker assignment, so no next step may
-// send the operator to its worker or its log lines in Radar.
+// A crashed actor has no worker assignment, and a reverting or deleting one is
+// the API server's to finish, so no next step sends the operator to a worker
+// or to log lines Radar can't show.
 func TestNextStepsOfferOnlyWhatCanBeRead(t *testing.T) {
 	actors := []Actor{
 		{Atespace: "a", Name: "c", State: StateCrashed, Crash: &Crash{Message: "killed for exceeding its memory limit"}, UpdateTime: ago(time.Hour)},
@@ -238,15 +239,15 @@ func TestNextStepsOfferOnlyWhatCanBeRead(t *testing.T) {
 		}
 	}
 	for _, id := range []string{"stuckTransition:reverting", "stuckTransition:deleting"} {
-		if r := find(t, rows, id); !strings.Contains(r.NextStep, "has no worker") || r.Command != apiServerLogs {
-			t.Errorf("%s holds no worker: %+v", id, r)
+		if r := find(t, rows, id); !strings.Contains(r.NextStep, "API server's log") || strings.Contains(r.NextStep, "worker") || r.Command != apiServerLogs {
+			t.Errorf("%s is the API server's to finish, worker or not: %+v", id, r)
 		}
 	}
 	if r := find(t, rows, "stuckTransition:resuming"); !strings.Contains(r.NextStep, "Resume each again") || r.Command != resumeCommand {
 		t.Errorf("an unfinished resume continues only on the next resume call: %+v", r)
 	}
 	// A group row speaks of the actors; one actor's page, of that actor.
-	if page := ActorAttention(rows, actors[3], now); len(page) != 1 || !strings.HasPrefix(page[0].NextStep, "Resume it again") || page[0].Command != "kubectl ate resume actor s -a a" {
+	if page := ActorAttention(rows, actors[3], nil, now); len(page) != 1 || !strings.HasPrefix(page[0].NextStep, "Resume it again") || page[0].Command != "kubectl ate resume actor s -a a" {
 		t.Errorf("a stuck actor's own page: %+v", page)
 	}
 	for _, step := range []string{crashedNextStep, CrashedMemoryNextStep, stuckNextStep[StateResuming]} {
@@ -260,8 +261,8 @@ func TestNextStepsOfferOnlyWhatCanBeRead(t *testing.T) {
 		}
 	}
 	// On the actor's own page, the step follows its own crash and names it.
-	onPage := ActorAttention(rows, actors[0], now)
-	if other := ActorAttention(rows, actors[4], now); other[0].NextStep != crashedActorNextStep || other[0].Command != "kubectl ate revert actor c2 -a a" || other[0].ThenCommand != "" {
+	onPage := ActorAttention(rows, actors[0], nil, now)
+	if other := ActorAttention(rows, actors[4], nil, now); other[0].NextStep != crashedActorNextStep || other[0].Command != "kubectl ate revert actor c2 -a a" || other[0].ThenCommand != "" {
 		t.Errorf("another cause gets the general step: %+v", other[0])
 	}
 	// Its two commands, in order: the move, then the revert.

@@ -147,7 +147,7 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
   } else {
     // Without the API, the worker Pods Kubernetes calls ready stand in, said as Pods.
     const k8s = data.pools.map((p) => p.kubernetes).filter((p): p is NonNullable<SubstratePoolRow['kubernetes']> => !!p)
-    const ready = k8s.reduce((n, p) => n + p.ready, 0)
+    const ready = k8s.reduce((n, p) => n + poolReadyPods(p), 0)
     const desired = k8s.every((p) => p.desired !== undefined) ? k8s.reduce((n, p) => n + (p.desired ?? 0), 0) : undefined
     facts.push({
       label: 'Worker Pods',

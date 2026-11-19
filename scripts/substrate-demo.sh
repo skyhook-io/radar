@@ -290,10 +290,20 @@ cmd_down() {
       delete_fixture_pod "$pod"
     done
     k delete workerpools.ate.dev,configmaps -n "$NS" -l "$SEL" 2>&1 | sed 's/^/    /' || true
-    # Delete the namespace only when nothing the demo didn't create is left in it.
-    others=$(k get all,configmaps,secrets,persistentvolumeclaims,workerpools.ate.dev -n "$NS" -o name 2>/dev/null \
-      | grep -v -e '^configmap/kube-root-ca.crt$' -e '^secret/default-token' || true)
-    if [ -z "$others" ]; then
+    # Delete the namespace only when nothing the demo didn't create is left in
+    # it, checked across every kind that can be listed there; a failed listing
+    # keeps it.
+    others="" inventory_ok=1
+    kinds=$(k api-resources --namespaced --verbs=list -o name 2>/dev/null | grep -v -e '^events$' -e '^events.events.k8s.io$' | paste -sd, -) || inventory_ok=0
+    if [ -z "$kinds" ]; then inventory_ok=0; fi
+    if [ "$inventory_ok" = 1 ]; then
+      listed=$(k get "$kinds" -n "$NS" -o name 2>/dev/null) || inventory_ok=0
+      others=$(printf '%s\n' "$listed" | grep -v -e '^$' -e '^configmap/kube-root-ca.crt$' -e '^configmap/istio-ca-root-cert$' -e '^secret/default-token' \
+        -e '^serviceaccount/default$' -e '^endpoints/' -e '^endpointslice' || true)
+    fi
+    if [ "$inventory_ok" != 1 ]; then
+      warn "kept namespace $NS: couldn't list everything in it to check it holds only the demo's objects"
+    elif [ -z "$others" ]; then
       k delete namespace "$NS" --wait=true --timeout=120s | sed 's/^/    /'
     else
       warn "kept namespace $NS: it holds objects the demo didn't create:"
