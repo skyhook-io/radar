@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/cache"
 
@@ -46,22 +47,50 @@ func (n *neighborhood) decide(r resourceid.Ref) ownership.Decision {
 	return d
 }
 
-// namePodNode lists the Node a Pod's spec names when the caller may not read
-// Nodes, marked, as the subject's own declared references are: the caller
-// reads the name with the Pod. Nothing is read about the Node.
-func (n *neighborhood) namePodNode(obj runtime.Object, rel *Relationships) {
-	pod, ok := obj.(*corev1.Pod)
-	if !ok || pod.Spec.NodeName == "" || rel.Node != nil {
-		return
+// nameSpecDeclared lists, by name and marked, what the subject's own spec
+// names that the caller may not read, as the subject's declared references
+// are: a Pod's Node and the ResourceClaims its spec names, and a Calico
+// HostEndpoint's Node. The caller reads these names with the subject. Nothing
+// is read about the targets. A claim a template generates is named only in
+// the Pod's status, so it isn't listed here.
+func (n *neighborhood) nameSpecDeclared(obj runtime.Object, rel *Relationships) {
+	state := func(r resourceid.Ref) string {
+		switch n.decide(r) {
+		case ownership.Allowed:
+			return ""
+		case ownership.Undecided:
+			return ResourceStateUnverified
+		}
+		return ResourceStateDenied
 	}
-	state := ResourceStateDenied
-	switch n.decide(resourceid.NewRef("", "Node", "", pod.Spec.NodeName)) {
-	case ownership.Allowed:
-		return
-	case ownership.Undecided:
-		state = ResourceStateUnverified
+	node := func(name string) {
+		if name == "" || rel.Node != nil {
+			return
+		}
+		if s := state(resourceid.NewRef("", "Node", "", name)); s != "" {
+			rel.Node = &ResourceRef{Kind: "Node", Name: name, State: s}
+		}
 	}
-	rel.Node = &ResourceRef{Kind: "Node", Name: pod.Spec.NodeName, State: state}
+	switch o := obj.(type) {
+	case *corev1.Pod:
+		node(o.Spec.NodeName)
+		for _, pc := range o.Spec.ResourceClaims {
+			if pc.ResourceClaimName == nil || *pc.ResourceClaimName == "" {
+				continue
+			}
+			claim := ResourceRef{Kind: "ResourceClaim", Group: "resource.k8s.io", Namespace: o.Namespace, Name: *pc.ResourceClaimName}
+			if s := state(refIdentity(claim)); s != "" {
+				claim.State = s
+				rel.ResourceClaims = appendResourceRef(rel.ResourceClaims, claim)
+			}
+		}
+	case *unstructured.Unstructured:
+		gvk := o.GroupVersionKind()
+		if gvk.Kind == "HostEndpoint" && (gvk.Group == "crd.projectcalico.org" || gvk.Group == "projectcalico.org") {
+			name, _, _ := unstructured.NestedString(o.Object, "spec", "node")
+			node(name)
+		}
+	}
 }
 
 type decisionKey struct {

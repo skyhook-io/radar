@@ -135,9 +135,10 @@ func TestRelationsAnswerDirectAccess(t *testing.T) {
 	s := newProjectionSession(t, pod)
 	denied := projectionAccess{denied: []string{"ServiceAccount", "Node", "ResourceClaim"}}
 	rel := projectionAnswer(t, s, pod, denied, ownership.Unrestricted())
-	// The Pod's own spec names its ServiceAccount and its Node, so they are
-	// listed, marked; ResourceClaims stay hidden.
-	if rel.ServiceAccount == nil || *rel.ServiceAccount != (ResourceRef{Kind: "ServiceAccount", Namespace: "shop", Name: "sa", State: ResourceStateDenied}) || rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "node", State: ResourceStateDenied}) || len(rel.ResourceClaims) > 0 {
+	// The Pod's own spec names its ServiceAccount, its Node and its
+	// ResourceClaim, so they are listed, marked.
+	if rel.ServiceAccount == nil || *rel.ServiceAccount != (ResourceRef{Kind: "ServiceAccount", Namespace: "shop", Name: "sa", State: ResourceStateDenied}) || rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "node", State: ResourceStateDenied}) ||
+		!slices.Equal(rel.ResourceClaims, []ResourceRef{{Kind: "ResourceClaim", Group: "resource.k8s.io", Namespace: "shop", Name: "claim", State: ResourceStateDenied}}) {
 		t.Fatalf("hidden spec references: %+v", rel)
 	}
 	for _, read := range s.reads {
@@ -270,7 +271,7 @@ func TestRelationsAnswerDeviceAndHostAccess(t *testing.T) {
 	endpoint := projectionCR("projectcalico.org", "HostEndpoint", "", "host", map[string]any{"spec": map[string]any{"node": "hidden"}})
 	s = newProjectionSession(t, endpoint)
 	rel = projectionAnswer(t, s, endpoint, projectionAccess{denied: []string{"Node"}}, ownership.Unrestricted())
-	if rel.Node != nil {
+	if rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "hidden", State: ResourceStateDenied}) {
 		t.Fatalf("hidden HostEndpoint Node: %+v", rel.Node)
 	}
 }
@@ -824,6 +825,39 @@ func TestRelationsAnswerNamesAPodsUnreadableNode(t *testing.T) {
 						t.Errorf("%s %T: read the Node the caller may not read", name, tc.access)
 					}
 				}
+			}
+		}
+	}
+}
+
+// What a spec names is listed, marked, also when the caller's check on it
+// couldn't be made: a HostEndpoint's Node and a Pod's declared ResourceClaim.
+// A claim a template generates is named only in the Pod's status, so it
+// stays hidden from a caller who may not read ResourceClaims.
+func TestRelationsAnswerNamesSpecDeclaredHostAndClaimRefs(t *testing.T) {
+	endpoint := projectionCR("crd.projectcalico.org", "HostEndpoint", "", "host", map[string]any{"spec": map[string]any{"node": "worker"}})
+	s := newProjectionSession(t, endpoint)
+	if rel := projectionAnswer(t, s, endpoint, undecidedKinds{"Node"}, ownership.Unrestricted()); rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "worker", State: ResourceStateUnverified}) {
+		t.Fatalf("unchecked HostEndpoint Node: %+v", rel.Node)
+	}
+	declared, generated := "declared", "generated-0"
+	pod := projectionObject(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod"},
+		Spec:       corev1.PodSpec{ResourceClaims: []corev1.PodResourceClaim{{Name: "a", ResourceClaimName: &declared}, {Name: "b", ResourceClaimTemplateName: &generated}}},
+		Status:     corev1.PodStatus{ResourceClaimStatuses: []corev1.PodResourceClaimStatus{{Name: "b", ResourceClaimName: &generated}}},
+	}, "", "Pod")
+	s = newProjectionSession(t, pod)
+	for _, tc := range []struct {
+		access ownership.Access
+		state  string
+	}{{projectionAccess{denied: []string{"ResourceClaim"}}, ResourceStateDenied}, {undecidedKinds{"ResourceClaim"}, ResourceStateUnverified}} {
+		rel := projectionAnswer(t, s, pod, tc.access, ownership.Unrestricted())
+		if want := []ResourceRef{{Kind: "ResourceClaim", Group: "resource.k8s.io", Namespace: "shop", Name: "declared", State: tc.state}}; !slices.Equal(rel.ResourceClaims, want) {
+			t.Errorf("%T: resource claims %+v, want %+v", tc.access, rel.ResourceClaims, want)
+		}
+		for _, read := range s.reads {
+			if read.Kind == "ResourceClaim" {
+				t.Errorf("%T: read a ResourceClaim the caller may not read", tc.access)
 			}
 		}
 	}
