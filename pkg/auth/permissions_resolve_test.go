@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -37,10 +38,10 @@ func TestResolve_ConcurrentMissesShareOneDiscovery(t *testing.T) {
 	pc := NewPermissionCache()
 	release := make(chan struct{})
 	var calls atomic.Int32
-	discover := func(context.Context) *UserPermissions {
+	discover := func(context.Context) (*UserPermissions, bool) {
 		calls.Add(1)
 		<-release
-		return &UserPermissions{AllowedNamespaces: []string{"team-a"}}
+		return &UserPermissions{AllowedNamespaces: []string{"team-a"}}, true
 	}
 	const n = 8
 	got := make([]*UserPermissions, n)
@@ -74,9 +75,9 @@ func TestResolve_ServesALiveEntryWithoutDiscovering(t *testing.T) {
 	pc := NewPermissionCache()
 	cached := &UserPermissions{AllowedNamespaces: []string{"team-a"}}
 	pc.Set("alice", nil, cached)
-	perms, ok := pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) *UserPermissions {
+	perms, ok := pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
 		t.Fatal("discovered with a live entry cached")
-		return nil
+		return nil, false
 	})
 	if !ok || perms != cached {
 		t.Fatalf("Resolve = %p, %v; want the cached entry", perms, ok)
@@ -89,11 +90,11 @@ func TestResolve_FailureIsSharedAndNotCached(t *testing.T) {
 	pc := NewPermissionCache()
 	release := make(chan struct{})
 	var calls atomic.Int32
-	discover := func(context.Context) *UserPermissions {
+	discover := func(context.Context) (*UserPermissions, bool) {
 		if calls.Add(1) == 1 {
 			<-release
 		}
-		return nil
+		return nil, false
 	}
 	const n = 4
 	var wg sync.WaitGroup
@@ -120,7 +121,7 @@ func TestResolve_FailureIsSharedAndNotCached(t *testing.T) {
 
 func TestResolve_PanicFailsClosed(t *testing.T) {
 	pc := NewPermissionCache()
-	perms, ok := pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) *UserPermissions {
+	perms, ok := pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
 		panic("boom")
 	})
 	if ok || perms != nil {
@@ -137,10 +138,10 @@ func TestResolve_LastCallerLeavingCancelsTheRun(t *testing.T) {
 	canceled := make(chan struct{})
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	perms, ok := pc.Resolve(ctx, "alice", nil, "1", func(runCtx context.Context) *UserPermissions {
+	perms, ok := pc.Resolve(ctx, "alice", nil, "1", func(runCtx context.Context) (*UserPermissions, bool) {
 		<-runCtx.Done()
 		close(canceled)
-		return nil
+		return nil, false
 	})
 	if ok || perms != nil {
 		t.Fatalf("Resolve = %v, %v; want a failure", perms, ok)
@@ -157,13 +158,13 @@ func TestResolve_CanceledCallerDoesNotFailOthers(t *testing.T) {
 	pc := NewPermissionCache()
 	release := make(chan struct{})
 	var calls atomic.Int32
-	discover := func(runCtx context.Context) *UserPermissions {
+	discover := func(runCtx context.Context) (*UserPermissions, bool) {
 		calls.Add(1)
 		select {
 		case <-release:
-			return &UserPermissions{}
+			return &UserPermissions{}, true
 		case <-runCtx.Done():
-			return nil
+			return nil, false
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -211,10 +212,10 @@ func TestResolve_DistinctConnectionsAndIdentitiesDoNotShare(t *testing.T) {
 			pc := NewPermissionCache()
 			release := make(chan struct{})
 			var calls atomic.Int32
-			discover := func(context.Context) *UserPermissions {
+			discover := func(context.Context) (*UserPermissions, bool) {
 				calls.Add(1)
 				<-release
-				return &UserPermissions{}
+				return &UserPermissions{}, true
 			}
 			var wg sync.WaitGroup
 			for _, c := range []caller{tc.a, tc.b} {
@@ -239,34 +240,117 @@ func TestResolve_InvalidateStartsANewDiscovery(t *testing.T) {
 	pc := NewPermissionCache()
 	release := make(chan struct{})
 	defer close(release)
-	go pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) *UserPermissions {
+	go pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
 		<-release
-		return &UserPermissions{AllowedNamespaces: []string{"stale"}}
+		return &UserPermissions{AllowedNamespaces: []string{"stale"}}, true
 	})
 	waitForWaiters(t, pc, "alice", nil, "1", 1)
 	pc.Invalidate()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	perms, ok := pc.Resolve(ctx, "alice", nil, "1", func(context.Context) *UserPermissions {
-		return &UserPermissions{AllowedNamespaces: []string{"fresh"}}
+	perms, ok := pc.Resolve(ctx, "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
+		return &UserPermissions{AllowedNamespaces: []string{"fresh"}}, true
 	})
-	if !ok || len(perms.AllowedNamespaces) != 1 || perms.AllowedNamespaces[0] != "fresh" {
-		t.Fatalf("Resolve = %+v, %v; want the discovery that began after Invalidate", perms, ok)
+	if !ok || !slices.Equal(perms.AllowedNamespaces, []string{"fresh"}) {
+		t.Fatal("the caller after Invalidate didn't get the discovery that began after it")
 	}
 }
 
 func TestResolve_ExpiredEntryIsRediscovered(t *testing.T) {
 	pc := &PermissionCache{cache: make(map[string]*UserPermissions), ttl: time.Millisecond}
 	var calls atomic.Int32
-	discover := func(context.Context) *UserPermissions {
+	discover := func(context.Context) (*UserPermissions, bool) {
 		calls.Add(1)
-		return &UserPermissions{}
+		return &UserPermissions{}, true
 	}
 	pc.Resolve(context.Background(), "alice", nil, "1", discover)
 	time.Sleep(5 * time.Millisecond)
 	pc.Resolve(context.Background(), "alice", nil, "1", discover)
 	if c := calls.Load(); c != 2 {
 		t.Fatalf("discoveries = %d, want a fresh one after the entry expired", c)
+	}
+}
+
+// An entry cached while a discovery ran stays, with the verdicts recorded on
+// it, and the discovery's callers get that entry.
+func TestResolve_KeepsAnEntryCachedMeanwhile(t *testing.T) {
+	pc := NewPermissionCache()
+	release := make(chan struct{})
+	result := make(chan *UserPermissions, 1)
+	go func() {
+		perms, _ := pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
+			<-release
+			return &UserPermissions{AllowedNamespaces: []string{"team-a"}}, true
+		})
+		result <- perms
+	}()
+	waitForWaiters(t, pc, "alice", nil, "1", 1)
+	meanwhile := &UserPermissions{AllowedNamespaces: []string{"team-a"}}
+	pc.Set("alice", nil, meanwhile)
+	meanwhile.SetCanI("list", "", "nodes", "", true)
+	close(release)
+
+	if got := <-result; got != meanwhile {
+		t.Fatalf("the discovery's caller got %p, want the entry cached meanwhile %p", got, meanwhile)
+	}
+	cached := pc.Get("alice", nil)
+	if cached != meanwhile {
+		t.Fatal("the discovery replaced the entry cached meanwhile")
+	}
+	if v, ok := cached.CanI("list", "", "nodes", ""); !ok || !v {
+		t.Fatal("the verdict recorded meanwhile was dropped")
+	}
+}
+
+// A discovery that began before Invalidate answers its own callers but never
+// replaces what was cached after it.
+func TestResolve_DiscoveryDetachedByInvalidateIsNotCached(t *testing.T) {
+	pc := NewPermissionCache()
+	release := make(chan struct{})
+	stale := make(chan *UserPermissions, 1)
+	go func() {
+		perms, _ := pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
+			<-release
+			return &UserPermissions{AllowedNamespaces: nil}, true
+		})
+		stale <- perms
+	}()
+	waitForWaiters(t, pc, "alice", nil, "1", 1)
+	pc.Invalidate()
+	fresh, ok := pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
+		return &UserPermissions{AllowedNamespaces: []string{}}, true
+	})
+	if !ok {
+		t.Fatal("the discovery after Invalidate failed")
+	}
+	fresh.SetCanI("list", "", "nodes", "", false)
+	close(release)
+
+	if got := <-stale; got == nil || got.AllowedNamespaces != nil {
+		t.Fatal("the earlier caller didn't get its own discovery's answer")
+	}
+	cached := pc.Get("alice", nil)
+	if cached != fresh {
+		t.Fatal("the entry discovered after Invalidate was replaced")
+	}
+	if _, ok := cached.CanI("list", "", "nodes", ""); !ok {
+		t.Fatal("the verdict recorded after Invalidate was dropped")
+	}
+}
+
+// An answer its discovery marks uncacheable reaches the callers and is not
+// cached.
+func TestResolve_UncacheableAnswerIsNotCached(t *testing.T) {
+	pc := NewPermissionCache()
+	answer := &UserPermissions{AllowedNamespaces: []string{"team-a"}}
+	perms, ok := pc.Resolve(context.Background(), "alice", nil, "1", func(context.Context) (*UserPermissions, bool) {
+		return answer, false
+	})
+	if !ok || perms != answer {
+		t.Fatalf("Resolve = %p, %v; want the discovery's answer", perms, ok)
+	}
+	if pc.Get("alice", nil) != nil {
+		t.Fatal("an uncacheable answer was cached")
 	}
 }

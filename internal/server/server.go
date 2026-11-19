@@ -5863,8 +5863,10 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 			return []string{}, true // fail-closed: cannot verify permissions
 		}
 		var ok bool
-		perms, ok = s.permCache.Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *auth.UserPermissions {
-			return discoverUserPermissions(ctx, client, user)
+		perms, ok = s.permCache.Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) (*auth.UserPermissions, bool) {
+			perms := discoverUserPermissions(ctx, client, user)
+			_, current := k8s.GetClientWithGeneration()
+			return perms, current == generation
 		})
 		if !ok {
 			return []string{}, true // fail-closed: no access on discovery error

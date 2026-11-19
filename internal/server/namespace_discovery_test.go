@@ -253,3 +253,39 @@ func TestGetUserNamespaces_ReconnectStartsANewDiscovery(t *testing.T) {
 		t.Fatalf("discoveries on the new connection = %d, want 1", d)
 	}
 }
+
+// A discovery sent over the previous connection that finishes after a
+// reconnect answers its own request but never replaces the entry, or the
+// verdicts, cached for the new connection.
+func TestGetUserNamespaces_LateDiscoveryKeepsTheNewConnectionsEntry(t *testing.T) {
+	gate := make(chan struct{})
+	old := newDiscoveryAPI(t, gate, allowOnly())
+	old.install(t)
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	user := &auth.User{Username: "reader"}
+	late := make(chan []string, 1)
+	go func() {
+		got, _ := s.getUserNamespacesWithStatus(requestWithUser(http.MethodGet, "/api/resources/pods", user), nil)
+		late <- got
+	}()
+	old.waitForDiscoveries(1)
+
+	fresh := newDiscoveryAPI(t, nil, allowOnly([]string{}...))
+	t.Cleanup(k8s.ReconnectTestClient(fresh.client))
+	if got, failed := s.getUserNamespacesWithStatus(requestWithUser(http.MethodGet, "/api/resources/pods", user), nil); failed || got == nil || len(got) != 0 {
+		t.Fatalf("namespaces = %#v, failed = %v; want the new cluster's []", got, failed)
+	}
+	s.permCache.Get(user.Username, user.Groups).SetCanI("list", "", "nodes", "", false)
+	close(gate)
+	if got := <-late; got != nil {
+		t.Fatalf("the earlier request got %#v, want its own discovery's every-namespace answer", got)
+	}
+
+	cached := s.permCache.Get(user.Username, user.Groups)
+	if cached == nil || cached.AllowedNamespaces == nil || len(cached.AllowedNamespaces) != 0 {
+		t.Fatal("the new cluster's [] entry was replaced")
+	}
+	if _, ok := cached.CanI("list", "", "nodes", ""); !ok {
+		t.Fatal("the verdict cached for the new connection was dropped")
+	}
+}

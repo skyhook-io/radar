@@ -217,3 +217,38 @@ func TestResolveUserPerms_ReconnectStartsANewDiscovery(t *testing.T) {
 		t.Fatalf("discoveries on the new connection = %d, want 1", d)
 	}
 }
+
+// A discovery sent over the previous connection that finishes after a
+// reconnect answers its own tool call but never replaces the entry, or the
+// verdicts, cached for the new connection.
+func TestResolveUserPerms_LateDiscoveryKeepsTheNewConnectionsEntry(t *testing.T) {
+	gate := make(chan struct{})
+	old := newDiscoveryAPI(t, gate, allowOnly())
+	old.install(t)
+	late := make(chan *pkgauth.UserPermissions, 1)
+	go func() {
+		_, perms := resolveUserPerms(userContext("reader"))
+		late <- perms
+	}()
+	old.waitForDiscoveries(1)
+
+	fresh := newDiscoveryAPI(t, nil, allowOnly([]string{}...))
+	t.Cleanup(k8s.ReconnectTestClient(fresh.client))
+	_, perms, failed := resolveUserPermsWithStatus(userContext("reader"))
+	if failed || perms.AllowedNamespaces == nil || len(perms.AllowedNamespaces) != 0 {
+		t.Fatalf("perms = %#v, failed = %v; want the new cluster's []", perms, failed)
+	}
+	perms.SetCanI("list", "", "nodes", "", false)
+	close(gate)
+	if got := <-late; got == nil || got.AllowedNamespaces != nil {
+		t.Fatal("the earlier call didn't get its own discovery's every-namespace answer")
+	}
+
+	cached := getPermCache().Get("reader", nil)
+	if cached != perms {
+		t.Fatal("the new connection's entry was replaced")
+	}
+	if _, ok := cached.CanI("list", "", "nodes", ""); !ok {
+		t.Fatal("the verdict cached for the new connection was dropped")
+	}
+}

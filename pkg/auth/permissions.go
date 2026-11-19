@@ -261,8 +261,15 @@ func (pc *PermissionCache) Invalidate() {
 //
 // discover returns nil when it couldn't decide: every caller sharing that run
 // then gets (nil, false) and must fail closed, and nothing is cached. A
-// caller whose own context ends first also gets (nil, false).
-func (pc *PermissionCache) Resolve(ctx context.Context, username string, groups []string, connection string, discover func(context.Context) *UserPermissions) (*UserPermissions, bool) {
+// caller whose own context ends first also gets (nil, false). discover also
+// reports whether its answer may be cached; it may not when the connection it
+// read was replaced while it ran.
+//
+// A run caches its answer only while it is still the identity's current run:
+// one that Invalidate or its callers detached answers its callers and caches
+// nothing, since the cache may already hold something newer. An entry cached
+// while the run went on stays, with the verdicts recorded on it.
+func (pc *PermissionCache) Resolve(ctx context.Context, username string, groups []string, connection string, discover func(context.Context) (perms *UserPermissions, cacheable bool)) (*UserPermissions, bool) {
 	key := cacheKey(username, groups)
 	flightKey := string(appendKeyPart([]byte(key), connection))
 
@@ -301,12 +308,16 @@ func (pc *PermissionCache) Resolve(ctx context.Context, username string, groups 
 	}
 }
 
-func (pc *PermissionCache) runFlight(ctx context.Context, key, flightKey string, f *permissionFlight, discover func(context.Context) *UserPermissions) {
+func (pc *PermissionCache) runFlight(ctx context.Context, key, flightKey string, f *permissionFlight, discover func(context.Context) (*UserPermissions, bool)) {
 	defer f.cancel()
-	perms := runDiscovery(ctx, discover)
+	perms, cacheable := runDiscovery(ctx, discover)
 	pc.mu.Lock()
-	if perms != nil {
-		pc.setLocked(key, perms)
+	if perms != nil && cacheable && pc.flights[flightKey] == f {
+		if live := pc.liveLocked(key); live != nil {
+			perms = live
+		} else {
+			pc.setLocked(key, perms)
+		}
 	}
 	pc.detachLocked(flightKey, f)
 	f.perms = perms
@@ -316,11 +327,11 @@ func (pc *PermissionCache) runFlight(ctx context.Context, key, flightKey string,
 
 // runDiscovery runs discover on the flight's own goroutine, where a panic
 // would end the process instead of failing the callers waiting on it.
-func runDiscovery(ctx context.Context, discover func(context.Context) *UserPermissions) (perms *UserPermissions) {
+func runDiscovery(ctx context.Context, discover func(context.Context) (*UserPermissions, bool)) (perms *UserPermissions, cacheable bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[auth] permission discovery panicked: %v\n%s", r, debug.Stack())
-			perms = nil
+			perms, cacheable = nil, false
 		}
 	}()
 	return discover(ctx)

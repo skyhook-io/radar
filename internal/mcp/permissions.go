@@ -169,8 +169,10 @@ func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.User
 		// Empty (not nil) AllowedNamespaces means "no access"; nil would mean cluster-admin.
 		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
 	}
-	perms, ok := cache.Resolve(ctx, user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *pkgauth.UserPermissions {
-		return discoverUserPermissions(ctx, client, user)
+	perms, ok := cache.Resolve(ctx, user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) (*pkgauth.UserPermissions, bool) {
+		perms := discoverUserPermissions(ctx, client, user)
+		_, current := k8s.GetClientWithGeneration()
+		return perms, current == generation
 	})
 	if !ok {
 		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
