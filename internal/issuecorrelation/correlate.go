@@ -106,6 +106,9 @@ type Options struct {
 	// sources could be resolved, and reports why when not. Any Unknown then
 	// blocks the absence claim.
 	CheckCoverage bool
+	// EventIDs asks for each change's timeline event ID, so a change can link
+	// to its event.
+	EventIDs bool
 }
 
 // Timing is what the issue's timing fields should read after correlation.
@@ -380,6 +383,7 @@ func (c *run) subjectLimit() int {
 func (c *run) query(limit int) meaningfulchanges.Query {
 	q := meaningfulchanges.Query{
 		From: c.opts.Window.From, Limit: limit, FieldLimit: FieldLimit, Viewer: c.access.Viewer,
+		EventIDs: c.opts.EventIDs,
 	}
 	if !c.opts.Window.OpenEnded {
 		q.To = c.opts.Window.To

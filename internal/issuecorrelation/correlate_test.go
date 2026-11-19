@@ -54,7 +54,7 @@ func webIssue(firstSeen time.Time) issuesapi.Issue {
 }
 
 func anchoredOptions(iss issuesapi.Issue) Options {
-	return Options{Window: WindowAroundFirstSeen(iss, time.Now()), Selection: SelectAroundFirstSeen, CheckCoverage: true}
+	return Options{Window: WindowAroundFirstSeen(iss, time.Now()), Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
 }
 
 func specUpdate(kind, name string, at time.Time, value string) timeline.TimelineEvent {
@@ -821,7 +821,7 @@ func TestCorrelate_UnknownOnsetStillAnchorsOnFirstSeen(t *testing.T) {
 	appendChange(t, store, specUpdate("Deployment", "web", imageAt, "web:bad"))
 	iss := webIssue(firstSeen)
 	iss.OnsetUnknown = true
-	opts := Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, CheckCoverage: true}
+	opts := Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
 	got := Correlate(context.Background(), iss, opts, Access{})
 	if got.NoChanges || len(got.Changes) != 1 || !changeTime(got.Changes[0]).Equal(imageAt) {
 		t.Fatalf("image change before first seen: no_changes=%v changes=%+v window=%+v", got.NoChanges, got.Changes, opts.Window)
@@ -869,7 +869,7 @@ func TestCorrelate_NoFirstSeenLooksBackADay(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	iss := webIssue(time.Time{})
 	iss.OnsetUnknown = true
-	opts := Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, CheckCoverage: true}
+	opts := Options{Window: WindowAroundFirstSeen(iss, now), Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
 
 	t.Run("change an hour ago", func(t *testing.T) {
 		initCache(t, webDeployment())
@@ -1094,7 +1094,7 @@ func waitCaughtUp(t *testing.T, resource string) {
 // though the subject's own history is complete.
 func TestCorrelate_DeferredWatchStartedAfterWindowStart(t *testing.T) {
 	windowAt := func(from time.Time) Options {
-		return Options{Window: Window{From: from, To: time.Now().Add(time.Minute)}, Selection: SelectAroundFirstSeen, CheckCoverage: true}
+		return Options{Window: Window{From: from, To: time.Now().Add(time.Minute)}, Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
 	}
 
 	t.Run("referenced ConfigMap", func(t *testing.T) {
@@ -1253,7 +1253,7 @@ func TestCorrelate_WindowStartsBeforeFirstSyncCompleted(t *testing.T) {
 	from := listReturned.Add(-100 * time.Millisecond)
 	listMu.Unlock()
 	iss := webIssue(time.Time{})
-	opts := Options{Window: Window{From: from, To: time.Now()}, Selection: SelectAroundFirstSeen, CheckCoverage: true}
+	opts := Options{Window: Window{From: from, To: time.Now()}, Selection: SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
 	got := Correlate(context.Background(), iss, opts, Access{})
 	if got.NoChanges || got.Unknown == nil || got.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
 		t.Fatalf("window inside the first list: no_changes=%v unknown=%+v history=%+v", got.NoChanges, got.Unknown, got.History)

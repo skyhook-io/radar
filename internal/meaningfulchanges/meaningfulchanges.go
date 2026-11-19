@@ -274,6 +274,8 @@ type Query struct {
 	// so rows outside them can't take its places. A read whose own groups
 	// don't overlap Groups is skipped.
 	Groups []string
+	// EventIDs sets each row's EventID to the timeline event it was read from.
+	EventIDs bool
 
 	// start is the window's lower bound, fixed once per answer so every
 	// candidate query reads the same window.
@@ -885,6 +887,9 @@ func rankedChanges(ctx context.Context, events []timeline.TimelineEvent, q Query
 		change := fromEvent(e, q.FieldLimit)
 		if change.ChangeCategory == "" {
 			continue
+		}
+		if q.EventIDs {
+			change.EventID = e.ID
 		}
 		if q.Allow != nil && !q.Allow(change) {
 			continue

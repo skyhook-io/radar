@@ -369,6 +369,12 @@ type RecentChange struct {
 	RunningPreviousValue *RunningPreviousValue `json:"running_previous_value,omitempty"`
 	UpdatesInWindow      int                   `json:"updates_in_window,omitempty"`
 	FirstUpdateAt        string                `json:"first_update_at,omitempty"`
+	// EventID is the ID of the timeline event this row was read from, set
+	// only where a caller asks for it (the per-resource issues endpoint's
+	// correlation). A row with several updates folded into it carries its
+	// newest event's ID. Absent on rows that come from no timeline event,
+	// such as native Helm release records.
+	EventID string `json:"event_id,omitempty"`
 }
 
 // RunningPreviousValue describes Pods that likely retain an earlier env value.

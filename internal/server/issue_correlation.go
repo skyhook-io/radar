@@ -74,7 +74,7 @@ func (s *Server) correlateResourceIssue(r *http.Request, related []issues.Issue,
 	iss := &related[index]
 	now := time.Now()
 	window := issuecorrelation.WindowAroundFirstSeen(*iss, now)
-	opts := issuecorrelation.Options{Window: window, Selection: issuecorrelation.SelectAroundFirstSeen, CheckCoverage: true}
+	opts := issuecorrelation.Options{Window: window, Selection: issuecorrelation.SelectAroundFirstSeen, CheckCoverage: true, EventIDs: true}
 	access := s.correlationAccess(r, helmReleases)
 	var result issuecorrelation.Result
 	if err := withTimelineIdentity(func() {
