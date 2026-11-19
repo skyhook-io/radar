@@ -28,7 +28,8 @@ type Session interface {
 	// Indexed reads the objects of gk in scope that index files under any of
 	// keys, from stores loaded in full, each object once, with a gap for each
 	// part of scope it couldn't read. An empty index reads every object of
-	// gk in scope. A kind discovery doesn't serve is read as empty only when
+	// gk in scope; an index with no keys reads no object but reports the
+	// same gaps. A kind discovery doesn't serve is read as empty only when
 	// discovery covered its group, so one failing API group leaves other
 	// groups' absent kinds empty. The objects are the cached ones: callers
 	// must not modify or keep them.

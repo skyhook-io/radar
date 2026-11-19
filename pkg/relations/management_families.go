@@ -14,6 +14,7 @@ import (
 // associates with inventory-less HelmReleases. Projection checks the release's
 // inventory and destination before treating a claim as management.
 var FluxHelmOrigins = &Family{
+	ScanRationale:  "Asked only for a HelmRelease that records no inventory, whose label-claimed members are workload kinds, never Pods.",
 	Name:           "fluxHelmOrigins",
 	Projection:     project("manages", true, "Managers", "Manages"),
 	Sources:        []Source{{Kind: kindDeployment}, {Kind: kindService}, {Kind: kindStatefulSet}, {Kind: kindDaemonSet}, {Kind: kindJob}, {Kind: kindCronJob}, {Kind: kindRollout}},
