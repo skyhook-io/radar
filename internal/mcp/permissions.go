@@ -4,12 +4,14 @@ import (
 	"context"
 	"log"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
@@ -161,30 +163,38 @@ func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.User
 		return user, perms, true
 	}
 
-	client := k8s.GetClient()
+	client, generation := k8s.GetClientWithGeneration()
 	if client == nil {
 		log.Printf("[mcp] K8s client unavailable for namespace discovery (user=%s) — denying access", user.Username)
 		// Empty (not nil) AllowedNamespaces means "no access"; nil would mean cluster-admin.
 		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
 	}
+	perms, ok := cache.Resolve(ctx, user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *pkgauth.UserPermissions {
+		return discoverUserPermissions(ctx, client, user)
+	})
+	if !ok {
+		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
+	}
+	return user, perms, true
+}
 
+// discoverUserPermissions computes the user's namespace access on client, or
+// returns nil when it can't be decided.
+func discoverUserPermissions(ctx context.Context, client kubernetes.Interface, user *pkgauth.User) *pkgauth.UserPermissions {
 	allNamespaces, listed := mcpAllNamespaceNamesDecision(ctx)
 	allowed, err := pkgauth.DiscoverNamespaces(ctx, client, user.Username, user.Groups, allNamespaces)
 	if err != nil {
 		log.Printf("[mcp] DiscoverNamespaces failed for %s: %v — denying access (fail-closed)", user.Username, err)
-		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
+		return nil
 	}
 	// Cluster-wide access needs no namespace list. A per-namespace answer
 	// does: checked against a list that couldn't be read, it would say "no
 	// access" where the truth is unknown.
 	if allowed != nil && !listed {
 		log.Printf("[mcp] namespace list unavailable for discovery (user=%s), denying access (fail-closed, not cached)", k8s.SanitizeForLog(user.Username))
-		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
+		return nil
 	}
-
-	perms := &pkgauth.UserPermissions{AllowedNamespaces: allowed}
-	cache.Set(user.Username, user.Groups, perms)
-	return user, perms, true
+	return &pkgauth.UserPermissions{AllowedNamespaces: allowed}
 }
 
 func resolveUserPermsWithStatus(ctx context.Context) (*pkgauth.User, *pkgauth.UserPermissions, bool) {

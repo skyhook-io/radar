@@ -5857,46 +5857,56 @@ func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string
 	if perms == nil {
 		log.Printf("[auth] No cached permissions for %s — discovering namespaces", user.Username)
 		// Discover namespaces synchronously on first request
-		client := k8s.GetClient()
+		client, generation := k8s.GetClientWithGeneration()
 		if client == nil {
 			log.Printf("[auth] K8s client not available for namespace discovery (user=%s) — denying access", k8s.SanitizeForLog(user.Username))
 			return []string{}, true // fail-closed: cannot verify permissions
 		}
-
-		// Get all namespace names from cache
-		var allNamespaces []string
-		if cache := k8s.GetResourceCache(); cache != nil {
-			if nsLister := cache.Namespaces(); nsLister != nil {
-				nsList, _ := nsLister.List(labels.Everything())
-				for _, ns := range nsList {
-					allNamespaces = append(allNamespaces, ns.Name)
-				}
-			}
-		}
-		// Fallback for namespace-scoped SAs: when the cluster-wide namespace
-		// informer is unavailable (SA lacks list-namespaces RBAC), the lister
-		// is empty and DiscoverNamespaces' per-namespace SAR loop has nothing
-		// to iterate — every non-admin user gets [] even when they have RBAC
-		// on the SA's bound namespace. Seed candidates from the kubeconfig
-		// context / --namespace fallback so those users get surfaced.
-		if len(allNamespaces) == 0 {
-			if accessible, _ := k8s.GetAccessibleNamespaces(r.Context()); len(accessible) > 0 {
-				allNamespaces = accessible
-			}
-		}
-
-		allowed, err := auth.DiscoverNamespaces(r.Context(), client, user.Username, user.Groups, allNamespaces)
-		if err != nil {
-			log.Printf("[auth] Failed to discover namespaces for %s: %v — denying access (fail-closed)", k8s.SanitizeForLog(user.Username), err)
+		var ok bool
+		perms, ok = s.permCache.Resolve(r.Context(), user.Username, user.Groups, strconv.FormatUint(generation, 10), func(ctx context.Context) *auth.UserPermissions {
+			return discoverUserPermissions(ctx, client, user)
+		})
+		if !ok {
 			return []string{}, true // fail-closed: no access on discovery error
 		}
-
-		log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
-		perms = &auth.UserPermissions{AllowedNamespaces: allowed}
-		s.permCache.Set(user.Username, user.Groups, perms)
 	}
 
 	return auth.FilterNamespacesForUser(requested, user, perms), false
+}
+
+// discoverUserPermissions computes the user's namespace access on client, or
+// returns nil when discovery fails.
+func discoverUserPermissions(ctx context.Context, client *kubernetes.Clientset, user *auth.User) *auth.UserPermissions {
+	// Get all namespace names from cache
+	var allNamespaces []string
+	if cache := k8s.GetResourceCache(); cache != nil {
+		if nsLister := cache.Namespaces(); nsLister != nil {
+			nsList, _ := nsLister.List(labels.Everything())
+			for _, ns := range nsList {
+				allNamespaces = append(allNamespaces, ns.Name)
+			}
+		}
+	}
+	// Fallback for namespace-scoped SAs: when the cluster-wide namespace
+	// informer is unavailable (SA lacks list-namespaces RBAC), the lister
+	// is empty and DiscoverNamespaces' per-namespace SAR loop has nothing
+	// to iterate — every non-admin user gets [] even when they have RBAC
+	// on the SA's bound namespace. Seed candidates from the kubeconfig
+	// context / --namespace fallback so those users get surfaced.
+	if len(allNamespaces) == 0 {
+		if accessible, _ := k8s.GetAccessibleNamespaces(ctx); len(accessible) > 0 {
+			allNamespaces = accessible
+		}
+	}
+
+	allowed, err := auth.DiscoverNamespaces(ctx, client, user.Username, user.Groups, allNamespaces)
+	if err != nil {
+		log.Printf("[auth] Failed to discover namespaces for %s: %v — denying access (fail-closed)", k8s.SanitizeForLog(user.Username), err)
+		return nil
+	}
+
+	log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
+	return &auth.UserPermissions{AllowedNamespaces: allowed}
 }
 
 // handleSSE wraps the SSEBroadcaster's HandleSSE with per-user namespace filtering.
