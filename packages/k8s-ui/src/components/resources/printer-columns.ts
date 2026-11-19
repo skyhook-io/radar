@@ -192,6 +192,11 @@ export function printerColumnWidth(def: PrinterColumnDef): string {
   }
 }
 
+/** Whether a column holds free text rather than a number, boolean or date. */
+export function printerColumnIsText(def: PrinterColumnDef): boolean {
+  return !['integer', 'number', 'boolean', 'date'].includes(def.type ?? '')
+}
+
 /**
  * Column names whose polarity is a convention rather than a guess. Shared with
  * the condition sets in generic-status.ts so the two can't drift, plus the

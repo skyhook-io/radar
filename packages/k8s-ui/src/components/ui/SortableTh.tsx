@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { ChevronUp, ChevronDown, ArrowUpDown } from 'lucide-react'
+import { TABLE_DENSITY } from './table-density'
 
 export type SortDir = 'asc' | 'desc'
 
 // Canonical dense-table header-cell styling, shared so the Applications,
 // GitOps, and Helm tables read as one family with the Resources table.
 export const TH_CLASS =
-  'border-b border-theme-border px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-theme-text-secondary'
+  `border-b border-theme-border ${TABLE_DENSITY.cellClass} text-left text-xs font-medium uppercase tracking-wide text-theme-text-secondary`
 
 // A clickable, sortable column header. Clicking fires onSort(sortKey); the
 // consumer owns the cycle (toggle dir, or asc→desc→off). One chevron marks the

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
@@ -23,7 +24,7 @@ import (
 // invocation generates.
 type requestScopedChecker struct {
 	ctx   context.Context
-	cache map[string]bool
+	cache map[string]ownership.Decision
 }
 
 // newMCPRequestScopedChecker returns a checker scoped to a single MCP
@@ -31,7 +32,7 @@ type requestScopedChecker struct {
 func newMCPRequestScopedChecker(ctx context.Context) *requestScopedChecker {
 	return &requestScopedChecker{
 		ctx:   ctx,
-		cache: make(map[string]bool, 8),
+		cache: make(map[string]ownership.Decision, 8),
 	}
 }
 
@@ -45,7 +46,13 @@ func newMCPRequestScopedChecker(ctx context.Context) *requestScopedChecker {
 //     through — Build only emits refs whose kinds are known to the
 //     topology builder, and an unknown kind here is a temporary
 //     discovery-cold state, not a permission bypass vector.
-func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace string) bool {
+func (c *requestScopedChecker) CanRead(ctx context.Context, group, kind, namespace string) bool {
+	return c.DecideRead(ctx, group, kind, namespace) == ownership.Allowed
+}
+
+// DecideRead implements resourcecontext.RefAccessDecider: CanRead's check,
+// Undecided when it couldn't be made.
+func (c *requestScopedChecker) DecideRead(_ context.Context, group, kind, namespace string) ownership.Decision {
 	key := "get|" + group + "|" + kind + "|" + namespace
 	if v, ok := c.cache[key]; ok {
 		return v
@@ -53,18 +60,25 @@ func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace
 
 	gvrGroup, resource := k8s.LookupResourceGVR(kind, group)
 	if resource == "" {
-		c.cache[key] = true
-		return true
+		c.cache[key] = ownership.Allowed
+		return ownership.Allowed
 	}
 
-	var allowed bool
+	var allowed, decided bool
 	if namespace == "" {
-		allowed = canReadClusterScopedKind(c.ctx, kind, group, "get")
+		allowed, decided = canReadClusterScopedKindDecision(c.ctx, kind, group, "get")
 	} else {
-		allowed = canReadInNamespace(c.ctx, gvrGroup, resource, namespace, "get")
+		allowed, decided = canReadInNamespaceDecision(c.ctx, gvrGroup, resource, namespace, "get")
 	}
-	c.cache[key] = allowed
-	return allowed
+	decision := ownership.Denied
+	switch {
+	case !decided:
+		decision = ownership.Undecided
+	case allowed:
+		decision = ownership.Allowed
+	}
+	c.cache[key] = decision
+	return decision
 }
 
 // workloadReadAccess adapts the request's checker to trace.Deps.CanReadWorkload.
@@ -76,4 +90,4 @@ func workloadReadAccess(ctx context.Context) func(group, kind, namespace string)
 }
 
 // Compile-time assertion that requestScopedChecker satisfies the contract.
-var _ resourcecontext.RefAccessChecker = (*requestScopedChecker)(nil)
+var _ resourcecontext.RefAccessDecider = (*requestScopedChecker)(nil)

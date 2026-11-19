@@ -2,6 +2,7 @@
 
 import { clsx } from 'clsx'
 import { Tooltip } from '../../ui/Tooltip'
+import { TruncatedText } from '../../ui/TruncatedText'
 import {
   getArgoApplicationProject,
   getArgoApplicationSync,
@@ -40,11 +41,9 @@ export function ArgoApplicationCell({ resource, column }: { resource: any; colum
     }
     case 'repo': {
       const repo = getArgoApplicationRepo(resource)
-      return (
-        <Tooltip content={resource.spec?.source?.repoURL || resource.spec?.sources?.[0]?.repoURL || repo}>
-          <span className="text-sm text-theme-text-secondary truncate block">{repo}</span>
-        </Tooltip>
-      )
+      const repoURL = resource.spec?.source?.repoURL || resource.spec?.sources?.[0]?.repoURL
+      // The cell shortens the repository; the tooltip gives the full URL.
+      return <TruncatedText text={repo} tooltip={repoURL && repoURL !== repo ? repoURL : undefined} className="text-sm text-theme-text-secondary" />
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -89,12 +88,7 @@ export function ArgoApplicationSetCell({ resource, column }: { resource: any; co
 export function ArgoAppProjectCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'description': {
-      const desc = getArgoAppProjectDescription(resource)
-      return (
-        <Tooltip content={desc}>
-          <span className="text-sm text-theme-text-secondary truncate block">{desc}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getArgoAppProjectDescription(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'destinations': {
       const count = getArgoAppProjectDestinations(resource)

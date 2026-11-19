@@ -108,7 +108,7 @@ func resolveOwner(catalog *Catalog, dependent Observation, ref metav1.OwnerRefer
 		// its next discovery may serve the kind, and the catalog can be older
 		// than the collector's discovery. So what discovery didn't list is
 		// unknown, never unresolvable.
-		if !catalog.Complete() {
+		if !catalog.CoversGroup(gk.Group) {
 			return unknown
 		}
 		return OwnerResolution{Gap: Gap{Kind: gk, Reason: readreason.KindUnknown}}

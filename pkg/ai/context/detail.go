@@ -42,16 +42,20 @@ func minifyDetailUnstructured(obj map[string]any) map[string]any {
 }
 
 // redactUnstructuredSecrets redacts inline secret-shaped values in a CRD's
-// spec/status. Core Secret bodies are handled structurally elsewhere; this is
+// spec/status, and in a core PodTemplate's template. Core Secret bodies are handled structurally elsewhere; this is
 // the only value-level pass that reaches arbitrary CRD specs (e.g. a Traefik
 // Middleware basicAuth user) before they go to an LLM.
 func redactUnstructuredSecrets(obj map[string]any) {
 	stripK3sHelmValues(obj)
+	redactUpgradePlanEnvs(obj)
 	if spec, ok := obj["spec"]; ok {
 		RedactInlineSecrets(spec)
 	}
 	if status, ok := obj["status"]; ok {
 		RedactInlineSecrets(status)
+	}
+	if template, ok := obj["template"]; ok {
+		RedactInlineSecrets(template)
 	}
 	redactSecretFindings(obj)
 }
@@ -93,6 +97,29 @@ func stripK3sHelmValues(obj map[string]any) {
 			keys[k] = "[omitted]"
 		}
 		spec["set"] = keys
+	}
+}
+
+// redactUpgradePlanEnvs blanks every env value of a system-upgrade-controller
+// Plan (spec.upgrade.envs, spec.prepare.envs): they are passed to upgrade Jobs
+// and can be credentials under any name, so pattern redaction is not enough.
+// Names stay, so the model still sees what is configured.
+func redactUpgradePlanEnvs(obj map[string]any) {
+	apiVersion, _ := obj["apiVersion"].(string)
+	if resourceid.GroupFromAPIVersion(apiVersion) != "upgrade.cattle.io" {
+		return
+	}
+	spec, _ := obj["spec"].(map[string]any)
+	for _, container := range []string{"upgrade", "prepare"} {
+		c, _ := spec[container].(map[string]any)
+		envs, _ := c["envs"].([]any)
+		for _, e := range envs {
+			if env, ok := e.(map[string]any); ok {
+				if _, has := env["value"]; has {
+					env["value"] = "[REDACTED]"
+				}
+			}
+		}
 	}
 }
 

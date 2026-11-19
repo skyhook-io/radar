@@ -1,0 +1,22 @@
+suite: Flux Operator collection follows its toggle
+templates:
+  - clusterrole.yaml
+tests:
+  - it: grants read on fluxcd.controlplane.io by default
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["fluxcd.controlplane.io"]
+            resources: ["*"]
+            verbs: ["get", "list", "watch"]
+  - it: omits it when Flux Operator collection is disabled
+    set:
+      rbac.crdGroups.fluxOperator: false
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["fluxcd.controlplane.io"]
+            resources: ["*"]
+            verbs: ["get", "list", "watch"]

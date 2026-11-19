@@ -6,6 +6,7 @@ import (
 	"maps"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,7 +31,7 @@ func TestTrafficScopeQueriesAreValidWithoutSelector(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) {
 		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "a"}, 1)}}, nil
 	}}
-	m, iso, err := decideScope(context.Background(), q, trafficScopeProbe("caretta_links_observed", ""), map[string]string{"cluster": "a"})
+	m, iso, err := decideScope(context.Background(), q, trafficScopeProbe("caretta_links_observed", "", 0), map[string]string{"cluster": "a"})
 	if err != nil || m != `cluster="a"` || iso.Mode != SeriesIsolationVerified {
 		t.Fatalf("m=%q iso=%+v err=%v", m, iso, err)
 	}
@@ -50,7 +51,7 @@ func TestTrafficScopeMismatchKeepsProvenLabels(t *testing.T) {
 		}
 		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "b"}, 1)}}, nil
 	}}
-	_, iso, err := decideScope(context.Background(), q, trafficScopeProbe("caretta_links_observed", ""), map[string]string{"cluster": "a"})
+	_, iso, err := decideScope(context.Background(), q, trafficScopeProbe("caretta_links_observed", "", 0), map[string]string{"cluster": "a"})
 	if !errors.Is(err, ErrScopeMismatch) {
 		t.Fatalf("err = %v, want mismatch", err)
 	}
@@ -60,7 +61,7 @@ func TestTrafficScopeMismatchKeepsProvenLabels(t *testing.T) {
 }
 
 func TestTrafficScopeWithoutProof(t *testing.T) {
-	probe := trafficScopeProbe("beyla_network_flow_bytes_total", `job=~".*beyla.*"`)
+	probe := trafficScopeProbe("beyla_network_flow_bytes_total", `job=~".*beyla.*"`, 0)
 	one := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) {
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, 4)}}, nil
 	}}
@@ -97,7 +98,7 @@ func TestTrafficSpansClusters(t *testing.T) {
 			q := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) {
 				return &prom.QueryResult{Series: tc.series}, nil
 			}}
-			got, err := trafficSpansClusters(context.Background(), q, "beyla_network_flow_bytes_total", `job="beyla"`)
+			got, err := trafficSpansClusters(context.Background(), q, "beyla_network_flow_bytes_total", `job="beyla"`, 0)
 			if err != nil || got != tc.want {
 				t.Fatalf("got %v, %v; want %v", got, err, tc.want)
 			}
@@ -109,14 +110,14 @@ func TestTrafficSpansClusters(t *testing.T) {
 		})
 	}
 	failing := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) { return nil, errors.New("timeout") }}
-	if _, err := trafficSpansClusters(context.Background(), failing, "m", ""); err == nil {
+	if _, err := trafficSpansClusters(context.Background(), failing, "m", "", 0); err == nil {
 		t.Error("a failed query must surface as an error")
 	}
 }
 
 func TestResolveTrafficScopeUsesOperatorLabels(t *testing.T) {
 	c := &Client{workloadScope: &prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "east"}}}
-	m, iso, err := c.ResolveTrafficScope(context.Background(), "caretta_links_observed", "", nil)
+	m, iso, err := c.ResolveTrafficScope(context.Background(), "caretta_links_observed", "", 0, nil)
 	if err != nil || m != `cluster="east"` || iso.Mode != SeriesIsolationConfigured {
 		t.Fatalf("m=%q iso=%+v err=%v", m, iso, err)
 	}
@@ -145,11 +146,33 @@ func TestTrafficScopeAmbiguityKeepsProvenLabels(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) {
 		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "a"}, 1), vec(map[string]string{"cluster": "a", "cluster_name": "a"}, 1)}}, nil
 	}}
-	_, iso, err := decideScope(context.Background(), q, trafficScopeProbe("caretta_links_observed", ""), map[string]string{"cluster": "a"})
+	_, iso, err := decideScope(context.Background(), q, trafficScopeProbe("caretta_links_observed", "", 0), map[string]string{"cluster": "a"})
 	if !errors.Is(err, ErrScopeAmbiguous) {
 		t.Fatalf("err = %v, want ambiguous", err)
 	}
 	if !maps.Equal(iso.Labels, map[string]string{"cluster": "a"}) {
 		t.Errorf("ambiguity dropped the proven labels: %+v", iso)
+	}
+}
+
+// A cluster whose series stopped within the traffic window is still in what a
+// windowed rate reads, so the scope check looks over that window too: the
+// instant read sees one cluster, the windowed one both.
+func TestTrafficSpansClustersOverWindow(t *testing.T) {
+	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		series := []prom.Series{vec(map[string]string{"cluster": "a"}, 9)}
+		if strings.Contains(query, "count_over_time(") {
+			series = append(series, vec(map[string]string{"cluster": "b"}, 3))
+		}
+		return &prom.QueryResult{Series: series}, nil
+	}}
+	if got, err := trafficSpansClusters(context.Background(), q, "istio_requests_total", "", 0); err != nil || got {
+		t.Fatalf("instant: got %v, %v; want one cluster", got, err)
+	}
+	if got, err := trafficSpansClusters(context.Background(), q, "istio_requests_total", "", time.Hour); err != nil || !got {
+		t.Fatalf("over an hour: got %v, %v; want two clusters", got, err)
+	}
+	if last := q.queries[len(q.queries)-1]; !strings.Contains(last, "[1h0m0s]") {
+		t.Errorf("windowed probe should read the hour: %s", last)
 	}
 }

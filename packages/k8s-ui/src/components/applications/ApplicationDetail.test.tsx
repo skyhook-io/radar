@@ -101,6 +101,31 @@ describe("ApplicationDetail shell", () => {
     expect(html).toContain('2/3 updated · 3 available')
   })
 
+  // The pill is the cluster's first child unless a host adds something before it.
+  const firstInHeaderCluster = (html: string) =>
+    html.match(/<div class="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">(.{0,80})/)?.[1];
+
+  it("renders the host's header actions before the health pill on a multi-workload app", () => {
+    const html = renderDetail({ headerActions: <button type="button">host action</button> });
+    expect(firstInHeaderCluster(html)).toContain("host action");
+    expect(html.indexOf("host action")).toBeGreaterThan(html.indexOf("</h1>"));
+    expect(html.indexOf("host action")).toBeLessThan(html.indexOf("Healthy"));
+  });
+
+  it("renders them on a single-workload app, which opens straight on the workload", () => {
+    const single = { ...app, workloads: [app.workloads[0]] };
+    const html = renderDetail({ app: single, headerActions: <button type="button">host action</button> });
+    expect(html).toContain("Runtime for");
+    expect(firstInHeaderCluster(html)).toContain("host action");
+  });
+
+  it("adds nothing for a host that doesn't pass them, on either kind of app", () => {
+    for (const shape of [app, { ...app, workloads: [app.workloads[0]] }]) {
+      const first = firstInHeaderCluster(renderDetail({ app: shape }));
+      expect(first).toMatch(/^<span class="inline-flex items-center gap-2 rounded-md/);
+    }
+  });
+
   it("preserves the built-in issue surface when the host slot is omitted", () => {
     const html = renderDetail({ renderOverviewIssues: undefined });
 
