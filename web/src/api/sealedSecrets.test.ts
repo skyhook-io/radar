@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { sealedSecretsQueryKey, sealedSecretsRefetchInterval } from './sealedSecrets'
+import { sealedSecretsControllerPath, sealedSecretsQueryKey, sealedSecretsRefetchInterval } from './sealedSecrets'
 
 it('polls while the sealing keys are loading and stops once they are read', () => {
   expect(sealedSecretsRefetchInterval({ installed: true, controllerState: 'ok', keysState: 'loading' })).toBe(3000)
@@ -12,5 +12,11 @@ it('polls while the controller lookup is loading too', () => {
 })
 
 it('asks again once support is confirmed, so an early failure does not stick', () => {
-  expect(sealedSecretsQueryKey('unknown')).not.toEqual(sealedSecretsQueryKey('supported'))
+  expect(sealedSecretsQueryKey('unknown', 'team')).not.toEqual(sealedSecretsQueryKey('supported', 'team'))
+})
+
+it('keeps one answer per SealedSecret namespace', () => {
+  expect(sealedSecretsQueryKey('supported', 'team-x')).not.toEqual(sealedSecretsQueryKey('supported', 'team-y'))
+  expect(sealedSecretsControllerPath('team-x')).toBe('/sealedsecrets/controller?sealedSecretNamespace=team-x')
+  expect(sealedSecretsControllerPath('')).toBe('/sealedsecrets/controller')
 })

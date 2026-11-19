@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // sealingKeyLabel marks the Secrets the sealed-secrets controller keeps its
@@ -93,11 +94,24 @@ func sealedSecretsControllerRefFor(d *appsv1.Deployment) sealedSecretsController
 	}
 }
 
-// sealingKeysFromSecrets projects the labelled Secrets (and the legacy key) to names and dates,
-// newest first. It reads Data["tls.crt"] (the public certificate) and never
-// any other key of Data. The active key is the newest one labelled "active",
-// which is the one the controller seals new secrets with.
-func sealingKeysFromSecrets(objs []runtime.Object) []sealingKey {
+// sealingKeysFromSecrets projects the controller's key Secrets to names and
+// dates, newest first. It reads Data["tls.crt"] (the public certificate) and
+// never any other key of Data.
+//
+// It loads keys the way the controller does: Secrets labelled "active", plus
+// the Secret named by --key-prefix whatever its label. Other label values are
+// listed as not used. The key marked active is the newest loaded key by the
+// controller's --key-order-priority (certificate NotBefore by default, or
+// Secret creation time), ties going to the earliest created, as the
+// controller only replaces its latest key with a strictly newer one. A key
+// whose certificate doesn't parse is never loaded by the controller. With an
+// unreadable key order no key is marked.
+func sealingKeysFromSecrets(objs []runtime.Object, s sealedSecretsSettings) []sealingKey {
+	order := s.keyOrder()
+	legacy := s.legacyKeyName()
+	if legacy == "" {
+		legacy = legacySealingKeyName
+	}
 	type entry struct {
 		key    sealingKey
 		when   time.Time
@@ -110,7 +124,7 @@ func sealingKeysFromSecrets(objs []runtime.Object) []sealingKey {
 			continue
 		}
 		value, labelled := sec.Labels[sealingKeyLabel]
-		if !labelled && sec.Name == legacySealingKeyName {
+		if sec.Name == legacy {
 			value, labelled = "active", true
 		}
 		if !labelled {
@@ -124,7 +138,7 @@ func sealingKeysFromSecrets(objs []runtime.Object) []sealingKey {
 			// no usable certificate
 		} else if certs := topology.ParsePEMCertificates(pem.EncodeToMemory(block)); len(certs) > 0 {
 			k.NotBefore, k.NotAfter, parsed = certs[0].NotBefore, certs[0].NotAfter, true
-			if t, err := time.Parse(time.RFC3339, k.NotBefore); err == nil {
+			if t, err := time.Parse(time.RFC3339, k.NotBefore); err == nil && order != keyOrderCreationTime {
 				when = t
 			}
 		}
@@ -134,12 +148,14 @@ func sealingKeysFromSecrets(objs []runtime.Object) []sealingKey {
 		if !entries[i].when.Equal(entries[j].when) {
 			return entries[i].when.After(entries[j].when)
 		}
+		if !entries[i].key.CreatedAt.Equal(entries[j].key.CreatedAt) {
+			return entries[i].key.CreatedAt.Before(entries[j].key.CreatedAt)
+		}
 		return entries[i].key.Name < entries[j].key.Name
 	})
 	out := make([]sealingKey, 0, len(entries))
-	activeSet := false
+	activeSet := order == keyOrderUnknown
 	for _, e := range entries {
-		// A key whose certificate doesn't parse can't be the one sealing.
 		if !activeSet && !e.key.NotUsed && e.parsed {
 			e.key.Active, activeSet = true, true
 		}
@@ -169,7 +185,9 @@ func absentControllerState(a k8score.KindReadAssessment, namespaceScoped bool) s
 	switch {
 	case a.Readiness == k8score.KindPending && len(a.Failed) == 0 || len(a.Loading) > 0:
 		return "loading"
-	case len(a.Failed) > 0:
+	// A cluster-wide informer has no per-namespace partition: its failure
+	// shows only in Readiness.
+	case len(a.Failed) > 0 || a.Readiness == k8score.KindFailed:
 		return "failed"
 	case namespaceScoped:
 		return "notCollected"
@@ -188,9 +206,42 @@ type sealedSecretsControllerResponse struct {
 	Installed       bool                        `json:"installed"`
 	Controller      *sealedSecretsControllerRef `json:"controller,omitempty"`
 	ControllerState string                      `json:"controllerState"`
-	Keys            []sealingKey                `json:"keys,omitempty"`
-	KeysState       string                      `json:"keysState"`
-	Counts          *sealedSecretCounts         `json:"counts,omitempty"`
+	// AmbiguousReason, with controllerState "ambiguous": "overlap" (several
+	// controllers serve the namespace) or "unknownScope" (Radar can't read
+	// which namespaces one of them serves). Never names them.
+	AmbiguousReason string `json:"ambiguousReason,omitempty"`
+	// AtKubesealDefault: the controller serving this namespace is
+	// kube-system/sealed-secrets-controller, where a bare `kubeseal
+	// --fetch-cert` reaches it. Set even when the controller is denied:
+	// upstream installs let every authenticated user get that Service by
+	// name, so kubeseal already reveals it.
+	AtKubesealDefault bool         `json:"atKubesealDefault,omitempty"`
+	Keys              []sealingKey `json:"keys"`
+	KeysState         string       `json:"keysState"`
+	// KeyOrder, with keysState "ok": how the controller picks its sealing
+	// key, "certNotBefore", "creationTime", or "unknown" (none is marked).
+	KeyOrder string              `json:"keyOrder,omitempty"`
+	Counts   *sealedSecretCounts `json:"counts,omitempty"`
+}
+
+// answerSealedSecretsController fills the controller and its keys for the
+// chosen controller d, each behind the caller's own access.
+func (s *Server) answerSealedSecretsController(r *http.Request, cache *k8s.ResourceCache, d *appsv1.Deployment, settings sealedSecretsSettings, resp *sealedSecretsControllerResponse) {
+	ns := d.Namespace
+	resp.AtKubesealDefault = ns == metav1.NamespaceSystem && d.Name == sealedSecretsControllerName
+	if s.canRead(r, "apps", "deployments", ns, "get") {
+		ref := sealedSecretsControllerRefFor(d)
+		resp.Controller, resp.ControllerState = &ref, "ok"
+	} else {
+		resp.ControllerState = "denied"
+	}
+	if !s.canRead(r, "", "secrets", ns, "list") {
+		resp.KeysState = "denied"
+	} else if objs, ok := cache.ReadableObjects("secrets", []string{ns}); !ok {
+		resp.KeysState = unreadKeysState(cache.AssessKindRead("secrets", []string{ns}))
+	} else {
+		resp.Keys, resp.KeysState, resp.KeyOrder = sealingKeysFromSecrets(objs, settings), "ok", settings.keyOrder()
+	}
 }
 
 var sealedSecretsKind = integration.WorkspaceKind{Key: "sealedSecrets", Group: "bitnami.com", Kind: "SealedSecret", Resource: "sealedsecrets"}
@@ -208,12 +259,28 @@ var sealedSecretsKind = integration.WorkspaceKind{Key: "sealedSecrets", Group: "
 //   - counts: the SealedSecrets the caller can list (partial when that is not
 //     cluster-wide), omitted when they can list none.
 //
+// With ?sealedSecretNamespace= (the drawer's SealedSecret namespace; not
+// ?namespace=, which is the namespace filter the totals honour) the controller is
+// the one serving that namespace (chooseControllerFor); "notWatched" when no
+// controller serves it. Without it, kubeseal's defaults decide
+// (findSealedSecretsController). The controller's flags, read from its
+// Deployment, decide its sealing key and legacy key.
+//
 // In shared no-auth mode the names and dates are Radar's own read and carry
 // no secret material. A caller denied the controller learns only that one
-// exists (controllerState "denied", not "notFound"), never where. Several
-// candidate controllers read "ambiguous", with no controller and no keys.
+// exists (controllerState "denied", not "notFound"), and, through
+// atKubesealDefault, whether it sits at kubeseal's default location, which a
+// bare `kubeseal --fetch-cert` would reveal to them anyway. Several
+// candidate controllers read "ambiguous" for every caller, with the reason
+// but no names, no controller and no keys: like "denied", it says only that
+// look-alikes exist.
 func (s *Server) handleSealedSecretsController(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
+		return
+	}
+	target := r.URL.Query().Get("sealedSecretNamespace")
+	if target != "" && len(validation.IsDNS1123Label(target)) > 0 {
+		s.writeError(w, http.StatusBadRequest, "invalid namespace")
 		return
 	}
 	cache := k8s.GetResourceCache()
@@ -236,24 +303,42 @@ func (s *Server) handleSealedSecretsController(w http.ResponseWriter, r *http.Re
 	} else if deployments, err := lister.List(labels.Everything()); err != nil {
 		log.Printf("[sealedsecrets] Failed to list Deployments: %v", err)
 		resp.ControllerState = "notCollected"
-	} else if d, ambiguous := findSealedSecretsController(deployments); ambiguous {
-		resp.ControllerState = "ambiguous"
-	} else if d == nil {
-		resp.ControllerState = absentControllerState(cache.AssessKindRead("deployments", nil), cache.KindNamespaces("deployments") != nil)
 	} else {
-		ns := d.Namespace
-		if s.canRead(r, "apps", "deployments", ns, "get") {
-			ref := sealedSecretsControllerRefFor(d)
-			resp.Controller, resp.ControllerState = &ref, "ok"
-		} else {
-			resp.ControllerState = "denied"
+		var candidates []*appsv1.Deployment
+		for _, d := range deployments {
+			if isSealedSecretsControllerCandidate(d) {
+				candidates = append(candidates, d)
+			}
 		}
-		if !s.canRead(r, "", "secrets", ns, "list") {
-			resp.KeysState = "denied"
-		} else if objs, ok := cache.ReadableObjects("secrets", []string{ns}); !ok {
-			resp.KeysState = unreadKeysState(cache.AssessKindRead("secrets", []string{ns}))
+		var d *appsv1.Deployment
+		var settings sealedSecretsSettings
+		watched := true
+		if target == "" {
+			var ambiguous bool
+			if d, ambiguous = findSealedSecretsController(candidates); ambiguous {
+				resp.AmbiguousReason = ambiguousOverlap
+			} else if d != nil {
+				settings = readSealedSecretsSettings(d)
+			}
 		} else {
-			resp.Keys, resp.KeysState = sealingKeysFromSecrets(objs), "ok"
+			d, settings, resp.AmbiguousReason, watched = chooseControllerFor(candidates, target)
+		}
+		absent := func() string {
+			return absentControllerState(cache.AssessKindRead("deployments", nil), cache.KindNamespaces("deployments") != nil)
+		}
+		switch {
+		case resp.AmbiguousReason != "":
+			resp.ControllerState = "ambiguous"
+		case d == nil && len(candidates) > 0 && !watched:
+			// Controllers exist but none serves this namespace; only a complete
+			// cluster-wide read can say that.
+			if resp.ControllerState = absent(); resp.ControllerState == "notFound" {
+				resp.ControllerState = "notWatched"
+			}
+		case d == nil:
+			resp.ControllerState = absent()
+		default:
+			s.answerSealedSecretsController(r, cache, d, settings, &resp)
 		}
 	}
 

@@ -71,7 +71,7 @@ func TestSealingKeysFromSecrets(t *testing.T) {
 		sealingKeySecret("broken", "kube-system", "active", []byte("garbage"), now.Add(-10*day)),
 		sealingKeySecret("plain", "kube-system", "", sealingKeyPEM(t, now), now),
 	}
-	got := sealingKeysFromSecrets(objs)
+	got := defaultKeys(objs)
 	var names []string
 	for _, k := range got {
 		names = append(names, k.Name)
@@ -292,7 +292,7 @@ func TestUnreadKeysState(t *testing.T) {
 // seals with, even when it is the newest by creation time.
 func TestSealingKeysUnparsedCertIsNeverActive(t *testing.T) {
 	now := time.Now().UTC()
-	got := sealingKeysFromSecrets([]runtime.Object{
+	got := defaultKeys([]runtime.Object{
 		sealingKeySecret("broken", "kube-system", "active", []byte("garbage"), now),
 		sealingKeySecret("old", "kube-system", "active", sealingKeyPEM(t, now.Add(-400*24*time.Hour)), now.Add(-400*24*time.Hour)),
 	})
@@ -342,7 +342,7 @@ func TestSealingKeysUseOnlyTheFirstCertificate(t *testing.T) {
 	now := time.Now().UTC()
 	later := sealingKeyPEM(t, now.Add(-time.Hour))
 	malformedFirst := append([]byte("-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydA==\n-----END CERTIFICATE-----\n"), later...)
-	got := sealingKeysFromSecrets([]runtime.Object{
+	got := defaultKeys([]runtime.Object{
 		sealingKeySecret("malformed", "kube-system", "active", malformedFirst, now.Add(-2*time.Hour)),
 		sealingKeySecret("old", "kube-system", "active", sealingKeyPEM(t, now.Add(-400*24*time.Hour)), now.Add(-400*24*time.Hour)),
 	})
@@ -368,6 +368,7 @@ func TestAbsentControllerState(t *testing.T) {
 		{"load failed", k8score.KindReadAssessment{Readiness: k8score.KindPending, Read: []string{}, Failed: []string{"a"}}, true, "failed"},
 		{"namespace-scoped and complete", k8score.KindReadAssessment{Readiness: k8score.KindReady, Read: []string{"a"}, Complete: true}, true, "notCollected"},
 		{"cluster-wide and complete", k8score.KindReadAssessment{Readiness: k8score.KindReady, AllNamespaces: true}, false, "notFound"},
+		{"cluster-wide load failed", k8score.KindReadAssessment{Readiness: k8score.KindFailed, AllNamespaces: true}, false, "failed"},
 	} {
 		if got := absentControllerState(tc.a, tc.scoped); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
@@ -379,7 +380,7 @@ func TestAbsentControllerState(t *testing.T) {
 // --key-prefix (default sealed-secrets-key) and seals with it when newest.
 func TestSealingKeysIncludeTheLegacyKeySecret(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	got := sealingKeysFromSecrets([]runtime.Object{
+	got := defaultKeys([]runtime.Object{
 		sealingKeySecret("sealed-secrets-keyabc", "kube-system", "active", sealingKeyPEM(t, now.Add(-48*time.Hour)), now.Add(-48*time.Hour)),
 		sealingKeySecret("sealed-secrets-key", "kube-system", "", sealingKeyPEM(t, now), now),
 	})
@@ -412,4 +413,30 @@ func TestSealedSecretsControllerAmbiguous(t *testing.T) {
 	if got.ControllerState != "ambiguous" || got.Controller != nil || got.KeysState != "unknown" || len(got.Keys) != 0 {
 		t.Fatalf("got %+v (%s), want ambiguous with no controller or keys", got, raw)
 	}
+}
+
+// A controller namespace without key Secrets still answers an explicit empty
+// list, which the drawer reads as "No sealing keys found".
+func TestSealedSecretsControllerNoKeysIsAnEmptyList(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	one := int32(1)
+	client := fake.NewClientset(deploy("kube-system", "sealed-secrets-controller", map[string]string{"app.kubernetes.io/name": "sealed-secrets"}, &one, 1))
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("init cache: %v", err)
+	}
+	seedCNPGWorkspace(t, sealedSecretKinds, sealedSecret("team", "a", "True"))
+	resp, err := http.Get(testServer.URL + "/api/sealedsecrets/controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, raw := getSealedSecretsController(t, resp)
+	if got.KeysState != "ok" || !strings.Contains(raw, `"keys":[]`) {
+		t.Fatalf("keysState = %q, want ok with \"keys\":[] (%s)", got.KeysState, raw)
+	}
+}
+
+// defaultKeys projects keys for a controller running with upstream defaults.
+func defaultKeys(objs []runtime.Object) []sealingKey {
+	return sealingKeysFromSecrets(objs, sealedSecretsSettings{})
 }

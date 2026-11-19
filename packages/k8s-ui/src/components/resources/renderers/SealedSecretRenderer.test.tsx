@@ -56,7 +56,8 @@ describe('SealedSecretRenderer controller section', () => {
 
   it('offers kubeseal --fetch-cert only on a SealedSecret that is not synced', () => {
     expect(render('False', controller())).toContain('kubeseal --controller-namespace kube-system --controller-name sealed-secrets-controller --fetch-cert')
-    expect(render('False', controller({ controller: undefined, controllerState: 'denied' }))).toContain('kubeseal --fetch-cert')
+    expect(render('False', controller({ controller: undefined, controllerState: 'denied' }))).not.toContain('kubeseal')
+    expect(render('False', controller({ controller: undefined, controllerState: 'denied' }))).toContain('the sealed-secrets controller that serves this namespace')
     expect(render('True', controller())).not.toContain('--fetch-cert')
   })
 
@@ -88,6 +89,8 @@ it('says the sealing keys are still loading rather than not collected', () => {
 it('names a failed key load and an empty key list', () => {
   expect(renderToString(<SealedSecretRenderer data={sealed('False')} controller={controller({ keys: undefined, keysState: 'failed' })} />)).toContain('could not load Secrets')
   expect(renderToString(<SealedSecretRenderer data={sealed('False')} controller={controller({ keys: [] })} />).replace(/<!-- -->/g, '')).toContain('No sealing keys found in kube-system')
+  // An agent that omits an empty list (or sends null) means the same.
+  expect(renderToString(<SealedSecretRenderer data={sealed('False')} controller={controller({ keys: undefined })} />).replace(/<!-- -->/g, '')).toContain('No sealing keys found in kube-system')
 })
 
 it('counts SealedSecrets without a Synced condition instead of dropping them', () => {
@@ -98,16 +101,63 @@ it('counts SealedSecrets without a Synced condition instead of dropping them', (
 it('keeps the re-seal hint when the controller status could not be loaded', () => {
   const html = render('False', null)
   expect(html).toContain('could not be loaded')
-  expect(html).toContain('kubeseal --fetch-cert')
-  expect(render('True', null)).not.toContain('--fetch-cert')
+  expect(html).toContain('re-seal it with the current certificate')
+  expect(html).not.toContain('kubeseal')
+  expect(render('True', null)).not.toContain('re-seal')
 })
 
 it('names a controller lookup that is still loading or failed', () => {
   expect(render('False', controller({ controller: undefined, controllerState: 'loading', keys: undefined, keysState: 'unknown' }))).toContain('Deployments are still loading')
   expect(render('False', controller({ controller: undefined, controllerState: 'failed', keys: undefined, keysState: 'unknown' }))).toContain('could not load Deployments')
-  expect(render('False', controller({ controller: undefined, controllerState: 'ambiguous', keys: undefined, keysState: 'unknown' }))).toContain('look like the sealed-secrets controller')
+  expect(render('False', controller({ controller: undefined, controllerState: 'ambiguous', keys: undefined, keysState: 'unknown' }))).toContain('More than one sealed-secrets controller serves this namespace')
 })
 
 it('opens the section on a synced SealedSecret too', () => {
   expect(render('True', controller())).not.toContain('aria-expanded="false"')
+})
+
+it('builds the kubeseal command from the controller serving this namespace', () => {
+  const ref = { kind: 'Deployment', namespace: 'team-x', name: 'sealed-secrets', ready: true }
+  expect(render('False', controller({ controller: ref }))).toContain('kubeseal --controller-namespace team-x --controller-name sealed-secrets --fetch-cert')
+})
+
+it('offers the bare command to a user who cannot see the controller only when it is at kubeseal default location', () => {
+  const denied = { controller: undefined, controllerState: 'denied' as const, keys: undefined, keysState: 'denied' as const }
+  const atDefault = render('False', controller({ ...denied, atKubesealDefault: true }))
+  expect(atDefault).toContain('kubeseal --fetch-cert')
+  expect(atDefault).not.toContain('--controller-name')
+  const elsewhere = render('False', controller({ ...denied, atKubesealDefault: false }))
+  expect(elsewhere).not.toContain('kubeseal')
+  expect(elsewhere).toContain('the sealed-secrets controller that serves this namespace')
+})
+
+it('shows no kubeseal command when Radar does not know the controller', () => {
+  for (const state of ['ambiguous', 'notFound', 'notWatched', 'failed', 'loading', 'notCollected'] as const) {
+    // atKubesealDefault only counts for a denied controller Radar did choose.
+    const html = render('False', controller({ controller: undefined, controllerState: state, keys: undefined, keysState: 'unknown', atKubesealDefault: true }))
+    expect(html).not.toContain('kubeseal')
+    expect(html).toContain('the sealed-secrets controller that serves this namespace')
+  }
+  expect(render('False', null)).not.toContain('kubeseal')
+})
+
+it('says why a controller choice is ambiguous and when none serves the namespace', () => {
+  expect(render('False', controller({ controller: undefined, controllerState: 'ambiguous', ambiguousReason: 'overlap', keys: undefined, keysState: 'unknown' }))).toContain("A cluster admin can check the controllers")
+  expect(render('False', controller({ controller: undefined, controllerState: 'ambiguous', ambiguousReason: 'unknownScope', keys: undefined, keysState: 'unknown' }))).toContain("read which namespaces one of the sealed-secrets controllers serves")
+  expect(render('False', controller({ controller: undefined, controllerState: 'notWatched', keys: undefined, keysState: 'unknown' }))).toContain('No sealed-secrets controller serves this namespace')
+})
+
+it('marks no sealing key when the key order is unknown, and says why', () => {
+  const keys = controller().keys!.map((k) => ({ ...k, active: false }))
+  const html = render('False', controller({ keys, keyOrder: 'unknown' }))
+  expect(html).not.toContain('Seals new secrets')
+  expect(html).toContain("read how the controller orders its keys")
+  expect(render('False', controller({ keyOrder: 'certNotBefore' }))).not.toContain("read how the controller orders")
+})
+
+it('shows no validity start for a key whose certificate could not be read', () => {
+  const keys = [{ name: 'sealed-secrets-keybroken', createdAt: '2026-11-12T08:00:00Z', active: false }]
+  const html = render('False', controller({ keys }))
+  expect(html).toContain('sealed-secrets-keybroken')
+  expect(html).not.toContain('2026-11-12')
 })

@@ -10,18 +10,24 @@ export function sealedSecretsRefetchInterval(data: SealedSecretsController | und
 }
 
 // Support is part of the key, so an answer fetched before capabilities
-// loaded is asked again once support is confirmed.
-export function sealedSecretsQueryKey(support: RadarFeatureSupport) {
-  return ['sealedsecrets', 'controller', support] as const
+// loaded is asked again once support is confirmed. The namespace is too: the
+// controller is the one serving the SealedSecret's namespace.
+export function sealedSecretsQueryKey(support: RadarFeatureSupport, namespace: string) {
+  return ['sealedsecrets', 'controller', namespace, support] as const
 }
 
-// The sealed-secrets controller, its sealing keys (names and dates only) and
-// the SealedSecret totals the caller can list. Disabled on an older Radar.
-export function useSealedSecretsController() {
+export function sealedSecretsControllerPath(namespace: string) {
+  return namespace ? `/sealedsecrets/controller?sealedSecretNamespace=${encodeURIComponent(namespace)}` : '/sealedsecrets/controller'
+}
+
+// The sealed-secrets controller serving `namespace`, its sealing keys (names
+// and dates only) and the SealedSecret totals the caller can list. Disabled
+// on an older Radar.
+export function useSealedSecretsController(namespace: string) {
   const { support, guard } = useRadarFeature('sealedSecretsController')
   const query = useQuery({
-    queryKey: sealedSecretsQueryKey(support),
-    queryFn: ({ signal }) => guard(() => fetchJSON<SealedSecretsController>('/sealedsecrets/controller', signal)),
+    queryKey: sealedSecretsQueryKey(support, namespace),
+    queryFn: ({ signal }) => guard(() => fetchJSON<SealedSecretsController>(sealedSecretsControllerPath(namespace), signal)),
     enabled: support !== 'unsupported',
     refetchInterval: (q) => sealedSecretsRefetchInterval(q.state.data),
     staleTime: 30_000,

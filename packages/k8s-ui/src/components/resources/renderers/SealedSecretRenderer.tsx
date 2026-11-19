@@ -6,9 +6,14 @@ import { Section, PropertyList, Property, ConditionsSection, KeyValueBadgeList, 
 export interface SealedSecretsController {
   installed: boolean
   controller?: { kind: string; namespace: string; name: string; ready: boolean }
-  controllerState: 'ok' | 'denied' | 'notFound' | 'notCollected' | 'loading' | 'failed' | 'ambiguous'
+  controllerState: 'ok' | 'denied' | 'notFound' | 'notWatched' | 'notCollected' | 'loading' | 'failed' | 'ambiguous'
+  ambiguousReason?: 'overlap' | 'unknownScope'
+  /** The controller serving this namespace is kube-system/sealed-secrets-controller, where a bare `kubeseal --fetch-cert` reaches it; set even when it is denied. */
+  atKubesealDefault?: boolean
   keys?: { name: string; createdAt: string; notBefore?: string; notAfter?: string; active: boolean; notUsed?: boolean }[]
   keysState: 'ok' | 'denied' | 'notCollected' | 'loading' | 'failed' | 'unknown'
+  /** How the controller picks its sealing key; 'unknown' means no key is marked. */
+  keyOrder?: 'certNotBefore' | 'creationTime' | 'unknown'
   counts?: { total: number; synced: number; notSynced: number; partial: boolean }
 }
 
@@ -25,12 +30,23 @@ const day = (value?: string) => (value ? value.slice(0, 10) : '-')
 // controller hides its name, so the key messages fall back to generic text.
 function ControllerSection({ controller, offerReseal, onNavigate }: { controller: SealedSecretsController | null; offerReseal: boolean; onNavigate?: SealedSecretRendererProps['onNavigate'] }) {
   const ref = controller?.controller
-  const fetchCert = ref
-    ? `kubeseal --controller-namespace ${ref.namespace} --controller-name ${ref.name} --fetch-cert`
-    : 'kubeseal --fetch-cert'
+  // A command only where Radar knows it reaches the controller serving this
+  // namespace: built from the visible controller, or kubeseal's bare defaults
+  // when the hidden controller sits there. A guess could fetch another
+  // controller's certificate, and re-sealing with it fails silently.
+  const command =
+    controller?.controllerState === 'ok' && ref
+      ? `kubeseal --controller-namespace ${ref.namespace} --controller-name ${ref.name} --fetch-cert`
+      : controller?.controllerState === 'denied' && controller.atKubesealDefault
+        ? 'kubeseal --fetch-cert'
+        : undefined
   const hint = offerReseal && (
     <div className="mt-3 text-xs text-theme-text-secondary">
-      If it was sealed for another cluster or with a key this controller no longer holds, re-seal it: <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono">{fetchCert}</code> prints the controller's current certificate.
+      {command ? (
+        <>If it was sealed for another cluster or with a key this controller no longer holds, re-seal it: <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono">{command}</code> prints the controller's current certificate.</>
+      ) : (
+        <>If it was sealed for another cluster or with a key the controller no longer holds, re-seal it with the current certificate of the sealed-secrets controller that serves this namespace.</>
+      )}
     </div>
   )
   if (!controller) {
@@ -54,7 +70,11 @@ function ControllerSection({ controller, offerReseal, onNavigate }: { controller
       : controller.controllerState === 'notCollected' ? 'Radar does not collect Deployments where the controller may run'
       : controller.controllerState === 'loading' ? 'Deployments are still loading'
       : controller.controllerState === 'failed' ? 'Radar could not load Deployments'
-      : controller.controllerState === 'ambiguous' ? "Several Deployments look like the sealed-secrets controller; Radar can't tell which one it is"
+      : controller.controllerState === 'ambiguous' && controller.ambiguousReason === 'unknownScope'
+        ? "Radar can't read which namespaces one of the sealed-secrets controllers serves, so it can't tell which one unseals this namespace"
+      : controller.controllerState === 'ambiguous'
+        ? "More than one sealed-secrets controller serves this namespace, so Radar can't tell which one unseals it. A cluster admin can check the controllers' namespace settings"
+      : controller.controllerState === 'notWatched' ? 'No sealed-secrets controller serves this namespace'
       : 'No sealed-secrets controller found'
   const counts = controller.counts
   return (
@@ -82,7 +102,7 @@ function ControllerSection({ controller, offerReseal, onNavigate }: { controller
             {controller.keys.map((k) => (
               <tr key={k.name} className="border-t border-theme-border">
                 <td className="py-1 pr-3 text-theme-text-primary break-all">{k.name}</td>
-                <td className="py-1 pr-3 text-theme-text-secondary">{day(k.notBefore || k.createdAt)}</td>
+                <td className="py-1 pr-3 text-theme-text-secondary">{day(k.notBefore)}</td>
                 <td className="py-1 pr-3 text-theme-text-secondary">{day(k.notAfter)}</td>
                 <td className="py-1">
                   {k.active && <Badge severity="info" size="sm">Seals new secrets</Badge>}
@@ -93,7 +113,10 @@ function ControllerSection({ controller, offerReseal, onNavigate }: { controller
           </tbody>
         </table>
       )}
-      {controller.keysState === 'ok' && controller.keys?.length === 0 && <div className="mt-2 text-sm text-theme-text-tertiary">No sealing keys found{where}.</div>}
+      {controller.keysState === 'ok' && !!controller.keys?.length && controller.keyOrder === 'unknown' && (
+        <div className="mt-2 text-sm text-theme-text-tertiary">Radar can't read how the controller orders its keys, so it doesn't mark which one seals new secrets.</div>
+      )}
+      {controller.keysState === 'ok' && !controller.keys?.length && <div className="mt-2 text-sm text-theme-text-tertiary">No sealing keys found{where}.</div>}
       {controller.keysState === 'denied' && <div className="mt-2 text-sm text-theme-text-tertiary">No access to Secrets{where}, so the sealing keys are not shown.</div>}
       {controller.keysState === 'loading' && <div className="mt-2 text-sm text-theme-text-tertiary">Sealing keys are still loading.</div>}
       {controller.keysState === 'failed' && <div className="mt-2 text-sm text-theme-text-tertiary">Radar could not load Secrets{where}, so the sealing keys are not shown.</div>}
