@@ -52,15 +52,34 @@ func SetScopeResolverForTesting(resolve prometheuspkg.ChartScopeResolver) func()
 
 // PromCost runs the metrics-store cost paths kept to this cluster. Client
 // decides the cluster scope; Store runs the cost queries (MCP passes its
-// bounded client).
+// bounded client). Conn is the connection Store was taken from: one PromCost
+// can serve several checks (an application's namespaces), and a check made
+// after the connection moved would vouch for a backend Store doesn't query,
+// so such a check answers query_error instead.
 type PromCost struct {
 	Client *prometheuspkg.Client
 	Store  *prom.Client
+	Conn   prometheuspkg.ConnectionSnapshot
 }
 
 // NewPromCost serves the REST routes from client's own store connection.
 func NewPromCost(client *prometheuspkg.Client) PromCost {
-	return PromCost{Client: client, Store: client.Prom()}
+	store, conn := client.PromSnapshot()
+	return PromCost{Client: client, Store: store, Conn: conn}
+}
+
+// NewMCPPromCost is NewPromCost on the MCP's bounded store client; Store is
+// nil when the client has no connection.
+func NewMCPPromCost(client *prometheuspkg.Client) PromCost {
+	store, conn := client.PromForMCPSnapshot()
+	return PromCost{Client: client, Store: store, Conn: conn}
+}
+
+// storeCurrent reports whether Store still belongs to the client's current
+// connection. Without a Client (a test's own resolver) there is no
+// connection to move.
+func (p PromCost) storeCurrent() bool {
+	return p.Client == nil || p.Client.ConnectionCurrent(p.Conn)
 }
 
 func (p PromCost) resolver() prometheuspkg.ChartScopeResolver {
@@ -151,7 +170,22 @@ func wireCostScope(scope prometheuspkg.ViewScope) *pkgopencost.ClusterScope {
 // the costs can't be shown: ReasonClusterScope when they couldn't be kept to
 // this cluster (the returned scope's ClusterScope says why), ReasonQueryError
 // when the caller's context ended first.
+//
+// The check runs on the client's current connection and the cost queries on
+// Store, so the connection must be Store's both before and after the check;
+// connections only move forward, so that pins the check to Store's backend.
 func (p PromCost) resolveCostScope(ctx context.Context, view string, costs, usage []string, s costSubject, span time.Duration) (pkgopencost.StoreScope, string) {
+	if !p.storeCurrent() {
+		return pkgopencost.StoreScope{}, pkgopencost.ReasonQueryError
+	}
+	scope, reason := p.resolveCostScopeOnce(ctx, view, costs, usage, s, span)
+	if !p.storeCurrent() {
+		return pkgopencost.StoreScope{}, pkgopencost.ReasonQueryError
+	}
+	return scope, reason
+}
+
+func (p PromCost) resolveCostScopeOnce(ctx context.Context, view string, costs, usage []string, s costSubject, span time.Duration) (pkgopencost.StoreScope, string) {
 	resolve := p.resolver()
 	core, err := prometheuspkg.ResolveChartScope(ctx, resolve, costScopeRequest(view, costs, s, span))
 	if err != nil {

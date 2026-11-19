@@ -1005,11 +1005,11 @@ func promCostClient(ctx context.Context) (opencost.PromCost, string) {
 		log.Printf("[mcp] Prometheus EnsureConnected failed for cost query: %v", err)
 		return opencost.PromCost{}, opencost.ConnectionFailureReason(err)
 	}
-	promClient := client.PromForMCP()
-	if promClient == nil {
+	promCost := opencost.NewMCPPromCost(client)
+	if promCost.Store == nil {
 		return opencost.PromCost{}, pkgopencost.ReasonNoPrometheus
 	}
-	return opencost.PromCost{Client: client, Store: promClient}, ""
+	return promCost, ""
 }
 
 func requestedNamespaces(namespace string) []string {

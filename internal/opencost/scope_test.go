@@ -512,3 +512,140 @@ func TestAutoSelectionKeepsAWithheldStore(t *testing.T) {
 		t.Fatalf("summary = %+v", resp)
 	}
 }
+
+// recordingStore is a metrics store that answers discovery's probe and
+// records every other query it receives.
+func recordingStore(t *testing.T) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		q := r.FormValue("query")
+		if q == "up" {
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prometheus"},"value":[1700000000,"1"]}]}}`))
+			return
+		}
+		mu.Lock()
+		queries = append(queries, q)
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"namespace":"shop","pod":"api-1","node":"n1"},"value":[1700000000,"1"]}]}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(queries)
+	}
+}
+
+// A PromCost's checks and its cost queries must describe one backend: when
+// the connection moves from store A to store B, a check (answered by B) must
+// not license cost queries that still go to A.
+func TestCostScopeCheckOnAMovedConnectionIsAQueryError(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fakeclientset.NewSimpleClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	storeA, queriesA := recordingStore(t)
+	storeB, _ := recordingStore(t)
+	connectTo := func(url string) *prometheuspkg.Client {
+		t.Helper()
+		prometheuspkg.SetManualURL(url)
+		client, err := prometheuspkg.ClientForOperation()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := client.EnsureConnected(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		return client
+	}
+	prometheuspkg.Initialize(nil, nil, "test")
+	t.Cleanup(func() {
+		prometheuspkg.Reset()
+		prometheuspkg.Initialize(nil, nil, "")
+	})
+
+	for _, tc := range []struct {
+		name string
+		// moveDuringCheck moves the connection inside the check rather than
+		// before it.
+		moveDuringCheck bool
+		run             func(PromCost) string
+	}{
+		{name: "moved during the check", moveDuringCheck: true, run: func(p PromCost) string {
+			return p.Workloads(context.Background(), "shop", nil).Reason
+		}},
+		{name: "moved before the check", run: func(p PromCost) string {
+			return p.Summary(context.Background(), pkgopencost.SummaryOptions{}).Reason
+		}},
+		{name: "moved before an application's namespace check", run: func(p PromCost) string {
+			resp := p.ApplicationTrend(context.Background(), pkgopencost.ApplicationTrendOptions{Range: "24h", Workloads: []pkgopencost.ApplicationWorkloadRef{{Kind: "Deployment", Namespace: "shop", Name: "api"}}})
+			return resp.Reason
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := connectTo(storeA.URL)
+			p := NewPromCost(client)
+			if p.Store == nil || !client.ConnectionCurrent(p.Conn) {
+				t.Fatal("PromCost not bound to the current connection")
+			}
+			before := len(queriesA())
+			checks := 0
+			fake := &fakeCostResolver{mode: modeUnlabeled}
+			t.Cleanup(SetScopeResolverForTesting(func(ctx context.Context, req prometheuspkg.ViewScopeRequest) (prometheuspkg.ViewScope, error) {
+				checks++
+				if tc.moveDuringCheck {
+					connectTo(storeB.URL)
+				}
+				return fake.resolve(ctx, req)
+			}))
+			if !tc.moveDuringCheck {
+				connectTo(storeB.URL)
+			}
+			if reason := tc.run(p); reason != pkgopencost.ReasonQueryError {
+				t.Errorf("reason = %q, want %q", reason, pkgopencost.ReasonQueryError)
+			}
+			if got := queriesA()[before:]; len(got) != 0 {
+				t.Errorf("cost queries reached the old store after the connection moved: %q", got)
+			}
+			if tc.moveDuringCheck && checks == 0 {
+				t.Error("the check never ran")
+			}
+			if !tc.moveDuringCheck && checks != 0 {
+				t.Errorf("checked %d times on a connection the store no longer belongs to", checks)
+			}
+		})
+	}
+}
+
+// Unmoved, a bound PromCost answers as before.
+func TestCostScopeCheckOnTheSameConnectionAnswers(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fakeclientset.NewSimpleClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	store, queries := recordingStore(t)
+	prometheuspkg.Initialize(nil, nil, "test")
+	prometheuspkg.SetManualURL(store.URL)
+	t.Cleanup(func() {
+		prometheuspkg.Reset()
+		prometheuspkg.Initialize(nil, nil, "")
+	})
+	client, err := prometheuspkg.ClientForOperation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := client.EnsureConnected(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	useFakeResolver(t, modeUnlabeled)
+	resp := NewPromCost(client).Workloads(context.Background(), "shop", nil)
+	if resp.Reason == pkgopencost.ReasonQueryError {
+		t.Fatalf("workloads = %+v", resp)
+	}
+	if len(queries()) == 0 {
+		t.Fatal("no cost query reached the store")
+	}
+}
