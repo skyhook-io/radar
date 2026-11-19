@@ -72,6 +72,21 @@ describe('ResourceRendererDispatch', () => {
     })
   })
 
+  describe('Flux Operator dispatch', () => {
+    it('uses the Flux Operator drawers only for fluxcd.controlplane.io', () => {
+      const own = renderKind('fluxreports', { apiVersion: 'fluxcd.controlplane.io/v1', kind: 'FluxReport', metadata: { name: 'flux', namespace: 'flux-system' }, spec: { reconcilers: [] }, status: {} })
+      expect(own).toContain('Reconcilers')
+      for (const kind of ['resourcesets', 'fluxinstances', 'fluxreports', 'resourcesetinputproviders']) {
+        const data = { apiVersion: 'example.com/v1', kind: 'Foreign', metadata: { name: 'foreign' }, spec: { collisionProbe: COLLISION_PROBE } }
+        const foreign = renderKind(kind, data)
+        expect(foreign).toContain(COLLISION_PROBE)
+        expect(foreign).not.toContain('Reconcilers')
+        expect(foreign).not.toContain('Distribution')
+        expect(getResourceStatus(kind, data)).toBeNull()
+      }
+    })
+  })
+
   it('does not block manual replica scaling for VPA-only relationships', () => {
     const html = renderWithScalers([
       { kind: 'VerticalPodAutoscaler', namespace: 'prod', name: 'api-vpa' },
