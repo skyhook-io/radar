@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -184,9 +185,12 @@ func TestVeleroSchedulePause(t *testing.T) {
 // Radar's own client, so the apiserver decides what the user may change.
 func TestVeleroSchedulePauseReadsAndPatchesAsTheCaller(t *testing.T) {
 	srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
+	var mu sync.Mutex
 	var requests []string
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		requests = append(requests, r.Method+" as "+r.Header.Get("Impersonate-User"))
+		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"apiVersion":"velero.io/v1","kind":"Schedule","metadata":{"name":"nightly","namespace":"velero","resourceVersion":"7"},"spec":{"schedule":"0 1 * * *"}}`))
 	}))
@@ -205,6 +209,8 @@ func TestVeleroSchedulePauseReadsAndPatchesAsTheCaller(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if len(requests) != 2 || requests[0] != "GET as alice" || requests[1] != "PATCH as alice" {
 		t.Fatalf("API requests = %v, want a GET and a PATCH as alice", requests)
 	}

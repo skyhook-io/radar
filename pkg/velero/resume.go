@@ -40,7 +40,7 @@ const (
 	// not be read.
 	ResumeReasonSkipUnknown = "skipUnknown"
 	// ResumeReasonSkipOnce: the server sets --schedule-skip-immediately, but
-	// Velero 1.16–1.18.3 apply it to only the first unset Schedule each server
+	// Velero 1.16–1.18.4 apply it to only the first unset Schedule each server
 	// process reconciles: the reconciler stores a pointer to its own default
 	// and clears it when consuming the skip (schedule_controller.go Reconcile).
 	ResumeReasonSkipOnce     = "skipServerOnce"
@@ -163,7 +163,7 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 		out.Summary = dueText + " Radar could not read whether the Velero server skips it (--schedule-skip-immediately), so Velero may submit it at once."
 	case skip == nil && *in.Server.ScheduleSkipImmediately:
 		out.Reason = ResumeReasonSkipOnce
-		out.Summary = dueText + " The Velero server is set to skip it, but Velero 1.16 to 1.18.3 skip only the first such schedule after the server starts, so Velero may submit it at once."
+		out.Summary = dueText + " The Velero server is set to skip it, but Velero 1.16 to 1.18.4 skip only the first such schedule after the server starts, so Velero may submit it at once."
 	case !certain && timing:
 		out.Reason = ResumeReasonTiming
 		out.Summary = dueText + " If one is, Velero submits it at once."
@@ -189,15 +189,19 @@ func skipMayApply(in ScheduleInput, skip *bool) bool {
 }
 
 // nextAfterSkip is the next run once Velero has consumed a skip, which moves
-// lastSkipped to now before it computes the next time.
+// lastSkipped to the moment it processes the resume. An @every schedule counts
+// its interval from then, which is later than now by however long the
+// confirmation stays open, so its time is approximate.
 func nextAfterSkip(in ScheduleInput, resumed *unstructured.Unstructured) (*time.Time, bool) {
 	skipped := resumed.DeepCopy()
 	_ = unstructured.SetNestedField(skipped.Object, in.Now.UTC().Format(time.RFC3339), "status", "lastSkipped")
 	in.Schedule = skipped
-	if after := readSchedule(in); after.State == StateOnSchedule {
-		return after.NextRun, after.NextRunCertain
+	after := readSchedule(in)
+	if after.State != StateOnSchedule {
+		return nil, false
 	}
-	return nil, false
+	cronExpr, _, _ := unstructured.NestedString(resumed.Object, "spec", "schedule")
+	return after.NextRun, after.NextRunCertain && !fixedDelay(cronExpr)
 }
 
 func fixedDelay(expr string) bool {

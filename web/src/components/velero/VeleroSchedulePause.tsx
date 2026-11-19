@@ -90,16 +90,26 @@ function SchedulePauseDialog({ namespace, name, pause, reviewedVersion, changed,
   const skipping = !pause && skip && resume?.skipping ? resume.skipping : undefined
   const outlook = skipping ?? resume?.default
   // A dialog left open past the next run would still say nothing is due and
-  // offer no skip, so read the outlook again when that time comes.
+  // offer no skip, so at that time the outlook is read again, and the
+  // confirmation waits for the new answer.
   const waitUntil = !pause && resume?.default.outcome === 'waits' ? resume.default.nextRun : undefined
   const refetchActivity = activity.refetch
+  const [expired, setExpired] = useState(false)
+  const updatedAt = activity.dataUpdatedAt
   useEffect(() => {
+    setExpired(false)
     if (!waitUntil) return
-    const delay = Date.parse(waitUntil) - Date.now() + 1000
+    const delay = Date.parse(waitUntil) - Date.now()
     if (!(delay < 2 ** 31 - 1)) return
-    const timer = setTimeout(() => void refetchActivity(), Math.max(delay, 0))
+    // Past the time already (an answer read just before it): ask again in a
+    // second rather than at once, so a server a moment behind isn't polled.
+    const timer = setTimeout(() => {
+      setExpired(true)
+      void refetchActivity()
+    }, delay > 0 ? delay : 1000)
     return () => clearTimeout(timer)
-  }, [waitUntil, refetchActivity])
+  }, [waitUntil, refetchActivity, updatedAt])
+  const outlookPending = !pause && workspace.support === 'supported' && (activity.isPending || expired)
   const effect = pause ? (
     'Velero stops submitting this schedule’s runs until it is resumed.'
   ) : outlook ? (
@@ -168,7 +178,7 @@ function SchedulePauseDialog({ namespace, name, pause, reviewedVersion, changed,
       confirmLabel={pause ? 'Pause schedule' : 'Resume schedule'}
       isLoading={mutation.isPending}
       result={mutation.error ? { state: 'error', message: mutation.error.message } : undefined}
-      incompleteReason={changed ? 'The schedule changed' : undefined}
+      incompleteReason={changed ? 'The schedule changed' : outlookPending ? 'Reading what resuming does' : undefined}
     >
       {!pause && resume?.skipping && (
         <label className="flex items-center gap-2 text-sm">

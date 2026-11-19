@@ -141,8 +141,9 @@ func TestDescribeResume(t *testing.T) {
 	t.Run("a skip on an @every schedule moves the next run", func(t *testing.T) {
 		every := schedule("every", "@every 1h", specField("paused", true), lastBackup(at("11:00")))
 		skipping := DescribeResume(ScheduleInput{Schedule: every, BackupsRead: true, Server: utcServer, Now: at("11:30")}, new(true))
-		if skipping.Outcome != ResumeWaits || skipping.NextRun == nil || !skipping.NextRun.Equal(at("12:30")) || !skipping.NextRunCertain {
-			t.Fatalf("skipping %+v, want the next run at 12:30", skipping)
+		// About 12:30: Velero counts from when it processes the resume.
+		if skipping.Outcome != ResumeWaits || skipping.NextRun == nil || !skipping.NextRun.Equal(at("12:30")) || skipping.NextRunCertain {
+			t.Fatalf("skipping %+v, want the next run at about 12:30", skipping)
 		}
 		due := DescribeResume(ScheduleInput{Schedule: every, BackupsRead: true, Server: utcServer, Now: at("12:10")}, new(true))
 		if due.Outcome != ResumeSkips || due.NextRun == nil || !due.NextRun.Equal(at("13:10")) {

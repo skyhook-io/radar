@@ -31,11 +31,12 @@ const state = vi.hoisted(() => ({
   guardInput: {} as Record<string, unknown>,
   toast: vi.fn(),
   refetch: vi.fn(),
+  updatedAt: 1,
 }))
 vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: state.support }) }))
 vi.mock('../../api/velero', () => ({
   useVeleroSchedulePause: () => ({ mutate: state.mutate, isPending: false, error: state.error }),
-  useVeleroScheduleActivity: () => ({ data: { resume: state.resume, serverStopped: state.serverStopped, backupsDisabled: state.backupsDisabled }, refetch: state.refetch, isPending: false }),
+  useVeleroScheduleActivity: () => ({ data: { resume: state.resume, serverStopped: state.serverStopped, backupsDisabled: state.backupsDisabled }, refetch: state.refetch, isPending: false, dataUpdatedAt: state.updatedAt }),
 }))
 vi.mock('../../hooks/useGitOpsWriteGuard', () => ({
   useGitOpsWriteGuard: ({ writes }: { writes: GitOpsWriteGuardInput['writes'] }) => ({
@@ -71,6 +72,7 @@ afterEach(() => {
   state.toast.mockReset()
   state.mutate.mockReset()
   state.refetch.mockReset()
+  state.updatedAt = 1
   vi.useRealTimers()
 })
 
@@ -120,16 +122,26 @@ describe('Pause and resume', () => {
     expect(state.mutate).toHaveBeenCalledWith(expect.objectContaining({ paused: false, skipImmediately: true }), expect.anything())
   })
 
-  it('reads the outlook again when the next run comes while the dialog is open', () => {
+  it('reads the outlook again when the next run comes, and waits for it before confirming', () => {
     vi.useFakeTimers()
     const nextRun = new Date(Date.now() + 60_000).toISOString()
     state.resume = { default: { outcome: 'waits', due: false, summary: 'No run is due, so Velero submits the next one at its scheduled time.', nextRun, nextRunCertain: true } }
-    render(<VeleroSchedulePause schedule={paused} />)
+    const root = render(<VeleroSchedulePause schedule={paused} />)
     act(() => buttons('Resume')[0].click())
+    const confirm = () => buttons('Resume schedule')[0] as HTMLButtonElement
     act(() => void vi.advanceTimersByTime(30_000))
     expect(state.refetch).not.toHaveBeenCalled()
-    act(() => void vi.advanceTimersByTime(31_500))
+    expect(confirm().disabled).toBe(false)
+    act(() => void vi.advanceTimersByTime(30_000))
     expect(state.refetch).toHaveBeenCalledTimes(1)
+    expect(confirm().disabled).toBe(true)
+    expect(text()).toContain('Reading what resuming does')
+    state.resume = due
+    state.updatedAt = 2
+    act(() => root.render(<VeleroSchedulePause schedule={paused} />))
+    expect(confirm().disabled).toBe(false)
+    expect(checkbox('Skip the run that’s due now')).toBeDefined()
+    expect(text()).toContain(due.default.summary)
   })
 
   it('offers no skip when nothing is due', () => {
