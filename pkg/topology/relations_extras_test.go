@@ -445,3 +445,49 @@ func TestAnswerFieldsCoverWhatAnswersFill(t *testing.T) {
 		t.Fatal("the characterization filled no listed field")
 	}
 }
+
+// flipKind allows kind on its first check and denies it after, as a
+// permission cache entry expiring mid-answer would.
+type flipKind struct {
+	kind   resourceid.GroupKind
+	checks *int
+}
+
+func (a flipKind) CanRead(gk resourceid.GroupKind, _ string) ownership.Decision {
+	if gk != a.kind {
+		return ownership.Allowed
+	}
+	*a.checks++
+	if *a.checks == 1 {
+		return ownership.Allowed
+	}
+	return ownership.Denied
+}
+func (flipKind) Namespaces() ([]string, bool) { return nil, true }
+
+// ReadSubject changes only the subject's own kind: a permission that changes
+// mid-answer on another kind is asked and answered exactly as without it.
+func TestReadSubjectLeavesOtherKindsChangingMidAnswerAlone(t *testing.T) {
+	labels := map[string]string{"app": "web"}
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}}}, "apps", "Deployment")
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: corev1.ServiceSpec{Selector: labels}}, "", "Service")
+	ingress := projectionObject(&networkingv1.Ingress{ObjectMeta: metav1.ObjectMeta{Name: "front", Namespace: "shop"}, Spec: networkingv1.IngressSpec{DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "web"}}}}, "networking.k8s.io", "Ingress")
+	s := newProjectionSession(t, dep, svc, ingress)
+	answer := func(wrap bool) (*Relationships, *RelationshipExtras, int) {
+		checks := 0
+		var access ownership.Access = flipKind{kind: projectionRef(ingress).GroupKind(), checks: &checks}
+		if wrap {
+			access = ReadSubject(access, projectionRef(dep))
+		}
+		rel, extras := RelationsContextAnswer(s, access, access, ownership.NewView(s, access), projectionRef(dep), dep, nil, nil)
+		return rel, extras, checks
+	}
+	plainRel, plainExtras, plainChecks := answer(false)
+	rel, extras, checks := answer(true)
+	if plainChecks < 2 {
+		t.Fatalf("Ingresses checked %d times; the test needs the permission to change mid-answer", plainChecks)
+	}
+	if checks != plainChecks || !reflect.DeepEqual(rel, plainRel) || !reflect.DeepEqual(extras.Fields, plainExtras.Fields) {
+		t.Fatalf("with ReadSubject: %d checks, %+v, %+v; without: %d checks, %+v, %+v", checks, rel, extras.Fields, plainChecks, plainRel, plainExtras.Fields)
+	}
+}
