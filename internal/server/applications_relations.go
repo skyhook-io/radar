@@ -697,21 +697,6 @@ func (b *appRelationBatch) relationshipsForRef(group, kind, ns, name string) *ap
 	return out
 }
 
-// applicationOwnerAbove is topology.OwnerAbove, except that the controller
-// chain ends at the first GitOps manager on it: past one lies a parent such
-// as an ApplicationSet, shared by apps that are separate.
-func applicationOwnerAbove(view *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
-	if chain := view.ControllerChain(r).Chain; len(chain) > 1 {
-		for _, owner := range chain[1:] {
-			if isGitOpsManagerKind(topology.NodeKind(owner.Kind), owner.Group) {
-				return owner, true
-			}
-		}
-		return chain[len(chain)-1], true
-	}
-	return topology.OwnerAbove(view, r)
-}
-
 // applicationStructuralRoot is the object start's application is rooted at,
 // and whether a manager kind it read was still loading, which can move it.
 func applicationStructuralRoot(session relations.Session, view *ownership.View, start resourceid.Ref) (resourceid.Ref, bool) {
@@ -723,7 +708,7 @@ func applicationStructuralRoot(session relations.Session, view *ownership.View, 
 		if isGitOpsManagerKind(topology.NodeKind(cur.Kind), cur.Group) {
 			return cur, loading
 		}
-		if next, ok := applicationOwnerAbove(view, cur); ok && !seen[next] {
+		if next, ok := topology.OwnerAboveToManager(view, cur); ok && !seen[next] {
 			cur = next
 			continue
 		}

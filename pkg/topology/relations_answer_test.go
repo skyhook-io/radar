@@ -976,3 +976,39 @@ func TestRelationsAnswerNamesSpecDeclaredHostAndClaimRefs(t *testing.T) {
 		}
 	}
 }
+
+// Managed By climbs the controller chain to the first GitOps manager above
+// the subject and names it, as Applications groups a workload under its
+// Application: past one lies a parent, such as an ApplicationSet, shared by
+// apps that are separate. A GitOps manager's own Managed By is still its
+// parent, and a chain without one climbs to its top.
+func TestRelationsAnswerManagedByStopsAtTheFirstGitOpsManager(t *testing.T) {
+	controller := true
+	ref := func(apiVersion, kind, name, uid string) []metav1.OwnerReference {
+		return []metav1.OwnerReference{{APIVersion: apiVersion, Kind: kind, Name: name, UID: types.UID(uid), Controller: &controller}}
+	}
+	set := projectionCR("argoproj.io", "ApplicationSet", "argocd", "apps", map[string]any{})
+	set.SetUID("set")
+	app := projectionCR("argoproj.io", "Application", "argocd", "web", map[string]any{})
+	app.SetUID("app")
+	app.SetOwnerReferences(ref("argoproj.io/v1", "ApplicationSet", "apps", "set"))
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web", UID: "deployment", OwnerReferences: ref("argoproj.io/v1", "Application", "web", "app")}}, "apps", "Deployment")
+	for _, tc := range []struct {
+		subject runtime.Object
+		want    ResourceRef
+	}{
+		{deployment, ResourceRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "web"}},
+		{app, ResourceRef{Kind: "ApplicationSet", Group: "argoproj.io", Namespace: "argocd", Name: "apps"}},
+	} {
+		s := newProjectionSession(t, set, app, deployment)
+		rel := projectionAnswer(t, s, tc.subject, ownership.Unrestricted(), ownership.Unrestricted())
+		if len(rel.ManagedBy) != 1 || refIdentity(rel.ManagedBy[0]) != refIdentity(tc.want) {
+			t.Errorf("%s: ManagedBy %+v, want %+v", projectionRef(tc.subject).Kind, rel.ManagedBy, tc.want)
+		}
+	}
+	plain := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "plain", UID: "plain", OwnerReferences: ref("argoproj.io/v1", "ApplicationSet", "apps", "set")}}, "apps", "Deployment")
+	s := newProjectionSession(t, set, plain)
+	if rel := projectionAnswer(t, s, plain, ownership.Unrestricted(), ownership.Unrestricted()); len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Name != "apps" {
+		t.Errorf("a chain without a GitOps manager: ManagedBy %+v", rel.ManagedBy)
+	}
+}

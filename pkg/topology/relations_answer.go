@@ -447,8 +447,9 @@ func relationsAnswer(session relations.Session, access, traverse ownership.Acces
 // topManager climbs from subject while something readable is above it: the
 // top of its controller chain; for an object with no controller reference, its
 // sole owner reference (a CiliumEndpoint's Pod, a CiliumNode's Node) or a
-// NodeClaim's NodePool. It stops below GitOps managers: what manages a
-// workload's Application is ownership.manager's answer, not this one.
+// NodeClaim's NodePool. It stops at the first GitOps manager above subject and
+// names it: what manages that Application, such as an ApplicationSet, is
+// ownership.manager's answer to weigh, not this one.
 func (n *neighborhood) topManager(session relations.Session, ov *ownership.View, subject resourceid.Ref) *ResourceRef {
 	var last *ResourceRef
 	seen := map[resourceid.Ref]bool{subject: true}
@@ -462,15 +463,33 @@ func (n *neighborhood) topManager(session relations.Session, ov *ownership.View,
 			break
 		}
 		seen[next], last, cur = true, &r, next
+		if ownership.IsRecordingManager(next.GroupKind()) {
+			break
+		}
 	}
 	return last
 }
 
 func (n *neighborhood) above(session relations.Session, ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
-	if owner, ok := OwnerAbove(ov, r); ok {
+	if owner, ok := OwnerAboveToManager(ov, r); ok {
 		return owner, true
 	}
 	return n.nodePool(session, r)
+}
+
+// OwnerAboveToManager is OwnerAbove, except that the controller chain ends at
+// the first GitOps manager on it (ownership.IsRecordingManager): past one lies
+// a parent such as an ApplicationSet, shared by apps that are separate.
+func OwnerAboveToManager(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
+	if chain := ov.ControllerChain(r).Chain; len(chain) > 1 {
+		for _, owner := range chain[1:] {
+			if ownership.IsRecordingManager(owner.GroupKind()) {
+				return owner, true
+			}
+		}
+		return chain[len(chain)-1], true
+	}
+	return OwnerAbove(ov, r)
 }
 
 // OwnerAbove returns the highest readable controller ancestor; an object with
