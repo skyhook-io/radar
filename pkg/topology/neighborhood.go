@@ -90,6 +90,10 @@ type Subgraph struct {
 	// is absent. It is set only for candidates Allow admitted, so it reveals
 	// nothing about one the caller may not read.
 	RootUnavailable readreason.Code `json:"-"`
+
+	// UncollectedRoots are the root candidates Allow admitted whose kind Radar
+	// doesn't collect, which a host may start collecting before asking again.
+	UncollectedRoots []resourceid.Ref `json:"-"`
 }
 
 // neighborhoodMaxHops is the hard ceiling on BFS depth. Two hops is enough

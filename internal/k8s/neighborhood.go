@@ -4,30 +4,55 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 // AnswerNeighborhood binds the walk and display data to the request's cache.
+// A root whose custom kind Radar isn't collecting yet starts that kind's
+// watch, as a read of the object would, and is asked about once more after
+// waiting as long as that read waits; it then answers from the watch, or says
+// the kind is still loading or denied to Radar.
 func AnswerNeighborhood(ctx context.Context, cache *ResourceCache, root topology.ResourceRef, opts topology.NeighborhoodOptions) (*topology.Subgraph, error) {
+	sub, caches, err := answerNeighborhood(ctx, cache, root, opts)
+	if err != nil || len(sub.Nodes) > 0 {
+		return sub, err
+	}
+	tried, refused := collectRootKinds(ctx, caches, sub.UncollectedRoots)
+	if !tried {
+		return sub, nil
+	}
+	sub, _, err = answerNeighborhood(ctx, cache, root, opts)
+	if err == nil && len(sub.Nodes) == 0 && sub.RootUnavailable == readreason.RadarKindNotCollected && len(refused) > 0 {
+		// A refusal in the root's namespace is recorded only against that
+		// watch request, so the walk's reads can't see it.
+		sub.RootUnavailable = readreason.Primary(refused)
+	}
+	return sub, err
+}
+
+func answerNeighborhood(ctx context.Context, cache *ResourceCache, root topology.ResourceRef, opts topology.NeighborhoodOptions) (*topology.Subgraph, cachesource.Caches, error) {
 	session, err := BeginOwnershipRead(cache)
 	if err != nil {
-		return nil, err
+		return nil, cachesource.Caches{}, err
 	}
 	if len(session.Catalog().DependentKinds()) == 0 {
 		// Discovery hasn't answered yet, as while Radar starts, so no related
 		// kind could be searched or resolved.
-		return nil, ownership.ErrNotConnected
+		return nil, cachesource.Caches{}, ownership.ErrNotConnected
 	}
 	rs, ok := session.(relations.Session)
 	if !ok {
-		return nil, fmt.Errorf("relation session unavailable")
+		return nil, cachesource.Caches{}, fmt.Errorf("relation session unavailable")
 	}
 	caches, ok := cachesource.SessionCaches(session)
 	if !ok {
-		return nil, fmt.Errorf("relation caches unavailable")
+		return nil, cachesource.Caches{}, fmt.Errorf("relation caches unavailable")
 	}
 	provider := NewTopologyResourceProvider(&ResourceCache{ResourceCache: caches.Typed})
 	var dp topology.DynamicProvider
@@ -36,10 +61,42 @@ func AnswerNeighborhood(ctx context.Context, cache *ResourceCache, root topology
 	}
 	sub, err := topology.WalkNeighborhood(ctx, rs, root, opts, provider, dp)
 	if err != nil {
-		return nil, err
+		return nil, cachesource.Caches{}, err
 	}
 	if err := session.ValidateCaches(); err != nil {
-		return nil, err
+		return nil, cachesource.Caches{}, err
 	}
-	return sub, nil
+	return sub, caches, nil
+}
+
+// collectRootKinds starts the watch of each root candidate's custom kind the
+// walk found uncollected (the walk lists only candidates the caller's Allow
+// admitted) and waits for it as a read of one object does. It reports whether
+// it tried any, and the codes of the watches Radar was refused. Typed kinds
+// are collected or not by configuration, and the kinds Radar reads directly
+// are never watched, so neither is started here.
+func collectRootKinds(ctx context.Context, caches cachesource.Caches, roots []resourceid.Ref) (tried bool, refused []readreason.Code) {
+	if caches.Dynamic == nil || caches.Discovery == nil {
+		return false, nil
+	}
+	for _, r := range roots {
+		if isTypedKind(r.GroupKind()) {
+			continue
+		}
+		gvr, ok := caches.Discovery.GetGVRWithGroup(r.Kind, r.Group)
+		if !ok || ShouldBypassDynamicInformer(gvr) {
+			continue
+		}
+		tried = true
+		if err := caches.Dynamic.EnsureWatchingContext(ctx, gvr, r.Namespace); err != nil {
+			if code, ok := CollectorErrorCode(err); ok {
+				refused = append(refused, code)
+			}
+			continue
+		}
+		wait, cancel := context.WithTimeout(ctx, k8score.ObjectReadSyncWait)
+		caches.Dynamic.WaitForSyncContext(wait, gvr, r.Namespace)
+		cancel()
+	}
+	return tried, refused
 }

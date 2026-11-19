@@ -414,6 +414,13 @@ func TestWalkNeighborhoodRootUnavailableSaysWhy(t *testing.T) {
 	if sub := walkTestNeighborhood(t, s, root, NeighborhoodOptions{Allow: func(*Node) bool { return false }}); sub.RootUnavailable != "" {
 		t.Fatalf("hidden root said why it couldn't be read: %+v", sub)
 	}
+	s.gaps[resourceid.GroupKind{Kind: "ConfigMap"}] = ownership.Gap{Kind: resourceid.GroupKind{Kind: "ConfigMap"}, Reason: readreason.RadarKindNotCollected}
+	if sub := walkTestNeighborhood(t, s, root, NeighborhoodOptions{}); !slices.Equal(sub.UncollectedRoots, []resourceid.Ref{projectionRef(root)}) {
+		t.Fatalf("uncollected root not offered for collection: %+v", sub)
+	}
+	if sub := walkTestNeighborhood(t, s, root, NeighborhoodOptions{Allow: func(*Node) bool { return false }}); len(sub.UncollectedRoots) != 0 {
+		t.Fatalf("a hidden root was offered for collection: %+v", sub)
+	}
 	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}}, "", "Node")
 	s = newProjectionSession(t, node)
 	sub, err := WalkNeighborhood(context.Background(), s, ResourceRef{Kind: "Node", Namespace: "shop", Name: "n1"}, NeighborhoodOptions{}, nil, nil)

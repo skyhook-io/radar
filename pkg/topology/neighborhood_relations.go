@@ -39,6 +39,9 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		obj, read := session.Borrow(r)
 		if read.State == ownership.Unavailable {
 			unavailable = append(unavailable, read.Gap.Reason)
+			if read.Gap.Reason == readreason.RadarKindNotCollected {
+				sub.UncollectedRoots = append(sub.UncollectedRoots, r)
+			}
 		}
 		if read.State != ownership.Present {
 			continue

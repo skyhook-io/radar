@@ -14,6 +14,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	fakediscovery "k8s.io/client-go/discovery/fake"
@@ -735,11 +736,13 @@ func TestNeighborhoodMCP_RootKindDeniedToRadarSaysSo(t *testing.T) {
 		getPermCache().Invalidate()
 	})
 	gvr := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
+	// Unwatched, the neighborhood starts the kind's watch itself, whose access
+	// check finds the denial.
 	for _, tc := range []struct {
 		watch bool
 		want  readreason.Code
-	}{{true, readreason.RadarForbidden}, {false, readreason.RadarKindNotCollected}} {
-		t.Run(string(tc.want), func(t *testing.T) {
+	}{{true, readreason.RadarForbidden}, {false, readreason.RadarForbidden}} {
+		t.Run(fmt.Sprintf("watched=%v", tc.watch), func(t *testing.T) {
 			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "VirtualServiceList"})
 			dyn.PrependReactor("list", "virtualservices", func(k8stesting.Action) (bool, runtime.Object, error) {
 				return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", fmt.Errorf("radar may not list virtualservices"))
@@ -767,6 +770,55 @@ func TestNeighborhoodMCP_RootKindDeniedToRadarSaysSo(t *testing.T) {
 			_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "virtualservice", Group: "networking.istio.io", Namespace: "bookinfo", Name: "reviews", Hops: 2})
 			if code, _ := readErrorCodeOf(err); code != tc.want || strings.Contains(err.Error(), "retry with kind") || strings.Contains(err.Error(), "not found") {
 				t.Fatalf("got %v, want %s", err, tc.want)
+			}
+		})
+	}
+}
+
+// A root whose custom kind nothing has watched starts the kind's watch, as a
+// read of the object would, and answers from it once it loads; until then it
+// says the kind is still loading.
+func TestNeighborhoodMCP_UnwatchedCustomRootStartsItsWatch(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}})); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	t.Cleanup(func() {
+		k8s.ResetTestState()
+		getPermCache().Invalidate()
+	})
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	for _, hold := range []bool{false, true} {
+		t.Run(fmt.Sprintf("held=%v", hold), func(t *testing.T) {
+			widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.io/v1", "kind": "Widget", "metadata": map[string]any{"name": "w1", "namespace": "shop", "uid": "w1"}}}
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, widget)
+			verbs := []string{"delete", "get", "list", "watch"}
+			k8s.ResetTestDynamicState()
+			t.Cleanup(k8s.ResetTestDynamicState)
+			if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+				{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: verbs},
+				{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: verbs},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if hold {
+				dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+					if l, ok := a.(k8stesting.ListActionImpl); ok && l.ListOptions.Limit == 1 {
+						return false, nil, nil
+					}
+					return true, nil, apierrors.NewInternalError(fmt.Errorf("the API server is busy"))
+				})
+			}
+			ctx := withRestrictedUser(t, "widget-reader", []string{"shop"})
+			result, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "widget", Group: "example.io", Namespace: "shop", Name: "w1"})
+			if hold {
+				if code, _ := readErrorCodeOf(err); code != readreason.KindSyncPending {
+					t.Fatalf("got %v, want %s", err, readreason.KindSyncPending)
+				}
+				return
+			}
+			if err != nil || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, `"name":"w1"`) {
+				t.Fatalf("got %v %v, want the Widget's neighborhood", result, err)
 			}
 		})
 	}

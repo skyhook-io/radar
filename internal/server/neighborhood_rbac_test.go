@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	fakediscovery "k8s.io/client-go/discovery/fake"
@@ -672,11 +675,13 @@ func TestNeighborhood_RootKindDeniedToRadarSaysSo(t *testing.T) {
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "bookinfo"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "reviews", Namespace: "bookinfo"}},
 	))
+	// Unwatched, the neighborhood starts the kind's watch itself, whose access
+	// check finds the denial.
 	for _, tc := range []struct {
 		watch bool
 		want  readreason.Code
-	}{{true, readreason.RadarForbidden}, {false, readreason.RadarKindNotCollected}} {
-		t.Run(string(tc.want), func(t *testing.T) {
+	}{{true, readreason.RadarForbidden}, {false, readreason.RadarForbidden}} {
+		t.Run(fmt.Sprintf("watched=%v", tc.watch), func(t *testing.T) {
 			virtualServicesDeniedToRadar(t, tc.watch)
 			env := newAuthTestServer(t)
 			env.srv.permCache.Set("istio-reader", nil, &auth.UserPermissions{AllowedNamespaces: []string{"bookinfo"}})
@@ -692,4 +697,66 @@ func TestNeighborhood_RootKindDeniedToRadarSaysSo(t *testing.T) {
 			}
 		})
 	}
+}
+
+// widgetsUnwatched installs discovery serving Widgets, a custom kind nothing
+// has watched yet, and one Widget in shop. hold fails every list but the access
+// check's, so the watch never syncs.
+func widgetsUnwatched(t *testing.T, hold bool) schema.GroupVersionResource {
+	t.Helper()
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.io/v1", "kind": "Widget", "metadata": map[string]any{"name": "w1", "namespace": "shop", "uid": "w1"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, widget)
+	verbs := []string{"delete", "get", "list", "watch"}
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: verbs},
+		{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: verbs},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if hold {
+		dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+			if l, ok := a.(k8stesting.ListActionImpl); ok && l.ListOptions.Limit == 1 {
+				return false, nil, nil
+			}
+			return true, nil, apierrors.NewInternalError(fmt.Errorf("the API server is busy"))
+		})
+	}
+	return gvr
+}
+
+// A root whose custom kind nothing has watched starts the kind's watch, as a
+// read of the object would, and answers from it once it loads; until then it
+// says the kind is still loading.
+func TestNeighborhood_UnwatchedCustomRootStartsItsWatch(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}))
+	get := func(t *testing.T) (int, string) {
+		t.Helper()
+		env := newAuthTestServer(t)
+		env.srv.permCache.Set("widget-reader", nil, &auth.UserPermissions{AllowedNamespaces: []string{"shop"}})
+		resp := env.authGet(t, "/api/ai/neighborhood/widget/shop/w1?group=example.io", "widget-reader", "")
+		defer resp.Body.Close()
+		var body bytes.Buffer
+		_, _ = body.ReadFrom(resp.Body)
+		return resp.StatusCode, body.String()
+	}
+	t.Run("loads", func(t *testing.T) {
+		gvr := widgetsUnwatched(t, false)
+		code, body := get(t)
+		if code != http.StatusOK || !strings.Contains(body, `"name":"w1"`) {
+			t.Fatalf("got %d %s, want the Widget's neighborhood", code, body)
+		}
+		if !slices.Contains(k8s.GetDynamicResourceCache().GetWatchedResources(), gvr) {
+			t.Fatal("the Widget watch was not started")
+		}
+	})
+	t.Run("still loading", func(t *testing.T) {
+		widgetsUnwatched(t, true)
+		code, body := get(t)
+		if code != http.StatusServiceUnavailable || !strings.Contains(body, string(readreason.KindSyncPending)) {
+			t.Fatalf("got %d %s, want 503 %s", code, body, readreason.KindSyncPending)
+		}
+	})
 }
