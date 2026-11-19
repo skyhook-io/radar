@@ -53,9 +53,14 @@ func (p *conPty) Resize(cols, rows uint16) error {
 	return windows.ResizePseudoConsole(p.console, windows.Coord{X: int16(cols), Y: int16(rows)})
 }
 
+// getDefaultShell prefers PowerShell 7 (pwsh), which people install alongside
+// the Windows PowerShell 5.1 every Windows ships, the way Windows Terminal
+// does. Commands Radar hands to this terminal run in either.
 func getDefaultShell() string {
-	if ps, err := exec.LookPath("powershell.exe"); err == nil {
-		return ps
+	for _, name := range []string{"pwsh.exe", "powershell.exe"} {
+		if ps, err := exec.LookPath(name); err == nil {
+			return ps
+		}
 	}
 	if comspec := os.Getenv("COMSPEC"); comspec != "" {
 		return comspec

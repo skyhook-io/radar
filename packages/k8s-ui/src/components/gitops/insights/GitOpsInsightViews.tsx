@@ -35,6 +35,7 @@ import {
   type ResourceStatusFacet,
 } from './insights-helpers'
 import { DriftPanel } from './DriftPanel'
+import { TABLE_DENSITY } from '../../ui/table-density'
 
 interface GitOpsStatusStripProps {
   insight?: GitOpsInsight | null
@@ -290,7 +291,7 @@ function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsigh
             <MetaFact label="Revision" value={summary.lastRevision || summary.targetRevision || '-'} mono />
           )}
           <SummaryTiming summary={summary} />
-          {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode} />}
+          {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode === 'Manual' ? 'Auto-sync off' : summary.autoSyncMode} />}
         </div>
       </Collapse>
     </div>
@@ -1138,7 +1139,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 border-b border-theme-border bg-theme-base/40 px-4 py-2">
+            <div className={clsx('grid grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 border-b border-theme-border bg-theme-base/40 py-2', TABLE_DENSITY.cellXClass)}>
               <ResSortHeader label="Resource" sortKey="name" sort={sort} onSort={onSort} />
               <ResSortHeader label="Sync" sortKey="sync" sort={sort} onSort={onSort} />
               <ResSortHeader label="Health" sortKey="health" sort={sort} onSort={onSort} />
@@ -1322,10 +1323,6 @@ function refKey(ref: { kind: string; namespace?: string; name: string }): string
 // nor a health message is available — otherwise those carry the truth and
 // this would just add noise. Empty string falls through to no row content.
 //
-// The "what to do" framing is intentional: badges already communicate state
-// ("OutOfSync"); the row should communicate what the operator should do
-// about it. With auto-sync on the answer is usually "wait, Argo will fix
-// it"; with manual mode the answer is "click Sync".
 function explainChangeStatus(
   sync: string | undefined,
   health: string | undefined,
@@ -1349,11 +1346,11 @@ function explainChangeStatus(
     if (inFlight) return 'Live state differs from Git. A sync is in progress — wait for it to finish.'
     if (context?.rolledBack) return 'Live state differs from Git after a rollback. Sync applies the desired state and can undo the rollback.'
     if (isAuto) return 'Live state differs from Git. Auto-sync should reconcile this within a few minutes; click Sync to force it.'
-    return 'Live state differs from Git. Click Sync to apply the desired state.'
+    return 'Live state differs from Git. Review the desired changes and sync policy before deciding whether to sync.'
   }
   if (health === 'Missing' && parentFailed) return 'Resource was not created — see the operation error above for the cause.'
   if (health === 'Degraded') return 'Resource reports an unhealthy state. Open the resource for events and logs.'
-  if (health === 'Missing') return 'Declared in Git but not present in the cluster. Sync to create it.'
+  if (health === 'Missing') return missingResourceMessage(sync, context)
   if (health === 'Progressing') return 'Resource is mid-rollout (e.g. pods coming up). Should converge shortly.'
   if (health === 'Suspended') return 'Resource is paused (e.g. CronJob suspended, HPA disabled). Intentional unless surprising.'
   return ''
@@ -1470,7 +1467,7 @@ function ChangeRow({
           across rows regardless of how long "Open <Kind> <name> →" is. With
           an `auto` last column, each row's 1fr column got a different
           residual width, pushing the badges to inconsistent offsets. */}
-      <div className="grid w-full grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 px-4 py-3 text-sm">
+      <div className={clsx('grid w-full grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 text-sm', TABLE_DENSITY.cellClass)}>
         <button
           type="button"
           onClick={handleRowClick}

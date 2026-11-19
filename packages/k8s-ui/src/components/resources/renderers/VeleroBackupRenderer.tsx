@@ -2,7 +2,7 @@ import { VeleroRunMessages, type VeleroRunMessagesFetch } from './VeleroRunMessa
 import { Archive, Clock, HardDrive, Filter } from 'lucide-react'
 import { clsx } from 'clsx'
 import { HEALTH_BADGE_COLORS } from '../../../utils/badge-colors'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import {
   getBackupStatus,
   getBackupIncludedNamespaces,
@@ -15,7 +15,6 @@ import {
   getBackupErrors,
   getBackupWarnings,
   getBackupValidationErrors,
-  getBackupTTL,
   getBackupItemOperationTimeout,
   getBackupSnapshotVolumes,
   getBackupDefaultVolumesToFsBackup,
@@ -25,7 +24,8 @@ import {
   isBackupPartialFailurePhase,
 } from '../resource-utils-velero'
 import { VeleroPhaseValue } from './velero-cells'
-import { veleroPhaseLabel } from '../resource-utils-velero'
+import { VELERO_SERVER_DEFAULT_RETENTION, veleroDeclaredRetention } from '../../velero/reading'
+import { getBackupStorageLocation, veleroPhaseLabel } from '../resource-utils-velero'
 import { TimeValue } from '../../ui/ScheduleValue'
 
 interface VeleroBackupRendererProps {
@@ -42,18 +42,7 @@ interface VeleroBackupRendererProps {
    */
   storageLocationPhase?: string
   /**
-   * The location this backup is actually stored in, resolved by the host
-   * against the location list. An unset `spec.storageLocation` means "whichever
-   * location carries spec.default", which this component cannot see.
-   *
-   * Undefined means the lookup has not answered. A backup that names its own
-   * location is still known by name in that state; one that does not is not
-   * known at all, and this page says so rather than printing the conventional
-   * name as though it had been resolved.
-   */
-  storageLocationName?: string
-  /**
-   * The lookup answered and no location by that name exists. Distinct from an
+   * The lookup answered and no location by the backup's name exists. Distinct from an
    * unresolved lookup: a backup whose storage location has been deleted cannot
    * be restored from, and without this it renders exactly like a healthy one.
    */
@@ -66,7 +55,7 @@ interface VeleroBackupRendererProps {
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
-export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocationName, storageLocationMissing, messages, onNavigate }: VeleroBackupRendererProps) {
+export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocationMissing, messages, onNavigate }: VeleroBackupRendererProps) {
   const status = data.status || {}
   const conditions = status.conditions || []
 
@@ -84,6 +73,10 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
   const isFailed = backupStatus.level === 'unhealthy'
   const isValidationFailure = phase === 'FailedValidation'
   const isPartiallyFailed = isBackupPartialFailurePhase(phase)
+  // A failed, rejected or partially failed run that raises an issue is
+  // described by the Operational issues section above it. Warnings raise none,
+  // so their box always shows.
+  const issueShown = useOperationalIssuesShown()
   const isInProgress = isBackupActivePhase(phase)
   const queuePosition = getBackupQueuePosition(data)
 
@@ -96,7 +89,7 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
   return (
     <>
       {/* Problem alerts */}
-      {isValidationFailure && (
+      {isValidationFailure && !issueShown && (
         <AlertBanner
           variant="error"
           title="Backup Validation Failed"
@@ -104,7 +97,7 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
           items={validationErrors.length > 0 ? validationErrors : undefined}
         />
       )}
-      {isFailed && !isValidationFailure && (
+      {isFailed && !isValidationFailure && !issueShown && (
         <AlertBanner
           variant="error"
           title="Backup Failed"
@@ -112,7 +105,7 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
           items={validationErrors.length > 0 ? validationErrors : undefined}
         />
       )}
-      {isPartiallyFailed && (
+      {isPartiallyFailed && !issueShown && (
         <AlertBanner
           variant="warning"
           title="Backup Partially Failed"
@@ -237,20 +230,17 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
       {/* Storage section */}
       <Section title="Storage" icon={HardDrive} defaultExpanded>
         <PropertyList>
-          {/* A backup that names its location is known by name whatever the
-              lookup is doing. One that does not is only known once the list
-              answers, because "unset" means whichever location carries
-              spec.default — so until then this says what the field says and
-              claims nothing further. */}
+          {/* Velero writes the location into spec.storageLocation when it
+              first processes the backup. Until then the default it will pick
+              may still change, so naming today's default would be a guess. */}
           <Property
             label="Storage Location"
             value={(() => {
-              const declared = data?.spec?.storageLocation as string | undefined
-              const name = storageLocationName || declared
+              const name = getBackupStorageLocation(data)
               if (!name) {
                 return (
                   <span className="text-sm text-theme-text-tertiary">
-                    Velero&rsquo;s default location, not yet resolved
+                    Not assigned yet
                   </span>
                 )
               }
@@ -270,9 +260,7 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
                     />
                   )}
                   {storageLocationMissing && (
-                    <span className={clsx('badge', HEALTH_BADGE_COLORS.unhealthy)}>
-                      {declared ? 'Not found' : 'No default location'}
-                    </span>
+                    <span className={clsx('badge', HEALTH_BADGE_COLORS.unhealthy)}>Not found</span>
                   )}
                   {storageLocationPhase && storageLocationPhase !== 'Available' && (
                     <span className={clsx('badge', HEALTH_BADGE_COLORS.unhealthy)}>{storageLocationPhase}</span>
@@ -283,15 +271,10 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
           />
           {/* A location that is gone is not a location that is unhealthy, and
               Velero writes no phase for one that does not exist — so without
-              this the backup renders exactly as it would on a healthy bucket.
-              Worded from where the name came from: a backup that names nothing
-              has not "named a location that no longer exists", and saying so
-              would attribute to the object a name the fallback invented. */}
+              this the backup renders exactly as it would on a healthy bucket. */}
           {storageLocationMissing && (
             <div className="text-xs text-warning-text">
-              {data?.spec?.storageLocation
-                ? 'This backup names a storage location that no longer exists in this namespace. Velero restores from the location recorded on the backup, so there is nothing here to restore from until it is recreated.'
-                : 'This backup names no storage location, which Velero resolves to the one marked default — and this namespace has none. Which location holds it cannot be determined here.'}
+              This backup names a storage location that no longer exists in this namespace. Velero restores from the location recorded on the backup, so there is nothing here to restore from until it is recreated.
             </div>
           )}
           {/* Only when it changes the answer. On a healthy location this would be
@@ -324,7 +307,7 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
       {/* Options section */}
       <Section title="Options" icon={Clock}>
         <PropertyList>
-          <Property label="TTL" value={getBackupTTL(data)} />
+          <Property label="Kept for" value={veleroDeclaredRetention(data?.spec?.ttl) ?? VELERO_SERVER_DEFAULT_RETENTION} />
           <Property label="Item Operation Timeout" value={getBackupItemOperationTimeout(data)} />
           <Property label="Snapshot Volumes" value={getBackupSnapshotVolumes(data)} />
           <Property label="Default FS Backup" value={getBackupDefaultVolumesToFsBackup(data)} />

@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/jobset"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/subject"
 	"github.com/skyhook-io/radar/pkg/topology"
 	batchv1 "k8s.io/api/batch/v1"
@@ -17,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	"reflect"
 )
 
 func TestApplicationsListJobSetInsteadOfExactMembers(t *testing.T) {
@@ -41,17 +43,29 @@ func TestApplicationsListJobSetInsteadOfExactMembers(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
+	addApplicationTypedDiscovery()
 	dc := k8s.GetDynamicResourceCache()
 	if err := dc.EnsureWatching(gvr); err != nil || !dc.WaitForSync(gvr, 2*time.Second) {
 		t.Fatalf("cache not ready: %v", err)
 	}
 	cache := k8s.GetResourceCache()
-	g := buildAppGraph(cache, []string{"ml"})
 	session, err := k8s.BeginOwnershipRead(cache)
 	if err != nil {
 		t.Fatal(err)
 	}
-	inputs := collectAppWorkloads(context.Background(), cache, []string{"ml"}, g, ownership.NewView(session, ownership.Unrestricted()), false)
+	inventory := &applicationInventory{batch: buildAppRelationBatch(context.Background(), session.(relations.Session), []string{"ml"}), session: session.(relations.Session), owners: ownership.NewView(session, ownership.Unrestricted())}
+	inputs := collectAppWorkloads(context.Background(), cache, []string{"ml"}, inventory, inventory.owners, false)
+	keys := map[string]string{}
+	for _, row := range groupApplications(inputs) {
+		for _, w := range row.Workloads {
+			keys[w.Name] = row.Key
+		}
+	}
+	wantKeys := map[string]string{"train-workers-0": "ml/JobSet/train", "stale": "ml/Job/stale", "foreign": "ml/Job/foreign", "label-only": "ml/Job/label-only"}
+	if !reflect.DeepEqual(keys, wantKeys) {
+		t.Fatalf("JobSet keys=%v want=%v", keys, wantKeys)
+	}
+
 	if len(inputs) != 5 {
 		t.Fatalf("workloads: %+v", inputs)
 	}

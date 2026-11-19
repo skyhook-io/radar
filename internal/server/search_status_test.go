@@ -36,8 +36,6 @@ func TestSearchStatusPreservesAuthorizedIssuesWithoutOwnership(t *testing.T) {
 		return a.Resource != "secrets"
 	})
 	env := newAuthTestServer(t)
-	var rebuilds atomic.Int32
-	env.srv.broadcaster.rebuildTopology = func() bool { rebuilds.Add(1); return false }
 	type status struct {
 		health string
 		issues int
@@ -50,7 +48,6 @@ func TestSearchStatusPreservesAuthorizedIssuesWithoutOwnership(t *testing.T) {
 			perms.SetCanI("list", "", "nodes", "", nodes)
 			env.srv.permCache.Set(user, nil, perms)
 			gets.Store(0)
-			rebuilds.Store(0)
 			resp := env.authGet(t, "/api/search?q=status-probe&include=none&context="+mode, user, "")
 			var result search.Result
 			err := json.NewDecoder(resp.Body).Decode(&result)
@@ -91,8 +88,8 @@ func TestSearchStatusPreservesAuthorizedIssuesWithoutOwnership(t *testing.T) {
 					t.Fatal("summary control did not read ownership")
 				}
 			} else {
-				if gets.Load() != 0 || rebuilds.Load() != 0 {
-					t.Fatalf("%s requested ownership/graph: gets=%d rebuilds=%d", mode, gets.Load(), rebuilds.Load())
+				if gets.Load() != 0 {
+					t.Fatalf("%s requested ownership: gets=%d", mode, gets.Load())
 				}
 				if mode == "status" && !reflect.DeepEqual(got, want) {
 					t.Fatalf("authorized status changed: got %+v want %+v", got, want)

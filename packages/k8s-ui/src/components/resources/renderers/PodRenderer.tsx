@@ -1,10 +1,11 @@
 import { useState, type ReactNode, type JSX } from 'react'
-import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield } from 'lucide-react'
+import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield, Info } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
-import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames } from '../resource-utils'
+import { SUBSTRATE_GROUP, SUBSTRATE_WORKER_POOL_LABEL } from '../resource-utils-agent-runtimes'
+import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames, getInitContainerNames, getLogContainerNames } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
   rbacVerbBadgeClass,
@@ -84,7 +85,7 @@ interface PodRendererProps {
   canPortForward?: boolean
   // Dock actions
   onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
-  onOpenLogsPanel?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string }) => void
+  onOpenLogsPanel?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   // Port forward render prop
   renderPortAction?: (props: { namespace: string; podName: string; port: number; protocol: string; disabled?: boolean }) => ReactNode
   // Metrics data injection
@@ -381,11 +382,6 @@ export function PodRenderer({
     }
   }
 
-  const allContainerNames = [
-    ...initContainers.map((c: { name: string }) => c.name),
-    ...containers.map((c: { name: string }) => c.name),
-  ]
-
   const handleOpenLogs = (containerName?: string) => {
     if (onOpenLogsOverride && podName && containerName) {
       onOpenLogsOverride(podName, containerName)
@@ -395,8 +391,9 @@ export function PodRenderer({
       onOpenLogsPanel?.({
         namespace,
         podName,
-        containers: allContainerNames,
+        containers: getLogContainerNames(data),
         containerName,
+        initContainers: getInitContainerNames(data),
       })
     }
   }
@@ -422,6 +419,8 @@ export function PodRenderer({
     )
   }
 
+  const substrateWorkerPool = data.metadata?.labels?.[SUBSTRATE_WORKER_POOL_LABEL]
+
   return (
     <>
       {/* Problems alert - shown at top when there are issues */}
@@ -439,6 +438,19 @@ export function PodRenderer({
             ))}
           </ul>
         </AlertBanner>
+      )}
+
+      {substrateWorkerPool && (
+        <AlertBanner
+          variant="info"
+          icon={Info}
+          title="Agent Substrate worker"
+          message={<>
+            A worker in WorkerPool{' '}
+            <ResourceLink name={substrateWorkerPool} kind="workerpools" group={SUBSTRATE_GROUP} namespace={data.metadata?.namespace || ''} onNavigate={onNavigate} />.
+            {' '}Substrate places actors on this Pod in turn, so its logs, metrics and restarts are shared by every actor it has hosted.
+          </>}
+        />
       )}
 
       {onEvaluateCapacity && (

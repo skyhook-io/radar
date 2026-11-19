@@ -98,3 +98,60 @@ status:
   phase: FailedValidation
   validationErrors:
     - stale error retained while paused
+---
+# Held behind a run Velero never started. The controller skips a due run while
+# a run of the same schedule is New or InProgress; this one stays New (nothing
+# processes it with the controller at 0), so every hourly run is skipped. The
+# Velero views read it as held, and as needing attention once the backup has
+# been New for ten minutes. A run that started and runs long is the stalled-run
+# Issue's, not this one's.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: sched-held
+  namespace: velero
+spec:
+  schedule: "0 * * * *"
+  template:
+    includedNamespaces:
+      - "*"
+    storageLocation: default
+    ttl: 720h0m0s
+status:
+  lastBackup: "@now-90m"
+  phase: Enabled
+---
+# The run holding sched-held. No spec.storageLocation: Velero writes it when it
+# first processes a backup, so an unprocessed one has none, and the location
+# views count it as "not yet assigned" rather than against today's default.
+apiVersion: velero.io/v1
+kind: Backup
+metadata:
+  name: sched-held-unstarted
+  namespace: velero
+  labels:
+    velero.io/schedule-name: sched-held
+spec:
+  includedNamespaces:
+    - "*"
+status:
+  phase: New
+---
+# 64 characters, one over Kubernetes' label limit. Velero writes the schedule
+# name unshortened into each backup's velero.io/schedule-name label, so it can
+# never create a backup for this schedule. It validates fine (Velero checks only
+# the cron), which is why only the Velero views can say it will never run.
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: sched-name-exceeds-the-sixty-three-character-label-limit-by-one1
+  namespace: velero
+spec:
+  schedule: "0 * * * *"
+  template:
+    includedNamespaces:
+      - "*"
+    storageLocation: default
+    ttl: 720h0m0s
+status:
+  phase: Enabled

@@ -13,11 +13,14 @@ import { RadarUpgradeNote, radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 
-function argoAutoSyncControllerNote(controller: ArgoActionHandlers['autoSyncController']): string {
+function argoAutoSyncControllerNote(controller: ArgoActionHandlers['autoSyncController'], enabling = false): string {
   if (!controller) return ''
-  return controller.kind === 'ApplicationSet'
-    ? ` ApplicationSet ${controller.name} can turn it back on; to keep it off, change the ApplicationSet's template.`
-    : ` Application ${controller.name} manages this one from Git and can turn it back on when it syncs; to keep it off, change it in Git.`
+  if (controller.kind === 'ApplicationSet') {
+    return enabling
+      ? ` ApplicationSet ${controller.name} may overwrite this setting. Enabling may apply pending changes immediately and bypass ApplicationSet rollout ordering. Review its template and rollout policy first.`
+      : ` ApplicationSet ${controller.name} may overwrite this setting or control when this Application syncs. Review its template and rollout policy before changing auto-sync.`
+  }
+  return ` Application ${controller.name} manages this one from Git and may overwrite this setting when it syncs. Review its source before changing auto-sync.`
 }
 
 function argoResumeDescription(suspended: boolean, settings: ArgoActionHandlers['resumeSettings']): string {
@@ -407,7 +410,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   {detail.path && <AppFact label="Path" value={detail.path} />}
                   {detail.chart && <AppFact label="Chart" value={detail.chart} />}
                   <AppFact label="Destination" value={detail.destination || '-'} />
-                  {detail.autoSyncMode && <AppFact label="Sync mode" value={detail.autoSyncMode} />}
+                  {detail.autoSyncMode && <AppFact label="Sync mode" value={detail.autoSyncMode === 'Manual' ? 'Auto-sync off' : detail.autoSyncMode} />}
                 </div>
               )}
               {resumeBlockedReason && <p className="mt-2 text-xs text-theme-text-secondary">{resumeBlockedReason}</p>}
@@ -468,7 +471,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   ) : (
                     <ActionButton
                       label="Enable auto-sync"
-                      description={argoResumeDescription(effectiveSuspended, argo.resumeSettings)}
+                      description={argoResumeDescription(effectiveSuspended, argo.resumeSettings) + argoAutoSyncControllerNote(argo.autoSyncController, true)}
                       icon={Play}
                       loading={argo.resuming}
                       onClick={() => !resumeBlockedReason && !resumeUpgrade && argo.onResume()}

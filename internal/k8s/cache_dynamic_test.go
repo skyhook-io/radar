@@ -2,7 +2,9 @@ package k8s
 
 import (
 	"context"
+	"reflect"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -132,6 +134,10 @@ func TestHighChurnDynamicBuiltinsBypassInformer(t *testing.T) {
 			if len(items) != 1 || items[0].GetName() != "sample" {
 				t.Fatalf("ListDynamicWithGroup returned %#v", items)
 			}
+			borrowed, err := cache.ListDynamicReadOnlyWithGroup(context.Background(), tc.kind, tc.namespace, tc.group)
+			if err != nil || !reflect.DeepEqual(items, borrowed) {
+				t.Fatalf("read-only direct list=%v err=%v, want %v", borrowed, err, items)
+			}
 			got, err := cache.GetDynamicWithGroup(context.Background(), tc.kind, tc.namespace, "sample", tc.group)
 			if err != nil {
 				t.Fatalf("GetDynamicWithGroup: %v", err)
@@ -153,5 +159,48 @@ func TestHighChurnDynamicBuiltinsBypassInformer(t *testing.T) {
 				t.Fatalf("%s started %d dynamic informer(s), want direct reads", tc.kind, count)
 			}
 		})
+	}
+}
+
+func TestListDynamicReadOnlyWithGroupStartsControllerRevisionWatch(t *testing.T) {
+	defer ResetTestDynamicState()
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "controllerrevisions"}
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1", "kind": "ControllerRevision",
+		"metadata": map[string]any{"namespace": "prod", "name": "revision", "managedFields": []any{map[string]any{"manager": "controller"}}, "annotations": map[string]any{"kubectl.kubernetes.io/last-applied-configuration": "{}", "keep": "yes"}},
+		"revision": int64(1),
+	}}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "ControllerRevisionList"}, obj)
+	if err := InitTestDynamicResourceCache(client, []APIResource{{Group: "apps", Version: "v1", Kind: "ControllerRevision", Name: "controllerrevisions", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	cache := &ResourceCache{}
+	dynamic := GetDynamicResourceCache()
+	if dynamic.GetInformerCount() != 0 {
+		t.Fatal("watch started before the read")
+	}
+	if _, err := cache.ListDynamicReadOnlyWithGroup(context.Background(), "ControllerRevision", "prod", "apps"); err != nil {
+		t.Fatal(err)
+	}
+	if !dynamic.WaitForSync(gvr, 2*time.Second) {
+		t.Fatal("ControllerRevision watch did not sync")
+	}
+	first, err := cache.ListDynamicReadOnlyWithGroup(context.Background(), "ControllerRevision", "prod", "apps")
+	if err != nil || len(first) != 1 {
+		t.Fatalf("read=%v err=%v", first, err)
+	}
+	second, err := cache.ListDynamicReadOnlyWithGroup(context.Background(), "ControllerRevision", "prod", "apps")
+	if err != nil || len(second) != 1 || first[0] != second[0] {
+		t.Fatal("read-only list did not borrow the cached object")
+	}
+	copied, err := cache.ListDynamicWithGroup(context.Background(), "ControllerRevision", "prod", "apps")
+	if err != nil || len(copied) != 1 || first[0] == copied[0] || !reflect.DeepEqual(first[0], copied[0]) {
+		t.Fatal("copying and read-only lists differ in value or ownership")
+	}
+	if first[0].GetAnnotations()["keep"] != "yes" {
+		t.Fatal("read-only list stripped a retained annotation")
+	}
+	if len(first[0].GetManagedFields()) != 0 || first[0].GetAnnotations()["kubectl.kubernetes.io/last-applied-configuration"] != "" {
+		t.Fatal("borrowed object was not stripped")
 	}
 }

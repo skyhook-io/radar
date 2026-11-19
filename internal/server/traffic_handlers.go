@@ -393,6 +393,10 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	flows := s.visibleFlows(r, resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows), namespaces, opts)
+	s.writeJSON(w, trafficRecordsPayload(response, flows))
+}
+
+func trafficRecordsPayload(response *traffic.FlowsResponse, flows []traffic.Flow) map[string]any {
 	result := map[string]any{
 		"source":                    response.Source,
 		"timestamp":                 response.Timestamp,
@@ -402,7 +406,7 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 	}
 	addFlowsCoverage(result, response)
 	addFlowsWarning(result, response, flows)
-	s.writeJSON(w, result)
+	return result
 }
 
 // handleTrafficFlowsStream provides SSE stream of traffic flows

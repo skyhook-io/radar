@@ -513,7 +513,7 @@ func (c *Client) newConnectedPromClientLocked(httpClient *http.Client) *prom.Cli
 // cache was built from this client's cluster connection, else nil.
 func (c *Client) cachedServiceLister() listerscorev1.ServiceLister {
 	cache := k8s.GetResourceCache()
-	if cache == nil || cache.Client() != c.k8sClient {
+	if cache == nil || cache.Client() != k8s.InformerClientFor(c.k8sClient) {
 		return nil
 	}
 	return cache.Services()
@@ -526,7 +526,7 @@ func (c *Client) cachedServiceLister() listerscorev1.ServiceLister {
 // silently drop candidates.
 func (c *Client) cachedServices() ([]*corev1.Service, bool) {
 	cache := k8s.GetResourceCache()
-	if cache == nil || cache.Client() != c.k8sClient {
+	if cache == nil || cache.Client() != k8s.InformerClientFor(c.k8sClient) {
 		return nil, false
 	}
 	if !cache.IsKindClusterWide(string(k8score.Services)) || !cache.IsKindReady(string(k8score.Services)) {

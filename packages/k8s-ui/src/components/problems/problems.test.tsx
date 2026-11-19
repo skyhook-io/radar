@@ -55,7 +55,6 @@ it('preserves alert and unknown tones in callouts and compact lists', () => {
     const callout = renderToStaticMarkup(<WorkspaceProblemCallout problem={p} rootKind="Cluster" />)
     expect(callout).toContain(`status-${tone}`)
     const list = renderToStaticMarkup(<ProblemList problems={[p]} rootKind="Cluster" />)
-    expect(list).toContain(tone === 'alert' ? 'bg-orange-500' : 'bg-slate-400')
     expect(list).toContain(tone === 'alert' ? 'text-orange-600' : 'text-theme-text-tertiary')
   }
   type HealthyProblem = Omit<ReturnType<typeof details>, 'tone'> & { source: 'issue'; tone: 'healthy' }

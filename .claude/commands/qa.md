@@ -31,6 +31,7 @@ once. `make build` is for running the binary (visual or live checks), not for
 verification rounds.
 
 **Keep it fast in practice:**
+- For selected frontend tests, run `npx vitest run <exact test paths>` from `web/`. Do not use `npm test -- <paths>`: the script already includes `src`, which selects the broader suite.
 - Batch fixes, then run the fast tier once for the batch, not after each edit.
 - Don't run suites while other heavy work (builds, other test runs, agents)
   runs on the machine: it slows everything and creates false failures.

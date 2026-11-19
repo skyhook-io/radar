@@ -285,13 +285,21 @@ const (
 	WarningCluster = "cluster"
 )
 
+type ProtocolBytes struct {
+	BytesSent int64 `json:"bytesSent"`
+	BytesRecv int64 `json:"bytesRecv"`
+}
+
 // AggregatedFlow represents flows aggregated by service pair.
 type AggregatedFlow struct {
-	Source      Endpoint  `json:"source"`
-	Destination Endpoint  `json:"destination"`
-	Protocol    string    `json:"protocol"`
-	Port        int       `json:"port"`
-	FlowCount   int64     `json:"flowCount"`
+	Source          Endpoint                 `json:"source"`
+	Destination     Endpoint                 `json:"destination"`
+	Protocol        string                   `json:"protocol"`
+	Port            int                      `json:"port"`
+	FlowCount       int64                    `json:"flowCount"`
+	BytesByProtocol map[string]ProtocolBytes `json:"bytesByProtocol,omitempty"`
+	// BytesSent and BytesRecv are the cross-protocol sums kept for compatibility.
+	// Display BytesByProtocol instead when more than one protocol is present.
 	BytesSent   int64     `json:"bytesSent"`
 	BytesRecv   int64     `json:"bytesRecv"`
 	Connections int64     `json:"connections"`

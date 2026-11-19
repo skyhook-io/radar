@@ -19,7 +19,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
-	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 type summaryAccess struct {
@@ -59,12 +58,21 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 		map[string]any{"group": "apps", "kind": "Deployment", "namespace": "shop", "name": "standalone"},
 		map[string]any{"kind": "Pod", "namespace": "shop", "name": "managed-gap"},
 	}, "status", "resources")
+	appSet := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet", "metadata": map[string]any{"namespace": "argocd", "name": "apps", "uid": "uid-appset"}}}
+	child := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{
+		"namespace": "argocd", "name": "child", "uid": "uid-child",
+		"ownerReferences": []any{map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet", "name": "apps", "uid": "uid-appset", "controller": true}},
+	},
+		"spec":   map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "argocd"}},
+		"status": map[string]any{"reconciledAt": "now", "resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "argocd", "name": "under-app"}}},
+	}}
+	underApp := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "under-app", UID: "uid-under-app", OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Application", Name: "child", UID: "uid-child", Controller: &yes}}}}
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "tls", UID: "uid-tls"}}
 	sealed := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "sealed", UID: "uid-sealed"}}
 	unmanaged := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "unmanaged", UID: "uid-unmanaged"}}
 	cert := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "cert-manager.io/v1", "kind": "Certificate", "metadata": map[string]any{"namespace": "shop", "name": "tls", "uid": "uid-cert"}, "spec": map[string]any{"secretName": "tls"}}}
 	sealedSpec := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "bitnami.com/v1alpha1", "kind": "SealedSecret", "metadata": map[string]any{"namespace": "shop", "name": "sealed", "uid": "uid-sealed-spec"}}}
-	if err := k8s.InitTestResourceCache(fake.NewClientset(deployment, pod, standalone, missing, managedGap, secret, sealed, unmanaged)); err != nil {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(deployment, pod, standalone, missing, managedGap, secret, sealed, unmanaged, underApp)); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetResourceCache)
@@ -72,16 +80,17 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 	appGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 	certGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "certificates"}
 	sealedGVR := schema.GroupVersionResource{Group: "bitnami.com", Version: "v1alpha1", Resource: "sealedsecrets"}
-	dynamic := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{widgetGVR: "WidgetList", appGVR: "ApplicationList", certGVR: "CertificateList", sealedGVR: "SealedSecretList"}, cr, app, cert, sealedSpec)
+	appSetGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"}
+	dynamic := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{widgetGVR: "WidgetList", appGVR: "ApplicationList", certGVR: "CertificateList", sealedGVR: "SealedSecretList", appSetGVR: "ApplicationSetList"}, cr, app, cert, sealedSpec, appSet, child)
 	var resources []k8s.APIResource
-	for _, r := range []struct{ group, version, kind, name string }{{"", "v1", "Pod", "pods"}, {"apps", "v1", "Deployment", "deployments"}, {"example.io", "v1", "Widget", "widgets"}, {"argoproj.io", "v1alpha1", "Application", "applications"}, {"cert-manager.io", "v1", "Certificate", "certificates"}, {"bitnami.com", "v1alpha1", "SealedSecret", "sealedsecrets"}, {"", "v1", "Secret", "secrets"}, {"", "v1", "ConfigMap", "configmaps"}} {
+	for _, r := range []struct{ group, version, kind, name string }{{"", "v1", "Pod", "pods"}, {"apps", "v1", "Deployment", "deployments"}, {"example.io", "v1", "Widget", "widgets"}, {"argoproj.io", "v1alpha1", "Application", "applications"}, {"argoproj.io", "v1alpha1", "ApplicationSet", "applicationsets"}, {"cert-manager.io", "v1", "Certificate", "certificates"}, {"bitnami.com", "v1alpha1", "SealedSecret", "sealedsecrets"}, {"", "v1", "Secret", "secrets"}, {"", "v1", "ConfigMap", "configmaps"}} {
 		resources = append(resources, k8s.APIResource{Group: r.group, Version: r.version, Kind: r.kind, Name: r.name, Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch", "delete"}})
 	}
 	if err := k8s.InitTestDynamicResourceCache(dynamic, resources); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
-	for _, gvr := range []schema.GroupVersionResource{widgetGVR, appGVR, certGVR, sealedGVR} {
+	for _, gvr := range []schema.GroupVersionResource{widgetGVR, appGVR, certGVR, sealedGVR, appSetGVR} {
 		cache := k8s.GetDynamicResourceCache()
 		if err := cache.EnsureWatching(gvr); err != nil {
 			t.Fatal(err)
@@ -97,61 +106,30 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 		access ownership.Access
 		want   string
 		note   resourcecontext.OmittedReason
-		graph  bool
 	}{
-		{"excluded Event", &corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "event", UID: "uid-event"}}, "Event", ownership.Unrestricted(), "", "", false},
-		{"operator beats copied labels", pod, "Pod", ownership.Unrestricted(), "Widget", "", false},
-		{"denied top", pod, "Pod", summaryAccess{ownership.Unrestricted(), resourceid.GroupKind{Group: "example.io", Kind: "Widget"}}, "Deployment", resourcecontext.OmittedRBACDenied, false},
-		{"recorded without metadata", standalone, "Deployment", ownership.Unrestricted(), "Application", "", true},
-		{"budget during graph", standalone, "Deployment", ownership.Unrestricted(), "Application", resourcecontext.OmittedBudgetExceeded, true},
-		{"recorded without graph", standalone, "Deployment", ownership.Unrestricted(), "Application", resourcecontext.OmittedUnavailable, true},
-		{"unserved owner", missing, "Pod", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable, false},
-		{"GitOps lead beside unknown owner", managedGap, "Pod", ownership.Unrestricted(), "Application", resourcecontext.OmittedUnavailable, false},
-		{"certificate spec", secret, "Secret", ownership.Unrestricted(), "Certificate", "", true},
-		{"sealed secret spec", sealed, "Secret", ownership.Unrestricted(), "SealedSecret", "", true},
-		{"no graph or manager", unmanaged, "ConfigMap", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable, true},
-		{"GitOps edge is not a fallback", unmanaged, "ConfigMap", ownership.Unrestricted(), "", "", true},
+		{"excluded Event", &corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "event", UID: "uid-event"}}, "Event", ownership.Unrestricted(), "", ""},
+		{"operator beats copied labels", pod, "Pod", ownership.Unrestricted(), "Widget", ""},
+		{"denied top", pod, "Pod", summaryAccess{ownership.Unrestricted(), resourceid.GroupKind{Group: "example.io", Kind: "Widget"}}, "Deployment", resourcecontext.OmittedRBACDenied},
+		{"recorded without metadata", standalone, "Deployment", ownership.Unrestricted(), "Application", ""},
+		{"first GitOps manager, not its ApplicationSet", underApp, "Deployment", ownership.Unrestricted(), "Application", ""},
+		{"unserved owner", missing, "Pod", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable},
+		{"GitOps lead beside unknown owner", managedGap, "Pod", ownership.Unrestricted(), "Application", resourcecontext.OmittedUnavailable},
+		{"certificate spec", secret, "Secret", ownership.Unrestricted(), "Certificate", ""},
+		{"sealed secret spec", sealed, "Secret", ownership.Unrestricted(), "SealedSecret", ""},
+		{"no spec generator or manager", unmanaged, "ConfigMap", ownership.Unrestricted(), "", ""},
+		{"denied certificate spec", secret, "Secret", summaryAccess{ownership.Unrestricted(), resourceid.GroupKind{Group: "cert-manager.io", Kind: "Certificate"}}, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			loaded := false
-			graph := func() IndexedTopology {
-				loaded = true
-				if tc.name == "budget during graph" {
-					cancel()
-					return IndexedTopology{}
-				}
-				if tc.name == "recorded without graph" || tc.name == "no graph or manager" {
-					return IndexedTopology{}
-				}
-				nodes := []topology.Node{
-					{ID: "deployment/shop/standalone", Kind: topology.KindDeployment, Name: "standalone", Data: map[string]any{"namespace": "shop", "apiVersion": "apps/v1"}},
-					{ID: "secret/shop/tls", Kind: topology.KindSecret, Name: "tls", Data: map[string]any{"namespace": "shop"}},
-					{ID: "secret/shop/sealed", Kind: topology.KindSecret, Name: "sealed", Data: map[string]any{"namespace": "shop"}},
-					{ID: "configmap/shop/unmanaged", Kind: topology.KindConfigMap, Name: "unmanaged", Data: map[string]any{"namespace": "shop"}},
-					{ID: "certificate/shop/tls", Kind: topology.KindCertificate, Name: "tls", Data: map[string]any{"namespace": "shop", "apiVersion": "cert-manager.io/v1"}},
-					{ID: "sealedsecret/shop/sealed", Kind: topology.KindSealedSecret, Name: "sealed", Data: map[string]any{"namespace": "shop", "apiVersion": "bitnami.com/v1alpha1"}},
-					{ID: "application/argocd/web", Kind: topology.KindApplication, Name: "web", Data: map[string]any{"namespace": "argocd", "apiVersion": "argoproj.io/v1alpha1"}},
-				}
-				value := &topology.Topology{Nodes: nodes, Edges: []topology.Edge{
-					{Source: "certificate/shop/tls", Target: "secret/shop/tls", Type: topology.EdgeManages},
-					{Source: "sealedsecret/shop/sealed", Target: "secret/shop/sealed", Type: topology.EdgeManages},
-					{Source: "application/argocd/web", Target: "configmap/shop/unmanaged", Type: topology.EdgeManages},
-				}}
-				return IndexedTopology{Topology: value, Index: topology.IndexByResource(value)}
-			}
 			owners := k8s.NewAgentOwnership(func(*ownership.Catalog) ownership.Access { return tc.access })
-			build := BuilderFromIndexes(ctx, graph, nil, nil, nil, owners)
+			build := BuilderFromIndexes(ctx, nil, nil, nil, owners)
 			meta := tc.obj.(metav1.Object)
 			group := ""
 			if tc.kind == "Deployment" {
 				group = "apps"
 			}
 			got := build(tc.obj, nil, group, tc.kind, meta.GetNamespace(), meta.GetName())
-			if loaded != tc.graph {
-				t.Fatalf("loaded graph=%v, want %v", loaded, tc.graph)
-			}
 			if got == nil {
 				if tc.want == "" && tc.note == "" {
 					return
@@ -165,9 +143,6 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 			} else if got.ManagedBy == nil || got.ManagedBy.Kind != tc.want {
 				t.Fatalf("pointer %+v, want %s", got.ManagedBy, tc.want)
 			}
-			if loaded != tc.graph {
-				t.Fatalf("loaded graph=%v, want %v", loaded, tc.graph)
-			}
 			if tc.note == "" {
 				if len(got.Omitted) != 0 {
 					t.Fatalf("unexpected omissions %+v", got.Omitted)
@@ -177,4 +152,22 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 			}
 		})
 	}
+	// One caller's residual lookup outliving its deadline doesn't keep
+	// another caller from its own.
+	t.Run("another caller's lookup still running", func(t *testing.T) {
+		release := make(chan struct{})
+		defer close(release)
+		stuck, stopStuck := context.WithCancel(context.Background())
+		started := make(chan struct{})
+		go WithinContext(stuck, specGeneratorGate, func() bool { close(started); <-release; return true })
+		<-started
+		stopStuck()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		owners := k8s.NewAgentOwnership(func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
+		got := BuilderFromIndexes(ctx, nil, nil, nil, owners)(secret, nil, "", "Secret", "shop", "tls")
+		if got == nil || got.ManagedBy == nil || got.ManagedBy.Kind != "Certificate" || len(got.Omitted) != 0 {
+			t.Fatalf("waited on another caller's lookup: %+v", got)
+		}
+	})
 }
