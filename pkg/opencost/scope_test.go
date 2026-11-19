@@ -106,6 +106,30 @@ func sortedCopy(in ...[]string) []string {
 
 // The metric lists the scope checks are built from must be exactly what each
 // path's queries read, fallbacks included.
+// A configured label value may hold any character; a % in one must reach
+// the store as written, never be read as a formatting verb.
+func TestScopedCostQueriesKeepPercentInLabelValues(t *testing.T) {
+	filter := func(metric string) string { return `cluster="prod%eu",radar_m="` + metric + `"` }
+	byCase := queriesByCase(t, &StoreScope{Filter: filter})
+	if len(byCase) == 0 {
+		t.Fatal("no queries")
+	}
+	for name, queries := range byCase {
+		for _, q := range queries {
+			if strings.Contains(q, "%!") || strings.Contains(q, "%%") {
+				t.Errorf("%s: formatting corrupted the query: %s", name, q)
+			}
+			for metric, sels := range costSelectors(q) {
+				for _, s := range sels {
+					if s != filter(metric) && !strings.HasSuffix(s, ","+filter(metric)) {
+						t.Errorf("%s: %s selector {%s} lacks its filter in %s", name, metric, s, q)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestCostMetricListsMatchQueries(t *testing.T) {
 	byCase := queriesByCase(t, nil)
 	join := func(names ...string) []string {

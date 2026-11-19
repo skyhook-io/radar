@@ -131,12 +131,13 @@ func workloadPodCostExpr(f prom.ClusterFilter, namespace string, fallback bool) 
 	return fmt.Sprintf(`sum by (namespace, pod) (
   (label_replace((sum_over_time(%s[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)")
     or (sum_over_time(%s[1h:1m]) / 60))
-  * on(node) group_left() `+nodeCPUHourlyCostExpr(f)+`
+  * on(node) group_left() %s
 ) + sum by (namespace, pod) (
   (label_replace((sum_over_time(%s[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)")
     or (sum_over_time(%s[1h:1m]) / 60))
-  / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr(f)+`
-)`, sel(f, MetricCPUAllocation, exported), sel(f, MetricCPUAllocation, own), sel(f, MetricMemoryAllocation, exported), sel(f, MetricMemoryAllocation, own))
+  / 1073741824 * on(node) group_left() %s
+)`, sel(f, MetricCPUAllocation, exported), sel(f, MetricCPUAllocation, own), nodeCPUHourlyCostExpr(f),
+		sel(f, MetricMemoryAllocation, exported), sel(f, MetricMemoryAllocation, own), nodeRAMHourlyCostExpr(f))
 }
 
 func mergeCostSeries(series []prom.Series) []CostDataPoint {
