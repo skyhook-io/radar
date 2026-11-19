@@ -197,6 +197,7 @@ export interface FeatureCapabilities {
   veleroRuns?: boolean
   /** POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion */
   veleroDeleteBackup?: boolean
+  veleroRunArtifacts?: boolean
   /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
   resourceDeletePreconditions?: boolean
   gitopsWriteEvidence?: boolean
