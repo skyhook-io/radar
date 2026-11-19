@@ -272,3 +272,38 @@ func TestApplicationsLongNonControllerChainReachesTop(t *testing.T) {
 		t.Fatalf("root = %v, want the chain's top %v", got, want)
 	}
 }
+
+// A GitOps manager ends the climb wherever it sits on a workload's controller
+// chain: a Deployment an Application controls belongs to that Application,
+// not to the ApplicationSet controlling it, so two Applications of one set
+// stay two apps.
+func TestStructuralRootStopsAtAManagerOnTheControllerChain(t *testing.T) {
+	set := appTestObject("argoproj.io", "ApplicationSet", "shop", "shop")
+	prod := appTestObject("argoproj.io", "Application", "shop", "shop-prod")
+	dev := appTestObject("argoproj.io", "Application", "shop", "shop-dev")
+	api := appTestObject("apps", "Deployment", "shop", "api")
+	worker := appTestObject("apps", "Deployment", "shop", "worker")
+	prod.OwnerReferences = append(prod.OwnerReferences, set.OwnerRef(true))
+	dev.OwnerReferences = append(dev.OwnerReferences, set.OwnerRef(true))
+	api.OwnerReferences = append(api.OwnerReferences, prod.OwnerRef(true))
+	worker.OwnerReferences = append(worker.OwnerReferences, dev.OwnerRef(true))
+	session := appManagerSession(t, set, prod, dev, api, worker)
+	inventory := &applicationInventory{session: session.(relations.Session), owners: ownership.NewView(session, ownership.Unrestricted())}
+	var inputs []appWorkloadInput
+	for _, tc := range []struct {
+		workload ownershiptest.Object
+		want     string
+	}{{api, "shop/Application/shop-prod"}, {worker, "shop/Application/shop-dev"}} {
+		ref := tc.workload.Ref
+		root, kind, group, identity := inventory.rootOf(ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		if root != tc.want {
+			t.Errorf("%s root = %s, want %s", ref.Name, root, tc.want)
+		}
+		in := rawInput(ref.Kind, ref.Namespace, ref.Name, "v1", "healthy")
+		in.rootKey, in.rootKind, in.rootGroup, in.rootIdentity = root, kind, group, identity
+		inputs = append(inputs, in)
+	}
+	if rows := groupApplications(inputs); len(rows) != 2 {
+		t.Fatalf("Applications of one set grouped as %d apps, want 2: %+v", len(rows), rows)
+	}
+}
