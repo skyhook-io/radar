@@ -23,7 +23,7 @@ func stubScope(t *testing.T, fn func(metric string) (string, promclient.SeriesIs
 	calls := 0
 	var mu sync.Mutex
 	prev := resolveTrafficScope
-	resolveTrafficScope = func(_ context.Context, metric, _ string) (string, promclient.SeriesIsolation, error) {
+	resolveTrafficScope = func(_ context.Context, metric, _ string, _ time.Duration) (string, promclient.SeriesIsolation, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
@@ -37,7 +37,7 @@ func stubScope(t *testing.T, fn func(metric string) (string, promclient.SeriesIs
 func stubSpans(t *testing.T, spans bool, err error) {
 	t.Helper()
 	prev := trafficSpansClusters
-	trafficSpansClusters = func(context.Context, string, string) (bool, error) { return spans, err }
+	trafficSpansClusters = func(context.Context, string, string, time.Duration) (bool, error) { return spans, err }
 	t.Cleanup(func() { trafficSpansClusters = prev })
 }
 

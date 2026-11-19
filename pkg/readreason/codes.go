@@ -79,6 +79,11 @@ const (
 
 	// ObjectNotFound: the object is absent from a scope Radar read in full.
 	ObjectNotFound Code = "object_not_found"
+	// LegacyGroupOnly: the object a reference names exists only in an older
+	// API group, while the group its controller reads first is served and
+	// lacks it. A controller that still reads the older group uses it; one
+	// that no longer does, such as Traefik 3 for traefik.containo.us, doesn't.
+	LegacyGroupOnly Code = "legacy_group_only"
 	// ListTooLarge: the list is over the request's size budget.
 	ListTooLarge Code = "list_too_large"
 	// FilterEvalFailed: a search filter could not be evaluated on objects
@@ -146,6 +151,7 @@ var actions = map[Code]Action{
 	NamespaceNotFound:          ActionChangeRequest,
 	NamespaceRequired:          ActionChangeRequest,
 	ObjectNotFound:             ActionNone,
+	LegacyGroupOnly:            ActionNone,
 	ListTooLarge:               ActionChangeRequest,
 	FilterEvalFailed:           ActionChangeRequest,
 	FindingsScanIncomplete:     ActionChangeRequest,
@@ -205,7 +211,7 @@ var precedence = []Code{
 	OutsideNamespacePin,
 	RadarCredentialsRejected, RadarForbidden, RadarKindNotCollected,
 	KindSyncTimedOut, RadarNamespaceNotCollected, FilterEvalFailed, FindingsScanIncomplete, ReadError,
-	ObjectNotFound,
+	LegacyGroupOnly, ObjectNotFound,
 }
 
 // Primary returns the code an error reports when several codes apply, such

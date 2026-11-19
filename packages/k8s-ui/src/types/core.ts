@@ -154,6 +154,9 @@ export interface Capabilities {
   // Which Cloud-connect lane this deployment gets. Optional on the wire:
   // older backends don't advertise it — consumers fall back to wizard links.
   cloudConnect?: CloudConnectCapability
+  // An access check errored, so a false above may be unanswered rather than
+  // denied. Older Radars never send it.
+  checksIncomplete?: boolean
 }
 
 // CloudConnectCapability picks the Cloud funnel's connect lane: 'driver'
@@ -179,6 +182,7 @@ export interface FeatureCapabilities {
   yamlSchemas?: boolean
   workloadImages?: boolean
   deploymentPause?: boolean
+  substrateHealthMetrics?: boolean
   resourceIssues?: boolean
   resourceIssueCoverage?: boolean
   podEnvironment?: boolean
@@ -186,6 +190,13 @@ export interface FeatureCapabilities {
   workloadHistory?: boolean
   cnpgWorkspace?: boolean
   cnpgProtectionSetup?: boolean
+  veleroWorkspace?: boolean
+  /** POST /api/velero/schedules/{namespace}/{name}/backup */
+  veleroBackupNow?: boolean
+  /** GET /api/velero/runs/{backups|restores} */
+  veleroRuns?: boolean
+  /** POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion */
+  veleroDeleteBackup?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
@@ -202,6 +213,7 @@ export interface FeatureCapabilities {
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
+  vulnerabilities?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -669,6 +681,13 @@ export interface ResourceRef {
   namespace: string
   name: string
   group?: string  // API group for CRDs (e.g., 'cert-manager.io')
+  /**
+   * Set when the subject's own spec names this object but the viewer may not
+   * read it ('denied'), or Radar couldn't check ('unverified'). Only the name
+   * is known: not whether it exists, nor its state. Absent means no qualifier
+   * was recorded, not that the object exists.
+   */
+  state?: 'denied' | 'unverified'
 }
 
 // Computed relationships for a resource
@@ -1693,6 +1712,8 @@ export interface AggregatedFlow {
   protocol: string
   port: number
   flowCount: number
+  bytesByProtocol?: Record<string, { bytesSent: number; bytesRecv: number }>
+  /** Cross-protocol sums kept for compatibility; display the breakdown when present. */
   bytesSent: number
   bytesRecv: number
   connections: number

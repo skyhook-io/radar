@@ -7,6 +7,7 @@ import { DialogPortal, assetUrl } from '@skyhook-io/k8s-ui'
 import { useVersionCheck } from '../api/client'
 import { openExternal } from '../utils/navigation'
 import { hasDesktopMenu, runDesktopMenuItem } from './WindowsTitleBar'
+import { COMMUNITY_SLACK_URL } from '../components/community'
 
 export type AboutInfo = { version: string; platform: string }
 
@@ -14,6 +15,7 @@ const LINKS = [
   { label: 'Website', url: 'https://radarhq.io' },
   { label: 'Documentation', url: 'https://radarhq.io/docs' },
   { label: 'GitHub', url: 'https://github.com/skyhook-io/radar' },
+  { label: 'Slack', url: COMMUNITY_SLACK_URL },
 ]
 
 const CHANNEL_LABEL: Record<string, string> = {

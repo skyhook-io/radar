@@ -1,4 +1,5 @@
 export { Tooltip, WithTooltip } from './Tooltip'
+export { TruncatedText } from './TruncatedText'
 export { CronValue, TimeValue } from './ScheduleValue'
 export type { CronDialect } from './ScheduleValue'
 export { Badge } from './Badge'

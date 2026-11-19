@@ -6,6 +6,7 @@ import { openExternal } from './utils/navigation'
 import { installWailsClipboardShim } from './utils/wails-clipboard'
 import { installWindowsTitleBar } from './desktop/WindowsTitleBar'
 import { installDesktopZoomShortcuts } from './utils/desktop-zoom'
+import { installStaleAssetPrompt } from './utils/staleAssetPrompt'
 import './index.css'
 
 // Automatic requests can beat the usage status to the server, and a recording
@@ -30,6 +31,9 @@ window.addEventListener('click', (e: MouseEvent) => {
 installWailsClipboardShim()
 installWindowsTitleBar()
 installDesktopZoomShortcuts()
+// Embedding hosts serve their own assets and own their notices, so the prompt
+// lives here rather than in RadarApp.
+installStaleAssetPrompt()
 
 // Mouse back/forward button navigation (button 3 = back, button 4 = forward).
 // Uses 'mouseup' in capture phase to intercept before the browser's native handler.

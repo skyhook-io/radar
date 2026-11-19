@@ -3,9 +3,13 @@ import { FLUX_OPERATOR_GROUP, FLUX_OPERATOR_PLURALS, getFluxOperatorStatus } fro
 import { getStrimziConnectorStatus, getStrimziClusterStatus, isStrimziKafka, isStrimziKafkaNodePool } from '../resources/resource-utils-strimzi'
 import { StrimziConnectorRenderer } from '../resources/renderers/StrimziConnectorRenderer'
 import { StrimziKafkaRenderer, StrimziKafkaNodePoolRenderer } from '../resources/renderers/StrimziKafkaRenderer'
+import { getVolumeSnapshotStatus, isVolumeSnapshot, isVolumeSnapshotContent, isVolumeSnapshotClass } from '../resources/resource-utils-volumesnapshot'
+import { VolumeSnapshotRenderer, VolumeSnapshotContentRenderer, VolumeSnapshotClassRenderer } from '../resources/renderers/VolumeSnapshotRenderers'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
 import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
+import { UpgradePlanRenderer } from '../resources/renderers/UpgradePlanRenderer'
+import { UPGRADE_PLAN_GROUP, getUpgradePlanStatus } from '../resources/resource-utils-upgrade-plan'
 import { SecretProviderClassRenderer, type SecretProviderClassRendererProps } from '../resources/renderers/SecretsStoreRenderers'
 import { SECRETS_STORE_GROUP } from '../resources/resource-utils-secrets-store'
 import { getFlaggerCanaryStatus } from '../resources/resource-utils-flagger'
@@ -89,6 +93,7 @@ import { getInferencePoolStatus, getInferenceObjectiveStatus } from '../resource
 import { getVolcanoJobStatus, getVolcanoQueueStatus, getVolcanoPodGroupStatus, getJobFlowStatus, getJobTemplateStatus } from '../resources/resource-utils-volcano'
 import { getKaiQueueStatus, getKaiPodGroupStatus } from '../resources/resource-utils-kai'
 import { getKaitoWorkspaceStatus, getRAGEngineStatus } from '../resources/resource-utils-kaito'
+import { getSandboxClaimStatus, getSandboxStatus, getSandboxWarmPoolStatus, getWorkerPoolStatus, isAgentSandboxExtensionResource, isAgentSandboxResource, isSubstrateResource } from '../resources/resource-utils-agent-runtimes'
 import { getNIMServiceStatus, getNIMCacheStatus, getNIMPipelineStatus } from '../resources/resource-utils-nim'
 import { getAMDDeviceConfigStatus } from '../resources/resource-utils-amd-gpu'
 import { getPyTorchJobStatus, getTFJobStatus, getMPIJobStatus, getTrainJobStatus } from '../resources/resource-utils-kubeflow-training'
@@ -403,6 +408,11 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  /** Host-injected: feeds Nodes to the Plan drawer's per-node progress. */
+  UpgradePlanRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   /** Host-injected: adds the Pods that mount this class and their mount state. */
   SecretProviderClassRenderer?: React.ComponentType<Pick<SecretProviderClassRendererProps, 'data' | 'onNavigate'>>
   /** Host-injected: adds the Backups-stored-here lookup to a storage location. */
@@ -416,6 +426,8 @@ export interface RendererOverrides {
   /** Host-injected: adds the on-demand fetch for the messages behind a
    *  restore's error and warning counts. */
   VeleroRestoreRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  /** Host-injected: adds the schedule's reading and recent runs from the Velero workspace endpoint. */
+  VeleroScheduleRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   // Kyverno policy coverage: the host fetches /api/policy/policies/... and
   // renders the section, which the policy renderers accept as a slot. One
   // override serves all six policy renderers — they differ in what the policy
@@ -494,8 +506,10 @@ export interface RendererOverrides {
 const KNOWN_KINDS = new Set([
   'customresourcedefinitions',
   'kafkaconnectors', 'kafkas', 'kafkanodepools',
+  'volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses',
   'opentelemetrycollectors', 'instrumentations',
   'canaries', 'metrictemplates',
+  'plans',
   'secretproviderclasses',
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
@@ -766,8 +780,10 @@ export function ResourceRendererDispatch({
   const isGroupGatedKind =
     kind === 'customresourcedefinitions' ||
     kind === 'kafkaconnectors' || kind === 'kafkas' || kind === 'kafkanodepools' ||
+    ['volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses'].includes(kind) ||
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
+    kind === 'plans' ||
     kind === 'secretproviderclasses' ||
     isFluxKind || kind === 'applications' || kind === 'services' || kind === 'ingresses' || kind === 'certificates' || kind === 'gateways'
     || kind === 'httproutes' || kind === 'grpcroutes'
@@ -786,8 +802,12 @@ export function ResourceRendererDispatch({
     (kind === 'kafkaconnectors' && isApiGroup(data?.apiVersion, 'kafka.strimzi.io')) ||
     (kind === 'kafkas' && isStrimziKafka(data)) ||
     (kind === 'kafkanodepools' && isStrimziKafkaNodePool(data)) ||
+    (kind === 'volumesnapshots' && isVolumeSnapshot(data)) ||
+    (kind === 'volumesnapshotcontents' && isVolumeSnapshotContent(data)) ||
+    (kind === 'volumesnapshotclasses' && isVolumeSnapshotClass(data)) ||
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
+    (kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP)) ||
     (kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP)) ||
     (isFluxKind && isFluxResource)
     || (kind === 'applications' && isApiGroup(data?.apiVersion, 'argoproj.io'))
@@ -869,8 +889,10 @@ export function ResourceRendererDispatch({
   const CNPGObjectStoreComp = rendererOverrides?.CNPGObjectStoreRenderer ?? CNPGObjectStoreRenderer
   const VeleroBSLComp = rendererOverrides?.VeleroBSLRenderer ?? VeleroBSLRenderer
   const SecretProviderClassComp = rendererOverrides?.SecretProviderClassRenderer ?? SecretProviderClassRenderer
+  const UpgradePlanComp = rendererOverrides?.UpgradePlanRenderer ?? UpgradePlanRenderer
   const VeleroBackupComp = rendererOverrides?.VeleroBackupRenderer ?? VeleroBackupRenderer
   const VeleroRestoreComp = rendererOverrides?.VeleroRestoreRenderer ?? VeleroRestoreRenderer
+  const VeleroScheduleComp = rendererOverrides?.VeleroScheduleRenderer ?? VeleroScheduleRenderer
   const KyvernoCoverageComp = rendererOverrides?.KyvernoPolicyCoverage
   const kyvernoCoverage = KyvernoCoverageComp ? (
     <KyvernoCoverageComp data={data} onNavigate={onNavigate} />
@@ -1038,7 +1060,7 @@ export function ResourceRendererDispatch({
         {kind === 'backups' && isApiGroup(data.apiVersion, CNPG_GROUP) && <CNPGBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'backups' && isApiGroup(data.apiVersion, 'velero.io') && <VeleroBackupComp data={data} onNavigate={onNavigate} />}
         {kind === 'restores' && isVeleroResource(data) && <VeleroRestoreComp data={data} onNavigate={onNavigate} />}
-        {kind === 'schedules' && isVeleroResource(data) && <VeleroScheduleRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'schedules' && isVeleroResource(data) && <VeleroScheduleComp data={data} onNavigate={onNavigate} />}
         {kind === 'backupstoragelocations' && isVeleroResource(data) && <VeleroBSLComp data={data} onNavigate={onNavigate} />}
         {kind === 'backuprepositories' && isVeleroResource(data) && <VeleroBackupRepositoryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'volumesnapshotlocations' && isVeleroResource(data) && <VeleroVSLRenderer data={data} />}
@@ -1148,10 +1170,14 @@ export function ResourceRendererDispatch({
         {kind === 'kafkaconnectors' && isApiGroup(data?.apiVersion, 'kafka.strimzi.io') && <StrimziConnectorRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'kafkas' && isStrimziKafka(data) && <StrimziKafkaRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'kafkanodepools' && isStrimziKafkaNodePool(data) && <StrimziKafkaNodePoolRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'volumesnapshots' && isVolumeSnapshot(data) && <VolumeSnapshotRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'volumesnapshotcontents' && isVolumeSnapshotContent(data) && <VolumeSnapshotContentRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'volumesnapshotclasses' && isVolumeSnapshotClass(data) && <VolumeSnapshotClassRenderer data={data} />}
         {kind === 'instrumentations' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <OpenTelemetryInstrumentationRenderer data={data} />}
         {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP) && <SecretProviderClassComp data={data} onNavigate={onNavigate} />}
+        {kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP) && <UpgradePlanComp data={data} onNavigate={onNavigate} />}
 
         {/* Generic renderer for CRDs and unknown resource types — also fires
             for known-plural collisions where no apiVersion-gated renderer
@@ -1216,12 +1242,16 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   }
   if (k === 'kafkaconnectors' && isApiGroup(data.apiVersion, 'kafka.strimzi.io')) return getStrimziConnectorStatus(data)
   if ((k === 'kafkas' && isStrimziKafka(data)) || (k === 'kafkanodepools' && isStrimziKafkaNodePool(data))) return getStrimziClusterStatus(data)
+  if ((k === 'volumesnapshots' && isVolumeSnapshot(data)) || (k === 'volumesnapshotcontents' && isVolumeSnapshotContent(data))) return getVolumeSnapshotStatus(data)
+  // A class is configuration with no status of its own.
+  if (k === 'volumesnapshotclasses' && isVolumeSnapshotClass(data)) return null
 
   if (isApiGroup(data.apiVersion, 'opentelemetry.io')) {
     if (k === 'opentelemetrycollectors') return getOpenTelemetryCollectorStatus(data)
     if (k === 'instrumentations') return getOpenTelemetryInstrumentationStatus(data)
   }
   if (k === 'canaries' && isApiGroup(data.apiVersion, 'flagger.app')) return getFlaggerCanaryStatus(data)
+  if (k === 'plans' && isApiGroup(data.apiVersion, UPGRADE_PLAN_GROUP)) return getUpgradePlanStatus(data)
   // A SecretProviderClass is configuration with no status of its own; mount
   // state belongs to each Pod and is shown in the Pod drawer.
   if (k === 'secretproviderclasses' && isApiGroup(data.apiVersion, SECRETS_STORE_GROUP)) return null
@@ -1260,6 +1290,10 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     if (data?.apiVersion?.startsWith('scheduling.volcano.sh/')) return getVolcanoPodGroupStatus(data)
   }
   if (k === 'workspaces' && data?.apiVersion?.startsWith('kaito.sh/')) return getKaitoWorkspaceStatus(data)
+  if (k === 'workerpools' && isSubstrateResource(data)) return getWorkerPoolStatus(data)
+  if (k === 'sandboxes' && isAgentSandboxResource(data)) return getSandboxStatus(data)
+  if (k === 'sandboxclaims' && isAgentSandboxExtensionResource(data)) return getSandboxClaimStatus(data)
+  if (k === 'sandboxwarmpools' && isAgentSandboxExtensionResource(data)) return getSandboxWarmPoolStatus(data)
   if (k === 'workloads' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getKueueWorkloadStatus(data)
   if (k === 'clusterqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getClusterQueueStatus(data)
   if (k === 'localqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getLocalQueueStatus(data)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -476,7 +477,7 @@ func TestPathStemEnv(t *testing.T) {
 
 type stubLister struct{ items []*unstructured.Unstructured }
 
-func (s *stubLister) ListDynamicWithGroup(_ context.Context, kind, _, group string) ([]*unstructured.Unstructured, error) {
+func (s *stubLister) ListDynamicReadOnlyWithGroup(_ context.Context, kind, _, group string) ([]*unstructured.Unstructured, error) {
 	switch {
 	case kind == "Application" && group == "argoproj.io":
 	case kind == "Kustomization" && group == "kustomize.toolkit.fluxcd.io":
@@ -1033,5 +1034,31 @@ func TestAddFluxKustomizationManagedSourceRefsIgnoresRemoteClusters(t *testing.T
 	addFluxKustomizationManagedSourceRefs(context.Background(), &stubLister{items: []*unstructured.Unstructured{ks}}, got)
 	if len(got) != 0 {
 		t.Fatalf("remote Kustomization claimed local objects: %#v", got)
+	}
+}
+
+func TestApplicationIdentityLeavesBorrowedObjectsUnchanged(t *testing.T) {
+	for _, kind := range []string{"Application", "Kustomization"} {
+		item := argoAppInNamespace("gitops", "api", map[string]any{
+			"path":        "apps/api/overlays/prod",
+			"source":      map[string]any{"path": "apps/api/overlays/prod"},
+			"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "prod"},
+		})
+		item.SetKind(kind)
+		item.Object["status"] = map[string]any{
+			"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "api"}},
+			"inventory": map[string]any{"entries": []any{map[string]any{"id": "prod_api_apps_Deployment", "v": "v1"}}},
+		}
+		before := item.DeepCopy()
+		cache := &stubLister{items: []*unstructured.Unstructured{item}}
+		paths, children, items := argoApplicationFacts(context.Background(), cache)
+		rows := groupApplications([]appWorkloadInput{rawInput("Deployment", "prod", "api", "v1", "healthy")})
+		enrichRowsWithManagedSourceRefs(context.Background(), cache, rows, items)
+		enrichRowsWithArgoStatus(rows, items)
+		collectArgoClaims(items, paths, appSetFanouts(children), nil)
+		fluxKustomizationFacts(context.Background(), cache)
+		if !reflect.DeepEqual(item, before) {
+			t.Fatalf("identity construction mutated %s", kind)
+		}
 	}
 }

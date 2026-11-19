@@ -377,6 +377,8 @@ func restoreHelmNamespaceFallbackState(t *testing.T) {
 		t.Fatalf("creating dummy client: %v", err)
 	}
 	k8s.SetTestClient(dummyClient)
+	// No synced namespace cache to fall back to either.
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 
 	k8s.SetFallbackNamespace("backend-fallback")
 	t.Cleanup(func() { k8s.SetFallbackNamespace("") })
