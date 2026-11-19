@@ -104,8 +104,9 @@ Fixtures, the same in both packages:
 | XL | L with every kind scaled by 10/3 | about 638,000 | about 98,000 |
 
 The graph benchmarks preserve the pre-cutover broadcast relationship path for comparison; production drawer,
-summary and resource-context reads now use caller-scoped families. Display topology, GitOps trees, neighborhoods
-and Applications still build their own graphs.
+summary and resource-context reads now use caller-scoped families. Display topology and the GitOps tree still build
+their own scoped topologies; neighborhoods and Applications read the relation families, and nothing in production
+builds this graph.
 
 What each benchmark reports:
 

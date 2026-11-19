@@ -30,7 +30,7 @@ and scope; it never proves that no external controller or writer exists.
 | Where to inspect a list row or search hit next | `summaryContext.managedBy` | One controller-first lead, with `source` identifying its evidence and `omitted` qualifying incomplete reads. See [selection rules](#the-top-controller). |
 | Source hints for request changes | rightsizing `managedBy: {tool, signal}` | Controller owner, GitOps/Helm metadata, `addonmanager` mode ([rightsizing](mcp.md#managedby--source-hints-for-request-changes)) |
 
-The four `managedBy` fields answer different questions; read `manager` for "which GitOps manager". The Applications view's `sourceRef` is each workload's `View.Manager` lead under the summary rules below, read with Radar's own access because its rows are shared by every caller with the same namespaces. Each response then withholds a GitOps source, with the delivery state read from it, from a caller who can't get that Application, Kustomization or HelmRelease. A row whose workloads don't all lead to one source, without two of them leading to different ones, takes the single Argo CD Application or Flux Kustomization whose list names every workload in it, if there is one.
+The four `managedBy` fields answer different questions; read `manager` for "which GitOps manager". The Applications view's `sourceRef` is each workload's `View.Manager` lead under the summary rules below, read with Radar's own access because its rows are shared by every caller with the same namespaces. Each response then withholds a GitOps source, with the delivery state read from it, from a caller who can't get that Application, Kustomization or HelmRelease. Attachments (Services, Ingresses, routes, config, scalers, storage, PDBs, NetworkPolicies) are found with Radar's own access too and are shared with the row; per caller, only KEDA authentication references are withheld, by an exact `get` check on each. Workload classification reads Radar's own Services: a Deployment, StatefulSet, DaemonSet or Rollout no Service selects reads `unknown`, not `worker`, when Radar couldn't read the Services in its namespace (not collected there, still loading, failed to load), its own kind there (a Deployment listed while Deployments are still loading), or an object a Service's selection needed, or when the workload was created or its spec changed between the attachment pass and the row's own read (that build isn't cached). A row counts such a workload as a service or a worker: its class is the one both readings give, else `unknown`, and its health counts toward the row's. A build that runs out of its time budget, or reads across a context switch, answers 503 and caches nothing, so the caller retries rather than reading partial rows. A row whose workloads don't all lead to one source, without two of them leading to different ones, takes the single Argo CD Application or Flux Kustomization whose list names every workload in it, if there is one.
 
 Topology draws a manages edge from a GitOps manager to what its status records: an Application's `status.resources`, a Kustomization's or HelmRelease's inventory. A HelmRelease that records no inventory draws them by the same origin-label rule the resource tree uses.
 
@@ -203,10 +203,12 @@ provenance and coverage to `pkg/resourcecontext`. Ownership is applied through t
 uses the owner-only path. Summary manager enrichment and workload history attachments also use the family sources.
 The session rejects a replaced cache rather than answering from another connection.
 
-There is no cluster-wide broadcast relationship graph or AI-context graph fallback. Display topology still builds
-SSE frames, `/api/topology` and MCP `get_topology`. The GitOps tree, REST/MCP neighborhoods and Applications retain
-their own scoped graphs. `ForRelationshipCache` remains a build option for those graph consumers and compatibility
-harnesses; it does not enable a shared relationship cache.
+There is no cluster-wide broadcast relationship graph or AI-context graph fallback, and nothing builds the
+relationship graph. Display topology still builds SSE frames, `/api/topology` and MCP `get_topology`. The GitOps tree
+builds its own scoped topology; REST/MCP neighborhoods walk the relation families and use the display builder only to
+present the objects they admitted. Both set `ForRelationshipCache`, which does not enable a shared relationship cache.
+Applications builds no graph: its rows come from ownership and one request-local family batch
+([app grouping](app-grouping.md)).
 
 The drawer characterization pins the family answer. Its [accepted differences](../pkg/topology/testdata/characterization/drawer-relationships.md)
 explain every changed class, including the hand-made Crossplane claim/XR fixture without a backlink. New relations

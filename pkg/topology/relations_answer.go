@@ -467,6 +467,17 @@ func (n *neighborhood) topManager(session relations.Session, ov *ownership.View,
 }
 
 func (n *neighborhood) above(session relations.Session, ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
+	if owner, ok := OwnerAbove(ov, r); ok {
+		return owner, true
+	}
+	return n.nodePool(session, r)
+}
+
+// OwnerAbove returns the highest readable controller ancestor; an object with
+// no controller reference climbs only to a sole owner reference that
+// resolves. Display and application climbs share this choice so
+// non-controller ownership follows the same rule.
+func OwnerAbove(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
 	if top := ChainOf(ov.ControllerChain(r)).Top(); top != nil {
 		if id := refIdentity(*top); id != r {
 			return id, true
@@ -487,7 +498,7 @@ func (n *neighborhood) above(session relations.Session, ov *ownership.View, r re
 	if len(owners) == 1 && owners[0].State == ownership.OwnerFound {
 		return owners[0].Ref, true
 	}
-	return n.nodePool(session, r)
+	return resourceid.Ref{}, false
 }
 
 // ownManagers is what manages an object nothing owns: the controllers that

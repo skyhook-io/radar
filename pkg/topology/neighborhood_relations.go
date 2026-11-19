@@ -718,7 +718,7 @@ func (a *neighborhoodAccess) node(r resourceid.Ref) Node {
 	if r.Group != "" {
 		apiVersion = r.Group + "/" + apiVersion
 	}
-	kind := NodeKind(pseudoKindFor(r.Kind, r.Group))
+	kind := NodeKind(NodeKindForGVK(r.Kind, r.Group))
 	if relations.NodeClasses.IsTarget(r.GroupKind()) {
 		kind = KindNodeClass
 	}
@@ -768,7 +768,7 @@ func neighborhoodRoots(c *ownership.Catalog, root ResourceRef, dp DynamicProvide
 }
 
 func (a *neighborhoodAccess) aliases(r resourceid.Ref) []resourceid.Ref {
-	if !IsCalicoPolicyKind(NodeKind(pseudoKindFor(r.Kind, r.Group))) {
+	if !IsCalicoPolicyKind(NodeKind(NodeKindForGVK(r.Kind, r.Group))) {
 		return nil
 	}
 	var out []resourceid.Ref
