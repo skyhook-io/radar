@@ -10,6 +10,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 func TestStripPolicyEvidenceCopiesSharedData(t *testing.T) {
@@ -142,8 +145,14 @@ func TestWalkNeighborhoodDoesNotExposeInternalCoverageIDs(t *testing.T) {
 // A workload's coverage badge would be computed without a policy the caller
 // may not read, so the walk withholds it.
 func TestWalkNeighborhoodWithholdsUnqualifiedCoverageBadge(t *testing.T) {
+	neighborhoodDisplayPolicyEffect = true
+	t.Cleanup(func() { neighborhoodDisplayPolicyEffect = false })
 	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app", Labels: map[string]string{"app": "web"}}}, "apps", "Deployment")
 	hidden := projectionCR("cilium.io", "CiliumClusterwideNetworkPolicy", "", "hidden", map[string]any{"spec": map[string]any{"endpointSelector": map[string]any{}}})
+	displayed, err := neighborhoodDisplayNodes(map[resourceid.Ref]runtime.Object{projectionRef(dep): dep}, nil, nil)
+	if _, ok := displayed[projectionRef(dep)].Data["policyStatus"]; err != nil || !ok {
+		t.Fatalf("the fixture no longer computes a coverage badge: %+v %v", displayed, err)
+	}
 	sub := walkTestNeighborhood(t, newProjectionSession(t, dep, hidden), dep, NeighborhoodOptions{Allow: func(n *Node) bool { return n.Kind != KindCiliumClusterwideNetworkPolicy }})
 	if len(sub.Nodes) != 1 || sub.Nodes[0].Kind != KindDeployment {
 		t.Fatalf("nodes=%+v", sub.Nodes)

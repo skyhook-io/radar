@@ -19,6 +19,11 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
+// neighborhoodDisplayPolicyEffect is whether the display builder computes
+// policy coverage badges. It never does for the walk; tests turn it on to
+// check the walk withholds a badge computed from the admitted objects alone.
+var neighborhoodDisplayPolicyEffect = false
+
 // The display builder sees only admitted objects. Its edges and synthesized
 // nodes never participate in admission or traversal; the family walk owns both.
 func neighborhoodDisplayNodes(objects map[resourceid.Ref]runtime.Object, provider ResourceProvider, dp DynamicProvider) (map[resourceid.Ref]Node, error) {
@@ -26,6 +31,7 @@ func neighborhoodDisplayNodes(objects map[resourceid.Ref]runtime.Object, provide
 	opts := DefaultBuildOptions()
 	opts.IncludeReplicaSets, opts.IncludeSecrets, opts.ForRelationshipCache = true, true, true
 	opts.MaxIndividualPods = int(^uint(0) >> 1)
+	opts.ShowPolicyEffect = neighborhoodDisplayPolicyEffect
 	var dynamic DynamicProvider
 	if dp != nil {
 		dynamic = newNeighborhoodDisplayDynamic(objects, p.dynamic, dp)
