@@ -148,7 +148,7 @@ func TestApplicationsIncompleteExposureIsNotAWorker(t *testing.T) {
 			t.Fatalf("positive exposure classified %s", got)
 		}
 	}
-	g := &appRelationBatch{exposureIncomplete: true}
+	g := &appRelationBatch{services: appUnread{everywhere: true}}
 	if got := classifyWorkload("Deployment", g.relationshipsForRef("apps", "Deployment", "team", "api")); got != "unknown" {
 		t.Fatalf("incomplete batch classified %s", got)
 	}
