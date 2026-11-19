@@ -138,7 +138,9 @@ func TestProxyAuth_IssueRecentChangesMatchesSingleIssue(t *testing.T) {
 			// The image change four minutes ago is the newest before the
 			// crash loop, which has no first-seen time.
 			{"full", 0, "Deployment/web"},
-			{"no-config", 0, "Deployment/web"},
+			// The caller can't read the ConfigMaps and Secrets, which may hold
+			// a newer change, so the row names nothing.
+			{"no-config", 0, ""},
 			{"full", 1, "Service/cart"},
 			{"no-service", 1, ""},
 			{"full", 2, "ResourceQuota/compute"},

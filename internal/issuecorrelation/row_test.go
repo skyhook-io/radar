@@ -29,6 +29,15 @@ func TestRowChange(t *testing.T) {
 		{"no first seen: the newest in the window", issuesapi.Issue{OnsetUnknown: true, CorrelatedChanges: []issuesapi.RecentChange{
 			at(-20*m, "ConfigMap"), at(40*m, "Deployment"), at(5*m, "Service")}}, "Deployment40m0s", false},
 		{"no changes", issuesapi.Issue{FirstSeen: firstSeen}, "", true},
+		{"a source Radar couldn't read may hold a newer change", issuesapi.Issue{FirstSeen: firstSeen,
+			Correlation:       &issuesapi.ChangeCorrelation{Unknown: &issuesapi.CorrelationUnknown{Reason: issuesapi.CorrelationUnknownReadError}},
+			CorrelatedChanges: []issuesapi.RecentChange{at(-4*m, "Deployment")}}, "", true},
+		{"a source the caller can't read may hold a newer change", issuesapi.Issue{FirstSeen: firstSeen,
+			Correlation:       &issuesapi.ChangeCorrelation{Unknown: &issuesapi.CorrelationUnknown{Reason: issuesapi.CorrelationUnknownUserForbidden}},
+			CorrelatedChanges: []issuesapi.RecentChange{at(-4*m, "Deployment")}}, "", true},
+		{"history missing from before the window can't hold a newer change", issuesapi.Issue{FirstSeen: firstSeen,
+			Correlation:       &issuesapi.ChangeCorrelation{Unknown: &issuesapi.CorrelationUnknown{Reason: issuesapi.CorrelationUnknownHistoryIncomplete}},
+			CorrelatedChanges: []issuesapi.RecentChange{at(-4*m, "Deployment")}}, "Deployment-4m0s", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := RowChange(tc.iss)

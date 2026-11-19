@@ -14,7 +14,17 @@ import (
 // are mixed, the selection holds the window's newest changes, so a change
 // before first seen that is older than those isn't found and the row names
 // nothing.
+//
+// A row names nothing when part of the answer couldn't be read (a source the
+// caller can't list, a failed read, sources Radar couldn't identify or isn't
+// collecting): that part may hold a newer change, and the row has no room to
+// say so. Incomplete history is the exception: what Radar no longer holds or
+// never saw is older than anything it recorded, so the newest recorded change
+// stands.
 func RowChange(iss issuesapi.Issue) (issuesapi.RecentChange, bool) {
+	if iss.Correlation != nil && iss.Correlation.Unknown != nil && iss.Correlation.Unknown.Reason != issuesapi.CorrelationUnknownHistoryIncomplete {
+		return issuesapi.RecentChange{}, false
+	}
 	var pick issuesapi.RecentChange
 	found := false
 	boundary := iss.FirstSeen.Add(anchorSlop)

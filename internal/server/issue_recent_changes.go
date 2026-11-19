@@ -22,7 +22,8 @@ const maxIssueRecentChanges = 50
 type IssueRecentChangesResponse struct {
 	// Changes holds, per issue ID, the one change that issue's row names.
 	// An issue with no such change is absent, whatever the reason: no
-	// change, Radar can't tell, an issue that isn't correlated or is no
+	// change, Radar can't tell (including an answer partly unknown, which
+	// may hide a newer change), an issue that isn't correlated or is no
 	// longer there, or a subject the caller may not read. Absence is
 	// therefore never "nothing changed".
 	Changes map[string]IssueRowChange `json:"changes"`
