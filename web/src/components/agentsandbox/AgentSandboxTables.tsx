@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Tooltip, type StatusBadge } from '@skyhook-io/k8s-ui'
+import { SearchBox, Tooltip, type StatusBadge } from '@skyhook-io/k8s-ui'
 import { formatAge, summarizeSchedulerMessage } from '@skyhook-io/k8s-ui/components/resources/resource-utils'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import {
@@ -232,7 +232,7 @@ export function reportsMissingPool(o: any): boolean {
   return getSandboxClaimStatus(o).text === 'WarmPoolNotFound'
 }
 
-export function ClaimsTable({ read, warmPools, onInspect, inspected, server }: { read: KindRead; warmPools: KindRead; onInspect: (r: SelectedResource) => void; inspected: SelectedResource | null; server?: ServerReadings }) {
+export function ClaimsTable({ read, warmPools, onInspect, inspected, server, empty }: { read: KindRead; warmPools: KindRead; onInspect: (r: SelectedResource) => void; inspected: SelectedResource | null; server?: ServerReadings; empty?: string }) {
   const rows = useMemo(() => byReading(readItems(read), getSandboxClaimStatus), [read])
   const multi = manyNamespaces(rows)
   const pools = useMemo(() => new Set(readItems(warmPools).map(rowKey)), [warmPools])
@@ -304,7 +304,7 @@ export function ClaimsTable({ read, warmPools, onInspect, inspected, server }: {
       rowResource={(o) => agentSandboxResource({ kind: 'SandboxClaim', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: nm(o) })}
       onInspect={onInspect}
       inspected={inspected}
-      empty={coverageEmptyText(read, 'SandboxClaims')}
+      empty={empty ?? coverageEmptyText(read, 'SandboxClaims')}
       minWidth={wide ? 760 : 560}
     />
   )
@@ -318,6 +318,7 @@ export function WarmPoolsTable({
   inspected,
   title,
   server,
+  empty,
 }: {
   read: KindRead
   claims: any[]
@@ -327,6 +328,7 @@ export function WarmPoolsTable({
   title?: string
   /** What the server's summary says about these pools. */
   server?: ServerReadings
+  empty?: string
 }) {
   const rows = useMemo(() => byReading(readItems(read), getSandboxWarmPoolStatus), [read])
   const multi = manyNamespaces(rows)
@@ -403,7 +405,7 @@ export function WarmPoolsTable({
       rowResource={(o) => agentSandboxResource({ kind: 'SandboxWarmPool', group: AGENT_SANDBOX_EXTENSIONS_GROUP, namespace: ns(o), name: nm(o) })}
       onInspect={onInspect}
       inspected={inspected}
-      empty={coverageEmptyText(read, 'SandboxWarmPools')}
+      empty={empty ?? coverageEmptyText(read, 'SandboxWarmPools')}
       minWidth={wide ? 760 : 560}
     />
   )
@@ -486,8 +488,32 @@ export function filterSandboxes(read: KindRead, pool: string, state: string): Ki
   return { ...read, items }
 }
 
+/** Keeps the objects whose name contains `search`, ignoring case. */
+export function filterByName(read: KindRead, search: string): KindRead {
+  const q = search.trim().toLowerCase()
+  if (read.state !== 'read' || !q) return read
+  return { ...read, items: read.items.filter((o) => nm(o).toLowerCase().includes(q)) }
+}
+
+/** The list's name search, kept in the Resources page's own `search` URL param so its links narrow these lists too. */
+function useNameSearch(): [string, (value: string) => void] {
+  const [params, setParams] = useSearchParams()
+  const set = (value: string) => {
+    const p = new URLSearchParams(params)
+    if (value) p.set('search', value)
+    else p.delete('search')
+    setParams(p, { replace: true })
+  }
+  return [params.get('search') ?? '', set]
+}
+
+function NameSearch({ value, onChange, noun, id }: { value: string; onChange: (value: string) => void; noun: string; id: string }) {
+  return <SearchBox value={value} onChange={onChange} scope="resources" shortcutId={id} placeholder={`Search ${noun} by name`} className="w-72 max-w-full" />
+}
+
 export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect, inspected, onCreate, server }: AgentSandboxScreenProps & { onCreate?: () => void; server?: ServerReadings }) {
   const [params, setParams] = useSearchParams()
+  const [search, setSearch] = useNameSearch()
   const pool = params.get('pool') ?? ''
   const state = params.get('state') === 'notReady' ? 'notReady' : ''
   const clear = (key: string) => {
@@ -499,12 +525,13 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
     ...(pool ? [{ label: `Warm pool: ${pool.slice(pool.indexOf('/') + 1)}`, onClear: () => clear('pool') }] : []),
     ...(state ? [{ label: 'Not ready', onClear: () => clear('state') }] : []),
   ]
-  const sandboxes = useMemo(() => filterSandboxes(data.sandboxes, pool, state), [data.sandboxes, pool, state])
-  const filtered = chips.length > 0 && sandboxes.state === 'read' && sandboxes.items.length === 0
+  const sandboxes = useMemo(() => filterByName(filterSandboxes(data.sandboxes, pool, state), search), [data.sandboxes, pool, state, search])
+  const filtered = (chips.length > 0 || !!search.trim()) && sandboxes.state === 'read' && sandboxes.items.length === 0
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <AgentSandboxHeader title="Sandboxes" namespaces={namespaces} onClearNamespaces={onClearNamespaces} chips={chips} actions={<CreateButton onCreate={onCreate} label={SANDBOX_KIND.kind} />} />
       <ScreenBody>
+        <NameSearch value={search} onChange={setSearch} noun="sandboxes" id="agent-sandbox-sandboxes-search" />
         <AgentSandboxCoverageNotice data={data} kinds={['sandboxes', 'claims']} />
         <SandboxesTable read={sandboxes} claims={data.claims} onInspect={onInspect} inspected={inspected} server={server} empty={filtered ? 'No Sandboxes match these filters.' : undefined} />
       </ScreenBody>
@@ -513,24 +540,32 @@ export function SandboxesScreen({ data, namespaces, onClearNamespaces, onInspect
 }
 
 export function ClaimsScreen({ data, namespaces, onClearNamespaces, onInspect, inspected, onCreate, server }: AgentSandboxScreenProps & { onCreate?: () => void; server?: ServerReadings }) {
+  const [search, setSearch] = useNameSearch()
+  const claims = useMemo(() => filterByName(data.claims, search), [data.claims, search])
+  const filtered = !!search.trim() && claims.state === 'read' && claims.items.length === 0
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <AgentSandboxHeader title="Claims" namespaces={namespaces} onClearNamespaces={onClearNamespaces} actions={<CreateButton onCreate={onCreate} label={SANDBOX_CLAIM_KIND.kind} />} />
       <ScreenBody>
+        <NameSearch value={search} onChange={setSearch} noun="claims" id="agent-sandbox-claims-search" />
         <AgentSandboxCoverageNotice data={data} kinds={['claims', 'warmPools']} />
-        <ClaimsTable read={data.claims} warmPools={data.warmPools} onInspect={onInspect} inspected={inspected} server={server} />
+        <ClaimsTable read={claims} warmPools={data.warmPools} onInspect={onInspect} inspected={inspected} server={server} empty={filtered ? 'No SandboxClaims match this search.' : undefined} />
       </ScreenBody>
     </div>
   )
 }
 
 export function WarmPoolsScreen({ data, namespaces, onClearNamespaces, onInspect, inspected, onCreate, server }: AgentSandboxScreenProps & { onCreate?: () => void; server?: ServerReadings }) {
+  const [search, setSearch] = useNameSearch()
+  const pools = useMemo(() => filterByName(data.warmPools, search), [data.warmPools, search])
+  const filtered = !!search.trim() && pools.state === 'read' && pools.items.length === 0
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <AgentSandboxHeader title="Warm pools" namespaces={namespaces} onClearNamespaces={onClearNamespaces} actions={<CreateButton onCreate={onCreate} label={SANDBOX_WARM_POOL_KIND.kind} />} />
       <ScreenBody>
+        <NameSearch value={search} onChange={setSearch} noun="warm pools" id="agent-sandbox-warm-pools-search" />
         <AgentSandboxCoverageNotice data={data} kinds={['warmPools', 'claims']} />
-        <WarmPoolsTable read={data.warmPools} claims={readItems(data.claims)} claimsRead={data.claims} onInspect={onInspect} inspected={inspected} server={server} />
+        <WarmPoolsTable read={pools} claims={readItems(data.claims)} claimsRead={data.claims} onInspect={onInspect} inspected={inspected} server={server} empty={filtered ? 'No SandboxWarmPools match this search.' : undefined} />
       </ScreenBody>
     </div>
   )
