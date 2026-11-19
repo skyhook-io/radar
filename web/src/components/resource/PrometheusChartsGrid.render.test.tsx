@@ -11,15 +11,16 @@ const charts: { seriesLabels?: string[]; referenceLines?: unknown[] }[] = []
 let workload: WorkloadMetrics
 const drawnMetrics = { unit: 'cores', result: { series: [{ labels: { pod: 'web-0' }, dataPoints: [{ timestamp: 100, value: 1 }, { timestamp: 160, value: 2 }] }] } }
 let resourceMetrics: Record<string, unknown> = drawnMetrics
+let metricsByCategory: Record<string, Record<string, unknown>> = {}
 
 vi.mock('../../api/client', async (importActual) => ({
   ...(await importActual<typeof import('../../api/client')>()),
   useAutoPromConnect: () => undefined,
   usePrometheusStatus: () => ({ data: { connected, error: 'Backend query failed' } }),
   usePrometheusConnect: () => ({ mutate: vi.fn(), isPending: false }),
-  usePrometheusResourceMetrics: (_kind: string, _ns: string, _name: string, _category: string, range: string) => {
+  usePrometheusResourceMetrics: (_kind: string, _ns: string, _name: string, category: string, range: string) => {
     ranges.push(range)
-    return { data: resourceMetrics }
+    return { data: metricsByCategory[category] ?? resourceMetrics }
   },
 }))
 vi.mock('../../api/workloadMetrics', () => ({ useWorkloadMetrics: () => ({ data: workload }) }))
@@ -44,6 +45,7 @@ beforeEach(() => {
   ranges.length = 0
   charts.length = 0
   resourceMetrics = drawnMetrics
+  metricsByCategory = {}
   workload = { state: 'available', sources: [], pods: 1, podsTotal: 1, start: 100, end: 160, stepSeconds: 60, rateWindowSeconds: 300, history: {}, comparison: {}, panels: {} }
 })
 
@@ -109,5 +111,64 @@ describe('Expanded metrics recovery and scope', () => {
     workload.panels.cpu = { state: 'available', unit: 'cores', series: [{ labels: { pod: 'web-0' }, dataPoints: [{ timestamp: 160, value: 0.1 }] }] }
     render()
     expect(charts.some((chart) => chart.referenceLines?.some((line) => (line as { label: string }).label === 'Template request 100m'))).toBe(true)
+  })
+})
+
+describe('Name-matched chart captions follow the charts\' cluster scope', () => {
+  const ANOTHER_CLUSTER_SECTION = 'matching names in a shared backend may include another cluster'
+  const ANOTHER_CLUSTER_GRID = 'Matching names in a shared backend may include another cluster.'
+  const scoped = (state: string, note = 'note') => ({ ...drawnMetrics, clusterScope: { state, note } })
+  const renderText = () => render().replaceAll('<!-- -->', '')
+  beforeEach(() => { connected = true })
+
+  it.each(['scoped_verified', 'scoped_configured'])('drops the other-cluster caveat when every chart is %s', (state) => {
+    resourceMetrics = scoped(state)
+    const html = renderText()
+    expect(html).toContain('Basic CPU / memory · matched by cluster label')
+    expect(html).toContain('Pod-name matched · matched by cluster label')
+    expect(html).toContain('kept to this cluster by its cluster labels')
+    expect(html).not.toContain('may include another cluster')
+    expect(html).not.toContain('identity unverified')
+  })
+  it('names an operator-declared single-cluster store', () => {
+    resourceMetrics = scoped('single_cluster_asserted')
+    const html = renderText()
+    expect(html).toContain('Basic CPU / memory · operator declared single-cluster')
+    expect(html).toContain('Pod-name matched · operator declared single-cluster')
+    expect(html).not.toContain('may include another cluster')
+  })
+  it.each([['absent', drawnMetrics], ['unlabeled', scoped('unlabeled')]])('keeps today\'s caveat when clusterScope is %s', (_label, metrics) => {
+    resourceMetrics = metrics
+    const html = renderText()
+    expect(html).toContain('Basic CPU / memory · identity unverified')
+    expect(html).toContain('These charts match current Pod names, not Pod UIDs or historical workload ownership; matching names in a shared backend may include another cluster.')
+    expect(html).toContain('Pod-name matched · identity unverified')
+    expect(html).toContain(`These charts match current Pod names, independently of the identity-checked charts above. ${ANOTHER_CLUSTER_GRID}`)
+  })
+  it('keeps the caveat header for withheld charts and defers to their own note', () => {
+    resourceMetrics = scoped('label_missing', 'The series lack this cluster\'s label.')
+    const html = renderText()
+    expect(html).toContain('Basic CPU / memory · identity unverified')
+    expect(html).toContain('Pod-name matched · identity unverified')
+    expect(html).toContain('say why in place of their data')
+    expect(html).toContain('The series lack this cluster&#x27;s label.')
+    expect(html).not.toContain('may include another cluster')
+  })
+  it('uses the least certain chart when a section disagrees', () => {
+    resourceMetrics = scoped('scoped_verified')
+    metricsByCategory = { memory: drawnMetrics, filesystem: scoped('unlabeled') }
+    const html = renderText()
+    expect(html).toContain('Basic CPU / memory · identity unverified')
+    expect(html).toContain(ANOTHER_CLUSTER_SECTION)
+    expect(html).toContain('Pod-name matched · identity unverified')
+    expect(html).toContain(ANOTHER_CLUSTER_GRID)
+  })
+  it('lets a verified network section drop the caveat while a withheld chart above keeps its header', () => {
+    resourceMetrics = scoped('scoped_verified')
+    metricsByCategory = { cpu: scoped('several_clusters') }
+    const html = renderText()
+    expect(html).toContain('Basic CPU / memory · identity unverified')
+    expect(html).toContain('Pod-name matched · matched by cluster label')
+    expect(html).not.toContain('may include another cluster')
   })
 })

@@ -39,6 +39,7 @@ import { Tooltip } from "../ui/Tooltip";
 import { WorkloadMetricsSection } from "./WorkloadMetricsSection";
 import { RightsizingStrip } from "./RightsizingStrip";
 import { useNavCustomization } from "../../context/NavCustomization";
+import { leastCertainScope, NAME_MATCHED_CLUSTER_NOTE, NAME_MATCHED_SUMMARY } from "./nameMatchedScope";
 import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings';
 
 // Used when MetricsTabContent is in expanded (full-screen) mode. Drawer mode
@@ -100,6 +101,13 @@ export function PrometheusChartsGrid({
       resource ? computeRequestLimitLines(resource, kind, "memory") : undefined,
     [resource, kind],
   );
+
+  // Read from the cache the network and storage charts fill; never fetches itself.
+  const rxScope = usePrometheusResourceMetrics(kind, namespace, name, "network_rx", timeRange, false).data?.clusterScope;
+  const txScope = usePrometheusResourceMetrics(kind, namespace, name, "network_tx", timeRange, false).data?.clusterScope;
+  const diskScope = usePrometheusResourceMetrics(kind, namespace, name, "filesystem", timeRange, false).data?.clusterScope;
+  const nameMatchedScope = leastCertainScope(categories.some((c) => c.key === "filesystem") ? [rxScope, txScope, diskScope] : [rxScope, txScope]);
+  const nameMatchedNote = NAME_MATCHED_CLUSTER_NOTE[nameMatchedScope];
 
   if (!isSupported) return null;
 
@@ -225,8 +233,8 @@ export function PrometheusChartsGrid({
 
       <div className="metrics-layout min-w-0 px-4 pt-4">
         {isWorkload && <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Network and storage</h3>}
-        {isWorkload && <Disclosure className="mb-2 text-xs text-theme-text-secondary" summary="Pod-name matched · identity unverified">
-          <p className="mt-2 max-w-2xl text-sm leading-relaxed">These charts match current Pod names, independently of the identity-checked charts above. Matching names in a shared backend may include another cluster.</p>
+        {isWorkload && <Disclosure className="mb-2 text-xs text-theme-text-secondary" summary={`Pod-name matched · ${NAME_MATCHED_SUMMARY[nameMatchedScope]}`}>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed">These charts match current Pod names, independently of the identity-checked charts above. {nameMatchedNote ?? "Matching names in a shared backend may include another cluster."}</p>
         </Disclosure>}
         <div className="metrics-chart-grid">
           {chartPanels.filter(({ def }) => !isWorkload || (def.key !== "cpu" && def.key !== "memory")).map(renderPanel)}
