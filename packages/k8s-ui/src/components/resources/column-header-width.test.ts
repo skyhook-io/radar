@@ -3,7 +3,7 @@ import { SKIP_FILTER_COLUMNS, getColumnHeaderWidth, getColumnMinWidth, type Colu
 import { getCellFilterValue } from './resource-utils'
 import { TABLE_DENSITY } from './table-density'
 
-// The header row is px-4 with a `truncate` label, under table-layout:fixed with
+// The header row is padded (TABLE_DENSITY.cellClass) around a `truncate` label, under table-layout:fixed with
 // explicit <col> widths. A column narrower than its own heading clips to
 // "ADDRESS T…" and — because only the Name column flexes — stays clipped at
 // 1280, 1920 and 2560 alike. These pin the floor that stops that.
