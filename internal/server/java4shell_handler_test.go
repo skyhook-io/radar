@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestJava4ShellWorksWithoutTrivyAndChecksPodAccess(t *testing.T) {
@@ -75,6 +77,55 @@ func TestJava4ShellWorksWithoutTrivyAndChecksPodAccess(t *testing.T) {
 	denied := env.authGet(t, "/api/vulnerabilities/java4shell?namespace=other", "alice", "")
 	if body := readBody(t, denied); denied.StatusCode != 403 {
 		t.Fatalf("denied scope: %d %s", denied.StatusCode, body)
+	}
+}
+
+func TestJava4ShellRegistryAccessFollowsImageInspection(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "java"},
+		Spec: corev1.PodSpec{ImagePullSecrets: []corev1.LocalObjectReference{
+			{Name: "allowed"}, {Name: "forbidden"},
+		}},
+	}
+	allowed := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "allowed"}, Type: corev1.SecretTypeDockerConfigJson}
+	forbidden := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "forbidden"}, Type: corev1.SecretTypeDockerConfigJson}
+	useTestResourceCache(t, fake.NewClientset(pod, allowed, forbidden))
+	s := &Server{authConfig: auth.Config{Mode: "proxy"}, permCache: auth.NewPermissionCache(), listenAddress: "0.0.0.0"}
+	for _, tc := range []struct {
+		name              string
+		getPod, getSecret bool
+		exec              bool
+		wantSecrets       []string
+	}{
+		{name: "list only", getSecret: true},
+		{name: "get Pod only", getPod: true},
+		{name: "exact Secret grant", getPod: true, getSecret: true, wantSecrets: []string{"allowed"}},
+		{name: "exec on readable Pod", getPod: true, exec: true, wantSecrets: []string{"allowed", "forbidden"}},
+		{name: "exec without get Pod", exec: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+			perms.SetCanI("get", "", "pods", "team", tc.getPod)
+			perms.SetCanI("get", "", "secrets/allowed", "team", tc.getSecret)
+			perms.SetCanI("get", "", "secrets/forbidden", "team", false)
+			perms.SetCanI("create", "", "pods/exec", "team", tc.exec)
+			s.permCache.Set(tc.name, nil, perms)
+			r := requestWithUser(http.MethodGet, "/", &auth.User{Username: tc.name})
+			access := s.java4ShellRegistryAccess(r, k8s.GetResourceCache(), pod)
+			var names []string
+			for _, secret := range access.PullSecrets {
+				names = append(names, secret.Name)
+			}
+			if !slices.Equal(names, tc.wantSecrets) || access.RadarCredentials != (tc.getPod && tc.exec) {
+				t.Fatalf("secrets %v, ambient credentials %v", names, access.RadarCredentials)
+			}
+		})
+	}
+	s.authConfig = auth.Config{}
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	access := s.java4ShellRegistryAccess(request, k8s.GetResourceCache(), pod)
+	if access.RadarCredentials || len(access.PullSecrets) != 2 {
+		t.Fatalf("shared listener received wrong scope: %d pull secrets, ambient credentials %v", len(access.PullSecrets), access.RadarCredentials)
 	}
 }
 

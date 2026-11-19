@@ -2,9 +2,11 @@ package server
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"net/http"
 	"slices"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/images"
@@ -18,9 +20,10 @@ import (
 )
 
 // handleJava4Shell reads only Pods the caller may list and uses Node facts
-// only with list-nodes access. The same bounded, anonymous registry read is
-// available on shared listeners. No registry or credential is supplied by
-// the caller, and the route is protected by the API's same-origin guard.
+// only with list-nodes access. Registry credentials follow image inspection's
+// Pod, Secret and exec permissions. Shared unauthenticated listeners can use
+// Pod pull secrets held by Radar's Kubernetes identity. The API's same-origin
+// guard applies, and callers never supply an image reference or credential.
 func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -108,8 +111,22 @@ func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 		s.writeReadFailure(w, resource, errReadHandlesChanged, &target)
 		return
 	}
+	// Leave most of the HTTP request budget for the registry. When a permission
+	// review is slow, the remaining unauthenticated lookups still make progress.
+	accessCtx, cancelAccess := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancelAccess()
+	accessRequest := r.WithContext(accessCtx)
 	result, err := images.DefaultRuntimeInventory(k8s.IsInCluster()).CheckJava4Shell(r.Context(), pods, func(pod *corev1.Pod) resourceid.Ref {
 		return s.java4ShellWorkload(r, cache, pod)
+	}, func(pod *corev1.Pod) images.Java4ShellRegistryAccess {
+		if accessCtx.Err() != nil || !current() {
+			return images.Java4ShellRegistryAccess{}
+		}
+		access := s.java4ShellRegistryAccess(accessRequest, cache, pod)
+		if !current() {
+			return images.Java4ShellRegistryAccess{}
+		}
+		return access
 	})
 	if r.Context().Err() != nil {
 		return
@@ -127,6 +144,44 @@ func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 		images.Java4ShellResult
 		Coverage resourceapi.Coverage `json:"coverage"`
 	}{Java4ShellResult: result, Coverage: target.coverage(plan.read, plan.gaps)})
+}
+
+func (s *Server) java4ShellRegistryAccess(r *http.Request, cache *k8s.ResourceCache, pod *corev1.Pod) images.Java4ShellRegistryAccess {
+	access := images.Java4ShellRegistryAccess{}
+	user := auth.UserFromContext(r.Context())
+	switch {
+	case user == nil:
+		if s.authConfig.Enabled() {
+			return access
+		}
+		access.RadarCredentials = !k8s.IsInCluster() && !s.sharedListener()
+	default:
+		if allowed, checked := s.imagePodReadDecision(r, pod.Namespace); !allowed || !checked {
+			return access
+		}
+		allowed, checked := s.imageExecDecision(r, pod.Namespace)
+		access.RadarCredentials = allowed && checked
+	}
+	for _, ref := range pod.Spec.ImagePullSecrets {
+		if ref.Name == "" {
+			continue
+		}
+		obj, found, _ := cache.ReadableObject("secrets", pod.Namespace, ref.Name)
+		if !found {
+			continue
+		}
+		secret := obj.(*corev1.Secret)
+		if secret.Type != corev1.SecretTypeDockerConfigJson {
+			continue
+		}
+		if user != nil && !access.RadarCredentials {
+			if allowed, checked := s.imagePullSecretDecision(r, pod.Namespace, ref.Name); !allowed || !checked {
+				continue
+			}
+		}
+		access.PullSecrets = append(access.PullSecrets, secret)
+	}
+	return access
 }
 
 func (s *Server) java4ShellWorkload(r *http.Request, cache *k8s.ResourceCache, pod *corev1.Pod) resourceid.Ref {

@@ -27,6 +27,11 @@ type Java4ShellPod struct {
 	Node *corev1.Node
 }
 
+type Java4ShellRegistryAccess struct {
+	PullSecrets      []*corev1.Secret
+	RadarCredentials bool
+}
+
 type Java4ShellFinding struct {
 	Workload               resourceid.Ref `json:"workload"`
 	Container              string         `json:"container"`
@@ -64,9 +69,10 @@ type java4ShellGroup struct {
 	container, digest, java string
 }
 
-// CheckJava4Shell uses anonymous registry reads only. Work keys keep different
-// platform configs separate, while CPU evidence is evaluated for each Pod.
-func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4ShellPod, workloadFor func(*corev1.Pod) resourceid.Ref) (Java4ShellResult, error) {
+// CheckJava4Shell shares registry reads only among Pods with the same image,
+// platform and credential grant. The caller authorizes and captures the
+// credentials for each Pod before a private read.
+func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4ShellPod, workloadFor func(*corev1.Pod) resourceid.Ref, accessFor func(*corev1.Pod) Java4ShellRegistryAccess) (Java4ShellResult, error) {
 	if !r.java4ShellActive.CompareAndSwap(false, true) {
 		return Java4ShellResult{}, ErrJava4ShellBusy
 	}
@@ -83,6 +89,10 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 			continue
 		}
 		platform, assumed, cpu := java4ShellPlacement(target.Node)
+		var access Java4ShellRegistryAccess
+		var secrets []credential
+		var credentialScope string
+		accessChecked := false
 		statuses := map[string]corev1.ContainerStatus{}
 		for _, source := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses, pod.Status.EphemeralContainerStatuses} {
 			for _, status := range source {
@@ -102,8 +112,25 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 				out.Unassessed["image_identity_unknown"]++
 				continue
 			}
+			if !accessChecked && accessFor != nil {
+				access = accessFor(pod)
+				var scope strings.Builder
+				if access.RadarCredentials {
+					scope.WriteString("|radar")
+				}
+				for _, secret := range access.PullSecrets {
+					c := credential{namespace: secret.Namespace, secret: secret.Name, snapshot: secret,
+						identity: string(secret.UID) + "/" + secret.ResourceVersion}
+					secrets = append(secrets, c)
+					scope.WriteByte('|')
+					scope.WriteString(c.id())
+				}
+				credentialScope = scope.String()
+				accessChecked = true
+			}
 			key := imageWorkKey(ref, platform) + "|advisory"
-			i, exists := byKey[key]
+			lookupKey := key + credentialScope
+			i, exists := byKey[lookupKey]
 			if !exists {
 				onDockerHub := ref.Context().RegistryStr() == name.DefaultRegistry
 				if len(items) >= maxLookupsPerCall || (onDockerHub && dockerHubLookups >= java4ShellDockerHubLookups) {
@@ -114,8 +141,9 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 					dockerHubLookups++
 				}
 				i = len(items)
-				byKey[key] = i
-				items = append(items, &work{key: key, ref: ref, platform: platform})
+				byKey[lookupKey] = i
+				items = append(items, &work{key: key, ref: ref, platform: platform, advisory: true,
+					secrets: secrets, radarCredentials: access.RadarCredentials})
 			}
 			image := status.Image
 			if image == "" {

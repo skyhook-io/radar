@@ -119,7 +119,7 @@ func TestJava4ShellKeepsPlacementSeparateFromImageEvidence(t *testing.T) {
 			workload = "another-workload"
 		}
 		return resourceid.NewRef("apps", "Deployment", pod.Namespace, workload)
-	})
+	}, nil)
 	if err != nil || got.Containers != 117 || got.Matches != 114 || got.FindingGroups != 2 || len(got.Findings) != 2 {
 		t.Fatalf("check: %+v, %v", got, err)
 	}
@@ -155,8 +155,49 @@ func TestJava4ShellNeverDialsRadarLoopback(t *testing.T) {
 	})
 	pod.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
 	got, err := newRuntimeInventory(registryConfigLookup(newGuardedTransport(false)), clusterKeychain).
-		CheckJava4Shell(context.Background(), []Java4ShellPod{{Pod: pod}}, nil)
+		CheckJava4Shell(context.Background(), []Java4ShellPod{{Pod: pod}}, nil, nil)
 	if err != nil || requests.Load() != 0 || got.Unassessed[StatusBlocked] != 1 {
 		t.Fatalf("got %+v, %v, and %d loopback requests", got, err, requests.Load())
+	}
+}
+
+func TestJava4ShellScopesAndRevalidatesPrivateRegistryAccess(t *testing.T) {
+	digest := "registry.example/team/java@sha256:" + strings.Repeat("a", 64)
+	ref := refKey(t, digest)
+	allowed := runningPod("allowed", "app", "node", "app", map[string][2]string{"java": {"registry.example/team/java:v1", digest}})
+	denied := runningPod("denied", "app", "node", "app", map[string][2]string{"java": {"registry.example/team/java:v1", digest}})
+	for _, pod := range []*corev1.Pod{allowed, denied} {
+		pod.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
+	}
+	node := &corev1.Node{Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{Architecture: "amd64", OperatingSystem: "linux"}}}
+	pods := []Java4ShellPod{{Pod: allowed, Node: node}, {Pod: denied, Node: node}}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "allowed", Name: "pull", UID: "secret-uid", ResourceVersion: "1"}}
+	f := &fakeLookup{
+		configs: map[string]*v1.ConfigFile{ref: {Config: v1.Config{Env: []string{"JAVA_VERSION=jdk-21.0.13+9"}}}},
+		errs:    map[string]error{ref + "|anonymous": unauthorized()},
+	}
+	inventory := fakeInventory(f)
+	workloadFor := func(p *corev1.Pod) resourceid.Ref { return resourceid.NewRef("", "Pod", p.Namespace, p.Name) }
+	accessFor := func(p *corev1.Pod) Java4ShellRegistryAccess {
+		if p == allowed {
+			return Java4ShellRegistryAccess{PullSecrets: []*corev1.Secret{secret}}
+		}
+		return Java4ShellRegistryAccess{}
+	}
+	got, err := inventory.CheckJava4Shell(context.Background(), pods, workloadFor, accessFor)
+	if err != nil || got.Matches != 1 || got.Unassessed[StatusAuthRequired] != 1 ||
+		len(got.Findings) != 1 || got.Findings[0].Workload.Namespace != allowed.Namespace {
+		t.Fatalf("private read crossed Pod scope or did not succeed: %+v, %v", got, err)
+	}
+
+	got, err = inventory.CheckJava4Shell(context.Background(), pods, workloadFor, nil)
+	if err != nil || got.Matches != 0 || got.Unassessed[StatusAuthRequired] != 2 {
+		t.Fatalf("private evidence reached a later unprivileged check: %+v, %v", got, err)
+	}
+
+	f.errs[ref+"|allowed/pull@rv1"] = unauthorized()
+	got, err = inventory.CheckJava4Shell(context.Background(), pods, workloadFor, accessFor)
+	if err != nil || got.Matches != 0 || got.Unassessed[StatusAuthRequired] != 2 {
+		t.Fatalf("revoked registry access did not suppress private evidence: %+v, %v", got, err)
 	}
 }

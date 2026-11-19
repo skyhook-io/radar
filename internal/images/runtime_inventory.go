@@ -145,6 +145,7 @@ type credential struct {
 	namespace string
 	secret    string
 	radar     bool
+	snapshot  *corev1.Secret
 	// identity pins a pull secret to its exact contents (UID and
 	// resourceVersion): a rotated or recreated Secret, or a same-named one in
 	// another cluster, is a different credential.
@@ -237,6 +238,11 @@ func clusterKeychain(c credential, ref name.Reference) (authn.Keychain, string, 
 	case c.secret == "":
 		return authn.NewMultiKeychain(), "", true
 	}
+	if c.snapshot != nil {
+		kc := &pullSecretKeychain{auths: pullSecretAuths(c.snapshot)}
+		auth, err := kc.Resolve(ref.Context())
+		return kc, c.identity, err == nil && auth != authn.Anonymous
+	}
 	identity, ok := pullSecretIdentity(c.namespace, c.secret)
 	if !ok {
 		return nil, "", false
@@ -302,15 +308,17 @@ func registryConfigLookup(guard *guardedTransport) configLookup {
 // work is one image on one platform, with every workload running it and the
 // pull secrets those Pods would use.
 type work struct {
-	key             string
-	display         string
-	ref             name.Reference
-	resolvedFrom    string
-	platform        v1.Platform
-	platformAssumed bool
-	secrets         []credential
-	workloads       map[string]*WorkloadUse
-	pods            map[string]map[string]bool // workload key -> Pod names
+	key              string
+	display          string
+	ref              name.Reference
+	resolvedFrom     string
+	platform         v1.Platform
+	platformAssumed  bool
+	secrets          []credential
+	radarCredentials bool
+	advisory         bool
+	workloads        map[string]*WorkloadUse
+	pods             map[string]map[string]bool // workload key -> Pod names
 }
 
 // Inventory reads the declared runtimes of every image the given Pods run.
@@ -327,16 +335,24 @@ func (r *RuntimeInventory) lookupConfigs(ctx context.Context, items []*work, rad
 	budget := new(atomic.Int32)
 	budget.Store(maxLookupsPerCall)
 	var wg sync.WaitGroup
+	workers := make(chan struct{}, registryFetchSlots)
 	for i, w := range items {
-		creds := r.credentials(w, radarCredentials)
+		creds := r.credentials(w, radarCredentials || w.radarCredentials)
 		res, hit, untried := r.fromCache(w, creds)
 		if hit {
 			results[i] = res
 			continue
 		}
+		select {
+		case workers <- struct{}{}:
+		case <-ctx.Done():
+			results[i] = configResult{status: StatusNotChecked, err: "time budget for this call ran out"}
+			continue
+		}
 		wg.Add(1)
 		go func(i int, w *work, untried []credential) {
 			defer wg.Done()
+			defer func() { <-workers }()
 			results[i] = r.fetch(ctx, w, untried, budget)
 		}(i, w, untried)
 	}
@@ -354,16 +370,23 @@ func (r *RuntimeInventory) credentials(w *work, radar bool) []credential {
 		secretSlots--
 	}
 	var out []credential
+	if w.advisory {
+		out = append(out, credential{})
+	}
+	secretCount := 0
 	for _, c := range w.secrets {
-		if len(out) == secretSlots {
+		if secretCount == secretSlots {
 			break
 		}
 		if _, identity, ok := r.keychain(c, w.ref); ok {
 			c.identity = identity
 			out = append(out, c)
+			secretCount++
 		}
 	}
-	out = append(out, credential{})
+	if !w.advisory {
+		out = append(out, credential{})
+	}
 	if radar {
 		out = append(out, credential{radar: true})
 	}
@@ -388,6 +411,10 @@ func (r *RuntimeInventory) fromCache(w *work, creds []credential) (res configRes
 	defer r.mu.Unlock()
 	var failure configResult
 	for _, c := range creds {
+		if w.advisory && c.id() != "anonymous" {
+			untried = append(untried, c)
+			continue
+		}
 		if cached, found := r.getLocked(resultKey(w, c)); found {
 			if cached.status == StatusOK {
 				return cached, true, nil
@@ -487,7 +514,11 @@ func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credentia
 				// identity changing (registry-side permissions).
 				ttl = credentialResultTTL
 			}
-			r.store(resultKey(w, c), res, ttl)
+			// Image inspection revalidates private registry access on each
+			// request. Advisory checks follow the same rule.
+			if !w.advisory || c.id() == "anonymous" {
+				r.store(resultKey(w, c), res, ttl)
+			}
 			return res
 		}
 		if ctx.Err() != nil {
@@ -501,7 +532,9 @@ func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credentia
 		if res.status == StatusError {
 			ttl = transientFailureTTL
 		}
-		r.store(resultKey(w, c), res, ttl)
+		if !w.advisory || c.id() == "anonymous" {
+			r.store(resultKey(w, c), res, ttl)
+		}
 		// Registries that hide repositories from unauthorized callers answer
 		// 404, so a not-found is worth trying with the next credential.
 		if res.status != StatusAuthRequired && res.status != StatusNotFound {

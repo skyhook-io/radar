@@ -27,7 +27,7 @@ export function Java4ShellPanel({ namespaces, context, connected, trivySearch, o
           <p className="text-xs text-theme-text-secondary">
             Check running workloads for affected Java versions and prioritize patching with current node evidence.
           </p>
-          <p className="text-xs text-theme-text-tertiary">Radar reads version declarations from image registries that allow anonymous access.</p>
+          <p className="text-xs text-theme-text-tertiary">Radar reads image metadata using the registry credentials your access allows.</p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
             <a className="text-accent-text hover:underline" href={advisoryURL} target="_blank" rel="noreferrer">{JAVA4SHELL_CVE} advisory</a>
             {trivySearch && <Link className="text-accent-text hover:underline" to={{ search: trivySearch }}>Find in Trivy reports</Link>}
@@ -53,7 +53,7 @@ const reasonLabels: Record<string, string> = {
   image_identity_unknown: 'missing a running image digest',
   version_unknown: 'with unsupported Java versions',
   platform_unknown: 'with unknown image platforms',
-  auth_required: 'required registry sign-in',
+  auth_required: 'with images Radar could not authenticate to read',
   not_found: 'with missing or private images',
   blocked: 'with registry addresses Radar could not reach',
   rate_limited: 'limited by the registry',
