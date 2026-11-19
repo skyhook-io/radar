@@ -743,3 +743,26 @@ func TestWalkNeighborhoodLinksLastHopSelections(t *testing.T) {
 		t.Errorf("drawing the selection read %d objects", reads-unmatchedReads)
 	}
 }
+
+// A Node and a Karpenter NodeClass carry the IDs the topology gives them,
+// whatever else the answer holds, so a node can be matched across answers.
+func TestWalkNeighborhoodNodesAndNodeClassesKeepTheirTopologyIDs(t *testing.T) {
+	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", UID: "node-a"}}, "", "Node")
+	cilium := projectionCR("cilium.io", "CiliumNode", "", "node-a", map[string]any{})
+	cilium.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "v1", Kind: "Node", Name: "node-a", UID: "node-a"}})
+	nodeClass := projectionCR("karpenter.k8s.aws", "EC2NodeClass", "", "default", map[string]any{})
+	ids := map[string]bool{}
+	for _, sub := range []*Subgraph{
+		walkTestNeighborhood(t, newProjectionSession(t, node, cilium), cilium, NeighborhoodOptions{}),
+		walkTestNeighborhood(t, newProjectionSession(t, nodeClass), nodeClass, NeighborhoodOptions{}),
+	} {
+		for _, n := range sub.Nodes {
+			ids[n.ID] = true
+		}
+	}
+	for _, want := range []string{"node//node-a", "nodeclass//default/karpenter.k8s.aws/ec2nodeclass"} {
+		if !ids[want] {
+			t.Errorf("missing node %s; ids %v", want, ids)
+		}
+	}
+}

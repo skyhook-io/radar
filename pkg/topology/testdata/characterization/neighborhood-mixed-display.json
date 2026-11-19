@@ -799,7 +799,7 @@
       }
     },
     {
-      "id": "rel||Node||node-a",
+      "id": "node//node-a",
       "kind": "Node",
       "name": "node-a",
       "status": "unknown",
@@ -834,7 +834,7 @@
       }
     },
     {
-      "id": "rel||Node||node-b",
+      "id": "node//node-b",
       "kind": "Node",
       "name": "node-b",
       "status": "unknown",

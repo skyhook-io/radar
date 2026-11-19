@@ -305,6 +305,9 @@ func neighborhoodStandaloneNode(r resourceid.Ref, obj runtime.Object, node Node)
 		node.Data["labels"] = meta.GetLabels()
 	}
 	if n, ok := obj.(*corev1.Node); ok {
+		// The topology's ID for a Node, which the display builder draws only
+		// beside a NodeClaim or a Machine.
+		node.ID = "node//" + n.Name
 		node.Status = extractNodeStatus(*n)
 		node.Data["instanceType"] = n.Labels["node.kubernetes.io/instance-type"]
 	}

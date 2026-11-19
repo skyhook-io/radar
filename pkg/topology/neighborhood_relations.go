@@ -315,6 +315,11 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		if !ok {
 			node = neighborhoodStandaloneNode(r, objects[r], access.node(r))
 		}
+		if relations.NodeClasses.IsTarget(r.GroupKind()) {
+			// The topology draws a NodeClass under this ID whether or not a
+			// NodePool here names it, as the display builder can't tell.
+			node.ID, node.Kind = karpenterNodeClassID(r.Group, r.Kind, r.Name), KindNodeClass
+		}
 		if IsCalicoPolicyKind(node.Kind) {
 			node.Data["apiVersions"] = access.node(r).Data["apiVersions"]
 		}
