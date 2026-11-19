@@ -176,6 +176,11 @@ type ListPackagesParams struct {
 	// "use the SA identity" (helm.ListReleasesAsUser convention).
 	User   string
 	Groups []string
+	// StatusScope is where the caller may see live object status, which Helm
+	// release health is computed from. Its zero value reads no status, so a
+	// caller that leaves it out gets "unknown" health rather than health over
+	// objects it can't read.
+	StatusScope helm.NamespaceStatusScope
 }
 
 // ErrInvalidSourceCode is returned when ListPackagesParams.Source is set
@@ -211,7 +216,7 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 	if cache == nil {
 		return PackagesResponse{}, errResourceCacheUnavailable
 	}
-	cacheKey := packagesCacheKeyFor(cache.Generation(), p.Namespaces)
+	cacheKey := packagesCacheKeyFor(cache.Generation(), p.Namespaces, p.StatusScope)
 	packagesCacheMu.Lock()
 	entry, hit := packagesCache[cacheKey]
 	packagesCacheMu.Unlock()
@@ -225,7 +230,7 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		generatedAt = entry.at
 	} else {
 		var err error
-		rows, sourceErrs, err = computePackagesInternal(ctx, cache, p.Namespaces)
+		rows, sourceErrs, err = computePackagesInternal(ctx, cache, p.Namespaces, p.StatusScope)
 		if err != nil {
 			return PackagesResponse{}, err
 		}
@@ -301,9 +306,11 @@ func clearPackagesCache() {
 // cluster's entries. User identity is intentionally NOT part of the key:
 // inventory reads run via the ServiceAccount (see computePackagesInternal),
 // so the result is identical for any caller with the same namespace
-// scope. Sharing entries across users avoids N-way duplication and
-// premature LRU eviction in multi-user Cloud deployments.
-func packagesCacheKeyFor(generation uint64, namespaces []string) string {
+// scope and status scope. Sharing entries across users avoids N-way
+// duplication and premature LRU eviction in multi-user Cloud deployments.
+// The status scope is in the key because Helm release health counts only
+// objects the caller may see.
+func packagesCacheKeyFor(generation uint64, namespaces []string, status helm.NamespaceStatusScope) string {
 	var b strings.Builder
 	b.WriteString(strconv.FormatUint(generation, 10))
 	b.WriteByte('|')
@@ -316,6 +323,8 @@ func packagesCacheKeyFor(generation uint64, namespaces []string) string {
 		sort.Strings(ns)
 		b.WriteString(strings.Join(ns, ","))
 	}
+	b.WriteString("|status:")
+	b.WriteString(status.CacheKey())
 	return b.String()
 }
 
@@ -334,13 +343,15 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
+	visible, checkFailed := s.getUserNamespacesWithStatus(r, nil)
 	user, groups := userCredsForPackages(r)
 	resp, err := ListPackages(r.Context(), ListPackagesParams{
-		Namespaces: namespaces,
-		Source:     r.URL.Query().Get("source"),
-		Chart:      r.URL.Query().Get("chart"),
-		User:       user,
-		Groups:     groups,
+		Namespaces:  namespaces,
+		Source:      r.URL.Query().Get("source"),
+		Chart:       r.URL.Query().Get("chart"),
+		User:        user,
+		Groups:      groups,
+		StatusScope: helm.NamespaceStatusScope{Namespaces: visible, Checked: !checkFailed},
 	})
 	if err != nil {
 		if errors.Is(err, errResourceCacheUnavailable) {
@@ -370,7 +381,7 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 // cloud-mode (see the helm comment below for the rationale). User
 // identity does still flow through ListPackagesParams for cache
 // scoping and for sensitive Helm endpoints invoked elsewhere.
-func computePackagesInternal(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) ([]packages.PackageRow, []SourceError, error) {
+func computePackagesInternal(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, status helm.NamespaceStatusScope) ([]packages.PackageRow, []SourceError, error) {
 	src := packages.Sources{}
 	var errs []SourceError
 
@@ -380,7 +391,7 @@ func computePackagesInternal(ctx context.Context, cache *k8s.ResourceCache, name
 	// secrets, so impersonating would 403 viewers on inventory metadata
 	// that isn't credential data). Sensitive Helm reads (GetValues,
 	// GetManifest) and all writes still impersonate.
-	helmReleases, helmErrs := collectHelmReleases(ctx, namespaces, nil)
+	helmReleases, helmErrs := collectHelmReleases(ctx, namespaces, nil, status)
 	src.Helm = helmReleases
 	errs = append(errs, helmErrs...)
 
@@ -460,7 +471,7 @@ func computePackagesInternal(ctx context.Context, cache *k8s.ResourceCache, name
 // multi-namespace → one call per namespace; per-namespace forbidden
 // errors are coalesced into one SourceError so a user with access to
 // ns-a but not ns-b still sees ns-a's releases.
-func collectHelmReleases(ctx context.Context, namespaces []string, user *auth.User) ([]packages.HelmRelease, []SourceError) {
+func collectHelmReleases(ctx context.Context, namespaces []string, user *auth.User, status helm.NamespaceStatusScope) ([]packages.HelmRelease, []SourceError) {
 	// Defensive: empty (non-nil) slice means "no namespaces authorized";
 	// callers should short-circuit before reaching here, but guard
 	// against a future caller that forgets and would otherwise fall
@@ -488,7 +499,7 @@ func collectHelmReleases(ctx context.Context, namespaces []string, user *auth.Us
 	var otherErrNamespaces []string
 	var otherErrs []error
 	for _, ns := range scopes {
-		releases, err := hClient.ListReleasesAsUser(ctx, ns, user)
+		releases, err := hClient.ListReleasesAsUser(ctx, ns, user, status)
 		if err == nil {
 			for _, h := range releases {
 				out = append(out, packages.HelmRelease{

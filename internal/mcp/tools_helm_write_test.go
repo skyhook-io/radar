@@ -536,3 +536,29 @@ func TestMaskKnownValuesCoversEscapedForms(t *testing.T) {
 		t.Fatalf("escaped credential survives masking: %s", got)
 	}
 }
+
+func TestRefuseFluxManagedRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		detail  helm.HelmReleaseDetail
+		blocked bool
+	}{
+		{"hidden controller", helm.HelmReleaseDetail{ManagedByFlux: true}, true},
+		{"readable controller", helm.HelmReleaseDetail{ManagedByFlux: true, ManagedByFluxHelmRelease: "shared/private-manager"}, true},
+		{"existing ownership reference", helm.HelmReleaseDetail{ManagedByFluxHelmRelease: "shared/private-manager"}, true},
+		{"ordinary Helm release", helm.HelmReleaseDetail{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := refuseFluxManagedRelease(&tc.detail)
+			if (err != nil) != tc.blocked {
+				t.Fatalf("blocked=%v, want %v", err != nil, tc.blocked)
+			}
+			if err != nil {
+				shown := strings.Contains(err.Error(), "shared/private-manager")
+				if shown != (tc.detail.ManagedByFluxHelmRelease != "") {
+					t.Fatalf("controller reference shown=%v, expected only a caller-readable reference: %v", shown, err)
+				}
+			}
+		})
+	}
+}

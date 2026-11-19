@@ -46,9 +46,15 @@ export const RADAR_FEATURES = {
   applications: { label: 'Applications', minimumVersion: 'v1.7.7' },
   workloadHistory: { label: 'Workload history', flag: 'workloadHistory', flagShippedWithEndpoint: true },
   deploymentPause: { label: 'Deployment rollout pause and resume', flag: 'deploymentPause', flagShippedWithEndpoint: true },
+  substrateHealthMetrics: { label: 'Agent Substrate charts', flag: 'substrateHealthMetrics', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
   cnpgWorkspace: { label: 'CloudNativePG views', flag: 'cnpgWorkspace', flagShippedWithEndpoint: true },
   traefikRoutes: { label: 'Traefik routes', flag: 'traefikRoutes', flagShippedWithEndpoint: true },
   cnpgProtectionSetup: { label: 'CloudNativePG backup setup', flag: 'cnpgProtectionSetup', flagShippedWithEndpoint: true },
+  veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
+  veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },
+  veleroRuns: { label: 'Velero backup and restore lists', flag: 'veleroRuns', flagShippedWithEndpoint: true },
+  veleroDeleteBackup: { label: 'Delete a Velero backup', flag: 'veleroDeleteBackup', flagShippedWithEndpoint: true },
+  resourceDeletePreconditions: { label: 'Delete only the object you reviewed', flag: 'resourceDeletePreconditions', flagShippedWithEndpoint: true },
   gitopsWriteEvidence: { label: 'GitOps revert warnings', flag: 'gitopsWriteEvidence', flagShippedWithEndpoint: true },
   serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },
   trafficRecords: { label: 'Flow records for a graph selection', flag: 'trafficRecords', flagShippedWithEndpoint: true },
@@ -73,6 +79,7 @@ export const RADAR_FEATURES = {
   helmInventory: { label: 'Helm releases without Secret access', flag: 'helmInventory', flagShippedWithEndpoint: true },
   agentSigninCheck: { label: 'Agent sign-in checks', flag: 'agentSigninCheck', flagShippedWithEndpoint: true },
   podFileUpload: { label: 'Pod file uploads', flag: 'podFileUpload', flagShippedWithEndpoint: true },
+  vulnerabilities: { label: 'Vulnerability views', flag: 'vulnerabilities', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES

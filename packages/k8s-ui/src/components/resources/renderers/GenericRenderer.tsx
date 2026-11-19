@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Info, CheckCircle, XCircle, AlertCircle, FileCode, AlertTriangle, Layers, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, isInvertedPolarityCondition } from '../../ui/drawer-components'
+import { AlertBanner, Section, PropertyList, Property, isInvertedPolarityCondition } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
+import { getAgentRuntimeStatus } from '../resource-utils-agent-runtimes'
 import { isApiGroup } from '../resource-utils-cnpg'
 import { getInferenceServiceStatus, isInferenceServiceStopRequested } from '../resource-utils-kserve'
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
@@ -40,32 +41,12 @@ export function GenericRenderer({ data }: GenericRendererProps) {
       {acknowledgedPause && <CrossplanePauseNotice data={data} />}
       {/* Health Status Banner (if determinable) */}
       {healthStatus && (
-        <div className={clsx(
-          'mb-4 p-3 rounded-lg border flex items-center gap-3',
-          healthStatus.type === 'healthy' && 'bg-green-500/10 border-green-500/30',
-          healthStatus.type === 'degraded' && 'bg-yellow-500/10 border-yellow-500/30',
-          healthStatus.type === 'unhealthy' && 'bg-red-500/10 border-red-500/30',
-          healthStatus.type === 'unknown' && 'bg-slate-500/10 border-slate-500/30'
-        )}>
-          {healthStatus.type === 'healthy' && <CheckCircle className="w-5 h-5 text-green-400 shrink-0" />}
-          {healthStatus.type === 'degraded' && <AlertCircle className="w-5 h-5 text-yellow-400 shrink-0" />}
-          {healthStatus.type === 'unhealthy' && <XCircle className="w-5 h-5 text-red-400 shrink-0" />}
-          {healthStatus.type === 'unknown' && <Info className="w-5 h-5 text-slate-400 shrink-0" />}
-          <div>
-            <div className={clsx(
-              'text-sm font-medium',
-              healthStatus.type === 'healthy' && 'text-green-400',
-              healthStatus.type === 'degraded' && 'text-yellow-400',
-              healthStatus.type === 'unhealthy' && 'text-red-400',
-              healthStatus.type === 'unknown' && 'text-slate-400'
-            )}>
-              {healthStatus.label}
-            </div>
-            {healthStatus.message && (
-              <div className="text-xs text-theme-text-secondary mt-0.5">{healthStatus.message}</div>
-            )}
-          </div>
-        </div>
+        <AlertBanner
+          variant={BANNER_VARIANT[healthStatus.level]}
+          icon={BANNER_ICON[healthStatus.level]}
+          title={healthStatus.label}
+          message={healthStatus.message}
+        />
       )}
 
       {/* Empty state hint */}
@@ -139,36 +120,44 @@ export function GenericRenderer({ data }: GenericRendererProps) {
 // HEALTH STATUS DETECTION
 // ============================================================================
 
-type HealthType = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
-
 interface HealthStatusResult {
-  type: HealthType
+  level: HealthLevel
   label: string
   message?: string
 }
 
-// This renderer's banner has four tones, while the shared derivation speaks the
-// full HealthLevel vocabulary. `alert` folds into unhealthy and `neutral` into
-// unknown — the banner has no distinct treatment for either.
-const BANNER_TYPE: Record<HealthLevel, HealthType> = {
-  healthy: 'healthy',
-  degraded: 'degraded',
-  alert: 'unhealthy',
-  unhealthy: 'unhealthy',
+// The shared banner carries light and dark pairs for each tone. `alert` keeps
+// its own orange step between degraded and unhealthy; `neutral` reads like
+// unknown.
+const BANNER_VARIANT = {
+  healthy: 'success',
+  degraded: 'warning',
+  alert: 'alert',
+  unhealthy: 'error',
   neutral: 'unknown',
   unknown: 'unknown',
+} as const satisfies Record<HealthLevel, string>
+const BANNER_ICON: Record<HealthLevel, typeof Info> = {
+  healthy: CheckCircle,
+  degraded: AlertCircle,
+  alert: AlertCircle,
+  unhealthy: XCircle,
+  neutral: Info,
+  unknown: Info,
 }
 
 function getHealthStatus(resource: any): HealthStatusResult | null {
   if (resource?.kind === 'InferenceService' && isApiGroup(resource?.apiVersion, 'serving.kserve.io') && isInferenceServiceStopRequested(resource)) {
     const status = getInferenceServiceStatus(resource)
-    if (status.level === 'neutral') return { type: 'unknown', label: 'Stopped', message: "This model is stopped and isn't serving requests." }
-    return { type: BANNER_TYPE[status.level], label: status.text }
+    if (status.level === 'neutral') return { level: 'neutral', label: 'Stopped', message: "This model is stopped and isn't serving requests." }
+    return { level: status.level, label: status.text }
   }
+  const agentRuntime = getAgentRuntimeStatus(resource)
+  if (agentRuntime) return { level: agentRuntime.level, label: agentRuntime.text, message: agentRuntime.message }
   const acknowledgedPause = getCrossplanePauseState(resource) === 'acknowledged'
   const derived = acknowledgedPause ? getCrossplaneIndependentStatus(resource) : getGenericResourceStatus(resource)
   if (!derived || (acknowledgedPause && derived.tone === 'healthy')) return null
-  return { type: BANNER_TYPE[derived.tone], label: derived.text, message: derived.reason }
+  return { level: derived.tone, label: derived.text, message: derived.reason }
 }
 
 // ============================================================================
@@ -357,6 +346,8 @@ export function genericConditionTone(resource: any, cond: any): GenericCondition
   if (getCrossplaneConditionTone(resource, cond) === 'neutral') return 'neutral'
   if (cond.status !== 'True' && cond.status !== 'False') return 'unknown'
   if (isKServeStopState(resource, cond)) return 'neutral'
+  if (resource?.kind === 'ApplicationSet' && isApiGroup(resource?.apiVersion, 'argoproj.io')
+    && cond.type === 'RolloutProgressing') return 'neutral'
   const isTrue = cond.status === 'True'
   if (WARNING_CONDITION_TYPES.has(cond.type)) return isTrue ? 'warning' : 'ok'
   if (isInvertedPolarityCondition(cond.type)) return isTrue ? 'fail' : 'ok'

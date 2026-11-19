@@ -1,18 +1,33 @@
 package mcp
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"log"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	fakediscovery "k8s.io/client-go/discovery/fake"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -314,6 +329,7 @@ func TestAllowPseudoKindTuplesMCP_NodeClass_AllowedWithProviderSAR(t *testing.T)
 // topology node resolves its API group and resource.
 func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T) {
 	setupSecretRefCacheMCP(t)
+	withWatchedNeighborhoodKindsMCP(t)
 
 	// Unauthorized
 	ctxDeny := withTestUserPerms(t, "alice", nil, nil)
@@ -359,6 +375,7 @@ func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T
 // NodePool roots are cluster-scoped and never require a namespace.
 func TestHandleGetNeighborhoodMCP_NodePoolRootNotNamespaceRequired(t *testing.T) {
 	setupSecretRefCacheMCP(t)
+	withWatchedNeighborhoodKindsMCP(t)
 
 	ctxDeny := withTestUserPerms(t, "alice", nil, nil)
 	denyPerms := getPermCache().Get("alice", nil)
@@ -439,6 +456,125 @@ func setupSecretRefCacheMCP(t *testing.T) {
 	t.Cleanup(func() {
 		k8s.ResetTestState()
 		getPermCache().Invalidate()
+	})
+	withNeighborhoodDiscoveryMCP(t, neighborhoodTestDiscoveryMCP())
+}
+
+// neighborhoodTestDiscoveryMCP is what a connected cluster's discovery serves
+// for the neighborhood fixtures. The neighborhood refuses to answer until
+// discovery has served something.
+func neighborhoodTestDiscoveryMCP() []*metav1.APIResourceList {
+	verbs := metav1.Verbs{"delete", "get", "list", "watch"}
+	return []*metav1.APIResourceList{
+		{GroupVersion: "v1", APIResources: []metav1.APIResource{
+			{Name: "pods", Kind: "Pod", Namespaced: true, Verbs: verbs},
+			{Name: "secrets", Kind: "Secret", Namespaced: true, Verbs: verbs},
+			{Name: "configmaps", Kind: "ConfigMap", Namespaced: true, Verbs: verbs},
+			{Name: "services", Kind: "Service", Namespaced: true, Verbs: verbs},
+			{Name: "namespaces", Kind: "Namespace", Verbs: verbs},
+			{Name: "nodes", Kind: "Node", Verbs: verbs},
+		}},
+		{GroupVersion: "apps/v1", APIResources: []metav1.APIResource{
+			{Name: "deployments", Kind: "Deployment", Namespaced: true, Verbs: verbs},
+			{Name: "replicasets", Kind: "ReplicaSet", Namespaced: true, Verbs: verbs},
+		}},
+		{GroupVersion: "karpenter.sh/v1", APIResources: []metav1.APIResource{
+			{Name: "nodepools", Kind: "NodePool", Verbs: verbs},
+			{Name: "nodeclaims", Kind: "NodeClaim", Verbs: verbs},
+		}},
+		{GroupVersion: "karpenter.k8s.aws/v1", APIResources: []metav1.APIResource{{Name: "ec2nodeclasses", Kind: "EC2NodeClass", Verbs: verbs}}},
+		{GroupVersion: "karpenter.azure.com/v1beta1", APIResources: []metav1.APIResource{{Name: "aksnodeclasses", Kind: "AKSNodeClass", Verbs: verbs}}},
+		{GroupVersion: "karpenter.k8s.gcp/v1alpha1", APIResources: []metav1.APIResource{{Name: "gcenodeclasses", Kind: "GCENodeClass", Verbs: verbs}}},
+	}
+}
+
+func withNeighborhoodDiscoveryMCP(t *testing.T, resources []*metav1.APIResourceList) {
+	t.Helper()
+	fd := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	fd.Resources = resources
+	restore, err := k8s.SetTestResourceDiscovery(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+}
+
+// withWatchedNeighborhoodKindsMCP installs discovery serving the neighborhood
+// fixtures' kinds and a dynamic cache that has loaded the custom ones, so an
+// absent custom root reads as absent rather than as not collected.
+func withWatchedNeighborhoodKindsMCP(t *testing.T) {
+	t.Helper()
+	var resources []k8s.APIResource
+	listKinds := map[schema.GroupVersionResource]string{}
+	for _, list := range neighborhoodTestDiscoveryMCP() {
+		gv, err := schema.ParseGroupVersion(list.GroupVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		custom := gv.Group != "" && gv.Group != "apps"
+		for _, r := range list.APIResources {
+			resources = append(resources, k8s.APIResource{Group: gv.Group, Version: gv.Version, Kind: r.Kind, Name: r.Name, Namespaced: r.Namespaced, IsCRD: custom, Verbs: []string(r.Verbs)})
+			if custom {
+				listKinds[gv.WithResource(r.Name)] = r.Kind + "List"
+			}
+		}
+	}
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds), resources); err != nil {
+		t.Fatal(err)
+	}
+	dc := k8s.GetDynamicResourceCache()
+	for gvr := range listKinds {
+		if err := dc.EnsureWatching(gvr); err != nil {
+			t.Fatal(err)
+		}
+		if !dc.WaitForSync(gvr, 5*time.Second) {
+			t.Fatalf("%s did not sync", gvr)
+		}
+	}
+}
+
+// A Role needs the caller's own permission whether or not discovery lists the
+// RBAC group, since the typed cache reads it either way; and before discovery
+// has served anything the neighborhood doesn't answer at all.
+func TestNeighborhoodMCP_RoleRootNeedsItsOwnPermissionWithoutDiscovery(t *testing.T) {
+	client := fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "web-role", Namespace: "shop", UID: "role-uid"}},
+	)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	t.Cleanup(func() {
+		k8s.ResetTestState()
+		getPermCache().Invalidate()
+	})
+	call := func(user string, grant bool) (*mcp.CallToolResult, error) {
+		t.Helper()
+		ctx := withRestrictedUser(t, user, []string{"shop"})
+		getPermCache().Get(user, nil).SetCanI("get", "rbac.authorization.k8s.io", "roles", "shop", grant)
+		result, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "role", Namespace: "shop", Name: "web-role"})
+		return result, err
+	}
+	t.Run("rbac group missing from discovery", func(t *testing.T) {
+		withNeighborhoodDiscoveryMCP(t, neighborhoodTestDiscoveryMCP())
+		if _, err := call("role-granted", true); err != nil {
+			t.Fatalf("user who may get roles: %v; the fixture no longer reaches the Role", err)
+		}
+		if result, err := call("role-denied", false); err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Errorf("user who may not get roles: %+v, %v; want not found", result, err)
+		}
+	})
+	t.Run("empty discovery", func(t *testing.T) {
+		withNeighborhoodDiscoveryMCP(t, nil)
+		for _, grant := range []bool{false, true} {
+			_, err := call(fmt.Sprintf("role-empty-%v", grant), grant)
+			if code, ok := readErrorCodeOf(err); !ok || code != readreason.ClusterConnecting {
+				t.Errorf("get roles %v with nothing discovered: %v, want %s", grant, err, readreason.ClusterConnecting)
+			}
+		}
 	})
 }
 
@@ -542,5 +678,170 @@ func TestNeighborhoodMCP_SecretRootIncluded(t *testing.T) {
 		t.Error("unauthorized user got success for Secret root — Allow gate must produce not-found via empty subgraph (existence-hiding)")
 	} else if !strings.Contains(err2.Error(), "not found") {
 		t.Errorf("unauthorized user got unexpected error %v — expected 'not found' shape to mirror existence-hiding", err2)
+	}
+}
+
+// A root Radar doesn't collect answers with the read's own code, so an agent
+// can tell it from one that doesn't exist; a caller who may not read the root
+// still gets not found.
+func TestNeighborhoodMCP_UncollectedRootAnswersWithItsReadCode(t *testing.T) {
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "key", Namespace: "shop"}},
+	), map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true}, k8score.Namespaces: {Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	t.Cleanup(func() {
+		k8s.ResetTestState()
+		getPermCache().Invalidate()
+	})
+	withNeighborhoodDiscoveryMCP(t, neighborhoodTestDiscoveryMCP())
+	for _, grant := range []bool{true, false} {
+		user := fmt.Sprintf("secret-reader-%v", grant)
+		ctx := withRestrictedUser(t, user, []string{"shop"})
+		getPermCache().Get(user, nil).SetCanI("get", "", "secrets", "shop", grant)
+		_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "secret", Namespace: "shop", Name: "key"})
+		code, coded := readErrorCodeOf(err)
+		switch {
+		case grant && code != readreason.RadarKindNotCollected:
+			t.Errorf("may get secrets: %v, want %s", err, readreason.RadarKindNotCollected)
+		case !grant && (coded || err == nil || !strings.Contains(err.Error(), "not found")):
+			t.Errorf("may not get secrets: %v, want not found", err)
+		}
+	}
+}
+
+// A walk that runs out of time says so and how to narrow the request.
+func TestNeighborhoodMCP_PastDeadlineSaysHowToNarrow(t *testing.T) {
+	setupSecretRefCacheMCP(t)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "deployment", Namespace: "default", Name: "nginx", Hops: 2})
+	if err == nil || !strings.Contains(err.Error(), "deadline") || !strings.Contains(err.Error(), "reduce hops (current 2)") {
+		t.Fatalf("past-deadline walk: %v", err)
+	}
+}
+
+// A root whose kind Radar may not read or doesn't collect says so with the
+// read's code, and never suggests a same-named object of another kind.
+func TestNeighborhoodMCP_RootKindDeniedToRadarSaysSo(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "bookinfo"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "reviews", Namespace: "bookinfo"}},
+	)); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	t.Cleanup(func() {
+		k8s.ResetTestState()
+		getPermCache().Invalidate()
+	})
+	gvr := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
+	// Unwatched, the neighborhood starts the kind's watch itself, whose access
+	// check finds the denial.
+	for _, tc := range []struct {
+		watch bool
+		want  readreason.Code
+	}{{true, readreason.RadarForbidden}, {false, readreason.RadarForbidden}} {
+		t.Run(fmt.Sprintf("watched=%v", tc.watch), func(t *testing.T) {
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "VirtualServiceList"})
+			dyn.PrependReactor("list", "virtualservices", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", fmt.Errorf("radar may not list virtualservices"))
+			})
+			verbs := []string{"delete", "get", "list", "watch"}
+			k8s.ResetTestDynamicState()
+			t.Cleanup(k8s.ResetTestDynamicState)
+			if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+				{Version: "v1", Kind: "Service", Name: "services", Namespaced: true, Verbs: verbs},
+				{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: verbs},
+				{Group: gvr.Group, Version: gvr.Version, Kind: "VirtualService", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: verbs},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if tc.watch {
+				dc := k8s.GetDynamicResourceCache()
+				_ = dc.EnsureWatching(gvr)
+				for deadline := time.Now().Add(5 * time.Second); dc.Observation(gvr).State != k8score.DynamicObservationDenied; time.Sleep(10 * time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Fatalf("the denial was never observed: %+v", dc.Observation(gvr))
+					}
+				}
+			}
+			ctx := withRestrictedUser(t, "istio-reader", []string{"bookinfo"})
+			_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "virtualservice", Group: "networking.istio.io", Namespace: "bookinfo", Name: "reviews", Hops: 2})
+			if code, _ := readErrorCodeOf(err); code != tc.want || strings.Contains(err.Error(), "retry with kind") || strings.Contains(err.Error(), "not found") {
+				t.Fatalf("got %v, want %s", err, tc.want)
+			}
+		})
+	}
+}
+
+// A root whose custom kind nothing has watched starts the kind's watch, as a
+// read of the object would, and answers from it once it loads; until then it
+// says the kind is still loading.
+func TestNeighborhoodMCP_UnwatchedCustomRootStartsItsWatch(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}})); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	t.Cleanup(func() {
+		k8s.ResetTestState()
+		getPermCache().Invalidate()
+	})
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	for _, hold := range []bool{false, true} {
+		t.Run(fmt.Sprintf("held=%v", hold), func(t *testing.T) {
+			widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.io/v1", "kind": "Widget", "metadata": map[string]any{"name": "w1", "namespace": "shop", "uid": "w1"}}}
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, widget)
+			verbs := []string{"delete", "get", "list", "watch"}
+			k8s.ResetTestDynamicState()
+			t.Cleanup(k8s.ResetTestDynamicState)
+			if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+				{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: verbs},
+				{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: verbs},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if hold {
+				dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+					if l, ok := a.(k8stesting.ListActionImpl); ok && l.ListOptions.Limit == 1 {
+						return false, nil, nil
+					}
+					return true, nil, apierrors.NewInternalError(fmt.Errorf("the API server is busy"))
+				})
+			}
+			ctx := withRestrictedUser(t, "widget-reader", []string{"shop"})
+			result, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "widget", Group: "example.io", Namespace: "shop", Name: "w1"})
+			if hold {
+				if code, _ := readErrorCodeOf(err); code != readreason.KindSyncPending {
+					t.Fatalf("got %v, want %s", err, readreason.KindSyncPending)
+				}
+				return
+			}
+			if err != nil || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, `"name":"w1"`) {
+				t.Fatalf("got %v %v, want the Widget's neighborhood", result, err)
+			}
+		})
+	}
+}
+
+// A neighborhood cut off by its deadline is logged as a timeout, as REST logs
+// none, not as a failed call carrying its error text.
+func TestNeighborhoodMCP_TimeoutIsNotLoggedAsAnError(t *testing.T) {
+	setupSecretRefCacheMCP(t)
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	call := logToolCall("get_neighborhood", handleGetNeighborhood)
+	if _, _, err := call(ctx, nil, getNeighborhoodInput{Kind: "deployment", Namespace: "default", Name: "nginx"}); err == nil {
+		t.Fatal("a walk past its deadline answered")
+	}
+	out := logs.String()
+	if !strings.Contains(out, "TIMEOUT") || !strings.Contains(out, "level=warn component=mcp tool=get_neighborhood") || strings.Contains(out, "level=error") || strings.Contains(out, "narrow it") {
+		t.Fatalf("timeout logged as a failure:\n%s", out)
 	}
 }

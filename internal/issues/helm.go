@@ -14,7 +14,7 @@ const NativeHelmGroup = "helm.sh"
 func NativeHelmReleaseIssues(releases []helm.HelmRelease, now time.Time) []Issue {
 	out := make([]Issue, 0, len(releases))
 	for _, rel := range releases {
-		if rel.ManagedByFluxHelmRelease != "" || rel.LastOperation == nil {
+		if rel.ManagedByFlux || rel.ManagedByFluxHelmRelease != "" || rel.LastOperation == nil {
 			continue
 		}
 		op := rel.LastOperation

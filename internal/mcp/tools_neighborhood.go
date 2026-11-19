@@ -2,9 +2,12 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -99,36 +102,6 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		opts.MaxNodes = 200
 	}
 
-	// Build the full topology and slice via BFS. The MCP server doesn't own
-	// a topology memoizer (the REST server does), so we accept the per-call
-	// rebuild cost here — neighborhood is a low-frequency tool.
-	//
-	// dp is captured once and threaded into both Builder and BuildNeighborhoodWithIndex
-	// so root-ID construction can resolve CRD plurals correctly (without it,
-	// buildNodeID falls back to the static kindMap which only covers built-in kinds).
-	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-	buildOpts := topology.DefaultBuildOptions()
-	buildOpts.IncludeReplicaSets = true
-	buildOpts.ForRelationshipCache = true
-	// Override DefaultBuildOptions' Secret-elision: with IncludeSecrets=false,
-	// root lookup for kind=secret produces an empty subgraph and the handler
-	// returns "resource not found" even for authorized users. The Allow gate
-	// below applies the per-namespace `get secrets` SAR per node, so
-	// unauthorized users still get the same "not found" via the empty-subgraph
-	// path — existence-hiding preserved.
-	buildOpts.IncludeSecrets = true
-	topo, err := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
-		WithDynamic(dp).
-		Build(buildOpts)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build topology: %w", err)
-	}
-	// Build the inverted index once and reuse it across BFS expansion plus
-	// any per-resource relationship lookups downstream. Without a memoizer
-	// the cost is paid every call, but it's still cheaper than scanning
-	// topo.Edges from inside the BFS loop (O(E) per hop level).
-	idx := topology.IndexByResource(topo)
-
 	root := topology.ResourceRef{
 		Kind:      displayKindForMCP(input.Kind),
 		Namespace: input.Namespace,
@@ -142,7 +115,18 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		return canReadNeighborhoodNodeMCP(ctx, n)
 	}
 
-	sub := topology.BuildNeighborhoodWithIndex(topo, root, opts, idx, dp)
+	sub, err := k8s.AnswerNeighborhood(ctx, cache, root, opts)
+	switch {
+	case err == nil:
+	case errors.Is(err, ownership.ErrCachesReplaced):
+		return nil, nil, errConnectionChanged()
+	case errors.Is(err, ownership.ErrNotConnected):
+		return nil, nil, readErrorf(readreason.ClusterConnecting, "Radar is still connecting to the cluster or discovering its resource kinds, so it can't answer the neighborhood yet; retry shortly.")
+	case errors.Is(err, context.DeadlineExceeded):
+		return nil, nil, &timeoutError{msg: fmt.Sprintf("the neighborhood didn't finish before the deadline; narrow it: reduce hops (current %d), lower max_nodes (current %d), or use profile auto", opts.Hops, opts.MaxNodes)}
+	default:
+		return nil, nil, fmt.Errorf("failed to answer neighborhood: %w", err)
+	}
 	// Same reason as the REST neighborhood: a Calico policy admitted through one
 	// serving group must not advertise the other.
 	topology.ReadvertiseCalicoPolicyNodes(sub.Nodes, func(t topology.SARTuple) bool {
@@ -156,6 +140,9 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		return nil, nil, fmt.Errorf("resource kind is ambiguous for %s/%s/%s; provide group", input.Kind, input.Namespace, input.Name)
 	}
 	if len(sub.Nodes) == 0 {
+		if sub.RootUnavailable != "" {
+			return nil, nil, dynamicPlanError(ctx, input.Kind, input.Group, input.Namespace, "read", sub.RootUnavailable)
+		}
 		if s := notFoundSuggestion(ctx, input.Kind, input.Namespace, input.Name); s != "" {
 			return nil, nil, fmt.Errorf("resource not found in topology: %s/%s/%s — %s", input.Kind, input.Namespace, input.Name, s)
 		}
@@ -207,15 +194,18 @@ func displayKindForMCP(kind string) string {
 // so both surfaces stay in lockstep when the pseudo-kind table or Secret-
 // tightening rules evolve.
 //
-// See REST canReadNeighborhoodNode for the Secret SAR rationale — namespace
-// access alone leaks Secrets when the cache SA has cluster-wide secrets RBAC
-// the calling user doesn't.
+// See REST canReadNeighborhoodNode for the per-kind SAR rationale — namespace
+// access alone leaks Secrets, Roles, RoleBindings, LimitRanges and Trivy
+// reports when the cache SA can read them and the calling user can't.
 func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
 	// Namespace-list gate is protocol-specific; apply it here for namespaced
 	// nodes BEFORE consulting the shared helper.
 	if n != nil && n.Data != nil {
 		if ns, ok := n.Data["namespace"].(string); ok && ns != "" {
 			if !checkNamespaceAccess(ctx, ns) {
+				return false
+			}
+			if group, resource, resolved := k8s.ExactNamespaceAccessNode(n); !resolved || resource != "" && !canReadInNamespace(ctx, group, resource, ns, "get") {
 				return false
 			}
 		}

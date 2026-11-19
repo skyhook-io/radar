@@ -146,6 +146,25 @@ body {
   flex-direction: column;
 }
 
+/* The Windows desktop app draws its own title bar above the app shell
+   (desktop/WindowsTitleBar.tsx); the shell gives up that height. */
+html.radar-custom-titlebar body {
+  overflow: hidden;
+}
+html.radar-custom-titlebar #radar {
+  margin-top: var(--radar-titlebar-h);
+  height: calc(100vh - var(--radar-titlebar-h));
+}
+html.radar-custom-titlebar #radar .h-screen {
+  height: calc(100vh - var(--radar-titlebar-h));
+}
+/* Full-window overlays (dialogs, fullscreen views) start below the title bar
+   so their own top controls stay reachable. */
+html.radar-custom-titlebar .fixed.inset-0:not([data-radar-titlebar]),
+html.radar-custom-titlebar .fixed.top-0:not([data-radar-titlebar]) {
+  top: var(--radar-titlebar-h);
+}
+
 /* ============================================
    REACT FLOW CUSTOMIZATIONS
    ============================================ */

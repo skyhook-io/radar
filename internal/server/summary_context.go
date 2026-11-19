@@ -4,8 +4,7 @@
 // The shared core (issue index, kind canonicalization, managedBy
 // resolution, per-row scope dispatch) lives in
 // internal/summarycontext. This file is the REST-specific wrapper —
-// it sources topology from the server-wide broadcaster cache and
-// otherwise just plumbs arguments through.
+// it supplies caller access to the shared family reader.
 
 package server
 
@@ -17,8 +16,6 @@ import (
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/pkg/ownership"
 )
-
-var summaryTopologyGate = summarycontext.NewBudgetGate(1)
 
 // newResourceSummaryContextBuilder assembles the per-request closure for the
 // list/search handlers. A missing typed cache returns nil; WithBudget turns that
@@ -38,12 +35,7 @@ func (s *Server) newResourceSummaryContextBuilder(r *http.Request, namespaces []
 		return nil
 	}
 	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadSubject: s.issueSubjectAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
-	return summarycontext.BuilderFromIndexes(r.Context(), func() summarycontext.IndexedTopology {
-		return summarycontext.WithinContext(r.Context(), summaryTopologyGate, func() summarycontext.IndexedTopology {
-			graph, index := s.broadcaster.GetCachedTopologyWithIndex()
-			return summarycontext.IndexedTopology{Topology: graph, Index: index}
-		})
-	}, idx, idx, s.summaryRefReader(r), s.summaryAgentOwnership(r))
+	return summarycontext.BuilderFromIndexes(r.Context(), idx, idx, s.summaryRefReader(r), s.summaryAgentOwnership(r))
 }
 
 // newSearchSummaryContextBuilder is the search-specific variant. Search
@@ -79,12 +71,7 @@ func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces 
 	if statusOnly {
 		return summarycontext.StatusBuilderFromIndexes(r.Context(), namespacedIdx, clusterIdx)
 	}
-	return summarycontext.BuilderFromIndexes(r.Context(), func() summarycontext.IndexedTopology {
-		return summarycontext.WithinContext(r.Context(), summaryTopologyGate, func() summarycontext.IndexedTopology {
-			graph, index := s.broadcaster.GetCachedTopologyWithIndex()
-			return summarycontext.IndexedTopology{Topology: graph, Index: index}
-		})
-	}, namespacedIdx, clusterIdx, s.summaryRefReader(r), s.summaryAgentOwnership(r))
+	return summarycontext.BuilderFromIndexes(r.Context(), namespacedIdx, clusterIdx, s.summaryRefReader(r), s.summaryAgentOwnership(r))
 }
 
 // summaryRefReader is the caller's access to a reference a summary names, as

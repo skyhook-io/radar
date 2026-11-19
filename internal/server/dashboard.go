@@ -28,6 +28,7 @@ import (
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/netpol"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -287,6 +288,8 @@ type DashboardHelmRelease struct {
 	ChartVersion   string `json:"chartVersion"`
 	Status         string `json:"status"`
 	ResourceHealth string `json:"resourceHealth,omitempty"`
+	// See helm.HelmRelease.StatusUnreadCount.
+	StatusUnreadCount int `json:"statusUnreadCount,omitempty"`
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -1255,7 +1258,7 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string, c
 		}
 	}
 
-	releases, read, denied, err := helmClient.ListReleasesRecordingAccess(r.Context(), namespaces, auth.UserFromContext(r.Context()))
+	releases, read, denied, err := helmClient.ListReleasesRecordingAccess(r.Context(), namespaces, auth.UserFromContext(r.Context()), s.helmObjectScope(r))
 	if (err == nil && len(read) == 0 && len(denied) > 0) || helm.ReleaseReadDeniedForCaller(err) {
 		// With a permission check unanswered, the read may have fallen back
 		// to a cluster-wide list the caller can't make even though some
@@ -1304,12 +1307,13 @@ func dashboardHelmSummaryFromReleases(releases []helm.HelmRelease) DashboardHelm
 	result.Releases = make([]DashboardHelmRelease, 0, limit)
 	for _, rel := range releases[:limit] {
 		result.Releases = append(result.Releases, DashboardHelmRelease{
-			Name:           rel.Name,
-			Namespace:      rel.Namespace,
-			Chart:          rel.Chart,
-			ChartVersion:   rel.ChartVersion,
-			Status:         rel.Status,
-			ResourceHealth: rel.ResourceHealth,
+			Name:              rel.Name,
+			Namespace:         rel.Namespace,
+			Chart:             rel.Chart,
+			ChartVersion:      rel.ChartVersion,
+			Status:            rel.Status,
+			ResourceHealth:    rel.ResourceHealth,
+			StatusUnreadCount: rel.StatusUnreadCount,
 		})
 	}
 
@@ -1571,7 +1575,7 @@ type npSelector struct {
 
 type dashboardCalicoPolicy struct {
 	policy     *unstructured.Unstructured
-	matcher    *topology.CalicoPolicyMatcher
+	matcher    *netpol.CalicoPolicyMatcher
 	definition topology.CalicoPolicyKind
 	// previewsProtection is false for the staged actions that describe removing
 	// or ignoring a policy rather than adding one.
@@ -1755,10 +1759,10 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 						seenCalicoPolicies[identity] = struct{}{}
 						calicoPolicies = append(calicoPolicies, dashboardCalicoPolicy{
 							policy:             policy,
-							matcher:            topology.CompileCalicoPolicyMatcher(policy),
+							matcher:            netpol.CompileCalicoPolicyMatcher(policy),
 							definition:         definition,
-							previewsProtection: !definition.Staged || topology.CalicoStagedActionPreviewsProtection(policy),
-							stagesRemoval:      definition.Staged && topology.CalicoStagedActionStagesRemoval(policy),
+							previewsProtection: !definition.Staged || netpol.CalicoStagedActionPreviewsProtection(policy),
+							stagesRemoval:      definition.Staged && netpol.CalicoStagedActionStagesRemoval(policy),
 						})
 					}
 				}
@@ -1869,7 +1873,7 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 				coveredIfStaged[workload.key] = true
 			}
 		}
-		calicoEndpointLabels := topology.CalicoEndpointLabels(workload.namespace, workload.labels, workload.serviceAccount)
+		calicoEndpointLabels := netpol.CalicoEndpointLabels(workload.namespace, workload.labels, workload.serviceAccount)
 		for _, policy := range calicoPolicies {
 			if policy.definition.Namespaced && policy.policy.GetNamespace() != workload.namespace {
 				continue

@@ -22,12 +22,19 @@ type CiliumIdentity struct {
 // CiliumIdentityFor builds the pod's identity; ns may be nil when the
 // Namespace isn't readable.
 func CiliumIdentityFor(pod *corev1.Pod, ns *corev1.Namespace) CiliumIdentity {
+	return CiliumIdentityOf(pod.Namespace, pod.Labels, pod.Spec.ServiceAccountName, ns)
+}
+
+// CiliumIdentityOf builds the identity of a pod in namespace with podLabels
+// and serviceAccount, such as the pods a workload's template makes; ns may be
+// nil when the Namespace isn't readable.
+func CiliumIdentityOf(namespace string, podLabels map[string]string, serviceAccount string, ns *corev1.Namespace) CiliumIdentity {
 	set := labels.Set{}
-	for k, v := range pod.Labels {
+	for k, v := range podLabels {
 		set[k] = v
 	}
-	set["io.kubernetes.pod.namespace"] = pod.Namespace
-	sa := pod.Spec.ServiceAccountName
+	set["io.kubernetes.pod.namespace"] = namespace
+	sa := serviceAccount
 	if sa == "" {
 		sa = "default"
 	}
@@ -58,6 +65,15 @@ func CiliumGoverns(obj *unstructured.Unstructured, id CiliumIdentity, dir Direct
 // dir: a deny-only spec can't, so it doesn't count. Same caller scoping.
 func CiliumMayAllow(obj *unstructured.Unstructured, id CiliumIdentity, dir Direction) (selects, decided bool, why string) {
 	return ciliumSelects(obj, id, func(spec map[string]any) bool { return ciliumSpecMayAllow(spec, dir) })
+}
+
+// CiliumSelects reports whether any of a Cilium policy's specs selects the
+// identity, whatever rules it carries. decided is false when the selector
+// can't be judged from what Radar knows. Same caller scoping as
+// CiliumGoverns.
+func CiliumSelects(obj *unstructured.Unstructured, id CiliumIdentity) (selects, decided bool) {
+	selects, decided, _ = ciliumSelects(obj, id, func(map[string]any) bool { return true })
+	return selects, decided
 }
 
 func ciliumSelects(obj *unstructured.Unstructured, id CiliumIdentity, covers func(map[string]any) bool) (selects, decided bool, why string) {

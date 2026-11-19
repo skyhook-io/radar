@@ -388,7 +388,7 @@ func InitResourceCache(ctx context.Context) error {
 	var initErr error
 	once, gen := claimCacheInit()
 	once.Do(func() {
-		client := GetClient()
+		client, informerClient := getCacheClients()
 		if client == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
@@ -443,7 +443,7 @@ func InitResourceCache(ctx context.Context) error {
 		cronJobScheduleObservations := newCronJobScheduleObservationTracker()
 
 		cfg := k8score.CacheConfig{
-			Client:                  client,
+			Client:                  informerClient,
 			ResourceScopes:          scopes,
 			ResourceScopeNamespaces: permResult.ScopeNamespaces,
 			DeferredTypes:           deferredResources,
@@ -909,10 +909,14 @@ func deletionAccountsForGenerationBump(oldObj, newObj any) bool {
 
 func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
 	if oldU, newU, ok := unstructuredPair(oldObj, newObj); ok && !desiredStateStripped(newU) {
-		registration, audited := diffFunctions[kind]
-		if !audited || resourceid.GroupFromAPIVersion(newU.GetAPIVersion()) != registration.group {
-			return !reflect.DeepEqual(genericDesiredState(oldU), genericDesiredState(newU))
+		oldDesired, newDesired := genericDesiredState(oldU), genericDesiredState(newU)
+		if registration, audited := diffFunctions[kind]; audited && resourceid.GroupFromAPIVersion(newU.GetAPIVersion()) == registration.group {
+			for _, root := range registration.requestRoots {
+				delete(oldDesired, root)
+				delete(newDesired, root)
+			}
 		}
+		return !reflect.DeepEqual(oldDesired, newDesired)
 	}
 	// The delete event that follows records the removal.
 	if deletionAccountsForGenerationBump(oldObj, newObj) {
@@ -1578,6 +1582,17 @@ func (c *ResourceCache) listTypedAsUnstructured(ctx context.Context, gvr schema.
 
 // ListDynamicWithGroup returns resources, using the group to disambiguate
 func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, namespace string, group string) ([]*unstructured.Unstructured, error) {
+	return c.listDynamicWithGroup(ctx, kind, namespace, group, false)
+}
+
+// ListDynamicReadOnlyWithGroup preserves ListDynamicWithGroup's routing and
+// watch activation, but borrows dynamic informer objects. Callers must not
+// mutate them or retain them beyond their synchronous computation.
+func (c *ResourceCache) ListDynamicReadOnlyWithGroup(ctx context.Context, kind, namespace, group string) ([]*unstructured.Unstructured, error) {
+	return c.listDynamicWithGroup(ctx, kind, namespace, group, true)
+}
+
+func (c *ResourceCache) listDynamicWithGroup(ctx context.Context, kind, namespace, group string, readOnly bool) ([]*unstructured.Unstructured, error) {
 	if gvr, ok := typedRouteGVR(kind, group); ok {
 		if out, handled, err := c.listTypedAsUnstructured(ctx, gvr, kind, namespace); handled {
 			return out, err
@@ -1598,6 +1613,9 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 		return dynamicCache.ListDirect(ctx, gvr, namespace)
 	}
 
+	if readOnly {
+		return dynamicCache.ListReadOnlyContext(ctx, gvr, namespace)
+	}
 	return dynamicCache.List(gvr, namespace)
 }
 
@@ -2418,7 +2436,7 @@ func bootstrapResourcePermissions(ctx context.Context, probe func(context.Contex
 // hold the very rejection being retried, without bumping the generation, so
 // the first result can still be published if the retry is discarded.
 func freshResourcePermissions(ctx context.Context, retry bool) permissionProbe {
-	return probeResourcePermissions(ctx, retry)
+	return probeResourcePermissions(ctx, retry, GetInformerDynamicClient)
 }
 
 // credentialsRejectedEverywhere reports a probe in which no kind

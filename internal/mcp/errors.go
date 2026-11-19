@@ -1,6 +1,9 @@
 package mcp
 
 import (
+	"context"
+	"errors"
+
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
@@ -29,6 +32,13 @@ func errNotConnected() error {
 	return readErrorf(readreason.ClusterDisconnected, "not connected to cluster. %s", restoreConnection)
 }
 
+// errNamespaceCheckFailed answers a read when Radar couldn't work out which
+// namespaces the caller can access. It is not a denial, and a retry can
+// succeed, so it must never read as "no access" or as an empty result.
+func errNamespaceCheckFailed() error {
+	return readErrorf(readreason.UserPermissionCheckFailed, "Radar couldn't check which namespaces you can access, so it read nothing.")
+}
+
 // restoreConnection is the remedy when Radar does not recover on its own:
 // outside credential failures, a retry is what reconnects.
 const restoreConnection = "Whoever runs Radar must restore its connection to the cluster (network, API endpoint or credentials); POST /api/connection/retry forces an immediate check"
@@ -41,4 +51,17 @@ func requireConnected() error {
 		return nil
 	}
 	return errNotConnected()
+}
+
+// timeoutError is a call cut off by its request's deadline. The caller can
+// narrow the request and retry; it is not a failure of Radar's, so the call
+// log records it as a timeout, not an error.
+type timeoutError struct{ msg string }
+
+func (e *timeoutError) Error() string { return e.msg }
+func (e *timeoutError) Unwrap() error { return context.DeadlineExceeded }
+
+func isTimeout(err error) bool {
+	var t *timeoutError
+	return errors.As(err, &t)
 }

@@ -103,9 +103,10 @@ type Handlers struct {
 	// depend on its per-user RBAC plumbing. May be nil in tests that don't
 	// exercise the list endpoints.
 	resolveNamespaces func(r *http.Request) ([]string, bool)
-	// ObjectScope builds the caller's view of cached objects for reads that
-	// don't touch Helm's storage. Nil, or a nil result, means the cache isn't
-	// available. Injected for the same reason as resolveNamespaces.
+	// ObjectScope builds the caller's view of cached objects, for reads that
+	// don't touch Helm's storage and for the live status release health is
+	// computed from. Nil, or a nil result, means the cache isn't available.
+	// Injected for the same reason as resolveNamespaces.
 	ObjectScope func(r *http.Request) *ObjectScope
 	// ResolveStorageNamespaces is resolveNamespaces that also reports whether
 	// every Secrets check behind it was answered, and the namespaces it left
@@ -257,6 +258,9 @@ func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The scope comes first, as in handleInventory: its namespace check caches
+	// the caller's answer for the resolver.
+	scope := h.objectScope(r)
 	// Resolve which namespaces to list. An explicit ?namespace= is honored by
 	// the resolver (via the request query); when none is given, a
 	// namespace-restricted identity resolves to its accessible namespaces
@@ -268,7 +272,7 @@ func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := userCreds(r)
-	releases, err := client.ListReleasesAcrossNamespaces(r.Context(), namespaces, user)
+	releases, err := client.ListReleasesAcrossNamespaces(r.Context(), namespaces, user, scope)
 	if err != nil {
 		if errors.Is(r.Context().Err(), context.Canceled) {
 			return // the caller left; this is not a Helm failure
@@ -367,7 +371,7 @@ func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 
 	user := userCreds(r)
-	release, err := client.GetReleaseAsUser(namespace, name, user)
+	release, err := client.GetReleaseAsUser(namespace, name, user, h.objectScope(r))
 	if err != nil {
 		writeGetReleaseError(w, err)
 		return

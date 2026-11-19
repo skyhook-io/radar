@@ -7,6 +7,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 type HelmOperation = helmhistory.Operation
@@ -29,12 +30,13 @@ type HelmRelease struct {
 	ResourceHealth string `json:"resourceHealth,omitempty"` // healthy, degraded, unhealthy, unknown
 	HealthIssue    string `json:"healthIssue,omitempty"`    // Primary issue if unhealthy (e.g., "OOMKilled")
 	HealthSummary  string `json:"healthSummary,omitempty"`  // Brief summary like "2/3 pods ready"
-	// ManagedByFluxHelmRelease names the Flux HelmRelease CR that owns this
-	// release when Flux's helm-controller installed it. Empty for releases
-	// installed via the helm CLI or other tools. Surfaces a "Managed by Flux"
-	// affordance in the UI so the user goes to GitOps to manage (changing
-	// values via `helm upgrade` here would get reverted on the next
-	// reconciliation). Format: "namespace/name".
+	// StatusUnreadCount counts workloads and Pods whose live status wasn't read.
+	// Other unread objects retain per-resource markers but do not affect health.
+	StatusUnreadCount int `json:"statusUnreadCount,omitempty"`
+	// ManagedByFlux preserves ownership even when the controller is unreadable.
+	ManagedByFlux bool `json:"managedByFlux,omitempty"`
+	// ManagedByFluxHelmRelease is the owning Flux controller in namespace/name
+	// form, returned only when the caller can read its namespace.
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
 }
 
@@ -76,7 +78,10 @@ type HelmReleaseDetail struct {
 	Operations       []HelmOperation       `json:"operations,omitempty"`
 	OperationInsight *HelmOperationInsight `json:"operationInsight,omitempty"`
 	// See HelmRelease.ManagedByFluxHelmRelease.
+	ManagedByFlux            bool   `json:"managedByFlux,omitempty"`
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
+	// See HelmRelease.StatusUnreadCount.
+	StatusUnreadCount int `json:"statusUnreadCount,omitempty"`
 }
 
 type HelmOperationInsight struct {
@@ -194,6 +199,11 @@ type OwnedResource struct {
 	Message    string `json:"message,omitempty"` // Status message or reason
 	Summary    string `json:"summary,omitempty"` // Brief status like "0/3 OOMKilled"
 	Issue      string `json:"issue,omitempty"`   // Primary issue if unhealthy
+	// StatusUnread says why the caller isn't shown this object's live status,
+	// which release health then doesn't count: user_forbidden or
+	// user_namespace_not_visible when they can't read it, or
+	// user_permission_check_failed when their access couldn't be checked.
+	StatusUnread readreason.Code `json:"statusUnread,omitempty"`
 }
 
 // ReleaseManifestResource is a resource declaration preserved in the latest
