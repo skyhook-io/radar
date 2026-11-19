@@ -7,6 +7,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -87,13 +88,21 @@ func (s *neighborhoodSession) Indexed(gk resourceid.GroupKind, index string, key
 		// The relation search matches each object before checking the
 		// caller's access to it, and the walk admits every node it includes,
 		// so a hidden object here is read only to tell whether it relates.
-		// An object this request already read as absent stays absent, even
-		// if the informer has since added it: the walk reads it from here.
-		obj, got := s.borrow(o.Ref, false)
-		if got.State != ownership.Present {
-			continue
+		// An object this request already read keeps that read, even an
+		// absence the informer has since filled: the walk reads it from here.
+		// One it hasn't is recorded as found here, not read again by name.
+		if prior, read := s.objects[o.Ref]; read {
+			if prior.read.State != ownership.Present {
+				continue
+			}
+			o.Object = prior.object
+		} else {
+			m, err := apimeta.Accessor(o.Object)
+			if err != nil {
+				continue
+			}
+			s.objects[o.Ref] = neighborhoodObject{o.Object, ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(o.Ref, m)}}
 		}
-		o.Object = obj
 		objects = append(objects, o)
 	}
 	read.Objects = objects
