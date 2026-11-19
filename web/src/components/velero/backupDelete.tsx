@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, Trash2 } from 'lucide-react'
 import { AlertBanner, ForceDeleteConfirmDialog, type VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
 import type { RadarFeatureSupport } from '../../api/radarFeatures'
@@ -34,6 +35,9 @@ export type VeleroObjectDeleteReason = 'unstored' | 'rejectedNoLocation' | 'olde
 // The phases Velero's backup tracker holds a backup in (pkg/velero.BackupStillRunning).
 export const RUNNING_PHASES = new Set(['InProgress', 'WaitingForPluginOperations', 'WaitingForPluginOperationsPartiallyFailed', 'Finalizing', 'FinalizingPartiallyFailed'])
 
+// The phases Velero leaves a backup in once it is done with it.
+const FINISHED_PHASES = new Set(['Completed', 'PartiallyFailed', 'Failed', 'FailedValidation'])
+
 export interface VeleroBackupDeleteInput {
   deleteBackup: RadarFeatureSupport
   /** The connected Radar binds a DELETE to the reviewed UID and resourceVersion. */
@@ -48,12 +52,15 @@ export interface VeleroBackupDeleteInput {
 export function veleroBackupDeletePath(backup: any, input: VeleroBackupDeleteInput): VeleroBackupDeletePath {
   // An unloaded object reads as phase "" with no location; nothing is decided from that.
   if (!backup) return { kind: 'pending' }
-  // An older Radar can't bind the DELETE to what was reviewed, so a running backup is left to Velero.
-  if (input.deleteBackup === 'unsupported') return RUNNING_PHASES.has(backup.status?.phase ?? '') ? { kind: 'pending' } : { kind: 'object', reason: 'olderRadar' }
+  const settling = !!backup.metadata?.deletionTimestamp || (backup.metadata?.finalizers ?? []).length > 0
+  // An older Radar can't bind the DELETE to what was reviewed, so it is offered
+  // only for a backup Velero has finished with: never one Velero may still
+  // move (new, queued, running), one being deleted, or one holding finalizers.
+  if (input.deleteBackup === 'unsupported') return !settling && FINISHED_PHASES.has(backup.status?.phase ?? '') ? { kind: 'object', reason: 'olderRadar' } : { kind: 'pending' }
   if (input.deleteBackup !== 'supported') return { kind: 'pending' }
   // Without the reviewed-object binding, Velero could start it between review and delete.
   if (input.preconditions !== 'supported') return { kind: 'request' }
-  if (backup.metadata?.deletionTimestamp || (backup.metadata?.finalizers ?? []).length > 0) return { kind: 'request' }
+  if (settling) return { kind: 'request' }
   const phase: string = backup.status?.phase ?? ''
   const location: string = backup.spec?.storageLocation ?? ''
   const reason: VeleroObjectDeleteReason | undefined =
@@ -123,6 +130,7 @@ export function VeleroDeleteObject({ backup, reason, preconditions }: { backup: 
   const name: string = backup?.metadata?.name ?? ''
   const [reviewed, setReviewed] = useState<{ uid: string; resourceVersion: string } | null>(null)
   const deleteResource = useDeleteResource()
+  const queryClient = useQueryClient()
   const preview = useCascadeDeletePreview(VELERO_BACKUP_KIND.name, namespace, name, VELERO_GROUP, reviewed !== null)
   return (
     <>
@@ -140,13 +148,17 @@ export function VeleroDeleteObject({ backup, reason, preconditions }: { backup: 
         onClose={() => setReviewed(null)}
         onConfirm={() => {
           if (!reviewed) return
-          deleteResource.mutate({
-            kind: VELERO_BACKUP_KIND.name,
-            group: VELERO_GROUP,
-            namespace,
-            name,
-            ...(preconditions ? { uid: reviewed.uid, resourceVersion: reviewed.resourceVersion } : {}),
-          })
+          deleteResource.mutate(
+            {
+              kind: VELERO_BACKUP_KIND.name,
+              group: VELERO_GROUP,
+              namespace,
+              name,
+              ...(preconditions ? { uid: reviewed.uid, resourceVersion: reviewed.resourceVersion } : {}),
+            },
+            // Refused (it changed since review) or failed: show the backup as it is now. The toast comes from the mutation's meta.
+            { onError: () => { void queryClient.invalidateQueries({ queryKey: ['resource'] }); void queryClient.invalidateQueries({ queryKey: ['velero'] }) } },
+          )
           setReviewed(null)
         }}
         resourceName={name}

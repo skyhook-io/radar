@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -125,6 +126,9 @@ func TestDeleteResourceHandlerBindsToTheReviewedObject(t *testing.T) {
 			router.ServeHTTP(res, httptest.NewRequest(http.MethodDelete, "/api/resources/configmaps/demo/held"+tc.query, nil))
 			if res.Code != tc.status {
 				t.Fatalf("status %d: %s", res.Code, res.Body.String())
+			}
+			if tc.status == http.StatusConflict && !strings.Contains(res.Body.String(), "changed since you reviewed it") {
+				t.Errorf("a refused bound delete says why: %s", res.Body.String())
 			}
 			if tc.wantRV != "" && (got == nil || got.ResourceVersion == nil || *got.ResourceVersion != tc.wantRV || got.UID == nil || *got.UID != "original") {
 				t.Fatalf("preconditions %+v", got)

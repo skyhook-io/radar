@@ -4653,6 +4653,10 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if apierrors.IsConflict(err) {
+			if uid != "" || resourceVersion != "" {
+				s.writeError(w, http.StatusConflict, "it changed since you reviewed it, so it was not deleted; review it again")
+				return
+			}
 			s.writeError(w, http.StatusConflict, err.Error())
 			return
 		}

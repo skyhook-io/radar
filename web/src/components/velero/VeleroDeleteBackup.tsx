@@ -112,7 +112,8 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
 
   if (!namespace || !name || !uid) return null
   // Where Velero would never act on a request, Delete object takes Delete backup's place.
-  const requestState = support !== 'supported' ? 'none' : !deletion.data && !deletion.error ? 'unknown' : (deletion.error && !deletion.data) || (started && !(state && SETTLED.has(state))) ? 'open' : 'none'
+  // A failed refresh leaves older data behind; for Delete object that reads as unknown.
+  const requestState = support !== 'supported' ? 'none' : !deletion.data && !deletion.error ? 'unknown' : deletion.error || (started && !(state && SETTLED.has(state))) ? 'open' : 'none'
   const path = veleroBackupDeletePath(backup, {
     deleteBackup: support,
     preconditions,

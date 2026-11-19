@@ -185,7 +185,7 @@ describe('Delete backup', () => {
     expect(text).not.toContain('permanently delete')
     expect(text).not.toContain('Force delete')
     act(() => buttons('Delete object').at(-1)!.click())
-    expect(state.deleteObject).toHaveBeenCalledWith({ kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly-1', uid: 'uid-nightly-1', resourceVersion: '41' })
+    expect(state.deleteObject).toHaveBeenCalledWith({ kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly-1', uid: 'uid-nightly-1', resourceVersion: '41' }, expect.anything())
   })
 
   it('offers neither delete until its deletion requests are read, and only follows one that is open', () => {
@@ -197,6 +197,14 @@ describe('Delete backup', () => {
     render(<VeleroDeleteBackup backup={unstored('nightly-2')} />)
     expect(buttons('Delete object')).toHaveLength(0)
     expect(document.body.textContent).toContain('Deleting…')
+  })
+
+  it('withholds Delete object when a refresh of its deletion requests failed', () => {
+    state.workspace = workspace({ accessMode: 'ReadWrite', phase: 'Available' })
+    state.deletion = { state: 'unknown' }
+    state.deletionError = new Error('HTTP 503')
+    render(<VeleroDeleteBackup backup={unstored('nightly-1')} />)
+    expect(buttons('Delete object')).toHaveLength(0)
   })
 
   it('offers Delete object, not Delete backup again, after Velero refused the request', () => {
@@ -213,7 +221,7 @@ describe('Delete backup', () => {
     act(() => buttons('Delete object')[0].click())
     expect(document.body.textContent).toContain('Removes only the Backup object')
     act(() => buttons('Delete object').at(-1)!.click())
-    expect(state.deleteObject).toHaveBeenCalledWith({ kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly-1' })
+    expect(state.deleteObject).toHaveBeenCalledWith({ kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly-1' }, expect.anything())
   })
 
   it('leaves the refusal to Velero when the location can’t be read', () => {

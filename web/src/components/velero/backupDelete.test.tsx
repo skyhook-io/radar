@@ -53,9 +53,12 @@ describe('how a Velero Backup is deleted', () => {
     expect(veleroBackupDeletePath(backup('New', undefined, { finalizers: ['example.io/hold'] }), input())).toEqual({ kind: 'request' })
   })
 
-  it('falls back to the object on a Radar without Delete backup, but not for a running backup, and decides nothing before it loads', () => {
+  it('falls back to the object on a Radar without Delete backup only for one Velero has finished with, and decides nothing before it loads', () => {
     expect(veleroBackupDeletePath(backup('Completed', 'default'), input({ deleteBackup: 'unsupported' }))).toEqual({ kind: 'object', reason: 'olderRadar' })
-    expect(veleroBackupDeletePath(backup('InProgress', 'default'), input({ deleteBackup: 'unsupported' }))).toEqual({ kind: 'pending' })
+    for (const phase of ['', 'New', 'Queued', 'ReadyToStart', 'InProgress', 'Finalizing', 'Deleting']) {
+      expect(veleroBackupDeletePath(backup(phase, 'default'), input({ deleteBackup: 'unsupported' })), phase).toEqual({ kind: 'pending' })
+    }
+    expect(veleroBackupDeletePath(backup('Completed', 'default', { finalizers: ['example.io/hold'] }), input({ deleteBackup: 'unsupported' }))).toEqual({ kind: 'pending' })
     expect(veleroBackupDeletePath(backup('New'), input({ deleteBackup: 'unknown' }))).toEqual({ kind: 'pending' })
     expect(veleroBackupDeletePath(undefined, input())).toEqual({ kind: 'pending' })
     expect(veleroBackupDeletePath(undefined, input({ deleteBackup: 'unsupported' }))).toEqual({ kind: 'pending' })
