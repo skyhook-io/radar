@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -39,36 +41,96 @@ func projectionObject(obj runtime.Object, group, kind string) runtime.Object {
 	obj.GetObjectKind().SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: "v1", Kind: kind})
 	return obj
 }
+
+// recordMembers gives a GitOps manager the member list its status records,
+// read as production reads it. The entries are placed by placeMembers once
+// the fixture's catalog is known.
+func recordMembers(o *ownershiptest.Object, u *unstructured.Unstructured) (gitops.MemberList, bool) {
+	var list gitops.MemberList
+	var ok, here, elsewhere bool
+	switch o.Ref.GroupKind() {
+	case ownership.ArgoApplication:
+		list, ok = gitops.ArgoMembers(u)
+		name, server, _ := gitops.ArgoComparedDestination(u)
+		here, elsewhere = gitops.IsInClusterArgoDestination(name, server), gitops.ArgoAppliesElsewhere(u)
+	case ownership.FluxHelmRelease, ownership.FluxKustomization:
+		list, ok = gitops.FluxMembers(u)
+		here = gitops.FluxTargetsLocalCluster(u)
+		elsewhere = !here
+	default:
+		return gitops.MemberList{}, false
+	}
+	if !ok {
+		if elsewhere {
+			o.Membership = ownership.MembersRemote
+		}
+		return gitops.MemberList{}, false
+	}
+	o.Membership = ownership.MembersRecorded
+	if !here {
+		// A remote manager's list names another cluster's objects.
+		o.Membership = ownership.MembersRemote
+	}
+	o.DestinationNamespace = list.DestinationNamespace
+	return list, true
+}
+
+// placeMembers names the object each entry means, as the cache source does:
+// by its kind's scope where the catalog knows it, and as recorded otherwise.
+func placeMembers(o *ownershiptest.Object, list gitops.MemberList, catalog *ownership.Catalog) {
+	for _, m := range list.Entries {
+		ref := resourceid.NewRef(m.Group, m.Kind, m.Namespace, m.Name)
+		if namespaced, known := catalog.Scope(ref.GroupKind()); known {
+			ref.Namespace = gitops.MemberNamespace(namespaced, m.Namespace, list.DestinationNamespace)
+		}
+		o.Members = append(o.Members, ref)
+	}
+}
+
 func newProjectionSession(t testing.TB, objects ...runtime.Object) *projectionSession {
 	t.Helper()
 	return projectionSessionOf(t, false, objects)
 }
 
 // newRecordingProjectionSession is newProjectionSession with each GitOps
-// manager's recorded member list.
+// manager's recorded member list, read and placed as the cache source does.
 func newRecordingProjectionSession(t testing.TB, objects ...runtime.Object) *projectionSession {
 	t.Helper()
 	return projectionSessionOf(t, true, objects)
 }
 
-func projectionSessionOf(t testing.TB, recordMembers bool, objects []runtime.Object, served ...ownership.ServedResource) *projectionSession {
+// projectionSessionOf serves each object's kind at the object's version,
+// beside served, and with record gives GitOps managers their recorded
+// members.
+func projectionSessionOf(t testing.TB, record bool, objects []runtime.Object, served ...ownership.ServedResource) *projectionSession {
 	t.Helper()
 	w := ownershiptest.World{Resources: served}
 	s := &projectionSession{objects: map[resourceid.Ref]runtime.Object{}}
 	seen := map[resourceid.GroupKind]bool{}
+	recorded := map[int]gitops.MemberList{}
 	for _, obj := range objects {
 		ref := projectionRef(obj)
 		m, _ := apimeta.Accessor(obj)
 		s.objects[ref] = obj
-		observation := ownershiptest.Object{Ref: ref, UID: m.GetUID(), APIVersion: obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), ResourceVersion: m.GetResourceVersion(), OwnerReferences: m.GetOwnerReferences(), Labels: m.GetLabels(), Annotations: m.GetAnnotations()}
-		if recordMembers {
-			recordGitOpsMembers(&observation, obj)
+		o := ownershiptest.Object{Ref: ref, UID: m.GetUID(), APIVersion: obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), ResourceVersion: m.GetResourceVersion(), OwnerReferences: m.GetOwnerReferences(), Labels: m.GetLabels(), Annotations: m.GetAnnotations()}
+		if u, ok := obj.(*unstructured.Unstructured); ok && record {
+			if list, ok := recordMembers(&o, u); ok {
+				recorded[len(w.Objects)] = list
+			}
 		}
-		w.Objects = append(w.Objects, observation)
+		w.Objects = append(w.Objects, o)
 		if !seen[ref.GroupKind()] {
-			w.Resources = append(w.Resources, ownership.ServedResource{Group: ref.Group, Version: obj.GetObjectKind().GroupVersionKind().Version, Kind: ref.Kind, Resource: ref.Kind + "s", Namespaced: ref.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
+			version := obj.GetObjectKind().GroupVersionKind().Version
+			if version == "" {
+				version = "v1"
+			}
+			w.Resources = append(w.Resources, ownership.ServedResource{Group: ref.Group, Version: version, Kind: ref.Kind, Resource: ref.Kind + "s", Namespaced: ref.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
 			seen[ref.GroupKind()] = true
 		}
+	}
+	catalog := ownership.NewCatalog(w.Resources, true)
+	for i, list := range recorded {
+		placeMembers(&w.Objects[i], list, catalog)
 	}
 	var err error
 	s.ReadSession, err = ownershiptest.Scan(w).Begin()
@@ -656,6 +718,42 @@ func TestRelationsAnswerStorageClassReverseLists(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A manager that deploys to another cluster records that cluster's objects,
+// even where its list names a local object's coordinates.
+func TestProjectionSessionLocatesManagers(t *testing.T) {
+	web := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web", UID: "web"}}, "apps", "Deployment")
+	for _, tc := range []struct {
+		server string
+		want   int
+	}{{"https://kubernetes.default.svc", 1}, {"https://remote.example.com", 0}} {
+		app := charUnstructured("argoproj.io/v1alpha1", "Application", "argocd", "shop", nil,
+			map[string]any{"destination": map[string]any{"server": tc.server, "namespace": "shop"}},
+			map[string]any{"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "shop", "name": "web"}}})
+		s := newRecordingProjectionSession(t, app, web)
+		if got := ownership.NewView(s, ownership.Unrestricted()).RecordingManagers(projectionRef(web)).Managers; len(got) != tc.want {
+			t.Errorf("destination %s: recording managers = %v, want %d", tc.server, got, tc.want)
+		}
+	}
+}
+
+// An entry for a cluster-scoped kind names the cluster-scoped object, with or
+// without a recorded namespace, as the cache source reads it.
+func TestProjectionSessionPlacesClusterScopedMembers(t *testing.T) {
+	reader := projectionObject(&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "reader", UID: "reader"}}, "rbac.authorization.k8s.io", "ClusterRole")
+	for _, recorded := range []map[string]any{
+		{"group": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "reader"},
+		{"group": "rbac.authorization.k8s.io", "kind": "ClusterRole", "namespace": "shop", "name": "reader"},
+	} {
+		app := charUnstructured("argoproj.io/v1alpha1", "Application", "argocd", "shop", nil,
+			map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "shop"}},
+			map[string]any{"resources": []any{recorded}})
+		s := newRecordingProjectionSession(t, app, reader)
+		if got := ownership.NewView(s, ownership.Unrestricted()).RecordingManagers(projectionRef(reader)).Managers; len(got) != 1 {
+			t.Errorf("entry %v: recording managers = %v, want the Application", recorded, got)
+		}
 	}
 }
 
