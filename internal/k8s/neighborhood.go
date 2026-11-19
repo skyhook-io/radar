@@ -23,15 +23,16 @@ func AnswerNeighborhood(ctx context.Context, cache *ResourceCache, root topology
 	if err != nil || len(sub.Nodes) > 0 {
 		return sub, err
 	}
-	tried, refused := collectRootKinds(ctx, caches, sub.UncollectedRoots)
+	tried, codes := collectRootKinds(ctx, caches, sub.UncollectedRoots)
 	if !tried {
 		return sub, nil
 	}
 	sub, _, err = answerNeighborhood(ctx, cache, root, opts)
-	if err == nil && len(sub.Nodes) == 0 && sub.RootUnavailable == readreason.RadarKindNotCollected && len(refused) > 0 {
+	if err == nil && len(sub.Nodes) == 0 && sub.RootUnavailable == readreason.RadarKindNotCollected && len(codes) > 0 {
 		// A refusal in the root's namespace is recorded only against that
-		// watch request, so the walk's reads can't see it.
-		sub.RootUnavailable = readreason.Primary(refused)
+		// watch request, and a watch still starting isn't recorded yet, so
+		// the walk's reads see neither.
+		sub.RootUnavailable = readreason.Primary(codes)
 	}
 	return sub, err
 }
@@ -71,14 +72,18 @@ func answerNeighborhood(ctx context.Context, cache *ResourceCache, root topology
 
 // collectRootKinds starts the watch of each root candidate's custom kind the
 // walk found uncollected (the walk lists only candidates the caller's Allow
-// admitted) and waits for it as a read of one object does. It reports whether
-// it tried any, and the codes of the watches Radar was refused. Typed kinds
-// are collected or not by configuration, and the kinds Radar reads directly
-// are never watched, so neither is started here.
-func collectRootKinds(ctx context.Context, caches cachesource.Caches, roots []resourceid.Ref) (tried bool, refused []readreason.Code) {
+// admitted) and waits for it, the whole step bounded as a read of one object
+// waits: starting a watch otherwise waits as long as CRD discovery takes
+// while Radar starts. It reports whether it tried any, and the codes of the
+// watches Radar was refused or that hadn't started within the bound. Typed
+// kinds are collected or not by configuration, and the kinds Radar reads
+// directly are never watched, so neither is started here.
+func collectRootKinds(ctx context.Context, caches cachesource.Caches, roots []resourceid.Ref) (tried bool, codes []readreason.Code) {
 	if caches.Dynamic == nil || caches.Discovery == nil {
 		return false, nil
 	}
+	bounded, cancel := context.WithTimeout(ctx, k8score.ObjectReadSyncWait)
+	defer cancel()
 	for _, r := range roots {
 		if isTypedKind(r.GroupKind()) {
 			continue
@@ -88,15 +93,17 @@ func collectRootKinds(ctx context.Context, caches cachesource.Caches, roots []re
 			continue
 		}
 		tried = true
-		if err := caches.Dynamic.EnsureWatchingContext(ctx, gvr, r.Namespace); err != nil {
+		if err := caches.Dynamic.EnsureWatchingContext(bounded, gvr, r.Namespace); err != nil {
 			if code, ok := CollectorErrorCode(err); ok {
-				refused = append(refused, code)
+				codes = append(codes, code)
+			} else if bounded.Err() != nil && ctx.Err() == nil {
+				// Starting the watch outlasted the bound: it goes on in the
+				// cache, or a retry starts it once discovery is done.
+				codes = append(codes, readreason.KindSyncPending)
 			}
 			continue
 		}
-		wait, cancel := context.WithTimeout(ctx, k8score.ObjectReadSyncWait)
-		caches.Dynamic.WaitForSyncContext(wait, gvr, r.Namespace)
-		cancel()
+		caches.Dynamic.WaitForSyncContext(bounded, gvr, r.Namespace)
 	}
-	return tried, refused
+	return tried, codes
 }

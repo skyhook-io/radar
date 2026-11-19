@@ -760,3 +760,57 @@ func TestNeighborhood_UnwatchedCustomRootStartsItsWatch(t *testing.T) {
 		}
 	})
 }
+
+// While CRD discovery is still running, starting a root's watch would wait
+// for it; the neighborhood answers within a read's wait that the kind is
+// still loading.
+func TestNeighborhood_UnwatchedRootDuringDiscoveryAnswersWithinTheBound(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}}))
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.io/v1", "kind": "Widget", "metadata": map[string]any{"name": "w1", "namespace": "shop", "uid": "w1"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, widget)
+	verbs := []string{"delete", "get", "list", "watch"}
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Version: "v1", Kind: "Pod", Name: "pods", Namespaced: true, Verbs: verbs},
+		{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: verbs},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	listed := make(chan struct{}, 1)
+	dyn.PrependReactor("list", "widgets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		select {
+		case listed <- struct{}{}:
+		default:
+		}
+		<-release
+		return false, nil, nil
+	})
+	t.Cleanup(func() { close(release) })
+	cache := k8s.GetDynamicResourceCache()
+	cache.DiscoverAllCRDs()
+	select {
+	case <-listed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("CRD discovery never listed Widgets")
+	}
+	if cache.GetDiscoveryStatus() != k8score.CRDDiscoveryInProgress {
+		t.Fatalf("discovery %s, want it still in progress", cache.GetDiscoveryStatus())
+	}
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("widget-reader", nil, &auth.UserPermissions{AllowedNamespaces: []string{"shop"}})
+	start := time.Now()
+	resp := env.authGet(t, "/api/ai/neighborhood/widget/shop/w1?group=example.io", "widget-reader", "")
+	elapsed := time.Since(start)
+	var body bytes.Buffer
+	_, _ = body.ReadFrom(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body.String(), string(readreason.KindSyncPending)) {
+		t.Fatalf("got %d %s, want 503 %s", resp.StatusCode, body.String(), readreason.KindSyncPending)
+	}
+	if elapsed > 4*k8score.ObjectReadSyncWait {
+		t.Errorf("answered after %s, want about %s", elapsed, k8score.ObjectReadSyncWait)
+	}
+}
