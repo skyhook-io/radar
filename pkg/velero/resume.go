@@ -40,7 +40,7 @@ const (
 	// not be read.
 	ResumeReasonSkipUnknown = "skipUnknown"
 	// ResumeReasonSkipOnce: the server sets --schedule-skip-immediately, but
-	// Velero 1.16–1.18 apply it to only the first unset Schedule each server
+	// Velero 1.16–1.18.3 apply it to only the first unset Schedule each server
 	// process reconciles: the reconciler stores a pointer to its own default
 	// and clears it when consuming the skip (schedule_controller.go Reconcile).
 	ResumeReasonSkipOnce     = "skipServerOnce"
@@ -163,7 +163,7 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 		out.Summary = dueText + " Radar could not read whether the Velero server skips it (--schedule-skip-immediately), so Velero may submit it at once."
 	case skip == nil && *in.Server.ScheduleSkipImmediately:
 		out.Reason = ResumeReasonSkipOnce
-		out.Summary = dueText + " The Velero server is set to skip it, but Velero 1.18 and earlier skip only the first such schedule after the server starts, so Velero may submit it at once."
+		out.Summary = dueText + " The Velero server is set to skip it, but Velero 1.16 to 1.18.3 skip only the first such schedule after the server starts, so Velero may submit it at once."
 	case !certain && timing:
 		out.Reason = ResumeReasonTiming
 		out.Summary = dueText + " If one is, Velero submits it at once."
