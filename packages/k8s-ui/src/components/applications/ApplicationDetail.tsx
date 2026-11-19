@@ -16,6 +16,7 @@ import {
   Coins,
   ExternalLink,
   GitCommit,
+  History,
   Layers,
   Radio,
   RefreshCw,
@@ -62,6 +63,7 @@ import {
   type AppWorkload,
   type AppBatchActivity,
   type AppHealth,
+  type AppRolloutSummary,
   CHIP,
   CHIP_TONE,
   HEALTH_META,
@@ -90,6 +92,9 @@ import {
 } from "../../utils/applications";
 import { PaneLoader } from "../ui/PaneLoader";
 import { formatRelativeAgeTime, midTruncate } from "../../utils/format";
+import { buildAppDeploys, workloadHasRevisions, type AppDeploys, type BuildAppDeploysInput } from "../../utils/app-deploys";
+import { ApplicationDeploys } from "./ApplicationDeploys";
+import type { WorkloadExtraTab } from "../workload/WorkloadView";
 import { VersionTooltip, AppIdentityTooltip, RolloutSummaryTooltip } from "./AppTooltips";
 import {
   ProvenanceBadge,
@@ -151,7 +156,7 @@ export interface AppWorkloadSelectionOptions {
   tab?: string;
 }
 
-type CanonicalApplicationView = "overview" | "topology" | "history";
+type CanonicalApplicationView = "overview" | "deploys" | "topology" | "history";
 
 export type ApplicationView = CanonicalApplicationView;
 
@@ -162,14 +167,23 @@ const APPLICATION_VIEWS: Array<{
   label: string;
 }> = [
   { id: "overview", label: "Overview" },
+  { id: "deploys", label: "Deploys" },
   { id: "topology", label: "Topology" },
   { id: "history", label: "History" },
 ];
 
 function canonicalApplicationView(
-  view?: ApplicationView,
+  view: ApplicationView | undefined,
+  deploysAvailable: boolean,
 ): CanonicalApplicationView {
+  if (view === "deploys" && !deploysAvailable) return DEFAULT_APPLICATION_VIEW;
   return view ?? DEFAULT_APPLICATION_VIEW;
+}
+
+/** What a workload scope can add to the host's WorkloadView. A workload scope
+ *  has no application tab row, so app-level views reach it as tabs of its own. */
+export interface AppWorkloadRenderContext {
+  extraTabs?: WorkloadExtraTab[];
 }
 
 type ViewProps =
@@ -182,8 +196,12 @@ type ViewProps =
 export type ApplicationDetailProps = {
   app: AppRow;
   onBack: () => void;
-  /** Render the host's WorkloadView for the chosen workload. */
-  renderWorkload: (workload: SelectedAppWorkload) => ReactNode;
+  /** Render the host's WorkloadView for the chosen workload. Spread `context`
+   *  onto it; it is empty unless the host enabled a view that needs it. */
+  renderWorkload: (
+    workload: SelectedAppWorkload,
+    context: AppWorkloadRenderContext,
+  ) => ReactNode;
   /** Optional host-rendered app-scope Cost view. When absent, no Cost tab is shown. */
   renderCostView?: (props: {
     app: AppRow;
@@ -237,6 +255,10 @@ export type ApplicationDetailProps = {
    *  must stay the logical app key for provenance) passes the active instance's
    *  key here so the switcher marks it. */
   activeInstanceKey?: string;
+  /** What the Deploys view reads. Undefined hides the view; `null` shows it
+   *  loading, so a host can hold its fetches until `onDeploysVisibleChange`. */
+  deploys?: BuildAppDeploysInput | null;
+  onDeploysVisibleChange?: (visible: boolean) => void;
   history?: AppHistory;
   historyLoading?: boolean;
   historyItems?: ApplicationHistoryItem[];
@@ -338,6 +360,8 @@ export function ApplicationDetail({
   onSwitchInstance,
   discoveredEnvs,
   activeInstanceKey,
+  deploys,
+  onDeploysVisibleChange,
   history,
   historyLoading,
   historyItems,
@@ -404,7 +428,13 @@ export function ApplicationDetail({
     DEFAULT_APPLICATION_VIEW,
   );
   const [internalCostSelected, setInternalCostSelected] = useState(false);
-  const activeView = canonicalApplicationView(selectedView ?? internalView);
+  const deploysAvailable =
+    deploys !== undefined &&
+    (Boolean(app.sourceRef) || workloads.some((w) => workloadHasRevisions(w.kind)));
+  const activeView = canonicalApplicationView(
+    selectedView ?? internalView,
+    deploysAvailable,
+  );
   const costSelected = Boolean(
     renderCostView && (costViewSelected ?? internalCostSelected),
   );
@@ -445,6 +475,39 @@ export function ApplicationDetail({
     ? workloads.find((w) => workloadKey(w) === rawSelected)
     : undefined;
   const singleWorkloadScope = workloads.length === 1 && !!selectedWorkload;
+  const shownDeploys = useMemo(() => {
+    if (!deploysAvailable) return undefined;
+    return deploys && buildAppDeploys(deploys, selectedWorkload);
+  }, [deploysAvailable, deploys, selectedWorkload]);
+  const workloadContext = useMemo<AppWorkloadRenderContext>(() => {
+    // A source-backed app has a deploy history even when this workload has no
+    // revisions of its own, as a CronJob doesn't.
+    if (!selectedWorkload || shownDeploys === undefined) return {};
+    if (!app.sourceRef && !workloadHasRevisions(selectedWorkload.kind)) return {};
+    return {
+      extraTabs: [
+        {
+          id: "deploys",
+          label: "Deploys",
+          icon: <History className="h-4 w-4" />,
+          after: "overview",
+          render: () => (
+            <div className="flex h-full min-h-0 flex-col">
+              <ApplicationDeploys
+                deploys={shownDeploys}
+                onVisibleChange={onDeploysVisibleChange}
+              />
+            </div>
+          ),
+        },
+      ],
+    };
+  }, [
+    app.sourceRef,
+    selectedWorkload,
+    shownDeploys,
+    onDeploysVisibleChange,
+  ]);
   useEffect(() => {
     if (selectedWorkloadKey !== undefined && hostKeyIsStale) {
       onSelectWorkload?.(null);
@@ -749,7 +812,7 @@ export function ApplicationDetail({
 
       <div className="min-h-0 flex-1 overflow-hidden bg-theme-base">
         {selectedWorkload ? (
-          renderRuntime(selectedWorkload, renderWorkload)
+          renderRuntime(selectedWorkload, renderWorkload, workloadContext)
         ) : (
           <ApplicationWorkspace
             app={app}
@@ -777,6 +840,9 @@ export function ApplicationDetail({
               setSelected(workloadKey(workload), options)
             }
             onNavigateToResource={onNavigateToResource}
+            deploys={shownDeploys}
+            onDeploysVisibleChange={onDeploysVisibleChange}
+            rolloutSummary={rolloutSummary}
             history={history}
             historyLoading={historyLoading}
             historyItems={historyItems}
@@ -826,6 +892,9 @@ function ApplicationWorkspace({
   onFocusWorkload,
   onSelectWorkload,
   onNavigateToResource,
+  deploys,
+  onDeploysVisibleChange,
+  rolloutSummary,
   history,
   historyLoading,
   historyItems,
@@ -876,6 +945,9 @@ function ApplicationWorkspace({
     name: string;
     group?: string;
   }) => void;
+  deploys?: AppDeploys | null;
+  onDeploysVisibleChange?: (visible: boolean) => void;
+  rolloutSummary: AppRolloutSummary | null;
   history?: AppHistory;
   historyLoading?: boolean;
   historyItems?: ApplicationHistoryItem[];
@@ -906,6 +978,7 @@ function ApplicationWorkspace({
         activeView={activeView}
         costSelected={costSelected}
         costAvailable={Boolean(renderCostView)}
+        deploysAvailable={deploys !== undefined}
         onChange={onViewChange}
         onCostChange={onCostViewChange}
       />
@@ -928,6 +1001,13 @@ function ApplicationWorkspace({
           onOpenSource={onOpenSource}
           renderOverviewIssues={renderOverviewIssues}
           hasOverviewIssues={hasOverviewIssues}
+        />
+      )}
+      {!costSelected && activeView === "deploys" && deploys !== undefined && (
+        <ApplicationDeploys
+          deploys={deploys}
+          rolloutSummary={rolloutSummary}
+          onVisibleChange={onDeploysVisibleChange}
         />
       )}
       {!costSelected && activeView === "topology" && (
@@ -979,12 +1059,14 @@ function ApplicationViewTabs({
   activeView,
   costSelected,
   costAvailable,
+  deploysAvailable,
   onChange,
   onCostChange,
 }: {
   activeView: CanonicalApplicationView;
   costSelected: boolean;
   costAvailable: boolean;
+  deploysAvailable: boolean;
   onChange: (view: CanonicalApplicationView) => void;
   onCostChange: () => void;
 }) {
@@ -995,7 +1077,9 @@ function ApplicationViewTabs({
       aria-label="Application views"
     >
       <div className="flex min-w-0 gap-1 overflow-x-auto">
-        {APPLICATION_VIEWS.map((view) => {
+        {APPLICATION_VIEWS.filter(
+          (view) => view.id !== "deploys" || deploysAvailable,
+        ).map((view) => {
           const active = !costSelected && view.id === activeView;
           return (
             <button
@@ -3355,7 +3439,8 @@ function useDismissablePopover<T extends HTMLElement>(
 
 function renderRuntime(
   workload: SelectedAppWorkload | undefined,
-  renderWorkload: (workload: SelectedAppWorkload) => ReactNode,
+  renderWorkload: ApplicationDetailProps["renderWorkload"],
+  context: AppWorkloadRenderContext,
 ): ReactNode {
   if (!workload) {
     return (
@@ -3367,7 +3452,7 @@ function renderRuntime(
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div key={workloadKey(workload)} className="min-h-0 flex-1">
-        {renderWorkload(workload)}
+        {renderWorkload(workload, context)}
       </div>
     </div>
   );
