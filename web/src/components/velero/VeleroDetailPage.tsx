@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useSearchParams } from 'react-router-dom'
-import { Archive, CalendarClock, FileText, History, List, Unplug } from 'lucide-react'
+import { Archive, CalendarClock, FileText, HardDrive, History, List, Unplug } from 'lucide-react'
 import type { WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
@@ -13,6 +13,7 @@ import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { currentPageLabel } from '../../utils/page-links'
 import { kindToPluralWithGroup } from '../../utils/navigation'
 import { VELERO_DETAIL_KINDS, veleroDetailKindFor, veleroDetailPath, type VeleroDetailTarget, VELERO_GROUP } from './routes'
+import { VeleroRunVolumes } from './VeleroRunVolumes'
 import { VeleroRunContents, VeleroRunLog } from './VeleroRunArtifacts'
 import { VeleroBackupRestores, VeleroBackupRestoresMark, VeleroLocationBackups, VeleroLocationBackupsMark, VeleroScheduleRuns, VeleroScheduleRunsMark } from './VeleroPages'
 
@@ -70,6 +71,7 @@ export function VeleroDetailPage({ target, onOpenResource }: { target: VeleroDet
     const { namespace, name } = target
     // Extra tabs anchor to built-in tabs; later inserts at that anchor come first.
     const runTabs = (kind: 'backups' | 'restores'): WorkloadExtraTab[] => [
+      { id: 'volumes', label: 'Volumes', after: 'overview', icon: <HardDrive className="h-4 w-4" />, render: () => <VeleroRunVolumes kind={kind} namespace={namespace} name={name} /> },
       { id: 'log', label: 'Log', after: 'overview', icon: <FileText className="h-4 w-4" />, render: () => <VeleroRunLog kind={kind} namespace={namespace} name={name} /> },
       { id: 'contents', label: 'Contents', after: 'overview', icon: <List className="h-4 w-4" />, render: () => <VeleroRunContents kind={kind} namespace={namespace} name={name} /> },
     ]
