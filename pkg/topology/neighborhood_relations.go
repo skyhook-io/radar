@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
@@ -634,7 +635,16 @@ func (a *neighborhoodAccess) node(r resourceid.Ref) Node {
 	if k, ok := a.catalog.Kind(r.GroupKind()); ok {
 		resource = k.Resource
 		if len(k.Versions) > 0 {
-			apiVersion = k.Versions[0]
+			// The version Radar reads a kind at when it serves several.
+			apiVersion = slices.MaxFunc(k.Versions, func(x, y string) int {
+				switch {
+				case k8score.IsMoreStableVersion(x, y):
+					return 1
+				case k8score.IsMoreStableVersion(y, x):
+					return -1
+				}
+				return 0
+			})
 		}
 	} else if b, ok := resourceid.BuiltinForKind(r.Kind); ok && b.Group == r.Group {
 		// The typed caches read built-ins discovery doesn't list, and a

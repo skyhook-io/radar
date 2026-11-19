@@ -300,6 +300,9 @@ func neighborhoodStandaloneNode(r resourceid.Ref, obj runtime.Object, node Node)
 		}
 		node.ID = fmt.Sprintf("%s/%s/%s/%s", strings.ToLower(r.Kind), r.Namespace, r.Name, r.Group)
 		node.Status = extractGenericStatus(o)
+		if v := o.GetAPIVersion(); v != "" {
+			node.Data["apiVersion"] = v
+		}
 	}
 	if meta, err := apimeta.Accessor(obj); err == nil {
 		node.Data["labels"] = meta.GetLabels()

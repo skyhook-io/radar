@@ -766,3 +766,23 @@ func TestWalkNeighborhoodNodesAndNodeClassesKeepTheirTopologyIDs(t *testing.T) {
 		}
 	}
 }
+
+// A node names the version Radar reads its object at, the most stable one
+// served, not the first in the catalog's sorted list.
+func TestWalkNeighborhoodNodeNamesTheVersionRead(t *testing.T) {
+	workload := projectionCR("kueue.x-k8s.io", "Workload", "shop", "job-1", map[string]any{})
+	workload.SetAPIVersion("kueue.x-k8s.io/v1beta2")
+	served := ownership.ServedResource{Group: "kueue.x-k8s.io", Version: "v1beta1", Kind: "Workload", Resource: "Workloads", Namespaced: true, Verbs: []string{"delete", "get", "list", "watch"}}
+	s := projectionSessionOf(t, false, []runtime.Object{workload}, served)
+	if k, _ := s.Catalog().Kind(resourceid.GroupKind{Group: "kueue.x-k8s.io", Kind: "Workload"}); len(k.Versions) != 2 {
+		t.Fatalf("the fixture no longer serves both versions: %+v", k)
+	}
+	sub := walkTestNeighborhood(t, s, workload, NeighborhoodOptions{})
+	if len(sub.Nodes) != 1 || sub.Nodes[0].Data["apiVersion"] != "kueue.x-k8s.io/v1beta2" {
+		t.Fatalf("got %+v, want apiVersion kueue.x-k8s.io/v1beta2", sub.Nodes)
+	}
+	a := &neighborhoodAccess{catalog: s.Catalog()}
+	if got := a.node(projectionRef(workload)).Data["apiVersion"]; got != "kueue.x-k8s.io/v1beta2" {
+		t.Errorf("the walk's own node for the kind names %v", got)
+	}
+}

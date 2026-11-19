@@ -51,9 +51,9 @@ func newRecordingProjectionSession(t testing.TB, objects ...runtime.Object) *pro
 	return projectionSessionOf(t, true, objects)
 }
 
-func projectionSessionOf(t testing.TB, recordMembers bool, objects []runtime.Object) *projectionSession {
+func projectionSessionOf(t testing.TB, recordMembers bool, objects []runtime.Object, served ...ownership.ServedResource) *projectionSession {
 	t.Helper()
-	w := ownershiptest.World{}
+	w := ownershiptest.World{Resources: served}
 	s := &projectionSession{objects: map[resourceid.Ref]runtime.Object{}}
 	seen := map[resourceid.GroupKind]bool{}
 	for _, obj := range objects {
@@ -66,7 +66,7 @@ func projectionSessionOf(t testing.TB, recordMembers bool, objects []runtime.Obj
 		}
 		w.Objects = append(w.Objects, observation)
 		if !seen[ref.GroupKind()] {
-			w.Resources = append(w.Resources, ownership.ServedResource{Group: ref.Group, Version: "v1", Kind: ref.Kind, Resource: ref.Kind + "s", Namespaced: ref.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
+			w.Resources = append(w.Resources, ownership.ServedResource{Group: ref.Group, Version: obj.GetObjectKind().GroupVersionKind().Version, Kind: ref.Kind, Resource: ref.Kind + "s", Namespaced: ref.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
 			seen[ref.GroupKind()] = true
 		}
 	}
