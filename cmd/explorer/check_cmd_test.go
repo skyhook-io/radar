@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestJava4ShellCLIListsScopedPodsAndResolvesWorkloads(t *testing.T) {
 	owner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "api-rs", UID: "replicaset", Controller: new(true)}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "api-pod", OwnerReferences: []metav1.OwnerReference{owner}},
-		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "api", Image: "registry.example/api:21"}}},
+		Spec:       corev1.PodSpec{NodeName: "worker", Containers: []corev1.Container{{Name: "api", Image: "registry.example/api:21"}}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{
 			Name: "api", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
 		}}},
@@ -55,9 +56,14 @@ func TestJava4ShellCLIListsScopedPodsAndResolvesWorkloads(t *testing.T) {
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "api", Controller: new(true)}},
 	}}
 	kube := fake.NewClientset(pod, sibling, finished, rs)
-	result, err := checkJava4Shell(context.Background(), kube, "team")
+	var progress bytes.Buffer
+	result, err := checkJava4Shell(context.Background(), kube, "team", &progress)
 	if err != nil || result.Containers != 1 || result.Matches != 0 || len(result.UnassessedRows) != 1 {
 		t.Fatalf("unexpected scoped check: %+v, %v", result, err)
+	}
+	wantProgress := "Listing Pods in namespace \"team\"…\nReading Node information…\nChecking registry image metadata…\n"
+	if progress.String() != wantProgress {
+		t.Errorf("progress = %q, want %q", progress.String(), wantProgress)
 	}
 	row := result.UnassessedRows[0]
 	if row.Workload.Kind != "Deployment" || row.Workload.Name != "api" || row.Reason != "image_identity_unknown" {
@@ -93,7 +99,7 @@ func TestJava4ShellCLIRefusesUnreadablePodScope(t *testing.T) {
 	kube.PrependReactor("list", "pods", func(kubetesting.Action) (bool, runtime.Object, error) {
 		return true, nil, denied
 	})
-	report, err := checkJava4Shell(context.Background(), kube, "")
+	report, err := checkJava4Shell(context.Background(), kube, "", io.Discard)
 	if !apierrors.IsForbidden(err) || report.Coverage.Status == resourceapi.CoverageComplete || len(kube.Actions()) != 1 {
 		t.Fatalf("denied scope reported as readable: %+v, %v, %v", report, err, kube.Actions())
 	}

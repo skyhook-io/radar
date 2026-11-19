@@ -79,7 +79,8 @@ func runCheckCommand(args []string, out, errOut io.Writer) int {
 		return 1
 	}
 
-	result, err := runJava4ShellCheck(*kubeconfig, *contextName, namespace, allNamespaces)
+	fmt.Fprintln(errOut, "Loading Kubernetes configuration…")
+	result, err := runJava4ShellCheck(*kubeconfig, *contextName, namespace, allNamespaces, errOut)
 	if err == nil {
 		err = writeJava4ShellCheck(out, output, result)
 	}
@@ -93,7 +94,7 @@ func runCheckCommand(args []string, out, errOut io.Writer) int {
 	return 0
 }
 
-func runJava4ShellCheck(kubeconfig, contextName, namespace string, allNamespaces bool) (images.Java4ShellReport, error) {
+func runJava4ShellCheck(kubeconfig, contextName, namespace string, allNamespaces bool, progress io.Writer) (images.Java4ShellReport, error) {
 	if kubeconfig != "" {
 		path, err := k8s.NormalizeKubeconfigPath(kubeconfig)
 		if err != nil {
@@ -120,13 +121,16 @@ func runJava4ShellCheck(kubeconfig, contextName, namespace string, allNamespaces
 
 	ctx, stop := signalContext()
 	defer stop()
-	return checkJava4Shell(ctx, client, namespace)
+	return checkJava4Shell(ctx, client, namespace, progress)
 }
 
-func checkJava4Shell(ctx context.Context, client kubernetes.Interface, namespace string) (images.Java4ShellReport, error) {
+func checkJava4Shell(ctx context.Context, client kubernetes.Interface, namespace string, progress io.Writer) (images.Java4ShellReport, error) {
 	scope := resourceapi.Scope{Type: resourceapi.ScopeAllNamespaces}
 	if namespace != "" {
 		scope = resourceapi.Scope{Type: resourceapi.ScopeNamespaces, Namespaces: resourceapi.Names([]string{namespace}, resourceapi.RESTSetLimit)}
+		fmt.Fprintf(progress, "Listing Pods in namespace %q…\n", namespace)
+	} else {
+		fmt.Fprintln(progress, "Listing Pods across all namespaces…")
 	}
 	report := images.Java4ShellReport{Coverage: resourceapi.Coverage{
 		Status: resourceapi.CoverageComplete, Scope: scope, Read: &scope, Gaps: []resourceapi.Gap{},
@@ -160,6 +164,7 @@ func checkJava4Shell(ctx context.Context, client kubernetes.Interface, namespace
 	}
 
 	if len(nodes) > 0 {
+		fmt.Fprintln(progress, "Reading Node information…")
 		nodeCtx, cancel := context.WithTimeout(ctx, java4ShellMetadataBudget)
 		nodePages := pager.New(func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
 			return client.CoreV1().Nodes().List(ctx, options)
@@ -178,6 +183,9 @@ func checkJava4Shell(ctx context.Context, client kubernetes.Interface, namespace
 		}
 	}
 
+	if len(pods) > 0 {
+		fmt.Fprintln(progress, "Checking registry image metadata…")
+	}
 	accessCtx, cancelAccess := context.WithTimeout(ctx, java4ShellMetadataBudget)
 	defer cancelAccess()
 	secrets := map[types.NamespacedName]*corev1.Secret{}
