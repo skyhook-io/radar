@@ -87,6 +87,7 @@ func TestJava4ShellKeepsPlacementSeparateFromImageEvidence(t *testing.T) {
 		p := runningPod("team", name, name+"-node", "web", map[string][2]string{"app": {"registry.example/team/app:latest", imageID}})
 		p.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: "private-credentials"}}
 		p.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
+		p.Status.ContainerStatuses[0].Image = "sha256:" + strings.Repeat("e", 64)
 		var node *corev1.Node
 		if arch != "" {
 			node = &corev1.Node{
@@ -123,7 +124,8 @@ func TestJava4ShellKeepsPlacementSeparateFromImageEvidence(t *testing.T) {
 	if err != nil || got.Containers != 117 || got.Matches != 114 || got.FindingGroups != 2 || len(got.Findings) != 2 {
 		t.Fatalf("check: %+v, %v", got, err)
 	}
-	if row := got.Findings[0]; row.Workload.Name != "web" || row.MitigationDeclaredPods != 1 || row.FixedIn != "21.0.13.1" ||
+	if row := got.Findings[0]; row.Workload.Name != "web" || row.Image != "registry.example/team/app" ||
+		row.MitigationDeclaredPods != 1 || row.FixedIn != "21.0.13.1" ||
 		row.Pods != 113 || row.VBMIPods != 1 || row.UnknownCPUPods != 111 || got.Findings[1].Workload.Name != "another-workload" {
 		t.Fatalf("findings: %+v", got.Findings)
 	}

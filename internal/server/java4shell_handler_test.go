@@ -16,10 +16,12 @@ import (
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -81,6 +83,60 @@ func TestJava4ShellWorksWithoutTrivyAndChecksPodAccess(t *testing.T) {
 	denied := env.authGet(t, "/api/vulnerabilities/java4shell?namespace=other", "alice", "")
 	if body := readBody(t, denied); denied.StatusCode != 403 {
 		t.Fatalf("denied scope: %d %s", denied.StatusCode, body)
+	}
+}
+
+func TestJava4ShellScopesToOwnedPodsAndRequiresWorkloadRead(t *testing.T) {
+	const ns = "java4shell-test"
+	owner := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "java", UID: "deployment-current"}}
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+		Namespace: ns, Name: "java-rs", UID: "replicaset-current",
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: owner.Name, UID: owner.UID, Controller: new(true)}},
+	}}
+	pod := func(name string, uid types.UID) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: ns, Labels: map[string]string{"app": "java"},
+				OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: rs.Name, UID: uid, Controller: new(true)}},
+			},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "java", Image: "java:21"}}},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "java", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}}},
+		}
+	}
+	objects := append(testNamespaces(ns), owner, rs, pod("current-pod", rs.UID), pod("stale-pod", "replicaset-previous"))
+	useTestResourceCache(t, fake.NewClientset(objects...))
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{ns}}
+	perms.SetCanI("list", "", "pods", ns, true)
+	perms.SetCanI("list", "", "nodes", "", false)
+	perms.SetCanI("get", "apps", "deployments", ns, true)
+	env.srv.permCache.Set("alice", nil, perms)
+	path := "/api/vulnerabilities/java4shell?workloadKind=Deployment&workloadNamespace=" + ns + "&workloadName=java"
+	resp := env.authGet(t, path, "alice", "")
+	body := readBody(t, resp)
+	var got struct {
+		images.Java4ShellResult
+		Workload resourceid.Ref
+		Coverage resourceapi.Coverage
+	}
+	if resp.StatusCode != http.StatusOK || json.Unmarshal([]byte(body), &got) != nil {
+		t.Fatalf("got %d %s", resp.StatusCode, body)
+	}
+	want := resourceid.NewRef("apps", "Deployment", ns, "java")
+	if got.Workload != want || got.Containers != 1 || got.Coverage.Status != resourceapi.CoverageComplete ||
+		len(got.UnassessedRows) != 1 || got.UnassessedRows[0].Workload != want || got.UnassessedRows[0].Reason != "image_identity_unknown" {
+		t.Fatalf("unexpected scoped response: %+v", got)
+	}
+	perms.SetCanI("get", "apps", "deployments", ns, false)
+	denied := env.authGet(t, path, "alice", "")
+	if body := readBody(t, denied); denied.StatusCode != http.StatusForbidden {
+		t.Fatalf("denied workload read: %d %s", denied.StatusCode, body)
+	}
+	invalid := env.authGet(t, path+"&namespaces=other", "alice", "")
+	if body := readBody(t, invalid); invalid.StatusCode != http.StatusBadRequest {
+		t.Fatalf("mismatched scope: %d %s", invalid.StatusCode, body)
 	}
 }
 

@@ -4,8 +4,10 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -16,7 +18,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // handleJava4Shell reads only Pods the caller may list and uses Node facts
@@ -24,11 +25,31 @@ import (
 // Pod, Secret and exec permissions. Shared unauthenticated listeners can use
 // Pod pull secrets held by Radar's Kubernetes identity. The API's same-origin
 // guard applies, and callers never supply an image reference or credential.
+// A workload scope additionally requires get access to the workload kind and
+// uses only Pods owned by that controller, before any registry reads.
 func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
 	const resource = "pods"
+	query := r.URL.Query()
+	requested := parseNamespaces(query)
+	var workload *resourceid.Ref
+	if kind, ns, name, group := query.Get("workloadKind"), query.Get("workloadNamespace"), query.Get("workloadName"), query.Get("workloadGroup"); kind != "" || ns != "" || name != "" || group != "" {
+		kind = k8s.CanonicalWorkloadKind(kind)
+		if ns == "" || name == "" || (group != "" && group != "apps") ||
+			(kind != "Deployment" && kind != "StatefulSet" && kind != "DaemonSet") {
+			s.writeError(w, http.StatusBadRequest, "Specify a Deployment, StatefulSet or DaemonSet with its namespace and name")
+			return
+		}
+		if len(requested) > 0 && !slices.Contains(requested, ns) {
+			s.writeError(w, http.StatusBadRequest, "The workload is outside the requested namespaces")
+			return
+		}
+		ref := resourceid.NewRef("apps", kind, ns, name)
+		workload = &ref
+		requested = []string{ns}
+	}
 	cache := readCache()
 	_, generation := k8s.GetClientWithGeneration()
 	current := func() bool {
@@ -39,7 +60,7 @@ func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 		s.writeCollectionFailure(w, resource, permissionFailure(false, ""))
 		return
 	}
-	target, scopeFailure := s.namespaceListTarget(r, cache, parseNamespaces(r.URL.Query()))
+	target, scopeFailure := s.namespaceListTarget(r, cache, requested)
 	if !current() {
 		s.writeCollectionFailure(w, resource, errReadHandlesChanged)
 		return
@@ -78,23 +99,50 @@ func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 		s.writeReadFailure(w, resource, err, &target)
 		return
 	}
-	objects, ok := cache.ReadableObjects(resource, plan.read)
-	if !ok {
-		s.writeReadFailure(w, resource, readFailuref(readreason.KindSyncPending, "Pods are still loading. Try again shortly"), &target)
-		return
+	var candidates []*corev1.Pod
+	if workload != nil {
+		workloadResource := workloadReadTargets[strings.ToLower(workload.Kind)]
+		if allowed, checked := s.canReadDecision(r, workloadResource.group, workloadResource.resource, workload.Namespace, "get"); !allowed {
+			s.writeReadFailure(w, resource, permissionFailure(checked, "Your access does not allow reading this workload"), &target)
+			return
+		}
+		candidates, err = k8s.WorkloadPods(r.Context(), cache, workload.Kind, workload.Namespace, workload.Name)
+		if err != nil {
+			switch {
+			case errors.Is(err, k8s.ErrWorkloadNotFound):
+				err = readFailuref(readreason.ObjectNotFound, "Workload no longer exists")
+			case errors.Is(err, k8s.ErrWorkloadCacheWarming):
+				err = readFailuref(readreason.KindSyncPending, "Workload ownership is still loading. Try again shortly")
+			case errors.Is(err, k8s.ErrWorkloadAccessDenied):
+				err = readFailuref(readreason.RadarForbidden, "Radar cannot read the resources that establish workload ownership")
+			default:
+				log.Printf("[java4shell] Failed to read Pods for %s: %v", workload, err)
+				err = readFailuref(readreason.ReadError, "Radar could not read this workload's Pods")
+			}
+			s.writeReadFailure(w, resource, err, &target)
+			return
+		}
+	} else {
+		objects, ok := cache.ReadableObjects(resource, plan.read)
+		if !ok {
+			s.writeReadFailure(w, resource, readFailuref(readreason.KindSyncPending, "Pods are still loading. Try again shortly"), &target)
+			return
+		}
+		candidates = make([]*corev1.Pod, 0, len(objects))
+		for _, obj := range objects {
+			candidates = append(candidates, obj.(*corev1.Pod))
+		}
 	}
-	objects = slices.DeleteFunc(objects, func(obj runtime.Object) bool {
-		phase := obj.(*corev1.Pod).Status.Phase
-		return phase == corev1.PodSucceeded || phase == corev1.PodFailed
+	candidates = slices.DeleteFunc(candidates, func(pod *corev1.Pod) bool {
+		return pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed
 	})
-	if !s.checkResourceListSize(w, len(objects), resourceListHardLimit, target, plan.gaps) {
+	if !s.checkResourceListSize(w, len(candidates), resourceListHardLimit, target, plan.gaps) {
 		return
 	}
 
 	nodesReadable := s.canRead(r, "", "nodes", "", "list")
-	pods := make([]images.Java4ShellPod, 0, len(objects))
-	for _, obj := range objects {
-		pod := obj.(*corev1.Pod)
+	pods := make([]images.Java4ShellPod, 0, len(candidates))
+	for _, pod := range candidates {
 		var node *corev1.Node
 		if nodesReadable && pod.Spec.NodeName != "" {
 			obj, found, _ := cache.ReadableObject("nodes", "", pod.Spec.NodeName)
@@ -117,6 +165,9 @@ func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 	defer cancelAccess()
 	accessRequest := r.WithContext(accessCtx)
 	result, err := images.DefaultRuntimeInventory(k8s.IsInCluster()).CheckJava4Shell(r.Context(), pods, func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
+		if workload != nil {
+			return *workload
+		}
 		return s.java4ShellWorkload(r.WithContext(ctx), cache, pod)
 	}, func(pod *corev1.Pod) images.Java4ShellRegistryAccess {
 		if accessCtx.Err() != nil || !current() {
@@ -143,7 +194,8 @@ func (s *Server) handleJava4Shell(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, struct {
 		images.Java4ShellResult
 		Coverage resourceapi.Coverage `json:"coverage"`
-	}{Java4ShellResult: result, Coverage: target.coverage(plan.read, plan.gaps)})
+		Workload *resourceid.Ref      `json:"workload,omitempty"`
+	}{Java4ShellResult: result, Coverage: target.coverage(plan.read, plan.gaps), Workload: workload})
 }
 
 func (s *Server) java4ShellRegistryAccess(r *http.Request, cache *k8s.ResourceCache, pod *corev1.Pod) images.Java4ShellRegistryAccess {

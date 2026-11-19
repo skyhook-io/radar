@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Download } from 'lucide-react'
 import { Collapse, CollapseChevron, TimeValue, useDisclosure } from '@skyhook-io/k8s-ui'
-import { JAVA4SHELL_CVE, useJava4ShellCheck, type Java4ShellFinding, type Java4ShellResult } from '../../api/vulnerabilities'
+import { JAVA4SHELL_CVE, useJava4ShellCheck, type Java4ShellFinding, type Java4ShellResult, type VulnerabilityWorkloadRef } from '../../api/vulnerabilities'
 import type { SelectedResource } from '../../types'
 import { triggerDownload } from '@skyhook-io/k8s-ui/utils/download'
 import { resourceCoverageNotice, resourceNarrowedNotice } from '@skyhook-io/k8s-ui/utils/resource-coverage'
@@ -14,23 +14,26 @@ import { Tooltip } from '../ui/Tooltip'
 const advisoryURL = 'https://github.com/advisories/GHSA-6g7j-4xh3-xq2q'
 
 interface Java4ShellPanelProps {
-  namespaces: string[]
+  namespaces?: string[]
   context: string
   connected: boolean
   trivySearch?: string
-  onNavigateToResource: (resource: SelectedResource) => void
+  workload?: VulnerabilityWorkloadRef
+  onNavigateToResource?: (resource: SelectedResource) => void
 }
 
-export function Java4ShellPanel({ namespaces, context, connected, trivySearch, onNavigateToResource }: Java4ShellPanelProps) {
-  const { data, dataUpdatedAt, isFetching, error, refetch } = useJava4ShellCheck(namespaces, context)
+export function Java4ShellPanel({ namespaces = [], context, connected, trivySearch, workload, onNavigateToResource }: Java4ShellPanelProps) {
+  const { data, dataUpdatedAt, isFetching, error, refetch } = useJava4ShellCheck(namespaces, context, workload)
   const checkedAt = new Date(dataUpdatedAt).toISOString()
   return (
-    <section aria-label="Java4Shell check" className="rounded-xl border border-theme-border bg-theme-surface p-4">
+    <section aria-label="Java4Shell check" className={`rounded-xl border border-theme-border bg-theme-surface ${workload ? 'p-3' : 'p-4'}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
           <h2 className="text-sm font-semibold text-theme-text-primary">Java4Shell</h2>
           <p className="text-xs text-theme-text-secondary">
-            Check running workloads for affected Java versions and prioritize patching with current node evidence.
+            {workload
+              ? 'Check the running images in this workload for affected Java versions.'
+              : 'Check running workloads for affected Java versions and prioritize patching with current node evidence.'}
           </p>
           <p className="text-xs text-theme-text-tertiary">Radar reads image metadata using the registry credentials your access allows.</p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
@@ -58,7 +61,7 @@ export function Java4ShellPanel({ namespaces, context, connected, trivySearch, o
             onClick={() => void refetch()}
             disabled={!connected || isFetching}
           >
-            {isFetching ? 'Checking workloads…' : data ? 'Run check again' : 'Check for Java4Shell'}
+            {isFetching ? (workload ? 'Checking workload…' : 'Checking workloads…') : data ? 'Run check again' : 'Check for Java4Shell'}
           </button>
         </div>
       </div>
@@ -82,14 +85,16 @@ const reasonLabels: Record<string, string> = {
   no_java_declaration: 'Image declares no Java version',
 }
 
-function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult; checkedAt: string; onOpen: (resource: SelectedResource) => void }) {
+function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult; checkedAt: string; onOpen?: (resource: SelectedResource) => void }) {
   const missingDeclaration = data.unassessed.no_java_declaration ?? 0
   const unassessed = Object.values(data.unassessed).reduce((count, n) => count + n, 0)
   const coverage = resourceCoverageNotice(data.coverage, 'Pods') ?? resourceNarrowedNotice(data.coverage)
   const namespaces = data.coverage.read?.namespaces
-  const scope = namespaces?.names && namespaces.names.length <= 3
-    ? namespaces.names.join(', ')
-    : namespaces ? pluralize(namespaces.count, 'namespace') : 'all namespaces'
+  const scope = data.workload?.name ?? (
+    namespaces?.names && namespaces.names.length <= 3
+      ? namespaces.names.join(', ')
+      : namespaces ? pluralize(namespaces.count, 'namespace') : 'all namespaces'
+  )
   const groups = new Map<string, Java4ShellFinding[]>()
   for (const row of data.findings) {
     const key = resourceRefKey(row.workload)
@@ -100,7 +105,7 @@ function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult
   const summary = data.matches > 0
     ? `${pluralize(data.matches, 'container')} with a declared Java version in an affected range`
     : data.containers === 0
-      ? 'Radar found no running containers in the scope it read'
+      ? data.workload ? 'Radar found no running containers in this workload' : 'Radar found no running containers in the scope it read'
       : missingDeclaration === data.containers
         ? 'Images checked declared no Java version'
         : unassessed === data.containers
@@ -124,8 +129,11 @@ function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult
         </p>
       )}
       {data.findings.length > 0 && (
+        <p className="text-theme-text-secondary">Image metadata describes the declared Java version. Confirm the deployed JVM and the fix from its vendor.</p>
+      )}
+      {data.workload && <WorkloadJava4ShellRows data={data} />}
+      {!data.workload && onOpen && data.findings.length > 0 && (
         <>
-          <p className="text-theme-text-secondary">Image metadata describes the declared Java version. Confirm the deployed JVM and the fix from its vendor.</p>
           <div role="region" aria-label="Matching containers by workload" tabIndex={0} className="max-h-96 overflow-auto rounded-lg border border-theme-border">
             <table className="w-full min-w-[40rem] text-left">
               <thead className="sticky top-0 bg-theme-elevated text-theme-text-secondary">
@@ -166,10 +174,55 @@ function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult
         </>
       )}
       {data.findingGroups > data.findings.length && (
-        <p className="text-theme-text-secondary">Showing {data.findings.length} of {data.findingGroups} matching workload and image groups. Narrow the namespace scope to see more.</p>
+        <p className="text-theme-text-secondary">Showing {data.findings.length} of {data.findingGroups} matching groups.{!data.workload && ' Narrow the namespace scope to see more.'}</p>
       )}
-      {data.unassessedGroups > 0 && <UnassessedDetails data={data} onOpen={onOpen} />}
+      {!data.workload && onOpen && data.unassessedGroups > 0 && <UnassessedDetails data={data} onOpen={onOpen} />}
     </div>
+  )
+}
+
+function WorkloadJava4ShellRows({ data }: { data: Java4ShellResult }) {
+  return (
+    <>
+      {data.findings.length > 0 && (
+        <ul aria-label="Matching containers" className="divide-y divide-theme-border rounded-md border border-theme-border">
+          {data.findings.map(row => (
+            <li key={JSON.stringify([row.container, row.digest, row.version])} className="space-y-1 p-2">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <span className="font-medium text-theme-text-primary">{row.container}</span>
+                <ImageName image={row.image} className="text-theme-text-tertiary" />
+                <span className="text-theme-text-tertiary">{pluralize(row.pods, 'Pod')}</span>
+              </div>
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <span className="font-mono text-theme-text-primary">{row.version}</span>
+                <span className="text-theme-text-secondary">{row.fixedIn ? `Upstream fix ${row.fixedIn}` : 'Check the vendor for an upgrade'}</span>
+              </div>
+              <JavaPlacement row={row} />
+            </li>
+          ))}
+        </ul>
+      )}
+      {data.unassessedRows.length > 0 && (
+        <>
+          <div className="font-medium text-theme-text-secondary">Unassessed containers</div>
+          <ul aria-label="Unassessed containers" className="divide-y divide-theme-border rounded-md border border-theme-border">
+            {data.unassessedRows.map(row => (
+              <li key={JSON.stringify([row.container, row.image, row.digest, row.reason])} className="space-y-1 p-2">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="font-medium text-theme-text-primary">{row.container}</span>
+                  <ImageName image={row.image} className="text-theme-text-tertiary" />
+                  <span className="text-theme-text-tertiary">{pluralize(row.pods, 'Pod')}</span>
+                </div>
+                <div className="text-theme-text-secondary">{reasonLabels[row.reason] ?? row.reason}</div>
+              </li>
+            ))}
+          </ul>
+          {data.unassessedGroups > data.unassessedRows.length && (
+            <p className="text-theme-text-secondary">Showing {data.unassessedRows.length} of {data.unassessedGroups} unassessed groups.</p>
+          )}
+        </>
+      )}
+    </>
   )
 }
 

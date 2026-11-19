@@ -129,6 +129,9 @@ func (r *RuntimeInventory) CheckJava4Shell(ctx context.Context, pods []Java4Shel
 			}
 			out.Containers++
 			c := java4ShellContainer{pod: pod, container: container.Name, image: status.Image}
+			if strings.HasPrefix(c.image, "sha256:") {
+				c.image = ""
+			}
 			ref, source, ok := imageRef(container.Image, status.ImageID)
 			if !ok || source != "digest" {
 				if c.image == "" {

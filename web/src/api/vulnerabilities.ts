@@ -207,12 +207,20 @@ export interface Java4ShellResult {
   unassessedRows: Java4ShellUnassessed[]
   unassessedGroups: number
   coverage: ResourceReadCoverage
+  workload?: VulnerabilityWorkloadRef
 }
 
-export function useJava4ShellCheck(namespaces: string[], context: string) {
+export function useJava4ShellCheck(namespaces: string[], context: string, workload?: VulnerabilityWorkloadRef) {
   const { guard } = useRadarFeature('runtimeAdvisoryChecks')
   const query = new URLSearchParams()
-  if (namespaces.length > 0) query.set('namespaces', [...namespaces].sort().join(','))
+  if (workload) {
+    query.set('workloadKind', workload.kind)
+    query.set('workloadGroup', workload.group)
+    query.set('workloadNamespace', workload.namespace)
+    query.set('workloadName', workload.name)
+  } else if (namespaces.length > 0) {
+    query.set('namespaces', [...namespaces].sort().join(','))
+  }
   const path = '/vulnerabilities/java4shell' + (query.size ? `?${query}` : '')
   return useQuery({
     queryKey: ['java4shell', getApiBase(), context, path],
