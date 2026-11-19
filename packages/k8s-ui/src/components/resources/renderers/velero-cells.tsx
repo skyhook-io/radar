@@ -58,7 +58,7 @@ export function VeleroPhaseValue({
   return (
     <span className="flex flex-col items-start gap-1 min-w-0">
       <span className={clsx('badge whitespace-nowrap', status.color)}>{status.text}</span>
-      {phase && phase !== status.text && (
+      {phase && phase.toLowerCase() !== status.text.replace(/\s+/g, '').toLowerCase() && (
         <span className="text-xs font-mono text-theme-text-tertiary break-all">{phase}</span>
       )}
     </span>
@@ -77,6 +77,7 @@ export function BackupCell({ resource, column }: { resource: any; column: string
     }
     case 'storageLocation': {
       const loc = getBackupStorageLocation(resource)
+      if (!loc) return <span className="text-sm text-theme-text-tertiary">Not assigned</span>
       return <span className="text-sm text-theme-text-secondary truncate block">{loc}</span>
     }
     case 'namespaces': {
