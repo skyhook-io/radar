@@ -88,7 +88,7 @@ export function ForceDeleteConfirmDialog({
   }
 
   function handleConfirm() {
-    onConfirm(forceDelete)
+    onConfirm(allowForce && forceDelete)
   }
 
   return (

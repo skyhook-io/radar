@@ -1,86 +1,100 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
-import { VeleroObjectDeleteNotice, genericDeleteOffered, veleroBackupDeletePath, veleroLocationMissing, veleroObjectDeletePresentation } from './backupDelete'
+import { describe, expect, it, vi } from 'vitest'
 import { location, workspace } from './velero.fixtures'
 
-const backup = (phase: string, storageLocation?: string) => ({
-  metadata: { namespace: 'velero', name: 'nightly-1' },
+vi.mock('../../api/client', () => ({ useDeleteResource: () => ({}), useCascadeDeletePreview: () => ({}) }))
+const { VeleroObjectDeleteNotice, veleroBackupDeletePath, veleroLocationMissing, veleroObjectDeleteDetails } = await import('./backupDelete')
+
+const backup = (phase: string, storageLocation?: string, meta: Record<string, unknown> = {}) => ({
+  metadata: { namespace: 'velero', name: 'nightly-1', ...meta },
   spec: storageLocation ? { storageLocation } : {},
   status: phase ? { phase } : {},
 })
-const known = (missing: boolean | undefined) => () => missing
+const input = (over: Partial<Parameters<typeof veleroBackupDeletePath>[1]> = {}): Parameters<typeof veleroBackupDeletePath>[1] => ({
+  deleteBackup: 'supported',
+  preconditions: 'supported',
+  locationMissing: () => undefined,
+  request: 'none',
+  ...over,
+})
 
 describe('how a Velero Backup is deleted', () => {
   it('deletes the object of a backup Velero never started and gave no location', () => {
     for (const phase of ['', 'New']) {
-      expect(veleroBackupDeletePath(backup(phase), 'supported', known(undefined))).toEqual({ kind: 'object', reason: 'unstored' })
+      expect(veleroBackupDeletePath(backup(phase), input())).toEqual({ kind: 'object', reason: 'unstored' })
     }
     // A schedule's template can name the location before Velero processes the run: Velero acts on a request for it.
-    expect(veleroBackupDeletePath(backup('New', 'default'), 'supported', known(false))).toEqual({ kind: 'request' })
+    expect(veleroBackupDeletePath(backup('New', 'default'), input())).toEqual({ kind: 'request' })
+    // Velero's queue may be handing these to the backup controller.
+    for (const phase of ['Queued', 'ReadyToStart']) expect(veleroBackupDeletePath(backup(phase), input()), phase).toEqual({ kind: 'request' })
   })
 
   it('deletes the object of a rejected backup only when its location is known not to exist', () => {
-    expect(veleroBackupDeletePath(backup('FailedValidation', 'gone'), 'supported', known(true))).toEqual({ kind: 'object', reason: 'rejectedNoLocation' })
-    expect(veleroBackupDeletePath(backup('FailedValidation'), 'supported', known(undefined))).toEqual({ kind: 'object', reason: 'rejectedNoLocation' })
-    expect(veleroBackupDeletePath(backup('FailedValidation', 'gone'), 'supported', known(undefined))).toEqual({ kind: 'request' })
-    expect(veleroBackupDeletePath(backup('FailedValidation', 'default'), 'supported', known(false))).toEqual({ kind: 'request' })
+    expect(veleroBackupDeletePath(backup('FailedValidation', 'gone'), input({ locationMissing: () => true }))).toEqual({ kind: 'object', reason: 'rejectedNoLocation' })
+    expect(veleroBackupDeletePath(backup('FailedValidation'), input())).toEqual({ kind: 'object', reason: 'rejectedNoLocation' })
+    expect(veleroBackupDeletePath(backup('FailedValidation', 'gone'), input())).toEqual({ kind: 'request' })
+    expect(veleroBackupDeletePath(backup('FailedValidation', 'default'), input({ locationMissing: () => false }))).toEqual({ kind: 'request' })
   })
 
   it('asks Velero for every other backup', () => {
     for (const phase of ['Completed', 'PartiallyFailed', 'Failed', 'InProgress', 'Deleting']) {
-      expect(veleroBackupDeletePath(backup(phase, 'default'), 'supported', known(false)), phase).toEqual({ kind: 'request' })
+      expect(veleroBackupDeletePath(backup(phase, 'default'), input()), phase).toEqual({ kind: 'request' })
     }
   })
 
-  it('falls back to the object on a Radar without Delete backup, and decides nothing while capabilities load', () => {
-    expect(veleroBackupDeletePath(backup('Completed', 'default'), 'unsupported', known(false))).toEqual({ kind: 'object', reason: 'olderRadar' })
-    expect(veleroBackupDeletePath(backup('New'), 'unknown', known(undefined))).toEqual({ kind: 'pending' })
-    expect(veleroBackupDeletePath(undefined, 'supported', known(undefined))).toEqual({ kind: 'pending' })
-    expect(veleroBackupDeletePath(undefined, 'unsupported', known(undefined))).toEqual({ kind: 'pending' })
-    expect(veleroBackupDeletePath(undefined, 'supported', known(undefined))).toEqual({ kind: 'pending' })
-    expect(veleroBackupDeletePath(undefined, 'unsupported', known(undefined))).toEqual({ kind: 'pending' })
+  it('never doubles an open request, and waits until the requests are read', () => {
+    expect(veleroBackupDeletePath(backup('New'), input({ request: 'open' }))).toEqual({ kind: 'request' })
+    expect(veleroBackupDeletePath(backup('New'), input({ request: 'unknown' }))).toEqual({ kind: 'pending' })
   })
 
-  it('offers the generic Delete for a Velero Backup only on the object path', () => {
-    expect(genericDeleteOffered('backups', 'velero.io', { kind: 'request' })).toBe(false)
-    expect(genericDeleteOffered('backups', 'velero.io', { kind: 'pending' })).toBe(false)
-    expect(genericDeleteOffered('backups', 'velero.io', { kind: 'object', reason: 'unstored' })).toBe(true)
-    expect(genericDeleteOffered('deployments', 'apps', { kind: 'request' })).toBe(true)
+  it('offers it only where the delete is bound to the reviewed object, and not for one being deleted or holding finalizers', () => {
+    expect(veleroBackupDeletePath(backup('New'), input({ preconditions: 'unsupported' }))).toEqual({ kind: 'request' })
+    expect(veleroBackupDeletePath(backup('New', undefined, { deletionTimestamp: '2026-11-19T00:00:00Z' }), input())).toEqual({ kind: 'request' })
+    expect(veleroBackupDeletePath(backup('New', undefined, { finalizers: ['example.io/hold'] }), input())).toEqual({ kind: 'request' })
   })
 
-  it('knows a location is missing only from a full read', () => {
+  it('falls back to the object on a Radar without Delete backup, but not for a running backup, and decides nothing before it loads', () => {
+    expect(veleroBackupDeletePath(backup('Completed', 'default'), input({ deleteBackup: 'unsupported' }))).toEqual({ kind: 'object', reason: 'olderRadar' })
+    expect(veleroBackupDeletePath(backup('InProgress', 'default'), input({ deleteBackup: 'unsupported' }))).toEqual({ kind: 'pending' })
+    expect(veleroBackupDeletePath(backup('New'), input({ deleteBackup: 'unknown' }))).toEqual({ kind: 'pending' })
+    expect(veleroBackupDeletePath(undefined, input())).toEqual({ kind: 'pending' })
+    expect(veleroBackupDeletePath(undefined, input({ deleteBackup: 'unsupported' }))).toEqual({ kind: 'pending' })
+  })
+
+  it('knows a location is missing only where every location in its namespace was read', () => {
     const read = workspace({ locations: [location({ name: 'default' })] })
     expect(veleroLocationMissing(read, 'velero', 'default')).toBe(false)
     expect(veleroLocationMissing(read, 'velero', 'gone')).toBe(true)
-    expect(veleroLocationMissing({ ...read, coverage: { ...read.coverage, backupStorageLocations: { state: 'partial' } } }, 'velero', 'gone')).toBeUndefined()
+    const partial = (allowedNamespaces?: string[]) => ({ ...read, coverage: { ...read.coverage, backupStorageLocations: { state: 'partial' as const, allowedNamespaces } } })
+    expect(veleroLocationMissing(partial(), 'velero', 'gone')).toBeUndefined()
+    expect(veleroLocationMissing(partial(['velero']), 'velero', 'gone')).toBe(true)
     expect(veleroLocationMissing(undefined, 'velero', 'gone')).toBeUndefined()
   })
 })
 
 describe('the Delete object confirmation', () => {
   it('says one thing for a backup Velero never stored: the object goes, nothing is in storage', () => {
-    for (const [reason, b] of [['unstored', backup('New')], ['rejectedNoLocation', backup('FailedValidation', 'gone')]] as const) {
-      const p = veleroObjectDeletePresentation(reason, b)
-      expect(p).toMatchObject({ label: 'Delete object', details: 'Deletes the Backup object. Nothing of it is in storage.', allowForce: false })
-      expect(p.details).not.toContain('permanently')
-    }
+    expect(veleroObjectDeleteDetails('unstored')).toBe('Deletes the Backup object. Nothing of it is in storage.')
+    expect(veleroObjectDeleteDetails('rejectedNoLocation')).toBe('Deletes the Backup object. Nothing of it is in storage.')
     const unstored = renderToStaticMarkup(<VeleroObjectDeleteNotice reason="unstored" backup={backup('New')} />)
     expect(unstored).toContain('Nothing of this backup is in storage')
     expect(unstored).toContain('never started this backup')
     const rejected = renderToStaticMarkup(<VeleroObjectDeleteNotice reason="rejectedNoLocation" backup={backup('FailedValidation', 'gone')} />)
+    expect(rejected).toContain('so it wrote nothing')
     expect(rejected).toContain('its storage location gone doesn’t exist')
   })
 
-  it('says a schedule’s queued run frees the schedule', () => {
-    const queued = { ...backup('New'), metadata: { namespace: 'velero', name: 'nightly-1', labels: { 'velero.io/schedule-name': 'nightly' } } }
-    expect(renderToStaticMarkup(<VeleroObjectDeleteNotice reason="unstored" backup={queued} />)).toContain('Once it’s gone, schedule nightly submits its next run.')
-    expect(renderToStaticMarkup(<VeleroObjectDeleteNotice reason="unstored" backup={backup('New')} />)).not.toContain('submits its next run')
+  it('says a schedule’s queued run holds it, and deleting it removes the hold', () => {
+    const queued = backup('New', undefined, { labels: { 'velero.io/schedule-name': 'nightly' } })
+    expect(renderToStaticMarkup(<VeleroObjectDeleteNotice reason="unstored" backup={queued} />)).toContain('While it is queued, Velero holds schedule nightly; deleting it removes that hold.')
+    expect(renderToStaticMarkup(<VeleroObjectDeleteNotice reason="unstored" backup={backup('New')} />)).not.toContain('holds schedule')
   })
 
   it('says only the object goes when this Radar can’t ask Velero, never "permanently"', () => {
-    const p = veleroObjectDeletePresentation('olderRadar', backup('Completed', 'default'))
-    expect(p).toMatchObject({ label: 'Delete object', allowForce: false })
-    expect(p.details).toBe('Removes only the Backup object. Any data it stored stays in object storage, and Velero’s backup sync can bring the object back.')
+    const details = veleroObjectDeleteDetails('olderRadar')
+    expect(details).toContain('Removes only the Backup object')
+    expect(details).toContain('volume snapshots and uploaded volume data')
+    expect(details).not.toContain('permanently')
     expect(renderToStaticMarkup(<VeleroObjectDeleteNotice reason="olderRadar" backup={backup('Completed', 'default')} />)).toContain('velero backup delete')
   })
 })

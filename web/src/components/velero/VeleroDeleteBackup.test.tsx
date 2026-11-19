@@ -16,13 +16,18 @@ const state = vi.hoisted(() => ({
   mutationData: undefined as { request: string } | undefined,
   fetching: false,
   restores: [] as { name: string; phase?: string }[],
+  deleteObject: vi.fn(),
   restoresPending: false,
   restoresCoverage: 'full',
   restoresError: null as Error | null,
   success: vi.fn(),
   failure: vi.fn(),
 }))
-vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: state.support }) }))
+vi.mock('../../api/client', () => ({
+  useRadarFeature: () => ({ support: state.support }),
+  useDeleteResource: () => ({ mutate: state.deleteObject, isPending: false }),
+  useCascadeDeletePreview: () => ({ data: undefined, isFetching: false, isError: false }),
+}))
 vi.mock('../../api/velero', () => ({
   useVeleroDeleteBackup: () => ({ mutate: state.mutate, reset: vi.fn(), isPending: false, error: state.error, data: state.mutationData }),
   useVeleroBackupDeletion: () => ({
@@ -166,14 +171,49 @@ describe('Delete backup', () => {
   })
 
   // Velero would refuse a request for it; the header's Delete object is offered instead.
-  it('steps aside for a backup Velero never stored', () => {
+  const unstored = (name: string) => ({ metadata: { namespace: 'velero', name, uid: `uid-${name}`, resourceVersion: '41' }, spec: {}, status: { phase: 'New' } })
+
+  it('offers Delete object for a backup Velero never stored, bound to the object reviewed', () => {
     state.workspace = workspace({ accessMode: 'ReadWrite', phase: 'Available' })
-    render(<VeleroDeleteBackup backup={{ metadata: { namespace: 'velero', name: 'nightly-1', uid: 'uid-1' }, spec: {}, status: { phase: 'New' } }} />)
+    state.deletion = { state: 'unknown' }
+    render(<VeleroDeleteBackup backup={unstored('nightly-1')} />)
     expect(buttons('Delete backup')).toHaveLength(0)
-    // A refusal Velero already recorded is history, not a reason to offer the request again.
+    act(() => buttons('Delete object')[0].click())
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('Deletes the Backup object. Nothing of it is in storage.')
+    expect(text).toContain('Nothing of this backup is in storage')
+    expect(text).not.toContain('permanently delete')
+    expect(text).not.toContain('Force delete')
+    act(() => buttons('Delete object').at(-1)!.click())
+    expect(state.deleteObject).toHaveBeenCalledWith({ kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly-1', uid: 'uid-nightly-1', resourceVersion: '41' })
+  })
+
+  it('offers neither delete until its deletion requests are read, and only follows one that is open', () => {
+    state.workspace = workspace({ accessMode: 'ReadWrite', phase: 'Available' })
+    render(<VeleroDeleteBackup backup={unstored('nightly-1')} />)
+    expect(buttons('Delete backup')).toHaveLength(0)
+    expect(buttons('Delete object')).toHaveLength(0)
+    state.deletion = { state: 'waiting', request: 'nightly-2-x' }
+    render(<VeleroDeleteBackup backup={unstored('nightly-2')} />)
+    expect(buttons('Delete object')).toHaveLength(0)
+    expect(document.body.textContent).toContain('Deleting…')
+  })
+
+  it('offers Delete object, not Delete backup again, after Velero refused the request', () => {
+    state.workspace = workspace({ accessMode: 'ReadWrite', phase: 'Available' })
     state.deletion = { state: 'refused', request: 'nightly-1-x', errors: ['backup storage location not found'] }
-    render(<VeleroDeleteBackup backup={{ metadata: { namespace: 'velero', name: 'nightly-2', uid: 'uid-2' }, spec: {}, status: { phase: 'New' } }} />)
+    render(<VeleroDeleteBackup backup={unstored('nightly-1')} />)
     expect(buttons('Delete backup')).toHaveLength(0)
+    expect(buttons('Delete object')).toHaveLength(1)
+  })
+
+  it('leaves out the reviewed-object binding a Radar without it would ignore', () => {
+    state.support = 'unsupported'
+    render(<VeleroDeleteBackup backup={{ ...backup('Completed'), metadata: { ...backup().metadata, resourceVersion: '7' } }} />)
+    act(() => buttons('Delete object')[0].click())
+    expect(document.body.textContent).toContain('Removes only the Backup object')
+    act(() => buttons('Delete object').at(-1)!.click())
+    expect(state.deleteObject).toHaveBeenCalledWith({ kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly-1' })
   })
 
   it('leaves the refusal to Velero when the location can’t be read', () => {

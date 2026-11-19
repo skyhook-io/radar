@@ -207,11 +207,13 @@ type FeatureCapabilities struct {
 	VeleroBackupNow bool `json:"veleroBackupNow"` // POST /api/velero/schedules/{namespace}/{name}/backup
 	VeleroRuns      bool `json:"veleroRuns"`      // GET /api/velero/runs/{backups|restores}
 	// POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion
-	VeleroDeleteBackup    bool `json:"veleroDeleteBackup"`
-	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
-	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
-	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
-	AgentSigninCheck      bool `json:"agentSigninCheck"`      // GET /api/agents/signin
+	VeleroDeleteBackup bool `json:"veleroDeleteBackup"`
+	// DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions
+	ResourceDeletePreconditions bool `json:"resourceDeletePreconditions"`
+	ServiceEndpointSlices       bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
+	TrafficRecords              bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
+	GitOpsWriteEvidence         bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
+	AgentSigninCheck            bool `json:"agentSigninCheck"`      // GET /api/agents/signin
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
 	// the history entry (id 0 included), and .../resume also clears
 	// spec.syncPolicy.automated.enabled: false. An older Radar writes an

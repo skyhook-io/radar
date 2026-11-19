@@ -23,18 +23,6 @@ import { clsx } from 'clsx'
 import { classifyDiffLine } from './UnifiedDiff'
 import { Tooltip } from '../ui/Tooltip'
 import { ForceDeleteConfirmDialog, type CascadeDependent, type CascadeDetail } from '../ui/ForceDeleteConfirmDialog'
-
-/** How a host presents Delete for one object (ResourceActionsBar `deletePresentation`). */
-export interface DeletePresentation {
-  /** A text button with this label, in place of the icon-only "Delete resource". */
-  label?: string
-  /** The confirmation's consequence line, in place of the generic "This will permanently delete…". */
-  details?: string
-  /** Shown first in the confirmation. */
-  notice?: React.ReactNode
-  /** Offer Force delete (strips finalizers). Default true. */
-  allowForce?: boolean
-}
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { AlertBanner } from '../ui/drawer-components'
 import { DialogPortal } from '../ui/DialogPortal'
@@ -105,12 +93,6 @@ interface ResourceActionsBarProps {
   cascadeDetail?: CascadeDetail
   cascadeRootResolved?: boolean
   cascadePreviewFailed?: boolean
-  /**
-   * How the host presents Delete for this object: a labelled button, the
-   * confirmation's consequence line in place of the generic one, a notice shown
-   * first, and whether Force delete is offered (default yes).
-   */
-  deletePresentation?: DeletePresentation
 
   // Workload restart
   onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
@@ -209,7 +191,7 @@ export function ResourceActionsBar({
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
-  onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed, deletePresentation,
+  onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
   onRestart, isRestarting,
   onPauseDeployment, onResumeDeployment, isPausingDeployment, isResumingDeployment,
   onLoadImages, onSetImages, isSettingImages, imageOwnership,
@@ -741,18 +723,7 @@ export function ResourceActionsBar({
         </div>
       )}
 
-      {onDelete && !((kind === 'node' || kind === 'nodes') && data?.metadata?.deletionTimestamp) && deletePresentation?.label && (
-        <button
-          type="button"
-          disabled={isDeleting}
-          onClick={() => setShowDeleteConfirm(true)}
-          className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium hover:text-red-400 hover:border-red-400/50 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {isDeleting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" aria-hidden /> : <Trash2 className="w-3.5 h-3.5" aria-hidden />}
-          {deletePresentation.label}
-        </button>
-      )}
-      {onDelete && !((kind === 'node' || kind === 'nodes') && data?.metadata?.deletionTimestamp) && !deletePresentation?.label && (
+      {onDelete && !((kind === 'node' || kind === 'nodes') && data?.metadata?.deletionTimestamp) && (
         <Tooltip content={isDeleting ? 'Deleting resource' : 'Delete resource'}>
           <button
             aria-label={isDeleting ? 'Deleting resource' : 'Delete resource'}
@@ -781,10 +752,6 @@ export function ResourceActionsBar({
         cascadeLoading={cascadeLoading}
         cascadeRootResolved={cascadeRootResolved}
         cascadePreviewFailed={cascadePreviewFailed}
-        details={deletePresentation?.details}
-        notice={deletePresentation?.notice}
-        allowForce={deletePresentation?.allowForce}
-        actionLabel={deletePresentation?.label}
       />
 
       {onLoadImages && onSetImages && (

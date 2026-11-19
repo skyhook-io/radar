@@ -4841,12 +4841,17 @@ export function useDeleteResource() {
       namespace,
       name,
       force,
+      uid,
+      resourceVersion,
     }: {
       kind: string;
       group?: string;
       namespace: string;
       name: string;
       force?: boolean;
+      /** Delete only the object reviewed: a Radar with resourceDeletePreconditions answers 409 when it changed. */
+      uid?: string;
+      resourceVersion?: string;
     }) => {
       const url = new URL(
         apiUrl(`/resources/${resourcePathSegments(kind, namespace, name)}`),
@@ -4858,6 +4863,8 @@ export function useDeleteResource() {
       if (force) {
         url.searchParams.set("force", "true");
       }
+      if (uid) url.searchParams.set("uid", uid);
+      if (resourceVersion) url.searchParams.set("resourceVersion", resourceVersion);
       return readDeleteResult(apiFetch(url.toString(), { method: "DELETE" }));
     },
     meta: {

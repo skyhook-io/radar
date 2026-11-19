@@ -219,7 +219,8 @@ function PageLead({ kind, namespace, name, leadContent, onNavigate }: { kind: st
   const navigate = useWorkspaceNavigate()
   const [params] = useSearchParams()
   const issuesTakenOver = !!useNavCustomization().fleetTakeoverHref?.('issues')
-  const problems = workspace.data ? veleroObjectProblems(workspace.data, kind, namespace, name) : []
+  const deleteObject = useRadarFeature('resourceDeletePreconditions').support === 'supported'
+  const problems = workspace.data ? veleroObjectProblems(workspace.data, kind, namespace, name, { deleteObject }) : []
   if (problems.length === 0) return <>{leadContent}</>
   return (
     <OpenIssueContext.Provider value={issuesTakenOver ? undefined : (p) => navigate(issuesPathForSubject(p.subject, params.get('namespaces')))}>

@@ -158,18 +158,21 @@ describe('Velero next steps', () => {
     expect(veleroScheduleNextStep({ state: 'held' })).toContain('backup controller enabled')
     // Delete object is offered only for a queued run Velero never gave a location.
     const queued = { name: 'nightly-20261119010000', phase: 'New', created: '', ranAt: '' }
-    expect(veleroScheduleNextStep({ state: 'held', blocker: queued })).toContain('or open the queued backup and use Delete object: nothing of it is in storage')
-    expect(veleroScheduleNextStep({ state: 'held', blocker: { ...queued, storageLocation: 'default' } })).not.toContain('delete')
+    expect(veleroScheduleNextStep({ state: 'held', blocker: queued }, { deleteObject: true })).toContain('or open the queued backup and use Delete object: nothing of it is in storage')
+    expect(veleroScheduleNextStep({ state: 'held', blocker: { ...queued, storageLocation: 'default' } }, { deleteObject: true })).not.toContain('Delete object')
+    // A Radar without Delete object, or one that doesn't report runs' locations, gets the plain step.
+    expect(veleroScheduleNextStep({ state: 'held', blocker: queued })).not.toContain('Delete object')
     expect(veleroIssueNextStep({ reason: 'VeleroScheduleHeld' })).toBe(veleroScheduleNextStep({ state: 'held' }))
   })
 })
 
 describe('a schedule held by a backup Velero never stored', () => {
-  it('links the queued backup, whose page offers Delete object', () => {
+  it('links the queued backup, and offers Delete object only where that Radar supports it', () => {
     const blocker = { name: 'nightly-20261119010000', phase: 'New', created: '', ranAt: '' }
-    const rows = veleroAttention(workspace({ schedules: [schedule({ name: 'nightly', state: 'held', reason: 'unstartedBlocker', attention: true, blocker })] }), null)
+    const data = workspace({ schedules: [schedule({ name: 'nightly', state: 'held', reason: 'unstartedBlocker', attention: true, blocker })] })
+    const rows = veleroAttention(data, null, { deleteObject: true })
     expect(rows[0].related).toEqual({ lead: 'Queued backup:', refs: [{ kind: 'Backup', group: 'velero.io', namespace: 'velero', name: 'nightly-20261119010000' }] })
-    const located = veleroAttention(workspace({ schedules: [schedule({ name: 'nightly', state: 'held', reason: 'unstartedBlocker', attention: true, blocker: { ...blocker, storageLocation: 'default' } })] }), null)
-    expect(located[0].related).toBeUndefined()
+    expect(rows[0].nextStep).toContain('Delete object')
+    expect(veleroAttention(data, null)[0].nextStep).not.toContain('Delete object')
   })
 })

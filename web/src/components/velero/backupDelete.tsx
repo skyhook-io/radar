@@ -1,8 +1,9 @@
-import { AlertBanner, type DeletePresentation, type VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
+import { useState } from 'react'
+import { Loader2, Trash2 } from 'lucide-react'
+import { AlertBanner, ForceDeleteConfirmDialog, type VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
 import type { RadarFeatureSupport } from '../../api/radarFeatures'
-import { useRadarFeature } from '../../api/client'
-import { useVeleroWorkspace } from '../../api/velero'
-import { isVeleroBackupKind } from './routes'
+import { useCascadeDeletePreview, useDeleteResource } from '../../api/client'
+import { VELERO_BACKUP_KIND, VELERO_GROUP } from './routes'
 import { VELERO_DELETE_OBJECT } from './shared'
 
 /**
@@ -11,7 +12,7 @@ import { VELERO_DELETE_OBJECT } from './shared'
  *   does. Velero removes the backup's data and then the object.
  * - `object`: Delete object, a DELETE of the Backup object, offered only where
  *   Velero would never act on a request (`reason` says why).
- * - `pending`: not decided yet (capabilities still loading); neither is offered.
+ * - `pending`: not decided yet; neither is offered.
  */
 export type VeleroBackupDeletePath =
   | { kind: 'request' }
@@ -21,81 +22,67 @@ export type VeleroBackupDeletePath =
 /**
  * - `unstored`: Velero never started it (phase empty or New) and it names no
  *   storage location, so nothing of it was stored, and Velero refuses a
- *   request for a backup without a location.
- * - `rejectedNoLocation`: Velero rejected it before it ran, and the location
- *   it names does not exist (or it names none), so nothing was stored and
- *   Velero refuses the request.
+ *   request for a backup without a location. Queued and ReadyToStart are not
+ *   included: Velero's queue may be handing the backup to its controller.
+ * - `rejectedNoLocation`: Velero rejected it before it ran (a rejected run
+ *   writes nothing), and the location it names does not exist (or it names
+ *   none), so Velero refuses the request.
  * - `olderRadar`: the connected Radar cannot create a DeleteBackupRequest.
  */
 export type VeleroObjectDeleteReason = 'unstored' | 'rejectedNoLocation' | 'olderRadar'
 
-/**
- * The delete path for one Backup. `locationMissing` says a named storage
- * location is known not to exist (the locations were read in full); undefined
- * when that can't be said.
- */
-export function veleroBackupDeletePath(
-  backup: any,
-  deleteBackupSupport: RadarFeatureSupport,
-  locationMissing: (name: string) => boolean | undefined,
-): VeleroBackupDeletePath {
+// The phases Velero's backup tracker holds a backup in (pkg/velero.BackupStillRunning).
+export const RUNNING_PHASES = new Set(['InProgress', 'WaitingForPluginOperations', 'WaitingForPluginOperationsPartiallyFailed', 'Finalizing', 'FinalizingPartiallyFailed'])
+
+export interface VeleroBackupDeleteInput {
+  deleteBackup: RadarFeatureSupport
+  /** The connected Radar binds a DELETE to the reviewed UID and resourceVersion. */
+  preconditions: RadarFeatureSupport
+  /** Whether a named storage location is known not to exist; undefined when that can't be said. */
+  locationMissing: (name: string) => boolean | undefined
+  /** Its DeleteBackupRequests: one open (or unreadable), none open, or not read yet. */
+  request: 'open' | 'none' | 'unknown'
+}
+
+/** The delete path for one Backup. */
+export function veleroBackupDeletePath(backup: any, input: VeleroBackupDeleteInput): VeleroBackupDeletePath {
   // An unloaded object reads as phase "" with no location; nothing is decided from that.
   if (!backup) return { kind: 'pending' }
-  if (deleteBackupSupport === 'unsupported') return { kind: 'object', reason: 'olderRadar' }
-  if (deleteBackupSupport !== 'supported') return { kind: 'pending' }
-  const phase: string = backup?.status?.phase ?? ''
-  const location: string = backup?.spec?.storageLocation ?? ''
-  if ((phase === '' || phase === 'New') && !location) return { kind: 'object', reason: 'unstored' }
-  if (phase === 'FailedValidation' && (!location || locationMissing(location) === true)) return { kind: 'object', reason: 'rejectedNoLocation' }
-  return { kind: 'request' }
+  // An older Radar can't bind the DELETE to what was reviewed, so a running backup is left to Velero.
+  if (input.deleteBackup === 'unsupported') return RUNNING_PHASES.has(backup.status?.phase ?? '') ? { kind: 'pending' } : { kind: 'object', reason: 'olderRadar' }
+  if (input.deleteBackup !== 'supported') return { kind: 'pending' }
+  // Without the reviewed-object binding, Velero could start it between review and delete.
+  if (input.preconditions !== 'supported') return { kind: 'request' }
+  if (backup.metadata?.deletionTimestamp || (backup.metadata?.finalizers ?? []).length > 0) return { kind: 'request' }
+  const phase: string = backup.status?.phase ?? ''
+  const location: string = backup.spec?.storageLocation ?? ''
+  const reason: VeleroObjectDeleteReason | undefined =
+    (phase === '' || phase === 'New') && !location
+      ? 'unstored'
+      : phase === 'FailedValidation' && (!location || input.locationMissing(location) === true)
+        ? 'rejectedNoLocation'
+        : undefined
+  if (!reason) return { kind: 'request' }
+  // A request already sent is followed where it is, never doubled by a second delete.
+  if (input.request === 'unknown') return { kind: 'pending' }
+  if (input.request === 'open') return { kind: 'request' }
+  return { kind: 'object', reason }
 }
 
-/**
- * Whether the generic Delete (a DELETE of the object) is offered: for every
- * resource but a Velero Backup, and for a Backup only where its path is
- * `object`. Bulk delete stays off for Velero Backups.
- */
-export function genericDeleteOffered(kind: string | undefined, group: string | undefined, path: VeleroBackupDeletePath): boolean {
-  return !isVeleroBackupKind(kind, group) || path.kind === 'object'
-}
-
-/** Whether a storage location is known not to exist: the workspace read every location and it is not among them. */
+/** Whether a storage location is known not to exist: the workspace read every location in its namespace and it is not among them. */
 export function veleroLocationMissing(workspace: VeleroWorkspaceResponse | undefined, namespace: string, name: string): boolean | undefined {
   if (!workspace) return undefined
   if (workspace.locations.some((l) => l.namespace === namespace && l.name === name)) return false
-  return workspace.coverage.backupStorageLocations?.state === 'full' ? true : undefined
+  const cov = workspace.coverage.backupStorageLocations
+  const read = cov?.state === 'full' || (cov?.state === 'partial' && !!cov.allowedNamespaces?.includes(namespace))
+  return read ? true : undefined
 }
 
-/**
- * The delete path for a resource on screen; `request` for anything that isn't
- * a Velero Backup. The workspace is read only for a Velero Backup, and shares
- * the page's request.
- */
-export function useVeleroBackupDeletePath(kind: string | undefined, group: string | undefined, backup: any): VeleroBackupDeletePath {
-  const isBackup = isVeleroBackupKind(kind, group)
-  const { support } = useRadarFeature('veleroDeleteBackup')
-  const workspaceSupport = useRadarFeature('veleroWorkspace').support
-  const workspace = useVeleroWorkspace({ enabled: isBackup && workspaceSupport === 'supported' })
-  if (!isBackup) return { kind: 'request' }
-  const namespace: string = backup?.metadata?.namespace ?? ''
-  return veleroBackupDeletePath(backup, support, (name) => veleroLocationMissing(workspace.data, namespace, name))
-}
-
-/**
- * How the header presents Delete object for a Velero Backup: a labelled
- * button, one consequence line, the reason it isn't Delete backup, and no
- * Force delete (these Backups carry no finalizer worth stripping).
- */
-export function veleroObjectDeletePresentation(reason: VeleroObjectDeleteReason, backup: any): DeletePresentation {
-  return {
-    label: VELERO_DELETE_OBJECT,
-    details:
-      reason === 'olderRadar'
-        ? 'Removes only the Backup object. Any data it stored stays in object storage, and Velero’s backup sync can bring the object back.'
-        : 'Deletes the Backup object. Nothing of it is in storage.',
-    notice: <VeleroObjectDeleteNotice reason={reason} backup={backup} />,
-    allowForce: false,
-  }
+/** The confirmation's consequence line, in place of the generic "This will permanently delete…". */
+export function veleroObjectDeleteDetails(reason: VeleroObjectDeleteReason): string {
+  return reason === 'olderRadar'
+    ? 'Removes only the Backup object. What Velero stored for it (its files, volume snapshots and uploaded volume data) stays, and Velero’s backup sync can bring the object back.'
+    : 'Deletes the Backup object. Nothing of it is in storage.'
 }
 
 /** Why this is Delete object and not Delete backup, said first in the confirmation. */
@@ -115,8 +102,68 @@ export function VeleroObjectDeleteNotice({ reason, backup }: { reason: VeleroObj
   const why =
     reason === 'unstored'
       ? 'Velero never started this backup and gave it no storage location, so it won’t act on a deletion request for it.'
-      : `Velero rejected this backup before it ran, and ${location ? `its storage location ${location} doesn’t exist` : 'it has no storage location'}, so it won’t act on a deletion request for it.`
-  // A queued run holds its schedule: Velero submits nothing new while it is New.
-  const next = reason === 'unstored' && schedule ? ` Once it’s gone, schedule ${schedule} submits its next run.` : ''
-  return <AlertBanner variant="info" title="Nothing of this backup is in storage" message={`${why}${next}`} className="mb-0" />
+      : `Velero rejected this backup before it ran, so it wrote nothing, and ${location ? `its storage location ${location} doesn’t exist` : 'it has no storage location'}, so Velero won’t act on a deletion request for it.`
+  // Velero submits nothing new for a schedule while one of its runs is New.
+  const held = reason === 'unstored' && schedule ? ` While it is queued, Velero holds schedule ${schedule}; deleting it removes that hold.` : ''
+  return <AlertBanner variant="info" title="Nothing of this backup is in storage" message={`${why}${held}`} className="mb-0" />
+}
+
+const OBJECT_BUTTON =
+  'btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium hover:text-red-400 hover:border-red-400/50 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50'
+
+/**
+ * Delete object, in the Backup header where Delete backup otherwise is: the
+ * generic delete (DELETE /api/resources/..., with its usual preview) bound to
+ * the object the user reviewed, so a backup Velero picked up meanwhile is
+ * refused (409) rather than deleted. No Force delete: these Backups carry no
+ * finalizer to strip.
+ */
+export function VeleroDeleteObject({ backup, reason, preconditions }: { backup: any; reason: VeleroObjectDeleteReason; preconditions: boolean }) {
+  const namespace: string = backup?.metadata?.namespace ?? ''
+  const name: string = backup?.metadata?.name ?? ''
+  const [reviewed, setReviewed] = useState<{ uid: string; resourceVersion: string } | null>(null)
+  const deleteResource = useDeleteResource()
+  const preview = useCascadeDeletePreview(VELERO_BACKUP_KIND.name, namespace, name, VELERO_GROUP, reviewed !== null)
+  return (
+    <>
+      <button
+        type="button"
+        disabled={deleteResource.isPending}
+        onClick={() => setReviewed({ uid: backup?.metadata?.uid ?? '', resourceVersion: backup?.metadata?.resourceVersion ?? '' })}
+        className={OBJECT_BUTTON}
+      >
+        {deleteResource.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Trash2 className="h-3.5 w-3.5" aria-hidden />}
+        {VELERO_DELETE_OBJECT}
+      </button>
+      <ForceDeleteConfirmDialog
+        open={reviewed !== null}
+        onClose={() => setReviewed(null)}
+        onConfirm={() => {
+          if (!reviewed) return
+          deleteResource.mutate({
+            kind: VELERO_BACKUP_KIND.name,
+            group: VELERO_GROUP,
+            namespace,
+            name,
+            ...(preconditions ? { uid: reviewed.uid, resourceVersion: reviewed.resourceVersion } : {}),
+          })
+          setReviewed(null)
+        }}
+        resourceName={name}
+        resourceKind="Backup"
+        namespaceName={namespace}
+        resourceData={backup}
+        isLoading={deleteResource.isPending}
+        cascadeDetail={preview.data}
+        cascadeDependents={preview.data?.dependents}
+        cascadeLoading={preview.isFetching}
+        cascadeRootResolved={preview.data?.rootResolved}
+        cascadePreviewFailed={preview.isError}
+        actionLabel={VELERO_DELETE_OBJECT}
+        details={veleroObjectDeleteDetails(reason)}
+        notice={<VeleroObjectDeleteNotice reason={reason} backup={backup} />}
+        allowForce={false}
+      />
+    </>
+  )
 }

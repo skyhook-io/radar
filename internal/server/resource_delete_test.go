@@ -89,3 +89,46 @@ func TestDeleteResourceHandler(t *testing.T) {
 		})
 	}
 }
+
+// The reviewed UID and resourceVersion reach the API server as preconditions;
+// a conflict (the object changed since review) is 409, and force can't be bound.
+func TestDeleteResourceHandlerBindsToTheReviewedObject(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "ConfigMap", "metadata": map[string]any{"name": "held", "namespace": "demo", "uid": "original", "resourceVersion": "9"}}}
+	for _, tc := range []struct {
+		name, query string
+		deleteErr   error
+		status      int
+		wantRV      string
+	}{
+		{name: "bound", query: "?uid=original&resourceVersion=8", status: http.StatusOK, wantRV: "8"},
+		{name: "changed since review", query: "?uid=original&resourceVersion=8", deleteErr: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "held", fmt.Errorf("precondition failed")), status: http.StatusConflict, wantRV: "8"},
+		{name: "force can't be bound", query: "?force=true&resourceVersion=8", status: http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj.DeepCopy())
+			var got *metav1.Preconditions
+			dyn.PrependReactor("delete", "configmaps", func(a clienttesting.Action) (bool, runtime.Object, error) {
+				got = a.(clienttesting.DeleteActionImpl).DeleteOptions.Preconditions
+				return true, nil, tc.deleteErr
+			})
+			if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Version: "v1", Kind: "ConfigMap", Name: "configmaps", Namespaced: true}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestDynamicState)
+			previous := k8s.GetConnectionStatus()
+			k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+			t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+			router := chi.NewRouter()
+			s := &Server{}
+			router.Delete("/api/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
+			res := httptest.NewRecorder()
+			router.ServeHTTP(res, httptest.NewRequest(http.MethodDelete, "/api/resources/configmaps/demo/held"+tc.query, nil))
+			if res.Code != tc.status {
+				t.Fatalf("status %d: %s", res.Code, res.Body.String())
+			}
+			if tc.wantRV != "" && (got == nil || got.ResourceVersion == nil || *got.ResourceVersion != tc.wantRV || got.UID == nil || *got.UID != "original") {
+				t.Fatalf("preconditions %+v", got)
+			}
+		})
+	}
+}
