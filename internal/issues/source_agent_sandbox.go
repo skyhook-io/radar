@@ -30,7 +30,8 @@ func detectAgentSandboxNotReported(gvr schema.GroupVersionResource, kind string,
 // detectWarmPoolTemplateMissing reports each SandboxWarmPool whose
 // SandboxTemplate is not in its namespace, judged only where Radar holds
 // that namespace's templates in full. The pool carries no condition that says
-// so; its claims say TemplateNotFound once one is made.
+// so; a claim says TemplateNotFound once the controller finds no warm
+// sandbox to hand it.
 func detectWarmPoolTemplateMissing(p Provider, poolGVR schema.GroupVersionResource, pools []*unstructured.Unstructured) []Issue {
 	if len(pools) == 0 {
 		return nil
@@ -80,7 +81,7 @@ func detectWarmPoolTemplateMissing(p Provider, poolGVR schema.GroupVersionResour
 		if !templates.ok || templates.names[name] {
 			continue
 		}
-		message := fmt.Sprintf("The pool names SandboxTemplate %s, which doesn't exist in %s, so it can't create or replenish sandboxes, and claims that find no ready warm sandbox can't bind.", name, ns)
+		message := fmt.Sprintf("The pool names SandboxTemplate %s, which doesn't exist in %s, so it can't create or replenish sandboxes, and claims that find no warm sandbox to adopt can't bind.", name, ns)
 		iss := newConditionIssue(poolGVR, "SandboxWarmPool", ns, pool.GetName(), SeverityWarning, agentsandbox.ReasonTemplateNotFound, message, time.Time{}, false, "", pool.GetCreationTimestamp().Time)
 		iss.RequiredReads = []EvidenceRead{
 			{Group: agentSandboxExtensionsGroup, Resource: poolGVR.Resource, Namespace: ns, Verb: "list"},
