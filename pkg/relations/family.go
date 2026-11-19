@@ -340,9 +340,12 @@ func (v *View) resolvesTo(candidates []resourceid.Ref, subject resourceid.Ref, c
 // subject as the host read it, or nil: a subject the host read that the
 // cache doesn't hold yet leaves the answer incomplete rather than empty.
 //
-// Candidates come from the family's index, or from the namespace index for
-// a local or explicitly accepted scan. Every candidate is re-evaluated as
-// asked, including alternative-group and mesh-domain resolution.
+// Candidates come from the family's index when it has one. Without one, a
+// namespaced subject of a family that isn't CrossNamespace reads its own
+// namespace through the namespace index, and any other subject, a scan its
+// family's ScanRationale accepts, reads every source of each kind in the
+// store. Every candidate is re-evaluated as asked, including
+// alternative-group and mesh-domain resolution.
 func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Object) ReferrersAnswer {
 	var a ReferrersAnswer
 	if !f.target(subject.GroupKind()) {
