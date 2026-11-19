@@ -14,7 +14,7 @@ import {
   type OpenCostTrendSeries,
 } from '../../api/client'
 import { Tooltip } from '../ui/Tooltip'
-import { ChartLegend, CostTimeRangeSelector, StackedAreaChart } from './CostTrendChart'
+import { ChartLegend, CostTimeRangeSelector, CostTrendWithheldNote, StackedAreaChart } from './CostTrendChart'
 import {
   DEFAULT_COST_CURRENCY,
   formatCostPerHour,
@@ -31,6 +31,7 @@ import {
   costIntegrationUnavailableMessage,
   costRateLabels,
   costSourceLabel,
+  costTrendWithholding,
   costWithheldScope,
   isCostDiscoveryPending,
 } from './source'
@@ -188,6 +189,9 @@ export function ApplicationCostTab({
   const trendCurrency = trend?.currency ?? current?.currency ?? DEFAULT_COST_CURRENCY
   const source = current?.source ?? trend?.source
   const historyUnsupported = trend?.reason === 'history_unsupported'
+  // Current costs stand while the trend was withheld: say why, rather than
+  // that the range has no history.
+  const trendWithholding = state === 'partial_missing_history' ? costTrendWithholding(trend) : undefined
   const currentWindow = current?.window
   const rateLabels = costRateLabels(currentWindow)
 
@@ -195,7 +199,7 @@ export function ApplicationCostTab({
     <div className="mx-auto w-full max-w-[1600px] space-y-4">
       {(current?.partial ||
         trend?.partial ||
-        (state === 'partial_missing_history' && !historyUnsupported) ||
+        (state === 'partial_missing_history' && !historyUnsupported && !trendWithholding) ||
         state === 'partial_missing_current' ||
         unsupportedCount > 0) && (
         <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-secondary">
@@ -260,8 +264,10 @@ export function ApplicationCostTab({
                   trendCurrency,
                 )}
                 subvalue={
-                  state === 'partial_missing_history'
-                    ? 'Historical data incomplete'
+                  trendWithholding
+                    ? 'Historical data withheld'
+                    : state === 'partial_missing_history'
+                      ? 'Historical data incomplete'
                     : `${included} of ${total} workloads included`
                 }
               />
@@ -287,8 +293,12 @@ export function ApplicationCostTab({
                   <ChartLegend series={chartSeries} />
                 </div>
               ) : (
-                <div className="flex h-[240px] items-center justify-center rounded-md border border-dashed border-theme-border bg-theme-base/60 text-sm text-theme-text-tertiary">
-                  No historical workload owner cost points for this range.
+                <div className="flex h-[240px] items-center justify-center rounded-md border border-dashed border-theme-border bg-theme-base/60 px-4 text-sm text-theme-text-tertiary">
+                  {trendWithholding ? (
+                    <CostTrendWithheldNote withholding={trendWithholding} />
+                  ) : (
+                    'No historical workload owner cost points for this range.'
+                  )}
                 </div>
               )}
             </div>

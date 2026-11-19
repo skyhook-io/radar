@@ -18,6 +18,26 @@ export function costWithheldScope(data?: { available?: boolean; reason?: CostUna
   return isClusterScopeWithheld(data.clusterScope) ? data.clusterScope : undefined
 }
 
+/**
+ * Why an unavailable cost trend was withheld, when the trend view should say
+ * so rather than read as "no history": its costs couldn't be kept to this
+ * cluster, or the store answered only in part.
+ */
+export type CostTrendWithholding =
+  | { reason: 'cluster_scope'; scope?: ClusterScope }
+  | { reason: 'partial_data' }
+
+export function costTrendWithholding(trend?: { available?: boolean; reason?: CostUnavailableReason; clusterScope?: ClusterScope }): CostTrendWithholding | undefined {
+  if (!trend || trend.available) return undefined
+  if (trend.reason === 'cluster_scope') return { reason: 'cluster_scope', scope: costWithheldScope(trend) }
+  if (trend.reason === 'partial_data') return { reason: 'partial_data' }
+  return undefined
+}
+
+export const COST_TREND_WITHHELD_TITLE = 'Cost history withheld for this cluster'
+export const COST_TREND_PARTIAL_NOTE =
+  'The metrics store answered only in part for this range, so cost history is withheld rather than shown too low.'
+
 export type CostSourcePreference = 'auto' | CostDataSource
 
 export const COST_SOURCE_OPTIONS: { value: CostSourcePreference; label: string; description: string }[] = [
