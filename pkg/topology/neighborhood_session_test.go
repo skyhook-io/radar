@@ -10,9 +10,11 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -94,5 +96,75 @@ func TestNeighborhoodSessionIndexedReadsEachCandidateOnce(t *testing.T) {
 	}
 	if reads != 0 {
 		t.Errorf("read %d Services by name after the indexed read found them", reads)
+	}
+}
+
+// inventorySession reads each manager's member list from its current object,
+// as the caches do, which liveInventory can change after the walk read the
+// manager, and captures a subject as the caches can.
+type inventorySession struct {
+	*projectionSession
+	liveInventory map[resourceid.Ref]*unstructured.Unstructured
+	subject       resourceid.Ref
+	captured      runtime.Object
+}
+
+func (s *inventorySession) CaptureSubject(ref resourceid.Ref, obj runtime.Object) relations.Session {
+	c := *s
+	c.subject, c.captured = ref, obj
+	return &c
+}
+
+func (s *inventorySession) Members(manager resourceid.Ref) ownership.MembersRead {
+	u := s.liveInventory[manager]
+	if manager == s.subject {
+		u = s.captured.(*unstructured.Unstructured)
+	}
+	if u == nil {
+		return s.projectionSession.Members(manager)
+	}
+	read := ownership.MembersRead{Manager: ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(manager, u)}, Membership: ownership.MembersRecorded}
+	list, _ := gitops.FluxMembers(u)
+	for _, e := range list.Entries {
+		read.Members = append(read.Members, resourceid.NewRef(e.Group, e.Kind, e.Namespace, e.Name))
+	}
+	return read
+}
+
+// A manager's members are read from the manager as the walk read it: an
+// inventory the controller rewrote after that read adds no member edge.
+func TestWalkNeighborhoodMembersFollowTheReadManager(t *testing.T) {
+	inventory := func(entries ...string) map[string]any {
+		var list []any
+		for _, id := range entries {
+			list = append(list, map[string]any{"id": id, "v": "v1"})
+		}
+		return map[string]any{"inventory": map[string]any{"entries": list}}
+	}
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "web", Labels: map[string]string{"app": "web"}}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}}}}}, "apps", "Deployment")
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "shop", UID: "api"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}}, "", "Service")
+	manager := projectionCR("kustomize.toolkit.fluxcd.io", "Kustomization", "flux-system", "apps", map[string]any{"status": inventory("shop_web_apps_Deployment")})
+	manager.SetUID("apps")
+	rewritten := manager.DeepCopy()
+	rewritten.Object["status"] = inventory("shop_web_apps_Deployment", "shop_api__Service")
+	sub, err := WalkNeighborhood(context.Background(), &inventorySession{projectionSession: newRecordingProjectionSession(t, dep, svc, manager), liveInventory: map[resourceid.Ref]*unstructured.Unstructured{projectionRef(manager): rewritten}}, refOf(projectionRef(dep)), NeighborhoodOptions{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	for _, n := range sub.Nodes {
+		names[n.ID] = n.Name
+	}
+	edges := map[string]bool{}
+	for _, e := range sub.Edges {
+		if e.Type == EdgeManages {
+			edges[names[e.Source]+" manages "+names[e.Target]] = true
+		}
+	}
+	if len(sub.Nodes) != 3 || !edges["apps manages web"] {
+		t.Fatalf("the fixture no longer reaches the manager, its member and the Service: nodes %+v edges %v", sub.Nodes, edges)
+	}
+	if edges["apps manages api"] {
+		t.Error("a member the manager listed only after the walk read it was drawn")
 	}
 }

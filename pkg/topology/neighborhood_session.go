@@ -109,6 +109,34 @@ func (s *neighborhoodSession) Indexed(gk resourceid.GroupKind, index string, key
 	s.indexes[string(key)] = read
 	return read
 }
+
+// Members reads a manager's member list from the object this request read,
+// so its members agree with the rest of the answer even if the manager has
+// changed since. A manager the request hasn't read is read as the session
+// reads it.
+func (s *neighborhoodSession) Members(manager resourceid.Ref) ownership.MembersRead {
+	if captured, ok := s.captured(manager); ok {
+		return captured.Members(manager)
+	}
+	return s.Session.Members(manager)
+}
+
+// Membership is Members' state, read the same way.
+func (s *neighborhoodSession) Membership(manager resourceid.Ref) ownership.MembersRead {
+	if captured, ok := s.captured(manager); ok {
+		return captured.Membership(manager)
+	}
+	return s.Session.Membership(manager)
+}
+
+func (s *neighborhoodSession) captured(r resourceid.Ref) (relations.Session, bool) {
+	o, ok := s.objects[r]
+	if !ok || o.read.State != ownership.Present {
+		return nil, false
+	}
+	return relations.CaptureSubject(s.Session, r, o.object)
+}
+
 func (s *neighborhoodSession) DependentCandidates(uid types.UID, scope ownership.SearchScope) ownership.DependentCandidatesRead {
 	read := s.Session.DependentCandidates(uid, scope)
 	read.Candidates = slices.DeleteFunc(slices.Clone(read.Candidates), func(o ownership.Observation) bool { return !s.access.allowed(o.Ref) })
