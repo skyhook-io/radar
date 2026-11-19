@@ -105,7 +105,7 @@ func appPruningFixture() (typed []runtime.Object, dynamic []*unstructured.Unstru
 		&corev1.Service{ObjectMeta: meta("web-stable")},
 		&networkingv1.Ingress{ObjectMeta: meta("edge"), Spec: networkingv1.IngressSpec{TLS: []networkingv1.IngressTLS{{SecretName: "edge-tls"}}, DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "api", Port: networkingv1.ServiceBackendPort{Number: 80}}}}},
 		&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: meta("api"), Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"}}},
-		&corev1.ServiceAccount{ObjectMeta: meta("api")},
+		&corev1.ServiceAccount{ObjectMeta: meta("api"), Secrets: []corev1.ObjectReference{{Name: "api-token"}}, ImagePullSecrets: []corev1.LocalObjectReference{{Name: "registry"}}},
 		&corev1.PersistentVolumeClaim{ObjectMeta: meta("api-data")},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "mirror-tls", Annotations: map[string]string{"reflector.v1.k8s.emberstack.com/reflects": "prod/edge-tls"}}},
 		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "mirror-config", Annotations: map[string]string{"reflector.v1.k8s.emberstack.com/reflects": "prod/api-config"}}},
@@ -113,7 +113,7 @@ func appPruningFixture() (typed []runtime.Object, dynamic []*unstructured.Unstru
 	for _, name := range []string{"api-config", "api-flags", "db-config", "agent-config", "nightly-config", "migrate-config", "web-config", "transport-ca"} {
 		typed = append(typed, &corev1.ConfigMap{ObjectMeta: meta(name)})
 	}
-	for _, name := range []string{"sealed", "edge-tls", "cert-tls", "transport-secret", "client-ca", "store-tls", "contour-ca"} {
+	for _, name := range []string{"sealed", "edge-tls", "cert-tls", "transport-secret", "client-ca", "store-tls", "contour-ca", "api-token", "registry"} {
 		typed = append(typed, &corev1.Secret{ObjectMeta: meta(name)})
 	}
 
