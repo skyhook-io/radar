@@ -343,4 +343,9 @@ func TestReadIndexDeduplicatesOnlyAcrossBuckets(t *testing.T) {
 			t.Errorf("keys %q read %v; want %v", tc.keys, got, tc.want)
 		}
 	}
+	for _, keys := range [][]string{{"x"}, nil} {
+		if _, err := readIndex(st, "missing", keys); err == nil {
+			t.Errorf("keys %q: a read by an index the store lacks succeeded", keys)
+		}
+	}
 }

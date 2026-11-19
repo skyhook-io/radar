@@ -138,13 +138,14 @@ func readIndex(indexer cache.Indexer, index string, keys []string) ([]any, error
 	switch {
 	case index == "":
 		return indexer.List(), nil
-	case len(keys) == 0:
-		return nil, nil
 	case indexer.GetIndexers()[index] == nil:
 		// Index registration is generated and pinned by tests, so only a code
-		// bug reads a store by an index it lacks; the caller reports a read error.
+		// bug reads a store by an index it lacks; the caller reports a read error,
+		// with keys or without.
 		log.Printf("[k8score] Store lacks index %q", index)
 		return nil, fmt.Errorf("index %q is missing", index)
+	case len(keys) == 0:
+		return nil, nil
 	case len(keys) == 1:
 		return indexer.ByIndex(index, keys[0])
 	case multiKeyIndexes[index]:

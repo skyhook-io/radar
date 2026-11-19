@@ -114,6 +114,9 @@ func TestDynamicRouteIndexesOnEveryVersionAndScope(t *testing.T) {
 					if _, ok := d.ReadableIndexed(gvr, namespace, "missing", "key"); ok || !d.LacksIndex(gvr, namespace, "missing") {
 						t.Fatal("a read by an index the store lacks succeeded or wasn't said to lack it")
 					}
+					if _, ok := d.ReadableIndexed(gvr, namespace, "missing"); ok {
+						t.Fatal("a read by an index the store lacks, with no keys, succeeded")
+					}
 				})
 			}
 		}

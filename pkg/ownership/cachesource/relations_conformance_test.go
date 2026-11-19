@@ -353,18 +353,20 @@ func (betaUndecided) CanRead(_ resourceid.GroupKind, namespace string) ownership
 func (betaUndecided) Namespaces() ([]string, bool) { return nil, true }
 
 // A store without the index never answers, however long it loads, so a read
-// by it is a read error, for a typed kind and for a dynamic one watched
-// cluster-wide or namespace by namespace.
+// by it is a read error, with keys or without, for a typed kind and for a
+// dynamic one watched cluster-wide or namespace by namespace.
 func TestIndexedReadByMissingIndexIsAReadError(t *testing.T) {
 	assertReadError := func(t *testing.T, s relations.Session, gk resourceid.GroupKind) {
 		t.Helper()
-		got := s.Indexed(gk, "missing", []string{"key"}, ownership.InNamespace("alpha"))
-		if len(got.Objects) != 0 || len(got.Gaps) == 0 {
-			t.Fatalf("%v: %+v; want a gap, never a complete empty answer", gk, got)
-		}
-		for _, g := range got.Gaps {
-			if g.Reason != readreason.ReadError {
-				t.Errorf("%v: gap %+v; want %s", gk, g, readreason.ReadError)
+		for _, keys := range [][]string{{"key"}, nil} {
+			got := s.Indexed(gk, "missing", keys, ownership.InNamespace("alpha"))
+			if len(got.Objects) != 0 || len(got.Gaps) == 0 {
+				t.Fatalf("%v, keys %q: %+v; want a gap, never a complete empty answer", gk, keys, got)
+			}
+			for _, g := range got.Gaps {
+				if g.Reason != readreason.ReadError {
+					t.Errorf("%v, keys %q: gap %+v; want %s", gk, keys, g, readreason.ReadError)
+				}
 			}
 		}
 	}
