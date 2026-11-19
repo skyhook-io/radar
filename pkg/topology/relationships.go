@@ -319,6 +319,8 @@ func isServiceEntrypointRoute(ref *ResourceRef) bool {
 // by the caller — the kind/name lookup used inside this entry point is
 // group-blind and can return the wrong typed object for CRDs whose plural
 // collides with a core resource (e.g. Knative Service vs core Service).
+//
+// Deprecated: Use RelationsAnswer with caller-scoped relation families.
 func GetRelationships(kind, namespace, name string, topo *Topology, provider ResourceProvider, dp DynamicProvider) *Relationships {
 	return GetRelationshipsWithObject(kind, namespace, name, nil, topo, provider, dp, nil)
 }
@@ -326,12 +328,13 @@ func GetRelationships(kind, namespace, name string, topo *Topology, provider Res
 // GetRelationshipsWithIndex is the indexed variant of GetRelationships. When
 // idx is non-nil, edge lookups go through the precomputed inverted index
 // instead of scanning topo.Edges; when nil, behavior matches GetRelationships
-// exactly. Callers that issue many per-resource queries against the same
-// topology (T6 BuildResourceContext, T12 get_neighborhood) should build idx
-// once and reuse it.
+// exactly. Graph consumers issuing many per-resource queries should build
+// idx once and reuse it.
 //
 // Prefer GetRelationshipsWithObject when the resource has already been fetched —
 // see the doc on GetRelationships for the kind/group collision rationale.
+//
+// Deprecated: Use RelationsAnswer with caller-scoped relation families.
 func GetRelationshipsWithIndex(kind, namespace, name string, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex) *Relationships {
 	return GetRelationshipsWithObject(kind, namespace, name, nil, topo, provider, dp, idx)
 }

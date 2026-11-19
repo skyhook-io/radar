@@ -240,6 +240,24 @@ func IsEvent(gk resourceid.GroupKind) bool {
 	return gk.Kind == "Event" && (gk.Group == "" || gk.Group == "events.k8s.io")
 }
 
+// GroupsForKind returns the API groups serving kind, including ambiguous
+// resources, in deterministic order. It implements resourceid.Catalog.
+func (c *Catalog) GroupsForKind(kind string) []string {
+	var groups []string
+	for gk := range c.kinds {
+		if gk.Kind == kind {
+			groups = append(groups, gk.Group)
+		}
+	}
+	for _, ambiguous := range c.ambiguous {
+		if ambiguous.Kind == kind {
+			groups = append(groups, ambiguous.Group)
+		}
+	}
+	slices.Sort(groups)
+	return slices.Compact(groups)
+}
+
 // CoversGroup reports whether discovery answered for group, so a kind absent
 // from that group was not served when discovery ran.
 func (c *Catalog) CoversGroup(group string) bool {

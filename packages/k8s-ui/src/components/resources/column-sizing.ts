@@ -43,6 +43,15 @@
 // table scrolls sideways. Where the table must fit (a window 1920px wide or
 // more) a second pass in the same order always takes every column on to its
 // heading and Name to NAME_MIN_PX.
+//
+// Before any value is cut, a column marked `dropOrder` (a low-priority column,
+// kubectl's `-o wide` tier in reverse) drops out of the table while the room
+// is short (layoutColumns): when what the table still needs after every
+// give-back that cuts nothing (exact columns to their content, short-value
+// columns to their content, Name to its yield width) is more than the room,
+// such columns go one at a time, lowest dropOrder first, until it fits or none
+// is left. The passes above then run on the columns that remain. A dropped
+// column comes back as soon as there is room for it.
 
 export type ColumnSizingMode = 'exact' | 'fit' | 'grow'
 
@@ -63,6 +72,8 @@ export interface ColumnLayoutInput {
   /** Where the table must fit (`mustFit`), how far past `min` it shrinks:
    *  its heading, or for Name NAME_MIN_PX. */
   hardMin?: number
+  /** Drops out of the table while room is short; lower drops first (see layoutColumns). */
+  dropOrder?: number
   /** Width the user dragged or double-click fitted. Overrides everything else. */
   userWidth?: number
   /** Measured content width, cell padding included. fit: the target; grow: the cap. */
@@ -82,14 +93,54 @@ export interface ColumnLayoutOptions {
   mustFit?: boolean
 }
 
-export function computeColumnLayout(columns: ColumnLayoutInput[], available: number, options: ColumnLayoutOptions = {}): Record<string, number> {
+/** The layout and the columns that dropped out to make room (see the header). */
+export function layoutColumns(columns: ColumnLayoutInput[], available: number, options: ColumnLayoutOptions = {}): { widths: Record<string, number>; dropped: string[] } {
+  const dropped = available > 0 ? columnsToDrop(columns, available) : []
+  if (!dropped.length) return { widths: computeColumnLayout(columns, available, options), dropped }
+  const gone = new Set(dropped)
+  return { widths: computeColumnLayout(columns.filter(c => !gone.has(c.key)), available, options), dropped }
+}
+
+function columnsToDrop(columns: ColumnLayoutInput[], available: number): string[] {
+  const droppable = columns.filter(c => c.dropOrder !== undefined && !c.userWidth)
+  if (!droppable.length) return []
+  const widths = startingWidths(columns)
+  // The width each column can give back without cutting a value.
+  const noCutBound = (c: ColumnLayoutInput) => {
+    const w = widths[c.key]
+    if (c.userWidth || c.mode === 'grow') return w
+    if (c.mode === 'exact' || c.key === 'name') return Math.min(w, lowerBound(c))
+    return Math.min(w, Math.max(lowerBound(c), Math.min(w, c.content ?? w)))
+  }
+  let short = sum(columns.map(noCutBound)) - available
+  const dropped: string[] = []
+  for (const c of [...droppable].sort((a, b) => a.dropOrder! - b.dropOrder!)) {
+    if (short <= 0.5) break
+    dropped.push(c.key)
+    short -= noCutBound(c)
+  }
+  return dropped
+}
+
+// Every column at its starting width: a user width as set, a fit column at its
+// content within its bounds, the rest at their floor.
+function startingWidths(columns: ColumnLayoutInput[]): Record<string, number> {
   const widths: Record<string, number> = {}
-  const cap = (c: ColumnLayoutInput, v: number) => Math.max(c.floor, Math.min(v, c.max ?? Infinity))
   for (const c of columns) {
     if (c.userWidth) widths[c.key] = c.userWidth
-    else if (c.mode === 'fit') widths[c.key] = cap(c, c.content ?? 0)
+    else if (c.mode === 'fit') widths[c.key] = capWidth(c, c.content ?? 0)
     else widths[c.key] = c.floor
   }
+  return widths
+}
+
+function capWidth(c: ColumnLayoutInput, v: number): number {
+  return Math.max(c.floor, Math.min(v, c.max ?? Infinity))
+}
+
+export function computeColumnLayout(columns: ColumnLayoutInput[], available: number, options: ColumnLayoutOptions = {}): Record<string, number> {
+  const widths = startingWidths(columns)
+  const cap = capWidth
   // Not laid out yet (first render, or no layout engine): the content widths
   // stand, and nothing is shared or taken back.
   if (!(available > 0)) return roundWidths(widths)

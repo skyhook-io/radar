@@ -168,6 +168,9 @@ type allNamespaces struct {
 }
 
 func (c allNamespaces) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
+	if reason, ok := c.unread[gk]; ok && index != "" && index != cache.NamespaceIndex {
+		return IndexedRead{Gaps: []ownership.Gap{{Kind: gk, Reason: reason}}}
+	}
 	// Another index only narrows what the caller evaluates, so every object
 	// stands in for what it files under keys.
 	if index == cache.NamespaceIndex {

@@ -413,7 +413,11 @@ function ScheduleProtection({ schedules, locations, multi, onInspect, inspected,
 /** The namespaces the caller can see, from the namespace list; undefined while it loads. */
 export type VeleroNamespaceList = string[] | 'error' | undefined
 
-export function VeleroOverview({ data, installation, onInstallation, onInspect, inspected, namespaces }: VeleroScreenProps & { namespaces?: VeleroNamespaceList }) {
+export function VeleroOverview({ data, installation, onInstallation, onInspect, inspected, namespaces, deleteObject = false }: VeleroScreenProps & {
+  namespaces?: VeleroNamespaceList
+  /** The connected Radar supports Delete object (resourceDeletePreconditions), so a held schedule's next step may offer it. */
+  deleteObject?: boolean
+}) {
   const navigateTo = useWorkspaceNavigate()
   const schedules = useMemo(() => inInstallation(data.schedules, installation), [data.schedules, installation])
   const locations = useMemo(() => inInstallation(data.locations, installation), [data.locations, installation])
@@ -421,7 +425,7 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
     () => (installation === null ? data.issues : data.issues.filter((i) => (i.namespace ?? '') === installation)),
     [data.issues, installation],
   )
-  const attention = useMemo(() => veleroAttention(data, installation), [data, installation])
+  const attention = useMemo(() => veleroAttention(data, installation, { deleteObject }), [data, installation, deleteObject])
   const capped = cappedIssueNotes(data, issues, installation)
   const groups = useMemo(() => {
     let budget = ATTENTION_BUDGET
