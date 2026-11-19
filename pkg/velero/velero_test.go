@@ -635,3 +635,12 @@ func TestServerRepeatedFlagsAndEnvTakeTheLastValue(t *testing.T) {
 		t.Fatalf("cfg %+v", cfg)
 	}
 }
+
+func TestScheduleRunsCarryTheirStorageLocation(t *testing.T) {
+	queued := backup("nightly-20261115120000", "nightly", "New", at("12:00"))
+	stored := backup("nightly-20261115110000", "nightly", "Completed", at("11:00"), storedAt("primary"))
+	r := ReadSchedule(ScheduleInput{Schedule: schedule("nightly", "0 * * * *", lastBackup(at("12:00"))), Backups: []*unstructured.Unstructured{queued, stored}, BackupsRead: true, Server: utcServer, Now: at("12:05"), WithRecent: true})
+	if len(r.Runs.Recent) != 2 || r.Runs.Recent[0].StorageLocation != "" || r.Runs.Recent[1].StorageLocation != "primary" {
+		t.Fatalf("recent %+v", r.Runs.Recent)
+	}
+}

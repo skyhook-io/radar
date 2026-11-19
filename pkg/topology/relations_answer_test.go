@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -39,20 +41,96 @@ func projectionObject(obj runtime.Object, group, kind string) runtime.Object {
 	obj.GetObjectKind().SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: "v1", Kind: kind})
 	return obj
 }
+
+// recordMembers gives a GitOps manager the member list its status records,
+// read as production reads it. The entries are placed by placeMembers once
+// the fixture's catalog is known.
+func recordMembers(o *ownershiptest.Object, u *unstructured.Unstructured) (gitops.MemberList, bool) {
+	var list gitops.MemberList
+	var ok, here, elsewhere bool
+	switch o.Ref.GroupKind() {
+	case ownership.ArgoApplication:
+		list, ok = gitops.ArgoMembers(u)
+		name, server, _ := gitops.ArgoComparedDestination(u)
+		here, elsewhere = gitops.IsInClusterArgoDestination(name, server), gitops.ArgoAppliesElsewhere(u)
+	case ownership.FluxHelmRelease, ownership.FluxKustomization:
+		list, ok = gitops.FluxMembers(u)
+		here = gitops.FluxTargetsLocalCluster(u)
+		elsewhere = !here
+	default:
+		return gitops.MemberList{}, false
+	}
+	if !ok {
+		if elsewhere {
+			o.Membership = ownership.MembersRemote
+		}
+		return gitops.MemberList{}, false
+	}
+	o.Membership = ownership.MembersRecorded
+	if !here {
+		// A remote manager's list names another cluster's objects.
+		o.Membership = ownership.MembersRemote
+	}
+	o.DestinationNamespace = list.DestinationNamespace
+	return list, true
+}
+
+// placeMembers names the object each entry means, as the cache source does:
+// by its kind's scope where the catalog knows it, and as recorded otherwise.
+func placeMembers(o *ownershiptest.Object, list gitops.MemberList, catalog *ownership.Catalog) {
+	for _, m := range list.Entries {
+		ref := resourceid.NewRef(m.Group, m.Kind, m.Namespace, m.Name)
+		if namespaced, known := catalog.Scope(ref.GroupKind()); known {
+			ref.Namespace = gitops.MemberNamespace(namespaced, m.Namespace, list.DestinationNamespace)
+		}
+		o.Members = append(o.Members, ref)
+	}
+}
+
 func newProjectionSession(t testing.TB, objects ...runtime.Object) *projectionSession {
 	t.Helper()
-	w := ownershiptest.World{}
+	return projectionSessionOf(t, false, objects)
+}
+
+// newRecordingProjectionSession is newProjectionSession with each GitOps
+// manager's recorded member list, read and placed as the cache source does.
+func newRecordingProjectionSession(t testing.TB, objects ...runtime.Object) *projectionSession {
+	t.Helper()
+	return projectionSessionOf(t, true, objects)
+}
+
+// projectionSessionOf serves each object's kind at the object's version,
+// beside served, and with record gives GitOps managers their recorded
+// members.
+func projectionSessionOf(t testing.TB, record bool, objects []runtime.Object, served ...ownership.ServedResource) *projectionSession {
+	t.Helper()
+	w := ownershiptest.World{Resources: served}
 	s := &projectionSession{objects: map[resourceid.Ref]runtime.Object{}}
 	seen := map[resourceid.GroupKind]bool{}
+	recorded := map[int]gitops.MemberList{}
 	for _, obj := range objects {
 		ref := projectionRef(obj)
 		m, _ := apimeta.Accessor(obj)
 		s.objects[ref] = obj
-		w.Objects = append(w.Objects, ownershiptest.Object{Ref: ref, UID: m.GetUID(), APIVersion: obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), ResourceVersion: m.GetResourceVersion(), OwnerReferences: m.GetOwnerReferences(), Labels: m.GetLabels(), Annotations: m.GetAnnotations()})
+		o := ownershiptest.Object{Ref: ref, UID: m.GetUID(), APIVersion: obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), ResourceVersion: m.GetResourceVersion(), OwnerReferences: m.GetOwnerReferences(), Labels: m.GetLabels(), Annotations: m.GetAnnotations()}
+		if u, ok := obj.(*unstructured.Unstructured); ok && record {
+			if list, ok := recordMembers(&o, u); ok {
+				recorded[len(w.Objects)] = list
+			}
+		}
+		w.Objects = append(w.Objects, o)
 		if !seen[ref.GroupKind()] {
-			w.Resources = append(w.Resources, ownership.ServedResource{Group: ref.Group, Version: "v1", Kind: ref.Kind, Resource: ref.Kind + "s", Namespaced: ref.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
+			version := obj.GetObjectKind().GroupVersionKind().Version
+			if version == "" {
+				version = "v1"
+			}
+			w.Resources = append(w.Resources, ownership.ServedResource{Group: ref.Group, Version: version, Kind: ref.Kind, Resource: ref.Kind + "s", Namespaced: ref.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
 			seen[ref.GroupKind()] = true
 		}
+	}
+	catalog := ownership.NewCatalog(w.Resources, true)
+	for i, list := range recorded {
+		placeMembers(&w.Objects[i], list, catalog)
 	}
 	var err error
 	s.ReadSession, err = ownershiptest.Scan(w).Begin()
@@ -135,7 +213,10 @@ func TestRelationsAnswerDirectAccess(t *testing.T) {
 	s := newProjectionSession(t, pod)
 	denied := projectionAccess{denied: []string{"ServiceAccount", "Node", "ResourceClaim"}}
 	rel := projectionAnswer(t, s, pod, denied, ownership.Unrestricted())
-	if rel.ServiceAccount != nil || rel.Node != nil || len(rel.ResourceClaims) > 0 {
+	// The Pod's own spec names its ServiceAccount, its Node and its
+	// ResourceClaim, so they are listed, marked.
+	if rel.ServiceAccount == nil || *rel.ServiceAccount != (ResourceRef{Kind: "ServiceAccount", Namespace: "shop", Name: "sa", State: ResourceStateDenied}) || rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "node", State: ResourceStateDenied}) ||
+		!slices.Equal(rel.ResourceClaims, []ResourceRef{{Kind: "ResourceClaim", Group: "resource.k8s.io", Namespace: "shop", Name: "claim", State: ResourceStateDenied}}) {
 		t.Fatalf("hidden spec references: %+v", rel)
 	}
 	for _, read := range s.reads {
@@ -268,7 +349,7 @@ func TestRelationsAnswerDeviceAndHostAccess(t *testing.T) {
 	endpoint := projectionCR("projectcalico.org", "HostEndpoint", "", "host", map[string]any{"spec": map[string]any{"node": "hidden"}})
 	s = newProjectionSession(t, endpoint)
 	rel = projectionAnswer(t, s, endpoint, projectionAccess{denied: []string{"Node"}}, ownership.Unrestricted())
-	if rel.Node != nil {
+	if rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "hidden", State: ResourceStateDenied}) {
 		t.Fatalf("hidden HostEndpoint Node: %+v", rel.Node)
 	}
 }
@@ -640,6 +721,42 @@ func TestRelationsAnswerStorageClassReverseLists(t *testing.T) {
 	}
 }
 
+// A manager that deploys to another cluster records that cluster's objects,
+// even where its list names a local object's coordinates.
+func TestProjectionSessionLocatesManagers(t *testing.T) {
+	web := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web", UID: "web"}}, "apps", "Deployment")
+	for _, tc := range []struct {
+		server string
+		want   int
+	}{{"https://kubernetes.default.svc", 1}, {"https://remote.example.com", 0}} {
+		app := charUnstructured("argoproj.io/v1alpha1", "Application", "argocd", "shop", nil,
+			map[string]any{"destination": map[string]any{"server": tc.server, "namespace": "shop"}},
+			map[string]any{"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "shop", "name": "web"}}})
+		s := newRecordingProjectionSession(t, app, web)
+		if got := ownership.NewView(s, ownership.Unrestricted()).RecordingManagers(projectionRef(web)).Managers; len(got) != tc.want {
+			t.Errorf("destination %s: recording managers = %v, want %d", tc.server, got, tc.want)
+		}
+	}
+}
+
+// An entry for a cluster-scoped kind names the cluster-scoped object, with or
+// without a recorded namespace, as the cache source reads it.
+func TestProjectionSessionPlacesClusterScopedMembers(t *testing.T) {
+	reader := projectionObject(&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "reader", UID: "reader"}}, "rbac.authorization.k8s.io", "ClusterRole")
+	for _, recorded := range []map[string]any{
+		{"group": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": "reader"},
+		{"group": "rbac.authorization.k8s.io", "kind": "ClusterRole", "namespace": "shop", "name": "reader"},
+	} {
+		app := charUnstructured("argoproj.io/v1alpha1", "Application", "argocd", "shop", nil,
+			map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "shop"}},
+			map[string]any{"resources": []any{recorded}})
+		s := newRecordingProjectionSession(t, app, reader)
+		if got := ownership.NewView(s, ownership.Unrestricted()).RecordingManagers(projectionRef(reader)).Managers; len(got) != 1 {
+			t.Errorf("entry %v: recording managers = %v, want the Application", recorded, got)
+		}
+	}
+}
+
 // Several owner references with no controller are garbage-collection
 // dependencies with no primary, so none of them is climbed as a manager.
 func TestRelationsAnswerManagedByIgnoresSeveralNonControllerOwners(t *testing.T) {
@@ -744,6 +861,267 @@ func TestRelationsAnswerCrossplaneReferenceUsesTheKindsScope(t *testing.T) {
 	for _, r := range s.reads {
 		if r.Kind == "Bucket" && r.Namespace == "" {
 			t.Fatalf("probed a namespaced Bucket cluster-wide: %v", r)
+		}
+	}
+}
+
+// countingDeployments counts how often an answer lists every Deployment.
+type countingDeployments struct {
+	*mockProvider
+	listed *int
+}
+
+func (p countingDeployments) Deployments() ([]*appsv1.Deployment, error) {
+	*p.listed++
+	return p.mockProvider.Deployments()
+}
+
+// Finding Istio's domain lists every Deployment, so an answer looks for it
+// only when it reads a VirtualService or DestinationRule, and then once.
+func TestRelationsAnswerFindsIstioDomainOnlyForIstioObjects(t *testing.T) {
+	cm := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "settings"}}, "", "ConfigMap")
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}}, "", "Service")
+	vs := projectionCR("networking.istio.io", "VirtualService", "shop", "web", map[string]any{"spec": map[string]any{
+		"http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "web"}}}}},
+	}})
+	rule := projectionCR("networking.istio.io", "DestinationRule", "shop", "web", map[string]any{"spec": map[string]any{"host": "web"}})
+	access := ownership.Unrestricted()
+	for _, tc := range []struct {
+		subject runtime.Object
+		objects []runtime.Object
+		want    int
+	}{
+		{cm, []runtime.Object{cm}, 0},
+		{svc, []runtime.Object{svc}, 0},
+		{svc, []runtime.Object{svc, vs, rule}, 1},
+		{vs, []runtime.Object{svc, vs}, 1},
+	} {
+		listed := 0
+		provider := countingDeployments{&mockProvider{}, &listed}
+		s := newProjectionSession(t, tc.objects...)
+		captured, ok := relations.CaptureSubject(s, projectionRef(tc.subject), tc.subject)
+		if !ok {
+			t.Fatal("capture failed")
+		}
+		RelationsAnswer(captured, access, access, ownership.NewView(captured, access), projectionRef(tc.subject), tc.subject, provider, nil)
+		if listed != tc.want {
+			t.Errorf("%s with %d objects listed Deployments %d times, want %d", projectionRef(tc.subject).Kind, len(tc.objects), listed, tc.want)
+		}
+	}
+}
+
+// A Pod's Node is named by its spec, so a caller who may open the Pod but
+// not read Nodes still sees which Node, marked, in the drawer and the
+// context alike; one whose check failed sees it unverified.
+func TestRelationsAnswerNamesAPodsUnreadableNode(t *testing.T) {
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod"}, Spec: corev1.PodSpec{NodeName: "worker"}}, "", "Pod")
+	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}}, "", "Node")
+	for _, tc := range []struct {
+		access ownership.Access
+		want   string
+	}{
+		{projectionAccess{}, ""},
+		{projectionAccess{denied: []string{"Node"}}, ResourceStateDenied},
+		{undecidedKinds{"Node"}, ResourceStateAccessUnverified},
+	} {
+		for name, answer := range map[string]func(relations.Session, ownership.Access, ownership.Access, *ownership.View, resourceid.Ref, runtime.Object, ResourceProvider, DynamicProvider) (*Relationships, *RelationshipExtras){"drawer": RelationsAnswerWithExtras, "context": RelationsContextAnswer} {
+			s := newProjectionSession(t, pod, node)
+			rel, extras := answer(s, tc.access, tc.access, ownership.NewView(s, tc.access), projectionRef(pod), pod, nil, nil)
+			if rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "worker", State: tc.want}) {
+				t.Errorf("%s %T: node = %+v, want worker %q", name, tc.access, rel.Node, tc.want)
+			}
+			if c, ok := extras.Fields["Node"]; ok {
+				t.Errorf("%s %T: the Node a spec names marked its field: %+v", name, tc.access, c)
+			}
+			if tc.want != "" {
+				for _, read := range s.reads {
+					if read.Kind == "Node" {
+						t.Errorf("%s %T: read the Node the caller may not read", name, tc.access)
+					}
+				}
+			}
+		}
+	}
+}
+
+// What a spec names is listed, marked, also when the caller's check on it
+// couldn't be made: a HostEndpoint's Node and a Pod's declared ResourceClaim.
+// A claim a template generates is named only in the Pod's status, so it
+// stays hidden from a caller who may not read ResourceClaims.
+func TestRelationsAnswerNamesSpecDeclaredHostAndClaimRefs(t *testing.T) {
+	endpoint := projectionCR("crd.projectcalico.org", "HostEndpoint", "", "host", map[string]any{"spec": map[string]any{"node": "worker"}})
+	s := newProjectionSession(t, endpoint)
+	if rel := projectionAnswer(t, s, endpoint, undecidedKinds{"Node"}, ownership.Unrestricted()); rel.Node == nil || *rel.Node != (ResourceRef{Kind: "Node", Name: "worker", State: ResourceStateAccessUnverified}) {
+		t.Fatalf("unchecked HostEndpoint Node: %+v", rel.Node)
+	}
+	declared, generated := "declared", "generated-0"
+	pod := projectionObject(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod"},
+		Spec:       corev1.PodSpec{ResourceClaims: []corev1.PodResourceClaim{{Name: "a", ResourceClaimName: &declared}, {Name: "b", ResourceClaimTemplateName: &generated}}},
+		Status:     corev1.PodStatus{ResourceClaimStatuses: []corev1.PodResourceClaimStatus{{Name: "b", ResourceClaimName: &generated}}},
+	}, "", "Pod")
+	s = newProjectionSession(t, pod)
+	for _, tc := range []struct {
+		access ownership.Access
+		state  string
+	}{{projectionAccess{denied: []string{"ResourceClaim"}}, ResourceStateDenied}, {undecidedKinds{"ResourceClaim"}, ResourceStateAccessUnverified}} {
+		rel := projectionAnswer(t, s, pod, tc.access, ownership.Unrestricted())
+		if want := []ResourceRef{{Kind: "ResourceClaim", Group: "resource.k8s.io", Namespace: "shop", Name: "declared", State: tc.state}}; !slices.Equal(rel.ResourceClaims, want) {
+			t.Errorf("%T: resource claims %+v, want %+v", tc.access, rel.ResourceClaims, want)
+		}
+		for _, read := range s.reads {
+			if read.Kind == "ResourceClaim" {
+				t.Errorf("%T: read a ResourceClaim the caller may not read", tc.access)
+			}
+		}
+	}
+}
+
+// Managed By climbs the controller chain to the first GitOps manager above
+// the subject and names it, as Applications groups a workload under its
+// Application: past one lies a parent, such as an ApplicationSet, shared by
+// apps that are separate. A GitOps manager's own Managed By is still its
+// parent, and a chain without one climbs to its top.
+func TestRelationsAnswerManagedByStopsAtTheFirstGitOpsManager(t *testing.T) {
+	controller := true
+	ref := func(apiVersion, kind, name, uid string) []metav1.OwnerReference {
+		return []metav1.OwnerReference{{APIVersion: apiVersion, Kind: kind, Name: name, UID: types.UID(uid), Controller: &controller}}
+	}
+	set := projectionCR("argoproj.io", "ApplicationSet", "argocd", "apps", map[string]any{})
+	set.SetUID("set")
+	app := projectionCR("argoproj.io", "Application", "argocd", "web", map[string]any{})
+	app.SetUID("app")
+	app.SetOwnerReferences(ref("argoproj.io/v1", "ApplicationSet", "apps", "set"))
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web", UID: "deployment", OwnerReferences: ref("argoproj.io/v1", "Application", "web", "app")}}, "apps", "Deployment")
+	for _, tc := range []struct {
+		subject runtime.Object
+		want    ResourceRef
+	}{
+		{deployment, ResourceRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "web"}},
+		{app, ResourceRef{Kind: "ApplicationSet", Group: "argoproj.io", Namespace: "argocd", Name: "apps"}},
+	} {
+		s := newProjectionSession(t, set, app, deployment)
+		rel := projectionAnswer(t, s, tc.subject, ownership.Unrestricted(), ownership.Unrestricted())
+		if len(rel.ManagedBy) != 1 || refIdentity(rel.ManagedBy[0]) != refIdentity(tc.want) {
+			t.Errorf("%s: ManagedBy %+v, want %+v", projectionRef(tc.subject).Kind, rel.ManagedBy, tc.want)
+		}
+	}
+	plain := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "plain", UID: "plain", OwnerReferences: ref("argoproj.io/v1", "ApplicationSet", "apps", "set")}}, "apps", "Deployment")
+	s := newProjectionSession(t, set, plain)
+	if rel := projectionAnswer(t, s, plain, ownership.Unrestricted(), ownership.Unrestricted()); len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Name != "apps" {
+		t.Errorf("a chain without a GitOps manager: ManagedBy %+v", rel.ManagedBy)
+	}
+
+	// Flux, and Applications nested in an Application: each names the first
+	// manager above it, whatever its kind.
+	kustomization := projectionCR("kustomize.toolkit.fluxcd.io", "Kustomization", "flux", "infra", map[string]any{})
+	kustomization.SetUID("ks")
+	release := projectionCR("helm.toolkit.fluxcd.io", "HelmRelease", "flux", "web", map[string]any{})
+	release.SetUID("hr")
+	release.SetOwnerReferences(ref("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "infra", "ks"))
+	fluxed := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "flux", Name: "web", UID: "fluxed", OwnerReferences: ref("helm.toolkit.fluxcd.io/v1", "HelmRelease", "web", "hr")}}, "apps", "Deployment")
+	outer := projectionCR("argoproj.io", "Application", "argocd", "outer", map[string]any{})
+	outer.SetUID("outer")
+	outer.SetOwnerReferences(ref("argoproj.io/v1", "ApplicationSet", "apps", "set"))
+	inner := projectionCR("argoproj.io", "Application", "argocd", "inner", map[string]any{})
+	inner.SetUID("inner")
+	inner.SetOwnerReferences(ref("argoproj.io/v1", "Application", "outer", "outer"))
+	nested := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "nested", UID: "nested", OwnerReferences: ref("argoproj.io/v1", "Application", "inner", "inner")}}, "apps", "Deployment")
+	for _, tc := range []struct {
+		subject runtime.Object
+		want    string
+	}{
+		{fluxed, "HelmRelease/web"},
+		{release, "Kustomization/infra"},
+		{nested, "Application/inner"},
+		{inner, "Application/outer"},
+	} {
+		s := newProjectionSession(t, kustomization, release, fluxed, set, outer, inner, nested)
+		rel := projectionAnswer(t, s, tc.subject, ownership.Unrestricted(), ownership.Unrestricted())
+		if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Kind+"/"+rel.ManagedBy[0].Name != tc.want {
+			t.Errorf("%s: ManagedBy %+v, want %s", projectionRef(tc.subject).Name, rel.ManagedBy, tc.want)
+		}
+	}
+
+	// A link the caller can't read below the manager ends the climb there:
+	// the manager above it is never named past it.
+	rs := projectionObject(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web-1", UID: "rs", OwnerReferences: ref("apps/v1", "Deployment", "web", "deployment")}}, "apps", "ReplicaSet")
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web-1-a", UID: "pod", OwnerReferences: ref("apps/v1", "ReplicaSet", "web-1", "rs")}}, "", "Pod")
+	s = newProjectionSession(t, set, app, deployment, rs, pod)
+	if rel := projectionAnswer(t, s, pod, projectionAccess{denied: []string{"ReplicaSet"}}, ownership.Unrestricted()); len(rel.ManagedBy) != 0 {
+		t.Errorf("climbed past a ReplicaSet the caller can't read: ManagedBy %+v", rel.ManagedBy)
+	}
+}
+
+// A controller chain cut at its first GitOps manager is settled there, so
+// what stopped the walk past it no longer qualifies it.
+func TestControllerChainToManager(t *testing.T) {
+	deployment := ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "argocd", Name: "web"}
+	app := ResourceRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "web"}
+	set := ResourceRef{Kind: "ApplicationSet", Group: "argoproj.io", Namespace: "argocd", Name: "apps"}
+	cut := (&ControllerChain{Refs: []ResourceRef{deployment, app, set}, Stop: "unknown", Reason: readreason.KindSyncPending}).ToManager()
+	if !slices.Equal(cut.Refs, []ResourceRef{deployment, app}) || cut.Stop != "" || cut.Reason != "" {
+		t.Fatalf("cut = %+v", cut)
+	}
+	plain := &ControllerChain{Refs: []ResourceRef{deployment, set}, Stop: "unknown"}
+	if got := plain.ToManager(); got != plain {
+		t.Fatalf("a chain without a GitOps manager changed: %+v", got)
+	}
+	self := &ControllerChain{Refs: []ResourceRef{app, set}}
+	if got := self.ToManager(); got != self {
+		t.Fatalf("a GitOps manager's own chain was cut: %+v", got)
+	}
+	if (*ControllerChain)(nil).ToManager() != nil {
+		t.Fatal("nil chain")
+	}
+	release := ResourceRef{Kind: "HelmRelease", Group: "helm.toolkit.fluxcd.io", Namespace: "flux", Name: "web"}
+	kustomization := ResourceRef{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "flux", Name: "infra"}
+	inner := ResourceRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "inner"}
+	for _, tc := range []struct {
+		chain, want []ResourceRef
+	}{
+		{[]ResourceRef{deployment, release, kustomization}, []ResourceRef{deployment, release}},
+		{[]ResourceRef{release, kustomization}, []ResourceRef{release, kustomization}},
+		{[]ResourceRef{deployment, inner, app, set}, []ResourceRef{deployment, inner}},
+		{[]ResourceRef{inner, app, set}, []ResourceRef{inner, app}},
+	} {
+		if got := (&ControllerChain{Refs: tc.chain}).ToManager(); !slices.Equal(got.Refs, tc.want) {
+			t.Errorf("ToManager(%v) = %v, want %v", tc.chain, got.Refs, tc.want)
+		}
+	}
+}
+
+// Both climbs fall back to the object's own owner references when its
+// controller chain doesn't climb past it.
+func TestOwnerAboveFallsBackToOwnerReferences(t *testing.T) {
+	controller := true
+	set := projectionCR("argoproj.io", "ApplicationSet", "argocd", "apps", map[string]any{})
+	set.SetUID("set")
+	app := projectionCR("argoproj.io", "Application", "argocd", "web", map[string]any{})
+	app.SetUID("app")
+	app.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "argoproj.io/v1", Kind: "ApplicationSet", Name: "apps", UID: "set", Controller: &controller}})
+	managed := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "web", UID: "managed", OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1", Kind: "Application", Name: "web", UID: "app", Controller: &controller}}}}, "apps", "Deployment")
+	ownerless := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "alone", UID: "alone"}}, "apps", "Deployment")
+	owned := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "argocd", Name: "settings", UID: "settings", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "alone", UID: "alone"}}}}, "", "ConfigMap")
+	view := ownership.NewView(newProjectionSession(t, set, app, managed, ownerless, owned), ownership.Unrestricted())
+	for _, tc := range []struct {
+		name           string
+		subject        runtime.Object
+		top, toManager string
+		climbs         bool
+	}{
+		{"ownerless", ownerless, "", "", false},
+		{"sole owner reference", owned, "alone", "alone", true},
+		{"controller chain through a manager", managed, "apps", "web", true},
+	} {
+		r := projectionRef(tc.subject)
+		top, ok := OwnerAbove(view, r)
+		if ok != tc.climbs || top.Name != tc.top {
+			t.Errorf("%s: OwnerAbove = %v %v, want %q %v", tc.name, top, ok, tc.top, tc.climbs)
+		}
+		manager, ok := OwnerAboveToManager(view, r)
+		if ok != tc.climbs || manager.Name != tc.toManager {
+			t.Errorf("%s: OwnerAboveToManager = %v %v, want %q %v", tc.name, manager, ok, tc.toManager, tc.climbs)
 		}
 	}
 }

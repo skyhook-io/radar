@@ -4,6 +4,7 @@ import (
 	"maps"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -35,8 +36,9 @@ func ResolveProfile(s string) Profile {
 	}
 }
 
-// NeighborhoodOptions configures a BuildNeighborhood call. Zero values are
-// replaced with sensible defaults: Profile=auto, Hops=1, MaxNodes=25.
+// NeighborhoodOptions configures WalkNeighborhood and the older graph search,
+// BuildNeighborhood. Zero values are replaced with sensible defaults:
+// Profile=auto, Hops=1, MaxNodes=25.
 type NeighborhoodOptions struct {
 	Profile  Profile
 	Hops     int
@@ -45,10 +47,14 @@ type NeighborhoodOptions struct {
 	// Allow gates each candidate node during BFS expansion. nil means
 	// allow all. When non-nil, BFS skips nodes for which Allow returns
 	// false — they don't consume the MaxNodes budget, can't appear as
-	// path-fragments between two allowed nodes, and bump
+	// path-fragments between two allowed nodes, and set
 	// Subgraph.RBACDenied so callers can report omissions to the user.
 	// The root node is also checked so callers can hide roots that pass
 	// coarse preflight checks but fail per-kind gates such as Secrets.
+	//
+	// Allow must decide by kind and namespace alone: WalkNeighborhood calls
+	// it once for each (group, kind, namespace), with a node that has no
+	// name, and applies the answer to every object of that kind there.
 	//
 	// This is the security boundary: forbidden nodes must not influence
 	// the visible graph shape. Post-hoc filtering would let an
@@ -68,17 +74,28 @@ type Subgraph struct {
 	Edges     []Edge      `json:"edges"`
 	Truncated bool        `json:"truncated,omitempty"`
 
-	// RBACDenied counts nodes skipped during BFS because Allow returned
-	// false. Reported as a single aggregated omission by the caller; we
-	// intentionally do NOT track which specific nodes were denied, since
-	// surfacing those names would re-introduce the existence-leak the
-	// Allow gate exists to prevent.
+	// RBACDenied is nonzero when Allow withheld some related node. Reported
+	// as a single aggregated omission by the caller; we intentionally do NOT
+	// track which specific nodes were denied, since surfacing those names
+	// would re-introduce the existence-leak the Allow gate exists to prevent.
 	RBACDenied int `json:"-"`
 
 	// AmbiguousRoot is set when the root lookup matched more than one API
 	// group and the caller omitted ResourceRef.Group. Callers should ask the
 	// user/agent to provide group instead of returning an arbitrary first match.
 	AmbiguousRoot bool `json:"-"`
+
+	// RootUnavailable is the read reason Radar couldn't read the root for,
+	// when no candidate the caller may read was found and at least one
+	// couldn't be read: its kind still loading, not collected, or refused to
+	// Radar's identity, for example. Empty when the root was found or is
+	// absent. It is set only for candidates Allow admitted, so it reveals
+	// nothing about one the caller may not read.
+	RootUnavailable readreason.Code `json:"-"`
+
+	// UncollectedRoots are the root candidates Allow admitted whose kind Radar
+	// doesn't collect, which a host may start collecting before asking again.
+	UncollectedRoots []resourceid.Ref `json:"-"`
 }
 
 // neighborhoodMaxHops is the hard ceiling on BFS depth. Two hops is enough
@@ -472,7 +489,7 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 // Pseudo-kinds: some CRDs are stored in the topology under a synthesized kind
 // distinct from their API kind (KnativeService for serving.knative.dev/Service,
 // CAPICluster for cluster.x-k8s.io/Cluster, …). We map (ref.Kind, ref.Group)
-// through pseudoKindFor BEFORE the direct kind comparison so a caller asking
+// through NodeKindForGVK BEFORE the direct kind comparison so a caller asking
 // for kind=Service&group=serving.knative.dev finds the KnativeService topology
 // node. Without this, the comparison Node.Kind="KnativeService" vs
 // ref.Kind="Service" never matches and the root lookup silently fails.
@@ -480,7 +497,7 @@ func findNodeByRef(nodes []Node, ref ResourceRef, dp DynamicProvider) (*Node, bo
 	// Resolve plural API resource names through discovery before comparing the
 	// caller-facing Kubernetes kind and Radar's topology pseudo-kind.
 	resourceKind := normalizeKindWithGroup(ref.Kind, ref.Group, dp)
-	wantKind := pseudoKindFor(resourceKind, ref.Group)
+	wantKind := NodeKindForGVK(resourceKind, ref.Group)
 	builtinGroup, builtin := resourceid.BuiltinGroup(resourceKind)
 	var match *Node
 	matchGroup := ""
@@ -522,7 +539,7 @@ func nodeIsCanonicalBuiltin(node *Node) bool {
 	return ok && (advertisedGroup == "" || advertisedGroup == group)
 }
 
-// pseudoKindFor maps an (API kind, API group) to the synthesized topology
+// NodeKindForGVK maps an (API kind, API group) to the synthesized topology
 // kind the builder assigns when both differ. For (kind, group) pairs that
 // aren't pseudo-mapped (or when group is empty), returns kind unchanged.
 //
@@ -537,7 +554,7 @@ func nodeIsCanonicalBuiltin(node *Node) bool {
 // see the NodeKind constants prefixed Knative*/CAPI* in types.go. Missing an
 // entry here means the caller-supplied API kind never matches the topology
 // node, so the neighborhood root lookup silently returns "not found."
-func pseudoKindFor(kind, group string) string {
+func NodeKindForGVK(kind, group string) string {
 	if group == "" {
 		return kind
 	}

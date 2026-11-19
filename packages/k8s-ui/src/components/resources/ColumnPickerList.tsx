@@ -11,6 +11,8 @@ interface ColumnPickerListProps {
   /** Every offered column, in display order. */
   columns: Column[]
   visibleColumns: Set<string>
+  /** Visible columns the table leaves out while it is short of room (Column.dropOrder). */
+  hiddenToFit?: ReadonlySet<string>
   customColumnKeys: Set<string>
   onToggle: (key: string) => void
   onRemoveCustom: (key: string) => void
@@ -24,11 +26,14 @@ interface ColumnPickerListProps {
   }
 }
 
+const NONE: ReadonlySet<string> = new Set()
+
 /** The Columns picker's rows: show/hide, remove a custom column, and reorder by
  *  dragging the grip or with Alt/Option+Up/Down on the row's checkbox. */
 export function ColumnPickerList({
   columns,
   visibleColumns,
+  hiddenToFit = NONE,
   customColumnKeys,
   onToggle,
   onRemoveCustom,
@@ -156,13 +161,13 @@ export function ColumnPickerList({
               <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={visibleColumns.has(col.key)}
+                  checked={visibleColumns.has(col.key) && !hiddenToFit.has(col.key)}
                   onChange={event => {
                     refocus.current = event.currentTarget
                     onToggle(col.key)
                   }}
                   disabled={col.key === 'name'}
-                  aria-describedby={hintId}
+                  aria-describedby={hiddenToFit.has(col.key) ? `${hintId} ${hintId}-fit-${i}` : hintId}
                   className="rounded border-theme-border"
                 />
                 <span className={clsx(
@@ -173,6 +178,11 @@ export function ColumnPickerList({
                 </span>
               </label>
               {isPaused && <span className="text-xs text-theme-text-tertiary">Scrolls</span>}
+              {hiddenToFit.has(col.key) && (
+                <Tooltip content="Left out while the table is short of room. Turn it on to keep it; the table may then scroll." position="left">
+                  <span id={`${hintId}-fit-${i}`} className="shrink-0 text-xs text-theme-text-tertiary">Hidden to fit</span>
+                </Tooltip>
+              )}
               <Tooltip content={fixed ? 'Context columns stay ahead of resource columns and pin with them' : isPaused ? 'Scrolls until there is room to keep it pinned. Click to unpin.' : isPinned ? 'Unpin column' : visibleColumns.has(col.key) ? 'Pin column to the left' : 'Show this column before pinning it'} position="left">
                 <button
                   type="button"
