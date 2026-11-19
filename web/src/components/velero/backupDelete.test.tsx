@@ -35,6 +35,10 @@ describe('how a Velero Backup is deleted', () => {
   it('falls back to the object on a Radar without Delete backup, and decides nothing while capabilities load', () => {
     expect(veleroBackupDeletePath(backup('Completed', 'default'), 'unsupported', known(false))).toEqual({ kind: 'object', reason: 'olderRadar' })
     expect(veleroBackupDeletePath(backup('New'), 'unknown', known(undefined))).toEqual({ kind: 'pending' })
+    expect(veleroBackupDeletePath(undefined, 'supported', known(undefined))).toEqual({ kind: 'pending' })
+    expect(veleroBackupDeletePath(undefined, 'unsupported', known(undefined))).toEqual({ kind: 'pending' })
+    expect(veleroBackupDeletePath(undefined, 'supported', known(undefined))).toEqual({ kind: 'pending' })
+    expect(veleroBackupDeletePath(undefined, 'unsupported', known(undefined))).toEqual({ kind: 'pending' })
   })
 
   it('offers the generic Delete for a Velero Backup only on the object path', () => {

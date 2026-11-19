@@ -38,6 +38,8 @@ export function veleroBackupDeletePath(
   deleteBackupSupport: RadarFeatureSupport,
   locationMissing: (name: string) => boolean | undefined,
 ): VeleroBackupDeletePath {
+  // An unloaded object reads as phase "" with no location; nothing is decided from that.
+  if (!backup) return { kind: 'pending' }
   if (deleteBackupSupport === 'unsupported') return { kind: 'object', reason: 'olderRadar' }
   if (deleteBackupSupport !== 'supported') return { kind: 'pending' }
   const phase: string = backup?.status?.phase ?? ''

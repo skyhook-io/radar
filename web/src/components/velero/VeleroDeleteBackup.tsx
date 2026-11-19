@@ -115,7 +115,6 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
   }, [queryClient, request, state, name, namespace, deletion.data?.errors])
 
   if (support !== 'supported' || !namespace || !name || !uid) return null
-  if (path.kind === 'object' && !started) return null
 
   const locationName: string = backup?.spec?.storageLocation ?? ''
   const location = workspace.data?.locations.find((l) => l.namespace === namespace && l.name === locationName)
@@ -165,6 +164,9 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
       </Tooltip>
     )
   }
+
+  // A request already sent is followed above; a new one is never offered here.
+  if (path.kind === 'object') return null
 
   const open = () => {
     deleteBackup.reset()

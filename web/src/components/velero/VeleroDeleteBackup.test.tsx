@@ -170,6 +170,10 @@ describe('Delete backup', () => {
     state.workspace = workspace({ accessMode: 'ReadWrite', phase: 'Available' })
     render(<VeleroDeleteBackup backup={{ metadata: { namespace: 'velero', name: 'nightly-1', uid: 'uid-1' }, spec: {}, status: { phase: 'New' } }} />)
     expect(buttons('Delete backup')).toHaveLength(0)
+    // A refusal Velero already recorded is history, not a reason to offer the request again.
+    state.deletion = { state: 'refused', request: 'nightly-1-x', errors: ['backup storage location not found'] }
+    render(<VeleroDeleteBackup backup={{ metadata: { namespace: 'velero', name: 'nightly-2', uid: 'uid-2' }, spec: {}, status: { phase: 'New' } }} />)
+    expect(buttons('Delete backup')).toHaveLength(0)
   })
 
   it('leaves the refusal to Velero when the location can’t be read', () => {
