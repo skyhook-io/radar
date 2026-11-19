@@ -184,7 +184,7 @@ import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessContr
 import { Tooltip } from '../ui/Tooltip'
 import { TruncatedText } from '../ui/TruncatedText'
 import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, rememberWidths } from './column-sizing'
-import { type CellWidth, type UsageLabel, NAME_MAX_PX, NAME_MIN_PX, NAME_PROTECTED_MAX_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, usageLabelWidth, workloadImagesText } from './column-content-width'
+import { type CellWidth, type UsageLabel, NAME_MAX_PX, NAME_MIN_PX, NAME_PROTECTED_MAX_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, usageLabelWidth, workloadImagesText, shortValueMin } from './column-content-width'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import type { Issue } from '../issues/types'
 import { issueTitle } from '../issues/severity'
@@ -299,7 +299,10 @@ export interface Column {
   minWidth?: number // minimum width in px
   /** How the column is sized automatically (see column-sizing.ts). Name,
    *  Namespace and Node fit their content; anything else keeps its width
-   *  unless it says 'grow' — long free text that takes the room left over. */
+   *  unless it says 'fit' — short values (status badges, enums, names) that are
+   *  useless cut, sized to the longest — or 'grow' — long free text that
+   *  takes the room left over. Either needs a reader of what its cell shows
+   *  in column-content-width.ts. */
   sizing?: ColumnSizingMode
   /** A grow column's share of the room left over (default 1). */
   growWeight?: number
@@ -753,10 +756,10 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   services: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'type', label: 'Type', width: 'w-28' },
+    { key: 'type', label: 'Type', width: 'w-28', sizing: 'fit' },
     { key: 'selector', label: 'Selector', width: 'w-48', sizing: 'grow', growWeight: 2 },
-    { key: 'endpoints', label: 'Endpoints', width: 'w-24' },
-    { key: 'ports', label: 'Ports', width: 'w-40' },
+    { key: 'endpoints', label: 'Endpoints', width: 'w-24', sizing: 'fit' },
+    { key: 'ports', label: 'Ports', width: 'w-40', sizing: 'fit' },
     { key: 'externalIP', label: 'External', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1009,10 +1012,10 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   nodepools: [
     { key: 'name', label: 'Name' },
-    { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'nodeClass', label: 'Node Class', width: 'w-36' },
-    { key: 'limits', label: 'Limits', width: 'w-36', tooltip: 'Configured provisioning ceilings — not what the pool has provisioned. Concurrent provisioning can exceed them during rapid scale-out, and a limit does not remove nodes already running.' },
-    { key: 'disruption', label: 'Disruption', width: 'w-40', tooltip: 'Which nodes Karpenter may consolidate; budgets and timing controls can still prevent removal or replacement' },
+    { key: 'status', label: 'Status', width: 'w-24', sizing: 'fit' },
+    { key: 'nodeClass', label: 'Node Class', width: 'w-36', sizing: 'fit' },
+    { key: 'limits', label: 'Limits', width: 'w-36', sizing: 'fit', tooltip: 'Configured provisioning ceilings — not what the pool has provisioned. Concurrent provisioning can exceed them during rapid scale-out, and a limit does not remove nodes already running.' },
+    { key: 'disruption', label: 'Disruption', width: 'w-40', sizing: 'fit', tooltip: 'Which nodes Karpenter may consolidate; budgets and timing controls can still prevent removal or replacement' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   nodeclaims: [
@@ -1021,13 +1024,13 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'instanceType', label: 'Instance Type', width: 'w-32' },
     { key: 'capacityType', label: 'Capacity', width: 'w-24', tooltip: 'Spot or On-Demand' },
     { key: 'zone', label: 'Zone', width: 'w-28' },
-    { key: 'nodePool', label: 'Node Pool', width: 'w-32' },
-    { key: 'nodeName', label: 'Node', width: 'w-40' },
+    { key: 'nodePool', label: 'Node Pool', width: 'w-32', sizing: 'fit' },
+    { key: 'nodeName', label: 'Node', width: 'w-40', sizing: 'fit' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ec2nodeclasses: [
     { key: 'name', label: 'Name' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-24', sizing: 'fit' },
     { key: 'ami', label: 'AMI', width: 'w-36', tooltip: 'AMI selector alias or ID' },
     { key: 'role', label: 'IAM Role', width: 'w-48' },
     { key: 'volumeSize', label: 'Volume', width: 'w-24', tooltip: 'Root volume size' },
@@ -1067,7 +1070,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   resourceslices: [
     { key: 'name', label: 'Name' },
     { key: 'driver', label: 'Driver', width: 'w-44' },
-    { key: 'pool', label: 'Pool', width: 'w-36', tooltip: "Pools are identified by driver and pool name. The scheduler needs a complete set of slices at the pool's highest generation before allocating from it." },
+    { key: 'pool', label: 'Pool', width: 'w-36', sizing: 'fit', tooltip: "Pools are identified by driver and pool name. The scheduler needs a complete set of slices at the pool's highest generation before allocating from it." },
     { key: 'node', label: 'Node', width: 'w-44', tooltip: "Node providing this slice's devices. A dash means node access is described by a node selector, all-nodes access, or per-device node selection." },
     { key: 'devices', label: 'Devices', width: 'w-24', tooltip: 'Devices published in this slice, including devices already allocated. This is not a count of free devices or the whole pool.' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1088,8 +1091,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   clusterqueues: [
     { key: 'name', label: 'Name' },
-    { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'cohort', label: 'Cohort', width: 'w-32', tooltip: 'Queues in this cohort can share unused quota, subject to borrowing and lending limits' },
+    { key: 'status', label: 'Status', width: 'w-24', sizing: 'fit' },
+    { key: 'cohort', label: 'Cohort', width: 'w-32', sizing: 'fit', tooltip: 'Queues in this cohort can share unused quota, subject to borrowing and lending limits' },
     { key: 'pendingWorkloads', label: 'Pending', width: 'w-24', tooltip: 'Workloads in this ClusterQueue waiting for admission, across namespaces; inspect workload status for the blocker' },
     { key: 'reservingWorkloads', label: 'Reserving', width: 'w-24', tooltip: 'Workloads holding a quota reservation in this ClusterQueue, admitted ones included, so it is not added to Admitted' },
     { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24', tooltip: 'Unfinished workloads admitted through this ClusterQueue, across namespaces; admission does not mean their pods are running' },
@@ -1099,8 +1102,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   localqueues: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'clusterQueue', label: 'Cluster Queue', width: 'w-40' },
+    { key: 'status', label: 'Status', width: 'w-24', sizing: 'fit' },
+    { key: 'clusterQueue', label: 'Cluster Queue', width: 'w-40', sizing: 'fit' },
     { key: 'pendingWorkloads', label: 'Pending', width: 'w-24', tooltip: 'Workloads submitted to this LocalQueue that are waiting for ClusterQueue admission' },
     { key: 'reservingWorkloads', label: 'Reserving', width: 'w-24', tooltip: 'Workloads from this LocalQueue holding a quota reservation, admitted ones included, so it is not added to Admitted' },
     { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24', tooltip: 'Unfinished workloads from this LocalQueue admitted to its ClusterQueue; their pods may still be waiting to run' },
@@ -1111,7 +1114,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'queueName', label: 'Queue', width: 'w-36' },
-    { key: 'admittedBy', label: 'Admitted By', width: 'w-36', tooltip: 'Admitting ClusterQueue' },
+    { key: 'admittedBy', label: 'Admitted By', width: 'w-36', sizing: 'fit', tooltip: 'Admitting ClusterQueue' },
     { key: 'priority', label: 'Priority', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1183,7 +1186,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   jobsets: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-28', sizing: 'fit' },
     { key: 'replicatedJobs', label: 'Repl. Jobs', width: 'w-24', tooltip: 'Number of replicated job templates' },
     { key: 'ready', label: 'Ready', width: 'w-20' },
     { key: 'succeeded', label: 'Succeeded', width: 'w-24' },
@@ -1885,7 +1888,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name', sizing: 'fit' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'type', label: 'Type', width: 'w-24' },
-    { key: 'reason', label: 'Reason', width: 'w-32' },
+    { key: 'reason', label: 'Reason', width: 'w-32', sizing: 'fit' },
     { key: 'message', label: 'Message', width: 'w-64', sizing: 'grow', growWeight: 3 },
     { key: 'object', label: 'Object', width: 'w-48', sizing: 'grow', growWeight: 3 },
     { key: 'count', label: 'Count', width: 'w-20' },
@@ -1957,8 +1960,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'project', label: 'Project', width: 'w-28', tooltip: 'AppProject the app belongs to — bounds which repos and clusters it may deploy to' },
-    { key: 'sync', label: 'Sync', width: 'w-24', tooltip: "Whether live resources match Argo's desired manifests; Synced does not mean Healthy" },
-    { key: 'health', label: 'Health', width: 'w-24' },
+    { key: 'sync', label: 'Sync', width: 'w-24', sizing: 'fit', tooltip: "Whether live resources match Argo's desired manifests; Synced does not mean Healthy" },
+    { key: 'health', label: 'Health', width: 'w-24', sizing: 'fit' },
     { key: 'repo', label: 'Repository', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -2114,7 +2117,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'storageLocation', label: 'Storage', width: 'w-36', tooltip: "The backup's storage location. A completed backup still needs this location reachable to restore from." },
     { key: 'namespaces', label: 'Scope', width: 'w-24', tooltip: 'Included namespaces (* = all)' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
-    { key: 'expiry', label: 'Expires', width: 'w-24', tooltip: "When Velero's retention makes this backup eligible for cleanup. Expired means Velero intends to delete it, not that it is gone — and not that a restore will work." },
+    { key: 'expiry', label: 'Expires', width: 'w-24', sizing: 'fit', tooltip: "When Velero's retention makes this backup eligible for cleanup. Expired means Velero intends to delete it, not that it is gone — and not that a restore will work." },
     { key: 'errors', label: 'Errors', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -6361,11 +6364,14 @@ export function ResourcesView({
         floor,
         // When room is short: exact columns may shrink to their content
         // (never below their heading), but only where the content is known;
-        // Node and Namespace to their heading, cutting values; Name, last, to
-        // the 75th percentile of its names (never below NAME_MIN_PX, never
-        // above the width it holds or NAME_PROTECTED_MAX_PX).
+        // short-value fit columns to their curated width, or their content
+        // when that is narrower; Node and Namespace to their heading, cutting
+        // values; Name, last, to the 75th percentile of its names (never below
+        // NAME_MIN_PX, never above the width it holds or NAME_PROTECTED_MAX_PX).
         min: spec.mode === 'exact'
           ? content !== undefined ? Math.max(headerShrinkWidth(col), content) : undefined
+          : spec.longest
+            ? content !== undefined ? shortValueMin(floor, headerShrinkWidth(col), content) : undefined
           : spec.keep
             ? content !== undefined
               ? Math.max(NAME_MIN_PX, Math.min(contentWidths?.[`${col.key}\u0000yieldTo`] ?? content, content, nameMax, NAME_PROTECTED_MAX_PX))
