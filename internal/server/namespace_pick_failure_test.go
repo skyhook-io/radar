@@ -8,7 +8,10 @@ import (
 	"slices"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -57,6 +60,9 @@ func fakeNamespaceAPIServer(t *testing.T, listStatus, sarStatus int, namespaces 
 }
 
 func TestGetAccessibleNamespacesWithSource(t *testing.T) {
+	// A failed LIST would otherwise be answered from the fixture's synced
+	// namespace cache.
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	cases := []struct {
 		name       string
 		listStatus int
@@ -80,6 +86,7 @@ func TestGetAccessibleNamespacesWithSource(t *testing.T) {
 // --rbac-namespaces is the install's complete namespace set only when the
 // cluster-wide LIST is denied; a failed LIST stays a best-effort list.
 func TestGetAccessibleNamespacesWithSource_RBACNamespaces(t *testing.T) {
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	cases := []struct {
 		name       string
 		listStatus int
@@ -173,6 +180,9 @@ func TestNamespaceScope_ListFailureKeepsSavedPick(t *testing.T) {
 	prevNs := k8s.SetTestContextNamespace("default")
 	t.Cleanup(func() { k8s.SetTestContextNamespace(prevNs) })
 	fakeNamespaceAPIServer(t, http.StatusInternalServerError, http.StatusForbidden)
+	// Otherwise the fixture's synced namespace cache answers the failed LIST
+	// with "broken" in it, and the seed trim is never reached.
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 
 	srv := New(Config{DevMode: true})
 	ts := httptest.NewServer(srv.Handler())
@@ -181,8 +191,8 @@ func TestNamespaceScope_ListFailureKeepsSavedPick(t *testing.T) {
 		srv.Stop()
 	})
 	req := httptest.NewRequest("GET", "/api/cluster/namespace-scope", nil)
-	// "broken" exists in the shared fixture cache, so the deleted-namespace
-	// prune keeps it; it is not among the seeds.
+	// With no cache the deleted-namespace prune keeps every pick; "broken" is
+	// not among the seeds.
 	srv.setActiveNamespaceForUser(req, []string{"broken"})
 
 	resp, err := http.Get(ts.URL + "/api/cluster/namespace-scope")
@@ -198,6 +208,10 @@ func TestNamespaceScope_ListFailureKeepsSavedPick(t *testing.T) {
 	// A browser tab keeping its own pick must not drop it on this list either.
 	if body.AccessChecked {
 		t.Error("accessChecked = true after a failed LIST, want false")
+	}
+	// The UI retries a failed list instead of keeping the short list as the answer.
+	if !body.ListFailed {
+		t.Error("listFailed = false after a failed LIST, want true")
 	}
 	if got := srv.getActiveNamespaceForUser(req); len(got) != 1 || got[0] != "broken" {
 		t.Errorf("saved pick after failed LIST = %v, want [broken]", got)
@@ -299,5 +313,86 @@ func TestNamespaceScope_NoNamespaceListIsNotAnAccessCheck(t *testing.T) {
 	}
 	if body.AccessChecked || len(body.AccessibleNamespaces) != 0 {
 		t.Errorf("accessChecked = %v, accessible = %v; want false with no list", body.AccessChecked, body.AccessibleNamespaces)
+	}
+}
+
+// Right after a context switch the namespace LIST can time out behind the
+// informer and discovery traffic on the shared client. The synced namespace
+// informer holds the same list, so the picker must not fall back to the
+// seeded short list (empty for a context with no namespace).
+func TestAccessibleNamespacesFallBackToTheSyncedCacheWhenTheListFails(t *testing.T) {
+	cacheClient := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}},
+	)
+	fakeNamespaceAPIServer(t, http.StatusInternalServerError, http.StatusForbidden)
+	// Puts back the shared fixture cache that InitTestResourceCache replaces.
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
+	if err := k8s.InitTestResourceCache(cacheClient); err != nil {
+		t.Fatalf("init cache: %v", err)
+	}
+	t.Cleanup(func() {
+		if rc := k8s.GetResourceCache(); rc != nil {
+			rc.Stop()
+		}
+	})
+
+	got, source := k8s.GetAccessibleNamespacesWithSource(context.Background())
+	if !slices.Equal(got, []string{"alpha", "beta"}) {
+		t.Errorf("namespaces = %v, want the cached [alpha beta]", got)
+	}
+	if !source.Complete() {
+		t.Errorf("source = %q, want a complete list", source)
+	}
+}
+
+// The cache can lag a namespace created moments ago, so a list taken from it
+// serves the picker but doesn't let a tab drop its pick by it (accessChecked)
+// and doesn't end the retry (listFailed).
+func TestNamespaceScope_CacheFallbackKeepsPickAndRetries(t *testing.T) {
+	prevCtx := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+	fakeNamespaceAPIServer(t, http.StatusInternalServerError, http.StatusForbidden)
+	cacheClient := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "broken"}},
+	)
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
+	if err := k8s.InitTestResourceCache(cacheClient); err != nil {
+		t.Fatalf("init cache: %v", err)
+	}
+	t.Cleanup(func() {
+		if rc := k8s.GetResourceCache(); rc != nil {
+			rc.Stop()
+		}
+	})
+
+	srv := New(Config{DevMode: true})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() {
+		ts.Close()
+		srv.Stop()
+	})
+	req := httptest.NewRequest("GET", "/api/cluster/namespace-scope", nil)
+	srv.setActiveNamespaceForUser(req, []string{"broken"})
+
+	resp, err := http.Get(ts.URL + "/api/cluster/namespace-scope")
+	if err != nil {
+		t.Fatalf("GET namespace-scope: %v", err)
+	}
+	var body NamespaceScopeResponse
+	decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || decodeErr != nil {
+		t.Fatalf("status = %d (decode: %v), want 200", resp.StatusCode, decodeErr)
+	}
+	if !slices.Equal(body.AccessibleNamespaces, []string{"alpha", "broken"}) {
+		t.Errorf("accessibleNamespaces = %v, want the cached [alpha broken]", body.AccessibleNamespaces)
+	}
+	if body.AccessChecked || !body.ListFailed {
+		t.Errorf("accessChecked=%v listFailed=%v, want false/true for a cache answer", body.AccessChecked, body.ListFailed)
+	}
+	if !slices.Equal(body.Actives, []string{"broken"}) {
+		t.Errorf("actives = %v, want [broken]", body.Actives)
 	}
 }

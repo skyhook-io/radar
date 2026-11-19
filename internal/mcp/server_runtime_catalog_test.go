@@ -88,7 +88,8 @@ func TestRuntimeCatalogUsesRequestEligibility(t *testing.T) {
 				t.Fatalf("collector listed=%v allowed=%v", names["collect_application_evidence"], tc.allowed)
 			}
 			for _, tool := range existing {
-				if tool.Name != "collect_application_evidence" && !names[tool.Name] {
+				// list_vulnerabilities is listed only where the cluster serves Trivy's reports.
+				if tool.Name != "collect_application_evidence" && tool.Name != "list_vulnerabilities" && !names[tool.Name] {
 					t.Errorf("existing tool %s removed", tool.Name)
 				}
 			}

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -546,6 +547,15 @@ func collectChangedPaths(path string, oldV, newV any, absentRoot string, ordered
 			}
 			return
 		}
+		// A pure reorder of an unkeyed list whose order matters reads as an
+		// order change of item positions; alignment would call it a removal
+		// and an addition of the same item.
+		if ordered(path) {
+			if oldOrder, newOrder, ok := unkeyedPermutation(o, n); ok {
+				*out = append(*out, changedSpecPath{path: path, order: true, oldOrder: oldOrder, newOrder: newOrder})
+				return
+			}
+		}
 		// Unkeyed items are aligned on the items both lists hold unchanged,
 		// so one inserted or removed item does not read as a change to
 		// every item after it. A changed item is named by its new index.
@@ -568,6 +578,36 @@ func collectChangedPaths(path string, oldV, newV any, absentRoot string, ordered
 // maxAlignCells bounds the quadratic alignment of unkeyed lists; longer
 // middles fall back to positional pairing.
 const maxAlignCells = 10000
+
+// unkeyedPermutation reports whether n holds exactly o's items in another
+// order, as o's positions and, for each position of n, the position in o of
+// the item now there.
+func unkeyedPermutation(o, n []any) ([]string, []string, bool) {
+	if len(o) != len(n) || len(o)*len(n) > maxAlignCells {
+		return nil, nil, false
+	}
+	used := make([]bool, len(o))
+	oldOrder := make([]string, len(o))
+	newOrder := make([]string, len(n))
+	for i := range o {
+		oldOrder[i] = strconv.Itoa(i)
+	}
+	for j, item := range n {
+		match := -1
+		for i := range o {
+			if !used[i] && reflect.DeepEqual(o[i], item) {
+				match = i
+				break
+			}
+		}
+		if match < 0 {
+			return nil, nil, false
+		}
+		used[match] = true
+		newOrder[j] = strconv.Itoa(match)
+	}
+	return oldOrder, newOrder, true
+}
 
 // itemPair holds indexes into an old and a new list; -1 is "absent".
 type itemPair struct{ old, new int }
@@ -766,10 +806,11 @@ func emptyLike(v, other any) any {
 // orderMatters limits order-only rows to lists whose sequence has an effect:
 // anything in a pod template (a reorder there is a new template revision,
 // and init containers and env vars are order-sensitive), admission webhooks
-// (mutating webhooks run in order), and route rules (the first of two
-// equally specific matches wins).
+// (mutating webhooks run in order), route rules (the first of two
+// equally specific matches wins), and Argo CD sources (a later source wins
+// where two render the same resource).
 func orderMatters(path string) bool {
-	return strings.Contains(path, "template.") || strings.HasPrefix(path, "webhooks") || path == "spec.rules"
+	return strings.Contains(path, "template.") || strings.HasPrefix(path, "webhooks") || path == "spec.rules" || path == "spec.sources"
 }
 
 func sharedKeyOrder(items []any, other map[string]any, field string) []string {
@@ -992,6 +1033,7 @@ var completeRowSuffixes = []string{
 	"spec.dnsConfig.searches", "spec.dnsConfig.options", "].command", "].args", "].image",
 	"spec.hostnames", "spec.externalIPs", "spec.loadBalancerSourceRanges", "spec.selector",
 	"spec.limits", "spec.metrics", "spec.scaleTargetRef", "spec.behavior.scaleUp", "spec.behavior.scaleDown",
+	"spec.syncPolicy.automated",
 }
 
 func isCompleteRow(path string) bool {
@@ -1116,7 +1158,7 @@ var safeStringFields = map[string]bool{
 	"effect": true, "key": true, "resource": true, "resources": true, "verbs": true, "operations": true,
 	"apiGroups": true, "apiVersions": true, "scope": true, "schedule": true,
 	"timeZone": true, "image": true, "matchPolicy": true, "sideEffects": true, "failurePolicy": true,
-	"sizeLimit": true, "strategy": true,
+	"sizeLimit": true, "strategy": true, "targetRevision": true,
 }
 
 // safeStringSuffixes cover enum and reference fields by naming convention
@@ -1129,7 +1171,7 @@ var safeStringSuffixes = []string{"Policy", "Name", "ClassName", "Type", "Mode",
 var freeFormMaps = map[string]bool{
 	"labels": true, "annotations": true, "matchLabels": true, "nodeSelector": true,
 	"parameters": true, "data": true, "stringData": true, "options": true, "config": true,
-	"plugins": true, "args": true,
+	"plugins": true, "args": true, "valuesObject": true, "commonLabels": true, "commonAnnotations": true,
 }
 
 func inFreeFormMap(path string) bool {

@@ -21,7 +21,7 @@ func (d *DynamicResourceCache) ListDirectBounded(ctx context.Context, gvr schema
 	var items []*unstructured.Unstructured
 	for {
 		options.Limit = int64(maxItems - len(items) + 1)
-		page, err := d.config.DynamicClient.Resource(gvr).Namespace(namespace).List(ctx, options)
+		page, err := d.directClient().Resource(gvr).Namespace(namespace).List(ctx, options)
 		if err != nil {
 			return nil, err
 		}

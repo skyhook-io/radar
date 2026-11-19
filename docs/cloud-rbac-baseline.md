@@ -38,10 +38,18 @@ grant access to the underlying Role or ClusterRole objects.
 
 ## Intentional exceptions
 
+Withholding a kind leaves it out of the user's own Kubernetes grants. It does not
+hide the kind inside Radar: a namespaced kind Radar collects is shown to anyone who
+can see its namespace, apart from the few kinds Radar checks exactly, as
+[authentication](authentication.md) describes.
+
 | Resources withheld by this add-on | Why / effect |
 |---|---|
+| Kubernetes PodTemplate | Pod templates can contain inline container credentials. Relationship collection adds no caller grants, and native visibility adds no default caller grant. |
+| Knative JobSink | Newly collected relationship dependency; no default caller grant pending review of inline Job configuration. |
 | OpenTelemetry Collector and Instrumentation | Collector configuration and instrumentation environment values can contain inline credentials. Native visibility adds no default caller grants. |
 | Flagger Canary and MetricTemplate | Canary webhook metadata and MetricTemplate provider headers may contain inline credentials. Collection is separately opt-in; native visibility adds no default caller grants. |
+| system-upgrade-controller Plan | `spec.upgrade.envs` and `spec.prepare.envs` may contain inline values, and `spec.secrets` names Secrets mounted into upgrade Jobs. Collection is separately opt-in; native visibility adds no default caller grants. |
 | Secrets Store CSI SecretProviderClass | `spec.parameters` is free-form provider configuration that the driver does not constrain. SecretProviderClassPodStatus (mount state and object versions only) remains readable, so the Pod drawer still shows whether a volume mounted. |
 | External Secrets SecretStore and ClusterSecretStore | Provider authentication can contain plaintext credentials, such as Scaleway `secretKey.value`. ExternalSecret/ClusterExternalSecret remain readable; store inspection requires a separate customer grant. |
 | KEDA TriggerAuthentication and ClusterTriggerAuthentication | `spec.hashiCorpVault.credential.token` may hold a Vault token directly. ScaledObject/ScaledJob remain readable. |

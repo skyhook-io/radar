@@ -12,7 +12,9 @@
     "hasDestination": false,
     "blockerCode": "no_destination",
     "destinationPlugin": "",
-    "barman": null
+    "barman": null,
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "in-tree empty",
@@ -31,7 +33,9 @@
     "hasDestination": false,
     "blockerCode": "no_destination",
     "destinationPlugin": "",
-    "barman": null
+    "barman": null,
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "in-tree",
@@ -52,7 +56,9 @@
     "hasDestination": true,
     "blockerCode": "",
     "destinationPlugin": "",
-    "barman": null
+    "barman": null,
+    "archivesWAL": true,
+    "walArchiverUnknown": false
   },
   {
     "name": "snapshots",
@@ -71,7 +77,9 @@
     "hasDestination": true,
     "blockerCode": "",
     "destinationPlugin": "",
-    "barman": null
+    "barman": null,
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "snapshot method mismatch",
@@ -90,7 +98,9 @@
     "hasDestination": true,
     "blockerCode": "method_destination_missing",
     "destinationPlugin": "",
-    "barman": null
+    "barman": null,
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "disabled Barman",
@@ -115,7 +125,9 @@
     "hasDestination": false,
     "blockerCode": "no_destination",
     "destinationPlugin": "",
-    "barman": null
+    "barman": null,
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "Barman without store",
@@ -140,7 +152,9 @@
     "barman": {
       "objectStore": "",
       "serverName": "pg"
-    }
+    },
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "enabled Barman",
@@ -167,7 +181,39 @@
     "barman": {
       "objectStore": "store",
       "serverName": "pg"
-    }
+    },
+    "archivesWAL": true,
+    "walArchiverUnknown": false
+  },
+  {
+    "name": "enabled Barman archiver",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "plugins": [
+          {
+            "name": "barman-cloud.cloudnative-pg.io",
+            "parameters": {
+              "barmanObjectName": "store"
+            },
+            "isWALArchiver": true
+          }
+        ]
+      }
+    },
+    "method": "plugin",
+    "plugin": "barman-cloud.cloudnative-pg.io",
+    "hasDestination": true,
+    "blockerCode": "",
+    "destinationPlugin": "barman-cloud.cloudnative-pg.io",
+    "barman": {
+      "objectStore": "store",
+      "serverName": "pg"
+    },
+    "archivesWAL": true,
+    "walArchiverUnknown": false
   },
   {
     "name": "Barman with explicit server",
@@ -195,7 +241,9 @@
     "barman": {
       "objectStore": "store",
       "serverName": "archive"
-    }
+    },
+    "archivesWAL": true,
+    "walArchiverUnknown": false
   },
   {
     "name": "opaque plugin",
@@ -216,7 +264,33 @@
     "hasDestination": true,
     "blockerCode": "",
     "destinationPlugin": "custom",
-    "barman": null
+    "barman": null,
+    "archivesWAL": false,
+    "walArchiverUnknown": true
+  },
+  {
+    "name": "opaque WAL archiver",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "plugins": [
+          {
+            "name": "custom",
+            "isWALArchiver": true
+          }
+        ]
+      }
+    },
+    "method": "plugin",
+    "plugin": "custom",
+    "hasDestination": true,
+    "blockerCode": "",
+    "destinationPlugin": "custom",
+    "barman": null,
+    "archivesWAL": true,
+    "walArchiverUnknown": false
   },
   {
     "name": "plugin name mismatch",
@@ -237,7 +311,9 @@
     "hasDestination": true,
     "blockerCode": "method_destination_missing",
     "destinationPlugin": "custom",
-    "barman": null
+    "barman": null,
+    "archivesWAL": false,
+    "walArchiverUnknown": true
   },
   {
     "name": "disabled then enabled plugin",
@@ -268,6 +344,8 @@
     "barman": {
       "objectStore": "store",
       "serverName": "pg"
-    }
+    },
+    "archivesWAL": true,
+    "walArchiverUnknown": false
   }
 ]

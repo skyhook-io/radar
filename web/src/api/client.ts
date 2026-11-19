@@ -90,6 +90,7 @@ import {
 } from './radarFeatures'
 import { useRadarUpgradeHost } from '../context/RadarUpgradeHost'
 import { apiVersionToGroup } from '../utils/navigation'
+import { isBadgeWorthy } from '../utils/auditBadges'
 import type { DeploymentMode } from '../types'
 
 // Auto-refresh cadences (ms) — named constants for each polled hook's
@@ -739,12 +740,60 @@ export function useDashboard(
 export function useAudit(namespaces: string[] = []) {
   const params =
     namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
-  // Mounted app-wide, so without this it keeps polling a cluster that is down.
+  // Without the connection check a mounted view keeps polling a cluster that
+  // is down.
   const connected = useClusterConnected();
+  const queryClient = useQueryClient();
   return useQuery<AuditResponse>({
     queryKey: ["audit", namespaces],
-    queryFn: () => fetchJSON(`/audit${params}`),
+    queryFn: async () => {
+      const audit = await fetchJSON<AuditResponse>(`/audit${params}`);
+      // Resource badges read the same scan through their own smaller query.
+      // A fresher full scan has them refetch rather than show a different
+      // answer: invalidating, unlike writing the projection, can't install an
+      // older scan or one from before a context switch. An in-flight badges
+      // request may predate this scan, and a first request isn't restarted by
+      // invalidation, so it is cancelled first. This runs with the fetch, not
+      // the view, so leaving the page mid-fetch doesn't skip it.
+      const badges = ["audit", namespaces, "badges"];
+      await queryClient.cancelQueries({ queryKey: badges, exact: true });
+      void queryClient.invalidateQueries({ queryKey: badges, exact: true });
+      return audit;
+    },
     enabled: connected,
+    staleTime: 30000,
+    refetchInterval: AUDIT_REFRESH_INTERVAL_MS,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export type AuditBadges = Pick<AuditResponse, "findings" | "checks">;
+
+// Keeps only what a badge view shows: findings of badge-worthy checks and
+// those checks' catalog entries. A Radar that predates include=badges answers
+// with the full response, which this cuts down rather than retaining.
+export function projectAuditBadges(response: AuditBadges): AuditBadges {
+  const findings = (response.findings ?? []).filter((f) => isBadgeWorthy(f, response.checks));
+  const checks: AuditBadges["checks"] = {};
+  for (const f of findings) checks[f.checkID] = response.checks[f.checkID];
+  return { findings, checks };
+}
+
+// The audit as resource badges need it (topology, resource lists): the
+// badge-worthy findings only, a small fraction of the full scan, which repeats
+// every finding per resource and per check for the Checks page.
+export function useAuditBadges(
+  namespaces: string[] = [],
+  options: { enabled?: boolean } = {},
+) {
+  const params = new URLSearchParams({ include: "badges" });
+  if (namespaces.length > 0) params.set("namespaces", namespaces.join(","));
+  const connected = useClusterConnected();
+  return useQuery<AuditBadges>({
+    queryKey: ["audit", namespaces, "badges"],
+    // The signal lets a superseded request stop downloading, not just lose.
+    queryFn: async ({ signal }) => projectAuditBadges(await fetchJSON<AuditBadges>(`/audit?${params}`, signal)),
+    enabled: connected && (options.enabled ?? true),
     staleTime: 30000,
     refetchInterval: AUDIT_REFRESH_INTERVAL_MS,
     placeholderData: (prev) => prev,
@@ -2074,9 +2123,10 @@ export function useApplyDesktopUpdate() {
       }
       return response.json();
     },
+    // No success toast: the update card shows the restart, in the corner a
+    // toast would cover.
     meta: {
       errorMessage: "Failed to apply update",
-      successMessage: "Update applied — restarting...",
     },
   });
 }
@@ -2202,8 +2252,31 @@ export function useCapabilities() {
     staleTime: 60000, // 1 minute - cached on backend too
     // Re-check periodically so transient failures self-correct, but not while
     // the cluster is down: reconnecting refreshes every query anyway.
-    refetchInterval: connected ? 60000 : false,
+    refetchInterval: (query) => connected ? capabilitiesRefetchInterval(query, 60000) : false,
   });
+}
+
+// A result built on a failed access check is kept by the server for only 5s;
+// ask again soon, backing off while the checks keep failing.
+export function capabilitiesRefetchInterval(
+  query: { state: { dataUpdatedAt: number; data?: Pick<Capabilities, "checksIncomplete"> } },
+  settled: number | false,
+): number | false {
+  return backoffRefetchInterval(query, query.state.dataUpdatedAt, !!query.state.data?.checksIncomplete, settled);
+}
+
+const failedAnswerStreaks = new WeakMap<object, { answeredAt: number; count: number }>();
+
+// backoffRefetchInterval polls 5s, 10s, 20s… up to 60s after consecutive
+// failed answers, so a struggling apiserver isn't asked more often the longer
+// it struggles; answeredAt identifies an answer, since React Query asks for
+// the interval more than once per fetch.
+export function backoffRefetchInterval(query: object, answeredAt: number, failing: boolean, settled: number | false): number | false {
+  const previous = failedAnswerStreaks.get(query) ?? { answeredAt: 0, count: 0 };
+  const streak = answeredAt === previous.answeredAt ? previous : { answeredAt, count: failing ? previous.count + 1 : 0 };
+  failedAnswerStreaks.set(query, streak);
+  if (!failing || streak.count === 0) return settled;
+  return Math.min(5000 * 2 ** (streak.count - 1), 60_000);
 }
 
 // ============================================================================
@@ -2484,12 +2557,14 @@ export function useNamespaceCapabilities(
   globalCaps: Capabilities | undefined,
 ) {
   const needsCheck = namespace && globalCaps;
+  const connected = useClusterConnected();
   return useQuery<Capabilities>({
     queryKey: ["capabilities", namespace],
     queryFn: () =>
       fetchJSON(`/capabilities?namespace=${encodeURIComponent(namespace!)}`),
     enabled: !!needsCheck,
     staleTime: 60000,
+    refetchInterval: (query) => connected ? capabilitiesRefetchInterval(query, false) : false,
   });
 }
 
@@ -2610,11 +2685,24 @@ export function useCanHelmAct(namespace?: string): { allowed: boolean; reason?: 
 
 // Namespaces
 export function useNamespaces() {
+  const connected = useClusterConnected();
   return useQuery<Namespace[]>({
     queryKey: ["namespaces"],
     queryFn: () => fetchJSON("/namespaces"),
     staleTime: 30000, // 30 seconds
+    refetchInterval: (query) => namespacesRefetchInterval(query, connected),
   });
+}
+
+// A 5xx is a list Radar couldn't read (a timed-out LIST or access check), not
+// an empty one; ask again (backing off) until it answers. A denial won't
+// change by polling, and while the cluster is disconnected reconnecting
+// refreshes every query anyway.
+export function namespacesRefetchInterval(query: { state: { status: string; error: unknown; dataUpdatedAt: number; errorUpdatedAt: number } }, connected = true): number | false {
+  if (!connected) return false;
+  const { status, error, dataUpdatedAt, errorUpdatedAt } = query.state;
+  const failing = status === "error" && error instanceof ApiError && error.status >= 500;
+  return backoffRefetchInterval(query, Math.max(dataUpdatedAt, errorUpdatedAt), failing, false);
 }
 
 // Topology (for manual refresh)
@@ -4743,7 +4831,10 @@ function deleteResourceNotification(result: DeleteResourceResult): { message: st
   return { message: "Resource deleted", type: "success" };
 }
 
-export function useDeleteResource() {
+export function useDeleteResource(options?: {
+  /** Runs after any outcome, even when the caller unmounted meanwhile. */
+  onSettled?: () => void;
+}) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -4753,12 +4844,17 @@ export function useDeleteResource() {
       namespace,
       name,
       force,
+      uid,
+      resourceVersion,
     }: {
       kind: string;
       group?: string;
       namespace: string;
       name: string;
       force?: boolean;
+      /** Delete only the object reviewed: a Radar with resourceDeletePreconditions answers 409 when it changed. */
+      uid?: string;
+      resourceVersion?: string;
     }) => {
       const url = new URL(
         apiUrl(`/resources/${resourcePathSegments(kind, namespace, name)}`),
@@ -4770,6 +4866,8 @@ export function useDeleteResource() {
       if (force) {
         url.searchParams.set("force", "true");
       }
+      if (uid) url.searchParams.set("uid", uid);
+      if (resourceVersion) url.searchParams.set("resourceVersion", resourceVersion);
       return readDeleteResult(apiFetch(url.toString(), { method: "DELETE" }));
     },
     meta: {
@@ -4787,6 +4885,7 @@ export function useDeleteResource() {
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
+    onSettled: () => options?.onSettled?.(),
   });
 }
 
@@ -7692,7 +7791,29 @@ export interface NamespaceScope {
   cacheScopeNamespace?: string;
   /** true when this client may rebuild the local cache for another namespace. */
   namespaceRescope: boolean;
+  /**
+   * The server's namespace LIST failed for a reason other than RBAC (e.g. a
+   * timeout right after a context switch), so accessibleNamespaces is only
+   * its short fallback list. Absent from older servers.
+   */
+  listFailed?: boolean;
 }
+
+/**
+ * A failed namespace list is retried rather than kept as the answer: 3s after
+ * the first failure, doubling to 30s so a list that keeps failing doesn't add
+ * load to an apiserver that is already struggling.
+ */
+export function namespaceScopeRefetchInterval(
+  scope: Pick<NamespaceScope, "listFailed"> | undefined,
+  consecutiveFailures: number,
+): number | false {
+  if (!scope?.listFailed) return false;
+  return Math.min(3000 * 2 ** Math.max(0, consecutiveFailures - 1), 30000);
+}
+
+// Consecutive listFailed answers per apiBase, for the back-off above.
+const namespaceListFailures = new Map<string, number>();
 
 export function useNamespaceScope() {
   return useQuery<NamespaceScope>({
@@ -7700,9 +7821,12 @@ export function useNamespaceScope() {
     queryFn: async ({ signal }) => {
       const apiBase = getApiBase();
       const scope = await fetchJSON<NamespaceScope>("/cluster/namespace-scope", signal);
+      namespaceListFailures.set(apiBase, scope.listFailed ? (namespaceListFailures.get(apiBase) ?? 0) + 1 : 0);
       return applyTabPick(scope, apiBase);
     },
     staleTime: 30000,
+    refetchInterval: (query) =>
+      namespaceScopeRefetchInterval(query.state.data, namespaceListFailures.get(getApiBase()) ?? 0),
   });
 }
 

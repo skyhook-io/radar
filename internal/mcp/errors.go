@@ -1,6 +1,9 @@
 package mcp
 
 import (
+	"context"
+	"errors"
+
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
@@ -48,4 +51,17 @@ func requireConnected() error {
 		return nil
 	}
 	return errNotConnected()
+}
+
+// timeoutError is a call cut off by its request's deadline. The caller can
+// narrow the request and retry; it is not a failure of Radar's, so the call
+// log records it as a timeout, not an error.
+type timeoutError struct{ msg string }
+
+func (e *timeoutError) Error() string { return e.msg }
+func (e *timeoutError) Unwrap() error { return context.DeadlineExceeded }
+
+func isTimeout(err error) bool {
+	var t *timeoutError
+	return errors.As(err, &t)
 }

@@ -22,7 +22,11 @@ func Scan(w World) ownership.Source {
 type scanSource struct{ w World }
 
 func (s scanSource) Begin() (ownership.ReadSession, error) {
-	session := scanSession{w: s.w, catalog: ownership.NewCatalog(s.w.Resources, !s.w.Partial), byRef: map[resourceid.Ref]Object{}, byKind: map[resourceid.GroupKind][]Object{}}
+	failed := s.w.FailedGroups
+	if s.w.Partial {
+		failed = nil
+	}
+	session := scanSession{w: s.w, catalog: ownership.NewCatalog(s.w.Resources, !s.w.Partial && len(failed) == 0, failed...), byRef: map[resourceid.Ref]Object{}, byKind: map[resourceid.GroupKind][]Object{}}
 	for _, o := range s.w.Objects {
 		session.byRef[o.Ref] = o
 		session.byKind[o.Ref.GroupKind()] = append(session.byKind[o.Ref.GroupKind()], o)
@@ -50,6 +54,18 @@ type scanSession struct {
 func (s scanSession) Catalog() *ownership.Catalog { return s.catalog }
 
 func (s scanSession) ValidateCaches() error { return nil }
+
+func (s scanSession) covers(group string) bool {
+	if s.w.Partial {
+		return false
+	}
+	for _, failed := range s.w.FailedGroups {
+		if failed == group {
+			return false
+		}
+	}
+	return true
+}
 
 // scope says whether discovery serves gk and whether it is namespaced.
 func (s scanSession) scope(gk resourceid.GroupKind) (namespaced, served bool) {
@@ -149,7 +165,7 @@ func (s scanSession) Object(ref resourceid.Ref) ownership.ObjectRead {
 	switch {
 	case s.ambiguous(gk):
 		return unavailable(ref, readreason.ReadError)
-	case !served && s.w.Partial:
+	case !served && !s.covers(gk.Group):
 		// The group discovery missed may serve it.
 		return unavailable(ref, readreason.ReadError)
 	case !served:
@@ -200,7 +216,7 @@ func (s scanSession) DependentCandidates(uid types.UID, scope ownership.SearchSc
 		r.Gaps = append(r.Gaps, ownership.Gap{Kind: gk, Namespace: namespace, Reason: reason})
 	}
 	searches := scope.AllNamespaces || len(scope.Namespaces) > 0 || scope.IncludeClusterScoped
-	if s.w.Partial && searches {
+	if (s.w.Partial || len(s.w.FailedGroups) > 0) && searches {
 		gap(resourceid.GroupKind{}, "", readreason.ReadError)
 	}
 	var namespaces []string
@@ -215,47 +231,10 @@ func (s scanSession) DependentCandidates(uid types.UID, scope ownership.SearchSc
 	}
 	var found []Object
 	for _, k := range s.dependents {
-		if k.namespaced && !scope.AllNamespaces && len(scope.Namespaces) == 0 || !k.namespaced && !scope.IncludeClusterScoped {
+		read, ok := s.readable(k, scope, namespaces, gap)
+		if !ok {
 			continue
 		}
-		c := s.w.collection(k.gk)
-		readable := map[string]bool{}
-		all := false
-		switch {
-		case !k.namespaced || scope.AllNamespaces && (c.Namespaces == nil || c.State != Collected && c.State != Loading):
-			if reason := heldReason(c, k.namespaced, ""); reason != "" {
-				gap(k.gk, "", reason)
-				continue
-			}
-			all = true
-		case scope.AllNamespaces:
-			// Collected in some namespaces only: the rest are unread.
-			gap(k.gk, "", readreason.RadarNamespaceNotCollected)
-			for _, ns := range c.Namespaces {
-				if reason := heldReason(c, true, ns); reason != "" {
-					gap(k.gk, ns, reason)
-				} else {
-					readable[ns] = true
-				}
-			}
-		case c.State == NotCollected || c.State == Refused || c.State == Unwatchable || c.State == Loading && c.Namespaces == nil:
-			// The whole kind's state, or that of the one store serving every
-			// namespace, leaves it unread in each namespace the scope names:
-			// one gap says so.
-			if len(namespaces) > 0 {
-				gap(k.gk, "", heldReason(c, true, ""))
-			}
-			continue
-		default:
-			for _, ns := range namespaces {
-				if reason := heldReason(c, true, ns); reason != "" {
-					gap(k.gk, ns, reason)
-				} else {
-					readable[ns] = true
-				}
-			}
-		}
-		read := func(o Object) bool { return all || readable[o.Ref.Namespace] }
 		for _, o := range s.byKind[k.gk] {
 			if read(o) && namesOwner(o.OwnerReferences, uid) {
 				found = append(found, o)
@@ -276,6 +255,52 @@ func (s scanSession) DependentCandidates(uid types.UID, scope ownership.SearchSc
 	slices.SortFunc(r.Gaps, compareGaps)
 	r.Gaps = slices.Compact(r.Gaps)
 	return r
+}
+
+// readable says which of k's objects a search of scope reads, recording a gap
+// for each part it can't, or false when it reads none of them.
+func (s scanSession) readable(k dependentKind, scope ownership.SearchScope, namespaces []string, gap func(resourceid.GroupKind, string, readreason.Code)) (func(Object) bool, bool) {
+	if k.namespaced && !scope.AllNamespaces && len(scope.Namespaces) == 0 || !k.namespaced && !scope.IncludeClusterScoped {
+		return nil, false
+	}
+	c := s.w.collection(k.gk)
+	readable := map[string]bool{}
+	all := false
+	switch {
+	case !k.namespaced || scope.AllNamespaces && (c.Namespaces == nil || c.State != Collected && c.State != Loading):
+		if reason := heldReason(c, k.namespaced, ""); reason != "" {
+			gap(k.gk, "", reason)
+			return nil, false
+		}
+		all = true
+	case scope.AllNamespaces:
+		// Collected in some namespaces only: the rest are unread.
+		gap(k.gk, "", readreason.RadarNamespaceNotCollected)
+		for _, ns := range c.Namespaces {
+			if reason := heldReason(c, true, ns); reason != "" {
+				gap(k.gk, ns, reason)
+			} else {
+				readable[ns] = true
+			}
+		}
+	case c.State == NotCollected || c.State == Refused || c.State == Unwatchable || c.State == Loading && c.Namespaces == nil:
+		// The whole kind's state, or that of the one store serving every
+		// namespace, leaves it unread in each namespace the scope names:
+		// one gap says so.
+		if len(namespaces) > 0 {
+			gap(k.gk, "", heldReason(c, true, ""))
+		}
+		return nil, false
+	default:
+		for _, ns := range namespaces {
+			if reason := heldReason(c, true, ns); reason != "" {
+				gap(k.gk, ns, reason)
+			} else {
+				readable[ns] = true
+			}
+		}
+	}
+	return func(o Object) bool { return all || readable[o.Ref.Namespace] }, true
 }
 
 func namesOwner(owners []metav1.OwnerReference, uid types.UID) bool {
@@ -359,7 +384,7 @@ func (s scanSession) nameable(ref resourceid.Ref) readreason.Code {
 		namespaced, served = b.Namespaced, true
 	}
 	switch {
-	case s.ambiguous(gk), !served && s.w.Partial:
+	case s.ambiguous(gk), !served && !s.covers(gk.Group):
 		return readreason.ReadError
 	case !served:
 		return ""
@@ -386,7 +411,7 @@ func (s scanSession) RecordingManagers(ref resourceid.Ref) ownership.RecordingMa
 	for _, gk := range managers {
 		namespaced, served := s.scope(gk)
 		if !served || s.ambiguous(gk) {
-			if s.w.Partial || s.ambiguous(gk) {
+			if !s.covers(gk.Group) || s.ambiguous(gk) {
 				gap(gk, "", readreason.ReadError)
 			}
 			continue

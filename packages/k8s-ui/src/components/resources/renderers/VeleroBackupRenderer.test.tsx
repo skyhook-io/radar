@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { VeleroBackupRenderer } from './VeleroBackupRenderer'
+import { OperationalIssuesShownContext } from '../../ui/drawer-components'
 
 const backup = (location: string) => ({
   metadata: { name: 'nightly', namespace: 'velero' },
@@ -75,40 +76,24 @@ describe('a run Velero refused to start', () => {
 })
 
 /**
- * Velero resolves an unset spec.storageLocation to whichever location carries
- * spec.default, which is a flag and not a name. An install that renamed its
- * default location has no object called "default" at all, so resolving by name
- * finds nothing: the unavailable-location warning never appears and the link
- * points at something that does not exist.
+ * Velero writes the resolved location into spec.storageLocation when it first
+ * processes a backup. An unset field means it has not done so yet, and the
+ * default it will pick can still change, so the page names no location.
  */
-describe('a backup that names no location', () => {
+describe('a backup Velero has not assigned a location yet', () => {
   const unset = {
     metadata: { name: 'nightly', namespace: 'velero' },
     spec: { ttl: '720h0m0s' },
-    status: { phase: 'Completed' },
+    status: { phase: 'New' },
   }
 
-  it('links the location that actually holds it', () => {
-    const html = renderToString(
-      <VeleroBackupRenderer data={unset} storageLocationName="primary" onNavigate={() => {}} />,
-    )
-    expect(html).toContain('primary')
-  })
-
-  it('still warns when that location is the unavailable one', () => {
-    const html = renderToString(
-      <VeleroBackupRenderer data={unset} storageLocationName="primary" storageLocationPhase="Unavailable" />,
-    )
-    expect(html).toContain('nothing here to restore from')
-  })
-
-  // Replaced the by-name fallback assertion: it checked for the substring
-  // "default", which the "Velero's default location, not yet resolved" sentence
-  // also contains — so it passed while documenting the opposite of what the
-  // renderer now does. A host that does not resolve gets no asserted name.
-  it('asserts no location name when the host does not resolve one', () => {
+  it('says the location is not assigned and links nothing', () => {
     const html = renderToString(<VeleroBackupRenderer data={unset} onNavigate={() => {}} />)
-    expect(html).toContain('not yet resolved')
+    const i = html.indexOf('Storage Location')
+    const cell = html.slice(i, html.indexOf('</div>', i))
+    expect(cell).toContain('Not assigned yet')
+    expect(cell).not.toContain('<button')
+    expect(cell).not.toContain('>default<')
   })
 })
 
@@ -119,11 +104,6 @@ describe('a backup that names no location', () => {
  * bucket.
  */
 describe('what the page claims before the location lookup answers', () => {
-  const unset = {
-    metadata: { name: 'nightly', namespace: 'velero' },
-    spec: {},
-    status: { phase: 'Completed' },
-  }
   const named = {
     metadata: { name: 'nightly', namespace: 'velero' },
     spec: { storageLocation: 'dr-replica' },
@@ -142,24 +122,16 @@ describe('what the page claims before the location lookup answers', () => {
     return html.slice(i, end < 0 ? undefined : end)
   }
 
-  // An unset location is only knowable from the list. Printing "default" before
-  // it answers is a guess that is wrong on any install that renamed it.
-  it('does not name a location it has not resolved', () => {
-    const cell = storageCell(renderToString(<VeleroBackupRenderer data={unset} onNavigate={() => {}} />))
-    expect(cell).toContain('not yet resolved')
-    expect(cell).not.toContain('>default<')
-  })
-
   // A backup that names its own location is known regardless of the lookup.
   it('still shows a location the backup names itself', () => {
     const html = renderToString(<VeleroBackupRenderer data={named} onNavigate={() => {}} />)
     expect(html).toContain('dr-replica')
-    expect(html).not.toContain('not yet resolved')
+    expect(html).not.toContain('Not assigned yet')
   })
 
   it('says so when the location it names is gone', () => {
     const html = renderToString(
-      <VeleroBackupRenderer data={named} storageLocationName="dr-replica" storageLocationMissing onNavigate={() => {}} />,
+      <VeleroBackupRenderer data={named} storageLocationMissing onNavigate={() => {}} />,
     )
     expect(html).toContain('Not found')
     expect(html).toContain('no longer exists')
@@ -170,10 +142,10 @@ describe('what the page claims before the location lookup answers', () => {
   // whole document always matches.
   it('does not link a location that is gone', () => {
     const missing = storageCell(renderToString(
-      <VeleroBackupRenderer data={named} storageLocationName="dr-replica" storageLocationMissing onNavigate={() => {}} />,
+      <VeleroBackupRenderer data={named} storageLocationMissing onNavigate={() => {}} />,
     ))
     const present = storageCell(renderToString(
-      <VeleroBackupRenderer data={named} storageLocationName="dr-replica" onNavigate={() => {}} />,
+      <VeleroBackupRenderer data={named} onNavigate={() => {}} />,
     ))
     expect(present).toContain('<button')
     expect(missing).not.toContain('<button')
@@ -181,41 +153,37 @@ describe('what the page claims before the location lookup answers', () => {
 })
 
 /**
- * Where the name came from changes what can be said about it. A backup that
- * names its own location and cannot find it has named something missing. A
- * backup that names nothing has not — the name was produced by Velero's
- * fallback rule, and blaming the object for it invents a claim.
+ * The drawer lists the issue a failed run raises above the renderer. Saying it
+ * again in a box of its own showed the same failure twice, one under the other.
  */
-describe('a location that cannot be found', () => {
-  const named = {
-    metadata: { name: 'nightly', namespace: 'velero' },
-    spec: { storageLocation: 'dr-replica' },
-    status: { phase: 'Completed' },
-  }
-  const unset = {
-    metadata: { name: 'nightly', namespace: 'velero' },
-    spec: {},
-    status: { phase: 'Completed' },
-  }
-
-  it('blames the backup only when the backup named it', () => {
-    const html = renderToString(
-      <VeleroBackupRenderer data={named} storageLocationName="dr-replica" storageLocationMissing />,
+describe('a failed run whose issue the drawer already shows', () => {
+  const run = (phase: string, extra: Record<string, unknown> = {}) => ({
+    metadata: { name: 'live-partial', namespace: 'velero' },
+    spec: { storageLocation: 'default' },
+    status: { phase, errors: 1, ...extra },
+  })
+  const withIssues = (data: any) =>
+    renderToString(
+      <OperationalIssuesShownContext.Provider value>
+        <VeleroBackupRenderer data={data} />
+      </OperationalIssuesShownContext.Provider>,
     )
-    expect(html).toContain('names a storage location that no longer exists')
-    expect(html).toContain('Not found')
+
+  it('leaves the failure to the issue', () => {
+    for (const phase of ['PartiallyFailed', 'Failed', 'FailedValidation']) {
+      const html = withIssues(run(phase))
+      expect(html, phase).not.toContain('Partially Failed')
+      expect(html, phase).not.toContain('Backup Failed')
+      expect(html, phase).not.toContain('Validation Failed')
+    }
   })
 
-  // The fallback resolved to the literal "default" because nothing carries
-  // spec.default. Saying the backup "names" that is attributing an invented
-  // name to the object.
-  it('says the namespace has no default when the backup named nothing', () => {
-    const html = renderToString(
-      <VeleroBackupRenderer data={unset} storageLocationName="default" storageLocationMissing />,
-    )
-    expect(html).toContain('names no storage location')
-    expect(html).toContain('this namespace has none')
-    expect(html).toContain('No default location')
-    expect(html).not.toContain('names a storage location that no longer exists')
+  it('still describes it when no issue does', () => {
+    expect(renderToString(<VeleroBackupRenderer data={run('PartiallyFailed')} />)).toContain('Do not assume this backup is complete')
+  })
+
+  // Warnings raise no issue, so this box is the only place they are said.
+  it('keeps the warnings box', () => {
+    expect(withIssues(run('Completed', { errors: 0, warnings: 2 }))).toContain('2 Warning(s)')
   })
 })
