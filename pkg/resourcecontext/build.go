@@ -10,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -341,8 +342,8 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.Reflection = buildReflection(ctx, obj, opts.Reflections, opts.AccessChecker, omitted)
 	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.RelationshipExtras, opts.AccessChecker, omitted)
 	rc.WorkloadSummary = buildWorkloadSummary(obj)
-	rc.IngressSummary = buildIngressSummary(ctx, obj, opts.AccessChecker, omitted)
-	rc.ServiceAccountSummary = buildServiceAccountSummary(ctx, obj, opts.AccessChecker, omitted)
+	rc.IngressSummary = buildIngressSummary(ctx, obj, opts.AccessChecker, opts.RelationshipExtras, omitted)
+	rc.ServiceAccountSummary = buildServiceAccountSummary(ctx, obj, opts.AccessChecker, opts.RelationshipExtras, omitted)
 	rc.NodeSummary = buildNodeSummary(obj)
 	rc.PVCSummary = buildPVCSummary(obj)
 	rc.JobSummary = buildJobSummary(obj)
@@ -855,7 +856,7 @@ func buildWorkloadSummary(obj runtime.Object) *WorkloadSummary {
 	}
 }
 
-func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessChecker, omitted *omittedTracker) *IngressSummary {
+func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessChecker, extras *topology.RelationshipExtras, omitted *omittedTracker) *IngressSummary {
 	ing, ok := obj.(*networkingv1.Ingress)
 	if !ok || ing == nil {
 		return nil
@@ -889,11 +890,11 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	}
 	out.BackendServices = filterRefs(ctx, ac, svcSet.refs("Service", ""), "ingressSummary.backendServices", omitted)
 
-	secretSet := newRefSet()
+	var secrets []ContextRef
 	for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
-		secretSet.add(ref.Name, ref.Namespace)
+		secrets = append(secrets, ContextRef{Kind: "Secret", Namespace: ref.Namespace, Name: ref.Name})
 	}
-	out.TLSSecrets = filterRefs(ctx, ac, secretSet.refs("Secret", ""), "ingressSummary.tlsSecrets", omitted)
+	out.TLSSecrets = declaredRefs(ctx, ac, extras, secrets, "ingressSummary.tlsSecrets", omitted)
 
 	if out.Class == "" && len(out.Addresses) == 0 && len(out.BackendServices) == 0 && len(out.TLSSecrets) == 0 && len(out.Warnings) == 0 {
 		return nil
@@ -901,7 +902,7 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	return out
 }
 
-func buildServiceAccountSummary(ctx context.Context, obj runtime.Object, ac RefAccessChecker, omitted *omittedTracker) *ServiceAccountSummary {
+func buildServiceAccountSummary(ctx context.Context, obj runtime.Object, ac RefAccessChecker, extras *topology.RelationshipExtras, omitted *omittedTracker) *ServiceAccountSummary {
 	sa, ok := obj.(*corev1.ServiceAccount)
 	if !ok {
 		return nil
@@ -916,8 +917,8 @@ func buildServiceAccountSummary(ctx context.Context, obj runtime.Object, ac RefA
 		}
 	}
 	summary := &ServiceAccountSummary{
-		SecretRefs:       filterBoundedRefs(ctx, ac, secrets, "serviceAccountSummary.secretRefs", omitted),
-		ImagePullSecrets: filterBoundedRefs(ctx, ac, pulls, "serviceAccountSummary.imagePullSecrets", omitted),
+		SecretRefs:       declaredRefs(ctx, ac, extras, secrets, "serviceAccountSummary.secretRefs", omitted),
+		ImagePullSecrets: declaredRefs(ctx, ac, extras, pulls, "serviceAccountSummary.imagePullSecrets", omitted),
 	}
 	if len(summary.SecretRefs) == 0 && len(summary.ImagePullSecrets) == 0 {
 		return nil
@@ -1526,6 +1527,41 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 		return nil
 	}
 	return out
+}
+
+// declaredRefs lists the references the subject's own spec declares, deduped
+// and capped at maxReferencedByItems. One the caller may not read is still
+// listed by name, with the state the relationship answer gave its
+// declaration, or, for a declaration the answer doesn't hold, denied when ac
+// refuses its kind there. Nothing is read about the targets.
+func declaredRefs(ctx context.Context, ac RefAccessChecker, extras *topology.RelationshipExtras, refs []ContextRef, field string, omitted *omittedTracker) []ContextRef {
+	key := func(r ContextRef) string { return resourceid.ResourceKey(r.Group, r.Kind, r.Namespace, r.Name) }
+	sorted := slices.SortedFunc(slices.Values(refs), func(a, b ContextRef) int { return strings.Compare(key(a), key(b)) })
+	sorted = slices.CompactFunc(sorted, func(a, b ContextRef) bool { return key(a) == key(b) })
+	if len(sorted) > maxReferencedByItems {
+		omitted.add(field, OmittedBudgetExceeded)
+		sorted = sorted[:maxReferencedByItems]
+	}
+	for i := range sorted {
+		r := &sorted[i]
+		target := resourceid.NewRef(r.Group, r.Kind, r.Namespace, r.Name)
+		var declared *relations.Declared
+		if extras != nil {
+			if j := slices.IndexFunc(extras.Declarations, func(d relations.Declared) bool { return d.Ref == target }); j >= 0 {
+				declared = &extras.Declarations[j]
+			}
+		}
+		switch {
+		case declared != nil:
+			r.State = topology.DeclaredState(*declared)
+		case !checkRef(ctx, ac, r):
+			r.State = topology.ResourceStateDenied
+		}
+	}
+	if len(sorted) == 0 {
+		return nil
+	}
+	return sorted
 }
 
 // Denied namespaces must not make reference authorization unbounded.

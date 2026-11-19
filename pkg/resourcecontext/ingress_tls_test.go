@@ -3,6 +3,8 @@ package resourcecontext
 import (
 	"context"
 	"fmt"
+
+	"github.com/skyhook-io/radar/pkg/topology"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,5 +48,9 @@ func TestBuild_IngressTLSReverseAndForward(t *testing.T) {
 	rc = fixtureContext(context.Background(), ing, nil, Options{Tier: TierBasic})
 	if rc.IngressSummary == nil || len(rc.IngressSummary.TLSSecrets) != 1 || rc.IngressSummary.TLSSecrets[0].Namespace != "a" {
 		t.Fatalf("forward: %+v", rc)
+	}
+	rc = fixtureContext(context.Background(), ing, nil, Options{Tier: TierBasic, AccessChecker: denyChecker{kind: "Secret", namespace: "a"}})
+	if s := rc.IngressSummary; s == nil || !slices.Equal(s.TLSSecrets, []ContextRef{{Kind: "Secret", Namespace: "a", Name: "tls", State: topology.ResourceStateDenied}}) || marksField(rc.Omitted, "ingressSummary.tlsSecrets") {
+		t.Fatalf("a declared Secret the caller may not read must be named and marked denied: %+v", rc)
 	}
 }

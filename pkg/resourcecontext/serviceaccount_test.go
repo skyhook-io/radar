@@ -6,6 +6,9 @@ import (
 	"fmt"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/topology"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,7 +53,8 @@ func TestBuild_ServiceAccountSecretRolesAndReverse(t *testing.T) {
 		t.Fatalf("denied SA: %+v", rc)
 	}
 	rc = fixtureContext(context.Background(), sa, nil, Options{Tier: TierBasic, AccessChecker: denyChecker{kind: "Secret", namespace: "prod"}})
-	if rc.ServiceAccountSummary != nil || !hasOmitted(rc.Omitted, "serviceAccountSummary.secretRefs") || !hasOmitted(rc.Omitted, "serviceAccountSummary.imagePullSecrets") {
+	denied := []ContextRef{{Kind: "Secret", Namespace: "prod", Name: "credentials", State: topology.ResourceStateDenied}}
+	if s := rc.ServiceAccountSummary; s == nil || !slices.Equal(s.SecretRefs, denied) || !slices.Equal(s.ImagePullSecrets, denied) || marksField(rc.Omitted, "serviceAccountSummary.secretRefs") || marksField(rc.Omitted, "serviceAccountSummary.imagePullSecrets") {
 		t.Fatalf("denied Secrets: %+v", rc)
 	}
 	custom := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "custom.example/v1", "kind": "Secret", "metadata": map[string]interface{}{"namespace": "prod", "name": "credentials"}}}
@@ -142,3 +146,30 @@ func TestServiceAccountCoverageAssessedBeforeTheSnapshot(t *testing.T) {
 		t.Fatalf("snapshot taken while loading was reported complete: %+v", rc.Omitted)
 	}
 }
+
+// A Secret a ServiceAccount declares whose access couldn't be checked is
+// listed by name and marked unverified, in the role the account gives it.
+func TestBuild_ServiceAccountSecretCheckFailedIsUnverified(t *testing.T) {
+	ctx := context.Background()
+	sa := &corev1.ServiceAccount{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ServiceAccount"}, ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: "prod"}, ImagePullSecrets: []corev1.LocalObjectReference{{Name: "registry"}}}
+	subject := resourceid.NewRef("", "ServiceAccount", "prod", "runner")
+	session := newContextFixtureSession(subject, sa, nil)
+	access := undecidedSecrets{}
+	rel, extras := topology.RelationsContextAnswer(session, access, access, ownership.NewView(session, access), subject, sa, nil, nil)
+	rc := Build(ctx, sa, Options{Relationships: rel, RelationshipExtras: extras})
+	want := []ContextRef{{Kind: "Secret", Namespace: "prod", Name: "registry", State: topology.ResourceStateUnverified}}
+	if s := rc.ServiceAccountSummary; s == nil || len(s.SecretRefs) != 0 || !slices.Equal(s.ImagePullSecrets, want) {
+		t.Fatalf("summary = %+v", rc.ServiceAccountSummary)
+	}
+}
+
+// undecidedSecrets can't decide Secrets.
+type undecidedSecrets struct{}
+
+func (undecidedSecrets) CanRead(gk resourceid.GroupKind, _ string) ownership.Decision {
+	if gk == (resourceid.GroupKind{Kind: "Secret"}) {
+		return ownership.Undecided
+	}
+	return ownership.Allowed
+}
+func (undecidedSecrets) Namespaces() ([]string, bool) { return nil, true }

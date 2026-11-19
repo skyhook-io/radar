@@ -777,7 +777,8 @@ The Docker image's primary use is [in-cluster deployment](in-cluster.md) with a 
 
 ## References you can't read
 
-A `resourceContext.uses` entry, or a Related Resources reference, may carry `state`: `"denied"` when the subject's
+A `resourceContext.uses` entry, an `ingressSummary.tlsSecrets` or `serviceAccountSummary` entry, or a Related
+Resources reference, may carry `state`: `"denied"` when the subject's
 own spec names an object the caller may not read (a pod template's ConfigMaps, Secrets, PVCs and ServiceAccount, an
 Ingress's TLS Secrets, a ServiceAccount's Secrets), or `"unverified"` when Radar couldn't check the caller's
 access. The name comes from the subject's spec, which the caller reads; Radar never reads the target for it, so
@@ -1596,7 +1597,9 @@ template-generated PVC names are not inferred. An absent omission does not by
 itself establish cache freshness or complete namespace coverage.
 
 Resource context's `ingressSummary.tlsSecrets` lists named TLS Secrets in the
-Ingress's namespace. A Secret's `referencedBy` includes readable Ingresses with
+Ingress's namespace, including ones the caller may not read, which carry
+`state` (see [References you can't read](#references-you-cant-read)). A
+Secret's `referencedBy` includes readable Ingresses with
 the path `spec.tls[].secretName`. Resource-view topology links only observed,
 visible TLS Secrets. Empty Secret names do not resolve controller defaults.
 
@@ -1625,8 +1628,9 @@ the warning's `correlated_changes` show recent edits to the Service, such as a
 selector change.
 
 ServiceAccount `serviceAccountSummary.secretRefs` and
-`serviceAccountSummary.imagePullSecrets` list declared Secret associations,
-filtered by the caller's permissions and capped at 20 references per field.
+`serviceAccountSummary.imagePullSecrets` list the Secrets the ServiceAccount
+declares in each role, capped at 20 references per field; one the caller may not
+read carries `state`, as above.
 A Secret's `referencedBy` includes declaring ServiceAccounts with `secrets[]`
 and `imagePullSecrets[]` paths. When Radar is still loading the Secret's
 namespace's ServiceAccounts, failed to, or doesn't collect them there,
