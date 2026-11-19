@@ -148,12 +148,12 @@ type Attention struct {
 	// Since is when the state began, where that is known.
 	Since *time.Time `json:"since,omitempty"`
 	// WaitingClaims, on a warm pool's reserve row when no sandbox in it is
-	// ready: its unbound claims still in progress, which can't take a warm
-	// sandbox. A lower bound where the namespace's claims were read in part;
+	// ready: its unbound claims still in progress, which wait while none is
+	// (the controller may hand one a sandbox still starting). A lower bound where the namespace's claims were read in part;
 	// absent when none were read.
 	WaitingClaims *Count `json:"waitingClaims,omitempty"`
 	// EmptyPool, on an unbound claim's row: the warm pool it names, read, with
-	// no sandbox ready, so the claim can't take a warm one.
+	// no sandbox ready, which the claim waits on.
 	EmptyPool *Ref `json:"emptyPool,omitempty"`
 	// Issue: Radar's Issues list the subject for the same state. It is the
 	// authoritative parity bit; no rule implies it.
@@ -647,8 +647,8 @@ func (b *builder) reserveEmpty(namespace, name string) bool {
 	return ready == 0
 }
 
-// waitingClaims counts a pool's unbound claims still in progress: with no
-// sandbox ready they can't take a warm one. Nil when the namespace's claims
+// waitingClaims counts a pool's unbound claims still in progress, waiting
+// while no sandbox is ready. Nil when the namespace's claims
 // were read in part and none of them waits: zero would claim too much.
 func (b *builder) waitingClaims(namespace, pool string) *Count {
 	n := 0
@@ -783,7 +783,7 @@ func (b *builder) poolRow(u *unstructured.Unstructured) (*Attention, []string) {
 	// Only an empty reserve says anything about claims: with any sandbox
 	// ready, the next claim can still take a warm one.
 	if ready == 0 {
-		parts = append(parts, "No sandbox is ready in reserve, so a new claim can’t take a warm one and waits for a sandbox to start.")
+		parts = append(parts, "No sandbox is ready in reserve, so a new claim waits for one to finish starting.")
 		row.WaitingClaims = b.waitingClaims(ns, u.GetName())
 	}
 	row.Reading = strings.Join(parts, " ")
