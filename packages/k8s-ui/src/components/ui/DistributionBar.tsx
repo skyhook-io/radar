@@ -78,8 +78,12 @@ export function DistributionLegendChip({
       onClick={onClick}
       aria-pressed={active}
       className={clsx(
-        'group inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors',
-        active ? 'border-theme-border bg-theme-elevated text-theme-text-primary' : 'border-transparent text-theme-text-secondary hover:bg-theme-hover/60',
+        // Bordered like FilterPill, so a clickable legend reads as filters.
+        'group inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors',
+        'focus-visible:ring-2 focus-visible:ring-theme-text-primary/20 focus-visible:outline-none',
+        active
+          ? 'border-theme-text-primary/25 bg-theme-text-primary/10 text-theme-text-primary'
+          : 'border-theme-border-light text-theme-text-secondary hover:border-theme-border hover:bg-theme-hover/50 hover:text-theme-text-primary',
       )}
     >
       {inner}

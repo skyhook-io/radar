@@ -78,6 +78,9 @@ func Classify(in classifyInput) issuesapi.Category {
 
 	case SourceCondition:
 		switch in.Reason {
+		case ReasonVeleroServerNotRunning:
+			// Filed on the server's Deployment, but what stops is backups.
+			return issuesapi.CategoryBackupStalled
 		case ReasonCertificateRenewalFailed:
 			return issuesapi.CategoryCertificateRenewalFailed
 		case ReasonKarpenterNodePoolNotReady,
@@ -144,7 +147,8 @@ func Classify(in classifyInput) issuesapi.Category {
 			// under backup_failed it renders as "Backup failed" above a message
 			// saying the run is still in progress, and points at the wrong fix:
 			// you look at the controller, not at an error the run never produced.
-			if in.Reason == ReasonVeleroRunStalled {
+			switch in.Reason {
+			case ReasonVeleroRunStalled, ReasonVeleroScheduleLate, ReasonVeleroScheduleHeld, ReasonVeleroScheduleNotValidated:
 				return issuesapi.CategoryBackupStalled
 			}
 			return issuesapi.CategoryBackupFailed

@@ -69,7 +69,7 @@ func listDynamicConfigObjectRefs(namespaces []string, opts dynamicConfigRefOptio
 		if handler == nil {
 			continue
 		}
-		items, err := cache.ListWatched(gvr)
+		items, err := cache.ListWatchedReadOnly(gvr)
 		if err != nil {
 			if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
 				log.Printf("[audit] CRD config-ref scan: skipping %s/%s: %v", gvr.GroupResource(), gvr.Version, err)

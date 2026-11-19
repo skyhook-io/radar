@@ -17,7 +17,7 @@ var allowedViews = map[string]bool{
 	"helm": true, "helmCompare": true, "traffic": true, "cost": true,
 	"capacity": true, "workload": true, "checks": true, "upgrade": true,
 	"gitops": true, "applications": true, "compare": true, "issues": true,
-	"investigations": true, "cnpg": true,
+	"investigations": true, "cnpg": true, "velero": true,
 }
 
 // Resource drawer panels. The drawer's Timeline tab carries the resource's

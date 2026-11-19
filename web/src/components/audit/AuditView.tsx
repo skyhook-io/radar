@@ -9,6 +9,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { useConnection } from '../../context/ConnectionContext'
 import { ChecksViewTabs } from './ChecksViewTabs'
 import { UpgradeReadinessView } from './UpgradeReadinessView'
+import { VulnerabilitiesView } from './VulnerabilitiesView'
 
 interface AuditViewProps {
   namespaces: string[]
@@ -25,6 +26,9 @@ export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) 
   const { pathname } = useLocation()
   if (pathname.startsWith('/checks/upgrade')) {
     return <UpgradeReadinessView namespaces={namespaces} onNavigateToResource={onNavigateToResource} />
+  }
+  if (pathname.startsWith('/checks/vulnerabilities')) {
+    return <VulnerabilitiesView namespaces={namespaces} onNavigateToResource={onNavigateToResource} />
   }
   return <BestPracticesView namespaces={namespaces} onNavigateToResource={onNavigateToResource} />
 }

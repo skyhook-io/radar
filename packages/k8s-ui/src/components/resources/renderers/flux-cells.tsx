@@ -3,6 +3,7 @@
 import { clsx } from 'clsx'
 import { Tooltip } from '../../ui/Tooltip'
 import { formatBytes } from '../../../utils/format'
+import { TruncatedText } from '../../ui/TruncatedText'
 import { getFluxDeployedRelease, getFluxLastApply } from '../../../utils/flux-history'
 import {
   getExternalArtifactStatus,
@@ -41,12 +42,7 @@ import {
 export function GitRepositoryCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'url': {
-      const url = getGitRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getGitRepositoryUrl(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'ref': {
       const ref = getGitRepositoryRef(resource)
@@ -74,12 +70,7 @@ export function GitRepositoryCell({ resource, column }: { resource: any; column:
 export function OCIRepositoryCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'url': {
-      const url = getOCIRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getOCIRepositoryUrl(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'ref': {
       const ref = getOCIRepositoryRef(resource)
@@ -107,12 +98,7 @@ export function OCIRepositoryCell({ resource, column }: { resource: any; column:
 export function HelmRepositoryCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'url': {
-      const url = getHelmRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getHelmRepositoryUrl(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'type': {
       const type = getHelmRepositoryType(resource)
@@ -222,11 +208,7 @@ export function FluxHelmReleaseCell({ resource, column }: { resource: any; colum
       if (!message) {
         return <span className="text-sm text-theme-text-tertiary">-</span>
       }
-      return (
-        <Tooltip content={message}>
-          <span className="text-sm text-theme-text-secondary truncate block">{message}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={message} className="text-sm text-theme-text-secondary" />
     }
     case 'revision': {
       const revision = getFluxHelmReleaseRevision(resource)

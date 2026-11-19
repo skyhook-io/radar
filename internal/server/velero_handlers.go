@@ -12,6 +12,7 @@ import (
 
 	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
+	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
 
 const veleroGroup = "velero.io"
@@ -21,13 +22,17 @@ type VeleroStoredBackup struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	Phase     string `json:"phase,omitempty"`
-	// Expiration is when Velero will delete this backup. A location full of
+	// Expiration is when the backup becomes eligible for garbage collection. A location full of
 	// backups that all expire next week is a different answer to "what can I
 	// restore" than one that keeps them for a year.
 	Expiration string `json:"expiration,omitempty"`
-	// Completed is when the backup finished — the point in time a restore from
-	// it would return to.
+	// Completed is the backup's status.completionTimestamp, when it finished.
+	// Objects are captured throughout the run, so it is not one point in time
+	// a restore returns to.
 	Completed string `json:"completed,omitempty"`
+	orderTime string
+	// Manual: created by Radar's Back up now from a schedule.
+	Manual bool `json:"manual,omitempty"`
 }
 
 // maxStoredBackupsListed bounds the list, not the counts. Velero keeps every
@@ -88,6 +93,9 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, http.StatusBadRequest, "storage location namespace and name are required")
 		return
 	}
+	if s.refuseOutsideVeleroPin(w, namespace) {
+		return
+	}
 	if !s.canRead(r, veleroGroup, "backups", namespace, "list") {
 		s.writeError(w, http.StatusForbidden, "no access to Velero backups")
 		return
@@ -117,23 +125,26 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Which location is the default one, read rather than assumed. A failure to
-	// list them is not fatal here: it only costs the fallback, and backups that
-	// name their location explicitly are unaffected.
-	defaultName := ""
-	if locs, lerr := listDynamicSynced(r.Context(), cache, "BackupStorageLocation", veleroGroup, namespace); lerr == nil {
-		defaultName = veleroDefaultLocationName(locs)
-	}
-
 	resp := VeleroStoredBackupsResponse{Backups: []VeleroStoredBackup{}}
 	for _, u := range items {
-		if u == nil || veleroBackupLocation(u, defaultName) != name {
+		if u == nil {
+			continue
+		}
+		if location, assigned := veleropkg.LocationOf(u); !assigned || location != name {
 			continue
 		}
 		b := VeleroStoredBackup{Namespace: u.GetNamespace(), Name: u.GetName()}
 		b.Phase, _, _ = unstructured.NestedString(u.Object, "status", "phase")
 		b.Expiration, _, _ = unstructured.NestedString(u.Object, "status", "expiration")
 		b.Completed, _, _ = unstructured.NestedString(u.Object, "status", "completionTimestamp")
+		b.orderTime = b.Completed
+		if b.orderTime == "" {
+			b.orderTime, _, _ = unstructured.NestedString(u.Object, "status", "startTimestamp")
+			if b.orderTime == "" {
+				b.orderTime = u.GetCreationTimestamp().UTC().Format(time.RFC3339)
+			}
+		}
+		_, b.Manual = u.GetAnnotations()[veleropkg.SubmissionAnnotation]
 		if b.Phase == "Completed" {
 			if veleroExpired(b.Expiration) {
 				resp.Expired++
@@ -143,13 +154,11 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		}
 		resp.Backups = append(resp.Backups, b)
 	}
-	// Newest first: the question is almost always "what is the most recent thing
-	// I can restore from". The cap below depends on this order — the most recent
-	// restorable point is derived from this list, so the newest entries must be
-	// the ones that survive truncation.
+	// A rejected or queued run has no completion time, but it may be the newest
+	// evidence that this location stopped accepting backups.
 	sort.Slice(resp.Backups, func(i, j int) bool {
-		if resp.Backups[i].Completed != resp.Backups[j].Completed {
-			return resp.Backups[i].Completed > resp.Backups[j].Completed
+		if resp.Backups[i].orderTime != resp.Backups[j].orderTime {
+			return resp.Backups[i].orderTime > resp.Backups[j].orderTime
 		}
 		return resp.Backups[i].Name < resp.Backups[j].Name
 	})
@@ -159,40 +168,6 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		resp.Truncated = true
 	}
 	s.writeJSON(w, resp)
-}
-
-// veleroBackupLocation is the storage location a Backup names, applying Velero's
-// default.
-//
-// An unset spec.storageLocation means "the location marked default", which is a
-// flag on the location (spec.default) and not a name. Assuming the literal name
-// "default" is right on most installs and silently wrong on any that renamed it
-// — and being wrong here does not look like an error, it looks like a location
-// holding nothing, which is the sentence someone reads before deciding they
-// cannot restore. So the flag is what decides, and the name is only the
-// fallback for when no location claims it.
-func veleroBackupLocation(u *unstructured.Unstructured, defaultLocation string) string {
-	if loc, ok, _ := unstructured.NestedString(u.Object, "spec", "storageLocation"); ok && loc != "" {
-		return loc
-	}
-	if defaultLocation != "" {
-		return defaultLocation
-	}
-	return "default"
-}
-
-// veleroDefaultLocationName returns the name of the location flagged
-// spec.default, or "" when none is. Velero permits at most one.
-func veleroDefaultLocationName(locations []*unstructured.Unstructured) string {
-	for _, l := range locations {
-		if l == nil {
-			continue
-		}
-		if isDefault, ok, _ := unstructured.NestedBool(l.Object, "spec", "default"); ok && isDefault {
-			return l.GetName()
-		}
-	}
-	return ""
 }
 
 // veleroExpired reports whether Velero's own expiration has passed. Same rule
