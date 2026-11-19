@@ -589,13 +589,13 @@ func neighborhoodDisposition(d relations.Disposition, allowed map[EdgeType]bool)
 // Service, policy or source, and an operator a root's owner reaches must not
 // crowd out the root's own Pods.
 func neighborhoodPriority(edge EdgeType, r resourceid.Ref, downstream, own bool) int {
+	if edge == EdgeManages && !downstream {
+		return 0
+	}
 	replica := r.Group == "" && r.Kind == "Pod" || r.Group == "apps" && r.Kind == "ReplicaSet" && downstream
 	if !replica {
 		switch edge {
 		case EdgeManages:
-			if !downstream {
-				return 0
-			}
 		case EdgeExposes, EdgeRoutesTo:
 			return 1
 		case EdgeProtects:

@@ -812,3 +812,19 @@ func TestWalkNeighborhoodBudgetKeepsTheRootsOwnPods(t *testing.T) {
 		}
 	}
 }
+
+// What manages the root comes first even when it is a Pod: a ConfigMap a Pod
+// owns and a Deployment also reads keeps its owning Pod in a budget of two.
+func TestWalkNeighborhoodBudgetKeepsAnOwningPod(t *testing.T) {
+	cm := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "shop", UID: "cfg", OwnerReferences: []metav1.OwnerReference{{APIVersion: "v1", Kind: "Pod", Name: "owner", UID: "pod"}}}}, "", "ConfigMap")
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "owner", Namespace: "shop", UID: "pod"}}, "", "Pod")
+	env := []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"}}}}
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "web"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "c", EnvFrom: env}}}}}}, "apps", "Deployment")
+	sub := walkTestNeighborhood(t, newProjectionSession(t, cm, pod, dep), cm, NeighborhoodOptions{MaxNodes: 2})
+	if !sub.Truncated || len(sub.Nodes) != 2 {
+		t.Fatalf("the fixture no longer fills a budget of two: %+v", sub)
+	}
+	if sub.Nodes[1].Kind != KindPod || sub.Nodes[1].Name != "owner" {
+		t.Errorf("kept %s/%s, want the owning Pod", sub.Nodes[1].Kind, sub.Nodes[1].Name)
+	}
+}
