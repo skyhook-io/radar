@@ -2349,11 +2349,11 @@ func (d *DynamicResourceCache) ListBlockingContext(ctx context.Context, gvr sche
 	return result, nil
 }
 
-// Get returns a single resource by namespace and name.
 // ObjectReadSyncWait is how long a read of one object waits for an informer
 // that hasn't finished its first list before answering from what has loaded.
 const ObjectReadSyncWait = 2 * time.Second
 
+// Get returns a single resource by namespace and name.
 func (d *DynamicResourceCache) Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
 	return d.get(gvr, namespace, name, false)
 }

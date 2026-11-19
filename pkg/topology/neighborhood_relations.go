@@ -20,9 +20,13 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// WalkNeighborhood asks the relation families only about the admitted frontier.
-// Allow applies to family reads as well as admission: a hidden intermediate
-// cannot supply a composition, a PodGroup member, or a budget charge.
+// WalkNeighborhood asks the relation families only about the admitted
+// frontier, and draws what the last hop's objects declare of the other admitted
+// objects from the objects already read. Allow decides what is admitted and
+// what a family answer may name. A relation search still matches objects the
+// caller can't read, and Pods are grouped by their Job read with Radar's
+// identity, but a hidden object never becomes a node, links two that are, or
+// supplies a composition, a PodGroup member or a budget charge.
 func WalkNeighborhood(ctx context.Context, session relations.Session, root ResourceRef, opts NeighborhoodOptions, provider ResourceProvider, dp DynamicProvider) (*Subgraph, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

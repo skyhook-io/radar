@@ -192,7 +192,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"from the root kind; profile all expands every edge type and is heavier, " +
 			"use it only when auto produced a too-narrow neighborhood. Hops defaults to " +
 			"1 and maxes at 2. Nodes are RBAC-filtered; denied neighbors appear only as " +
-			"aggregate omitted counts.",
+			"one unnamed omitted entry.",
 		Annotations: readOnly,
 	}, logToolCall("get_neighborhood", handleGetNeighborhood))
 

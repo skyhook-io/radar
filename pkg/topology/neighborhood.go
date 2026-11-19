@@ -36,8 +36,9 @@ func ResolveProfile(s string) Profile {
 	}
 }
 
-// NeighborhoodOptions configures a BuildNeighborhood call. Zero values are
-// replaced with sensible defaults: Profile=auto, Hops=1, MaxNodes=25.
+// NeighborhoodOptions configures WalkNeighborhood and the older graph search,
+// BuildNeighborhood. Zero values are replaced with sensible defaults:
+// Profile=auto, Hops=1, MaxNodes=25.
 type NeighborhoodOptions struct {
 	Profile  Profile
 	Hops     int
@@ -84,10 +85,11 @@ type Subgraph struct {
 	// user/agent to provide group instead of returning an arbitrary first match.
 	AmbiguousRoot bool `json:"-"`
 
-	// RootUnavailable is why Radar couldn't read the root, when no candidate
-	// the caller may read was found and at least one couldn't be read: its
-	// kind still loading, or not collected. Empty when the root was found or
-	// is absent. It is set only for candidates Allow admitted, so it reveals
+	// RootUnavailable is the read reason Radar couldn't read the root for,
+	// when no candidate the caller may read was found and at least one
+	// couldn't be read: its kind still loading, not collected, or refused to
+	// Radar's identity, for example. Empty when the root was found or is
+	// absent. It is set only for candidates Allow admitted, so it reveals
 	// nothing about one the caller may not read.
 	RootUnavailable readreason.Code `json:"-"`
 
