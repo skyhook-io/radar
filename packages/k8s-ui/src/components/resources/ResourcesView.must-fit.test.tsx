@@ -33,6 +33,12 @@ afterEach(() => {
 })
 
 async function renderAt(windowWidth: number) {
+  // Every low-priority column kept, as a user who turned them on would have
+  // them: the table can't make room by leaving columns out.
+  localStorage.setItem('radar-columns-nodes', JSON.stringify({
+    visible: ['name', 'status', 'roles', 'cpu', 'memory', 'pods', 'conditions', 'taints', 'version', 'age'],
+    hidden: [], kept: ['roles', 'pods', 'taints', 'version'], widthsVersion: 2,
+  }))
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: windowWidth })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   const items = Array.from({ length: 12 }, (_, i) => node(i))

@@ -183,7 +183,7 @@ import { isRolloutActivityVisible } from '../../utils/workload-rollout'
 import { FreshnessControl, type FreshnessConnection } from '../ui/FreshnessControl'
 import { Tooltip } from '../ui/Tooltip'
 import { TruncatedText } from '../ui/TruncatedText'
-import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, rememberWidths } from './column-sizing'
+import { type ColumnLayoutInput, type ColumnSizingMode, computeColumnLayout, layoutColumns, rememberWidths } from './column-sizing'
 import { type CellWidth, type UsageLabel, NAME_MAX_PX, NAME_MIN_PX, NAME_PROTECTED_MAX_PX, columnSizingSpec, measureColumnContent, resetCellTextMeasure, usageLabelWidth, workloadImagesText, shortValueMin } from './column-content-width'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import type { Issue } from '../issues/types'
@@ -297,6 +297,11 @@ export interface Column {
   defaultVisible?: boolean // false = hidden by default, shown via column picker
   defaultWidth?: number // default width in px (used for resizable columns)
   minWidth?: number // minimum width in px
+  /** A low-priority column (kubectl's `-o wide` tier, in reverse): it drops out
+   *  of the table while the room is short and comes back when there is room,
+   *  lowest first. It stays in the column picker, marked "Hidden to fit"; a
+   *  user who turns it on keeps it. See layoutColumns in column-sizing.ts. */
+  dropOrder?: number
   /** How the column is sized automatically (see column-sizing.ts). Name,
    *  Namespace and Node fit their content; anything else keeps its width
    *  unless it says 'fit' — short values (status badges, enums, names) that are
@@ -712,7 +717,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'restarts', label: 'Restarts', width: 'w-28' },
     { key: 'gpu', label: 'GPU', width: 'w-20', tooltip: 'Effective GPU request (requests, falling back to limits) summed across containers', defaultVisible: false },
     { key: 'podIP', label: 'Pod IP', width: 'w-32', defaultVisible: false },
-    { key: 'node', label: 'Node', width: 'w-44' },
+    { key: 'node', label: 'Node', width: 'w-44', dropOrder: 1 },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   deployments: [
@@ -720,7 +725,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
-    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template' },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template', dropOrder: 1 },
     { key: 'available', label: 'Available', width: 'w-28', tooltip: 'Number of pods available (ready for minReadySeconds)' },
     { key: 'images', label: 'Images', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -731,8 +736,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'desired', label: 'Desired', width: 'w-20', tooltip: 'Nodes eligible for this daemon after node selectors, required node affinity and taints/tolerations are applied' },
     { key: 'ready', label: 'Ready', width: 'w-20', tooltip: 'Number of pods that are ready (passing readiness probes)' },
-    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template spec' },
-    { key: 'available', label: 'Available', width: 'w-28', tooltip: 'Number of pods available (ready for minReadySeconds duration)' },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template spec', dropOrder: 1 },
+    { key: 'available', label: 'Available', width: 'w-28', tooltip: 'Number of pods available (ready for minReadySeconds duration)', dropOrder: 2 },
     { key: 'images', label: 'Images', width: 'w-48', sizing: 'grow' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -760,7 +765,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'selector', label: 'Selector', width: 'w-48', sizing: 'grow', growWeight: 2 },
     { key: 'endpoints', label: 'Endpoints', width: 'w-24', sizing: 'fit' },
     { key: 'ports', label: 'Ports', width: 'w-40', sizing: 'fit' },
-    { key: 'externalIP', label: 'External', width: 'w-40' },
+    { key: 'externalIP', label: 'External', width: 'w-40', dropOrder: 1 },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   endpointslices: [
@@ -780,20 +785,20 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hosts', label: 'Hosts', width: 'min-w-48', sizing: 'grow' },
     { key: 'rules', label: 'Rules', width: 'min-w-56', sizing: 'grow' },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
-    { key: 'address', label: 'Address', width: 'min-w-32' },
+    { key: 'address', label: 'Address', width: 'min-w-32', dropOrder: 1 },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   nodes: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-44' },
-    { key: 'roles', label: 'Roles', width: 'w-28', tooltip: 'Node roles from node-role.kubernetes.io/* labels. A node with no role label shows as worker.' },
+    { key: 'roles', label: 'Roles', width: 'w-28', tooltip: 'Node roles from node-role.kubernetes.io/* labels. A node with no role label shows as worker.', dropOrder: 2 },
     { key: 'cpu', label: 'CPU', width: 'w-40', tooltip: 'Current CPU usage / allocatable' },
     { key: 'memory', label: 'Memory', width: 'w-40', tooltip: 'Current memory usage / allocatable' },
-    { key: 'pods', label: 'Pods', width: 'w-28', tooltip: 'Pods running / allocatable' },
+    { key: 'pods', label: 'Pods', width: 'w-28', tooltip: 'Pods running / allocatable', dropOrder: 4 },
     { key: 'gpu', label: 'GPUs', width: 'w-20', tooltip: 'Allocatable GPUs', defaultVisible: false },
     { key: 'conditions', label: 'Conditions', width: 'w-40' },
-    { key: 'taints', label: 'Taints', width: 'w-24' },
-    { key: 'version', label: 'Version', width: 'w-28' },
+    { key: 'taints', label: 'Taints', width: 'w-24', dropOrder: 1 },
+    { key: 'version', label: 'Version', width: 'w-28', dropOrder: 3 },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   configmaps: [
@@ -852,7 +857,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'capacity', label: 'Capacity', width: 'w-24' },
     { key: 'storageClass', label: 'Storage Class', width: 'w-40' },
     { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'RWO=ReadWriteOnce (one node, possibly several pods), ROX=ReadOnlyMany (read-only on many nodes), RWX=ReadWriteMany (read-write on many nodes), RWOP=ReadWriteOncePod (one pod only)' },
-    { key: 'volume', label: 'Volume', width: 'w-48', sizing: 'grow' },
+    { key: 'volume', label: 'Volume', width: 'w-48', sizing: 'grow', dropOrder: 1 },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   rollouts: [
@@ -1201,7 +1206,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'url', label: 'URL', width: 'w-64' },
     { key: 'modelFormat', label: 'Format', width: 'w-28' },
     { key: 'runtime', label: 'Runtime', width: 'w-40' },
-    { key: 'deploymentMode', label: 'Mode', width: 'w-28', tooltip: 'Serverless, RawDeployment, or ModelMesh' },
+    { key: 'deploymentMode', label: 'Mode', width: 'w-28', tooltip: 'Serverless, RawDeployment, or ModelMesh', dropOrder: 1 },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   servingruntimes: [
@@ -2116,7 +2121,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'storageLocation', label: 'Storage', width: 'w-36', tooltip: "The backup's storage location. A completed backup still needs this location reachable to restore from." },
     { key: 'namespaces', label: 'Scope', width: 'w-24', tooltip: 'Included namespaces (* = all)' },
-    { key: 'duration', label: 'Duration', width: 'w-24' },
+    { key: 'duration', label: 'Duration', width: 'w-24', dropOrder: 1 },
     { key: 'expiry', label: 'Expires', width: 'w-24', sizing: 'fit', tooltip: "When Velero's retention makes this backup eligible for cleanup. Expired means Velero intends to delete it, not that it is gone — and not that a restore will work." },
     { key: 'errors', label: 'Errors', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -3551,6 +3556,9 @@ interface ColumnSettings {
   /** COLUMN_WIDTHS_VERSION when written since columns sized themselves; absent
    *  before (see savedColumnWidths). */
   widthsVersion?: number
+  /** Low-priority columns (Column.dropOrder) the user turned on, which stay in
+   *  the table even when it is short of room. */
+  kept?: string[]
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -4115,6 +4123,7 @@ export function ResourcesView({
   // Column visibility and resize state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set())
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set())
+  const [keptColumns, setKeptColumns] = useState<Set<string>>(new Set())
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [columnOrder, setColumnOrder] = useState<string[] | null>(null)
   const [pinnedColumns, setPinnedColumns] = useState<string[]>([])
@@ -4223,6 +4232,8 @@ export function ResourcesView({
   // The rendered widths, frozen for the length of a drag (see columnLayoutWidths).
   const [resizeFrozenWidths, setResizeFrozenWidths] = useState<Record<string, number> | null>(null)
   const columnLayoutWidthsRef = useRef<Record<string, number>>({})
+  // The columns hidden to fit at the last layout (read by the picker's toggle).
+  const droppedColumnsRef = useRef<ReadonlySet<string>>(new Set())
   const tableContainerRef = useRef<HTMLDivElement>(null)
   const [tableScroller, setTableScroller] = useState<HTMLElement | null>(null)
   const [tableViewportWidth, setTableViewportWidth] = useState(0)
@@ -4416,6 +4427,7 @@ export function ResourcesView({
         knownColumnKeys.current = new Set()
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setHiddenColumns(new Set())
+        setKeptColumns(new Set())
         setColumnWidths({})
         setColumnOrder(null)
         setPinnedColumns([])
@@ -4427,6 +4439,7 @@ export function ResourcesView({
         if (!savedHidden) for (const key of DATA_SHOWN_COLUMNS) restoredVisible.delete(key)
         setVisibleColumns(restoredVisible)
         setHiddenColumns(new Set(savedHidden ?? []))
+        setKeptColumns(new Set(Array.isArray(saved.kept) ? saved.kept.filter((k): k is string => typeof k === 'string') : []))
         setColumnWidths(savedColumnWidths(saved.widths, saved.widthsVersion !== COLUMN_WIDTHS_VERSION))
         const savedOrder = sanitizeColumnOrder(saved.order)
         // Older settings reorder only columns after Name. Convert once to a full order.
@@ -4437,6 +4450,7 @@ export function ResourcesView({
     } else {
       setVisibleColumns(getDefaultVisibleColumns(effective))
       setHiddenColumns(new Set())
+      setKeptColumns(new Set())
       setColumnWidths({})
       setColumnOrder(null)
       setPinnedColumns([])
@@ -4465,9 +4479,10 @@ export function ResourcesView({
       pinned: pinnedColumns,
       hidden: Array.from(hiddenColumns),
       widthsVersion: COLUMN_WIDTHS_VERSION,
+      kept: Array.from(keptColumns),
     })
     // allColumnKeysSig, not allColumnKeys: see the memo above.
-  }, [visibleColumns, hiddenColumns, columnWidths, customColumns, columnOrder, pinnedColumns, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
+  }, [visibleColumns, hiddenColumns, keptColumns, columnWidths, customColumns, columnOrder, pinnedColumns, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
 
   // Close column picker on outside click or Escape
   useLayoutEffect(() => {
@@ -4600,6 +4615,7 @@ export function ResourcesView({
     const customKeys = new Set(builtCustomColumns.map(c => c.key))
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
     setHiddenColumns(new Set())
+    setKeptColumns(new Set())
     setColumnWidths({})
     setColumnOrder(null)
     setPinnedColumns([])
@@ -6219,7 +6235,22 @@ export function ResourcesView({
   const columns = visibleTableColumns
 
   const toggleColumnVisibility = useCallback((colKey: string) => {
+    // A column hidden to fit is one the user wants: keep it in the table, even
+    // if the table then scrolls.
+    if (droppedColumnsRef.current.has(colKey)) {
+      setKeptColumns(prev => new Set(prev).add(colKey))
+      return
+    }
     const shown = pickerVisibleColumns.has(colKey)
+    // Turning a column on is a choice to see it, at any width; turning it off
+    // ends that.
+    setKeptColumns(prev => {
+      if (shown === !prev.has(colKey)) return prev
+      const next = new Set(prev)
+      if (shown) next.delete(colKey)
+      else next.add(colKey)
+      return next
+    })
     const dataShown = DATA_SHOWN_COLUMNS.has(colKey)
     // A hidden column has no pin to surprise the user when it is shown again.
     setPinnedColumns(prev => prev.filter(key => key !== colKey))
@@ -6332,10 +6363,19 @@ export function ResourcesView({
   // The width each visible column renders at. One vector feeds the <colgroup>,
   // the pin offsets and budget, and the table's minimum width, so they agree.
   const lastLayout = useRef<{ signature: string; widths: Record<string, number> } | null>(null)
+  // Columns that never drop to fit: ones the user kept, pinned, sorts or
+  // filters by (or has the filter menu open on), and the host's context columns.
+  const undroppableColumns = useMemo(() => {
+    const keys = new Set([...keptColumns, ...pinnedColumns, ...allColumns.slice(0, fixedLeadingCount).map(column => column.key)])
+    if (effectiveSortColumn) keys.add(effectiveSortColumn)
+    if (openColumnFilter) keys.add(openColumnFilter)
+    for (const [key, values] of Object.entries(columnFilters)) if (values?.length) keys.add(key)
+    return keys
+  }, [keptColumns, pinnedColumns, allColumns, fixedLeadingCount, effectiveSortColumn, openColumnFilter, columnFilters])
   const availableWidth = tableViewportWidth - leadingPinWidth
   // Held widths only carry over while nothing but the data changed.
   const layoutSignature = [datasetIdentity, availableWidth, columns.map(c => `${c.key}=${columnWidths[c.key] ?? ''}`).join(',')].join('\u0000')
-  const columnLayoutWidths = useMemo(() => {
+  const columnLayout = useMemo(() => {
     // While a column is being dragged, every other column holds still:
     // the drag tracks the pointer from the dragged column's left edge, which
     // must not move under it. The room is re-shared on release.
@@ -6392,6 +6432,7 @@ export function ResourcesView({
         max: isName ? nameMax : spec.max,
         weight: spec.weight,
         hold: held?.[col.key],
+        dropOrder: col.dropOrder !== undefined && !undroppableColumns.has(col.key) ? col.dropOrder : undefined,
       }
     })
     // The phone cap goes into the layout, so the room it frees counts when
@@ -6405,19 +6446,25 @@ export function ResourcesView({
         min: capped(c.min), fitMin: capped(c.fitMin), hardMin: capped(c.hardMin), hold: capped(c.hold), userWidth: capped(c.userWidth),
       })
       : inputs
-    const widths = computeColumnLayout(laidOut, availableWidth, {
-      mustFit: mustFitWindow,
-    })
+    // Mid-drag the columns hidden to fit stay as they were, like every width.
+    const { widths, dropped } = frozen
+      ? { widths: computeColumnLayout(laidOut.filter(c => !droppedColumnsRef.current.has(c.key)), availableWidth, { mustFit: mustFitWindow }), dropped: [...droppedColumnsRef.current] }
+      : layoutColumns(laidOut, availableWidth, { mustFit: mustFitWindow })
     if (capName) widths.name = Math.min(widths.name, phoneNameCap)
-    return widths
-  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap, mustFitWindow])
+    return { widths, dropped: new Set(dropped) as ReadonlySet<string> }
+  }, [columns, columnWidths, resizeFrozenWidths, contentWidths, availableWidth, layoutSignature, extraColumnsByKey, headerFontEpoch, phoneNameCap, mustFitWindow, undroppableColumns])
+  const columnLayoutWidths = columnLayout.widths
+  const droppedColumns = columnLayout.dropped
+  // What the table shows: the visible columns minus those hidden to fit.
+  const shownColumns = useMemo(() => droppedColumns.size ? columns.filter(col => !droppedColumns.has(col.key)) : columns, [columns, droppedColumns])
   useLayoutEffect(() => {
     columnLayoutWidthsRef.current = columnLayoutWidths
+    droppedColumnsRef.current = droppedColumns
     if (!resizeFrozenWidths) lastLayout.current = { signature: layoutSignature, widths: columnLayoutWidths }
-  }, [columnLayoutWidths, layoutSignature, resizeFrozenWidths])
+  }, [columnLayoutWidths, droppedColumns, layoutSignature, resizeFrozenWidths])
 
-  const pinWidths = useMemo(() => visibleTableColumns.map(column => ({ key: column.key, width: columnLayoutWidths[column.key] })),
-    [visibleTableColumns, columnLayoutWidths])
+  const pinWidths = useMemo(() => shownColumns.map(column => ({ key: column.key, width: columnLayoutWidths[column.key] })),
+    [shownColumns, columnLayoutWidths])
   const effectivePinnedColumns = useMemo(() => {
     if (!pinnedColumns.length) return []
     const visible = new Set(visibleTableColumns.map(column => column.key))
@@ -6453,15 +6500,15 @@ export function ResourcesView({
   // Every column has an explicit width that together fill the room, so the
   // table is at least their sum and scrolls sideways below it.
   const tableColumnLayout = useMemo<TableColumnLayout>(() => {
-    const widths = columns.map(col => columnLayoutWidths[col.key])
+    const widths = shownColumns.map(col => columnLayoutWidths[col.key])
     return {
       widths,
-      keys: columns.map(col => col.key),
+      keys: shownColumns.map(col => col.key),
       compareMode: !!compareMode,
       checkbox: isCheckboxMode,
       minWidth: leadingPinWidth + widths.reduce((total, w) => total + w, 0),
     }
-  }, [columns, columnLayoutWidths, compareMode, isCheckboxMode, leadingPinWidth])
+  }, [shownColumns, columnLayoutWidths, compareMode, isCheckboxMode, leadingPinWidth])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -6987,17 +7034,23 @@ export function ResourcesView({
 
           {/* Column picker */}
           <div className="relative flex" ref={columnPickerRef}>
-            <Tooltip content="Configure columns">
+            <Tooltip content={droppedColumns.size ? `Configure columns · ${droppedColumns.size} hidden to fit` : 'Configure columns'}>
             <button
               aria-label="Configure columns"
+              aria-description={droppedColumns.size ? `${droppedColumns.size} hidden to fit` : undefined}
               aria-expanded={showColumnPicker}
               onClick={() => setShowColumnPicker(prev => !prev)}
               className={clsx(
-                'p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg',
+                'relative p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg',
                 showColumnPicker && 'bg-theme-elevated text-theme-text-primary'
               )}
             >
               <Columns3 className="w-4 h-4" />
+              {droppedColumns.size > 0 && (
+                <span aria-hidden className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-1 rounded-full bg-theme-elevated border border-theme-border text-[10px] leading-[14px] text-theme-text-secondary text-center">
+                  {droppedColumns.size}
+                </span>
+              )}
             </button>
             </Tooltip>
             {showColumnPicker && createPortal(
@@ -7034,6 +7087,7 @@ export function ResourcesView({
                 <ColumnPickerList
                   columns={allColumns}
                   visibleColumns={pickerVisibleColumns}
+                  hiddenToFit={droppedColumns}
                   customColumnKeys={customColumnKeySet}
                   onToggle={toggleColumnVisibility}
                   onRemoveCustom={removeCustomColumn}
@@ -7374,11 +7428,11 @@ export function ResourcesView({
                       />
                     </th>
                   )}
-                  {columns.map((col, colIdx) => {
+                  {shownColumns.map((col, colIdx) => {
                     // Built-in sortable keys, plus any extra/custom column that carries its own getSortValue.
                     const isSortable = isColumnSortable(col, extraColumnsByKey)
                     const isSorted = effectiveSortColumn === col.key
-                    const isLastCol = colIdx === columns.length - 1
+                    const isLastCol = colIdx === shownColumns.length - 1
                     const filterCol = filterableColumnMap.get(col.key)
                     const activeFilterValues = columnFilters[col.key] || []
                     const hasActiveFilter = activeFilterValues.length > 0
@@ -7617,7 +7671,7 @@ export function ResourcesView({
                     resource={resource}
                     kind={selectedKind.name}
                     group={selectedKind.group}
-                    columns={columns}
+                    columns={shownColumns}
                     extraColumnsByKey={extraColumnsByKey}
                     pinStyles={pinStyles}
                     isSelected={isSelected}
