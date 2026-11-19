@@ -191,8 +191,9 @@ func checkJava4Shell(ctx context.Context, client kubernetes.Interface, namespace
 	secrets := map[types.NamespacedName]*corev1.Secret{}
 	sets := map[types.NamespacedName]*appsv1.ReplicaSet{}
 	var ownerDeadline time.Time
+	var lastProgress time.Time
 	var err error
-	report.Java4ShellResult, err = images.DefaultRuntimeInventory(false).CheckJava4Shell(ctx, pods, func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
+	report.Java4ShellResult, err = images.DefaultRuntimeInventory(false).ScanJava4Shell(ctx, pods, func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
 		if ownerDeadline.IsZero() {
 			ownerDeadline = time.Now().Add(java4ShellMetadataBudget)
 		}
@@ -242,6 +243,11 @@ func checkJava4Shell(ctx context.Context, client kubernetes.Interface, namespace
 			}
 		}
 		return access
+	}, func(done, total int) {
+		if total > 0 && (done == total || time.Since(lastProgress) >= time.Second) {
+			fmt.Fprintf(progress, "Processed %d of %d image groups…\n", done, total)
+			lastProgress = time.Now()
+		}
 	})
 	if err != nil {
 		return images.Java4ShellReport{}, err
@@ -287,6 +293,9 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 	default:
 		fmt.Fprintf(w, "No matches among the %d containers whose declared Java version could be assessed\n", report.Containers-unassessed)
 	}
+	for _, major := range slices.Sorted(maps.Keys(report.UnaffectedByMajor)) {
+		fmt.Fprintf(w, "Declared Java %d outside affected versions · %d running containers\n", major, report.UnaffectedByMajor[major])
+	}
 	if len(report.Findings) > 0 {
 		fmt.Fprintln(w, "\nNAMESPACE\tWORKLOAD\tCONTAINER\tDECLARED JAVA\tUPSTREAM FIX\tPODS\tVBMI PODS\tCPU UNKNOWN\tMITIGATION DECLARED")
 		for _, row := range report.Findings {
@@ -326,6 +335,8 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 
 func checkReasonLabel(reason string) string {
 	switch reason {
+	case "docker_hub_limit":
+		return "Docker Hub lookup limit reached"
 	case "java_home_declared":
 		return "Image sets JAVA_HOME. Java version unknown"
 	case "no_java_declaration":

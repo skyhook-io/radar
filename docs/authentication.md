@@ -109,6 +109,19 @@ Pods with matching credential access share a private result within the
 same check. Credentials go over HTTPS, and the advisory pins registry
 connections to checked addresses and refuses loopback and link-local addresses.
 
+For Amazon ECR, set `RADAR_JAVA4SHELL_ECR_REGISTRIES` on Radar to a comma-separated
+list of exact registry hosts, such as `123456789012.dkr.ecr.us-east-1.amazonaws.com`.
+The Java4Shell check can then use the AWS identity configured for the Radar
+process or CLI. For a Radar Pod on EKS, use a dedicated read-only IAM role via
+EKS Pod Identity or IRSA. Grant `ecr:GetAuthorizationToken` and scope
+`ecr:BatchGetImage` and `ecr:GetDownloadUrlForLayer` to the repositories Radar
+needs to read. The authorization token is obtained for the named registry.
+The same per-Pod access checks govern use of this identity. On EKS, the UI
+requires Radar authentication and the caller's `get pods` and `create pods/exec`
+permissions in the workload namespace. A standalone loopback listener and the
+CLI can use the local AWS identity. The check disables EC2 instance metadata
+credential discovery.
+
 ### Prometheus metrics
 
 Charts of a specific resource are gated like the resource itself: you see them only if you can read what they chart. The surfaces that can't be tied to one resource — raw PromQL, metric discovery, alert rules and the cluster-wide aggregate — are gated on listing Pods in **every** namespace, because a PromQL expression can't be namespace-filtered by inspecting it. Kubernetes' built-in `view` ClusterRole meets that bar, so binding `view` also grants read access to everything the Prometheus backend holds, `kube-system` and node-level series included.

@@ -20,39 +20,43 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 )
 
 // Image statuses. Anything but StatusOK means the image's runtimes are
 // unknown, never that it has none.
 const (
-	StatusOK            = "ok"
-	StatusAuthRequired  = "auth_required"
-	StatusNotFound      = "not_found"
-	StatusRateLimited   = "rate_limited"
-	StatusBlocked       = "blocked"
-	StatusError         = "error"
-	StatusNotChecked    = "not_checked"
-	StatusNoDeclaration = "no_declaration"
+	StatusOK                 = "ok"
+	StatusAuthRequired       = "auth_required"
+	StatusNotFound           = "not_found"
+	StatusRateLimited        = "rate_limited"
+	StatusBlocked            = "blocked"
+	StatusError              = "error"
+	StatusNotChecked         = "not_checked"
+	StatusNoDeclaration      = "no_declaration"
+	java4ShellDockerHubLimit = "docker_hub_limit"
 )
 
 const (
-	defaultInventoryLimit = 50
-	maxInventoryLimit     = 200
-	maxWorkloadsPerImage  = 20
-	maxLookupsPerCall     = 200
-	maxAttemptsPerImage   = 4
-	maxConfigBytes        = 1 << 20
-	inventoryCallBudget   = 40 * time.Second
-	configFetchTimeout    = 15 * time.Second
-	registryFetchSlots    = 4
-	configCacheEntries    = 4096
-	tagResultTTL          = 10 * time.Minute
-	credentialResultTTL   = time.Hour
-	maxOutstandingLookups = 16
-	failureTTL            = 10 * time.Minute
-	transientFailureTTL   = 30 * time.Second
-	rateLimitBackoff      = 5 * time.Minute
+	defaultInventoryLimit      = 50
+	maxInventoryLimit          = 200
+	maxWorkloadsPerImage       = 20
+	maxLookupsPerCall          = 200
+	java4ShellDockerHubLookups = 24
+	maxAttemptsPerImage        = 4
+	maxConfigBytes             = 1 << 20
+	inventoryCallBudget        = 40 * time.Second
+	java4ShellScanBudget       = 5 * time.Minute
+	configFetchTimeout         = 15 * time.Second
+	registryFetchSlots         = 4
+	configCacheEntries         = 4096
+	tagResultTTL               = 10 * time.Minute
+	credentialResultTTL        = time.Hour
+	maxOutstandingLookups      = 16
+	failureTTL                 = 10 * time.Minute
+	transientFailureTTL        = 30 * time.Second
+	rateLimitBackoff           = 5 * time.Minute
 )
 
 // InventoryOptions narrows an inventory.
@@ -145,6 +149,7 @@ type credential struct {
 	namespace string
 	secret    string
 	radar     bool
+	advisory  bool
 	snapshot  *corev1.Secret
 	// identity pins a pull secret to its exact contents (UID and
 	// resourceVersion): a rotated or recreated Secret, or a same-named one in
@@ -235,7 +240,14 @@ func newRuntimeInventory(lookup configLookup, keychain keychainSource) *RuntimeI
 func clusterKeychain(c credential, ref name.Reference) (authn.Keychain, string, bool) {
 	switch {
 	case c.radar:
-		return GetAuthenticatedKeychain(ref.String(), "", nil), "", true
+		keychain := GetAuthenticatedKeychain(ref.String(), "", nil)
+		if c.advisory {
+			ecr := runtimeECRKeychain()
+			if ecr.registries[ref.Context().RegistryStr()] != nil {
+				keychain = &ecrFallbackKeychain{ecr: ecr, fallback: keychain}
+			}
+		}
+		return keychain, "", true
 	case c.secret == "":
 		return authn.NewMultiKeychain(), "", true
 	}
@@ -271,7 +283,7 @@ func registryConfigLookup(guard *guardedTransport) configLookup {
 		if ctx.Value(strictRegistryLookupKey{}) == true {
 			rt.inCluster = true
 		}
-		auth, err := keychain.Resolve(ref.Context())
+		auth, err := authn.Resolve(ctx, keychain, ref.Context())
 		if err != nil {
 			return nil, "", err
 		}
@@ -325,36 +337,78 @@ type work struct {
 // Inventory reads the declared runtimes of every image the given Pods run.
 func (r *RuntimeInventory) Inventory(ctx context.Context, src PodSource, opts InventoryOptions) Inventory {
 	items := collectWork(src)
-	return shapeInventory(items, r.lookupConfigs(ctx, items, opts.RadarCredentials), opts)
+	return shapeInventory(items, r.lookupConfigs(ctx, items, opts.RadarCredentials, nil), opts)
 }
 
-func (r *RuntimeInventory) lookupConfigs(ctx context.Context, items []*work, radarCredentials bool) []configResult {
-	ctx, cancel := context.WithTimeout(ctx, inventoryCallBudget)
+func (r *RuntimeInventory) lookupConfigs(ctx context.Context, items []*work, radarCredentials bool, progress func(done, total int)) []configResult {
+	duration := inventoryCallBudget
+	var budget *atomic.Int32
+	var limiter *rate.Limiter
+	if progress == nil {
+		budget = new(atomic.Int32)
+		budget.Store(maxLookupsPerCall)
+	} else {
+		duration = java4ShellScanBudget
+		limiter = rate.NewLimiter(8, registryFetchSlots)
+		progress(0, len(items))
+	}
+	ctx, cancel := context.WithTimeout(ctx, duration)
 	defer cancel()
 
 	results := make([]configResult, len(items))
-	budget := new(atomic.Int32)
-	budget.Store(maxLookupsPerCall)
 	var wg sync.WaitGroup
+	var progressMu sync.Mutex
+	completed := 0
+	complete := func(i int, result configResult) {
+		results[i] = result
+		if progress != nil {
+			progressMu.Lock()
+			completed++
+			progress(completed, len(items))
+			progressMu.Unlock()
+		}
+	}
 	workers := make(chan struct{}, registryFetchSlots)
+	advisoryLookups, dockerHubLookups := 0, 0
 	for i, w := range items {
+		onDockerHub := w.advisory && w.ref.Context().RegistryStr() == name.DefaultRegistry
+		dockerHubLimit := onDockerHub && dockerHubLookups >= java4ShellDockerHubLookups
+		if dockerHubLimit || (progress == nil && w.advisory && advisoryLookups >= maxLookupsPerCall) {
+			// Public results can still answer after the limit. Avoid resolving
+			// private credentials for groups that cannot make a registry read.
+			cached, hit, _ := r.fromCache(w, []credential{{}})
+			if hit && cached.status == StatusOK {
+				complete(i, cached)
+			} else if dockerHubLimit {
+				complete(i, configResult{status: java4ShellDockerHubLimit})
+			} else {
+				complete(i, configResult{status: StatusNotChecked, err: "per-call image lookup limit reached; narrow by namespace"})
+			}
+			continue
+		}
 		creds := r.credentials(w, radarCredentials || w.radarCredentials)
 		res, hit, untried := r.fromCache(w, creds)
 		if hit {
-			results[i] = res
+			complete(i, res)
 			continue
+		}
+		if w.advisory {
+			advisoryLookups++
+			if onDockerHub {
+				dockerHubLookups++
+			}
 		}
 		select {
 		case workers <- struct{}{}:
 		case <-ctx.Done():
-			results[i] = configResult{status: StatusNotChecked, err: "time budget for this call ran out"}
+			complete(i, configResult{status: StatusNotChecked, err: "time budget for this call ran out"})
 			continue
 		}
 		wg.Add(1)
 		go func(i int, w *work, untried []credential) {
 			defer wg.Done()
 			defer func() { <-workers }()
-			results[i] = r.fetch(ctx, w, untried, budget)
+			complete(i, r.fetch(ctx, w, untried, budget, limiter))
 		}(i, w, untried)
 	}
 	wg.Wait()
@@ -371,7 +425,8 @@ func (r *RuntimeInventory) credentials(w *work, radar bool) []credential {
 		secretSlots--
 	}
 	var out []credential
-	if w.advisory {
+	useECR := w.advisory && radar && runtimeECRKeychain().registries[w.ref.Context().RegistryStr()] != nil
+	if w.advisory && !useECR {
 		out = append(out, credential{})
 	}
 	secretCount := 0
@@ -389,7 +444,7 @@ func (r *RuntimeInventory) credentials(w *work, radar bool) []credential {
 		out = append(out, credential{})
 	}
 	if radar {
-		out = append(out, credential{radar: true})
+		out = append(out, credential{radar: true, advisory: w.advisory})
 	}
 	return out
 }
@@ -487,11 +542,11 @@ var (
 
 // fetch tries the remaining credentials until one reads the config. Every
 // attempt spends the call's lookup budget.
-func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credential, budget *atomic.Int32) configResult {
+func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credential, budget *atomic.Int32, limiter *rate.Limiter) configResult {
 	registry := w.ref.Context().RegistryStr()
 	res := configResult{status: StatusNotChecked, err: "per-call lookup limit reached; narrow by namespace"}
 	for _, c := range creds {
-		if budget.Add(-1) < 0 {
+		if budget != nil && budget.Add(-1) < 0 {
 			return configResult{status: StatusNotChecked, err: "per-call lookup limit reached before all available credentials were tried"}
 		}
 		keychain, identity, ok := r.keychain(c, w.ref)
@@ -499,6 +554,11 @@ func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credentia
 			continue
 		}
 		c.identity = identity
+		if limiter != nil && !r.rateLimited(registry) {
+			if err := limiter.Wait(ctx); err != nil {
+				return configResult{status: StatusNotChecked, err: "time budget for this call ran out"}
+			}
+		}
 		cfg, digest, err := r.attempt(ctx, registry, w, keychain)
 		if errors.Is(err, errRateLimitedRecently) {
 			return configResult{status: StatusRateLimited, err: "registry rate limit hit recently; retry later"}
@@ -592,6 +652,9 @@ func (r *RuntimeInventory) attempt(ctx context.Context, registry string, w *work
 }
 
 func classifyFetchError(err error) configResult {
+	if errors.Is(err, errECRCredentials) {
+		return configResult{status: StatusAuthRequired, err: errECRCredentials.Error()}
+	}
 	if isBlocked(err) {
 		return configResult{status: StatusBlocked, err: "registry address is not allowed from Radar"}
 	}

@@ -12,6 +12,7 @@ import { ImageName } from '../vulnerabilities/parts'
 import { Tooltip } from '../ui/Tooltip'
 
 const advisoryURL = 'https://github.com/advisories/GHSA-6g7j-4xh3-xq2q'
+const registryAccessURL = 'https://github.com/skyhook-io/radar/blob/main/docs/authentication.md#image-inspection'
 
 interface Java4ShellPanelProps {
   namespaces?: string[]
@@ -23,7 +24,7 @@ interface Java4ShellPanelProps {
 }
 
 export function Java4ShellPanel({ namespaces = [], context, connected, trivySearch, workload, onNavigateToResource }: Java4ShellPanelProps) {
-  const { data, dataUpdatedAt, isFetching, error, refetch } = useJava4ShellCheck(namespaces, context, workload)
+  const { data, dataUpdatedAt, isFetching, error, refetch, progress, cancel } = useJava4ShellCheck(namespaces, context, workload)
   const checkedAt = new Date(dataUpdatedAt).toISOString()
   return (
     <section aria-label="Java4Shell check" className={`rounded-xl border border-theme-border bg-theme-surface ${workload ? 'p-3' : 'p-4'}`}>
@@ -55,17 +56,34 @@ export function Java4ShellPanel({ namespaces = [], context, connected, trivySear
               <Download className="h-3.5 w-3.5" /> Download JSON
             </button>
           )}
+          {cancel && (
+            <button type="button" className="btn-secondary shrink-0 px-3 py-1.5 text-xs font-medium" onClick={cancel}>
+              Cancel check
+            </button>
+          )}
           <button
             type="button"
             className="btn-brand shrink-0 px-3 py-1.5 text-xs font-medium"
             onClick={() => void refetch()}
-            disabled={!connected || isFetching}
+            disabled={!connected || isFetching || Boolean(cancel)}
           >
-            {isFetching ? (workload ? 'Checking workload…' : 'Checking workloads…') : data ? 'Run check again' : 'Check for Java4Shell'}
+            {isFetching ? (workload ? 'Checking workload…' : 'Checking workloads…') : cancel ? 'Checking another scope…' : data ? 'Run check again' : 'Check for Java4Shell'}
           </button>
         </div>
       </div>
-      {isFetching && <p role="status" className="mt-3 text-xs text-theme-text-secondary">Reading running Pods and image metadata. This can take up to 40 seconds after the Pods are read.</p>}
+      {isFetching && (
+        <div className="mt-3 space-y-1 text-xs text-theme-text-secondary">
+          <p role="status">{progress && progress.total > 0
+            ? `Processed ${progress.done} of ${progress.total} image groups`
+            : 'Reading running Pods and preparing registry lookups.'}</p>
+          <progress
+            aria-label="Java4Shell scan progress"
+            className="block w-full accent-accent"
+            value={progress && progress.total > 0 ? progress.done : undefined}
+            max={progress?.total || undefined}
+          />
+        </div>
+      )}
       {error && <p role="alert" className="mt-3 text-xs text-warning-text">{error.message}{data && ' Showing the previous result.'}</p>}
       {data && <Java4ShellResults data={data} checkedAt={checkedAt} onOpen={onNavigateToResource} />}
     </section>
@@ -82,6 +100,7 @@ const reasonLabels: Record<string, string> = {
   rate_limited: 'Registry rate limit',
   error: 'Registry read failed',
   not_checked: 'Check limit reached',
+  docker_hub_limit: 'Docker Hub lookup limit reached',
   java_home_declared: 'Image sets JAVA_HOME. Java version unknown',
   no_java_declaration: 'Image declares no Java version',
 }
@@ -89,8 +108,11 @@ const reasonLabels: Record<string, string> = {
 function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult; checkedAt: string; onOpen?: (resource: SelectedResource) => void }) {
   const missingDeclaration = data.unassessed.no_java_declaration ?? 0
   const javaHomeDeclared = data.unassessed.java_home_declared ?? 0
+  const dockerHubLimit = data.unassessed.docker_hub_limit ?? 0
+  const checkLimitReached = (data.unassessed.not_checked ?? 0) + dockerHubLimit
+  const registryAuthRequired = data.unassessed.auth_required ?? 0
   const unassessed = Object.values(data.unassessed).reduce((count, n) => count + n, 0)
-  const otherUnassessed = unassessed - missingDeclaration - javaHomeDeclared
+  const otherUnassessed = unassessed - missingDeclaration - javaHomeDeclared - checkLimitReached - registryAuthRequired
   const coverage = resourceCoverageNotice(data.coverage, 'Pods') ?? resourceNarrowedNotice(data.coverage)
   const namespaces = data.coverage.read?.namespaces
   const scope = data.workload?.name ?? (
@@ -121,6 +143,26 @@ function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult
         <p className="text-theme-text-tertiary">Checked <TimeValue timestamp={checkedAt} /> · {scope}</p>
       </div>
       {coverage && <p className="text-warning-text">{coverage}</p>}
+      {data.unaffectedByMajor && (
+        <ul aria-label="Declared Java versions outside affected ranges" className="text-theme-text-secondary">
+          {Object.entries(data.unaffectedByMajor).map(([major, count]) => (
+            <li key={major}>Declared Java {major} outside affected versions · {pluralize(count, 'container')}</li>
+          ))}
+        </ul>
+      )}
+      {registryAuthRequired > 0 && (
+        <p className="text-warning-text">
+          Registry authentication required for {pluralize(registryAuthRequired, 'container')}.{' '}
+          <a className="text-accent-text hover:underline" href={registryAccessURL} target="_blank" rel="noreferrer">Set up registry access</a>
+        </p>
+      )}
+      {checkLimitReached > 0 && (
+        <p className="text-warning-text">
+          Check limit reached for {pluralize(checkLimitReached, 'container')}.
+          {dockerHubLimit > 0 && ` Docker Hub lookup limit reached for ${pluralize(dockerHubLimit, 'container')}.`}
+          {data.workload ? ' Run the check again to retry.' : ' Select fewer namespaces or run the check from a workload’s Vulnerabilities section.'}
+        </p>
+      )}
       {javaHomeDeclared > 0 && (
         <p className="text-theme-text-secondary">
           Images for {pluralize(javaHomeDeclared, 'container')} set <code>JAVA_HOME</code>. Verify the installed Java version.

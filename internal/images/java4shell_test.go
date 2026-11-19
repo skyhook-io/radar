@@ -42,14 +42,18 @@ func TestJava4ShellVersions(t *testing.T) {
 		{"26.0.2", true, "", true},
 		{"27.0.1.1", false, "27.0.1.1", true},
 		{"8u511b33-perf", true, "", true},
+		{"8u511-b33-perf", true, "", true},
 		{"8u511b33", false, "", false},
 		{"jdk8u432-b06", false, "", true},
+		{"1.8.0_452", false, "", true},
+		{"1.8.0_511", false, "", false},
 		{"11.0.33", false, "", true},
 		{"21", false, "", false},
 		{"", false, "", false},
 	} {
 		t.Run(tc.version, func(t *testing.T) {
-			match, fix, known := java4ShellVersion(tc.version)
+			major, match, fix := java4ShellVersion(tc.version)
+			known := major != 0
 			if match != tc.match || fix != tc.fix || known != tc.known {
 				t.Fatalf("got (%v, %q, %v), want (%v, %q, %v)", match, fix, known, tc.match, tc.fix, tc.known)
 			}
@@ -145,6 +149,77 @@ func TestJava4ShellKeepsPlacementSeparateFromImageEvidence(t *testing.T) {
 	}
 }
 
+func TestJava4ShellSpendsLookupBudgetOnUncachedImages(t *testing.T) {
+	for _, tc := range []struct {
+		registry string
+		limit    int
+		reason   string
+	}{
+		{registry: "docker.io", limit: java4ShellDockerHubLookups, reason: java4ShellDockerHubLimit},
+		{registry: "registry.example", limit: maxLookupsPerCall, reason: StatusNotChecked},
+	} {
+		t.Run(tc.registry, func(t *testing.T) {
+			configs := make(map[string]*v1.ConfigFile, tc.limit+2)
+			var targets []Java4ShellPod
+			node := &corev1.Node{Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{Architecture: "amd64", OperatingSystem: "linux"}}}
+			for i := range tc.limit + 2 {
+				name := fmt.Sprintf("fixture-%03d", i)
+				image := tc.registry + "/example/" + name
+				ref := image + "@sha256:" + strings.Repeat("a", 64)
+				cfg := &v1.ConfigFile{}
+				if i == tc.limit+1 {
+					cfg.Config.Env = []string{"JAVA_VERSION=21.0.13"}
+				}
+				configs[refKey(t, ref)] = cfg
+				pod := runningPod("team", name, "worker", name, map[string][2]string{"app": {image + ":1", ref}})
+				pod.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
+				targets = append(targets, Java4ShellPod{Pod: pod, Node: node})
+			}
+			f := &fakeLookup{configs: configs}
+			inventory := fakeInventory(f)
+			first, err := inventory.CheckJava4Shell(context.Background(), targets[tc.limit+1:], nil, nil)
+			if err != nil || first.Matches != 1 || f.calls.Load() != 1 {
+				t.Fatalf("narrow check: matches=%d lookups=%d err=%v", first.Matches, f.calls.Load(), err)
+			}
+			wide, err := inventory.CheckJava4Shell(context.Background(), targets, nil, nil)
+			if err != nil || wide.Matches != 1 || wide.Unassessed[tc.reason] != 1 || int(f.calls.Load()) != tc.limit+1 {
+				t.Fatalf("wide check: matches=%d unassessed=%v lookups=%d err=%v", wide.Matches, wide.Unassessed, f.calls.Load(), err)
+			}
+			retry, err := inventory.CheckJava4Shell(context.Background(), targets, nil, nil)
+			if err != nil || retry.Matches != 1 || retry.Unassessed[tc.reason] != 0 ||
+				retry.Unassessed[noJavaDeclarationReason] != tc.limit+1 || int(f.calls.Load()) != tc.limit+2 {
+				t.Fatalf("repeat check: matches=%d unassessed=%v lookups=%d err=%v", retry.Matches, retry.Unassessed, f.calls.Load(), err)
+			}
+		})
+	}
+}
+
+func TestJava4ShellPacedScanChecksMoreThanTheOneShotLimit(t *testing.T) {
+	const images = maxLookupsPerCall + 1
+	var targets []Java4ShellPod
+	lookup := &fakeLookup{configs: map[string]*v1.ConfigFile{}}
+	node := &corev1.Node{Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{Architecture: "amd64", OperatingSystem: "linux"}}}
+	for i := range 1200 {
+		image := fmt.Sprintf("registry.example/team/app-%03d", i%images)
+		ref := image + "@sha256:" + strings.Repeat("a", 64)
+		lookup.configs[refKey(t, ref)] = &v1.ConfigFile{Config: v1.Config{Env: []string{"JAVA_VERSION=jdk8u432-b06"}}}
+		pod := runningPod("team", fmt.Sprintf("fixture-%04d", i), "worker", "app", map[string][2]string{"app": {image + ":1", ref}})
+		pod.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
+		targets = append(targets, Java4ShellPod{Pod: pod, Node: node})
+	}
+	next := 0
+	result, err := fakeInventory(lookup).ScanJava4Shell(context.Background(), targets, nil, nil, func(done, total int) {
+		if done != next || total != images {
+			t.Errorf("unexpected progress %d/%d, wanted %d/%d", done, total, next, images)
+		}
+		next++
+	})
+	if err != nil || next != images+1 || lookup.calls.Load() != images ||
+		len(result.Unassessed) != 0 || result.UnaffectedByMajor[8] != 1200 || result.Matches != 0 {
+		t.Fatalf("paced scan: completed=%d lookups=%d result=%+v error=%v", next-1, lookup.calls.Load(), result, err)
+	}
+}
+
 func TestJava4ShellNeverDialsRadarLoopback(t *testing.T) {
 	var requests atomic.Int32
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -167,18 +242,22 @@ func TestJava4ShellNeverDialsRadarLoopback(t *testing.T) {
 func TestJava4ShellUsesJavaHomeOnlyWhenVersionIsMissing(t *testing.T) {
 	const javaHome = "/opt/fixture-jvm"
 	for _, tc := range []struct {
-		name      string
-		env       []string
-		noNode    bool
-		reason    string
-		wantMatch int
+		name                string
+		env                 []string
+		noNode              bool
+		reason              string
+		wantMatch           int
+		wantUnaffectedMajor int
 	}{
 		{name: "home only", env: []string{"JAVA_HOME=" + javaHome}, reason: javaHomeDeclaredReason},
 		{name: "no Java declaration", env: []string{"OTHER_JAVA_HOME=" + javaHome}, reason: noJavaDeclarationReason},
 		{name: "last home cleared", env: []string{"JAVA_HOME=" + javaHome, "JAVA_HOME= "}, reason: noJavaDeclarationReason},
 		{name: "last home set", env: []string{"JAVA_HOME=", "JAVA_HOME=" + javaHome}, reason: javaHomeDeclaredReason},
 		{name: "affected version", env: []string{"JAVA_HOME=" + javaHome, "JAVA_VERSION=jdk-21.0.13+9"}, wantMatch: 1},
-		{name: "fixed version", env: []string{"JAVA_HOME=" + javaHome, "JAVA_VERSION=jdk-21.0.13.1+2"}},
+		{name: "fixed version", env: []string{"JAVA_HOME=" + javaHome, "JAVA_VERSION=jdk-21.0.13.1+2"}, wantUnaffectedMajor: 21},
+		{name: "ordinary Java 8", env: []string{"JAVA_VERSION=jdk8u432-b06"}, wantUnaffectedMajor: 8},
+		{name: "affected Java 8 performance pack", env: []string{"JAVA_VERSION=8u511b33-perf"}, wantMatch: 1},
+		{name: "ambiguous Java 8 build", env: []string{"JAVA_VERSION=8u511b33"}, reason: "version_unknown"},
 		{name: "unrecognized version", env: []string{"JAVA_HOME=" + javaHome, "JAVA_VERSION=21"}, reason: "version_unknown"},
 		{name: "invalid version value", env: []string{"JAVA_HOME=" + javaHome, "JAVA_VERSION=invalid version"}, reason: javaHomeDeclaredReason},
 		{name: "unresolved platform", env: []string{"JAVA_HOME=" + javaHome}, noNode: true, reason: "platform_unknown"},
@@ -203,6 +282,10 @@ func TestJava4ShellUsesJavaHomeOnlyWhenVersionIsMissing(t *testing.T) {
 				}
 			} else if result.Unassessed[tc.reason] != 1 || len(result.UnassessedRows) != 1 || result.UnassessedRows[0].Reason != tc.reason {
 				t.Fatalf("want reason %q, got %+v", tc.reason, result)
+			}
+			if tc.wantUnaffectedMajor == 0 && len(result.UnaffectedByMajor) != 0 ||
+				tc.wantUnaffectedMajor != 0 && result.UnaffectedByMajor[tc.wantUnaffectedMajor] != 1 {
+				t.Fatalf("unaffected by Java major: %+v", result.UnaffectedByMajor)
 			}
 			report, err := json.Marshal(result)
 			if err != nil || strings.Contains(string(report), javaHome) {

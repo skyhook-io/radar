@@ -973,7 +973,7 @@ func TestInventory_PartialCredentialBudgetIsNotChecked(t *testing.T) {
 	w := collectWork(src)[0]
 	budget := new(atomic.Int32)
 	budget.Store(1)
-	got := inv.fetch(context.Background(), w, inv.credentials(w, false), budget)
+	got := inv.fetch(context.Background(), w, inv.credentials(w, false), budget, nil)
 	if got.status != StatusNotChecked || f.calls.Load() != 1 {
 		t.Fatalf("unfinished credential attempts must be not_checked: %+v calls=%d", got, f.calls.Load())
 	}
