@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -49,11 +50,14 @@ type appRelationBatch struct {
 	dependencies map[resourceid.Ref]map[resourceid.Ref]runtime.Object
 }
 
-// appSameSpec reports whether cur has the spec of old, as the batch read it.
-// An informer replaces an object on every update, so the same pointer is the
-// same version. A typed workload's generation moves with its spec alone; a
-// custom resource's also moves with status when its CRD has no status
-// subresource (Argo Workflows'), so its spec is compared instead.
+// appSameSpec reports whether cur has what the batch's rules read of old. An
+// informer replaces an object on every update, so the same pointer is the same
+// version. A typed workload's generation moves with its spec alone, but also
+// with a replica count no rule reads: a moved generation compares the spec
+// without it. A Job is selectable only while it has pods, which only its
+// status says. A custom resource's generation also moves with status when its
+// CRD has no status subresource (Argo Workflows'), so its spec is compared
+// instead.
 func appSameSpec(old, cur runtime.Object) bool {
 	if old == nil || cur == nil {
 		return old == nil && cur == nil
@@ -83,7 +87,55 @@ func appSameSpec(old, cur runtime.Object) bool {
 		c, ok := cur.(*corev1.PodTemplate)
 		return ok && equality.Semantic.DeepEqual(o.Template, c.Template)
 	}
-	return om.GetGeneration() == cm.GetGeneration()
+	if om.GetGeneration() != cm.GetGeneration() && !appSameTypedSpec(old, cur) {
+		return false
+	}
+	if o, ok := old.(*batchv1.Job); ok {
+		c, ok := cur.(*batchv1.Job)
+		return ok && (o.Status.Active > 0) == (c.Status.Active > 0)
+	}
+	return true
+}
+
+// appSameTypedSpec compares two typed workloads' specs, ignoring the replica
+// count of the kinds that scale.
+func appSameTypedSpec(old, cur runtime.Object) bool {
+	switch o := old.(type) {
+	case *appsv1.Deployment:
+		c, ok := cur.(*appsv1.Deployment)
+		if !ok {
+			return false
+		}
+		a, b := o.Spec, c.Spec
+		a.Replicas, b.Replicas = nil, nil
+		return equality.Semantic.DeepEqual(a, b)
+	case *appsv1.StatefulSet:
+		c, ok := cur.(*appsv1.StatefulSet)
+		if !ok {
+			return false
+		}
+		a, b := o.Spec, c.Spec
+		a.Replicas, b.Replicas = nil, nil
+		return equality.Semantic.DeepEqual(a, b)
+	case *appsv1.ReplicaSet:
+		c, ok := cur.(*appsv1.ReplicaSet)
+		if !ok {
+			return false
+		}
+		a, b := o.Spec, c.Spec
+		a.Replicas, b.Replicas = nil, nil
+		return equality.Semantic.DeepEqual(a, b)
+	case *appsv1.DaemonSet:
+		c, ok := cur.(*appsv1.DaemonSet)
+		return ok && equality.Semantic.DeepEqual(o.Spec, c.Spec)
+	case *batchv1.Job:
+		c, ok := cur.(*batchv1.Job)
+		return ok && equality.Semantic.DeepEqual(o.Spec, c.Spec)
+	case *batchv1.CronJob:
+		c, ok := cur.(*batchv1.CronJob)
+		return ok && equality.Semantic.DeepEqual(o.Spec, c.Spec)
+	}
+	return false
 }
 
 // appSameValue compares two decoded JSON values, as unstructured objects hold

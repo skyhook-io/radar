@@ -8,6 +8,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -666,5 +667,75 @@ func TestApplicationsRolloutPodTemplateChangedBetweenBatchAndRows(t *testing.T) 
 	}
 	if row := rowByName(fresh, "web"); row == nil || row.WorkloadClass != "service" || !freshCacheable {
 		t.Fatalf("rebuilt rows: row %+v cacheable %v, want service and cacheable", row, freshCacheable)
+	}
+}
+
+// What the attachment rules read decides whether the batch's answer still
+// holds, not the generation: a Deployment scaled between the passes keeps it,
+// and a Job, selectable only while it has pods, keeps it while it stays active
+// and loses it once it completes.
+func TestApplicationsScaleAndJobCompletionBetweenBatchAndRows(t *testing.T) {
+	labels := map[string]string{"app": "api"}
+	replicas := func(n int32) *int32 { return &n }
+	deployment := func(generation int64, n int32) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api", UID: "api", Generation: generation}, Spec: appsv1.DeploymentSpec{Replicas: replicas(n), Selector: &metav1.LabelSelector{MatchLabels: labels}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}}}
+	}
+	job := func(active, succeeded int32) *batchv1.Job {
+		return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "migrate", UID: "migrate", Generation: 1}, Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}}, Status: batchv1.JobStatus{Active: active, Succeeded: succeeded}}
+	}
+	exposed := func(row *appRow) bool {
+		return row != nil && row.Relationships != nil && len(row.Relationships.ServiceRefs) == 1
+	}
+	for _, tc := range []struct {
+		name          string
+		workload      string
+		change        func(*fake.Clientset) error
+		settled       func() bool
+		wantExposed   bool
+		wantCacheable bool
+	}{
+		{"Deployment scaled", "api", func(c *fake.Clientset) error {
+			_, err := c.AppsV1().Deployments("prod").Update(context.Background(), deployment(2, 3), metav1.UpdateOptions{})
+			return err
+		}, func() bool {
+			d, err := k8s.GetResourceCache().Deployments().Deployments("prod").Get("api")
+			return err == nil && d.Generation == 2
+		}, true, true},
+		{"Job still active", "migrate", func(c *fake.Clientset) error {
+			_, err := c.BatchV1().Jobs("prod").UpdateStatus(context.Background(), job(2, 0), metav1.UpdateOptions{})
+			return err
+		}, func() bool {
+			j, err := k8s.GetResourceCache().Jobs().Jobs("prod").Get("migrate")
+			return err == nil && j.Status.Active == 2
+		}, true, true},
+		{"Job completed", "migrate", func(c *fake.Clientset) error {
+			_, err := c.BatchV1().Jobs("prod").UpdateStatus(context.Background(), job(0, 1), metav1.UpdateOptions{})
+			return err
+		}, func() bool {
+			j, err := k8s.GetResourceCache().Jobs().Jobs("prod").Get("migrate")
+			return err == nil && j.Status.Succeeded == 1
+		}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := fake.NewClientset(append(testNamespaces("prod"), deployment(1, 1), job(1, 0), &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api"}, Spec: corev1.ServiceSpec{Selector: labels}})...)
+			useTestResourceCache(t, client)
+			restore, err := k8s.SetTestResourceDiscovery(fake.NewClientset().Discovery())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(restore)
+			addApplicationTypedDiscovery()
+			before, beforeCacheable, fresh, _ := changeBetweenBatchAndRows(t, func() {
+				if err := tc.change(client); err != nil {
+					t.Fatal(err)
+				}
+			}, tc.settled)
+			if row := rowByName(before, tc.workload); exposed(row) != tc.wantExposed || beforeCacheable != tc.wantCacheable {
+				t.Fatalf("rows over a batch read before the change: row %+v cacheable %v, want exposed %v and cacheable %v", row, beforeCacheable, tc.wantExposed, tc.wantCacheable)
+			}
+			if row := rowByName(fresh, tc.workload); exposed(row) != tc.wantExposed {
+				t.Fatalf("rebuilt rows: row %+v, want exposed %v", row, tc.wantExposed)
+			}
+		})
 	}
 }
