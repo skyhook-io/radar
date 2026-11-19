@@ -21,10 +21,15 @@ import (
 )
 
 type sharedKubernetesClients struct {
-	clientset  *kubernetes.Clientset
-	discovery  *discovery.DiscoveryClient
-	dynamic    dynamic.Interface
-	generation uint64
+	clientset *kubernetes.Clientset
+	discovery *discovery.DiscoveryClient
+	dynamic   dynamic.Interface
+	// The informer cache and its list probes use their own clients: each
+	// client-go client carries its own rate limiter, and informer LIST/WATCH
+	// bursts must not queue request handlers behind them.
+	informerClientset kubernetes.Interface
+	informerDynamic   dynamic.Interface
+	generation        uint64
 }
 
 const (
@@ -119,11 +124,22 @@ func newSharedKubernetesClients(config *rest.Config) (*sharedKubernetesClients, 
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
+	informerClientset, err := kubernetes.NewForConfigAndClient(clientConfig, &observedClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create informer clientset: %w", err)
+	}
+	informerDynamic, err := dynamic.NewForConfigAndClient(clientConfig, &observedClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create informer dynamic client: %w", err)
+	}
+
 	return &sharedKubernetesClients{
-		clientset:  clientset,
-		discovery:  discoveryClient,
-		dynamic:    dynamicClient,
-		generation: generation,
+		clientset:         clientset,
+		discovery:         discoveryClient,
+		dynamic:           dynamicClient,
+		informerClientset: informerClientset,
+		informerDynamic:   informerDynamic,
+		generation:        generation,
 	}, nil
 }
 

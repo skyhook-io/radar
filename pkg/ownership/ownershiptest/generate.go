@@ -52,7 +52,12 @@ var Kinds = []Kind{
 	{GroupKind: ownership.ArgoApplication, Version: "v1alpha1", Resource: "applications", Namespaced: true, HasGCVerbs: true},
 	{GroupKind: ownership.FluxHelmRelease, Version: "v2", Resource: "helmreleases", Namespaced: true, HasGCVerbs: true},
 	{GroupKind: ownership.FluxKustomization, Version: "v1", Resource: "kustomizations", Namespaced: true, HasGCVerbs: true},
+	{GroupKind: ArgoRollout, Version: "v1alpha1", Resource: "rollouts", Namespaced: true, HasGCVerbs: true},
 }
+
+// ArgoRollout is the Argo Rollouts kind, a custom resource that declares a
+// pod template.
+var ArgoRollout = resourceid.GroupKind{Group: "argoproj.io", Kind: "Rollout"}
 
 // KindOf returns the generated kind gk.
 func KindOf(gk resourceid.GroupKind) (Kind, bool) {
@@ -262,7 +267,14 @@ func Generate(seed uint64) World {
 		}
 	}
 	w := b.world()
-	w.Partial = r.IntN(8) == 0
+	if r.IntN(8) == 0 {
+		switch r.IntN(6) {
+		case 0:
+			w.Partial = true
+		default:
+			w.FailedGroups = []string{pick("", "apps", "argoproj.io", "example.io", "metrics.k8s.io")}
+		}
+	}
 	for _, k := range Kinds {
 		if !k.HasGCVerbs {
 			continue

@@ -8,28 +8,28 @@ window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener: 
 let root: ReturnType<typeof createRoot>
 let host: HTMLDivElement
 afterEach(() => { act(() => root?.unmount()); host?.remove() })
-it('navigates Favorites, Views and grouped kinds in their visible order', () => {
+it('navigates Favorites, an integration\'s destinations and its other kinds in their visible order', () => {
   Element.prototype.scrollIntoView = vi.fn()
   const view = vi.fn(), kind = vi.fn()
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   const cluster = { group: 'postgresql.cnpg.io', version: 'v1', kind: 'Cluster', name: 'clusters', namespaced: true, isCrd: true, verbs: ['list'] }
-  act(() => root.render(<ResourcesSidebar selectedKind={null} onSelectedKindChange={kind} apiResources={[cluster]} resourceCounts={{ 'postgresql.cnpg.io/Cluster': 1 }} pinned={[{ name: 'pods', kind: 'Pod', group: '' }]} categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Clusters view', onSelect: view }], defaultKindsCollapsed: true } }} />))
-  const category = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('CloudNativePG'))!
-  if (category.getAttribute('aria-expanded') !== 'true') act(() => category.click())
+  act(() => root.render(<ResourcesSidebar selectedKind={null} onSelectedKindChange={kind} apiResources={[cluster]} resourceCounts={{ 'postgresql.cnpg.io/Cluster': 1 }} pinned={[{ name: 'pods', kind: 'Pod', group: '' }]} categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Clusters view', onSelect: view }, { id: 'protection', label: 'Backups view', onSelect: () => {} }] } }} />))
+  const expand = host.querySelector<HTMLButtonElement>('button[aria-label$="CloudNativePG"]')!
+  if (expand.getAttribute('aria-expanded') !== 'true') act(() => expand.click())
   const input = host.querySelector('input')!
   const key = (name: string) => act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true })))
   key('ArrowDown'); key('ArrowDown'); key('Enter')
   expect(view).toHaveBeenCalledTimes(1)
   expect(kind).not.toHaveBeenCalled()
-  act(() => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Resource kinds')!.click())
-  key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); key('Enter')
+  act(() => [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Other kinds'))!.click())
+  key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); key('Enter')
   expect(kind).toHaveBeenCalledWith(expect.objectContaining({ name: 'clusters', group: 'postgresql.cnpg.io' }))
 })
 it('opens a matching View with Enter when search finds no kind', () => {
   Element.prototype.scrollIntoView = vi.fn()
   const view = vi.fn()
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-  act(() => root.render(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[{ group: 'postgresql.cnpg.io', version: 'v1', kind: 'Cluster', name: 'clusters', namespaced: true, isCrd: true, verbs: ['list'] }]} resourceCounts={{ 'postgresql.cnpg.io/Cluster': 1 }} categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'operator', label: 'Operator', onSelect: view }], defaultKindsCollapsed: true } }} />))
+  act(() => root.render(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[{ group: 'postgresql.cnpg.io', version: 'v1', kind: 'Cluster', name: 'clusters', namespaced: true, isCrd: true, verbs: ['list'] }]} resourceCounts={{ 'postgresql.cnpg.io/Cluster': 1 }} categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'operator', label: 'Operator', onSelect: view }] } }} />))
   const input = host.querySelector('input')!
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'operator')
@@ -67,4 +67,62 @@ it('reads and reports display settings through the parent when it holds them', (
   expect(favorites.getAttribute('aria-expanded')).toBe('false')
   act(() => favorites.click())
   expect(onChange).toHaveBeenCalledWith({ showEmptyKinds: false, favoritesExpanded: true })
+})
+
+// One open at a time: it stays open while the user looks at other kinds, and opening another folds it.
+it('keeps the last integration open after leaving it, across a remount, until another opens, and opens it after mounting so it animates', async () => {
+  // Fresh module state: this is the first sidebar of the page load.
+  vi.resetModules()
+  const { ResourcesSidebar } = await import('./ResourcesSidebar')
+  const kinds = [
+    { group: 'apps', version: 'v1', kind: 'Deployment', name: 'deployments', namespaced: true, isCrd: false, verbs: ['list'] },
+    { group: 'postgresql.cnpg.io', version: 'v1', kind: 'Cluster', name: 'clusters', namespaced: true, isCrd: true, verbs: ['list'] },
+    { group: 'velero.io', version: 'v1', kind: 'Backup', name: 'backups', namespaced: true, isCrd: true, verbs: ['list'] },
+  ]
+  const state = () => {
+    const open = (label: string) => host.querySelector(`button[aria-label$=" ${label}"]`)!.getAttribute('aria-expanded') === 'true'
+    return { backups: open('Backups'), databases: open('Databases') }
+  }
+  const frames = () => act(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))))
+  const mount = (active: 'velero' | 'cnpg' | null) => {
+    act(() => root?.unmount())
+    host?.remove()
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    act(() => root.render(<ResourcesSidebar
+      selectedKind={{ name: 'deployments', kind: 'Deployment', group: 'apps' }}
+      onSelectedKindChange={() => {}}
+      apiResources={kinds}
+      resourceCounts={{ 'apps/Deployment': 3 }}
+      categoryWorkspaces={{
+        Velero: { label: 'Backups', destinations: [{ id: 'v', label: 'Velero overview', active: active === 'velero', onSelect: () => {} }] },
+        CloudNativePG: { label: 'Databases', destinations: [{ id: 'c', label: 'Clusters view', active: active === 'cnpg', onSelect: () => {} }] },
+      }}
+    />))
+  }
+  const show = async (active: 'velero' | 'cnpg' | null) => { mount(active); await frames(); return state() }
+  // The first mount in a page load opens what is on screen at once.
+  mount('velero')
+  expect(state()).toEqual({ backups: true, databases: false })
+  expect(await show(null)).toEqual({ backups: true, databases: false })
+  // A later mount starts as the last one was left, then opens the one on screen.
+  mount('cnpg')
+  expect(state()).toEqual({ backups: true, databases: false })
+  await frames()
+  expect(state()).toEqual({ backups: false, databases: true })
+  expect(await show(null)).toEqual({ backups: false, databases: true })
+})
+it('lets a destination that is a kind\'s list be pinned, and tells the host when a destination is chosen', () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  const view = vi.fn(), chosen = vi.fn(), togglePin = vi.fn()
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  const schedules = { group: 'velero.io', version: 'v1', kind: 'Schedule', name: 'schedules', namespaced: true, isCrd: true, verbs: ['list'] }
+  const kind = { name: 'schedules', kind: 'Schedule', group: 'velero.io' }
+  act(() => root.render(<ResourcesSidebar selectedKind={kind} onSelectedKindChange={() => {}} apiResources={[schedules]} togglePin={togglePin} onDestinationSelected={chosen} categoryWorkspaces={{ Velero: { label: 'Backups', destinations: [{ id: 'schedules', label: 'Schedules', kind, onSelect: view }] } }} />))
+  const row = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Schedules'))!
+  act(() => row.querySelector<HTMLElement>('[title="Pin to favorites"]')!.click())
+  expect(togglePin).toHaveBeenCalledWith(kind)
+  expect(view).not.toHaveBeenCalled()
+  act(() => row.click())
+  expect(view).toHaveBeenCalledTimes(1)
+  expect(chosen).toHaveBeenCalledTimes(1)
 })

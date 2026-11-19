@@ -21,7 +21,7 @@ var ReadOnlyTools = []string{
 	"list_helm_releases", "get_helm_release", "get_helm_chart", "list_packages", "issues",
 	"search", "get_subject_permissions", "query_prometheus", "discover_metrics",
 	"get_prometheus_rules", "get_workload_logs", "get_cluster_upgrade_readiness",
-	"get_cost", "get_rightsizing", "wait_for", "get_runtime_versions",
+	"get_cost", "get_rightsizing", "wait_for", "get_runtime_versions", "list_vulnerabilities",
 }
 
 // WriteTools are the mutating Radar MCP tools supported by the built-in AI —

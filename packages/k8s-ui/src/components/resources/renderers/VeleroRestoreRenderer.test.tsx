@@ -139,5 +139,6 @@ describe('what a restore says it will touch', () => {
   it('treats an empty label selector as unscoped', () => {
     const html = renderScope(scopedRestore({ labelSelector: {}, orLabelSelectors: [{}] }))
     expect(html).not.toContain('Scope')
+    expect(renderScope(scopedRestore({ orLabelSelectors: [{ matchLabels: { app: 'api' } }, {}] }))).not.toContain('Scope')
   })
 })

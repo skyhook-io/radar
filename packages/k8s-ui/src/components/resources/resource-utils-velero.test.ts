@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { getCellFilterValue } from './resource-utils'
 import {
+  getBackupStorageLocation,
   getBackupStatus,
   getRestoreStatus,
   getScheduleStatus,
@@ -9,7 +10,6 @@ import {
   isVeleroResource,
   getScheduleCronInfo,
   getBackupRepositoryStatus,
-  resolveBackupStorageLocation,
 } from './resource-utils-velero'
 
 const backup = (phase: string, extra: Record<string, unknown> = {}) => ({
@@ -213,7 +213,7 @@ describe('getScheduleCronInfo', () => {
   it('leaves readable empty when cronToHuman has no phrasing for the expression', () => {
     // cronToHuman returns its input unchanged for shapes it does not recognise.
     // Rendering that would print the same string on both lines.
-    const r = getScheduleCronInfo(sched('0 3 * * 0'))
+    const r = getScheduleCronInfo(sched('15 14 1 * *'))
     expect(r.malformed).toBe(false)
     expect(r.readable).toBe('')
   })
@@ -267,27 +267,14 @@ describe('getScheduleCronInfo', () => {
   })
 })
 
-describe('which location holds a backup', () => {
-  const locations = [
-    { metadata: { name: 'primary' }, spec: { default: true } },
-    { metadata: { name: 'dr-replica' }, spec: { default: false } },
-  ]
-
+describe('which location a backup targets', () => {
   it('uses the location the backup names', () => {
-    expect(resolveBackupStorageLocation({ spec: { storageLocation: 'dr-replica' } }, locations)).toBe('dr-replica')
+    expect(getBackupStorageLocation({ spec: { storageLocation: 'dr-replica' } })).toBe('dr-replica')
   })
 
-  // The rule Velero actually applies: the flag, not the name.
-  it('resolves an unset location through spec.default', () => {
-    expect(resolveBackupStorageLocation({ spec: {} }, locations)).toBe('primary')
-  })
-
-  // Velero's own fallback when nothing claims the flag.
-  it('falls back to the conventional name when no location is marked default', () => {
-    expect(resolveBackupStorageLocation({ spec: {} }, [{ metadata: { name: 'only' }, spec: {} }])).toBe('default')
-  })
-
-  it('falls back when the list has not been read', () => {
-    expect(resolveBackupStorageLocation({ spec: {} }, undefined)).toBe('default')
+  // Velero writes the location when it processes the backup; until then the
+  // default it will pick can still change.
+  it('names none before Velero assigns one', () => {
+    expect(getBackupStorageLocation({ spec: {} })).toBe('')
   })
 })
