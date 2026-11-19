@@ -1342,6 +1342,21 @@ func TestSubstrateActorLogsFromLastNode(t *testing.T) {
 			t.Errorf("resp = %+v", resp)
 		}
 	})
+	t.Run("Pods whose logs are unreadable don't use up the search", func(t *testing.T) {
+		var pods []*corev1.Pod
+		for i := range substrateLastNodeMaxPods {
+			pods = append(pods, workerPod("locked", fmt.Sprintf("agent-pool-l%d", i), "node-1"))
+		}
+		setPods(append(pods, workerPod("open", "agent-pool-z", "node-1"))...)
+		useLogs(map[string]string{"open/agent-pool-z": actorLine("research", "lit-0193", "agent", "found me")})
+		prev := substratePodLogAllowed
+		substratePodLogAllowed = func(_ *Server, _ *http.Request, ns string) bool { return ns == "open" }
+		t.Cleanup(func() { substratePodLogAllowed = prev })
+		resp := read()
+		if resp.ReasonCode != "candidates" || !slices.Equal(lineMessages(resp.Lines), []string{"found me"}) || resp.MorePods != 0 {
+			t.Errorf("the readable seventh Pod is searched: %+v", resp)
+		}
+	})
 	t.Run("denied pods/log is skipped and said", func(t *testing.T) {
 		setPods(workerPod("restricted", "agent-pool-r", "node-1"))
 		prev := substratePodLogAllowed

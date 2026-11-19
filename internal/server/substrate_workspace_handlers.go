@@ -1721,17 +1721,29 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 		s.writeJSON(w, resp)
 		return
 	}
-	if len(pods) > substrateLastNodeMaxPods {
-		resp.MorePods = len(pods) - substrateLastNodeMaxPods
-		pods = pods[:substrateLastNodeMaxPods]
+	// The search's places go to Pods whose logs the caller may read; the rest
+	// are said as denied, never spending a place a readable Pod needs.
+	logsAllowed := map[string]bool{}
+	var readablePods []*corev1.Pod
+	for _, p := range pods {
+		ok, seen := logsAllowed[p.Namespace]
+		if !seen {
+			ok = substratePodLogAllowed(s, r, p.Namespace)
+			logsAllowed[p.Namespace] = ok
+		}
+		if ok {
+			readablePods = append(readablePods, p)
+		} else {
+			resp.Searched = append(resp.Searched, substrateSearchedPod{Namespace: p.Namespace, Pod: p.Name, Outcome: "denied", Message: "requires get pods/log in " + p.Namespace})
+		}
+	}
+	if len(readablePods) > substrateLastNodeMaxPods {
+		resp.MorePods = len(readablePods) - substrateLastNodeMaxPods
+		readablePods = readablePods[:substrateLastNodeMaxPods]
 	}
 	var all, evidence []substrateLogLine
 	readable := 0
-	for _, p := range pods {
-		if !substratePodLogAllowed(s, r, p.Namespace) {
-			resp.Searched = append(resp.Searched, substrateSearchedPod{Namespace: p.Namespace, Pod: p.Name, Outcome: "denied", Message: "requires get pods/log in " + p.Namespace})
-			continue
-		}
+	for _, p := range readablePods {
 		readable++
 		read := s.searchSubstratePod(r, client, p.Namespace, p.Name, filter, tail)
 		resp.Searched = append(resp.Searched, read.pod)
@@ -1754,7 +1766,7 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 		resp.Reason = "This actor has no worker now. Radar found worker Pods on node " + node + ", where it was last, but may not read their logs."
 	case len(all) == 0:
 		resp.ReasonCode = "noMatch"
-		resp.Reason = fmt.Sprintf("This actor has no worker now. None of the %s on node %s, where it was last, holds its lines in the part of the log read.", plural(len(resp.Searched), "worker Pod", "worker Pods"), node)
+		resp.Reason = fmt.Sprintf("This actor has no worker now. None of the %s on node %s, where it was last, holds its lines in the part of the log read.", plural(readable, "worker Pod", "worker Pods"), node)
 	default:
 		resp.ReasonCode = "candidates"
 		resp.Reason = "This actor has no worker now. These lines come from worker Pods on node " + node + ", where it was last; Substrate does not record which Pod it ran in, so each line names the Pod it was found in."

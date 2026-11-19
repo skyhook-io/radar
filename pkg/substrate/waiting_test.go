@@ -60,6 +60,7 @@ func TestWorkerImpactOf(t *testing.T) {
 		{"restarted: the sandbox is gone", on(StateRunning, 3), worker(WorkerActive, 4), nil, ImpactRestarted, "its sandbox is gone"},
 		{"a resuming actor is restored again, not crashed", on(StateResuming, 0), worker(WorkerActive, 4), nil, "", ""},
 		{"restart wins over unavailable", on(StateRunning, 3), worker(WorkerUnavailable, 4), nil, ImpactRestarted, ""},
+		{"a deleting actor's lost sandbox needs no revert", on(StateDeleting, 3), worker(WorkerActive, 4), nil, ImpactRestarted, "its sandbox is gone"},
 		{"another worker's actor", Actor{State: StateRunning, Assignment: &Assignment{Worker: "w2"}}, worker(WorkerDraining, 3), nil, "", ""},
 	}
 	for _, tc := range tests {
@@ -78,6 +79,14 @@ func TestWorkerImpactOf(t *testing.T) {
 	}
 	if got := WorkerImpactOf(named, worker(WorkerActive, 4), nil); got.Command != "kubectl ate revert actor x -a a" || got.NextStep == "" {
 		t.Errorf("restarted step = %+v", got)
+	}
+	// Substrate refuses a revert during a delete; a reverting actor has one running.
+	for _, state := range []string{StateDeleting, StateReverting} {
+		a := named
+		a.State = state
+		if got := WorkerImpactOf(a, worker(WorkerActive, 4), nil); got.Command != "" || strings.Contains(got.NextStep, "Revert it") {
+			t.Errorf("%s actor on a restarted worker: %+v", state, got)
+		}
 	}
 	// The deadline is a field, never a time written into the sentence.
 	got := WorkerImpactOf(on(StateRunning, 3), worker(WorkerDraining, 3), terminating)

@@ -206,7 +206,7 @@ func failed[T any](err error, creds *bearerCreds) kindResult[T] {
 	if code == CodeDenied {
 		r.coverage.State = CoverageDenied
 	}
-	if connectionLevel(code) {
+	if connectionLevel(code) || creds.credentialFailed(err) {
 		r.tierErr = &TierError{Code: code, Message: msg}
 	}
 	return r
