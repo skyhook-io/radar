@@ -18,8 +18,13 @@ var supportedGroupsNotReported = map[string]string{
 	"autoscaling.k8s.io":           "VPA CRDs that some managed clusters install whether or not VPA runs",
 	"autoscaling.x-k8s.io":         "ProvisioningRequest, served by Cluster Autoscaler and used by Kueue, so no single owner",
 	"k8s.cni.cncf.io":              "NetworkAttachmentDefinition, a standard several CNIs serve besides Multus",
+	"snapshot.storage.k8s.io":      "CSI snapshot CRDs with no single owner; managed clusters often preinstall them",
 	"helm.crossplane.io":           "a Crossplane provider package; Crossplane's own groups already report it",
 	"kubernetes.crossplane.io":     "a Crossplane provider package; Crossplane's own groups already report it",
+	"":                             "core PodTemplate, built into Kubernetes",
+	"policy.networking.k8s.io":     "AdminNetworkPolicy, a Kubernetes SIG Network API several CNIs serve",
+	"eks.amazonaws.com":            "EKS Auto Mode's NodeClass, managed by AWS rather than installed as a package",
+	"sinks.knative.dev":            "Knative Eventing's JobSink; eventing.knative.dev already reports Knative Eventing",
 }
 
 func TestSupportedCRDGroupsAreReportedOrExcluded(t *testing.T) {

@@ -4,14 +4,17 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // FluxSourceRef identifies an artifact dependency, distinct from managed objects.
 type FluxSourceRef struct {
 	resourceid.Ref
 	Role string
+	// Path is the field that names the source.
+	Path string
 }
 
 // FluxSourceReferences follows the source contracts of Kustomization,
@@ -30,16 +33,16 @@ func FluxSourceReferences(root *unstructured.Unstructured) []FluxSourceRef {
 		fields = []string{"spec", "sourceRef"}
 		kinds = []string{"GitRepository", "OCIRepository", "Bucket", "ExternalArtifact"}
 	case "helm.toolkit.fluxcd.io/HelmRelease":
-		if _, present, _ := unstructured.NestedMap(root.Object, "spec", "chartRef"); present {
+		if raw, _, _ := unstructured.NestedFieldNoCopy(root.Object, "spec", "chartRef"); isSourceMap(raw) {
 			fields = []string{"spec", "chartRef"}
 			kinds = []string{"HelmChart", "OCIRepository", "ExternalArtifact"}
 			role = "chart reference"
 		} else {
-			if _, inline, _ := unstructured.NestedMap(root.Object, "spec", "chart"); inline {
+			if raw, _, _ := unstructured.NestedFieldNoCopy(root.Object, "spec", "chart"); isSourceMap(raw) {
 				chart, _, _ := unstructured.NestedString(root.Object, "status", "helmChart")
 				namespace, name, qualified := strings.Cut(chart, "/")
 				if qualified && namespace != "" && name != "" && !strings.Contains(name, "/") {
-					chartRefs = []FluxSourceRef{{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "HelmChart", namespace, name), Role: "chart reference"}}
+					chartRefs = []FluxSourceRef{{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "HelmChart", namespace, name), Role: "chart reference", Path: "status.helmChart"}}
 				}
 			}
 			fields = []string{"spec", "chart", "spec", "sourceRef"}
@@ -53,8 +56,9 @@ func FluxSourceReferences(root *unstructured.Unstructured) []FluxSourceRef {
 	default:
 		return nil
 	}
-	m, present, _ := unstructured.NestedMap(root.Object, fields...)
-	if !present {
+	raw, present, _ := unstructured.NestedFieldNoCopy(root.Object, fields...)
+	m, isMap := raw.(map[string]any)
+	if !present || !isMap {
 		return chartRefs
 	}
 	kind, name := StringValue(m["kind"]), StringValue(m["name"])
@@ -69,5 +73,7 @@ func FluxSourceReferences(root *unstructured.Unstructured) []FluxSourceRef {
 	if crossNamespace && StringValue(m["namespace"]) != "" {
 		namespace = StringValue(m["namespace"])
 	}
-	return append([]FluxSourceRef{{Ref: resourceid.NewRef(group, kind, namespace, name), Role: role}}, chartRefs...)
+	return append([]FluxSourceRef{{Ref: resourceid.NewRef(group, kind, namespace, name), Role: role, Path: strings.Join(fields, ".")}}, chartRefs...)
 }
+
+func isSourceMap(raw any) bool { _, ok := raw.(map[string]any); return ok }

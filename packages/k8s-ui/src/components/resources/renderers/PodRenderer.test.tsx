@@ -669,3 +669,24 @@ describe('PodRenderer OOMKilled limit hint', () => {
     expect(afterOOM(html, 'pod limit')).toBe(false)
   })
 })
+
+describe('PodRenderer Agent Substrate worker note', () => {
+  it('names the pool and says the Pod is shared by the actors it hosts', () => {
+    const html = renderToString(
+      <PodRenderer
+        data={{ ...pod, metadata: { ...pod.metadata, labels: { 'ate.dev/worker-pool': 'agent-pool' } } }}
+        onCopy={() => undefined}
+        copied={null}
+        onNavigate={() => undefined}
+      />,
+    )
+    expect(html).toContain('Agent Substrate worker')
+    expect(html).toContain('agent-pool')
+    expect(html).toContain('shared by every actor it has hosted')
+  })
+
+  it('stays quiet on other Pods', () => {
+    const html = renderToString(<PodRenderer data={pod} onCopy={() => undefined} copied={null} />)
+    expect(html).not.toContain('Agent Substrate worker')
+  })
+})

@@ -72,6 +72,21 @@ describe('ResourceRendererDispatch', () => {
     })
   })
 
+  describe('Flux Operator dispatch', () => {
+    it('uses the Flux Operator drawers only for fluxcd.controlplane.io', () => {
+      const own = renderKind('fluxreports', { apiVersion: 'fluxcd.controlplane.io/v1', kind: 'FluxReport', metadata: { name: 'flux', namespace: 'flux-system' }, spec: { reconcilers: [] }, status: {} })
+      expect(own).toContain('Reconcilers')
+      for (const kind of ['resourcesets', 'fluxinstances', 'fluxreports', 'resourcesetinputproviders']) {
+        const data = { apiVersion: 'example.com/v1', kind: 'Foreign', metadata: { name: 'foreign' }, spec: { collisionProbe: COLLISION_PROBE } }
+        const foreign = renderKind(kind, data)
+        expect(foreign).toContain(COLLISION_PROBE)
+        expect(foreign).not.toContain('Reconcilers')
+        expect(foreign).not.toContain('Distribution')
+        expect(getResourceStatus(kind, data)).toBeNull()
+      }
+    })
+  })
+
   it('does not block manual replica scaling for VPA-only relationships', () => {
     const html = renderWithScalers([
       { kind: 'VerticalPodAutoscaler', namespace: 'prod', name: 'api-vpa' },
@@ -1209,6 +1224,30 @@ describe('Strimzi Kafka and KafkaNodePool exact group', () => {
   })
 })
 
+describe('CSI VolumeSnapshot exact group', () => {
+  const snapshot = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshot', metadata: {name: 'data-snap', namespace: 'demo'}, spec: {source: {persistentVolumeClaimName: 'data'}}, status: {error: {message: 'class not found'}}}
+  const content = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshotContent', metadata: {name: 'snapcontent-1'}, spec: {driver: 'hostpath.csi.k8s.io', deletionPolicy: 'Retain', source: {volumeHandle: 'v'}, volumeSnapshotRef: {name: 'data-snap', namespace: 'demo', uid: 'u'}}, status: {readyToUse: true}}
+  const snapshotClass = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshotClass', metadata: {name: 'csi'}, driver: 'hostpath.csi.k8s.io', deletionPolicy: 'Delete'}
+  it('renders curated drawers and snapshot status', () => {
+    expect(getResourceStatus('volumesnapshots', snapshot)?.text).toBe('Error')
+    expect(renderKind('volumesnapshots', snapshot, 'demo')).toContain('Source PVC')
+    expect(getResourceStatus('volumesnapshotcontents', content)?.text).toBe('Ready')
+    expect(renderKind('volumesnapshotcontents', content)).toContain('Deletion policy')
+    expect(getResourceStatus('volumesnapshotclasses', snapshotClass)).toBeNull()
+    expect(renderKind('volumesnapshotclasses', snapshotClass)).toContain('Default class')
+  })
+  it('leaves unrelated and lookalike groups generic', () => {
+    for (const apiVersion of ['volumesnapshot.external-storage.k8s.io/v1', 'fake.snapshot.storage.k8s.io/v1']) {
+      for (const [kind, data, marker] of [['volumesnapshots', snapshot, 'Source PVC'], ['volumesnapshotcontents', content, 'Deletion policy'], ['volumesnapshotclasses', snapshotClass, 'Default class']] as const) {
+        const other = {...data, apiVersion}
+        expect(renderKind(kind, other)).not.toContain(marker)
+      }
+      expect(getResourceStatus('volumesnapshots', {...snapshot, apiVersion})?.text).not.toBe('Error')
+      expect(getResourceStatus('volumesnapshotcontents', {...content, apiVersion})?.text).not.toBe('Ready')
+    }
+  })
+})
+
 it('keeps foreign customresourcedefinitions on generic renderer and status', () => {
   const data = { apiVersion: 'foreign.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'foreign' }, spec: { example: 'generic-sentinel' }, status: { conditions: [{ type: 'Established', status: 'True' }] } }
   const html = renderToString(<ResourceRendererDispatch resource={{ kind: 'customresourcedefinitions', name: 'foreign', namespace: '' }} data={data} onCopy={() => {}} copied={null} showCommonSections={false} />)
@@ -1326,3 +1365,28 @@ describe('Longhorn kind collisions', () => {
     expect(renderCollidingKind('volumes', 'storage.example.com/v1')).toContain(COLLISION_PROBE)
   })
 })
+
+describe('Plan kind collision (upgrade.cattle.io vs other plans CRDs)', () => {
+  const planData = (apiVersion: string) => ({
+    apiVersion, kind: 'Plan', metadata: { name: 'p', namespace: 'system-upgrade' },
+    spec: { version: 'v1', collisionProbe: COLLISION_PROBE }, status: { conditions: [{ type: 'Complete', status: 'True' }] },
+  })
+  const draw = (apiVersion: string) => renderToString(
+    <ResourceRendererDispatch resource={{ kind: 'plans', namespace: 'system-upgrade', name: 'p' }} data={planData(apiVersion)} onCopy={() => {}} copied={null} showCommonSections={false} />,
+  ).replace(/<!-- -->/g, '')
+
+  it('routes upgrade.cattle.io Plan to the Plan renderer and a foreign plans CRD to the generic one', () => {
+    const ours = draw('upgrade.cattle.io/v1')
+    expect(ours).toContain('Target')
+    expect(ours).not.toContain(COLLISION_PROBE)
+    expect(draw('example.com/v1')).toContain(COLLISION_PROBE)
+  })
+
+  it('gives a foreign plans CRD no Plan status', () => {
+    // A Plan applying to a Node is in progress even when Complete=True is still set.
+    const applying = (apiVersion: string) => ({ ...planData(apiVersion), status: { applying: ['n1'], conditions: [{ type: 'Complete', status: 'True' }] } })
+    expect(getResourceStatus('plans', applying('upgrade.cattle.io/v1'))?.text).toBe('In progress')
+    expect(getResourceStatus('plans', applying('example.com/v1'))?.text).not.toBe('In progress')
+  })
+})
+

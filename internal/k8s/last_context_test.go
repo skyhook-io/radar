@@ -36,6 +36,7 @@ func restoreClientGlobals(t *testing.T) {
 		savedConfig     = k8sConfig
 		savedDiscovery  = discoveryClient
 		savedDynamic    = dynamicClient
+		savedActive     = activeClients
 		savedGeneration = activeClientGeneration
 		savedInit       = initializationStarted
 		savedDirCount   = kubeconfigDirectoryFileCount
@@ -68,6 +69,7 @@ func restoreClientGlobals(t *testing.T) {
 		k8sConfig = savedConfig
 		discoveryClient = savedDiscovery
 		dynamicClient = savedDynamic
+		activeClients = savedActive
 		activeClientGeneration = savedGeneration
 		initializationStarted = savedInit
 		kubeconfigDirectoryFileCount = savedDirCount

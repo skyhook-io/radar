@@ -386,3 +386,50 @@ func TestDeleteResourceBindsObservedUID(t *testing.T) {
 		}
 	}
 }
+
+// A caller's reviewed UID and resourceVersion become preconditions, so the API
+// server refuses the delete when the object was replaced or changed since.
+func TestDeleteResourceBindsToTheReviewedObject(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "velero.io", Version: "v1", Resource: "backups"}
+	disc, err := NewResourceDiscovery(fake.NewSimpleClientset().Discovery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	disc.AddAPIResource(APIResource{Group: "velero.io", Version: "v1", Kind: "Backup", Name: "backups", Namespaced: true, Verbs: []string{"delete"}})
+	backup := &unstructured.Unstructured{}
+	backup.SetAPIVersion("velero.io/v1")
+	backup.SetKind("Backup")
+	backup.SetNamespace("velero")
+	backup.SetName("nightly-1")
+	backup.SetUID("live-uid")
+	backup.SetResourceVersion("42")
+	for _, tc := range []struct {
+		name            string
+		opts            DeleteResourceOptions
+		wantUID, wantRV string
+	}{
+		{"unbound uses the UID it read", DeleteResourceOptions{}, "live-uid", ""},
+		{"bound to the reviewed object", DeleteResourceOptions{UID: "reviewed-uid", ResourceVersion: "41"}, "reviewed-uid", "41"},
+		{"resourceVersion alone keeps the UID it read", DeleteResourceOptions{ResourceVersion: "41"}, "live-uid", "41"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "BackupList"}, backup.DeepCopy())
+			var got *metav1.Preconditions
+			dyn.PrependReactor("delete", "backups", func(a clienttesting.Action) (bool, runtime.Object, error) {
+				got = a.(clienttesting.DeleteActionImpl).DeleteOptions.Preconditions
+				return true, nil, nil
+			})
+			opts := tc.opts
+			opts.Kind, opts.Group, opts.Namespace, opts.Name = "Backup", "velero.io", "velero", "nightly-1"
+			if _, err := NewWorkloadManager(dyn, disc).DeleteResourceWithResult(context.Background(), opts); err != nil {
+				t.Fatal(err)
+			}
+			if got == nil || got.UID == nil || string(*got.UID) != tc.wantUID {
+				t.Fatalf("preconditions %+v, want uid %s", got, tc.wantUID)
+			}
+			if (tc.wantRV == "") != (got.ResourceVersion == nil) || (got.ResourceVersion != nil && *got.ResourceVersion != tc.wantRV) {
+				t.Fatalf("resourceVersion precondition %v, want %q", got.ResourceVersion, tc.wantRV)
+			}
+		})
+	}
+}

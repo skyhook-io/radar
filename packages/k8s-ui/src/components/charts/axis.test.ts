@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { chartLayout, integerAxisTop, xLabelMaxWidthEm, yAxisValues } from './axis'
+import { chartLayout, integerAxisTop, isCountUnit, xLabelMaxWidthEm, yAxisValues } from './axis'
 
 describe('integer axes', () => {
+  it('puts averaged counts on whole-number ticks', () => {
+    expect(isCountUnit('avgCount')).toBe(true)
+    expect(yAxisValues(0, integerAxisTop(1.65, 4), 4, true)).toEqual([0, 1, 2])
+  })
+
   it('ends a count axis on a whole step that reaches the maximum', () => {
     expect(integerAxisTop(0, 4)).toBe(1)
     expect(integerAxisTop(1, 4)).toBe(1)
