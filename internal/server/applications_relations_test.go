@@ -482,3 +482,136 @@ func TestApplicationsWorkloadChangedBetweenBatchAndRows(t *testing.T) {
 		})
 	}
 }
+
+// changeBetweenBatchAndRows builds a batch over the current cache, applies
+// change, waits until settled reports the cache has it, and returns rows over
+// that batch and whether the build is cacheable, then over a fresh batch.
+func changeBetweenBatchAndRows(t *testing.T, change func(), settled func() bool) (before []appRow, beforeCacheable bool, fresh []appRow, freshCacheable bool) {
+	t.Helper()
+	cache := k8s.GetResourceCache()
+	rows := func(session ownership.ReadSession, batch *appRelationBatch) ([]appRow, bool) {
+		view := ownership.NewView(session, ownership.Unrestricted())
+		inventory := &applicationInventory{batch: batch, session: session.(relations.Session), owners: view}
+		return groupApplications(collectAppWorkloads(context.Background(), cache, []string{"prod"}, inventory, view, false)), inventory.cacheable()
+	}
+	session, err := k8s.BeginOwnershipRead(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := buildAppRelationBatch(context.Background(), session.(relations.Session), []string{"prod"})
+	change()
+	for deadline := time.Now().Add(5 * time.Second); !settled(); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the change never reached the cache")
+		}
+	}
+	before, beforeCacheable = rows(session, batch)
+	next, err := k8s.BeginOwnershipRead(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, freshCacheable = rows(next, buildAppRelationBatch(context.Background(), next.(relations.Session), []string{"prod"}))
+	return before, beforeCacheable, fresh, freshCacheable
+}
+
+// A Rollout whose workloadRef names a Deployment is selected by that
+// Deployment's template, so the Deployment changing between the passes leaves
+// the Rollout's exposure undecided, though the Rollout itself didn't change.
+func TestApplicationsRolloutTemplateChangedBetweenBatchAndRows(t *testing.T) {
+	labels := map[string]string{"app": "api"}
+	template := func(generation int64, labels map[string]string) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web-template", UID: "web-template", Generation: generation}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}}}
+	}
+	client := fake.NewClientset(append(testNamespaces("prod"), template(1, map[string]string{"app": "other"}), &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api"}, Spec: corev1.ServiceSpec{Selector: labels}})...)
+	useTestResourceCache(t, client)
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	rollout := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "metadata": map[string]any{"namespace": "prod", "name": "web", "uid": "web"},
+		"spec": map[string]any{"workloadRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "web-template"}},
+	}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"}, rollout)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Rollout", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	addApplicationTypedDiscovery()
+	dc := k8s.GetDynamicResourceCache()
+	if err := dc.EnsureWatching(gvr); err != nil || !dc.WaitForSync(gvr, 2*time.Second) {
+		t.Fatalf("watch %v: %v", gvr, err)
+	}
+	before, beforeCacheable, fresh, freshCacheable := changeBetweenBatchAndRows(t, func() {
+		if _, err := client.AppsV1().Deployments("prod").Update(context.Background(), template(2, labels), metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}, func() bool {
+		d, err := k8s.GetResourceCache().Deployments().Deployments("prod").Get("web-template")
+		return err == nil && d.Generation == 2
+	})
+	if row := rowByName(before, "web"); row == nil || row.WorkloadClass != "unknown" || beforeCacheable {
+		t.Fatalf("rows over a batch read before the template changed: row %+v cacheable %v, want unknown and not cacheable", row, beforeCacheable)
+	}
+	if row := rowByName(fresh, "web"); row == nil || row.WorkloadClass != "service" || !freshCacheable {
+		t.Fatalf("rebuilt rows: row %+v cacheable %v, want service and cacheable", row, freshCacheable)
+	}
+}
+
+// Argo's Workflow CRD has no status subresource, so its generation moves with
+// every status write. A running Workflow's status written between the passes
+// keeps the batch's answer; a spec change doesn't.
+func TestApplicationsWorkflowWrittenBetweenBatchAndRows(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(testNamespaces("prod")...))
+	workflows := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "workflows"}
+	templates := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "workflowtemplates"}
+	workflow := func(generation int64, template, phase string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1", "kind": "Workflow", "metadata": map[string]any{"namespace": "prod", "name": "release", "uid": "release", "generation": generation},
+			"spec":   map[string]any{"templates": []any{map[string]any{"name": "main", "steps": []any{[]any{map[string]any{"name": "build", "templateRef": map[string]any{"name": template}}}}}}},
+			"status": map[string]any{"phase": phase},
+		}}
+	}
+	build := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "WorkflowTemplate", "metadata": map[string]any{"namespace": "prod", "name": "build", "uid": "build"}}}
+	other := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "WorkflowTemplate", "metadata": map[string]any{"namespace": "prod", "name": "other", "uid": "other"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{workflows: "WorkflowList", templates: "WorkflowTemplateList"}, workflow(1, "build", "Running"), build, other)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: workflows.Group, Version: workflows.Version, Name: workflows.Resource, Kind: "Workflow", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}},
+		{Group: templates.Group, Version: templates.Version, Name: templates.Resource, Kind: "WorkflowTemplate", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	addApplicationTypedDiscovery()
+	dc := k8s.GetDynamicResourceCache()
+	for _, gvr := range []schema.GroupVersionResource{workflows, templates} {
+		if err := dc.EnsureWatching(gvr); err != nil || !dc.WaitForSync(gvr, 2*time.Second) {
+			t.Fatalf("watch %v: %v", gvr, err)
+		}
+	}
+	write := func(next *unstructured.Unstructured) (func(), func() bool) {
+		return func() {
+				if _, err := dyn.Resource(workflows).Namespace("prod").Update(context.Background(), next, metav1.UpdateOptions{}); err != nil {
+					t.Fatal(err)
+				}
+			}, func() bool {
+				items, err := dc.ListReadOnlyContext(context.Background(), workflows, "prod")
+				return err == nil && len(items) == 1 && items[0].GetGeneration() == next.GetGeneration()
+			}
+	}
+	configured := func(row *appRow, template string) bool {
+		return row != nil && row.Relationships != nil && len(row.Relationships.ConfigRefs) == 1 && row.Relationships.ConfigRefs[0].Name == template
+	}
+
+	// The API server bumps this CRD's generation for a status write too.
+	change, settled := write(workflow(2, "build", "Succeeded"))
+	before, beforeCacheable, _, _ := changeBetweenBatchAndRows(t, change, settled)
+	if row := rowByName(before, "release"); !configured(row, "build") || !beforeCacheable {
+		t.Fatalf("a status write between the passes: row %+v cacheable %v, want the batch's answer, cacheable", row, beforeCacheable)
+	}
+	change, settled = write(workflow(3, "other", "Succeeded"))
+	before, beforeCacheable, fresh, freshCacheable := changeBetweenBatchAndRows(t, change, settled)
+	if row := rowByName(before, "release"); row == nil || row.Relationships != nil && len(row.Relationships.ConfigRefs) != 0 || beforeCacheable {
+		t.Fatalf("a spec change between the passes: row %+v cacheable %v, want no answer from the batch, not cacheable", row, beforeCacheable)
+	}
+	if row := rowByName(fresh, "release"); !configured(row, "other") || !freshCacheable {
+		t.Fatalf("rebuilt rows: row %+v cacheable %v, want the new template, cacheable", row, freshCacheable)
+	}
+}
