@@ -72,7 +72,13 @@ func appSameSpec(old, cur runtime.Object) bool {
 	switch o := old.(type) {
 	case *unstructured.Unstructured:
 		c, ok := cur.(*unstructured.Unstructured)
-		return ok && appSameValue(o.Object["spec"], c.Object["spec"])
+		// A core PodTemplate, read from the dynamic cache, keeps its data at
+		// the root, not under spec.
+		field := "spec"
+		if o.GetKind() == "PodTemplate" && resourceid.GroupFromAPIVersion(o.GetAPIVersion()) == "" {
+			field = "template"
+		}
+		return ok && appSameValue(o.Object[field], c.Object[field])
 	case *corev1.PodTemplate:
 		c, ok := cur.(*corev1.PodTemplate)
 		return ok && equality.Semantic.DeepEqual(o.Template, c.Template)
