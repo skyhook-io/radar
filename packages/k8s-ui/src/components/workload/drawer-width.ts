@@ -8,11 +8,12 @@ const DRAWER_MAX_SHARE = 0.7
 
 const BASE_WIDTH = 550
 const WIDE_EXTRA = 200
-// Kept for the view behind: the Resources kind list (288px) plus a table's Name,
-// Namespace and two status columns at their minimum widths (~700px). The drawer
-// only grows into room beyond that, so up to ~1700px windows it stays at 550.
-// The table stretches its Name column across the whole content area, so on wide
-// screens the columns right of Name sit under the drawer whatever this reserve.
+// Kept for the view behind: the Resources kind list (224–288px) plus a table's
+// Name, Namespace and two status columns at their minimum widths (~700px). The
+// drawer only grows into room beyond that, so up to ~1700px windows it stays at
+// 550. The table spreads leftover room over all its columns, so on wide screens
+// its later columns sit under the drawer whatever this reserve, unless the
+// table lays itself out for the part the drawer leaves visible.
 const LIST_RESERVE = 1000
 // Past this a drawer's label/value rows only get sparser; a user who wants more
 // width wants the full page.
