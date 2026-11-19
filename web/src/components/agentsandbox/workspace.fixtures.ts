@@ -41,7 +41,7 @@ export function liveAttention(): AgentSandboxAttention[] {
     {
       id: `warmPool:${NS}/warm`, category: 'warmPool', rule: 'reserveBelowTarget', reason: 'Warming', severity: 'alert',
       title: 'Warm reserve below target: 0/2 ready',
-      reading: 'Its 2 sandboxes can’t be scheduled. No sandbox is ready in reserve, so a new claim can’t take a warm one and waits for a sandbox to start.',
+      reading: 'Its 2 sandboxes can’t be scheduled. No sandbox is ready in reserve, so a new claim waits for one to finish starting.',
       rawDetail: '0/4 nodes are available: 4 Too many pods. no new claims to deallocate, preemption: 0/4 nodes are available: 4 No preemption victims found for incoming pod.',
       rawDetailLabel: 'Scheduler’s message', rawDetailSource: 'scheduler',
       nextStep: 'Add nodes, raise the nodes’ max-pods limit, or remove Pods you no longer need',

@@ -199,7 +199,7 @@ func TestLiveNamespace(t *testing.T) {
 	if warm.Title != "Warm reserve below target: 0/2 ready" {
 		t.Errorf("warm title %q", warm.Title)
 	}
-	if !strings.Contains(warm.Reading, "Its 2 sandboxes can’t be scheduled.") || !strings.Contains(warm.Reading, "can’t take a warm one") {
+	if !strings.Contains(warm.Reading, "Its 2 sandboxes can’t be scheduled.") || !strings.Contains(warm.Reading, "a new claim waits for one to finish starting") {
 		t.Errorf("warm reading %q", warm.Reading)
 	}
 	if warm.RawDetailSource != DetailScheduler || !strings.HasPrefix(warm.RawDetail, "0/4 nodes are available") {

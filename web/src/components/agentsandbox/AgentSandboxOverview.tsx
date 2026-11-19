@@ -193,14 +193,14 @@ function Impact({ a, onNavigate }: { a: AgentSandboxAttention; onNavigate: (ref:
     return (
       <span>
         {w.lowerBound ? 'at least ' : ''}
-        {plural(w.count, 'claim', 'claims')} can’t take a warm sandbox
+        {plural(w.count, 'claim', 'claims')} waiting with no warm sandbox ready
       </span>
     )
   }
   if (a.emptyPool) {
     return (
       <span>
-        can’t take a warm sandbox: warm pool <RefLink refTo={toRef(a.emptyPool)} onNavigate={onNavigate} mono /> has none ready
+        waiting: warm pool <RefLink refTo={toRef(a.emptyPool)} onNavigate={onNavigate} mono /> has no sandbox ready
       </span>
     )
   }
