@@ -128,9 +128,49 @@ func TestDescribeResume(t *testing.T) {
 
 	t.Run("an @every schedule waits whatever the zone", func(t *testing.T) {
 		every := schedule("every", "@every 1h", specField("paused", true), lastBackup(at("11:00")))
-		got := DescribeResume(ScheduleInput{Schedule: every, BackupsRead: true, Server: ServerConfigFromDeployments(nil, false), Now: at("11:30")}, nil)
+		unzoned := ServerConfigFromDeployments([]*appsv1.Deployment{veleroDeployment(nil, nil)}, true)
+		unzoned.zone = nil
+		got := DescribeResume(ScheduleInput{Schedule: every, BackupsRead: true, Server: unzoned, Now: at("11:30")}, nil)
 		if got.Outcome != ResumeWaits || got.Due || !got.NextRunCertain || got.NextRun == nil || !got.NextRun.Equal(at("12:00")) {
 			t.Fatalf("got %+v, want a certain wait until 12:00", got)
+		}
+	})
+
+	// A consumed skip moves the anchor to the resume, and an @every schedule
+	// counts its interval from there.
+	t.Run("a skip on an @every schedule moves the next run", func(t *testing.T) {
+		every := schedule("every", "@every 1h", specField("paused", true), lastBackup(at("11:00")))
+		skipping := DescribeResume(ScheduleInput{Schedule: every, BackupsRead: true, Server: utcServer, Now: at("11:30")}, new(true))
+		if skipping.Outcome != ResumeWaits || skipping.NextRun == nil || !skipping.NextRun.Equal(at("12:30")) || !skipping.NextRunCertain {
+			t.Fatalf("skipping %+v, want the next run at 12:30", skipping)
+		}
+		due := DescribeResume(ScheduleInput{Schedule: every, BackupsRead: true, Server: utcServer, Now: at("12:10")}, new(true))
+		if due.Outcome != ResumeSkips || due.NextRun == nil || !due.NextRun.Equal(at("13:10")) {
+			t.Fatalf("skipping a due run %+v, want the next run at 13:10", due)
+		}
+		for name, server := range map[string]ServerConfig{"server skips": skipOn, "flag unread": flagUnread} {
+			got := DescribeResume(ScheduleInput{Schedule: every, BackupsRead: true, Server: server, Now: at("11:30")}, nil)
+			if got.Outcome != ResumeWaits || got.NextRunCertain || !strings.Contains(got.Summary, "one interval after resuming") {
+				t.Fatalf("%s: %+v, want an uncertain next run", name, got)
+			}
+		}
+		// A cron expression's next time is the same from either anchor.
+		cron := DescribeResume(ScheduleInput{Schedule: paused(), BackupsRead: true, Server: skipOn, Now: at("11:30")}, nil)
+		if cron.Outcome != ResumeWaits || !cron.NextRunCertain {
+			t.Fatalf("cron with the server skipping: %+v", cron)
+		}
+	})
+
+	t.Run("a run in progress holds a schedule that would run repeatedly", func(t *testing.T) {
+		never := schedule("never", "0 0 31 2 *", specField("paused", true))
+		running := []*unstructured.Unstructured{backup("never-20261115110000", "never", "InProgress", at("11:00"))}
+		got := DescribeResume(ScheduleInput{Schedule: never, Backups: running, BackupsRead: true, Server: utcServer, Now: at("12:10")}, nil)
+		if got.Outcome != ResumeRunsRepeatedly || got.Blocker == nil || got.Blocker.Name != "never-20261115110000" || !strings.Contains(got.Summary, "submits nothing while never-20261115110000") {
+			t.Fatalf("got %+v", got)
+		}
+		unread := DescribeResume(ScheduleInput{Schedule: never, Server: utcServer, Now: at("12:10")}, nil)
+		if !strings.Contains(unread.Summary, "could not read this schedule's backups") {
+			t.Fatalf("unread backups: %+v", unread)
 		}
 	})
 

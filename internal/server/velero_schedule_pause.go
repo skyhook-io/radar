@@ -115,8 +115,11 @@ func (s *Server) writeSchedulePauseError(w http.ResponseWriter, err error, names
 		s.writeError(w, http.StatusForbidden, "no access to change this Velero schedule")
 	case apierrors.IsConflict(err):
 		s.writeError(w, http.StatusConflict, "the schedule changed since you opened it; review it again")
+	case step == "read":
+		log.Printf("[velero] Failed to read schedule %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
+		s.writeError(w, http.StatusServiceUnavailable, "could not read the schedule")
 	default:
-		log.Printf("[velero] Failed to %s schedule %s/%s: %v", step, sanitizeForLog(namespace), sanitizeForLog(name), err)
-		s.writeError(w, http.StatusServiceUnavailable, "could not change the schedule")
+		log.Printf("[velero] Failed to patch schedule %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
+		s.writeError(w, http.StatusInternalServerError, "could not change the schedule")
 	}
 }

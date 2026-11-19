@@ -98,11 +98,32 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 		return ResumeOutlook{Outcome: ResumeWontRun, Reason: string(ReasonNameTooLong), Summary: "This schedule's name is longer than 63 characters, so every run Velero submits fails."}
 	case StateAlwaysDue:
 		// Before any skip: Velero would consume it, find no next time and
-		// submit at once anyway.
-		return ResumeOutlook{Outcome: ResumeRunsRepeatedly, Reason: string(ReasonNoFutureTime), Summary: "This schedule's cron expression has no future time, so once resumed Velero submits runs immediately and repeatedly until the cron is fixed. Skipping does not prevent it."}
+		// submit at once anyway, unless a run still new or in progress holds
+		// it, as it holds any due run.
+		out := ResumeOutlook{Outcome: ResumeRunsRepeatedly, Reason: string(ReasonNoFutureTime), Summary: "This schedule's cron expression has no future time, so once resumed Velero submits runs immediately and repeatedly until the cron is fixed. Skipping does not prevent it."}
+		if b := blockerOf(runsOf(r.Name, in.Backups)); b != nil {
+			out.Blocker = b
+			out.Summary = "This schedule's cron expression has no future time. Velero submits nothing while " + b.Name + " is new or in progress; after that it submits runs immediately and repeatedly until the cron is fixed. Skipping does not prevent it."
+		} else if !in.BackupsRead {
+			out.Summary += " Radar could not read this schedule's backups, so one still in progress may hold it until it finishes."
+		}
+		return out
 	case StateOnSchedule:
 		if r.NextRunCertain {
-			return ResumeOutlook{Outcome: ResumeWaits, Summary: "No run is due, so Velero submits the next one at its scheduled time.", NextRun: r.NextRun, NextRunCertain: true}
+			out := ResumeOutlook{Outcome: ResumeWaits, Summary: "No run is due, so Velero submits the next one at its scheduled time.", NextRun: r.NextRun, NextRunCertain: true}
+			// A consumed skip moves the anchor to now. That changes nothing for
+			// a cron expression with no time between the last run and now, but
+			// an @every schedule then counts its interval from the resume.
+			switch {
+			case !fixedDelay(cronExpr):
+			case skip != nil && *skip:
+				out.NextRun, out.NextRunCertain = nextAfterSkip(in, resumed)
+				out.Summary = "No run is due. Skipping restarts this schedule's interval, so Velero submits the next run one interval after it resumes."
+			case skipMayApply(in, skip):
+				out.NextRunCertain = false
+				out.Summary = "No run is due. Velero submits the next one at its scheduled time, or one interval after resuming if the Velero server skips it (--schedule-skip-immediately)."
+			}
+			return out
 		}
 		// Due in the zone Radar assumed is not due in every zone the
 		// controller might use.
@@ -126,6 +147,7 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 	out := ResumeOutlook{Due: due}
 	if skip != nil && *skip {
 		out.Outcome, out.Summary = ResumeSkips, "Velero skips the run due now, if any, and submits the next one at its scheduled time."
+		out.NextRun, out.NextRunCertain = nextAfterSkip(in, resumed)
 		return out
 	}
 	runs := runsOf(r.Name, in.Backups)
@@ -155,4 +177,30 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 		out.Outcome, out.Summary = ResumeRunsNow, "A run is due, so Velero submits it as soon as the schedule resumes."
 	}
 	return out
+}
+
+// skipMayApply: resuming with skip leaves the skip to the server's flag, and
+// that flag is set or could not be read.
+func skipMayApply(in ScheduleInput, skip *bool) bool {
+	if skip != nil {
+		return *skip
+	}
+	return in.Server.ScheduleSkipImmediately == nil || *in.Server.ScheduleSkipImmediately
+}
+
+// nextAfterSkip is the next run once Velero has consumed a skip, which moves
+// lastSkipped to now before it computes the next time.
+func nextAfterSkip(in ScheduleInput, resumed *unstructured.Unstructured) (*time.Time, bool) {
+	skipped := resumed.DeepCopy()
+	_ = unstructured.SetNestedField(skipped.Object, in.Now.UTC().Format(time.RFC3339), "status", "lastSkipped")
+	in.Schedule = skipped
+	if after := readSchedule(in); after.State == StateOnSchedule {
+		return after.NextRun, after.NextRunCertain
+	}
+	return nil, false
+}
+
+func fixedDelay(expr string) bool {
+	parsed, err := parseCron(expr)
+	return err == nil && parsed.fixedDelay
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { CirclePause, CirclePlay } from 'lucide-react'
 import {
   ActionConfirmDialog,
@@ -89,13 +89,26 @@ function SchedulePauseDialog({ namespace, name, pause, reviewedVersion, changed,
   const resume = activity.data?.resume
   const skipping = !pause && skip && resume?.skipping ? resume.skipping : undefined
   const outlook = skipping ?? resume?.default
+  // A dialog left open past the next run would still say nothing is due and
+  // offer no skip, so read the outlook again when that time comes.
+  const waitUntil = !pause && resume?.default.outcome === 'waits' ? resume.default.nextRun : undefined
+  const refetchActivity = activity.refetch
+  useEffect(() => {
+    if (!waitUntil) return
+    const delay = Date.parse(waitUntil) - Date.now() + 1000
+    if (!(delay < 2 ** 31 - 1)) return
+    const timer = setTimeout(() => void refetchActivity(), Math.max(delay, 0))
+    return () => clearTimeout(timer)
+  }, [waitUntil, refetchActivity])
   const effect = pause ? (
     'Velero stops submitting this schedule’s runs until it is resumed.'
   ) : outlook ? (
     <>
       {outlook.summary}
-      {outlook.outcome === 'waits' && outlook.nextRun && <> Next run {veleroNextRunText({ nextRun: outlook.nextRun, nextRunCertain: !!outlook.nextRunCertain })}.</>}
+      {(outlook.outcome === 'waits' || outlook.outcome === 'skips') && outlook.nextRun && <> Next run {veleroNextRunText({ nextRun: outlook.nextRun, nextRunCertain: !!outlook.nextRunCertain })}.</>}
     </>
+  ) : activity.isPending && workspace.support === 'supported' ? (
+    'Reading what Velero does when this schedule resumes…'
   ) : (
     'Velero submits this schedule’s runs again. Radar could not read what it does first: a run that’s due may be submitted at once.'
   )
