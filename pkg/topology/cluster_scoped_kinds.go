@@ -116,7 +116,7 @@ func RBACTuplesForKind(kind, group string, disc PseudoKindDiscoveryLookup) (tupl
 	// table's Pascal-cased rows. ClusterScopedKinds contains only
 	// cluster-scoped entries; namespaced pseudo-kinds (KnativeService,
 	// CAPICluster, …) correctly fail the lookup and the caller falls back.
-	resolved := pseudoKindFor(kind, group)
+	resolved := NodeKindForGVK(kind, group)
 
 	// tracked := the kind appears in ClusterScopedKinds at all. We need this
 	// signal separately from "matched a row under the supplied group" so the

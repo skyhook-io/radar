@@ -47,6 +47,10 @@ type Object struct {
 	Membership           ownership.MembershipState
 	Members              []resourceid.Ref
 	DestinationNamespace string
+	// Declares are the ConfigMaps, Secrets, PersistentVolumeClaims and
+	// ServiceAccount a Pod, or the pod template of a ReplicaSet, Deployment or
+	// Job, declares. Other kinds ignore it.
+	Declares []resourceid.Ref
 	// Form picks one of the ways a status can say the same thing, such as
 	// an empty list written or left out; a renderer must vary only that,
 	// and Scan ignores it.

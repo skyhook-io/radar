@@ -566,7 +566,7 @@ Always granted (required for basic functionality):
 
 | API Group | Resources |
 |-----------|-----------|
-| Core (`""`) | pods, services, configmaps, events, namespaces, nodes, persistentvolumes, pvcs, serviceaccounts, endpoints, limitranges, resourcequotas |
+| Core (`""`) | pods, services, configmaps, events, namespaces, nodes, persistentvolumes, pvcs, serviceaccounts, podtemplates, endpoints, limitranges, resourcequotas |
 | `discovery.k8s.io` | endpointslices |
 | `policy` | poddisruptionbudgets |
 | `storage.k8s.io` | storageclasses |
@@ -720,6 +720,8 @@ retain their finite grants.
 
 | Option | API Groups |
 |--------|------------|
+| `agentSandbox` | `agents.x-k8s.io`, `extensions.agents.x-k8s.io`. Sandboxes and SandboxTemplates carry Pod templates, whose environment values can be inline |
+| `agentSubstrate` | `ate.dev` |
 | `antrea` | `crd.antrea.io` (`networkpolicies`, `clusternetworkpolicies`) |
 | `apiRegistration` | `apiregistration.k8s.io` |
 | `argo` | `argoproj.io` |
@@ -744,7 +746,7 @@ retain their finite grants.
 | `istio` | `networking.istio.io`, `security.istio.io` |
 | `karpenter` | `karpenter.sh`, `karpenter.k8s.aws`, `karpenter.azure.com`, `karpenter.k8s.gcp`, `eks.amazonaws.com` |
 | `keda` | `keda.sh` |
-| `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `networking.internal.knative.dev` |
+| `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `networking.internal.knative.dev`, and `jobsinks` in `sinks.knative.dev` |
 | `kubeshark` | `kubeshark.io` |
 | `kured` | `kured.io` |
 | `kyverno` | `kyverno.io`, `policies.kyverno.io`, `wgpolicyk8s.io`, `reports.kyverno.io`, `openreports.io` |
@@ -766,6 +768,7 @@ retain their finite grants.
 | `trivy` | `aquasecurity.github.io` |
 | `velero` | `velero.io` |
 | `verticalPodAutoscaler` | `autoscaling.k8s.io` |
+| `volumeSnapshots` | `snapshot.storage.k8s.io` (`volumesnapshots`, `volumesnapshotcontents`, `volumesnapshotclasses` only) |
 
 **VictoriaMetrics collection:** the chart grants Radar cluster-wide `get/list/watch`
 on VMAgent, VMCluster and VMSingle (`vmagents`, `vmclusters`, `vmsingles` in

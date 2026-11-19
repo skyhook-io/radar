@@ -244,7 +244,7 @@ func TestLateCRDCountFailureIsRetried(t *testing.T) {
 	}
 	t.Cleanup(cache.Stop)
 
-	cache.onCRDEvent(crdObject("dbclusters.db.example.com", "db.example.com", "dbclusters"))
+	cache.onCRDEvent(nil, crdObject("dbclusters.db.example.com", "db.example.com", "dbclusters"))
 	waitUntilTrue(t, "CRD watched after transient count failure", func() bool {
 		return cache.hasCoveringInformer(clusters, "")
 	})
@@ -289,12 +289,12 @@ func TestKnownCRDEventsDoNotScheduleScan(t *testing.T) {
 	t.Cleanup(func() { lateCRDScanDelay = old })
 
 	cache := &DynamicResourceCache{seenCRDs: map[string]struct{}{"a.io/as": {}}, pendingCRDs: map[string]struct{}{}}
-	cache.onCRDEvent(crdObject("as.a.io", "a.io", "as"))
+	cache.onCRDEvent(nil, crdObject("as.a.io", "a.io", "as"))
 	if cache.lateCRDTimer != nil {
 		t.Fatal("event for a known CRD scheduled a scan")
 	}
 	cache.lateCRDRetries = lateCRDMaxRetries
-	cache.onCRDEvent(crdObject("bs.b.io", "b.io", "bs"))
+	cache.onCRDEvent(nil, crdObject("bs.b.io", "b.io", "bs"))
 	if cache.lateCRDTimer == nil {
 		t.Fatal("event for a new CRD did not schedule a scan")
 	}

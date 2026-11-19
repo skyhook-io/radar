@@ -7,8 +7,9 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
-	"github.com/skyhook-io/radar/pkg/topology"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,13 +18,15 @@ import (
 
 func TestStorageClassClaimsOutsideCollectedNamespaces(t *testing.T) {
 	class := "fast"
-	client := fake.NewClientset(
+	classObject := &storagev1.StorageClass{TypeMeta: metav1.TypeMeta{APIVersion: "storage.k8s.io/v1", Kind: "StorageClass"}, ObjectMeta: metav1.ObjectMeta{Name: class}}
+	client := fake.NewClientset(classObject,
 		&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "disk"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: class}},
 		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "team"}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &class}},
 	)
 	scope := func(namespace string) map[string]k8score.ResourceScope {
 		return map[string]k8score.ResourceScope{
 			string(k8score.PersistentVolumes):      {Enabled: true},
+			string(k8score.StorageClasses):         {Enabled: true},
 			string(k8score.PersistentVolumeClaims): {Enabled: true, Namespace: namespace},
 		}
 	}
@@ -50,7 +53,20 @@ func TestStorageClassClaimsOutsideCollectedNamespaces(t *testing.T) {
 			for (cache.KindReadinessFor(string(k8score.PersistentVolumeClaims)) != k8score.KindReady || cache.KindReadinessFor(string(k8score.PersistentVolumes)) != k8score.KindReady) && time.Now().Before(deadline) {
 				time.Sleep(10 * time.Millisecond)
 			}
-			rc := resourcecontext.Build(context.Background(), &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: class}}, resourcecontext.Options{Topology: &topology.Topology{}, Provider: NewTopologyResourceProvider(cache)})
+			discovery, err := k8score.NewResourceDiscovery(fake.NewClientset().Discovery())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range []k8score.APIResource{{Group: "", Version: "v1", Name: "persistentvolumes", Kind: "PersistentVolume"}, {Group: "", Version: "v1", Name: "persistentvolumeclaims", Kind: "PersistentVolumeClaim", Namespaced: true}, {Group: "storage.k8s.io", Version: "v1", Name: "storageclasses", Kind: "StorageClass"}} {
+				r.Verbs = metav1.Verbs{"get", "list", "watch", "delete"}
+				discovery.AddAPIResource(r)
+			}
+			previous := ownershipSource
+			ownershipSource = cachesource.New(func() cachesource.Caches { return cachesource.Caches{Typed: core, Discovery: discovery} })
+			t.Cleanup(func() { ownershipSource = previous })
+			access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+			rel, _, extras := AnswerResourceContextRelationships(cache, classObject, access, access)
+			rc := resourcecontext.Build(context.Background(), classObject, resourcecontext.Options{Relationships: rel, RelationshipExtras: extras})
 			if len(rc.Dependents) != 2 {
 				t.Fatalf("class dependents = %+v", rc.Dependents)
 			}

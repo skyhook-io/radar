@@ -13,6 +13,7 @@ import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { Facet, type FacetTone } from '../ui/Facet'
 import { SortableTh, TH_CLASS } from '../ui/SortableTh'
+import { TABLE_DENSITY } from '../ui/table-density'
 import { DistributionBar } from '../ui/DistributionBar'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { pluralize } from '../../utils/pluralize'
@@ -420,7 +421,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
 
         {/* Content: toolbar (search + sort) over the scrollable table. */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="flex shrink-0 items-center gap-3 border-b border-theme-border px-4 py-3">
+          <div className={clsx('flex shrink-0 items-center gap-3 border-b border-theme-border', TABLE_DENSITY.toolbarClass)}>
             <SearchBox
               value={textFilter}
               onChange={(v) => filters.setString('q', v)}

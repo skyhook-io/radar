@@ -88,9 +88,9 @@ batches, so it never overflows and always converges.
 
 ## Relationship cost baselines
 
-Radar keeps one all-namespace relationship graph in memory for Related Resources, summaries and the AI
-resource context, and rebuilds it on every topology broadcast while a browser is connected. The work to
-answer those questions from indexes on the informer cache instead is measured against these baselines.
+Before the family cutover, Radar kept one all-namespace relationship graph in memory for Related Resources,
+summaries and AI resource context, rebuilding it on every topology broadcast while a browser was connected.
+These baselines retain that implementation for comparison with caller-scoped family reads from the informer cache.
 
 ```bash
 make bench-relationships
@@ -103,21 +103,32 @@ Fixtures, the same in both packages:
 | L | The field census (`fieldShape` in `pkg/topology/scale_bench_test.go`): 432 namespaces, 248 nodes | 191,504 | 29,455 |
 | XL | L with every kind scaled by 10/3 | about 638,000 | about 98,000 |
 
+The graph benchmarks preserve the pre-cutover broadcast relationship path for comparison; production drawer,
+summary and resource-context reads now use caller-scoped families. Display topology and the GitOps tree still build
+their own scoped topologies; neighborhoods and Applications read the relation families, and nothing in production
+builds this graph.
+
 What each benchmark reports:
 
 - `BenchmarkRelationshipGraphRetained`: heap the shared graph (`graph-MiB`) and its lookup index (`index-MiB`)
-  keep, built with the broadcaster's options (Secrets included).
+  kept, built with the former broadcaster's options (Secrets included).
 - `BenchmarkSharedRelationshipBuild`: one rebuild, time and bytes allocated, with the previous graph and an index
   of its size still held (building the new index happens later, on the next relationship read).
 - `BenchmarkDrawerRelationships`: one Related Resources read. `shared-index` is auth off; `per-user-copy` is
   auth on, where each request copies the graph, strips what the user may not list and rebuilds the index.
 - `BenchmarkSummaryRelationshipsPage`: a relationship read from an already built graph for every row of a
-  1,000-row Pod list. Production reads relationships only for rows with no readable top controller, so a typical
-  page reads far fewer, but a read that finds the graph stale also waits for its rebuild and index.
+  1,000-row Pod list. Before cutover, production read graph relationships only for rows with no readable top
+  controller, and a stale graph forced a rebuild and index before answering.
 - `BenchmarkIndexRelist`: one relist (`Replace`) of a Pod store, with and without an index. Part of it, keying
   the list, runs outside the store's lock, so the total is an upper bound on how long readers wait; an index
   adds only to the locked part, so the difference is its cost. Pods follow the census: one owner each.
 - `BenchmarkIndexedStoreChurn`: update cost while eight readers list a namespace, with and without an index.
+- `BenchmarkConfigConsumers` (`pkg/relations`): what references a ConfigMap, and a Secret every Pod pulls with,
+  answered from the cache by reading the namespace's Pods, ReplicaSets and Deployments. `typical` is the census's
+  average namespace (68 Pods); `dense` holds 5,000 Pods, 5,000 ReplicaSets and 2,500 Deployments.
+- `BenchmarkNodePods` (`pkg/relations`): a Node's Pods (about 30), by reading every Pod as Radar does and by an
+  index of Pods by Node, which Radar doesn't keep; `BenchmarkIndexRelist`'s `with-owner-uid-and-node` prices
+  that index on each relist.
 
 Baseline (Apple M1 Pro, 8 cores, Go 1.26, November 2026):
 
@@ -133,11 +144,19 @@ Baseline (Apple M1 Pro, 8 cores, Go 1.26, November 2026):
 | Pod relist, plus the owner-UID index | 33 ms | 129 ms |
 | Pod update, alone, without / with the owner-UID index | 180 ns / 245 ns | |
 | Pod update with eight concurrent readers, without / with | 18.0 µs / 18.8 µs | |
+| Config consumers from the cache, typical namespace (ConfigMap / Secret) | 33 µs / 76 µs | |
+| Config consumers from the cache, dense namespace (ConfigMap / Secret, 500 listed) | 6 ms / 14 ms | |
+| A Node's Pods, reading every Pod | 10 ms, 19 MB | 34-40 ms, 63 MB |
+| A Node's Pods, with an index of Pods by Node | 14-27 µs | 15-18 µs |
+| Pod relist, owner-UID index plus an index by Node | 34 ms (+5 ms) | 161 ms (+57 ms) |
+
+Radar doesn't keep the index of Pods by Node: a Node's Pods are asked for rarely, and reading every Pod is what
+the relationship read does today, while the index would cost every relist. An index of a busy kind earns its
+keep only when its question is frequent; the Reflector index (`Reflections`' `ReferrersIndex`) files only mirrors, so it holds
+next to nothing.
 
 The synthetic fixtures carry more references per Pod than most clusters, so the graph is larger than in a
-real process of the same shape. For a process-level number, run `go run ./cmd/testserver -census large-eks`,
-wait for the cache to sync, open the UI or a resource drawer so the graph is rebuilt over the synced cache
-(a broadcast with no browser connected only marks it stale), then take `/debug/pprof/heap?gc=1`: the graph
-is the part under the topology builder. The fake API server
-keeps its own copy of every object (`client-go/testing.(*tracker)`), which is not Radar's memory; subtract
-it.
+real process of the same shape. For a current process-level profile, run `go run ./cmd/testserver -census large-eks`
+and take `/debug/pprof/heap?gc=1`. The removed broadcast relationship graph no longer appears in that profile; use
+the retained graph benchmarks for the historical comparison above. The fake API server keeps its own copy of
+every object (`client-go/testing.(*tracker)`), which is not Radar's memory; subtract it.

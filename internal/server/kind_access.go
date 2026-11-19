@@ -65,6 +65,14 @@ func (s *Server) listScopeWithCandidates(r *http.Request, namespaces []string, g
 // kinds: where its identity watches the kind namespace by namespace, what it
 // does not hold is unread (uncached), never empty and never syncing forever.
 func (s *Server) readWorkspaceKind(r *http.Request, cache *k8s.ResourceCache, k integration.WorkspaceKind, namespaces, groups []string, budget *syncBudget) (integration.KindAccess, []*unstructured.Unstructured) {
+	return s.readWorkspaceKindAmong(r, cache, k, namespaces, groups, budget, func() []string { return namespaceNamesInCache(cache) }, false)
+}
+
+// readWorkspaceKindAmong is readWorkspaceKind with the namespaces checked for a
+// caller without cluster-wide list access. With concealExtent, such a caller's
+// read is always partial, so the answer never shows whether the candidates
+// held more than the caller could see.
+func (s *Server) readWorkspaceKindAmong(r *http.Request, cache *k8s.ResourceCache, k integration.WorkspaceKind, namespaces, groups []string, budget *syncBudget, candidates func() []string, concealExtent bool) (integration.KindAccess, []*unstructured.Unstructured) {
 	ctx := r.Context()
 	if k.ClusterScoped {
 		if !s.canRead(r, k.Group, k.Resource, "", "list") {
@@ -76,9 +84,12 @@ func (s *Server) readWorkspaceKind(r *http.Request, cache *k8s.ResourceCache, k 
 		}
 		return integration.KindAccess{State: integration.KindCoverageFull, All: true}, list
 	}
-	allowed, denied, partial, ok := s.listScopeWithCandidates(r, namespaces, k.Group, k.Resource, func() []string { return namespaceNamesInCache(cache) })
+	allowed, denied, partial, ok := s.listScopeWithCandidates(r, namespaces, k.Group, k.Resource, candidates)
 	if !ok {
 		return integration.KindAccess{State: integration.KindCoverageDenied}, nil
+	}
+	if concealExtent && namespaces == nil && allowed != nil {
+		partial = true
 	}
 	acc := integration.AccessFromScope(allowed, partial)
 	acc.Denied = denied
@@ -93,9 +104,12 @@ func (s *Server) readWorkspaceKind(r *http.Request, cache *k8s.ResourceCache, k 
 // apiserver, as well as waiting for it to sync. Once it is spent, or the
 // request is cancelled, a namespace that has not synced is unread.
 type syncBudget struct {
-	ctx          context.Context
-	deadline     time.Time
-	bound        bool
+	ctx      context.Context
+	deadline time.Time
+	bound    bool
+	// readOnly lists a synced namespace without copying its objects. The
+	// caller must neither mutate nor retain them past the request.
+	readOnly     bool
 	discovery    *k8s.ResourceDiscovery
 	dynamicCache *k8s.DynamicResourceCache
 }
@@ -119,6 +133,9 @@ func (b *syncBudget) listBlocking(dc *k8s.DynamicResourceCache, gvr schema.Group
 		return dc.ListBlocking(gvr, namespace, dynamicSyncWait)
 	}
 	if dc.IsNamespaceSynced(gvr, namespace) {
+		if b.readOnly {
+			return dc.ListReadOnly(gvr, namespace)
+		}
 		return dc.ListBlocking(gvr, namespace, 0)
 	}
 	if b.ctx.Err() != nil {
