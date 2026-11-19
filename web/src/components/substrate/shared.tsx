@@ -302,12 +302,13 @@ export function When({ iso, hint, prefix, held }: { iso: string; hint?: string; 
 }
 
 /**
- * Where a copied command must point to change the actor on screen. On a local
- * Radar: the context's name, the kubeconfig file it is named in (another file
- * may hold a same-named context), and the endpoint Radar reads Substrate
- * through when it isn't the port-forward kubectl ate makes by itself. Where
- * Radar can't know the reader's (in-cluster, Hub), context is null. Without a
- * provider, commands are shown as written.
+ * Where a copied command must point to change the actor on screen: the
+ * context's name and the kubeconfig file it is named in (another file may
+ * hold a same-named context), on a local Radar; context is null where Radar
+ * can't know the reader's (in-cluster, Hub). And the endpoint Radar reads
+ * Substrate at, in every mode, when it isn't the ate-system/api Service
+ * kubectl ate port-forwards to by itself. Without a provider, commands are
+ * shown as written.
  */
 export interface KubectlTarget {
   context: string | null
@@ -327,14 +328,16 @@ const CHANGES_STATE = /^kubectl ate (revert|update|resume|suspend|delete) /
  */
 export function withKubectlTarget(command: string, target: KubectlTarget | undefined): string {
   if (!target || !CHANGES_STATE.test(command) || /\s--(context|kubeconfig|endpoint)[\s=]/.test(command)) return command
-  if (!target.context) return `${command} --context <context>`
   const flags = [
-    ...(target.kubeconfig ? [`--kubeconfig ${shellWord(target.kubeconfig)}`] : []),
-    `--context ${shellWord(target.context)}`,
+    ...(target.context && target.kubeconfig ? [`--kubeconfig ${shellWord(target.kubeconfig)}`] : []),
+    `--context ${target.context ? shellWord(target.context) : '<context>'}`,
     ...(target.endpoint ? [`--endpoint ${shellWord(target.endpoint)}`] : []),
   ]
   return `${command} ${flags.join(' ')}`
 }
+
+/** The endpoint an installation reads Substrate at unless its operator sets another (substrate.api.endpoint). */
+export const DEFAULT_INSTALLATION_ENDPOINT = 'api.ate-system.svc:443'
 
 /**
  * A shell command a next step names, as a code chip with a copy button, on a

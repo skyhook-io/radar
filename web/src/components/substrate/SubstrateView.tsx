@@ -34,7 +34,7 @@ import { SubstrateOverview } from './SubstrateOverview'
 import { SubstratePoolPage } from './SubstratePoolPage'
 import { SubstrateTemplatePage, SubstrateTemplatesScreen } from './SubstrateTemplates'
 import { SubstrateWorkersScreen } from './SubstrateWorkers'
-import { KubectlTargetContext, SubstrateScreenGate, type KubectlTarget } from './shared'
+import { DEFAULT_INSTALLATION_ENDPOINT, KubectlTargetContext, SubstrateScreenGate, type KubectlTarget } from './shared'
 import { substrateDiscovered, useSubstrateSidebarWorkspace } from './useSubstrateSidebarWorkspace'
 
 /**
@@ -92,10 +92,13 @@ export function SubstrateView({ namespaces, selectedResource, onOpenResource, on
   // On a local Radar, the file and name the context has there, and a saved
   // direct endpoint (the default is the port-forward kubectl ate makes itself).
   const kubectlContext = useCNPGKubectlContext()
-  const connectionView = useSubstrateConnection(!!kubectlContext)
+  const connectionView = useSubstrateConnection(discovered)
   const local = connectionView.data?.view === 'local' ? connectionView.data : undefined
+  const managed = connectionView.data?.view === 'managed' ? connectionView.data.managed : undefined
   const kubeconfigFile = local?.target.source?.startsWith('/') ? local.target.source : undefined
-  const endpoint = local?.saved && !local.targetChanged ? local.settings?.endpoint || undefined : undefined
+  const endpoint = local
+    ? (local.saved && !local.targetChanged ? local.settings?.endpoint || undefined : undefined)
+    : managed?.endpoint && managed.endpoint !== DEFAULT_INSTALLATION_ENDPOINT ? managed.endpoint : undefined
   const kubectlTarget = useMemo<KubectlTarget>(
     () => ({ context: kubectlContext ? (local?.target.inFileName || kubectlContext.name) : null, kubeconfig: kubeconfigFile, endpoint }),
     [kubectlContext, local?.target.inFileName, kubeconfigFile, endpoint],
