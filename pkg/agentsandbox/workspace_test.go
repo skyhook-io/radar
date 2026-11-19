@@ -759,3 +759,56 @@ func TestCaveatsAreNotFolded(t *testing.T) {
 		t.Errorf("pool row %+v", row)
 	}
 }
+
+// The controller adopts a ready warm sandbox before it looks up the template,
+// so a pool that still holds one serves claims without it: only the pool's
+// row reports the missing template, and a waiting claim reads as any other.
+func TestStockedPoolServesClaimsWithoutTemplate(t *testing.T) {
+	waits := claim("waits", time.Hour, spec(map[string]any{"warmPoolRef": map[string]any{"name": "p"}}))
+	fresh := claim("fresh", time.Minute, spec(map[string]any{"warmPoolRef": map[string]any{"name": "p"}}))
+	in := Input{Now: now, Sandboxes: full(), Claims: full(waits, fresh), WarmPools: full(pool("p", "gone", 2, 1, time.Hour)), Templates: full(), Controller: running()}
+	s := Summarize(in)
+	if row := rowFor(s, "SandboxWarmPool", "p"); row == nil || row.Rule != RuleTemplateMissing {
+		t.Errorf("pool row %+v", row)
+	}
+	row := rowFor(s, "SandboxClaim", "waits")
+	if row == nil || row.Rule == RuleCannotBind || row.Reason == ReasonTemplateNotFound {
+		t.Errorf("a claim on a stocked pool %+v", row)
+	}
+	if row := rowFor(s, "SandboxClaim", "fresh"); row != nil {
+		t.Errorf("a claim within its start-up time %+v", row)
+	}
+}
+
+// A fresh replacement doesn't hide an older member the scheduler can't place.
+func TestFreshMemberDoesNotHideABlockedOne(t *testing.T) {
+	in := liveInput()
+	in.Sandboxes = full(
+		sandbox("stuck", 20*time.Minute, owner("SandboxWarmPool", "warm"),
+			conds(cnd("PodScheduled", "False", "Unschedulable", "0/4 nodes are available: 4 Insufficient cpu.", 20*time.Minute), cnd("Ready", "False", "DependenciesNotReady", "Pod exists with phase: Pending", 20*time.Minute))),
+		sandbox("fresh", time.Minute, owner("SandboxWarmPool", "warm"), conds(cnd("Ready", "False", "DependenciesNotReady", "", time.Minute))),
+	)
+	row := rowFor(Summarize(in), "SandboxWarmPool", "warm")
+	if row == nil || row.Rule != RuleReserveBelowTarget {
+		t.Fatalf("row %+v", row)
+	}
+	if row.RawDetailSource != DetailScheduler || row.NextStep == "" || !strings.Contains(row.Reading, "can’t be scheduled") {
+		t.Errorf("scheduler step missing: %+v", row)
+	}
+	if row.Related == nil || len(row.Related.Refs) != 1 || row.Related.Refs[0].Name != "stuck" {
+		t.Errorf("related %+v, want only the stuck member", row.Related)
+	}
+}
+
+// A pool that just handed out its ready sandboxes is refilling: its
+// replacements are young, so it raises nothing.
+func TestJustHandedOutIsQuiet(t *testing.T) {
+	in := liveInput()
+	in.Sandboxes = full(
+		sandbox("new-a", time.Minute, owner("SandboxWarmPool", "warm"), conds(cnd("Ready", "False", "DependenciesNotReady", "", time.Minute))),
+		sandbox("new-b", 30*time.Second, owner("SandboxWarmPool", "warm")),
+	)
+	if row := rowFor(Summarize(in), "SandboxWarmPool", "warm"); row != nil {
+		t.Errorf("a refilling pool raised %+v", row)
+	}
+}
