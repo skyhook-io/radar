@@ -10,9 +10,11 @@ function volumeMethod(row: VeleroVolumeRecord, restore: boolean) {
     case 'CSISnapshot': return row.snapshotDataMoved ? `CSI snapshot · Copy ${restore ? 'from' : 'to'} the bucket (data mover)` : 'CSI snapshot'
     case 'PodVolumeBackup': return 'File-system backup'
     case 'PodVolumeRestore': return 'File-system restore'
-    default: return row.method || 'Not recorded'
+    default: return row.method || (row.skipped ? 'None (skipped)' : 'Not recorded')
   }
 }
+
+const resultLabels: Record<string, string> = { succeeded: 'Succeeded', failed: 'Failed' }
 
 function VolumeDetails({ label, info }: { label: string; info?: VeleroVolumeDetails }) {
   if (!info) return null
@@ -97,7 +99,7 @@ export function VeleroRunVolumes({ kind, namespace, name }: { kind: 'backups' | 
         columns={[
           { header: 'Volume', cell: (row) => <div className="space-y-1 break-all">{row.pvcName && <div>PVC {row.pvcNamespace ? row.pvcNamespace + '/' : ''}{row.pvcName}</div>}{row.pvName && <div className="text-xs text-theme-text-secondary">PV {row.pvName}</div>}{!row.pvcName && !row.pvName && <div>{row.podVolumeInfo?.podName ? `${row.podVolumeInfo.podNamespace || ''}/${row.podVolumeInfo.podName} · ${row.podVolumeInfo.volumeName || 'Volume not recorded'}` : 'Not recorded'}</div>}</div> },
           { header: 'Method', cell: (row) => <div className="space-y-1">{volumeMethod(row, restore)}{row.method === 'CSISnapshot' && row.preserveLocalSnapshot !== undefined && <div className="text-xs text-theme-text-secondary">Local snapshot retained: {row.preserveLocalSnapshot ? 'Yes' : 'No'}</div>}</div> },
-          ...(!restore ? [{ header: 'Result', cell: (row: VeleroVolumeRecord) => <div className="space-y-1">{row.skipped ? <><Badge severity="neutral">Skipped</Badge><div>{row.skippedReason || 'Reason not recorded'}</div></> : row.result ? <Badge severity={row.result === 'failed' ? 'error' : row.result === 'succeeded' ? 'success' : 'neutral'}>{row.result}</Badge> : 'Not recorded'}</div> }] : []),
+          ...(!restore ? [{ header: 'Result', cell: (row: VeleroVolumeRecord) => <div className="space-y-1">{row.skipped ? <><Badge severity="neutral">Skipped</Badge><div>{row.skippedReason || 'Reason not recorded'}</div></> : row.result ? <Badge severity={row.result === 'failed' ? 'error' : row.result === 'succeeded' ? 'success' : 'neutral'}>{resultLabels[row.result] ?? row.result}</Badge> : 'Not recorded'}</div> }] : []),
           { header: 'Recorded details', cell: (row) => <div className="space-y-2"><VolumeDetails label="Native snapshot" info={row.nativeSnapshotInfo} /><VolumeDetails label="CSI snapshot" info={row.csiSnapshotInfo} /><VolumeDetails label="Data mover" info={row.snapshotDataMovementInfo} /><VolumeDetails label="File-system copy" info={row.podVolumeInfo} />{!row.nativeSnapshotInfo && !row.csiSnapshotInfo && !row.snapshotDataMovementInfo && !row.podVolumeInfo && 'Not recorded'}</div> },
         ]}
         rows={data.volumes.map((row, index) => ({ ...row, index }))}

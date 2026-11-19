@@ -85,10 +85,12 @@ describe('Volumes tab', () => {
 
   it('shows all methods, explicit outcomes, skipped reasons and unknown CSI results', async () => {
     respond(); await mount(); await settle(() => host.textContent!.includes('snap-123'))
-    for (const text of ['Native snapshot', 'CSI snapshot', 'Copy to the bucket (data mover)', 'File-system backup', 'excluded by policy', 'ebs.csi.aws.com', '1 KB', 'op-moved', 'succeeded', 'failed']) expect(host.textContent).toContain(text)
+    for (const text of ['Native snapshot', 'CSI snapshot', 'Copy to the bucket (data mover)', 'File-system backup', 'excluded by policy', 'ebs.csi.aws.com', '1 KB', 'op-moved', 'Succeeded', 'Failed']) expect(host.textContent).toContain(text)
+    const skipped = [...host.querySelectorAll('tr')].find((row) => row.textContent!.includes('excluded by policy'))!
+    expect(skipped.textContent).toContain('None (skipped)')
     const csi = [...host.querySelectorAll('tr')].find((row) => row.textContent!.includes('ebs.csi.aws.com'))!
     expect(csi.textContent).toContain('Not recorded')
-    expect(csi.textContent).not.toContain('succeeded')
+    expect(csi.textContent).not.toContain('Succeeded')
     const native = [...host.querySelectorAll('tr')].find((row) => row.textContent!.includes('snap-123'))!
     expect(native.textContent).not.toContain('Local snapshot retained')
     expect(csi.textContent).toContain('Local snapshot retained: Yes')
@@ -103,7 +105,7 @@ describe('Volumes tab', () => {
     expect(host.textContent).toContain('before plugin operations finish')
     expect(host.textContent).toContain('File-system restore')
     expect([...host.querySelectorAll('th')].map((e) => e.textContent)).not.toContain('Result')
-    expect(host.textContent).not.toContain('succeeded')
+    expect(host.textContent).not.toContain('Succeeded')
   })
 
   it.each([['Velero has no volume record for this run', 404], ['no access to this Velero Backup', 403], ['the object store refused it', 503]])('keeps artifact error distinct from operation data: %s', async (message, status) => {
