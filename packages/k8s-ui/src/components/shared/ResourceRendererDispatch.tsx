@@ -5,6 +5,8 @@ import { StrimziConnectorRenderer } from '../resources/renderers/StrimziConnecto
 import { StrimziKafkaRenderer, StrimziKafkaNodePoolRenderer } from '../resources/renderers/StrimziKafkaRenderer'
 import { getVolumeSnapshotStatus, isVolumeSnapshot, isVolumeSnapshotContent, isVolumeSnapshotClass } from '../resources/resource-utils-volumesnapshot'
 import { VolumeSnapshotRenderer, VolumeSnapshotContentRenderer, VolumeSnapshotClassRenderer } from '../resources/renderers/VolumeSnapshotRenderers'
+import { getMetalLBPoolStatus, getMetalLBConfigurationStateStatus, isMetalLBIPAddressPool, isMetalLBL2Advertisement, isMetalLBBGPAdvertisement, isMetalLBBGPPeer, isMetalLBConfigurationState } from '../resources/resource-utils-metallb'
+import { MetalLBIPAddressPoolRenderer, MetalLBL2AdvertisementRenderer, MetalLBBGPAdvertisementRenderer, MetalLBBGPPeerRenderer, MetalLBConfigurationStateRenderer } from '../resources/renderers/MetalLBRenderers'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
 import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
@@ -507,6 +509,7 @@ const KNOWN_KINDS = new Set([
   'customresourcedefinitions',
   'kafkaconnectors', 'kafkas', 'kafkanodepools',
   'volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses',
+  'ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates',
   'opentelemetrycollectors', 'instrumentations',
   'canaries', 'metrictemplates',
   'plans',
@@ -781,6 +784,7 @@ export function ResourceRendererDispatch({
     kind === 'customresourcedefinitions' ||
     kind === 'kafkaconnectors' || kind === 'kafkas' || kind === 'kafkanodepools' ||
     ['volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses'].includes(kind) ||
+    ['ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates'].includes(kind) ||
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
     kind === 'plans' ||
@@ -805,6 +809,11 @@ export function ResourceRendererDispatch({
     (kind === 'volumesnapshots' && isVolumeSnapshot(data)) ||
     (kind === 'volumesnapshotcontents' && isVolumeSnapshotContent(data)) ||
     (kind === 'volumesnapshotclasses' && isVolumeSnapshotClass(data)) ||
+    (kind === 'ipaddresspools' && isMetalLBIPAddressPool(data)) ||
+    (kind === 'l2advertisements' && isMetalLBL2Advertisement(data)) ||
+    (kind === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data)) ||
+    (kind === 'bgppeers' && isMetalLBBGPPeer(data)) ||
+    (kind === 'configurationstates' && isMetalLBConfigurationState(data)) ||
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
     (kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP)) ||
@@ -1173,6 +1182,11 @@ export function ResourceRendererDispatch({
         {kind === 'volumesnapshots' && isVolumeSnapshot(data) && <VolumeSnapshotRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'volumesnapshotcontents' && isVolumeSnapshotContent(data) && <VolumeSnapshotContentRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'volumesnapshotclasses' && isVolumeSnapshotClass(data) && <VolumeSnapshotClassRenderer data={data} />}
+        {kind === 'ipaddresspools' && isMetalLBIPAddressPool(data) && <MetalLBIPAddressPoolRenderer data={data} />}
+        {kind === 'l2advertisements' && isMetalLBL2Advertisement(data) && <MetalLBL2AdvertisementRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data) && <MetalLBBGPAdvertisementRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'bgppeers' && isMetalLBBGPPeer(data) && <MetalLBBGPPeerRenderer data={data} />}
+        {kind === 'configurationstates' && isMetalLBConfigurationState(data) && <MetalLBConfigurationStateRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'instrumentations' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <OpenTelemetryInstrumentationRenderer data={data} />}
         {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
@@ -1245,6 +1259,10 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if ((k === 'volumesnapshots' && isVolumeSnapshot(data)) || (k === 'volumesnapshotcontents' && isVolumeSnapshotContent(data))) return getVolumeSnapshotStatus(data)
   // A class is configuration with no status of its own.
   if (k === 'volumesnapshotclasses' && isVolumeSnapshotClass(data)) return null
+  if (k === 'ipaddresspools' && isMetalLBIPAddressPool(data)) return getMetalLBPoolStatus(data)
+  if (k === 'configurationstates' && isMetalLBConfigurationState(data)) return getMetalLBConfigurationStateStatus(data)
+  // Advertisements and peers are configuration; MetalLB writes no status on them.
+  if ((k === 'l2advertisements' && isMetalLBL2Advertisement(data)) || (k === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data)) || (k === 'bgppeers' && isMetalLBBGPPeer(data))) return null
 
   if (isApiGroup(data.apiVersion, 'opentelemetry.io')) {
     if (k === 'opentelemetrycollectors') return getOpenTelemetryCollectorStatus(data)

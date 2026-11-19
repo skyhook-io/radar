@@ -462,6 +462,14 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.metallb }}
+  # The kinds Radar curates and the controller's ConfigurationState reports.
+  # BFD profiles, communities and the per-Service announcement statuses are
+  # not read.
+  - apiGroups: ["metallb.io"]
+    resources: ["ipaddresspools", "l2advertisements", "bgpadvertisements", "bgppeers", "configurationstates"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.multus }}
   # Pod details link each secondary network to its NetworkAttachmentDefinition;
   # nothing else in the group is read.
