@@ -208,7 +208,7 @@ describe('Delete backup', () => {
     render(<VeleroDeleteBackup backup={unstored('nightly-1')} />)
     expect(buttons('Delete object')).toHaveLength(0)
     expect(buttons('Delete backup')).toHaveLength(0)
-    expect(document.body.textContent).toContain('Deletion requested')
+    expect(document.body.textContent).toContain('Deletion status unreadable')
   })
 
   it('offers Delete object, not Delete backup again, after Velero refused the request', () => {

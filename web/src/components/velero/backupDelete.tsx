@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, Trash2 } from 'lucide-react'
 import { AlertBanner, ForceDeleteConfirmDialog, type VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
 import type { RadarFeatureSupport } from '../../api/radarFeatures'
-import { useDeleteResource, useRadarFeature } from '../../api/client'
+import { useCascadeDeletePreview, useDeleteResource, useRadarFeature } from '../../api/client'
 import { useVeleroBackupDeletion, useVeleroWorkspace } from '../../api/velero'
 import { VELERO_BACKUP_KIND, VELERO_GROUP } from './routes'
 import { VELERO_DELETE_BUTTON, VELERO_DELETE_OBJECT } from './shared'
@@ -95,10 +95,11 @@ export function VeleroObjectDeleteNotice({ reason, backup }: { reason: VeleroObj
  * generic delete (DELETE /api/resources/...) bound to the object the user
  * reviewed, so a backup Velero picked up meanwhile is refused (409) rather
  * than deleted. No Force delete: these Backups carry no finalizer to strip.
- * No dependents preview either: the only objects Velero owns by a Backup are
- * its PodVolumeBackups and DataUploads, which it creates while the backup
- * runs, and these never ran (Velero v1.18.2 podvolume/backupper.go,
- * backup/actions/csi/pvc_action.go).
+ * Dependents are listed only when the preview finds some: the only objects
+ * Velero owns by a Backup are the PodVolumeBackups and DataUploads it creates
+ * while the backup runs (Velero v1.18.2 podvolume/backupper.go,
+ * backup/actions/csi/pvc_action.go), and these never ran, so the generic
+ * preview's coverage caveats would only warn about nothing.
  */
 export function VeleroDeleteObject({ backup, reason }: { backup: any; reason: VeleroObjectDeleteReason }) {
   const namespace: string = backup?.metadata?.namespace ?? ''
@@ -106,6 +107,7 @@ export function VeleroDeleteObject({ backup, reason }: { backup: any; reason: Ve
   const [reviewed, setReviewed] = useState<{ uid: string; resourceVersion: string } | null>(null)
   const queryClient = useQueryClient()
   // Deleted, refused (it changed since review) or failed: show the backup as it is now, even if this button is gone by then.
+  const preview = useCascadeDeletePreview(VELERO_BACKUP_KIND.name, namespace, name, VELERO_GROUP, reviewed !== null)
   const deleteResource = useDeleteResource({
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ['resource'] })
@@ -143,6 +145,9 @@ export function VeleroDeleteObject({ backup, reason }: { backup: any; reason: Ve
         namespaceName={namespace}
         resourceData={backup}
         isLoading={deleteResource.isPending}
+        cascadeDetail={preview.data ? { ...preview.data, coverage: undefined } : undefined}
+        cascadeDependents={preview.data?.dependents}
+        cascadeLoading={preview.isFetching}
         actionLabel={VELERO_DELETE_OBJECT}
         details={VELERO_DELETE_OBJECT_DETAILS}
         notice={<VeleroObjectDeleteNotice reason={reason} backup={backup} />}

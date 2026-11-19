@@ -159,7 +159,7 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
       <Tooltip content={tooltip} position="bottom">
         <span>
           {unreadable ? (
-            <Badge severity="warning">{started ? 'Deletion requested' : 'Deletion status unreadable'}</Badge>
+            <Badge severity="warning">{started && !objectUnreadable ? 'Deletion requested' : 'Deletion status unreadable'}</Badge>
           ) : (
             <Badge severity="neutral">
               <Loader2 className="mr-1 inline h-3 w-3 animate-spin" aria-hidden />

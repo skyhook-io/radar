@@ -104,6 +104,7 @@ func TestDeleteResourceHandlerBindsToTheReviewedObject(t *testing.T) {
 	}{
 		{name: "bound", query: "?uid=original&resourceVersion=8", status: http.StatusOK, wantRV: "8"},
 		{name: "changed since review", query: "?uid=original&resourceVersion=8", deleteErr: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "held", fmt.Errorf("Precondition failed: ResourceVersion in precondition: 8, ResourceVersion in object meta: 9")), status: http.StatusConflict, wantRV: "8", wantMessage: "changed since you reviewed it"},
+		{name: "a webhook quoting the phrase keeps its own words", query: "?uid=original&resourceVersion=8", deleteErr: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "held", fmt.Errorf("Precondition failed: the change window is closed")), status: http.StatusConflict, wantRV: "8", wantMessage: "the change window is closed"},
 		{name: "a webhook's conflict keeps its own words", query: "?uid=original&resourceVersion=8", deleteErr: apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, "held", fmt.Errorf("policy holds this object")), status: http.StatusConflict, wantRV: "8", wantMessage: "policy holds this object"},
 		{name: "force can't be bound", query: "?force=true&resourceVersion=8", status: http.StatusBadRequest},
 	} {

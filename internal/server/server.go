@@ -4611,6 +4611,10 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, result)
 }
 
+// deletePreconditionFailed is the API server's own message when a delete's UID
+// or resourceVersion precondition doesn't match the stored object.
+var deletePreconditionFailed = regexp.MustCompile(`Precondition failed: (UID|ResourceVersion) in precondition`)
+
 // handleDeleteResource deletes a Kubernetes resource
 func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	kind := chi.URLParam(r, "kind")
@@ -4654,7 +4658,7 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 		}
 		if apierrors.IsConflict(err) {
 			// A precondition the API server checked, not an admission webhook's 409.
-			if (uid != "" || resourceVersion != "") && strings.Contains(err.Error(), "Precondition failed") {
+			if (uid != "" || resourceVersion != "") && deletePreconditionFailed.MatchString(err.Error()) {
 				s.writeError(w, http.StatusConflict, "it changed since you reviewed it, so it was not deleted; review it again")
 				return
 			}
