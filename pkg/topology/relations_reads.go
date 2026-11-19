@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/cache"
 
@@ -20,6 +21,20 @@ import (
 // object narrows the answer and a check that couldn't be made leaves it
 // incomplete; the gap names no namespace.
 func (n *neighborhood) allowed(r resourceid.Ref) bool {
+	switch n.decide(r) {
+	case ownership.Allowed:
+		return true
+	case ownership.Undecided:
+		n.cover("special", relations.Coverage{NotChecked: []ownership.Gap{{Kind: r.GroupKind(), Reason: readreason.UserPermissionCheckFailed}}})
+	default:
+		n.cover("special", relations.Coverage{Narrowed: true})
+	}
+	return false
+}
+
+// decide is the caller's access to r's kind in r's namespace, asked once per
+// answer.
+func (n *neighborhood) decide(r resourceid.Ref) ownership.Decision {
 	key := decisionKey{r.GroupKind(), r.Namespace}
 	d, seen := n.decided[key]
 	if !seen {
@@ -29,15 +44,53 @@ func (n *neighborhood) allowed(r resourceid.Ref) bool {
 		}
 		n.decided[key] = d
 	}
-	switch d {
-	case ownership.Allowed:
-		return true
-	case ownership.Undecided:
-		n.cover("special", relations.Coverage{NotChecked: []ownership.Gap{{Kind: r.GroupKind(), Reason: readreason.UserPermissionCheckFailed}}})
-	default:
-		n.cover("special", relations.Coverage{Narrowed: true})
+	return d
+}
+
+// nameSpecDeclared lists, by name and marked, what the subject's own spec
+// names that the caller may not read, as the subject's declared references
+// are: a Pod's Node and the ResourceClaims its spec names, and a Calico
+// HostEndpoint's Node. The caller reads these names with the subject. Nothing
+// is read about the targets. A claim a template generates is named only in
+// the Pod's status, so it isn't listed here.
+func (n *neighborhood) nameSpecDeclared(obj runtime.Object, rel *Relationships) {
+	state := func(r resourceid.Ref) string {
+		switch n.decide(r) {
+		case ownership.Allowed:
+			return ""
+		case ownership.Undecided:
+			return ResourceStateAccessUnverified
+		}
+		return ResourceStateDenied
 	}
-	return false
+	node := func(name string) {
+		if name == "" || rel.Node != nil {
+			return
+		}
+		if s := state(resourceid.NewRef("", "Node", "", name)); s != "" {
+			rel.Node = &ResourceRef{Kind: "Node", Name: name, State: s}
+		}
+	}
+	switch o := obj.(type) {
+	case *corev1.Pod:
+		node(o.Spec.NodeName)
+		for _, pc := range o.Spec.ResourceClaims {
+			if pc.ResourceClaimName == nil || *pc.ResourceClaimName == "" {
+				continue
+			}
+			claim := ResourceRef{Kind: "ResourceClaim", Group: "resource.k8s.io", Namespace: o.Namespace, Name: *pc.ResourceClaimName}
+			if s := state(refIdentity(claim)); s != "" {
+				claim.State = s
+				rel.ResourceClaims = appendResourceRef(rel.ResourceClaims, claim)
+			}
+		}
+	case *unstructured.Unstructured:
+		gvk := o.GroupVersionKind()
+		if gvk.Kind == "HostEndpoint" && (gvk.Group == "crd.projectcalico.org" || gvk.Group == "projectcalico.org") {
+			name, _, _ := unstructured.NestedString(o.Object, "spec", "node")
+			node(name)
+		}
+	}
 }
 
 type decisionKey struct {
@@ -76,6 +129,9 @@ type relationDirectProvider struct {
 // function), so a Node's Pods are checked once they match the Node, not
 // every Pod in every namespace first.
 func (p *relationDirectProvider) objects(gk resourceid.GroupKind) ([]runtime.Object, error) {
+	if read, ok := p.n.seeded[gk]; ok {
+		return read.objects, read.err
+	}
 	namespaces, all := p.n.access.Namespaces()
 	scope := ownership.SearchScope{Namespaces: namespaces, AllNamespaces: all, IncludeClusterScoped: true}
 	index, keys := "", []string(nil)
@@ -144,7 +200,7 @@ func (a intermediateAccess) CanRead(gk resourceid.GroupKind, ns string) ownershi
 	return a.Access.CanRead(gk, ns)
 }
 
-func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ownership.Access, subject resourceid.Ref, obj runtime.Object, istioDomain string, rel *Relationships) {
+func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ownership.Access, subject resourceid.Ref, obj runtime.Object, istioDomain func() string, rel *Relationships) {
 	services := []resourceid.Ref{}
 	if subject.GroupKind() == (resourceid.GroupKind{Kind: "Service"}) {
 		services = append(services, subject)
@@ -153,6 +209,7 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 		selected := v.SelectedBy(relations.ServiceSelectors, subject, obj)
 		selected.Coverage.Total = 0
 		n.cover(relations.ServiceSelectors.Name, selected.Coverage)
+		n.extras.cover("Entrypoints", selected.Coverage)
 		services = selected.Matches
 	}
 	add := func(r resourceid.Ref) {
@@ -175,10 +232,11 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 		if traverse.CanRead(svc.GroupKind(), svc.Namespace) != ownership.Allowed {
 			continue
 		}
-		v := relations.NewView(s, intermediateAccess{Access: emit, ref: svc, traverse: traverse})
-		for _, family := range []*relations.Family{relations.IngressBackends, relations.GatewayBackends, relations.IstioServiceHosts(istioDomain), relations.TraefikBackends, relations.ContourBackends} {
+		v := relations.NewView(s, intermediateAccess{Access: emit, ref: svc, traverse: traverse}).WithLimit(n.limit)
+		for _, family := range []*relations.Family{relations.IngressBackends, relations.GatewayBackends, relations.IstioServiceHostsIn(istioDomain), relations.TraefikBackends, relations.ContourBackends} {
 			found := v.Referrers(family, svc, nil)
 			n.cover(family.Name, found.Coverage)
+			n.extras.cover("Entrypoints", found.Coverage)
 			for _, r := range found.Referrers {
 				// A DestinationRule configures traffic to the host; the
 				// family's own projection files it under ConfigRefs.
@@ -192,14 +250,16 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 		// Routes can be private hops to a readable Gateway.
 		for _, composition := range []struct{ backends, parents *relations.Family }{
 			{relations.GatewayBackends, relations.GatewayParents},
-			{relations.IstioServiceHosts(istioDomain), relations.IstioGateways},
+			{relations.IstioServiceHostsIn(istioDomain), relations.IstioGateways},
 		} {
 			routes := relations.NewView(s, traverse).WithLimit(0).Referrers(composition.backends, svc, nil)
 			routes.Coverage.Total = 0
 			n.cover(composition.parents.Name, routes.Coverage)
+			n.extras.cover("Entrypoints", routes.Coverage)
 			for _, route := range routes.Referrers {
 				parents := relations.NewView(s, intermediateAccess{Access: emit, ref: route.Ref, traverse: traverse}).References(composition.parents, route.Ref, nil)
 				n.cover(composition.parents.Name, parents.Coverage)
+				n.extras.cover("Entrypoints", parents.Coverage)
 				for _, parent := range parents.Declared {
 					if parent.State == relations.TargetPresent {
 						add(parent.Ref)

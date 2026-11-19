@@ -66,26 +66,26 @@ func ContourSecretPathReferences(obj *unstructured.Unstructured) []PathRef {
 		}
 	}
 	addServices := func(raw map[string]any, path string) {
-		services, _, _ := unstructured.NestedSlice(raw, "services")
+		services, _, _ := borrowedSlice(raw, "services")
 		for _, service := range services {
 			if m, ok := service.(map[string]any); ok {
 				addValidation(m, path+".services[]")
 			}
 		}
 	}
-	routes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "routes")
+	routes, _, _ := borrowedSlice(obj.Object, "spec", "routes")
 	for _, route := range routes {
 		if m, ok := route.(map[string]any); ok {
 			addServices(m, "spec.routes[]")
 		}
 	}
-	if tcp, _, _ := unstructured.NestedMap(obj.Object, "spec", "tcpproxy"); tcp != nil {
+	if tcp, _, _ := borrowedMap(obj.Object, "spec", "tcpproxy"); tcp != nil {
 		addServices(tcp, "spec.tcpproxy")
 	}
-	providers, _, _ := unstructured.NestedSlice(obj.Object, "spec", "virtualhost", "jwtProviders")
+	providers, _, _ := borrowedSlice(obj.Object, "spec", "virtualhost", "jwtProviders")
 	for _, provider := range providers {
 		if m, ok := provider.(map[string]any); ok {
-			if jwks, _, _ := unstructured.NestedMap(m, "remoteJWKS"); jwks != nil {
+			if jwks, _, _ := borrowedMap(m, "remoteJWKS"); jwks != nil {
 				addValidation(jwks, "spec.virtualhost.jwtProviders[].remoteJWKS")
 			}
 		}
@@ -102,7 +102,7 @@ const ContourGroup = "projectcontour.io"
 func ContourBackendReferences(obj *unstructured.Unstructured) []PathRef {
 	var refs []PathRef
 	addServices := func(raw map[string]any, path string) {
-		services, _, _ := unstructured.NestedSlice(raw, "services")
+		services, _, _ := borrowedSlice(raw, "services")
 		for _, item := range services {
 			m, _ := item.(map[string]any)
 			name, _ := m["name"].(string)
@@ -111,7 +111,7 @@ func ContourBackendReferences(obj *unstructured.Unstructured) []PathRef {
 			}
 		}
 	}
-	routes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "routes")
+	routes, _, _ := borrowedSlice(obj.Object, "spec", "routes")
 	for _, route := range routes {
 		if m, ok := route.(map[string]any); ok {
 			addServices(m, "spec.routes[]")
@@ -128,15 +128,15 @@ func ContourBackendReferences(obj *unstructured.Unstructured) []PathRef {
 		}
 		refs = append(refs, PathRef{Ref: resourceid.NewRef(ContourGroup, "HTTPProxy", ns, name), Path: path})
 	}
-	includes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "includes")
+	includes, _, _ := borrowedSlice(obj.Object, "spec", "includes")
 	for _, item := range includes {
 		m, _ := item.(map[string]any)
 		include(m, "spec.includes[]")
 	}
-	tcp, _, _ := unstructured.NestedMap(obj.Object, "spec", "tcpproxy")
+	tcp, _, _ := borrowedMap(obj.Object, "spec", "tcpproxy")
 	addServices(tcp, "spec.tcpproxy")
 	for _, field := range []string{"include", "includes"} {
-		m, _, _ := unstructured.NestedMap(tcp, field)
+		m, _, _ := borrowedMap(tcp, field)
 		include(m, "spec.tcpproxy."+field)
 	}
 	return refs

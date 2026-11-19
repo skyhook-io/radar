@@ -199,6 +199,8 @@ export interface FeatureCapabilities {
   veleroRuns?: boolean
   /** POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion */
   veleroDeleteBackup?: boolean
+  /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
+  resourceDeletePreconditions?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
@@ -683,6 +685,14 @@ export interface ResourceRef {
   namespace: string
   name: string
   group?: string  // API group for CRDs (e.g., 'cert-manager.io')
+  /**
+   * Set when the subject's own spec names this object but the viewer may not
+   * read it ('denied'), or Radar couldn't check the viewer's access
+   * ('access_unverified'). Only the name
+   * is known: not whether it exists, nor its state. Absent means no qualifier
+   * was recorded, not that the object exists.
+   */
+  state?: 'denied' | 'access_unverified'
 }
 
 // Computed relationships for a resource

@@ -80,7 +80,7 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 	unstructured.RemoveNestedField(resumed.Object, "spec", "paused")
 	unstructured.RemoveNestedField(resumed.Object, "spec", "skipImmediately")
 	cronExpr, _, _ := unstructured.NestedString(resumed.Object, "spec", "schedule")
-	if _, err := parseCron(cronExpr); err == nil {
+	if _, err := parseCron(cronExpr, in.Server.dayMatch()); err == nil {
 		_ = unstructured.SetNestedField(resumed.Object, "Enabled", "status", "phase")
 		unstructured.RemoveNestedField(resumed.Object, "status", "validationErrors")
 	}
@@ -205,6 +205,7 @@ func nextAfterSkip(in ScheduleInput, resumed *unstructured.Unstructured) (*time.
 }
 
 func fixedDelay(expr string) bool {
-	parsed, err := parseCron(expr)
+	// @every parses the same under both libraries, so the day-matching rule doesn't matter.
+	parsed, err := parseCron(expr, DayMatchUnknown)
 	return err == nil && parsed.fixedDelay
 }

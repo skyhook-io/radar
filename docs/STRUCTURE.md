@@ -85,6 +85,9 @@ radar/
 │   │   ├── insights/          # Per-app diagnosis pipeline: issues + drift diff + recent events + plan + history
 │   │   └── tree/              # GitOps resource tree builder for ArgoCD/FluxCD detail graphs
 │   ├── k8score/               # Shared K8s caching layer (informers, listers, transforms)
+│   ├── ownership/             # Caller-scoped owners, dependents and managers
+│   ├── relations/             # Declared, selector and composition families + field dispositions
+│   ├── resourcecontext/       # Agent context from supplied family/ownership answers
 │   ├── portforward/           # Port forwarding logic
 │   ├── timeline/              # Timeline event storage (memory/SQLite/PostgreSQL)
 │   └── topology/
@@ -92,7 +95,8 @@ radar/
 │       ├── certificates.go    # Certificate relationship detection
 │       ├── memo.go            # 5s-TTL Memoizer wrapping deterministic Topology builds
 │       ├── pod_grouping.go    # Pod grouping/collapsing logic
-│       ├── relationships.go   # Resource relationship detection
+│       ├── relations_answer.go # Family/ownership projection for Related Resources and context
+│       ├── relationships.go   # Graph relationship projection for retained graph consumers
 │       └── types.go           # Node, edge, topology definitions
 ├── packages/k8s-ui/           # Shared UI package (@skyhook-io/k8s-ui)
 │   └── src/

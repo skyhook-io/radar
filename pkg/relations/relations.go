@@ -28,7 +28,8 @@ type Session interface {
 	// Indexed reads the objects of gk in scope that index files under any of
 	// keys, from stores loaded in full, each object once, with a gap for each
 	// part of scope it couldn't read. An empty index reads every object of
-	// gk in scope. A kind discovery doesn't serve is read as empty only when
+	// gk in scope; an index with no keys reads no object but reports the
+	// same gaps. A kind discovery doesn't serve is read as empty only when
 	// discovery covered its group, so one failing API group leaves other
 	// groups' absent kinds empty. The objects are the cached ones: callers
 	// must not modify or keep them.
@@ -81,10 +82,11 @@ func (c Coverage) Complete() bool {
 // not safe for concurrent use, and its answers hold only if the session's
 // ValidateCaches passes once they are built.
 type View struct {
-	session Session
-	access  ownership.Access
-	limit   int
-	decided map[accessKey]ownership.Decision
+	session       Session
+	lookupSession Session
+	access        ownership.Access
+	limit         int
+	decided       map[accessKey]ownership.Decision
 }
 
 type accessKey struct {
@@ -100,7 +102,14 @@ const DefaultLimit = 500
 // DefaultLimit objects per Referrers, Selected, SelectedBy or Composed
 // answer.
 func NewView(s Session, access ownership.Access) *View {
-	return &View{session: s, access: access, limit: DefaultLimit, decided: map[accessKey]ownership.Decision{}}
+	return &View{session: s, lookupSession: s, access: access, limit: DefaultLimit, decided: map[accessKey]ownership.Decision{}}
+}
+
+// WithAuxiliarySession supplies non-emitted selector inputs such as Namespace
+// labels. Emission reads still use the original session and Access.
+func (v *View) WithAuxiliarySession(s Session) *View {
+	v.lookupSession = s
+	return v
 }
 
 // WithLimit sets, on v itself, the most objects a Referrers, Selected,

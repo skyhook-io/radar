@@ -13,7 +13,7 @@ import (
 // workflowTemplateRef and every DAG task's or step's templateRef, each
 // target once per path, in the order first named.
 func ArgoWorkflowTemplateRefs(obj map[string]any, namespace string, fields ...string) []PathRef {
-	spec, found, _ := unstructured.NestedMap(obj, fields...)
+	spec, found, _ := borrowedMap(obj, fields...)
 	if !found {
 		return nil
 	}
@@ -38,29 +38,29 @@ func ArgoWorkflowTemplateRefs(obj map[string]any, namespace string, fields ...st
 			refs = append(refs, PathRef{Ref: k.ref, Path: k.path})
 		}
 	}
-	if workflowRef, found, _ := unstructured.NestedMap(spec, "workflowTemplateRef"); found {
+	if workflowRef, found, _ := borrowedMap(spec, "workflowTemplateRef"); found {
 		add(workflowRef, "workflowTemplateRef")
 	}
-	templates, _, _ := unstructured.NestedSlice(spec, "templates")
+	templates, _, _ := borrowedSlice(spec, "templates")
 	for _, rawTemplate := range templates {
 		template, ok := rawTemplate.(map[string]any)
 		if !ok {
 			continue
 		}
-		tasks, _, _ := unstructured.NestedSlice(template, "dag", "tasks")
+		tasks, _, _ := borrowedSlice(template, "dag", "tasks")
 		for _, task := range tasks {
 			if m, ok := task.(map[string]any); ok {
-				if ref, found, _ := unstructured.NestedMap(m, "templateRef"); found {
+				if ref, found, _ := borrowedMap(m, "templateRef"); found {
 					add(ref, "templates[].dag.tasks[].templateRef")
 				}
 			}
 		}
-		groups, _, _ := unstructured.NestedSlice(template, "steps")
+		groups, _, _ := borrowedSlice(template, "steps")
 		for _, group := range groups {
 			steps, _ := group.([]any)
 			for _, step := range steps {
 				if m, ok := step.(map[string]any); ok {
-					if ref, found, _ := unstructured.NestedMap(m, "templateRef"); found {
+					if ref, found, _ := borrowedMap(m, "templateRef"); found {
 						add(ref, "templates[].steps[][].templateRef")
 					}
 				}
