@@ -135,6 +135,11 @@ func TestChartGrantsEveryWatchedCRDGroup(t *testing.T) {
 			watched[c.Group] = "supportedCRDFallbacks (internal/k8s/dynamic_cache.go)"
 		}
 	}
+	for _, k := range relationshipWatchKinds() {
+		if k.Group != "" {
+			watched[k.Group] = "relations.Kinds (pkg/relations/kinds.go)"
+		}
+	}
 	for _, e := range topology.ClusterScopedKinds {
 		if e.Group != "" {
 			watched[e.Group] = "topology.ClusterScopedKinds (pkg/topology/cluster_scoped_kinds.go)"
@@ -163,8 +168,9 @@ func TestChartGrantsEveryWatchedCRDGroup(t *testing.T) {
 // not valid YAML), skipping comments and {{ }} directives so groups named in prose
 // don't count, and reading both inline (apiGroups: ["a","b"]) and block-style
 // (apiGroups:\n  - "a") rules. Conditional per-group rules are counted as available
-// collection grants; most default to true. Flagger is an explicitly documented
-// opt-in, with default-off/opt-in chart regression tests. This guard checks that
+// collection grants; most default to true. Flagger and system-upgrade-controller
+// (upgrade.cattle.io) are explicitly documented opt-ins, with default-off/opt-in
+// chart regression tests. This guard checks that
 // each catalog group has a focused grant path, not that every path is enabled; the wildcard "*" is excluded on purpose.
 func chartGrantedAPIGroups(t *testing.T) map[string]bool {
 	t.Helper()
@@ -202,4 +208,26 @@ func chartGrantedAPIGroups(t *testing.T) map[string]bool {
 		}
 	}
 	return groups
+}
+
+func TestRelationshipChartGrantsPodTemplatesAndKnativeSinks(t *testing.T) {
+	role := renderCollectorClusterRole(t, "")
+	for _, target := range []struct{ group, resource string }{{"", "podtemplates"}, {"sinks.knative.dev", "jobsinks"}} {
+		granted := false
+		for _, rule := range role.Rules {
+			if slices.Contains(rule.APIGroups, target.group) && (slices.Contains(rule.Resources, target.resource) || slices.Contains(rule.Resources, "*")) && slices.Contains(rule.Verbs, "get") && slices.Contains(rule.Verbs, "list") && slices.Contains(rule.Verbs, "watch") {
+				granted = true
+				break
+			}
+		}
+		if !granted {
+			t.Errorf("default chart does not grant collection of %s/%s", target.group, target.resource)
+		}
+	}
+	role = renderCollectorClusterRole(t, "rbac.crdGroups.knative=false")
+	for _, rule := range role.Rules {
+		if slices.Contains(rule.APIGroups, "sinks.knative.dev") {
+			t.Fatal("Knative sink grant ignored the Knative toggle")
+		}
+	}
 }

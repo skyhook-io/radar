@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, buildAppMembershipIndex, batchActivityForApp, batchRuntimeForApp, batchSignalForApp, servingReadiness, resolveAppWorkloadSelection, type AppGroupFoldEntry, type AppRow, type AppWorkload } from './applications'
+import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, worstHealth, buildAppMembershipIndex, batchActivityForApp, batchRuntimeForApp, batchSignalForApp, servingReadiness, resolveAppWorkloadSelection, classSetOf, type AppGroupFoldEntry, type AppRow, type AppWorkload, type AppWorkloadClass } from './applications'
 
 describe('application workload scope resolution', () => {
   const sole = ['Deployment/prod/api']
@@ -343,6 +343,31 @@ describe('foldAppGroups', () => {
     expect((sw[0] as { workloadClass?: string }).workloadClass).toBe('service')
     const sj = foldAppGroups([mk('service', 'a', 'dev'), mk('job', 'b', 'staging')], new Set(), false)
     expect((sj[0] as { workloadClass?: string }).workloadClass).toBe('mixed')
+  })
+
+  it('reads an undecided workload as a service or a worker, taking the class both readings give', () => {
+    const mk = (cls: AppWorkloadClass, key: string, env: string) =>
+      entry(key, key, env, { classComposition: [{ cls, count: 1 }] })
+    const classOf = (a: AppWorkloadClass, b: AppWorkloadClass) =>
+      (foldAppGroups([mk(a, 'a', 'dev'), mk(b, 'b', 'staging')], new Set(), false)[0] as { workloadClass?: string }).workloadClass
+    expect(classOf('unknown', 'job')).toBe('mixed')
+    expect(classOf('unknown', 'service')).toBe('service')
+    expect(classOf('unknown', 'worker')).toBe('unknown')
+    expect(classOf('unknown', 'unknown')).toBe('unknown')
+  })
+
+  it('files an undecided workload under the Unknown facet, not Service or Worker', () => {
+    const row: AppRow = {
+      key: 'shop',
+      name: 'shop',
+      health: 'unhealthy',
+      workload_class: 'unknown',
+      workloads: [
+        { kind: 'Deployment', namespace: 'prod', name: 'sync', health: 'unhealthy', ready: 0, desired: 1, restarts: 3, workload_class: 'unknown' },
+        { kind: 'Deployment', namespace: 'prod', name: 'proc', health: 'healthy', ready: 1, desired: 1, restarts: 0, workload_class: 'worker' },
+      ],
+    }
+    expect(classSetOf(row).sort()).toEqual(['unknown', 'worker'])
   })
 
   it('scopes non-portable identities but folds portable identities across scopes', () => {

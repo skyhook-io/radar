@@ -62,15 +62,14 @@ func longhornVolumeRef(pv *corev1.PersistentVolume, dp DynamicProvider) *Resourc
 
 // longhornVolumePVs are the PVs backed by the named Longhorn Volume, unless
 // another cached Volume shares its name.
-func longhornVolumePVs(name string, provider ResourceProvider, dp DynamicProvider) []ResourceRef {
+func longhornVolumePVs(name string, provider ResourceProvider, dp DynamicProvider, readable func(ResourceRef) bool) []ResourceRef {
 	if len(longhornVolumesNamed(name, dp)) > 1 {
 		return nil
 	}
 	pvs, _ := provider.PersistentVolumes()
 	var refs []ResourceRef
 	for _, pv := range pvs {
-		if longhornHandle(pv) == name {
-			ref := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
+		if ref := (ResourceRef{Kind: "PersistentVolume", Name: pv.Name}); longhornHandle(pv) == name && readable(ref) {
 			enrichRef(&ref, dp)
 			refs = append(refs, ref)
 		}

@@ -18,6 +18,9 @@ type Client struct {
 	t Transport
 }
 
+// MaxWorkloadQueryBytes is the longest PromQL, in raw bytes, that Radar sends
+// in one query; callers check it, since metrics stores limit query length
+// (VictoriaMetrics' default is 16 KiB) whether it is sent by GET or POST.
 const MaxWorkloadQueryBytes = 16000
 
 var ErrWorkloadQueryTooLarge = errors.New("Pod-name selection or workload size exceeds Radar's safe metrics query limit")
@@ -29,12 +32,18 @@ func NewClient(t Transport) *Client {
 
 // Query executes an instant PromQL query.
 func (c *Client) Query(ctx context.Context, promQL string) (*QueryResult, error) {
-	return c.issueQuery(ctx, "/api/v1/query", url.Values{"query": {promQL}})
+	return c.issueQuery(ctx, "GET", "/api/v1/query", url.Values{"query": {promQL}})
+}
+
+// QueryPost executes an instant PromQL query sent in a POST form body, for a
+// query that may be too long for a proxy's URL limit. Its result is Query's.
+func (c *Client) QueryPost(ctx context.Context, promQL string) (*QueryResult, error) {
+	return c.issueQuery(ctx, "POST", "/api/v1/query", url.Values{"query": {promQL}})
 }
 
 // QueryAt executes an instant query at a fixed evidence time.
 func (c *Client) QueryAt(ctx context.Context, promQL string, at time.Time) (*QueryResult, error) {
-	return c.issueQuery(ctx, "/api/v1/query", url.Values{"query": {promQL}, "time": {strconv.FormatInt(at.Unix(), 10)}})
+	return c.issueQuery(ctx, "GET", "/api/v1/query", url.Values{"query": {promQL}, "time": {strconv.FormatInt(at.Unix(), 10)}})
 }
 
 // QueryEvidence rejects partial answers rather than inferring identity from them.
@@ -84,7 +93,7 @@ func (c *Client) queryRange(ctx context.Context, promQL string, start, end time.
 	if complete {
 		return c.issueCompleteQuery(ctx, "POST", "/api/v1/query_range", params)
 	}
-	return c.issueQuery(ctx, "/api/v1/query_range", params)
+	return c.issueQuery(ctx, "GET", "/api/v1/query_range", params)
 }
 
 var ErrPartialResponse = errors.New("metrics backend returned a partial response")
@@ -111,8 +120,8 @@ func (c *Client) issueCompleteQuery(ctx context.Context, method, path string, pa
 	return parseQueryResult(response.Data)
 }
 
-func (c *Client) issueQuery(ctx context.Context, path string, params url.Values) (*QueryResult, error) {
-	body, err := c.t.Do(ctx, "GET", path, params)
+func (c *Client) issueQuery(ctx context.Context, method, path string, params url.Values) (*QueryResult, error) {
+	body, err := c.t.Do(ctx, method, path, params)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +145,15 @@ func (c *Client) issueQuery(ctx context.Context, path string, params url.Values)
 // match entries are PromQL series selectors; zero start/end skip the window
 // params; limit <= 0 skips the limit param.
 func (c *Client) LabelValues(ctx context.Context, label string, matches []string, start, end time.Time, limit int) ([]string, error) {
+	values, _, err := c.LabelValuesWithWarnings(ctx, label, matches, start, end, limit)
+	return values, err
+}
+
+// LabelValuesWithWarnings is LabelValues with the response's warnings, for a
+// caller that must not read a partial list as a complete one. The warnings are
+// the backend's, plus one Radar adds when the backend marks the response
+// partial; none means the backend reported no gap.
+func (c *Client) LabelValuesWithWarnings(ctx context.Context, label string, matches []string, start, end time.Time, limit int) ([]string, []string, error) {
 	params := url.Values{}
 	for _, m := range matches {
 		params.Add("match[]", m)
@@ -152,7 +170,7 @@ func (c *Client) LabelValues(ctx context.Context, label string, matches []string
 
 	body, err := c.t.Do(ctx, "GET", "/api/v1/label/"+url.PathEscape(label)+"/values", params)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var pr struct {
@@ -160,14 +178,20 @@ func (c *Client) LabelValues(ctx context.Context, label string, matches []string
 		Error     string   `json:"error"`
 		ErrorType string   `json:"errorType"`
 		Data      []string `json:"data"`
+		Warnings  []string `json:"warnings"`
+		IsPartial bool     `json:"isPartial"`
 	}
 	if err := json.Unmarshal(body, &pr); err != nil {
-		return nil, fmt.Errorf("prom: parse label values from %s: %w", c.t.Address(), err)
+		return nil, nil, fmt.Errorf("prom: parse label values from %s: %w", c.t.Address(), err)
 	}
 	if pr.Status != "success" {
-		return nil, fmt.Errorf("prom: label values error from %s: %s (%s)", c.t.Address(), pr.Error, pr.ErrorType)
+		return nil, nil, fmt.Errorf("prom: label values error from %s: %s (%s)", c.t.Address(), pr.Error, pr.ErrorType)
 	}
-	return pr.Data, nil
+	warnings := pr.Warnings
+	if pr.IsPartial {
+		warnings = append(warnings, "the backend marked the response partial")
+	}
+	return pr.Data, warnings, nil
 }
 
 // MetricMetadata describes one metric as reported by /api/v1/metadata.

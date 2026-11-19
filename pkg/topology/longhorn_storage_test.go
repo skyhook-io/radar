@@ -120,3 +120,17 @@ func TestLonghornVolumeLookupReadsTheCacheWithoutCopying(t *testing.T) {
 		t.Errorf("copying List calls = %d, read-only calls = %d; want the read-only list only", dp.copyingCalls, dp.readOnlyCalls)
 	}
 }
+
+// Each Longhorn link is shown only when the caller may read what it names.
+func TestLonghornLinksWithholdWhatTheCallerMayNotRead(t *testing.T) {
+	vol := longhornVolume("longhorn-system", "vol-1")
+	pv := csiPV("pv-a", "driver.longhorn.io", "vol-1")
+	provider := &pvProvider{pvs: []*corev1.PersistentVolume{pv}}
+	deny := func(kind string) func(ResourceRef) bool { return func(r ResourceRef) bool { return r.Kind != kind } }
+	if rel := getRelationshipsWithObject("persistentvolumes", "", "pv-a", pv, &Topology{}, provider, longhornDynamic(vol), nil, deny("Volume")); rel != nil && len(rel.StorageRefs) != 0 {
+		t.Errorf("Volume withheld: PV storage refs = %+v, want none", rel.StorageRefs)
+	}
+	if rel := getRelationshipsWithObject("volumes", "longhorn-system", "vol-1", vol, &Topology{}, provider, longhornDynamic(vol), nil, deny("PersistentVolume")); rel != nil && len(rel.Consumers) != 0 {
+		t.Errorf("PV withheld: Volume consumers = %+v, want none", rel.Consumers)
+	}
+}

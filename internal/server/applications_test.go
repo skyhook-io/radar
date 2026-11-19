@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/subject"
@@ -895,7 +896,7 @@ func TestGroupApplications_EntrypointRefsDeduplicateAndClassify(t *testing.T) {
 	}
 }
 
-func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T) {
+func TestApplicationsRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T) {
 	// Route kinds are custom resources; the builder records their apiVersion.
 	apiVersions := map[string]string{
 		"HTTPRoute":      "gateway.networking.k8s.io/v1",
@@ -933,7 +934,7 @@ func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T
 			edge("httpproxy/prod/api-contour", "service/prod/api", topology.EdgeExposes),
 		},
 	}
-	g := &appGraph{topo: topo, idx: topology.IndexByResource(topo)}
+	g := applicationTopologyFixture(t, topo)
 
 	rels := g.relationshipsFor("Deployment", "prod", "api", nil)
 	if rels == nil {
@@ -962,7 +963,7 @@ func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T
 	}
 }
 
-func TestAppGraphRelationshipsForUsesFetchedObjectGroup(t *testing.T) {
+func TestApplicationsRelationshipsForUsesFetchedObjectGroup(t *testing.T) {
 	topo := &topology.Topology{
 		Nodes: []topology.Node{
 			{ID: "service/ml/core", Kind: topology.KindService, Name: "core", Data: map[string]any{"namespace": "ml"}},
@@ -980,7 +981,7 @@ func TestAppGraphRelationshipsForUsesFetchedObjectGroup(t *testing.T) {
 		"kind":       "Job",
 		"metadata":   map[string]any{"namespace": "ml", "name": "train"},
 	}}
-	g := &appGraph{topo: topo, idx: topology.IndexByResource(topo)}
+	g := applicationTopologyFixture(t, topo)
 
 	rels := g.relationshipsFor("Job", "ml", "train", volcano)
 	if rels == nil || len(rels.Services) != 1 || rels.Services[0] != "volcano" {
@@ -1022,13 +1023,7 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 			manages("ks-infra", "dep-grafana"), // manager → workload
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
-	for _, n := range topo.Nodes {
-		g.byID[n.ID] = n
-		ns, _ := n.Data["namespace"].(string)
-		kind := topology.KubernetesKindForNode(&n)
-		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&n, kind), kind, ns, n.Name)] = n.ID
-	}
+	g := applicationTopologyFixture(t, topo)
 
 	apiRoot, _, apiGroup, apiIdentity := g.rootOf("apps", "Deployment", "prod", "api")
 	grafanaRoot, _, _, _ := g.rootOf("apps", "Deployment", "monitoring", "grafana")
@@ -1067,13 +1062,7 @@ func TestStructuralRoot_JobSetMembersShareTheJobSetRoot(t *testing.T) {
 			{Source: jobSetID, Target: "job/ml/train-workers-0", Type: topology.EdgeManages},
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
-	for _, node := range topo.Nodes {
-		g.byID[node.ID] = node
-		kind := topology.KubernetesKindForNode(&node)
-		ns, _ := node.Data["namespace"].(string)
-		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&node, kind), kind, ns, node.Name)] = node.ID
-	}
+	g := applicationTopologyFixture(t, topo)
 
 	want := resourceid.ResourceKey("jobset.x-k8s.io", "JobSet", "ml", "train")
 	if root, kind, group, identity := g.rootOf("jobset.x-k8s.io", "JobSet", "ml", "train"); root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {
@@ -1102,13 +1091,7 @@ func TestStructuralRoot_DoesNotStopAtForeignManagerKind(t *testing.T) {
 			{Source: "application/prod/app/apps.example.io", Target: "deployment/prod/api", Type: topology.EdgeManages},
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
-	for _, node := range topo.Nodes {
-		g.byID[node.ID] = node
-		kind := topology.KubernetesKindForNode(&node)
-		ns, _ := node.Data["namespace"].(string)
-		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&node, kind), kind, ns, node.Name)] = node.ID
-	}
+	g := applicationTopologyFixture(t, topo)
 
 	root, _, group, _ := g.rootOf("apps", "Deployment", "prod", "api")
 	if root != "prod/Platform/root" || group != "platform.example.io" {
@@ -1133,8 +1116,7 @@ func TestRelationshipsFor_RoutesCarryConcreteKind(t *testing.T) {
 			{ID: "gw->web", Source: "gateway/prod/gw", Target: "httproute/prod/web", Type: topology.EdgeRoutesTo},
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
-
+	g := applicationTopologyFixture(t, topo)
 	rels := g.relationshipsFor("Gateway", "prod", "gw", nil)
 	if rels == nil {
 		t.Fatal("relationshipsFor returned nil; want Routes populated")
@@ -1230,6 +1212,50 @@ func TestGroupApplications_MixedHealthUsesServingWorkloads(t *testing.T) {
 	pureBatch := groupApplications([]appWorkloadInput{rawInput("CronWorkflow", "prod", "nightly", "", "unhealthy")})
 	if len(pureBatch) != 1 || pureBatch[0].Health != "unhealthy" {
 		t.Fatalf("pure batch health = %+v, want unhealthy batch verdict", pureBatch)
+	}
+}
+
+// A Deployment whose exposure went undecided still runs: its health is part of
+// the serving health and its class keeps a job-only row from reading as a job.
+func TestGroupApplications_UndecidedWorkloadKeepsClassAndHealth(t *testing.T) {
+	mk := func(kind, name, health string, rels *appRelationships) appWorkloadInput {
+		in := overlayInput(kind, "prod", name, "1.0", health, subject.TierPartOf, "prod/app/shop", subject.ConfidenceMedium)
+		in.wl.WorkloadClass = classifyWorkload(kind, rels)
+		in.rels = rels
+		return in
+	}
+	service := func() appWorkloadInput {
+		return mk("Deployment", "api", "healthy", &appRelationships{Services: []string{"api"}})
+	}
+	crashing := func() appWorkloadInput {
+		return mk("Deployment", "sync", "unhealthy", &appRelationships{exposureIncomplete: true})
+	}
+	cron := func() appWorkloadInput { return mk("CronJob", "nightly", "healthy", nil) }
+
+	for _, c := range []struct {
+		name      string
+		ins       []appWorkloadInput
+		wantClass string
+	}{
+		{"beside a service", []appWorkloadInput{service(), crashing()}, "service"},
+		{"beside a service and a job", []appWorkloadInput{service(), crashing(), cron()}, "mixed"},
+		{"beside a job", []appWorkloadInput{crashing(), cron()}, "mixed"},
+	} {
+		rows := groupApplications(c.ins)
+		row := rowByName(rows, "shop")
+		if row == nil || row.WorkloadClass != c.wantClass || row.Health != "unhealthy" || row.RuntimeHealth != "unhealthy" {
+			t.Errorf("%s: row = %+v, want class %s and unhealthy", c.name, row, c.wantClass)
+		}
+	}
+
+	root := overlayInput("JobSet", "prod", "train", "", "neutral", subject.TierPartOf, "prod/app/shop", subject.ConfidenceMedium)
+	member := rawInput("Job", "prod", "train-workers-0", "", "healthy")
+	member.rootKey, member.rootKind, member.rootGroup, member.rootIdentity = root.rootKey, root.rootKind, root.rootGroup, root.rootIdentity
+	member.wl.jobSetParent = root.rootIdentity
+	rows := groupApplications([]appWorkloadInput{service(), crashing(), member, root})
+	foldJobSetApplicationWorkloads(rows)
+	if row := rowByName(rows, "shop"); row == nil || row.WorkloadClass != "mixed" || row.Health != "unhealthy" || row.RuntimeHealth != "unhealthy" {
+		t.Fatalf("JobSet row = %+v, want mixed and unhealthy", row)
 	}
 }
 
@@ -1375,14 +1401,16 @@ func TestGroupApplications_MatchKeys(t *testing.T) {
 
 // A real class mix (service + scheduled job) reports "mixed", not "unknown" —
 // the per-workload classes are confident and the UI shows the composition.
-// service+worker stays "service" (operated primarily as a service), and an
-// unclassifiable member (bare Pod) doesn't poison a known class.
+// service+worker stays "service" (operated primarily as a service). A workload
+// whose exposure went undecided is a service or a worker, so the row takes the
+// class both readings give, and "unknown" when they differ.
 func TestWorkloadClass_MixedComposition(t *testing.T) {
 	mk := func(name, kind, class string) appWorkloadInput {
 		in := overlayInput(kind, "prod", name, "1.0", "healthy", subject.TierPartOf, "prod/app/shop", subject.ConfidenceMedium)
 		in.wl.WorkloadClass = class
 		return in
 	}
+	undecided := classifyWorkload("Deployment", &appRelationships{exposureIncomplete: true})
 	cases := []struct {
 		name string
 		ins  []appWorkloadInput
@@ -1391,8 +1419,11 @@ func TestWorkloadClass_MixedComposition(t *testing.T) {
 		{"service+job", []appWorkloadInput{mk("api", "Deployment", "service"), mk("nightly", "CronJob", "job")}, "mixed"},
 		{"worker+job", []appWorkloadInput{mk("proc", "Deployment", "worker"), mk("nightly", "CronJob", "job")}, "mixed"},
 		{"service+worker", []appWorkloadInput{mk("api", "Deployment", "service"), mk("proc", "Deployment", "worker")}, "service"},
-		{"service+unknown", []appWorkloadInput{mk("api", "Deployment", "service"), mk("dbg", "Pod", "unknown")}, "service"},
-		{"only-unknown", []appWorkloadInput{mk("dbg", "Pod", "unknown")}, "unknown"},
+		{"service+unknown", []appWorkloadInput{mk("api", "Deployment", "service"), mk("dbg", "Deployment", undecided)}, "service"},
+		{"unknown+job", []appWorkloadInput{mk("dbg", "Deployment", undecided), mk("nightly", "CronJob", "job")}, "mixed"},
+		{"unknown+worker", []appWorkloadInput{mk("dbg", "Deployment", undecided), mk("proc", "Deployment", "worker")}, "unknown"},
+		{"service+unknown+job", []appWorkloadInput{mk("api", "Deployment", "service"), mk("dbg", "Deployment", undecided), mk("nightly", "CronJob", "job")}, "mixed"},
+		{"only-unknown", []appWorkloadInput{mk("dbg", "Deployment", undecided)}, "unknown"},
 	}
 	for _, c := range cases {
 		rows := groupApplications(c.ins)
@@ -1565,15 +1596,16 @@ func TestWarningEventIndexResolvesOnlyUnambiguousGroups(t *testing.T) {
 	}
 	defer core.Stop()
 	cache := &k8s.ResourceCache{ResourceCache: core}
-	graph := &appGraph{byID: map[string]topology.Node{
-		"argo": {Kind: topology.KindRollout, Name: "api", Data: map[string]any{"namespace": "dev", "apiVersion": "argoproj.io/v1alpha1"}},
-	}}
-	index := indexWarningEventsByObject(cache, []string{"dev"}, graph)
+	argo := appTestObject("argoproj.io", "Rollout", "dev", "api")
+	session := appManagerSession(t, argo)
+	inventory := &applicationInventory{session: session.(relations.Session)}
+	index := indexWarningEventsByObject(cache, []string{"dev"}, inventory.resolveEventGroup)
 	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", "", nil); len(got) != 1 {
 		t.Fatalf("unambiguous warning missing: %+v", index)
 	}
-	graph.byID["other"] = topology.Node{Kind: topology.KindRollout, Name: "api", Data: map[string]any{"namespace": "dev", "apiVersion": "other.io/v1"}}
-	index = indexWarningEventsByObject(cache, []string{"dev"}, graph)
+	other := appTestObject("other.io", "Rollout", "dev", "api")
+	inventory.session = appManagerSession(t, argo, other).(relations.Session)
+	index = indexWarningEventsByObject(cache, []string{"dev"}, inventory.resolveEventGroup)
 	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", "", nil); len(got) != 0 {
 		t.Fatalf("ambiguous warning attributed: %+v", got)
 	}

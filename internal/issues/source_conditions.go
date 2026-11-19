@@ -52,6 +52,15 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 	for _, k := range f.Kinds {
 		wantKind[strings.ToLower(k)] = true
 	}
+	// A rejected run is reported on the unavailable location that caused it.
+	// A kind filter on either side must collect both kinds of runs and their location.
+	wantVeleroRejections := wantKind["backup"] || wantKind["restore"] || wantKind["backupstoragelocation"]
+	wantVeleroReadings := len(wantKind) == 0 || wantKind["schedule"] || wantKind["deployment"] || wantKind["backupstoragelocation"]
+	veleroInputs := map[string]bool{
+		"BackupStorageLocation": wantVeleroReadings || wantVeleroRejections,
+		"Backup":                wantVeleroRejections,
+		"Restore":               wantVeleroRejections,
+	}
 	var out []Issue
 	for _, gvr := range gvrs {
 		kind := p.KindForGVR(gvr)
@@ -67,7 +76,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		// entirely. Match in lowercase (same as applyFilters) so
 		// "Pod"/"pod" and CRD-typed "MyResource"/"myresource" both
 		// compare equal.
-		if len(wantKind) > 0 && !wantKind[strings.ToLower(kind)] {
+		if len(wantKind) > 0 && !wantKind[strings.ToLower(kind)] && !(gvr.Group == VeleroGroup && veleroInputs[kind]) {
 			continue
 		}
 		clusterScoped, _, _ := classifyDynamicScope(p, gvr, kind)
@@ -130,6 +139,11 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		// backup supersession is a property of the series, not of one object.
 		if gvr.Group == VeleroGroup {
 			out = append(out, detectVeleroIssues(gvr, kind, items, ownedSubjects)...)
+			// Every installation has a storage location, so its list is where
+			// the server, its schedules and its validation are read together.
+			if kind == "BackupStorageLocation" && wantVeleroReadings {
+				out = append(out, detectVeleroReadingIssues(p, gvr, items, time.Now())...)
+			}
 			continue
 		}
 		// A Longhorn Volume carries no failing condition for faulted or
@@ -170,6 +184,10 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 				out = append(out, StrimziKafkaIssues(gvr, u)...)
 				continue
 			}
+			if gvr.Group == VolumeSnapshotGroup && kind == "VolumeSnapshot" {
+				out = append(out, VolumeSnapshotIssues(gvr, u)...)
+				continue
+			}
 			if ownedSubjects[resourceKey(gvr.Group, kind, u.GetNamespace(), u.GetName())] {
 				continue
 			}
@@ -182,7 +200,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			// silent ON PURPOSE — because the object is mid-operation and its
 			// False Ready is expected — has to say so explicitly, or the noise
 			// it just suppressed comes straight back through the generic path.
-			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) {
+			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) || agentSandboxSuppressesGenericConditions(gvr.Group, kind, u) {
 				continue
 			}
 			condTypes := conditions.DefaultFalseConditionTypes
@@ -263,7 +281,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			out = append(out, iss)
 		}
 	}
-	return out
+	return foldVeleroLocationRejections(out)
 }
 
 func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
@@ -275,6 +293,10 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 	case "flagger.app":
 		if kind == "Canary" {
 			return detectFlaggerCanaryIssues(gvr, u)
+		}
+	case "upgrade.cattle.io":
+		if kind == "Plan" {
+			return detectUpgradePlanIssues(gvr, u)
 		}
 	case "gateway.networking.k8s.io":
 		return detectGatewayConditionIssues(gvr, kind, u)
@@ -288,6 +310,12 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 		}
 	case "postgresql.cnpg.io":
 		return detectCNPGIssues(gvr, kind, u)
+	case agentSandboxGroup:
+		return detectSandboxSuspensionBlocked(gvr, kind, u)
+	case substrateGroup:
+		if kind == "WorkerPool" {
+			return detectWorkerPoolIssues(gvr, kind, u)
+		}
 	}
 	return nil
 }

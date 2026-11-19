@@ -45,6 +45,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/loadtest"
+	"github.com/skyhook-io/radar/internal/mcp"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/static"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -59,7 +60,11 @@ func main() {
 	adminPort := flag.Int("admin-port", 0, "load-test: admin listener port for live scaling (0 = <port>+1)")
 	censusProfile := flag.String("census", "", "load-test: seed a named census profile (e.g. large-eks) instead of -pods")
 	censusScale := flag.Float64("census-scale", 1.0, "load-test: scale factor applied to -census counts")
+	vulnReports := flag.Bool("vulnerability-reports", false, "seed Trivy Operator VulnerabilityReports and the workloads they describe (with the default fixture)")
 	flag.Parse()
+	if *replayPath != "" && (*pods != 0 || *censusProfile != "" || *vulnReports) {
+		log.Fatal("-replay cannot be combined with -pods, -census or -vulnerability-reports")
+	}
 
 	// Isolate config/settings writes to a temp directory so e2e tests
 	// don't touch the developer's real ~/.radar/config.json.
@@ -75,8 +80,12 @@ func main() {
 	var (
 		fakeClient *fake.Clientset
 		gen        *loadtest.Generator
+		replay     *replayState
 	)
-	if *censusProfile != "" {
+	if *replayPath != "" {
+		replay = mustLoadReplay(*replayPath)
+		fakeClient = replay.client
+	} else if *censusProfile != "" {
 		c, ok := loadtest.Profiles[*censusProfile]
 		if !ok {
 			log.Fatalf("unknown -census profile %q", *censusProfile)
@@ -98,7 +107,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Seeding %d pods across %d apps / %d namespaces / %d nodes (%d objects, %s)\n",
 			cfg.Pods, gen.AppCount(), cfg.Namespaces, cfg.Nodes, len(objs), time.Since(start).Round(time.Millisecond))
 	} else {
-		fakeClient = fake.NewClientset(seedObjects()...)
+		objs := seedObjects()
+		if *vulnReports {
+			typed, _ := vulnerabilityFixture()
+			objs = append(objs, typed...)
+		}
+		fakeClient = fake.NewClientset(objs...)
 	}
 
 	// --- Initialize subsystems ---
@@ -109,8 +123,23 @@ func main() {
 		if err := k8s.InitLoadTestResourceCache(fakeClient); err != nil {
 			log.Fatalf("InitLoadTestResourceCache: %v", err)
 		}
+		if err := installCensusDiscovery(fakeClient); err != nil {
+			log.Fatalf("installCensusDiscovery: %v", err)
+		}
 	} else if err := k8s.InitTestResourceCache(fakeClient); err != nil {
 		log.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	if replay != nil {
+		replay.mustStart()
+		defer k8s.ResetTestDynamicState()
+	}
+
+	if *vulnReports {
+		_, reports := vulnerabilityFixture()
+		if err := initVulnerabilityReports(reports); err != nil {
+			log.Fatalf("initVulnerabilityReports: %v", err)
+		}
 	}
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
@@ -132,6 +161,7 @@ func main() {
 		StaticFS:        static.FS,
 		StaticRoot:      "dist",
 		EffectiveConfig: effectiveCfg,
+		MCPHandler:      mcp.NewReadOnlyHandler(),
 	})
 
 	ready := make(chan struct{})
@@ -145,11 +175,13 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Test server ready on http://localhost:%d (fake k8s)\n", *port)
 
 	var adminSrv *http.Server
-	if gen != nil {
-		ap := *adminPort
-		if ap == 0 {
-			ap = *port + 1
-		}
+	ap := *adminPort
+	if ap == 0 {
+		ap = *port + 1
+	}
+	if replay != nil {
+		adminSrv = startReplayAdmin(ap, replay)
+	} else if gen != nil {
 		adminSrv = startAdminServer(ap, gen, fakeClient)
 	}
 

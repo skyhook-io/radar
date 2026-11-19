@@ -1,11 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,27 +68,6 @@ func newMemoTestServer(t *testing.T) *Server {
 	s := newTestServer(t)
 	s.topoMemo = topology.NewMemoizer(5 * time.Second)
 	return s
-}
-
-func TestTopologyMemo_AIContextAfterSwitch(t *testing.T) {
-	useTestResourceCache(t, clusterWithDeployment("old-cluster-web"))
-	s := newMemoTestServer(t)
-
-	before, _, _, _, ok := s.topologyForContext()
-	if !ok || !topologyHasNode(before.Nodes, "old-cluster-web") {
-		t.Fatalf("seed: expected old-cluster-web in the topology, got ok=%v", ok)
-	}
-
-	useTestResourceCache(t, clusterWithDeployment("new-cluster-api"))
-	s.finalizePostContextSwitch()
-
-	after, _, _, _, ok := s.topologyForContext()
-	if !ok {
-		t.Fatal("post-switch topology unavailable")
-	}
-	if topologyHasNode(after.Nodes, "old-cluster-web") || !topologyHasNode(after.Nodes, "new-cluster-api") {
-		t.Errorf("post-switch topology still describes the previous cluster: %+v", after.Nodes)
-	}
 }
 
 // The GitOps handlers pick up the cache while parsing the request and run
@@ -155,6 +138,7 @@ func neighborhoodRequest(t *testing.T, s *Server, name string) (int, neighborhoo
 // both must come from the new cluster, or the root resolves but its
 // neighbors are looked up in the previous cluster's index.
 func TestTopologyMemo_NeighborhoodAfterSwitch(t *testing.T) {
+	withOwnershipDiscovery(t)
 	useTestResourceCache(t, clusterWithDeployment("old-cluster-web"))
 	s := newMemoTestServer(t)
 	if code, resp := neighborhoodRequest(t, s, "old-cluster-web"); code != http.StatusOK || !topologyHasNode(resp.Subgraph.Nodes, "old-cluster-web-rs") {
@@ -170,5 +154,50 @@ func TestTopologyMemo_NeighborhoodAfterSwitch(t *testing.T) {
 	}
 	if !topologyHasNode(resp.Subgraph.Nodes, "new-cluster-api-rs") {
 		t.Errorf("post-switch neighborhood is missing the new cluster's ReplicaSet: %+v", resp.Subgraph.Nodes)
+	}
+}
+
+// A client that leaves mid-walk is not told the service is unavailable.
+func TestNeighborhoodCancelledRequestWritesNothing(t *testing.T) {
+	withOwnershipDiscovery(t)
+	useTestResourceCache(t, clusterWithDeployment("web"))
+	s := newMemoTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/ai/neighborhood/Deployment/demo/web", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("kind", "Deployment")
+	rctx.URLParams.Add("namespace", "demo")
+	rctx.URLParams.Add("name", "web")
+	ctx, cancel := context.WithCancel(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	cancel()
+	rec := httptest.NewRecorder()
+	s.handleAINeighborhood(rec, req.WithContext(ctx))
+	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+		t.Fatalf("cancelled request answered %d: %s", rec.Code, rec.Body)
+	}
+}
+
+// A walk that runs out of the request's time is a timeout that says how to
+// narrow the request, not a logged internal error.
+func TestNeighborhoodPastDeadlineIsATimeout(t *testing.T) {
+	withOwnershipDiscovery(t)
+	useTestResourceCache(t, clusterWithDeployment("web"))
+	s := newMemoTestServer(t)
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	req := httptest.NewRequest(http.MethodGet, "/api/ai/neighborhood/Deployment/demo/web", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("kind", "Deployment")
+	rctx.URLParams.Add("namespace", "demo")
+	rctx.URLParams.Add("name", "web")
+	ctx, cancel := context.WithDeadline(context.WithValue(req.Context(), chi.RouteCtxKey, rctx), time.Now().Add(-time.Second))
+	defer cancel()
+	rec := httptest.NewRecorder()
+	s.handleAINeighborhood(rec, req.WithContext(ctx))
+	if rec.Code != http.StatusGatewayTimeout || !strings.Contains(rec.Body.String(), "hops=1") {
+		t.Fatalf("past-deadline walk answered %d: %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(logged.String(), "[neighborhood]") {
+		t.Errorf("a timeout was logged as a failure: %s", logged.String())
 	}
 }

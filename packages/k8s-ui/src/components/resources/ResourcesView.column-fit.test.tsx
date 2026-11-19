@@ -38,7 +38,7 @@ it('fits a column to its widest content on a resize-handle double-click without 
   const headers = [...host.querySelectorAll<HTMLElement>('thead th[data-column-key]')]
   const nameIndex = headers.findIndex(th => th.dataset.columnKey === 'name')
   expect(host.querySelectorAll(`td[data-column-key="name"]`).length).toBeGreaterThan(0)
-  // The first mousedown switches the table to fixed widths, which remounts the header, so look it up per event.
+  // Looked up per event: a width change re-renders the header.
   const nameHeader = () => host.querySelector<HTMLElement>('thead th[data-column-key="name"]')!
   const sortState = () => nameHeader().querySelector('svg')?.getAttribute('class')
   const sortBefore = sortState()
@@ -48,8 +48,10 @@ it('fits a column to its widest content on a resize-handle double-click without 
 
   const nameCol = host.querySelectorAll<HTMLTableColElement>('colgroup col')[nameIndex]
   expect(nameCol.style.width).toBe(`${longName.length * 10}px`)
-  // Every other column switches to a fixed width from the snapshot, as a drag would.
-  const otherCol = host.querySelectorAll<HTMLTableColElement>('colgroup col')[nameIndex === 0 ? 1 : 0]
-  expect(otherCol.style.width).toBe('100px')
+  // The other columns keep sizing themselves: only the fitted column is saved.
+  const otherIndex = nameIndex === 0 ? 1 : 0
+  const otherCol = host.querySelectorAll<HTMLTableColElement>('colgroup col')[otherIndex]
+  expect(otherCol.style.width).not.toBe('100px')
+  expect(Object.keys(JSON.parse(localStorage.getItem('radar-columns-pods')!).widths)).toEqual(['name'])
   expect(sortState()).toBe(sortBefore)
 })

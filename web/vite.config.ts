@@ -32,21 +32,24 @@ export default defineConfig({
     // Split large vendor chunk to avoid Vite build-import-analysis parse failures
     rolldownOptions: {
       output: {
-        manualChunks(id: string) {
-          if (!id.includes('node_modules/')) return
-
-          // Trailing slashes on react/ and react-dom/ prevent matching react-router, react-resizable, etc.
-          const chunks: Record<string, string[]> = {
-            vendor: ['react/', 'react-dom/', 'react-router'],
-            monaco: ['monaco-editor/', '@monaco-editor/'],
-            ui: ['@xyflow/', '@xterm/'],
-          }
-
-          for (const [chunk, prefixes] of Object.entries(chunks)) {
-            if (prefixes.some((p) => id.includes(`node_modules/${p}`))) {
-              return chunk
-            }
-          }
+        // Groups claim modules in priority order, each taking its modules'
+        // dependencies along. Vendor goes first so it claims Vite's preload
+        // helper: every dynamic import calls it, and inside the monaco group
+        // it would make the entry load the whole editor at startup.
+        codeSplitting: {
+          groups: [
+            {
+              name: 'vendor',
+              // Trailing slashes keep react/ and react-dom/ from matching
+              // react-resizable and the like; react-router covers -dom too.
+              test: /node_modules[\\/](react[\\/]|react-dom[\\/]|react-router)|vite[\\/]preload-helper/,
+              priority: 30,
+            },
+            { name: 'ui', test: /node_modules[\\/](@xyflow|@xterm)[\\/]/, priority: 20 },
+            // Only the editor itself. The React wrapper is imported statically
+            // and must stay out, or the editor becomes a startup dependency.
+            { name: 'monaco', test: /node_modules[\\/]monaco-editor[\\/]/, priority: 10 },
+          ],
         },
       },
     },

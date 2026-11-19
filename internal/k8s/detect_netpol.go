@@ -145,7 +145,7 @@ type otherPolicyView struct {
 	// Per-scan memos: many Services share a namespace, and the dynamic cache
 	// copies every object it lists.
 	lists    map[string]listResult
-	matchers map[calicoMatcherKey]*topology.CalicoPolicyMatcher
+	matchers map[calicoMatcherKey]*netpol.CalicoPolicyMatcher
 }
 
 type listResult struct {
@@ -326,12 +326,12 @@ func (v *otherPolicyView) calicoMaySelect(policy *unstructured.Unstructured, pod
 	if !ok {
 		matcher = compileCalicoMayMatcher(policy, namespaceLabels != nil)
 		if v.matchers == nil {
-			v.matchers = map[calicoMatcherKey]*topology.CalicoPolicyMatcher{}
+			v.matchers = map[calicoMatcherKey]*netpol.CalicoPolicyMatcher{}
 		}
 		v.matchers[key] = matcher
 	}
 	for _, pod := range pods {
-		matched, valid := matcher.Matches(topology.CalicoEndpointLabels(pod.Namespace, pod.Labels, pod.Spec.ServiceAccountName), namespaceLabels, pod.Spec.ServiceAccountName, nil)
+		matched, valid := matcher.Matches(netpol.CalicoEndpointLabels(pod.Namespace, pod.Labels, pod.Spec.ServiceAccountName), namespaceLabels, pod.Spec.ServiceAccountName, nil)
 		if matched || !valid {
 			return true
 		}
@@ -339,7 +339,7 @@ func (v *otherPolicyView) calicoMaySelect(policy *unstructured.Unstructured, pod
 	return false
 }
 
-func compileCalicoMayMatcher(policy *unstructured.Unstructured, namespaceLabelsKnown bool) *topology.CalicoPolicyMatcher {
+func compileCalicoMayMatcher(policy *unstructured.Unstructured, namespaceLabelsKnown bool) *netpol.CalicoPolicyMatcher {
 	if sel, _, _ := unstructured.NestedString(policy.Object, "spec", "serviceAccountSelector"); !calicoSelectsAll(sel) {
 		policy = policy.DeepCopy()
 		unstructured.RemoveNestedField(policy.Object, "spec", "serviceAccountSelector")
@@ -348,7 +348,7 @@ func compileCalicoMayMatcher(policy *unstructured.Unstructured, namespaceLabelsK
 		policy = policy.DeepCopy()
 		unstructured.RemoveNestedField(policy.Object, "spec", "namespaceSelector")
 	}
-	return topology.CompileCalicoPolicyMatcher(policy)
+	return netpol.CompileCalicoPolicyMatcher(policy)
 }
 
 // calicoCovers applies Calico's types defaulting: without explicit types a
