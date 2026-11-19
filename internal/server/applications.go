@@ -622,6 +622,9 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		defer func() { <-applicationsBuildSlot }()
 		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), applicationsBuildBudget)
 		defer cancel()
+		if applicationsBuildTestHooks.admitted != nil {
+			applicationsBuildTestHooks.admitted()
+		}
 		session, err := k8s.BeginOwnershipRead(cache)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
@@ -674,6 +677,13 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 
 var errApplicationsBuildFailed = errors.New("the Applications build failed; the server log has the details")
 
+// applicationsBuildTestHooks let a test act inside a shared build: joined runs
+// once a caller is waiting on the build, admitted once the build holds its
+// slot. Both are nil outside tests.
+var applicationsBuildTestHooks struct {
+	joined, admitted func()
+}
+
 // awaitApplicationsBuild joins the build for key, starting build when none is
 // running, and waits for it on ctx. The build is shared by every caller with
 // this key, so no caller's request bounds it: each caller waits on its own
@@ -695,6 +705,9 @@ func awaitApplicationsBuild(ctx context.Context, key string, build func() (*appl
 		}
 		return resp, nil
 	})
+	if applicationsBuildTestHooks.joined != nil {
+		applicationsBuildTestHooks.joined()
+	}
 	select {
 	case res := <-flight:
 		if res.Err != nil {
