@@ -1,5 +1,5 @@
 import { ArchiveRestore, Filter } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, LabelSelectorDisplay } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, LabelSelectorDisplay, useOperationalIssuesShown } from '../../ui/drawer-components'
 import {
   getRestoreStatus,
   getRestoreBackupName,
@@ -48,7 +48,8 @@ export function VeleroRestoreRenderer({ data, messages, onNavigate }: VeleroRest
   const namespaceMapping = getRestoreNamespaceMapping(data)
   const rawLabelSelector = getRestoreLabelSelector(data)
   const labelSelector = hasLabelSelectorTerms(rawLabelSelector) ? rawLabelSelector : null
-  const orLabelSelectors = getRestoreOrLabelSelectors(data).filter(hasLabelSelectorTerms)
+  const selectors = getRestoreOrLabelSelectors(data)
+  const orLabelSelectors = selectors.every(hasLabelSelectorTerms) ? selectors : []
   const namespaceMappingEntries = Object.entries(namespaceMapping)
   const hasScope =
     includedNamespaces.length > 0 ||
@@ -64,6 +65,10 @@ export function VeleroRestoreRenderer({ data, messages, onNavigate }: VeleroRest
   const isFailed = restoreStatus.level === 'unhealthy'
   const isValidationFailure = phase === 'FailedValidation'
   const isPartiallyFailed = isBackupPartialFailurePhase(phase)
+  // A failed, rejected or partially failed run that raises an issue is
+  // described by the Operational issues section above it. Warnings raise none,
+  // so their box always shows.
+  const issueShown = useOperationalIssuesShown()
   const isInProgress = isBackupActivePhase(phase)
 
   // Progress data
@@ -75,7 +80,7 @@ export function VeleroRestoreRenderer({ data, messages, onNavigate }: VeleroRest
   return (
     <>
       {/* Problem alerts */}
-      {isValidationFailure && (
+      {isValidationFailure && !issueShown && (
         <AlertBanner
           variant="error"
           title="Restore Validation Failed"
@@ -83,7 +88,7 @@ export function VeleroRestoreRenderer({ data, messages, onNavigate }: VeleroRest
           items={validationErrors.length > 0 ? validationErrors : undefined}
         />
       )}
-      {isFailed && !isValidationFailure && (
+      {isFailed && !isValidationFailure && !issueShown && (
         <AlertBanner
           variant="error"
           title="Restore Failed"
@@ -91,7 +96,7 @@ export function VeleroRestoreRenderer({ data, messages, onNavigate }: VeleroRest
           items={validationErrors.length > 0 ? validationErrors : undefined}
         />
       )}
-      {isPartiallyFailed && (
+      {isPartiallyFailed && !issueShown && (
         <AlertBanner
           variant="warning"
           title="Restore Partially Failed"

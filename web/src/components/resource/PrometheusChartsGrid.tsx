@@ -1,3 +1,4 @@
+import { clsx } from "clsx";
 import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Loader2, Wifi, WifiOff } from "lucide-react";
@@ -46,6 +47,8 @@ export interface PrometheusChartsGridProps {
   name: string;
   /** Optional full K8s resource for request/limit overlay derivation. */
   resource?: any;
+  /** Fill and scroll its container (default). False lets the parent scroll it with content below. */
+  fill?: boolean;
 }
 
 const SUPPORTED_KINDS = new Set([
@@ -64,6 +67,7 @@ export function PrometheusChartsGrid({
   namespace,
   name,
   resource,
+  fill = true,
 }: PrometheusChartsGridProps) {
   useAutoPromConnect();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
@@ -192,7 +196,7 @@ export function PrometheusChartsGrid({
         </select>;
 
   return (
-    <div className="flex flex-col min-w-0 w-full h-full overflow-auto">
+    <div className={clsx("flex flex-col min-w-0 w-full", fill && "h-full overflow-auto")}>
       {!isWorkload && <div className="flex shrink-0 items-center justify-between gap-3 px-4 pt-3">{rangeControl}</div>}
 
       {isWorkload && (

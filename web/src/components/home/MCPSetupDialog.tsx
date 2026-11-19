@@ -16,6 +16,8 @@ interface MCPSetupDialogProps {
   httpTools?: boolean
   /** Whether the native Helm MCP tool is registered; target Kubernetes permissions still required. */
   helmTools?: boolean
+  /** Whether the cluster serves Trivy's reports, the only place list_vulnerabilities is listed. */
+  vulnerabilityTools?: boolean
   applicationEvidenceAvailable?: boolean
   mcpUrl: string
   /** Opens Radar's own investigation composer. Omit where investigations can't run. */
@@ -59,7 +61,7 @@ function CodeBlock({ children }: { children: string }) {
   )
 }
 
-export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTools, httpTools, helmTools, onInvestigate, applicationEvidenceAvailable = false }: MCPSetupDialogProps) {
+export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTools, httpTools, helmTools, vulnerabilityTools = false, onInvestigate, applicationEvidenceAvailable = false }: MCPSetupDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const [isDesktop, setIsDesktop] = useState(false)
   const [portPinned, setPortPinned] = useState(false)
@@ -133,7 +135,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTo
   const currentPort = Number(window.location.port) || 80
 
   const tools = MCP_TOOL_CATALOG
-    .filter((tool) => (!readOnly || !tool.write) && (tool.name !== 'exec_pod' || execTools) && (tool.name !== 'curl_service' || httpTools) && (tool.name !== 'manage_helm' || helmTools) && (!tool.localOnly || (!readOnly && applicationEvidenceAvailable)))
+    .filter((tool) => (!readOnly || !tool.write) && (tool.name !== 'exec_pod' || execTools) && (tool.name !== 'curl_service' || httpTools) && (tool.name !== 'manage_helm' || helmTools) && (tool.name !== 'list_vulnerabilities' || vulnerabilityTools) && (!tool.localOnly || (!readOnly && applicationEvidenceAvailable)))
     .map((tool) => readOnly && tool.name === 'diagnose'
       ? { ...tool, params: tool.params.filter((param) => param.arg !== 'in_cluster') }
       : tool)

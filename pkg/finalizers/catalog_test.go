@@ -294,3 +294,23 @@ func TestFluxHelmControllerRequiresPublishedImage(t *testing.T) {
 		})
 	}
 }
+
+func TestSubstrateSandboxConfigProtectionOwner(t *testing.T) {
+	config := &unstructured.Unstructured{}
+	config.SetAPIVersion("ate.dev/v1")
+	owner := ResolveOwner("sandboxconfig.ate.dev/workerpool-protection", config)
+	if owner == nil || owner.Controller != "ate-controller" || owner.AllowConditionalCleanup {
+		t.Fatalf("owner = %+v, want ate-controller without conditional cleanup", owner)
+	}
+	if !owner.MatchesWorkload(&metav1.ObjectMeta{Name: "ate-controller", Labels: map[string]string{"app": "ate-controller"}}, corev1.PodTemplateSpec{}) {
+		t.Fatal("expected the ate-controller Deployment to match")
+	}
+	if owner.MatchesWorkload(&metav1.ObjectMeta{Name: "atelet", Labels: map[string]string{"app": "atelet"}}, corev1.PodTemplateSpec{}) {
+		t.Fatal("atelet must not match the controller")
+	}
+	other := &unstructured.Unstructured{}
+	other.SetAPIVersion("example.com/v1")
+	if ResolveOwner("sandboxconfig.ate.dev/workerpool-protection", other) != nil {
+		t.Fatal("the key must not resolve outside ate.dev")
+	}
+}

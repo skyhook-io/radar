@@ -1,10 +1,11 @@
 import { useState, type ReactNode, type JSX } from 'react'
-import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield } from 'lucide-react'
+import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield, Info } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
 import { PodLogShippingSection, type PodLogShippingProps } from './PodLogShippingSection'
 import type { PolicyResourceResponse } from '../../../types/policy'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
+import { SUBSTRATE_GROUP, SUBSTRATE_WORKER_POOL_LABEL } from '../resource-utils-agent-runtimes'
 import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames, getInitContainerNames, getLogContainerNames } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
@@ -423,6 +424,8 @@ export function PodRenderer({
     )
   }
 
+  const substrateWorkerPool = data.metadata?.labels?.[SUBSTRATE_WORKER_POOL_LABEL]
+
   return (
     <>
       {/* Problems alert - shown at top when there are issues */}
@@ -440,6 +443,19 @@ export function PodRenderer({
             ))}
           </ul>
         </AlertBanner>
+      )}
+
+      {substrateWorkerPool && (
+        <AlertBanner
+          variant="info"
+          icon={Info}
+          title="Agent Substrate worker"
+          message={<>
+            A worker in WorkerPool{' '}
+            <ResourceLink name={substrateWorkerPool} kind="workerpools" group={SUBSTRATE_GROUP} namespace={data.metadata?.namespace || ''} onNavigate={onNavigate} />.
+            {' '}Substrate places actors on this Pod in turn, so its logs, metrics and restarts are shared by every actor it has hosted.
+          </>}
+        />
       )}
 
       {onEvaluateCapacity && (
