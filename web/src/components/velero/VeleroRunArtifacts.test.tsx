@@ -33,7 +33,7 @@ const contents = (patch: Partial<VeleroRunContentsResponse> = {}): VeleroRunCont
 })
 const log = (patch: Partial<VeleroRunLogResponse> = {}): VeleroRunLogResponse => ({
   lines: [{ number: 42, level: 'warning', text: 'level=warning msg="storage retry"' }],
-  counts: { error: 0, warning: 1, info: 9999, debug: 7, other: 2 }, matched: 1, truncated: false, partial: false, decodedBytes: 4096, ...patch,
+  counts: { error: 0, warning: 1, info: 9999, debug: 7, other: 2 }, matched: 1, truncated: false, partial: false, decodedBytes: 4096, levels: ['error', 'warning'], ...patch,
 })
 async function mount(node: ReactNode) {
   await act(async () => { root.render(<QueryClientProvider client={client}>{node}</QueryClientProvider>) })
@@ -184,22 +184,25 @@ describe('Log rows and filters', () => {
     state.fetch.mockResolvedValue(log())
     await mount(<VeleroRunLog {...props} />)
     await settle(() => host.textContent!.includes('storage retry'))
-    expect(lastParams().get('levels')).toBe('error,warning')
+    expect(lastParams().get('levels')).toBe('auto')
+    expect(button('Errors + warnings').getAttribute('aria-selected')).toBe('true')
     expect(button('Info').textContent).toBe('Info9999')
   })
 
-  it('opens a run with no errors or warnings on every level', async () => {
-    const clean = log({ counts: { error: 0, warning: 0, info: 3, debug: 0, other: 0 }, lines: [], matched: 0 })
-    state.fetch.mockResolvedValueOnce(clean)
-    state.fetch.mockResolvedValueOnce({ ...clean, lines: [{ number: 1, level: 'info', text: 'level=info msg="backup completed"' }], matched: 3 })
+  // The server picks every level for a clean log, so opening it is one
+  // download, not a problems read followed by an everything read.
+  it('opens a run with no errors or warnings on every level, in one request', async () => {
+    const clean = log({ counts: { error: 0, warning: 0, info: 3, debug: 0, other: 0 }, lines: [{ number: 1, level: 'info', text: 'level=info msg="backup completed"' }], matched: 3, levels: ['error', 'warning', 'info', 'debug', 'other'] })
+    state.fetch.mockResolvedValue(clean)
     await mount(<VeleroRunLog {...props} />)
     await settle(() => host.textContent!.includes('backup completed'))
-    expect(lastParams().get('levels')).toBe('error,warning,info,debug,other')
+    expect(lastParams().get('levels')).toBe('auto')
     expect(button('Show all levels').getAttribute('aria-pressed')).toBe('true')
-    state.fetch.mockResolvedValue(clean)
+    expect(state.fetch).toHaveBeenCalledTimes(1)
+    state.fetch.mockResolvedValue(log({ ...clean, lines: [], matched: 0, levels: ['error', 'warning'] }))
     await act(async () => button('Errors + warnings').click())
     await settle(() => lastParams().get('levels') === 'error,warning' && host.textContent!.includes('No matching log lines'))
-    expect(state.fetch).toHaveBeenCalledTimes(3)
+    expect(state.fetch).toHaveBeenCalledTimes(2)
   })
 
   it('posts level and text filters and wraps on demand', async () => {
