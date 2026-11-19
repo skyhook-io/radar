@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -303,5 +304,43 @@ func TestTypedReadableDependentsRefusesAnUnloadedStore(t *testing.T) {
 	}
 	if _, ok := rc.ReadableDependents(Pods, nil, "uid-x"); !ok {
 		t.Fatal("a loaded store must answer")
+	}
+}
+
+// Read key by key, an object is returned once: as its one key's bucket when
+// the other keys hold nothing, and deduplicated when several keys hold it.
+func TestReadIndexDeduplicatesOnlyAcrossBuckets(t *testing.T) {
+	st := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{"letters": func(obj any) ([]string, error) {
+		return strings.Split(obj.(*corev1.ConfigMap).Labels["letters"], ","), nil
+	}})
+	for name, letters := range map[string]string{"a": "x", "b": "x,y", "c": "y"} {
+		if err := st.Add(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: name, Labels: map[string]string{"letters": letters}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(keys ...string) []string {
+		t.Helper()
+		items, err := readIndex(st, "letters", keys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, item := range items {
+			out = append(out, item.(*corev1.ConfigMap).Name)
+		}
+		slices.Sort(out)
+		return out
+	}
+	for _, tc := range []struct {
+		keys []string
+		want []string
+	}{
+		{[]string{"empty", "x"}, []string{"a", "b"}},
+		{[]string{"x", "y"}, []string{"a", "b", "c"}},
+		{[]string{"empty", "none"}, nil},
+	} {
+		if got := read(tc.keys...); !slices.Equal(got, tc.want) {
+			t.Errorf("keys %q read %v; want %v", tc.keys, got, tc.want)
+		}
 	}
 }

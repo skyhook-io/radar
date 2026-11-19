@@ -12,7 +12,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -130,35 +129,6 @@ func routeFixture(indexed bool) (stores, []any, []any) {
 		_ = s.byKind[refOf(u).GroupKind()].Add(u)
 	}
 	return s, routes, virtualServices
-}
-
-func BenchmarkRelationRouteReverse(b *testing.B) {
-	for _, indexed := range []bool{false, true} {
-		s, _, _ := routeFixture(indexed)
-		for _, q := range []struct {
-			f      *Family
-			target resourceid.Ref
-			count  int
-		}{
-			{GatewayParents, resourceid.NewRef("gateway.networking.k8s.io", "Gateway", "shared", "gw"), 5000},
-			{GatewayBackends, resourceid.NewRef("", "Service", "shared", "service-7"), 50},
-			{IstioServiceHosts("cluster.local"), resourceid.NewRef("", "Service", "shared", "service-7"), 20},
-		} {
-			f := *q.f
-			if !indexed {
-				f.ReferrersIndex = nil
-			}
-			b.Run(fmt.Sprintf("indexed=%t/%s", indexed, f.Name), func(b *testing.B) {
-				v := NewView(s, ownership.Unrestricted()).WithLimit(0)
-				b.ReportAllocs()
-				for b.Loop() {
-					if got := v.Referrers(&f, q.target, nil); len(got.Referrers) != q.count {
-						b.Fatalf("got %d want %d", len(got.Referrers), q.count)
-					}
-				}
-			})
-		}
-	}
 }
 
 func BenchmarkRelationRouteReplace(b *testing.B) {

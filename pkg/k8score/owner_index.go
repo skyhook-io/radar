@@ -130,8 +130,10 @@ func (rc *ResourceCache) ReadableIndexedObjects(resource string, namespaces []st
 }
 
 // readIndex reads the objects indexer files under any of keys, which are
-// sorted and distinct, each once; an empty index reads every object. One of k8score's own indexes answers every
-// key from one hold of the store's lock; any other is read key by key.
+// sorted and distinct, each once; an empty index reads every object. One of
+// k8score's own indexes answers every key from one hold of the store's lock;
+// any other is read key by key, deduplicating only when several keys hold
+// objects.
 func readIndex(indexer cache.Indexer, index string, keys []string) ([]any, error) {
 	switch {
 	case index == "":
@@ -148,13 +150,28 @@ func readIndex(indexer cache.Indexer, index string, keys []string) ([]any, error
 	case multiKeyIndexes[index]:
 		return indexer.Index(index, indexQuery(keys))
 	}
-	var items []any
-	seen := map[string]bool{}
+	buckets := make([][]any, 0, 2)
 	for _, key := range keys {
 		found, err := indexer.ByIndex(index, key)
 		if err != nil {
 			return nil, err
 		}
+		if len(found) > 0 {
+			buckets = append(buckets, found)
+		}
+	}
+	switch len(buckets) {
+	case 0:
+		return nil, nil
+	case 1:
+		// A bucket holds each object once, so only objects from several
+		// buckets need deduplicating; the relation indexes' unread bucket is
+		// almost always empty.
+		return buckets[0], nil
+	}
+	var items []any
+	seen := map[string]bool{}
+	for _, found := range buckets {
 		for _, item := range found {
 			if k, err := cache.MetaNamespaceKeyFunc(item); err == nil && !seen[k] {
 				seen[k] = true
