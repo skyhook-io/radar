@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
@@ -399,5 +401,47 @@ func TestRelationsContextListsEveryEntrypoint(t *testing.T) {
 		if len(rel.Ingresses) != relations.DefaultLimit || !extras.Fields["Entrypoints"].Truncated {
 			t.Fatalf("hidden=%v: drawer listed %d Ingresses, fields %+v", hidden, len(rel.Ingresses), extras.Fields)
 		}
+	}
+}
+
+// AnswerFields must hold every field an answer fills that a resource context
+// lists, or a context would drop that field's gaps: each one the drawer
+// characterization fills for a kind is among that kind's AnswerFields.
+func TestAnswerFieldsCoverWhatAnswersFill(t *testing.T) {
+	raw, err := os.ReadFile("testdata/characterization/drawer-relationships.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var records []struct {
+		Root          string                     `json:"root"`
+		Relationships map[string]json.RawMessage `json:"relationships"`
+	}
+	if err := json.Unmarshal(raw, &records); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]string{}
+	rt := reflect.TypeOf(Relationships{})
+	for i := range rt.NumField() {
+		names[strings.Split(rt.Field(i).Tag.Get("json"), ",")[0]] = rt.Field(i).Name
+	}
+	listed := []string{"Services", "Ingresses", "Gateways", "Routes", "RoutedFrom", "Backends", "PDBs", "NetworkPolicies", "Scalers", "Protects", "HealthChecks", "StagedPolicies", "Monitors", "MonitorTargets", "Dependencies", "Dependents"}
+	checked := 0
+	for _, r := range records {
+		parts := strings.Split(r.Root, "|")
+		gk := resourceid.GroupKind{Group: parts[0], Kind: parts[1]}
+		has := AnswerFields(gk)
+		for key, value := range r.Relationships {
+			field := names[key]
+			if !slices.Contains(listed, field) || string(value) == "null" || string(value) == "[]" {
+				continue
+			}
+			checked++
+			if !has[field] {
+				t.Errorf("%s fills %s, which AnswerFields(%v) lacks", r.Root, field, gk)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("the characterization filled no listed field")
 	}
 }

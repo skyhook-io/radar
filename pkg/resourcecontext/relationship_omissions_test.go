@@ -58,7 +58,7 @@ func TestRelationshipOmissionsFollowEachFieldsEvidence(t *testing.T) {
 
 	unanswered := map[string]relations.Coverage{"answer": {NotChecked: []ownership.Gap{{Reason: readreason.ClusterConnecting}}}}
 	pod := omissions("Pod", "", unanswered)
-	if !slices.Contains(pod, OmittedField{Field: "uses", Reason: OmittedUnavailable}) || !slices.Contains(pod, OmittedField{Field: "exposedBy", Reason: OmittedUnavailable}) {
+	if !slices.Contains(pod, OmittedField{Field: "uses", Reason: OmittedUnavailable}) {
 		t.Fatalf("a Pod without an answer = %+v", pod)
 	}
 	if slices.ContainsFunc(pod, func(o OmittedField) bool { return o.Field == "runsOn" || o.Field == "referencedBy" }) {
@@ -100,6 +100,35 @@ func TestServiceWithUnreadableVirtualServicesMarksNoUses(t *testing.T) {
 	for _, o := range rc.Omitted {
 		if strings.HasPrefix(o.Field, "uses") {
 			t.Fatalf("a Service's context marked %s: %+v", o.Field, rc.Omitted)
+		}
+	}
+}
+
+// Without an answer, a context marks unavailable only the fields its kind can
+// have: those some relation family, or the answer's own reads, fill for it.
+func TestUnansweredContextMarksOnlyItsKindsFields(t *testing.T) {
+	unanswered := map[string]relations.Coverage{"answer": {NotChecked: []ownership.Gap{{Reason: readreason.ClusterConnecting}}}}
+	for _, tc := range []struct {
+		kind, group string
+		want        []string
+	}{
+		{"ConfigMap", "", []string{"referencedBy"}},
+		{"Service", "", []string{"exposes", "exposedBy", "backends", "monitors"}},
+		{"Deployment", "apps", []string{"exposes", "exposedBy", "selectedBy", "scaledBy", "monitors", "stagedPolicies", "uses"}},
+		{"Node", "", []string{"referencedBy"}},
+	} {
+		omitted := newOmittedTracker()
+		addRelationshipOmissions(resourceIdentity{Group: tc.group, Kind: tc.kind, Namespace: "shop", Name: "x"}, &topology.RelationshipExtras{Fields: unanswered}, omitted)
+		var got []string
+		for _, o := range omitted.items {
+			if o.Reason != OmittedUnavailable {
+				t.Fatalf("%s: %+v", tc.kind, o)
+			}
+			got = append(got, o.Field)
+		}
+		slices.Sort(got)
+		if want := slices.Sorted(slices.Values(tc.want)); !slices.Equal(got, want) {
+			t.Errorf("%s without an answer marked %v, want %v", tc.kind, got, want)
 		}
 	}
 }

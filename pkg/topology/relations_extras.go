@@ -266,3 +266,78 @@ func targetCoverage(a relations.ReferencesAnswer, keep func(resourceid.GroupKind
 	})
 	return c
 }
+
+// AnswerFields are the Relationships fields, and the RelationshipExtras.Fields
+// entries, a context answer about a subject of kind gk can fill: what its
+// families, selector families and compositions project for that kind, as
+// the answer projects them, and the answer's own reads (its network
+// entrypoints, a Pod's Node, storage, configuration references and Pod
+// placement, scaler managers, Cluster API health checks and Knative
+// Serving's Services). A host can tell from them which fields a kind has.
+func AnswerFields(gk resourceid.GroupKind) map[string]bool {
+	out := map[string]bool{}
+	add := func(d relations.Disposition, forward bool) {
+		for _, rule := range d.Rules {
+			fields, kind := rule.ReferrerFields, rule.Target
+			if forward {
+				fields, kind = rule.ReferenceFields, rule.Source
+			}
+			if kind.Kind != "" && kind != gk {
+				continue
+			}
+			for _, field := range fields {
+				if field != "" {
+					out[field] = true
+				}
+			}
+		}
+	}
+	declares := func(sources []relations.Source) bool {
+		return slices.ContainsFunc(sources, func(s relations.Source) bool { return s.Kind == gk })
+	}
+	declared := func(f *relations.Family) bool {
+		return f.IsTarget != nil && f.IsTarget(gk) || f.IsTarget == nil && slices.Contains(f.Targets, gk)
+	}
+	for _, f := range relations.Families("") {
+		if declares(f.Sources) {
+			add(f.Projection, true)
+		}
+		if declared(f) {
+			add(f.Projection, false)
+		}
+	}
+	for _, f := range relations.SelectorFamilies() {
+		if slices.ContainsFunc(f.Selectors, func(s relations.Selector) bool { return s.Kind == gk }) {
+			add(f.Projection, true)
+		}
+		if slices.ContainsFunc(f.Selectables, func(s relations.Selectable) bool { return s.Kind == gk }) {
+			add(f.Projection, false)
+		}
+	}
+	for _, f := range relations.Compositions() {
+		if declares(f.Producer.Sources) {
+			add(f.Projection, true)
+		}
+		for _, consumer := range f.Consumers {
+			if (len(f.ConsumerKinds) == 0 || slices.Contains(f.ConsumerKinds, gk)) && declares(consumer.Sources) {
+				add(f.Projection, false)
+			}
+		}
+	}
+	set := func(on bool, fields ...string) {
+		for _, field := range fields {
+			out[field] = out[field] || on
+		}
+	}
+	set(gk == resourceid.GroupKind{Kind: "Service"} || slices.ContainsFunc(relations.ServiceSelectors.Selectables, func(s relations.Selectable) bool { return s.Kind == gk }), "Entrypoints", "Ingresses", "Gateways", "Routes", "RoutedFrom")
+	set(declares(relations.ConfigReferences.Sources), "Uses")
+	set(declared(relations.ConfigReferences) || declared(relations.PodPlacement), "ReferencedBy")
+	set(declares(relations.PodPlacement.Sources), "Node")
+	set(declares(relations.Storage.Sources), "Dependencies")
+	set(declared(relations.Storage), "Dependents")
+	set(out["Scalers"], "ScalerManagers")
+	set(gk == resourceid.GroupKind{Group: "cluster.x-k8s.io", Kind: "Cluster"}, "HealthChecks")
+	set(gk == resourceid.GroupKind{Group: "cluster.x-k8s.io", Kind: "MachineHealthCheck"}, "Dependencies")
+	set(gk == resourceid.GroupKind{Group: "serving.knative.dev", Kind: "Service"} || gk == resourceid.GroupKind{Kind: "Service"}, "Services", "Backends")
+	return out
+}

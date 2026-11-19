@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/readreason"
-	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -30,6 +29,20 @@ func addRelationshipOmissions(ident resourceIdentity, extras *topology.Relations
 		// own spec names without one.
 		"answer": {"exposes", "exposedBy", "backends", "selectedBy", "scaledBy", "protects", "healthChecks", "stagedPolicies", "monitors", "monitorTargets", "dependencies", "dependents", "referencedBy", "uses"},
 	}
+	has := topology.AnswerFields(resourceid.GroupKind{Group: ident.Group, Kind: ident.Kind})
+	// A field the subject's kind can have is one some field an answer fills
+	// for that kind feeds; uses is listed only for pod specs.
+	lists := func(name string) bool {
+		if name == "uses" || strings.HasPrefix(name, "uses.") {
+			return listsUses(ident)
+		}
+		for field, names := range fields {
+			if has[field] && slices.Contains(names, name) {
+				return true
+			}
+		}
+		return false
+	}
 	for _, field := range slices.Sorted(maps.Keys(extras.Fields)) {
 		coverage := extras.Fields[field]
 		reason := OmittedReason("")
@@ -44,7 +57,7 @@ func addRelationshipOmissions(ident resourceIdentity, extras *topology.Relations
 			}
 		}
 		for _, name := range fields[field] {
-			if !listsField(ident, name) {
+			if !lists(name) {
 				continue
 			}
 			if coverage.Narrowed {
@@ -55,21 +68,6 @@ func addRelationshipOmissions(ident resourceIdentity, extras *topology.Relations
 			}
 		}
 	}
-}
-
-// listsField reports whether a context of ident's kind can list the field, so
-// an answer's gaps mark only fields that kind has.
-func listsField(ident resourceIdentity, name string) bool {
-	gk := resourceid.GroupKind{Group: ident.Group, Kind: ident.Kind}
-	switch {
-	case name == "uses" || strings.HasPrefix(name, "uses."):
-		return listsUses(ident)
-	case name == "referencedBy":
-		return slices.Contains(relations.ConfigReferences.Targets, gk) || slices.Contains(relations.PodPlacement.Targets, gk)
-	case name == "runsOn":
-		return gk == resourceid.GroupKind{Kind: "Pod"}
-	}
-	return true
 }
 
 // listsUses reports the kinds whose context lists what their pod spec uses.

@@ -197,12 +197,14 @@ func TestResourceContextWithoutARelationshipAnswer(t *testing.T) {
 	obj := deployment.DeepCopy()
 	obj.APIVersion, obj.Kind = "apps/v1", "Deployment"
 	rc := context(obj)
-	for _, field := range []string{"exposes", "exposedBy", "backends", "selectedBy", "scaledBy", "protects", "dependencies", "dependents", "uses"} {
+	for _, field := range []string{"exposes", "exposedBy", "selectedBy", "scaledBy", "monitors", "stagedPolicies", "uses"} {
 		if !slices.Contains(rc.Omitted, resourcecontext.OmittedField{Field: field, Reason: resourcecontext.OmittedUnavailable}) {
 			t.Errorf("%s not marked unavailable: %+v", field, rc.Omitted)
 		}
 	}
-	if slices.ContainsFunc(rc.Omitted, func(o resourcecontext.OmittedField) bool { return o.Field == "referencedBy" || o.Field == "runsOn" }) {
+	if slices.ContainsFunc(rc.Omitted, func(o resourcecontext.OmittedField) bool {
+		return o.Field == "referencedBy" || o.Field == "runsOn" || o.Field == "backends" || o.Field == "dependents"
+	}) {
 		t.Errorf("a Deployment's context marked a field it doesn't have: %+v", rc.Omitted)
 	}
 	pod := &corev1.Pod{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"}, ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web-a"}, Spec: corev1.PodSpec{NodeName: "worker"}}
