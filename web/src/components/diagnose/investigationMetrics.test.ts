@@ -311,7 +311,7 @@ describe("metricsChangeMarkers", () => {
 
   it("never follows a referenced Secret the caller may not read", () => {
     const secretChange = change("Secret", "api-secret", "2026-09-06T07:40:00Z");
-    const bundle = (state?: "denied" | "unverified") => ({
+    const bundle = (state?: "denied" | "access_unverified") => ({
       ...diagnoseBundle,
       resourceContext: {
         ...diagnoseBundle.resourceContext,
@@ -322,11 +322,11 @@ describe("metricsChangeMarkers", () => {
       },
       recentChanges: [...diagnoseBundle.recentChanges, secretChange],
     });
-    const labels = (state?: "denied" | "unverified") =>
+    const labels = (state?: "denied" | "access_unverified") =>
       markersFor([[tool("diag", "diagnose", bundle(state)), tool("prom", "query_prometheus", rangeResult(targetSelectors))]], "prom").map((m) => m.label);
     expect(labels()).toContain("Secret api-secret");
     expect(labels("denied")).not.toContain("Secret api-secret");
-    expect(labels("unverified")).not.toContain("Secret api-secret");
+    expect(labels("access_unverified")).not.toContain("Secret api-secret");
   });
 
   it("excludes a sibling workload's change even from a target-scoped change query", () => {

@@ -3,7 +3,7 @@ import { useLocation } from 'react-router-dom'
 import type { WorkspaceScreenProps } from '../../integrations/workspaceRoute'
 import { useAPIResources } from '../../api/apiResources'
 import { useVeleroWorkspace } from '../../api/velero'
-import { useNamespaces } from '../../api/client'
+import { useNamespaces, useRadarFeature } from '../../api/client'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
@@ -28,6 +28,7 @@ export function VeleroView({ namespaces, selectedResource, onOpenResource, onClo
   const narrow = useMediaQuery('(max-width: 1100px)')
   const laptop = useMediaQuery('(max-width: 1300px)')
   const compactNavigation = narrow || (laptop && !!detail)
+  const deleteObject = useRadarFeature('resourceDeletePreconditions').support === 'supported'
   const { data: apiResources, isPending: discoveryPending, isError: discoveryFailed } = useAPIResources()
   // Discovery that could not be read does not say Velero is absent; the server is asked then.
   const discovered = veleroDiscovered(apiResources) || discoveryFailed
@@ -50,7 +51,7 @@ export function VeleroView({ namespaces, selectedResource, onOpenResource, onClo
         <VeleroDetailPage target={detail} onOpenResource={onOpenResource} />
       ) : (
         <VeleroScreenGate query={query} discoveryPending={discoveryPending} discovered={discovered}>
-          {(data) => <VeleroOverview data={data} installation={installation} onInstallation={setInstallation} onInspect={inspect} inspected={drawerTarget} namespaces={namespaceNames} />}
+          {(data) => <VeleroOverview data={data} installation={installation} onInstallation={setInstallation} onInspect={inspect} inspected={drawerTarget} namespaces={namespaceNames} deleteObject={deleteObject} />}
         </VeleroScreenGate>
       )}
     </WorkspaceFrame>

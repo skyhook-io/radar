@@ -157,7 +157,7 @@ func TestBuild_ServiceAccountSecretCheckFailedIsUnverified(t *testing.T) {
 	access := undecidedSecrets{}
 	rel, extras := topology.RelationsContextAnswer(session, access, access, ownership.NewView(session, access), subject, sa, nil, nil)
 	rc := Build(ctx, sa, Options{Relationships: rel, RelationshipExtras: extras})
-	want := []ContextRef{{Kind: "Secret", Namespace: "prod", Name: "registry", State: topology.ResourceStateUnverified}}
+	want := []ContextRef{{Kind: "Secret", Namespace: "prod", Name: "registry", State: topology.ResourceStateAccessUnverified}}
 	if s := rc.ServiceAccountSummary; s == nil || len(s.SecretRefs) != 0 || !slices.Equal(s.ImagePullSecrets, want) {
 		t.Fatalf("summary = %+v", rc.ServiceAccountSummary)
 	}

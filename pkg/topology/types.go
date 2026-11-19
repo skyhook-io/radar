@@ -455,7 +455,8 @@ type ResourceRef struct {
 	// State says what Radar knows about a reference the subject's own spec
 	// declares, when that isn't simply that the target is readable:
 	// ResourceStateDenied when the caller may not read it, or
-	// ResourceStateUnverified when the check couldn't be made. Only the name
+	// ResourceStateAccessUnverified when Radar couldn't check the caller's
+	// access to it. Only the name
 	// is known then, not whether the target exists or its state. Empty means
 	// no qualifier was recorded, which is not proof the target exists.
 	State string `json:"state,omitempty"`
@@ -463,8 +464,8 @@ type ResourceRef struct {
 
 // The values of ResourceRef.State.
 const (
-	ResourceStateDenied     = "denied"
-	ResourceStateUnverified = "unverified"
+	ResourceStateDenied           = "denied"
+	ResourceStateAccessUnverified = "access_unverified"
 )
 
 type ReflectionRelationships struct {

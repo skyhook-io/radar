@@ -153,6 +153,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"disagree means a manager's list and the metadata of the resource (or, with via, its controller) name different managers: " +
 			"check both). children: direct owner-reference preview; complete covers readable scope, not all runtime. " +
 			"Absent is not empty; coverage is not health. Absent `stale` does not establish freshness. " +
+			"A reference with `state: denied` is one the resource names that you may not read; `state: access_unverified` means Radar couldn't check your access to it; neither says whether it exists. " +
 			"For broad incidents rank with issues, get_dashboard, search or list_resources first. " +
 			"Search ConfigMaps, CRD specs, env refs or object content with search. " +
 			"Set group for ambiguous kinds (Knative Service vs core Service). In recentChanges, " +

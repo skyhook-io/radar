@@ -122,6 +122,10 @@ type ScheduleRun struct {
 	// Manual: created by Radar's Back up now (SubmissionAnnotation), not by
 	// the schedule controller. It is still one of the schedule's runs.
 	Manual bool `json:"manual,omitempty"`
+	// StorageLocation is the Backup's spec.storageLocation: named by the
+	// schedule's template, else filled when Velero first processes the run.
+	// Absent on a run Velero has not assigned a location.
+	StorageLocation string `json:"storageLocation,omitempty"`
 }
 
 // ScheduleRuns is what the backups Velero still keeps say about a schedule.
@@ -543,6 +547,7 @@ func runFrom(b *unstructured.Unstructured) ScheduleRun {
 	run.Errors, _, _ = unstructured.NestedInt64(b.Object, "status", "errors")
 	run.Warnings, _, _ = unstructured.NestedInt64(b.Object, "status", "warnings")
 	_, run.Manual = b.GetAnnotations()[SubmissionAnnotation]
+	run.StorageLocation, _ = LocationOf(b)
 	return run
 }
 

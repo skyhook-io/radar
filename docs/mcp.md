@@ -781,7 +781,7 @@ A `resourceContext.uses` entry, `runsOn`, an `ingressSummary.tlsSecrets` or `ser
 Related Resources reference, may carry `state`: `"denied"` when the subject's
 own spec names an object the caller may not read (a pod template's ConfigMaps, Secrets, PVCs and ServiceAccount, a
 Pod's Node, an Ingress's TLS Secrets, a ServiceAccount's Secrets, and, in Related Resources only, the ResourceClaims a
-Pod's spec names and a Calico HostEndpoint's Node), or `"unverified"` when Radar couldn't check the caller's
+Pod's spec names and a Calico HostEndpoint's Node), or `"access_unverified"` when Radar couldn't check the caller's
 access. The name comes from the subject's spec, which the caller reads; Radar never reads the target for it, so
 neither its existence nor its state is known. Treat it as a declared dependency to verify with someone who has access,
 not as a missing or a healthy one. A ResourceClaim a claim template generates is named only in the Pod's status, so it
@@ -1751,11 +1751,13 @@ Controller and spec-generator references appear separately in `managedBy` below.
 
 ### `managedBy` — the top controller
 
-List/search `summaryContext.managedBy` is one inspection lead: highest readable controller, then an observed spec
-generator, then eligible GitOps/Helm evidence. For example, a TiDB Pod can lead through its StatefulSet to a summary
+List/search `summaryContext.managedBy` is one inspection lead: highest readable controller, up to the first GitOps
+manager above the object (an Application, not its ApplicationSet), then an observed spec generator, then eligible
+GitOps/Helm evidence. For example, a TiDB Pod can lead through its StatefulSet to a summary
 reference with `kind: TidbCluster`, `group: pingcap.com`, and `source: native`.
 
-Follow the lead with `get_resource` or `diagnose`. Detail `resourceContext.managedBy` lists controller/spec references;
+Follow the lead with `get_resource` or `diagnose`. Detail `resourceContext.managedBy` lists controller/spec references,
+its controller climb stopping at the first GitOps manager above the object (an Application, not its ApplicationSet);
 `resourceContext.manager` retains the GitOps/Helm evidence to inspect before planning edits. A lead is not an edit target,
 and absence does not prove unmanaged.
 

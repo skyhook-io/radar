@@ -43,9 +43,12 @@ type ResourceContext struct {
 	// resolved by owner-reference UID, never labels or generated names. Hosts
 	// currently supply this for Collector/Canary roots only; absent is not empty.
 	Children *ChildrenContext `json:"children,omitempty"`
-	// ManagedBy names the highest readable controller and separately observed
-	// non-GitOps managing controllers. Manager carries GitOps/Helm evidence.
-	// An incomplete controller walk is reported in Omitted.
+	// ManagedBy names the highest readable controller, climbing no further
+	// than the first GitOps manager above the resource (an Argo CD
+	// Application, not the ApplicationSet that controls it), and separately
+	// observed non-GitOps managing controllers. Manager carries GitOps/Helm
+	// evidence. An incomplete controller walk below that manager is reported
+	// in Omitted; what stopped the walk above it doesn't qualify the answer.
 	ManagedBy []ContextRef `json:"managedBy,omitempty"`
 	// Manager is what manages the resource, weighed from GitOps managers'
 	// status lists and the resource's own tracking metadata, or its
@@ -204,7 +207,8 @@ type ContextRef struct {
 	Name      string `json:"name"`
 	// State qualifies a reference the subject declares, as
 	// topology.ResourceRef.State does: "denied" when the caller may not read
-	// the target, or "unverified" when the check couldn't be made. The
+	// the target, or "access_unverified" when Radar couldn't check the
+	// caller's access to it. The
 	// target's existence and state are unknown then. Empty means no qualifier
 	// was recorded, which is not proof the target exists.
 	State string `json:"state,omitempty"`

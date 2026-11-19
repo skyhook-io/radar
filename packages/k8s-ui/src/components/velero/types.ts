@@ -70,6 +70,8 @@ export interface VeleroRun {
   warnings?: number
   /** Created by Radar's Back up now, not by the schedule controller; still one of the schedule's runs. */
   manual?: boolean
+  /** spec.storageLocation: named by the schedule's template, else filled when Velero first processes the run; absent until then. */
+  storageLocation?: string
 }
 
 /** pkg/velero ScheduleRuns: what the backups Velero still keeps say about a schedule. */

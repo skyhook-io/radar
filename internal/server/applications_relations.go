@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -482,21 +483,24 @@ func buildPlannedAppRelationBatch(ctx context.Context, session relations.Session
 	view := relations.NewView(session, ownership.Unrestricted()).WithLimit(0)
 	declarations := map[*relations.Family]map[resourceid.Ref][]resourceid.Ref{}
 	// The mesh domain is istiod's, wherever it runs, whatever namespaces the
-	// request names.
-	deploymentKind := resourceid.GroupKind{Group: "apps", Kind: "Deployment"}
-	deployments := objects(deploymentKind)
-	if !scope.AllNamespaces {
-		deployments = session.Indexed(deploymentKind, "", nil, ownership.SearchScope{AllNamespaces: true})
-		b.loading = b.loading || appStillLoading(deployments.Gaps...)
-	}
-	var controllerDeployments []*appsv1.Deployment
-	for _, o := range deployments.Objects {
-		if d, ok := o.Object.(*appsv1.Deployment); ok {
-			controllerDeployments = append(controllerDeployments, d)
+	// request names. Finding it reads every Deployment, so it is found only
+	// once a VirtualService or DestinationRule is read.
+	istioDomain := sync.OnceValue(func() string {
+		deploymentKind := resourceid.GroupKind{Group: "apps", Kind: "Deployment"}
+		deployments := objects(deploymentKind)
+		if !scope.AllNamespaces {
+			deployments = session.Indexed(deploymentKind, "", nil, ownership.SearchScope{AllNamespaces: true})
+			b.loading = b.loading || appStillLoading(deployments.Gaps...)
 		}
-	}
-	domain := configrefs.IstioServiceDomain(controllerDeployments)
-	families := relations.Families(domain)
+		var controllerDeployments []*appsv1.Deployment
+		for _, o := range deployments.Objects {
+			if d, ok := o.Object.(*appsv1.Deployment); ok {
+				controllerDeployments = append(controllerDeployments, d)
+			}
+		}
+		return configrefs.IstioServiceDomain(controllerDeployments)
+	})
+	families := relations.FamiliesIn(istioDomain)
 	evaluation := plan(families, relations.Compositions())
 	for _, f := range families {
 		if len(evaluation.sources[f]) == 0 {
@@ -697,21 +701,6 @@ func (b *appRelationBatch) relationshipsForRef(group, kind, ns, name string) *ap
 	return out
 }
 
-// applicationOwnerAbove is topology.OwnerAbove, except that the controller
-// chain ends at the first GitOps manager on it: past one lies a parent such
-// as an ApplicationSet, shared by apps that are separate.
-func applicationOwnerAbove(view *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
-	if chain := view.ControllerChain(r).Chain; len(chain) > 1 {
-		for _, owner := range chain[1:] {
-			if isGitOpsManagerKind(topology.NodeKind(owner.Kind), owner.Group) {
-				return owner, true
-			}
-		}
-		return chain[len(chain)-1], true
-	}
-	return topology.OwnerAbove(view, r)
-}
-
 // applicationStructuralRoot is the object start's application is rooted at,
 // and whether a manager kind it read was still loading, which can move it.
 func applicationStructuralRoot(session relations.Session, view *ownership.View, start resourceid.Ref) (resourceid.Ref, bool) {
@@ -723,7 +712,7 @@ func applicationStructuralRoot(session relations.Session, view *ownership.View, 
 		if isGitOpsManagerKind(topology.NodeKind(cur.Kind), cur.Group) {
 			return cur, loading
 		}
-		if next, ok := applicationOwnerAbove(view, cur); ok && !seen[next] {
+		if next, ok := topology.OwnerAboveToManager(view, cur); ok && !seen[next] {
 			cur = next
 			continue
 		}

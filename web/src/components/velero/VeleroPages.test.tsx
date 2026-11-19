@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   workspace: undefined as unknown,
   activity: undefined as unknown,
   stored: undefined as unknown,
+  deletion: { state: 'unknown' } as unknown,
 }))
 vi.mock('../../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/client')>()),
@@ -26,6 +27,7 @@ vi.mock('../../api/velero', async (importOriginal) => ({
   },
   useVeleroWorkspace: () => ({ data: state.workspace }),
   useVeleroScheduleActivity: () => ({ data: state.activity }),
+  useVeleroBackupDeletion: () => ({ data: state.deletion, error: null }),
 }))
 vi.mock('../../api/policy', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/policy')>()),
@@ -250,6 +252,17 @@ describe('The composed Overview', () => {
     expect(html).toContain('Next step: </span>Create the bucket or point the location at one that exists')
     expect(html).toContain('Velero’s message')
     expect(html).toContain('See in Issues →')
+  })
+
+  it('names Delete object in the next step of a rejected backup Velero won’t delete', () => {
+    const rejected = (location: string) => ({ metadata: { namespace: 'velero', name: 'adhoc', uid: 'u1' }, spec: { storageLocation: location }, status: { phase: 'FailedValidation' } })
+    state.workspace = workspace({
+      locations: [location({ name: 'default' })],
+      issues: [{ id: 'i2', severity: 'critical', category: 'backup', kind: 'Backup', group: 'velero.io', namespace: 'velero', name: 'adhoc', reason: 'BackupValidationFailed', message: 'backup storage location gone not found', action: 'Name an existing storage location, then create the backup again' }],
+    })
+    expect(page('backups', rejected('gone'))).toContain('Name an existing storage location, then create the backup again; to remove this backup, use Delete object (nothing of it is in storage)')
+    // Its location exists, so Velero acts on Delete backup: nothing to add.
+    expect(page('backups', rejected('default'))).not.toContain('Delete object')
   })
 
   it('gives a banner without the Issue’s own action a next step from what its message means', () => {
