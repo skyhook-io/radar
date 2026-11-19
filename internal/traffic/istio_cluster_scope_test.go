@@ -3,6 +3,7 @@ package traffic
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -46,7 +47,7 @@ func (s *istioStore) query(_ context.Context, q string) (*prom.QueryResult, erro
 		return out
 	}
 	switch {
-	case strings.Contains(q, istioTCPMetric):
+	case strings.Contains(q, istioTCPMetric), strings.Contains(q, "istio_tcp_sent_bytes_total"):
 		if s.failTCP {
 			return nil, errors.New("query timed out")
 		}
@@ -77,6 +78,11 @@ func TestIstioQueriesCarryClusterMatchers(t *testing.T) {
 	if !names["http-server-a"] || !names["tcp-server-a"] || names["http-server-b"] || names["tcp-server-b"] {
 		t.Errorf("flows = %v, want only cluster a's", names)
 	}
+	for _, metric := range []string{istioTCPMetric, "istio_tcp_sent_bytes_total"} {
+		if !slices.ContainsFunc(store.sent(), func(q string) bool { return strings.Contains(q, metric) }) {
+			t.Errorf("missing directional query for %s", metric)
+		}
+	}
 	for _, q := range store.sent() {
 		if want := strings.Count(q, "{"); strings.Count(q, `cluster="a"`) != want {
 			t.Errorf("every selector must carry the cluster matcher: %s", q)
@@ -103,7 +109,7 @@ func TestIstioNotFilteredWithoutConfiguredURL(t *testing.T) {
 }
 
 // TCP series scraped without the cluster label must not empty the HTTP flows,
-// and the map says why the TCP connections are missing.
+// and the map says why the TCP traffic is missing.
 func TestIstioFamiliesScopedSeparately(t *testing.T) {
 	useConfiguredStore(t)
 	stubScope(t, clusterA)
@@ -115,8 +121,8 @@ func TestIstioFamiliesScopedSeparately(t *testing.T) {
 	if names := flowNames(resp.Flows); !names["http-server-a"] || names["http-server-b"] || names["tcp-server-"] {
 		t.Errorf("flows = %v, want cluster a's HTTP flows and no unattributed TCP", names)
 	}
-	if !strings.Contains(resp.Warning, "TCP connections aren't shown") || !strings.Contains(resp.Warning, "none of it has a cluster label") {
-		t.Errorf("warning %q does not explain the missing TCP connections", resp.Warning)
+	if !strings.Contains(resp.Warning, "TCP traffic isn't shown") || !strings.Contains(resp.Warning, "none of it has a cluster label") {
+		t.Errorf("warning %q does not explain the missing TCP traffic", resp.Warning)
 	}
 	// Whole edges are missing, so the warning must outlast a viewer's filters.
 	if resp.WarningKind != WarningIncomplete {
@@ -231,11 +237,11 @@ func TestIstioScopeCheckFailure(t *testing.T) {
 		if names := flowNames(resp.Flows); !names["http-server-a"] || names["tcp-server-a"] {
 			t.Errorf("flows = %v, want HTTP flows without TCP", names)
 		}
-		if !strings.Contains(resp.Warning, "TCP connections") {
-			t.Errorf("warning %q does not name the missing TCP connections", resp.Warning)
+		if !strings.Contains(resp.Warning, "TCP traffic") {
+			t.Errorf("warning %q does not name the missing TCP traffic", resp.Warning)
 		}
 		for _, q := range store.sent() {
-			if strings.Contains(q, istioTCPMetric) {
+			if strings.Contains(q, "istio_tcp_") {
 				t.Errorf("queried TCP series without a cluster scope: %s", q)
 			}
 		}
@@ -275,7 +281,7 @@ func TestIstioMissingFamilyNoteSurvivesMixedNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(resp.Warning, mixedClustersNote) || !strings.Contains(resp.Warning, "TCP connections aren't shown") {
+	if !strings.Contains(resp.Warning, mixedClustersNote) || !strings.Contains(resp.Warning, "TCP traffic isn't shown") {
 		t.Fatalf("warning %q, want both notes", resp.Warning)
 	}
 	if resp.WarningKind != WarningIncomplete {
@@ -295,7 +301,7 @@ func TestIstioMismatchSurvivesFailedTCPQuery(t *testing.T) {
 	if len(resp.Flows) != 0 || resp.WarningKind != WarningTransient || !resp.WarningClusterScope {
 		t.Fatalf("flows = %d, kind = %s, cluster scope = %v", len(resp.Flows), resp.WarningKind, resp.WarningClusterScope)
 	}
-	if !strings.Contains(resp.Warning, "TCP connections") || !strings.Contains(resp.Warning, "cluster=a") {
+	if !strings.Contains(resp.Warning, "TCP traffic") || !strings.Contains(resp.Warning, "cluster=a") {
 		t.Errorf("warning %q should name both the failed TCP query and the cluster mismatch", resp.Warning)
 	}
 }

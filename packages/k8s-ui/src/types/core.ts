@@ -154,6 +154,9 @@ export interface Capabilities {
   // Which Cloud-connect lane this deployment gets. Optional on the wire:
   // older backends don't advertise it — consumers fall back to wizard links.
   cloudConnect?: CloudConnectCapability
+  // An access check errored, so a false above may be unanswered rather than
+  // denied. Older Radars never send it.
+  checksIncomplete?: boolean
 }
 
 // CloudConnectCapability picks the Cloud funnel's connect lane: 'driver'
@@ -179,6 +182,7 @@ export interface FeatureCapabilities {
   yamlSchemas?: boolean
   workloadImages?: boolean
   deploymentPause?: boolean
+  substrateHealthMetrics?: boolean
   resourceIssues?: boolean
   resourceIssueCoverage?: boolean
   podEnvironment?: boolean
@@ -186,6 +190,15 @@ export interface FeatureCapabilities {
   workloadHistory?: boolean
   cnpgWorkspace?: boolean
   cnpgProtectionSetup?: boolean
+  veleroWorkspace?: boolean
+  /** POST /api/velero/schedules/{namespace}/{name}/backup */
+  veleroBackupNow?: boolean
+  /** GET /api/velero/runs/{backups|restores} */
+  veleroRuns?: boolean
+  /** POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion */
+  veleroDeleteBackup?: boolean
+  /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
+  resourceDeletePreconditions?: boolean
   gitopsWriteEvidence?: boolean
   gitopsOutsideChanges?: boolean
   gitopsFieldWriters?: boolean
@@ -204,6 +217,7 @@ export interface FeatureCapabilities {
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
+  vulnerabilities?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -671,6 +685,14 @@ export interface ResourceRef {
   namespace: string
   name: string
   group?: string  // API group for CRDs (e.g., 'cert-manager.io')
+  /**
+   * Set when the subject's own spec names this object but the viewer may not
+   * read it ('denied'), or Radar couldn't check the viewer's access
+   * ('access_unverified'). Only the name
+   * is known: not whether it exists, nor its state. Absent means no qualifier
+   * was recorded, not that the object exists.
+   */
+  state?: 'denied' | 'access_unverified'
 }
 
 // Computed relationships for a resource
@@ -1029,10 +1051,11 @@ export interface HelmRelease {
   resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
   healthIssue?: string    // Primary issue if unhealthy (e.g., "OOMKilled")
   healthSummary?: string  // Brief summary like "2/3 pods ready"
-  // When set, this release was installed by Flux's helm-controller — the
-  // user should manage it via the named HelmRelease CR (GitOps tab) rather
-  // than helm CLI / Radar's Helm view, since changes here would get
-  // reverted at the next reconcile. Format: "namespace/name".
+  /** Workloads and Pods whose live status wasn't read; other unread objects keep per-resource markers. */
+  statusUnreadCount?: number
+  // Flux ownership remains visible when the controller reference is withheld.
+  managedByFlux?: boolean
+  // Readable controller reference, in namespace/name form.
   managedByFluxHelmRelease?: string
 }
 
@@ -1102,6 +1125,8 @@ export interface HelmReleaseDetail {
   resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
   healthIssue?: string
   healthSummary?: string
+  /** See HelmRelease.statusUnreadCount. */
+  statusUnreadCount?: number
   hooks?: HelmHook[]
   hookDiagnostics?: HookDiagnostic[]
   readme?: string
@@ -1109,8 +1134,8 @@ export interface HelmReleaseDetail {
   lastOperation?: HelmOperation
   operations?: HelmOperation[]
   operationInsight?: HelmOperationInsight
-  // When set, this release was installed by Flux's helm-controller — see
-  // HelmRelease.managedByFluxHelmRelease for context. Format: "namespace/name".
+  // Ownership is retained even when the controller reference is withheld.
+  managedByFlux?: boolean
   managedByFluxHelmRelease?: string
 }
 
@@ -1209,6 +1234,8 @@ export interface HelmOwnedResource {
   message?: string  // Status message or reason
   summary?: string  // Brief status like "0/3 OOMKilled"
   issue?: string    // Primary issue if unhealthy (e.g., "OOMKilled")
+  /** Why the caller isn't shown this object's live status (a read code such as user_forbidden); release health doesn't count it. */
+  statusUnread?: string
 }
 
 export interface HelmValues {
@@ -1690,6 +1717,8 @@ export interface AggregatedFlow {
   protocol: string
   port: number
   flowCount: number
+  bytesByProtocol?: Record<string, { bytesSent: number; bytesRecv: number }>
+  /** Cross-protocol sums kept for compatibility; display the breakdown when present. */
   bytesSent: number
   bytesRecv: number
   connections: number

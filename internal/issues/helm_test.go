@@ -140,3 +140,21 @@ func TestNativeHelmReleaseUninstallStuckIssue(t *testing.T) {
 		t.Fatalf("Flux-owned release issues = %#v", got)
 	}
 }
+
+func TestNativeHelmReleaseIssuesUsesFluxOwnershipWithHiddenController(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		managed bool
+		want    int
+	}{
+		{"hidden Flux controller", true, 0},
+		{"ordinary Helm release", false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rel := helm.HelmRelease{Name: "payments", Namespace: "team-a", ManagedByFlux: tc.managed, LastOperation: &helm.HelmOperation{Kind: helmhistory.KindUpgradeFailed, Status: helmhistory.StatusFailed, Revision: 2}}
+			if got := NativeHelmReleaseIssues([]helm.HelmRelease{rel}, time.Now()); len(got) != tc.want {
+				t.Fatalf("native issues=%d want %d", len(got), tc.want)
+			}
+		})
+	}
+}

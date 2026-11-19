@@ -8,6 +8,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { kindToPlural, kindToPluralWithGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 import type { Relationships, ResourceRef, ResourceWithRelationships, WorkloadPodInfo } from '../../../types'
 import type { ScalerDiagnosis } from '@skyhook-io/k8s-ui/components/resources/renderers/WorkloadRenderer'
+import { WorkloadVulnerabilitiesSection } from '../../vulnerabilities/WorkloadVulnerabilitiesSection'
 
 // Map plural lowercase kind to singular PascalCase for ownerReferences matching
 function getOwnerKind(kind: string): string {
@@ -20,6 +21,10 @@ function getOwnerKind(kind: string): string {
   }
   return kindMap[kind] || kind
 }
+
+// The workloads the vulnerability rollup names: a ReplicaSet's Pods are
+// named by their Deployment, so a ReplicaSet drawer has no section.
+const VULNERABILITY_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet'])
 
 interface WorkloadRendererProps {
   kind: string
@@ -99,6 +104,9 @@ export function WorkloadRenderer({ kind, data, onNavigate, scaleBlockedBy, workl
       policyLoading={policyLoading}
       policyError={policyError as Error | null}
       namespaceLimitRangeNames={limitRangesReady ? podLimitRangeNames(limitRanges) : undefined}
+      vulnerabilitySection={VULNERABILITY_KINDS.has(getOwnerKind(kind)) && metadata.name ? (
+        <WorkloadVulnerabilitiesSection kind={getOwnerKind(kind)} namespace={namespace} name={metadata.name} />
+      ) : undefined}
       scaleBlockedBy={scaleBlockedBy}
       workloadPods={workloadPods}
       scalerDiagnostics={scalerDiagnostics}

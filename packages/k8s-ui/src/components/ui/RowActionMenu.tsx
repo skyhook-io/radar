@@ -16,6 +16,8 @@ export interface RowActionItem {
   danger?: boolean
   /** Render a horizontal divider above this item. */
   divider?: boolean
+  /** A checked state turns this action into a menu checkbox. */
+  checked?: boolean
 }
 
 interface RowActionMenuProps {
@@ -121,7 +123,8 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
             const content = (
               <button
                 type="button"
-                role="menuitem"
+                role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+                aria-checked={item.checked}
                 disabled={item.disabled || item.pending}
                 onClick={(e) => {
                   e.stopPropagation()

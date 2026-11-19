@@ -60,6 +60,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { useToast } from '../ui/Toast'
 import { useContextSwitchFlow } from '../useContextSwitchFlow'
+import { FluxOperatorCard } from './FluxOperatorCard'
 import { useDestinationCluster } from './useDestinationCluster'
 import { destinationToast } from './destination-toast'
 
@@ -105,9 +106,7 @@ type ArgoSyncDialogTarget =
 
 const KIND_BY_NAME = new Map(GITOPS_KINDS.map((k) => [k.name, k]))
 
-// Rows are the table's primary content; their poll cadence is what the toolbar
-// freshness signal advertises ("Auto-refreshes every 2m"). Single source of
-// truth so the signal can't drift from the actual refetchInterval below.
+// Fallback poll for the rows; SSE changes to row kinds refetch them within 15s (App.tsx slow tier).
 const GITOPS_ROWS_REFRESH_INTERVAL_MS = 120_000
 
 interface ResourceCountsResponse {
@@ -139,6 +138,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   const { connection } = useConnection()
   const namespacesParam = namespaces.join(',')
   const { data: apiResources, isLoading: apiResourcesLoading } = useAPIResources()
+  const fluxReportsServed = !!apiResources?.some((r) => r.name === 'fluxreports' && r.group === 'fluxcd.controlplane.io')
 
   const argoSync = useArgoSync()
   const argoRefresh = useArgoRefresh()
@@ -204,7 +204,9 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
       const failures: unknown[] = []
       const fetchResourceList = async (kind: string, group: string, namespacesParam: string): Promise<any[]> => {
         try {
-          const result = await fetchCoveredResourceList<any>(kind, { group, namespaces: namespacesParam ? namespacesParam.split(',') : [] })
+          // Summary drops status.resources / status.inventory, which the rows
+          // never read and which dominate the payload on large fleets.
+          const result = await fetchCoveredResourceList<any>(kind, { group, namespaces: namespacesParam ? namespacesParam.split(',') : [], summary: true })
           coverage.push(result.coverage)
           return result.items
         } catch (error) {
@@ -339,6 +341,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   return (
     <>
       <SharedGitOpsTableView
+        headerSlot={fluxReportsServed ? <FluxOperatorCard available refetchInterval={GITOPS_ROWS_REFRESH_INTERVAL_MS} /> : undefined}
         rows={rowsQuery.data?.rows ?? []}
         coverageStatus={rowsQuery.data?.coverageStatus ?? 'unknown'}
         loading={apiResourcesLoading || countsQuery.isLoading || rowsQuery.isLoading || coldRetrying}
@@ -565,7 +568,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     if (node?.missing) {
       const nextStep = node.sync === 'Synced'
         ? 'Argo reports it as synced. Refresh the application to check its status.'
-        : 'Sync the application to create it.'
+        : 'Review the desired changes and sync policy before deciding whether to sync.'
       showToast(`${ref.kind} ${ref.name} is not present in this cluster. ${nextStep}`, { type: 'info' })
       return
     }
