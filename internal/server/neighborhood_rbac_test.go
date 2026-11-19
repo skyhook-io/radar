@@ -574,12 +574,18 @@ func TestNeighborhood_RoleRootNeedsItsOwnPermissionWithoutDiscovery(t *testing.T
 		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "web-role", Namespace: "shop", UID: "role-uid"}},
 	))
 	env := newAuthTestServer(t)
+	var code readreason.Code
 	get := func(user string, grant bool) int {
 		t.Helper()
 		env.srv.permCache.Set(user, nil, &auth.UserPermissions{AllowedNamespaces: []string{"shop"}})
 		env.srv.permCache.Get(user, nil).SetCanI("get", "rbac.authorization.k8s.io", "roles", "shop", grant)
 		resp := env.authGet(t, "/api/ai/neighborhood/role/shop/web-role", user, "")
+		var body struct {
+			ErrorCode readreason.Code `json:"error_code"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&body)
 		resp.Body.Close()
+		code = body.ErrorCode
 		return resp.StatusCode
 	}
 	t.Run("rbac group missing from discovery", func(t *testing.T) {
@@ -594,8 +600,8 @@ func TestNeighborhood_RoleRootNeedsItsOwnPermissionWithoutDiscovery(t *testing.T
 	t.Run("empty discovery", func(t *testing.T) {
 		withNeighborhoodDiscovery(t, nil)
 		for _, grant := range []bool{false, true} {
-			if got := get(fmt.Sprintf("role-empty-%v", grant), grant); got != http.StatusServiceUnavailable {
-				t.Errorf("get roles %v with nothing discovered: %d, want 503", grant, got)
+			if got := get(fmt.Sprintf("role-empty-%v", grant), grant); got != http.StatusServiceUnavailable || code != readreason.ClusterConnecting {
+				t.Errorf("get roles %v with nothing discovered: %d %q, want 503 %s", grant, got, code, readreason.ClusterConnecting)
 			}
 		}
 	})

@@ -130,7 +130,10 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, context.DeadlineExceeded):
 		s.writeError(w, http.StatusGatewayTimeout, "The neighborhood didn't finish within the request deadline; narrow it with hops=1, a smaller max_nodes, or profile=auto.")
 		return
-	case errors.Is(err, ownership.ErrCachesReplaced), errors.Is(err, ownership.ErrNotConnected):
+	case errors.Is(err, ownership.ErrNotConnected):
+		s.writeReadFailure(w, sanitizeForLog(rawKind), readFailuref(readreason.ClusterConnecting, "Radar is still connecting to the cluster or discovering its resource kinds; retry the neighborhood shortly"), nil)
+		return
+	case errors.Is(err, ownership.ErrCachesReplaced):
 		s.writeError(w, http.StatusServiceUnavailable, "Cluster connection changed or is not ready; retry the neighborhood.")
 		return
 	default:
