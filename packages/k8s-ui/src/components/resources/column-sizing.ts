@@ -15,14 +15,17 @@
 //           don't set the width, then take part in sharing the room left
 //           (below) up to their longest value. Name is sized to its longest
 //           name (capped by max) and gives way last, and only down to the
-//           width most of its names need (NAME_YIELD_PERCENTILE).
+//           width most of its names need (NAME_YIELD_PERCENTILE). A column
+//           flagged `sizing: 'fit'` (short values: status badges, enums,
+//           referenced names) is sized to its longest value and has nothing
+//           to share.
 //   grow  — starts at its floor and shares whatever room is left, by weight,
 //           each up to its longest value. Long free text: Event messages,
 //           selectors, image lists, uncurated CRD printer columns.
 //   user  — a width the user dragged; kept as is.
 //
 // Room is handed out in a fixed order: user widths, Name, exact widths and fit
-// columns at their 95th percentile; then the grow columns and the fit columns'
+// columns at their measured content; then the grow columns and the fit columns'
 // longer values share what is left by weight, each up to its longest value;
 // then whatever is still left is spread over every column in proportion to its
 // width, so the table fills its room and keeps its proportions (placeLeftover).
@@ -30,14 +33,16 @@
 // When the room is short it is taken back in rank order (yieldRank), each
 // column down to its `min`: Node first (to its header), then exact columns (to
 // the larger of their header and their content), then Namespace (to its
-// header), then Name (to its 75th percentile, at most NAME_PROTECTED_MAX_PX:
-// only names wider than that are cut, and only when the alternative is
-// scrolling; a kind can opt its Name out, as Events does). Grow columns are
-// already at their floor and user widths never shrink. If the table is still
-// short, Name goes on to its median, but only if that ends the scrolling;
-// otherwise the first pass stands and the table scrolls sideways. Where the
-// table must fit (a window 1920px wide or more) a second pass in the same
-// order always takes every column on to its heading and Name to NAME_MIN_PX.
+// header) and the short-value fit columns (no further than their curated
+// width, or their content when that is narrower), then Name (to its 75th
+// percentile, at most NAME_PROTECTED_MAX_PX: only names wider than that are
+// cut, and only when the alternative is scrolling; a kind can opt its Name out,
+// as Events does). Grow columns are already at their floor and user widths
+// never shrink. If the table is still short, Name goes on to its median, but
+// only if that ends the scrolling; otherwise the first pass stands and the
+// table scrolls sideways. Where the table must fit (a window 1920px wide or
+// more) a second pass in the same order always takes every column on to its
+// heading and Name to NAME_MIN_PX.
 
 export type ColumnSizingMode = 'exact' | 'fit' | 'grow'
 
