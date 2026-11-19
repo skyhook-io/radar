@@ -33,7 +33,7 @@ import (
 // The characterization goldens record what the public topology functions
 // return today for one fixture cluster: the graph, then for every fixture
 // object the Related Resources, ManagedBy and delete preview production
-// computes for it, plus selected neighborhoods and a per-user projection.
+// computes for it, plus a per-user projection.
 // They pin behavior, not correctness — several recorded answers are known
 // defects. A change meant to leave public answers untouched keeps them
 // byte-identical; a change that alters them regenerates them with
