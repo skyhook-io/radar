@@ -107,6 +107,8 @@ describe('Flux drawer and resource timing', () => {
     const html = text(renderToString(<KustomizationRenderer data={{ ...base, apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', status: { ...base.status, conditions: ready, lastAppliedRevision: 'main@sha1:aaa', lastAttemptedRevision: 'main@sha1:bbb' } }} />))
     expect(html).toContain('main@sha1:aaa')
     expect(html).toContain('not the last successful apply')
+    // The badge turns the value into an element, which Property no longer wraps; a long digest must still break.
+    expect(html).toContain('<span class="break-words">main@sha1:bbb</span>')
     const section = html.match(/<button\b[\s\S]*?<\/button>/g)?.find(button => button.includes('>Revision<'))
     expect(section).toContain('aria-expanded="true"')
   })
@@ -129,6 +131,7 @@ describe('Flux drawer and resource timing', () => {
   it('flags a HelmRelease whose attempted chart differs from the deployed one', () => {
     const html = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { ...helm.status, conditions: ready, lastAttemptedRevision: '1.4.0' } }} />))
     expect(html).toContain('not the last successful apply')
+    expect(html).toContain('<span class="break-words">1.4.0</span>')
     const section = html.match(/<button\b[\s\S]*?<\/button>/g)?.find(button => button.includes('Revision Info'))
     expect(section).toContain('aria-expanded="true"')
   })
