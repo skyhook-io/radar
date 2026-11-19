@@ -633,21 +633,18 @@ func TestRecentExpiryNeedsADate(t *testing.T) {
 }
 
 // The same missing template is one severity on every surface: the pool's row,
-// the claim row Radar derives from it, and the pool's Issue (a warning).
+// the claim row the controller's TemplateNotFound gives, and the pool's Issue
+// (a warning).
 func TestMissingTemplateIsAWarning(t *testing.T) {
-	waits := claim("waits", time.Hour, spec(map[string]any{"warmPoolRef": map[string]any{"name": "p"}}))
-	in := Input{Now: now, Sandboxes: full(), Claims: full(waits), WarmPools: full(pool("p", "gone", 1, 0, time.Hour)), Templates: full(), Controller: running()}
+	reported := claim("reported", time.Hour, spec(map[string]any{"warmPoolRef": map[string]any{"name": "p"}}),
+		conds(cnd("Ready", "False", "TemplateNotFound", `SandboxTemplate "gone" not found`, time.Hour)))
+	in := Input{Now: now, Sandboxes: full(), Claims: full(reported), WarmPools: full(pool("p", "gone", 1, 0, time.Hour)), Templates: full(), Controller: running()}
 	s := Summarize(in)
-	for _, name := range []string{"p", "waits"} {
-		var row *Attention
-		for i := range s.Attention {
-			if s.Attention[i].Subject.Name == name {
-				row = &s.Attention[i]
-			}
-		}
-		if row == nil || row.Reason != ReasonTemplateNotFound || row.Severity != SeverityWarning {
-			t.Errorf("%s: %+v", name, row)
-		}
+	if row := rowFor(s, "SandboxWarmPool", "p"); row == nil || row.Reason != ReasonTemplateNotFound || row.Severity != SeverityWarning {
+		t.Errorf("pool: %+v", row)
+	}
+	if row := rowFor(s, "SandboxClaim", "reported"); row == nil || row.Rule != RuleCannotBind || row.Reason != "TemplateNotFound" || row.Severity != SeverityWarning {
+		t.Errorf("claim: %+v", row)
 	}
 }
 
@@ -760,24 +757,33 @@ func TestCaveatsAreNotFolded(t *testing.T) {
 	}
 }
 
-// The controller adopts a ready warm sandbox before it looks up the template,
-// so a pool that still holds one serves claims without it: only the pool's
-// row reports the missing template, and a waiting claim reads as any other.
-func TestStockedPoolServesClaimsWithoutTemplate(t *testing.T) {
+// The controller adopts a warm member before it looks up the template, and
+// falls back to one not yet ready, so neither a stocked pool nor one with
+// none ready tells Radar a claim can't bind: only the pool's row reports the
+// missing template, and a waiting claim reads as any other.
+func TestMissingTemplateLeavesClaimsToTheController(t *testing.T) {
 	waits := claim("waits", time.Hour, spec(map[string]any{"warmPoolRef": map[string]any{"name": "p"}}))
 	fresh := claim("fresh", time.Minute, spec(map[string]any{"warmPoolRef": map[string]any{"name": "p"}}))
 	in := Input{Now: now, Sandboxes: full(), Claims: full(waits, fresh), WarmPools: full(pool("p", "gone", 2, 1, time.Hour)), Templates: full(), Controller: running()}
-	s := Summarize(in)
-	if row := rowFor(s, "SandboxWarmPool", "p"); row == nil || row.Rule != RuleTemplateMissing {
-		t.Errorf("pool row %+v", row)
+	check := func(label string, s Summary) {
+		t.Helper()
+		if row := rowFor(s, "SandboxWarmPool", "p"); row == nil || row.Rule != RuleTemplateMissing {
+			t.Errorf("%s: pool row %+v", label, row)
+		}
+		row := rowFor(s, "SandboxClaim", "waits")
+		if row == nil || row.Rule == RuleCannotBind || row.Reason == ReasonTemplateNotFound {
+			t.Errorf("%s: waiting claim %+v, want only its progress", label, row)
+		}
+		if row := rowFor(s, "SandboxClaim", "fresh"); row != nil {
+			t.Errorf("%s: a claim within its start-up time %+v", label, row)
+		}
 	}
-	row := rowFor(s, "SandboxClaim", "waits")
-	if row == nil || row.Rule == RuleCannotBind || row.Reason == ReasonTemplateNotFound {
-		t.Errorf("a claim on a stocked pool %+v", row)
-	}
-	if row := rowFor(s, "SandboxClaim", "fresh"); row != nil {
-		t.Errorf("a claim within its start-up time %+v", row)
-	}
+	check("stocked", Summarize(in))
+
+	in.WarmPools = full(pool("p", "gone", 2, 0, time.Hour))
+	in.Sandboxes = full(sandbox("p-x1", 10*time.Minute, owner("SandboxWarmPool", "p"),
+		status(map[string]any{"podIPs": []any{"10.0.0.7"}}), conds(cnd("Ready", "False", "DependenciesNotReady", "", 10*time.Minute))))
+	check("none ready", Summarize(in))
 }
 
 // A fresh replacement doesn't hide an older member the scheduler can't place.
