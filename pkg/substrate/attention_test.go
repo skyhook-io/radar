@@ -506,3 +506,18 @@ func TestMemoryCauseRemedies(t *testing.T) {
 		}
 	}
 }
+
+// A restarted worker's lost actors that are already deleting or reverting
+// get no revert: Substrate refuses one during a delete, and a revert runs.
+func TestRestartedWorkerDoesNotRevertDeletingActors(t *testing.T) {
+	restarting := worker("r", "p", WorkerActive, 8, 1)
+	restarting.RegisteredEpoch, restarting.ObservedEpoch = 5, 4
+	rows := NeedsAttention(Inputs{
+		Workers: []Worker{restarting}, WorkersRead: true,
+		Actors: []Actor{{Atespace: "a", Name: "leaving", State: StateDeleting, Assignment: &Assignment{Worker: "r", Epoch: 4}}}, ActorsRead: true, Now: now,
+	})
+	r := find(t, rows, "workerRestarting:r")
+	if r.Command != "" || strings.Contains(r.NextStep, "Revert") {
+		t.Errorf("a deleting actor's row = %+v", r)
+	}
+}

@@ -205,3 +205,29 @@ func TestSharedTokenDeniedIsReadable(t *testing.T) {
 		t.Errorf("Substrate's own rejection = %s", code)
 	}
 }
+
+// Any token this side can't get fails the whole connection, not each read:
+// with a Kubernetes 401 or a transient error, no read can succeed.
+func TestSharedTokenFailureIsConnectionWide(t *testing.T) {
+	for name, fail := range map[string]error{
+		"unauthorized": apierrors.NewUnauthorized("token expired"),
+		"transient":    apierrors.NewServiceUnavailable("etcd leader changed"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := fake.NewClientset()
+			var requests []*authv1.TokenRequest
+			tokenReactor(c, time.Now, &requests, fail)
+			creds := &bearerCreds{source: &sharedToken{client: c}}
+			_, err := creds.GetRequestMetadata(context.Background())
+			st, _ := status.FromError(err)
+			wrapped := status.Error(st.Code(), "transport: per-RPC creds failed due to error: "+st.Message())
+			r := failed[string](wrapped, creds)
+			if r.tierErr == nil {
+				t.Fatalf("%s: a failed mint is per-read %+v; the tier would read connected", name, r.coverage)
+			}
+			if name == "unauthorized" && r.tierErr.Code != CodeMintDenied {
+				t.Errorf("a 401 = %s", r.tierErr.Code)
+			}
+		})
+	}
+}

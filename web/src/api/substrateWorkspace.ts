@@ -558,7 +558,7 @@ export interface SubstrateSettings {
 
 /**
  * The context and cluster a connection view was read for (k8s.ProfileTarget).
- * Opaque to the UI: send it back unchanged with a save or disconnect.
+ * Send it back unchanged with a save or disconnect.
  */
 export interface SubstrateConnectionTarget {
   binding: string
@@ -566,6 +566,9 @@ export interface SubstrateConnectionTarget {
   fingerprint: string
   clientGeneration: number
   operationGeneration: number
+  /** The kubeconfig file the context comes from, and its name there: what a copied kubectl command needs to reach the same cluster. */
+  source?: string
+  inFileName?: string
   [field: string]: unknown
 }
 

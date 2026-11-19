@@ -302,22 +302,38 @@ export function When({ iso, hint, prefix, held }: { iso: string; hint?: string; 
 }
 
 /**
- * The kubeconfig context a copied command targets: its name on a local Radar,
- * null where Radar can't know the reader's (in-cluster, Hub). Without a
+ * Where a copied command must point to change the actor on screen. On a local
+ * Radar: the context's name, the kubeconfig file it is named in (another file
+ * may hold a same-named context), and the endpoint Radar reads Substrate
+ * through when it isn't the port-forward kubectl ate makes by itself. Where
+ * Radar can't know the reader's (in-cluster, Hub), context is null. Without a
  * provider, commands are shown as written.
  */
-export const KubectlTargetContext = createContext<{ context: string | null } | undefined>(undefined)
+export interface KubectlTarget {
+  context: string | null
+  kubeconfig?: string
+  endpoint?: string
+}
+
+export const KubectlTargetContext = createContext<KubectlTarget | undefined>(undefined)
 
 const CHANGES_STATE = /^kubectl ate (revert|update|resume|suspend|delete) /
 
 /**
- * A kubectl ate command that changes an actor, aimed at the cluster on screen:
- * the reader's shell may point at another, where a same-named actor would be
- * changed instead. Where the context is unknown, a <context> to fill in.
+ * A kubectl ate command that changes an actor, aimed at the Substrate on
+ * screen: the reader's shell may point at another, where a same-named actor
+ * would be changed instead. Where the context is unknown, a <context> to fill
+ * in.
  */
-export function withKubectlTarget(command: string, target: { context: string | null } | undefined): string {
-  if (!target || !CHANGES_STATE.test(command) || /\s--context[\s=]/.test(command)) return command
-  return `${command} --context ${target.context ? shellWord(target.context) : '<context>'}`
+export function withKubectlTarget(command: string, target: KubectlTarget | undefined): string {
+  if (!target || !CHANGES_STATE.test(command) || /\s--(context|kubeconfig|endpoint)[\s=]/.test(command)) return command
+  if (!target.context) return `${command} --context <context>`
+  const flags = [
+    ...(target.kubeconfig ? [`--kubeconfig ${shellWord(target.kubeconfig)}`] : []),
+    `--context ${shellWord(target.context)}`,
+    ...(target.endpoint ? [`--endpoint ${shellWord(target.endpoint)}`] : []),
+  ]
+  return `${command} ${flags.join(' ')}`
 }
 
 /**

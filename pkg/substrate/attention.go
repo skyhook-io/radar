@@ -931,6 +931,16 @@ func workerRows(in Inputs) []Attention {
 					lead, plural(len(lost), "actor ran", "actors ran"), w.RegisteredEpoch, w.ObservedEpoch)
 				row.NextStep = "Revert each to its newest stored generation now; Substrate marks them crashed when it reconciles the worker anyway."
 				row.Command = revertCommand
+				// Substrate refuses a revert while a delete runs, and a reverting
+				// actor already has one running.
+				if !slices.ContainsFunc(lost, func(a Actor) bool { return a.State != StateDeleting && a.State != StateReverting }) {
+					row.NextStep, row.Command = "Nothing to recover: Substrate is already deleting or reverting them.", ""
+					if len(lost) == 1 {
+						row.NextStep = "Nothing to recover: Substrate is already deleting or reverting it."
+					}
+				} else if slices.ContainsFunc(lost, func(a Actor) bool { return a.State == StateDeleting || a.State == StateReverting }) {
+					row.NextStep = "Revert each that isn't already deleting or reverting to its newest stored generation now; Substrate marks them crashed when it reconciles the worker anyway."
+				}
 				row.Subject = workerActors(w, ImpactRestarted)
 				row.Related = append([]Subject{subject}, related...)
 				row.Count, row.Sample = len(lost), sample(lost)

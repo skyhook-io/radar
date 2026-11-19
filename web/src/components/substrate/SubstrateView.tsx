@@ -2,7 +2,7 @@ import { useCallback, useMemo } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import type { WorkspaceScreenProps } from '../../integrations/workspaceRoute'
 import { useAPIResources } from '../../api/apiResources'
-import { useSubstrateStatus, useSubstrateWorkspace, type SubstrateRef, type SubstrateSubject } from '../../api/substrateWorkspace'
+import { useSubstrateConnection, useSubstrateStatus, useSubstrateWorkspace, type SubstrateRef, type SubstrateSubject } from '../../api/substrateWorkspace'
 import { useConnection } from '../../context/ConnectionContext'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { currentPageLabel } from '../../utils/page-links'
@@ -34,7 +34,7 @@ import { SubstrateOverview } from './SubstrateOverview'
 import { SubstratePoolPage } from './SubstratePoolPage'
 import { SubstrateTemplatePage, SubstrateTemplatesScreen } from './SubstrateTemplates'
 import { SubstrateWorkersScreen } from './SubstrateWorkers'
-import { KubectlTargetContext, SubstrateScreenGate } from './shared'
+import { KubectlTargetContext, SubstrateScreenGate, type KubectlTarget } from './shared'
 import { substrateDiscovered, useSubstrateSidebarWorkspace } from './useSubstrateSidebarWorkspace'
 
 /**
@@ -89,8 +89,17 @@ export function SubstrateView({ namespaces, selectedResource, onOpenResource, on
   const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar)
   const selectedKind = route.pool ? SUBSTRATE_WORKERPOOL_KIND : null
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
+  // On a local Radar, the file and name the context has there, and a saved
+  // direct endpoint (the default is the port-forward kubectl ate makes itself).
   const kubectlContext = useCNPGKubectlContext()
-  const kubectlTarget = useMemo(() => ({ context: kubectlContext?.name ?? null }), [kubectlContext?.name])
+  const connectionView = useSubstrateConnection(!!kubectlContext)
+  const local = connectionView.data?.view === 'local' ? connectionView.data : undefined
+  const kubeconfigFile = local?.target.source?.startsWith('/') ? local.target.source : undefined
+  const endpoint = local?.saved && !local.targetChanged ? local.settings?.endpoint || undefined : undefined
+  const kubectlTarget = useMemo<KubectlTarget>(
+    () => ({ context: kubectlContext ? (local?.target.inFileName || kubectlContext.name) : null, kubeconfig: kubeconfigFile, endpoint }),
+    [kubectlContext, local?.target.inFileName, kubeconfigFile, endpoint],
+  )
 
   const openActor = decodeActorParam(params.get(ACTOR_DRAWER_PARAM))
   const setActorDrawer = useCallback(
