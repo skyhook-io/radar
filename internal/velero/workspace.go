@@ -177,7 +177,7 @@ func (r *Reader) Workspace(ctx context.Context) WorkspaceResponse {
 		resp.Installations = append(resp.Installations, inst)
 		server := inst.Server
 		backups, backupsRead := inv.in(backupsKey, ns), inv.covered(backupsKey, ns)
-		bySchedule := backupsBySchedule(backups)
+		bySchedule := domain.BackupsBySchedule(backups)
 		for _, s := range inv.in(schedulesKey, ns) {
 			resp.Schedules = append(resp.Schedules, domain.ReadSchedule(domain.ScheduleInput{
 				Schedule: s, Backups: bySchedule[s.GetName()], BackupsRead: backupsRead, Server: server,
@@ -208,18 +208,6 @@ func (r *Reader) Workspace(ctx context.Context) WorkspaceResponse {
 	})
 	resp.Issues, resp.IssueTotals = issuesOf(inv)
 	return resp
-}
-
-// backupsBySchedule groups a namespace's backups by the schedule that
-// submitted them, so each schedule reads only its own.
-func backupsBySchedule(backups []*unstructured.Unstructured) map[string][]*unstructured.Unstructured {
-	out := map[string][]*unstructured.Unstructured{}
-	for _, b := range backups {
-		if name, ok := b.GetLabels()[domain.ScheduleNameLabel]; ok {
-			out[name] = append(out[name], b)
-		}
-	}
-	return out
 }
 
 // installationNamespaces are the namespaces any Velero object was read in.
@@ -344,7 +332,7 @@ type RunRow struct {
 	Created   string `json:"created,omitempty"`
 	Started   string `json:"started,omitempty"`
 	Completed string `json:"completed,omitempty"`
-	// Expiration is a Backup's; Velero deletes it at the next garbage collection after it.
+	// Expiration is when a Backup becomes eligible for garbage collection.
 	Expiration string `json:"expiration,omitempty"`
 	// Schedule is a Backup's velero.io/schedule-name label: the schedule that
 	// submitted it. Never set on a Restore (see ScheduleName).

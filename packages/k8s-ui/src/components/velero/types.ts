@@ -64,7 +64,7 @@ export interface VeleroRun {
   ranAt: string
   started?: string
   completed?: string
-  /** The Backup's status.expiration; Velero deletes it at the next garbage collection after it. */
+  /** When the Backup becomes eligible for garbage collection. */
   expiration?: string
   errors?: number
   warnings?: number

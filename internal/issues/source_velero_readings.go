@@ -112,12 +112,15 @@ func detectVeleroReadingIssues(p Provider, bslGVR schema.GroupVersionResource, l
 
 		schedules, schedulesKnown := read("Schedule", ns)
 		backups, backupsKnown := read("Backup", ns)
+		var bySchedule map[string][]*unstructured.Unstructured
 		if !schedulesKnown || !backupsKnown {
 			schedules = nil
+		} else if len(schedules) > 0 {
+			bySchedule = veleropkg.BackupsBySchedule(backups)
 		}
 		scheduleGVR := gvrs["Schedule"]
 		for _, s := range schedules {
-			reading := veleropkg.ReadSchedule(veleropkg.ScheduleInput{Schedule: s, Backups: backups, BackupsRead: true, Server: server, DefaultLocation: defaultLocation, Locations: byNS[ns], Now: now})
+			reading := veleropkg.ReadSchedule(veleropkg.ScheduleInput{Schedule: s, Backups: bySchedule[s.GetName()], BackupsRead: true, Server: server, DefaultLocation: defaultLocation, Locations: byNS[ns], Now: now})
 			if server.Down() && reading.Attention && reading.State == veleropkg.StateLate {
 				lateWhileDown = append(lateWhileDown, Ref{Group: VeleroGroup, Kind: "Schedule", Namespace: ns, Name: s.GetName()})
 				continue
@@ -127,6 +130,10 @@ func detectVeleroReadingIssues(p Provider, bslGVR schema.GroupVersionResource, l
 				continue
 			}
 			iss := veleroStateIssue(scheduleGVR, "Schedule", ns, s.GetName(), severity, reason, message, s.GetCreationTimestamp().Time)
+			if reason == ReasonVeleroScheduleHeld && server.FlagsKnown() && server.BackupsDisabled {
+				iss.Cause = "The Velero server has disabled a controller required to start backups."
+				iss.Action = "Enable the backup and backup-queue controllers on the Velero server, or pause the schedule if backups are intentionally disabled."
+			}
 			iss.RequiredReads = append([]EvidenceRead{
 				{Group: VeleroGroup, Resource: "schedules", Namespace: ns, Verb: "list"},
 				{Group: VeleroGroup, Resource: "backups", Namespace: ns, Verb: "list"},

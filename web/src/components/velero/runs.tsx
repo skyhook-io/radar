@@ -49,12 +49,12 @@ export function When({ iso, fallback }: { iso?: string; fallback: string }) {
   )
 }
 
-/** When Velero deletes a run: "in 21h", or "expired" once its retention passed. */
+/** When a backup's retention ends. */
 export function Expires({ iso }: { iso?: string }) {
   if (!iso) return <span className="text-theme-text-tertiary">—</span>
   if (expired(iso)) {
     return (
-      <Tooltip content={`${veleroLocalTime(iso)} · Velero deletes it at its next garbage collection`}>
+      <Tooltip content={`${veleroLocalTime(iso)} · eligible for garbage collection`}>
         <span className="text-theme-text-tertiary">expired</span>
       </Tooltip>
     )

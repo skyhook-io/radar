@@ -48,7 +48,8 @@ export function VeleroRestoreRenderer({ data, messages, onNavigate }: VeleroRest
   const namespaceMapping = getRestoreNamespaceMapping(data)
   const rawLabelSelector = getRestoreLabelSelector(data)
   const labelSelector = hasLabelSelectorTerms(rawLabelSelector) ? rawLabelSelector : null
-  const orLabelSelectors = getRestoreOrLabelSelectors(data).filter(hasLabelSelectorTerms)
+  const selectors = getRestoreOrLabelSelectors(data)
+  const orLabelSelectors = selectors.every(hasLabelSelectorTerms) ? selectors : []
   const namespaceMappingEntries = Object.entries(namespaceMapping)
   const hasScope =
     includedNamespaces.length > 0 ||

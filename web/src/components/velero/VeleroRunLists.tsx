@@ -217,7 +217,7 @@ export function VeleroBackups({ data, installation, onInstallation, onInspect, i
           inspected={inspected}
           minWidth={wide ? 1000 : 520}
           empty={runsEmpty(query, 'backups', view === 'failed' ? 'No failed backups' : 'No backups match')}
-          footer="Failed counts runs that failed, partially failed or were rejected. Velero deletes each backup at the first garbage collection after its retention."
+          footer="Failed counts runs that failed, partially failed or were rejected. Expired backups are eligible for garbage collection."
         />
       </ScreenBody>
     </div>

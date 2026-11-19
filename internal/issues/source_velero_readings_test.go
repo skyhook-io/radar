@@ -264,6 +264,37 @@ func TestVeleroScheduleWritingToAReadOnlyLocation(t *testing.T) {
 	}
 }
 
+func TestVeleroHeldScheduleNamesDisabledBackupProcessingWhenKnown(t *testing.T) {
+	objects := hourlyLastRan(4 * time.Hour)
+	objects[0].Object["spec"].(map[string]any)["schedule"] = "@every 1h"
+	objects[1].Object["status"] = map[string]any{"phase": "New"}
+	deployment := veleroServerDeployment(1)
+	server := &deployment.Spec.Template.Spec.Containers[0]
+	server.Args = append(server.Args, "--disable-controllers=backup-queue")
+	for _, tc := range []struct {
+		name       string
+		deployRead bool
+	}{
+		{"known disabled", true},
+		{"server unread", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := byReason(veleroReadings(t, objects, veleroLocation(time.Second), []*appsv1.Deployment{deployment}, tc.deployRead, true))
+			held, ok := got[ReasonVeleroScheduleHeld]
+			if !ok || !strings.Contains(held.Message, objects[1].GetName()) {
+				t.Fatalf("missing held backup: %+v", got)
+			}
+			if tc.deployRead {
+				if !hasRead(held, "apps", "deployments") || !strings.Contains(held.Cause, "disabled") || !strings.Contains(held.Action, "backup-queue") {
+					t.Errorf("missing cause, action or deployment evidence: %+v", held)
+				}
+			} else if held.Cause != "" || held.Action != "" {
+				t.Errorf("unread server supplied a cause or action: %+v", held)
+			}
+		})
+	}
+}
+
 func TestVeleroValidationOverdueWhileTheServerRuns(t *testing.T) {
 	got := byReason(veleroReadings(t, nil, veleroLocation(time.Hour), []*appsv1.Deployment{veleroServerDeployment(1)}, true, true))
 	iss, ok := got[ReasonVeleroLocationValidationOverdue]

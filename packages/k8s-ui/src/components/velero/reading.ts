@@ -267,7 +267,7 @@ export function veleroNextRunTitle(reading: Pick<VeleroScheduleReading, 'nextRun
 /** The namespace's Backups were not read: no access, still syncing, not watched by Radar, or a read error. */
 export const VELERO_RUNS_UNKNOWN = 'Unknown — backups were not read'
 /** No run among the backups Velero still keeps; TTL deletes older ones, so this is not "never". */
-export const VELERO_NONE_KEPT = 'None kept: Velero deletes backups once their retention ends'
+export const VELERO_NONE_KEPT = 'None kept: expired backups are eligible for garbage collection'
 /** VELERO_NONE_KEPT for a table cell; the full sentence goes in its tooltip. */
 export const VELERO_NONE_KEPT_SHORT = 'None kept'
 

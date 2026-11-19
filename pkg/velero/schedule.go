@@ -115,8 +115,7 @@ type ScheduleRun struct {
 	RanAt     time.Time  `json:"ranAt"`
 	Started   *time.Time `json:"started,omitempty"`
 	Completed *time.Time `json:"completed,omitempty"`
-	// Expiration is the Backup's status.expiration; Velero deletes it at the
-	// next garbage collection after it.
+	// Expiration is when the Backup becomes eligible for garbage collection.
 	Expiration *time.Time `json:"expiration,omitempty"`
 	Errors     int64      `json:"errors,omitempty"`
 	Warnings   int64      `json:"warnings,omitempty"`
@@ -496,6 +495,21 @@ func scheduleLocation(s *unstructured.Unstructured, defaultLocation string) Sche
 		return ScheduleLocation{Name: name}
 	}
 	return ScheduleLocation{Name: defaultLocation, ViaDefault: true}
+}
+
+// BackupsBySchedule groups one namespace's backups by their schedule-name
+// label, so each schedule reading only scans its own runs.
+func BackupsBySchedule(backups []*unstructured.Unstructured) map[string][]*unstructured.Unstructured {
+	out := map[string][]*unstructured.Unstructured{}
+	for _, b := range backups {
+		if b == nil {
+			continue
+		}
+		if name, ok := b.GetLabels()[ScheduleNameLabel]; ok {
+			out[name] = append(out[name], b)
+		}
+	}
+	return out
 }
 
 // runsOf returns the schedule's backups, newest first.

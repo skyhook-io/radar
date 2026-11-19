@@ -188,7 +188,7 @@ export function VeleroBSLRenderer({ data, storedBackups, storedTotal, restorable
                     nothing. */}
               {expired > 0 && (
                 <div className="text-xs text-theme-text-secondary mb-2">
-                  {`${expired} stored ${expired === 1 ? 'backup has' : 'backups have'} passed ${expired === 1 ? 'its' : 'their'} retention. Velero deletes ${expired === 1 ? 'it' : 'them'} when its garbage collector next runs, so ${expired === 1 ? 'it is' : 'they are'} not something to plan a recovery around.`}
+                  {`${expired} stored ${expired === 1 ? 'backup has' : 'backups have'} passed ${expired === 1 ? 'its' : 'their'} retention. Expired backups are eligible for garbage collection.`}
                   {restorable === 0 && ' Nothing stored here is still inside its retention.'}
                 </div>
               )}

@@ -240,22 +240,20 @@ function PageLead({ kind, namespace, name, leadContent, onNavigate }: { kind: st
 
 // ---- Backup -------------------------------------------------------------
 
-// The phases a backup has its contents stored in. Velero's restore controller
-// does not check a backup's phase, but one that failed or hasn't finished has
-// no complete contents to restore.
-const RESTORABLE_PHASES = new Set(['Completed', 'PartiallyFailed'])
+const FINISHED_WITH_CONTENTS = new Set(['Completed', 'PartiallyFailed'])
 
 /** Whether a restore from this backup can work: "No" with the reason where certain, an uncertain answer where Velero would try, else not verified. */
 function restoreAnswer(resource: any, location: ReturnType<typeof locationState> | null): { text: string; uncertain?: boolean } | null {
   const phase: string = resource?.status?.phase ?? ''
-  if (phase === 'Failed') return { text: 'No: it did not complete' }
-  // Velero refuses these whatever the backup's phase.
+  // For a restore by backup name, Velero checks the location and reads the archive.
   if (location?.missing) return { text: 'No: its storage location doesn’t exist' }
   if (location?.loc?.phase === 'Unavailable') return { text: 'No: its storage location is unavailable, and Velero refuses a restore from an unavailable location' }
   if (phase === 'Deleting' || resource?.metadata?.deletionTimestamp)
     return { text: 'Uncertain: it is being deleted, so its contents may already be gone from storage', uncertain: true }
-  if (!RESTORABLE_PHASES.has(phase)) return { text: 'No: it hasn’t finished' }
-  return null
+  if (FINISHED_WITH_CONTENTS.has(phase)) return null
+  if (phase === 'Failed') return { text: 'Uncertain: the backup failed after it started. Some contents may have reached storage.', uncertain: true }
+  if (!phase || phase === 'New') return { text: 'Not yet: Velero hasn’t started the backup.' }
+  return { text: 'Wait for the backup to finish. Its stored contents may still be incomplete.', uncertain: true }
 }
 
 function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavigate?: NavigateToResource }) {
@@ -290,7 +288,7 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
   const warnings = getBackupWarnings(resource)
   const restores = useVeleroRuns('restores', namespace, { backup: resource?.metadata?.name ?? '' })
   // Runs are newest first: the newest restore from this backup that Velero finished.
-  const restoredBefore = restore ? undefined : (restores.data?.runs ?? []).find((r) => RESTORABLE_PHASES.has(r.phase ?? ''))
+  const restoredBefore = restores.data?.runs.find((r) => FINISHED_WITH_CONTENTS.has(r.phase ?? ''))
   return (
     <>
       <RefreshFailedNotice queries={[workspace]} />
@@ -343,9 +341,9 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
                     {gcOff
                       ? `${expired(status.expiration) ? 'Past its retention' : veleroMomentText(status.expiration)}, but Velero’s garbage collection is disabled (--restore-only or --disable-controllers=gc), so it is not deleted then`
                       : deletionOff
-                        ? `${expired(status.expiration) ? 'Past its retention' : veleroMomentText(status.expiration)}: Velero’s garbage collection then requests its deletion, but nothing processes the request while the backup-deletion controller is disabled`
+                        ? `${expired(status.expiration) ? 'Past its retention' : veleroMomentText(status.expiration)}. The backup-deletion controller is disabled, so deletion requests remain pending.`
                         : expired(status.expiration)
-                          ? 'Past its retention: Velero deletes it at its next garbage collection'
+                          ? 'Past its retention and eligible for garbage collection'
                           : veleroMomentText(status.expiration)}
                     {veleroDeclaredRetention(spec.ttl) ? ` · retention ${veleroDeclaredRetention(spec.ttl)}` : ''}
                   </Note>
@@ -366,14 +364,20 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
               'On demand, not by a schedule'
             )}
           </FactRow>
-          {!nothing && (
+          {(!nothing || restoredBefore) && (
             <FactRow label="Restore">
               <span className="inline-flex flex-wrap items-baseline gap-x-2">
-                {restore ? (
+                {!nothing && (restore ? (
                   <span className={restore.uncertain ? 'text-theme-text-secondary' : undefined}>{restore.text}</span>
-                ) : restoredBefore ? (
+                ) : !restoredBefore && (
+                  <span className="text-theme-text-secondary">Not verified — Velero never tests a restore</span>
+                ))}
+                <TabLink tab="restores">Restores</TabLink>
+              </span>
+              {restoredBefore && (
+                <div>
                   <span>
-                    Restored before:{' '}
+                    Previous restore from this backup name:{' '}
                     <Link onClick={() => onNavigate?.(veleroResource('Restore', restoredBefore.namespace, restoredBefore.name))}>{restoredBefore.name}</Link>
                     <span className="text-theme-text-secondary">
                       {' · '}
@@ -382,11 +386,8 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
                       <When iso={restoredBefore.completed ?? restoredBefore.started} fallback="time unknown" />
                     </span>
                   </span>
-                ) : (
-                  <span className="text-theme-text-secondary">Not verified — Velero never tests a restore</span>
-                )}
-                <TabLink tab="restores">Restores</TabLink>
-              </span>
+                </div>
+              )}
             </FactRow>
           )}
         </FactGrid>
@@ -703,7 +704,7 @@ function VeleroScheduleOverview({ resource, onNavigate }: { resource: any; onNav
               <>
                 {partial ? `At least ${Math.max(kept, runs.length)}` : kept} kept · {outcomeCounts(runs)}
                 {partial && ` among the ${runs.length} Radar read`}
-                <Note>Velero deletes each run after its retention, so this is not a full history.</Note>
+                <Note>Expired runs are eligible for garbage collection, so this history can have gaps.</Note>
               </>
             )}
           </FactRow>
@@ -714,9 +715,9 @@ function VeleroScheduleOverview({ resource, onNavigate }: { resource: any; onNav
 }
 
 /** A red dot on a tab whose list holds failed runs. */
-function FailedMark({ count }: { count: number }) {
+function FailedMark({ count, shown }: { count: number; shown?: number }) {
   if (count === 0) return null
-  const label = `${count} failed`
+  const label = `${count} failed${shown === undefined ? '' : ` among the newest ${shown}`}`
   return (
     <Tooltip content={label} position="bottom">
       <span role="img" aria-label={label} className="ml-1 inline-flex shrink-0">
@@ -773,7 +774,7 @@ export function VeleroScheduleRuns({ namespace, name, onNavigate }: { namespace:
         rowResource={(r) => veleroResource('Backup', r.namespace, r.name)}
         onInspect={onNavigate}
         minWidth={wide ? 900 : 500}
-        empty={runsEmpty(query, 'backups', view === 'failed' ? 'No failed runs among those Velero keeps' : 'No runs kept; Velero deletes each run after its retention')}
+        empty={runsEmpty(query, 'backups', view === 'failed' ? 'No failed runs among those Velero keeps' : 'No runs kept')}
         footer="This schedule’s backups that Velero still keeps (by the velero.io/schedule-name label)."
       />
     </div>
@@ -943,7 +944,8 @@ function VeleroLocationOverview({ resource, onNavigate }: { resource: any; onNav
 
 /** The Backups tab's mark: some backups naming the location failed. */
 export function VeleroLocationBackupsMark({ namespace, name }: { namespace: string; name: string }) {
-  return <FailedMark count={useLocationBackups(namespace, name).failed} />
+  const { stored, failed } = useLocationBackups(namespace, name)
+  return <FailedMark count={failed} shown={stored.data?.truncated ? stored.data.backups.length : undefined} />
 }
 
 /** The backups that name a location, newest first, with the failed ones a segment away. */
@@ -954,7 +956,7 @@ export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespa
   const [view, setView] = useState<'all' | 'failed'>('all')
   const shown = view === 'failed' ? failed : rows
   const partial = !!stored.data?.truncated
-  const count = (n: number) => (partial && n > 0 ? `≥${n}` : String(n))
+  const failedCount = partial ? `${failed.length} shown` : String(failed.length)
   return (
     <div className="space-y-3 p-4">
       <Segments
@@ -963,7 +965,7 @@ export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespa
         onChange={setView}
         options={[
           { id: 'all' as const, label: 'All', count: String(stored.data?.stored ?? rows.length) },
-          { id: 'failed' as const, label: 'Failed', count: failed.length > 0 ? <span className={toneTextClass('unhealthy')}>{count(failed.length)}</span> : count(0) },
+          { id: 'failed' as const, label: 'Failed', count: failed.length > 0 ? <span className={toneTextClass('unhealthy')}>{failedCount}</span> : failedCount },
         ]}
       />
       {stored.error && stored.data && <Notice>The last refresh failed ({(stored.error as Error).message}); what is shown is from before it.</Notice>}
@@ -971,7 +973,7 @@ export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespa
         title="Backups targeting this location"
         subtitle={
           stored.data
-            ? `${stored.data.stored ?? rows.length} · ${stored.data.restorable} completed · ${stored.data.expired ?? 0} expired · ${count(failed.length)} failed`
+            ? `${stored.data.stored ?? rows.length} · ${stored.data.restorable} completed · ${stored.data.expired ?? 0} expired · ${failed.length} failed${partial ? ` among the newest ${rows.length}` : ''}`
             : undefined
         }
         columns={[
@@ -1003,7 +1005,7 @@ export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespa
             : stored.error && !stored.data
               ? `Backups could not be read: ${(stored.error as Error).message}`
               : view === 'failed'
-                ? 'No failed backups name this location.'
+                ? partial ? `No failed backups among the newest ${rows.length} at this location.` : 'No failed backups name this location.'
                 : 'No backups name this location.'
         }
         footer={stored.data?.truncated ? `The newest ${rows.length} of ${stored.data.stored}.` : 'Counted from the Backup objects that name this location, not from what is in the bucket.'}

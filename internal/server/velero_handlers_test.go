@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -57,51 +56,43 @@ func mustReadSource(t *testing.T, path string) string {
 	return string(b)
 }
 
-// Velero retains backups until their TTL expires, so one location can hold
-// thousands. The list is a page and the counts are the location's — the panel
-// reading this renders a chip per entry and prints "N of M", so an uncapped list
-// is both a wall of chips and a response that grows without bound.
-func TestVeleroStoredBackupsIsAPageNotTheWholeLocation(t *testing.T) {
-	if maxStoredBackupsListed <= 0 {
-		t.Fatal("the cap must be positive")
+func TestVeleroStoredBackupsKeepsNewRunsOnACappedPage(t *testing.T) {
+	stored := func(name, phase, created string, times map[string]any) *unstructured.Unstructured {
+		times["phase"] = phase
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "velero.io/v1", "kind": "Backup",
+			"metadata": map[string]any{"name": name, "namespace": "velero", "creationTimestamp": created},
+			"spec":     map[string]any{"storageLocation": "primary"}, "status": times,
+		}}
 	}
-	// Newest-first ordering is what makes truncation safe: the most recent
-	// restorable point is derived from this list, so the newest must survive.
-	resp := VeleroStoredBackupsResponse{}
-	for i := 0; i < maxStoredBackupsListed+50; i++ {
-		resp.Backups = append(resp.Backups, VeleroStoredBackup{
-			Namespace: "velero",
-			Name:      fmt.Sprintf("b-%03d", i),
-			Phase:     "Completed",
-			Completed: fmt.Sprintf("2026-08-%02dT00:00:00Z", 1+(i%27)),
-		})
+	var backups []runtime.Object
+	for i := 0; i < maxStoredBackupsListed; i++ {
+		backups = append(backups, stored(fmt.Sprintf("completed-%03d", i), "Completed", "2026-11-16T00:00:00Z",
+			map[string]any{"completionTimestamp": "2026-11-16T02:00:00Z"}))
 	}
-	total := len(resp.Backups)
-	sort.Slice(resp.Backups, func(i, j int) bool {
-		if resp.Backups[i].Completed != resp.Backups[j].Completed {
-			return resp.Backups[i].Completed > resp.Backups[j].Completed
-		}
-		return resp.Backups[i].Name < resp.Backups[j].Name
-	})
-	newest := resp.Backups[0]
-	resp.Stored = total
-	if len(resp.Backups) > maxStoredBackupsListed {
-		resp.Backups = resp.Backups[:maxStoredBackupsListed]
-		resp.Truncated = true
+	backups = append(backups,
+		stored("rejected", "FailedValidation", "2026-11-19T04:00:00Z", map[string]any{}),
+		stored("running", "InProgress", "2026-11-15T00:00:00Z", map[string]any{"startTimestamp": "2026-11-18T03:00:00Z"}),
+	)
+	seedVeleroDynamic(t, backups...)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"velero"}}
+	allow(perms, veleroGroup, "backups", "velero", true)
+	env.srv.permCache.Set("reader", nil, perms)
+	resp := env.authGet(t, "/api/velero/backupstoragelocations/velero/primary/backups", "reader", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-
-	if !resp.Truncated {
-		t.Error("a location holding more than the cap must report the list as truncated")
+	var got VeleroStoredBackupsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
 	}
-	if resp.Stored != total {
-		t.Errorf("Stored = %d, want %d — the count describes the location, not the page", resp.Stored, total)
+	if !got.Truncated || got.Stored != len(backups) || len(got.Backups) != maxStoredBackupsListed {
+		t.Fatalf("truncated %t, total %d, listed %d", got.Truncated, got.Stored, len(got.Backups))
 	}
-	if len(resp.Backups) != maxStoredBackupsListed {
-		t.Errorf("listed %d, want the cap of %d", len(resp.Backups), maxStoredBackupsListed)
-	}
-	if resp.Backups[0].Name != newest.Name {
-		t.Errorf("newest entry %q did not survive truncation (got %q) — the restorable point is derived from it",
-			newest.Name, resp.Backups[0].Name)
+	if got.Backups[0].Name != "rejected" || got.Backups[1].Name != "running" || got.Restorable != maxStoredBackupsListed {
+		t.Errorf("first two backups %q and %q, completed total %d", got.Backups[0].Name, got.Backups[1].Name, got.Restorable)
 	}
 }
 

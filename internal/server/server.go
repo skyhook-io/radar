@@ -3062,9 +3062,22 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// "namespaces" is cluster-scoped at the K8s API but exposed as a per-user
 	// filtered list — gate the GET via the user's namespace access for the
 	// requested name, not via cluster-scoped SAR.
+	objectOnly := false
 	if failure := s.preflightResourceGetFrom(r, started, kind, namespace, name, group); failure != nil {
-		s.writeReadFailure(w, kind, failure, nil)
-		return
+		// The Velero lists can be visible without general namespace access.
+		// An exact get grants the object on the row, but no related evidence.
+		if failure.code == readreason.UserNamespaceNotVisible && group == veleroGroup &&
+			slices.Contains([]string{"backups", "restores", "schedules", "backupstoragelocations"}, kind) && outsideNamespacePin(namespace) == nil {
+			allowed, checked := s.canReadDecision(r, group, kind, namespace, "get")
+			objectOnly = allowed && checked
+			if !checked {
+				failure = permissionFailure(false, "")
+			}
+		}
+		if !objectOnly {
+			s.writeReadFailure(w, kind, failure, nil)
+			return
+		}
 	}
 	if failure := outsideNamespacePin(namespace); failure != nil {
 		if readCache() != started {
@@ -3173,18 +3186,18 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// Pass the already-fetched resource so ManagedBy synthesis
 		// disambiguates by group (avoids kind/plural collisions like Knative
 		// Service vs core Service).
-		relationships := s.relationshipsFor(r, kind, namespace, name, resource)
+		read := topology.ResourceWithRelationships{Resource: resource}
+		if !objectOnly {
+			read.Relationships = s.relationshipsFor(r, kind, namespace, name, resource)
+			read.RelatedFindings = issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+			read.HPADiagnosis = hpaDiagnosisFor(resource)
+		}
 		if readCache() != cache {
 			s.writeCollectionFailure(w, kind, errReadHandlesChanged)
 			return
 		}
 
-		s.writeJSON(w, newResourceReadResponse(topology.ResourceWithRelationships{
-			RelatedFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
-			Resource:        resource,
-			Relationships:   relationships,
-			HPADiagnosis:    hpaDiagnosisFor(resource),
-		}))
+		s.writeJSON(w, newResourceReadResponse(read))
 		return
 	}
 

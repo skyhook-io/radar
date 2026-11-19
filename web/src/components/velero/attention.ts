@@ -12,7 +12,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
 import { VELERO_GROUP } from './routes'
-import { VELERO_CHECK_SERVER, VELERO_SHORTEN_NAME, VELERO_START_SERVER, VELERO_WRITABLE_LOCATION, inInstallation, namesAndMore, veleroIssueProblem } from './shared'
+import { VELERO_CHECK_HELD_BACKUP, VELERO_CHECK_SERVER, VELERO_SHORTEN_NAME, VELERO_START_SERVER, VELERO_WRITABLE_LOCATION, inInstallation, namesAndMore, veleroIssueProblem } from './shared'
 
 export function readInPart(cov: VeleroKindCoverage | undefined): boolean {
   return !cov || INCOMPLETE_COVERAGE_STATES.has(cov.state)
@@ -29,7 +29,7 @@ export function veleroScheduleNextStep(s: Pick<VeleroScheduleReading, 'state' | 
     case 'rejected':
       return 'Fix what Velero rejected in the schedule; Velero validates it again when it changes'
     case 'held':
-      return 'Find out why its backup hasn’t started, or delete that backup'
+      return VELERO_CHECK_HELD_BACKUP
     case 'late':
     case 'probablyLate':
     case 'lateOrHeld':

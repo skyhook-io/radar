@@ -155,5 +155,7 @@ describe('Velero next steps', () => {
       expect(veleroScheduleNextStep({ state }), state).toBeTruthy()
     }
     expect(veleroScheduleNextStep({ state: 'late', reason: 'serverDown' })).toContain('Start the Velero server')
+    expect(veleroScheduleNextStep({ state: 'held' })).toContain('backup controller enabled')
+    expect(veleroIssueNextStep({ reason: 'VeleroScheduleHeld' })).toBe(veleroScheduleNextStep({ state: 'held' }))
   })
 })
