@@ -281,6 +281,16 @@ type ScheduleActivityResponse struct {
 	// BackupsDisabled is the server's backupsDisabled: true or false when its
 	// flags were read, absent when they could not be.
 	BackupsDisabled *bool `json:"backupsDisabled,omitempty"`
+	// Resume says what resuming does, set while the schedule is paused.
+	Resume *ResumeChoices `json:"resume,omitempty"`
+}
+
+// ResumeChoices is what resuming a paused schedule does as `velero schedule
+// unpause` leaves it (spec.skipImmediately unset, so the server's flag
+// decides), and with the run due now skipped, when one is or may be due.
+type ResumeChoices struct {
+	Default  domain.ResumeOutlook  `json:"default"`
+	Skipping *domain.ResumeOutlook `json:"skipping,omitempty"`
 }
 
 // ScheduleActivity reads one Schedule with its recent runs. found=false when
@@ -307,14 +317,23 @@ func (r *Reader) ScheduleActivity(ctx context.Context, namespace, name string) (
 		return resp, true, false
 	}
 	inst := r.installation(ctx, inv, namespace)
-	resp.Reading = domain.ReadSchedule(domain.ScheduleInput{
+	in := domain.ScheduleInput{
 		Schedule: target, Backups: inv.in(backupsKey, namespace), BackupsRead: inv.covered(backupsKey, namespace),
 		Server: inst.Server, DefaultLocation: inst.DefaultLocation, Locations: inv.in(locationsKey, namespace), Now: now, WithRecent: true,
-	})
+	}
+	resp.Reading = domain.ReadSchedule(in)
 	resp.ServerStopped = inst.Server.Down()
 	if inst.Server.FlagsKnown() {
 		disabled := inst.Server.BackupsDisabled
 		resp.BackupsDisabled = &disabled
+	}
+	if resp.Reading.State == domain.StatePaused {
+		choices := &ResumeChoices{Default: domain.DescribeResume(in, nil)}
+		if choices.Default.Due {
+			skipping := domain.DescribeResume(in, new(true))
+			choices.Skipping = &skipping
+		}
+		resp.Resume = choices
 	}
 	return resp, true, true
 }

@@ -81,6 +81,35 @@ export function useVeleroBackupNow() {
   })
 }
 
+// POST /api/velero/schedules/{namespace}/{name}/{pause|resume}
+//
+// Sets spec.paused, bound to the version of the schedule the user reviewed (a
+// schedule edited since is refused, 409). skipImmediately is written to the
+// schedule: true skips the run due on resume, null leaves it to the server.
+export function useVeleroSchedulePause() {
+  const queryClient = useQueryClient()
+  const { guard } = useRadarFeature('veleroSchedulePause')
+  return useMutation({
+    mutationFn: ({ namespace, name, paused, resourceVersion, skipImmediately = null }: {
+      namespace: string
+      name: string
+      paused: boolean
+      resourceVersion: string
+      skipImmediately?: boolean | null
+    }) =>
+      guard(() =>
+        fetchJSON<{ paused: boolean; changed: boolean }>(
+          `/velero/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${paused ? 'pause' : 'resume'}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resourceVersion, skipImmediately }) },
+        ),
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['velero'] })
+      void queryClient.invalidateQueries({ queryKey: ['resource'] })
+    },
+  })
+}
+
 /** internal/velero RunRow: one Backup or Restore as its list and pages show it. */
 export interface VeleroRunRow {
   namespace: string
