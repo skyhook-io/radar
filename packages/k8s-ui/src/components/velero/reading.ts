@@ -112,7 +112,7 @@ export function veleroLocalTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-const SERVER_DOWN = 'The Velero server has no running replicas, so nothing submits backups.'
+const SERVER_DOWN = 'The Velero server has no pods, so nothing submits backups.'
 
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
@@ -126,9 +126,10 @@ function missedText(n: number | undefined): string {
 }
 
 /**
- * Why a schedule is in its state, in one or two plain sentences. `created` is
- * the Schedule's creationTimestamp when the caller holds the object (the
- * drawer); the workspace reading does not carry it.
+ * Why a schedule is in its state, in one or two plain sentences. `created`
+ * overrides the reading's own `created` (the Schedule's creationTimestamp);
+ * `serverShown` says a stopped server is already named on screen, so its
+ * consequences don't repeat it.
  */
 export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: { created?: string; serverShown?: boolean }): string {
   const blocker = reading.blocker
@@ -144,6 +145,8 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
         ? `Velero rejected this schedule: ${reading.validationErrors.join('; ')}`
         : 'Velero rejected this schedule, so it does not run.'
     case 'cannotRun':
+      if (reading.reason === 'locationReadOnly')
+        return `Its storage location ${reading.location.name ?? ''} is read-only, so Velero rejects every backup this schedule submits.`
       return 'This schedule’s name is longer than 63 characters, too long for the label Velero puts on its backups, so Velero submits no runs.'
     case 'notValidated': {
       if (!reading.attention) return 'Waiting for Velero to validate this schedule.'
@@ -156,7 +159,7 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
     case 'unknown':
       return 'Radar can’t read this cron expression the way Velero does, so it can’t say when the schedule runs next.'
     case 'alwaysDue':
-      return 'This cron expression has no future time, so Velero treats the schedule as always due and submits a new backup whenever the previous one has started.'
+      return 'This cron expression has no future time, so Velero treats the schedule as always due and submits a new backup whenever none of its backups is waiting to start or running.'
     case 'skipPending':
       return 'Set to skip its next run (skipImmediately). Velero moves the schedule past it on its next pass.'
     case 'held':
@@ -183,7 +186,7 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
     case 'possiblyLate':
       return 'Past its estimated time, but Radar couldn’t confirm the Velero server’s time zone, so it may not be due yet.'
     case 'due':
-      if (serverDown !== null) return serverDown ? 'Due now, but the Velero server has no running replicas, so nothing will submit it.' : 'Due now, but nothing submits it until the server starts.'
+      if (serverDown !== null) return serverDown ? 'Due now, but the Velero server has no pods, so nothing will submit it.' : 'Due now, but nothing submits it until the server starts.'
       return 'Due now. Velero normally submits it within a few minutes.'
     case 'onSchedule':
       return 'On schedule'
@@ -231,8 +234,8 @@ const ZONE_SOURCE_LABEL: Record<VeleroZoneSource, string> = {
 const ZONE_SOURCE_DETAIL: Record<VeleroZoneSource, string> = {
   cron: 'The cron expression names its own zone (CRON_TZ= or TZ=).',
   server: 'The Velero server Deployment sets TZ, and its rollout is complete.',
-  serverDefault: 'The Velero server Deployment sets no TZ, so the server runs in UTC.',
-  inferred: 'An offset read from the name of this schedule’s newest backup, which Velero writes in its local time. An offset carries no daylight-saving rules.',
+  serverDefault: 'The Velero server runs in UTC: its Deployment sets no TZ, or sets TZ=UTC.',
+  inferred: 'An offset read from the name of the backup the schedule last submitted, which Velero writes in its local time. An offset carries no daylight-saving rules.',
   unknown: 'Radar couldn’t read the Velero server’s zone, so times are estimated in UTC.',
 }
 
@@ -261,9 +264,10 @@ export function veleroNextRunTitle(reading: Pick<VeleroScheduleReading, 'nextRun
     : `${at} · an estimate: ${veleroZoneDetail(reading.zone)}`
 }
 
-export const VELERO_RUNS_UNKNOWN = 'Unknown — no access to backups'
+/** The namespace's Backups were not read: no access, still syncing, not watched by Radar, or a read error. */
+export const VELERO_RUNS_UNKNOWN = 'Unknown — backups were not read'
 /** No run among the backups Velero still keeps; TTL deletes older ones, so this is not "never". */
-export const VELERO_NONE_KEPT = 'None kept: Velero deletes backups once their retention ends'
+export const VELERO_NONE_KEPT = 'None kept: expired backups are eligible for garbage collection'
 /** VELERO_NONE_KEPT for a table cell; the full sentence goes in its tooltip. */
 export const VELERO_NONE_KEPT_SHORT = 'None kept'
 
@@ -274,6 +278,12 @@ export const VELERO_NONE_KEPT_SHORT = 'None kept'
 export function veleroScheduleNeverRan(reading: Pick<VeleroScheduleReading, 'lastSubmitted' | 'runs'>): boolean {
   return reading.runs.read !== 'unknown' && !reading.lastSubmitted && !reading.runs.newest
 }
+
+/** The word beside a run Radar's Back up now created; it still counts as one of the schedule's runs. */
+export const VELERO_MANUAL_RUN = 'manual'
+export const VELERO_MANUAL_RUN_TITLE = 'Created with Back up now, not by the schedule'
+/** pkg/velero SubmissionAnnotation: on a Backup Radar's Back up now created. */
+export const VELERO_SUBMISSION_ANNOTATION = 'radar.skyhook.io/submission'
 
 /** The newest Completed run, or why there is none to show. */
 export function veleroNewestSuccessfulText(runs: VeleroScheduleRuns): { text: string; run?: VeleroRun } {
@@ -350,19 +360,19 @@ export function veleroFrequencyText(seconds: number): string {
 /** Why a storage location needs attention. */
 export function veleroLocationReasonText(loc: VeleroLocationReading): string {
   if (loc.neverValidated) {
-    const cause = loc.reason === 'serverDown' ? ' The Velero server has no running replicas, so nothing validates it.' : ''
+    const cause = loc.reason === 'serverDown' ? ' The Velero server has no pods, so nothing validates it.' : ''
     return `Velero has never validated this location; it validates a new location as soon as it sees it.${cause}`
   }
   if (loc.validationOverdue && loc.lastValidation && loc.frequency) {
-    const cause = loc.reason === 'serverDown' ? ' The Velero server has no running replicas, so nothing validates it.' : ''
+    const cause = loc.reason === 'serverDown' ? ' The Velero server has no pods, so nothing validates it.' : ''
     return `Velero last validated this location ${formatAge(loc.lastValidation)} ago; it validates every ${veleroFrequencyText(loc.frequency.seconds)}.${cause}`
   }
   return ''
 }
 
-/** Why an installation needs attention: its server Deployment has no available pod. */
+/** Why an installation needs attention: its server Deployment has no pods (status.replicas is 0). */
 export function veleroServerDownText(namespace: string, deployment?: string): string {
-  return `Deployment ${deployment ?? 'velero'} in ${namespace} has no running replicas, so no new scheduled backups are submitted and no storage location is validated.`
+  return `Deployment ${deployment ?? 'velero'} in ${namespace} has no pods, so no new scheduled backups are submitted and no storage location is validated.`
 }
 
 const DEFAULT_SOURCE_DETAIL: Record<VeleroDefaultSource, string> = {

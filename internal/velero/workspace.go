@@ -81,8 +81,6 @@ type Installation struct {
 	Server          domain.ServerConfig  `json:"server"`
 	DefaultLocation string               `json:"defaultLocation,omitempty"`
 	DefaultSource   domain.DefaultSource `json:"defaultSource"`
-	// UnassignedBackups is nil when the namespace's Backups were not read.
-	UnassignedBackups *int `json:"unassignedBackups,omitempty"`
 }
 
 // Issue is the subset of an Issues row the views render.
@@ -98,7 +96,9 @@ type Issue struct {
 	Message   string             `json:"message,omitempty"`
 	Cause     string             `json:"cause,omitempty"`
 	Action    string             `json:"action,omitempty"`
-	FirstSeen time.Time          `json:"first_seen,omitzero"`
+	// FirstSeen is when the fault began, absent when its onset is not known;
+	// absence does not mean the fault is new.
+	FirstSeen time.Time `json:"first_seen,omitzero"`
 	// Affected are the runs this row covers, which raise no row of their own:
 	// for an unavailable location, the runs Velero rejected because of it.
 	Affected []issuesapi.Ref `json:"affected,omitempty"`
@@ -108,15 +108,19 @@ type Issue struct {
 type WorkspaceResponse struct {
 	// ObservedAt is when the readings were computed; every time in the
 	// response is absolute, so a client never recomputes state from it.
-	ObservedAt      time.Time                           `json:"observedAt"`
-	Installed       bool                                `json:"installed"`
+	ObservedAt time.Time `json:"observedAt"`
+	Installed  bool      `json:"installed"`
+	// Context is the Kubernetes context the readings came from, so a client
+	// can tell that an answer belongs to a context it has since left.
 	Context         string                              `json:"context"`
 	ForcedNamespace string                              `json:"forcedNamespace,omitempty"`
 	Coverage        map[string]integration.KindCoverage `json:"coverage"`
 	Installations   []Installation                      `json:"installations"`
 	Schedules       []domain.ScheduleReading            `json:"schedules"`
 	Locations       []domain.LocationReading            `json:"locations"`
-	Issues          []Issue                             `json:"issues"`
+	// Issues are the first 50 per installation in Problems priority order; an
+	// issue left out by the cap is not resolved (IssueTotals counts them).
+	Issues []Issue `json:"issues"`
 	// IssueTotals counts, per installation namespace, the issues visible to
 	// the caller before the per-installation cap.
 	IssueTotals map[string]int `json:"issueTotals"`
@@ -173,11 +177,11 @@ func (r *Reader) Workspace(ctx context.Context) WorkspaceResponse {
 		resp.Installations = append(resp.Installations, inst)
 		server := inst.Server
 		backups, backupsRead := inv.in(backupsKey, ns), inv.covered(backupsKey, ns)
-		bySchedule := backupsBySchedule(backups)
+		bySchedule := domain.BackupsBySchedule(backups)
 		for _, s := range inv.in(schedulesKey, ns) {
 			resp.Schedules = append(resp.Schedules, domain.ReadSchedule(domain.ScheduleInput{
 				Schedule: s, Backups: bySchedule[s.GetName()], BackupsRead: backupsRead, Server: server,
-				DefaultLocation: inst.DefaultLocation, Now: now,
+				DefaultLocation: inst.DefaultLocation, Locations: inv.in(locationsKey, ns), Now: now,
 			}))
 		}
 		for _, l := range inv.in(locationsKey, ns) {
@@ -206,18 +210,6 @@ func (r *Reader) Workspace(ctx context.Context) WorkspaceResponse {
 	return resp
 }
 
-// backupsBySchedule groups a namespace's backups by the schedule that
-// submitted them, so each schedule reads only its own.
-func backupsBySchedule(backups []*unstructured.Unstructured) map[string][]*unstructured.Unstructured {
-	out := map[string][]*unstructured.Unstructured{}
-	for _, b := range backups {
-		if name, ok := b.GetLabels()[domain.ScheduleNameLabel]; ok {
-			out[name] = append(out[name], b)
-		}
-	}
-	return out
-}
-
 // installationNamespaces are the namespaces any Velero object was read in.
 func installationNamespaces(inv inventory) []string {
 	seen := map[string]bool{}
@@ -244,10 +236,6 @@ func (r *Reader) installation(ctx context.Context, inv inventory, ns string) Ins
 		inst.DefaultLocation, inst.DefaultSource = domain.DefaultLocation(inv.in(locationsKey, ns), server)
 	} else {
 		inst.DefaultSource = domain.DefaultUnknown
-	}
-	if inv.covered(backupsKey, ns) {
-		n := domain.UnassignedBackups(inv.in(backupsKey, ns))
-		inst.UnassignedBackups = &n
 	}
 	return inst
 }
@@ -286,9 +274,13 @@ type ScheduleActivityResponse struct {
 	Reading    domain.ScheduleReading              `json:"reading"`
 	Coverage   map[string]integration.KindCoverage `json:"coverage"`
 	// ServerStopped: the installation's server Deployment was read and has no
-	// running replicas, so a backup created now waits until it starts.
-	ServerStopped   bool `json:"serverStopped,omitempty"`
-	BackupsDisabled bool `json:"backupsDisabled,omitempty"`
+	// pods (status.replicas is 0), so a backup created now waits until it
+	// starts. Sent only when true: absent means the server has pods, or its
+	// Deployment could not be read.
+	ServerStopped bool `json:"serverStopped,omitempty"`
+	// BackupsDisabled is the server's backupsDisabled: true or false when its
+	// flags were read, absent when they could not be.
+	BackupsDisabled *bool `json:"backupsDisabled,omitempty"`
 }
 
 // ScheduleActivity reads one Schedule with its recent runs. found=false when
@@ -317,18 +309,21 @@ func (r *Reader) ScheduleActivity(ctx context.Context, namespace, name string) (
 	inst := r.installation(ctx, inv, namespace)
 	resp.Reading = domain.ReadSchedule(domain.ScheduleInput{
 		Schedule: target, Backups: inv.in(backupsKey, namespace), BackupsRead: inv.covered(backupsKey, namespace),
-		Server: inst.Server, DefaultLocation: inst.DefaultLocation, Now: now, WithRecent: true,
+		Server: inst.Server, DefaultLocation: inst.DefaultLocation, Locations: inv.in(locationsKey, namespace), Now: now, WithRecent: true,
 	})
 	resp.ServerStopped = inst.Server.Down()
-	resp.BackupsDisabled = inst.Server.FlagsKnown() && inst.Server.BackupsDisabled
+	if inst.Server.FlagsKnown() {
+		disabled := inst.Server.BackupsDisabled
+		resp.BackupsDisabled = &disabled
+	}
 	return resp, true, true
 }
 
 // maxRuns bounds a runs response; the newest are kept.
 const maxRuns = 5000
 
-// Run is one Backup or Restore as its list and its pages show it.
-type Run struct {
+// RunRow is one Backup or Restore as its list and its pages show it.
+type RunRow struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	UID       string `json:"uid"`
@@ -337,20 +332,28 @@ type Run struct {
 	Created   string `json:"created,omitempty"`
 	Started   string `json:"started,omitempty"`
 	Completed string `json:"completed,omitempty"`
-	// Expiration is a Backup's; Velero deletes it at the next garbage collection after it.
+	// Expiration is when a Backup becomes eligible for garbage collection.
 	Expiration string `json:"expiration,omitempty"`
-	// Schedule is the Backup's velero.io/schedule-name label.
+	// Schedule is a Backup's velero.io/schedule-name label: the schedule that
+	// submitted it. Never set on a Restore (see ScheduleName).
 	Schedule        string `json:"schedule,omitempty"`
 	StorageLocation string `json:"storageLocation,omitempty"`
-	// ItemsDone and ItemsTotal: items backed up, or restored; absent until Velero counts them.
+	// ItemsDone and ItemsTotal are Velero's progress: items processed so far
+	// (a Backup's itemsBackedUp; a Restore's itemsRestored, which also counts
+	// items skipped or failed) of the total. Absent until Velero reports them.
 	ItemsDone  *int64 `json:"itemsDone,omitempty"`
 	ItemsTotal *int64 `json:"itemsTotal,omitempty"`
 	Errors     int64  `json:"errors"`
 	Warnings   int64  `json:"warnings"`
+	// Manual: a Backup Radar's Back up now created from its schedule
+	// (domain.SubmissionAnnotation); it is still one of the schedule's runs.
+	Manual bool `json:"manual,omitempty"`
 	// BackupName, NamespaceMapping and the namespace selection are a Restore's:
 	// together they say where it restored into. The selection is always sent
 	// for a Restore, empty meaning every namespace in the backup.
-	BackupName         string            `json:"backupName,omitempty"`
+	BackupName string `json:"backupName,omitempty"`
+	// ScheduleName is a Restore's spec.scheduleName: restore from that
+	// schedule's newest completed backup. Unrelated to Schedule.
 	ScheduleName       string            `json:"scheduleName,omitempty"`
 	NamespaceMapping   map[string]string `json:"namespaceMapping,omitempty"`
 	IncludedNamespaces *[]string         `json:"includedNamespaces,omitempty"`
@@ -361,8 +364,9 @@ type Run struct {
 type RunsResponse struct {
 	ObservedAt time.Time                `json:"observedAt"`
 	Coverage   integration.KindCoverage `json:"coverage"`
-	Runs       []Run                    `json:"runs"`
-	// Total counts the runs read before the cap; Runs holds the newest.
+	Runs       []RunRow                 `json:"runs"`
+	// Total counts the runs that passed the schedule or backup filter, before
+	// the cap; Runs holds the newest of them.
 	Total     int  `json:"total"`
 	Truncated bool `json:"truncated,omitempty"`
 }
@@ -378,6 +382,8 @@ func RunsKey(plural string) string {
 	return ""
 }
 
+// RunsFilter narrows Runs: Schedule to a schedule's Backups, Backup to the
+// Restores of one backup.
 type RunsFilter struct {
 	Schedule string
 	Backup   string
@@ -401,7 +407,7 @@ func (r *Reader) Runs(ctx context.Context, key, namespace string, filter RunsFil
 		}
 	}
 	access, items := r.Observations.WorkspaceRead(ctx, kind, scope)
-	resp := RunsResponse{ObservedAt: r.now(), Coverage: access.Coverage(), Runs: []Run{}}
+	resp := RunsResponse{ObservedAt: r.now(), Coverage: access.Coverage(), Runs: []RunRow{}}
 	for _, u := range integration.KeepGroups(items, groups) {
 		if namespace != "" && u.GetNamespace() != namespace {
 			continue
@@ -431,14 +437,14 @@ func (r *Reader) Runs(ctx context.Context, key, namespace string, filter RunsFil
 	return resp
 }
 
-func runStart(r Run) string {
+func runStart(r RunRow) string {
 	if r.Started != "" {
 		return r.Started
 	}
 	return r.Created
 }
 
-func runOf(u *unstructured.Unstructured, restore bool) Run {
+func runOf(u *unstructured.Unstructured, restore bool) RunRow {
 	str := func(fields ...string) string { v, _, _ := unstructured.NestedString(u.Object, fields...); return v }
 	num := func(fields ...string) int64 { v, _, _ := unstructured.NestedInt64(u.Object, fields...); return v }
 	opt := func(fields ...string) *int64 {
@@ -447,7 +453,7 @@ func runOf(u *unstructured.Unstructured, restore bool) Run {
 		}
 		return nil
 	}
-	run := Run{
+	run := RunRow{
 		Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()),
 		Phase: str("status", "phase"), Created: u.GetCreationTimestamp().UTC().Format(time.RFC3339),
 		Started: str("status", "startTimestamp"), Completed: str("status", "completionTimestamp"),
@@ -479,6 +485,7 @@ func runOf(u *unstructured.Unstructured, restore bool) Run {
 		run.IncludedNamespaces, run.ExcludedNamespaces = &included, &excluded
 	} else {
 		run.ItemsDone = opt("status", "progress", "itemsBackedUp")
+		_, run.Manual = u.GetAnnotations()[domain.SubmissionAnnotation]
 	}
 	return run
 }

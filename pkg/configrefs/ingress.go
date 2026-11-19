@@ -42,7 +42,7 @@ func IngressBackendServiceRefs(ing *networkingv1.Ingress) []PathRef {
 		}
 		r := PathRef{Ref: resourceid.Ref{Kind: "Service", Namespace: ing.Namespace, Name: backend.Service.Name}, Path: path}
 		for _, seen := range refs {
-			if seen == r {
+			if seen.Ref == r.Ref && seen.Path == r.Path {
 				return
 			}
 		}

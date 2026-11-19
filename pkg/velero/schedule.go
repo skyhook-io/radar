@@ -16,6 +16,10 @@ const Group = "velero.io"
 // (pkg/builder/backup_builder.go FromSchedule).
 const ScheduleNameLabel = "velero.io/schedule-name"
 
+// SubmissionAnnotation marks a Backup Radar's Back up now created from a
+// schedule; its value identifies the confirmation it came from.
+const SubmissionAnnotation = "radar.skyhook.io/submission"
+
 // maxLabelValue is Kubernetes' label value limit. Velero writes the schedule
 // name into a label without shortening it, so a longer name makes every
 // submission fail.
@@ -68,18 +72,24 @@ const (
 	StateOnSchedule   ScheduleState = "onSchedule"
 )
 
-// Reason codes qualify a state.
+// ScheduleReason qualifies a ScheduleState. ReasonServerDown also explains a
+// storage location's overdue validation.
+type ScheduleReason string
+
 const (
-	ReasonNameTooLong       = "nameTooLong"
-	ReasonUnparseable       = "unparseable"
-	ReasonUnstartedBlocker  = "unstartedBlocker"
-	ReasonZoneUnconfirmed   = "zoneUnconfirmed"
-	ReasonBackupsUnread     = "backupsUnread"
-	ReasonNoFutureTime      = "noFutureTime"
-	ReasonValidationPending = "validationPending"
-	// ReasonServerDown: the Velero server Deployment has no available pod,
-	// which explains a late or unvalidated schedule.
-	ReasonServerDown = "serverDown"
+	ReasonNameTooLong       ScheduleReason = "nameTooLong"
+	ReasonUnparseable       ScheduleReason = "unparseable"
+	ReasonUnstartedBlocker  ScheduleReason = "unstartedBlocker"
+	ReasonZoneUnconfirmed   ScheduleReason = "zoneUnconfirmed"
+	ReasonBackupsUnread     ScheduleReason = "backupsUnread"
+	ReasonNoFutureTime      ScheduleReason = "noFutureTime"
+	ReasonValidationPending ScheduleReason = "validationPending"
+	// ReasonLocationReadOnly: the storage location the schedule writes to is
+	// ReadOnly, so Velero rejects every backup it submits.
+	ReasonLocationReadOnly ScheduleReason = "locationReadOnly"
+	// ReasonServerDown: the Velero server Deployment has no pods
+	// (status.replicas is 0), which explains a late or unvalidated schedule.
+	ReasonServerDown ScheduleReason = "serverDown"
 )
 
 // RunsRead says whether a Schedule's backups were read.
@@ -93,8 +103,8 @@ const (
 	RunsReadUnknown RunsRead = "unknown"
 )
 
-// Run is one Backup a Schedule submitted.
-type Run struct {
+// ScheduleRun is one Backup a Schedule submitted.
+type ScheduleRun struct {
 	Name    string    `json:"name"`
 	Phase   string    `json:"phase,omitempty"`
 	Created time.Time `json:"created"`
@@ -105,20 +115,28 @@ type Run struct {
 	RanAt     time.Time  `json:"ranAt"`
 	Started   *time.Time `json:"started,omitempty"`
 	Completed *time.Time `json:"completed,omitempty"`
-	Expires   *time.Time `json:"expires,omitempty"`
-	Errors    int64      `json:"errors,omitempty"`
-	Warnings  int64      `json:"warnings,omitempty"`
+	// Expiration is when the Backup becomes eligible for garbage collection.
+	Expiration *time.Time `json:"expiration,omitempty"`
+	Errors     int64      `json:"errors,omitempty"`
+	Warnings   int64      `json:"warnings,omitempty"`
+	// Manual: created by Radar's Back up now (SubmissionAnnotation), not by
+	// the schedule controller. It is still one of the schedule's runs.
+	Manual bool `json:"manual,omitempty"`
 }
 
 // ScheduleRuns is what the backups Velero still keeps say about a schedule.
 // Velero deletes backups past their TTL, so "none" means none among those kept.
 type ScheduleRuns struct {
-	Read            RunsRead `json:"read"`
-	Kept            int      `json:"kept"`
-	Newest          *Run     `json:"newest,omitempty"`
-	NewestCompleted *Run     `json:"newestCompleted,omitempty"`
-	// Recent is filled only on request (the schedule activity endpoint).
-	Recent []Run `json:"recent,omitempty"`
+	Read RunsRead `json:"read"`
+	// Kept counts the schedule's backups Velero still keeps; 0 and meaningless
+	// when Read is unknown.
+	Kept            int          `json:"kept"`
+	Newest          *ScheduleRun `json:"newest,omitempty"`
+	NewestCompleted *ScheduleRun `json:"newestCompleted,omitempty"`
+	// Recent is the newest runs, up to 10, filled only on request (the
+	// schedule activity endpoint). Absent in the workspace, when Read is
+	// unknown, and when the schedule has no runs kept; Read and Kept say which.
+	Recent []ScheduleRun `json:"recent,omitempty"`
 }
 
 // ScheduleLocation is where a schedule's next backup will be written.
@@ -127,34 +145,47 @@ type ScheduleLocation struct {
 	// ViaDefault: the template names no location, so the installation's
 	// default receives it; Name is that default when it could be resolved.
 	ViaDefault bool `json:"viaDefault,omitempty"`
+	// ReadOnly: the location is in ReadOnly access mode, so Velero rejects
+	// the schedule's backups. False when the location could not be read.
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 // ScheduleReading is one Schedule read against its controller's rules.
 type ScheduleReading struct {
-	Namespace        string        `json:"namespace"`
-	Name             string        `json:"name"`
-	Created          time.Time     `json:"created"`
-	Cron             string        `json:"cron"`
-	Zone             Zone          `json:"zone"`
-	State            ScheduleState `json:"state"`
-	Reason           string        `json:"reason,omitempty"`
-	Attention        bool          `json:"attention"`
-	Paused           bool          `json:"paused,omitempty"`
-	ValidationErrors []string      `json:"validationErrors,omitempty"`
-	LastSubmitted    *time.Time    `json:"lastSubmitted,omitempty"`
-	LastSkipped      *time.Time    `json:"lastSkipped,omitempty"`
-	NextRun          *time.Time    `json:"nextRun,omitempty"`
-	// NextRunCertain: NextRun is evaluated in the zone the controller uses.
+	Namespace string         `json:"namespace"`
+	Name      string         `json:"name"`
+	Created   time.Time      `json:"created"`
+	Cron      string         `json:"cron"`
+	Zone      Zone           `json:"zone"`
+	State     ScheduleState  `json:"state"`
+	Reason    ScheduleReason `json:"reason,omitempty"`
+	// Attention: the reading itself needs a look. Faults the Issues engine
+	// raises (a rejected schedule) carry no attention here, so false is not
+	// a health verdict: combine it with the issues.
+	Attention        bool     `json:"attention"`
+	ValidationErrors []string `json:"validationErrors,omitempty"`
+	// LastSubmitted is status.lastBackup: when the controller last submitted
+	// a run, whatever became of it.
+	LastSubmitted *time.Time `json:"lastSubmitted,omitempty"`
+	// NextRun is when the controller will next submit a run. Absent when it is
+	// not evaluated (a paused, disabled, rejected, unvalidated, unparseable or
+	// skip-pending schedule) and when the cron has no future time; State says
+	// which.
+	NextRun *time.Time `json:"nextRun,omitempty"`
+	// NextRunCertain: NextRun is exact, because it is evaluated in the zone
+	// the controller uses, or the schedule is @every, whose times do not
+	// depend on the zone. False without NextRun: no time was given.
 	NextRunCertain bool `json:"nextRunCertain"`
 	// MissedRuns counts scheduled times that passed with no submission, when
-	// the schedule is late. Velero does not catch up on them.
+	// the schedule is late, up to 100 (100 means at least 100); absent when
+	// none. Velero does not catch up on them.
 	MissedRuns int              `json:"missedRuns,omitempty"`
-	Blocker    *Run             `json:"blocker,omitempty"`
+	Blocker    *ScheduleRun     `json:"blocker,omitempty"`
 	Runs       ScheduleRuns     `json:"runs"`
 	Location   ScheduleLocation `json:"location"`
-	// TTL is the template's spec.ttl as written, how long each run is kept;
-	// always sent, "" when the server's --default-backup-ttl applies (see
-	// DeclaredTTL). Read from the schedule, not from a run: backup sync
+	// TTL is the template's spec.ttl as Velero applies it (DeclaredTTL), how
+	// long each run is kept; always sent, "" when the server's
+	// --default-backup-ttl applies. Read from the schedule, not from a run: backup sync
 	// recreates a run's object with a new creation time, so expiry less
 	// creation is not its TTL.
 	TTL string `json:"ttl"`
@@ -189,8 +220,11 @@ type ScheduleInput struct {
 	// DefaultLocation is the installation's default storage location name, ""
 	// when it could not be resolved.
 	DefaultLocation string
-	Now             time.Time
-	WithRecent      bool
+	// Locations are the namespace's storage locations, nil when they were not
+	// read; they say whether the schedule's location is ReadOnly.
+	Locations  []*unstructured.Unstructured
+	Now        time.Time
+	WithRecent bool
 }
 
 // ReadSchedule reads one Schedule. Backups not of this schedule are ignored,
@@ -215,12 +249,18 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	s := in.Schedule
 	r := ScheduleReading{Namespace: s.GetNamespace(), Name: s.GetName(), Created: s.GetCreationTimestamp().UTC()}
 	r.Cron, _, _ = unstructured.NestedString(s.Object, "spec", "schedule")
-	r.Paused, _, _ = unstructured.NestedBool(s.Object, "spec", "paused")
+	paused, _, _ := unstructured.NestedBool(s.Object, "spec", "paused")
 	r.ValidationErrors, _, _ = unstructured.NestedStringSlice(s.Object, "status", "validationErrors")
 	phase, _, _ := unstructured.NestedString(s.Object, "status", "phase")
 	r.LastSubmitted = timeField(s, "status", "lastBackup")
-	r.LastSkipped = timeField(s, "status", "lastSkipped")
+	lastSkipped := timeField(s, "status", "lastSkipped")
 	r.Location = scheduleLocation(s, in.DefaultLocation)
+	for _, l := range in.Locations {
+		if l != nil && r.Location.Name != "" && l.GetName() == r.Location.Name {
+			mode, _, _ := unstructured.NestedString(l.Object, "spec", "accessMode")
+			r.Location.ReadOnly = mode == "ReadOnly"
+		}
+	}
 	ttl, _, _ := unstructured.NestedString(s.Object, "spec", "template", "ttl")
 	r.TTL = DeclaredTTL(ttl)
 	r.IncludedNamespaces, _, _ = unstructured.NestedStringSlice(s.Object, "spec", "template", "includedNamespaces")
@@ -239,7 +279,7 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	r.Zone = scheduleZone(r.Cron, parsed, perr, in.Server, s.GetName(), r.LastSubmitted, runs)
 
 	switch {
-	case r.Paused:
+	case paused:
 		r.State = StatePaused
 		return r
 	case in.Server.SchedulingDisabled:
@@ -252,6 +292,10 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 		return r
 	case len(s.GetName()) > maxLabelValue:
 		r.State, r.Reason, r.Attention = StateCannotRun, ReasonNameTooLong, true
+		return r
+	case r.Location.ReadOnly:
+		// Velero's backup validation refuses a ReadOnly location.
+		r.State, r.Reason, r.Attention = StateCannotRun, ReasonLocationReadOnly, true
 		return r
 	case phase != "Enabled":
 		r.State, r.Reason = StateNotValidated, ReasonValidationPending
@@ -272,8 +316,8 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	if r.LastSubmitted != nil {
 		anchor = *r.LastSubmitted
 	}
-	if r.LastSkipped != nil && r.LastSkipped.After(anchor) {
-		anchor = *r.LastSkipped
+	if lastSkipped != nil && lastSkipped.After(anchor) {
+		anchor = *lastSkipped
 	}
 	loc := zoneLocation(r.Zone, parsed)
 	next := parsed.next(anchor, loc)
@@ -336,7 +380,7 @@ func uncertainMargin(z Zone, p parsedCron, anchor time.Time, loc *time.Location)
 	return p.cronGap(anchor, loc) + unknownZoneMargin
 }
 
-func heldReason(b *Run, now time.Time) (string, bool) {
+func heldReason(b *ScheduleRun, now time.Time) (ScheduleReason, bool) {
 	if (b.Phase == "" || b.Phase == "New") && now.Sub(b.Created) > unstartedHoldAfter {
 		return ReasonUnstartedBlocker, true
 	}
@@ -357,7 +401,7 @@ func missedRuns(p parsedCron, first time.Time, loc *time.Location, now time.Time
 }
 
 // scheduleZone decides the zone a schedule's times are read in.
-func scheduleZone(expr string, p parsedCron, perr error, server ServerConfig, name string, lastBackup *time.Time, runs []Run) Zone {
+func scheduleZone(expr string, p parsedCron, perr error, server ServerConfig, name string, lastBackup *time.Time, runs []ScheduleRun) Zone {
 	if perr == nil && p.zoned {
 		return Zone{Name: cronZoneName(expr), Source: ZoneFromCron}
 	}
@@ -399,7 +443,7 @@ func zoneLocation(z Zone, p parsedCron) *time.Location {
 
 // Only the controller's submission matches lastBackup. CLI and on-demand runs
 // use UTC names even when the server uses a different local zone.
-func inferOffset(name string, lastBackup *time.Time, runs []Run) (time.Duration, bool) {
+func inferOffset(name string, lastBackup *time.Time, runs []ScheduleRun) (time.Duration, bool) {
 	if lastBackup == nil {
 		return 0, false
 	}
@@ -453,9 +497,24 @@ func scheduleLocation(s *unstructured.Unstructured, defaultLocation string) Sche
 	return ScheduleLocation{Name: defaultLocation, ViaDefault: true}
 }
 
+// BackupsBySchedule groups one namespace's backups by their schedule-name
+// label, so each schedule reading only scans its own runs.
+func BackupsBySchedule(backups []*unstructured.Unstructured) map[string][]*unstructured.Unstructured {
+	out := map[string][]*unstructured.Unstructured{}
+	for _, b := range backups {
+		if b == nil {
+			continue
+		}
+		if name, ok := b.GetLabels()[ScheduleNameLabel]; ok {
+			out[name] = append(out[name], b)
+		}
+	}
+	return out
+}
+
 // runsOf returns the schedule's backups, newest first.
-func runsOf(schedule string, backups []*unstructured.Unstructured) []Run {
-	var runs []Run
+func runsOf(schedule string, backups []*unstructured.Unstructured) []ScheduleRun {
+	var runs []ScheduleRun
 	for _, b := range backups {
 		if b == nil || b.GetLabels()[ScheduleNameLabel] != schedule {
 			continue
@@ -471,8 +530,8 @@ func runsOf(schedule string, backups []*unstructured.Unstructured) []Run {
 	return runs
 }
 
-func runFrom(b *unstructured.Unstructured) Run {
-	run := Run{Name: b.GetName(), Created: b.GetCreationTimestamp().UTC()}
+func runFrom(b *unstructured.Unstructured) ScheduleRun {
+	run := ScheduleRun{Name: b.GetName(), Created: b.GetCreationTimestamp().UTC()}
 	run.Phase, _, _ = unstructured.NestedString(b.Object, "status", "phase")
 	run.Started = timeField(b, "status", "startTimestamp")
 	run.RanAt = run.Created
@@ -480,13 +539,14 @@ func runFrom(b *unstructured.Unstructured) Run {
 		run.RanAt = *run.Started
 	}
 	run.Completed = timeField(b, "status", "completionTimestamp")
-	run.Expires = timeField(b, "status", "expiration")
+	run.Expiration = timeField(b, "status", "expiration")
 	run.Errors, _, _ = unstructured.NestedInt64(b.Object, "status", "errors")
 	run.Warnings, _, _ = unstructured.NestedInt64(b.Object, "status", "warnings")
+	_, run.Manual = b.GetAnnotations()[SubmissionAnnotation]
 	return run
 }
 
-func summarizeRuns(runs []Run, read, withRecent bool) ScheduleRuns {
+func summarizeRuns(runs []ScheduleRun, read, withRecent bool) ScheduleRuns {
 	if !read {
 		return ScheduleRuns{Read: RunsReadUnknown}
 	}
@@ -502,7 +562,7 @@ func summarizeRuns(runs []Run, read, withRecent bool) ScheduleRuns {
 	if withRecent {
 		out.Recent = runs[:min(len(runs), maxRecentRuns)]
 		if out.Recent == nil {
-			out.Recent = []Run{}
+			out.Recent = []ScheduleRun{}
 		}
 	}
 	return out
@@ -510,7 +570,7 @@ func summarizeRuns(runs []Run, read, withRecent bool) ScheduleRuns {
 
 // blockerOf is the newest run the controller counts as still running: phase
 // "", New or InProgress (schedule_controller.go checkIfBackupInNewOrProgress).
-func blockerOf(runs []Run) *Run {
+func blockerOf(runs []ScheduleRun) *ScheduleRun {
 	for i := range runs {
 		switch runs[i].Phase {
 		case "", "New", "InProgress":

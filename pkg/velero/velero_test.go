@@ -96,7 +96,7 @@ func TestReadScheduleTiming(t *testing.T) {
 		unread    bool
 		now       time.Time
 		state     ScheduleState
-		reason    string
+		reason    ScheduleReason
 		attention bool
 		missed    int
 	}{
@@ -289,7 +289,7 @@ func TestServerConfigFromDeployments(t *testing.T) {
 	}
 	rolling := veleroDeployment(nil, nil)
 	rolling.Status.UpdatedReplicas = 0
-	if got := ServerConfigFromDeployments([]*appsv1.Deployment{rolling}, true); got.Source != ServerRolling || got.TimeZone != "" {
+	if got := ServerConfigFromDeployments([]*appsv1.Deployment{rolling}, true); got.Source != ServerRolloutInProgress || got.TimeZone != "" {
 		t.Fatalf("rolling %+v", got)
 	}
 	other := veleroDeployment(nil, nil)
@@ -355,9 +355,6 @@ func TestReadLocation(t *testing.T) {
 	}
 	if len(r.Schedules) != 2 || r.Schedules[0] != (ScheduleRef{Name: "explicit"}) || r.Schedules[1] != (ScheduleRef{Name: "implicit", ViaDefault: true}) {
 		t.Fatalf("schedules %+v", r.Schedules)
-	}
-	if UnassignedBackups(backups) != 1 {
-		t.Fatalf("unassigned %d", UnassignedBackups(backups))
 	}
 	unread := ReadLocation(LocationInput{Location: locs[0], Server: utcServer, Now: at("12:00")})
 	if unread.Backups != nil || unread.Schedules != nil {
@@ -502,19 +499,24 @@ func TestZoneInferenceIgnoresNewerOnDemandRun(t *testing.T) {
 
 func TestServerReadyReplicasAndBackupControllerFlags(t *testing.T) {
 	for _, tc := range []struct {
-		args                 []string
-		disabled, scheduling bool
+		args                               []string
+		disabled, scheduling, deletion, gc bool
 	}{
-		{[]string{"--restore-only"}, true, true},
-		{[]string{"--restore-only=false"}, false, false},
-		{[]string{"--disable-controllers=backup,gc"}, true, false},
-		{[]string{"--disable-controllers", "schedule"}, false, true},
-		{nil, false, false},
+		{[]string{"--restore-only"}, true, true, true, true},
+		{[]string{"--restore-only=false"}, false, false, false, false},
+		{[]string{"--restore-only=1"}, true, true, true, true},
+		{[]string{"--restore-only=true", "--restore-only=false"}, false, false, false, false},
+		{[]string{"--restore-only=false", "--restore-only"}, true, true, true, true},
+		{[]string{"--disable-controllers=gc", "--disable-controllers=backup"}, true, false, false, true},
+		{[]string{"--disable-controllers=backup,gc"}, true, false, false, true},
+		{[]string{"--disable-controllers", "schedule"}, false, true, false, false},
+		{[]string{"--disable-controllers=backup-queue,backup-deletion"}, true, false, true, false},
+		{nil, false, false, false, false},
 	} {
 		d := veleroDeployment(nil, tc.args)
 		d.Status.Replicas, d.Status.ReadyReplicas = 1, 0
 		cfg := ServerConfigFromDeployments([]*appsv1.Deployment{d}, true)
-		if cfg.BackupsDisabled != tc.disabled || cfg.SchedulingDisabled != tc.scheduling || !cfg.FlagsKnown() {
+		if cfg.BackupsDisabled != tc.disabled || cfg.SchedulingDisabled != tc.scheduling || cfg.DeletionDisabled != tc.deletion || cfg.GCDisabled != tc.gc || !cfg.FlagsKnown() {
 			t.Fatalf("%v: %+v", tc.args, cfg)
 		}
 		if cfg.Down() || cfg.ReadyReplicas == nil || *cfg.ReadyReplicas != 0 {
@@ -522,17 +524,17 @@ func TestServerReadyReplicasAndBackupControllerFlags(t *testing.T) {
 		}
 		encoded, err := json.Marshal(cfg)
 		var decoded ServerConfig
-		if err := json.Unmarshal(encoded, &decoded); err != nil || decoded.BackupsDisabled != cfg.BackupsDisabled {
+		if err := json.Unmarshal(encoded, &decoded); err != nil || decoded.BackupsDisabled != cfg.BackupsDisabled || decoded.SchedulingDisabled != cfg.SchedulingDisabled || decoded.DeletionDisabled != cfg.DeletionDisabled || decoded.GCDisabled != cfg.GCDisabled {
 			t.Fatalf("controller fact did not round-trip: %s (%v)", encoded, err)
 		}
-		if err != nil || !strings.Contains(string(encoded), `"backupsDisabled":`) || !strings.Contains(string(encoded), `"readyReplicas":0`) {
+		if err != nil || !strings.Contains(string(encoded), `"backupsDisabled":`) || !strings.Contains(string(encoded), `"schedulingDisabled":`) || !strings.Contains(string(encoded), `"deletionDisabled":`) || !strings.Contains(string(encoded), `"gcDisabled":`) || !strings.Contains(string(encoded), `"readyReplicas":0`) {
 			t.Fatalf("wire %s: %v", encoded, err)
 		}
 	}
 	d := veleroDeployment(nil, []string{"--restore-only", "--default-backup-storage-location=$(LOC)"})
 	cfg := ServerConfigFromDeployments([]*appsv1.Deployment{d}, true)
 	encoded, _ := json.Marshal(cfg)
-	if cfg.FlagsKnown() || strings.Contains(string(encoded), "backupsDisabled") {
+	if cfg.FlagsKnown() || strings.Contains(string(encoded), "backupsDisabled") || strings.Contains(string(encoded), "schedulingDisabled") || strings.Contains(string(encoded), "deletionDisabled") || strings.Contains(string(encoded), "gcDisabled") {
 		t.Fatalf("unknown flags serialized a fact: %s", encoded)
 	}
 }
@@ -582,5 +584,54 @@ func TestReadScheduleNamespaceSelectionFromTemplate(t *testing.T) {
 	}
 	if r := read(schedule("all", "0 9 * * *"), nil, utcServer, at("12:00")); r.IncludedNamespaces == nil || r.ExcludedNamespaces == nil || len(r.IncludedNamespaces) != 0 {
 		t.Fatalf("an empty selection is sent as empty lists, got %#v %#v", r.IncludedNamespaces, r.ExcludedNamespaces)
+	}
+}
+
+func TestScheduleWritingToAReadOnlyLocationCannotRun(t *testing.T) {
+	readOnly := func(o map[string]any) { o["spec"].(map[string]any)["accessMode"] = "ReadOnly" }
+	locs := []*unstructured.Unstructured{location("default", readOnly), location("dr")}
+	read := func(s *unstructured.Unstructured, locations []*unstructured.Unstructured) ScheduleReading {
+		return ReadSchedule(ScheduleInput{Schedule: s, BackupsRead: true, Server: utcServer, DefaultLocation: "default", Locations: locations, Now: at("12:10")})
+	}
+	viaDefault := read(schedule("nightly", "0 * * * *"), locs)
+	if viaDefault.State != StateCannotRun || viaDefault.Reason != ReasonLocationReadOnly || !viaDefault.Attention || !viaDefault.Location.ReadOnly {
+		t.Fatalf("a schedule writing to a read-only default: %+v", viaDefault)
+	}
+	elsewhere := read(schedule("dr", "0 * * * *", func(o map[string]any) {
+		o["spec"].(map[string]any)["template"] = map[string]any{"storageLocation": "dr"}
+	}), locs)
+	if elsewhere.State == StateCannotRun || elsewhere.Location.ReadOnly {
+		t.Fatalf("a schedule writing to a writable location: %+v", elsewhere)
+	}
+	if unread := read(schedule("nightly", "0 * * * *"), nil); unread.State == StateCannotRun || unread.Location.ReadOnly {
+		t.Fatalf("unread locations say nothing about access: %+v", unread)
+	}
+	// The location itself stays healthy: nothing about it is wrong.
+	if l := ReadLocation(LocationInput{Location: locs[0], Server: utcServer, Now: at("12:00")}); l.Attention {
+		t.Fatalf("a read-only location needs no attention of its own: %+v", l)
+	}
+}
+
+func TestBackUpNowRunsAreMarkedManual(t *testing.T) {
+	manual := backup("nightly-20261115120500", "nightly", "Completed", at("12:05"), func(o map[string]any) {
+		o["metadata"].(map[string]any)["annotations"] = map[string]any{SubmissionAnnotation: "confirmation-1"}
+	})
+	scheduled := backup("nightly-20261115110000", "nightly", "Completed", at("11:00"))
+	r := ReadSchedule(ScheduleInput{Schedule: schedule("nightly", "0 * * * *", lastBackup(at("11:00"))), Backups: []*unstructured.Unstructured{manual, scheduled}, BackupsRead: true, Server: utcServer, Now: at("12:10"), WithRecent: true})
+	if r.Runs.NewestCompleted == nil || r.Runs.NewestCompleted.Name != manual.GetName() || !r.Runs.NewestCompleted.Manual {
+		t.Fatalf("the newest success is the manual run: %+v", r.Runs.NewestCompleted)
+	}
+	if len(r.Runs.Recent) != 2 || r.Runs.Recent[1].Manual {
+		t.Fatalf("only Back up now runs are manual: %+v", r.Runs.Recent)
+	}
+}
+
+func TestServerRepeatedFlagsAndEnvTakeTheLastValue(t *testing.T) {
+	cfg := ServerConfigFromDeployments([]*appsv1.Deployment{veleroDeployment(
+		[]corev1.EnvVar{{Name: "TZ", Value: "Asia/Tokyo"}, {Name: "TZ", Value: "Europe/Berlin"}},
+		[]string{"--default-backup-storage-location=a", "--default-backup-storage-location=b", "--store-validation-frequency=1m", "--store-validation-frequency=5m"},
+	)}, true)
+	if cfg.TimeZone != "Europe/Berlin" || cfg.DefaultLocation != "b" || cfg.ValidationFrequencySeconds == nil || *cfg.ValidationFrequencySeconds != 300 {
+		t.Fatalf("cfg %+v", cfg)
 	}
 }

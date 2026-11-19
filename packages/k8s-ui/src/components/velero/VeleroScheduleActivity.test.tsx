@@ -52,7 +52,7 @@ describe('VeleroScheduleActivity', () => {
     const html = text(renderToStaticMarkup(
       <VeleroScheduleActivity reading={reading({ runs: { read: 'unknown', kept: 0 }, nextRunCertain: false, zone: { name: 'UTC', source: 'unknown' } })} />,
     ))
-    expect(html).toContain('Unknown — no access to backups')
+    expect(html).toContain('Unknown — backups were not read')
     expect(html).not.toContain('None kept')
     expect(html).toContain('~in ')
     expect(html).toContain('time zone not confirmed')
@@ -115,8 +115,19 @@ describe('Recent runs', () => {
   })
 
   it('does not promise a submission while the server is stopped', () => {
-    expect(veleroScheduleReasonText(reading({ state: 'due', reason: 'serverDown' }))).toBe('Due now, but the Velero server has no running replicas, so nothing will submit it.')
+    expect(veleroScheduleReasonText(reading({ state: 'due', reason: 'serverDown' }))).toBe('Due now, but the Velero server has no pods, so nothing will submit it.')
     expect(veleroScheduleReasonText(reading({ state: 'due' }))).toBe('Due now. Velero normally submits it within a few minutes.')
   })
 })
 
+
+describe('a schedule writing to a read-only location', () => {
+  it('says Velero rejects its backups, and marks a Back up now run as manual', () => {
+    expect(veleroScheduleReasonText(reading({ state: 'cannotRun', reason: 'locationReadOnly', attention: true, location: { name: 'archive', readOnly: true } }))).toBe(
+      'Its storage location archive is read-only, so Velero rejects every backup this schedule submits.',
+    )
+    const manual = { name: 'nightly-20261115120500', phase: 'Completed', created: ago(5), ranAt: ago(5), completed: ago(4), manual: true }
+    const html = renderToStaticMarkup(<VeleroScheduleActivity reading={reading({ runs: { read: 'full', kept: 1, newest: manual, newestCompleted: manual, recent: [manual] } })} />)
+    expect(html).toContain('>manual<')
+  })
+})

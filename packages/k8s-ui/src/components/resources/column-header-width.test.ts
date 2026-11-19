@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { getColumnMinWidth, type Column } from './ResourcesView'
+import { SKIP_FILTER_COLUMNS, getColumnHeaderWidth, getColumnMinWidth, type Column } from './ResourcesView'
+import { getCellFilterValue } from './resource-utils'
 
 // The header row is px-4 with a `truncate` label, under table-layout:fixed with
 // explicit <col> widths. A column narrower than its own heading clips to
@@ -71,5 +72,26 @@ describe('getColumnMinWidth header floor', () => {
 
   it('never returns less than the declared width, even past the cap', () => {
     expect(getColumnMinWidth(col({ key: 'printer:x', label: 'A'.repeat(200), width: 'w-96' }))).toBe(384)
+  })
+})
+
+describe('columns that can never offer a filter', () => {
+  // Their values never reach the filter dropdown, so their header reserves no
+  // room for its button.
+  const pod = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'p', namespace: 'n' }, spec: { nodeName: 'n1', containers: [{ name: 'c', resources: { limits: { cpu: '1', memory: '1Gi', 'nvidia.com/gpu': '1' } } }] }, status: { phase: 'Running', containerStatuses: [{ name: 'c', ready: true, restartCount: 3 }] } }
+  const node = { apiVersion: 'v1', kind: 'Node', metadata: { name: 'n1' }, status: { capacity: { cpu: '4', memory: '16Gi', pods: '110', 'nvidia.com/gpu': '8' }, allocatable: { cpu: '4', memory: '16Gi', pods: '110' } } }
+  for (const [kind, resource, keys] of [['pods', pod, ['containers', 'cpu', 'memory', 'gpu', 'restarts']], ['nodes', node, ['cpu', 'memory', 'gpu', 'pods']]] as const) {
+    for (const key of keys) {
+      it(`${kind} ${key} yields no filter value and reserves no filter button`, () => {
+        expect(getCellFilterValue(resource, key, kind)).toBe('')
+        expect(SKIP_FILTER_COLUMNS.has(key)).toBe(true)
+      })
+    }
+  }
+
+  it('makes the Containers header 20px narrower than a column that could carry a filter', () => {
+    const containers = getColumnHeaderWidth({ key: 'containers', label: 'Containers' })
+    const filterable = getColumnHeaderWidth({ key: 'status', label: 'Containers' }) // also sortable
+    expect(filterable - containers).toBe(20)
   })
 })

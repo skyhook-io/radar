@@ -49,12 +49,12 @@ export function When({ iso, fallback }: { iso?: string; fallback: string }) {
   )
 }
 
-/** When Velero deletes a run: "in 21h", or "expired" once its retention passed. */
+/** When a backup's retention ends. */
 export function Expires({ iso }: { iso?: string }) {
   if (!iso) return <span className="text-theme-text-tertiary">—</span>
   if (expired(iso)) {
     return (
-      <Tooltip content={`${veleroLocalTime(iso)} · Velero deletes it at its next garbage collection`}>
+      <Tooltip content={`${veleroLocalTime(iso)} · eligible for garbage collection`}>
         <span className="text-theme-text-tertiary">expired</span>
       </Tooltip>
     )
@@ -105,7 +105,9 @@ export function runsEmpty(query: { data?: VeleroRunsResponse; isPending: boolean
   if (!query.data) return `${noun[0].toUpperCase()}${noun.slice(1)} could not be read: ${(query.error as Error | null)?.message ?? 'unknown error'}`
   const cov = query.data.coverage
   if (INCOMPLETE_COVERAGE_STATES.has(cov.state)) return `${filtered} in what Radar could read (${coverageLabel(cov)}).`
-  return query.data.runs.length === 0 ? coverageEmpty(cov, noun) : `${filtered}.`
+  if (query.data.runs.length === 0) return coverageEmpty(cov, noun)
+  // Only the newest were sent, so an older match may exist.
+  return query.data.truncated ? `${filtered} in the newest ${query.data.runs.length.toLocaleString('en-US')}.` : `${filtered}.`
 }
 
 /** A read that failed or is partial, said above the rows it leaves. */

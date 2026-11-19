@@ -12,18 +12,14 @@ import { veleroAttentionCount, veleroScreenCounts, type VeleroScreen } from './a
 export const VELERO_SIDEBAR_CATEGORY = 'Velero'
 
 /** The job Velero does, its name in the sidebar's Integrations; "Velero" sits beneath it. */
-export const VELERO_SIDEBAR_LABEL = 'Backups'
+export const VELERO_SIDEBAR_LABEL = 'Backup & restore'
 
 export function veleroDiscovered(apiResources: APIResource[] | undefined): boolean {
   return !!apiResources?.some((r) => r.group === VELERO_GROUP)
 }
 
-const SCREENS = [
-  { kind: VELERO_BACKUP_KIND, label: 'Backups' },
-  { kind: VELERO_SCHEDULE_KIND, label: 'Schedules' },
-  { kind: VELERO_RESTORE_KIND, label: 'Restores' },
-  { kind: VELERO_LOCATION_KIND, label: 'Locations' },
-] as const
+// Each list is named as its objects' pages name it ("Velero / Storage locations /").
+const SCREENS = [VELERO_BACKUP_KIND, VELERO_SCHEDULE_KIND, VELERO_RESTORE_KIND, VELERO_LOCATION_KIND].map((kind) => ({ kind, label: VELERO_DETAIL_KINDS[kind.name].label }))
 
 /**
  * Velero in the sidebar's Integrations: one row with what needs attention

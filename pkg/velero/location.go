@@ -106,17 +106,20 @@ type LocationReading struct {
 	ValidationOverdue bool                 `json:"validationOverdue,omitempty"`
 	// NeverValidated: no validation was recorded although the location is
 	// older than neverValidatedAfter.
-	NeverValidated bool          `json:"neverValidated,omitempty"`
-	Default        bool          `json:"default"`
-	DefaultSource  DefaultSource `json:"defaultSource"`
+	NeverValidated bool `json:"neverValidated,omitempty"`
+	Default        bool `json:"default"`
+	// DefaultSource is how the installation's default was decided, the same
+	// on every location of the installation, not how this one became default.
+	DefaultSource DefaultSource `json:"defaultSource"`
 	// Backups is nil when the namespace's Backups were not read.
 	Backups *LocationBackups `json:"backups,omitempty"`
 	// Schedules is nil when the namespace's Schedules were not read.
 	Schedules []ScheduleRef `json:"schedules"`
 	Attention bool          `json:"attention"`
-	// Reason is ReasonServerDown when an overdue validation is explained by
-	// the Velero server having no available pod.
-	Reason string `json:"reason,omitempty"`
+	// Reason is ReasonServerDown when an overdue or never-recorded validation
+	// is explained by the server Deployment having no pods (status.replicas is
+	// 0); otherwise absent.
+	Reason ScheduleReason `json:"reason,omitempty"`
 }
 
 // LocationInput is what ReadLocation needs; the slices are the namespace's.
@@ -207,19 +210,4 @@ func validationFrequency(l *unstructured.Unstructured, server ServerConfig) *Val
 		return &ValidationFrequency{Seconds: secs, Source: "server", Disabled: secs == 0}
 	}
 	return nil
-}
-
-// UnassignedBackups counts a namespace's backups Velero has not yet assigned
-// a storage location to.
-func UnassignedBackups(backups []*unstructured.Unstructured) int {
-	n := 0
-	for _, b := range backups {
-		if b == nil {
-			continue
-		}
-		if _, ok := LocationOf(b); !ok {
-			n++
-		}
-	}
-	return n
 }

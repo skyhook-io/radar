@@ -62,11 +62,31 @@ The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, wi
   in at the session's first look, and turns every unread kind or namespace into a gap. Dependent searches reuse the
   session's unwatched-kind gaps; watched stores are still read each time, so a loading store can become available.
 
+## Collection activation
+
+`relations.Kinds()` declares the bounded source, target, lookup and projection dependencies. Radar removes the kinds
+served by typed informers using `k8score.AllKindListers()` and gives the rest to each new dynamic cache's watch reconciler.
+It starts before the deferred-informer warmup gate, reconciles after every discovery refresh, and retries every 75
+seconds (after the 60-second denial memory expires). A new CRD, or an update that changes a required CRD's served
+versions, schedules a scan whose discovery refresh triggers the reconcile; other CRD updates (cert-manager's CA-bundle
+rewrites) cost nothing. CRDs seen before startup discovery finishes wait for it, then get the usual small-CRD decision. A context switch, reconnect or namespace rescope creates
+and starts a new reconciler; stopping a cache cancels its requests and unregisters its discovery subscription.
+Activation is non-blocking and singleflight per resource, so a burst of discovery refreshes starts each watch once.
+
+Both Calico groups and both Traefik groups are activated because families read both. Open-ended Knative destinations
+use named Serving, Broker, Channel, flow and JobSink targets, and NodeClasses use the four supported providers; discovery
+alone never expands them into watches of Knative internals or arbitrary providers. Crossplane composites/claims and
+arbitrary ownership kinds retain their existing behavior: they are read from watches already active, without eagerly
+watching every installed provider/XRD kind. The fallback catalog supplies the versions, plurals and scope for recovery;
+`TestRelationshipKindsHaveFallbacks` and the chart-RBAC check keep it aligned with the declaration. The recording builder
+test pins every activation absent from the graph's cold listing, including targets otherwise started by common warmup.
+
 ## Beyond ownership: other relations
 
-`pkg/relations` answers the relations that aren't ownership or management from the same caches, through the same
-session, `Access` and gaps: a `relations.Session` is an ownership session that also reads index lookups (`Indexed`)
-and lends cached objects (`Borrow`), which the cache source implements.
+`pkg/relations` answers every relation that isn't an owner reference or a GitOps member list, including management
+declared by spec, status or labels, from the same caches, through the same session, `Access` and gaps: a
+`relations.Session` is an ownership session that also reads index lookups (`Indexed`) and lends cached objects
+(`Borrow`), which the cache source implements.
 
 A **family** (`family.go`) is one way objects name others: the kinds that declare (each optionally narrowed to the
 target kinds it can declare), the kinds a declaration can name, and a function that visits what an object declares
@@ -75,14 +95,27 @@ with the path declaring it. The `View` answers every family the same way:
 - `References(family, subject)`: each target the subject declares, every path declaring it, and what reading it
   found: present, absent, unread (with its gap) or withheld from the caller.
 - `Referrers(family, subject)`: what declares the subject, as the caller may read it, up to 500 with a total. A
-  family's namespaced targets are always in the declarer's namespace, so the answer reads that namespace's objects of
-  each declaring kind through the namespace index and evaluates what each declares. A cluster-scoped target is answered
-  as `Children` answers a cluster-scoped owner: the namespaces the caller may read something in are searched, each
-  declarer is checked where it is, and a gap is kept only if it covers what the caller may read
-  (`ownership.GapCoversReadable`). An index of every declaration cost about 1.4 KB per Pod
-  and made a Pod relist about five times as long ([measurements](loadtest.md#relationship-cost-baselines)).
+  namespaced target is normally declared from its own namespace, so the answer reads that namespace's objects of each
+  declaring kind through the namespace index and evaluates what each declares. An index of every declaration cost
+  about 1.4 KB per Pod and made a Pod relist about five times as long
+  ([measurements](loadtest.md#relationship-cost-baselines)).
+- A cluster-scoped target, or any target of a family whose declarations cross namespaces (`CrossNamespace`, as Gateway
+  API references do), is answered as `Children` answers a cluster-scoped owner: the namespaces the caller may read
+  something in are searched, each declarer is checked where it is, and a gap is kept only if it covers what the caller
+  may read (`ownership.GapCoversReadable`).
 - A declaration counts only if its kind is one of the family's targets and its source may declare that kind (an HPA
   doesn't scale a DaemonSet).
+- A family whose sources are many and in every namespace can find a target's referrers through a store index
+  keyed by the target (`ReferrersIndex`) instead of reading every source; what each one declares is still
+  evaluated. Only `Reflections` does: an index of a busy kind costs every relist
+  ([measurements](loadtest.md#relationship-cost-baselines)).
+- A declaration may name alternatives (`Declaration.Or`): the same reference in another API group its controller also
+  reads, in the order it tries them, as Traefik 2.10 tries `traefik.io` and then `traefik.containo.us`. `References`
+  names the first that exists, and `Referrers` counts a declaration only for the target it resolves to. A candidate
+  Radar couldn't read, or the caller may not, stops the resolution there: the answer names it and says so rather than
+  falling back to a later one. A target in none of them is named in the first group the cluster serves. A target found
+  only after served groups that lack it carries `legacy_group_only`, in both directions: Traefik 2.10 and 2.11 read
+  `traefik.containo.us` too, Traefik 3 ignores it, and Radar can't tell which controller runs.
 - Both answer nothing for a subject the caller may not read; a permission check that couldn't be made is a gap, not a
   denial; a subject the host read that the cache doesn't hold yet leaves the answer incomplete.
 
@@ -96,8 +129,65 @@ The families so far:
 | `IngressBackends` | Ingresses → their default and rule backend Services | `families.go` |
 | `RolloutServices` | Argo Rollouts → the canary, stable, active and preview Services their strategy names | `families.go` |
 | `CertificateSecrets` | cert-manager Certificates → the Secret they write | `families.go` |
+| `GatewayParents` | Gateway API routes (HTTP, GRPC, TCP, TLS, UDP) → the Gateways their parentRefs attach to, in any namespace | `families.go` |
+| `GatewayBackends` | Gateway API routes → the Services their rules send traffic to, in any namespace, whether or not a ReferenceGrant permits it | `families.go` |
+| `GatewayClasses` | Gateways → the GatewayClass they name | `families.go` |
+| `CertManagerIssuers` | cert-manager Certificates, CertificateRequests, ACME Orders and Challenges → the Issuer or ClusterIssuer their `issuerRef` names (external issuers aren't followed) | `families.go` |
+| `FluxSources` | Flux Kustomizations, HelmReleases, HelmCharts → the GitRepository, OCIRepository, Bucket, ExternalArtifact, HelmRepository or HelmChart they build from, in any namespace (an inline HelmRelease also declares the HelmChart the controller recorded) | `families.go` |
+| `NodeClasses` | Karpenter NodePools → their provider's NodeClass, or EKS Auto Mode's (`IsTarget`: each provider defines its own kind) | `families.go` |
+| `ClusterClasses` | Cluster API Clusters → the ClusterClass their topology names, in any namespace | `families.go` |
+| `KnativeEventDestinations` | Knative Triggers, event sources and Channels → where they send events (subscriber, sink, backing channel), in any namespace: core Services and any kind in a Knative group, such as JobSink | `families.go` |
+| `KnativeTriggerBrokers` | Knative Triggers → the Broker they subscribe to (`brokerRef` in any namespace, or the older same-namespace `broker`) | `families.go` |
+| `KnativeRouteRevisions` | Knative Routes → the Revisions their status sends traffic to | `families.go` |
+| `IstioGateways` | Istio VirtualServices → the Istio Gateways they bind to, in any namespace (`mesh` binds sidecars, not a Gateway) | `families.go` |
+| `IstioServiceHosts(domain)` | Istio VirtualServices (HTTP, TCP, TLS routes) and DestinationRules → the Services their hosts name, in any namespace. Made per request with the mesh's domain from istiod (`configrefs.IstioServiceDomain`): an FQDN resolves only with it | `families.go` |
+| `ArgoWorkflowTemplates` | Argo Workflows and CronWorkflows → the WorkflowTemplates and ClusterWorkflowTemplates their `workflowTemplateRef` and task or step `templateRef`s use | `families.go` |
+| `TraefikBackends` | Traefik IngressRoutes and TraefikServices → the Services and TraefikServices they route, balance or mirror to; IngressRouteTCPs and IngressRouteUDPs → their Services; in any namespace | `traefik.go` |
+| `TraefikRouteConfig` | Traefik HTTP and TCP routes → their Middlewares (MiddlewareTCP), ServersTransports (ServersTransportTCP) and TLSOption, and chain Middlewares → the Middlewares they run, in any namespace | `traefik.go` |
+| `TraefikSecrets` | Traefik transports, TLSOptions, TLSStores and routes → the Secrets and ConfigMaps they read | `traefik.go` |
+| `ContourBackends` | Contour HTTPProxies → the Services they send to and the HTTPProxies they include or their TCP proxy delegates to, in any namespace | `contour.go` |
+| `ContourSecrets` | Contour HTTPProxies → the Secrets they read for TLS and validation | `contour.go` |
+| `PodPlacement` | Pods → the Node they run on (a finished Pod runs nowhere); a Node's Pods are read from every Pod | `status_families.go` |
+| `Reflections` | Reflector mirrors (Secrets, ConfigMaps) → the source their `reflects` annotation names, in any namespace; a source's mirrors come from `ReflectsIndex` | `status_families.go` |
+| `Storage` | PersistentVolumeClaims → their PersistentVolume and StorageClass; PersistentVolumes → their claim and StorageClass | `status_families.go` |
+| `MachineNodes` | Karpenter NodeClaims and Cluster API Machines → the Node their status records | `status_families.go` |
+| `AnalysisRuns` | Argo Rollouts → the AnalysisRuns their status points at | `status_families.go` |
+| `FluxHelmOrigins` | Origin labels on Deployment, Service, StatefulSet, DaemonSet, Job, CronJob and Rollout → Flux HelmRelease; the dark projection uses these only for local releases with no readable inventory | `management_families.go` |
+| `ArgoPodWorkflows` | Pods → Argo Workflow through the workflow label, preserving the graph’s label-only management path | `management_families.go` |
+| `ArgoWorkflowCronWorkflows` | Argo Workflow → CronWorkflow, preferring the controller reference to the cron-workflow label fallback | `management_families.go` |
+| `SealedSecrets` | Bitnami SealedSecrets → the Secret of their own name they produce | `status_families.go` |
 
-Extractors live in `pkg/configrefs`, which the topology builder also uses.
+`CertificateRoutes` (`compositions.go`) joins a Certificate’s declared output Secret coordinates to Traefik routes and Contour proxies declaring the same Secret. Both endpoints are checked under the caller’s access; the logical Secret is never read or required to exist. The dark projection feeds Certificate `Consumers` and route `ConfigRefs`.
+
+`SealedSecretConsumers` uses the same composition over the SealedSecret’s own namespace/name and `ConfigReferences` declarations, in both directions. It feeds SealedSecret `Consumers` and consumer `ConfigRefs` even when the Secret is absent, uncollected or denied. Ordinary `Referrers` still requires a held, readable target.
+
+A **selector family** (`selectors.go`, `selector_families.go`) is one way objects choose others by labels: the kinds
+that select and how each reads its selector, and the kinds that can be chosen and how a selector sees each (a
+workload is seen as the pods its template makes; a Rollout with a `workloadRef` as its referenced workload's). What a
+match depends on but never lists, such as that template or a Namespace's labels, is read with Radar's identity, as the
+relationship graph reads it (`Lookup`). `Selected(family, selector)` lists what a selector chooses and
+`SelectedBy(family, object)` what chooses an object, through the same search, access checks and coverage as
+`Referrers`. They follow the API's semantics, not the topology view's display rules: an empty NetworkPolicy, Cilium,
+PodDisruptionBudget or monitor selector chooses everything in scope, as a default-deny policy does. A match Radar
+can't judge, such as a Cilium selector on Namespace labels, leaves the answer incomplete (`filter_eval_failed`)
+rather than reading as no match.
+
+| Family | Selectors → chosen |
+|---|---|
+| `ServiceSelectors` | Services → the Deployments, Rollouts, StatefulSets, DaemonSets and active Jobs whose pod template their selector matches (a Service without a selector, or an ExternalName Service, chooses none) |
+| `DisruptionBudgets` | PodDisruptionBudgets → Deployments, StatefulSets, DaemonSets |
+| `NetworkPolicies` | NetworkPolicies and CiliumNetworkPolicies → Deployments, StatefulSets, DaemonSets; Cilium policies match as Cilium does (`netpol.CiliumSelects`: every spec, label sources, identity labels) |
+| `Monitors` | ServiceMonitors → Services; PodMonitors → workloads; in the namespaces their `namespaceSelector` names |
+| `CalicoPolicies`, `CalicoStagedPolicies` | Calico NetworkPolicies and GlobalNetworkPolicies, and their staged kinds that preview protection → Deployments, StatefulSets, DaemonSets, matched as Calico does (`netpol.CompileCalicoPolicyMatcher`), reading Namespace and ServiceAccount labels, with Radar's identity as the graph does (they decide a match but are never listed), only once a policy's other selectors match; a policy both Calico groups serve is listed once |
+
+Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
+families read each reference's fields the same way. Resolution can still differ: topology lists one Traefik group per
+cluster, while a family resolves each reference through its candidates, so on a cluster serving both groups a
+Middleware only in `traefik.containo.us` is a family's answer but not drawn.
+
+Each declared, selector and composition family carries its Related Resources `Projection` disposition beside its extraction rule. It names the fields in both declaration directions and the graph encoding, or explains the direct read / intentional non-projection. `relations_answer.go` generates its edge maps from these declarations. `TestEveryFamilyProjectsExactlyItsDeclaredFields` projects one isolated synthetic edge for every supported kind pair and checks the exact fields after ownership; legacy `ManagedBy` and ownership coverage are checked separately.
+
+The independent 72-family cutover inventory is `pkg/topology/testdata/relationship-family-inventory.tsv`. Each direction names registered or direct producers, or a reason it does not project. Its notes preserve the remaining held-target differences for synthetic AnalysisRun and Secret/ConfigMap nodes; these are not parity claims. `TestRelationshipFamilyInventoryHasBothDirections` rejects an unaccounted family or unknown producer.
 
 Families are built here while Related Resources still reads the relationship graph; readers switch to the families in
 one change that also removes the graph.

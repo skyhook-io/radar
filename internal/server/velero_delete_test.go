@@ -190,8 +190,8 @@ func TestVeleroBackupDeletion(t *testing.T) {
 		{"deleting", []runtime.Object{request("InProgress"), deletableBackup("nightly-1", "uid-1", "Deleting", "default")}, veleropkg.DeletionInProgress},
 		{"refused by Velero", []runtime.Object{request("Processed", "backup storage location default not found"), deletableBackup("nightly-1", "uid-1", "Completed", "default")}, veleropkg.DeletionRefused},
 		{"failed partway", []runtime.Object{request("Processed", "error deleting snapshot snap-1: throttled"), deletableBackup("nightly-1", "uid-1", "Deleting", "default")}, veleropkg.DeletionFailed},
-		{"done: request and backup gone", nil, veleropkg.DeletionDone},
-		{"done: a new backup took the name", []runtime.Object{deletableBackup("nightly-1", "uid-9", "Completed", "default")}, veleropkg.DeletionDone},
+		{"done: request and backup gone", nil, veleropkg.DeletionDeleted},
+		{"done: a new backup took the name", []runtime.Object{deletableBackup("nightly-1", "uid-9", "Completed", "default")}, veleropkg.DeletionDeleted},
 		{"unknown: request gone, backup remains", []runtime.Object{deletableBackup("nightly-1", "uid-1", "Completed", "default")}, veleropkg.DeletionUnknown},
 	}
 	for _, c := range cases {
@@ -242,6 +242,24 @@ func TestVeleroDeleteBackupRefusesStoppedServer(t *testing.T) {
 	rec := serve(srv, http.MethodPost, "/api/velero/backups/velero/nightly-1/delete", `{"uid":"uid-1"}`)
 	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "stopped") || len(deleteRequests(t, dyn)) != 0 {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestVeleroDeleteBackupRefusesDisabledDeletionController(t *testing.T) {
+	for _, flags := range [][]string{{"--restore-only"}, {"--disable-controllers=backup-deletion"}} {
+		t.Run(strings.Join(flags, " "), func(t *testing.T) {
+			srv, dyn := deleteServer(t, deletableBackup("nightly-1", "uid-1", "Completed", "default"))
+			seedVeleroActionServer(t, 1, flags...)
+			rec := serve(srv, http.MethodPost, "/api/velero/backups/velero/nightly-1/delete", `{"uid":"uid-1"}`)
+			if rec.Code != 409 || !strings.Contains(rec.Body.String(), "backup-deletion controller is disabled") || len(deleteRequests(t, dyn)) != 0 {
+				t.Fatalf("%d %s", rec.Code, rec.Body)
+			}
+		})
+	}
+	srv, dyn := deleteServer(t, deletableBackup("nightly-1", "uid-1", "Completed", "default"))
+	seedVeleroActionServer(t, 1, "--disable-controllers=gc")
+	if rec := serve(srv, http.MethodPost, "/api/velero/backups/velero/nightly-1/delete", `{"uid":"uid-1"}`); rec.Code != http.StatusOK || len(deleteRequests(t, dyn)) != 1 {
+		t.Fatalf("gc off does not stop a deletion: %d %s", rec.Code, rec.Body)
 	}
 }
 

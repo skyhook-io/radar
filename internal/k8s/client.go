@@ -22,6 +22,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -31,6 +32,7 @@ import (
 	"k8s.io/client-go/util/homedir"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 var (
@@ -38,6 +40,7 @@ var (
 	k8sConfig                    *rest.Config
 	discoveryClient              *discovery.DiscoveryClient
 	dynamicClient                dynamic.Interface
+	activeClients                *sharedKubernetesClients
 	initOnce                     sync.Once
 	initErr                      error
 	kubeconfigPath               string
@@ -144,6 +147,25 @@ type kubeconfigSources struct {
 	ignoredKubeconfigEnvReason string
 	directoryFileCount         int
 	directoryPaths             []string
+}
+
+// ResolveContextSource resolves a requested display name from the configured
+// kubeconfig sources before initialization, without building clients or contacting
+// a cluster. Each file is loaded in isolation, as it is during Initialize.
+func ResolveContextSource(opts InitOptions, name string) (ContextRef, error) {
+	sources, err := resolveKubeconfigSources(opts, os.Getenv("KUBECONFIG"), homedir.HomeDir())
+	if err != nil {
+		return ContextRef{}, err
+	}
+	registry, configs := buildContextRegistry(sources.paths)
+	entry, ok := registry[name]
+	if !ok {
+		return ContextRef{}, fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
+	}
+	if err := clientcmd.ConfirmUsable(*configs[entry.SourceFile], entry.InFileName); err != nil {
+		return ContextRef{}, err
+	}
+	return ContextRef{Name: name, SourceFile: entry.SourceFile, InFileName: entry.InFileName}, nil
 }
 
 // Initialize initializes the K8s client with the given options
@@ -344,6 +366,7 @@ func doInit(opts InitOptions) error {
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
+	activeClients = clients
 	activeClientGeneration = clients.generation
 
 	return nil
@@ -807,6 +830,69 @@ func GetDynamicClient() dynamic.Interface {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	return dynamicClient
+}
+
+// GetInformerClient returns the clientset the informer cache lists and watches
+// through. It shares GetClient()'s http.Client (transport, auth observer,
+// request deadlines) but has its own client-side rate limiter, so informer
+// LIST/WATCH traffic never delays request handlers. Falls back to GetClient()
+// when the active client set has no informer client, e.g. a test that installed
+// only the request client.
+func GetInformerClient() kubernetes.Interface {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return informerClientForLocked(k8sClient)
+}
+
+// getCacheClients reads the request and informer clientsets in one critical
+// section, so a context switch between two reads cannot pair one cluster's
+// observer source with another cluster's informers.
+func getCacheClients() (*kubernetes.Clientset, kubernetes.Interface) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return k8sClient, informerClientForLocked(k8sClient)
+}
+
+// InformerClientFor maps a request clientset to the informer clientset of the
+// same client set, so a holder of GetClient() can tell whether the resource
+// cache (whose Client() is the informer client) describes its connection.
+func InformerClientFor(client kubernetes.Interface) kubernetes.Interface {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if c, ok := client.(*kubernetes.Clientset); ok {
+		return informerClientForLocked(c)
+	}
+	return client
+}
+
+func informerClientForLocked(client *kubernetes.Clientset) kubernetes.Interface {
+	if client == nil {
+		return nil
+	}
+	// Matching on the request client keeps an informer client from another
+	// client set (a previous cluster) from ever being handed out.
+	if activeClients != nil && activeClients.clientset == client && activeClients.informerClientset != nil {
+		return activeClients.informerClientset
+	}
+	return client
+}
+
+// GetInformerDynamicClient is GetInformerClient for the dynamic informer cache
+// and the startup list probes, falling back to GetDynamicClient().
+func GetInformerDynamicClient() dynamic.Interface {
+	_, informer := getDynamicCacheClients()
+	return informer
+}
+
+// getDynamicCacheClients reads the request and informer dynamic clients in one
+// critical section, for the same reason as getCacheClients.
+func getDynamicCacheClients() (request, informer dynamic.Interface) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if dynamicClient != nil && activeClients != nil && activeClients.dynamic == dynamicClient && activeClients.informerDynamic != nil {
+		return dynamicClient, activeClients.informerDynamic
+	}
+	return dynamicClient, dynamicClient
 }
 
 func GetDynamicClientSnapshot() (dynamic.Interface, string) {
@@ -1509,12 +1595,16 @@ const (
 	// NamespaceListRBAC: the LIST was denied and --rbac-namespaces names every
 	// namespace the install is granted, so the list is complete for this install.
 	NamespaceListRBAC NamespaceListSource = "rbac-namespaces"
+	// NamespaceListCache: the LIST failed and the synced namespace informer
+	// answered. Complete as of the cache, but it can lag a namespace created
+	// moments ago, so it must not prune a pick.
+	NamespaceListCache NamespaceListSource = "cache"
 )
 
 // Complete reports whether the list holds every namespace Radar can be
 // granted, rather than a best-effort short list.
 func (s NamespaceListSource) Complete() bool {
-	return s == NamespaceListCluster || s == NamespaceListRBAC
+	return s == NamespaceListCluster || s == NamespaceListRBAC || s == NamespaceListCache
 }
 
 // GetAccessibleNamespacesWithSource is GetAccessibleNamespaces plus the reason
@@ -1540,6 +1630,15 @@ func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, Namespace
 
 	source := NamespaceListSeeded
 	if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+		// After a context switch the LIST can time out behind informer and
+		// discovery traffic on the shared client; the synced cluster-wide
+		// namespace informer holds the same list.
+		// Only while the client that failed is still current: a LIST that
+		// outlived a context switch must not borrow the new cluster's cache.
+		if names, ok := cachedNamespaceNames(); ok && GetClient() == client {
+			log.Printf("[k8s] GetAccessibleNamespaces: listing namespaces failed: %v (using the synced namespace cache)", err)
+			return names, NamespaceListCache
+		}
 		source = NamespaceListFailed
 		log.Printf("[k8s] GetAccessibleNamespaces: non-auth error listing namespaces: %v (falling back to best-effort short list)", err)
 	}
@@ -1568,6 +1667,25 @@ func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, Namespace
 	clientMu.RUnlock()
 	sort.Strings(fallback)
 	return fallback, source
+}
+
+// cachedNamespaceNames lists namespaces from the informer cache when it is
+// synced and cluster-wide, so it holds what a successful LIST would return.
+func cachedNamespaceNames() ([]string, bool) {
+	rc := GetResourceCache()
+	if rc == nil || rc.Namespaces() == nil || !rc.IsKindReady(k8score.Namespaces) || !rc.IsKindClusterWide(k8score.Namespaces) {
+		return nil, false
+	}
+	items, err := rc.Namespaces().List(labels.Everything())
+	if err != nil {
+		return nil, false
+	}
+	names := make([]string, 0, len(items))
+	for _, ns := range items {
+		names = append(names, ns.Name)
+	}
+	sort.Strings(names)
+	return names, true
 }
 
 // ForceInCluster overrides in-cluster detection for testing
@@ -2039,6 +2157,7 @@ func installPreparedContext(p *preparedContext) {
 	k8sClient = p.clients.clientset
 	discoveryClient = p.clients.discovery
 	dynamicClient = p.clients.dynamic
+	activeClients = p.clients
 	activeClientGeneration = p.clients.generation
 	contextName = p.name
 	contextBinding = newContextBinding

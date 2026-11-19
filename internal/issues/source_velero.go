@@ -2,8 +2,6 @@ package issues
 
 import (
 	"fmt"
-	"reflect"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -256,10 +254,9 @@ func detectVeleroIssues(gvr schema.GroupVersionResource, kind string, items []*u
 // the newest *decided* run is considered: if it succeeded, the group is clear;
 // otherwise that one run drives the issue and the older failures stay quiet.
 //
-// An ad-hoc backup that failed stays listed, but drops from critical to a
-// warning once a backup created after it, in the same Velero namespace,
-// completed over at least the namespaces it named (see veleroCoveredBy): the
-// data it was meant to save has since been saved.
+// An ad-hoc backup that failed stays critical. When a backup in the same
+// Velero namespace completed after it, its cause names that backup as
+// context; whether it saved what the failed one was meant to is not judged.
 func veleroBackupIssues(gvr schema.GroupVersionResource, kind string, items []*unstructured.Unstructured) []Issue {
 	groups := map[string][]*unstructured.Unstructured{}
 	var order []string
@@ -272,6 +269,7 @@ func veleroBackupIssues(gvr schema.GroupVersionResource, kind string, items []*u
 	}
 
 	var out []Issue
+	successes := newestVeleroSuccessByNamespace(items)
 	for _, key := range order {
 		newest := newestDecidedVeleroRun(groups[key])
 		if newest == nil {
@@ -283,9 +281,8 @@ func veleroBackupIssues(gvr schema.GroupVersionResource, kind string, items []*u
 			continue
 		}
 		if iss.Severity == SeverityCritical && newest.GetLabels()[veleroScheduleLabel] == "" {
-			if later := newerVeleroSuccessCovering(newest, items); later != nil {
-				iss.Severity = SeverityWarning
-				iss.Cause = "A later backup, " + later.GetName() + ", completed over the same namespaces."
+			if later, ok := successes[newest.GetNamespace()]; ok && later.started.After(veleroRunTime(newest)) {
+				iss.Cause = "A later backup, " + later.name + ", completed in this Velero namespace; check that it saved what this one was meant to."
 			}
 		}
 		out = append(out, iss)
@@ -293,142 +290,31 @@ func veleroBackupIssues(gvr schema.GroupVersionResource, kind string, items []*u
 	return append(out, veleroStalledRunIssues(gvr, kind, items)...)
 }
 
-// newerVeleroSuccessCovering is the newest Completed backup that started
-// after failed was created, in its Velero namespace, and backed up every
-// namespace failed named; nil when there is none. The start time, not the
-// creation time, is what shows the data was saved later: backup sync
-// recreates an old backup's object with a new creation time but keeps the
-// status it was stored with, and a backup created earlier but queued until
-// after the failure still saved its data later.
-func newerVeleroSuccessCovering(failed *unstructured.Unstructured, items []*unstructured.Unstructured) *unstructured.Unstructured {
-	var best *unstructured.Unstructured
-	var bestStarted time.Time
-	at := veleroRunTime(failed)
+// newestVeleroSuccessByNamespace is, per Velero namespace, the Completed
+// backup that started last. The start time, not the creation time, is when
+// its data was saved: backup sync recreates an old backup's object with a new
+// creation time but keeps the status it was stored with.
+func newestVeleroSuccessByNamespace(items []*unstructured.Unstructured) map[string]veleroSuccess {
+	out := map[string]veleroSuccess{}
 	for _, u := range items {
-		if u.GetNamespace() != failed.GetNamespace() || veleroPhase(u) != "Completed" {
+		if veleroPhase(u) != "Completed" {
 			continue
 		}
 		started, _, _ := unstructured.NestedString(u.Object, "status", "startTimestamp")
 		t, err := time.Parse(time.RFC3339, started)
-		if err != nil || !t.After(at) {
+		if err != nil {
 			continue
 		}
-		if !veleroCoveredBy(failed, u) {
-			continue
-		}
-		if best == nil || t.After(bestStarted) {
-			best, bestStarted = u, t
+		if best, ok := out[u.GetNamespace()]; !ok || t.After(best.started) {
+			out[u.GetNamespace()] = veleroSuccess{name: u.GetName(), started: t}
 		}
 	}
-	return best
+	return out
 }
 
-// veleroNarrowingFilters are the spec fields that select less than every
-// object in a namespace.
-var veleroNarrowingFilters = []string{
-	"includedResources", "excludedResources",
-	"includedClusterScopedResources", "excludedClusterScopedResources",
-	"includedNamespaceScopedResources", "excludedNamespaceScopedResources",
-	"labelSelector", "orLabelSelectors",
-	// A resource policy filters volumes and resources outside these lists;
-	// snapshotVolumes false saves no volume data.
-	"resourcePolicy", "snapshotVolumes",
-}
-
-// veleroSavedDataFlags change what a backup saves whichever way they are set,
-// and unset means the server's default, so later covers earlier only when
-// both set them alike: a later run without file-system backup, data
-// movement or cluster-scoped resources saved less than one with them.
-var veleroSavedDataFlags = []string{"defaultVolumesToFsBackup", "snapshotMoveData", "includeClusterResources"}
-
-// veleroCoveredBy says whether later's spec selects at least the namespaces
-// earlier's does, read conservatively: a later backup filtered by resource,
-// label or policy covers only a backup filtered the same way, one that sets
-// the file-system backup, data movement or cluster-resource flags differently
-// covers nothing, namespace names
-// compare as written, and a glob pattern in later's exclusions or in either
-// include list (other than "*") is not evaluated, so it covers nothing. When
-// unsure it says no, which keeps the failure critical.
-func veleroCoveredBy(earlier, later *unstructured.Unstructured) bool {
-	for _, f := range veleroNarrowingFilters {
-		lv, lok, _ := unstructured.NestedFieldNoCopy(later.Object, "spec", f)
-		if !lok || veleroEmpty(lv) {
-			continue
-		}
-		ev, _, _ := unstructured.NestedFieldNoCopy(earlier.Object, "spec", f)
-		if !reflect.DeepEqual(lv, ev) {
-			return false
-		}
-	}
-	for _, f := range veleroSavedDataFlags {
-		lv, _, _ := unstructured.NestedFieldNoCopy(later.Object, "spec", f)
-		ev, _, _ := unstructured.NestedFieldNoCopy(earlier.Object, "spec", f)
-		if !reflect.DeepEqual(lv, ev) {
-			return false
-		}
-	}
-	eIn, eEx := veleroNamespaceSelection(earlier)
-	lIn, lEx := veleroNamespaceSelection(later)
-	for _, set := range []map[string]bool{eIn, lIn, lEx} {
-		for ns := range set {
-			if strings.ContainsAny(ns, "*?[{") {
-				return false
-			}
-		}
-	}
-	if lIn == nil {
-		// Later selects every namespace except lEx: each it excludes must be
-		// excluded by earlier too, or outside what earlier named.
-		for ns := range lEx {
-			if eIn == nil && !eEx[ns] || eIn != nil && eIn[ns] {
-				return false
-			}
-		}
-		return true
-	}
-	if eIn == nil {
-		return false
-	}
-	for ns := range eIn {
-		if !lIn[ns] || lEx[ns] {
-			return false
-		}
-	}
-	return true
-}
-
-// veleroNamespaceSelection is a spec's namespaces as sets: included is nil
-// when it selects every namespace (empty, or containing "*").
-func veleroNamespaceSelection(u *unstructured.Unstructured) (included, excluded map[string]bool) {
-	in := veleroStringSlice(u, "spec", "includedNamespaces")
-	excluded = map[string]bool{}
-	for _, ns := range veleroStringSlice(u, "spec", "excludedNamespaces") {
-		excluded[ns] = true
-	}
-	if len(in) == 0 || slices.Contains(in, "*") {
-		return nil, excluded
-	}
-	included = map[string]bool{}
-	for _, ns := range in {
-		if !excluded[ns] {
-			included[ns] = true
-		}
-	}
-	return included, excluded
-}
-
-func veleroEmpty(v any) bool {
-	switch t := v.(type) {
-	case nil:
-		return true
-	case []any:
-		return len(t) == 0
-	case map[string]any:
-		return len(t) == 0
-	case string:
-		return t == ""
-	}
-	return false
+type veleroSuccess struct {
+	name    string
+	started time.Time
 }
 
 // veleroStalledRunIssues reports runs that are still in flight long past the

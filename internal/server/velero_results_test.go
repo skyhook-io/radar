@@ -448,7 +448,7 @@ func TestVeleroRunMessagesRoutesEachFailureToItsOwnAnswer(t *testing.T) {
 		dyn := answerWith(t, "http://unused")
 		start := time.Now()
 		rec := post(t, dyn, "/api/velero/backups/velero/nightly/messages")
-		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "has no running replicas") {
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "has no pods") {
 			t.Fatalf("status = %d body = %s, want 503 naming the stopped server", rec.Code, rec.Body.String())
 		}
 		if time.Since(start) > 2*time.Second {

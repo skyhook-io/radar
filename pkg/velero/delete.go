@@ -17,9 +17,9 @@ const (
 	BackupUIDLabel  = "velero.io/backup-uid"
 )
 
-// ValidLabelValue is Velero's label.GetValidName: a value longer than a label
+// ShortenLabelValue is Velero's label.GetValidName: a value longer than a label
 // allows keeps its first 57 characters and gains 6 of its SHA-256.
-func ValidLabelValue(value string) string {
+func ShortenLabelValue(value string) string {
 	if len(value) <= maxLabelValue {
 		return value
 	}
@@ -50,7 +50,7 @@ func DeleteBackupRequestFor(namespace, backup, uid string) *unstructured.Unstruc
 			"generateName": backup + "-",
 			"namespace":    namespace,
 			"labels": map[string]any{
-				BackupNameLabel: ValidLabelValue(backup),
+				BackupNameLabel: ShortenLabelValue(backup),
 				BackupUIDLabel:  uid,
 			},
 		},
@@ -59,8 +59,10 @@ func DeleteBackupRequestFor(namespace, backup, uid string) *unstructured.Unstruc
 }
 
 // DeletionRefusal is why Velero would refuse to delete a backup now, or "".
-// The location is the backup's own (spec.storageLocation); nil when it could
-// not be read, in which case only the backup's phase is checked.
+// The backup's phase and that it names a storage location are always checked.
+// The location is the backup's own (spec.storageLocation); its access mode and
+// availability are checked only when it is supplied (nil when it could not be
+// read).
 func DeletionRefusal(backup *unstructured.Unstructured, location *unstructured.Unstructured) string {
 	phase, _, _ := unstructured.NestedString(backup.Object, "status", "phase")
 	if BackupStillRunning(phase) {
@@ -96,8 +98,8 @@ const (
 	// DeletionFailed: Velero started deleting and reported errors. Some of the
 	// backup may already be gone.
 	DeletionFailed DeletionState = "failed"
-	// DeletionDone: the backup the request was for no longer exists.
-	DeletionDone DeletionState = "deleted"
+	// DeletionDeleted: the backup the request was for no longer exists.
+	DeletionDeleted DeletionState = "deleted"
 	// DeletionUnknown: the request is gone and the backup is still there.
 	// Velero removes a processed or in-progress request after 24 hours, so its
 	// outcome can't be read any more.
@@ -122,7 +124,7 @@ func ReadDeletion(request *unstructured.Unstructured, backupExists bool) Deletio
 		if backupExists {
 			return DeletionReading{State: DeletionUnknown}
 		}
-		return DeletionReading{State: DeletionDone}
+		return DeletionReading{State: DeletionDeleted}
 	}
 	phase, _, _ := unstructured.NestedString(request.Object, "status", "phase")
 	errs, _, _ := unstructured.NestedStringSlice(request.Object, "status", "errors")
@@ -132,7 +134,7 @@ func ReadDeletion(request *unstructured.Unstructured, backupExists bool) Deletio
 	case phase == "Processed" && len(errs) > 0:
 		return DeletionReading{State: DeletionFailed, Errors: errs}
 	case phase == "Processed" && !backupExists:
-		return DeletionReading{State: DeletionDone}
+		return DeletionReading{State: DeletionDeleted}
 	case phase == "Processed":
 		// Processed without errors while the backup remains: Velero is still
 		// removing the Backup object, or removing it failed after the record.

@@ -12,7 +12,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
 import { VELERO_GROUP } from './routes'
-import { VELERO_CHECK_SERVER, VELERO_SHORTEN_NAME, VELERO_START_SERVER, inInstallation, namesAndMore, veleroIssueProblem } from './shared'
+import { VELERO_CHECK_HELD_BACKUP, VELERO_CHECK_SERVER, VELERO_SHORTEN_NAME, VELERO_START_SERVER, VELERO_WRITABLE_LOCATION, inInstallation, namesAndMore, veleroIssueProblem } from './shared'
 
 export function readInPart(cov: VeleroKindCoverage | undefined): boolean {
   return !cov || INCOMPLETE_COVERAGE_STATES.has(cov.state)
@@ -23,13 +23,13 @@ export function veleroScheduleNextStep(s: Pick<VeleroScheduleReading, 'state' | 
   if (s.reason === 'serverDown') return VELERO_START_SERVER
   switch (s.state) {
     case 'cannotRun':
-      return VELERO_SHORTEN_NAME
+      return s.reason === 'locationReadOnly' ? VELERO_WRITABLE_LOCATION : VELERO_SHORTEN_NAME
     case 'alwaysDue':
       return 'Change the cron expression to one with a future time'
     case 'rejected':
       return 'Fix what Velero rejected in the schedule; Velero validates it again when it changes'
     case 'held':
-      return 'Find out why its backup hasn’t started, or delete that backup'
+      return VELERO_CHECK_HELD_BACKUP
     case 'late':
     case 'probablyLate':
     case 'lateOrHeld':
@@ -64,8 +64,23 @@ function serverProblem(namespace: string, deployment: string | undefined, late: 
     category: 'server',
     title: 'Velero server not running',
     // The subject link below names the Deployment.
-    detail: `No running replicas, so no new scheduled backups are submitted and no storage location is validated.${missed}`,
+    detail: `No pods, so no new scheduled backups are submitted and no storage location is validated.${missed}`,
     nextStep: VELERO_START_SERVER,
+    subject: { kind: 'Deployment', group: 'apps', namespace, name: deployment ?? 'velero' },
+    source: 'reading',
+    tone: 'unhealthy',
+  }
+}
+
+function backupsDisabledProblem(namespace: string, deployment: string | undefined, schedules: VeleroScheduleReading[]): WorkspaceProblem {
+  return {
+    id: `backups-disabled:${namespace}`,
+    category: 'server',
+    title: 'Velero backups disabled',
+    detail: `The server runs without its backup controller (--restore-only, or --disable-controllers naming backup or backup-queue), so no backup runs: ${
+      schedules.length === 1 ? 'schedule' : `${schedules.length} schedules,`
+    } ${namesAndMore(schedules.map((s) => s.name))} ${schedules.length === 1 ? 'backs' : 'back'} up nothing.`,
+    nextStep: 'Enable the backup controller on the Velero server, or pause the schedules',
     subject: { kind: 'Deployment', group: 'apps', namespace, name: deployment ?? 'velero' },
     source: 'reading',
     tone: 'unhealthy',
@@ -86,11 +101,13 @@ function locationProblem(l: VeleroLocationReading): WorkspaceProblem {
 }
 
 /**
- * The Overview's Needs attention list: a stopped server, schedule and location
- * readings, then Velero's Issues. One fault is one row, as on the Issues page:
- * a stopped server's row names the schedules it leaves late, which get no row
- * of their own, and storage it leaves unchecked is not listed. An unavailable
- * location's issue names the runs Velero rejected because of it.
+ * The Overview's Needs attention list: a stopped server, a server with backups
+ * disabled while schedules are not paused, schedule and location readings,
+ * then Velero's Issues. One fault is one row, as on the Issues page: a stopped
+ * server's row names the schedules it leaves late, and a backups-disabled
+ * row the schedules it leaves holding unstarted runs, which get no row of
+ * their own; storage a stopped server leaves unchecked is not listed. An
+ * unavailable location's issue names the runs Velero rejected because of it.
  */
 export function veleroAttention(data: VeleroWorkspaceResponse, installation: string | null): WorkspaceProblem[] {
   const issues = installation === null ? data.issues : data.issues.filter((i) => (i.namespace ?? '') === installation)
@@ -98,9 +115,17 @@ export function veleroAttention(data: VeleroWorkspaceResponse, installation: str
   const downIn = new Set(down.map((i) => i.namespace))
   const lateWhileDown = (s: VeleroScheduleReading) => downIn.has(s.namespace) && s.state === 'late'
   const schedules = inInstallation(data.schedules, installation).filter((s) => s.attention)
+  // A stopped server is the one fault there; backups disabled is said once it runs.
+  const disabled = data.installations
+    .filter((i) => (installation === null || i.namespace === installation) && !downIn.has(i.namespace) && i.server.backupsDisabled === true)
+    .map((i) => ({ installation: i, schedules: data.schedules.filter((s) => s.namespace === i.namespace && s.state !== 'paused') }))
+    .filter((d) => d.schedules.length > 0)
+  const disabledIn = new Set(disabled.map((d) => d.installation.namespace))
+  const heldWhileDisabled = (s: VeleroScheduleReading) => disabledIn.has(s.namespace) && s.state === 'held'
   return [
     ...down.map((i) => serverProblem(i.namespace, i.server.deployment, schedules.filter((s) => s.namespace === i.namespace && lateWhileDown(s)))),
-    ...schedules.filter((s) => !lateWhileDown(s)).map((s) => scheduleProblem(s, downIn.has(s.namespace))),
+    ...disabled.map((d) => backupsDisabledProblem(d.installation.namespace, d.installation.server.deployment, d.schedules)),
+    ...schedules.filter((s) => !lateWhileDown(s) && !heldWhileDisabled(s)).map((s) => scheduleProblem(s, downIn.has(s.namespace))),
     ...inInstallation(data.locations, installation)
       .filter((l) => l.attention && !(l.reason === 'serverDown' && downIn.has(l.namespace)))
       .map(locationProblem),
@@ -157,9 +182,34 @@ const OVERVIEW_KINDS: readonly VeleroWorkspaceKey[] = ['schedules', 'backups', '
  * the server capped still count: it sends their total. A count over data read
  * only in part is a lower bound, and its zero is unknown.
  */
+/**
+ * Whether Needs attention may be missing rows: a kind read in part, or a
+ * server Deployment Radar could not read, which hides a stopped server and
+ * disabled backups. `installation` narrows it as veleroAttention does.
+ */
+export function veleroAttentionPartial(data: VeleroWorkspaceResponse, installation: string | null): boolean {
+  return OVERVIEW_KINDS.some((k) => readInPart(data.coverage[k])) || inInstallation(data.installations, installation).some((i) => i.server.source === 'unread')
+}
+
+/**
+ * Rows that may fold into one where a server Deployment is unread: a stopped
+ * server takes the late schedules into its row, disabled backups the held
+ * ones. Subtracted, the count stays a lower bound whichever is true.
+ */
+function foldableWhileServerUnread(data: VeleroWorkspaceResponse): number {
+  return data.installations
+    .filter((i) => i.server.source === 'unread')
+    .reduce((n, i) => {
+      const rows = data.schedules.filter((s) => s.namespace === i.namespace && s.attention)
+      const late = rows.filter((s) => s.state === 'late').length
+      const held = rows.filter((s) => s.state === 'held').length
+      return n + Math.max(late - 1, held - 1, 0)
+    }, 0)
+}
+
 export function veleroAttentionCount(data: VeleroWorkspaceResponse): VeleroAttentionCount {
-  const count = veleroAttention(data, null).length + cappedIssues(data)
-  const partial = OVERVIEW_KINDS.some((k) => readInPart(data.coverage[k]))
+  const count = veleroAttention(data, null).length + cappedIssues(data) - foldableWhileServerUnread(data)
+  const partial = veleroAttentionPartial(data, null)
   if (partial && count === 0) {
     return { count: null, lowerBound: true, title: 'Unknown: some Velero data could not be read, so nothing found does not mean nothing needs attention.' }
   }
@@ -179,7 +229,8 @@ export type VeleroScreen = keyof typeof SCREEN_KINDS
 /**
  * Each list screen's sidebar badge: the rows Needs attention lists about that
  * screen's kind, so the screens' badges add up to the Overview's total less
- * what belongs to no screen (a stopped server, Issues the server capped).
+ * what belongs to no screen (a stopped server, disabled backups, Issues the
+ * server capped).
  * Issues the server capped may be about any kind, so while there are some
  * every screen's count is a lower bound.
  */

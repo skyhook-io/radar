@@ -5,6 +5,8 @@ import {
   ProblemList,
   StatusDot,
   Tooltip,
+  VELERO_MANUAL_RUN,
+  VELERO_MANUAL_RUN_TITLE,
   VELERO_NONE_KEPT_SHORT,
   VELERO_RUNS_UNKNOWN,
   VeleroScheduleStateBadge,
@@ -22,11 +24,11 @@ import { refToSelectedResource } from '../../utils/navigation'
 import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { coverageEmpty } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
-import { readInPart, veleroAttention } from './attention'
+import { readInPart, veleroAttention, veleroAttentionPartial } from './attention'
 import { VELERO_LOCATIONS_PATH, VELERO_SCHEDULES_PATH } from './routes'
 import { KEPT_FOR_HEADER, KeptForCell, KeptForLine, NextRunCell } from './VeleroSchedules'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
-import { namespacesNoScheduleIncludes } from './coverage'
+import { namespacesNoScheduleIncludes, veleroSelectionProblem } from './coverage'
 import {
   VELERO_WIDE,
   VeleroCoverageNotice,
@@ -42,8 +44,6 @@ import {
 export const VELERO_NOTHING_NEEDS_ATTENTION = 'Nothing needs attention.'
 /** The same, when part of Velero could not be read: an empty list there proves less. */
 export const VELERO_NOTHING_IN_WHAT_WAS_READ = 'Nothing in what Radar can read needs attention.'
-
-const ATTENTION_KINDS = ['schedules', 'backups', 'restores', 'backupStorageLocations', 'backupRepositories'] as const
 
 // Rows shown across all groups before folding, so a burst of failed runs cannot
 // push the server, schedule and storage groups off the screen. Every group
@@ -121,17 +121,17 @@ function schedulesFact(schedules: VeleroScheduleReading[], partial: boolean): Su
 
 function newestBackupFact(schedules: VeleroScheduleReading[], schedulesPartial: boolean, onInspect: VeleroScreenProps['onInspect']): SummaryFact {
   const label = 'Newest successful scheduled backup'
-  let newest: { at: string; namespace: string; name: string } | undefined
+  let newest: { at: string; namespace: string; name: string; manual?: boolean } | undefined
   for (const s of schedules) {
     const run = s.runs.newestCompleted
     if (!run) continue
     const at = run.completed ?? run.ranAt
-    if (!newest || Date.parse(at) > Date.parse(newest.at)) newest = { at, namespace: s.namespace, name: run.name }
+    if (!newest || Date.parse(at) > Date.parse(newest.at)) newest = { at, namespace: s.namespace, name: run.name, manual: run.manual }
   }
   // Schedules or their backups Radar could not read may hold a newer one.
   const unread = schedulesPartial || schedules.some((s) => s.runs.read === 'unknown')
   if (!newest) {
-    if (unread) return { label, value: schedulesPartial && schedules.length === 0 ? 'unknown — not read' : 'unknown — no access to backups', tone: 'unknown' }
+    if (unread) return { label, value: schedulesPartial && schedules.length === 0 ? 'unknown — not read' : 'unknown — backups were not read', tone: 'unknown' }
     return { label, value: schedules.length === 0 ? 'no schedules' : 'none kept', tone: schedules.length === 0 ? 'neutral' : 'alert' }
   }
   const run = newest
@@ -140,9 +140,10 @@ function newestBackupFact(schedules: VeleroScheduleReading[], schedulesPartial: 
     // An age is not a verdict: whether it is late is each schedule's state.
     tone: 'neutral',
     value: (
-      <Tooltip content={`${run.name} · ${veleroLocalTime(run.at)}${unread ? ' · some schedules or their backups were not read' : ''}`}>
+      <Tooltip content={`${run.name} · ${veleroLocalTime(run.at)}${run.manual ? ` · ${VELERO_MANUAL_RUN_TITLE}` : ''}${unread ? ' · some schedules or their backups were not read' : ''}`}>
         <button type="button" onClick={() => onInspect(veleroResource('Backup', run.namespace, run.name))} className="text-accent-text hover:underline">
           {formatRelativeAgeTime(run.at)}
+          {run.manual && `, ${VELERO_MANUAL_RUN}`}
         </button>
       </Tooltip>
     ),
@@ -248,8 +249,17 @@ function CoverageRow({ tone, label, title, children }: { tone: StatusTone; label
  * attention badge.
  */
 function ScheduleCoverage({ data, schedules, namespaces, onInspect }: { data: VeleroScreenProps['data']; schedules: VeleroScheduleReading[]; namespaces: VeleroNamespaceList; onInspect: VeleroScreenProps['onInspect'] }) {
-  const namespaceList = Array.isArray(namespaces) ? namespaces : undefined
+  // An empty list is not "every namespace is covered": the cluster always has some.
+  const namespaceList = Array.isArray(namespaces) && namespaces.length > 0 ? namespaces : undefined
   const isError = namespaces === 'error'
+  const noneListed = Array.isArray(namespaces) && namespaces.length === 0
+  const invalid = useMemo(
+    () => data.schedules.flatMap((schedule) => {
+      const problem = veleroSelectionProblem(schedule)
+      return problem ? [{ schedule, problem }] : []
+    }),
+    [data.schedules],
+  )
   const paused = schedules.filter((s) => s.state === 'paused')
   const coverage = useMemo(() => {
     // Every schedule Radar can see counts, whichever installation is picked:
@@ -258,7 +268,7 @@ function ScheduleCoverage({ data, schedules, namespaces, onInspect }: { data: Ve
     return namespacesNoScheduleIncludes(namespaceList, data.schedules, data.installations.map((i) => i.namespace))
   }, [namespaceList, data])
   const unknown = !!data.forcedNamespace || readInPart(data.coverage.schedules)
-  if (!coverage && !unknown && !isError && paused.length === 0) return null
+  if (!coverage && !unknown && !isError && !noneListed && invalid.length === 0 && paused.length === 0) return null
   const leftOut = coverage && coverage.leftOut > 0 ? ' Kubernetes’ own namespaces and Velero’s are not listed.' : ''
   const title = `Namespaces you can see that no schedule's template selects. A schedule counts even when it is paused or failing, or selects only some resources by label or kind.${leftOut}`
   return (
@@ -272,6 +282,10 @@ function ScheduleCoverage({ data, schedules, namespaces, onInspect }: { data: Ve
         ) : isError ? (
           <CoverageRow tone="unknown" label="Namespaces not in any schedule" title={title}>
             unknown, Radar couldn’t list namespaces
+          </CoverageRow>
+        ) : noneListed ? (
+          <CoverageRow tone="unknown" label="Namespaces not in any schedule" title={title}>
+            unknown, Radar listed no namespaces
           </CoverageRow>
         ) : coverage && coverage.uncovered.length === 0 ? (
           <CoverageRow tone="healthy" label="Namespaces not in any schedule" title={title}>
@@ -288,6 +302,20 @@ function ScheduleCoverage({ data, schedules, namespaces, onInspect }: { data: Ve
             )}
           </CoverageRow>
         ) : null}
+        {invalid.length > 0 && (
+          <CoverageRow tone="degraded" label="Selects nothing">
+            {invalid.map(({ schedule: s, problem }, i) => (
+              <span key={`${s.namespace}/${s.name}`}>
+                {i > 0 && '; '}
+                <button type="button" onClick={() => onInspect(veleroResource('Schedule', s.namespace, s.name))} className="font-mono text-accent-text hover:underline">
+                  {s.name}
+                </button>
+                {`: ${problem}`}
+              </span>
+            ))}
+            {' '}— Velero refuses {invalid.length === 1 ? 'this namespace selection' : 'these namespace selections'}, so {invalid.length === 1 ? 'it backs' : 'they back'} up nothing
+          </CoverageRow>
+        )}
         {paused.length > 0 && (
           <CoverageRow tone="neutral" label="Paused">
             {paused.map((s, i) => (
@@ -312,8 +340,11 @@ function LastSuccessCell({ s }: { s: VeleroScheduleReading }) {
   if (!run) return <span className="text-theme-text-tertiary">{veleroScheduleNeverRan(s) ? 'Never' : VELERO_NONE_KEPT_SHORT}</span>
   const at = run.completed ?? run.ranAt
   return (
-    <Tooltip content={`${run.name} · ${veleroLocalTime(at)}`}>
-      <span>{formatRelativeAgeTime(at)}</span>
+    <Tooltip content={`${run.name} · ${veleroLocalTime(at)}${run.manual ? ` · ${VELERO_MANUAL_RUN_TITLE}` : ''}`}>
+      <span>
+        {formatRelativeAgeTime(at)}
+        {run.manual && <span className="ml-1.5 text-xs text-theme-text-secondary">{VELERO_MANUAL_RUN}</span>}
+      </span>
     </Tooltip>
   )
 }
@@ -421,7 +452,7 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
           <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
             {attention.length === 0 ? (
               <p className="text-sm text-theme-text-tertiary">
-                {ATTENTION_KINDS.some((k) => readInPart(data.coverage[k])) ? VELERO_NOTHING_IN_WHAT_WAS_READ : VELERO_NOTHING_NEEDS_ATTENTION}
+                {veleroAttentionPartial(data, installation) ? VELERO_NOTHING_IN_WHAT_WAS_READ : VELERO_NOTHING_NEEDS_ATTENTION}
               </p>
             ) : (
               <div className="space-y-4">
