@@ -58,13 +58,17 @@ it('leaves low-priority columns out while the table is short of room, lowest fir
   const order = ['roles', 'taints', 'version', 'pods']
   const dropped = order.filter(key => !headers().includes(key))
   expect(dropped).toEqual(order.slice(0, dropped.length))
-  // Narrowing step by step, the first column to go is Roles, alone.
-  let firstDropped: string[] = []
-  for (let room = 1600; room >= 900 && !firstDropped.length; room -= 10) {
-    await resize(room)
-    firstDropped = order.filter(key => !headers().includes(key))
+  // At the widest room where anything is left out, it is Roles, alone
+  // (found by halving between a room that drops and one that doesn't).
+  let [drops, keeps] = [900, 1600]
+  while (keeps - drops > 4) {
+    const mid = Math.round((drops + keeps) / 2)
+    await resize(mid)
+    if (order.some(key => !headers().includes(key))) drops = mid
+    else keeps = mid
   }
-  expect(firstDropped).toEqual(['roles'])
+  await resize(drops)
+  expect(order.filter(key => !headers().includes(key))).toEqual(['roles'])
   // Room again: every column is back.
   await resize(1600)
   expect(headers()).toEqual(expect.arrayContaining(['taints', 'roles', 'version', 'pods']))
