@@ -2,6 +2,7 @@ package images
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -163,11 +164,63 @@ func TestJava4ShellNeverDialsRadarLoopback(t *testing.T) {
 	}
 }
 
+func TestJava4ShellUsesJavaHomeOnlyWhenVersionIsMissing(t *testing.T) {
+	const javaHome = "/opt/fixture-jvm"
+	for _, tc := range []struct {
+		name      string
+		env       []string
+		noNode    bool
+		reason    string
+		wantMatch int
+	}{
+		{name: "home only", env: []string{"JAVA_HOME=" + javaHome}, reason: javaHomeDeclaredReason},
+		{name: "no Java declaration", env: []string{"OTHER_JAVA_HOME=" + javaHome}, reason: noJavaDeclarationReason},
+		{name: "last home cleared", env: []string{"JAVA_HOME=" + javaHome, "JAVA_HOME= "}, reason: noJavaDeclarationReason},
+		{name: "last home set", env: []string{"JAVA_HOME=", "JAVA_HOME=" + javaHome}, reason: javaHomeDeclaredReason},
+		{name: "affected version", env: []string{"JAVA_HOME=" + javaHome, "JAVA_VERSION=jdk-21.0.13+9"}, wantMatch: 1},
+		{name: "fixed version", env: []string{"JAVA_HOME=" + javaHome, "JAVA_VERSION=jdk-21.0.13.1+2"}},
+		{name: "unrecognized version", env: []string{"JAVA_HOME=" + javaHome, "JAVA_VERSION=21"}, reason: "version_unknown"},
+		{name: "invalid version value", env: []string{"JAVA_HOME=" + javaHome, "JAVA_VERSION=invalid version"}, reason: javaHomeDeclaredReason},
+		{name: "unresolved platform", env: []string{"JAVA_HOME=" + javaHome}, noNode: true, reason: "platform_unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			image := "registry.example/team/java"
+			ref := image + "@sha256:" + strings.Repeat("a", 64)
+			f := &fakeLookup{configs: map[string]*v1.ConfigFile{refKey(t, ref): {Config: v1.Config{Env: tc.env}}}}
+			pod := runningPod("team", "app", "node", "app", map[string][2]string{"app": {image + ":1", ref}})
+			pod.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
+			target := Java4ShellPod{Pod: pod}
+			if !tc.noNode {
+				target.Node = &corev1.Node{Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{Architecture: "amd64", OperatingSystem: "linux"}}}
+			}
+			result, err := fakeInventory(f).CheckJava4Shell(context.Background(), []Java4ShellPod{target}, nil, nil)
+			if err != nil || result.Matches != tc.wantMatch || result.Containers != 1 || f.calls.Load() != 1 {
+				t.Fatalf("unexpected check result %+v, %v, lookups=%d", result, err, f.calls.Load())
+			}
+			if tc.reason == "" {
+				if len(result.Unassessed) != 0 {
+					t.Fatalf("assessed version reported as unassessed: %+v", result.Unassessed)
+				}
+			} else if result.Unassessed[tc.reason] != 1 || len(result.UnassessedRows) != 1 || result.UnassessedRows[0].Reason != tc.reason {
+				t.Fatalf("want reason %q, got %+v", tc.reason, result)
+			}
+			report, err := json.Marshal(result)
+			if err != nil || strings.Contains(string(report), javaHome) {
+				t.Fatalf("unexpected report: %s, %v", report, err)
+			}
+		})
+	}
+}
+
 func TestJava4ShellBoundsUnassessedRowsAndKeepsTotals(t *testing.T) {
 	baseImage := "registry.example/team/base"
 	digest := baseImage + "@sha256:" + strings.Repeat("a", 64)
-	f := &fakeLookup{configs: map[string]*v1.ConfigFile{refKey(t, digest): {}}}
-	targets := make([]Java4ShellPod, 0, java4ShellRowLimit+4)
+	javaDigest := "registry.example/team/java@sha256:" + strings.Repeat("b", 64)
+	f := &fakeLookup{configs: map[string]*v1.ConfigFile{
+		refKey(t, digest):     {},
+		refKey(t, javaDigest): {Config: v1.Config{Env: []string{"JAVA_HOME=/opt/java"}}},
+	}}
+	var targets []Java4ShellPod
 	node := &corev1.Node{Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{Architecture: "amd64", OperatingSystem: "linux"}}}
 	add := func(name, workload, imageID string) {
 		pod := runningPod("team", name, "node", workload, map[string][2]string{"app": {baseImage + ":1", imageID}})
@@ -176,10 +229,11 @@ func TestJava4ShellBoundsUnassessedRowsAndKeepsTotals(t *testing.T) {
 	}
 	for i := range java4ShellRowLimit + 2 {
 		name := fmt.Sprintf("base-%03d", i)
-		add(name, name, digest)
+		add(name, name, "")
 	}
-	add("java-1", "java", "")
-	add("java-2", "java", "")
+	add("generic", "generic", digest)
+	add("java-1", "java", javaDigest)
+	add("java-2", "java", javaDigest)
 	var firstWorkload string
 	result, err := fakeInventory(f).CheckJava4Shell(context.Background(), targets, func(_ context.Context, p *corev1.Pod) resourceid.Ref {
 		workload := p.Labels["workload"]
@@ -188,13 +242,14 @@ func TestJava4ShellBoundsUnassessedRowsAndKeepsTotals(t *testing.T) {
 		}
 		return resourceid.NewRef("apps", "Deployment", p.Namespace, workload)
 	}, nil)
-	if err != nil || result.UnassessedGroups != java4ShellRowLimit+3 || len(result.UnassessedRows) != java4ShellRowLimit ||
-		result.Unassessed["no_java_declaration"] != java4ShellRowLimit+2 || result.Unassessed["image_identity_unknown"] != 2 {
+	if err != nil || result.UnassessedGroups != java4ShellRowLimit+4 || len(result.UnassessedRows) != java4ShellRowLimit ||
+		result.Unassessed[noJavaDeclarationReason] != 1 || result.Unassessed["image_identity_unknown"] != java4ShellRowLimit+2 ||
+		result.Unassessed[javaHomeDeclaredReason] != 2 {
 		t.Fatalf("wrong unassessed totals: groups=%d rows=%d reasons=%+v, err=%v", result.UnassessedGroups, len(result.UnassessedRows), result.Unassessed, err)
 	}
 	row := result.UnassessedRows[0]
-	if row.Workload.Name != "java" || row.Container != "app" || row.Image != baseImage+":1" || row.Digest != "" ||
-		row.Reason != "image_identity_unknown" || row.Pods != 2 || firstWorkload != "java" || f.calls.Load() != 1 {
+	if row.Workload.Name != "java" || row.Container != "app" || row.Digest != "sha256:"+strings.Repeat("b", 64) ||
+		row.Reason != javaHomeDeclaredReason || row.Pods != 2 || firstWorkload != "java" || f.calls.Load() != 2 {
 		t.Fatalf("wrong priority, grouping or lookup count: %+v, first owner=%q, calls=%d", row, firstWorkload, f.calls.Load())
 	}
 }

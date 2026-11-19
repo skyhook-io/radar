@@ -196,11 +196,12 @@ type cachedConfig struct {
 }
 
 type configResult struct {
-	status   string
-	err      string
-	digest   string
-	declared []DeclaredRuntime
-	base     string
+	status           string
+	err              string
+	digest           string
+	declared         []DeclaredRuntime
+	base             string
+	javaHomeDeclared bool
 }
 
 var (
@@ -504,7 +505,10 @@ func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credentia
 		}
 		if err == nil {
 			declared, base := DeclaredRuntimes(cfg)
-			res = configResult{status: StatusOK, digest: digest, declared: declared, base: base}
+			res = configResult{
+				status: StatusOK, digest: digest, declared: declared, base: base,
+				javaHomeDeclared: w.advisory && declaresJavaHome(cfg),
+			}
 			ttl := time.Duration(0)
 			switch {
 			case w.resolvedFrom == "tag":

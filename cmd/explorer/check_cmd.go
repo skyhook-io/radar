@@ -325,10 +325,14 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 }
 
 func checkReasonLabel(reason string) string {
-	if reason == "no_java_declaration" {
+	switch reason {
+	case "java_home_declared":
+		return "Image sets JAVA_HOME. Java version unknown"
+	case "no_java_declaration":
 		return "Image declares no Java version"
+	default:
+		return strings.ReplaceAll(reason, "_", " ")
 	}
-	return strings.ReplaceAll(reason, "_", " ")
 }
 
 func checkTableValue(text string) string {

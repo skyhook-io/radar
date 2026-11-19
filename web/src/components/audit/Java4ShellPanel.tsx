@@ -82,12 +82,15 @@ const reasonLabels: Record<string, string> = {
   rate_limited: 'Registry rate limit',
   error: 'Registry read failed',
   not_checked: 'Check limit reached',
+  java_home_declared: 'Image sets JAVA_HOME. Java version unknown',
   no_java_declaration: 'Image declares no Java version',
 }
 
 function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult; checkedAt: string; onOpen?: (resource: SelectedResource) => void }) {
   const missingDeclaration = data.unassessed.no_java_declaration ?? 0
+  const javaHomeDeclared = data.unassessed.java_home_declared ?? 0
   const unassessed = Object.values(data.unassessed).reduce((count, n) => count + n, 0)
+  const otherUnassessed = unassessed - missingDeclaration - javaHomeDeclared
   const coverage = resourceCoverageNotice(data.coverage, 'Pods') ?? resourceNarrowedNotice(data.coverage)
   const namespaces = data.coverage.read?.namespaces
   const scope = data.workload?.name ?? (
@@ -118,9 +121,14 @@ function Java4ShellResults({ data, checkedAt, onOpen }: { data: Java4ShellResult
         <p className="text-theme-text-tertiary">Checked <TimeValue timestamp={checkedAt} /> · {scope}</p>
       </div>
       {coverage && <p className="text-warning-text">{coverage}</p>}
-      {unassessed > missingDeclaration && (
+      {javaHomeDeclared > 0 && (
         <p className="text-theme-text-secondary">
-          Java version unassessed in {pluralize(unassessed - missingDeclaration, 'container')}.
+          Images for {pluralize(javaHomeDeclared, 'container')} set <code>JAVA_HOME</code>. Verify the installed Java version.
+        </p>
+      )}
+      {otherUnassessed > 0 && (
+        <p className="text-theme-text-secondary">
+          Java version unassessed in {pluralize(otherUnassessed, 'container')}.
         </p>
       )}
       {missingDeclaration > 0 && (
