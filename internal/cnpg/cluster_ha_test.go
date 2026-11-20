@@ -185,3 +185,31 @@ func TestCNPGClusterHAPrimaryProtectionNeedsListNodes(t *testing.T) {
 		})
 	}
 }
+
+// "Expected" rests on the operator switching over, so a leader Lease the
+// caller read as expired makes it not idle; an unread Lease changes nothing.
+func TestCNPGHAOperatorNotLeadingIsNotIdle(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name  string
+		lease CNPGHALease
+		want  string
+	}{
+		{"leader lease expired", CNPGHALease{ReadSource: integration.ReadSource{State: cnpgHAStateOK}, Expired: &yes}, "blocking"},
+		{"leader lease renewed", CNPGHALease{ReadSource: integration.ReadSource{State: cnpgHAStateOK}, Expired: &no}, "expected"},
+		{"lease not readable", CNPGHALease{ReadSource: integration.ReadSource{State: "denied"}}, "expected"},
+		{"lease without a renew time", CNPGHALease{ReadSource: integration.ReadSource{State: cnpgHAStateOK}}, "expected"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := CNPGClusterHAResponse{OperatorLease: tc.lease}
+			resp.PDBs.Items = []CNPGHAPDB{{Role: "primary", Protection: "expected"}, {Role: "primary", Protection: "singleInstance"}}
+			cnpgHAOperatorNotLeading(&resp)
+			if got := resp.PDBs.Items[0]; got.Protection != tc.want || (tc.want == "blocking") != strings.Contains(got.ProtectionReason, "leader Lease has expired") {
+				t.Fatalf("protection = %q (%q), want %q", got.Protection, got.ProtectionReason, tc.want)
+			}
+			if resp.PDBs.Items[1].Protection != "singleInstance" {
+				t.Fatalf("single instance changed: %+v", resp.PDBs.Items[1])
+			}
+		})
+	}
+}

@@ -251,6 +251,7 @@ func (s *Reader) ClusterHA(callerCtx context.Context, c HAClients, cache *k8s.Re
 	}
 	resp.PrimaryLease = s.hAPrimaryLease(ctx, callerCtx, c, cluster, now)
 	resp.OperatorLease = s.hAOperatorLease(ctx, callerCtx, c, cache, now)
+	cnpgHAOperatorNotLeading(&resp)
 	resp.Jobs = s.hAJobs(callerCtx, cache, cluster)
 	for _, job := range resp.Jobs.Items {
 		if job.Instance != "" && (job.Role == "join" || job.Role == "initdb") && (job.Phase == "active" || job.Phase == "pending") {
@@ -822,6 +823,20 @@ func cnpgHAPrimaryProtection(resp *CNPGClusterHAResponse, cache *k8s.ResourceCac
 					item.Protection, item.ProtectionReason = "", ""
 				}
 			}
+		}
+	}
+}
+
+// cnpgHAOperatorNotLeading: "expected" rests on the operator switching over
+// before a drain, so an expired leader Lease (no operator instance leading)
+// makes it not idle. Only from a Lease the caller read; otherwise unchanged.
+func cnpgHAOperatorNotLeading(resp *CNPGClusterHAResponse) {
+	if resp.OperatorLease.State != cnpgHAStateOK || resp.OperatorLease.Expired == nil || !*resp.OperatorLease.Expired {
+		return
+	}
+	for i := range resp.PDBs.Items {
+		if item := &resp.PDBs.Items[i]; item.Protection == "expected" {
+			item.Protection, item.ProtectionReason = "blocking", "no CloudNativePG operator instance is leading: its leader Lease has expired"
 		}
 	}
 }
