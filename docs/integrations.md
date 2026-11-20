@@ -736,6 +736,7 @@ The viewer reads `GET /api/loki/pods/{namespace}/{name}/logs?container=&since=1h
 - **Containers:** listed in the Job template's run order, with init containers and native sidecars (init containers with `restartPolicy: Always`) marked as they are live, whether or not the answer has lines for them, so the viewer can switch between them. A container the template doesn't name, such as one a webhook injected, follows unmarked when it has lines. When Loki has no container label it can't split a pod: the answer holds one whole-pod entry per pod, which the viewer shows as all containers, with a notice that Loki has no container label, rather than as a container to pick.
 - If Loki can't answer, the viewer keeps Kubernetes' message and adds why Loki didn't answer.
 - If Loki holds nothing for the run, the viewer keeps Kubernetes' message.
+- If Loki has no lines for a chosen container, the viewer says so and keeps the run's pods and containers to switch to.
 
 ## Trivy Operator
 

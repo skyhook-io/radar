@@ -43,6 +43,11 @@ export interface WorkloadLogsResult {
    * control is disabled, with this as the reason.
    */
   fixedRangeReason?: string
+  /**
+   * The answer has no lines for the chosen container and says nothing about
+   * the pods: keep the pod and container list already shown.
+   */
+  keepPreviousSources?: boolean
 }
 
 export interface WorkloadLogsViewerProps {
@@ -166,18 +171,20 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       setEmptyMessage(result.emptyMessage || null)
       setEmptyCommand(result.command || null)
 
-      podColorIndexRef.current = new Map(resultPods.map((pod, i) => [pod.name, i]))
-      podsRef.current = resultPods
-      setPods(resultPods)
+      if (!result.keepPreviousSources) {
+        podColorIndexRef.current = new Map(resultPods.map((pod, i) => [pod.name, i]))
+        podsRef.current = resultPods
+        setPods(resultPods)
 
-      const previousPods = previousSnapshotPods.current
-      const nextPods = resultPods.map(p => p.name)
-      previousSnapshotPods.current = nextPods
-      setSelectedPods(selected => previousPods === null
-        ? initialSelection(nextPods)
-        : previousPods.every(pod => selected.has(pod))
-        ? new Set(nextPods)
-        : new Set(nextPods.filter(pod => selected.has(pod))))
+        const previousPods = previousSnapshotPods.current
+        const nextPods = resultPods.map(p => p.name)
+        previousSnapshotPods.current = nextPods
+        setSelectedPods(selected => previousPods === null
+          ? initialSelection(nextPods)
+          : previousPods.every(pod => selected.has(pod))
+          ? new Set(nextPods)
+          : new Set(nextPods.filter(pod => selected.has(pod))))
+      }
 
       const indexByPod = new Map<string, number>()
       resultPods.forEach((pod, i) => indexByPod.set(pod.name, i))
@@ -381,8 +388,10 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const allContainers = useMemo(() => {
     const s = new Set<string>()
     pods.forEach(pod => pod.containers.forEach(c => s.add(c)))
+    // The picker must offer what it shows, or it would display another option.
+    if (selectedContainer) s.add(selectedContainer)
     return Array.from(s)
-  }, [pods])
+  }, [pods, selectedContainer])
 
   const togglePod = useCallback((podName: string) => {
     setSelectedPods(prev => {

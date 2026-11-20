@@ -68,6 +68,15 @@ describe('withLokiRunFallback', () => {
     expect(got.logs).toEqual([])
     expect(calls.urls).toEqual(['/loki/jobs/team/nightly-1/logs?container=sidecar'])
   })
+  // A chosen container with no lines is Loki's answer for that container, not
+  // the run's pods being gone: the viewer keeps the run's pods and containers.
+  it('says the chosen container has no lines, keeping the run inventory', async () => {
+    const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true, undefined, 'sidecar')
+    expect(got.keepPreviousSources).toBe(true)
+    expect(got.emptyReason).toBeUndefined()
+    expect(got.emptyMessage).toBe('Loki has no lines from container sidecar for this run')
+    expect(got.fixedRangeReason).toBeTruthy()
+  })
   it('shows a run Loki can\'t split by container, whatever container is chosen', async () => {
     calls.container = '(all containers)'
     try {

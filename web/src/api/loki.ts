@@ -128,6 +128,12 @@ export async function withLokiRunFallback(kind: string, namespace: string, name:
   const logs = wholePod
     ? run.logs.map(l => ({ ...l, container: '' }))
     : container ? run.logs.filter(l => l.container === container) : run.logs
+  const fixedRangeReason = "This run is read whole from Loki; the line count and time range don't apply"
+  // Loki answered for the chosen container only: its silence says nothing about
+  // the run's other containers, so the viewer keeps the run's pods to switch to.
+  if (logs.length === 0 && container) {
+    return { pods: [], logs: [], keepPreviousSources: true, emptyMessage: `Loki has no lines from container ${container} for this run`, fixedRangeReason }
+  }
   if (logs.length === 0) return data
   const pods = wholePod ? run.pods.map(p => ({ ...p, containers: p.containers.filter(c => c !== ALL_CONTAINERS) })) : run.pods
   const summary = [
@@ -137,5 +143,5 @@ export async function withLokiRunFallback(kind: string, namespace: string, name:
   ].filter(Boolean).join(', ')
   // The server's notice is whole sentences; the summary is not.
   const notice = run.notice ? `${summary}. ${run.notice}` : summary
-  return { pods, logs, notice, fixedRangeReason: "This run is read whole from Loki; the line count and time range don't apply" }
+  return { pods, logs, notice, fixedRangeReason }
 }

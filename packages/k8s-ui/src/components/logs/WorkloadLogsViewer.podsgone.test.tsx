@@ -128,3 +128,47 @@ it('disables the range control while the answer has a fixed range', async () => 
   await act(async () => root.unmount())
   host.remove()
 })
+
+// Choosing a container Loki has no lines for keeps the run's pods and
+// containers, so the user can go on to one that has lines.
+it('switches all → container without lines → container with lines', async () => {
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host)
+  const asked: (string | undefined)[] = []
+  const fetchAll = vi.fn(async ({ container }: { container?: string }): Promise<WorkloadLogsResult> => {
+    asked.push(container)
+    if (container === 'setup') return { pods: [], logs: [], keepPreviousSources: true, emptyMessage: 'Loki has no lines from container setup for this run' }
+    return { pods: [{ name: 'run-1-abcde', containers: ['setup', 'work'], ready: false }], logs: [{ pod: 'run-1-abcde', container: 'work', timestamp: '2026-11-13T02:00:00.000000000Z', content: 'from work' }], notice: 'From Loki' }
+  })
+  await act(async () => root.render(<WorkloadLogsViewer name="run-1" fetchAll={fetchAll} />))
+  await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+  const picker = () => host.querySelector('select')!
+  const choose = async (value: string) => {
+    await act(async () => { picker().value = value; picker().dispatchEvent(new Event('change', { bubbles: true })) })
+    await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+  }
+  await choose('setup')
+  expect([...picker().options].map(o => o.value)).toEqual(['', 'setup', 'work'])
+  expect(picker().value).toBe('setup')
+  expect(host.textContent).toContain('Loki has no lines from container setup for this run')
+  expect(host.textContent).toContain('1/1 pods')
+  await choose('work')
+  expect(asked).toEqual([undefined, 'setup', 'work'])
+  expect(picker().value).toBe('work')
+  expect([...picker().options].map(o => o.value)).toEqual(['', 'setup', 'work'])
+  expect(host.textContent).not.toContain('Loki has no lines from container setup')
+  await act(async () => root.unmount())
+  host.remove()
+})
+
+// The picker always offers the container it shows, even before any source lists it.
+it('offers the chosen container when no pod lists it', async () => {
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host)
+  const fetchAll = vi.fn(async (): Promise<WorkloadLogsResult> => ({ pods: [], logs: [] }))
+  await act(async () => root.render(<WorkloadLogsViewer name="run-1" fetchAll={fetchAll} initialContainer="setup" />))
+  await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+  const picker = host.querySelector('select')!
+  expect([...picker.options].map(o => o.value)).toContain('setup')
+  expect(picker.value).toBe('setup')
+  await act(async () => root.unmount())
+  host.remove()
+})
