@@ -4,3 +4,4 @@ export type {
   NamespacePickerHandle,
   NamespaceScopeView,
 } from './NamespacePicker'
+export type { NamespaceCollection, NamespaceCollectionGroup } from '../../utils/namespace-collection'
