@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Edge, Node } from '@xyflow/react'
 import type { AggregatedFlow } from '../../types'
-import { TrafficGraph } from './TrafficGraph'
+import { TrafficGraph, TrafficNode } from './TrafficGraph'
 import { endpointPair, groupAddonFlows } from './trafficFilters'
 
 const { fitView } = vi.hoisted(() => ({ fitView: vi.fn() }))
@@ -265,5 +265,35 @@ describe('TrafficGraph edge labels for traffic measured only in bytes', () => {
     const both = { ...tcpOnly, bytesByProtocol: { tcp: { bytesSent: 29999, bytesRecv: 119999 }, udp: { bytesSent: 30, bytesRecv: 0 } } }
     await act(async () => root.render(<TrafficGraph flows={[both]} trafficSource="beyla" onLayoutUnavailable={vi.fn()} windowSeconds={60} />))
     expect(container.querySelector('[data-edge]')!.textContent).toBe('TCP · 2.4 KB/s · UDP · <1 B/s')
+  })
+})
+
+describe('TrafficNode title', () => {
+  // jsdom has no layout or canvas: give the title 100px and every glyph 7px.
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+      { font: '', measureText: (t: string) => ({ width: t.length * 7 }) } as unknown as CanvasRenderingContext2D)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 100 } as DOMRect)
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('keeps the end of a long name, so names sharing a prefix stay apart', () => {
+    const titles = ['checkout-platform-release-engine', 'checkout-platform-release-redis'].map(label => {
+      act(() => root.render(<TrafficNode data={{ label, namespace: 'demo', kind: 'Deployment' }} />))
+      const title = container.querySelector(`[title="${label}"]`)!
+      return title.lastElementChild!.textContent!
+    })
+    expect(titles[0]).toBe('checko…engine')
+    expect(titles[1]).toMatch(/redis$/)
+    expect(titles[0]).not.toBe(titles[1])
+  })
+
+  it('gives screen readers the full name, not the cut one', () => {
+    const label = 'checkout-platform-release-engine'
+    act(() => root.render(<TrafficNode data={{ label, namespace: 'demo', kind: 'Deployment' }} />))
+    const srOnly = container.querySelector('.sr-only')
+    expect(srOnly?.textContent).toBe(label)
+    expect(container.querySelector(`[title="${label}"]`)!.closest('[aria-hidden="true"]')).not.toBeNull()
   })
 })

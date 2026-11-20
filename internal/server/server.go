@@ -581,6 +581,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// AI investigation event stream via SSE — long-lived; lives outside the
 		// 60s timeout group. The run keeps going server-side after disconnect.
 		r.Get("/diagnose/runs/{id}/stream", s.handleDiagnoseRunStream)
+		r.Get("/vulnerabilities/java4shell/stream", s.handleJava4ShellStream)
 
 		// Node drain — outside the 60s timeout group: it may wait minutes for PDB backoff
 		// and, by default, for the evicted pods to finish terminating.
@@ -718,6 +719,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/resources/{kind}/{namespace}/{name}/cascade-preview", s.handleCascadeDeletePreview)
 			r.Delete("/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
+			r.Get("/sealedsecrets/controller", s.handleSealedSecretsController)
 			r.Get("/certificates", s.handleCertificates)
 
 			// Cluster audit
@@ -1528,6 +1530,7 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
 		ApplicationEvidence:         true,
+		SealedSecretsController:     true,
 		ResourceReadCoverage:        true,
 		SearchCoverage:              true,
 		SearchEventContent:          true,
@@ -1568,6 +1571,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		PodFileUpload:               true,
 		Vulnerabilities:             true,
 		RuntimeAdvisoryChecks:       true,
+		RuntimeAdvisoryProgress:     true,
 		LokiConnection:              true,
 		LokiPodHistory:              true,
 		LokiJobRuns:                 true,

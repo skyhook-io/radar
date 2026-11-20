@@ -224,6 +224,8 @@ export interface FeatureCapabilities {
   lokiJobRuns?: boolean
   vulnerabilities?: boolean
   runtimeAdvisoryChecks?: boolean
+  runtimeAdvisoryProgress?: boolean
+  sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -1686,7 +1688,7 @@ export interface TrafficFlow {
    *  measures a rate rather than observing individual responses, so it has a
    *  status code for no single flow. */
   errorRate?: number
-  verdict: string // forwarded, dropped, error
+  verdict: string // forwarded, dropped, error; empty when the source reports none
   /** The network plugin's own account of which policies decided this flow
    *  (Hubble reports it). Absent when the plugin said nothing. */
   policyVerdict?: {
