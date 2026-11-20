@@ -301,6 +301,14 @@ different cluster labels:
   identity and holds this cluster's own live objects (Pods, Nodes, ReplicaSets,
   volumes or the HPA, depending on the metric). Views that join metrics, like
   rightsizing and costs, need every input to land on this cluster.
+- Views that add series over a namespace or the whole cluster (the cluster
+  overview, namespace charts and costs) also check that such a metric holds no
+  object kube-state-metrics lists under another cluster's labels and not this
+  cluster's (Pods, Nodes or volumes); if it does, the view is withheld
+  (`label_missing`), and if kube-state-metrics has no series with this
+  cluster's labels over the view's time range, it is withheld as `unknown`.
+  Objects named alike in both clusters, and history older than
+  kube-state-metrics' retention, can't be told apart this way.
 - With no cluster labels anywhere, a metric showing one identity is used as
   before; several identities withhold the view.
 - A metric absent for the subject (no terminations this week, for example)
