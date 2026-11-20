@@ -7,6 +7,7 @@ import { fluxConditionsToGitOpsStatus, parseFluxInventory, type FluxCondition } 
 import { TimeValue } from '../../ui/ScheduleValue'
 import { getFluxDeployedRelease, getFluxHandledRequestToken, getFluxReleaseAttemptTime } from '../../../utils/flux-history'
 import { Tooltip } from '../../ui/Tooltip'
+import { Badge } from '../../ui/Badge'
 
 export interface FluxValuesReference {
   kind?: 'ConfigMap' | 'Secret'
@@ -85,6 +86,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
   const sourceRef = chartRef.sourceRef || {}
 
   const lastRelease = getFluxDeployedRelease(data)
+  const deployedRevision = lastRelease?.chartVersion || status.lastAppliedRevision
 
   return (
     <>
@@ -338,7 +340,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
 
       {/* Revision info */}
       {(status.helmChart || status.lastAppliedRevision || status.lastAttemptedRevision || handledRequest) && (
-        <Section title="Revision Info" defaultExpanded={false}>
+        <Section title="Revision Info" defaultExpanded={true}>
           <PropertyList>
             {status.helmChart && (
               <Property label="Helm Chart" value={status.helmChart} />
@@ -347,7 +349,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
               <Property label="Applied Revision" value={status.lastAppliedRevision} />
             )}
             {status.lastAttemptedRevision && (
-              <Property label="Attempted Revision" value={status.lastAttemptedRevision} />
+              <Property label="Attempted Revision" value={<><span className="break-words">{status.lastAttemptedRevision}</span>{deployedRevision && deployedRevision !== status.lastAttemptedRevision && <> <Badge severity="warning" size="sm">not the last successful apply</Badge></>}</>} />
             )}
             <Property label="Last handled manual request" value={handledRequest} />
           </PropertyList>
