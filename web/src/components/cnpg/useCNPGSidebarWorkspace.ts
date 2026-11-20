@@ -7,7 +7,7 @@ import { useRadarFeature } from '../../api/client'
 import { useCNPGFleetDisk } from '../../api/cnpg-storage'
 import { useCNPGFleetMetrics } from '../../api/cnpg-history'
 import { CNPG_CLUSTER_KIND, CNPG_SCREENS, cnpgClusterKindListMode, type CNPGScreen } from './routes'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 
 export const CNPG_SIDEBAR_CATEGORY = 'CloudNativePG'
 
@@ -98,7 +98,7 @@ export function useCNPGSidebarWorkspace({
   /** Count disk use and replication lag too. Off by default outside the CloudNativePG views: every Resources page renders this sidebar. */
   withMetrics?: boolean
 }): Record<string, SidebarCategoryWorkspace> | undefined {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const available = cnpgDiscovered(apiResources)
   const { fleet } = useCNPGFleet(namespaces, available, withMetrics)
   const { support } = useRadarFeature('cnpgWorkspace')

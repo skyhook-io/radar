@@ -219,6 +219,8 @@ export interface FeatureCapabilities {
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
+  loggingPodShipping?: boolean
+  loggingPipeline?: boolean
   vulnerabilities?: boolean
   runtimeAdvisoryChecks?: boolean
   runtimeAdvisoryProgress?: boolean
@@ -2006,4 +2008,89 @@ export interface WorkloadLogStreamEvent {
   reason?: string
   // error event
   message?: string
+}
+
+// GET /api/logging/pods/{namespace}/{name}: which routes forward a pod's logs,
+// per installed shipper. The wire is provider-neutral; a provider's own words
+// (Flow, ClusterOutput) appear only as kind. readErrors non-empty means
+// "can't tell", never "not shipped".
+export interface LogDestination { kind: string; namespace?: string; name: string; type?: string; found: boolean; active?: boolean }
+export interface LogReadError { group: string; resource: string }
+export interface LogRoute {
+  provider: string
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  selected: boolean
+  uncertain: boolean
+  ignored: boolean
+  /** Why the operator can't render the route; empty when valid. */
+  invalid?: string
+  /** The route's shipper has an invalid route and doesn't skip invalid ones, so it renders none of its configuration: what still runs is unknown. */
+  renderBlocked?: boolean
+  /** Receives what no other route of its shipper selects (a Logging's defaultFlow). */
+  fallback?: boolean
+  excluded: boolean
+  /** For a selecting route: whether its logs reach a destination; undefined = unknown. */
+  delivers?: boolean
+  unmet: string[]
+  hasFilters: boolean
+  active?: boolean
+  destinations: LogDestination[]
+}
+export interface LogShipping {
+  /** Installed shippers Radar understands; empty hides the section. */
+  providers: string[]
+  routes: LogRoute[]
+  shipped: boolean
+  uncertain: boolean
+  readErrors: LogReadError[]
+  /** The pod's annotation asking the collector to drop its logs; while set, never "shipped". */
+  excludeAnnotation?: string
+}
+
+// GET /api/logging/pipeline: per installed shipper, collectors → aggregators →
+// routes (with the running pods each selects) → destinations, and the running
+// pods nothing routes. Counts with lowerBound may be higher.
+export interface LogPodCount { count: number; lowerBound: boolean }
+export interface LogWorkload { kind: string; namespace: string; name: string; ready: number; desired: number }
+export interface LogInstance {
+  name: string
+  controlNamespace: string
+  /** Where the collectors run (fluentBitAgentNamespace); older Radar omits it. */
+  collectorNamespace?: string
+  collectors: LogWorkload[]
+  aggregators: LogWorkload[]
+  /** The kind wasn't read in this Logging's control namespace: an empty list is unknown, not none. */
+  collectorsUnread: boolean
+  aggregatorsUnread: boolean
+}
+export interface LogPipelineRoute {
+  provider: string
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  /** The Logging whose loggingRef the route carries; empty when none has it. */
+  instance: string
+  ignored: boolean
+  /** Why the operator can't render the route; empty when valid. */
+  invalid?: string
+  /** The instance has an invalid route and doesn't skip invalid ones, so the operator renders none of its configuration; counts are lower bounds. */
+  renderBlocked?: boolean
+  /** Receives what no other route of its instance selects (a Logging's defaultFlow). */
+  fallback?: boolean
+  hasFilters: boolean
+  active?: boolean
+  destinations: LogDestination[]
+  selectedPods: LogPodCount
+}
+export interface LogPipelineDestination { kind: string; namespace: string; name: string; type?: string; address?: string; active?: boolean; problems: string[] }
+export interface LogPipelineProvider { provider: string; instances: LogInstance[]; routes: LogPipelineRoute[]; destinations: LogPipelineDestination[] }
+export interface LogPipeline {
+  providers: LogPipelineProvider[]
+  unrouted: LogPodCount & { pods: { namespace: string; name: string }[]; truncated: boolean }
+  /** gaps: kinds unread or not listable; namespaces: what pod counts cover, null = all. */
+  coverage: { gaps: LogReadError[]; namespaces: string[] | null }
 }

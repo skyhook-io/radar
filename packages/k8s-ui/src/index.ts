@@ -57,6 +57,8 @@ export * from './components/issues'
 
 // CloudNativePG workspace model (fleet derivation over /api/cnpg/workspace) and summaries
 export * from './components/cnpg'
+// Log shipping pipeline (/api/logging/pipeline) view helpers
+export * from './components/logging'
 
 // Velero workspace wire types, reading copy and the Schedule activity section
 export * from './components/velero'
