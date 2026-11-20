@@ -106,7 +106,7 @@ func (t *ContextSwitchTracker) Start(target string, onFailure func(error)) (Cont
 	}
 	if t.retriesDone != nil {
 		t.cancelRetries()
-		t.status.Progress = "Waiting for the current connection retry…"
+		t.status.Progress = "Stopping the current connection retry…"
 	}
 	go t.run(ctx, t.status, onFailure, t.retriesDone)
 	return t.status, true

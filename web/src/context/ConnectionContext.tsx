@@ -47,7 +47,7 @@ interface ConnectionContextValue {
 class ConnectionRetryError extends Error {
   errorType?: string
 
-  constructor(message: string, readonly status: number, errorType?: string) {
+  constructor(message: string, readonly status: number, errorType?: string, readonly code?: string) {
     super(message)
     this.name = 'ConnectionRetryError'
     this.errorType = errorType
@@ -124,8 +124,8 @@ async function retryConnection(automatic = false): Promise<ConnectionState> {
     headers: automatic ? automaticRequestHeaders() : undefined,
   })
   if (!response.ok) {
-    const error = await readErrorBody(response) as { error?: string; errorType?: string }
-    throw new ConnectionRetryError(error.error || `HTTP ${response.status}`, response.status, error.errorType)
+    const error = await readErrorBody(response) as { error?: string; errorType?: string; error_code?: string }
+    throw new ConnectionRetryError(error.error || `HTTP ${response.status}`, response.status, error.errorType, error.error_code)
   }
   return response.json()
 }
@@ -342,7 +342,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const retryError = error as ConnectionRetryError
       if (retryError.status === 409) {
         if (attempt) setConnection(prev => prev === attempt.pendingConnection ? attempt.previousConnection : prev)
-        showApiNotice('Retry when the current cluster operation finishes', error.message, 'info')
+        if (retryError.code !== 'reconnect_superseded') showApiNotice('Cluster retry unavailable', error.message, 'info')
         return
       }
       setConnection(prev => {

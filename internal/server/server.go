@@ -5321,7 +5321,7 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, k8s.ErrReconnectSuperseded) {
-			s.writeError(w, http.StatusConflict, err.Error())
+			s.writeErrorCode(w, http.StatusConflict, "reconnect_superseded", err.Error())
 			return
 		}
 		errorType := k8s.ClassifyError(err)

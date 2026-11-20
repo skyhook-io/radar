@@ -350,7 +350,7 @@ func TestTrackedSwitchAdmittedDuringLocalRetry(t *testing.T) {
 	}
 	op, ok := tracker.Start("target", nil)
 	_, later := tracker.BeginRetry()
-	if !ok || op.Phase != "preflight" || op.Progress != "Waiting for the current connection retry…" || later != nil {
+	if !ok || op.Phase != "preflight" || op.Progress != "Stopping the current connection retry…" || later != nil {
 		t.Fatalf("selection during Retry: %+v, accepted %t", op, ok)
 	}
 	if !tracker.Cancel(op.ID, op.Target) {
