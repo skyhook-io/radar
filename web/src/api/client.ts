@@ -7310,6 +7310,7 @@ interface GitOpsMutationConfig<TVariables, TContext = undefined> {
   useRequestContext?: () => TContext;
   getBody?: (variables: TVariables, context: TContext) => unknown;
   errorMessage: string;
+  isErrorShownInline?: (variables: TVariables) => boolean;
   successMessage?: string;
   getSuccessMessage?: (data: GitOpsOperationResponse, variables: TVariables) => string;
   getInvalidateKeys: (variables: TVariables) => (string | undefined)[][];
@@ -7329,23 +7330,28 @@ function createGitOpsMutation<TVariables, TContext = undefined>(
       mutationFn: async (
         variables: TVariables,
       ): Promise<GitOpsOperationResponse> => {
-        const response = await apiFetch(
-          `${getApiBase()}${config.getPath(variables)}`,
-          {
-            method: "POST",
-            headers: config.getBody
-              ? { "Content-Type": "application/json" }
-              : undefined,
-            body: config.getBody
-              ? JSON.stringify(config.getBody(variables, requestContext))
-              : undefined,
-          },
-        );
-        if (!response.ok) {
-          const error = await readErrorBody(response);
-          throw new GitOpsActionError(error, response.status);
+        try {
+          const response = await apiFetch(
+            `${getApiBase()}${config.getPath(variables)}`,
+            {
+              method: "POST",
+              headers: config.getBody
+                ? { "Content-Type": "application/json" }
+                : undefined,
+              body: config.getBody
+                ? JSON.stringify(config.getBody(variables, requestContext))
+                : undefined,
+            },
+          );
+          if (!response.ok) {
+            const error = await readErrorBody(response);
+            throw new GitOpsActionError(error, response.status);
+          }
+          return await response.json() as GitOpsOperationResponse;
+        } catch (error) {
+          if (error instanceof Error && config.isErrorShownInline?.(variables)) markShownInline(error);
+          throw error;
         }
-        return response.json() as Promise<GitOpsOperationResponse>;
       },
       meta: {
         errorMessage: options?.reportErrors === false ? undefined : config.errorMessage,
@@ -7371,6 +7377,7 @@ type ArgoAppVars = { namespace: string; name: string };
 // useArgoSync sends these — splitting the type prevents callers from passing
 // resources/revision/prune to mutations that would silently drop them.
 export type ArgoSyncVars = ArgoAppVars & {
+  isErrorShownInline?: () => boolean;
   resources?: Array<{
     group?: string;
     kind: string;
@@ -7531,6 +7538,7 @@ export const useArgoSync = createGitOpsMutation<ArgoSyncVars, boolean>({
   useRequestContext: useArgoSyncInheritance,
   getBody: argoSyncRequestBody,
   errorMessage: "Failed to trigger sync",
+  isErrorShownInline: (variables) => variables.isErrorShownInline?.() ?? false,
   getSuccessMessage: (_data, v) => (v.dryRun ? "Dry run started" : "Sync initiated"),
   getInvalidateKeys: argoInvalidateKeys,
 });

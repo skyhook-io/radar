@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { normalizeArgoApplication } from '@skyhook-io/k8s-ui'
 import type { ArgoActionHandlers, GitOpsInsight, GitOpsInsightRef, GitOpsRow, GitOpsRowAction } from '@skyhook-io/k8s-ui'
 import { GitOpsView } from './GitOpsView'
+import { isShownInline } from '../../api/httpErrors'
 
 // The requests the Sync dialog builds, sent by the real useArgoSync and
 // useArgoResourceValidation: only a Radar advertising argoSyncInheritance is
@@ -82,14 +83,17 @@ let host: HTMLDivElement
 let root: ReturnType<typeof createRoot>
 let requests: Array<{ path: string; body: Record<string, unknown> }>
 let syncDenial: { error: string; error_code: string; summary: string } | undefined
+let pendingSyncResponse: Promise<Response> | undefined
 
 beforeEach(async () => {
   requests = []
   syncDenial = undefined
+  pendingSyncResponse = undefined
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (init?.method === 'POST') {
       requests.push({ path, body: JSON.parse(String(init.body)) })
+      if (path.endsWith('/sync') && pendingSyncResponse) return pendingSyncResponse
       if (path.endsWith('/sync') && syncDenial) {
         return Promise.resolve(Response.json(syncDenial, { status: 403 }))
       }
@@ -390,7 +394,7 @@ it.each([
   await click(button('Sync now'))
   expect(toggle('Prune').checked).toBe(true)
   expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain(syncDenial.summary)
-  expect(client.getMutationCache().getAll().at(-1)?.options.meta?.errorMessage).toBeUndefined()
+  expect(isShownInline(client.getMutationCache().getAll().at(-1)?.state.error)).toBe(true)
   await click(button('Error details'))
   expect(document.querySelector('[role="dialog"] pre')?.textContent).toBe(syncDenial.error)
   await click(button('Cancel'))
@@ -409,4 +413,20 @@ it('closes a failed sync when the detail page changes Applications', async () =>
   await click(button('Open sync'))
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain('argocd/other')
   expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull()
+})
+
+it('keeps global error reporting for a rejection after leaving the originating Application', async () => {
+  let respond!: (response: Response) => void
+  pendingSyncResponse = new Promise(resolve => { respond = resolve })
+  await click(button('Open sync'))
+  await click(button('Sync now'))
+  await click(button('Open other Application'))
+  await act(async () => respond(Response.json({
+    error: 'denied', error_code: 'admission_denied', summary: 'Change window is closed',
+  }, { status: 403 })))
+  await settle()
+  const mutation = client.getMutationCache().getAll().at(-1)
+  expect(mutation?.state.status).toBe('error')
+  expect(mutation?.options.meta?.errorMessage).toBe('Failed to trigger sync')
+  expect(isShownInline(mutation?.state.error)).toBe(false)
 })
