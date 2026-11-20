@@ -1,6 +1,8 @@
 package topology
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"testing"
@@ -1123,5 +1125,98 @@ func TestOwnerAboveFallsBackToOwnerReferences(t *testing.T) {
 		if ok != tc.climbs || manager.Name != tc.toManager {
 			t.Errorf("%s: OwnerAboveToManager = %v %v, want %q %v", tc.name, manager, ok, tc.toManager, tc.climbs)
 		}
+	}
+}
+
+// trackedSession holds a Deployment Argo CD tracks and the Applications in
+// namespaces that record it.
+func trackedSession(t *testing.T, labels, annotations map[string]string, recorders ...resourceid.Ref) (*projectionSession, runtime.Object) {
+	t.Helper()
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "own-share", Name: "guestbook-ui", UID: "dep", Labels: labels, Annotations: annotations}}, "apps", "Deployment")
+	ref := projectionRef(dep)
+	w := ownershiptest.World{
+		Resources: []ownership.ServedResource{
+			{Group: "apps", Version: "v1", Kind: "Deployment", Resource: "deployments", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
+			{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application", Resource: "applications", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
+		},
+		Objects: []ownershiptest.Object{{Ref: ref, APIVersion: "apps/v1", UID: "dep", Labels: labels, Annotations: annotations}},
+	}
+	for i, app := range recorders {
+		w.Objects = append(w.Objects, ownershiptest.Object{Ref: app, APIVersion: "argoproj.io/v1alpha1", UID: types.UID(fmt.Sprintf("app-%d", i)), Membership: ownership.MembersRecorded, Members: []resourceid.Ref{ref}})
+	}
+	s := &projectionSession{objects: map[resourceid.Ref]runtime.Object{ref: dep}}
+	var err error
+	if s.ReadSession, err = ownershiptest.Scan(w).Begin(); err != nil {
+		t.Fatal(err)
+	}
+	return s, dep
+}
+
+// Argo CD's default tracking id and its instance label name the Application
+// without its namespace. Managed By takes the namespace of the one
+// Application of that name that records the object and the caller may read;
+// with several, or none readable, the name stays without one.
+func TestRelationsAnswerPlacesATrackedApplication(t *testing.T) {
+	app := func(namespace, name string) resourceid.Ref {
+		return resourceid.NewRef("argoproj.io", "Application", namespace, name)
+	}
+	tracking := map[string]string{"argocd.argoproj.io/tracking-id": "own-share-a:apps/Deployment:own-share/guestbook-ui"}
+	instance := map[string]string{"argocd.argoproj.io/instance": "own-share-a"}
+	for _, tc := range []struct {
+		name        string
+		labels      map[string]string
+		annotations map[string]string
+		recorders   []resourceid.Ref
+		access      ownership.Access
+		want        string
+	}{
+		{"one readable recorder", nil, tracking, []resourceid.Ref{app("argocd", "own-share-a"), app("argocd", "own-share-b")}, ownership.Unrestricted(), "argocd"},
+		{"named by the instance label", instance, nil, []resourceid.Ref{app("argocd", "own-share-a")}, ownership.Unrestricted(), "argocd"},
+		{"two of that name", nil, tracking, []resourceid.Ref{app("argocd", "own-share-a"), app("teams", "own-share-a")}, ownership.Unrestricted(), ""},
+		{"the recorder unreadable", nil, tracking, []resourceid.Ref{app("argocd", "own-share-a")}, projectionAccess{denied: []string{"Application"}}, ""},
+		{"no recorder", nil, tracking, nil, ownership.Unrestricted(), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, dep := trackedSession(t, tc.labels, tc.annotations, tc.recorders...)
+			rel := projectionAnswer(t, s, dep, tc.access, ownership.Unrestricted())
+			want := ResourceRef{Kind: "Application", Group: "argoproj.io", Namespace: tc.want, Name: "own-share-a"}
+			if len(rel.ManagedBy) != 1 || rel.ManagedBy[0] != want {
+				t.Fatalf("ManagedBy = %+v, want %+v", rel.ManagedBy, want)
+			}
+		})
+	}
+}
+
+// A caller who may read only one of two same-named Applications that record
+// the object gets the readable one's namespace, and the answer, ownership
+// included, is the same byte for byte whether the hidden one exists or not:
+// it never says one is there.
+func TestRelationsAnswerPlacesATrackedApplicationWithoutRevealingAHiddenOne(t *testing.T) {
+	tracking := map[string]string{"argocd.argoproj.io/tracking-id": "own-share-a:apps/Deployment:own-share/guestbook-ui"}
+	readable := resourceid.NewRef("argoproj.io", "Application", "argocd", "own-share-a")
+	hidden := resourceid.NewRef("argoproj.io", "Application", "teams", "own-share-a")
+	caller := projectionAccess{namespaces: []string{"own-share", "argocd"}}
+	answer := func(recorders ...resourceid.Ref) []byte {
+		s, dep := trackedSession(t, nil, tracking, recorders...)
+		captured, ok := relations.CaptureSubject(s, projectionRef(dep), dep)
+		if !ok {
+			t.Fatal("capture failed")
+		}
+		ov := ownership.NewView(captured, caller)
+		rel, _ := RelationsAnswer(captured, caller, caller, ov, projectionRef(dep), dep, nil, nil)
+		m, _ := apimeta.Accessor(dep)
+		ApplyOwnership(rel, ov, ownership.Observe(projectionRef(dep), m))
+		if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Namespace != "argocd" {
+			t.Fatalf("recorders %v: ManagedBy %+v, want argocd/own-share-a", recorders, rel.ManagedBy)
+		}
+		raw, err := json.Marshal(rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	with, without := answer(readable, hidden), answer(readable)
+	if !bytes.Equal(with, without) {
+		t.Fatalf("the hidden Application changed the answer:\nwith    %s\nwithout %s", with, without)
 	}
 }

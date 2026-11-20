@@ -243,3 +243,39 @@ func TestScheduleActivityBackupControllerFact(t *testing.T) {
 		t.Fatalf("%+v read=%v found=%v", response, readable, found)
 	}
 }
+
+// A paused schedule's activity says what resuming does, as the CLI leaves the
+// skip and with the due run skipped; an active one says nothing of resuming.
+func TestScheduleActivityResume(t *testing.T) {
+	sched := func(name string, paused bool) *unstructured.Unstructured {
+		return obj("Schedule", "velero", name, nil,
+			map[string]any{"schedule": "0 * * * *", "paused": paused, "template": map[string]any{}},
+			map[string]any{"phase": "Enabled", "lastBackup": testNow.Add(-2 * time.Hour).Format(time.RFC3339)})
+	}
+	r := fakeRead{objects: map[string][]*unstructured.Unstructured{"schedules": {sched("held", true), sched("active", false)}}}.reader()
+
+	resp, readable, found := r.ScheduleActivity(context.Background(), "velero", "held")
+	if !readable || !found || resp.Resume == nil {
+		t.Fatalf("readable=%v found=%v resume=%+v", readable, found, resp.Resume)
+	}
+	// The server Deployment is unread here, so its flag is unknown.
+	if resp.Resume.Default.Outcome != domain.ResumeMayRunNow || resp.Resume.Default.Reason != domain.ResumeReasonSkipUnknown {
+		t.Errorf("default %+v", resp.Resume.Default)
+	}
+	if resp.Resume.Skipping == nil || resp.Resume.Skipping.Outcome != domain.ResumeSkips {
+		t.Errorf("skipping %+v", resp.Resume.Skipping)
+	}
+
+	never := obj("Schedule", "velero", "never", nil,
+		map[string]any{"schedule": "0 0 31 2 *", "paused": true, "template": map[string]any{}},
+		map[string]any{"phase": "Enabled"})
+	r2 := fakeRead{objects: map[string][]*unstructured.Unstructured{"schedules": {never}}}.reader()
+	if resp, _, found := r2.ScheduleActivity(context.Background(), "velero", "never"); !found || resp.Resume == nil ||
+		resp.Resume.Default.Outcome != domain.ResumeRunsRepeatedly || resp.Resume.Default.Due || resp.Resume.Skipping != nil {
+		t.Errorf("a cron with no future time offers no skip: %+v", resp.Resume)
+	}
+
+	if active, _, _ := r.ScheduleActivity(context.Background(), "velero", "active"); active.Resume != nil {
+		t.Errorf("an active schedule has no resume outlook: %+v", active.Resume)
+	}
+}

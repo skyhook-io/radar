@@ -51,6 +51,9 @@ export const RADAR_FEATURES = {
   cnpgProtectionSetup: { label: 'CloudNativePG backup setup', flag: 'cnpgProtectionSetup', flagShippedWithEndpoint: true },
   veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
   veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },
+  veleroSchedulePause: { label: 'Pause and resume Velero schedules', flag: 'veleroSchedulePause', flagShippedWithEndpoint: true },
+  veleroRunVolumes: { label: 'Velero run volumes', flag: 'veleroRunVolumes', flagShippedWithEndpoint: true },
+  veleroRunArtifacts: { label: 'Velero run contents and log', flag: 'veleroRunArtifacts', flagShippedWithEndpoint: true },
   veleroRuns: { label: 'Velero backup and restore lists', flag: 'veleroRuns', flagShippedWithEndpoint: true },
   veleroDeleteBackup: { label: 'Delete a Velero backup', flag: 'veleroDeleteBackup', flagShippedWithEndpoint: true },
   resourceDeletePreconditions: { label: 'Delete only the object you reviewed', flag: 'resourceDeletePreconditions', flagShippedWithEndpoint: true },
@@ -80,6 +83,7 @@ export const RADAR_FEATURES = {
   podFileUpload: { label: 'Pod file uploads', flag: 'podFileUpload', flagShippedWithEndpoint: true },
   loggingPodShipping: { label: 'Log shipping', flag: 'loggingPodShipping', flagShippedWithEndpoint: true },
   vulnerabilities: { label: 'Vulnerability views', flag: 'vulnerabilities', flagShippedWithEndpoint: true },
+  runtimeAdvisoryChecks: { label: 'Java4Shell checks', flag: 'runtimeAdvisoryChecks', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES
