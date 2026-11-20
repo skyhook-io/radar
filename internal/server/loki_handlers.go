@@ -338,8 +338,9 @@ func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 		for _, t := range template {
 			// Every template container stays listed, with or without lines in
 			// this answer, so the viewer can switch to it (Loki's line limit
-			// or a chosen container may have left it out).
-			if cs[t.Name] || labels.Container != "" {
+			// or a chosen container may have left it out). Not for a pod whose
+			// streams carry no container label: it can only be read whole.
+			if cs[t.Name] || (lines.SplitsContainers && !cs[noContainerLabel]) {
 				p.Containers = append(p.Containers, t.Name)
 				p.ContainerStatuses = append(p.ContainerStatuses, t)
 				delete(cs, t.Name)

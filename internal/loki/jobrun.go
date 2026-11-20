@@ -15,12 +15,16 @@ import (
 type JobRun struct {
 	Lines
 	Notice string
+	// SplitsContainers: Loki labels containers in the run's window, so a
+	// container can be read alone.
+	SplitsContainers bool
 }
 
-// ReadJobRun reads a Job run's lines within one read slot. The Job label is
-// taken from Loki's label names in the run's own window, not from the
-// connection's, which Loki answers for its recent default window only: a
-// shipper that gained or lost the label since then would otherwise be missed.
+// ReadJobRun reads a Job run's lines within one read slot. The Job and
+// container labels are taken from Loki's label names in the run's own window,
+// not from the connection's, which Loki answers for its recent default window
+// only: a shipper that gained or lost a label since then would otherwise be
+// missed.
 // When Loki has a Job label but none of this run's streams carry it (several
 // shippers feeding one Loki), the run is read again by pod name, with the
 // same window and limit.
@@ -37,7 +41,9 @@ func ReadJobRun(ctx context.Context, l StreamLabels, namespace, job string, inde
 	if err != nil {
 		return JobRun{}, err
 	}
-	l.Job = DetectLabels(names).Job
+	inWindow := DetectLabels(names)
+	l.Job, l.Container = inWindow.Job, inWindow.Container
+	split := l.Container != ""
 	if l.Job != "" {
 		selector, _, err := JobSelector(l, namespace, job, indexed, container)
 		if err != nil {
@@ -45,7 +51,7 @@ func ReadJobRun(ctx context.Context, l StreamLabels, namespace, job string, inde
 		}
 		lines, err := queryRange(ctx, l, selector, w, limit)
 		if err != nil || len(lines.Items) > 0 {
-			return JobRun{Lines: lines, Notice: fmt.Sprintf("Selected by Loki's %s label.", l.Job)}, err
+			return JobRun{Lines: lines, Notice: fmt.Sprintf("Selected by Loki's %s label.", l.Job), SplitsContainers: split}, err
 		}
 	}
 	byLabel := l.Job
@@ -62,7 +68,7 @@ func ReadJobRun(ctx context.Context, l StreamLabels, namespace, job string, inde
 	if byLabel != "" {
 		how = fmt.Sprintf("Selected by pod name: no lines carry Loki's %s label for this Job.", byLabel)
 	}
-	return JobRun{Lines: lines, Notice: strings.TrimSpace(how + " " + nameNotice)}, nil
+	return JobRun{Lines: lines, Notice: strings.TrimSpace(how + " " + nameNotice), SplitsContainers: split}, nil
 }
 
 // labelNamesIn is Loki's label names for streams in w.

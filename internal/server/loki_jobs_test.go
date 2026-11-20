@@ -373,3 +373,38 @@ func TestLokiJobLogsReadsLabelsInTheRunWindow(t *testing.T) {
 		t.Fatalf("query = %s, notice %q", q, got.Notice)
 	}
 }
+
+// Container support comes from the run's own streams, not the connection's
+// recent label discovery: a run shipped before Loki labelled containers is
+// read whole, with no container choices and no container matcher.
+func TestLokiJobLogsContainerSupportFromTheRun(t *testing.T) {
+	seedJobWithSpec(t, batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "work"}, {Name: "side"}}}}})
+	rec := newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"nightly-29905990-aaaaa"},"values":[["1763002800000000001","a"]]}]}}`)
+	rec.mu.Lock()
+	rec.labelNames = `["namespace","pod"]`
+	rec.mu.Unlock()
+	resp, got, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs?container=work")
+	if resp.StatusCode != 200 || len(got.Pods) != 1 || strings.Join(got.Pods[0].Containers, ",") != noContainerLabel {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod=~"^nightly-29905990-[a-z0-9]{5}$"}` {
+		t.Fatalf("query = %s", q)
+	}
+}
+
+// With mixed pipelines a pod whose streams carry no container label is read
+// whole: it offers no template containers beside its whole-pod entry.
+func TestLokiJobLogsWholePodStreamsOfferNoContainers(t *testing.T) {
+	seedJobWithSpec(t, batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "work"}, {Name: "side"}}}}})
+	newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"nightly-29905990-aaaaa"},"values":[["1763002800000000001","a"]]},
+ {"stream":{"namespace":"team","pod":"nightly-29905990-bbbbb","container":"work"},"values":[["1763002800000000002","b"]]}]}}`)
+	resp, got, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs")
+	if resp.StatusCode != 200 || len(got.Pods) != 2 {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if a, b := strings.Join(got.Pods[0].Containers, ","), strings.Join(got.Pods[1].Containers, ","); a != noContainerLabel || b != "work,side" {
+		t.Fatalf("containers = %q / %q", a, b)
+	}
+}

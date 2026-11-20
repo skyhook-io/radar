@@ -172,3 +172,42 @@ it('offers the chosen container when no pod lists it', async () => {
   await act(async () => root.unmount())
   host.remove()
 })
+
+// The default host auto-streams. Once a run is read from the log store because
+// its pods are gone, a container change reads the store again instead of
+// opening a Kubernetes stream whose empty pod list would wipe the run's pods.
+it('switches all → container without lines → container with lines while auto-streaming', async () => {
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host)
+  const asked: (string | undefined)[] = []
+  const fetchAll = vi.fn(async ({ container }: { container?: string }): Promise<WorkloadLogsResult> => {
+    asked.push(container)
+    if (container === 'setup') return { pods: [], logs: [], keepPreviousSources: true, emptyMessage: 'Loki has no lines from container setup for this run' }
+    return { pods: [{ name: 'run-1-abcde', containers: ['setup', 'work'], ready: false }], logs: [{ pod: 'run-1-abcde', container: 'work', timestamp: '2026-11-13T02:00:00.000000000Z', content: 'from work' }], notice: 'From Loki' }
+  })
+  await act(async () => root.render(<WorkloadLogsViewer name="run-1" fetchAll={fetchAll} createStream={() => new FakeEventSource() as unknown as EventSource} autoStream readSnapshotWhenPodsGone />))
+  const podsGone = async () => {
+    await act(async () => FakeEventSource.last?.emit('connected', { pods: [] }))
+    await act(async () => FakeEventSource.last?.emit('end', { reason: 'pods-gone', emptyReason: 'pods-gone', emptyMessage: 'This Job has finished, but its pods are no longer present' }))
+    await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+  }
+  await podsGone()
+  const picker = () => host.querySelector('select')!
+  const choose = async (value: string) => {
+    const before = FakeEventSource.last
+    await act(async () => { picker().value = value; picker().dispatchEvent(new Event('change', { bubbles: true })) })
+    // A stream opened for the change ends as the real one would.
+    if (FakeEventSource.last !== before) await podsGone()
+    await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+  }
+  expect([...picker().options].map(o => o.value)).toEqual(['', 'setup', 'work'])
+  await choose('setup')
+  expect([...picker().options].map(o => o.value)).toEqual(['', 'setup', 'work'])
+  expect(host.textContent).toContain('1/1 pods')
+  expect(host.textContent).toContain('Loki has no lines from container setup for this run')
+  await choose('work')
+  expect(asked).toEqual([undefined, 'setup', 'work'])
+  expect([...picker().options].map(o => o.value)).toEqual(['', 'setup', 'work'])
+  expect(picker().value).toBe('work')
+  await act(async () => root.unmount())
+  host.remove()
+})

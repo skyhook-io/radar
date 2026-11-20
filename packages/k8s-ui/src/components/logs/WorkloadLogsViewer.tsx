@@ -211,12 +211,17 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const loadLogsRef = useRef(loadLogs)
   const readSnapshotWhenPodsGoneRef = useRef(readSnapshotWhenPodsGone)
   const streamShowedLinesRef = useRef(false)
+  // Set while the run's pods are gone and the host serves it as a snapshot: a
+  // container change then reads the snapshot again, since a new stream would
+  // only report no pods and wipe the run's pods and containers.
+  const readingSnapshotRef = useRef(false)
   // A stream that ended with its pods gone and nothing shown, before the host
   // could read the snapshot: read it once the host can.
   const [endedPodsGone, setEndedPodsGone] = useState(false)
   useEffect(() => {
     if (endedPodsGone && readSnapshotWhenPodsGone) {
       setEndedPodsGone(false)
+      readingSnapshotRef.current = true
       void loadLogs()
     }
   }, [endedPodsGone, readSnapshotWhenPodsGone, loadLogs])
@@ -231,7 +236,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   // won't auto-start, so fall back to the snapshot — otherwise a container
   // switch would keep showing the previous selection's lines.
   useEffect(() => {
-    if (!willAutoStream || userStoppedRef.current) loadLogs()
+    if (!willAutoStream || userStoppedRef.current || readingSnapshotRef.current) loadLogs()
   }, [loadLogs, willAutoStream])
   useEffect(() => { stopStreaming() }, [selectedContainer, stopStreaming])
   useEffect(() => () => { fetchController.current?.abort() }, [])
@@ -257,6 +262,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     setFetchError(null)
     clear()
     streamShowedLinesRef.current = false
+    readingSnapshotRef.current = false
     streamPodNamesRef.current = []
     setEndedPodsGone(false)
     startStreaming(
@@ -351,6 +357,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             if (readSnapshotWhenPodsGoneRef.current) {
               // The snapshot follows the selection made on the stream's pods.
               if (streamPodNamesRef.current.length > 0) previousSnapshotPods.current = streamPodNamesRef.current
+              readingSnapshotRef.current = true
               void loadLogsRef.current()
               return
             }
@@ -378,6 +385,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     if (userStoppedRef.current) return
     if (autoStartedForRef.current === selectedContainer) return
     autoStartedForRef.current = selectedContainer
+    if (readingSnapshotRef.current) return
     handleStartStreaming()
     // Reset the arm latch on teardown so a re-run re-streams — without this,
     // React Strict Mode's mount→unmount→mount closes the stream but the latch
