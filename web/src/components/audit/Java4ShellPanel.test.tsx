@@ -32,6 +32,7 @@ it('shows Java home and check limit counts before opening details and counts oth
   expect(html).toContain('Declared Java 8 outside affected versions · 3 containers')
   expect(html).toContain('Registry authentication required for 2 containers.')
   expect(html).toContain('Image platform unknown · 2 containers')
+  expect(html).toContain('<p role="status" class="sr-only">Java4Shell check finished.</p>')
   expect(html).toContain('aria-expanded="false"')
   expect(html).not.toContain('aria-label="Unassessed containers by workload"')
 })

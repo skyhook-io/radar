@@ -26,6 +26,9 @@ interface Java4ShellPanelProps {
 export function Java4ShellPanel({ namespaces = [], context, connected, trivySearch, workload, onNavigateToResource }: Java4ShellPanelProps) {
   const { data, dataUpdatedAt, isFetching, error, refetch, progress, cancel } = useJava4ShellCheck(namespaces, context, workload)
   const checkedAt = new Date(dataUpdatedAt).toISOString()
+  const progressText = progress && progress.total > 0
+    ? `Checking image groups · ${progress.done} of ${progress.total} processed`
+    : 'Reading running Pods and preparing registry lookups.'
   return (
     <section aria-label="Java4Shell check" className={`rounded-xl border border-theme-border bg-theme-surface ${workload ? 'p-3' : 'p-4'}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -71,14 +74,14 @@ export function Java4ShellPanel({ namespaces = [], context, connected, trivySear
           </button>
         </div>
       </div>
+      <p role="status" className="sr-only">
+        {isFetching
+          ? `${progressText}${data ? ' Showing the previous result while the check runs.' : ''}`
+          : data && !error ? 'Java4Shell check finished.' : ''}
+      </p>
       {isFetching && (
         <div className="mt-3 space-y-1 text-xs text-theme-text-secondary">
-          <p role="status">
-            {progress && progress.total > 0
-              ? `Checking image groups · ${progress.done} of ${progress.total} processed`
-              : 'Reading running Pods and preparing registry lookups.'}
-            {data && <span className="sr-only"> Showing the previous result while the check runs.</span>}
-          </p>
+          <p aria-hidden>{progressText}</p>
           <progress
             aria-label="Java4Shell scan progress"
             className="block w-full accent-accent"
@@ -146,7 +149,7 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
   return (
     <div className="mt-3 flex flex-col gap-2 border-t border-theme-border pt-3 text-xs">
       <div className="flex flex-wrap justify-between gap-x-3 gap-y-1">
-        <p role="status" aria-busy={checkingAgain} className="font-medium text-theme-text-primary">{summary}</p>
+        <p className="font-medium text-theme-text-primary">{summary}</p>
         <p className="text-theme-text-tertiary">{checkingAgain ? 'Previous result' : 'Checked'} <TimeValue timestamp={checkedAt} /> · {scope}</p>
       </div>
       {coverage && <p className="text-warning-text">{coverage}</p>}
