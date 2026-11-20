@@ -747,6 +747,93 @@ func TestBeylaSource_QueryL4_NamespaceFilterIsValidPromQL(t *testing.T) {
 	}
 }
 
+func TestBeylaRateQuery_CountsCrossNodeFlowsOnce(t *testing.T) {
+	// Both nodes' agents report a cross-node flow with identical labels apart
+	// from instance and pod. Only series carrying a node label can be collapsed:
+	// without one, two replicas on different nodes look exactly like a duplicate.
+	got := beylaRateQuery("a, b", "m", `job="x"`, "", `, direction="request"`, rateWindowFor(0))
+	want := `sum by (a, b) (` +
+		`max without (instance, pod, node, host) (rate(m{job="x", direction="request", k8s_src_node_name!=""}[5m])) or ` +
+		`max without (instance, pod, node, host) (rate(m{job="x", direction="request", k8s_src_node_name="", k8s_dst_node_name!=""}[5m])) or ` +
+		`rate(m{job="x", direction="request", k8s_src_node_name="", k8s_dst_node_name=""}[5m]))`
+	assertEq(t, "query", got, want)
+}
+
+func TestBeylaRateQuery_NamespaceFilterReachesEveryBranch(t *testing.T) {
+	q := beylaRateQuery(beylaL4GroupBy, beylaFlowMetric, beylaJobSelector(), "ns1", beylaL4DirectionFilter, rateWindowFor(0))
+	for _, label := range []string{"k8s_src_namespace", "k8s_dst_namespace"} {
+		if n := strings.Count(q, label+`="ns1"`); n != 3 {
+			t.Errorf("%s matcher appears %d times, want once per node branch (3): %s", label, n, q)
+		}
+	}
+}
+
+func beylaNodeProbeFake(probe func() (*prom.QueryResult, error)) promQueryFunc {
+	return func(_ context.Context, query string) (*prom.QueryResult, error) {
+		if strings.Contains(query, `direction="unknown"`) {
+			return emptyResult(), nil
+		}
+		if strings.HasPrefix(query, "count(") && strings.Contains(query, `k8s_src_node_name!=""`) {
+			return probe()
+		}
+		if strings.Contains(query, "beyla_network_flow_bytes_total") {
+			return promResult("vector", promSeries(map[string]string{
+				"k8s_src_owner_name": "client", "k8s_src_namespace": "demo",
+				"k8s_dst_owner_name": "web", "k8s_dst_namespace": "demo",
+				"dst_port": "80", "transport": "TCP",
+			}, 12.0)), nil
+		}
+		return emptyResult(), nil
+	}
+}
+
+const nodeLabelAdvice = "Flows between two nodes are reported by both nodes' Beyla agents and counted twice here."
+
+func TestBeylaSource_GetFlows_WarnsWhenNodeLabelsAreAbsent(t *testing.T) {
+	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+	src.queryFn = beylaNodeProbeFake(func() (*prom.QueryResult, error) { return emptyResult(), nil })
+
+	resp, err := src.GetFlows(context.Background(), FlowOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, want := range []string{nodeLabelAdvice, "k8s.src.node.name and k8s.dst.node.name", "beyla_network_flow_bytes"} {
+		if !strings.Contains(resp.Warning, want) {
+			t.Errorf("warning should contain %q, got: %q", want, resp.Warning)
+		}
+	}
+	assertEq(t, "warningKind", resp.WarningKind, WarningPartial)
+}
+
+func TestBeylaSource_GetFlows_NoNodeLabelWarningWhenPresent(t *testing.T) {
+	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+	src.queryFn = beylaNodeProbeFake(func() (*prom.QueryResult, error) {
+		return promResult("vector", promSeries(map[string]string{}, 4)), nil
+	})
+
+	resp, err := src.GetFlows(context.Background(), FlowOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Warning != "" {
+		t.Errorf("expected no warning when node labels are exported, got: %q", resp.Warning)
+	}
+}
+
+func TestBeylaSource_GetFlows_NoNodeLabelWarningWhenProbeFails(t *testing.T) {
+	// A warning invented from a failed query is worse than none.
+	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+	src.queryFn = beylaNodeProbeFake(func() (*prom.QueryResult, error) { return nil, fmt.Errorf("timeout") })
+
+	resp, err := src.GetFlows(context.Background(), FlowOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(resp.Warning, nodeLabelAdvice) {
+		t.Errorf("a failed probe must not produce the node-label advice, got: %q", resp.Warning)
+	}
+}
+
 func TestBeylaSource_QueryL7_UsesCorrectMetricAndLabels(t *testing.T) {
 	q := beylaL7RateQuery(beylaJobSelector(), "test-ns", rateWindowFor(0))
 	if !strings.Contains(q, "http_server_request_duration_seconds_count") {
