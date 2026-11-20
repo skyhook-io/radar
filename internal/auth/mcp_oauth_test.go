@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"html"
 	"net/http"
@@ -650,5 +652,53 @@ func TestMCPOAuthConsentAcceptsEquivalentBrowserOrigin(t *testing.T) {
 	result := f.consent(page, f.consentForm(page), "https://radar.example", f.cookies)
 	if result.Code != http.StatusSeeOther {
 		t.Fatalf("equivalent browser origin: %d %s", result.Code, result.Body)
+	}
+}
+
+func TestMCPOAuthConsentWarnsWhenAccessLeavesTheMachine(t *testing.T) {
+	for _, tc := range []struct {
+		redirect string
+		warn     bool
+	}{
+		{"http://127.0.0.1:54321/callback", false},
+		{"http://localhost:54321/callback", false},
+		{"http://[::1]:54321/callback", false},
+		{"https://tool.example.net/callback", true},
+	} {
+		t.Run(tc.redirect, func(t *testing.T) {
+			f := newMCPOAuthFixture(t)
+			client := f.s.clients[f.client.ID]
+			client.RedirectURIs = []string{tc.redirect}
+			f.s.clients[client.ID] = client
+			query := f.request("/mcp")
+			query.Set("redirect_uri", tc.redirect)
+			page := f.authorize(query, f.cookies)
+			if page.Code != http.StatusOK {
+				t.Fatalf("consent page: %d %s", page.Code, page.Body)
+			}
+			body := page.Body.String()
+			warned := strings.Contains(body, "Access will be sent to another server: tool.example.net")
+			if warned != tc.warn {
+				t.Fatalf("warning shown=%v, want %v", warned, tc.warn)
+			}
+			if !strings.Contains(body, "Up to 24 hours") {
+				t.Fatal("consent page does not state how long access lasts")
+			}
+		})
+	}
+}
+
+func TestMCPOAuthConsentStyleAllowedByCSP(t *testing.T) {
+	f := newMCPOAuthFixture(t)
+	page := f.authorize(f.request("/mcp"), f.cookies)
+	body := page.Body.String()
+	start, end := strings.Index(body, "<style>"), strings.Index(body, "</style>")
+	if start < 0 || end < start {
+		t.Fatal("consent page has no style block")
+	}
+	sum := sha256.Sum256([]byte(body[start+len("<style>") : end]))
+	hash := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	if csp := page.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "style-src "+hash) || !strings.Contains(csp, "default-src 'none'") {
+		t.Fatalf("CSP %q does not allow the rendered style block %s", csp, hash)
 	}
 }

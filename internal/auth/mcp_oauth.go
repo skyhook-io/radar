@@ -235,13 +235,51 @@ func (s *MCPOAuthServer) HandleRegister(w http.ResponseWriter, r *http.Request) 
 	mcpJSON(w, http.StatusCreated, client)
 }
 
-var mcpConsentTemplate = template.Must(template.New("consent").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Authorize Radar MCP</title></head><body><main><h1>Authorize Radar MCP</h1><p>Signed in as <strong>{{.Username}}</strong>.</p><p>Application name (provided by the application): <strong>{{.ClientName}}</strong></p><p>Client ID: <code>{{.ClientID}}</code></p><p>Allow this application to access <code>{{.Resource}}</code> with your Kubernetes permissions? {{.Capability}}</p><p>Authorization returns to <code>{{.RedirectURI}}</code>.</p><form method="post"><input type="hidden" name="request" value="{{.Request}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><button name="decision" value="allow">Allow</button> <button name="decision" value="deny">Deny</button></form></main></body></html>`))
+// Colors mirror Radar's theme tokens; the page cannot load the app's stylesheet
+// under its CSP, so the style block is allowed by hash instead.
+const mcpConsentStyle = `:root{color-scheme:light dark;--base:light-dark(#F0F3F9,#0B0F1E);--surface:light-dark(#F8FBFE,#14192A);--elevated:light-dark(#E6ECF5,#1E2338);--text:light-dark(#1A1C20,#F5F6F8);--muted:light-dark(#555860,#A9ADB8);--border:light-dark(#D8E0EE,#222840);--brand:light-dark(#4A7CC9,#6A9FE0);--brand-hover:light-dark(#3B66A8,#8BB5EA);--warn-bg:light-dark(#FEF3C7,rgba(245,158,11,.12));--warn-border:light-dark(#F59E0B,rgba(245,158,11,.45));--warn-text:light-dark(#92400E,#FBBF24)}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px;background:var(--base);color:var(--text);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{width:100%;max-width:520px;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;box-shadow:0 8px 24px rgba(15,23,42,.08)}
+.brand{font-weight:600;color:var(--brand);letter-spacing:.02em}h1{font-size:18px;margin:4px 0 4px}.muted{color:var(--muted)}
+.warn{margin:16px 0;padding:12px 14px;border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:10px}.warn strong{color:var(--warn-text)}.warn p{margin:6px 0 0}
+dl{margin:16px 0;display:grid;grid-template-columns:max-content 1fr;gap:10px 16px}dt{color:var(--muted)}dd{margin:0;min-width:0;overflow-wrap:anywhere}
+code{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--elevated);border-radius:4px;padding:1px 4px}
+.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}button{font:inherit;font-weight:500;padding:8px 16px;border-radius:10px;cursor:pointer}
+.deny{background:var(--surface);color:var(--text);border:1px solid var(--border)}.deny:hover{background:var(--elevated)}
+.allow{background:var(--brand);color:#fff;border:1px solid transparent}.allow:hover{background:var(--brand-hover)}
+@media (max-width:480px){dl{grid-template-columns:1fr;gap:2px}dd{margin-bottom:8px}}`
+
+var mcpConsentStyleCSP = func() string {
+	sum := sha256.Sum256([]byte(mcpConsentStyle))
+	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+}()
+
+var mcpConsentTemplate = template.Must(template.New("consent").Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Authorize Radar MCP</title><style>` + mcpConsentStyle + `</style></head><body><main>
+<div class="brand">Radar</div><h1>Allow an AI tool to use Radar?</h1><p class="muted">Signed in as <strong>{{.Username}}</strong></p>
+{{if .ThirdParty}}<div class="warn" role="alert"><strong>Access will be sent to another server: {{.RedirectHost}}</strong><p>If you allow, whoever runs {{.RedirectHost}} can use Radar's AI tools as you, with your Kubernetes permissions, for up to {{.Lifetime}}. Allow only if you started this sign-in yourself and trust that server.</p></div>{{end}}
+<dl><dt>Application</dt><dd>{{with .ClientName}}<strong>{{.}}</strong> <span class="muted">(name provided by the application)</span>{{else}}<span class="muted">No name provided</span>{{end}}</dd>
+<dt>Client ID</dt><dd><code>{{.ClientID}}</code></dd>
+<dt>Endpoint</dt><dd><code>{{.Resource}}</code><br><span class="muted">{{.Capability}} Your Kubernetes permissions apply.</span></dd>
+<dt>Access goes to</dt><dd><code>{{.RedirectURI}}</code><br><span class="muted">{{if .ThirdParty}}A server outside your computer.{{else}}An application on your computer.{{end}}</span></dd>
+<dt>Lasts</dt><dd>Up to {{.Lifetime}}. Logging out of Radar in this browser ends it sooner.</dd></dl>
+<form method="post"><input type="hidden" name="request" value="{{.Request}}"><input type="hidden" name="csrf" value="{{.CSRF}}"><div class="actions"><button class="deny" name="decision" value="deny">Deny</button><button class="allow" name="decision" value="allow">Allow</button></div></form></main></body></html>`))
+
+// mcpLocalRedirect reports whether the authorization code stays on the user's
+// own machine; any other host receives a credential usable as the user.
+func mcpLocalRedirect(raw string) (host string, local bool) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw, false
+	}
+	ip := net.ParseIP(u.Hostname())
+	return u.Host, u.Hostname() == "localhost" || (ip != nil && ip.IsLoopback())
+}
 
 // HandleAuthorize validates authorization requests and requires explicit browser consent.
 func (s *MCPOAuthServer) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	mcpPrivateHeaders(w)
 	// A form-action restriction also blocks redirects to the client's OAuth callback.
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src "+mcpConsentStyleCSP+"; frame-ancestors 'none'; base-uri 'none'")
 	w.Header().Set("X-Frame-Options", "DENY")
 	// Preserve Origin on the same-origin form POST while hiding cross-origin referrers.
 	w.Header().Set("Referrer-Policy", "same-origin")
@@ -316,10 +354,12 @@ func (s *MCPOAuthServer) HandleAuthorize(w http.ResponseWriter, r *http.Request)
 	pending.CSRF = mcpHash(csrf)
 	pending.SID = session.SID
 	client := s.clients[pending.ClientID]
-	data := map[string]string{"Username": session.User.Username, "ClientName": client.Name, "ClientID": client.ID, "Resource": pending.Resource,
-		"RedirectURI": pending.RedirectURI, "Request": id, "CSRF": csrf, "Capability": "This endpoint may run read and write tools."}
+	redirectHost, local := mcpLocalRedirect(pending.RedirectURI)
+	data := map[string]any{"Username": session.User.Username, "ClientName": client.Name, "ClientID": client.ID, "Resource": pending.Resource,
+		"RedirectURI": pending.RedirectURI, "RedirectHost": redirectHost, "ThirdParty": !local, "Lifetime": fmt.Sprintf("%d hours", int(mcpGrantTTL.Hours())),
+		"Request": id, "CSRF": csrf, "Capability": "It may run read and write tools."}
 	if strings.HasSuffix(pending.Resource, "/mcp-readonly") {
-		data["Capability"] = "This endpoint exposes read-only tools."
+		data["Capability"] = "It exposes read-only tools."
 	}
 	s.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: mcpConsentCookie + mcpHash(id), Value: csrf, Path: s.basePath + "/auth/mcp/authorize", Secure: strings.HasPrefix(s.origin, "https://"), HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
