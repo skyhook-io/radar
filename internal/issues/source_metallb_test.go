@@ -72,6 +72,16 @@ func TestMetalLBConfigurationIssuesGroupsSpeakers(t *testing.T) {
 	if !iss.OnsetUnknown || !iss.FirstSeen.IsZero() {
 		t.Fatalf("onset = %v (unknown %v), want unknown", iss.FirstSeen, iss.OnsetUnknown)
 	}
+	// Every speaker that shares the rejection finds the one warning.
+	readAll := RelatedIssueOptions{CanReadRelated: func(Ref) bool { return true }}
+	for _, name := range []string{"speaker-control-plane", "speaker-worker", "speaker-worker2"} {
+		if related := RelatedIssuesFrom(got, got, readAll, MetalLBGroup, "ConfigurationState", "metallb-system", name); len(related) != 1 || related[0].ID != iss.ID {
+			t.Fatalf("%s resolves to %+v, want the grouped warning", name, related)
+		}
+	}
+	if related := RelatedIssuesFrom(got, got, readAll, MetalLBGroup, "ConfigurationState", "metallb-system", "controller"); len(related) != 0 {
+		t.Fatalf("the Valid controller resolves to %+v, want none", related)
+	}
 }
 
 func TestMetalLBConfigurationIssuesPrefersController(t *testing.T) {

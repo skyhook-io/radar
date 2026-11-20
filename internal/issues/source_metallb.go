@@ -87,7 +87,12 @@ func MetalLBConfigurationIssues(gvr schema.GroupVersionResource, items []*unstru
 		if others := metalLBOtherComponents(g.states[1:]); others != "" {
 			message += ". Also rejected by " + others
 		}
-		out = append(out, newConditionIssue(gvr, "ConfigurationState", anchor.GetNamespace(), anchor.GetName(), SeverityWarning, ReasonMetalLBConfigurationInvalid, message, time.Time{}, false, "", anchor.GetCreationTimestamp().Time))
+		iss := newConditionIssue(gvr, "ConfigurationState", anchor.GetNamespace(), anchor.GetName(), SeverityWarning, ReasonMetalLBConfigurationInvalid, message, time.Time{}, false, "", anchor.GetCreationTimestamp().Time)
+		// The other states sharing the rejection resolve to this finding too.
+		for _, u := range g.states[1:] {
+			iss.AffectedRefs = append(iss.AffectedRefs, Ref{Group: gvr.Group, Kind: "ConfigurationState", Namespace: u.GetNamespace(), Name: u.GetName()})
+		}
+		out = append(out, iss)
 	}
 	out, _ = filterShapedIssues(out, Filters{})
 	return out
