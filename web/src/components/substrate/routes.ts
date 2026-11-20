@@ -3,9 +3,6 @@ import type { SubstratePoolRef, SubstrateRef } from '../../api/substrateWorkspac
 
 export const SUBSTRATE_GROUP = 'ate.dev'
 
-/** The Resources sidebar category Substrate's kinds are listed under (api-resources.ts). */
-export const SUBSTRATE_CATEGORY = 'Agent Substrate'
-
 export const SUBSTRATE_PATH = '/substrate'
 
 /** The namespace picker's tooltip on every Substrate screen: actors live in atespaces, which are not namespaces. */

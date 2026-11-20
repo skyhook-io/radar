@@ -1,19 +1,17 @@
 import { useMemo } from 'react'
-import { Boxes } from 'lucide-react'
+import { Bot } from 'lucide-react'
 import type { SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../../types'
 import { useRadarFeature } from '../../api/client'
 import { useAgentSandboxWorkspace, type AgentSandboxSidebar } from '../../api/agentSandbox'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
+import { AGENTS_SIDEBAR_CATEGORY } from '../workspace/sidebar'
 import { agentSandboxDiscovered } from './data'
 import { AGENT_SANDBOX_OVERVIEW, SANDBOXES_PATH, SANDBOX_CLAIMS_PATH, SANDBOX_CLAIM_KIND, SANDBOX_KIND, SANDBOX_WARM_POOLS_PATH, SANDBOX_WARM_POOL_KIND } from './routes'
 import { sidebarCount } from './workspace'
 
-/** The Resources sidebar category Agent Sandbox's kinds are listed under (api-resources.ts). */
-export const AGENT_SANDBOX_SIDEBAR_CATEGORY = 'Agent Sandbox'
-
-/** The job Agent Sandbox does, its name in the sidebar's Integrations; "Agent Sandbox" sits beneath it. */
-export const AGENT_SANDBOX_SIDEBAR_LABEL = 'Sandboxes'
+/** Agent Sandbox's heading among the Agents row's destinations, when another runtime shares the row. */
+export const AGENT_SANDBOX_SIDEBAR_SECTION = 'Sandbox'
 
 const SCREENS = [
   { kind: SANDBOX_KIND, key: 'sandboxes', label: 'Sandboxes', path: SANDBOXES_PATH, noun: ['sandbox', 'sandboxes'] },
@@ -22,9 +20,9 @@ const SCREENS = [
 ] as const satisfies readonly { kind: unknown; label: string; path: string; key: keyof Omit<AgentSandboxSidebar, 'total' | 'controller'>; noun: readonly [string, string] }[]
 
 /**
- * Agent Sandbox in the sidebar's Integrations: one row with what needs
- * attention, opening to the Overview and Radar's three tables (each with what
- * needs attention there); SandboxTemplate stays under Other kinds. The counts
+ * Agent Sandbox in the sidebar's Integrations, as its part of the Agents row:
+ * what needs attention, and the Overview and Radar's three tables (each with
+ * what needs attention there); SandboxTemplate stays under Other kinds. The counts
  * are the server's (/api/agentsandbox/workspace) and follow the namespace
  * filter. Undefined when Agent Sandbox is not discovered, or the connected
  * Radar is known to predate the overview.
@@ -49,17 +47,17 @@ export function useAgentSandboxSidebarWorkspace({
     if (!available) return undefined
     const total = sidebar ? sidebarCount(sidebar.total, ['row', 'rows'], sidebar.controller) : undefined
     return {
-      [AGENT_SANDBOX_SIDEBAR_CATEGORY]: {
-        label: AGENT_SANDBOX_SIDEBAR_LABEL,
-        icon: Boxes,
+      [AGENTS_SIDEBAR_CATEGORY]: {
+        tools: 'Agent Sandbox',
+        icon: Bot,
         count: total?.count,
         countLowerBound: total?.lowerBound,
         countTitle: total?.title,
         destinations: [
-          { id: 'overview', label: AGENT_SANDBOX_OVERVIEW.label, active: !!active, onSelect: () => navigate(AGENT_SANDBOX_OVERVIEW.path) },
+          { id: 'agent-sandbox-overview', label: AGENT_SANDBOX_OVERVIEW.label, section: AGENT_SANDBOX_SIDEBAR_SECTION, active: !!active, onSelect: () => navigate(AGENT_SANDBOX_OVERVIEW.path) },
           ...SCREENS.map(({ kind, key, label, path, noun }) => {
             const c = sidebar ? sidebarCount(sidebar[key], [noun[0], noun[1]]) : undefined
-            return { id: kind.name, label, kind, count: c?.count, countLowerBound: c?.lowerBound, countTitle: c?.title, onSelect: () => navigate(path) }
+            return { id: kind.name, label, section: AGENT_SANDBOX_SIDEBAR_SECTION, kind, count: c?.count, countLowerBound: c?.lowerBound, countTitle: c?.title, onSelect: () => navigate(path) }
           }),
         ],
         scopeNote: nsKey ? `Counts for namespace ${nsKey}` : undefined,
