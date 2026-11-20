@@ -265,7 +265,15 @@ func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (
 	// The queries run on one store handle and the check must describe that
 	// handle's backend.
 	cache := k8s.GetResourceCache()
-	store := client.bindStore(queryCtx)
+	store, err := client.bindStore(queryCtx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return RightsizingResponse{}, ctx.Err()
+		}
+		// With no store to check, the queries fail with the connect error,
+		// which is the answer, rather than a cluster scope that never ran.
+		return computeRightsizing(queryCtx, store, kind, namespace, name, workload, ViewScope{}), nil
+	}
 	scope, err := resolveOnConnection(func() bool { return client.ConnectionCurrent(store.conn) }, func() (ViewScope, error) {
 		return resolveRightsizingScope(queryCtx, client, singleRightsizingScopeRequest(kind, namespace, workload, cache), cache)
 	})

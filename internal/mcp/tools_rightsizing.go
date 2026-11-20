@@ -1030,7 +1030,7 @@ func rightsizingRemediation(scope, reason string) string {
 
 	switch rightsizingReasonCode(reason) {
 	case prometheuspkg.ScanReasonClusterScopeWithheld:
-		return "The metrics store holds series Radar can't attribute to this cluster, so recommendations were withheld rather than computed from other clusters' Pods. clusterScope.note says why and what to configure. Report this as no answer, never as workloads needing no change."
+		return "Radar couldn't keep the metrics store's series to this cluster, so recommendations were withheld rather than risk computing them from other clusters' Pods. clusterScope.note says why and what to do. Report this as no answer, never as workloads needing no change."
 	case "partial_data":
 		return "Prometheus answered the usage queries only partially (a store or shard did not respond), so no recommendation was computed from the incomplete samples. Retry once the metrics backend is healthy."
 	case "pod_inventory_unreadable":

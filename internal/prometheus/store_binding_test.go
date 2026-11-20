@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -153,6 +154,52 @@ func TestRightsizingCheckOnTheSameConnectionQueriesItsStore(t *testing.T) {
 	}
 	if len(queries()) == 0 {
 		t.Fatal("no rightsizing query reached the store")
+	}
+}
+
+// A store that can't be reached is a failed query, not a cluster scope that
+// couldn't be checked: no check runs and the reason says the queries failed.
+func TestRightsizingOnAnUnreachableStoreReportsFailedQueries(t *testing.T) {
+	initBindingTestCluster(t)
+	store, _ := bindingTestStore(t)
+	connectBindingTestClient(t, store.URL)
+	store.Close()
+	checks := replaceRightsizingScopeResolver(t, func() {})
+
+	resp, err := RightsizingForWorkload(context.Background(), "Deployment", "shop", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *checks != 0 {
+		t.Errorf("checks = %d, want none without a store", *checks)
+	}
+	if resp.Reason != ReasonRightsizingQueriesFailed || resp.SampleAvailable || resp.ClusterScope != nil {
+		t.Errorf("reason = %q sample = %v clusterScope = %+v, want %q, no sample and no scope", resp.Reason, resp.SampleAvailable, resp.ClusterScope, ReasonRightsizingQueriesFailed)
+	}
+}
+
+func TestBindStoreAfterAFailedConnectFailsItsQueries(t *testing.T) {
+	initBindingTestCluster(t)
+	store, queries := bindingTestStore(t)
+	client := connectBindingTestClient(t, store.URL)
+	wantErr := errors.New("connect failed")
+	bound := boundStore{err: wantErr}
+	if _, err := bound.Query(context.Background(), "up"); !errors.Is(err, wantErr) {
+		t.Errorf("query error = %v, want the connect error", err)
+	}
+	if bound, err := client.bindStore(context.Background()); err != nil || bound.store == nil {
+		t.Fatalf("bind on a reachable store: %+v err=%v", bound, err)
+	}
+	store.Close()
+	bound, err := client.bindStore(context.Background())
+	if err == nil || bound.store != nil {
+		t.Fatalf("bind on an unreachable store: %+v err=%v", bound, err)
+	}
+	if _, qErr := bound.Query(context.Background(), "x"); !errors.Is(qErr, err) {
+		t.Errorf("query error = %v, want the connect error %v", qErr, err)
+	}
+	if got := queries(); len(got) != 0 {
+		t.Errorf("queries reached the store: %q", got)
 	}
 }
 
