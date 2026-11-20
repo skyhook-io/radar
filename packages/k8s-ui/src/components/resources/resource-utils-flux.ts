@@ -227,6 +227,13 @@ export function getExternalArtifactGenerator(ea: any): string {
   return ref.name || ''
 }
 
+// Another controller can produce an ExternalArtifact; it names itself in
+// spec.sourceRef, which is what the CRD's own Source column shows.
+export function getExternalArtifactProducer(ea: any): string {
+  const ref = ea.spec?.sourceRef
+  return ref?.kind && ref?.name ? `${ref.kind}/${ref.name}` : ''
+}
+
 // Digest revisions ("latest@sha256:…") read as the tag and 12 hex chars.
 export function shortArtifactRevision(revision: string): string {
   const at = revision.indexOf('@sha256:')

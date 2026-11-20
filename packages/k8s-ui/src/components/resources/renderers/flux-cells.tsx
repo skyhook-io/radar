@@ -9,6 +9,7 @@ import {
   getExternalArtifactStatus,
   getExternalArtifactRevision,
   getExternalArtifactGenerator,
+  getExternalArtifactProducer,
   getArtifactGeneratorStatus,
   getArtifactGeneratorSources,
   getArtifactGeneratorCount,
@@ -264,13 +265,10 @@ export function FluxAlertCell({ resource, column }: { resource: any; column: str
 
 export function ExternalArtifactCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
-    case 'generator': {
-      const generator = getExternalArtifactGenerator(resource)
-      if (generator) return <span className="text-sm text-theme-text-secondary truncate block">{generator}</span>
-      // Another controller can produce an ExternalArtifact; name it as the CRD's own column did.
-      const ref = resource.spec?.sourceRef
-      const other = ref?.kind && ref?.name ? `${ref.kind}/${ref.name}` : ''
-      return <span className="text-sm text-theme-text-tertiary truncate block">{other || '-'}</span>
+    case 'producer': {
+      const producer = getExternalArtifactGenerator(resource) || getExternalArtifactProducer(resource)
+      if (!producer) return <span className="text-sm text-theme-text-tertiary">-</span>
+      return <TruncatedText text={producer} className="text-sm text-theme-text-secondary" />
     }
     case 'status': {
       const status = getExternalArtifactStatus(resource)

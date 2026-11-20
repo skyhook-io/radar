@@ -5,7 +5,7 @@ import { GitOpsStatusBadge } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
 import { Tooltip } from '../../ui/Tooltip'
-import { getArtifactGeneratorArtifacts, getExternalArtifactGenerator, isArtifactGeneratorPaused, shortArtifactRevision } from '../resource-utils-flux'
+import { getArtifactGeneratorArtifacts, getExternalArtifactGenerator, getExternalArtifactProducer, isArtifactGeneratorPaused, shortArtifactRevision } from '../resource-utils-flux'
 
 type NavigateRef = { kind: string; namespace: string; name: string; group?: string }
 
@@ -46,6 +46,7 @@ export function ExternalArtifactRenderer({ data, onNavigate }: Props) {
   const artifact = data.status?.artifact || {}
   const sourceRef = data.spec?.sourceRef || {}
   const generator = getExternalArtifactGenerator(data)
+  const producer = generator ? '' : getExternalArtifactProducer(data)
   const namespace = data.metadata?.namespace || ''
   return (
     <>
@@ -57,6 +58,7 @@ export function ExternalArtifactRenderer({ data, onNavigate }: Props) {
           )}
           {typeof artifact.size === 'number' && <Property label="Size" value={formatBytes(artifact.size)} />}
           {artifact.lastUpdateTime && <Property label="Last update" value={<TimeValue timestamp={artifact.lastUpdateTime} />} />}
+          {producer && <Property label="Produced by" value={producer} />}
         </PropertyList>
       </Section>
       {generator && (

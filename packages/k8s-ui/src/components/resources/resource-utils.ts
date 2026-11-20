@@ -1947,6 +1947,7 @@ export {
   getExternalArtifactStatus,
   getExternalArtifactRevision,
   getExternalArtifactGenerator,
+  getExternalArtifactProducer,
   getArtifactGeneratorStatus,
   getArtifactGeneratorSources,
   getArtifactGeneratorCount,
