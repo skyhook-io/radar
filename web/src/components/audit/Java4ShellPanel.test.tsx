@@ -37,6 +37,40 @@ it('shows Java home and check limit counts before opening details and counts oth
   expect(html).not.toContain('aria-label="Unassessed containers by workload"')
 })
 
+it('shows instance-type inference alongside unknown CPU and non-x86 placement', () => {
+  const result: Java4ShellResult = {
+    findings: [{
+      workload: { kind: 'Deployment', group: 'apps', namespace: 'team', name: 'api' },
+      container: 'app',
+      image: 'example.com/team/api',
+      digest: 'sha256:fixture',
+      version: 'jdk-21.0.8+9',
+      pods: 4,
+      vbmiPods: 0,
+      unknownCPUPods: 1,
+      noVBMIByInstanceType: { 'm6a.large': 2 },
+      mitigationDeclaredPods: 0,
+    }],
+    containers: 4,
+    matches: 4,
+    findingGroups: 1,
+    unassessed: {},
+    unassessedRows: [],
+    unassessedGroups: 0,
+    coverage: { status: 'complete', scope: { type: 'all_namespaces' }, read: { type: 'all_namespaces' }, gaps: [] },
+  }
+  const client = new QueryClient({ defaultOptions: { queries: { enabled: false } } })
+  client.setQueryData(['java4shell', getApiBase(), 'fixture', '/vulnerabilities/java4shell'], result)
+  const html = renderToStaticMarkup(
+    <QueryClientProvider client={client}>
+      <Java4ShellPanel context="fixture" connected onNavigateToResource={() => {}} />
+    </QueryClientProvider>,
+  )
+  expect(html).toContain('2 Pods on m6a.large · VBMI absent (inferred from instance type)')
+  expect(html).toContain('CPU capability unknown for 1 Pod')
+  expect(html).toContain('1 Pod on non-x86 nodes at check time')
+})
+
 it('delivers progress and only returns a result after the terminal record', async () => {
   const update = { done: 1, total: 3 }
   const report = { containers: 3, matches: 0, unaffectedByMajor: { '8': 3 } }

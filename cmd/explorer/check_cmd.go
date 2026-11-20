@@ -346,7 +346,7 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 		}
 		fmt.Fprint(w, "JAVA\tADVISORY FIX\tPODS")
 		if details {
-			fmt.Fprint(w, "\tAVX-512 VBMI\tCPU UNKNOWN\tMITIGATION FLAG")
+			fmt.Fprint(w, "\tAVX-512 VBMI\tCPU UNKNOWN\tVBMI ABSENT (INFERRED)\tMITIGATION FLAG")
 		}
 		fmt.Fprintln(w)
 		for _, row := range report.Findings {
@@ -360,14 +360,31 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 				fmt.Fprintf(w, "%s\t", checkTableValue(row.Image))
 			}
 			fmt.Fprintf(w, "%s\t%s\t%d", row.Version, fix, row.Pods)
+			inferredNoVBMI := 0
+			for _, count := range row.NoVBMIByInstanceType {
+				inferredNoVBMI += count
+			}
 			if details {
-				fmt.Fprintf(w, "\t%d\t%d\t%d", row.VBMIPods, row.UnknownCPUPods, row.MitigationDeclaredPods)
+				fmt.Fprintf(w, "\t%d\t%d\t%d", row.VBMIPods, row.UnknownCPUPods, inferredNoVBMI)
+				if inferredNoVBMI > 0 {
+					fmt.Fprintf(w, " (%s)", strings.Join(slices.Sorted(maps.Keys(row.NoVBMIByInstanceType)), ", "))
+				}
+				fmt.Fprintf(w, "\t%d", row.MitigationDeclaredPods)
 			} else {
 				if row.VBMIPods > 0 {
 					fmt.Fprintf(w, " · %d with AVX-512 VBMI", row.VBMIPods)
 				}
 				if row.UnknownCPUPods > 0 {
 					fmt.Fprintf(w, " · %d CPU unknown", row.UnknownCPUPods)
+				}
+				if inferredNoVBMI > 0 {
+					source := "instance types"
+					if len(row.NoVBMIByInstanceType) == 1 {
+						for instanceType := range row.NoVBMIByInstanceType {
+							source = instanceType
+						}
+					}
+					fmt.Fprintf(w, " · %d VBMI absent (inferred from %s)", inferredNoVBMI, source)
 				}
 			}
 			fmt.Fprintln(w)

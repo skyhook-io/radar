@@ -104,10 +104,18 @@ func TestJava4ShellKeepsPlacementSeparateFromImageEvidence(t *testing.T) {
 	}
 	unknownLabel := newTarget("a-unknown-label", digest, "amd64", map[string]string{"feature.node.kubernetes.io/cpu-cpuid.BMI2": "true"})
 	vbmi := newTarget("b-vbmi", digest, "amd64", map[string]string{java4ShellVBMILabel: "true"})
+	vbmi.Node.Spec.ProviderID = "aws:///us-east-1a/i-confirmed"
+	vbmi.Node.Labels[corev1.LabelInstanceTypeStable] = "m6a.large"
 	vbmi.Pod.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "JAVA_TOOL_OPTIONS", Value: "-XX:-UseBASE64Intrinsics"}}
 	arm := newTarget("c-arm", digest, "arm64", nil)
+	aws := newTarget("a-aws", digest, "amd64", map[string]string{corev1.LabelInstanceTypeStable: "m6a.large"})
+	aws.Node.Spec.ProviderID = "aws:///us-east-1a/i-test"
+	gcp := newTarget("a-gcp", digest, "amd64", map[string]string{corev1.LabelInstanceTypeStable: "c2d-standard-4"})
+	gcp.Node.Spec.ProviderID = "gce://project/region-a/instance"
+	azure := newTarget("a-azure", digest, "amd64", map[string]string{corev1.LabelInstanceTypeStable: "Standard_D4as_v4"})
+	azure.Node.Spec.ProviderID = "azure:///subscriptions/sub/resourceGroups/group/providers/Microsoft.Compute/virtualMachineScaleSets/pool/virtualMachines/1"
 	pods := []Java4ShellPod{
-		unknownLabel, vbmi, arm,
+		unknownLabel, vbmi, arm, aws, gcp, azure,
 		newTarget("d-unreadable-node", digest, "", nil),
 		newTarget("e-tag-only", "sha256:"+strings.Repeat("c", 64), "amd64", nil),
 		newTarget("f-private", private, "amd64", nil),
@@ -126,13 +134,16 @@ func TestJava4ShellKeepsPlacementSeparateFromImageEvidence(t *testing.T) {
 		}
 		return resourceid.NewRef("apps", "Deployment", pod.Namespace, workload)
 	}, nil)
-	if err != nil || got.Containers != 117 || got.Matches != 114 || got.FindingGroups != 2 || len(got.Findings) != 2 {
+	if err != nil || got.Containers != 120 || got.Matches != 117 || got.FindingGroups != 2 || len(got.Findings) != 2 {
 		t.Fatalf("check: %+v, %v", got, err)
 	}
 	if row := got.Findings[0]; row.Workload.Name != "web" || row.Image != "registry.example/team/app" ||
 		row.MitigationDeclaredPods != 1 || row.FixedIn != "21.0.13.1" ||
-		row.Pods != 113 || row.VBMIPods != 1 || row.UnknownCPUPods != 111 || got.Findings[1].Workload.Name != "another-workload" {
+		row.Pods != 116 || row.VBMIPods != 1 || row.UnknownCPUPods != 111 || got.Findings[1].Workload.Name != "another-workload" {
 		t.Fatalf("findings: %+v", got.Findings)
+	}
+	if inferred := got.Findings[0].NoVBMIByInstanceType; len(inferred) != 3 || inferred["m6a.large"] != 1 || inferred["c2d-standard-4"] != 1 || inferred["Standard_D4as_v4"] != 1 {
+		t.Fatalf("cloud inference: %v", inferred)
 	}
 	for _, reason := range []string{"platform_unknown", "image_identity_unknown", StatusAuthRequired} {
 		if got.Unassessed[reason] != 1 {
@@ -146,6 +157,47 @@ func TestJava4ShellKeepsPlacementSeparateFromImageEvidence(t *testing.T) {
 		if !strings.HasSuffix(call, " anonymous") {
 			t.Fatalf("lookup used a credential: %s", call)
 		}
+	}
+}
+
+func TestJava4ShellInstanceTypeWithoutVBMI(t *testing.T) {
+	for _, tt := range []struct {
+		providerID   string
+		instanceType string
+		arch         string
+		inferred     bool
+	}{
+		{"aws:///zone/id", "c6a.metal", "amd64", true},
+		{"aws:///zone/id", "m6a.large", "amd64", true},
+		{"aws:///zone/id", "r6a.xlarge", "amd64", true},
+		{"gce://project/zone/node", "c2-standard-4", "amd64", true},
+		{"gce://project/zone/node", "c2d-highcpu-16", "amd64", true},
+		{"azure:///subscriptions/id", "Standard_D4a_v4", "amd64", true},
+		{"azure:///subscriptions/id", "standard_d16as_v4", "amd64", true},
+		{"aws:///zone/id", "m6i.large", "amd64", false},
+		{"aws:///zone/id", "m6a", "amd64", false},
+		{"gce://project/zone/node", "n2-standard-4", "amd64", false},
+		{"azure:///subscriptions/id", "Standard_D4as_v5", "amd64", false},
+		{"azure:///subscriptions/id", "Standard_D4s_v4", "amd64", false},
+		{"gce://project/zone/node", "m6a.large", "amd64", false},
+		{"", "m6a.large", "amd64", false},
+		{"aws:///zone/id", "m6a.large", "", false},
+		{"aws:///zone/id", "m6a.large", "arm64", false},
+	} {
+		t.Run(tt.providerID+"/"+tt.instanceType+"/"+tt.arch, func(t *testing.T) {
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{corev1.LabelInstanceTypeStable: tt.instanceType}},
+				Spec:       corev1.NodeSpec{ProviderID: tt.providerID},
+				Status:     corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{Architecture: tt.arch}},
+			}
+			want := ""
+			if tt.inferred {
+				want = tt.instanceType
+			}
+			if got := java4ShellInstanceTypeWithoutVBMI(node); got != want {
+				t.Fatalf("inferred instance type = %q, want %q", got, want)
+			}
+		})
 	}
 }
 

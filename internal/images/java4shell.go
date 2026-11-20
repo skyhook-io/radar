@@ -52,6 +52,7 @@ type Java4ShellFinding struct {
 	Pods                   int            `json:"pods"`
 	VBMIPods               int            `json:"vbmiPods"`
 	UnknownCPUPods         int            `json:"unknownCPUPods"`
+	NoVBMIByInstanceType   map[string]int `json:"noVBMIByInstanceType,omitempty"`
 	MitigationDeclaredPods int            `json:"mitigationDeclaredPods"`
 }
 
@@ -90,6 +91,7 @@ type java4ShellContainer struct {
 	unassessedReason   string
 	platformAssumed    bool
 	cpu                string
+	noVBMIInstanceType string
 	mitigationDeclared bool
 }
 
@@ -135,6 +137,10 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 			continue
 		}
 		platform, assumed, cpu := java4ShellPlacement(target.Node)
+		var noVBMIInstanceType string
+		if cpu == "unknown" {
+			noVBMIInstanceType = java4ShellInstanceTypeWithoutVBMI(target.Node)
+		}
 		var access Java4ShellRegistryAccess
 		var secrets []credential
 		var credentialScope string
@@ -198,6 +204,7 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 			c.lookup = i
 			c.platformAssumed = assumed
 			c.cpu = cpu
+			c.noVBMIInstanceType = noVBMIInstanceType
 			c.mitigationDeclared = java4ShellMitigationDeclared(container)
 			containers = append(containers, c)
 		}
@@ -272,7 +279,14 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 		case "vbmi":
 			row.VBMIPods++
 		case "unknown":
-			row.UnknownCPUPods++
+			if c.noVBMIInstanceType == "" {
+				row.UnknownCPUPods++
+			} else {
+				if row.NoVBMIByInstanceType == nil {
+					row.NoVBMIByInstanceType = map[string]int{}
+				}
+				row.NoVBMIByInstanceType[c.noVBMIInstanceType]++
+			}
 		}
 		if c.mitigationDeclared {
 			row.MitigationDeclaredPods++
@@ -368,6 +382,36 @@ func java4ShellPlacement(node *corev1.Node) (v1.Platform, bool, string) {
 	default:
 		return platform, assumed, "unknown"
 	}
+}
+
+var azureDav4InstanceType = regexp.MustCompile(`(?i)^standard_d(2|4|8|16|32|48|64|96)as?_v4$`)
+
+func java4ShellInstanceTypeWithoutVBMI(node *corev1.Node) string {
+	if node == nil || node.Status.NodeInfo.Architecture != "amd64" {
+		return ""
+	}
+	instanceType := node.Labels[corev1.LabelInstanceTypeStable]
+	provider, id, ok := strings.Cut(node.Spec.ProviderID, "://")
+	if !ok || id == "" {
+		return ""
+	}
+	switch provider {
+	case "aws":
+		family, size, _ := strings.Cut(instanceType, ".")
+		if size != "" && (family == "c6a" || family == "m6a" || family == "r6a") {
+			return instanceType
+		}
+	case "gce":
+		family, size, _ := strings.Cut(instanceType, "-")
+		if size != "" && (family == "c2" || family == "c2d") {
+			return instanceType
+		}
+	case "azure":
+		if azureDav4InstanceType.MatchString(instanceType) {
+			return instanceType
+		}
+	}
+	return ""
 }
 
 var (

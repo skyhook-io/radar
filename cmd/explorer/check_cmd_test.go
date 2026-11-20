@@ -194,3 +194,34 @@ func TestCheckImageProgressTerminalAndRedirect(t *testing.T) {
 		}
 	}
 }
+
+func TestJava4ShellCLIShowsCPUInferenceAlongsideMatch(t *testing.T) {
+	report := images.Java4ShellReport{Java4ShellResult: images.Java4ShellResult{
+		Containers: 3,
+		Matches:    3,
+		Findings: []images.Java4ShellFinding{{
+			Workload:             resourceid.NewRef("apps", "Deployment", "team", "api"),
+			Version:              "jdk-21.0.8+9",
+			Pods:                 3,
+			UnknownCPUPods:       1,
+			NoVBMIByInstanceType: map[string]int{"m6a.large": 2},
+		}},
+	}}
+	for _, details := range []bool{false, true} {
+		var output bytes.Buffer
+		if err := writeJava4ShellCheck(&output, "table", report, details); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"Affected Java declarations in 3 of 3 assessed containers"}
+		if details {
+			want = append(want, "VBMI ABSENT (INFERRED)", "2 (m6a.large)")
+		} else {
+			want = append(want, "2 VBMI absent (inferred from m6a.large)")
+		}
+		for _, want := range want {
+			if !strings.Contains(output.String(), want) {
+				t.Errorf("details %t: missing %q in %s", details, want, output.String())
+			}
+		}
+	}
+}

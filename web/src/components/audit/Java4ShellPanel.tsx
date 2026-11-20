@@ -365,12 +365,19 @@ function UnassessedDetails({ data, onOpen }: { data: Java4ShellResult; onOpen?: 
 }
 
 function JavaPlacement({ row }: { row: Java4ShellFinding }) {
-  const other = row.pods - row.vbmiPods - row.unknownCPUPods
+  const instanceTypes = Object.entries(row.noVBMIByInstanceType ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  const inferredNoVBMI = instanceTypes.reduce((total, [, count]) => total + count, 0)
+  const nonX86 = row.pods - row.vbmiPods - row.unknownCPUPods - inferredNoVBMI
   return (
     <>
       {row.vbmiPods > 0 && <div className="font-medium text-warning-text">Prioritize patching · {pluralize(row.vbmiPods, 'Pod')} on nodes reporting AVX-512 VBMI</div>}
       {row.unknownCPUPods > 0 && <div className="text-theme-text-secondary">CPU capability unknown for {pluralize(row.unknownCPUPods, 'Pod')}</div>}
-      {other > 0 && <div className="text-theme-text-secondary">{pluralize(other, 'Pod')} on non-x86 nodes at check time</div>}
+      {instanceTypes.map(([instanceType, count]) => (
+        <div key={instanceType} className="text-theme-text-secondary">
+          {pluralize(count, 'Pod')} on {instanceType} · VBMI absent (inferred from instance type)
+        </div>
+      ))}
+      {nonX86 > 0 && <div className="text-theme-text-secondary">{pluralize(nonX86, 'Pod')} on non-x86 nodes at check time</div>}
       {row.mitigationDeclaredPods > 0 && <div className="text-theme-text-tertiary">Mitigation flag declared in {pluralize(row.mitigationDeclaredPods, 'Pod spec')}</div>}
     </>
   )

@@ -185,6 +185,7 @@ export interface Java4ShellFinding {
   pods: number
   vbmiPods: number
   unknownCPUPods: number
+  noVBMIByInstanceType?: Record<string, number>
   mitigationDeclaredPods: number
 }
 
