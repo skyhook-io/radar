@@ -84,6 +84,11 @@ type PermissionCache struct {
 	cache       map[string]*UserPermissions // keyed by cacheKey(username, groups)
 	ttl         time.Duration
 	contextName func() string // current K8s context; entries with a different stamp are invisible
+
+	// flights holds the discoveries Resolve is running, keyed by identity and
+	// connection. Guarded by mu, so joining a run and finding its cached
+	// answer can't interleave.
+	flights map[string]*flight[discovery]
 }
 
 // cacheKey builds the composite cache key for an identity. The verdicts stored
@@ -180,8 +185,12 @@ func (pc *PermissionCache) WithContextName(provider func() string) *PermissionCa
 func (pc *PermissionCache) Get(username string, groups []string) *UserPermissions {
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
+	return pc.liveLocked(cacheKey(username, groups))
+}
 
-	perms, ok := pc.cache[cacheKey(username, groups)]
+// liveLocked is Get for a computed key, with pc.mu held.
+func (pc *PermissionCache) liveLocked(key string) *UserPermissions {
+	perms, ok := pc.cache[key]
 	if !ok || time.Now().After(perms.ExpiresAt) {
 		return nil
 	}
@@ -201,13 +210,16 @@ func (pc *PermissionCache) Get(username string, groups []string) *UserPermission
 func (pc *PermissionCache) Set(username string, groups []string, perms *UserPermissions) {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
+	pc.setLocked(cacheKey(username, groups), perms)
+}
 
+// setLocked is Set for a computed key, with pc.mu held.
+func (pc *PermissionCache) setLocked(key string, perms *UserPermissions) {
 	now := time.Now()
 	perms.ExpiresAt = now.Add(pc.ttl)
 	if pc.contextName != nil {
 		perms.ContextName = pc.contextName()
 	}
-	key := cacheKey(username, groups)
 	pc.cache[key] = perms
 
 	for k, p := range pc.cache {
@@ -220,11 +232,85 @@ func (pc *PermissionCache) Set(username string, groups []string, perms *UserPerm
 	}
 }
 
-// Invalidate removes all cached permissions (e.g., on context switch)
+// Invalidate removes all cached permissions (e.g., on context switch). A
+// caller after it never shares a discovery that began before it.
 func (pc *PermissionCache) Invalidate() {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 	pc.cache = make(map[string]*UserPermissions)
+	pc.flights = nil
+}
+
+// Resolve returns the identity's cached permissions, or runs discover to
+// compute and cache them. Callers that miss at once for the same identity and
+// connection share one discover run, so a cache expiry costs one discovery
+// rather than one per request. The run keeps going while any of those callers
+// still waits and is canceled when the last one stops. connection names the
+// cluster connection discover reads; callers on another connection never
+// share its answer.
+//
+// discover returns nil when it couldn't decide: every caller sharing that run
+// then gets (nil, false) and must fail closed, and nothing is cached. A
+// caller whose own context ends first also gets (nil, false). discover also
+// reports whether its answer may be cached; it may not when the connection it
+// read was replaced while it ran.
+//
+// A run caches its answer only while it is still the identity's current run:
+// one that Invalidate or its callers detached answers its callers and caches
+// nothing, since the cache may already hold something newer. An entry cached
+// while the run went on stays, with the verdicts recorded on it.
+func (pc *PermissionCache) Resolve(ctx context.Context, username string, groups []string, connection string, discover func(context.Context) (perms *UserPermissions, cacheable bool)) (*UserPermissions, bool) {
+	key := cacheKey(username, groups)
+	flightKey := string(appendKeyPart([]byte(key), connection))
+
+	pc.mu.Lock()
+	if perms := pc.liveLocked(key); perms != nil {
+		pc.mu.Unlock()
+		return perms, true
+	}
+	f := pc.flights[flightKey]
+	if f == nil {
+		f = startFlight(ctx, &pc.mu, "permission discovery", func(ctx context.Context) discovery {
+			perms, cacheable := discover(ctx)
+			return discovery{perms, cacheable}
+		}, func(f *flight[discovery], d discovery) discovery {
+			if d.perms != nil && d.cacheable && pc.flights[flightKey] == f {
+				if live := pc.liveLocked(key); live != nil {
+					d.perms = live
+				} else {
+					pc.setLocked(key, d.perms)
+				}
+			}
+			pc.detachLocked(flightKey, f)
+			return d
+		})
+		if pc.flights == nil {
+			pc.flights = make(map[string]*flight[discovery])
+		}
+		pc.flights[flightKey] = f
+	} else {
+		f.join()
+	}
+	pc.mu.Unlock()
+
+	d, ok := f.await(ctx, &pc.mu, func() { pc.detachLocked(flightKey, f) })
+	if !ok || d.perms == nil {
+		return nil, false
+	}
+	return d.perms, true
+}
+
+// discovery is what one discover run produced.
+type discovery struct {
+	perms     *UserPermissions
+	cacheable bool
+}
+
+// detachLocked stops new callers from joining f, with pc.mu held.
+func (pc *PermissionCache) detachLocked(flightKey string, f *flight[discovery]) {
+	if pc.flights[flightKey] == f {
+		delete(pc.flights, flightKey)
+	}
 }
 
 // DiscoverNamespaces checks which namespaces a user can access via SubjectAccessReview.
