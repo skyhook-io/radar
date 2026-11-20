@@ -21,6 +21,10 @@ import (
 // The progress callback receives human-readable status messages suitable for
 // display in the UI (e.g. via SSE connection status updates).
 func InitAllSubsystems(ctx context.Context, progress func(string)) error {
+	return initAllSubsystems(ctx, progress, 0)
+}
+
+func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait time.Duration) error {
 	subsystemStart := time.Now()
 
 	// 1. Timeline — before caches so events during warmup are captured
@@ -88,14 +92,22 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 		log.Printf("Resource cache initialized with %d resources", cache.GetResourceCount())
 	}
 
-	// Wait for discovery to complete before dynamic cache (which needs discovery data).
-	// If context is canceled, skip the wait — let discovery drain in background.
-	if discoveryStarted && ctx.Err() == nil {
-		if discoveryErr := <-discoveryErrCh; discoveryErr != nil {
-			log.Printf("Warning: resource discovery init failed: %v", discoveryErr)
+	if discoveryStarted {
+		progress("Waiting for Kubernetes API discovery…")
+		waitCtx := ctx
+		if discoveryWait > 0 {
+			var cancel context.CancelFunc
+			waitCtx, cancel = context.WithTimeout(ctx, discoveryWait)
+			defer cancel()
 		}
-	} else if discoveryStarted {
-		logTiming("   [ops] Skipping discovery wait: context canceled")
+		select {
+		case discoveryErr := <-discoveryErrCh:
+			if discoveryErr != nil {
+				log.Printf("Warning: resource discovery init failed: %v", discoveryErr)
+			}
+		case <-waitCtx.Done():
+			return fmt.Errorf("waiting for Kubernetes API discovery: %w", waitCtx.Err())
+		}
 	}
 
 	// Bail if context was canceled while we were waiting

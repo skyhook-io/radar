@@ -85,6 +85,7 @@ import (
 
 // Server is the Explorer HTTP server
 type Server struct {
+	contextSwitch           k8s.ContextSwitchTracker
 	router                  *chi.Mux
 	broadcaster             *SSEBroadcaster
 	vitalsMetrics           vitalsMetricsMemo
@@ -1435,6 +1436,7 @@ func (s *Server) Handler() http.Handler {
 
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
+	s.contextSwitch.Stop()
 	prometheuspkg.RightsizingScans().Invalidate()
 	StopAllLocalTermSessions()
 	if runs := s.aiRunManager(); runs != nil {
@@ -5158,6 +5160,31 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	query := r.URL.Query()
+	if (query.Has("cancelSwitch") || query.Get("track") == "1") && s.configManagement() != "local" {
+		s.writeError(w, http.StatusForbidden, "Tracked context switches are available on local Radar.")
+		return
+	}
+	if id := query.Get("cancelSwitch"); query.Has("cancelSwitch") {
+		if !s.contextSwitch.Cancel(id, name) {
+			s.writeError(w, http.StatusConflict, "This switch can no longer be cancelled.")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if query.Get("track") == "1" {
+		op, ok := s.contextSwitch.Start(name, countRefusedSwitch)
+		if !ok {
+			s.writeError(w, http.StatusConflict, "Another cluster switch is already in progress.")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		s.writeJSON(w, op)
+		return
+	}
+
 	if err := k8s.PerformCheckedContextSwitch(r.Context(), name); err != nil {
 		// A preflight rejection fails before any teardown — the current cluster is
 		// still connected, so don't poison the global connection status.
@@ -5215,6 +5242,12 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		// Lets the browser stand down its auto-retry for the whole auth-loss
 		// episode, even when the live errorType flips to non-auth values.
 		"authRecoveryOwed": k8s.RuntimeAuthRecoveryOwed(),
+	}
+	if op := s.contextSwitch.Snapshot(); op != nil {
+		if op.Phase == "switching" && op.Target == status.Context && status.State == k8s.StateConnecting && status.ProgressMsg != "" {
+			op.Progress = status.ProgressMsg
+		}
+		response["contextSwitch"] = op
 	}
 	// Context enumeration re-reads kubeconfig files (under the client write
 	// lock in multi-file mode) — too expensive for the UI's perpetual

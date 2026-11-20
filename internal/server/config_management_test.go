@@ -246,3 +246,20 @@ func TestOperatorConfigReadPrivacy(t *testing.T) {
 		t.Fatalf("shared preferences: %s", w.Body.String())
 	}
 }
+
+func TestTrackedContextSwitchRefusesManagedInstallations(t *testing.T) {
+	for _, s := range []*Server{
+		{authConfig: auth.Config{Mode: "proxy"}},
+		{cloudConnectCfg: CloudConnectConfig{CloudTunnelConfigured: true}},
+	} {
+		router := chi.NewRouter()
+		router.Post("/contexts/{name}", s.handleSwitchContext)
+		for _, q := range []string{"track=1", "cancelSwitch=abc"} {
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, httptest.NewRequest("POST", "/contexts/target?"+q, nil))
+			if resp.Code != http.StatusForbidden || s.contextSwitch.Snapshot() != nil {
+				t.Fatalf("managed switch %s: %d %s", q, resp.Code, resp.Body.String())
+			}
+		}
+	}
+}

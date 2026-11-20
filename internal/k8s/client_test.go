@@ -733,7 +733,7 @@ func TestInClusterRuntimeReconnectPublishesConnectedAfterReinit(t *testing.T) {
 	contextSwitchMu.Lock()
 	previousCallbacks := contextSwitchCallbacks
 	callbackContext := ""
-	contextSwitchCallbacks = []ContextSwitchCallback{func(name string) { callbackContext = name }}
+	contextSwitchCallbacks = []func(string, string){func(name, _ string) { callbackContext = name }}
 	contextSwitchMu.Unlock()
 	t.Cleanup(func() {
 		contextSwitchMu.Lock()
@@ -801,7 +801,7 @@ func TestInClusterRuntimeReconnectDoesNotPublishAfterSupersededInit(t *testing.T
 	contextSwitchMu.Lock()
 	previousCallbacks := contextSwitchCallbacks
 	callbackCalled := false
-	contextSwitchCallbacks = []ContextSwitchCallback{func(string) { callbackCalled = true }}
+	contextSwitchCallbacks = []func(string, string){func(string, string) { callbackCalled = true }}
 	contextSwitchMu.Unlock()
 	t.Cleanup(func() {
 		contextSwitchMu.Lock()

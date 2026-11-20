@@ -66,7 +66,7 @@ type CostResetFunc func()
 
 var (
 	beforeContextSwitchCallbacks   []ContextSwitchCallback
-	contextSwitchCallbacks         []ContextSwitchCallback
+	contextSwitchCallbacks         []func(string, string)
 	namespaceRescopeCallbacks      []NamespaceRescopeCallback
 	contextSwitchProgressCallbacks []ContextSwitchProgressCallback
 	contextSwitchMu                sync.RWMutex
@@ -201,6 +201,11 @@ func OnBeforeContextSwitch(callback ContextSwitchCallback) {
 
 // OnContextSwitch registers a callback to be called when the context is switched
 func OnContextSwitch(callback ContextSwitchCallback) {
+	OnContextSwitchComplete(func(name, _ string) { callback(name) })
+}
+
+// OnContextSwitchComplete includes the operation ID for a tracked user switch.
+func OnContextSwitchComplete(callback func(name, switchID string)) {
 	contextSwitchMu.Lock()
 	defer contextSwitchMu.Unlock()
 	contextSwitchCallbacks = append(contextSwitchCallbacks, callback)
@@ -481,6 +486,7 @@ func credentialPluginStuck(ctx context.Context, prepared *preparedContext, probe
 type checkedSwitch struct {
 	ctx      context.Context
 	prepared *preparedContext
+	tracker  *ContextSwitchTracker
 }
 
 // PerformCheckedContextSwitch is the switch a person asks for. While the
@@ -490,17 +496,26 @@ type checkedSwitch struct {
 // never holds up another operation. Disconnected sessions switch as before:
 // there is no working cluster to protect.
 func PerformCheckedContextSwitch(ctx context.Context, newContext string) error {
+	return performCheckedContextSwitch(ctx, newContext, nil)
+}
+
+func performCheckedContextSwitch(ctx context.Context, newContext string, tracker *ContextSwitchTracker) error {
+	checked := &checkedSwitch{ctx: ctx, tracker: tracker}
 	if !shouldCheckBeforeSwitch(newContext) {
-		return performContextSwitch(newContext, 0, false, nil)
+		return performContextSwitch(newContext, 0, false, checked)
 	}
 	observedOperationGen := currentOperationGen()
 	prepared, err := prepareContext(newContext)
 	if err != nil {
 		// A context that can't even be loaded is refused by the switch's own
 		// preflight, with its existing wording.
-		return performContextSwitch(newContext, 0, false, nil)
+		return performContextSwitch(newContext, 0, false, checked)
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, connectionTestTimeoutFor(prepared.usesExec))
+	timeout := connectionTestTimeoutFor(prepared.usesExec)
+	if tracker != nil {
+		timeout = ContextSwitchTimeout
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	probeErr := testConnection(probeCtx, prepared.config, prepared.usesExec)
 	cancel()
 	if probeErr != nil {
@@ -513,7 +528,8 @@ func PerformCheckedContextSwitch(ctx context.Context, newContext string) error {
 			PluginStuck: credentialPluginStuck(ctx, prepared, probeErr),
 		})
 	}
-	return performContextSwitch(newContext, observedOperationGen, true, &checkedSwitch{ctx: ctx, prepared: prepared})
+	checked.prepared = prepared
+	return performContextSwitch(newContext, observedOperationGen, true, checked)
 }
 
 func shouldCheckBeforeSwitch(newContext string) bool {
@@ -613,7 +629,7 @@ func reinitializeCurrentContextIfOperationCurrent(
 	}
 
 	reportProgress("Building topology...")
-	notifyContextSwitchCallbacks(contextName)
+	notifyContextSwitchCallbacks(contextName, "")
 	SetConnectionStatus(ConnectionStatus{
 		State:       StateConnected,
 		Context:     contextName,
@@ -623,7 +639,7 @@ func reinitializeCurrentContextIfOperationCurrent(
 	return nil
 }
 
-func performContextSwitch(newContext string, observedOperationGen uint64, requireOperationCurrent bool, checked *checkedSwitch) error {
+func performContextSwitch(newContext string, observedOperationGen uint64, requireOperationCurrent bool, checked *checkedSwitch) (switchErr error) {
 	switchStart := time.Now()
 	log.Printf("[ops] Context switch START → %q", newContext)
 
@@ -682,16 +698,34 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// it if the person gave up waiting, or if the name now resolves to
 	// something else: a CAPI merge or a kubeconfig edit doesn't bump the
 	// operation generation.
-	if checked != nil {
-		if checked.ctx.Err() != nil {
-			return fmt.Errorf("%w: switch to %q was cancelled", ErrContextSwitchPreflight, newContext)
-		}
+	if checked != nil && checked.ctx.Err() != nil {
+		return fmt.Errorf("%w: switch to %q was cancelled", ErrContextSwitchPreflight, newContext)
+	}
+	if checked != nil && checked.prepared != nil {
 		fingerprint, err := currentContextSourceFingerprint(newContext)
 		if err != nil || fingerprint != checked.prepared.fingerprint {
 			return fmt.Errorf("%w: the kubeconfig for %q changed while Radar was checking it, try again", ErrContextSwitchPreflight, newContext)
 		}
 	}
 
+	progress := reportProgress
+	if checked != nil && checked.tracker != nil {
+		if !checked.tracker.commit(checked.ctx) {
+			return context.Canceled
+		}
+		progress = func(message string) {
+			checked.tracker.progress(message)
+			if status := GetConnectionStatus(); status.State == StateConnecting && status.Context == newContext {
+				UpdateConnectionProgress(message)
+			}
+			reportProgress(message)
+		}
+		defer func() {
+			if switchErr != nil {
+				SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: newContext, Error: switchErr.Error(), ErrorType: ClassifyError(switchErr)})
+			}
+		}()
+	}
 	// Fire before-switch callbacks while the OLD context is still active, so
 	// teardown (e.g. cancelling in-flight AI investigations) can't leak onto the
 	// cluster we're about to connect to. After the preflight above — a failed
@@ -707,7 +741,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// previous cluster's caches are gone, so lingering port-forwards / exec
 	// terminals would be reading state we can no longer serve.
 	stopActiveSessions()
-	reportProgress("Stopping caches...")
+	progress("Stopping caches...")
 	t := time.Now()
 	ResetAllSubsystems()
 	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
@@ -721,10 +755,10 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	InvalidateResourcePermissionsCache()
 
 	// Step 2: Switch the K8s client to the new context
-	reportProgress("Connecting to cluster...")
+	progress("Connecting to cluster...")
 	t = time.Now()
 	log.Printf("Switching K8s client to context %q...", newContext)
-	if checked != nil {
+	if checked != nil && checked.prepared != nil {
 		installPreparedContext(checked.prepared)
 	} else if err := SwitchContext(newContext); err != nil {
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
@@ -734,6 +768,9 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		return fmt.Errorf("failed to switch context: %w", err)
 	}
 	logTiming("   [ops] SwitchContext: %v", time.Since(t))
+	if checked != nil && checked.tracker != nil {
+		SetConnectionStatus(ConnectionStatus{State: StateConnecting, Context: newContext, ClusterName: GetClusterName(), ProgressMsg: "Loading cluster data…"})
+	}
 	ClearNamespaceScopeOverride()
 	RestoreNamespaceScopePreference(GetContextName())
 	if err := requireNamespaceScopeTarget(newContext); err != nil {
@@ -750,11 +787,15 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// checked switch already probed the same client config before teardown.
 	// Contexts are derived from the operation context so they're canceled
 	// if another context switch starts while this one is in progress.
-	if checked == nil {
-		reportProgress("Testing cluster connectivity...")
+	if checked == nil || checked.prepared == nil {
+		progress("Testing cluster connectivity...")
 		t = time.Now()
 		log.Println("Testing cluster connectivity...")
-		connCtx, connCancel := NewOperationContext(connectionTestOperationTimeout())
+		timeout := connectionTestOperationTimeout()
+		if checked != nil && checked.tracker != nil {
+			timeout = ContextSwitchTimeout
+		}
+		connCtx, connCancel := NewOperationContext(timeout)
 		defer connCancel()
 		if err := TestClusterConnection(connCtx); err != nil {
 			elapsed := time.Since(switchStart).Truncate(time.Millisecond)
@@ -768,11 +809,25 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 
 	// Step 4: Initialize all subsystems (same function as initial boot).
 	// Teardown above is non-blocking, so old informers may still be draining.
-	// Use a timeout to prevent context switch from hanging indefinitely.
+
 	t = time.Now()
-	initCtx, initCancel := NewOperationContext(ContextSwitchTimeout)
+	var initCtx context.Context
+	var initCancel context.CancelFunc
+	var discoveryWait time.Duration
+	if checked != nil && checked.tracker != nil {
+		// Once the target answers, informer readiness uses the same first-paint
+		// backstop as startup. A cluster replacement still cancels this work.
+		initCtx, initCancel = context.WithCancel(OperationContext())
+		// A stuck exec plugin can outlive the discovery client HTTP timeout.
+		// Start this wait budget only once the typed cache is ready.
+		discoveryWait = FirstPaintBackstop
+		stop := context.AfterFunc(checked.ctx, initCancel)
+		defer stop()
+	} else {
+		initCtx, initCancel = NewOperationContext(ContextSwitchTimeout)
+	}
 	defer initCancel()
-	if err := InitAllSubsystems(initCtx, reportProgress); err != nil {
+	if err := initAllSubsystems(initCtx, progress, discoveryWait); err != nil {
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
 		log.Printf("[ops] Context switch FAILED at subsystem init: %v (%v since switch start)", err, elapsed)
 		errorlog.Record("context-switch", "error",
@@ -782,9 +837,12 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	logTiming("   [ops] InitAllSubsystems: %v", time.Since(t))
 
 	// Step 5: Notify all registered callbacks
-	reportProgress("Building topology...")
-	log.Printf("[ops] Context switch to %q COMPLETE (%v total)", newContext, time.Since(switchStart))
-	notifyContextSwitchCallbacks(newContext)
+	progress("Building topology...")
+	var switchID string
+	if checked != nil && checked.tracker != nil {
+		switchID = checked.tracker.Snapshot().ID
+	}
+	notifyContextSwitchCallbacks(newContext, switchID)
 
 	// Publish success while still holding contextOpMu: a caller publishing
 	// after this returns races the next queued operation's teardown, and the
@@ -795,18 +853,19 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		Context:     newContext,
 		ClusterName: GetClusterName(),
 	})
+	log.Printf("[ops] Context switch to %q COMPLETE (%v total)", newContext, time.Since(switchStart))
 
 	return nil
 }
 
-func notifyContextSwitchCallbacks(contextName string) {
+func notifyContextSwitchCallbacks(contextName, switchID string) {
 	contextSwitchMu.RLock()
-	callbacks := make([]ContextSwitchCallback, len(contextSwitchCallbacks))
+	callbacks := make([]func(string, string), len(contextSwitchCallbacks))
 	copy(callbacks, contextSwitchCallbacks)
 	contextSwitchMu.RUnlock()
 
 	for _, callback := range callbacks {
-		callback(contextName)
+		callback(contextName, switchID)
 	}
 }
 

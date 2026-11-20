@@ -32,7 +32,7 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 | `--disable-auto-port-forward` | `false` | Never open a port-forward on Radar's own initiative (metrics, traffic, cost and Argo CD discovery). Port-forwards you start still work. See [Automatic port-forwarding](#automatic-port-forwarding) |
 | `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
 | `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
-| `--context-switch-timeout` | `30s` | Maximum time a kubeconfig context switch may take. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
+| `--context-switch-timeout` | `30s` | Timeout for the target connectivity check in the browser. Synchronous switch and recovery initialization also use this timeout. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
 | `--first-paint-backstop` | `5m` | Hard upper bound on the initial critical-cache sync wait before Radar falls through to a partial-data render. Env: `RADAR_FIRST_PAINT_BACKSTOP`. |
 | `--namespace-list-timeout` | `5s` | Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted. A timeout on a slow control plane is misreported in the UI as "Limited list — RBAC". Env: `RADAR_NAMESPACE_LIST_TIMEOUT`. |
 | `--max-scope-candidates` | `20` | Cap on the namespace-fallback probe fanout (used by accounts that can list namespaces cluster-wide but not list a specific kind cluster-wide). Raise above `20` for clusters with more than 20 namespaces. Env: `RADAR_MAX_SCOPE_CANDIDATES`. |
@@ -51,13 +51,15 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 
 ### Tuning for slow or high-latency clusters
 
-The default deadlines (30 s context switch, 5 m first-paint backstop, 5 s
+In the local cluster picker, Radar checks the target before closing sessions on a connected cluster. You can cancel during that check. Once the switch starts replacing caches, dismissing the progress display or refreshing the tab lets the switch continue. The picker reports its progress. The first-paint backstop controls the critical informer wait. If API discovery is still pending when the typed cache is ready, a tracked switch gives discovery a fresh wait of the same duration. A discovery timeout names this stage in the error.
+
+The default deadlines (30 s connectivity check, 5 m first-paint backstop, 5 s
 namespace LIST, 20 scope candidates) are tuned for healthy clusters reached
 over fast, low-latency connections. They are too tight for clusters reached
 over SSH tunnels, geographically distant control planes, or accounts subject
 to API-server throttling, where they surface as one of three symptoms:
 
-- "Context switch timed out" toasts when the cache eventually does sync
+- Timeouts while checking target connectivity
 - "Limited list — RBAC doesn't allow listing all namespaces" even though the
   account has cluster-wide list permission (the LIST timed out, not RBAC)
 - Kinds silently marked denied because the namespace they live in fell past

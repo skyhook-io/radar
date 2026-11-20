@@ -22,11 +22,8 @@ import (
 // reads any of these (i.e. before InitializeK8s). No locking is provided —
 // the contract is "configure once at startup".
 var (
-	// ContextSwitchTimeout caps the time a kubeconfig context switch can take
-	// from the user clicking a context to the new client being live and the
-	// minimal informer set having synced. On healthy clusters it completes in
-	// a few seconds; on high-latency clusters reached over an SSH tunnel the
-	// minimal-set sync alone can exceed 30s.
+	// ContextSwitchTimeout bounds the tracked switch's target connectivity check.
+	// Synchronous switch, rescope and recovery callers also use it for initialization.
 	ContextSwitchTimeout = 30 * time.Second
 
 	// FirstPaintBackstop is the hard upper bound on the critical-sync wait
