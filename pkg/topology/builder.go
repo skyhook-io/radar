@@ -1738,7 +1738,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		virtualServiceGVR, hasVirtualServices = resourceDiscovery.GetGVRWithGroup("VirtualService", "networking.istio.io")
 	}
-	virtualServiceIDs := make(map[string]string)             // ns/name -> vsID
 	var virtualServiceResources []*unstructured.Unstructured // Store for second pass
 	if hasVirtualServices && dynamicCache != nil {
 		loadIstioDomain()
@@ -1755,7 +1754,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			name := vs.GetName()
 
 			vsID := fmt.Sprintf("virtualservice/%s/%s", ns, name)
-			virtualServiceIDs[ns+"/"+name] = vsID
 
 			// Extract spec fields for display
 			spec, _, _ := unstructured.NestedMap(vs.Object, "spec")
@@ -1799,7 +1797,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		destinationRuleGVR, hasDestinationRules = resourceDiscovery.GetGVRWithGroup("DestinationRule", "networking.istio.io")
 	}
-	destinationRuleIDs := make(map[string]string)             // ns/name -> drID
 	var destinationRuleResources []*unstructured.Unstructured // Store for second pass
 	if hasDestinationRules && dynamicCache != nil {
 		loadIstioDomain()
@@ -1816,7 +1813,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			name := dr.GetName()
 
 			drID := fmt.Sprintf("destinationrule/%s/%s", ns, name)
-			destinationRuleIDs[ns+"/"+name] = drID
 
 			host, _, _ := unstructured.NestedString(dr.Object, "spec", "host")
 			subsets, _, _ := unstructured.NestedSlice(dr.Object, "spec", "subsets")
@@ -1852,7 +1848,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		istioGatewayGVR, hasIstioGateways = resourceDiscovery.GetGVRWithGroup("Gateway", "networking.istio.io")
 	}
-	istioGatewayIDs := make(map[string]string) // ns/name -> igwID
 	if hasIstioGateways && dynamicCache != nil {
 		istioGateways, igwErr := dynamicCache.ListNamespaces(istioGatewayGVR, opts.Namespaces)
 		if igwErr != nil {
@@ -1867,7 +1862,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			name := igw.GetName()
 
 			igwID := fmt.Sprintf("istiogateway/%s/%s", ns, name)
-			istioGatewayIDs[ns+"/"+name] = igwID
 
 			servers, _, _ := unstructured.NestedSlice(igw.Object, "spec", "servers")
 			selector, _, _ := unstructured.NestedStringMap(igw.Object, "spec", "selector")
@@ -4472,76 +4466,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 14b. Create Istio VirtualService edges
-	// VirtualService → Service (via spec.http[].route[].destination.host)
-	// Istio Gateway → VirtualService (via spec.gateways[])
-	// Track seen VS→Service pairs to deduplicate (multiple routes to same service)
-	vsToSvcSeen := make(map[string]bool)
-	for _, vs := range virtualServiceResources {
-		vsNs := vs.GetNamespace()
-		vsName := vs.GetName()
-		vsID := virtualServiceIDs[vsNs+"/"+vsName]
-
-		if spec, _, _ := unstructured.NestedMap(vs.Object, "spec"); spec == nil {
-			continue
-		}
-
-		// Create Istio Gateway → VirtualService edges
-		for _, gw := range configrefs.IstioVirtualServiceGateways(vs) {
-			if igwID, ok := istioGatewayIDs[gw.Ref.Namespace+"/"+gw.Ref.Name]; ok {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", igwID, vsID),
-					Source: igwID,
-					Target: vsID,
-					Type:   EdgeExposes,
-				})
-			}
-		}
-
-		// VirtualService → Service edges, from HTTP, then TCP, then TLS
-		// routes; the first protocol to reach a Service names the edge.
-		for _, dest := range configrefs.IstioVirtualServiceDestinations(vs, istioDomain) {
-			svcID, ok := serviceIDs[dest.Ref.Namespace+"/"+dest.Ref.Name]
-			if !ok {
-				continue
-			}
-			dedupeKey := vsID + "|" + svcID
-			if vsToSvcSeen[dedupeKey] {
-				continue
-			}
-			vsToSvcSeen[dedupeKey] = true
-			suffix := ""
-			if protocol, _, _ := strings.Cut(strings.TrimPrefix(dest.Path, "spec."), "["); protocol != "http" {
-				suffix = "-" + protocol
-			}
-			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s%s-to-%s", vsID, suffix, svcID),
-				Source: vsID,
-				Target: svcID,
-				Type:   EdgeExposes,
-			})
-		}
-	}
-
-	// 14c. Create Istio DestinationRule → Service edges (via spec.host)
-	for _, dr := range destinationRuleResources {
-		drNs := dr.GetNamespace()
-		drName := dr.GetName()
-		drID := destinationRuleIDs[drNs+"/"+drName]
-
-		host, named := configrefs.IstioDestinationRuleService(dr, istioDomain)
-		if !named {
-			continue
-		}
-		if svcID, ok := serviceIDs[host.Ref.Namespace+"/"+host.Ref.Name]; ok {
-			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", drID, svcID),
-				Source: drID,
-				Target: svcID,
-				Type:   EdgeConfigures,
-			})
-		}
-	}
+	// 14b. Istio edges: Gateway → VirtualService, VirtualService → Service (the
+	// first route to reach a Service, HTTP before TCP before TLS), and
+	// DestinationRule → Service.
+	istioHosts := relations.IstioServiceHostsIn(func() string { loadIstioDomain(); return istioDomain })
+	edges = drawFamilies(edges, drawn, nodes, unstructuredSources(virtualServiceResources), relations.IstioGateways, istioHosts)
+	edges = drawFamilies(edges, drawn, nodes, unstructuredSources(destinationRuleResources), istioHosts)
 
 	// 14d. Create KNative Serving edges
 
