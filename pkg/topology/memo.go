@@ -27,10 +27,8 @@ type Memoizer struct {
 }
 
 type memoEntry struct {
-	topo      *Topology
-	builtAt   time.Time
-	indexOnce sync.Once           // guards lazy build of index
-	index     *RelationshipsIndex // populated by Memoizer.GetIndex on first call
+	topo    *Topology
+	builtAt time.Time
 }
 
 // NewMemoizer returns a Memoizer with the given TTL. A zero or negative TTL
@@ -89,49 +87,6 @@ func (m *Memoizer) lookup(key string) (*Topology, bool) {
 		return e.topo, true
 	}
 	return nil, false
-}
-
-// GetIndex returns the RelationshipsIndex for the topology produced by build
-// under opts. The index is computed lazily on first call and cached alongside
-// the topology entry, so subsequent GetIndex calls for the same entry are O(1)
-// map lookups. Falls through to an inline build when the underlying entry has
-// been evicted between the topology fetch and the index fetch, or when the
-// Memoizer is disabled (ttl ≤ 0).
-func (m *Memoizer) GetIndex(opts BuildOptions, build func() (*Topology, error)) (*RelationshipsIndex, error) {
-	return m.GetIndexScoped(0, opts, build)
-}
-
-// GetIndexScoped is GetIndex with the scope semantics of GetScoped.
-func (m *Memoizer) GetIndexScoped(scope uint64, opts BuildOptions, build func() (*Topology, error)) (*RelationshipsIndex, error) {
-	_, index, err := m.GetWithIndexScoped(scope, opts, build)
-	return index, err
-}
-
-// GetWithIndexScoped returns one coherent topology snapshot and its lazy cached
-// index, with the scope semantics of GetScoped. It preserves the entry identity
-// check even if another caller refreshes or evicts the entry; callers never
-// pair nodes with an index from another build.
-func (m *Memoizer) GetWithIndexScoped(scope uint64, opts BuildOptions, build func() (*Topology, error)) (*Topology, *RelationshipsIndex, error) {
-	topo, err := m.GetScoped(scope, opts, build)
-	if err != nil {
-		return nil, nil, err
-	}
-	if m == nil || m.ttl <= 0 {
-		return topo, IndexByResource(topo), nil
-	}
-	key := scopedKey(scope, opts)
-	m.mu.Lock()
-	entry := m.entries[key]
-	m.mu.Unlock()
-	// Entry evicted between Get() and GetIndex() — build inline and return.
-	// Costs one extra walk but keeps the API correct under aggressive eviction.
-	if entry == nil || entry.topo != topo {
-		return topo, IndexByResource(topo), nil
-	}
-	entry.indexOnce.Do(func() {
-		entry.index = IndexByResource(entry.topo)
-	})
-	return topo, entry.index, nil
 }
 
 func (m *Memoizer) store(key string, topo *Topology) {

@@ -194,7 +194,8 @@ func TestBeylaSource_GetFlows_OwnerLevel(t *testing.T) {
 	assertEq(t, "dest kind", f.Destination.Kind, "Workload")
 	assertEq(t, "port", fmt.Sprintf("%d", f.Port), "8080")
 	assertEq(t, "protocol", f.Protocol, "tcp")
-	assertEq(t, "verdict", f.Verdict, "forwarded")
+	// Beyla observes traffic, not a datapath decision: no error, no verdict.
+	assertEq(t, "verdict", f.Verdict, "")
 	// No HTTP data on this edge, so there is no rate to report. Beyla exports no
 	// connection count at all, and a placeholder here would drive edge thickness
 	// and the node totals from a number nothing measured.
@@ -641,6 +642,7 @@ func TestBeylaSource_ParseL7Flows_OwnerFallback(t *testing.T) {
 			}
 			assertEq(t, "dest name", flows[0].Destination.Name, tt.wantName)
 			assertEq(t, "dest kind", flows[0].Destination.Kind, tt.wantKind)
+			assertEq(t, "verdict", flows[0].Verdict, "")
 		})
 	}
 }
@@ -1263,6 +1265,7 @@ func TestBeylaSource_GetFlows_UnorientableConversationBecomesOneUndirectedEdge(t
 		t.Error("the edge must declare that its direction is unknown, or the graph will draw an arrow")
 	}
 	assertEq(t, "protocol", f.Protocol, "udp")
+	assertEq(t, "verdict", f.Verdict, "")
 	// Endpoints are ordered deterministically so the edge does not flip between
 	// polls; demo/client sorts before kube-system/coredns.
 	assertEq(t, "source", f.Source.Name, "client")

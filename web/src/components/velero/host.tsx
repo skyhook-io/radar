@@ -9,6 +9,7 @@ import { renderVeleroSummary } from './VeleroPages'
 import { VeleroBackupsKindList, VeleroLocationsKindList, VeleroRestoresKindList, VeleroSchedulesKindList } from './VeleroKindLists'
 import { VeleroDeleteBackup } from './VeleroDeleteBackup'
 import { VeleroBackupNow } from './VeleroBackupNow'
+import { VeleroSchedulePause } from './VeleroSchedulePause'
 import { VeleroScheduleStatusBadge } from './VeleroScheduleStatusBadge'
 import { VeleroRunIssueMessages } from './VeleroRunMessagesHost'
 import { kindToPluralWithGroup } from '../../utils/navigation'
@@ -58,8 +59,8 @@ export const veleroResourceHost: ResourceHost = {
   detailOwnership: ['summary', 'destination'],
   // The composed Overview, on the page and in the drawer (the renderer is
   // Spec & status); a backup's Delete backup; and a schedule's header: its
-  // reading as the status chip, and Back up now in the action row with every
-  // resource's actions.
+  // reading as the status chip, and Back up now and Pause/Resume in the action
+  // row with every resource's actions.
   detailSlots: (resource): DetailSlots => {
     const summary: DetailSlots = { renderSummary: (props) => renderVeleroSummary(props) }
     if (detailKind(resource) === VELERO_BACKUP_KIND.name) return {
@@ -71,7 +72,12 @@ export const veleroResourceHost: ResourceHost = {
       ...summary,
       renderStatusBadge: (data: any) => <VeleroScheduleStatusBadge resource={data} />,
       renderHeaderActions: ({ resource: data, onNavigate }) =>
-        isApiGroup(data?.apiVersion, VELERO_GROUP_NAME) ? <VeleroBackupNow schedule={data} onNavigate={onNavigate} /> : null,
+        isApiGroup(data?.apiVersion, VELERO_GROUP_NAME) ? (
+          <>
+            <VeleroBackupNow schedule={data} onNavigate={onNavigate} />
+            <VeleroSchedulePause schedule={data} />
+          </>
+        ) : null,
     }
   },
   // A failed run's messages are what is wrong with it.

@@ -1,10 +1,129 @@
-import { Lock, Key, FileText } from 'lucide-react'
+import { Lock, Key, FileText, Server } from 'lucide-react'
+import { Badge } from '../../ui/Badge'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, KeyValueBadgeList, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
+
+export interface SealedSecretsController {
+  installed: boolean
+  controller?: { kind: string; namespace: string; name: string; ready: boolean }
+  controllerState: 'ok' | 'denied' | 'notFound' | 'notWatched' | 'notCollected' | 'loading' | 'failed' | 'ambiguous'
+  ambiguousReason?: 'overlap' | 'unknownScope'
+  /** The controller serving this namespace is kube-system/sealed-secrets-controller, where a bare `kubeseal --fetch-cert` reaches it; set even when it is denied. */
+  atKubesealDefault?: boolean
+  keys?: { name: string; createdAt: string; notBefore?: string; notAfter?: string; active: boolean; notUsed?: boolean }[]
+  keysState: 'ok' | 'denied' | 'notCollected' | 'loading' | 'failed' | 'unknown'
+  /** How the controller picks its sealing key; 'unknown' means no key is marked. */
+  keyOrder?: 'certNotBefore' | 'creationTime' | 'unknown'
+  counts?: { total: number; synced: number; notSynced: number; partial: boolean }
+}
 
 interface SealedSecretRendererProps {
   data: any
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  /** Host-fetched controller status; undefined hides the section, null means the fetch failed. */
+  controller?: SealedSecretsController | null
+}
+
+const day = (value?: string) => (value ? value.slice(0, 10) : '-')
+
+// The Secrets namespace the keys live in: the controller's. A denied
+// controller hides its name, so the key messages fall back to generic text.
+function ControllerSection({ controller, offerReseal, onNavigate }: { controller: SealedSecretsController | null; offerReseal: boolean; onNavigate?: SealedSecretRendererProps['onNavigate'] }) {
+  const ref = controller?.controller
+  // A command only where Radar knows it reaches the controller serving this
+  // namespace: built from the visible controller, or kubeseal's bare defaults
+  // when the hidden controller sits there. A guess could fetch another
+  // controller's certificate, and re-sealing with it fails silently.
+  const command =
+    controller?.controllerState === 'ok' && ref
+      ? `kubeseal --controller-namespace ${ref.namespace} --controller-name ${ref.name} --fetch-cert`
+      : controller?.controllerState === 'denied' && controller.atKubesealDefault
+        ? 'kubeseal --fetch-cert'
+        : undefined
+  const hint = offerReseal && (
+    <div className="mt-3 text-xs text-theme-text-secondary">
+      {command ? (
+        <>If it was sealed for another cluster or with a key this controller no longer holds, re-seal it: <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono">{command}</code> prints the controller's current certificate.</>
+      ) : (
+        <>If it was sealed for another cluster or with a key the controller no longer holds, re-seal it with the current certificate of the sealed-secrets controller that serves this namespace.</>
+      )}
+    </div>
+  )
+  if (!controller) {
+    return (
+      <Section title="Controller and sealing keys" icon={Server} defaultExpanded={true}>
+        <div className="text-sm text-theme-text-tertiary">Controller status could not be loaded.</div>
+        {hint}
+      </Section>
+    )
+  }
+  // The key messages name the namespace only when the controller is visible.
+  const ns = ref?.namespace
+  const where = ns ? ` in ${ns}` : " in the controller's namespace"
+  const controllerValue =
+    controller.controllerState === 'ok' && ref ? (
+      <span className="inline-flex items-center gap-2">
+        <ResourceLink name={ref.name} kind="deployments" namespace={ref.namespace} onNavigate={onNavigate} />
+        <Badge severity={ref.ready ? 'success' : 'error'} size="sm">{ref.ready ? 'Ready' : 'Not ready'}</Badge>
+      </span>
+    ) : controller.controllerState === 'denied' ? "No access to the controller's Deployment"
+      : controller.controllerState === 'notCollected' ? 'Radar does not collect Deployments where the controller may run'
+      : controller.controllerState === 'loading' ? 'Deployments are still loading'
+      : controller.controllerState === 'failed' ? 'Radar could not load Deployments'
+      : controller.controllerState === 'ambiguous' && controller.ambiguousReason === 'unknownScope'
+        ? "Radar can't read which namespaces one of the sealed-secrets controllers serves, so it can't tell which one unseals this namespace"
+      : controller.controllerState === 'ambiguous'
+        ? "More than one sealed-secrets controller serves this namespace, so Radar can't tell which one unseals it. A cluster admin can check the controllers' namespace settings"
+      : controller.controllerState === 'notWatched' ? 'No sealed-secrets controller serves this namespace'
+      : 'No sealed-secrets controller found'
+  const counts = controller.counts
+  return (
+    <Section title="Controller and sealing keys" icon={Server} defaultExpanded={true}>
+      <PropertyList>
+        <Property label="Controller" value={controllerValue} />
+        {counts && (
+          <Property
+            label="SealedSecrets"
+            value={`${counts.synced} synced · ${counts.notSynced} not synced${counts.total > counts.synced + counts.notSynced ? ` · ${counts.total - counts.synced - counts.notSynced} without a Synced condition` : ''}${counts.partial ? ' in namespaces you can list' : ''}`}
+          />
+        )}
+      </PropertyList>
+      {controller.keysState === 'ok' && controller.keys && controller.keys.length > 0 && (
+        <table className="mt-3 w-full text-xs">
+          <thead>
+            <tr className="text-left text-theme-text-tertiary">
+              <th className="py-1 pr-3 font-medium">Sealing key</th>
+              <th className="py-1 pr-3 font-medium">Valid from</th>
+              <th className="py-1 pr-3 font-medium">Valid until</th>
+              <th className="py-1 font-medium" />
+            </tr>
+          </thead>
+          <tbody>
+            {controller.keys.map((k) => (
+              <tr key={k.name} className="border-t border-theme-border">
+                <td className="py-1 pr-3 text-theme-text-primary break-all">{k.name}</td>
+                <td className="py-1 pr-3 text-theme-text-secondary">{day(k.notBefore)}</td>
+                <td className="py-1 pr-3 text-theme-text-secondary">{day(k.notAfter)}</td>
+                <td className="py-1">
+                  {k.active && <Badge severity="info" size="sm">Seals new secrets</Badge>}
+                  {k.notUsed && <Badge severity="neutral" size="sm">Not used</Badge>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {controller.keysState === 'ok' && !!controller.keys?.length && controller.keyOrder === 'unknown' && (
+        <div className="mt-2 text-sm text-theme-text-tertiary">Radar can't read how the controller orders its keys, so it doesn't mark which one seals new secrets.</div>
+      )}
+      {controller.keysState === 'ok' && !controller.keys?.length && <div className="mt-2 text-sm text-theme-text-tertiary">No sealing keys found{where}.</div>}
+      {controller.keysState === 'denied' && <div className="mt-2 text-sm text-theme-text-tertiary">No access to Secrets{where}, so the sealing keys are not shown.</div>}
+      {controller.keysState === 'loading' && <div className="mt-2 text-sm text-theme-text-tertiary">Sealing keys are still loading.</div>}
+      {controller.keysState === 'failed' && <div className="mt-2 text-sm text-theme-text-tertiary">Radar could not load Secrets{where}, so the sealing keys are not shown.</div>}
+      {controller.keysState === 'notCollected' && <div className="mt-2 text-sm text-theme-text-tertiary">Radar does not collect Secrets{where}, so the sealing keys are not shown.</div>}
+      {hint}
+    </Section>
+  )
 }
 
 function getScope(annotations: Record<string, string> | undefined): string {
@@ -14,7 +133,7 @@ function getScope(annotations: Record<string, string> | undefined): string {
   return 'strict'
 }
 
-export function SealedSecretRenderer({ data, onNavigate }: SealedSecretRendererProps) {
+export function SealedSecretRenderer({ data, onNavigate, controller }: SealedSecretRendererProps) {
   const spec = data.spec || {}
   const status = data.status || {}
   const conditions = status.conditions || []
@@ -32,6 +151,8 @@ export function SealedSecretRenderer({ data, onNavigate }: SealedSecretRendererP
   const syncedCond = conditions.find((c: any) => c.type === 'Synced')
   const isSynced = syncedCond?.status === 'True'
   const isNotSynced = syncedCond?.status === 'False'
+  // The controller writes no reason, only the error; a Secret it doesn't own is not a sealing problem.
+  const offerReseal = isNotSynced && !String(syncedCond?.message ?? '').includes('already exists and is not managed by SealedSecret')
   const operationalIssuesShown = useOperationalIssuesShown()
 
   const hasTemplateMetadata =
@@ -80,6 +201,8 @@ export function SealedSecretRenderer({ data, onNavigate }: SealedSecretRendererP
           <Property label="Observed Gen" value={status.observedGeneration} />
         </PropertyList>
       </Section>
+
+      {controller !== undefined && <ControllerSection controller={controller} offerReseal={offerReseal} onNavigate={onNavigate} />}
 
       {/* Encrypted Keys */}
       <Section title={`Encrypted Keys (${encryptedKeys.length})`} icon={Key}>

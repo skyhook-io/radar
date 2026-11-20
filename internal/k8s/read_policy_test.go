@@ -28,6 +28,9 @@ func TestRequiresExactNamespaceAccess(t *testing.T) {
 		{"rbac.authorization.k8s.io", "v1", "roles", true},
 		{"rbac.authorization.k8s.io", "v1", "rolebindings", true},
 		{"example.com", "v1", "vulnerabilityreports", false},
+		{"metallb.io", "v1beta2", "bgppeers", true},
+		{"metallb.io", "v1beta1", "ipaddresspools", false},
+		{"crd.projectcalico.org", "v1", "bgppeers", false},
 		{"", "", "", false},
 	} {
 		gvr := schema.GroupVersionResource{Group: tc.group, Version: tc.version, Resource: tc.resource}
@@ -71,6 +74,9 @@ func TestExactNamespaceAccessNodeFailsClosedWithoutResource(t *testing.T) {
 		{"v1", "LimitRange", "", "", "", false},
 		{"v1", "Secret", "", "", "", false},
 		{"aquasecurity.github.io/v1alpha1", "VulnerabilityReport", "", "", "", false},
+		{"metallb.io/v1beta2", "BGPPeer", "", "", "", false},
+		{"metallb.io/v1beta2", "BGPPeer", "bgppeers", "metallb.io", "bgppeers", true},
+		{"crd.projectcalico.org/v1", "BGPPeer", "", "", "", true},
 		{"v1", "ConfigMap", "", "", "", true},
 		{"example.com/v1", "Role", "", "", "", true},
 		{"rbac.authorization.k8s.io/v1", "ClusterRole", "", "", "", true},

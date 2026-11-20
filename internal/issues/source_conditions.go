@@ -151,6 +151,11 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		if gvr.Group == longhorn.Group && kind == "Volume" {
 			out = append(out, detectLonghornVolumeIssues(gvr, kind, items)...)
 		}
+		// Every MetalLB speaker reports the same rejection, so it is read per list.
+		if gvr.Group == MetalLBGroup && kind == "ConfigurationState" {
+			out = append(out, MetalLBConfigurationIssues(gvr, items, ownedSubjects)...)
+			continue
+		}
 		// A schedule's outcome is read against the cluster's backups, so it is
 		// evaluated per namespace over the Cluster list, not per object.
 		if gvr.Group == cnpgGroup && kind == "Cluster" {

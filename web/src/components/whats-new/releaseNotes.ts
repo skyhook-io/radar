@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Activity, BellOff, Bot, Boxes, Braces, Database, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2 } from 'lucide-react'
+import { Activity, BellOff, Bot, Boxes, Braces, Database, GitBranch, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2, Zap } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -48,6 +48,72 @@ export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 // major release must have its own entry: scripts/check-whats-new.sh refuses to
 // release one without it.
 export const RELEASE_NOTES: ReleaseNotes[] = [
+  {
+    version: 'v1.21.0',
+    highlights: [
+      {
+        id: 'velero-workspace',
+        icon: HardDrive,
+        title: 'Manage your Velero backups in Radar',
+        description: 'Run backups on demand, manage schedules, and inspect backup and restore contents, logs and per-volume progress.',
+        leadDescription: 'Start a backup on demand, pause or resume schedules, and delete backups through Velero. Spot late schedules and storage problems, then open a backup or restore for its contents, logs and per-volume progress when available.',
+        importance: 9,
+        path: '/velero',
+        cta: 'Open Backup & restore',
+      },
+      {
+        id: 'relationship-performance',
+        icon: Zap,
+        title: 'Radar now uses up to 69% less CPU and 20% less peak heap memory',
+        description: 'Resource neighborhoods respond faster. Applications show Services, routes and scalers even on large clusters.',
+        importance: 8,
+      },
+      {
+        id: 'running-image-vulnerabilities',
+        icon: ShieldAlert,
+        title: 'New Vulnerabilities view',
+        description: 'See CVEs for running images in one place with Trivy Operator. Find affected workloads, available fixes and gaps in scan coverage.',
+        importance: 8,
+        path: '/checks/vulnerabilities',
+        cta: 'Open Vulnerabilities',
+      },
+      {
+        id: 'agent-runtime-health',
+        icon: Bot,
+        title: 'Agent Sandbox and Agent Substrate',
+        description: 'See Sandbox and WorkerPool status and issues. With Prometheus, check WorkerPool capacity and snapshot health on Nodes.',
+        importance: 7,
+      },
+      {
+        id: 'java4shell-check',
+        icon: ScanSearch,
+        title: 'Check for Java4Shell',
+        description: 'Find affected Java versions in Checks or with radar check java4shell. Node CPU features help prioritize fixes. Works without Trivy.',
+        importance: 7,
+        path: '/checks/vulnerabilities',
+        cta: 'Open Java4Shell check',
+      },
+      {
+        id: 'flux-operator',
+        icon: GitBranch,
+        title: 'Flux Operator in GitOps',
+        description: 'See Flux versions, controller readiness and failing reconciler counts in GitOps. Open dedicated views for Flux Operator resources.',
+        importance: 7,
+        path: '/gitops',
+        cta: 'Open GitOps',
+      },
+    ],
+    improvements: [
+      'Pod Logs opens on the init container holding up startup, and the Pods table distinguishes starting containers from failures',
+      'Radar retries namespace and permission checks after timeouts when switching clusters',
+      'GitOps refreshes live for Argo CD and Flux, with clearer rollout, auto-sync and managed resource details',
+      'Istio Live Traffic shows waypoint requests and errors, rates for the selected time range, and TCP throughput',
+      'Pages load faster, long timelines scroll smoothly, and resource views fetch only the check badges they display',
+      'Windows Desktop gains a compact title bar, single-instance launch, safer updates, better PowerShell defaults and fixed zoom shortcuts',
+      'New views for system-upgrade-controller Plans, CSI snapshots and Strimzi Kafka, plus CloudNativePG backup checks',
+      'Denser resource tables fit columns to their contents and hide lower-priority columns when space is tight',
+    ],
+  },
   {
     version: 'v1.20.0',
     highlights: [
