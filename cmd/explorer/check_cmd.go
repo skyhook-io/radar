@@ -27,6 +27,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/pager"
 
+	"github.com/skyhook-io/radar/internal/cliui"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
@@ -38,6 +39,7 @@ const (
 	java4ShellMetadataBudget = 5 * time.Second
 	java4ShellPodLimit       = 50000
 	java4ShellTableGapLimit  = 10
+	java4ShellHintHostLimit  = 4
 	java4ShellRegistryDocs   = "https://github.com/skyhook-io/radar/blob/main/docs/authentication.md#image-inspection"
 )
 
@@ -304,11 +306,12 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 	}
 
 	var table bytes.Buffer
+	style := cliui.New(out)
 	scope := "all namespaces"
 	if report.Coverage.Scope.Namespaces != nil {
 		scope = "namespace " + report.Coverage.Scope.Namespaces.Names[0]
 	}
-	fmt.Fprintf(&table, "Java4Shell (%s) · %s\n", images.Java4ShellCVE, scope)
+	fmt.Fprintf(&table, "\n%s · %s\n\n", style.Bold("Java4Shell ("+images.Java4ShellCVE+")"), scope)
 	unassessed := 0
 	for _, count := range report.Unassessed {
 		unassessed += count
@@ -329,16 +332,16 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 		default:
 			fmt.Fprintf(&table, "No affected Java declarations among assessed containers (%d).\n", outside)
 		}
-		fmt.Fprintf(&table, "Running containers: %d · Outside affected ranges: %d\n", report.Containers, outside)
+		fmt.Fprintf(&table, "%d running containers · %d Java versions assessed · %d outside affected ranges\n", report.Containers, report.Matches+outside, outside)
 		if unassessed > 0 {
-			fmt.Fprintf(&table, "No Java version declared: %d · Assessment gaps: %d\n", noDeclaration, gaps)
+			fmt.Fprintf(&table, "%d without a Java version in image metadata · %d could not be checked\n", noDeclaration, gaps)
 		}
 	}
 	for _, major := range slices.Sorted(maps.Keys(report.UnaffectedByMajor)) {
 		fmt.Fprintf(&table, "Java %d declarations outside affected ranges: %d\n", major, report.UnaffectedByMajor[major])
 	}
 	if len(report.Findings) > 0 {
-		fmt.Fprintln(&table, "\nAffected declarations")
+		fmt.Fprintln(&table, "\n"+style.Bold("Affected Java declarations"))
 		w := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
 		fmt.Fprint(w, "NAMESPACE\tWORKLOAD\tCONTAINER\t")
 		if details {
@@ -399,35 +402,67 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 		}
 	}
 	if gaps > 0 {
-		fmt.Fprintln(&table, "\nAssessment gaps")
+		fmt.Fprintf(&table, "\n%s\n", style.Tone(cliui.Attention, "Could not check · next steps"))
 		for _, reason := range slices.Sorted(maps.Keys(report.Unassessed)) {
-			if reason != "no_java_declaration" {
-				fmt.Fprintf(&table, "  %s: %d\n", checkReasonLabel(reason), report.Unassessed[reason])
+			if reason == "no_java_declaration" {
+				continue
 			}
-		}
-		if report.Unassessed[images.StatusAuthRequired] > 0 {
-			writeJava4ShellAuthHint(&table, report.AuthRequiredRegistries)
-		}
-		if report.Unassessed["docker_hub_limit"]+report.Unassessed[images.StatusNotChecked] > 0 {
-			if report.Coverage.Scope.Namespaces == nil {
-				fmt.Fprintln(&table, "Narrow the scan with -n NAMESPACE to retry images skipped because of a limit.")
-			} else {
-				fmt.Fprintln(&table, "Check a single workload in Radar to reduce registry lookups.")
+			fmt.Fprintf(&table, "\n  %s · %d containers\n", style.Bold(checkReasonLabel(reason)), report.Unassessed[reason])
+			switch reason {
+			case images.StatusAuthRequired:
+				writeJava4ShellAuthHint(&table, report.AuthRequiredRegistries)
+			case images.StatusRateLimited:
+				hosts := report.RateLimitedRegistries
+				if len(hosts) > 0 {
+					fmt.Fprintf(&table, "    HTTP 429 from %s", checkTableValue(strings.Join(hosts[:min(len(hosts), java4ShellHintHostLimit)], ", ")))
+					if extra := len(hosts) - java4ShellHintHostLimit; extra > 0 {
+						fmt.Fprintf(&table, " and %d more", extra)
+					}
+					fmt.Fprintln(&table, ".")
+				}
+				if slices.Contains(hosts, "public.ecr.aws") {
+					fmt.Fprintln(&table, "    Amazon ECR Public allows one anonymous pull per second.")
+				}
+				wait := "Wait for the registry quota to reset"
+				if len(hosts) == 1 && hosts[0] == "public.ecr.aws" {
+					wait = "Wait a few seconds"
+				}
+				if report.Coverage.Scope.Namespaces == nil {
+					fmt.Fprintf(&table, "    %s, then retry a single affected namespace.\n", wait)
+					fmt.Fprintln(&table, "    "+java4ShellNarrowerScope(report, reason))
+				} else {
+					fmt.Fprintf(&table, "    %s, then rerun this namespace.\n", wait)
+				}
+			case "docker_hub_limit":
+				fmt.Fprintln(&table, "    Radar checks at most 24 uncached Docker Hub image groups per scan.")
+				fmt.Fprintln(&table, "    "+java4ShellNarrowerScope(report, reason))
+			case images.StatusNotChecked:
+				fmt.Fprintln(&table, "    "+java4ShellNarrowerScope(report, reason))
+			case "java_home_declared":
+				fmt.Fprintln(&table, "    Verify the installed Java version for images that set JAVA_HOME.")
+			case "image_identity_unknown", "version_unknown":
+				fmt.Fprintln(&table, "    If these workloads use Java, confirm the installed version directly.")
 			}
-		}
-		if report.Unassessed[images.StatusRateLimited] > 0 {
-			fmt.Fprintln(&table, "Retry after the registry rate limit resets or configure registry credentials with a higher quota.")
-		}
-		if report.Unassessed["java_home_declared"] > 0 {
-			fmt.Fprintln(&table, "Verify the installed Java version for images that set JAVA_HOME.")
 		}
 	}
-	writeJava4ShellAssessmentRows(&table, report, details)
+	writeJava4ShellAssessmentRows(&table, style, report, details)
 	if !details && (len(report.Findings) > 0 || unassessed > 0) {
 		fmt.Fprintln(&table, "\nUse --details for image references, node evidence and additional rows.")
 	}
 	_, err := table.WriteTo(out)
 	return err
+}
+
+func java4ShellNarrowerScope(report images.Java4ShellReport, reason string) string {
+	if report.Coverage.Scope.Namespaces != nil {
+		return "Check the affected workload on its own in Radar’s Vulnerabilities tab."
+	}
+	for _, row := range report.UnassessedRows {
+		if row.Reason == reason {
+			return "For example, use -n " + checkTableValue(row.Workload.Namespace) + " instead of -A."
+		}
+	}
+	return "Replace -A with -n NAMESPACE."
 }
 
 func writeJava4ShellAuthHint(out io.Writer, registries []string) {
@@ -439,27 +474,26 @@ func writeJava4ShellAuthHint(out io.Writer, registries []string) {
 			otherHosts = append(otherHosts, host)
 		}
 	}
-	const exampleHostLimit = 4
 	if len(ecrHosts) > 0 {
-		fmt.Fprintln(out, "Private Amazon ECR needs a local AWS identity with pull access. Replace your-profile and rerun the same check.")
-		fmt.Fprintln(out, "  export AWS_PROFILE=your-profile")
-		fmt.Fprintf(out, "  export RADAR_JAVA4SHELL_ECR_REGISTRIES=%s\n", strings.Join(ecrHosts[:min(len(ecrHosts), exampleHostLimit)], ","))
-		if len(ecrHosts) > exampleHostLimit {
-			fmt.Fprintln(out, "Add other ECR registry hosts from --details, separated by commas.")
+		fmt.Fprintln(out, "    Private ECR needs a local AWS identity with pull access. Replace your-profile and rerun.")
+		fmt.Fprintln(out, "      export AWS_PROFILE=your-profile")
+		fmt.Fprintf(out, "      export RADAR_JAVA4SHELL_ECR_REGISTRIES=%s\n", strings.Join(ecrHosts[:min(len(ecrHosts), java4ShellHintHostLimit)], ","))
+		if len(ecrHosts) > java4ShellHintHostLimit {
+			fmt.Fprintln(out, "    Add other ECR registry hosts from --details, separated by commas.")
 		}
-		fmt.Fprintln(out, "If the profile uses SSO, run aws sso login --profile your-profile first.")
+		fmt.Fprintln(out, "    If the profile uses SSO, run aws sso login --profile your-profile first.")
 	}
 	if len(otherHosts) > 0 {
-		fmt.Fprintln(out, "For these registries, run docker login REGISTRY and rerun the same check.")
-		fmt.Fprintf(out, "  %s\n", strings.Join(otherHosts[:min(len(otherHosts), exampleHostLimit)], ", "))
+		fmt.Fprintln(out, "    For these registries, run docker login REGISTRY and rerun the same check.")
+		fmt.Fprintf(out, "      %s\n", checkTableValue(strings.Join(otherHosts[:min(len(otherHosts), java4ShellHintHostLimit)], ", ")))
 	}
-	if len(otherHosts) > exampleHostLimit || len(registries) == 0 {
-		fmt.Fprintln(out, "Use --details to see the image registry.")
+	if len(otherHosts) > java4ShellHintHostLimit || len(registries) == 0 {
+		fmt.Fprintln(out, "    Use --details to see the image registry.")
 	}
-	fmt.Fprintln(out, "Registry setup", java4ShellRegistryDocs)
+	fmt.Fprintln(out, "    Registry setup", java4ShellRegistryDocs)
 }
 
-func writeJava4ShellAssessmentRows(out *bytes.Buffer, report images.Java4ShellReport, details bool) {
+func writeJava4ShellAssessmentRows(out *bytes.Buffer, style cliui.Styler, report images.Java4ShellReport, details bool) {
 	rows := report.UnassessedRows
 	if !details {
 		rows = make([]images.Java4ShellUnassessed, 0, len(report.UnassessedRows))
@@ -477,11 +511,11 @@ func writeJava4ShellAssessmentRows(out *bytes.Buffer, report images.Java4ShellRe
 		shown = min(shown, java4ShellTableGapLimit)
 	}
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	heading := "Workload groups with gaps"
 	if details {
-		fmt.Fprintln(out, "\nContainer assessment details")
-	} else {
-		fmt.Fprintln(out)
+		heading = "Container assessment details"
 	}
+	fmt.Fprintln(out, "\n"+style.Bold(heading))
 	fmt.Fprint(w, "NAMESPACE\tWORKLOAD\tCONTAINER\t")
 	if details {
 		fmt.Fprint(w, "IMAGE\t")

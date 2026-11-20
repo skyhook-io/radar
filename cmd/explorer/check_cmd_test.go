@@ -89,7 +89,7 @@ func TestJava4ShellCLIListsScopedPodsAndResolvesWorkloads(t *testing.T) {
 	}
 	output.Reset()
 	if err := writeJava4ShellCheck(&output, "table", result, false); err != nil ||
-		!strings.Contains(output.String(), "Assessment gaps: 1") ||
+		!strings.Contains(output.String(), "1 could not be checked") ||
 		!strings.Contains(output.String(), "Running image digest unavailable") {
 		t.Fatalf("invalid report table: %s (%v)", output.String(), err)
 	}
@@ -119,7 +119,7 @@ func TestJava4ShellCLIPrintsJavaHomeAsUnassessed(t *testing.T) {
 	if err := writeJava4ShellCheck(&output, "table", report, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"No Java versions could be assessed.", "Assessment gaps: 1", "Verify the installed Java version for images that set JAVA_HOME."} {
+	for _, want := range []string{"No Java versions could be assessed.", "1 could not be checked", "Verify the installed Java version for images that set JAVA_HOME."} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("expected %q in %s", want, output.String())
 		}
@@ -154,7 +154,7 @@ func TestJava4ShellTablePrioritizesActionableGaps(t *testing.T) {
 	if err := writeJava4ShellCheck(&output, "table", report, false); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"No affected Java declarations among assessed containers (1).", "No Java version declared: 1", "Assessment gaps: 11", "Registry authentication required: 11",
+	want := []string{"No affected Java declarations among assessed containers (1).", "1 without a Java version in image metadata", "11 could not be checked", "Registry authentication required · 11 containers",
 		"private-09", "Showing the first 10 workload groups with gaps", "docker login REGISTRY", "  example.com\n", java4ShellRegistryDocs}
 	for _, phrase := range want {
 		if !strings.Contains(output.String(), phrase) {
@@ -186,6 +186,31 @@ func TestJava4ShellTableShowsECRRegistryHosts(t *testing.T) {
 		"export AWS_PROFILE=your-profile",
 		"export RADAR_JAVA4SHELL_ECR_REGISTRIES=" + first + "," + second + "\n",
 		"aws sso login --profile your-profile", "  ghcr.io\n",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("missing %q in %s", want, output.String())
+		}
+	}
+}
+
+func TestJava4ShellTableDistinguishesRegistryAndScanLimits(t *testing.T) {
+	report := images.Java4ShellReport{Java4ShellResult: images.Java4ShellResult{
+		Containers:            3,
+		Unassessed:            map[string]int{images.StatusRateLimited: 2, "docker_hub_limit": 1},
+		RateLimitedRegistries: []string{"public.ecr.aws"},
+		UnassessedRows: []images.Java4ShellUnassessed{
+			{Reason: images.StatusRateLimited, Workload: resourceid.NewRef("apps", "DaemonSet", "kube-system", "csi"), Pods: 2},
+			{Reason: "docker_hub_limit", Workload: resourceid.NewRef("apps", "DaemonSet", "velero", "node-agent"), Pods: 1},
+		},
+	}}
+	var output bytes.Buffer
+	if err := writeJava4ShellCheck(&output, "table", report, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Could not check · next steps",
+		"HTTP 429 from public.ecr.aws.", "one anonymous pull per second", "Wait a few seconds",
+		"use -n kube-system instead of -A", "24 uncached Docker Hub image groups per scan", "use -n velero instead of -A",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("missing %q in %s", want, output.String())
