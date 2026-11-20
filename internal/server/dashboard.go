@@ -25,7 +25,6 @@ import (
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/netpol"
@@ -1502,7 +1501,7 @@ func (s *Server) collectNamespacedCRDCounts(r *http.Request, allowed []string) [
 			continue
 		}
 		scope := allowed
-		if res.Group == aicontext.TrivyGroup {
+		if k8s.RequiresExactNamespaceAccess(gvr) {
 			readable, all, complete := trivyAccess.scope(gvr, allowed)
 			if !complete || (!all && len(readable) == 0) {
 				continue

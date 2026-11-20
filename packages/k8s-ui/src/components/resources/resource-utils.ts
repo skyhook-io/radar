@@ -2,6 +2,7 @@ import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getVolumeSnapshotColumnValue } from './resource-utils-volumesnapshot'
+import { getMetalLBColumnValue } from './resource-utils-metallb'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 import { FLUX_OPERATOR_GROUP, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
@@ -2587,6 +2588,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (strimziClusterValue !== undefined) return strimziClusterValue
   const volumeSnapshotValue = getVolumeSnapshotColumnValue(resource, column)
   if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
+  const metalLBValue = getMetalLBColumnValue(resource, column)
+  if (metalLBValue !== undefined) return metalLBValue
   const otelValue = getOpenTelemetryColumnValue(resource, column)
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)

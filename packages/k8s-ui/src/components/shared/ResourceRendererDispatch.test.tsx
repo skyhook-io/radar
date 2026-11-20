@@ -1224,6 +1224,40 @@ describe('Strimzi Kafka and KafkaNodePool exact group', () => {
   })
 })
 
+describe('MetalLB exact group', () => {
+  const pool = {apiVersion: 'metallb.io/v1beta1', kind: 'IPAddressPool', metadata: {name: 'public', namespace: 'metallb-system'}, spec: {addresses: ['172.18.255.200-172.18.255.201']}, status: {assignedIPv4: 2, availableIPv4: 0, assignedIPv6: 0, availableIPv6: 0}}
+  const l2 = {apiVersion: 'metallb.io/v1beta1', kind: 'L2Advertisement', metadata: {name: 'l2', namespace: 'metallb-system'}, spec: {ipAddressPools: ['public']}}
+  const bgpAdv = {apiVersion: 'metallb.io/v1beta1', kind: 'BGPAdvertisement', metadata: {name: 'bgp', namespace: 'metallb-system'}, spec: {peers: ['router']}}
+  const peer = {apiVersion: 'metallb.io/v1beta2', kind: 'BGPPeer', metadata: {name: 'router', namespace: 'metallb-system'}, spec: {myASN: 64500, peerASN: 64501, peerAddress: '172.18.0.5', password: 's3cret-md5'}}
+  const state = {apiVersion: 'metallb.io/v1beta1', kind: 'ConfigurationState', metadata: {name: 'controller', namespace: 'metallb-system', labels: {'metallb.io/component-type': 'controller'}}, status: {result: 'Invalid', errorSummary: 'invalid pool'}}
+  it('renders curated drawers and statuses', () => {
+    expect(getResourceStatus('ipaddresspools', pool)?.text).toBe('Exhausted')
+    expect(renderKind('ipaddresspools', pool, 'metallb-system')).toContain('Auto assign')
+    expect(getResourceStatus('l2advertisements', l2)).toBeNull()
+    expect(renderKind('l2advertisements', l2, 'metallb-system')).toContain('IP address pools')
+    expect(getResourceStatus('bgpadvertisements', bgpAdv)).toBeNull()
+    expect(renderKind('bgpadvertisements', bgpAdv, 'metallb-system')).toContain('Aggregation length')
+    expect(getResourceStatus('bgppeers', peer)).toBeNull()
+    const peerHtml = renderKind('bgppeers', peer, 'metallb-system')
+    expect(peerHtml).toContain('Peer ASN')
+    expect(peerHtml).toContain('Set inline (not shown)')
+    expect(peerHtml).not.toContain('s3cret-md5')
+    expect(getResourceStatus('configurationstates', state)?.text).toBe('Invalid')
+    expect(renderKind('configurationstates', state, 'metallb-system')).toContain('invalid pool')
+  })
+  it('leaves Calico BGPPeers and lookalike groups generic', () => {
+    const calicoPeer = {apiVersion: 'crd.projectcalico.org/v1', kind: 'BGPPeer', metadata: {name: 'router'}, spec: {peerIP: '10.0.0.1', asNumber: 64512}}
+    expect(renderKind('bgppeers', calicoPeer)).not.toContain('My ASN')
+    expect(renderKind('bgppeers', {...calicoPeer, apiVersion: 'projectcalico.org/v3'})).not.toContain('My ASN')
+    for (const apiVersion of ['fake.metallb.io/v1beta1', 'metallb.io.example.com/v1']) {
+      for (const [kind, data, marker] of [['ipaddresspools', pool, 'Auto assign'], ['l2advertisements', l2, 'IP address pools'], ['bgpadvertisements', bgpAdv, 'Aggregation length'], ['bgppeers', peer, 'My ASN'], ['configurationstates', state, 'Other failures leave the result Valid']] as const) {
+        expect(renderKind(kind, {...data, apiVersion})).not.toContain(marker)
+      }
+      expect(getResourceStatus('ipaddresspools', {...pool, apiVersion})?.text).not.toBe('Exhausted')
+    }
+  })
+})
+
 describe('CSI VolumeSnapshot exact group', () => {
   const snapshot = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshot', metadata: {name: 'data-snap', namespace: 'demo'}, spec: {source: {persistentVolumeClaimName: 'data'}}, status: {error: {message: 'class not found'}}}
   const content = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshotContent', metadata: {name: 'snapcontent-1'}, spec: {driver: 'hostpath.csi.k8s.io', deletionPolicy: 'Retain', source: {volumeHandle: 'v'}, volumeSnapshotRef: {name: 'data-snap', namespace: 'demo', uid: 'u'}}, status: {readyToUse: true}}

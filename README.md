@@ -511,6 +511,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Sealed Secrets** | SealedSecret, controller and sealing keys |
 | **Dynamic Resource Allocation** | ResourceClaim, ResourceClaimTemplate, DeviceClass, ResourceSlice (resource.k8s.io, K8s 1.32+) |
 | **NVIDIA GPU Operator** | ClusterPolicy, NVIDIADriver |
+| **MetalLB** | [IPAddressPool, L2Advertisement, BGPAdvertisement, BGPPeer and ConfigurationState](docs/integrations.md#metallb): address counters and exhaustion, advertised pools, peers and Issues for rejected configuration |
 | **Calico** | NetworkPolicy, GlobalNetworkPolicy, StagedNetworkPolicy, StagedGlobalNetworkPolicy, StagedKubernetesNetworkPolicy, IPPool, HostEndpoint, Tier |
 | **Kueue** | ClusterQueue, LocalQueue, Workload, ResourceFlavor, AdmissionCheck (+ Cluster Autoscaler ProvisioningRequest) — basic |
 | **KubeRay** | RayCluster, RayJob, RayService, RayCronJob — basic |

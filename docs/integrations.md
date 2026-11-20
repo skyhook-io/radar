@@ -1950,6 +1950,57 @@ Radar statically evaluates Calico selectors against workload pod templates and t
 
 ---
 
+## MetalLB
+
+[MetalLB](https://metallb.io/) (`metallb.io`) gives LoadBalancer Services an address from an IPAddressPool and announces it from the cluster's nodes, over layer 2 (ARP/NDP) or BGP. It reads its objects only from its own namespace (usually `metallb-system`); its admission webhook refuses them anywhere else.
+
+### What Radar Shows
+
+**IPAddressPool:** status, address ranges, auto assign (when off, only Services that request the pool get its addresses), avoid buggy IPs, assigned and available addresses per IP family, and service allocation (priority, namespaces and selectors). Counts are addresses, not Services: Services can share an address. A Service records the pool its address came from in the `metallb.io/ip-allocated-from-pool` annotation.
+
+**L2Advertisement / BGPAdvertisement:** the pools announced, by name (linked) or selector, and "All pools" when neither is set; the nodes allowed to announce; interfaces (L2); peers (linked), communities, local preference, AS-path prepend and aggregation lengths (BGP); Service selectors. Selectors in one list are ORed.
+
+**BGPPeer:** peer address or unnumbered interface, port, peer ASN (or the dynamic ASN mode), local ASN, source address, router ID, VRF, BFD profile, eBGP multi-hop, graceful restart, timers and node selectors. A password set inline in `spec.password` is shown as "Set inline (not shown)"; a password Secret is named, never read.
+
+**ConfigurationState:** whether a MetalLB component accepted the configuration. The controller writes one (`controller`) and each speaker one per node (`speaker-<node>`), labelled `metallb.io/component-type` and `metallb.io/node-name`. The drawer shows the component, links the node and lists the errors.
+
+All five kinds have curated table columns, which keep the fields of MetalLB's own printer columns. Status reads:
+
+| Kind | Status | Source |
+|---|---|---|
+| IPAddressPool | Available | `status` counters with addresses free in each family the pool has |
+| IPAddressPool | Exhausted, IPv4 exhausted, IPv6 exhausted | No available addresses, in every family or in one of a dual-stack pool's. A new Service that can only use the pool stays pending |
+| IPAddressPool | No addresses | Every counter is zero. The controller reports this for a pool it has not loaded, for example after rejecting the configuration |
+| IPAddressPool | Not reported | No `status`: MetalLB before 0.15, or a pool the controller has not reconciled |
+| ConfigurationState | Valid, Invalid, Unknown | `status.result` |
+| ConfigurationState | Not reported | No `status.result` yet |
+
+MetalLB reports the largest 64-bit count for an IPv6 range with 62 or more host bits; Radar shows any count beyond 2^53 as unlimited. Advertisements and peers are configuration and carry no status. None of these views show which node announces a Service, whether a BGP session is established, or whether an address is reachable.
+
+**Issues:** a ConfigurationState whose result is `Invalid` produces a warning, `MetalLBConfigurationInvalid`, quoting the component's errors. Invalid means a reconciler could not parse the configuration; the component keeps the last configuration it accepted. Failures that are not parse errors leave the result Valid, so Valid does not prove addresses are announced. Every speaker parses the same objects, so one bad object makes them all Invalid: states with the same errors in the same namespace produce one Issue, on the controller's state when it shares them and otherwise on the first speaker's by name, and the message counts the others. A speaker that alone rejects a node-scoped object (a BGPPeer or BGPAdvertisement whose node selector matches only some nodes) reports different errors and gets its own Issue. The reconcilers rewrite the condition time on every pass, so the onset is unknown.
+
+**MCP:** list summaries carry each pool's status, addresses, counters and "Requested only" when auto assign is off; each advertisement's mode and pools; each peer's address, iBGP/eBGP and ASNs (never the password); and each ConfigurationState's result, component and node.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| IPAddressPool | `metallb.io/v1beta1` | — | Yes | Yes |
+| L2Advertisement | `metallb.io/v1beta1` | — | Yes | Yes |
+| BGPAdvertisement | `metallb.io/v1beta1` | — | Yes | Yes |
+| BGPPeer | `metallb.io/v1beta2`, `v1beta1` | — | Yes | Yes |
+| ConfigurationState | `metallb.io/v1beta1` | — | Yes | Yes |
+
+**Helm:** `rbac.crdGroups.metallb` (default on) grants read on these resources only. BGPPeers can hold the session password inline, so the chart reads them only when it also reads Secrets (`rbac.secrets`, `rbac.helm`, authentication enabled, or cloud mode), like VictoriaMetrics; otherwise the BGPPeer list is not collected. BFD profiles, communities and the ServiceL2Status / ServiceBGPStatus resources are not read. Radar Cloud's default integration-read role grants pools, advertisements and ConfigurationStates, and withholds BGPPeers because `spec.password` can hold the session password inline; see [the default read policy](cloud-rbac-baseline.md).
+
+**Access:** with authentication, BGPPeers are one of the kinds Radar checks per user, like Secrets: seeing `metallb-system` is not enough to list, open, count or search them; the caller needs their own `list` (or `get`) on BGPPeers there. See [Authentication](authentication.md).
+
+Checked against MetalLB v0.16.2 (native mode) on kind: an exhausted pool with a pending Service, a dual-stack pool with auto assign off and service allocation, advertisements by name, by selector and for every pool, a peer with an inline password, and a peer naming a missing password Secret, which made the speaker's ConfigurationState Invalid while the controller's stayed Valid.
+
+Not covered: topology and Related Resources edges (Service to pool, advertisement to pool, peer to node), the ServiceL2Status and ServiceBGPStatus announcement resources, BFDProfile and Community views, and FRR-K8s configuration.
+
+---
+
 ## Multus (secondary networks)
 
 [Multus](https://github.com/k8snetworkplumbingwg/multus-cni) attaches extra network interfaces to a Pod. The Pod records what it asked for in the `k8s.v1.cni.cncf.io/networks` annotation and what Multus attached in `k8s.v1.cni.cncf.io/network-status`. OpenShift uses the same annotations for its secondary networks.
