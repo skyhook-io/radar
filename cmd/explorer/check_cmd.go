@@ -336,6 +336,9 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 		if unassessed > 0 {
 			fmt.Fprintf(&table, "%d without a Java version in image metadata · %d could not be checked\n", noDeclaration, gaps)
 		}
+		if noDeclaration > 0 {
+			fmt.Fprintln(&table, "For images with no Java version in their metadata, verify the installed version in workloads that use Java.")
+		}
 	}
 	for _, major := range slices.Sorted(maps.Keys(report.UnaffectedByMajor)) {
 		fmt.Fprintf(&table, "Java %d declarations outside affected ranges: %d\n", major, report.UnaffectedByMajor[major])
@@ -420,8 +423,8 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 				hosts := report.RateLimitedRegistries
 				if len(hosts) > 0 {
 					fmt.Fprintf(&table, "    HTTP 429 from %s", checkTableValue(strings.Join(hosts[:min(len(hosts), java4ShellHintHostLimit)], ", ")))
-					if extra := len(hosts) - java4ShellHintHostLimit; extra > 0 {
-						fmt.Fprintf(&table, " and %d more", extra)
+					if len(hosts) > java4ShellHintHostLimit {
+						fmt.Fprint(&table, " and others")
 					}
 					fmt.Fprintln(&table, ".")
 				}
@@ -464,7 +467,8 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 	}
 	writeJava4ShellAssessmentRows(&table, style, report, details)
 	if !details && (len(report.Findings) > 0 || unassessed > 0) {
-		fmt.Fprintln(&table, "\nUse --details for image references, node evidence and additional rows.")
+		fmt.Fprintln(&table, "\nWorkload rows show affected declarations and unassessed containers.")
+		fmt.Fprintln(&table, "Use --details for image references, node evidence and additional rows.")
 	}
 	_, err := table.WriteTo(out)
 	return err
@@ -492,11 +496,29 @@ func writeJava4ShellAuthHint(out io.Writer, registries []string) {
 		}
 	}
 	if len(ecrHosts) > 0 {
-		fmt.Fprintln(out, "    Private ECR needs a local AWS identity with pull access. Replace your-profile and rerun.")
-		fmt.Fprintln(out, "      export AWS_PROFILE=your-profile")
-		fmt.Fprintf(out, "      export RADAR_JAVA4SHELL_ECR_REGISTRIES=%s\n", strings.Join(ecrHosts[:min(len(ecrHosts), java4ShellHintHostLimit)], ","))
-		if len(ecrHosts) > java4ShellHintHostLimit {
-			fmt.Fprintln(out, "    Add other ECR registry hosts from --details, separated by commas.")
+		configured := strings.TrimSpace(os.Getenv(images.ECRRegistriesEnv))
+		configuredHosts := strings.Split(configured, ",")
+		var unconfigured []string
+		for _, host := range ecrHosts {
+			if !slices.ContainsFunc(configuredHosts, func(entry string) bool { return strings.TrimSpace(entry) == host }) {
+				unconfigured = append(unconfigured, host)
+			}
+		}
+		if len(unconfigured) != len(ecrHosts) {
+			fmt.Fprintln(out, "    For ECR hosts already configured, verify the local AWS profile is signed in and can pull the images.")
+		}
+		if len(unconfigured) > 0 {
+			fmt.Fprintln(out, "    Private ECR needs a local AWS identity with pull access. Replace your-profile and rerun.")
+			fmt.Fprintln(out, "      export AWS_PROFILE=your-profile")
+			hosts := strings.Join(unconfigured[:min(len(unconfigured), java4ShellHintHostLimit)], ",")
+			if configured != "" {
+				fmt.Fprintf(out, "      export %[1]s=\"$%[1]s,%[2]s\"\n", images.ECRRegistriesEnv, hosts)
+			} else {
+				fmt.Fprintf(out, "      export %s=%s\n", images.ECRRegistriesEnv, hosts)
+			}
+			if len(unconfigured) > java4ShellHintHostLimit {
+				fmt.Fprintln(out, "    Add other ECR registry hosts from --details, separated by commas.")
+			}
 		}
 		fmt.Fprintln(out, "    If the profile uses SSO, run aws sso login --profile your-profile first.")
 	}

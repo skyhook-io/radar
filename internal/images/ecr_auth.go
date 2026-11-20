@@ -18,7 +18,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 )
 
-const ecrRegistriesEnv = "RADAR_JAVA4SHELL_ECR_REGISTRIES"
+const ECRRegistriesEnv = "RADAR_JAVA4SHELL_ECR_REGISTRIES"
 
 const PublicECRRegistry = "public.ecr.aws"
 
@@ -31,7 +31,7 @@ func IsPrivateECRRegistry(host string) bool {
 var errECRCredentials = errors.New("Radar could not obtain credentials for this Amazon ECR registry")
 
 var runtimeECRKeychain = sync.OnceValue(func() *ecrKeychain {
-	return newECRKeychain(os.Getenv(ecrRegistriesEnv), requestECRToken)
+	return newECRKeychain(os.Getenv(ECRRegistriesEnv), requestECRToken)
 })
 
 type ecrTokenRequest func(ctx context.Context, registry, account, region string) (authn.Authenticator, time.Time, error)
@@ -89,7 +89,7 @@ func newECRKeychain(registries string, request ecrTokenRequest) *ecrKeychain {
 		}
 	}
 	if invalid > 0 {
-		log.Printf("[images] Ignored %d invalid entries in %s. Use exact ECR registry hosts such as 123456789012.dkr.ecr.us-east-1.amazonaws.com.", invalid, ecrRegistriesEnv)
+		log.Printf("[images] Ignored %d invalid entries in %s. Use exact ECR registry hosts such as 123456789012.dkr.ecr.us-east-1.amazonaws.com.", invalid, ECRRegistriesEnv)
 	}
 	return k
 }

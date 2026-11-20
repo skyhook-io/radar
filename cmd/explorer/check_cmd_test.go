@@ -180,6 +180,7 @@ func TestJava4ShellTablePrioritizesActionableGaps(t *testing.T) {
 func TestJava4ShellTableShowsECRRegistryHosts(t *testing.T) {
 	const first = "123456789012.dkr.ecr.us-east-1.amazonaws.com"
 	const second = "987654321012.dkr.ecr.eu-west-1.amazonaws.com"
+	t.Setenv(images.ECRRegistriesEnv, "")
 	var output bytes.Buffer
 	writeJava4ShellAuthHint(&output, []string{first, second, "ghcr.io"})
 	for _, want := range []string{
@@ -190,6 +191,19 @@ func TestJava4ShellTableShowsECRRegistryHosts(t *testing.T) {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("missing %q in %s", want, output.String())
 		}
+	}
+	t.Setenv(images.ECRRegistriesEnv, first)
+	output.Reset()
+	writeJava4ShellAuthHint(&output, []string{first, second})
+	for _, want := range []string{"For ECR hosts already configured, verify", `export RADAR_JAVA4SHELL_ECR_REGISTRIES="$RADAR_JAVA4SHELL_ECR_REGISTRIES,` + second + `"`} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("missing %q in %s", want, output.String())
+		}
+	}
+	output.Reset()
+	writeJava4ShellAuthHint(&output, []string{first})
+	if strings.Contains(output.String(), "export RADAR_JAVA4SHELL_ECR_REGISTRIES") {
+		t.Errorf("suggested reconfiguring a host already set: %s", output.String())
 	}
 }
 

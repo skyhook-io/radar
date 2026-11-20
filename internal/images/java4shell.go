@@ -66,8 +66,8 @@ type Java4ShellResult struct {
 	UnassessedRows         []Java4ShellUnassessed `json:"unassessedRows"`
 	UnassessedGroups       int                    `json:"unassessedGroups"`
 	UnaffectedByMajor      map[int]int            `json:"unaffectedByMajor,omitempty"`
-	AuthRequiredRegistries []string               `json:"-"`
-	RateLimitedRegistries  []string               `json:"-"`
+	AuthRequiredRegistries []string               `json:"authRequiredRegistries,omitempty"`
+	RateLimitedRegistries  []string               `json:"rateLimitedRegistries,omitempty"`
 }
 
 type Java4ShellReport struct {
@@ -226,6 +226,8 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 	}
 	out.AuthRequiredRegistries = slices.Sorted(maps.Keys(authRegistries))
 	out.RateLimitedRegistries = slices.Sorted(maps.Keys(throttledRegistries))
+	out.AuthRequiredRegistries = out.AuthRequiredRegistries[:min(len(out.AuthRequiredRegistries), java4ShellRowLimit)]
+	out.RateLimitedRegistries = out.RateLimitedRegistries[:min(len(out.RateLimitedRegistries), java4ShellRowLimit)]
 	groups := map[java4ShellGroup]*Java4ShellFinding{}
 	workloads := map[*corev1.Pod]resourceid.Ref{}
 	resolveWorkload := func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {

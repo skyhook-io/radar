@@ -208,6 +208,8 @@ export interface Java4ShellResult {
   unassessed: Record<string, number>
   unassessedRows: Java4ShellUnassessed[]
   unassessedGroups: number
+  authRequiredRegistries?: string[]
+  rateLimitedRegistries?: string[]
   unaffectedByMajor?: Record<string, number>
   coverage: ResourceReadCoverage
   workload?: VulnerabilityWorkloadRef

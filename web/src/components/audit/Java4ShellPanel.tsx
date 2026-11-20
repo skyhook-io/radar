@@ -26,9 +26,13 @@ interface Java4ShellPanelProps {
 export function Java4ShellPanel({ namespaces = [], context, connected, trivySearch, workload, onNavigateToResource }: Java4ShellPanelProps) {
   const { data, dataUpdatedAt, isFetching, error, refetch, progress, cancel } = useJava4ShellCheck(namespaces, context, workload)
   const checkedAt = new Date(dataUpdatedAt).toISOString()
+  const canceled = error?.name === 'AbortError'
+  const scope = workload
+    ? `${workload.namespace}/${workload.name}`
+    : namespaces.length > 3 ? pluralize(namespaces.length, 'selected namespace') : namespaces.join(', ') || 'All namespaces'
   const progressText = progress && progress.total > 0
     ? `Checking image groups · ${progress.done} of ${progress.total} processed`
-    : 'Reading running Pods and preparing registry lookups.'
+    : 'Reading running Pods and image metadata.'
   return (
     <section aria-label="Java4Shell check" className={`rounded-xl border border-theme-border bg-theme-surface ${workload ? 'p-3' : 'p-4'}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -40,6 +44,7 @@ export function Java4ShellPanel({ namespaces = [], context, connected, trivySear
               : 'Check running container images for affected Java version declarations.'}
             {' '}Radar reads registry metadata with the credentials available to this check.
           </p>
+          <p className="text-xs text-theme-text-secondary"><span className="font-medium">Check scope</span> · {scope}</p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
             <a className="text-accent-text hover:underline" href={advisoryURL} target="_blank" rel="noreferrer">{JAVA4SHELL_CVE} advisory</a>
             {trivySearch && <Link className="text-accent-text hover:underline" to={{ search: trivySearch }}>Find in Trivy reports</Link>}
@@ -61,7 +66,7 @@ export function Java4ShellPanel({ namespaces = [], context, connected, trivySear
           )}
           {cancel && (
             <button type="button" className="btn-secondary shrink-0 px-3 py-1.5 text-xs font-medium" onClick={cancel}>
-              Cancel check
+              {isFetching ? 'Cancel check' : 'Cancel check in another scope'}
             </button>
           )}
           <button
@@ -90,7 +95,8 @@ export function Java4ShellPanel({ namespaces = [], context, connected, trivySear
           />
         </div>
       )}
-      {error && <p role="alert" className="mt-3 text-xs text-warning-text">{error.message}{data && ' Showing the previous result.'}</p>}
+      {canceled && <p role="status" className="mt-3 text-xs text-theme-text-secondary">Check canceled.{data && ' Showing the previous result.'}</p>}
+      {error && !canceled && <p role="alert" className="mt-3 text-xs text-warning-text">{error.message}{data && ' Showing the previous result.'}</p>}
       {data && <Java4ShellResults data={data} checkedAt={checkedAt} onOpen={onNavigateToResource} checkingAgain={isFetching} />}
     </section>
   )
@@ -105,10 +111,15 @@ const reasonLabels: Record<string, string> = {
   blocked: 'Registry address blocked',
   rate_limited: 'Registry rate limit',
   error: 'Registry read failed',
-  not_checked: 'Check limit reached',
+  not_checked: 'Scan limit reached',
   docker_hub_limit: "Radar's Docker Hub lookup cap reached",
   java_home_declared: 'Image sets JAVA_HOME. Java version unknown',
   no_java_declaration: 'Image declares no Java version',
+}
+
+function registryNames(hosts?: string[]): string {
+  if (!hosts?.length) return ''
+  return ` · ${hosts.slice(0, 3).join(', ')}${hosts.length > 3 ? ' and others' : ''}`
 }
 
 function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: Java4ShellResult; checkedAt: string; onOpen?: (resource: SelectedResource) => void; checkingAgain: boolean }) {
@@ -217,23 +228,34 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
           ))}
         </ul>
       )}
+      {missingDeclaration > 0 && (
+        <p className="text-theme-text-secondary">For images with no Java version in their metadata, verify the installed version in workloads that use Java.</p>
+      )}
       {gaps > 0 && (
-        <div className="space-y-1 border-t border-theme-border pt-2">
-          <h3 className="font-medium text-theme-text-primary">Assessment gaps</h3>
+        <div className="space-y-2 border-t border-theme-border pt-2">
+          <h3 className="font-medium text-theme-text-primary">Could not check · next steps</h3>
           {registryAuthRequired > 0 && (
             <p className="text-warning-text">
-              Registry authentication required for {pluralize(registryAuthRequired, 'container')}.{' '}
-              <a className="text-accent-text hover:underline" href={registryAccessURL} target="_blank" rel="noreferrer">Registry credentials and permissions</a>
+              Registry authentication required for {pluralize(registryAuthRequired, 'container')}{registryNames(data.authRequiredRegistries)}.{' '}
+              <a className="text-accent-text hover:underline" href={registryAccessURL} target="_blank" rel="noreferrer">Set up Radar’s registry access</a>
             </p>
           )}
-          {checkLimitReached > 0 && <p className="text-warning-text">Check limit reached for {pluralize(checkLimitReached, 'container')}.</p>}
-          {dockerHubLimit > 0 && <p className="text-warning-text">{reasonLabels.docker_hub_limit} for {pluralize(dockerHubLimit, 'container')}.</p>}
-          {(checkLimitReached > 0 || dockerHubLimit > 0) && (
-            <p className="text-theme-text-secondary">{data.workload ? 'Run the check again to retry.' : 'Select fewer namespaces or check a specific workload to retry.'}</p>
+          {checkLimitReached > 0 && (
+            <p className="text-theme-text-secondary">
+              <span className="text-warning-text">{reasonLabels.not_checked} for {pluralize(checkLimitReached, 'container')}.</span>{' '}
+              {data.workload ? 'Retry this workload. If the check still stops early, verify Java in the skipped containers.' : 'Select fewer namespaces or open an affected workload and check it there.'}
+            </p>
+          )}
+          {dockerHubLimit > 0 && (
+            <p className="text-theme-text-secondary">
+              <span className="text-warning-text">{reasonLabels.docker_hub_limit} for {pluralize(dockerHubLimit, 'container')}.</span>{' '}
+              {data.workload ? 'Retry to reuse any image metadata Radar cached. If the cap is reached again, verify Java in the skipped containers.' : 'Radar applies this cap each time. Select fewer namespaces or open an affected workload and check it there.'}
+            </p>
           )}
           {registryRateLimit > 0 && (
-            <p className="text-warning-text">
-              Registry rate limit hit for {pluralize(registryRateLimit, 'container')}. Retry after the limit resets.
+            <p className="text-theme-text-secondary">
+              <span className="text-warning-text">Registry throttling affected {pluralize(registryRateLimit, 'container')}{registryNames(data.rateLimitedRegistries)}.</span>{' '}
+              Radar pauses calls to throttled registries for five minutes. Retry after the pause and when the registry quota allows requests again.
             </p>
           )}
           {javaHomeDeclared > 0 && (
@@ -247,6 +269,9 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
         </div>
       )}
       {data.unassessedGroups > 0 && <UnassessedDetails data={data} onOpen={onOpen} />}
+      {!data.workload && data.containers > 0 && (
+        <p className="text-theme-text-tertiary">Workload rows show affected declarations and unassessed containers. Open a workload’s Vulnerabilities section to check it on its own.</p>
+      )}
     </div>
   )
 }
@@ -297,7 +322,7 @@ function UnassessedDetails({ data, onOpen }: { data: Java4ShellResult; onOpen?: 
     <div>
       <button {...buttonProps} type="button" onClick={() => setOpen(!open)} className="inline-flex items-center gap-1.5 py-1 font-medium text-accent-text hover:underline">
         <CollapseChevron open={open} className="h-3.5 w-3.5" />
-        Containers without an assessment
+        {gapRows.length > 0 ? 'Show skipped images' : 'Show images with no Java version declared'}
       </button>
       <Collapse open={open} id={panelId} mountLazily>
         {canFilter && (
