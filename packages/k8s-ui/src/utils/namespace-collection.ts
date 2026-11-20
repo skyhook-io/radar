@@ -18,6 +18,19 @@ export interface NamespaceCollection {
 
 const MAX_SHOWN = 3
 
+/**
+ * Whether the collection limit reaches the namespaces the user is viewing.
+ * With nothing picked the view is every namespace, so any narrowing counts; a
+ * pick Radar collects every kind in is complete, as lists and counts say.
+ */
+export function collectionAffectsPick(collection: NamespaceCollection, actives: readonly string[]): boolean {
+  if (actives.length === 0) return true
+  return collection.groups.some(({ namespaces }) => {
+    if (!namespaces.names || namespaces.names.length < namespaces.count) return true
+    return actives.some(ns => !namespaces.names!.includes(ns))
+  })
+}
+
 function joinNames(names: string[]): string {
   if (names.length <= 1) return names[0] ?? ''
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`

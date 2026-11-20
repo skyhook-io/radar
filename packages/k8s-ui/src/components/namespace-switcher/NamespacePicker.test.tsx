@@ -165,6 +165,16 @@ describe('NamespacePicker collection', () => {
     expect(chip()).toBeNull()
   })
 
+  it('shows no chip for a pick Radar collects every kind in', async () => {
+    await renderOpen({ ...unfiltered, actives: ['team-a'], mode: 'namespace', collection })
+    expect(chip()).toBeNull()
+  })
+
+  it('keeps the chip for a pick that reaches a namespace Radar leaves out', async () => {
+    await renderOpen({ ...unfiltered, actives: ['team-a', 'team-b'], mode: 'namespace', collection })
+    expect(chip()).not.toBeNull()
+  })
+
   it('keeps the chip when the host disables the picker, since it describes Radar and not the pick', async () => {
     await renderOpen({ ...unfiltered, collection }, { disabled: true, disabledTooltip: 'Not available here.' })
     expect(chip()).not.toBeNull()

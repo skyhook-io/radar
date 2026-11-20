@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { collectionGroupParts, type NamespaceCollectionGroup } from './namespace-collection'
+import { collectionAffectsPick, collectionGroupParts, type NamespaceCollectionGroup } from './namespace-collection'
 
 const group = (kinds: string[], namespaces: NamespaceCollectionGroup['namespaces']): NamespaceCollectionGroup => ({
   kinds: kinds.map(kind => ({ kind })),
@@ -42,5 +42,26 @@ describe('collectionGroupParts', () => {
 
   it('says when no namespace the caller can see is collected', () => {
     expect(collectionGroupParts(group(['Pod'], { count: 0 })).namespaces).toBe('no namespace you can see')
+  })
+})
+
+describe('collectionAffectsPick', () => {
+  const collection = { groups: [group(['Pod'], { count: 2, names: ['team-a', 'team-b'] }), group(['Secret'], { count: 1, names: ['team-a'] })] }
+
+  it('applies to every namespace when nothing is picked', () => {
+    expect(collectionAffectsPick(collection, [])).toBe(true)
+  })
+
+  it('does not apply to a pick every kind is collected in', () => {
+    expect(collectionAffectsPick(collection, ['team-a'])).toBe(false)
+  })
+
+  it('applies when one kind leaves a picked namespace out', () => {
+    expect(collectionAffectsPick(collection, ['team-b'])).toBe(true)
+    expect(collectionAffectsPick(collection, ['team-a', 'team-c'])).toBe(true)
+  })
+
+  it('applies when a group only counts its namespaces', () => {
+    expect(collectionAffectsPick({ groups: [group(['Pod'], { count: 120 })] }, ['team-a'])).toBe(true)
   })
 })

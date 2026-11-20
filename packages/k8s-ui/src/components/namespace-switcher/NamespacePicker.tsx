@@ -6,7 +6,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { useKeepInViewport } from '../../hooks/useKeepInViewport'
 import { usePhoneLayout } from '../../hooks/usePhoneLayout'
 import { MultiSelectPicker } from '../ui/MultiSelectPicker'
-import type { NamespaceCollection } from '../../utils/namespace-collection'
+import { collectionAffectsPick, type NamespaceCollection } from '../../utils/namespace-collection'
 import { NamespaceCollectionChip } from './NamespaceCollectionChip'
 import { NamespaceCollectionDetails, COLLECTION_NOTE } from './NamespaceCollectionDetails'
 
@@ -255,7 +255,8 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
   const isClusterWide = activeCount === 0
   const cacheScopeLocked = scope.cacheScoped && !scope.namespaceRescope
   const needsNamespaces = scope.authoritative === false && limitedListHelp != null
-  const collection = scope.collection?.groups.length ? scope.collection : undefined
+  const collection =
+    scope.collection?.groups.length && collectionAffectsPick(scope.collection, scopeActives) ? scope.collection : undefined
   const dropdownNote = phone ? collection : undefined
   const emptyStateLabel = needsNamespaces ? 'No namespaces yet.' : 'No namespaces available.'
   const isDisabled = disabled || loading || pending || cacheScopeLocked
