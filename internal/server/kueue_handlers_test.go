@@ -121,6 +121,11 @@ func TestKueueAdmissionPermissionFilteredRefsAndUnsupportedEvidence(t *testing.T
 	}
 	w.SetAPIVersion("kueue.x-k8s.io/v1beta1")
 	got = kueueAdmissionForRoot(context.Background(), root, []*unstructured.Unstructured{w}, nil)
+	if got.Total != 1 || got.Workloads[0].Projection != "available" || got.Workloads[0].Scheduling.Observations[0].Kueue.Admission == nil {
+		t.Fatalf("v1beta1 Workload lost its projection: %+v", got)
+	}
+	w.SetAPIVersion("kueue.x-k8s.io/v1alpha1")
+	got = kueueAdmissionForRoot(context.Background(), root, []*unstructured.Unstructured{w}, nil)
 	if got.Total != 1 || got.Workloads[0].Projection != "unsupported" {
 		t.Fatalf("unsupported version is not absence: %+v", got)
 	}

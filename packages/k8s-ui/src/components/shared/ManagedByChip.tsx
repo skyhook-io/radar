@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { GitBranch, Package } from 'lucide-react'
 import { clsx } from 'clsx'
-import { gitOpsOwnerFromRef, managerCandidates, managerChipPresentation, managerChoices, managerRefLabel, type GitOpsOwnerRef, type ManagerChoice, type ManagerListing } from '../../utils/gitops-owner'
+import { activeManagerClaims, gitOpsOwnerFromRef, managerCandidates, managerChipPresentation, managerChoices, managerRefLabel, type GitOpsOwnerRef, type ManagerChoice, type ManagerListing } from '../../utils/gitops-owner'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
-import type { ManagerAnswer } from '../../types/core'
+import type { ManagerAnswer, ResourceRef } from '../../types/core'
+import { resourceRefKey } from '../../utils/resource-refs'
 import type { GitOpsStatus } from '../../types/gitops'
 import { StatusDot, type StatusTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
@@ -163,6 +164,11 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
     const owner = gitOpsOwnerFromRef(c.ref)
     return { ...c, owner: c.found && owner?.namespace ? owner : null }
   })
+  // A label naming no namespace is unresolved only when its own check says
+  // so; otherwise Applications of that name list the object and it doesn't
+  // say which.
+  const evidence = manager.via ?? manager.direct
+  const unresolved = (ref: ResourceRef) => activeManagerClaims(evidence).some(c => c.check === 'unresolved' && resourceRefKey(c.manager) === resourceRefKey(ref))
   const several = managerCandidates(manager).length > 1
   const lead = manager.lead ? gitOpsOwnerFromRef(manager.lead) : null
   const direct = !several ? choices.find(c => c.owner && lead && c.owner.name === lead.name && c.owner.namespace === lead.namespace)?.owner ?? null : null
@@ -225,7 +231,7 @@ function ManagerAnswerChip({ manager, status, onOpen, variant }: {
               )}
             >
               <span className="truncate">{managerRefLabel(c.ref)}</span>
-              <span className="text-[11px] text-theme-text-tertiary">{choiceRole(c)}{c.owner ? '' : !c.ref.namespace ? " · its label doesn't name its namespace" : !c.found ? ' · Radar found no such manager you can view' : ''}</span>
+              <span className="text-[11px] text-theme-text-tertiary">{choiceRole(c)}{c.owner ? '' : !c.ref.namespace ? unresolved(c.ref) ? ` · Radar found no ${c.ref.kind} of this name listing it; it may be managed from another cluster` : ` · its label doesn't say which ${c.ref.kind} of this name` : !c.found ? ' · Radar found no such manager you can view' : ''}</span>
             </button>
           ))}
         </div>

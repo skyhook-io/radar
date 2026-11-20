@@ -3,15 +3,16 @@ package cachesource
 
 import (
 	"slices"
+	"sync"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -28,7 +29,11 @@ type Caches struct {
 // caches on a switch, the typed cache with them, so a new typed cache marks a
 // new connection.
 type Source struct {
-	current func() Caches
+	current           func() Caches
+	catalogMu         sync.Mutex
+	catalogDiscovery  *k8score.ResourceDiscovery
+	catalogGeneration uint64
+	catalog           *ownership.Catalog
 }
 
 // New returns a source reading the caches current returns.
@@ -44,18 +49,32 @@ func (s *Source) Begin() (ownership.ReadSession, error) {
 	if caches.Typed == nil {
 		return nil, ownership.ErrNotConnected
 	}
-	return &session{caches: caches, current: s.current, catalog: catalogOf(caches.Discovery)}, nil
+	return &session{caches: caches, current: s.current, catalog: s.catalogOf(caches.Discovery)}, nil
 }
 
-func catalogOf(discovery *k8score.ResourceDiscovery) *ownership.Catalog {
-	snapshot := discovery.Catalog()
+func (s *Source) catalogOf(discovery *k8score.ResourceDiscovery) *ownership.Catalog {
+	s.catalogMu.Lock()
+	defer s.catalogMu.Unlock()
+	var snapshot k8score.DiscoveryCatalog
+	if s.catalog != nil && s.catalogDiscovery == discovery {
+		var changed bool
+		snapshot, changed = discovery.CatalogIfChanged(s.catalogGeneration)
+		if !changed {
+			return s.catalog
+		}
+	} else {
+		snapshot = discovery.Catalog()
+	}
 	served := make([]ownership.ServedResource, 0, len(snapshot.Resources))
 	for _, r := range snapshot.Resources {
 		served = append(served, ownership.ServedResource{
 			Group: r.Group, Version: r.Version, Kind: r.Kind, Resource: r.Name, Namespaced: r.Namespaced, Verbs: r.Verbs,
 		})
 	}
-	return ownership.NewCatalog(served, snapshot.Complete)
+	s.catalog = ownership.NewCatalog(served, snapshot.Complete, snapshot.FailedGroups...)
+	s.catalogDiscovery = discovery
+	s.catalogGeneration = snapshot.Generation
+	return s.catalog
 }
 
 // typedKinds are the kinds the typed cache holds, keyed to the built-in that
@@ -71,21 +90,38 @@ var typedKinds = func() map[resourceid.GroupKind]resourceid.Builtin {
 }()
 
 type session struct {
+	subjectRef resourceid.Ref
+	subject    apiruntime.Object
+
 	caches  Caches
 	current func() Caches
 	catalog *ownership.Catalog
 	// watched holds the versions each dynamically watched resource is watched
 	// at, as of the session's first dynamic read.
 	watched map[schema.GroupResource][]schema.GroupVersionResource
+	serving map[resourceid.GroupKind][]schema.GroupVersionResource
 	// byNamespace holds the namespaces each resource version is watched in
 	// when it is watched namespace by namespace (nil otherwise).
 	byNamespace map[schema.GroupVersionResource][]string
 	// unwatched holds why each resource with no watched version is unread
 	// ("" for a watched one).
-	unwatched map[schema.GroupResource]readreason.Code
+	unwatched           map[schema.GroupResource]readreason.Code
+	dependentKinds      []ownership.CatalogKind
+	preparedNamespaced  bool
+	preparedCluster     bool
+	unwatchedNamespaced []ownership.Gap
+	unwatchedCluster    []ownership.Gap
+	unwatchedAll        []ownership.Gap
+	lastGapMode         uint8
+	lastExtraGaps       []ownership.Gap
+	lastCombinedGaps    []ownership.Gap
+
+	membershipStates map[resourceid.Ref]membershipStateObservation
 	// recordingManagersRead, set only by tests, runs after RecordingManagers reads a manager
 	// kind, with the keys it read together.
 	recordingManagersRead func(kind resourceid.GroupKind, keys []string)
+
+	observationViews map[resourceid.GroupKind]*k8score.DynamicObservationView
 }
 
 // TypedCache returns the typed cache s reads from, when this package began s.
@@ -100,6 +136,22 @@ func TypedCache(s ownership.ReadSession) (*k8score.ResourceCache, bool) {
 	return cs.caches.Typed, true
 }
 
+// SessionCaches returns the caches pinned by a session begun by this source.
+func SessionCaches(s ownership.ReadSession) (Caches, bool) {
+	cs, ok := s.(*session)
+	if !ok {
+		return Caches{}, false
+	}
+	return cs.caches, true
+}
+
+// CaptureSubject also pins status reads such as a manager's recorded members.
+func (s *session) CaptureSubject(ref resourceid.Ref, obj apiruntime.Object) relations.Session {
+	captured := *s
+	captured.subjectRef, captured.subject = ref, obj
+	return &captured
+}
+
 func (s *session) Catalog() *ownership.Catalog {
 	return s.catalog
 }
@@ -108,22 +160,36 @@ func (s *session) Object(ref resourceid.Ref) ownership.ObjectRead {
 	return s.readObject(ref, nil)
 }
 
+// Borrow is Object, also lending the cached object when it is Present.
+func (s *session) Borrow(ref resourceid.Ref) (apiruntime.Object, ownership.ObjectRead) {
+	var borrowed apiruntime.Object
+	read := s.readObject(ref, func(obj apiruntime.Object) { borrowed = obj })
+	return borrowed, read
+}
+
 // readObject is Object, lending the cached object it answered from, when
 // present, to borrow, which must not modify or keep it.
-func (s *session) readObject(ref resourceid.Ref, borrow func(*unstructured.Unstructured)) ownership.ObjectRead {
+func (s *session) readObject(ref resourceid.Ref, borrow func(apiruntime.Object)) ownership.ObjectRead {
 	if ref.Kind == "" || ref.Name == "" {
 		return unavailable(ref, readreason.ReadError)
 	}
 	if ownership.IsEvent(ref.GroupKind()) {
 		return ownership.ObjectRead{State: ownership.Excluded}
 	}
+	if s.subject != nil && ref == s.subjectRef {
+		read := observe(ref, s.subject)
+		if borrow != nil && read.State == ownership.Present {
+			borrow(s.subject)
+		}
+		return read
+	}
 	if b, ok := typedKinds[ref.GroupKind()]; ok {
-		return s.typedObject(ref, b)
+		return s.typedObject(ref, b, borrow)
 	}
 	return s.dynamicObject(ref, borrow)
 }
 
-func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin) ownership.ObjectRead {
+func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin, borrow func(apiruntime.Object)) ownership.ObjectRead {
 	if reason, wrong := scopeMismatch(ref, b.Namespaced); wrong {
 		return unavailable(ref, reason)
 	}
@@ -134,16 +200,20 @@ func (s *session) typedObject(ref resourceid.Ref, b resourceid.Builtin) ownershi
 	case !found:
 		return ownership.ObjectRead{State: ownership.Absent}
 	}
-	return observe(ref, obj)
+	read := observe(ref, obj)
+	if borrow != nil && read.State == ownership.Present {
+		borrow(obj)
+	}
+	return read
 }
 
-func (s *session) dynamicObject(ref resourceid.Ref, borrow func(*unstructured.Unstructured)) ownership.ObjectRead {
+func (s *session) dynamicObject(ref resourceid.Ref, borrow func(apiruntime.Object)) ownership.ObjectRead {
 	if s.catalog.Ambiguous(ref.GroupKind()) {
 		return unavailable(ref, readreason.ReadError)
 	}
 	kind, known := s.catalog.Kind(ref.GroupKind())
 	if !known {
-		if !s.catalog.Complete() {
+		if !s.catalog.CoversGroup(ref.Group) {
 			// The group discovery missed may serve it.
 			return unavailable(ref, readreason.ReadError)
 		}
@@ -202,7 +272,12 @@ func unansweredReason(obs observer, versions []schema.GroupVersionResource, name
 // servingVersions returns the versions the session reads kind's resource at,
 // most stable first: the watched versions the catalog serves. With none
 // watched it is the most stable served version, whose observation says why.
+// The result is shared within the session and must not be modified.
 func (s *session) servingVersions(kind ownership.CatalogKind) []schema.GroupVersionResource {
+	if versions, ok := s.serving[kind.GroupKind]; ok {
+		return versions
+	}
+
 	gr := schema.GroupResource{Group: kind.Group, Resource: kind.Resource}
 	if s.watched == nil {
 		s.watched = map[schema.GroupResource][]schema.GroupVersionResource{}
@@ -220,6 +295,11 @@ func (s *session) servingVersions(kind ownership.CatalogKind) []schema.GroupVers
 	if len(versions) == 0 {
 		versions = []schema.GroupVersionResource{{Group: kind.Group, Version: mostStable(kind.Versions), Resource: kind.Resource}}
 	}
+	if s.serving == nil {
+		s.serving = map[resourceid.GroupKind][]schema.GroupVersionResource{}
+	}
+	s.serving[kind.GroupKind] = versions
+
 	return versions
 }
 

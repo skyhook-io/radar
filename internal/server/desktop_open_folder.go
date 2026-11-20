@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/skyhook-io/radar/internal/desktopenv"
 	"github.com/skyhook-io/radar/internal/version"
 )
 
@@ -78,6 +79,7 @@ func openWithDefaultApp(path string) {
 		log.Printf("[desktop] Cannot open file on %s", runtime.GOOS)
 		return
 	}
+	cmd.Dir = desktopenv.ChildDir()
 	if err := cmd.Start(); err != nil {
 		log.Printf("[desktop] Failed to open file: %v", err)
 	}
@@ -97,6 +99,7 @@ func revealInFileManager(path string) {
 		log.Printf("[desktop] Cannot open file manager on %s", runtime.GOOS)
 		return
 	}
+	cmd.Dir = desktopenv.ChildDir()
 	if err := cmd.Start(); err != nil {
 		log.Printf("[desktop] Failed to reveal in file manager: %v", err)
 	}

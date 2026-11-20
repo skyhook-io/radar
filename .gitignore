@@ -10,6 +10,7 @@ vendor/
 
 # Node
 node_modules/
+.vitest-cache/
 web/node_modules/
 web/dist/
 packages/*/node_modules/
@@ -29,6 +30,7 @@ Thumbs.db
 internal/static/dist/*
 !internal/static/dist/.gitkeep
 /build/bin/
+/build/appimage/
 
 # Wails generated
 web/wailsjs/

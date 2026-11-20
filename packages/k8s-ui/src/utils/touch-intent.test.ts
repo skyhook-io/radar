@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { isTouchIntent } from './touch-intent'
 
 function press(pointerType: string) {
@@ -8,8 +8,13 @@ function press(pointerType: string) {
   document.body.dispatchEvent(e)
 }
 
-// Order matters: the module keeps the last touch time, so the mouse case
-// runs before any touch has been recorded.
+function pressKey() {
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+}
+
+// The module keeps the last touch time across tests and files; a key press clears it.
+beforeEach(pressKey)
+
 describe('isTouchIntent', () => {
   it('ignores mouse presses', () => {
     press('mouse')
@@ -28,7 +33,7 @@ describe('isTouchIntent and the keyboard', () => {
   it('ends the tap window on a key press', () => {
     press('touch')
     expect(isTouchIntent()).toBe(true)
-    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    pressKey()
     expect(isTouchIntent()).toBe(false)
   })
 })

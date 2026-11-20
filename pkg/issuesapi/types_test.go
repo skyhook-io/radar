@@ -54,3 +54,20 @@ func TestIssueOnsetProvenanceWireShape(t *testing.T) {
 		t.Fatalf("onset provenance wire shape = %s", wire)
 	}
 }
+
+func TestIssueHazardJSON(t *testing.T) {
+	for _, hazard := range []string{"", "Sync can take over tracking."} {
+		wire, err := json.Marshal(Issue{Hazard: hazard})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(wire, &fields); err != nil {
+			t.Fatal(err)
+		}
+		got, present := fields["hazard"]
+		if present != (hazard != "") || (present && got != hazard) {
+			t.Fatalf("hazard %q: wire = %s", hazard, wire)
+		}
+	}
+}

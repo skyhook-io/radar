@@ -1,8 +1,9 @@
-import { dedupeResourceRefs, omitResourceRefs } from '../../utils/resource-refs'
+import { dedupeResourceRefs, omitResourceRefs, resourceRefKey } from '../../utils/resource-refs'
+import { gapReasonText } from '../../utils/read-actions'
 import { customResourceDefinitionRef, getCRDDefinitionsSnapshot, subscribeCRDDefinitions } from '../../utils/navigation'
 import { Disclosure } from './Disclosure'
 import { createContext, useContext, useState, useSyncExternalStore } from 'react'
-import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
+import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatDuration, formatResources } from '../resources/resource-utils'
 import { getEffectiveResources } from '../../utils/extended-resources'
@@ -255,6 +256,7 @@ const NEGATIVE_POLARITY_TYPES = new Set([
   'OutOfSync',
   // ArgoCD ApplicationSet
   'ErrorOccurred',
+  'InvalidRolloutConfig',
   // FluxCD (meta)
   'Stalled',
   // Gateway API (sigs.k8s.io/gateway-api v1)
@@ -284,7 +286,7 @@ const NEGATIVE_POLARITY_PATTERNS: RegExp[] = [
   /^Frequent/,
 ]
 
-function isInvertedPolarityCondition(type: string | undefined): boolean {
+export function isInvertedPolarityCondition(type: string | undefined): boolean {
   if (!type) return false
   if (NEGATIVE_POLARITY_TYPES.has(type)) return true
   return NEGATIVE_POLARITY_PATTERNS.some((re) => re.test(type))
@@ -396,13 +398,15 @@ export function ConditionsSection({
 // ALERT BANNER
 // ============================================================================
 
+// The message line is 12px body text, so it uses the neutral secondary tone:
+// the variants' tinted tones fall below 4.5:1 on their light backgrounds.
 const ALERT_COLORS = {
-  alert:   { bg: 'status-alert', border: '', title: '', message: '', list: '', bullet: '' },
+  alert:   { bg: 'status-alert', border: '', title: '', message: 'text-theme-text-secondary', list: '', bullet: '' },
   unknown: { bg: 'status-unknown', border: '', title: '', message: '', list: '', bullet: '' },
-  error:   { bg: 'bg-red-50 dark:bg-red-950/30', border: 'border-red-200 dark:border-red-800/30', title: 'text-red-700 dark:text-red-300', message: 'text-red-600/80 dark:text-red-300/70', list: 'text-red-600 dark:text-red-400', bullet: 'text-red-400/60 dark:text-red-400/50' },
-  warning: { bg: 'bg-amber-50 dark:bg-amber-950/30', border: 'border-amber-200 dark:border-amber-800/30', title: 'text-amber-700 dark:text-amber-300', message: 'text-amber-600/80 dark:text-amber-300/70', list: 'text-amber-600 dark:text-amber-400', bullet: 'text-amber-400/60 dark:text-amber-400/50' },
-  info:    { bg: 'bg-sky-50 dark:bg-sky-950/30', border: 'border-sky-200 dark:border-sky-800/30', title: 'text-sky-700 dark:text-sky-300', message: 'text-sky-600/80 dark:text-sky-300/70', list: 'text-sky-600 dark:text-sky-400', bullet: 'text-sky-400/60 dark:text-sky-400/50' },
-  success: { bg: 'bg-emerald-50 dark:bg-emerald-950/30', border: 'border-emerald-200 dark:border-emerald-800/30', title: 'text-emerald-700 dark:text-emerald-300', message: 'text-emerald-600/80 dark:text-emerald-300/70', list: 'text-emerald-600 dark:text-emerald-400', bullet: 'text-emerald-400/60 dark:text-emerald-400/50' },
+  error:   { bg: 'bg-red-50 dark:bg-red-950/30', border: 'border-red-200 dark:border-red-800/30', title: 'text-red-700 dark:text-red-300', message: 'text-theme-text-secondary', list: 'text-red-600 dark:text-red-400', bullet: 'text-red-400/60 dark:text-red-400/50' },
+  warning: { bg: 'bg-amber-50 dark:bg-amber-950/30', border: 'border-amber-200 dark:border-amber-800/30', title: 'text-amber-700 dark:text-amber-300', message: 'text-theme-text-secondary', list: 'text-amber-600 dark:text-amber-400', bullet: 'text-amber-400/60 dark:text-amber-400/50' },
+  info:    { bg: 'bg-sky-50 dark:bg-sky-950/30', border: 'border-sky-200 dark:border-sky-800/30', title: 'text-sky-700 dark:text-sky-300', message: 'text-theme-text-secondary', list: 'text-sky-600 dark:text-sky-400', bullet: 'text-sky-400/60 dark:text-sky-400/50' },
+  success: { bg: 'bg-emerald-50 dark:bg-emerald-950/30', border: 'border-emerald-200 dark:border-emerald-800/30', title: 'text-emerald-700 dark:text-emerald-300', message: 'text-theme-text-secondary', list: 'text-emerald-600 dark:text-emerald-400', bullet: 'text-emerald-400/60 dark:text-emerald-400/50' },
 } as const
 
 const DEFAULT_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -419,7 +423,7 @@ interface AlertBannerProps {
   icon?: React.ComponentType<{ className?: string }>
   title: string
   message?: React.ReactNode
-  items?: string[]
+  items?: React.ReactNode[]
   children?: React.ReactNode
   /** A control at the end of the title line, e.g. a link to where the problem is handled. */
   action?: React.ReactNode
@@ -587,6 +591,26 @@ function ContainerResourcesLine({ resources }: { resources: any }) {
   )
 }
 
+// Pod-level budget (spec.resources) is shared by all containers, so it stays
+// its own row rather than being merged into the container rows.
+export function PodAggregateResources({ resources }: { resources: any }) {
+  const hasRequests = Object.keys(resources?.requests ?? {}).length > 0
+  const hasLimits = Object.keys(resources?.limits ?? {}).length > 0
+  if (!hasRequests && !hasLimits) return null
+  return (
+    <div className="rounded-[10px] border border-dashed border-theme-border p-3">
+      <div className="flex items-baseline justify-between gap-2 mb-2">
+        <span className="text-sm font-medium text-theme-text-primary">Pod (aggregate)</span>
+        <span className="text-xs text-theme-text-tertiary">Shared by all containers</span>
+      </div>
+      <div className="text-xs text-theme-text-secondary space-y-1">
+        {hasRequests && <div>Requests: {formatResources(resources.requests)}</div>}
+        {hasLimits && <div>Limits: {formatResources(resources.limits)}</div>}
+      </div>
+    </div>
+  )
+}
+
 export function PodTemplateSection({ template }: { template: any }) {
   if (!template) return null
   const initContainers = template.spec?.initContainers || []
@@ -594,6 +618,7 @@ export function PodTemplateSection({ template }: { template: any }) {
 
   return (
     <div className="space-y-2">
+      <PodAggregateResources resources={template.spec?.resources} />
       {initContainers.length > 0 && (
         <>
           <div className="text-xs text-theme-text-tertiary font-medium uppercase tracking-wide">Init Containers</div>
@@ -819,7 +844,7 @@ export type CopyHandler = (text: string, key: string) => void
 // RELATED RESOURCES SECTION
 // ============================================================================
 
-import type { TimelineEvent, Relationships, ResourceRef, OwnershipCoverage } from '../../types'
+import type { TimelineEvent, Relationships, ResourceRef, OwnershipCoverage, ManagerAnswer } from '../../types'
 import { isChangeEvent, isK8sEvent } from '../../types'
 import { Info, Link } from 'lucide-react'
 import { formatRelativeAgeTime } from '../../utils/format'
@@ -914,7 +939,7 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind, track
           />
         )}
         {(managers.length > 0 || managedByNote.text) && (
-          <RelationshipGroup label="Managed By" refs={managers} onNavigate={onNavigate} note={managedByNote} />
+          <RelationshipGroup label={managersListOnly(relationships.ownership?.manager, managers) ? 'Listed By' : 'Managed By'} refs={managers} onNavigate={onNavigate} note={managedByNote} />
         )}
         {relationships.deployment && (
           <RelationshipGroup label="Deployment" refs={[relationships.deployment]} onNavigate={onNavigate} />
@@ -1015,7 +1040,7 @@ function ownershipUnanswered(coverage: OwnershipCoverage | undefined): string | 
 }
 
 // ownerNote says why no owner is named, when there is an owner reference.
-function ownerNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
+export function ownerNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
   const ref = coverage?.ownerRef
   const named = ref?.kind && ref.name ? `${ref.kind} ${ref.name}` : 'the owner it names'
   switch (coverage?.primaryOwnerState) {
@@ -1075,39 +1100,6 @@ function capitalize(s: string): string {
 
 function joinOr(items: string[]): string {
   return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`
-}
-
-function gapReasonText(reason: string): string {
-  switch (reason) {
-    case 'radar_kind_not_collected':
-    case 'radar_namespace_not_collected':
-      return "Radar doesn't collect it"
-    case 'kind_sync_pending':
-      return 'still loading'
-    case 'kind_sync_timed_out':
-      return 'loading is overdue'
-    case 'radar_forbidden':
-    case 'radar_credentials_rejected':
-      return 'Radar may not list it'
-    case 'kind_not_watchable':
-      return "its API can't be watched"
-    case 'user_permission_check_failed':
-      return "your access couldn't be checked"
-    case 'user_forbidden':
-      return 'you may not list it'
-    case 'kind_unknown':
-      return "Radar's API discovery doesn't list its kind or version"
-    case 'object_not_found':
-      return "Radar doesn't have it yet"
-    case 'cluster_connecting':
-      return 'Radar is still connecting'
-    case 'cluster_disconnected':
-      return 'Radar lost its connection'
-    case 'connection_changed':
-      return "Radar's connection changed meanwhile"
-    default:
-      return 'the read failed'
-  }
 }
 
 // membersNote says what a GitOps manager's status records beyond the members
@@ -1183,6 +1175,14 @@ const MANAGED_BY_HINT = [
   'Argo CD Applications or Flux objects whose status lists this resource, and other controllers that manage it without an owner reference.',
   "Kubernetes' garbage collector follows owner references, not these links.",
 ]
+
+// managersListOnly: every manager shown is one whose list names the resource
+// while its metadata doesn't confirm it, which the chip calls Listed by.
+function managersListOnly(answer: ManagerAnswer | undefined, managers: ResourceRef[]): boolean {
+  if (!answer || answer.via || !['listed', 'shared', 'disagree'].includes(answer.state) || !managers.length) return false
+  const recorders = new Set((answer.direct.recorders ?? []).map(resourceRefKey))
+  return managers.every(m => recorders.has(resourceRefKey(m)))
+}
 
 // managersNote explains Managed By: where it comes from, more than one
 // manager, and the managers the search couldn't settle. With none listed, a
@@ -1314,6 +1314,22 @@ export function ResourceRefBadge({ resourceRef, onClick, wrapAtSeparator }: Reso
     ? 'badge max-w-full min-w-0 flex-wrap items-center whitespace-normal text-left leading-tight'
     : 'badge'
   const tooltip = `${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`
+
+  if (resourceRef.state) {
+    // Named by this resource's spec, but not readable by the viewer: show the
+    // name without implying it exists or can be opened.
+    const why = resourceRef.state === 'denied'
+      ? `You can't view this ${resourceRef.kind}.`
+      : `Radar couldn't check whether you can view this ${resourceRef.kind}.`
+    return (
+      <Tooltip content={`${why} It's listed because this resource references it; whether it exists isn't shown.`} delay={150}>
+        <span className={clsx(layoutClass, kindClass, 'opacity-70')} aria-label={`${tooltip}, not viewable`}>
+          <Lock className="w-3 h-3 shrink-0" aria-hidden="true" />
+          {content}
+        </span>
+      </Tooltip>
+    )
+  }
 
   if (onClick) {
     return (

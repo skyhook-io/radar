@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/desktopenv"
 	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
@@ -130,6 +131,8 @@ func (a *cursorAgent) resolveApprovalFlags() ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	help := exec.CommandContext(ctx, a.bin, "--help")
+	help.Dir = launchDir()
+	desktopenv.HideConsoleWindow(help)
 	addAgentDirToPath(help)
 	out, _ := help.CombinedOutput()
 	if ctx.Err() != nil {

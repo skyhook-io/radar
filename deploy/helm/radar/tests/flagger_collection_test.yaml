@@ -1,0 +1,22 @@
+suite: Flagger collection is explicitly opt-in
+templates:
+  - clusterrole.yaml
+tests:
+  - it: does not expand default collection permissions
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["flagger.app"]
+            resources: ["canaries", "metrictemplates"]
+            verbs: ["get", "list", "watch"]
+  - it: grants only native read collection when explicitly enabled
+    set:
+      rbac.crdGroups.flagger: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["flagger.app"]
+            resources: ["canaries", "metrictemplates"]
+            verbs: ["get", "list", "watch"]

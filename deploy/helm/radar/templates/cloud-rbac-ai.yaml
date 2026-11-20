@@ -32,19 +32,10 @@ aggregationRule:
     - matchLabels:
         rbac.authorization.k8s.io/aggregate-to-view: "true"
 # Omit rules because the aggregation controller owns them.
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" . }}-cloud-ai-read
-  labels:
-    {{- include "radar.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "radar.fullname" . }}-cloud-ai-read
-subjects:
-  - kind: Group
-    name: radar:ai:reader
-    apiGroup: rbac.authorization.k8s.io
+{{- include "radar.binding" (dict
+  "root" .
+  "name" (printf "%s-cloud-ai-read" (include "radar.fullname" .))
+  "roleRef" (printf "%s-cloud-ai-read" (include "radar.fullname" .))
+  "groups" (list "radar:ai:reader")
+) }}
 {{- end -}}

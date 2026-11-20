@@ -552,6 +552,14 @@ func TestNamespaceObservationReadsOnlyTheServingInformer(t *testing.T) {
 			t.Errorf("%s: %+v, want state=%s reason=%s over the kind's namespaces", tc.namespace, got, tc.state, tc.reason)
 		}
 	}
+	if since, ok := d.NamespaceWatchedSince(gvr, "synced"); !ok || since.IsZero() {
+		t.Fatalf("synced namespace lost its watch boundary: %v %v", since, ok)
+	}
+	for _, ns := range []string{"stalled", "unwatched", ""} {
+		if since, ok := d.NamespaceWatchedSince(gvr, ns); ok || !since.IsZero() {
+			t.Fatalf("%q: unavailable boundary = %v %v", ns, since, ok)
+		}
+	}
 	whole := d.Observation(gvr)
 	if whole.State != DynamicObservationSyncing || whole.ReasonCode != "sync_stalled" {
 		t.Fatalf("kind observation must still report its stalled namespace: %+v", whole)

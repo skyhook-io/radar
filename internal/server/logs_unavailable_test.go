@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -96,7 +97,15 @@ func TestPodLogsStream_NodeWatcherFailureBeforeOutput(t *testing.T) {
 	}
 }
 
+func setWorkloadLogDiscoveryInterval(t *testing.T, interval time.Duration) {
+	previous := workloadLogDiscoveryInterval
+	workloadLogDiscoveryInterval = interval
+	t.Cleanup(func() { workloadLogDiscoveryInterval = previous })
+}
+
 func TestWorkloadLogsStream_NodeWatcherFailureRecovers(t *testing.T) {
+	setWorkloadLogDiscoveryInterval(t, 100*time.Millisecond)
+
 	var requests atomic.Int32
 	var resumed atomic.Bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +125,7 @@ func TestWorkloadLogsStream_NodeWatcherFailureRecovers(t *testing.T) {
 	}
 	previous := k8s.SetTestClient(client)
 	t.Cleanup(func() { k8s.SetTestClient(previous) })
-	stream := readSSEFor(t, "/api/workloads/deployments/default/nginx/logs/stream", 12*time.Second)
+	stream := readSSEFor(t, "/api/workloads/deployments/default/nginx/logs/stream", 20*workloadLogDiscoveryInterval)
 	if !resumed.Load() || strings.Count(stream, `"content":"before"`) != 1 || strings.Count(stream, `"content":"recovered"`) != 1 {
 		t.Fatalf("expected resumed output without replay: %s", stream)
 	}
@@ -145,8 +154,10 @@ func TestPodLogsStream_ReportsLogsUnavailable(t *testing.T) {
 // pass. A source the node cannot read must be named once in the notice bar, not
 // left as a silently empty pane.
 func TestWorkloadLogsStream_ReportsLogsUnavailableOnce(t *testing.T) {
+	setWorkloadLogDiscoveryInterval(t, 100*time.Millisecond)
+
 	useLogsUnavailableServer(t)
-	stream := readSSEFor(t, "/api/workloads/deployments/default/nginx/logs/stream", 7*time.Second)
+	stream := readSSEFor(t, "/api/workloads/deployments/default/nginx/logs/stream", 20*workloadLogDiscoveryInterval)
 	want := "1 source could not be read: nginx-abc-xyz/nginx: " + k8score.ErrLogsUnavailable.Error()
 	if !strings.Contains(stream, "event: notice") || !strings.Contains(stream, want) {
 		t.Fatalf("expected a notice naming the source:\n%s", stream)
@@ -163,9 +174,12 @@ func TestWorkloadLogsStream_ReportsLogsUnavailableOnce(t *testing.T) {
 // instance the node cannot read must be named once, not shown as a log line or
 // left silently empty.
 func TestCNPGClusterLogsStream_ReportsLogsUnavailableOnce(t *testing.T) {
+	const discoveryInterval = 100 * time.Millisecond
+	t.Cleanup(cnpgsvc.SetTestLogDiscoveryInterval(discoveryInterval))
+
 	seedCNPGLogCluster(t, "pgunavailable")
 	useLogsUnavailableServer(t)
-	stream := readSSEFor(t, "/api/cnpg/clusters/pgunavailable/pg-orders/logs/stream?pod=pg-orders-2", 7*time.Second)
+	stream := readSSEFor(t, "/api/cnpg/clusters/pgunavailable/pg-orders/logs/stream?pod=pg-orders-2", 20*discoveryInterval)
 	want := "1 source could not be read: pg-orders-2/postgres: " + k8score.ErrLogsUnavailable.Error()
 	if !strings.Contains(stream, "event: notice") || !strings.Contains(stream, want) {
 		t.Fatalf("expected a notice naming the instance:\n%s", stream)

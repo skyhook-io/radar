@@ -3,7 +3,7 @@
 // absent here is internal: exported from its own file only so a sibling can
 // reach it, and free to move between files without affecting a caller.
 
-export { metricsScope } from "./adapters/prometheus";
+export { metricsScope, metricsSelectedPod } from "./adapters/prometheus";
 export { projectInvestigationEvidence } from "./builder";
 export {
   investigationActivitySourceDomId,

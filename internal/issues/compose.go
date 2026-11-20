@@ -169,7 +169,8 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 			if ref := pr.DiagnosisSource; ref != nil && f.CanReadRelated != nil {
 				gv, err := schema.ParseGroupVersion(ref.APIVersion)
 				if err != nil || !f.CanReadRelated(Ref{Group: gv.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}) {
-					pr.Cause, pr.Action = "", ""
+					pr.Cause, pr.Action, pr.Hazard = "", "", ""
+					pr.ActionPrimary, pr.ActionSecondaryTitle, pr.ActionSecondary = "", "", nil
 				}
 			}
 			if len(pr.TerminatingFinalizers) > 0 {
@@ -190,6 +191,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	emit(p.DetectScheduling(f.Namespaces), SourceScheduling)  // placement/admission/post-bind
 	karpenterIssues, karpenterOwnedSubjects := detectKarpenterIssues(p, f, &unchecked)
 	out = append(out, karpenterIssues...)
+	out = append(out, detectKueueIssues(p, f, &unchecked)...)
 	out = append(out, detectGenericCRDIssues(p, f, karpenterOwnedSubjects, &unchecked)...) // generic CRD .status.conditions
 	out = foldDeletingConditions(out)
 	out = elevateAdmissionWebhookBackendSeverity(out, p)
@@ -229,6 +231,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		groupedForContext = out
 	}
 	out = enrichDiagnosticContextAuthorized(out, flatForContext, groupedForContext, p, f.CanReadClusterScoped)
+	out = enrichAdmissionWebhookCandidates(out, p, podTemplateAccess{f.CanReadClusterScoped, f.CanReadRelated})
 	if !f.SkipPodTemplateContext {
 		out = enrichPodTemplateContext(out, flatForContext, p, podTemplateAccess{f.CanReadClusterScoped, f.CanReadRelated}, f.Grouped, Ref{})
 	}

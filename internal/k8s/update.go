@@ -68,8 +68,8 @@ func DeleteResource(ctx context.Context, opts DeleteResourceOptions) error {
 
 // DeleteResourceWithClient deletes a Kubernetes resource using the provided client.
 // If client is nil, uses the shared dynamic client.
-func DeleteResourceWithClient(ctx context.Context, opts DeleteResourceOptions, client dynamic.Interface) error {
-	return getWorkloadManagerWithClient(client).DeleteResource(ctx, opts)
+func DeleteResourceWithClient(ctx context.Context, opts DeleteResourceOptions, client dynamic.Interface) (*k8score.DeleteResourceResult, error) {
+	return getWorkloadManagerWithClient(client).DeleteResourceWithResult(ctx, opts)
 }
 
 // ApplyResource creates or updates a Kubernetes resource from YAML.
@@ -125,6 +125,11 @@ func RestartWorkload(ctx context.Context, kind, namespace, name string) error {
 // RestartWorkloadWithClient performs a rolling restart using the provided client.
 func RestartWorkloadWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) error {
 	return getWorkloadManagerWithClient(client).RestartWorkload(ctx, kind, namespace, name)
+}
+
+// SetDeploymentPausedWithClient sets spec.paused on a Deployment using the provided client.
+func SetDeploymentPausedWithClient(ctx context.Context, namespace, name string, paused bool, client dynamic.Interface) error {
+	return getWorkloadManagerWithClient(client).SetDeploymentPaused(ctx, namespace, name, paused)
 }
 
 func GetWorkloadImagesWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) (*WorkloadImageInventory, error) {

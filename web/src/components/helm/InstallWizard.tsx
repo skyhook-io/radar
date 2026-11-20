@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { X, Package, ChevronRight, ChevronLeft, Play, Loader2, AlertTriangle, CheckCircle, User, BookOpen, Link as LinkIcon, Star, BadgeCheck, Shield, Globe, Building2, Plus, Minus, Terminal } from 'lucide-react'
-import { PaneLoader, Input, useDebouncedValue } from '@skyhook-io/k8s-ui'
+import { PaneLoader, Input, useDebouncedValue, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import yaml from 'yaml'
 import { createPatch } from 'diff'
@@ -661,6 +661,10 @@ interface ValuesStepProps {
 function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartDetail, source }: ValuesStepProps) {
   const [showEditor, setShowEditor] = useState(false)
   const editorDisclosure = useDisclosure(showEditor)
+  // Phones install with the chart's values: authoring YAML by touch is
+  // error-prone. An editor already open when a phone rotates stays, and the
+  // review step shows any change from the defaults.
+  const isPhone = usePhoneLayout()
 
   const isLocal = source === 'local'
   const localDetail = chartDetail as ChartDetail | undefined
@@ -703,7 +707,7 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
       </div>
 
       {/* Collapsible editor section */}
-      <div className="border border-theme-border rounded-lg overflow-hidden">
+      <div className={`border border-theme-border rounded-lg overflow-hidden${isPhone && !showEditor ? ' hidden' : ''}`}>
         <button
           {...editorDisclosure.buttonProps}
           onClick={() => setShowEditor(!showEditor)}

@@ -1,9 +1,10 @@
 import { useState, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { pluralize } from '@skyhook-io/k8s-ui'
-import { useSwitchContext, fetchSessionCounts, type SessionCounts } from '../api/client'
+import { useSwitchContext, fetchSessionCounts, SwitchContextError, type SessionCounts } from '../api/client'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from './ui/Toast'
+import { Tooltip } from './ui/Tooltip'
 import { useDock } from './dock'
 import type { ContextInfo, SelectedResource } from '../types'
 import { parseContextForSwitcher } from '../utils/context-name'
@@ -11,6 +12,12 @@ import { parseContextForSwitcher } from '../utils/context-name'
 function shouldSuppressSwitchErrorToast(error: unknown): boolean {
   const message = error instanceof Error ? error.message : ''
   return message.includes('cluster connection failed:')
+}
+
+// A switch the server refused before leaving the current cluster, because the
+// new one didn't answer. Those show the full connection error screen.
+function refusedBeforeLeaving(error: unknown): error is SwitchContextError & { errorType: string } {
+  return error instanceof SwitchContextError && !!error.errorType
 }
 
 interface PendingSwitch {
@@ -24,7 +31,7 @@ interface PendingSwitch {
 // live. Callers render `confirmDialog`.
 export function useContextSwitchFlow() {
   const switchContext = useSwitchContext()
-  const { startSwitch, endSwitch, setOpenAfterSwitch } = useContextSwitch()
+  const { startSwitch, endSwitch, setOpenAfterSwitch, setFailedSwitch } = useContextSwitch()
   const { showError } = useToast()
   const { tabs } = useDock()
   const [pending, setPending] = useState<PendingSwitch | null>(null)
@@ -48,7 +55,9 @@ export function useContextSwitchFlow() {
       endSwitch()
       // Backend may not transition to StateDisconnected on client-side errors
       // (network, timeout) — without this toast the user gets no feedback.
-      if (!shouldSuppressSwitchErrorToast(error)) {
+      if (refusedBeforeLeaving(error)) {
+        setFailedSwitch({ context: context.name, error: error.message, errorType: error.errorType })
+      } else if (!shouldSuppressSwitchErrorToast(error)) {
         const message = error instanceof Error ? error.message : 'Unknown error'
         showError('Failed to switch context', message)
       }
@@ -56,7 +65,12 @@ export function useContextSwitchFlow() {
   }
 
   const requestSwitch = async (context: ContextInfo, openAfter?: SelectedResource) => {
-    if (context.isCurrent || switchContext.isPending) return
+    if (switchContext.isPending) return
+    // Picking the cluster you're still on dismisses a refused switch's screen.
+    if (context.isCurrent) {
+      setFailedSwitch(null)
+      return
+    }
     // Active sessions (port forwards from API + terminal tabs from dock) get
     // a confirmation prompt — switching contexts kills both.
     try {
@@ -117,7 +131,10 @@ export function useContextSwitchFlow() {
             )}
           </ul>
           <p className="text-xs text-theme-text-tertiary">
-            Switch to: <span className="text-theme-text-secondary">{parseContextForSwitcher(pending.context).clusterName}</span>
+            Switch to:{' '}
+            <Tooltip content={shortNameHides(pending.context) ? pending.context.name : ''}>
+              <span className="text-theme-text-secondary">{parseContextForSwitcher(pending.context).clusterName}</span>
+            </Tooltip>
           </p>
         </div>
         <div className="px-4 py-3 border-t border-theme-border flex justify-end gap-2">
@@ -142,6 +159,14 @@ export function useContextSwitchFlow() {
     requestSwitch,
     isPending: switchContext.isPending,
     error: switchContext.isError ? switchContext.error : null,
+    // The picker's inline line is for failures that don't get the full screen.
+    errorText: switchContext.isError && switchContext.error && !refusedBeforeLeaving(switchContext.error)
+      ? switchContext.error.message
+      : null,
     confirmDialog,
   }
+}
+
+function shortNameHides(context: ContextInfo) {
+  return parseContextForSwitcher(context).clusterName !== context.name
 }

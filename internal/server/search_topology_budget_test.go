@@ -18,9 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
-// The managedBy enrichment needs the topology, whose cold build reads custom
-// resources; right after a restart those reads wait on custom-resource
-// discovery for tens of seconds. Search answers within its budget instead.
+// Cold custom-resource discovery must not hold search beyond its budget.
 func TestSearchDoesNotWaitOnAColdTopologyBuild(t *testing.T) {
 	useTestResourceCache(t, fake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
@@ -36,13 +34,14 @@ func TestSearchDoesNotWaitOnAColdTopologyBuild(t *testing.T) {
 		<-release
 		return false, nil, nil
 	})
-	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: apps.Group, Version: apps.Version, Name: apps.Resource, Kind: "Application", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: apps.Group, Version: apps.Version, Name: apps.Resource, Kind: "Application", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}}}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("search-cold", nil, &auth.UserPermissions{})
-	env.srv.broadcaster.markCachedTopologyDirty()
+	perms := &auth.UserPermissions{}
+	perms.SetCanI("get", "", "configmaps", "default", true)
+	env.srv.permCache.Set("search-cold", nil, perms)
 	time.AfterFunc(20*time.Second, unblock)
 
 	start := time.Now()

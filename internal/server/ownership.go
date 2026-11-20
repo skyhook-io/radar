@@ -4,22 +4,21 @@ import (
 	"net/http"
 	"slices"
 
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 // requestAccess is what one request's user may read through Related
-// Resources, by the rules the per-user relationship graph applies
-// (relationshipTopologyForUser, applyClusterScopedTopologyRBAC): namespace
-// access for namespaced kinds, with a list check per namespace for Secrets,
-// LimitRanges and Calico's policies in either API group, and a list check for
-// each cluster-scoped kind. Listing what an object owns enumerates names, so
+// Resources and the relation families: namespace
+// access for namespaced kinds, with a list check per namespace for the kinds a
+// resource read gates exactly (k8s.RequiresExactNamespaceAccess) and Calico's
+// policies in either API group, and a list check for each cluster-scoped kind. Listing what an object owns enumerates names, so
 // every check is a list check.
 type requestAccess struct {
 	s       *Server
@@ -29,21 +28,58 @@ type requestAccess struct {
 	// couldn't be discovered.
 	namespaces []string
 	failed     bool
+	exactGet   bool
 }
 
 // ownershipAccess is what the request's user may read; without
 // authentication, everything.
 func (s *Server) ownershipAccess(r *http.Request, catalog *ownership.Catalog) ownership.Access {
+	return s.newOwnershipAccess(r, catalog, false)
+}
+
+func (s *Server) agentOwnershipAccess(r *http.Request, catalog *ownership.Catalog) ownership.Access {
+	return s.newOwnershipAccess(r, catalog, true)
+}
+
+func (s *Server) newOwnershipAccess(r *http.Request, catalog *ownership.Catalog, exactGet bool) ownership.Access {
 	if auth.UserFromContext(r.Context()) == nil {
 		return ownership.Unrestricted()
 	}
 	namespaces, failed := s.getUserNamespacesWithStatus(r, nil)
-	return &requestAccess{s: s, r: r, catalog: catalog, namespaces: namespaces, failed: failed}
+	return &requestAccess{s: s, r: r, catalog: catalog, namespaces: namespaces, failed: failed, exactGet: exactGet}
 }
 
 // CanRead's checks are memoized on the user's permissions, so asking again
 // costs a lookup.
 func (a *requestAccess) CanRead(kind resourceid.GroupKind, namespace string) ownership.Decision {
+	if !a.exactGet {
+		return a.canList(kind, namespace)
+	}
+	resource, namespaced, known := a.resource(kind)
+	switch {
+	case !known && a.catalog.Ambiguous(kind):
+		return ownership.Undecided
+	case !known:
+		return ownership.Allowed
+	case namespace != "" && a.failed:
+		return ownership.Undecided
+	case namespace != "" && a.namespaces != nil && !slices.Contains(a.namespaces, namespace):
+		return ownership.Denied
+	}
+	allowed, decided := a.s.canReadDecision(a.r, kind.Group, resource, namespace, "get")
+	switch {
+	case !decided:
+		return ownership.Undecided
+	case allowed:
+		return ownership.Allowed
+	case namespaced && namespace == "":
+		return ownership.Undecided
+	default:
+		return ownership.Denied
+	}
+}
+
+func (a *requestAccess) canList(kind resourceid.GroupKind, namespace string) ownership.Decision {
 	resource, namespaced, known := a.resource(kind)
 	switch {
 	case !known && a.catalog.Ambiguous(kind):
@@ -62,7 +98,7 @@ func (a *requestAccess) CanRead(kind resourceid.GroupKind, namespace string) own
 		return ownership.Undecided
 	case a.namespaces != nil && !slices.Contains(a.namespaces, namespace):
 		return ownership.Denied
-	case checkedInNamespace(kind):
+	case checkedInNamespace(kind.Group, resource):
 		return a.check(kind.Group, resource, namespace)
 	}
 	return ownership.Allowed
@@ -76,7 +112,7 @@ func (a *requestAccess) anyNamespace(kind resourceid.GroupKind, resource string)
 	switch {
 	case a.failed:
 		return ownership.Undecided
-	case !checkedInNamespace(kind):
+	case !checkedInNamespace(kind.Group, resource):
 		if a.namespaces == nil || len(a.namespaces) > 0 {
 			return ownership.Allowed
 		}
@@ -87,18 +123,12 @@ func (a *requestAccess) anyNamespace(kind resourceid.GroupKind, resource string)
 	return ownership.Undecided
 }
 
-// checkedInNamespace reports the namespaced kinds authorized per namespace
-// beyond namespace access: Secrets and Calico's policies, as the relationship
-// graph strips them, and LimitRanges and Trivy's reports, as a resource GET
-// checks them.
-func checkedInNamespace(kind resourceid.GroupKind) bool {
-	switch kind.Group {
-	case "":
-		return kind.Kind == "Secret" || kind.Kind == "LimitRange"
-	case "projectcalico.org", "crd.projectcalico.org", aicontext.TrivyGroup:
-		return true
-	}
-	return false
+// checkedInNamespace reports the namespaced resources authorized per
+// namespace beyond namespace access: those a resource read gates exactly, and
+// Calico's policies in either API group.
+func checkedInNamespace(group, resource string) bool {
+	return k8s.RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: group, Resource: resource}) ||
+		group == "projectcalico.org" || group == "crd.projectcalico.org"
 }
 
 func (a *requestAccess) check(group, resource, namespace string) ownership.Decision {
@@ -129,55 +159,15 @@ func (a *requestAccess) Namespaces() ([]string, bool) {
 	return a.namespaces, a.namespaces == nil
 }
 
-// relationshipsFor is a fetched resource's Related Resources: the links the
-// relationship graph holds, with ownership answered from owner references
-// for the request's user. It is nil when Radar has no graph and can't build
-// one, as before it connects or when a context switch overtakes the build:
-// without one Radar can't say what manages the object, and the UI reads a missing field as owners not mapped
-// yet, which its GitOps write guard warns about.
-func (s *Server) relationshipsFor(r *http.Request, kind, namespace, name string, resource any) *topology.Relationships {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil
-	}
-	cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex()
-	if cachedTopo == nil {
-		return nil
-	}
-	user := auth.UserFromContext(r.Context()) != nil
-	if user {
-		cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
-		relIdx = nil
-	}
-	rel := topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
-		k8s.NewTopologyResourceProvider(cache),
-		k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
-	if user && rel != nil {
-		s.withholdDirectLookups(r, rel)
-	}
-	fetched, ok := k8s.OwnershipObservation(resource)
+// relationshipsFor answers a fetched resource's Related Resources within the
+// request's namespace and kind access. Missing or replaced caches leave the
+// answer unavailable so the write guard cannot mistake it for no manager.
+func (s *Server) relationshipsFor(r *http.Request, resource any) *topology.Relationships {
+	obj, ok := resource.(runtime.Object)
 	if !ok {
-		return rel
+		return nil
 	}
-	if rel == nil {
-		rel = &topology.Relationships{}
-	}
-	owner, _ := apimeta.Accessor(resource)
-	k8s.AnswerOwnership(rel, fetched, owner, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+	access := func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }
+	rel, _, _ := k8s.AnswerRelationships(k8s.GetResourceCache(), obj, access, access)
 	return rel
-}
-
-// withholdDirectLookups drops what the user may not list from the
-// relationships read straight from the shared caches rather than the
-// user's graph: a StorageClass's volumes and the Pods on a Node.
-func (s *Server) withholdDirectLookups(r *http.Request, rel *topology.Relationships) {
-	if len(rel.Pods) > 0 {
-		if namespaces := s.getUserNamespaces(r, nil); namespaces != nil {
-			rel.Pods = slices.DeleteFunc(rel.Pods, func(p topology.ResourceRef) bool { return !slices.Contains(namespaces, p.Namespace) })
-		}
-	}
-	isVolume := func(c topology.ResourceRef) bool { return c.Kind == "PersistentVolume" && c.Group == "" }
-	if slices.ContainsFunc(rel.Consumers, isVolume) && !s.canRead(r, "", "persistentvolumes", "", "list") {
-		rel.Consumers = slices.DeleteFunc(rel.Consumers, isVolume)
-	}
 }

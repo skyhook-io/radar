@@ -14,6 +14,8 @@ afterEach(() => {
   act(() => root?.unmount())
   host?.remove()
   vi.useRealTimers()
+  // The last touch time is module state; a key press clears it for the next file.
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
 })
 
 function render(child: React.ReactNode) {

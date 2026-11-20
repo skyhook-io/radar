@@ -279,6 +279,26 @@ func CurrentConfig() (string, map[string]string) {
 	return globalClient.manualURL, copyHeaders(globalClient.headers)
 }
 
+// ConnectionSource says how Prometheus is reached: "manual" when a URL is
+// configured, "discovered" when discovery found one in the cluster, otherwise
+// "none".
+func ConnectionSource() string {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if globalClient == nil {
+		return "none"
+	}
+	globalClient.mu.RLock()
+	defer globalClient.mu.RUnlock()
+	switch {
+	case globalClient.manualURL != "":
+		return "manual"
+	case globalClient.baseURL != "":
+		return "discovered"
+	}
+	return "none"
+}
+
 // configureLocked is the single writer for manualURL + headers. manualURL is
 // read under c.mu (discover, Reinitialize), so the write takes c.mu; callers
 // hold clientMu (read) across the whole write so a concurrent Reinitialize
@@ -923,6 +943,23 @@ func (c *Client) QueryRange(ctx context.Context, query string, start, end time.T
 	return p.QueryRange(ctx, query, start, end, step)
 }
 
+// MetricNames lists the metric names matching the selectors that hold
+// samples between start and end.
+func (c *Client) MetricNames(ctx context.Context, matches []string, start, end time.Time) ([]string, error) {
+	if _, _, err := c.EnsureConnected(ctx); err != nil {
+		return nil, err
+	}
+	p := c.getPromClient()
+	if p == nil {
+		return nil, errors.New("prometheus connection was reset")
+	}
+	names, warnings, err := p.LabelValuesWithWarnings(ctx, "__name__", matches, start, end, 2000)
+	if err == nil && len(warnings) > 0 {
+		return nil, fmt.Errorf("Prometheus returned an incomplete list of metric names: %s", truncate(strings.Join(warnings, "; "), 200))
+	}
+	return names, err
+}
+
 // Query executes a Prometheus instant query via the underlying pkg/prom.Client.
 func (c *Client) Query(ctx context.Context, query string) (*prom.QueryResult, error) {
 	if _, _, err := c.EnsureConnected(ctx); err != nil {
@@ -933,4 +970,16 @@ func (c *Client) Query(ctx context.Context, query string) (*prom.QueryResult, er
 		return nil, errors.New("prometheus connection was reset")
 	}
 	return p.Query(ctx, query)
+}
+
+// QueryPost is Query with the query sent in a POST body rather than the URL.
+func (c *Client) QueryPost(ctx context.Context, query string) (*prom.QueryResult, error) {
+	if _, _, err := c.EnsureConnected(ctx); err != nil {
+		return nil, err
+	}
+	p := c.getPromClient()
+	if p == nil {
+		return nil, errors.New("prometheus connection was reset")
+	}
+	return p.QueryPost(ctx, query)
 }

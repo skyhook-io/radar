@@ -604,14 +604,15 @@ func TestCronJobScheduleDetectionUsesObservedHistory(t *testing.T) {
 		}
 	})
 
-	t.Run("a directly detected stuck child Job suppresses the aggregate", func(t *testing.T) {
+	t.Run("a merely active child Job does not suppress the aggregate", func(t *testing.T) {
 		cj := newSubject()
 		tracker := newCronJobScheduleObservationTracker()
 		observeMisses(tracker, cj, cronJobScheduleObservationThreshold)
 		job := ownedJob(cj)
 		job.Status.Active = 1
-		if got := DetectCronJobProblems([]*batchv1.CronJob{cj}, []*batchv1.Job{job}, tracker, now); len(got) != 0 {
-			t.Fatalf("stuck child Job left a duplicate aggregate: %+v", got)
+		got := DetectCronJobProblems([]*batchv1.CronJob{cj}, []*batchv1.Job{job}, tracker, now)
+		if len(got) != 1 || got[0].Problem != "repeated-without-success" {
+			t.Fatalf("an active-only child should not suppress the aggregate: %+v", got)
 		}
 	})
 

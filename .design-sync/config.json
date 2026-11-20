@@ -221,7 +221,32 @@
     "TopologyPreview": "../../../web/src/components/home/TopologyPreview.tsx",
     "LocalTimelineScrubber": "../../../web/src/components/timeline/LocalTimelineScrubber.tsx",
     "TrafficGraph": "../../../web/src/components/traffic/TrafficGraph.tsx",
-    "TrafficFilterSidebar": "../../../web/src/components/traffic/TrafficFilterSidebar.tsx"
+    "TrafficFilterSidebar": "../../../web/src/components/traffic/TrafficFilterSidebar.tsx",
+    "CNPGClusterBackupFacts": "../src/components/cnpg/CNPGClusterSummary.tsx",
+    "CNPGDimensionMark": "../src/components/cnpg/CNPGClusterSummary.tsx",
+    "CNPGDimensionVerdict": "../src/components/cnpg/CNPGClusterSummary.tsx",
+    "CNPGServingStatus": "../src/components/cnpg/CNPGClusterSummary.tsx",
+    "CNPGWALArchivingFact": "../src/components/cnpg/CNPGClusterSummary.tsx",
+    "CNPGClusterCertificates": "../src/components/cnpg/CNPGClusterHASection.tsx",
+    "CNPGDatabaseRoleSummary": "../src/components/cnpg/CNPGDeclarativeSummary.tsx",
+    "CNPGDatabaseSummary": "../src/components/cnpg/CNPGDeclarativeSummary.tsx",
+    "CNPGPublicationSummary": "../src/components/cnpg/CNPGDeclarativeSummary.tsx",
+    "CNPGSubscriptionSummary": "../src/components/cnpg/CNPGDeclarativeSummary.tsx",
+    "CNPGLogicalPathView": "../src/components/cnpg/CNPGLogicalPath.tsx",
+    "CNPGPoolerScheduling": "../src/components/cnpg/CNPGPoolerSummary.tsx",
+    "CNPGPoolerUnmeasured": "../src/components/cnpg/CNPGPoolerSummary.tsx",
+    "CNPGScheduledBackupSummary": "../src/components/cnpg/CNPGBackupSummary.tsx",
+    "CNPGSchedulePreviewFacts": "../src/components/cnpg/CNPGBackupSummary.tsx",
+    "PrimaryConflictNote": "../src/components/cnpg/primitives.tsx",
+    "ProblemCallout": "../src/components/cnpg/primitives.tsx",
+    "ToneDot": "../src/components/cnpg/primitives.tsx",
+    "SummaryHeading": "../src/components/cnpg/primitives.tsx",
+    "CNPGDatabaseRoleRenderer": "../src/components/resources/renderers/CNPGDeclarativeRenderer.tsx",
+    "FlaggerCanaryRenderer": "../src/components/resources/renderers/FlaggerRenderers.tsx",
+    "FlaggerMetricTemplateRenderer": "../src/components/resources/renderers/FlaggerRenderers.tsx",
+    "OpenTelemetryCollectorRenderer": "../src/components/resources/renderers/OpenTelemetryRenderers.tsx",
+    "OpenTelemetryInstrumentationRenderer": "../src/components/resources/renderers/OpenTelemetryRenderers.tsx",
+    "CrossplaneStatusCell": null
   },
   "overrides": {
     "ConfirmDialog": {
@@ -405,6 +430,16 @@
       "cardMode": "column"
     },
     "LocalTimelineScrubber": {
+      "cardMode": "column"
+    },
+    "GitOpsGraphFilterRail": {
+      "cardMode": "single",
+      "viewport": "1100x760"
+    },
+    "FoldSection": {
+      "cardMode": "column"
+    },
+    "CNPGDimensionVerdict": {
       "cardMode": "column"
     }
   },

@@ -1,0 +1,91 @@
+suite: Allowed hosts
+templates:
+  - deployment.yaml
+release:
+  name: radar
+  namespace: tools
+tests:
+  - it: always allows the Service's namespace-qualified name
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-hosts=radar.tools
+
+  - it: adds ingress and HTTPRoute hostnames to listed hosts once each
+    set:
+      allowedHosts:
+        - radar.internal
+        - radar.example.com
+      ingress:
+        enabled: true
+        hosts:
+          - host: radar.example.com
+            paths: [{path: /, pathType: Prefix}]
+          - host: radar.corp.example
+            paths: [{path: /, pathType: Prefix}]
+      httpRoute:
+        enabled: true
+        parentRefs: [{name: gw}]
+        hostnames:
+          - radar.gw.example
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-hosts=radar.tools,radar.internal,radar.example.com,radar.corp.example,radar.gw.example
+
+  - it: ignores hostnames of disabled routes
+    set:
+      ingress:
+        enabled: false
+        hosts:
+          - host: radar.example.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-hosts=radar.tools
+
+  - it: keeps wildcard route hosts for the server to match
+    set:
+      ingress:
+        enabled: true
+        hosts:
+          - host: "*.example.com"
+      httpRoute:
+        enabled: true
+        parentRefs: [{name: gw}]
+        hostnames: ["*.gw.example"]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-hosts=radar.tools,*.example.com,*.gw.example
+
+  - it: passes the wildcard through
+    set:
+      allowedHosts: ["*"]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-hosts=radar.tools,*
+
+  - it: rejects a scheme or port at install time
+    set:
+      allowedHosts:
+        - https://radar.example.com:8443
+    asserts:
+      - failedTemplate: {}
+
+  - it: accepts an internationalized hostname for the server to convert
+    set:
+      allowedHosts:
+        - bücher.example
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-hosts=radar.tools,bücher.example
+
+  - it: rejects a leading-dot or port entry at install time
+    set:
+      allowedHosts:
+        - .example.com
+    asserts:
+      - failedTemplate: {}

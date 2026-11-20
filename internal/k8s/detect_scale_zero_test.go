@@ -536,3 +536,398 @@ func TestNestedNumberInt64(t *testing.T) {
 		t.Error("missing field must report not-found")
 	}
 }
+
+// --- Scan every matching workload, including workloadRef Rollouts ---
+
+func deploymentWithReplicas(name, ns string, replicas int32, lbls map[string]string) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: lbls}},
+		},
+	}
+}
+
+func statefulSetWithReplicas(name, ns string, replicas int32, lbls map[string]string) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: &replicas,
+			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: lbls}},
+		},
+	}
+}
+
+// argoRolloutWithRef is a spec.workloadRef Rollout: it carries NO inline pod
+// template, borrowing its pod definition from the referenced workload.
+func argoRolloutWithRef(name, ns string, replicas int64, refKind, refName string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Rollout",
+		"metadata":   map[string]any{"name": name, "namespace": ns},
+		"spec": map[string]any{
+			"replicas": float64(replicas),
+			"workloadRef": map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       refKind,
+				"name":       refName,
+			},
+		},
+	}}
+}
+
+// argoRolloutInlineNoReplicas is an inline-template Rollout with no spec.replicas
+// field, which Argo defaults to 1 (an active workload).
+func argoRolloutInlineNoReplicas(name, ns string, tmplLabels map[string]string) *unstructured.Unstructured {
+	lbls := map[string]any{}
+	for k, v := range tmplLabels {
+		lbls[k] = v
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Rollout",
+		"metadata":   map[string]any{"name": name, "namespace": ns},
+		"spec": map[string]any{
+			"template": map[string]any{"metadata": map[string]any{"labels": lbls}},
+		},
+	}}
+}
+
+// argoRolloutRawRef is a Rollout carrying a spec.workloadRef built from raw
+// fields (e.g. an empty or partially-populated reference) and no inline template.
+func argoRolloutRawRef(name, ns string, replicas int64, ref map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Rollout",
+		"metadata":   map[string]any{"name": name, "namespace": ns},
+		"spec": map[string]any{
+			"replicas":    float64(replicas),
+			"workloadRef": ref,
+		},
+	}}
+}
+
+// initDormancyEnv installs the global typed cache plus, when rollouts are given,
+// the dynamic Rollout cache (synced), so scaledToZeroBackingWorkload can be
+// called directly.
+func initDormancyEnv(t *testing.T, typed []runtime.Object, rolloutObjs ...*unstructured.Unstructured) {
+	t.Helper()
+	if err := InitTestResourceCache(fake.NewClientset(typed...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	if len(rolloutObjs) == 0 {
+		return
+	}
+	rolloutGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	objs := make([]runtime.Object, 0, len(rolloutObjs))
+	for _, r := range rolloutObjs {
+		objs = append(objs, r)
+	}
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{rolloutGVR: "RolloutList"},
+		objs...,
+	)
+	if err := InitTestDynamicResourceCache(dynClient, []APIResource{
+		{Group: "argoproj.io", Version: "v1alpha1", Kind: "Rollout", Name: "rollouts", Namespaced: true, Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	dynCache := GetDynamicResourceCache()
+	if err := dynCache.EnsureWatching(rolloutGVR); err != nil {
+		t.Fatalf("EnsureWatching rollouts: %v", err)
+	}
+	if !dynCache.WaitForSync(rolloutGVR, 2*time.Second) {
+		t.Fatal("rollout dynamic cache did not sync")
+	}
+}
+
+func lbl() map[string]string { return map[string]string{"app": "api"} }
+
+// TestDormancy_ActiveSiblingVetoesDormant: a Service matching one workload parked
+// at 0 and one active workload must NOT read as intentionally scaled to zero - the
+// active sibling disproves dormancy. Covers same-kind, cross-kind, and reversed
+// declaration order (an active workload wins regardless of scan order).
+func TestDormancy_ActiveSiblingVetoesDormant(t *testing.T) {
+	cases := []struct {
+		name  string
+		typed []runtime.Object
+	}{
+		{"two deployments, dormant first", []runtime.Object{
+			deploymentWithReplicas("api-old", "prod", 0, lbl()),
+			deploymentWithReplicas("api-new", "prod", 2, lbl()),
+		}},
+		{"two deployments, active first", []runtime.Object{
+			deploymentWithReplicas("api-new", "prod", 2, lbl()),
+			deploymentWithReplicas("api-old", "prod", 0, lbl()),
+		}},
+		{"deployment dormant + statefulset active", []runtime.Object{
+			deploymentWithReplicas("api-old", "prod", 0, lbl()),
+			statefulSetWithReplicas("api-sts", "prod", 1, lbl()),
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer ResetTestState()
+			defer ResetTestDynamicState()
+			initDormancyEnv(t, tc.typed)
+			zero, outcome := scaledToZeroBackingWorkload(GetResourceCache(), scaleZeroSvc("prod"))
+			if zero {
+				t.Error("an active matching sibling must prevent a scaled-to-zero (benign) verdict")
+			}
+			if outcome != rolloutLookupConclusive {
+				t.Errorf("active veto outcome = %v, want conclusive", outcome)
+			}
+		})
+	}
+}
+
+// TestDormancy_AllParkedIsDormant: when every matching workload is parked at 0,
+// the Service is genuinely intentionally off (benign).
+func TestDormancy_AllParkedIsDormant(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initDormancyEnv(t, []runtime.Object{
+		deploymentWithReplicas("api-a", "prod", 0, lbl()),
+		statefulSetWithReplicas("api-b", "prod", 0, lbl()),
+	})
+	zero, outcome := scaledToZeroBackingWorkload(GetResourceCache(), scaleZeroSvc("prod"))
+	if !zero {
+		t.Error("all matching workloads parked at 0 must read as scaled-to-zero (benign)")
+	}
+	if outcome != rolloutLookupConclusive {
+		t.Errorf("all-parked outcome = %v, want conclusive", outcome)
+	}
+}
+
+// TestDormancy_WorkloadRefRolloutActiveVetoes is the core workloadRef case: a Rollout
+// borrows its pod template from a Deployment that Argo parks at 0, while the
+// Rollout itself wants pods. The parked referenced Deployment must NOT make the
+// Service benign - resolving the workloadRef reveals the Rollout is active. This
+// fails without workloadRef resolution (the Rollout has no inline template, so it
+// would be invisible and the parked Deployment would win).
+func TestDormancy_WorkloadRefRolloutActiveVetoes(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initDormancyEnv(t,
+		[]runtime.Object{deploymentWithReplicas("api-tmpl", "prod", 0, lbl())},
+		argoRolloutWithRef("api-rollout", "prod", 3, "Deployment", "api-tmpl"),
+	)
+	zero, outcome := scaledToZeroBackingWorkload(GetResourceCache(), scaleZeroSvc("prod"))
+	if zero {
+		t.Error("an active workloadRef Rollout (resolved via its referenced Deployment) must veto dormancy")
+	}
+	if outcome != rolloutLookupConclusive {
+		t.Errorf("workloadRef active veto outcome = %v, want conclusive", outcome)
+	}
+}
+
+// TestDormancy_WorkloadRefRolloutParkedIsDormant: a workloadRef Rollout genuinely
+// scaled to 0, borrowing from a Deployment also at 0, is benign. The selector is
+// matched through the referenced Deployment's template labels.
+func TestDormancy_WorkloadRefRolloutParkedIsDormant(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	// The referenced Deployment carries the matching pod-template labels (as a real
+	// workloadRef setup does). This guards that resolving the ref and reading the
+	// Rollout's own replicas=0 keeps the benign verdict rather than flipping it to
+	// active or ref-unresolved.
+	initDormancyEnv(t,
+		[]runtime.Object{deploymentWithReplicas("api-tmpl", "prod", 0, lbl())},
+		argoRolloutWithRef("api-rollout", "prod", 0, "Deployment", "api-tmpl"),
+	)
+	zero, outcome := scaledToZeroBackingWorkload(GetResourceCache(), scaleZeroSvc("prod"))
+	if !zero {
+		t.Error("a workloadRef Rollout at 0 (and its referenced Deployment at 0) must read as benign dormancy")
+	}
+	if outcome != rolloutLookupConclusive {
+		t.Errorf("workloadRef dormant outcome = %v, want conclusive", outcome)
+	}
+}
+
+// TestDormancy_UnreadableRefIsUnknown: a matching Rollout whose workloadRef can't
+// be resolved - a missing referenced Deployment, or an unsupported ref kind - must
+// read as "can't confirm" (ref-unresolved), never a confident benign/outage.
+func TestDormancy_UnreadableRefIsUnknown(t *testing.T) {
+	cases := []struct {
+		name    string
+		rollout *unstructured.Unstructured
+	}{
+		{"referenced deployment missing", argoRolloutWithRef("api-rollout", "prod", 0, "Deployment", "does-not-exist")},
+		{"unsupported ref kind", argoRolloutWithRef("api-rollout", "prod", 0, "CloneSet", "api-clone")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer ResetTestState()
+			defer ResetTestDynamicState()
+			initDormancyEnv(t, nil, tc.rollout)
+			zero, outcome := scaledToZeroBackingWorkload(GetResourceCache(), scaleZeroSvc("prod"))
+			if zero {
+				t.Error("an unresolvable ref must not produce a confident scaled-to-zero verdict")
+			}
+			if outcome != rolloutLookupRefUnresolved {
+				t.Errorf("unresolvable ref outcome = %v, want ref-unresolved", outcome)
+			}
+		})
+	}
+}
+
+// TestDormancy_EmptyOrPartialRefIsUnknown: a Rollout that carries a spec.workloadRef
+// object but doesn't fully populate it (empty, or apiVersion only) must read as
+// "can't confirm", NOT fall through to the absent inline template and let a parked
+// typed sibling make the Service benign.
+func TestDormancy_EmptyOrPartialRefIsUnknown(t *testing.T) {
+	cases := []struct {
+		name string
+		ref  map[string]any
+	}{
+		{"empty ref object", map[string]any{}},
+		{"apiVersion only, no kind/name", map[string]any{"apiVersion": "apps/v1"}},
+		{"kind without name", map[string]any{"apiVersion": "apps/v1", "kind": "Deployment"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer ResetTestState()
+			defer ResetTestDynamicState()
+			// A parked Deployment sibling would otherwise be read as benign; the
+			// unresolved ref must keep the Service non-downgraded.
+			initDormancyEnv(t,
+				[]runtime.Object{deploymentWithReplicas("api-old", "prod", 0, lbl())},
+				argoRolloutRawRef("api-rollout", "prod", 0, tc.ref),
+			)
+			zero, outcome := scaledToZeroBackingWorkload(GetResourceCache(), scaleZeroSvc("prod"))
+			if zero {
+				t.Error("an unresolved workloadRef must not let a parked sibling make the Service benign")
+			}
+			if outcome != rolloutLookupRefUnresolved {
+				t.Errorf("empty/partial ref outcome = %v, want ref-unresolved", outcome)
+			}
+		})
+	}
+}
+
+// TestNoReadyEndpoints_UnresolvableRefStaysCritical: a genuine zero-ready-pods
+// outage must stay critical (with a caveat) when the only uncertainty is an
+// unresolvable Rollout workloadRef. An unrelated broken reference in the namespace
+// must not downgrade the Service's outage to a warning.
+func TestNoReadyEndpoints_UnresolvableRefStaysCritical(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	old := metav1.NewTime(time.Now().Add(-30 * time.Minute))
+	initDormancyEnv(t,
+		[]runtime.Object{
+			&corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "api-0", Namespace: "prod", Labels: lbl(), CreationTimestamp: old},
+				Status:     corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse}}},
+			},
+			&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod", CreationTimestamp: old},
+				Spec:       corev1.ServiceSpec{Selector: lbl(), Ports: []corev1.ServicePort{{Port: 80}}},
+			},
+		},
+		// An unrelated Rollout with an unsupported (unresolvable) workloadRef.
+		argoRolloutWithRef("unrelated-rollout", "prod", 0, "CloneSet", "whatever"),
+	)
+	var got *Detection
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(GetResourceCache(), "prod")
+		for i := range problems {
+			p := &problems[i]
+			if p.Kind == "Service" && p.Name == "api" && p.Fingerprint == NoReadyEndpointsFingerprint {
+				got = p
+				break
+			}
+		}
+		if got != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got == nil {
+		t.Fatalf("missing Service/api no-ready-endpoints row; got: %+v", problems)
+	}
+	if got.Severity != "critical" {
+		t.Errorf("an unresolvable Rollout ref must NOT downgrade a real outage; severity = %q, want critical", got.Severity)
+	}
+	if !strings.Contains(got.Message, "couldn't resolve") {
+		t.Errorf("expected a caveat about the unresolvable Rollout, got message %q", got.Message)
+	}
+}
+
+// TestDormancy_RolloutOnlyParkedIsDormant: a benign verdict resting only on the
+// Rollout cache (no typed workload at all) is still reached when the Rollout scan
+// is complete - the typed/Rollout dormancy split must not break the plain case.
+func TestDormancy_RolloutOnlyParkedIsDormant(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initDormancyEnv(t, nil, argoRolloutScaled("api-rollout", "prod", 0, lbl()))
+	zero, outcome := scaledToZeroBackingWorkload(GetResourceCache(), scaleZeroSvc("prod"))
+	if !zero {
+		t.Error("a single parked Rollout (synced) must read as benign dormancy")
+	}
+	if outcome != rolloutLookupConclusive {
+		t.Errorf("rollout-only dormant outcome = %v, want conclusive", outcome)
+	}
+}
+
+// TestDormancy_ActiveWinsOverUnknown: active evidence disproves dormancy even when
+// another matching Rollout is unresolvable - the unknown must not short-circuit the
+// scan before the active workload is seen (order-independent precedence).
+func TestDormancy_ActiveWinsOverUnknown(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initDormancyEnv(t,
+		[]runtime.Object{deploymentWithReplicas("api-active", "prod", 2, lbl())},
+		argoRolloutWithRef("api-rollout", "prod", 0, "Deployment", "does-not-exist"),
+	)
+	zero, outcome := scaledToZeroBackingWorkload(GetResourceCache(), scaleZeroSvc("prod"))
+	if zero {
+		t.Error("an active workload must veto dormancy regardless of an unresolvable sibling")
+	}
+	if outcome != rolloutLookupConclusive {
+		t.Errorf("active-over-unknown outcome = %v, want conclusive", outcome)
+	}
+}
+
+// TestDormancy_RolloutNoReplicasIsActive: a matching Rollout with no spec.replicas
+// defaults to 1 (active) and must veto a parked sibling's dormancy.
+func TestDormancy_RolloutNoReplicasIsActive(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initDormancyEnv(t,
+		[]runtime.Object{deploymentWithReplicas("api-old", "prod", 0, lbl())},
+		argoRolloutInlineNoReplicas("api-rollout", "prod", lbl()),
+	)
+	zero, outcome := scaledToZeroBackingWorkload(GetResourceCache(), scaleZeroSvc("prod"))
+	if zero {
+		t.Error("a Rollout with no replicas field (Argo default 1) is active and must veto dormancy")
+	}
+	if outcome != rolloutLookupConclusive {
+		t.Errorf("default-replicas active outcome = %v, want conclusive", outcome)
+	}
+}
+
+// TestDormancy_NilReplicasDeploymentIsActive: a matching Deployment with a nil
+// Replicas pointer defaults to 1 (active) and must veto a parked sibling.
+func TestDormancy_NilReplicasDeploymentIsActive(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	nilReplicaDep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-default", Namespace: "prod"},
+		Spec:       appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: lbl()}}},
+	}
+	initDormancyEnv(t, []runtime.Object{
+		nilReplicaDep,
+		statefulSetWithReplicas("api-sts", "prod", 0, lbl()),
+	})
+	zero, outcome := scaledToZeroBackingWorkload(GetResourceCache(), scaleZeroSvc("prod"))
+	if zero {
+		t.Error("a Deployment with nil replicas (default 1) is active and must veto dormancy")
+	}
+	if outcome != rolloutLookupConclusive {
+		t.Errorf("nil-replicas active outcome = %v, want conclusive", outcome)
+	}
+}

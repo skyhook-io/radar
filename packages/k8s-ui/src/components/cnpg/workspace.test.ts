@@ -19,8 +19,13 @@ it('preserves declared archiver failures and distinguishes backup-only and opaqu
   const barman = { name: 'barman-cloud.cloudnative-pg.io', isWALArchiver: true }
   expect(make([barman], 'False')).toMatchObject({ text: 'Failing', tone: 'unhealthy', detail: 'archive report' })
   expect(make([barman])).toMatchObject({ text: 'Not archived: no destination configured', tone: 'neutral' })
-  expect(make([{ ...barman, isWALArchiver: false, parameters: { barmanObjectName: 'store' } }])).toMatchObject({ text: 'Not archived: no destination configured', tone: 'neutral' })
+  // CNPG hands WAL to barman-cloud whether or not it is marked isWALArchiver; with a store it archives.
+  const unflagged = { ...barman, isWALArchiver: false, parameters: { barmanObjectName: 'store' } }
+  expect(make([unflagged])).toMatchObject({ text: 'CNPG reports archiving', tone: 'healthy' })
+  expect(make([unflagged], 'False')).toMatchObject({ text: 'Failing', tone: 'unhealthy', detail: 'archive report' })
   expect(make([{ name: 'third-party-archive', isWALArchiver: true }])).toMatchObject({ text: 'CNPG reports archiving', detail: 'Archive plugin declared; its destination is not assessed here' })
+  expect(make([{ name: 'third-party-sidecar' }])).toMatchObject({ state: 'unknown', text: 'Not assessed', tone: 'unknown' })
+  expect(make([{ name: 'third-party-sidecar' }], 'False')).toMatchObject({ text: 'Failing', tone: 'unhealthy' })
   expect(make([{ ...barman, enabled: false, parameters: { barmanObjectName: 'store' } }])).toMatchObject({ text: 'Not archived: no destination configured', tone: 'neutral' })
 })
 
@@ -133,6 +138,27 @@ describe('buildCNPGFleet', () => {
     expect(row.attention).toBe(false)
     expect(row.problems[0].title).toBe('No declarative backup schedule')
     expect(row.protection.schedule.text).toBe('No declarative schedule')
+  })
+
+  it('titles and files each CNPG check by its id, as posture', () => {
+    const ids = ['cnpgNoDeclarativeBackup', 'cnpgNoBackupDestination', 'cnpgNoWALArchiving', 'cnpgSingleInstance', 'cnpgInTreeBackupDeprecated', 'cnpgFutureCheck']
+    const fleet = buildCNPGFleet(
+      resp({ clusters: [cluster('pg-a', 'db')] }, {
+        audit: ids.map((checkId) => ({ checkId, severity: 'warning', kind: 'Cluster', namespace: 'db', name: 'pg-a', message: `message of ${checkId}` })),
+      }),
+    )
+    const row = fleet.rows[0]
+    const byId = Object.fromEntries(row.problems.filter((p) => p.source === 'audit').map((p) => [p.id.split(':')[1], p]))
+    expect(Object.fromEntries(Object.entries(byId).map(([id, p]) => [id, [p.title, p.category, p.severity]]))).toEqual({
+      cnpgNoDeclarativeBackup: ['No declarative backup schedule', 'protection', 'posture'],
+      cnpgNoBackupDestination: ['No backup destination', 'protection', 'posture'],
+      cnpgNoWALArchiving: ['No WAL archiving', 'protection', 'posture'],
+      cnpgSingleInstance: ['Single instance', 'availability', 'posture'],
+      cnpgInTreeBackupDeprecated: ['Deprecated in-tree Barman backup', 'declarations', 'posture'],
+      cnpgFutureCheck: ['message of cnpgFutureCheck', 'protection', 'posture'],
+    })
+    expect(row.attention).toBe(false)
+    expect(row.categories.size).toBe(0)
   })
 
   it('says "no access" rather than "none" when a kind is not readable', () => {
@@ -561,6 +587,16 @@ it('counts an enabled destination-blocked schedule as a Cluster protection probl
     expect(buildCNPGFleet(resp({ clusters: [c], scheduledBackups: schedules })).rows[0].attention).toBe(false)
   }
   expect(buildCNPGFleet(resp({ clusters: [c], scheduledBackups: [schedule] }, { coverage: { scheduledBackups: { state: 'denied' } } })).attentionCount).toBe(0)
+})
+
+it('does not repeat a blocked schedule as the no-destination posture finding', () => {
+  const c = cluster('payments', 'db', { spec: { instances: 1 }, status: { readyInstances: 1, phase: 'Cluster in healthy state' } })
+  const schedule = { apiVersion: G, kind: 'ScheduledBackup', metadata: { name: 'payments-nightly', namespace: 'db' }, spec: { cluster: { name: 'payments' } } }
+  const audit = [{ checkId: 'cnpgNoBackupDestination', severity: 'warning', kind: 'Cluster', namespace: 'db', name: 'payments', message: 'no destination' }]
+  const blocked = buildCNPGFleet(resp({ clusters: [c], scheduledBackups: [schedule] }, { audit, issues: [serverProblem('CNPGScheduleDestinationMissing', 'Backup schedule payments-nightly cannot run: no backup destination', 'ScheduledBackup', 'payments-nightly')] }))
+  expect(blocked.rows[0].problems.map((p) => p.id)).not.toContain('audit:cnpgNoBackupDestination:db/payments')
+  const unscheduled = buildCNPGFleet(resp({ clusters: [c] }, { audit }))
+  expect(unscheduled.rows[0].problems.map((p) => p.id)).toContain('audit:cnpgNoBackupDestination:db/payments')
 })
 
 it('marks a schedule-method mismatch even when the Cluster has another working destination', () => {

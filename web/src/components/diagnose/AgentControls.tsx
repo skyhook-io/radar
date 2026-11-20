@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { AlertTriangle, Check, ShieldCheck, ChevronDown } from "lucide-react";
 import {
   TRANSITION_MENU,
@@ -420,11 +420,20 @@ function ConsentCardShell({
   approveLabel = "Approve & investigate",
   warning = false,
   error,
+  notice,
+  approveBusy = false,
+  subject,
   onOpenSettings,
   onApprove,
   onCancel,
 }: DiagnoseConsentCopy & {
   warning?: boolean;
+  // Something to know before approving, e.g. that the agent isn't signed in.
+  // It informs; Approve stays available.
+  notice?: ReactNode;
+  // Approve was pressed and waits on a check that hasn't answered yet.
+  approveBusy?: boolean;
+  subject?: ConsentSubject;
   // Why the last approval failed, straight from the server. The card stays up on
   // failure so retrying works in place, which means this is the ONLY chance to
   // say why — a host that records consent above the individual refuses the
@@ -458,6 +467,18 @@ function ConsentCardShell({
           {title}
         </div>
       </div>
+      {subject && (
+        <div className="mb-3 rounded-md border border-theme-border-subtle bg-theme-surface px-3 py-2">
+          <div className="break-words text-sm font-medium text-theme-text-primary">
+            {subject.title}
+          </div>
+          {subject.detail && (
+            <div className="mt-0.5 text-xs text-theme-text-tertiary">
+              {subject.detail}
+            </div>
+          )}
+        </div>
+      )}
       <div className="text-sm leading-relaxed text-theme-text-secondary">
         {body}
       </div>
@@ -476,6 +497,7 @@ function ConsentCardShell({
           {resolvedSettingsLabel}
         </button>
       )}
+      {notice}
       {/* Red, not amber: the full-local card is itself amber, so an amber box on
           it reads as another paragraph of body copy. role="alert" because nothing
           else moves on failure — focus stays on Approve, so without it a screen
@@ -498,9 +520,10 @@ function ConsentCardShell({
         </button>
         <button
           onClick={onApprove}
+          disabled={approveBusy}
           className="flex-1 rounded-lg btn-brand py-1.5 text-sm"
         >
-          {approveLabel}
+          {approveBusy ? "Checking sign-in…" : approveLabel}
         </button>
       </div>
     </div>
@@ -517,12 +540,24 @@ function ConsentCardShell({
 //      MUST override rather than let Radar assert the local story over its flow.
 //   2. No `copy` — the OSS bring-your-own-local-CLI default, the only tier where
 //      "on your machine / no Radar cloud / your account" actually holds.
+// What the consent card is about to investigate: the resource, or the
+// engineer's question and where it starts.
+export interface ConsentSubject {
+  title: string;
+  detail?: string;
+  /** The run starts from a question, not from one resource. */
+  question?: boolean;
+}
+
 export function ConsentCard({
   agentName,
   agent,
   profile,
   copy,
   error,
+  notice,
+  approveBusy,
+  subject,
   onOpenSettings,
   onApprove,
   onCancel,
@@ -532,11 +567,23 @@ export function ConsentCard({
   profile: ExecutionProfile;
   copy?: DiagnoseConsentCopy;
   error?: string | null;
+  notice?: ReactNode;
+  approveBusy?: boolean;
+  subject?: ConsentSubject;
   onOpenSettings?: () => void;
   onApprove: () => void;
   onCancel: () => void;
 }) {
-  const chrome = { onOpenSettings, onApprove, onCancel, error };
+  const chrome = {
+    onOpenSettings,
+    onApprove,
+    onCancel,
+    error,
+    notice,
+    approveBusy,
+    subject,
+  };
+  const about = subject?.question ? "the resources it reads" : "this resource";
 
   // Tier 1: a host (e.g. radar-hub-web) supplied its own copy — use it verbatim.
   if (copy) return <ConsentCardShell {...copy} {...chrome} />;
@@ -562,9 +609,9 @@ export function ConsentCard({
             your own {agentName}
           </span>{" "}
           on your machine — no Radar cloud, no API key, no account. Radar sends
-          this resource&apos;s spec, recent events, and pod logs to it (and on
-          to its model provider under your account, not to Radar). Transcripts
-          are kept in your local Radar history on this machine until cleared.
+          the spec, recent events, and pod logs of {about} to it (and on to its
+          model provider under your account, not to Radar). Transcripts are kept
+          in your local Radar history on this machine until cleared.
           {profile === "safeguarded" && (
             <>
               {" "}

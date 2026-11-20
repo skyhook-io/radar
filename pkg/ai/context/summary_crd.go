@@ -8,6 +8,8 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/csr"
+	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -31,6 +33,14 @@ func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecon
 
 	// Known CRD extractors
 	switch {
+	case group == "opentelemetry.io" && kind == "OpenTelemetryCollector":
+		return summarizeOpenTelemetryCollector(obj)
+	case group == "opentelemetry.io" && kind == "Instrumentation":
+		return summarizeOpenTelemetryInstrumentation(obj)
+	case group == "flagger.app" && kind == "Canary":
+		return summarizeFlaggerCanary(obj)
+	case group == "flagger.app" && kind == "MetricTemplate":
+		return summarizeFlaggerMetricTemplate(obj)
 	case group == TrivyGroup && obj.Object["report"] != nil:
 		return summarizeTrivyReport(obj)
 	case group == "argoproj.io" && kind == "Application":
@@ -49,7 +59,7 @@ func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecon
 		return summarizeKarpenterNodePool(obj)
 	case group == "karpenter.sh" && kind == "NodeClaim":
 		return summarizeKarpenterNodeClaim(obj)
-	case strings.Contains(group, "karpenter") && strings.HasSuffix(kind, "NodeClass"):
+	case karpenter.IsNodeClassKind(group, kind):
 		return summarizeKarpenterNodeClass(obj)
 	case group == "keda.sh" && kind == "ScaledObject":
 		return summarizeKedaScaledObject(obj)
@@ -93,6 +103,14 @@ func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecon
 		return summarizeNvidiaClusterPolicy(obj)
 	case group == "nvidia.com" && kind == "NVIDIADriver":
 		return summarizeNvidiaDriver(obj)
+	case group == csr.Group && kind == csr.Kind:
+		return summarizeCertificateSigningRequest(obj)
+	case group == volumeSnapshotGroup && kind == "VolumeSnapshot":
+		return summarizeVolumeSnapshot(obj)
+	case group == volumeSnapshotGroup && kind == "VolumeSnapshotContent":
+		return summarizeVolumeSnapshotContent(obj)
+	case group == volumeSnapshotGroup && kind == "VolumeSnapshotClass":
+		return summarizeVolumeSnapshotClass(obj)
 	}
 
 	// Generic fallback
@@ -338,12 +356,8 @@ func rolloutBlockReason(obj *unstructured.Unstructured) string {
 		}
 	}
 
-	for _, path := range [][]string{
-		{"status", "canary", "currentStepAnalysisRunStatus"},
-		{"status", "canary", "currentBackgroundAnalysisRunStatus"},
-		{"status", "blueGreen", "prePromotionAnalysisRunStatus"},
-		{"status", "blueGreen", "postPromotionAnalysisRunStatus"},
-	} {
+	for _, run := range configrefs.RolloutAnalysisRunStatuses {
+		path := append([]string{"status"}, run.Path...)
 		phase, _, _ := unstructured.NestedString(obj.Object, append(path, "status")...)
 		switch phase {
 		case "Failed", "Error", "Inconclusive":

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/skyhook-io/radar/internal/desktopenv"
 )
 
 // AgentInfo describes a detected local agent CLI for the OSS BYO-agent picker.
@@ -28,6 +30,10 @@ type AgentInfo struct {
 	// them is read-only.
 	Apply        bool `json:"apply,omitempty"`
 	Verification bool `json:"verification,omitempty"`
+	// Questions declares that the backend opens a run from the engineer's
+	// question, with or without a resource. A backend that omits it accepts
+	// only a resource.
+	Questions bool `json:"questions,omitempty"`
 }
 
 // knownAgents are the CLI names we probe for - a FIXED list. We never exec a
@@ -207,6 +213,8 @@ func probeVersion(ctx context.Context, path string) string {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, path, "--version")
+	cmd.Dir = launchDir()
+	desktopenv.HideConsoleWindow(cmd)
 	addAgentDirToPath(cmd)
 	out, err := cmd.Output()
 	if err != nil {

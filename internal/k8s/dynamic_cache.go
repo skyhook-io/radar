@@ -36,7 +36,7 @@ var (
 func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 	var initErr error
 	dynamicCacheOnce.Do(func() {
-		client := GetDynamicClient()
+		directClient, client := getDynamicCacheClients()
 		if client == nil {
 			initErr = fmt.Errorf("dynamic client not initialized")
 			return
@@ -82,7 +82,9 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 		recordClusterContext := ActiveClusterContext()
 
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
+			RequiredWatchKinds:          relationshipWatchKinds(),
 			DynamicClient:               client,
+			DirectClient:                directClient,
 			Discovery:                   sharedDiscovery,
 			Changes:                     changeCh,
 			NamespaceFallback:           nsFallback,
@@ -182,6 +184,27 @@ type supportedCRDResource struct {
 // drift checks. Only installed catalog entries are warmed, so watch identities
 // stay bounded even when discovery exposes an unbounded CRD set.
 var supportedCRDFallbacks = []supportedCRDResource{
+	{Group: "cilium.io", Versions: []string{"v2"}, Resource: "ciliumclusterwidenetworkpolicies", Kind: "CiliumClusterwideNetworkPolicy", Namespaced: false},
+	{Group: "policy.networking.k8s.io", Versions: []string{"v1beta1", "v1alpha2"}, Resource: "clusternetworkpolicies", Kind: "ClusterNetworkPolicy", Namespaced: false},
+	{Group: "", Versions: []string{"v1"}, Resource: "podtemplates", Kind: "PodTemplate", Namespaced: true},
+	{Group: "cilium.io", Versions: []string{"v2"}, Resource: "ciliumnetworkpolicies", Kind: "CiliumNetworkPolicy", Namespaced: true},
+	{Group: "eks.amazonaws.com", Versions: []string{"v1"}, Resource: "nodeclasses", Kind: "NodeClass", Namespaced: false},
+	{Group: "sinks.knative.dev", Versions: []string{"v1alpha1"}, Resource: "jobsinks", Kind: "JobSink", Namespaced: true},
+	{Group: "opentelemetry.io", Versions: []string{"v1beta1", "v1alpha1"}, Resource: "opentelemetrycollectors", Kind: "OpenTelemetryCollector", Namespaced: true},
+	{Group: "opentelemetry.io", Versions: []string{"v1alpha1"}, Resource: "instrumentations", Kind: "Instrumentation", Namespaced: true},
+	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "canaries", Kind: "Canary", Namespaced: true},
+	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "metrictemplates", Kind: "MetricTemplate", Namespaced: true},
+	// system-upgrade-controller (Rancher, k3s, RKE2). Other projects also name a kind Plan.
+	{Group: "upgrade.cattle.io", Versions: []string{"v1"}, Resource: "plans", Kind: "Plan", Namespaced: true},
+	{Group: "secrets-store.csi.x-k8s.io", Versions: []string{"v1", "v1alpha1"}, Resource: "secretproviderclasses", Kind: "SecretProviderClass", Namespaced: true},
+	{Group: "secrets-store.csi.x-k8s.io", Versions: []string{"v1", "v1alpha1"}, Resource: "secretproviderclasspodstatuses", Kind: "SecretProviderClassPodStatus", Namespaced: true},
+	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshots", Kind: "VolumeSnapshot", Namespaced: true},
+	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshotcontents", Kind: "VolumeSnapshotContent", Namespaced: false},
+	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshotclasses", Kind: "VolumeSnapshotClass", Namespaced: false},
+	{Group: "core.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "strimzipodsets", Kind: "StrimziPodSet", Namespaced: true},
+	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkas", Kind: "Kafka", Namespaced: true},
+	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkanodepools", Kind: "KafkaNodePool", Namespaced: true},
+	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkaconnects", Kind: "KafkaConnect", Namespaced: true},
 	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkaconnectors", Kind: "KafkaConnector", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applications", Kind: "Application", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applicationsets", Kind: "ApplicationSet", Namespaced: true},
@@ -210,6 +233,10 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "kustomize.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "kustomizations", Kind: "Kustomization", Namespaced: true},
 	{Group: "helm.toolkit.fluxcd.io", Versions: []string{"v2", "v2beta2", "v2beta1"}, Resource: "helmreleases", Kind: "HelmRelease", Namespaced: true},
 	{Group: "notification.toolkit.fluxcd.io", Versions: []string{"v1beta3", "v1beta2"}, Resource: "alerts", Kind: "Alert", Namespaced: true},
+	{Group: "fluxcd.controlplane.io", Versions: []string{"v1"}, Resource: "fluxinstances", Kind: "FluxInstance", Namespaced: true},
+	{Group: "fluxcd.controlplane.io", Versions: []string{"v1"}, Resource: "fluxreports", Kind: "FluxReport", Namespaced: true},
+	{Group: "fluxcd.controlplane.io", Versions: []string{"v1"}, Resource: "resourcesets", Kind: "ResourceSet", Namespaced: true},
+	{Group: "fluxcd.controlplane.io", Versions: []string{"v1"}, Resource: "resourcesetinputproviders", Kind: "ResourceSetInputProvider", Namespaced: true},
 	{Group: "apiregistration.k8s.io", Versions: []string{"v1"}, Resource: "apiservices", Kind: "APIService", Namespaced: false},
 	{Group: "apiextensions.k8s.io", Versions: []string{"v1"}, Resource: "customresourcedefinitions", Kind: "CustomResourceDefinition", Namespaced: false},
 	// Admission webhook configs gate or silently rewrite admission for every
@@ -220,6 +247,8 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "mutatingwebhookconfigurations", Kind: "MutatingWebhookConfiguration", Namespaced: false},
 	{Group: "scheduling.k8s.io", Versions: []string{"v1"}, Resource: "priorityclasses", Kind: "PriorityClass", Namespaced: false},
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingwebhookconfigurations", Kind: "ValidatingWebhookConfiguration", Namespaced: false},
+	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicies", Kind: "ValidatingAdmissionPolicy", Namespaced: false},
+	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicybindings", Kind: "ValidatingAdmissionPolicyBinding", Namespaced: false},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gatewayclasses", Kind: "GatewayClass", Namespaced: false},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gateways", Kind: "Gateway", Namespaced: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "httproutes", Kind: "HTTPRoute", Namespaced: true},
@@ -459,6 +488,16 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	// disambiguates everywhere downstream.
 	{Group: "nvidia.com", Versions: []string{"v1"}, Resource: "clusterpolicies", Kind: "ClusterPolicy", Namespaced: false},
 	{Group: "nvidia.com", Versions: []string{"v1alpha1"}, Resource: "nvidiadrivers", Kind: "NVIDIADriver", Namespaced: false},
+	{Group: "k8s.cni.cncf.io", Versions: []string{"v1"}, Resource: "network-attachment-definitions", Kind: "NetworkAttachmentDefinition", Namespaced: true},
+	// Agent runtimes. Substrate's actors are not Kubernetes objects; only its
+	// pools and runtime configuration are.
+	{Group: "ate.dev", Versions: []string{"v1"}, Resource: "workerpools", Kind: "WorkerPool", Namespaced: true},
+	{Group: "ate.dev", Versions: []string{"v1"}, Resource: "sandboxconfigs", Kind: "SandboxConfig", Namespaced: false},
+	{Group: "ate.dev", Versions: []string{"v1"}, Resource: "csidriverconfigs", Kind: "CSIDriverConfig", Namespaced: false},
+	{Group: "agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxes", Kind: "Sandbox", Namespaced: true},
+	{Group: "extensions.agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxclaims", Kind: "SandboxClaim", Namespaced: true},
+	{Group: "extensions.agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxtemplates", Kind: "SandboxTemplate", Namespaced: true},
+	{Group: "extensions.agents.x-k8s.io", Versions: []string{"v1beta1"}, Resource: "sandboxwarmpools", Kind: "SandboxWarmPool", Namespaced: true},
 	// NOTE: the wgpolicyk8s.io PolicyReport CRDs are intentionally NOT in
 	// this list. They are warmed up conditionally — only when Kyverno is
 	// detected — via WarmupKyvernoPolicyReports in policy_reports.go. Adding
@@ -469,7 +508,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 
 func RegisterSupportedCRDFallbacks() {
 	discovery := GetResourceDiscovery()
-	client := GetDynamicClient()
+	client := GetInformerDynamicClient()
 	if discovery == nil || client == nil {
 		return
 	}

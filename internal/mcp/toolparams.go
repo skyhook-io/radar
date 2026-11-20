@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"k8s.io/apimachinery/pkg/util/validation"
 
@@ -62,12 +63,17 @@ type toolParamRegistry struct {
 	mu       sync.RWMutex
 	names    map[string][]string
 	required map[string][]string
+	// enums holds each parameter's allowed string values, read from a tool's
+	// explicit input schema. Tools whose schema is generated from the input
+	// struct publish no enums and have no entry.
+	enums map[string]map[string][]string
 }
 
 func newToolParamRegistry() *toolParamRegistry {
 	return &toolParamRegistry{
 		names:    map[string][]string{},
 		required: map[string][]string{},
+		enums:    map[string]map[string][]string{},
 	}
 }
 
@@ -97,6 +103,12 @@ func (r *toolParamRegistry) lookup(tool string) (accepted, required []string) {
 // we know nothing and must stay quiet.
 func isRegisteredTool(tool string) bool {
 	return defaultToolParams.isRegistered(tool)
+}
+
+func (r *toolParamRegistry) lookupEnums(tool string) map[string][]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.enums[tool]
 }
 
 func (r *toolParamRegistry) isRegistered(tool string) bool {
@@ -301,12 +313,79 @@ func addToolWithRegistry[In, Out any](registry *toolParamRegistry, s *mcpsdk.Ser
 	registry.mu.Lock()
 	registry.names[t.Name] = accepted
 	registry.required[t.Name] = required
+	if enums := stringEnums(t.InputSchema); len(enums) > 0 {
+		registry.enums[t.Name] = enums
+	} else {
+		delete(registry.enums, t.Name)
+	}
 	registry.mu.Unlock()
 	name := t.Name
 	mcpsdk.AddTool(s, t, func(ctx context.Context, req *mcpsdk.CallToolRequest, in In) (*mcpsdk.CallToolResult, Out, error) {
 		usagedata.RecordMCPTool(name)
 		return h(ctx, req, in)
 	})
+}
+
+// stringEnums reads the top-level parameters of an explicit input schema whose
+// allowed values are all strings.
+func stringEnums(schema any) map[string][]string {
+	s, ok := schema.(*jsonschema.Schema)
+	if !ok || s == nil {
+		return nil
+	}
+	out := map[string][]string{}
+	for name, prop := range s.Properties {
+		if prop == nil || len(prop.Enum) == 0 {
+			continue
+		}
+		values := make([]string, 0, len(prop.Enum))
+		for _, v := range prop.Enum {
+			str, ok := v.(string)
+			if !ok {
+				values = nil
+				break
+			}
+			values = append(values, str)
+		}
+		if len(values) > 0 {
+			out[name] = values
+		}
+	}
+	return out
+}
+
+// repairEnumCase rewrites a value that differs from exactly one allowed value
+// only in letter case, such as kind "deployment" for "Deployment". Other tools
+// take kinds in any case, so callers send them that way; the schema's enum
+// would otherwise reject the call. A value that is already allowed, matches no
+// allowed value, or matches more than one is left for validation.
+func repairEnumCase(enums map[string][]string, args map[string]json.RawMessage, repairs *[]string) {
+	for param, allowed := range enums {
+		raw, ok := args[param]
+		if !ok {
+			continue
+		}
+		var got string
+		if err := json.Unmarshal(raw, &got); err != nil || slices.Contains(allowed, got) {
+			continue
+		}
+		match := ""
+		for _, v := range allowed {
+			if !strings.EqualFold(v, got) {
+				continue
+			}
+			if match != "" {
+				match = ""
+				break
+			}
+			match = v
+		}
+		if match == "" {
+			continue
+		}
+		args[param] = json.RawMessage(strconv.Quote(match))
+		*repairs = append(*repairs, fmt.Sprintf("%s=%s->%s", param, got, match))
+	}
 }
 
 // structJSONFields returns the json field names of a struct type, and the subset
@@ -388,7 +467,8 @@ func toCamel(s string) string {
 }
 
 // repairToolArgs rewrites recognisable misspellings of argument names to the
-// names this tool actually accepts. It returns the (possibly rewritten) JSON,
+// names this tool actually accepts, and enum values that differ from an
+// allowed value only in letter case. It returns the (possibly rewritten) JSON,
 // the renames performed (for logging), and any supplied names it could NOT
 // resolve — which are exactly the names that will make schema validation fail,
 // and so the signal for attaching parameter help without parsing SDK text.
@@ -459,6 +539,7 @@ func repairToolArgsWithRegistry(registry *toolParamRegistry, tool string, raw js
 		args[target] = val
 		repairs = append(repairs, fmt.Sprintf("%s->%s", key, target))
 	}
+	repairEnumCase(registry.lookupEnums(tool), args, &repairs)
 	// Missing required arguments are the other guaranteed validation failure.
 	// Detecting them here means the help attaches without parsing SDK text.
 	_, required := registry.lookup(tool)

@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
+import { usePhoneLayout } from '../../hooks/usePhoneLayout'
 
 // Shared tabbed detail chrome. Hosts provide all data-aware pieces; this owns
 // only the header, tab strip, optional controls, overlay, and content frame.
@@ -11,6 +12,8 @@ export interface DetailShellTab<TId extends string = string> {
   badge?: ReactNode
   /** Omit the tab from the strip without disturbing the others' identity. */
   hidden?: boolean
+  /** On a phone, show `compactIdentity` alone in the header while this tab is active. */
+  phoneCompactHeader?: boolean
 }
 
 export interface DetailShellProps<TId extends string = string> {
@@ -23,6 +26,8 @@ export interface DetailShellProps<TId extends string = string> {
   /** Inline leading control on the identity row — a back button in standalone Radar. */
   nav?: ReactNode
   identity: ReactNode
+  /** Replaces the identity on a phone while a `phoneCompactHeader` tab is active (e.g. the name). The breadcrumb and nav stay. */
+  compactIdentity?: ReactNode
   headerActions?: ReactNode
   /** A line under the identity row, above the tabs — e.g. a status summary that holds on every tab. */
   subheader?: ReactNode
@@ -31,6 +36,8 @@ export interface DetailShellProps<TId extends string = string> {
   activeTab: TId
   onTabChange: (id: TId) => void
   tabStripEnd?: ReactNode
+  /** Give trailing controls their own row when they would squeeze the tabs. */
+  wrapTabStripEnd?: boolean
   overlay?: ReactNode
   /** Hide breadcrumb/identity/header actions when a host page already owns that chrome. */
   compactHeader?: boolean
@@ -46,6 +53,7 @@ export function DetailShell<TId extends string = string>({
   breadcrumb,
   nav,
   identity,
+  compactIdentity,
   headerActions,
   subheader,
   scopeControls,
@@ -53,13 +61,16 @@ export function DetailShell<TId extends string = string>({
   activeTab,
   onTabChange,
   tabStripEnd,
+  wrapTabStripEnd = false,
   overlay,
   compactHeader = false,
   wrapHeader = false,
   children,
 }: DetailShellProps<TId>) {
+  const isPhone = usePhoneLayout()
+  const wrapTabControls = wrapTabStripEnd && !isPhone
   const visibleTabs = tabs.filter((t) => !t.hidden)
-  const { stripRef, compact } = useCompactTabs(visibleTabs.map((t) => `${t.id}:${t.label}:${!!t.badge}`).join('|'))
+  const { stripRef, compact } = useCompactTabs(visibleTabs.map((t) => `${t.id}:${t.label}:${!!t.badge}`).join('|'), wrapTabControls)
 
   useLayoutEffect(() => {
     const strip = stripRef.current
@@ -70,6 +81,10 @@ export function DetailShell<TId extends string = string>({
       else if (left + active.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left + active.offsetWidth - strip.clientWidth
     }
   }, [activeTab, compact])
+
+  // A tab that wants the screen (Logs) swaps the header for the host's compact
+  // identity on a phone, so its content gets the rest of the height.
+  const phoneCompact = isPhone && compactIdentity != null && !!visibleTabs.find((t) => t.id === activeTab)?.phoneCompactHeader
 
   return (
     <div className="flex flex-col h-full w-full bg-theme-base">
@@ -85,16 +100,16 @@ export function DetailShell<TId extends string = string>({
               {/* Wrapping on, the identity's basis is its one-line width, so the
                   actions move below whenever the whole title line would not fit
                   beside them — never squeezing the name to keep them up. */}
-              <div className={clsx('min-w-0 phone:basis-[calc(100%-3rem)]', wrapHeader ? 'flex-auto' : 'flex-1')}>{identity}</div>
-              {wrapHeader ? <div className="ml-auto flex shrink-0 items-start gap-4">{headerActions}</div> : headerActions}
+              <div className={clsx('min-w-0 phone:basis-[calc(100%-3rem)]', wrapHeader ? 'flex-auto' : 'flex-1')}>{phoneCompact ? compactIdentity : identity}</div>
+              {phoneCompact ? null : wrapHeader ? <div className="ml-auto flex shrink-0 items-start gap-4">{headerActions}</div> : headerActions}
             </div>
-            {subheader && <div className="-mt-1 px-6 pb-3 phone:px-4">{subheader}</div>}
+            {subheader && !phoneCompact && <div className="-mt-1 px-6 pb-3 phone:px-4">{subheader}</div>}
           </>
         )}
 
         {/* Tabs (left) + scope controls / actions (right) */}
-        <div className={clsx('flex items-center phone:flex-wrap', compactHeader ? 'px-0' : 'border-t border-theme-border px-6 phone:px-4')}>
-          <div ref={stripRef} className={clsx('flex min-w-0 flex-auto overflow-x-auto phone:basis-full', compact ? 'gap-0' : 'gap-1')} role="tablist">
+        <div className={clsx('flex items-center phone:flex-wrap', wrapTabControls && 'flex-wrap', compactHeader ? 'px-0' : 'border-t border-theme-border px-6 phone:px-4')}>
+          <div ref={stripRef} className={clsx('flex min-w-0 overflow-x-auto phone:basis-full', wrapTabControls ? 'max-w-full flex-[1_0_max-content]' : 'flex-auto', compact ? 'gap-0' : 'gap-1')} role="tablist">
             {visibleTabs.map((t) => (
               <DetailShellTabButton key={t.id} active={activeTab === t.id} compact={compact} onClick={() => onTabChange(t.id)}>
                 {!compact && t.icon}
@@ -104,7 +119,7 @@ export function DetailShell<TId extends string = string>({
             ))}
           </div>
           {(scopeControls || tabStripEnd) && (
-            <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 pl-2 phone:py-2">
+            <div className={clsx('ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2 pl-2 phone:py-2', wrapTabControls && 'max-w-full flex-[0_0_max-content]')}>
               {scopeControls}
               {tabStripEnd}
             </div>
@@ -126,7 +141,7 @@ export function DetailShell<TId extends string = string>({
  * keep their look. The width the strip needs with icons is measured while it
  * shows them, so toggling cannot oscillate.
  */
-function useCompactTabs(tabsKey: string) {
+function useCompactTabs(tabsKey: string, wrapControls: boolean) {
   const stripRef = useRef<HTMLDivElement>(null)
   const needed = useRef(0)
   const [compact, setCompact] = useState(false)
@@ -137,6 +152,8 @@ function useCompactTabs(tabsKey: string) {
   useLayoutEffect(() => {
     const el = stripRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
+    const row = wrapControls ? el.parentElement : null
+    const controls = row && el.nextElementSibling
     const childWidth = () => [...el.children].reduce((sum, child) => sum + child.getBoundingClientRect().width, 0)
     let previousWidth = childWidth()
     let followActive = true
@@ -150,8 +167,20 @@ function useCompactTabs(tabsKey: string) {
       const width = childWidth()
       if (compact) needed.current += width - previousWidth
       previousWidth = width
-      if (!compact) needed.current = el.scrollWidth
-      const next = needed.current > el.clientWidth + 1
+      if (!compact) {
+        needed.current = row
+          ? width + (parseFloat(getComputedStyle(el).columnGap) || 0) * Math.max(0, el.children.length - 1)
+          : el.scrollWidth
+      }
+      let available = el.clientWidth
+      if (row) {
+        // Measure as if the controls were beside the tabs, even after wrapping.
+        // Otherwise moving the controls down can undo compaction on resize.
+        const style = getComputedStyle(row)
+        const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0)
+        available = row.clientWidth - padding - (controls?.getBoundingClientRect().width ?? 0)
+      }
+      const next = needed.current > available + 1
       setCompact((prev) => (prev === next ? prev : next))
       const active = el.querySelector<HTMLElement>('[aria-selected="true"]')
       if (active && followActive) {
@@ -163,10 +192,12 @@ function useCompactTabs(tabsKey: string) {
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
+    if (row) ro.observe(row)
+    if (controls) ro.observe(controls)
     for (const child of el.children) ro.observe(child)
     el.addEventListener('scroll', onScroll)
     return () => { ro.disconnect(); el.removeEventListener('scroll', onScroll) }
-  }, [compact, tabsKey])
+  }, [compact, tabsKey, wrapControls])
   return { stripRef, compact }
 }
 

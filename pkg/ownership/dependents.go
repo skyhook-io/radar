@@ -46,6 +46,8 @@ type DependentCandidatesRead struct {
 	// is that kind everywhere the search looked, or, with
 	// radar_namespace_not_collected, the namespaces of that kind Radar doesn't
 	// collect.
+	// The slice is read-only and may be shared across results. It remains
+	// unchanged by later session reads; clone it before modifying it.
 	Gaps []Gap
 }
 

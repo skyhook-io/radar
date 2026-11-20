@@ -20,6 +20,7 @@ export const READ_ACTIONS: Record<string, ReadAction> = {
   kind_sync_pending: 'retry',
   kind_sync_timed_out: 'wait',
   kind_unknown: 'change_request',
+  legacy_group_only: 'none',
   list_too_large: 'change_request',
   namespace_not_found: 'change_request',
   namespace_required: 'change_request',
@@ -53,4 +54,40 @@ export function canonicalReadCode(code: unknown): unknown {
 export function readActionFor(code: unknown): ReadAction | undefined {
   const current = canonicalReadCode(code)
   return typeof current === 'string' ? (READ_ACTIONS[current] ?? 'change_request') : undefined
+}
+
+/** Why a read failed, in a few plain words; an unknown code reads as a failed read. */
+export function gapReasonText(reason: string): string {
+  switch (canonicalReadCode(reason)) {
+    case 'radar_kind_not_collected':
+    case 'radar_namespace_not_collected':
+      return "Radar doesn't collect it"
+    case 'kind_sync_pending':
+      return 'still loading'
+    case 'kind_sync_timed_out':
+      return 'loading is overdue'
+    case 'radar_forbidden':
+    case 'radar_credentials_rejected':
+      return 'Radar may not list it'
+    case 'kind_not_watchable':
+      return "its API can't be watched"
+    case 'user_permission_check_failed':
+      return "your access couldn't be checked"
+    case 'user_forbidden':
+      return 'you may not list it'
+    case 'kind_unknown':
+      return "Radar's API discovery doesn't list its kind or version"
+    case 'object_not_found':
+      return "Radar doesn't have it yet"
+    case 'legacy_group_only':
+      return 'it exists only in an older API group, which newer versions of its controller may not read'
+    case 'cluster_connecting':
+      return 'Radar is still connecting'
+    case 'cluster_disconnected':
+      return 'Radar lost its connection'
+    case 'connection_changed':
+      return "Radar's connection changed meanwhile"
+    default:
+      return 'the read failed'
+  }
 }

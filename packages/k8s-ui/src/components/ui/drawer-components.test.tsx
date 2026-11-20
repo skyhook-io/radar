@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { AlertBanner, EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection, defaultConditionTone } from './drawer-components'
+import { AlertBanner, EventsSection, PodTemplateSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection, defaultConditionTone } from './drawer-components'
 import type { Relationships } from '../../types'
 
 const problems = [
@@ -216,6 +216,33 @@ describe('RelatedResourcesSection ownership', () => {
     const html = renderToString(<RelatedResourcesSection relationships={{ ownership: { children: { complete: true }, manages: { membership: 'remote' } } }} />)
     expect(html).toContain('Manages')
     expect(html).toContain("Its destination isn&#x27;t this cluster as far as Radar can tell, so its members aren&#x27;t listed.")
+  })
+
+  describe('titles managers the way the chip does', () => {
+    const other = { ...app, name: 'other' }
+    const title = (relationships: Relationships) => {
+      const html = renderToString(<RelatedResourcesSection relationships={relationships} onNavigate={() => {}} />)
+      return html.includes('Listed By') ? 'Listed By' : html.includes('Managed By') ? 'Managed By' : 'none'
+    }
+    const answer = (state: 'listed' | 'shared' | 'disagree' | 'agree', recorders = [app]) => ({ state, direct: { object: rs, recorders } })
+    it.each(['listed', 'shared', 'disagree'] as const)('a %s answer lists its recorders', state => {
+      expect(title({ managers: [app], ownership: { children: { complete: true }, manager: answer(state) } })).toBe('Listed By')
+    })
+    it('an agree answer manages', () => {
+      expect(title({ managers: [app], ownership: { children: { complete: true }, manager: answer('agree') } })).toBe('Managed By')
+    })
+    it('a manager that is not a direct recorder keeps Managed By', () => {
+      expect(title({ managers: [app, other], ownership: { children: { complete: true }, manager: answer('listed') } })).toBe('Managed By')
+    })
+    it('an inherited answer keeps Managed By', () => {
+      expect(title({ managers: [app], ownership: { children: { complete: true }, manager: { ...answer('listed'), via: { object: cm, recorders: [app] } } } })).toBe('Managed By')
+    })
+    it('a note without managers keeps Managed By', () => {
+      expect(title({ ownership: { children: { complete: true }, manager: answer('listed', []), managers: { remote: 1 } } })).toBe('Managed By')
+    })
+    it('an older Radar without an answer keeps Managed By', () => {
+      expect(title({ managers: [app] })).toBe('Managed By')
+    })
   })
 
   it('says which direction Managed By comes from', () => {
@@ -487,5 +514,41 @@ describe('RelatedResourcesSection capped lists', () => {
     const whole = text({ children: pods, ownership: { children: { complete: true } } })
     expect(whole).toContain('Children (12)')
     expect(whole).toContain('Show all 12')
+  })
+})
+
+describe('PodTemplateSection pod-level resources', () => {
+  const container = { name: 'app', image: 'app:1', resources: { requests: { cpu: '100m' } } }
+
+  it('shows spec.resources as its own Pod (aggregate) row beside the container rows', () => {
+    const html = renderToString(
+      <PodTemplateSection
+        template={{ spec: { resources: { requests: { cpu: '2', memory: '1Gi' }, limits: { memory: '2Gi' } }, containers: [container] } }}
+      />
+    )
+    expect(html).toContain('Pod (aggregate)')
+    expect(html).toContain('CPU: 2 cores, Mem: 1.00 GiB')
+    expect(html).toContain('Mem: 2.00 GiB')
+    expect(html).toContain('CPU: 0.10 cores')
+  })
+
+  it('renders no aggregate row when the template sets no pod-level resources', () => {
+    const html = renderToString(<PodTemplateSection template={{ spec: { containers: [container] } }} />)
+    expect(html).not.toContain('Pod (aggregate)')
+    expect(renderToString(<PodTemplateSection template={{ spec: { resources: {}, containers: [container] } }} />)).not.toContain('Pod (aggregate)')
+    expect(renderToString(<PodTemplateSection template={{ spec: { resources: { requests: {}, limits: {} }, containers: [container] } }} />)).not.toContain('Pod (aggregate)')
+  })
+})
+
+describe('references the viewer may not read', () => {
+  it('lists a referenced Secret by name without a link', () => {
+    const configMap = { kind: 'ConfigMap', namespace: 'shop', name: 'web-config' }
+    const secret = { kind: 'Secret', namespace: 'shop', name: 'web-tls', state: 'denied' as const }
+    const html = renderToString(<RelatedResourcesSection relationships={{ configRefs: [configMap, secret] }} onNavigate={() => {}} />)
+    const buttons = html.match(/<button[\s\S]*?<\/button>/g) ?? []
+    expect(html).toContain('web-tls')
+    expect(html).toContain('not viewable')
+    expect(buttons.some((b) => b.includes('web-config'))).toBe(true)
+    expect(buttons.some((b) => b.includes('web-tls'))).toBe(false)
   })
 })

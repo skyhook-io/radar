@@ -418,6 +418,7 @@ trend charts remain unavailable for Kubecost.
 | `service.type` | Service type | `ClusterIP` |
 | `service.port` | Service port | `9280` |
 | `basePath` | URL prefix Radar serves under, e.g. `/radar` for no-strip-prefix subpath ingress | `""` |
+| `allowedHosts` | Hostnames Radar answers when `auth.mode` is `none`, besides `localhost`, IP addresses and Kubernetes Service names. `<service>.<namespace>`, `ingress.hosts`, `httpRoute.hostnames` and the hosts of `trustedOrigins` are added automatically; list others, such as a custom cluster domain. `*` turns the check off | `[]` |
 | `trustedOrigins` | Origins besides Radar's own address that may use Radar's API, including changes and pod terminals, e.g. `http://radar.internal`. Set only if changes fail with "Radar refused this request" because a proxy rewrites `Host` | `[]` |
 | `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
@@ -444,13 +445,16 @@ trend charts remain unavailable for Kubecost.
 | `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends). Requires `traffic.prometheusUrl` — credentials are never sent to auto-discovered endpoints | `{}` |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers. Requires `traffic.prometheusUrl` | `{}` |
 | `traffic.prometheusSingleCluster` | Assert that the backend is dedicated to this cluster for workload metrics and PVC usage. Replaces automatic matching. [Scope limits](../../../docs/workload-metrics.md#optional-operator-override) | `false` |
-| `traffic.prometheusClusterLabels` | Exact cluster label/value constraints for workload metrics and PVC usage, combined with AND. Labels must exist on each affected metric source. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
+| `traffic.prometheusClusterLabels` | Exact cluster label/value constraints for workload metrics, PVC usage and, when `prometheusUrl` is set, the Caretta/Beyla/Istio traffic map, combined with AND. Labels must exist on each affected metric source. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
 | `traffic.beylaJobSelector` | Beyla Live Traffic matcher fragment. Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher; custom workload jobs are normally discovered automatically | `""` |
 | `argocd.existingSecret` | Name of a Secret holding the Argo CD API token (recommended — keeps it out of the release) | `""` |
 | `argocd.existingSecretKey` | Key within `argocd.existingSecret` holding the token | `token` |
 | `argocd.token` | Inline Argo CD API token (dev only — lands in the release state) | `""` |
 | `argocd.url` | Explicit `argocd-server` URL; blank auto-discovers in-cluster | `""` |
 | `argocd.insecureTls` | Skip TLS verification for a self-signed `argocd-server` | `false` |
+| `disableExec` | Turn off pod exec through Radar for everyone on this cluster. See [Turning exec off](#turning-exec-off) | `false` |
+| `mcp.execTools` | Opt in to `exec_pod` (`--mcp-exec-tools`); requires pods/exec. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with `--disable-exec` or `--mcp-read-only` | `false` |
+| `mcp.httpTools` | Opt in to in-cluster `curl_service` (`--mcp-http-tools`); requires get services/proxy. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with disabled or read-only MCP; independent of exec | `false` |
 | `usageReporting.enabled` | Anonymous daily usage stats: views, actions and MCP tools used, plus this cluster's version, platform, node-count range and known integrations. Off unless `true`; Radar never asks in a cluster ([what is sent](https://radarhq.io/docs/configuration/usage-stats)) | unset |
 | `resources.requests.cpu` | CPU request | `200m` |
 | `resources.requests.memory` | Memory request | `256Mi` |
@@ -527,20 +531,54 @@ read at startup and keeps serving objects it already cached after a grant is
 removed. `helm upgrade` rolls the pod whenever `rbac` values change. If you change
 Radar's RBAC outside Helm, restart Radar.
 
+### Limit Radar to selected namespaces
+
+Set `rbac.namespaces` to keep Radar inside a list of namespaces:
+
+```yaml
+rbac:
+  namespaces: [app, billing]
+```
+
+Radar's ClusterRole is then bound by a RoleBinding in each listed namespace instead of cluster-wide, so its ServiceAccount can read only there. Radar never caches anything outside the list, so nothing from other namespaces reaches the UI, MCP or Radar Cloud. With `cloud.enabled`, every Radar Cloud binding (the owner, member and viewer tiers, `radar:system` and `radar:ai:reader`) also becomes a RoleBinding in the same namespaces: people keep their usual role inside the list and get none outside it.
+
+What else changes:
+
+- Nodes, PersistentVolumes, StorageClasses, CRDs and other cluster-scoped views show no access. A CRD installed after Radar starts is picked up when Radar restarts.
+- One ClusterRole stays cluster-wide, named after the release with a `-cluster` suffix (`radar-cluster` for a release named `radar`): access reviews, and with auth or Radar Cloud, impersonation. Impersonation cannot be limited to namespaces; each impersonated request is still bounded by that person's RBAC.
+- Cluster-scoped rules in `rbac.additionalRules` have no effect, because that ClusterRole is bound per namespace.
+- `rbac.selfUpgrade` still grants get and patch on Radar's own Deployment in its namespace.
+
+Limits:
+
+- RBAC grants add up. A binding created outside the chart for `radar:member`, a `radar:user:<id>` group or an identity-provider group still applies to writes made through Radar.
+- `edit` and `admin` in a listed namespace let people run pods as any ServiceAccount there, so a privileged ServiceAccount in a listed namespace reaches beyond the list.
+- Prometheus, OpenCost, Kubecost and Hubble are not limited by RBAC. Radar shows what those backends return, which can cover the whole cluster.
+- Set the list at install. Narrowing an install that already reported to Radar Cloud does not remove what Radar Cloud holds: people with access to every listed namespace can still see history from namespaces that left the list, and alerts there resolve.
+- If Radar's ServiceAccount cannot read a listed namespace when Radar starts (its RoleBinding is missing, say), or cannot read a kind there that it reads in the other listed namespaces, Radar reports its view as incomplete and Radar Cloud stops evaluating alerts for the cluster. As with any grant change, Radar notices a removed grant only when it restarts.
+- Radar's ServiceAccount must not be able to list namespaces cluster-wide. If a binding added outside the chart lets it, Radar logs a warning and is not limited.
+
+The chart refuses Radar's own namespace in the list when auth or Radar Cloud is on, since people with access there could use Radar's ServiceAccount, which can impersonate anyone. It also refuses an empty list, `cloud.defaultRbac.nodeOps`, and `--namespace-scope` or `--rbac-namespaces` in `extraArgs`.
+
 ### Default Permissions (Core K8s Resources)
 
 Always granted (required for basic functionality):
 
 | API Group | Resources |
 |-----------|-----------|
-| Core (`""`) | pods, services, configmaps, events, namespaces, nodes, pvcs, serviceaccounts, endpoints |
-| `apps` | deployments, daemonsets, statefulsets, replicasets |
+| Core (`""`) | pods, services, configmaps, events, namespaces, nodes, persistentvolumes, pvcs, serviceaccounts, podtemplates, endpoints, limitranges, resourcequotas |
+| `discovery.k8s.io` | endpointslices |
+| `policy` | poddisruptionbudgets |
+| `storage.k8s.io` | storageclasses |
+| `apps` | deployments, daemonsets, statefulsets, replicasets, controllerrevisions |
 | `networking.k8s.io` | ingresses, networkpolicies |
 | `batch` | jobs, cronjobs |
 | `autoscaling` | horizontalpodautoscalers |
 | `scheduling.k8s.io` | priorityclasses; feature-gated workloads, podgroups, compositepodgroups when served |
 | `certificates.k8s.io` | podcertificaterequests, clustertrustbundles (stable in Kubernetes 1.37) |
 | `apiextensions.k8s.io` | customresourcedefinitions (for CRD discovery) |
+
+Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, PriorityLevelConfigurations, and PodSecurityPolicies on clusters where those kinds are served. These reads inspect source-manifest evidence and do not add the kinds to Radar's resource browser.
 
 ### Privileged Permissions (Opt-in)
 
@@ -552,10 +590,109 @@ Disabled by default for security:
 | Terminal | `rbac.podExec: true` | Shell access to pods |
 | Port Forward | `rbac.portForward: true` | Port forwarding to pods. Also the fallback for traffic sources (Hubble/Caretta) — Radar dials the relay/metrics Service directly first, so in-cluster installs only need this when a NetworkPolicy or routing blocks Radar's namespace from reaching the service |
 | Logs | `rbac.podLogs: true` | View pod logs (**enabled by default**) |
-| Helm Write | `rbac.helm: true` | Install/upgrade/rollback/uninstall Helm releases. No-auth installs: grants Radar's ServiceAccount create/update/patch/delete on all resource types, since Helm runs as it. Under auth or cloud-mode Helm runs as the signed-in user, so the ServiceAccount gets no write grant; instead a split helm add-on ClusterRole is emitted — `radar-helm` (member-safe: CRDs, storage, namespaces) and `radar-helm-admin` (owner-only: RBAC, webhooks, ApiServices) |
-| RBAC view | `rbac.viewRBAC: true` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default — cache-served reads bypass per-user RBAC, so this exposes the cluster's authorization graph to every authenticated Radar user. Auto-enabled under auth or cloud mode (every read is re-checked per user there). |
+| Helm Write | `rbac.helm: true` | Install/upgrade/rollback/uninstall Helm releases. Installs with auth and Cloud off: grants Radar's ServiceAccount create/update/patch/delete on all resource types, since Helm runs as it. Under auth or cloud-mode Helm runs as the signed-in user, so the ServiceAccount gets no write grant; instead a split helm add-on ClusterRole is emitted — `radar-helm` (member-safe: CRDs, storage, namespaces) and `radar-helm-admin` (owner-only: RBAC, webhooks, ApiServices) |
+| RBAC view | `rbac.viewRBAC: true` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings and CertificateSigningRequests in the resource browser. Off by default — cache-served reads bypass per-user RBAC, so this exposes the cluster's authorization graph to every authenticated Radar user. Auto-enabled under auth or cloud mode (every read is re-checked per user there). |
 | Webhooks view | `rbac.viewWebhooks: true` | Show MutatingWebhookConfigurations and ValidatingWebhookConfigurations in the resource browser. Off by default — the configurations reveal which admission controls are enforced (Gatekeeper / Kyverno policies, image scanners, DLP) and where the gaps are, which is recon value for a low-trust viewer. Auto-enabled under auth or cloud mode. |
+| Admission policies view | `rbac.viewAdmissionPolicies: true` | Show native ValidatingAdmissionPolicies and ValidatingAdmissionPolicyBindings in the resource browser. Off by default for no-auth installs because the declarations expose admission-control coverage and gaps. Auto-enabled under auth or cloud mode, where reads are re-checked per user. |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Off by default because this exposes node-level runtime and configuration details to anyone who can reach a no-auth Radar install. Under auth, grant `get` on `nodes/proxy` to each Kubernetes identity that should inspect this evidence. |
+
+### MCP container commands
+
+`mcp.execTools` registers `exec_pod`, and `mcp.httpTools` independently registers
+`curl_service`; both default off. `rbac.podExec` grants Radar's ServiceAccount exec
+permission, but not the `get services/proxy` that Service GETs need on the target
+Service (as the signed-in caller, or as Radar's ServiceAccount without auth). The
+chart doesn't grant that by default; see
+[the scoped Service HTTP grant](#granting-service-http-access-without-authentication).
+The table below covers exec only:
+
+| `mcp.execTools` | `rbac.podExec` | Result |
+|---|---|---|
+| false | false | MCP exec unavailable; chart grants no SA exec access. |
+| false | true | MCP exec unavailable; SA exec grant supports the existing terminal. |
+| true | false | MCP exec registered; no SA exec grant from this option. It works only if the executing identity has permission from another grant. |
+| true | true | MCP exec registered; SA exec grant present except in user-token mode. |
+
+With auth off, execution uses the ServiceAccount, shared by every reachable
+client. With proxy/OIDC impersonation, it uses the caller's Kubernetes permissions;
+the SA grant does not grant the caller exec. In user-token mode, the chart emits
+no SA exec rule and execution uses the forwarded caller token. The chart's SA
+rule grants `create pods/exec` (SPDY); WebSocket also needs `get pods/exec`.
+`disableExec` (`--disable-exec`), read-only mode and disabled MCP suppress registration regardless
+of either value. See [the exec contract](../../../docs/mcp.md#exec_pod).
+
+### Granting Service HTTP access without authentication
+
+For a no-auth Radar listener, enable `mcp.httpTools` and explicitly grant Radar's
+ServiceAccount `get services/proxy` on the intended target. For example, this
+namespace Role permits only the Service named `app` in `team-a`. Replace the
+ServiceAccount name and namespace with those used by your Radar installation.
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: radar-service-http
+  namespace: team-a
+rules:
+  - apiGroups: [""]
+    resources: ["services/proxy"]
+    resourceNames: ["app"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: radar-service-http
+  namespace: team-a
+subjects:
+  - kind: ServiceAccount
+    name: radar
+    namespace: radar
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: radar-service-http
+```
+
+Radar checks the grant for the Service's name, so `resourceNames: ["app"]` covers
+every port of `app`; a name with a port, such as `app:8080`, isn't accepted.
+Every reachable unauthenticated MCP client shares this access; with
+authentication, each signed-in caller needs the grant instead. Prefer a namespace
+Role to `rbac.additionalRules`: those rules extend a ClusterRole, so a
+`resourceNames` restriction there matches that name in every namespace. The grant
+delegates Radar-to-Service network access; it doesn't control where a Service
+routes. On a shared cluster, constrain who can change EndpointSlices, directly or
+through GitOps controllers, and use network policy.
+
+### Turning exec off
+
+`disableExec: true` turns off pod exec through Radar for everyone on this cluster,
+Owners included. It passes `--disable-exec` and removes the `pods/exec` rule from
+Radar's ServiceAccount, even if `rbac.podExec` is `true`. With authentication off and
+Cloud off, `rbac.helm: true` separately gives the ServiceAccount write access to all
+resources, including exec. Setting `rbac.helm: false` removes that grant, but Radar can
+then no longer install, upgrade, roll back or uninstall Helm releases. Without
+`rbac.secrets: true` the Helm view also can't read Helm's own records, so it lists
+releases from the Helm labels and annotations on deployed objects, with no status or
+history. Set `disableExec` per
+cluster, for example in production values only. To keep exec for some people, leave it off and
+control exec with Kubernetes RBAC instead.
+
+With exec off:
+
+- The pod terminal, debug containers and node debug shells are unavailable.
+- Pod file browsing and transfers are unavailable.
+- The MCP `exec_pod` tool is not registered, even with `mcp.execTools: true`.
+- CloudNativePG loses live sessions, cancel and terminate, PgBouncer state,
+  per-instance parameters and the restored-database read.
+- For signed-in users, inspecting a private image needs `get` on its pull Secret,
+  and Radar's own registry credentials are no longer used. Without authentication,
+  image inspection doesn't change.
+
+Logs, port-forward, workload actions, Helm and alerts don't depend on exec. This
+setting only affects Radar: anyone Kubernetes RBAC allows can still use
+`kubectl exec`.
 
 ### In-app Agent Upgrades (opt-in, for Radar Cloud users)
 
@@ -569,7 +706,7 @@ It creates a namespace-scoped Role (not a ClusterRole) with `get` + `patch` on t
 
 ### CRD Access
 
-Radar discovers CRDs in your cluster. Common CRD groups are enabled by default. Granting RBAC for CRDs that don't exist has no effect.
+Radar discovers CRDs in your cluster. Common CRD groups are enabled by default; Flagger and system-upgrade-controller are explicitly opt-in. Granting RBAC for CRDs that don't exist has no effect.
 
 **Wildcard option:** Grant the collector service account read access to every API group and resource:
 ```bash
@@ -583,6 +720,8 @@ retain their finite grants.
 
 | Option | API Groups |
 |--------|------------|
+| `agentSandbox` | `agents.x-k8s.io`, `extensions.agents.x-k8s.io`. Sandboxes and SandboxTemplates carry Pod templates, whose environment values can be inline |
+| `agentSubstrate` | `ate.dev` |
 | `antrea` | `crd.antrea.io` (`networkpolicies`, `clusternetworkpolicies`) |
 | `apiRegistration` | `apiregistration.k8s.io` |
 | `argo` | `argoproj.io` |
@@ -599,18 +738,21 @@ retain their finite grants.
 | `envoyGateway` | `gateway.envoyproxy.io` |
 | `externalDns` | `externaldns.k8s.io` |
 | `externalSecrets` | `external-secrets.io` |
+| `flagger` | `flagger.app` (`canaries`, `metrictemplates` only); **off by default**. Enable `rbac.crdGroups.flagger=true` for native browsing and failed-rollout Issues. |
 | `flux` | `*.toolkit.fluxcd.io` |
+| `fluxOperator` | `fluxcd.controlplane.io` (FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider) |
 | `gatewayApi` | `gateway.networking.k8s.io` |
 | `gcpMonitoring` | `monitoring.googleapis.com` |
 | `grafana` | `monitoring.grafana.com`, `tempo.grafana.com`, `loki.grafana.com`, `grafana.integreatly.org` |
 | `istio` | `networking.istio.io`, `security.istio.io` |
 | `karpenter` | `karpenter.sh`, `karpenter.k8s.aws`, `karpenter.azure.com`, `karpenter.k8s.gcp`, `eks.amazonaws.com` |
 | `keda` | `keda.sh` |
-| `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `networking.internal.knative.dev` |
+| `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `networking.internal.knative.dev`, and `jobsinks` in `sinks.knative.dev` |
 | `kubeshark` | `kubeshark.io` |
 | `kured` | `kured.io` |
 | `kyverno` | `kyverno.io`, `policies.kyverno.io`, `wgpolicyk8s.io`, `reports.kyverno.io`, `openreports.io` |
 | `mariadb` | `mariadb.mmontes.io` |
+| `multus` | `k8s.cni.cncf.io` (`network-attachment-definitions`) |
 | `networkPolicyApi` | `policy.networking.k8s.io` |
 | `nginx` | `nginx.org` |
 | `openshift` | `observability.openshift.io` |
@@ -619,12 +761,15 @@ retain their finite grants.
 | `reflector` | `reflector.v1.k8s.emberstack.com` |
 | `reloader` | `reloader.stakater.com` |
 | `sealedSecrets` | `bitnami.com` |
-| `strimzi` | `strimzi.io`, `kafka.strimzi.io` |
+| `secretsStoreCsi` | `secrets-store.csi.x-k8s.io` (`secretproviderclasses`, `secretproviderclasspodstatuses` only) |
+| `strimzi` | `strimzi.io`, `kafka.strimzi.io`, `core.strimzi.io` (`strimzipodsets` only) |
+| `systemUpgrade` | `upgrade.cattle.io` (`plans` only); **off by default**, because Plan env can carry values. Enable `rbac.crdGroups.systemUpgrade=true` on Rancher/k3s/RKE2 for the Plan drawer and per-node upgrade progress. |
 | `tekton` | `tekton.dev` |
 | `traefik` | `traefik.io`, `traefik.containo.us` |
 | `trivy` | `aquasecurity.github.io` |
 | `velero` | `velero.io` |
 | `verticalPodAutoscaler` | `autoscaling.k8s.io` |
+| `volumeSnapshots` | `snapshot.storage.k8s.io` (`volumesnapshots`, `volumesnapshotcontents`, `volumesnapshotclasses` only) |
 
 **VictoriaMetrics collection:** the chart grants Radar cluster-wide `get/list/watch`
 on VMAgent, VMCluster and VMSingle (`vmagents`, `vmclusters`, `vmsingles` in

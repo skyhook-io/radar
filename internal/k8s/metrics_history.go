@@ -36,6 +36,7 @@ func InitMetricsHistory() {
 	defer metricsHistoryMu.Unlock()
 	metricsHistoryOnce.Do(func() {
 		metricsHistoryStore = k8score.NewMetricsHistoryStoreWithResolver(GetDynamicClient(), ResolveMetricsGVR)
+		metricsHistoryStore.Namespaces = RBACNamespaces
 		metricsHistoryStore.OnError = func(subsystem, level, format string, args ...any) {
 			errorlog.Record(subsystem, level, format, args...)
 		}

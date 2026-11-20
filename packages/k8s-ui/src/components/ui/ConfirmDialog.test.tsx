@@ -34,4 +34,11 @@ describe('ConfirmDialog warning disclosure', () => {
     expect(renderToStaticMarkup(<ConfirmDialog {...props} />))
       .toContain('This action cannot be undone.')
   })
+
+  it('shows an ordinary action without a warning', () => {
+    const html = renderToStaticMarkup(<ConfirmDialog {...props} variant="default" />)
+    expect(html).toContain('btn-brand')
+    expect(html).not.toContain('bg-amber-600')
+    expect(html).not.toContain('lucide-triangle-alert')
+  })
 })

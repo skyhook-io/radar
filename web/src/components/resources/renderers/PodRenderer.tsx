@@ -1,12 +1,19 @@
 import { PodRenderer as BasePodRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/PodRenderer'
 import type { CopyHandler } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
+import { getPodNetworks, uniqueNetworkAttachmentRefs } from '@skyhook-io/k8s-ui/utils/multus'
 import type { PodEnvironmentRevealResponse, ResolvedEnvFrom } from '@skyhook-io/k8s-ui'
+import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useOpenTerminal, useOpenLogs } from '../../dock'
 import { useCapabilitiesContext, useNamespacedCapabilities, useIsLocalDeployment } from '../../../contexts/CapabilitiesContext'
-import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, usePodEnvironment, usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus, useRevealPodEnvironment } from '../../../api/client'
+import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, usePodEnvironment, usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus, useResourceEvents, useResources, useRevealPodEnvironment } from '../../../api/client'
+import { toSecretsStoreRead } from '../../../api/secretsStore'
+import {
+  SECRETS_STORE_GROUP, SECRET_PROVIDER_CLASSES, SECRET_PROVIDER_CLASS_POD_STATUSES, getSecretsStoreVolumes,
+} from '@skyhook-io/k8s-ui/components/resources/resource-utils-secrets-store'
 import { useRBACSubject } from '../../../api/rbac'
 import { usePolicyResource } from '../../../api/policy'
+import { useNetworkAttachmentLookups } from '../../../api/networkAttachments'
 import { podLimitRangeNames, useNamespaceLimitRanges } from '../../../api/quotas'
 import { podAwaitsScheduling } from '../../capacity/podDemandGate'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
@@ -83,6 +90,16 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
 
   const { data: limitRanges, isSuccess: limitRangesReady } = useNamespaceLimitRanges(namespace ?? '', !!namespace)
 
+  const networkAttachmentRefs = useMemo(() => uniqueNetworkAttachmentRefs(getPodNetworks(data).rows), [data])
+  const networkAttachmentLookups = useNetworkAttachmentLookups(networkAttachmentRefs)
+
+  // Secrets Store CSI: read only for a Pod that mounts such a volume.
+  const usesSecretsStore = !!namespace && getSecretsStoreVolumes(data).length > 0
+  const providerClasses = useResources<any>(SECRET_PROVIDER_CLASSES, namespace, SECRETS_STORE_GROUP, { enabled: usesSecretsStore })
+  const providerStatuses = useResources<any>(SECRET_PROVIDER_CLASS_POD_STATUSES, namespace, SECRETS_STORE_GROUP, { enabled: usesSecretsStore })
+  // The query the detail view's Events section already runs, so it shares that cache.
+  const podEvents = useResourceEvents(usesSecretsStore ? 'pods' : '', namespace ?? '', podName ?? '', '')
+
   return (
     <BasePodRenderer
       data={data}
@@ -115,6 +132,13 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
       policyLoading={policyLoading}
       policyError={policyError as Error | null}
       namespaceLimitRangeNames={limitRangesReady ? podLimitRangeNames(limitRanges) : undefined}
+      networkAttachmentLookups={networkAttachmentLookups}
+
+      secretsStore={usesSecretsStore ? {
+        classes: toSecretsStoreRead({ data: providerClasses.data, coverage: providerClasses.coverage, error: providerClasses.error, isLoading: providerClasses.isLoading }),
+        statuses: toSecretsStoreRead({ data: providerStatuses.data, coverage: providerStatuses.coverage, error: providerStatuses.error, isLoading: providerStatuses.isLoading }),
+        events: podEvents.k8sError ? undefined : podEvents.k8sEvents,
+      } : undefined}
       canExec={canExec}
       canViewLogs={canViewLogs}
       canPortForward={showPortForward}
@@ -155,6 +179,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
           containers={containers}
           initialContainer={initialContainer}
           onSwitchToImageFiles={onSwitchToImageFiles}
+          pod={data}
         />
       )}
     />

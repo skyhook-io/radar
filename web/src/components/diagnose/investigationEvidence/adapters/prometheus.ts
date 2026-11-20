@@ -338,8 +338,10 @@ export function adaptPrometheusRules(
   // every alerting rule (a name or group filter never looked at the rest), a
   // complete list, every rule evaluated, and every returned instance placed
   // in another namespace outright. An instance this projection merely fails
-  // to recognize is not evidence of absence.
+  // to recognize is not evidence of absence. A run with no resource has
+  // nothing for an alert to miss.
   if (
+    builder.target.name &&
     source.confirmedSuccess &&
     !truncated &&
     !namesTarget &&
@@ -439,6 +441,30 @@ function exactPodSet(value: string): string[] | undefined {
   return names.every((name) => /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(name))
     ? names
     : undefined;
+}
+/**
+ * The one Pod a query is about, when every selector names exactly that Pod
+ * and nothing else. A query over two Pods is about neither alone, and a
+ * selector without a pod matcher is about whatever else it selects.
+ */
+export function metricsSelectedPod(
+  selectors: readonly InvestigationMetricsSelector[],
+): string | undefined {
+  let pod: string | undefined;
+  for (const selector of selectors) {
+    const named = selector.matchers.filter(
+      (matcher) => matcher.label === "pod",
+    );
+    if (named.length === 0) return undefined;
+    for (const { op, value } of named) {
+      const names =
+        op === "=" ? [value] : op === "=~" ? exactPodSet(value) : undefined;
+      if (names?.length !== 1 || (pod !== undefined && names[0] !== pod))
+        return undefined;
+      pod = names[0];
+    }
+  }
+  return pod;
 }
 /**
  * Whether a workload identity label names the target: the label
@@ -747,7 +773,8 @@ export function adaptQueryPrometheus(
       source,
       "Prometheus query",
       `The result of \`${value.query}\` was too large to keep${parts.length ? ` (${parts.join(", ")})` : ""}, so Radar cannot chart it.${note ? ` ${note}` : ""}`,
-      "truncated",
+      // No series is kept, so this is an unknown, not a sample of the answer.
+      "unknown",
     );
     return;
   }

@@ -1,0 +1,175 @@
+import type { WorkloadPodInfo, WorkloadPodContainerInfo } from '../types/core'
+
+/** Identity of one container in one Pod; names can mean different things in different Pods. */
+export function podContainerKey(pod: string, container: string): string {
+  return `${pod}/${container}`
+}
+
+/** Whether a container of the named Pod is a regular init container or a native sidecar. */
+export function containerRole(pods: WorkloadPodInfo[], pod: string, container: string): 'init' | 'sidecar' | undefined {
+  const status = pods.find(p => p.name === pod)?.containerStatuses?.find(c => c.name === container)
+  if (status?.sidecar) return 'sidecar'
+  return status?.init ? 'init' : undefined
+}
+
+/** Container names that are a regular init container in every Pod that reports them. */
+export function initContainerNames(pods: WorkloadPodInfo[]): Set<string> {
+  const init = new Set<string>()
+  const other = new Set<string>()
+  for (const pod of pods) {
+    for (const status of pod.containerStatuses ?? []) {
+      if (status.init && !status.sidecar) init.add(status.name)
+      else other.add(status.name)
+    }
+  }
+  for (const name of other) init.delete(name)
+  return init
+}
+
+/**
+ * Characters the container column needs (the INIT marker takes five more). It
+ * comes from the shown Pods' app containers and sidecars, plus init containers
+ * only once they have lines, so a finished init container doesn't widen it.
+ * It never depends on which lines are scrolled into view.
+ */
+export function containerColumnWidth(pods: WorkloadPodInfo[], entries: Iterable<{ container: string; containerRole?: 'init' | 'sidecar' }>, max = 24): number {
+  let width = 0
+  for (const pod of pods) {
+    const init = new Set((pod.containerStatuses ?? []).filter(status => status.init && !status.sidecar).map(status => status.name))
+    for (const name of pod.containers) if (!init.has(name)) width = Math.max(width, name.length)
+  }
+  for (const entry of entries) {
+    if (width >= max) break
+    if (entry.containerRole === 'init') width = Math.max(width, entry.container.length + 5)
+  }
+  return Math.min(width, max)
+}
+
+/**
+ * Whether each line should name its source: more than one Pod shown, retained
+ * lines from another Pod, or lines with a source label (such as a database
+ * instance's role or "previous run"), which says more than the Pod name.
+ */
+export function viewMixesPods(pods: { name: string }[], entries: Iterable<{ pod?: string; sourceLabel?: string }>): boolean {
+  if (pods.length > 1) return true
+  let only = pods[0]?.name
+  for (const entry of entries) {
+    if (entry.sourceLabel) return true
+    if (!entry.pod) continue
+    if (only === undefined) only = entry.pod
+    else if (entry.pod !== only) return true
+  }
+  return false
+}
+
+/**
+ * Whether "All containers" mixes output from several containers, so each line
+ * should name its container: more than one app container, or lines from more
+ * than one container, or from an init container or sidecar, on screen. A Pod
+ * that is merely initializing doesn't count, so routine startup during a
+ * rollout doesn't toggle the column. One app container beside a finished init
+ * container reads as a single source.
+ */
+export function viewMixesContainers(pods: WorkloadPodInfo[], entries: Iterable<{ pod?: string; container: string; containerRole?: 'init' | 'sidecar' }>): boolean {
+  const apps = new Set<string>()
+  const supporting = new Set<string>()
+  for (const pod of pods) {
+    const statuses = pod.containerStatuses ?? []
+    // A Pod that hasn't reported container statuses (not yet scheduled) can't
+    // tell init containers from app containers, so it doesn't count either way.
+    if (statuses.length === 0) continue
+    const roles = new Map(statuses.map(status => [status.name, status]))
+    for (const name of pod.containers) {
+      const status = roles.get(name)
+      if (status?.init || status?.sidecar) supporting.add(podContainerKey(pod.name, name))
+      else apps.add(name)
+    }
+  }
+  if (apps.size > 1) return true
+  let first: string | undefined
+  for (const entry of entries) {
+    if (entry.containerRole || (entry.pod && supporting.has(podContainerKey(entry.pod, entry.container)))) return true
+    if (first === undefined) first = entry.container
+    else if (entry.container !== first) return true
+  }
+  return false
+}
+
+// The init container a Pod is waiting on: the first regular one that hasn't
+// completed, once it has run. Before it runs, a native sidecar ahead of it that
+// hasn't started is what holds it back; after it runs, the kubelet restarts
+// earlier sidecars on their own, so a restarting one isn't the blocker.
+function blockingInitContainer(statuses: WorkloadPodContainerInfo[]): WorkloadPodContainerInfo | undefined {
+  const inits = statuses.filter(status => status.init)
+  const index = inits.findIndex(status => !status.sidecar && !(status.state === 'terminated' && status.reason === 'Completed'))
+  const step = index >= 0 ? inits[index] : undefined
+  if (step && (step.state !== 'waiting' || (step.reason && step.reason !== 'PodInitializing'))) return step
+  return (index >= 0 ? inits.slice(0, index) : inits).find(status => status.sidecar && !status.started) ?? step
+}
+
+function blockerText(status: WorkloadPodContainerInfo): string {
+  if (status.sidecar) return `sidecar ${status.name} hasn't finished starting`
+  const state = status.state === 'running' ? 'is still running'
+    : status.state === 'terminated' ? (status.reason ? `exited (${status.reason})` : 'exited')
+      : status.reason && status.reason !== 'PodInitializing' ? `is in ${status.reason}`
+        : "hasn't finished"
+  return `init container ${status.name} ${state}`
+}
+
+interface InitializingNoticeOptions {
+  /** The container the viewer is filtered to; empty for all containers. */
+  selectedContainer?: string
+  /** Pod/container keys that already produced lines, so they have started. */
+  containersWithOutput?: ReadonlySet<string>
+  /** Short name for a Pod in the notice, matching the line prefix. */
+  podLabel?: (pod: WorkloadPodInfo) => string
+}
+
+function stuckPods(pods: WorkloadPodInfo[], options: InitializingNoticeOptions) {
+  const { selectedContainer = '', containersWithOutput } = options
+  const stuck: { pod: WorkloadPodInfo; message: string; blocker: string }[] = []
+  for (const pod of pods) {
+    const statuses = pod.containerStatuses ?? []
+    const waiting = statuses.filter(status => !status.init && status.state === 'waiting' && status.reason === 'PodInitializing'
+      && (selectedContainer === '' || status.name === selectedContainer)
+      && !containersWithOutput?.has(podContainerKey(pod.name, status.name)))
+    const blocker = blockingInitContainer(statuses)
+    if (waiting.length === 0 || !blocker) continue
+    const subject = waiting.length === 1 ? `${waiting[0].name} hasn't started` : `${waiting.map(status => status.name).join(', ')} haven't started`
+    stuck.push({ pod, message: `${subject}: ${blockerText(blocker)}.`, blocker: blocker.name })
+  }
+  return stuck
+}
+
+/**
+ * Explains why app containers in the shown Pods have no output: they are
+ * waiting for an init container. Empty when no shown Pod is initializing, or
+ * when the Radar serving the logs doesn't report container states. Pod status
+ * arrives when a Pod is first seen, so a container that has since produced
+ * lines is no longer reported as waiting.
+ */
+export function initializingPodsNotice(pods: WorkloadPodInfo[], options: InitializingNoticeOptions = {}): string {
+  const { podLabel = pod => pod.name } = options
+  const stuck = stuckPods(pods, options)
+  if (stuck.length === 0) return ''
+  const distinct = new Set(stuck.map(item => item.message))
+  if (pods.length === 1) return stuck[0].message
+  if (stuck.length === 1) return `Pod ${podLabel(stuck[0].pod)}: ${stuck[0].message}`
+  if (distinct.size === 1) return `${stuck.length} of ${pods.length} Pods: ${stuck[0].message}`
+  return `${stuck.length} of ${pods.length} Pods have app containers waiting on init containers.`
+}
+
+/**
+ * The init container the notice names, when every stuck Pod waits on the same
+ * one and none of them has shown its lines. "All containers" reads an init
+ * container only while it is failing, so this is how to reach the output of
+ * one that is slow but still making progress.
+ */
+export function unshownBlockingInitContainer(pods: WorkloadPodInfo[], options: InitializingNoticeOptions = {}): string | undefined {
+  if (options.selectedContainer) return undefined
+  const stuck = stuckPods(pods, options)
+  const names = new Set(stuck.map(item => item.blocker))
+  if (names.size !== 1) return undefined
+  const [name] = names
+  return stuck.some(item => options.containersWithOutput?.has(podContainerKey(item.pod.name, name))) ? undefined : name
+}

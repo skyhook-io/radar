@@ -30,7 +30,8 @@ export function ScreenEmptyState({
 }) {
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center bg-theme-base p-6">
-      <div className="max-w-md text-center">
+      {/* Phones: shrink to the screen so wide content (YAML) scrolls inside itself. */}
+      <div className="max-w-md text-center phone:w-full phone:min-w-0">
         <Icon className="mx-auto h-9 w-9 text-theme-text-tertiary/50" />
         <h2 className="mt-3 text-lg font-medium text-theme-text-primary">
           {title}
@@ -77,7 +78,7 @@ export function Segments<T extends string>({
   label,
 }: {
   value: T
-  options: { id: T; label: string; count?: number | string }[]
+  options: { id: T; label: string; count?: ReactNode }[]
   onChange: (id: T) => void
   label: string
 }) {
@@ -127,7 +128,8 @@ export function SectionTable<T>({
   minWidth = 760,
   footer,
 }: {
-  title: ReactNode
+  /** Left out where the page heading already names the table. */
+  title?: ReactNode
   subtitle?: ReactNode
   columns: TableColumn<T>[]
   rows: T[]
@@ -142,7 +144,7 @@ export function SectionTable<T>({
   return (
     <section>
       <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-        <h2 className="text-sm font-semibold text-theme-text-primary">{title}</h2>
+        {title && <h2 className="text-sm font-semibold text-theme-text-primary">{title}</h2>}
         {subtitle && <span className="text-xs text-theme-text-tertiary">{subtitle}</span>}
       </div>
       <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
@@ -167,11 +169,20 @@ export function SectionTable<T>({
                 {rows.map((row) => {
                   const res = rowResource?.(row) ?? null
                   const active = !!res && sameSelectedResource(inspected, res)
+                  const open = res && onInspect ? () => onInspect(res) : undefined
                   return (
                     <tr
                       key={rowKey(row)}
-                      onClick={res && onInspect ? () => onInspect(res) : undefined}
-                      className={clsx(res && onInspect && 'cursor-pointer', ROW_HOVER, active && 'selection')}
+                      onClick={open}
+                      // Keyboard users open a row the way a click does; keys on a
+                      // control inside the row stay that control's.
+                      tabIndex={open ? 0 : undefined}
+                      onKeyDown={open ? (e) => {
+                        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+                        e.preventDefault()
+                        open()
+                      } : undefined}
+                      className={clsx(open && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent', ROW_HOVER, active && 'selection')}
                       aria-selected={res ? active : undefined}
                     >
                       {columns.map((c, i) => (

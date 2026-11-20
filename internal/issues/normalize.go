@@ -138,6 +138,8 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 	}
 	reason := p.Reason
 	cause, action, cleanup := p.Cause, p.Action, p.ConditionalCleanup
+	hazard := p.Hazard
+	actionPrimary, actionSecondaryTitle, actionSecondary := p.ActionPrimary, p.ActionSecondaryTitle, p.ActionSecondary
 	issueTiming, issueTimingBasis := p.IssueTiming, p.IssueTimingBasis
 	if since.IsZero() && !issueTimingIndependentOfOnset(issueTimingBasis) {
 		issueTiming = ""
@@ -152,6 +154,8 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 			// Detector diagnoses describe the original reason and would mislead
 			// after the message promotes the issue to an RBAC failure.
 			cause, action, cleanup = "", "", nil
+			hazard = ""
+			actionPrimary, actionSecondaryTitle, actionSecondary = "", "", nil
 		}
 		reason = "RBACForbidden"
 	}
@@ -170,7 +174,11 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		MessageSource:        p.MessageSource,
 		Cause:                cause,
 		Action:               action,
+		Hazard:               hazard,
 		ConditionalCleanup:   cleanup,
+		ActionPrimary:        actionPrimary,
+		ActionSecondaryTitle: actionSecondaryTitle,
+		ActionSecondary:      actionSecondary,
 		RemediationKind:      p.RemediationKind,
 		RemediationTarget:    p.RemediationTarget,
 		OperationRetryCount:  p.OperationRetryCount,
@@ -200,8 +208,15 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		}
 		iss.DiagnosticContext = &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleContext, Facts: []issuesapi.DiagnosticFact{{Type: factNodeStartupCorroboration, Message: message, Refs: refs}}}
 	}
+	if p.EvictedFromNode != "" && reason == p.Reason {
+		iss.DiagnosticContext = &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleContext, Facts: []issuesapi.DiagnosticFact{evictedFromNodeFact([]string{p.EvictedFromNode}, false)}}
+	}
 	if reason == p.Reason {
 		if ctx := networkPolicyIsolationContext(p); ctx != nil {
+			iss.DiagnosticContext = ctx
+			iss.AffectedRefs = p.AffectedRefs
+		}
+		if ctx := tlsCertificateConsumersContext(p); ctx != nil {
 			iss.DiagnosticContext = ctx
 			iss.AffectedRefs = p.AffectedRefs
 		}

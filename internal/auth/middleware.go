@@ -2,6 +2,7 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -115,7 +116,9 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 				username := r.Header.Get(cfg.UserHeader)
 				if username != "" {
 					var groups []string
-					if g := r.Header.Get(cfg.GroupsHeader); g != "" {
+					// Proxies send groups as one comma-separated header or as
+					// one header per group; accept both.
+					for _, g := range r.Header.Values(cfg.GroupsHeader) {
 						for _, part := range strings.Split(g, ",") {
 							if trimmed := strings.TrimSpace(part); trimmed != "" {
 								groups = append(groups, trimmed)
@@ -237,13 +240,30 @@ func AuditLog(r *http.Request, namespace, name string) {
 }
 
 type AuditActionDetails struct {
-	Action    string
-	Namespace string
-	Name      string
-	Container string
-	Variable  string
-	Source    string
-	Outcome   string
+	InvocationID  string
+	Kind          string
+	Group         string
+	Action        string
+	Namespace     string
+	Name          string
+	Container     string
+	Variable      string
+	Source        string
+	Outcome       string
+	Executable    string
+	ArgumentCount int
+	CommandHash   string
+	RequestedKind string
+	RequestedName string
+	SelectedUID   string
+	Node          string
+	// File is a file a write targets; Directory and Bytes describe it.
+	// Never the file's contents.
+	Directory string
+	File      string
+	Bytes     int64
+	ExitCode  *int
+	Duration  time.Duration
 }
 
 func AuditLogAction(r *http.Request, details AuditActionDetails) {
@@ -253,7 +273,32 @@ func AuditLogAction(r *http.Request, details AuditActionDetails) {
 		username = user.Username
 		groups = user.Groups
 	}
-	log.Printf("[audit] user=%q groups=%q action=%q path=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
-		username, groups, details.Action, r.URL.Path, details.Namespace, details.Name,
+	line := fmt.Sprintf("[audit] user=%q groups=%q action=%q path=%q kind=%q api_group=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
+		username, groups, details.Action, r.URL.Path, details.Kind, details.Group, details.Namespace, details.Name,
 		details.Container, details.Variable, details.Source, details.Outcome)
+	if details.InvocationID != "" {
+		line += fmt.Sprintf(" invocationID=%q", details.InvocationID)
+	}
+	if details.CommandHash != "" {
+		line += fmt.Sprintf(" executable=%q argumentCount=%d commandHash=%q", details.Executable, details.ArgumentCount, details.CommandHash)
+	}
+	if details.RequestedName != "" {
+		line += fmt.Sprintf(" requestedKind=%q requestedName=%q", details.RequestedKind, details.RequestedName)
+	}
+	if details.SelectedUID != "" {
+		line += fmt.Sprintf(" selectedUID=%q", details.SelectedUID)
+	}
+	if details.Node != "" {
+		line += fmt.Sprintf(" node=%q", details.Node)
+	}
+	if details.File != "" {
+		line += fmt.Sprintf(" dir=%q file=%q bytes=%d", details.Directory, details.File, details.Bytes)
+	}
+	if details.ExitCode != nil {
+		line += fmt.Sprintf(" exitCode=%d", *details.ExitCode)
+	}
+	if details.Duration != 0 {
+		line += fmt.Sprintf(" duration=%s", details.Duration)
+	}
+	log.Print(line)
 }

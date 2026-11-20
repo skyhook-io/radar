@@ -32,7 +32,7 @@ type fallbackFixture struct {
 	forbid, fail, slow func(ns string) bool
 }
 
-const slowList = 2 * time.Second
+var slowList = 2 * time.Second
 
 func inNamespaces(names ...string) func(string) bool {
 	return func(ns string) bool { return slices.Contains(names, ns) }
@@ -226,11 +226,15 @@ func readCNPGClusters(namespaces []string) (integration.KindCoverage, []*unstruc
 // as slow syncs. Watches the budget cut short carry on, and a later read finds
 // them.
 func TestCNPGWorkspace_FallbackCacheSlowWatchStartsWithinOneBudget(t *testing.T) {
+	previousWait, previousSlowList := dynamicSyncWait, slowList
+	dynamicSyncWait, slowList = 500*time.Millisecond, 500*time.Millisecond
+	t.Cleanup(func() { dynamicSyncWait, slowList = previousWait, previousSlowList })
+
 	seedCNPGFallbackCache(t, fallbackFixture{fallbacks: []string{"a"}, slow: inNamespaces("x", "y", "z")}, "a", "pg-a", "x", "pg-x", "y", "pg-y", "z", "pg-z")
 	namespaces := []string{"a", "x", "y", "z"}
 
 	cov, clusters, elapsed := readCNPGClusters(namespaces)
-	if elapsed > dynamicSyncWait+time.Second {
+	if elapsed > dynamicSyncWait+dynamicSyncWait/3 {
 		t.Errorf("kind reads took %v; starting three slow watches must share one %v budget", elapsed, dynamicSyncWait)
 	}
 	if cov.State != integration.KindCoveragePartial || len(cov.UncachedNamespaces) != 3 {
@@ -252,7 +256,7 @@ func TestCNPGWorkspace_FallbackCacheSlowWatchStartsWithinOneBudget(t *testing.T)
 		if time.Now().After(deadline) {
 			t.Fatalf("the watches never finished starting: %+v", cov)
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -293,5 +297,28 @@ func TestSyncBudget_StopsWhenRequestEnds(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("listBlocking took %v after its request was cancelled at 200ms", elapsed)
+	}
+}
+
+// A read-only budget hands back the cached objects; the default copies them.
+func TestSyncBudget_ReadOnlySkipsTheCopy(t *testing.T) {
+	seedCNPGFallbackCache(t, fallbackFixture{fallbacks: []string{"a"}}, "a", "pg-a")
+	gvr, ok := k8s.GetResourceDiscovery().GetGVRWithGroup("Cluster", "postgresql.cnpg.io")
+	if !ok {
+		t.Fatal("Cluster not discovered")
+	}
+	dc := k8s.GetDynamicResourceCache()
+	shared := &syncBudget{ctx: context.Background(), deadline: time.Now().Add(time.Minute), readOnly: true}
+	first, err := shared.listBlocking(dc, gvr, "a")
+	if err != nil || len(first) != 1 {
+		t.Fatalf("read-only list = %v, %v", first, err)
+	}
+	again, _ := shared.listBlocking(dc, gvr, "a")
+	if first[0] != again[0] {
+		t.Error("read-only budget copied the cached object")
+	}
+	copied, _ := newSyncBudget(context.Background()).listBlocking(dc, gvr, "a")
+	if len(copied) != 1 || copied[0] == first[0] {
+		t.Error("default budget stopped copying")
 	}
 }

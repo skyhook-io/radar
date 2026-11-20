@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -22,9 +23,11 @@ type candidate struct {
 	obj apiruntime.Object
 }
 
-// search collects one DependentCandidates call's candidates and gaps.
+// search collects one index search's candidates and gaps: the objects index
+// files under any of keys.
 type search struct {
-	uid        string
+	index      string
+	keys       []string
 	scope      ownership.SearchScope
 	namespaces []string
 	found      []candidate
@@ -32,22 +35,29 @@ type search struct {
 }
 
 func (s *session) DependentCandidates(uid types.UID, scope ownership.SearchScope) ownership.DependentCandidatesRead {
-	q := &search{uid: string(uid), scope: scope}
-	if !scope.AllNamespaces {
-		for _, ns := range slices.Compact(slices.Sorted(slices.Values(scope.Namespaces))) {
-			if ns == "" {
-				// A store read for "" would answer for every namespace.
-				q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.NamespaceRequired})
-				continue
-			}
-			q.namespaces = append(q.namespaces, ns)
-		}
-	}
+	q := newSearch(k8score.OwnerUIDIndex, []string{string(uid)}, scope)
 	searches := scope.Searches(true) || scope.Searches(false)
+	if searches {
+		s.prepareDependentKinds(scope)
+	}
 	if !s.catalog.Complete() && searches {
 		q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.ReadError})
 	}
-	for _, kind := range s.catalog.DependentKinds() {
+	var stable []ownership.Gap
+	var gapMode uint8
+	namespaced := scope.AllNamespaces || len(q.namespaces) > 0
+	switch {
+	case namespaced && scope.IncludeClusterScoped:
+		stable = s.unwatchedAll
+		gapMode = 3
+	case namespaced:
+		stable = s.unwatchedNamespaced
+		gapMode = 1
+	case scope.IncludeClusterScoped:
+		stable = s.unwatchedCluster
+		gapMode = 2
+	}
+	for _, kind := range s.dependentKinds {
 		if !scope.Searches(kind.Namespaced) {
 			continue
 		}
@@ -71,9 +81,68 @@ func (s *session) DependentCandidates(uid types.UID, scope ownership.SearchScope
 			r.Gaps = append(r.Gaps, read.Gap)
 		}
 	}
-	slices.SortFunc(r.Gaps, compareGaps)
-	r.Gaps = slices.Compact(r.Gaps)
+	// Reuse representation only after live gaps were read and compared; never
+	// let later searches change a gap slice an earlier answer retained.
+	if len(r.Gaps) == 0 {
+		r.Gaps = stable[:len(stable):len(stable)]
+	} else {
+		slices.SortFunc(r.Gaps, compareGaps)
+		r.Gaps = slices.Compact(r.Gaps)
+		if s.lastGapMode != gapMode || !slices.Equal(s.lastExtraGaps, r.Gaps) {
+			s.lastGapMode = gapMode
+			s.lastExtraGaps = r.Gaps
+			s.lastCombinedGaps = append(slices.Clone(stable), r.Gaps...)
+			slices.SortFunc(s.lastCombinedGaps, compareGaps)
+			s.lastCombinedGaps = slices.Compact(s.lastCombinedGaps)
+		}
+		r.Gaps = s.lastCombinedGaps[:len(s.lastCombinedGaps):len(s.lastCombinedGaps)]
+	}
 	return r
+}
+
+// Unwatched kinds have no UID-specific work. Prepare only searched scopes so
+// a typed-only search does not prematurely capture dynamic watches.
+func (s *session) prepareDependentKinds(scope ownership.SearchScope) {
+	namespaced := scope.Searches(true) && !s.preparedNamespaced
+	cluster := scope.Searches(false) && !s.preparedCluster
+	if !namespaced && !cluster {
+		return
+	}
+	s.preparedNamespaced = s.preparedNamespaced || namespaced
+	s.preparedCluster = s.preparedCluster || cluster
+	for _, kind := range s.catalog.DependentKinds() {
+		if kind.Namespaced && !namespaced || !kind.Namespaced && !cluster {
+			continue
+		}
+		var reason readreason.Code
+		if _, typed := typedKinds[kind.GroupKind]; !typed {
+			if s.caches.Dynamic == nil {
+				reason = readreason.RadarKindNotCollected
+			} else {
+				reason, _ = s.unwatchedReason(kind, s.servingVersions(kind))
+			}
+		}
+		if reason == "" {
+			s.dependentKinds = append(s.dependentKinds, kind)
+			continue
+		}
+		gap := ownership.Gap{Kind: kind.GroupKind, Reason: reason}
+		if kind.Namespaced {
+			s.unwatchedNamespaced = append(s.unwatchedNamespaced, gap)
+		} else {
+			s.unwatchedCluster = append(s.unwatchedCluster, gap)
+		}
+	}
+	if namespaced {
+		slices.SortFunc(s.unwatchedNamespaced, compareGaps)
+	}
+	if cluster {
+		slices.SortFunc(s.unwatchedCluster, compareGaps)
+	}
+	s.unwatchedAll = append(slices.Clone(s.unwatchedNamespaced), s.unwatchedCluster...)
+	slices.SortFunc(s.unwatchedAll, compareGaps)
+	s.lastExtraGaps = nil
+	s.lastCombinedGaps = nil
 }
 
 // gap records that kind in namespace went unread; "" stands for the kind
@@ -91,6 +160,21 @@ func (q *search) gapEverywhere(gk resourceid.GroupKind, namespaced bool, reason 
 		return
 	}
 	q.gap(gk, "", reason)
+}
+
+func newSearch(index string, keys []string, scope ownership.SearchScope) *search {
+	q := &search{index: index, keys: keys, scope: scope}
+	if !scope.AllNamespaces {
+		for _, ns := range slices.Compact(slices.Sorted(slices.Values(scope.Namespaces))) {
+			if ns == "" {
+				// A store read for "" would answer for every namespace.
+				q.gaps = append(q.gaps, ownership.Gap{Reason: readreason.NamespaceRequired})
+				continue
+			}
+			q.namespaces = append(q.namespaces, ns)
+		}
+	}
+	return q
 }
 
 func (q *search) add(gk resourceid.GroupKind, obj apiruntime.Object, namespace, name string) {
@@ -142,7 +226,7 @@ func (s *session) typedCandidates(q *search, b resourceid.Builtin) {
 			return
 		}
 	}
-	objs, ok := s.caches.Typed.ReadableDependents(b.Resource, read, q.uid)
+	objs, ok := s.caches.Typed.ReadableIndexedObjects(b.Resource, read, q.index, q.keys...)
 	if !ok {
 		q.gapEverywhere(gk, b.Namespaced, readreason.ReadError)
 		return
@@ -155,7 +239,7 @@ func (s *session) typedCandidates(q *search, b resourceid.Builtin) {
 }
 
 func (s *session) dynamicCandidates(q *search, kind ownership.CatalogKind) {
-	s.dynamicIndexed(q, kind, k8score.OwnerUIDIndex, []string{q.uid}, func(u *unstructured.Unstructured) {
+	s.dynamicIndexed(q, kind, q.index, q.keys, func(u *unstructured.Unstructured) {
 		q.add(kind.GroupKind, u, u.GetNamespace(), u.GetName())
 	})
 }
@@ -202,7 +286,7 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 		return
 	}
 	if !kind.Namespaced {
-		q.gap(gk, "", unansweredReason(s.caches.Dynamic, versions, ""))
+		q.gap(gk, "", s.indexedReason(s.caches.Dynamic, versions, "", index))
 		return
 	}
 	var watchedByNamespace []string
@@ -214,7 +298,7 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 	if len(watchedByNamespace) == 0 {
 		// Each version's one informer serves every namespace and none can
 		// answer, so the kind's state is the same in each: one gap.
-		q.gapEverywhere(gk, true, unansweredReason(s.caches.Dynamic, versions, ""))
+		q.gapEverywhere(gk, true, s.indexedReason(s.caches.Dynamic, versions, "", index))
 		return
 	}
 	namespaces := q.namespaces
@@ -222,10 +306,16 @@ func (s *session) dynamicIndexed(q *search, kind ownership.CatalogKind, index st
 		slices.Sort(watchedByNamespace)
 		namespaces = slices.Compact(watchedByNamespace)
 	}
-	// Explaining an unread namespace needs the version's collection scope,
-	// which the cache would otherwise rebuild from every informer for each
-	// namespace.
-	obs := s.caches.Dynamic.NewObservationView(versions)
+	// Reuse scope bookkeeping across searches. The view refreshes when
+	// informers change and still reads readiness live.
+	obs := s.observationViews[gk]
+	if obs == nil {
+		obs = s.caches.Dynamic.NewObservationView(versions)
+		if s.observationViews == nil {
+			s.observationViews = map[resourceid.GroupKind]*k8score.DynamicObservationView{}
+		}
+		s.observationViews[gk] = obs
+	}
 	for _, ns := range namespaces {
 		s.readNamespace(q, gk, versions, ns, index, keys, obs, found)
 	}
@@ -253,7 +343,19 @@ func (s *session) readNamespace(q *search, gk resourceid.GroupKind, versions []s
 			return
 		}
 	}
-	q.gap(gk, namespace, unansweredReason(obs, versions, namespace))
+	q.gap(gk, namespace, s.indexedReason(obs, versions, namespace, index))
+}
+
+// indexedReason says why none of versions answered a read by index in
+// namespace. A store without the index never answers, however long it loads:
+// that is a read error. Otherwise it is unansweredReason.
+func (s *session) indexedReason(obs observer, versions []schema.GroupVersionResource, namespace, index string) readreason.Code {
+	for _, gvr := range versions {
+		if s.caches.Dynamic.LacksIndex(gvr, namespace, index) {
+			return readreason.ReadError
+		}
+	}
+	return unansweredReason(obs, versions, namespace)
 }
 
 // unwatchedReason reports a kind none of whose served versions is watched,
@@ -300,4 +402,40 @@ func compareRefs(a, b resourceid.Ref) int {
 
 func compareGaps(a, b ownership.Gap) int {
 	return cmp.Or(cmp.Compare(a.Kind.Group, b.Kind.Group), cmp.Compare(a.Kind.Kind, b.Kind.Kind), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Reason, b.Reason))
+}
+
+// Indexed reads the objects of gk in scope that index files under any of
+// keys: a typed kind from the typed cache, any other kind through the same
+// version and namespace rules as DependentCandidates. A kind the catalog
+// doesn't serve, typed or not, is read as empty when discovery covered its
+// group, and as a gap otherwise.
+func (s *session) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
+	q := newSearch(index, keys, scope)
+	kind, known := s.catalog.Kind(gk)
+	switch b, typed := typedKinds[gk]; {
+	case s.catalog.Ambiguous(gk):
+		q.gap(gk, "", readreason.ReadError)
+	case !known:
+		if !s.catalog.CoversGroup(gk.Group) {
+			q.gap(gk, "", readreason.ReadError)
+		}
+	case !scope.Searches(kind.Namespaced):
+	case typed:
+		s.typedCandidates(q, b)
+	default:
+		s.dynamicIndexed(q, kind, index, keys, func(u *unstructured.Unstructured) {
+			q.add(gk, u, u.GetNamespace(), u.GetName())
+		})
+	}
+	slices.SortFunc(q.found, func(a, b candidate) int { return compareRefs(a.ref, b.ref) })
+	r := relations.IndexedRead{Gaps: q.gaps}
+	for i, c := range q.found {
+		if i > 0 && q.found[i-1].ref == c.ref {
+			continue
+		}
+		r.Objects = append(r.Objects, relations.IndexedObject{Ref: c.ref, Object: c.obj})
+	}
+	slices.SortFunc(r.Gaps, compareGaps)
+	r.Gaps = slices.Compact(r.Gaps)
+	return r
 }

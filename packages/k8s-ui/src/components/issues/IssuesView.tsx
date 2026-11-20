@@ -1,7 +1,8 @@
+import { IssueGuidance, issueGuidanceSummary } from './IssueGuidance'
 import { summarizeSchedulerMessage } from '../resources/resource-utils'
-import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import { Fragment, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, Eraser, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
-import { CardBody, CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
+import { CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse';
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
@@ -12,6 +13,7 @@ import {
   ISSUE_SEVERITY_HEADER_BAND_CLASS,
   ISSUE_SEVERITY_LABEL,
   ISSUE_SEVERITY_RAIL_CLASS,
+  ISSUE_SEVERITY_ROW_HOVER_CLASS,
   ISSUE_SEVERITY_SOLID_CLASS,
   ISSUE_SEVERITY_TEXT_CLASS,
   issueTitle,
@@ -29,6 +31,7 @@ import {
   type IssueResourceRef,
   type IssueSeverity,
 } from './types';
+import { SEVERITY_RAIL_HEADER_INSET_CLASS, SeverityRail } from '../ui/SeverityRail';
 
 // Leading severity glyph — the at-a-glance severity cue on every row: critical =
 // octagon (stop), warning = triangle.
@@ -88,8 +91,8 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
         tone="healthy"
         variant="card"
         icon={CircleCheck}
-        headline="Nothing broken right now"
-        body="No active issues across the selected scope."
+        headline="No issues detected"
+        body="Radar's checks found nothing broken in the selected scope. They don't cover every failure, and Audit lists configuration that can still break things."
       />
     ) : (
       <EmptyState headline="No issue data yet" body="Connect a cluster to populate the issue queue." action={emptyAction} />
@@ -173,9 +176,9 @@ export interface IssueRowProps {
   compact?: boolean;
   className?: string;
   dimmed?: boolean;
-  /** Suppress the "Subject" deep-link in the expanded body — set by hosts that
-   *  embed the row under the very resource that IS the subject (the drawer header
-   *  already names it), so it doesn't echo back redundantly. */
+  /** Set by hosts that embed the row under the very resource that IS the
+   *  subject (the drawer header already names it): the collapsed row leaves out
+   *  its kind and name, and the expanded body its "Subject" deep-link. */
   hideSubject?: boolean;
   renderBadges?: (ctx: IssueRowSlotContext) => ReactNode;
   renderMeta?: (ctx: IssueRowSlotContext) => ReactNode;
@@ -256,149 +259,177 @@ export function IssueRow({
     </div>
   );
 
+  // The resource line under the title. Embedded under the resource that is
+  // the issue's subject, it leaves out the kind and name the drawer header
+  // already shows, and says what the rest is.
+  const meta = renderMeta?.(slotCtx);
+  const resourceLine: ReactNode[] = [];
+  if (!hideSubject) {
+    resourceLine.push(
+      <>
+        <span className={KIND_CHIP_CLASS}>{issue.kind}</span>
+        <span className="min-w-0 truncate font-medium text-theme-text-secondary">
+          {issue.namespace ? `${issue.namespace} / ` : ''}
+          {issue.name}
+        </span>
+      </>,
+    );
+  }
+  if (cluster) {
+    resourceLine.push(
+      <span className="max-w-[160px] shrink-0 truncate">
+        <ClusterName name={cluster} />
+      </span>,
+    );
+  }
+  if (affected) {
+    resourceLine.push(<span className="shrink-0 tabular-nums">{hideSubject ? `Affects ${affected}` : affected}</span>);
+  }
+  if (issue.incident_parent) {
+    const parent = issue.incident_parent;
+    resourceLine.push(
+      // Non-interactive signal (the header is the toggle — a nested button
+      // would be invalid); the clickable link lives in the body.
+      <Tooltip content={confidenceTitle(parent.confidence ?? '')} delay={200} wrapperClassName="min-w-0">
+        <span className="truncate text-theme-text-tertiary">
+          ↳ {incidentParentLabel(parent.fact_type, parent.confidence)}{' '}
+          <span className="font-medium text-theme-text-secondary">{parent.ref.kind} / {parent.ref.name}</span>
+        </span>
+      </Tooltip>,
+    );
+  }
+
   return (
     <Container
       className={[
-        'overflow-hidden rounded-xl border bg-theme-surface transition-[border-color,box-shadow] duration-200',
+        'relative isolate rounded-xl border bg-theme-surface transition-[border-color,box-shadow] duration-200',
         // The open card lifts via elevation — heavier shadow + a bright
         // emphasis edge that clearly separates it from sibling cards. Severity
-        // stays rationed to the band + pill; separation is depth, not more color.
+        // stays rationed to the rail, band + pill; separation is depth, not more color.
         // ring-1 widens the edge to 2px without the layout shift a border-2
         // swap would cause on expand.
         open ? 'border-[var(--border-emphasis)] ring-1 ring-[var(--border-emphasis)] shadow-theme-md' : 'border-theme-border shadow-theme-sm',
         dimmed ? 'opacity-60' : '',
         className ?? '',
       ].filter(Boolean).join(' ')}
-      style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 72px' }}
     >
-      {/* The whole header is the single toggle target. The leading severity
-          icon is the at-a-glance cue; a trailing chevron shows open/closed.
-          Deep-links live in the expanded body (a link nested in a button would
-          be invalid). Collapsed: neutral row + rail. Expanded: severity-tinted
-          band + solid pill — the tint is a focus signal, not per-row alarm. */}
-      <div
-        {...buttonProps}
-        role="button"
-        tabIndex={0}
-        onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return;
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            onToggle();
-          }
-        }}
-        className={`group @container/issue flex cursor-pointer items-center gap-3 phone:flex-wrap phone:gap-y-2 border-l-[3px] py-3 pl-3 pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? ISSUE_SEVERITY_HEADER_BAND_CLASS[severity] : ISSUE_SEVERITY_RAIL_CLASS[severity]}`}
-      >
-        <SeverityIcon className={`h-[18px] w-[18px] shrink-0 ${ISSUE_SEVERITY_TEXT_CLASS[severity]}`} aria-hidden />
+      <SeverityRail open={open} className={ISSUE_SEVERITY_RAIL_CLASS[severity]} />
+      {/* Clips the header band and body to the rounded corners, inside the border the rail paints over. */}
+      <div className="overflow-hidden rounded-[11px]" style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 70px' }}>
+        {/* The whole header is the single toggle target. The leading severity
+            icon is the at-a-glance cue; a trailing chevron shows open/closed.
+            Deep-links live in the expanded body (a link nested in a button would
+            be invalid). Collapsed: neutral row + rail. Expanded: severity-tinted
+            band + solid pill — the tint is a focus signal, not per-row alarm. */}
+        <div
+          {...buttonProps}
+          role="button"
+          tabIndex={0}
+          onClick={onToggle}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              onToggle();
+            }
+          }}
+          className={`group @container/issue flex cursor-pointer items-center gap-3 phone:flex-wrap phone:gap-y-2 py-3 ${SEVERITY_RAIL_HEADER_INSET_CLASS} pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? ISSUE_SEVERITY_HEADER_BAND_CLASS[severity] : ISSUE_SEVERITY_ROW_HOVER_CLASS[severity]}`}
+        >
+          <SeverityIcon className={`h-[18px] w-[18px] shrink-0 ${ISSUE_SEVERITY_TEXT_CLASS[severity]}`} aria-hidden />
 
-        {/* Phones: the title takes its own line with the badge and reason
-            under it, and the severity, actions and chevron get a last line
-            (the right cluster below wraps under the text). */}
-        <div className="flex min-w-0 flex-1 flex-col gap-1 phone:basis-[calc(100%-30px)]">
-          <div className="flex min-w-0 items-baseline gap-2 phone:flex-wrap phone:gap-y-1">
-            <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:basis-full">{issueTitle(issue)}</span>
-            <span className={`shrink-0 self-center ${groupBadgeClass(issue.category_group)}`}>{groupLabel(issue.category_group)}</span>
-            {renderBadges?.(slotCtx)}
-            {/* The detector reason rides the title row while COLLAPSED so the
-                key triage signal shows without expanding. When open, the full
-                cause lives in the WHAT'S WRONG section below, so it fades out
-                here (stays mounted — it's the flex-1 filler, so unmounting
-                wouldn't reflow anything, but fading avoids the pop). */}
-            {issue.reason && !schedulingCause ? (
-              <span
-                aria-hidden={open || undefined}
-                className={`min-w-0 flex-1 truncate text-xs text-theme-text-tertiary transition-opacity duration-200 ${open ? 'opacity-0' : 'opacity-100'}`}
-              >
-                <span className="font-medium text-theme-text-secondary">{issue.reason}</span>
-                {headline ? <span> — {headline}</span> : null}
-              </span>
-            ) : null}
-          </div>
-          {schedulingCause && <div className="break-words text-xs text-theme-text-secondary">{schedulingCause}</div>}
-          <div className="flex min-w-0 items-center gap-1.5 text-xs text-theme-text-tertiary">
-            <span className={KIND_CHIP_CLASS}>{issue.kind}</span>
-            <span className="min-w-0 truncate font-medium text-theme-text-secondary">
-              {issue.namespace ? `${issue.namespace} / ` : ''}
-              {issue.name}
-            </span>
-            {cluster ? (
-              <>
-                <span aria-hidden>·</span>
-                <span className="max-w-[160px] shrink-0 truncate">
-                  <ClusterName name={cluster} />
+          {/* Phones: the title takes its own line with the badge and reason
+              under it, and the severity, actions and chevron get a last line
+              (the right cluster below wraps under the text). */}
+          <div className="flex min-w-0 flex-1 flex-col gap-1 phone:basis-[calc(100%-30px)]">
+            <div className="flex min-w-0 items-baseline gap-2 phone:flex-wrap phone:gap-y-1">
+              <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:basis-full">{issueTitle(issue)}</span>
+              <span className={`shrink-0 self-center ${groupBadgeClass(issue.category_group)}`}>{groupLabel(issue.category_group)}</span>
+              {renderBadges?.(slotCtx)}
+              {/* The detector reason rides the title row while COLLAPSED so the
+                  key triage signal shows without expanding. When open, the full
+                  cause lives in the WHAT'S WRONG section below, so it fades out
+                  here (stays mounted — it's the flex-1 filler, so unmounting
+                  wouldn't reflow anything, but fading avoids the pop). */}
+              {issue.reason && !schedulingCause ? (
+                <span
+                  aria-hidden={open || undefined}
+                  className={`min-w-0 flex-1 truncate text-xs text-theme-text-tertiary transition-opacity duration-200 ${open ? 'opacity-0' : 'opacity-100'}`}
+                >
+                  <span className="font-medium text-theme-text-secondary">{issue.reason}</span>
+                  {headline ? <span> — {headline}</span> : null}
                 </span>
-              </>
+              ) : null}
+            </div>
+            {schedulingCause && <div className="break-words text-xs text-theme-text-secondary">{schedulingCause}</div>}
+            {resourceLine.length > 0 || meta ? (
+              <div className="flex min-w-0 items-center gap-1.5 text-xs text-theme-text-tertiary">
+                {resourceLine.map((part, i) => (
+                  <Fragment key={i}>
+                    {i > 0 && <span aria-hidden>·</span>}
+                    {part}
+                  </Fragment>
+                ))}
+                {meta}
+              </div>
             ) : null}
-            {affected ? (
-              <>
-                <span aria-hidden>·</span>
-                <span className="shrink-0 tabular-nums">{affected}</span>
-              </>
-            ) : null}
-            {issue.incident_parent ? (
-              <>
-                <span aria-hidden>·</span>
-                {/* Non-interactive signal (the header is the toggle — a nested
-                    button would be invalid); the clickable link lives in the body. */}
-                <Tooltip content={confidenceTitle(issue.incident_parent.confidence ?? '')} delay={200} wrapperClassName="min-w-0">
-                  <span className="truncate text-theme-text-tertiary">
-                    ↳ {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}{' '}
-                    <span className="font-medium text-theme-text-secondary">{issue.incident_parent.ref.kind} / {issue.incident_parent.ref.name}</span>
-                  </span>
-                </Tooltip>
-              </>
-            ) : null}
-            {renderMeta?.(slotCtx)}
+            {/* Narrow container: the meta chips drop to their own line here rather
+                than stealing width from the title on the row above. Hidden once the
+                row is wide enough to hold them inline in the right cluster. */}
+            {metaChips('flex @2xl/issue:hidden phone:hidden')}
           </div>
-          {/* Narrow container: the meta chips drop to their own line here rather
-              than stealing width from the title on the row above. Hidden once the
-              row is wide enough to hold them inline in the right cluster. */}
-          {metaChips('flex @2xl/issue:hidden phone:hidden')}
+
+          {/* Right cluster — the always-visible affordances (per-row action +
+              chevron) plus, on a wide container, the inline meta chips. */}
+          <div className="flex shrink-0 items-center gap-3 phone:basis-full phone:pl-[30px]">
+            {metaChips('hidden @2xl/issue:flex phone:flex')}
+            <div className="contents phone:ml-auto phone:flex phone:items-center phone:gap-3">
+              {renderActions?.(slotCtx)}
+              <CollapseChevron open={open} className="h-4 w-4" />
+            </div>
+          </div>
         </div>
 
-        {/* Right cluster — the always-visible affordances (per-row action +
-            chevron) plus, on a wide container, the inline meta chips. */}
-        <div className="flex shrink-0 items-center gap-3 phone:basis-full phone:pl-[30px]">
-          {metaChips('hidden @2xl/issue:flex phone:flex')}
-          <div className="contents phone:ml-auto phone:flex phone:items-center phone:gap-3">
-            {renderActions?.(slotCtx)}
-            <CollapseChevron open={open} className="h-4 w-4" />
+        {(issue.action_primary || issue.hazard) && (
+          <Collapse open={!open} unmountOnExit>
+            <div className="px-4 pb-3 pl-6 text-xs">
+              {issue.cause && <p className="mb-1 text-theme-text-primary">{issue.cause}</p>}
+              <IssueGuidance hazard={issue.hazard} action={issue.action_primary ? issueGuidanceSummary(issue.action, issue.action_primary, issue.hazard) : undefined} secondaryTitle={issue.action_secondary_title} secondary={issue.action_secondary} ordered={issue.reason === 'SharedResourceWarning'} className="text-theme-text-tertiary" />
+            </div>
+          </Collapse>
+        )}
+
+        {/* Details unmount after the close transition: a list can hold hundreds
+            of rows and the body is the expensive part, so closed rows stay light. */}
+        <Collapse open={open} unmountOnExit id={panelId}>
+          {/* Body sits on the card surface (not a recessed grey panel) so its
+              text keeps enough contrast. */}
+          <div className="border-t border-theme-border bg-theme-surface py-4 pl-6 pr-4">
+            <div className="flex flex-col divide-y divide-theme-border/70 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
+              <Diagnosis issue={issue} source={diagnosisSource} />
+              {issue.incident_parent ? (
+                <section className="flex flex-col gap-1">
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+                    {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}
+                    {issue.incident_parent.confidence ? (
+                      <Tooltip content={confidenceTitle(issue.incident_parent.confidence)} delay={200}>
+                        <span className="ml-2 badge-sm text-[10px] font-normal text-theme-text-tertiary">
+                          {issue.incident_parent.confidence} confidence
+                        </span>
+                      </Tooltip>
+                    ) : null}
+                  </h4>
+                  <ul className="flex flex-col gap-px">
+                    <ResourceLine refForLink={memberRef(issue, issue.incident_parent.ref)} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
+                  </ul>
+                </section>
+              ) : null}
+              <DiagnosticContext issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
+              <AffectedResources issue={issue} hideSubject={hideSubject} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
+              {renderDetailSection?.(slotCtx)}
+            </div>
           </div>
-        </div>
+        </Collapse>
       </div>
-
-      {/* Details unmount after the close transition: a list can hold hundreds
-          of rows and the body is the expensive part, so closed rows stay light. */}
-      <Collapse open={open} unmountOnExit id={panelId}>
-        {/* Body sits on the card surface (not a recessed grey panel) so its
-            text keeps enough contrast. */}
-        <div className="border-t border-theme-border bg-theme-surface py-4 pl-6 pr-4">
-          <div className="flex flex-col divide-y divide-theme-border/70 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
-            <Diagnosis issue={issue} source={diagnosisSource} />
-            {issue.incident_parent ? (
-              <section className="flex flex-col gap-1">
-                <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-                  {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}
-                  {issue.incident_parent.confidence ? (
-                    <Tooltip content={confidenceTitle(issue.incident_parent.confidence)} delay={200}>
-                      <span className="ml-2 badge-sm text-[10px] font-normal text-theme-text-tertiary">
-                        {issue.incident_parent.confidence} confidence
-                      </span>
-                    </Tooltip>
-                  ) : null}
-                </h4>
-                <ul className="flex flex-col gap-px">
-                  <ResourceLine refForLink={memberRef(issue, issue.incident_parent.ref)} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
-                </ul>
-              </section>
-            ) : null}
-            <DiagnosticContext issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
-            <AffectedResources issue={issue} hideSubject={hideSubject} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
-            {renderDetailSection?.(slotCtx)}
-          </div>
-        </div>
-      </Collapse>
     </Container>
   );
 }
@@ -509,11 +540,13 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
       </>
     ) : undefined;
 
+  const guidanceSummary = issueGuidanceSummary(issue.action, issue.action_primary, issue.hazard);
   const hasNextStep =
-    !!issue.action || !!sourceNextStep || (issue.remediation_kind === 'create-namespace' && !!issue.remediation_target);
+    !!guidanceSummary || !!issue.action_secondary?.length || !!sourceNextStep || (issue.remediation_kind === 'create-namespace' && !!issue.remediation_target);
 
   return (
     <div className="flex flex-col divide-y divide-theme-border/70 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
+      <IssueGuidance hazard={issue.hazard} className="text-sm leading-relaxed" />
       {/* When a parsed cause replaces the detector text, the terse reason code
           (CrashLoopBackOff, FailedMount…) rides the eyebrow — it's the greppable
           identifier operators anchor on, and the collapsed header drops it while
@@ -547,7 +580,7 @@ function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSou
           tone="fix"
           labelExtra={nextStepAttribution ?? undefined}
         >
-          {sourceNextStep ?? (issue.action ? <CardBody>{issue.action}</CardBody> : null)}
+          {sourceNextStep ?? <IssueGuidance action={guidanceSummary} secondaryTitle={issue.action_secondary_title} secondary={issue.action_secondary} ordered={issue.reason === 'SharedResourceWarning'} className="text-sm leading-relaxed text-theme-text-secondary" />}
           {/* Survives an override: this is a structured one-click fix with an
               apply path, not advice competing with the host's. */}
           {issue.remediation_kind === 'create-namespace' && issue.remediation_target ? (

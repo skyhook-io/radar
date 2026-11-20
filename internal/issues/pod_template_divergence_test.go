@@ -259,7 +259,7 @@ func BenchmarkPodTemplateFlat500Pods(b *testing.B) {
 
 func TestPodTemplateExistingOOMDiagnosisRequiresSourceRead(t *testing.T) {
 	source := &corev1.ObjectReference{Kind: "ReplicaSet", APIVersion: "apps/v1", Namespace: "test", Name: "owner"}
-	p := &fakeProvider{problems: []k8s.Detection{{Kind: "Pod", Namespace: "test", Name: "worker", Severity: "critical", Reason: "OOMKilled", Message: "Container OOMKilled", Cause: "Private owner limit", Action: "Private owner advice", DiagnosisSource: source}}}
+	p := &fakeProvider{problems: []k8s.Detection{{Kind: "Pod", Namespace: "test", Name: "worker", Severity: "critical", Reason: "OOMKilled", Message: "Container OOMKilled", Cause: "Private owner limit", Action: "Private owner advice", Hazard: "Private owner hazard", DiagnosisSource: source}}}
 	for _, readable := range []bool{true, false} {
 		rows := Compose(p, Filters{CanReadRelated: func(ref Ref) bool { return ref.Kind != "ReplicaSet" || readable }})
 		if len(rows) != 1 {
@@ -268,7 +268,7 @@ func TestPodTemplateExistingOOMDiagnosisRequiresSourceRead(t *testing.T) {
 		if got := strings.Contains(rows[0].Cause, "Private"); got != readable {
 			t.Fatalf("readable=%v cause=%q", readable, rows[0].Cause)
 		}
-		if !readable && strings.Contains(rows[0].Action, "Private") {
+		if !readable && (strings.Contains(rows[0].Action, "Private") || rows[0].Hazard != "") {
 			t.Fatalf("advice leaked: %+v", rows[0])
 		}
 	}

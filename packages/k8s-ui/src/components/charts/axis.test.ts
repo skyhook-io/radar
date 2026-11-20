@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { chartLayout, integerAxisTop, yAxisValues } from './axis'
+import { chartLayout, integerAxisTop, isCountUnit, xLabelMaxWidthEm, yAxisValues } from './axis'
 
 describe('integer axes', () => {
+  it('puts averaged counts on whole-number ticks', () => {
+    expect(isCountUnit('avgCount')).toBe(true)
+    expect(yAxisValues(0, integerAxisTop(1.65, 4), 4, true)).toEqual([0, 1, 2])
+  })
+
   it('ends a count axis on a whole step that reaches the maximum', () => {
     expect(integerAxisTop(0, 4)).toBe(1)
     expect(integerAxisTop(1, 4)).toBe(1)
@@ -44,5 +49,21 @@ describe('integer axes', () => {
       expect(layout.fontSize).toBe(12)
     }
     expect(chartLayout(false, false, 500)).toEqual(chartLayout(false))
+  })
+})
+
+describe('xLabelMaxWidthEm', () => {
+  // "Oct 21 02:48 PM" is 15 characters, 9em.
+  const dateAndTime = 9
+  const room = (layout: ReturnType<typeof chartLayout>, edgeAnchored: boolean) =>
+    xLabelMaxWidthEm(layout.width - layout.marginLeft - layout.marginRight, layout.xIntervals, layout.fontSize, edgeAnchored)
+
+  it('fits a date-and-time label on the full layout and the compact edges', () => {
+    expect(room(chartLayout(false), false)).toBeGreaterThanOrEqual(dateAndTime)
+    expect(room(chartLayout(true), true)).toBeGreaterThanOrEqual(dateAndTime)
+  })
+
+  it('leaves too little room for a date and time with three ticks at 400px', () => {
+    expect(room(chartLayout(false, true, 400), true)).toBeLessThan(dateAndTime)
   })
 })

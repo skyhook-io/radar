@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/urlutil"
 )
@@ -63,7 +64,7 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 			if s.configManagement() == "operator" {
 				resp.Reason = "The saved Argo CD token is not bound to this kubeconfig source. Ask the operator to provision the token through startup configuration."
 			}
-		} else if err := argocd.LastProbeError(); err != nil && resp.Configured {
+		} else if err := argocd.LastProbeError(); err != nil && (resp.Configured || errors.Is(err, portforward.ErrAutoDisabled)) {
 			resp.Reason = "Radar couldn't connect to Argo CD: " + argoAPIHealthFailure(err, argocd.TokenSet()) + "."
 		}
 	}

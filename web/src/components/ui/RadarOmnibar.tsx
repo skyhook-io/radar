@@ -1,10 +1,11 @@
 import { forwardRef, useEffect, useMemo, useState, useRef, useImperativeHandle } from 'react'
 import { Omnibar, type OmnibarHandle } from './Omnibar'
-import { useSearch, useNamespaceScope, useContexts, type SearchHit, type SearchResult } from '../../api/client'
+import { useSearch, useNamespaceScope, useContexts, useRadarFeature, type SearchHit, type SearchResult } from '../../api/client'
 import { useAPIResources } from '../../api/apiResources'
 import { loadRecentResources, recordRecentResource } from '../../hooks/useRecentResources'
 import { useCommandItems, type CommandItemCallbacks } from './command-items'
 import { PENDING_RETRY_BUDGET_MS, PENDING_RETRY_MS, searchCoverageNote } from './searchCoverageNote'
+import { useDiagnose } from '../diagnose/DiagnoseContext'
 
 interface RadarOmnibarProps extends CommandItemCallbacks {
   onOpenResource: (hit: SearchHit) => void
@@ -31,6 +32,7 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
   const [exhaustedQuery, setExhaustedQuery] = useState<string | null>(null)
 
   const { data: searchData, isFetching, isPlaceholderData, isError } = useSearch(query, {
+    context: 'status',
     enabled: open,
     globalNs: true,
     refetchInterval: (data) => (open && stillLoading(data) && exhaustedQuery !== query ? PENDING_RETRY_MS : false),
@@ -46,6 +48,7 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
   const { data: nsScope } = useNamespaceScope()
   const { data: apiResources } = useAPIResources()
   const { data: contexts } = useContexts()
+  const { support: eventContentSupport } = useRadarFeature('searchEventContent')
   const contextKey = useMemo(() => contexts?.find((c) => c.isCurrent)?.name ?? '', [contexts])
 
   const modifierOptions = useMemo(() => ({
@@ -54,11 +57,24 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
   }), [nsScope, apiResources])
 
   const commandItems = useCommandItems(callbacks)
+  // Words that find nothing (or more than a lookup) can become a question;
+  // the composer opens with them so where and since when stay visible.
+  const diagnose = useDiagnose()
+  const onInvestigateQuery = diagnose.available && diagnose.questions
+    ? // The omnibar seeds its ns: pills from the namespace picker, so no pill
+      // means the engineer cleared the scope: start across the cluster.
+      ({ text, namespaces }: { text: string; namespaces: string[] }) =>
+        diagnose.openQuestion({ text, namespaces })
+    : undefined
   const { onNavigateKind } = callbacks
   const note = searchCoverageNote(searchData?.coverage, {
     hits: searchData?.hits,
     query,
     recheckKind: (kind) => omnibarRef.current?.addModifier({ key: 'kind', value: kind }),
+    searchEvents: eventContentSupport === 'supported' && !isFetching && !isPlaceholderData && !isError
+      ? () => omnibarRef.current?.addModifier({ key: 'kind', value: 'Event' })
+      : undefined,
+    eventSearchNeedsUpgrade: eventContentSupport === 'unsupported' && !isFetching && !isPlaceholderData && !isError,
     pendingExhausted: exhaustedQuery === query,
     openKindList: (kind, group) => {
       const resource = apiResources?.find((r) => r.kind === kind && r.group === group)
@@ -77,8 +93,10 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
       isError={isError}
       isPlaceholderData={isPlaceholderData}
       note={note}
+      eventContentSearch={eventContentSupport === 'supported'}
       modifierOptions={modifierOptions}
       seedNamespaces={nsScope?.actives}
+      onInvestigateQuery={onInvestigateQuery}
       loadRecents={() => loadRecentResources(contextKey)}
       recordRecent={(r) => recordRecentResource(r, contextKey)}
     />

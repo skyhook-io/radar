@@ -97,6 +97,7 @@ func TestComputeCostSummary_HappyPath(t *testing.T) {
 		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"checkout": 3.0, "payments": 0.5})},
 		{contains: "container_cpu_usage_seconds_total", body: vectorBody(map[string]float64{"checkout": 0.8, "payments": 0.6})},
 		{contains: "container_memory_working_set_bytes", body: vectorBody(map[string]float64{"checkout": 1.2, "payments": 0.25})},
+		{contains: unsizedPersistentVolumeExpr, body: vectorBody(nil)},
 		{contains: "pv_hourly_cost", body: vectorBody(map[string]float64{"checkout": 0.05})},
 		{contains: "node_total_hourly_cost", body: scalarBody(8.0)}, // exceeds sum of namespaces, so it wins
 		{contains: "node_gpu_count", body: scalarBody(0)},
@@ -112,7 +113,7 @@ func TestComputeCostSummary_HappyPath(t *testing.T) {
 	if got.TotalHourlyCost != 8.0 {
 		t.Errorf("TotalHourlyCost=%v, want 8.0 (node_total_hourly_cost ceiling)", got.TotalHourlyCost)
 	}
-	if got.TotalStorageCost != 0.05 {
+	if got.TotalStorageCost == nil || *got.TotalStorageCost != 0.05 {
 		t.Errorf("TotalStorageCost=%v, want 0.05", got.TotalStorageCost)
 	}
 	// totalAlloc = (2+3) + (1+0.5) = 6.5; totalUsage = (0.8+1.2) + (0.6+0.25) = 2.85
@@ -288,6 +289,93 @@ func TestComputeCostSummary_DedupesPersistentVolumeClaimRefs(t *testing.T) {
 	}
 	if !strings.Contains(storageQuery, `label_replace(kube_persistentvolume_claim_ref, "namespace", "$1", "claim_namespace", "(.+)")`) {
 		t.Fatalf("storage query must normalize claim_namespace before namespace aggregation:\n%s", storageQuery)
+	}
+	if !strings.Contains(storageQuery, "kube_persistentvolume_capacity_bytes") {
+		t.Fatalf("storage query must scale the per-GiB pv_hourly_cost by volume size:\n%s", storageQuery)
+	}
+}
+
+// avg_over_time only averages the samples a series has, so a pod that lived
+// five minutes would be billed for the whole hour. Allocation must be
+// weighted by the time each series was present.
+func TestComputeCostSummary_AllocationIsTimeWeighted(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query().Get("query"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(vectorBody(map[string]float64{"checkout": 1.0})))
+	}))
+	defer srv.Close()
+	client := prom.NewClient(prom.NewHTTPTransport(srv.URL, "", nil))
+
+	ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{})
+
+	var checked int
+	for _, q := range queries {
+		if !strings.Contains(q, "container_cpu_allocation") && !strings.Contains(q, "container_memory_allocation_bytes") {
+			continue
+		}
+		checked++
+		if strings.Contains(q, "avg_over_time") {
+			t.Errorf("allocation query must not use avg_over_time:\n%s", q)
+		}
+		if !strings.Contains(q, "[1h:1m]) / 60") {
+			t.Errorf("allocation query must be time-weighted over the hour:\n%s", q)
+		}
+	}
+	if checked != 2 {
+		t.Fatalf("expected CPU and memory allocation queries, saw %d", checked)
+	}
+}
+
+// A volume with a price but no size drops out of the storage join. Its
+// namespace must read as unknown storage, not as having none.
+func TestComputeCostSummary_UnsizedVolumeStorageIsUnknown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("query")
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(q, "container_cpu_allocation"), strings.Contains(q, "container_memory_allocation_bytes"):
+			_, _ = w.Write([]byte(vectorBody(map[string]float64{"db": 1.0, "web": 1.0})))
+		case strings.Contains(q, "unless on (persistentvolume)"):
+			_, _ = w.Write([]byte(vectorBody(map[string]float64{"db": 1})))
+		default:
+			_, _ = w.Write([]byte(vectorBody(nil)))
+		}
+	}))
+	defer srv.Close()
+	client := prom.NewClient(prom.NewHTTPTransport(srv.URL, "", nil))
+
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{})
+	if !got.Available {
+		t.Fatalf("summary unavailable: %+v", got)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		TotalStorageCost json.RawMessage `json:"totalStorageCost"`
+		Namespaces       []struct {
+			Name        string          `json:"name"`
+			StorageCost json.RawMessage `json:"storageCost"`
+		} `json:"namespaces"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if string(wire.TotalStorageCost) != "null" {
+		t.Errorf("totalStorageCost=%q, want null when a namespace's storage is unknown:\n%s", wire.TotalStorageCost, raw)
+	}
+	storage := map[string]string{}
+	for _, ns := range wire.Namespaces {
+		storage[ns.Name] = string(ns.StorageCost)
+	}
+	if storage["db"] != "null" {
+		t.Errorf("db storageCost=%q, want null:\n%s", storage["db"], raw)
+	}
+	if storage["web"] != "0" {
+		t.Errorf("web storageCost=%q, want 0 for a namespace without volumes:\n%s", storage["web"], raw)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 )
 
@@ -257,6 +258,55 @@ func TestCanReadWorkloadRefSourceFollowsTheDeniedRead(t *testing.T) {
 
 			if got := srv.canReadWorkloadRefSource(req, workloadRef, "prod"); got != tc.allowed {
 				t.Errorf("canReadWorkloadRefSource() = %v, want %v", got, tc.allowed)
+			}
+		})
+	}
+}
+
+// The UI keys its "use Resume rollout" message off the code, so a paused refusal
+// must carry it and other refusals must not.
+func TestWriteWorkloadRollbackErrorCode(t *testing.T) {
+	s := &Server{}
+	tests := []struct {
+		name     string
+		err      error
+		wantCode string
+	}{
+		{"paused", fmt.Errorf("Deployment ns/web: %w", k8score.ErrWorkloadPaused), errCodeWorkloadPaused},
+		{"already at the revision", fmt.Errorf("revision 2 of Deployment ns/web: %w", rollouts.ErrTemplateUnchanged), ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			s.writeWorkloadRollbackError(rec, http.StatusConflict, tc.err)
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if rec.Code != http.StatusConflict || body["error_code"] != tc.wantCode || body["error"] != tc.err.Error() {
+				t.Fatalf("got %d %v, want 409 with error_code %q and the error text", rec.Code, body, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestWorkloadRollbackErrorStatus(t *testing.T) {
+	conflict := apierrors.NewConflict(schema.GroupResource{Group: "apps", Resource: "deployments"}, "web", errors.New("the object has been modified"))
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"workload changed mid-rollback", fmt.Errorf("Deployment ns/web changed while rolling back: %w", conflict), http.StatusConflict},
+		{"already at the revision", fmt.Errorf("revision 2 of Deployment ns/web: %w", rollouts.ErrTemplateUnchanged), http.StatusConflict},
+		{"paused", fmt.Errorf("Deployment ns/web: %w", k8score.ErrWorkloadPaused), http.StatusConflict},
+		{"missing revision", errors.New("revision 9 not found"), http.StatusNotFound},
+		{"unexpected", errors.New("boom"), http.StatusInternalServerError},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := workloadRollbackErrorStatus(tc.err); got != tc.want {
+				t.Errorf("status = %d, want %d", got, tc.want)
 			}
 		})
 	}

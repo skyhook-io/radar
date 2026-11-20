@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -77,6 +78,21 @@ func TestWriteGitOpsErrorStatusMapping(t *testing.T) {
 		{
 			name:       "ErrInvalidResourceSelection → 400",
 			err:        gitops.ErrInvalidResourceSelection,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "wrapped ErrInvalidRevision → 400",
+			err:        errors.Join(gitops.ErrInvalidRevision, errors.New("multi-source Application")),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "wrapped ErrAutoSyncEnabled → 409",
+			err:        errors.Join(gitops.ErrAutoSyncEnabled, errors.New("extra context")),
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name:       "ErrHistoryEntryNotRollbackable → 400",
+			err:        gitops.ErrHistoryEntryNotRollbackable,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
@@ -384,6 +400,15 @@ func TestFluxBlockerConditionSurvivesDeniedSource(t *testing.T) {
 	out := s.filterGitOpsInsightForUser(r, &gitopsRequest{AllowedNamespaces: []string{"team"}}, gitopsinsights.Insight{Issues: []gitopsinsights.Issue{issue}}, nil)
 	if len(out.Issues) != 1 || out.Issues[0].Message != issue.Message || out.Issues[0].Cause != "" || len(out.Issues[0].Refs) != 0 {
 		t.Fatalf("root condition lost or source status leaked: %+v", out.Issues)
+	}
+}
+
+// A request the client abandoned is not a server failure.
+func TestWriteGitOpsBuildErrorIgnoresAbandonedRequest(t *testing.T) {
+	rec := httptest.NewRecorder()
+	(&Server{}).writeGitOpsBuildError(rec, &gitopsRequest{}, fmt.Errorf("build: %w", context.Canceled))
+	if rec.Code == http.StatusInternalServerError || rec.Body.Len() != 0 {
+		t.Fatalf("abandoned request answered %d %q", rec.Code, rec.Body.String())
 	}
 }
 

@@ -18,6 +18,8 @@ import (
 // reopens it. The reopen must resume after the lines already sent, not repeat
 // the tail.
 func TestWorkloadLogsStream_ReopenDoesNotRepeatLines(t *testing.T) {
+	setWorkloadLogDiscoveryInterval(t, 100*time.Millisecond)
+
 	lines := []string{
 		"2026-09-28T14:00:00.100000000Z first",
 		"2026-09-28T14:00:05.200000000Z second",
@@ -48,7 +50,7 @@ func TestWorkloadLogsStream_ReopenDoesNotRepeatLines(t *testing.T) {
 	previous := k8s.SetTestClient(client)
 	t.Cleanup(func() { k8s.SetTestClient(previous) })
 
-	stream := readSSEFor(t, "/api/workloads/deployments/default/nginx/logs/stream", 7*time.Second)
+	stream := readSSEFor(t, "/api/workloads/deployments/default/nginx/logs/stream", 20*workloadLogDiscoveryInterval)
 
 	mu.Lock()
 	defer mu.Unlock()

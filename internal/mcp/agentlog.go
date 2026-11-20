@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
 
@@ -38,7 +39,10 @@ type agentLogFields struct {
 //	  est_tokens=539 truncated=false omitted=0 context_tier=none kind=Pod ns=prod
 func emitAgentLog(f agentLogFields) {
 	level := "info"
-	if f.Err != nil {
+	switch {
+	case isTimeout(f.Err):
+		level = "warn"
+	case f.Err != nil:
 		level = "error"
 	}
 	tier := f.ContextTier
@@ -126,22 +130,39 @@ func logToolCall[In any](
 	handler func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error),
 ) func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input In) (*mcp.CallToolResult, any, error) {
-		args, _ := json.Marshal(input)
-		log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m %s", name, string(args))
+		sensitive := name == "exec_pod" || name == "manage_helm" || name == "get_helm_chart" || name == "curl_service"
+		if sensitive {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m", name)
+		} else {
+			loggedInput := any(input)
+			if deletion, ok := loggedInput.(deleteResourceInput); ok {
+				deletion.Confirm = ""
+				loggedInput = deletion
+			}
+			args, _ := json.Marshal(loggedInput)
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m %s", name, string(args))
+		}
 
 		start := time.Now()
 		result, extra, err := handler(ctx, req, input)
 		dur := time.Since(start)
+		toolErr := err
+		if toolErr == nil && result != nil && result.IsError {
+			toolErr = errors.New("tool returned an error result")
+		}
 
-		if err != nil {
-			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s) %v", name, dur.Round(time.Millisecond), err)
+		if isTimeout(toolErr) {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[33mTIMEOUT\033[0m (%s)", name, dur.Round(time.Millisecond))
+		} else if toolErr != nil && sensitive {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s)", name, dur.Round(time.Millisecond))
+		} else if toolErr != nil {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s) %v", name, dur.Round(time.Millisecond), toolErr)
 			if cause := collectorCause(err); cause != nil {
 				log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m collector response: %v", name, cause)
 			}
 		} else {
 			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[32mOK\033[0m (%s)", name, dur.Round(time.Millisecond))
 		}
-		toolErr := err
 		if structured, ok := readErrorResult(err); ok {
 			result, extra, err = structured, nil, nil
 		}

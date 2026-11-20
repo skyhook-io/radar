@@ -158,7 +158,7 @@ func resolveReadTargetFrom(ctx context.Context, cache *k8s.ResourceCache, reques
 		return target, errConnectionChanged()
 	}
 	if code == readreason.UserPermissionCheckFailed {
-		return target, readErrorf(code, "Radar couldn't check which namespaces you can access, so it read nothing.")
+		return target, errNamespaceCheckFailed()
 	}
 	if code == readreason.UserNoNamespaceAccess {
 		return target, readErrorf(code, "You can't access any namespace in this request's scope, so Radar read nothing. %s %s", withCloudRole(ctx, "A cluster admin can grant access"), namespaceAccessRule)
@@ -744,6 +744,10 @@ func checkDynamicResourceRead(ctx context.Context, kind, group, namespace, verb 
 }
 
 func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, verb string, readErr error, dynamicCache *k8s.DynamicResourceCache, gvr schema.GroupVersionResource, ok bool) (bool, error) {
+	// A read that ended with the caller's context says nothing about the kind.
+	if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(readErr, ctxErr) {
+		return false, ctxErr
+	}
 	var classified *readError
 	if errors.As(readErr, &classified) {
 		return false, readErr
@@ -793,7 +797,12 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 	}
 	if readErr == nil || isObjectNotFound(readErr) {
 		if !dynamicCache.IsNamespaceSynced(gvr, namespace) {
-			_, waitErr := dynamicCache.ListBlocking(gvr, namespace, dynamicSyncWait)
+			// The caller's deadline bounds this wait: an MCP tool call that
+			// ends must not keep a goroutine blocked on a sync it can't use.
+			_, waitErr := dynamicCache.ListBlockingContext(ctx, gvr, namespace, dynamicSyncWait)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return false, ctxErr
+			}
 			if waitErr != nil {
 				return checkDynamicResourceReadFrom(ctx, kind, group, namespace, verb, waitErr, dynamicCache, gvr, ok)
 			}

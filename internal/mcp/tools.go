@@ -23,10 +23,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/kueuevisibility"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
@@ -59,11 +61,12 @@ import (
 // steers. Put conditional advice in response guidance so it arrives when
 // relevant; otherwise describe only fields whose names are insufficient for
 // correct interpretation, not every response field.
-func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolParamRegistry) {
+const autoInstrumentationContract = "autoInstrumentation.openTelemetry checks per-language refs for NEW Pods, never existing injection. resolved is not admission: a failing language can block all injection. unknown/absence is not no injection. default_ambiguous means multiple Instrumentation CRs (CRD mode)."
+
+func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramRegistry *toolParamRegistry) {
 	boolPtr := func(b bool) *bool { return &b }
-	// All radar tools operate against the connected cluster (closed world),
-	// not the open internet — set OpenWorldHint=false so MCP clients that
-	// gate on this hint don't treat radar like a web-search tool.
+	// Kubernetes API tools have a closed domain; optional container execution
+	// can reach external services and has its own annotations.
 	readOnly := &mcp.ToolAnnotations{
 		ReadOnlyHint:  true,
 		OpenWorldHint: boolPtr(false),
@@ -127,36 +130,37 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"(pods/po, deployments/deploy, services/svc, configmaps/cm, CRDs). Returns compact Kubernetes-shaped " +
 			"rows plus summaryContext by default (managedBy, health, issueCount) so you can " +
 			"compare many similar resources and pick suspects before calling get_resource. " +
+			"managedBy is the controller or manager to inspect next. It is a lead, not an edit target and not necessarily the only " +
+			"manager (omitted can qualify it): read get_resource resourceContext.manager before choosing where to edit, and never " +
+			"infer unmanaged from its absence. " +
 			"Returns {summary, next?, coverage, items}: summary says in words what the rows cover and what was not read; " +
 			"next, when present, is what you can do to complete it; coverage holds the same as data. Failures return {error, error_code, next?, coverage?}. " +
 			"For unknown kind/name searches, use search. For broad health triage, use " +
 			"get_dashboard or issues first. " +
-			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
+			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Neither state establishes readiness, and absence does not rule out other pause mechanisms.",
 		Annotations: readOnly,
-	}, logToolCall("list_resources", handleListResources))
+	}, logToolCall("list_resources", stopsWhenCallerLeaves(handleListResources)))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_resource",
-		Description: "Use AFTER narrowing to one resource. Returns the resource's " +
-			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
-			"(relationships, refs, controller observations, issue/audit/policy rollups; " +
-			"use include=issues for bounded failures and diagnostic facts, or diagnose for a bundle; " +
+		Description: "Get Kubernetes spec/status/metadata and available resourceContext " +
+			"(include=issues adds bounded failures and diagnostic facts; diagnose gives a bundle; " +
 			"for a Node's current read-only pod/PDB drain estimate use include=drain-plan; " +
-			"audit findings are static posture and remediation priority, not evidence " +
-			"of an active outage; auditSummary.highestSeverity uses the Checks ladder " +
-			"(critical|high|medium|low; current built-ins are high|medium), separate " +
-			"from issueSummary's live-operational critical|warning; manager: none is not " +
-			"unmanaged; disagree: check both). This is the drill-down " +
-			"tool, not the best first call for broad incidents. Start with issues, " +
-			"get_dashboard, search, or list_resources to rank candidates; then call " +
-			"get_resource for the exact object. If you are looking for a string across " +
-			"ConfigMaps, CRD specs, env refs, or object content, use search instead of " +
-			"fetching resources one by one. Use the group parameter for ambiguous " +
-			"kinds such as Knative Service vs core Service. When recentChanges entries " +
-			"carry `application_configuration_change: true`, it is a factual edit " +
-			"classification and narrow ranking hint, not a causal or universal relevance verdict. " +
+			"auditSummary.highestSeverity uses critical|high|medium|low (current built-ins are high|medium) and " +
+			"issueSummary critical|warning; these are separate scales: audit is posture-remediation priority, issues are " +
+			"live failures, though some audit findings (expired certificates, dangling references) can be live failures; " +
+			"manager.state none means no management evidence was found, not that the resource is unmanaged; " +
+			"disagree means a manager's list and the metadata of the resource (or, with via, its controller) name different managers: " +
+			"check both). children: direct owner-reference preview; complete covers readable scope, not all runtime. " +
+			"Absent is not empty; coverage is not health. Absent `stale` does not establish freshness. " +
+			"A reference with `state: denied` is one the resource names that you may not read; `state: access_unverified` means Radar couldn't check your access to it; neither says whether it exists. " +
+			"For broad incidents rank with issues, get_dashboard, search or list_resources first. " +
+			"Search ConfigMaps, CRD specs, env refs or object content with search. " +
+			"Set group for ambiguous kinds (Knative Service vs core Service). In recentChanges, " +
+			"`application_configuration_change: true` marks an application configuration edit; it is a ranking hint, " +
+			"not proof of cause, and unflagged changes may still matter. " +
 			"Failures return {error, error_code, next?, coverage?}; only object_not_found means it is absent. " +
-			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
+			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Neither state establishes readiness, and absence does not rule out other pause mechanisms. " + autoInstrumentationContract,
 		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 
@@ -168,7 +172,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"Ingresses, ConfigMaps, Secrets, owners) so you can see service-to-workload " +
 			"routing and ownership relationships instead of inspecting resources one by one. " +
 			"Use view=traffic for routing/connectivity questions and view=resources for " +
-			"ownership/deployment hierarchy. NOTE: view=traffic is SPEC-DERIVED routing " +
+			"ownership/deployment hierarchy. view=traffic is routing derived from specs " +
 			"(Ingress→Service→Pod declarations) — it does not show observed traffic, " +
 			"request rates, or live connections. Always specify namespace unless you " +
 			"specifically need a cross-namespace graph. If you already know the suspicious " +
@@ -189,7 +193,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"from the root kind; profile all expands every edge type and is heavier, " +
 			"use it only when auto produced a too-narrow neighborhood. Hops defaults to " +
 			"1 and maxes at 2. Nodes are RBAC-filtered; denied neighbors appear only as " +
-			"aggregate omitted counts.",
+			"one unnamed omitted entry.",
 		Annotations: readOnly,
 	}, logToolCall("get_neighborhood", handleGetNeighborhood))
 
@@ -220,31 +224,35 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Annotations: readOnly,
 	}, logToolCall("get_pod_logs", handleGetPodLogs))
 
-	diagnoseDescription := "Get a bounded, point-in-time evidence bundle for one narrowed workload, " +
-		"GitOps reconciler or network entry. Combines signals in one round-trip; " +
-		"it does not run an agent and is not an authoritative root-cause verdict or an exhaustive account. " +
+	diagnoseDescription := "Get a bounded, point-in-time evidence bundle in one round-trip; " +
+		"it does not run an agent and is not an authoritative root-cause verdict. " +
 		"Use for CrashLoopBackOff, OOMKilled, image-pull, readiness, scheduling, GitOps sync/health, " +
 		"or traffic not reaching a service, route or ingress. Pod, Deployment, StatefulSet, DaemonSet and Argo Rollout " +
 		"bundle resource context, selected/capped current and previous logs, Warning events, startup blockers, " +
-		"related issues and recent workload/ConfigMap changes. " +
-		"Warning events are a capped sample for the observed resource and Pods; UID-less evidence cannot prove an incarnation. Use get_events for a broader, dedicated event read, including history. " +
+		"related issues and recent workload/ConfigMap changes. OpenTelemetryCollector and Flagger Canary return root reconciliation and owned-workload evidence. Canary separates its `declaredTarget`. " +
+		"For sidecar Collectors, diagnose application Pods. " +
+		autoInstrumentationContract + " " +
+		"Warning events are a capped sample for the observed resource and Pods; an event without a UID may belong to an earlier object of the same name. Use get_events for a broader, dedicated event read, including history. " +
 		"`crashCause` is evidence, not a root-cause verdict. `logLineSelection` ranks " +
 		"`" + crashLineFatalPattern + "`, `" + crashLineHeaderOnly + "`, `" +
 		crashLineLastMatchedLine + "`, then `" + crashLineLogTail + "`. Inspect source logs for low-confidence " +
 		"selections; `traceback_header_only` means the informative line was not captured. " +
-		"`auditSummary.highestSeverity` uses static-posture critical|high|medium|low (built-ins high|medium), " +
-		"unlike live `issueSummary` critical|warning. `application_configuration_change: true` classifies an edit; " +
-		"it is not a causal or universal relevance verdict. Application, Kustomization and Flux HelmRelease return " +
-		"status and parsed issues; no logs. Network entries give per-route reachability evidence: trust " +
+		"`auditSummary.highestSeverity` uses critical|high|medium|low (built-ins high|medium), posture-remediation priority " +
+		"on a separate scale from live `issueSummary` critical|warning. `application_configuration_change: true` marks " +
+		"an application configuration edit; it is a ranking hint, not proof of cause, and unflagged changes may still matter. Application, Kustomization and Flux HelmRelease return " +
+		"status and parsed issues; no logs. " +
+		"KafkaConnector and KafkaConnect (group=kafka.strimzi.io) return cached curated operator findings, not configuration, logs or application endpoint reads. " +
+		"Batch kinds return cached context, Issues and events without runtime logs or metrics. " +
+		"Network entries give per-route reachability evidence: trust " +
 		"`routes[].outcome` + `confidence` and `headline`/`diagnosis` over coarse `verdict`; `indirect` means only the " +
-		"API-server proxy reached it, not the live path. Point-in-time means frozen from this call, " +
-		"not that every source was read atomically; preserve collection limits, errors, timestamps, and confidence. " +
+		"API-server proxy reached it, not the live path. Point-in-time freezes this call's result, " +
+		"not that every source was read atomically; preserve limits, errors, timestamps and confidence. " +
 		"For one facet, prefer resource/log/event tools; use get_resource for other kinds."
 	if includeWrites {
 		tool := &mcp.Tool{
 			Name: "diagnose",
-			Description: diagnoseDescription + " Read-only EXCEPT the optional in_cluster=true arg " +
-				"(network kinds), which creates up to 5 transient, self-destructing probe pods to test the real dataplane.",
+			Description: diagnoseDescription + " Read-only except in_cluster=true " +
+				"(network kinds), which creates up to 5 short-lived probe pods to test the real dataplane.",
 			// NOT readOnly: in_cluster=true creates pods. A client gating on
 			// readOnlyHint must be told that.
 			Annotations: diagnoseAnno,
@@ -274,13 +282,14 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"Secret data updates appear when referenced by a workload template or current Pod spec at query time; kind=Secret lists all. " +
 			"consumed_by means referenced by; running_previous_value names Pods likely still on the earlier env value (absence means not established); *_withheld counts names you can't read. " +
 			"`application_configuration_change: true` identifies a workload-runtime or " +
-			"referenced-ConfigMap edit or likely stale Secret env readers, a ranking hint, not a causal or " +
-			"universal relevance verdict. Helm operation entries rank by category and recency " +
+			"referenced-ConfigMap edit or likely stale Secret env readers. It is a ranking hint, not proof of cause; " +
+			"unflagged changes may still matter. Helm operation entries rank by category and recency " +
 			"and are not raised by this flag. This is " +
 			"often faster than reading " +
 			"ReplicaSet histories or audit/log streams, especially when issues " +
 			"are empty or dominated by baseline failures. Bound the window with since; narrow by " +
-			"namespace, kind or name. Runs of 5+ plain creates are listed " +
+			"namespace, kind or name; custom-resource kinds outside Argo CD, Flux, Rollouts and " +
+			"Gateway API appear only with kind or name. Runs of 5+ plain creates are listed " +
 			"in `created` as `+<seconds after first>s Kind/name` lines, counted in limit. " +
 			"A namespace query (no kind/name) adds clusterScopedChanges: webhook config " +
 			"changes that may affect it. Omit namespace for other changes outside it. " +
@@ -298,7 +307,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_cluster_audit",
 		Description: "Use when the agent's decision is 'is this cluster well-configured / " +
-			"compliant?' — STATIC CONFIG POSTURE, not live operational state. Returns " +
+			"compliant?': static configuration posture. Returns " +
 			"best-practice findings: Security (runAsRoot, privileged containers, dangerous " +
 			"capabilities, hostPath/hostNetwork, secret-in-ConfigMap), Reliability (single " +
 			"replicas, missing PDB, missing TopologySpread, podHARisk, Service/Ingress " +
@@ -306,9 +315,9 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"Efficiency (missing resource requests/limits, orphaned ConfigMaps/Secrets, " +
 			"stale PVCs/PVs). " +
 			"Each finding has remediation guidance. " +
-			"INDEPENDENT of operational health: a healthy pod can have many audit findings " +
-			"(badly configured but working), a crashing pod can have zero (cleanly " +
-			"configured but failing). Finding severity and the explicit critical/high/medium/low " +
+			"Findings are mostly latent risk, but some (expired certificates, dangling " +
+			"references) can be live failures; check them before dismissing. A crashing pod " +
+			"can have zero findings. Finding severity and the explicit critical/high/medium/low " +
 			"summary counts are posture remediation priority; current built-in checks emit high " +
 			"or medium. They are not the live-issue severity scale. For 'what's broken right now?' " +
 			"use the issues tool. " +
@@ -316,7 +325,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"or diagnose to see its resourceContext policy rollup. " +
 			"Respects user's audit settings (ignored namespaces, disabled checks). Filter " +
 			"by namespace, category, or severity. Resources absent from findings should " +
-			"NOT be reported as non-compliant — empty findings for a scope means no " +
+			"not be reported as non-compliant — empty findings for a scope means no " +
 			"violations, not a failed check.",
 		Annotations: readOnly,
 	}, logToolCall("get_cluster_audit", handleGetAudit))
@@ -330,7 +339,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"check catalog (reviewed through " + upgradereadiness.ReviewedThrough + "): version " +
 			"skew, removed/deprecated API usage (live manifests, Helm sources, API-server " +
 			"metrics), node runtime and cgroup evidence, drain feasibility, admission/conversion " +
-			"webhook readiness, and release-specific configuration checks. The verdict is NOT a " +
+			"webhook readiness, and release-specific configuration checks. The verdict is not a " +
 			"readiness guarantee: checks with status `unknown` had incomplete evidence and may " +
 			"hide blockers — report them alongside the verdict, never as passed. `coverage` " +
 			"describes what could actually be inspected under the caller's RBAC; " +
@@ -352,7 +361,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_runtime_versions",
-		Description: "Which running workloads use which runtime version, for runtime CVEs " +
+		Description: "Lists which running workloads use which runtime version, for runtime CVEs " +
 			"(PHP, Node, Python, Go, Java, …). Reads the version each running image declares in its " +
 			"config (PHP_VERSION etc., set by Docker official images and inherited by images built " +
 			"FROM them) for the digest the Pod runs: manifest and config only. Declared, not proof; " +
@@ -361,6 +370,18 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"other than ok means unknown, not absent.",
 		Annotations: readOnly,
 	}, logToolCall("get_runtime_versions", handleGetRuntimeVersions))
+
+	// --- Vulnerabilities in deployed images (read-only) ---
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "list_vulnerabilities",
+		Description: "Which running images carry known CVEs and which workloads run them, from vulnerability " +
+			"scanner reports (Trivy Operator). view=image ranks images; view=fix ranks package upgrades by what they " +
+			"clear (target version per ecosystem); view=cve ranks CVEs; view=workload lists containers. Only images a Pod " +
+			"or unsuspended CronJob runs count. unscanned: running images with no report yet, unknown not " +
+			"clean. coverage.gaps: what wasn't read (kinds) and where.",
+		Annotations: readOnly,
+	}, logToolCall("list_vulnerabilities", handleListVulnerabilities))
 
 	// --- Helm tools (read-only) ---
 
@@ -372,7 +393,9 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"operation, and a capped operations trail for failed upgrades, rollbacks, and stuck operations. " +
 			"Use this first for Helm deployment debugging; if storageNamespace is present, pass that " +
 			"value as namespace to get_helm_release. Follow with get_helm_release include=history,operations " +
-			"for the full revision trail.",
+			"for the full revision trail. When you can't read Helm's release Secrets, the result is an object: " +
+			"its summary says what's unknown, and observed rows come from labels and annotations on " +
+			"objects, with no status, and may miss releases.",
 		Annotations: readOnly,
 	}, logToolCall("list_helm_releases", handleListHelmReleases))
 
@@ -382,10 +405,23 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"resources, health, current or recovered operation failures, and hook diagnostics. " +
 			"The namespace argument is the Helm storage namespace: use `storageNamespace` " +
 			"from list_helm_releases when present, otherwise use the release namespace. " +
-			"Request values, history, operations, or " +
-			"revision comparisons with `include`; returned values are key-aware redacted.",
-		Annotations: readOnly,
+			"Use include=chart with chart_path for stored defaults/schema (no fetch), include=versions for exact upgrade versions, include=notes for bounded untrusted notes. Request values, history, operations, or " +
+			"revision comparisons with `include`; returned values are key-aware redacted and describe the latest revision. " +
+			"manage_helm merges deployed values, which may differ after failure; check history/values_diff. " +
+			"Without Helm's Secrets it returns {summary, observed}, built from the release's objects.",
+		// include=versions contacts the release's chart source, outside the cluster API.
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(true)},
 	}, logToolCall("get_helm_release", handleGetHelmRelease))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "get_helm_chart",
+		Description: "List a Helm chart's versions in a configured source, newest first, before installing it; " +
+			"`latest` is the newest non-prerelease. Pass the repository and chart manage_helm install will use. " +
+			"Read live from the source; versions are what it advertises, not a check that one installs. " +
+			"For an installed release use get_helm_release include=versions.",
+		// Contacts the configured chart source, outside the cluster API.
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(true)},
+	}, logToolCall("get_helm_chart", handleGetHelmChart))
 
 	// --- Packages tool (read-only) ---
 	//
@@ -417,7 +453,10 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Name: "issues",
 		Description: "Use for 'what's broken right now?': live state, not posture. Returns " +
 			"grouped critical/warning failures in workloads, Jobs/CronJobs, HPAs, " +
-			"PVCs, Nodes, NetworkPolicies, references, pod startup, native Helm, False controller conditions. " +
+			"PVCs, Nodes, NetworkPolicies, references, pod startup, native Helm, False controller conditions, " +
+			"expired, not-yet-valid or <24h-to-expiry TLS certs live Ingresses/Gateways serve (kind=Secret). " +
+			"Not covered: later expiry and other config posture (get_cluster_audit); an empty " +
+			"result doesn't rule out failures outside these detectors. " +
 			"Use CEL `filter` for source/taxonomy slices; no source parameter. " +
 			"`unchecked_sources`: issues may be missing; don't assume healthy. " +
 			"`kinds`/`namespaces` scope the gap. `kind_sync_pending`: loading; retry shortly. " +
@@ -440,9 +479,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"set evaluates `not_linked_to_returned_issues`; otherwise absence means linkage " +
 			"was not evaluated, not that every change is linked. A marked change ranks first " +
 			"as a lead to verify, not evidence of cause. " +
-			"`application_configuration_change: true` is a factual edit classification and " +
-			"narrow ranking hint, not a causal or universal relevance verdict; its presence " +
-			"inside `correlated_changes` does not strengthen causality. " +
+			"`application_configuration_change: true` marks an application configuration edit: a ranking hint, not proof " +
+			"of cause; unflagged changes may still matter, and inside `correlated_changes` it does not strengthen causality. " +
 			"Under `recent_changes_truncated=true` or `recent_changes_history_coverage`, absence " +
 			"from the feed is not evidence. Per-issue " +
 			"`no_recent_changes.window_seconds` is the observed window with no tracked change; " +
@@ -452,7 +490,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"unknown. `correlated_changes` covers tracked edits on the issue subject, its " +
 			"directly referenced ConfigMaps/Secrets, and a rejecting quota/LimitRange/webhook; " +
 			"`correlated_changes_incomplete`: older ones were not read. " +
-			"Use get_events for raw events, get_cluster_audit for posture, diagnose for workloads " +
+			"Use get_events for raw events, diagnose for workloads " +
 			"or GitOps, get_resource for other kinds, and get_neighborhood across resources. " +
 			"`group=" + issues.NativeHelmGroup + "` routes to get_helm_release; " +
 			"`group=helm.toolkit.fluxcd.io` routes to diagnose. Scope app triage to a namespace; omit it " +
@@ -467,17 +505,22 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Description: "Find resources by content/term match when you do not know which object " +
 			"contains a string, config key, env ref, image, label/annotation value, " +
 			"ConfigMap data, CRD field, or status message. Tokens are AND'd. " +
-			"Secret content is intentionally NOT indexed — Secret names match by " +
+			"Secret content is intentionally not indexed — Secret names match by " +
 			"metadata, but data values won't appear in snippets to avoid leaking " +
 			"secret material through search results. " +
 			"Examples: `readinessProbe user-service`, `image:flagd`, `kind:Pod label:app=cart error`. " +
+			"An IP or ip:port from a log matches only that whole address; site ip:<role> marks a Pod, Service or Node " +
+			"holding it (podIP, hostNetworkPod, clusterIP, nodeInternalIP...; exitedPodIP is a finished pod's old IP, " +
+			"possibly reused); other sites only mention it. " +
 			"Use the namespace parameter for structured namespace scoping. Modifiers such as " +
 			"kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
 			"you already know the kind/namespace. Returns ranked hits with snippets and " +
-			"summaryContext. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
+			"summaryContext. managedBy is the controller or manager to inspect next. It is a lead, not an edit target and not necessarily " +
+			"the only manager (omitted can qualify it): read get_resource resourceContext.manager before choosing where to edit, and " +
+			"never infer unmanaged from its absence. Covers what you can list and Radar collects; big CRDs need kind:. Trivy reports match by " +
 			"CVE ID, package or SBOM component. coverage.status=partial: absence unproven, see coverageHint. " +
-			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Independent of readiness; absence allows other pauses.",
+			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Neither state establishes readiness, and absence does not rule out other pause mechanisms.",
 		Annotations: readOnly,
 	}, logToolCall("search", handleSearch))
 
@@ -510,13 +553,13 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "query_prometheus",
-		Description: "Use when the question needs metric VALUES or history: CPU/memory over time, " +
+		Description: "Use when the question needs metric values or history: CPU/memory over time, " +
 			"request rates, error ratios, saturation, restarts trend, 'was there a spike?'. Executes " +
 			"PromQL against the cluster's Prometheus (auto-discovered or configured in Radar; also " +
 			"works with PromQL-compatible backends: Thanos, VictoriaMetrics, Mimir). " +
 			"type=instant returns current values; type=range returns time series for a window " +
 			"(since=1h default). For live top-N snapshots prefer top_resources; for metric/label " +
-			"NAME discovery use discover_metrics first — do not guess metric names. " +
+			"name discovery use discover_metrics first — do not guess metric names. " +
 			"For cluster or namespace spend use get_cost rather than hand-writing cost queries — " +
 			"it handles currency, idle attribution, and the Kubecost vs OpenCost source split. " +
 			"Empty results include a bounded list of related active metric names when a metric family can be inferred. " +
@@ -527,7 +570,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "discover_metrics",
-		Description: "Use BEFORE query_prometheus when unsure of exact metric or label names. " +
+		Description: "Use before query_prometheus when unsure of exact metric or label names. " +
 			"Lists metric names matching a selector (match={__name__=~\"node_cpu.*\"}) with their " +
 			"type (counter vs gauge — counters need rate()) and help text, or values of one label " +
 			"(label=namespace). Returns up to limit values from the last hour of active series; " +
@@ -540,7 +583,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Name: "get_prometheus_rules",
 		Description: "List Prometheus alerting and recording rules with their PromQL definitions, " +
 			"state (firing/pending/inactive), labels, annotations, and active alert instances. " +
-			"When investigating a firing alert, ALWAYS fetch its rule definition here FIRST, then " +
+			"When investigating a firing alert, fetch its rule definition here first, then " +
 			"run its query with query_prometheus to see the actual values. state=firing shows " +
 			"everything currently alerting. Filters are substring matches; results cap at limit " +
 			"(default 50) with truncated=true — narrow rather than paging.",
@@ -564,7 +607,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_workload_logs",
 		Description: "Get aggregated logs from all pods of a workload (Deployment, StatefulSet, " +
-			"DaemonSet, Job, or Argo Workflow). Logs are collected from all matching pods concurrently, then " +
+			"DaemonSet, Argo Rollout, Job, or Argo Workflow). Logs are collected from all matching pods concurrently, then " +
 			"server-side filtered to errors, warnings, panics, and stack traces using " +
 			"deterministic regex patterns and deduplicated. When grep is set, it replaces " +
 			"diagnostic filtering and returns only regex matches, like `kubectl logs --timestamps | grep PATTERN`. " +
@@ -581,7 +624,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	}, logToolCall("wait_for", handleWaitFor))
 
 	// --- Write tools (workload, cronjob, gitops, apply, patch, node) ---
-	// Registered only on the full server. The read-only mount omits them so a
+	// Registered on the full and Apply servers. The read-only mount omits them so a
 	// read-only investigation can't even discover a mutating tool — server-side
 	// enforcement that doesn't depend on the agent CLI's own tool allowlisting.
 	if !includeWrites {
@@ -589,15 +632,33 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	}
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name:        "collect_application_evidence",
+		Description: "Read RabbitMQ alarms/resource values, NATS JetStream observations or Vault node state from one Pod. Requires operator approval and Pod-read/port-forward permissions; opens a temporary port-forward. Local only. Unavailable evidence is not a health verdict.",
+		InputSchema: applicationEvidenceInputSchema(),
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)},
+	}, logToolCall("collect_application_evidence", handleRuntimeEvidence))
+
+	if !k8s.ForceDisableHelmWrite {
+		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+			Name:        "manage_helm",
+			Description: "Install/upgrade/rollback/uninstall native Helm as the caller. Install needs an exact version (get_helm_chart lists them) and configured source; refuses existing history. Upgrade can reuse a complete stored chart without a source; version omission requires latest/deployed agreement. Other upgrades need a confirmed configured source. dry_run previews upgrades (identical merge rules) and rollbacks (live takeover/retention checks; rollback claims existing objects unchecked); expected_revision checks for stale edits, not an atomic lock. Upgrade merges last deployed overrides (latest failed/superseded if none deployed). Latest get_helm_release values may differ: inspect history/values_diff after failure. Maps merge, lists replace; hidden-credential container replacement is refused unless replace_values=true replaces ALL overrides. Change GitOps dependencies in git. Uninstall without confirm previews resources; return the reviewed token to delete. Coordinate writers: Helm has no atomic revision-conditioned uninstall. Hooks may run; operations take minutes and can outlive client timeouts. Inspect get_helm_release before retrying; use wait_for for readiness. Never pass literal credentials.",
+			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)},
+		}, logToolCall("manage_helm", handleManageHelm))
+	}
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, DaemonSet, or Argo Rollout). " +
 			"Supported actions: 'restart' triggers a rolling restart, 'scale' changes the replica count " +
 			"(requires 'replicas' parameter), 'rollback' reverts to a previous revision " +
-			"(requires 'revision'; enumerate valid numbers with get_resource include=revisions). " +
+			"(requires 'revision'; enumerate valid numbers with get_resource include=revisions), " +
+			"'pause' holds a Deployment's rollouts until 'resume' (Deployments only; rollback is refused while paused). " +
 			"Use list_resources or get_dashboard first to identify the target. " +
-			"On a Rollout, 'rollback' rewrites the pod template and so starts a NEW rollout that re-runs every " +
+			"Roll back a native Helm release's workload as the release (manage_helm rollback where available); a workload rollback leaves Helm's record stale. " +
+			"On a Rollout, 'rollback' rewrites the pod template and so starts a new rollout that re-runs every " +
 			"canary step, pause, and analysis — to revert traffic now use manage_rollout abort, or follow the " +
 			"rollback with manage_rollout promote-full.",
+		InputSchema: manageWorkloadInputSchema(),
 		Annotations: writeTool,
 	}, logToolCall("manage_workload", handleManageWorkload))
 
@@ -607,7 +668,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"'abort' reverts traffic to the last stable version at once without touching spec, and stays " +
 			"aborted until retried — the incident-response verb; " +
 			"'retry' clears an abort; 'promote' clears the current pause to advance one step; " +
-			"'promote-full' skips ALL remaining steps, pauses, and analysis (emergency hotfix) — straight after a " +
+			"'promote-full' skips all remaining steps, pauses, and analysis (emergency hotfix) — straight after a " +
 			"rollback it may report that the Argo Rollouts controller has not caught up, which is safe to retry; " +
 			"'skip-step' advances exactly one canary step (canary only). " +
 			"For rollback, restart, or scale use manage_workload with kind=rollout. " +
@@ -627,10 +688,10 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_gitops",
-		Description: "Perform operations on GitOps resources (ArgoCD or FluxCD). " +
-			"For ArgoCD: actions are 'sync' (trigger deployment), 'refresh', 'terminate', 'rollback', " +
+		Description: "Perform operations on GitOps resources (Argo CD or Flux). " +
+			"For Argo CD: actions are 'sync' (trigger deployment), 'refresh', 'terminate', 'rollback', " +
 			"'suspend' (disable auto-sync), 'resume' (re-enable auto-sync). Resource kind is always Application. " +
-			"For FluxCD: actions are 'reconcile' (trigger sync), 'sync-with-source', 'suspend', 'resume'. " +
+			"For Flux: actions are 'reconcile' (trigger sync), 'sync-with-source', 'suspend', 'resume'. " +
 			"Requires 'kind' parameter (kustomization, helmrelease, gitrepository, etc.).",
 		Annotations: writeTool,
 	}, logToolCall("manage_gitops", handleManageGitOps))
@@ -670,12 +731,39 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	}, logToolCall("patch_resource", handlePatchResource))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "delete_resource",
+		Description: "Delete one Kubernetes object as the caller, in two calls: the first returns a server dry-run preview and, " +
+			"when the ownership preview resolves the object, a confirm token; after reviewing it, call again with dry_run=false " +
+			"and that token. The token is bound to you, the context and the previewed object (UID, spec, finalizers, policy) and " +
+			"fails if any changed. The preview's dependents (observed owner references, possible dependents) and GitOps " +
+			"finalizer cleanup are advisory and may be incomplete: they cover only what Radar observes and you can read, so " +
+			"check their coverage. Deleting a " +
+			"Namespace or CRD removes all its contents or instances, even with orphan. Propagation defaults to background " +
+			"unless GC finalizers record a policy. Radar never edits finalizers, so an accepted deletion can stay pending: " +
+			"inspect what blocks it before removing a finalizer with patch_resource.",
+		Annotations: writeTool,
+	}, logToolCall("delete_resource", handleDeleteResource))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_node",
-		Description: "Cordon, uncordon or drain a node. Drain waits for deletion. " +
-			"outcome: complete/incomplete/unconfirmed/started. started: status ok; incomplete/unconfirmed: partial. " +
-			"expectedSkip: normal exclusions. Complete does not certify shutdown safety.",
+		Description: "Cordon, uncordon or drain a node. A drain waits until evicted pods are gone; with wait_for_deletion=false " +
+			"it returns outcome started once evictions are accepted, unless the drain is incomplete. Outcome incomplete (status " +
+			"partial) means an eviction failed, a pod blocks the drain, or evicted pods are still there; unconfirmed (status " +
+			"partial) means their deletion could not be verified. skippedPods with expectedSkip=true were left in place by " +
+			"design. A complete drain does not mean the node is safe to shut down.",
 		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
+
+	if includeExec && httpToolsEnabled.Load() && k8s.IsInCluster() {
+		registerHTTPTools(server, paramRegistry, &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)})
+	}
+	// Tools that run commands in the cluster: opt-in (--mcp-exec-tools).
+	if includeExec && execToolsEnabled.Load() {
+		registerExecTools(server, paramRegistry, &mcp.ToolAnnotations{
+			DestructiveHint: boolPtr(true),
+			OpenWorldHint:   boolPtr(true),
+		})
+	}
 }
 
 // Tool input types
@@ -695,7 +783,7 @@ type listResourcesInput struct {
 	Kind      string `json:"kind" jsonschema:"resource kind to list for a broad sweep, e.g. pods/po, deployments/deploy, services/svc, configmaps/cm. Prefer this before get_resource when comparing many same-kind objects."`
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace for app-scoped triage"`
-	Context   string `json:"context,omitempty" jsonschema:"per-row context: default attaches summaryContext (managedBy + health + issueCount + crossplanePause) for suspect ranking; 'none' returns bare rows"`
+	Context   string `json:"context,omitempty" jsonschema:"per-row context: 'basic' (default) attaches health, issueCount, crossplanePause and managedBy. 'none' returns bare rows"`
 }
 
 type getResourceInput struct {
@@ -703,13 +791,13 @@ type getResourceInput struct {
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. cluster.x-k8s.io for CAPI Cluster vs CNPG Cluster)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
-	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes, revisions, issues, drain-plan. Comma-separated. drain-plan is Node-only: a read-only current pod/PDB estimate with explicit options, up to 100 pods and total/truncated indicators; not controller eviction history. include=issues returns up to 3 relatedIssues with diagnostic_context and total/truncated indicators; pod/template differences are context, not proof of admission mutation. Separate from context. include=revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (number, image, isCurrent; Rollouts also mark isStable, the revision an abort reverts to) — fetch before manage_workload rollback. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
-	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource, wrapped as {resource, ...} when warnings note Pod/template divergence or staleEnv lists env holding a pre-write Secret/ConfigMap value). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is not evidence of an active outage. For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
+	Include   string `json:"include,omitempty" jsonschema:"optional extras, comma-separated: events, metrics, changes, revisions, issues, drain-plan. revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (Rollouts mark isStable, the revision an abort reverts to); fetch it before manage_workload rollback. issues adds up to 3 relatedIssues; pod/template differences in them are context, not proof of admission mutation. drain-plan (Node only) is a read-only estimate for a drain with force, DaemonSets ignored and emptyDir data deleted (see its options), not eviction history; a default manage_node drain doesn't force, so unmanaged pods it lists as evicted would stay behind and leave that drain incomplete. Separate from context. For logs use get_pod_logs / get_workload_logs or diagnose."`
+	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource, wrapped as {resource, ...} when warnings note Pod/template divergence or staleEnv lists env holding a pre-write Secret/ConfigMap value). For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
 }
 
 type topologyInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace for a multi-service incident map; recommended unless you need cross-namespace topology"`
-	View      string `json:"view,omitempty" jsonschema:"view mode: traffic for service routing/connectivity or resources for ownership hierarchy"`
+	View      string `json:"view,omitempty" jsonschema:"view mode: resources (default) for ownership hierarchy, or traffic for service routing/connectivity"`
 	Format    string `json:"format,omitempty" jsonschema:"output format: graph (default, full node/edge data) or summary (text description of resource chains)"`
 }
 
@@ -740,12 +828,12 @@ type podLogsInput struct {
 }
 
 type searchInput struct {
-	Query     string `json:"query" jsonschema:"search query for unknown resources or broad content scans. Free tokens AND'd. Matches identity plus searchable object content. Examples: adServiceFailure, kind:NetworkChaos delay, kind:ConfigMap flagd, image:flagd. Modifiers: kind:Pod, kind:NetworkChaos, ns:foo, label:k=v, image:redis"`
+	Query     string `json:"query" jsonschema:"search query for unknown resources or broad content scans. Free tokens AND'd. Matches identity plus searchable object content. Examples: adServiceFailure, kind:NetworkChaos delay, kind:ConfigMap flagd, image:flagd, 10.244.1.7:6379 (IP lookup). Modifiers: kind:Pod, kind:NetworkChaos, ns:foo, label:k=v, image:redis"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"optional namespace scope, as an inline ns: modifier; overrides inline ones. Skips cluster-scoped kinds unless kind: names one"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include   string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
 	Filter    string `json:"filter,omitempty" jsonschema:"CEL boolean predicate. Bindings: object (sanitized; no Secret data), kind, apiVersion, metadata, spec, status, labels, annotations, report (Trivy findings; the binding matches one finding). Guard fields with has(spec.sources); check map keys with '\"app\" in labels'. Example, Deployments with zero or unreported ready replicas: 'kind == \"Deployment\" && (!has(status.readyReplicas) || status.readyReplicas == 0)'"`
-	Context   string `json:"context,omitempty" jsonschema:"per-hit context: default attaches summaryContext (managedBy + health + issueCount + crossplanePause) for suspect ranking; 'none' returns bare hits"`
+	Context   string `json:"context,omitempty" jsonschema:"per-hit context: 'basic' (default) attaches health, issueCount, crossplanePause and managedBy. 'none' returns bare hits"`
 }
 
 type issuesInput struct {
@@ -753,7 +841,7 @@ type issuesInput struct {
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical,warning"`
 	Kind      string `json:"kind,omitempty" jsonschema:"comma-separated kind filter (e.g. Deployment,Pod)"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max issues returned (default 200, max 1000)"`
-	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane; runtime here is an issue taxonomy group, not issue_timing), source (problem=built-in Radar detector, missing_ref=dangling by-name reference, scheduling=pod startup blocker, condition=False controller/CRD condition), kind, group, ns (the namespace — use 'ns', not 'namespace' which is a CEL reserved word), name, reason, message, cause, action, remediation_kind, remediation_target, count (int, affected-resource fan-out), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, operation_retry_count (int, GitOps operation retries — distinct from restart_count), stuck (bool), issue_timing (independent timing evidence, not a root-cause verdict: 'started_at_resource_creation' or 'started_after_resource_was_healthy'; absent = unknown), issue_timing_basis ('condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'), first_seen, onset_unknown, onset_coverage_unknown, resource_created_at, last_seen. Times are unix seconds. first_seen is the earliest evidence-backed active-time anchor and may be Radar's first observation: read it as 'active at least since', not exact onset. It is 0 when unknown. Require first_seen != 0 for any age filter. When the whole row must have exact timing, also require onset_coverage_unknown == 0; onset_unknown alone does not exclude partially dated groups. onset_coverage is emitted only when at least one contributing signal has unknown timing. The owner_condition, pod_creation, and spec bases need not share first_seen's anchor; never subtract resource_created_at from first_seen to infer a healthy duration. resource_created_at is resource-age context, never onset. last_seen updates each compose. For cross-cluster scoping use clusters= (not CEL). Examples: 'issue_timing == \"started_after_resource_was_healthy\"', 'first_seen != 0 && onset_coverage_unknown == 0 && first_seen < timestamp(\"2026-05-01T00:00:00Z\").getSeconds()'"`
+	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane; a taxonomy, not issue_timing), source (problem=built-in Radar detector, missing_ref=dangling by-name reference, scheduling=pod startup blocker, condition=False controller/CRD condition), kind, group, ns (the namespace; namespace is reserved in CEL), name, reason, message, cause, action, remediation_kind, remediation_target, count (int, affected resources besides the subject; 0 if only the subject), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, operation_retry_count (int, GitOps operation retries, not restarts), stuck (bool), issue_timing (timing evidence, not a root-cause verdict: 'started_at_resource_creation' or 'started_after_resource_was_healthy'; empty = unknown), issue_timing_basis ('condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'), first_seen, onset_unknown, onset_coverage_unknown, resource_created_at, last_seen. Times are unix seconds; compare with int(timestamp(\"...\")). first_seen is the earliest evidence-backed time the issue was active: read it as 'active at least since' (it may be Radar's first observation); it is 0 when unknown. Require first_seen != 0 for any age filter. When the whole row must have exact timing, also require onset_coverage_unknown == 0; onset_unknown alone does not exclude partially dated groups. The owner_condition, pod_creation and spec issue_timing_basis values need not share first_seen's anchor. resource_created_at is resource age, never onset; never subtract resource_created_at from first_seen to infer a healthy duration. last_seen is not an age signal (usually the latest compose time). onset_coverage appears in results only when at least one contributing signal has unknown timing. Examples: 'issue_timing == \"started_after_resource_was_healthy\"', 'first_seen != 0 && onset_coverage_unknown == 0 && first_seen < int(timestamp(\"2026-05-01T00:00:00Z\"))'"`
 }
 
 // Tool handlers
@@ -767,13 +855,26 @@ func handleGetDashboard(ctx context.Context, req *mcp.CallToolRequest, input das
 	// Dashboard summary doesn't currently take a multi-namespace input, so we
 	// gate on the requested namespace, or on cluster-wide namespaced access
 	// when the caller doesn't pin a namespace. Cluster-scoped dashboard fields
-	// are still gated per kind below.
+	// are still gated per kind below. cluster://health answers through this
+	// handler, so these refusals are worded for both.
 	if input.Namespace != "" {
-		if !checkNamespaceAccess(ctx, input.Namespace) {
+		allowed, failed := filterNamespacesForUserWithStatus(ctx, []string{input.Namespace})
+		if failed {
+			return nil, nil, errNamespaceCheckFailed()
+		}
+		if allowed != nil && !slices.Contains(allowed, input.Namespace) {
 			return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
 		}
-	} else if filterNamespacesForUser(ctx, nil) != nil {
-		return nil, nil, fmt.Errorf("forbidden: dashboard summary requires cluster-wide namespace access — pass a specific namespace you have access to")
+	} else {
+		allowed, failed := filterNamespacesForUserWithStatus(ctx, nil)
+		switch {
+		case failed:
+			return nil, nil, errNamespaceCheckFailed()
+		case allowed != nil && len(allowed) == 0:
+			return nil, nil, fmt.Errorf("forbidden: you can't access any namespace in this cluster, so there is no summary to show %s", namespaceAccessRule)
+		case allowed != nil:
+			return nil, nil, fmt.Errorf("forbidden: the cluster-wide summary requires cluster-wide list pods permission. Namespace-by-namespace grants don't satisfy this check. Call get_dashboard with namespace set to one of yours: %s", namespaceForError(slices.Sorted(slices.Values(allowed))))
+		}
 	}
 
 	dashboard := buildDashboard(ctx, cache, input.Namespace, canReadClusterScopedKind(ctx, "nodes", "", "list"), canReadClusterScopedKind(ctx, "namespaces", "", "list"))
@@ -999,10 +1100,12 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	// access set would silently zero issueCount on every row. The
 	// cluster-scoped RBAC gate above (canReadClusterScopedKind) already
 	// authorized the read, so we pass nil here to compose cluster-wide.
-	if input.Context != "none" {
-		if builder := newResourceSummaryContextBuilder(ctx, listScope); builder != nil {
-			summarycontext.AttachToTypedList(results, objs, builder)
-		}
+	if !contextNone(input.Context) {
+		builder, cancel := summarycontext.WithBudget(ctx, func(ctx context.Context) summarycontext.Builder {
+			return newResourceSummaryContextBuilder(ctx, listScope)
+		})
+		defer cancel()
+		summarycontext.AttachToTypedList(results, objs, builder)
 	}
 
 	if !resourceReadCacheIsCurrent(cache) {
@@ -1012,6 +1115,10 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 }
 
 func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getResourceInput) (*mcp.CallToolResult, any, error) {
+	return readMCPResource(ctx, input, resourcecontext.TierBasic)
+}
+
+func readMCPResource(ctx context.Context, input getResourceInput, tier resourcecontext.ContextTier) (*mcp.CallToolResult, any, error) {
 	started := currentReadCache()
 	kind := resourceKindName(strings.ToLower(input.Kind), input.Group)
 	group := input.Group
@@ -1152,20 +1259,26 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	// tier is the default: cheap managedBy / exposes / selectedBy /
 	// runsOn / uses / issueSummary / auditSummary / policySummary. Pass
 	// context=none for a bare minified resource (bulk scans, raw jq work).
-	contextMode := strings.ToLower(strings.TrimSpace(input.Context))
 	includes := parseIncludes(input.Include)
-	skipContext := contextMode == "none"
+	skipContext := contextNone(input.Context)
 
 	var issueSummary *resourcecontext.IssueSummary
 	var issueRows []issues.Issue
+	var nodeCertificateReport *k8s.NodeCertificateReport
 	if !skipContext || includes["issues"] {
 		gvk := rawObj.GetObjectKind().GroupVersionKind()
-		issueSummary, issueRows = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
+		issueSummary, issueRows, nodeCertificateReport = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
+	}
+	if nodeCertificateReport != nil {
+		node, ok := rawObj.(*corev1.Node)
+		if !ok || nodeCertificateReport.UID != string(node.UID) {
+			nodeCertificateReport = nil
+		}
 	}
 	var resourceCtx *resourcecontext.ResourceContext
 	var warnings []string
 	if !skipContext {
-		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, resourcecontext.TierBasic, issueSummary)
+		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, tier, issueSummary)
 
 		// State-derived advisory warnings (deletionTimestamp, external manager,
 		// terminating namespace, workload health-condition history, PVC stuck
@@ -1225,11 +1338,17 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	//     or template-divergence warning upgrades this to {resource, warnings})
 	//   - resource + resourceContext: no includes, default context
 	//   - resource + resourceContext + extras: includes set
-	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && staleEnv == nil && !defaultConfigMapChanges {
+	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && staleEnv == nil && !defaultConfigMapChanges && nodeCertificateReport == nil {
 		return toJSONResult(resourceData)
 	}
 
 	result := map[string]any{"resource": resourceData}
+	if tier == resourcecontext.TierDiagnostic {
+		result["coverage"] = "Cached resource and Issues evidence, with a bounded sample of this resource's events. Pods, runtime logs and metrics were not collected. An empty Issues list does not establish runtime health. Follow Workload references with get_resource or diagnose for admission context, and Pod references with diagnose for runtime evidence."
+	}
+	if nodeCertificateReport != nil {
+		result["nodeCertificateReport"] = nodeCertificateReport
+	}
 	if includes["issues"] {
 		attachRelatedIssueDetails(result, issueRows)
 	}
@@ -1287,16 +1406,10 @@ func recentChangesSourceTracked(gvk schema.GroupVersionKind) bool {
 	return (gvk.Kind == "Secret" && gvk.Group == "") || meaningfulchanges.TrackedKindForGroup(gvk.Kind, gvk.Group)
 }
 
-// buildMCPResourceContext assembles the resourceContext section for MCP
-// get_resource. Mirrors the REST handler's buildAIResourceContext: pre-
-// computes IssueSummary + AuditSummary in the caller, threads the
-// PolicyReport index when Kyverno is installed, hands a request-scoped
-// RBAC checker to Build for per-ref gating, and lets Build's own
-// fallback resolve Relationships via topology.GetRelationshipsWithObject
-// (which applies KindForGVK so cross-group CRDs map to the right
-// topology node).
+// buildMCPResourceContext assembles the same access-checked family and
+// ownership answers as REST, with precomputed issue and audit facts.
 func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, issueSummary *resourcecontext.IssueSummary) *resourcecontext.ResourceContext {
-	return buildMCPResourceContextWithStaleChecks(
+	return buildMCPResourceContextWithOperatorChildren(
 		ctx,
 		obj,
 		kind,
@@ -1305,10 +1418,15 @@ func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, name
 		tier,
 		k8s.FindStaleSecretEnvChecksForObject(ctx, k8s.GetResourceCache(), obj),
 		issueSummary,
+		nil,
 	)
 }
 
 func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary) *resourcecontext.ResourceContext {
+	return buildMCPResourceContextWithOperatorChildren(ctx, obj, kind, namespace, name, tier, staleChecks, issueSummary, nil)
+}
+
+func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary, children *k8s.OperatorChildren) *resourcecontext.ResourceContext {
 	if obj == nil {
 		return nil
 	}
@@ -1323,15 +1441,19 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 
 	auditSum := computeMCPAuditSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 
+	scheduling := schedulinginsight.ForResource(obj, tier)
+	kueuevisibility.Attach(ctx, scheduling, obj)
+
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          tier,
-		AccessChecker: newMCPRequestScopedChecker(ctx),
-		IssueSummary:  issueSummary,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, tier),
-		Execution:     executioninsight.ForResource(obj, tier),
-		Serving:       servinginsight.ForResource(obj),
+		RelatedFindings: issues.CachedStrimziEvidence(obj, issueRelatedResourceAccess(ctx), func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) }),
+		Reflections:     k8s.ReflectionLookup{Cache: cache},
+		Tier:            tier,
+		AccessChecker:   newMCPRequestScopedChecker(ctx),
+		IssueSummary:    issueSummary,
+		AuditSummary:    auditSum,
+		Scheduling:      scheduling,
+		Execution:       executioninsight.ForResource(obj, tier),
+		Serving:         servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
@@ -1358,11 +1480,22 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 		}),
 	}
 
-	if topo, index, prov, dyn, ok := mcpTopologyForContext(); ok {
-		opts.RelIndex = index
-		opts.Topology = topo
-		opts.Provider = prov
-		opts.DynamicProv = dyn
+	access := func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) }
+	traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+	opts.Relationships, _, opts.RelationshipExtras = k8s.AnswerResourceContextRelationships(cache, obj, access, traverse)
+	if cache != nil {
+		opts.Provider = k8s.NewTopologyResourceProvider(cache)
+		opts.DynamicProv = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
+	}
+	opts.OpenTelemetryAutoInstrumentation, opts.OpenTelemetryAutoInstrumentationUnavailable = k8s.OpenTelemetryAutoInstrumentationForObject(obj, func(group, resource, namespace, verb string) bool {
+		return (namespace == "" || checkNamespaceAccess(ctx, namespace)) && canReadInNamespace(ctx, group, resource, namespace, verb)
+	})
+	if children == nil {
+		children = k8s.OperatorChildrenForObject(obj, func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
+	}
+	if children != nil {
+		opts.Children = children.Context
+		opts.ChildrenUnavailable = children.Unavailable != ""
 	}
 	opts.Ownership = func(rel *topology.Relationships, fetched ownership.Observation) {
 		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
@@ -1571,14 +1704,43 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		limit = min(input.Limit, 50)
 	}
 
+	started := currentReadCache()
+	var collection changesCollection
+	if input.Kind != "" {
+		var err error
+		if collection, err = changesKindCollection(ctx, input.Kind, input.Namespace, since); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	var requested []string
 	if input.Namespace != "" {
 		requested = []string{input.Namespace}
 	}
 	allowed := filterNamespacesForUser(ctx, requested)
-	if allowed != nil && len(allowed) == 0 {
+	// A caller limited to some namespaces reads history only there, and
+	// cluster-scoped rows are in none of them. For a named kind and no
+	// namespace, the kind's cluster-scoped groups the caller may list are
+	// read separately, limited to those groups before the store's bound.
+	var clusterGroups []string
+	if input.Kind != "" && input.Namespace == "" && allowed != nil {
+		clusterGroups = readableClusterScopedGroups(ctx, input.Kind)
+	}
+	// Without that read, coverage would vouch for an empty answer it
+	// doesn't describe.
+	if collection.clusterScoped != "" && allowed != nil && len(clusterGroups) == 0 {
+		collection = changesCollection{hints: []string{fmt.Sprintf("Changes to %s are cluster-scoped, and get_changes reads history only in the namespaces you can see, so they are not listed here.", collection.clusterScoped)}}
+	}
+	if allowed != nil && len(allowed) == 0 && len(clusterGroups) == 0 {
+		if input.Kind != "" && currentReadCache() != started {
+			return nil, nil, errConnectionChanged()
+		}
 		// Wrap the empty result so capped + uncapped + denied agree on wire shape.
-		return toJSONResult(getChangesResponseMCP{Changes: []mcpChange{}})
+		hints := collection.hints
+		if since := collection.sinceHint(nil); since != "" {
+			hints = append(hints, since)
+		}
+		return toJSONResult(getChangesResponseMCP{Changes: []mcpChange{}, Coverage: collection.coverage, NarrowHint: strings.Join(hints, " ")})
 	}
 
 	query := meaningfulchanges.Query{
@@ -1599,9 +1761,29 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		query.Kinds = []string{input.Kind}
 	}
 
-	recentResult, err := meaningfulchanges.Recent(ctx, query)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
+	var recentResult meaningfulchanges.RecentResult
+	if allowed == nil || len(allowed) > 0 {
+		var err error
+		if recentResult, err = meaningfulchanges.Recent(ctx, query); err != nil {
+			return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
+		}
+	}
+	if len(clusterGroups) > 0 {
+		clusterQuery := query
+		clusterQuery.Namespaces = []string{""}
+		clusterQuery.Groups = clusterGroups
+		clusterResult, err := meaningfulchanges.Recent(ctx, clusterQuery)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
+		}
+		recentResult.Changes = append(recentResult.Changes, clusterResult.Changes...)
+		recentResult.OutputCapped = recentResult.OutputCapped || clusterResult.OutputCapped
+		recentResult.FetchSaturated = recentResult.FetchSaturated || clusterResult.FetchSaturated
+		// A namespace created after Radar started clears the namespaced
+		// read's history gap; cluster scope has no such namespace.
+		if clusterResult.History.Incomplete {
+			recentResult.History = clusterResult.History
+		}
 	}
 	changes := recentResult.Changes
 	var sourcesErrored []string
@@ -1622,11 +1804,20 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		Changes:         changes,
 		SourcesErrored:  sourcesErrored,
 		HistoryCoverage: meaningfulchanges.HistoryCoverageFor(recentResult.History, callerReadsAllNamespaces(ctx)),
+		Coverage:        collection.coverage,
 	}
 	if input.Namespace != "" && input.Kind == "" && input.Name == "" {
 		resp.ClusterScopedChanges = mcpClusterScopedChanges(ctx, input.Namespace, since, false)
 	}
-	var hints []string
+	// What Radar doesn't collect comes first: it decides whether an empty
+	// answer means anything.
+	hints := slices.Clone(collection.hints)
+	if since := collection.sinceHint(resp.HistoryCoverage); since != "" {
+		hints = append(hints, since)
+	}
+	if input.Name != "" && input.Kind == "" && len(changes) == 0 {
+		hints = append(hints, "No change is recorded under this name in the kinds Radar collects; pass kind= to check whether Radar collects the kind.")
+	}
 	if recentResult.FetchSaturated {
 		hints = append(hints, meaningfulchanges.FetchSaturatedGuidance+
 			" Narrow with namespace=, kind= or name=. limit changes how many rows are returned, not the fetch bound."+
@@ -1644,6 +1835,9 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	if input.Name == "" {
 		resp.Changes, resp.Created = meaningfulchanges.CompactCreates(resp.Changes)
 	}
+	if input.Kind != "" && currentReadCache() != started {
+		return nil, nil, errConnectionChanged()
+	}
 	return toJSONResult(resp)
 }
 
@@ -1656,11 +1850,17 @@ type getChangesResponseMCP struct {
 	SourcesErrored []string                   `json:"sourcesErrored,omitempty"`
 	// ClusterScopedChanges is set for a namespace query: changes to
 	// cluster-scoped admission configuration that applies, or may apply, to
-	// the namespace. Changes above never include cluster-scoped objects.
+	// the namespace. For such a query, Changes above never include
+	// cluster-scoped objects.
 	ClusterScopedChanges *issuesapi.ClusterScopedChanges `json:"clusterScopedChanges,omitempty"`
 	// HistoryCoverage is set when the window starts before the history Radar
 	// holds, including when no change was returned.
 	HistoryCoverage *issuesapi.HistoryCoverage `json:"historyCoverage,omitempty"`
+	// Coverage is set when kind names a custom kind: where Radar collects it
+	// now, as list_resources reports it. It does not say how much history
+	// Radar holds; complete coverage with a recent start still misses
+	// earlier changes, which narrowHint states.
+	Coverage *resourceapi.Coverage `json:"coverage,omitempty"`
 }
 
 func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topologyInput) (*mcp.CallToolResult, any, error) {
@@ -1672,12 +1872,21 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 	if input.Namespace != "" {
 		requested = []string{input.Namespace}
 	}
-	allowed := filterNamespacesForUser(ctx, requested)
+	allowed, failed := filterNamespacesForUserWithStatus(ctx, requested)
+	if failed {
+		return nil, nil, errNamespaceCheckFailed()
+	}
 	if allowed != nil && len(allowed) == 0 {
 		if input.Namespace != "" {
 			return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
 		}
 		return nil, nil, fmt.Errorf("forbidden: topology requires either a namespace you can access or cluster-wide access")
+	}
+	// A cluster-wide request narrowed to the caller's namespaces says so, the
+	// same way get_events does, so the graph isn't read as the whole cluster.
+	var scope topologyScopeMCP
+	if input.Namespace == "" && allowed != nil {
+		scope = topologyScopeMCP{PartialScope: true, ScopeNamespaces: slices.Sorted(slices.Values(allowed))}
 	}
 
 	opts := topology.DefaultBuildOptions()
@@ -1706,7 +1915,9 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 	applyClusterScopedTopologyRBAC(ctx, topo)
 
 	if strings.ToLower(input.Format) == "summary" {
-		return toJSONResult(buildTopologySummary(topo))
+		summary := buildTopologySummary(topo)
+		summary.topologyScopeMCP = scope
+		return toJSONResult(summary)
 	}
 
 	// Steering for oversized graph responses — reuses the topology Warnings
@@ -1718,7 +1929,48 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 			len(topo.Nodes),
 		))
 	}
-	return toJSONResult(topo)
+	if !scope.PartialScope {
+		return toJSONResult(topo)
+	}
+	return toJSONResult(topologyWithScope{topo: topo, scope: scope})
+}
+
+// topologyScopeMCP marks a cluster-wide topology request that was narrowed to
+// the namespaces the caller may read, with the same fields and meaning as
+// get_events: without it a narrowed graph reads as the whole cluster.
+type topologyScopeMCP struct {
+	PartialScope    bool     `json:"partialScope,omitempty"`
+	ScopeNamespaces []string `json:"scopeNamespaces,omitempty"`
+}
+
+// topologyWithScope is a graph plus its scope marker. topology.Topology has
+// its own MarshalJSON, which an embedding struct would promote and so drop
+// the marker; the marker's fields are appended to the graph's object instead.
+// The pkg type stays as REST and Radar Hub use it.
+type topologyWithScope struct {
+	topo  *topology.Topology
+	scope topologyScopeMCP
+}
+
+func (t topologyWithScope) MarshalJSON() ([]byte, error) {
+	graph, err := json.Marshal(t.topo)
+	if err != nil {
+		return nil, err
+	}
+	marker, err := json.Marshal(t.scope)
+	if err != nil {
+		return nil, err
+	}
+	if len(graph) < 2 || graph[0] != '{' || graph[len(graph)-1] != '}' || len(marker) <= 2 {
+		return nil, fmt.Errorf("topology scope: unexpected JSON shape")
+	}
+	if len(graph) == 2 {
+		return marker, nil
+	}
+	out := make([]byte, 0, len(graph)+len(marker))
+	out = append(out, graph[:len(graph)-1]...)
+	out = append(out, ',')
+	return append(out, marker[1:]...), nil
 }
 
 // deniedClusterScopedTopoKinds returns the set of cluster-scoped topology
@@ -1813,6 +2065,7 @@ type topologySummary struct {
 	CRDDiscoveryStatus      string        `json:"crdDiscoveryStatus,omitempty"`
 	EstimatedNodes          int           `json:"estimatedNodes,omitempty"`
 	SummaryMode             bool          `json:"summaryMode,omitempty"`
+	topologyScopeMCP
 }
 
 type nsSummary struct {
@@ -2022,7 +2275,12 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	if input.Namespace != "" {
 		requested = []string{input.Namespace}
 	}
-	allowed := filterNamespacesForUser(ctx, requested)
+	allowed, failed := filterNamespacesForUserWithStatus(ctx, requested)
+	if failed {
+		// Not a denial: an empty list marked accessDenied would tell the
+		// agent the caller has no access when Radar just couldn't check.
+		return nil, nil, errNamespaceCheckFailed()
+	}
 	if allowed != nil && len(allowed) == 0 {
 		// Wrap the empty result so capped + uncapped + denied agree on wire shape.
 		// The marker lets a consumer tell "nothing recorded" from "not readable";
@@ -2099,6 +2357,9 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	// real (a fixed internal 20 used to make 21-100 silently unreachable),
 	// and the pre-cap total makes truncation visible instead of silent.
 	deduplicated, totalGroups := aicontext.DeduplicateEventsN(eventValues, limit)
+	if deduplicated == nil {
+		deduplicated = []aicontext.DeduplicatedEvent{} // "events":[], not null
+	}
 
 	// Always wrap into the response struct so capped + uncapped agree on
 	// wire shape ({events: [...], narrowHint?: "..."}).
@@ -2436,9 +2697,10 @@ type mcpMetrics struct {
 }
 
 type mcpClusterInfo struct {
-	Name     string `json:"name"`
-	Platform string `json:"platform"`
-	Version  string `json:"version"`
+	Name              string `json:"name"`                        // kubeconfig context, or "in-cluster"
+	KubeconfigCluster string `json:"kubeconfigCluster,omitempty"` // cluster entry the context points at; several contexts can share one
+	Platform          string `json:"platform"`
+	Version           string `json:"version"`
 }
 
 type mcpNodeSummary = health.NodeFleetCounts
@@ -2580,6 +2842,12 @@ type mcpHelmSummary struct {
 	// reporting Total=0.
 	Unavailable       bool   `json:"unavailable,omitempty"`
 	UnavailableReason string `json:"unavailableReason,omitempty"`
+	// UnreadNamespaces are namespaces whose Helm release Secrets weren't read:
+	// the caller was refused there, or the permission check behind that went
+	// unanswered. Their releases are missing from Total and Releases;
+	// list_helm_releases may still find them from objects the caller can read.
+	// Absent when every namespace in scope was read, and when Unavailable.
+	UnreadNamespaces *resourceapi.NameSet `json:"unreadNamespaces,omitempty"`
 }
 
 type mcpHelmRelease struct {
@@ -2594,12 +2862,38 @@ type mcpHelmRelease struct {
 	ResourceHealth           string              `json:"resourceHealth,omitempty"`
 	HealthIssue              string              `json:"healthIssue,omitempty"`
 	HealthSummary            string              `json:"healthSummary,omitempty"`
+	StatusUnreadCount        int                 `json:"statusUnreadCount,omitempty"`
 	LastOperation            *helm.HelmOperation `json:"lastOperation,omitempty"`
+	ManagedByFlux            bool                `json:"managedByFlux,omitempty"`
 	ManagedByFluxHelmRelease string              `json:"managedByFluxHelmRelease,omitempty"`
 }
 
 func mcpHelmDashboardPriority(r helm.HelmRelease) int {
 	return helm.ReleasePriority(r)
+}
+
+func mcpClusterInfoFromInfo(info *k8s.ClusterInfo) mcpClusterInfo {
+	return mcpClusterInfo{
+		Name:              info.DisplayName(),
+		KubeconfigCluster: info.KubeconfigCluster(),
+		Platform:          info.Platform,
+		Version:           info.KubernetesVersion,
+	}
+}
+
+// dashboardRequestTotals sums what the scheduler reserves for each live pod:
+// a pod-level budget (spec.resources) when one is set, otherwise its
+// containers, sidecars and init containers counted the way kube-scheduler does.
+func dashboardRequestTotals(pods []*corev1.Pod) (cpuMillis, memBytes int64) {
+	for _, pod := range pods {
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		requests := capacity.EffectivePodRequests(pod)
+		cpuMillis += requests.Cpu().MilliValue()
+		memBytes += requests.Memory().Value()
+	}
+	return cpuMillis, memBytes
 }
 
 func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace string, includeNodes bool, includeNamespaces bool) mcpDashboard {
@@ -2612,11 +2906,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 
 	// Cluster info
 	if info, err := k8s.GetClusterInfo(ctx); err == nil {
-		d.Cluster = mcpClusterInfo{
-			Name:     info.Cluster,
-			Platform: info.Platform,
-			Version:  info.KubernetesVersion,
-		}
+		d.Cluster = mcpClusterInfoFromInfo(info)
 	}
 
 	now := time.Now()
@@ -2889,12 +3179,24 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		d.HelmReleases.UnavailableReason = "Helm client not initialized."
 	} else {
 		user := userFromContext(ctx)
-		namespaces := resolveHelmListNamespaces(ctx, namespace)
+		// The scope comes first, as in list_helm_releases: its namespace check
+		// caches the answer the resolver then reads.
+		scope := mcpHelmObjectScope(ctx, namespace)
+		namespaces, checked, unread := resolveHelmStorageScope(ctx, namespace)
 		if namespaces != nil && len(namespaces) == 0 {
 			// No namespace access: leave the zero-value Helm summary.
 		} else {
-			releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, namespaces, user)
-			if err != nil {
+			releases, read, denied, err := helmClient.ListReleasesRecordingAccess(ctx, namespaces, user, scope)
+			if !checked && ((err == nil && len(read) == 0 && len(denied) > 0) || helm.ReleaseReadDeniedForCaller(err)) {
+				// A permission check went unanswered, so the refusal may be of a
+				// cluster-wide fallback the caller can't make even though some
+				// namespace would allow it.
+				d.HelmReleases.Unavailable = true
+				d.HelmReleases.UnavailableReason = "Couldn't check the caller's access to Helm release secrets (a permission check went unanswered); retry shortly."
+			} else if err == nil && len(read) == 0 && len(denied) > 0 {
+				d.HelmReleases.Unavailable = true
+				d.HelmReleases.UnavailableReason = "RBAC denied: caller cannot list Helm release secrets in this scope. list_helm_releases may find releases from objects the caller can read."
+			} else if err != nil {
 				// Not fatal for the dashboard — a viewer with no helm access
 				// still sees everything else. Surface to LLM consumers via
 				// Unavailable so they don't confidently report "Total=0
@@ -2910,6 +3212,9 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 				}
 			} else {
 				d.HelmReleases.Total = len(releases)
+				if missing := helm.UnreadStorageNamespaces(unread, denied); len(missing) > 0 {
+					d.HelmReleases.UnreadNamespaces = resourceapi.Names(missing, resourceapi.MCPSetLimit)
+				}
 
 				// Sort: failed/pending first, then operation-signaled Helm rollbacks,
 				// then unhealthy/degraded owned resources.
@@ -2931,7 +3236,9 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 						ResourceHealth:           r.ResourceHealth,
 						HealthIssue:              r.HealthIssue,
 						HealthSummary:            r.HealthSummary,
+						StatusUnreadCount:        r.StatusUnreadCount,
 						LastOperation:            r.LastOperation,
+						ManagedByFlux:            r.ManagedByFlux,
 						ManagedByFluxHelmRelease: r.ManagedByFluxHelmRelease,
 					})
 				}
@@ -2978,21 +3285,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 							var cpuReqMillis, memReqBytes int64
 							if podLister := cache.Pods(); podLister != nil {
 								allPods, _ := podLister.List(labels.Everything())
-								for _, pod := range allPods {
-									if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-										continue
-									}
-									for _, c := range pod.Spec.Containers {
-										if c.Resources.Requests != nil {
-											if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-												cpuReqMillis += cpu.MilliValue()
-											}
-											if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-												memReqBytes += mem.Value()
-											}
-										}
-									}
-								}
+								cpuReqMillis, memReqBytes = dashboardRequestTotals(allPods)
 							}
 
 							if cpuCapMillis > 0 && memCapBytes > 0 {
@@ -3277,8 +3570,10 @@ func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filter
 	}
 	user := userFromContext(ctx)
 	helmNamespaces := namespaces
+	checked := true
+	var unread []string
 	if helmNamespaces == nil {
-		helmNamespaces = resolveHelmListNamespaces(ctx, "")
+		helmNamespaces, checked, unread = resolveHelmStorageScope(ctx, "")
 	}
 	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, user)
 	username, groups := "", []string(nil)
@@ -3286,6 +3581,11 @@ func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filter
 		username, groups = user.Username, user.Groups
 	}
 	unchecked, incomplete = helm.ReportIssueRead(ctx, err, username, groups, helmNamespaces)
+	// Namespaces left out because the caller can't read Helm's storage there
+	// were never read, and list_helm_releases still lists their releases.
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		unchecked, incomplete = helm.AddUnreadNamespaces(unchecked, incomplete, unread, checked)
+	}
 	return issues.NativeHelmReleaseIssues(releases, time.Now()), unchecked, incomplete
 }
 
@@ -3420,12 +3720,12 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	// cluster-scoped hits whose problems live at namespace="". The
 	// builder routes per-hit by scope; CanReadClusterScoped above
 	// already gates which cluster-scoped kinds are reachable.
-	if input.Context != "none" {
-		if builder := summarycontext.Within(summarycontext.SearchBudget, func() summarycontext.Builder {
+	if !contextNone(input.Context) {
+		builder, cancel := summarycontext.WithBudget(ctx, func(ctx context.Context) summarycontext.Builder {
 			return newSearchSummaryContextBuilder(ctx, scanNamespaces)
-		}); builder != nil {
-			opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
-		}
+		})
+		defer cancel()
+		opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
 	}
 	result, err := search.Search(ctx, provider, parsed, opts)
 	if errors.Is(err, search.ErrConnectionChanged) || (err == nil && !provider.Current()) {
@@ -3442,6 +3742,9 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		)
 	}
 	response.CoverageHint = searchCoverageHint(result, len(parsed.KindFilter) > 0)
+	if ipOnlyQuery(parsed) && input.Filter == "" && result.TotalMatched == result.Total {
+		response.IPHint = searchIPHint(parsed.Tokens[0], result.Hits)
+	}
 	return toJSONResult(response)
 }
 
@@ -3452,8 +3755,34 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 // agents read the limits before interpreting the matches.
 type searchResponseMCP struct {
 	CoverageHint string `json:"coverageHint,omitempty"`
+	IPHint       string `json:"ipHint,omitempty"`
 	NarrowHint   string `json:"narrowHint,omitempty"`
 	search.Result
+}
+
+// ipOnlyQuery reports a query of one IP address alone: no other term (tokens
+// are AND'd, so a second IP hides each one's holder), modifier or namespace
+// scope that could hide the Pod, Service or Node holding it.
+func ipOnlyQuery(q search.Query) bool {
+	return len(q.Tokens) == 1 && len(q.IPTokens()) == 1 &&
+		len(q.KindFilter) == 0 && len(q.NSFilter) == 0 && len(q.LabelFilter) == 0 && len(q.ImageFilter) == 0
+}
+
+// searchIPHint says when no hit of an untruncated one-IP search currently
+// holds the address, so a hit that only mentions it (a ConfigMap, a Pod's
+// hostIP) or an exited pod that once held it isn't read as its holder.
+// coverageHint qualifies it the same way it qualifies any absence.
+func searchIPHint(ip string, hits []search.Hit) string {
+	held := slices.ContainsFunc(hits, func(h search.Hit) bool {
+		return slices.ContainsFunc(h.Matched, func(m search.MatchedField) bool {
+			return m.Token == ip && strings.HasPrefix(m.Site, "ip:") && m.Site != "ip:exitedPodIP"
+		})
+	})
+	if held {
+		return ""
+	}
+	return fmt.Sprintf("no running Pod, Service or Node in Radar's view holds %s; other hits only mention it or held it "+
+		"before. Pod IPs are reused, a deleted pod's IP no longer resolves, and the address may be outside the cluster", ip)
 }
 
 // toJSONResult marshals data into a text content MCP result.

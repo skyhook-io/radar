@@ -1,0 +1,67 @@
+{
+  "apiVersion": "serving.kserve.io/v1beta1",
+  "kind": "InferenceService",
+  "metadata": {
+    "name": "iris-invalid-spec",
+    "namespace": "ml-serving",
+    "generation": 1,
+    "annotations": {
+      "modelFormat": "unsupported-format",
+      "serving.kserve.io/deploymentMode": "Standard"
+    }
+  },
+  "spec": {
+    "predictor": {
+      "maxReplicas": 1,
+      "minReplicas": 1,
+      "model": {
+        "modelFormat": {
+          "name": "unsupported-format"
+        },
+        "name": "",
+        "resources": {
+          "limits": {
+            "cpu": "500m",
+            "memory": "512Mi"
+          },
+          "requests": {
+            "cpu": "50m",
+            "memory": "192Mi"
+          }
+        },
+        "storageUri": "gs://kfserving-examples/models/sklearn/1.0/model"
+      }
+    }
+  },
+  "status": {
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-11-03T02:17:16Z",
+        "status": "Unknown",
+        "type": "IngressReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:17:16Z",
+        "status": "Unknown",
+        "type": "PredictorReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:17:16Z",
+        "status": "Unknown",
+        "type": "Ready"
+      }
+    ],
+    "deploymentMode": "Standard",
+    "modelStatus": {
+      "lastFailureInfo": {
+        "message": "No runtime found to support specified framework/version",
+        "reason": "NoSupportingRuntime"
+      },
+      "states": {
+        "activeModelState": "",
+        "targetModelState": "FailedToLoad"
+      },
+      "transitionStatus": "InvalidSpec"
+    }
+  }
+}

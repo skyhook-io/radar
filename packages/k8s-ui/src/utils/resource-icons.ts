@@ -52,6 +52,7 @@ import {
   // GitOps
   GitBranch,
   Layers,
+  ListVideo,
   Anchor,
   FolderGit2,
 
@@ -91,6 +92,7 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   replicaset: Copy,
   job: Play,
   cronjob: Timer,
+  jobset: ListVideo,
   rollout: Rocket,
 
   // Networking

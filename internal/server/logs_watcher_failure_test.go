@@ -20,6 +20,8 @@ import (
 )
 
 func TestWorkloadLogsStream_RepeatedWatcherFailureKeepsNotice(t *testing.T) {
+	setWorkloadLogDiscoveryInterval(t, 500*time.Millisecond)
+
 	for _, fresh := range []bool{false, true} {
 		t.Run(fmt.Sprintf("fresh=%v", fresh), func(t *testing.T) {
 			var requests atomic.Int32
@@ -45,7 +47,7 @@ func TestWorkloadLogsStream_RepeatedWatcherFailureKeepsNotice(t *testing.T) {
 			}
 			previous := k8s.SetTestClient(client)
 			t.Cleanup(func() { k8s.SetTestClient(previous) })
-			stream := readSSEFor(t, "/api/workloads/deployments/default/nginx/logs/stream", 7*time.Second)
+			stream := readSSEFor(t, "/api/workloads/deployments/default/nginx/logs/stream", 10*workloadLogDiscoveryInterval)
 			if requests.Load() < 2 || strings.Contains(stream, `"notice":""`) || strings.Count(stream, "event: notice") != 1 {
 				t.Fatalf("expected one persistent warning across failed follows:\n%s", stream)
 			}
@@ -54,6 +56,8 @@ func TestWorkloadLogsStream_RepeatedWatcherFailureKeepsNotice(t *testing.T) {
 }
 
 func TestWorkloadLogsStream_RecoveryRequiresOpenedFollowOrFiniteRead(t *testing.T) {
+	setWorkloadLogDiscoveryInterval(t, 100*time.Millisecond)
+
 	for _, mode := range []string{"idle", "pending", "finished"} {
 		t.Run(mode, func(t *testing.T) {
 			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "watcher-0", Namespace: "watcher", UID: "one", Labels: map[string]string{"app": "watcher"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
@@ -84,7 +88,7 @@ func TestWorkloadLogsStream_RecoveryRequiresOpenedFollowOrFiniteRead(t *testing.
 			}
 			previous := k8s.SetTestClient(client)
 			t.Cleanup(func() { k8s.SetTestClient(previous) })
-			stream := readSSEFor(t, "/api/workloads/deployments/watcher/watcher/logs/stream", 12*time.Second)
+			stream := readSSEFor(t, "/api/workloads/deployments/watcher/watcher/logs/stream", 20*workloadLogDiscoveryInterval)
 			cleared := strings.Contains(stream, `"notice":""`)
 			if requests.Load() < 2 || cleared != (mode != "pending") {
 				t.Fatalf("mode=%s, requests=%d, cleared=%v:\n%s", mode, requests.Load(), cleared, stream)

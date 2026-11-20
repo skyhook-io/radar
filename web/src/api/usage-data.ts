@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchJSON } from './client'
-import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode } from './config'
+import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, setAutomaticRequestMarking } from './config'
 
 export type UsageDataState = 'undecided' | 'on' | 'off'
 export type UsageDataSource = 'default' | 'user' | 'env' | 'deployment'
@@ -26,9 +26,12 @@ export interface UsageReport {
     authMode: string
     timelineStorage: string
     mcpEnabled: boolean
+    // 'none' | 'discovered' | 'manual'
     prometheus: string
     costSource: string
     browsers: string[]
+    aiConfigured: boolean
+    trafficSource: string
   }
   engagement: { sessions: number; activeMinutes: string }
   views: Record<string, number>
@@ -36,6 +39,8 @@ export interface UsageReport {
   mcpTools: Record<string, number>
   uiEvents: Record<string, number>
   errors: Record<string, number>
+  actionKinds: Record<string, number>
+  connectionFailures: Record<string, number>
   clusters: { contexts: string; used: number; shapes: ClusterShape[] }
 }
 
@@ -140,13 +145,26 @@ export function recordUsageEvent(event: UsageEvent): void {
 
 const ACTIVE_TICK_MINUTES = 5
 
-// Counts views, one session per page load, and visible time in five-minute
-// ticks. Nothing is sent unless usage data is on.
+// Real use: a window left open on a second screen sees none of these. Scroll
+// isn't one: following logs scrolls by itself, and a person scrolling already
+// shows up as wheel, touch, pointer or key input.
+const INPUT_EVENTS = ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'] as const
+
+// Counts views, one session per page load, and time in use in five-minute
+// ticks: a tick counts only if the page is visible and someone used it during
+// that tick. Nothing is sent unless usage data is on.
 export function useUsageRecording(view: string, status: UsageDataStatus | undefined) {
   const on = isRecording(status)
+
   useEffect(() => {
     setUsageRecording(on)
   }, [on])
+
+  // No status yet leaves the mark as the entry point set it.
+  const decided = status !== undefined
+  useEffect(() => {
+    if (decided) setAutomaticRequestMarking(on)
+  }, [decided, on])
 
   useEffect(() => {
     if (on) recordUsageEvent({ type: 'view', name: view })
@@ -155,11 +173,21 @@ export function useUsageRecording(view: string, status: UsageDataStatus | undefi
   useEffect(() => {
     if (!on) return
     recordUsageEvent({ type: 'session' })
+    let usedThisTick = false
+    const markUsed = () => {
+      usedThisTick = true
+    }
+    // Capture, because views may stop propagation.
+    const listenerOptions = { capture: true, passive: true }
+    for (const type of INPUT_EVENTS) window.addEventListener(type, markUsed, listenerOptions)
     const tick = window.setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        recordUsageEvent({ type: 'active', minutes: ACTIVE_TICK_MINUTES })
-      }
+      const used = usedThisTick && document.visibilityState === 'visible'
+      usedThisTick = false
+      if (used) recordUsageEvent({ type: 'active', minutes: ACTIVE_TICK_MINUTES })
     }, ACTIVE_TICK_MINUTES * 60_000)
-    return () => window.clearInterval(tick)
+    return () => {
+      window.clearInterval(tick)
+      for (const type of INPUT_EVENTS) window.removeEventListener(type, markUsed, listenerOptions)
+    }
   }, [on])
 }

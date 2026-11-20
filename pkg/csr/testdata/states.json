@@ -1,0 +1,148 @@
+{
+  "vectors": [
+    {
+      "name": "no status",
+      "csr": { "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-new" } },
+      "state": "pending",
+      "label": "Pending approval",
+      "level": "neutral",
+      "conditionType": "",
+      "certificatePresent": false
+    },
+    {
+      "name": "pending for longer than a stuck Pod",
+      "csr": { "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-old", "creationTimestamp": "2020-01-01T00:00:00Z" }, "status": {} },
+      "state": "pending",
+      "label": "Pending approval",
+      "level": "degraded",
+      "conditionType": "",
+      "certificatePresent": false
+    },
+    {
+      "name": "no conditions",
+      "csr": { "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-waiting" }, "status": {} },
+      "state": "pending",
+      "label": "Pending approval",
+      "level": "neutral",
+      "conditionType": "",
+      "certificatePresent": false
+    },
+    {
+      "name": "approved, signer has not returned a certificate",
+      "csr": {
+        "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-approved" },
+        "status": { "conditions": [ { "type": "Approved", "status": "True", "reason": "KubectlApprove", "message": "This CSR was approved by kubectl certificate approve.", "lastUpdateTime": "2026-10-20T10:00:00Z", "lastTransitionTime": "2026-10-20T10:00:00Z" } ] }
+      },
+      "state": "approved",
+      "label": "Approved, not issued",
+      "level": "degraded",
+      "conditionType": "Approved",
+      "certificatePresent": false
+    },
+    {
+      "name": "approved with an empty certificate",
+      "csr": {
+        "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-empty-certificate" },
+        "status": { "certificate": "", "conditions": [ { "type": "Approved", "status": "True", "reason": "AutoApproved" } ] }
+      },
+      "state": "approved",
+      "label": "Approved, not issued",
+      "level": "neutral",
+      "conditionType": "Approved",
+      "certificatePresent": false
+    },
+    {
+      "name": "issued",
+      "csr": {
+        "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-issued" },
+        "status": { "certificate": "Y2VydGlmaWNhdGU=", "conditions": [ { "type": "Approved", "status": "True", "reason": "AutoApproved", "message": "Auto approving kubelet client certificate after SubjectAccessReview." } ] }
+      },
+      "state": "issued",
+      "label": "Issued",
+      "level": "healthy",
+      "conditionType": "Approved",
+      "certificatePresent": true
+    },
+    {
+      "name": "denied",
+      "csr": {
+        "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-denied" },
+        "status": { "conditions": [ { "type": "Denied", "status": "True", "reason": "KubectlDeny", "message": "This CSR was denied by kubectl certificate deny." } ] }
+      },
+      "state": "denied",
+      "label": "Denied",
+      "level": "unhealthy",
+      "conditionType": "Denied",
+      "certificatePresent": false
+    },
+    {
+      "name": "approved, then the signer failed",
+      "csr": {
+        "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-failed" },
+        "status": { "conditions": [
+          { "type": "Approved", "status": "True", "reason": "KubectlApprove" },
+          { "type": "Failed", "status": "True", "reason": "SignerValidationFailure", "message": "invalid usage for client certificate: server auth" }
+        ] }
+      },
+      "state": "failed",
+      "label": "Failed",
+      "level": "unhealthy",
+      "conditionType": "Failed",
+      "certificatePresent": false
+    },
+    {
+      "name": "failed with a certificate",
+      "csr": {
+        "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-failed-certificate" },
+        "status": { "certificate": "Y2VydGlmaWNhdGU=", "conditions": [
+          { "type": "Approved", "status": "True" },
+          { "type": "Failed", "status": "True", "reason": "SignerError" }
+        ] }
+      },
+      "state": "failed",
+      "label": "Failed",
+      "level": "unhealthy",
+      "conditionType": "Failed",
+      "certificatePresent": true
+    },
+    {
+      "name": "certificate without approval",
+      "csr": {
+        "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-unapproved-certificate" },
+        "status": { "certificate": "Y2VydGlmaWNhdGU=" }
+      },
+      "state": "pending",
+      "label": "Pending approval",
+      "level": "neutral",
+      "conditionType": "",
+      "certificatePresent": true
+    },
+    {
+      "name": "approved and denied in legacy data",
+      "csr": {
+        "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-conflicting" },
+        "status": { "conditions": [
+          { "type": "Approved", "status": "True" },
+          { "type": "Denied", "status": "True", "reason": "PolicyDeny" }
+        ] }
+      },
+      "state": "denied",
+      "label": "Denied",
+      "level": "unhealthy",
+      "conditionType": "Denied",
+      "certificatePresent": false
+    },
+    {
+      "name": "unrelated condition only",
+      "csr": {
+        "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-custom-condition" },
+        "status": { "conditions": [ { "type": "Ready", "status": "True" } ] }
+      },
+      "state": "pending",
+      "label": "Pending approval",
+      "level": "neutral",
+      "conditionType": "",
+      "certificatePresent": false
+    }
+  ]
+}

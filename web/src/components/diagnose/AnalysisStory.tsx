@@ -212,7 +212,16 @@ function removeInlineMarker(markdown: string, index: number): string {
   return before + after;
 }
 
-const LOSS_COPY: Record<Exclude<StoryPlacementLoss, object>, string> = {
+type NamedLoss = Exclude<StoryPlacementLoss, object>;
+
+// The chip names which failure it is; the tooltip says what it means.
+const LOSS_LABEL: Record<NamedLoss, string> = {
+  invalid: "unknown citation",
+  unlinked: "unverified",
+  unplaced: "unclear citation",
+};
+
+const LOSS_COPY: Record<NamedLoss, string> = {
   invalid: "The agent cited a result Radar cannot identify.",
   unlinked: "Radar could not verify this citation against its record.",
   unplaced:
@@ -269,7 +278,7 @@ function LostSupport({
           className="h-3 w-3 shrink-0 text-amber-500"
           aria-hidden
         />
-        unverified
+        {LOSS_LABEL[reason]}
       </span>
     </Tooltip>
   );
@@ -325,10 +334,13 @@ export function AnalysisStory({
 }: {
   /** Resolved once by the host, which also needs it for its own counts. */
   placements: StoryPlacements;
-  /** Renders the card for a placed item; `compact` when it sits in the collapsed preview. */
+  /**
+   * Renders the card for a placed item: `compact` when the agent placed it
+   * compact or it sits in the collapsed preview, `preview` for the latter.
+   */
   renderPlacement: (
     target: StoryPlacementTarget,
-    options: { compact: boolean },
+    options: { compact: boolean; preview: boolean },
   ) => ReactNode;
   onReveal: (target: StoryPlacementTarget) => void;
   /** Opens a cited call's raw result in Activity when Radar renders no card for it. */
@@ -443,6 +455,7 @@ export function AnalysisStory({
       >
         {renderPlacement(resolution.target, {
           compact: compact || segment.compact === true,
+          preview: compact,
         })}
       </div>
     );

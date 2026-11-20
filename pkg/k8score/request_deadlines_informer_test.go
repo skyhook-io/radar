@@ -107,7 +107,7 @@ func TestRequestDeadlines_StalledInformerListRecovers(t *testing.T) {
 			srv := httptest.NewServer(api)
 			cfg := &rest.Config{Host: srv.URL, QPS: 100, Burst: 200}
 			cfg.Wrap(func(rt http.RoundTripper) http.RoundTripper {
-				return &requestDeadlineRoundTripper{next: rt, idle: time.Second, headerTimeout: time.Second, ceiling: time.Minute, watchGrace: time.Second}
+				return &requestDeadlineRoundTripper{next: rt, idle: 500 * time.Millisecond, headerTimeout: 500 * time.Millisecond, ceiling: time.Minute, watchGrace: time.Second}
 			})
 			rc, err := NewResourceCache(CacheConfig{
 				Client:         kubernetes.NewForConfigOrDie(cfg),

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -344,17 +345,25 @@ func untrackedSpecChanges(oldObj, newObj, oldProjected, newProjected any, root s
 		reported[change.Path] = true
 	}
 	untracked = collapseUntracked(untracked, covered, reported)
+	return untrackedSpecRows(root, untracked)
+}
+
+func untrackedSpecRows(root string, untracked []changedSpecPath) ([]FieldChange, []string) {
 	if len(untracked) == 0 {
 		return nil, nil
 	}
 
 	var changes []FieldChange
 	var omitted []string
+	omittedCount := 0
 	labels := make([]string, 0, len(untracked))
 	for _, c := range untracked {
 		oldVal, newVal := c.oldV, c.newV
 		oldFound, newFound := oldVal != nil, newVal != nil
 		label := shortSpecPath(c.path)
+		if root == "desired state" {
+			label = c.path
+		}
 		switch {
 		case c.order:
 			label += " order"
@@ -365,7 +374,10 @@ func untrackedSpecChanges(oldObj, newObj, oldProjected, newProjected any, root s
 		}
 		labels = append(labels, label)
 		if len(changes) == maxUntrackedSpecRows {
-			omitted = append(omitted, c.path)
+			omittedCount++
+			if root != "desired state" || len(omitted) < maxUntrackedSpecRows {
+				omitted = append(omitted, c.path)
+			}
 			continue
 		}
 		if c.order {
@@ -375,10 +387,12 @@ func untrackedSpecChanges(oldObj, newObj, oldProjected, newProjected any, root s
 		oldShown, newShown := untrackedDisplayValues(c.path, oldVal, newVal)
 		changes = append(changes, FieldChange{Path: c.path, OldValue: oldShown, NewValue: newShown})
 	}
-	// Past the row cap, one row still names every changed field, so no field
-	// identity is lost even when its values are.
 	if len(omitted) > 0 {
-		changes = append(changes, FieldChange{Path: root + " (more fields)", OldValue: nil, NewValue: omitted})
+		path := root + " (more fields)"
+		if extra := omittedCount - len(omitted); extra > 0 {
+			path = fmt.Sprintf("%s (more fields; %d paths omitted)", root, extra)
+		}
+		changes = append(changes, FieldChange{Path: path, OldValue: nil, NewValue: omitted})
 	}
 	shown := labels
 	if len(shown) > maxUntrackedSummary {
@@ -388,6 +402,9 @@ func untrackedSpecChanges(oldObj, newObj, oldProjected, newProjected any, root s
 	prefix := "other spec changes: "
 	if root != "spec" {
 		prefix = "other changes: "
+	}
+	if root == "desired state" {
+		prefix = "desired state changes: "
 	}
 	summary := prefix + strings.Join(shown, ", ")
 	if extra := len(labels) - len(shown); extra > 0 {
@@ -482,6 +499,12 @@ func rootFieldsEqual(oldObj, newObj any, root string) bool {
 // differ. Lists of named objects are keyed by name to match the explicit
 // differs' `containers[app]` notation; other lists are keyed by index.
 func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out *[]changedSpecPath) {
+	collectChangedPaths(path, oldV, newV, absentRoot, orderMatters, out)
+}
+
+// collectChangedPaths reports a reorder of a keyed list at any path where
+// ordered returns true.
+func collectChangedPaths(path string, oldV, newV any, absentRoot string, ordered func(string) bool, out *[]changedSpecPath) {
 	if reflect.DeepEqual(oldV, newV) {
 		return
 	}
@@ -505,7 +528,7 @@ func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out
 			return
 		}
 		for _, k := range unionKeys(o, n) {
-			collectChangedSpecPaths(specPathKey(path, k), o[k], n[k], absentRoot, out)
+			collectChangedPaths(specPathKey(path, k), o[k], n[k], absentRoot, ordered, out)
 		}
 	case []any:
 		n, ok := newV.([]any)
@@ -516,29 +539,159 @@ func collectChangedSpecPaths(path string, oldV, newV any, absentRoot string, out
 		if field := listKeyField(o, n); field != "" {
 			oldByKey, _ := listByKey(o, field)
 			newByKey, _ := listByKey(n, field)
-			if oldOrder, newOrder := sharedKeyOrder(o, newByKey, field), sharedKeyOrder(n, oldByKey, field); orderMatters(path) && !equalStringSlices(oldOrder, newOrder) {
+			if oldOrder, newOrder := sharedKeyOrder(o, newByKey, field), sharedKeyOrder(n, oldByKey, field); ordered(path) && !equalStringSlices(oldOrder, newOrder) {
 				*out = append(*out, changedSpecPath{path: path, order: true, oldOrder: oldOrder, newOrder: newOrder})
 			}
 			for _, k := range unionKeys(oldByKey, newByKey) {
-				collectChangedSpecPaths(path+"["+k+"]", oldByKey[k], newByKey[k], absentRoot, out)
+				collectChangedPaths(path+"["+k+"]", oldByKey[k], newByKey[k], absentRoot, ordered, out)
 			}
 			return
 		}
-		// Unkeyed items are compared by position; items past the shorter
-		// list are reported as added or removed.
-		for i := 0; i < max(len(o), len(n)); i++ {
+		// A pure reorder of an unkeyed list whose order matters reads as an
+		// order change of item positions; alignment would call it a removal
+		// and an addition of the same item.
+		if ordered(path) {
+			if oldOrder, newOrder, ok := unkeyedPermutation(o, n); ok {
+				*out = append(*out, changedSpecPath{path: path, order: true, oldOrder: oldOrder, newOrder: newOrder})
+				return
+			}
+		}
+		// Unkeyed items are aligned on the items both lists hold unchanged,
+		// so one inserted or removed item does not read as a change to
+		// every item after it. A changed item is named by its new index.
+		for _, pair := range alignUnkeyed(o, n) {
 			var oldItem, newItem any
-			if i < len(o) {
-				oldItem = o[i]
+			index := pair.old
+			if pair.old >= 0 {
+				oldItem = o[pair.old]
 			}
-			if i < len(n) {
-				newItem = n[i]
+			if pair.new >= 0 {
+				newItem, index = n[pair.new], pair.new
 			}
-			collectChangedSpecPaths(fmt.Sprintf("%s[%d]", path, i), oldItem, newItem, absentRoot, out)
+			collectChangedPaths(fmt.Sprintf("%s[%d]", path, index), oldItem, newItem, absentRoot, ordered, out)
 		}
 	default:
 		*out = append(*out, changedSpecPath{path: path, absentRoot: absentRoot, oldV: oldV, newV: newV})
 	}
+}
+
+// maxAlignCells bounds the quadratic alignment of unkeyed lists; longer
+// middles fall back to positional pairing.
+const maxAlignCells = 10000
+
+// unkeyedPermutation reports whether n holds exactly o's items in another
+// order, as o's positions and, for each position of n, the position in o of
+// the item now there.
+func unkeyedPermutation(o, n []any) ([]string, []string, bool) {
+	if len(o) != len(n) || len(o)*len(n) > maxAlignCells {
+		return nil, nil, false
+	}
+	used := make([]bool, len(o))
+	oldOrder := make([]string, len(o))
+	newOrder := make([]string, len(n))
+	for i := range o {
+		oldOrder[i] = strconv.Itoa(i)
+	}
+	for j, item := range n {
+		match := -1
+		for i := range o {
+			if !used[i] && reflect.DeepEqual(o[i], item) {
+				match = i
+				break
+			}
+		}
+		if match < 0 {
+			return nil, nil, false
+		}
+		used[match] = true
+		newOrder[j] = strconv.Itoa(match)
+	}
+	return oldOrder, newOrder, true
+}
+
+// itemPair holds indexes into an old and a new list; -1 is "absent".
+type itemPair struct{ old, new int }
+
+// alignUnkeyed returns the item pairs of two unkeyed lists that differ.
+// After the equal prefix and suffix, equal items are matched by longest
+// common subsequence; the unmatched items between two matches are paired
+// by position, so an edit stays one change beside an insert elsewhere.
+func alignUnkeyed(o, n []any) []itemPair {
+	prefix := 0
+	for prefix < len(o) && prefix < len(n) && reflect.DeepEqual(o[prefix], n[prefix]) {
+		prefix++
+	}
+	suffix := 0
+	for suffix < len(o)-prefix && suffix < len(n)-prefix && reflect.DeepEqual(o[len(o)-1-suffix], n[len(n)-1-suffix]) {
+		suffix++
+	}
+	oldMid, newMid := o[prefix:len(o)-suffix], n[prefix:len(n)-suffix]
+
+	var out []itemPair
+	var gapOld, gapNew []int
+	flush := func() {
+		for k := 0; k < max(len(gapOld), len(gapNew)); k++ {
+			pair := itemPair{old: -1, new: -1}
+			if k < len(gapOld) {
+				pair.old = gapOld[k]
+			}
+			if k < len(gapNew) {
+				pair.new = gapNew[k]
+			}
+			out = append(out, pair)
+		}
+		gapOld, gapNew = gapOld[:0], gapNew[:0]
+	}
+	if len(oldMid)*len(newMid) > maxAlignCells {
+		for i := range oldMid {
+			gapOld = append(gapOld, prefix+i)
+		}
+		for j := range newMid {
+			gapNew = append(gapNew, prefix+j)
+		}
+		flush()
+		return out
+	}
+
+	// lcs[i][j] is the common-subsequence length of oldMid[i:] and newMid[j:].
+	lcs := make([][]int, len(oldMid)+1)
+	for i := range lcs {
+		lcs[i] = make([]int, len(newMid)+1)
+	}
+	equal := make([][]bool, len(oldMid))
+	for i := len(oldMid) - 1; i >= 0; i-- {
+		equal[i] = make([]bool, len(newMid))
+		for j := len(newMid) - 1; j >= 0; j-- {
+			if reflect.DeepEqual(oldMid[i], newMid[j]) {
+				equal[i][j] = true
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else {
+				lcs[i][j] = max(lcs[i+1][j], lcs[i][j+1])
+			}
+		}
+	}
+	i, j := 0, 0
+	for i < len(oldMid) && j < len(newMid) {
+		switch {
+		case equal[i][j] && lcs[i][j] == lcs[i+1][j+1]+1:
+			flush()
+			i, j = i+1, j+1
+		case lcs[i+1][j] >= lcs[i][j+1]:
+			gapOld = append(gapOld, prefix+i)
+			i++
+		default:
+			gapNew = append(gapNew, prefix+j)
+			j++
+		}
+	}
+	for ; i < len(oldMid); i++ {
+		gapOld = append(gapOld, prefix+i)
+	}
+	for ; j < len(newMid); j++ {
+		gapNew = append(gapNew, prefix+j)
+	}
+	flush()
+	return out
 }
 
 // collapseUntracked reports an uncovered leaf inside a block that exists on
@@ -653,10 +806,11 @@ func emptyLike(v, other any) any {
 // orderMatters limits order-only rows to lists whose sequence has an effect:
 // anything in a pod template (a reorder there is a new template revision,
 // and init containers and env vars are order-sensitive), admission webhooks
-// (mutating webhooks run in order), and route rules (the first of two
-// equally specific matches wins).
+// (mutating webhooks run in order), route rules (the first of two
+// equally specific matches wins), and Argo CD sources (a later source wins
+// where two render the same resource).
 func orderMatters(path string) bool {
-	return strings.Contains(path, "template.") || strings.HasPrefix(path, "webhooks") || path == "spec.rules"
+	return strings.Contains(path, "template.") || strings.HasPrefix(path, "webhooks") || path == "spec.rules" || path == "spec.sources"
 }
 
 func sharedKeyOrder(items []any, other map[string]any, field string) []string {
@@ -879,6 +1033,7 @@ var completeRowSuffixes = []string{
 	"spec.dnsConfig.searches", "spec.dnsConfig.options", "].command", "].args", "].image",
 	"spec.hostnames", "spec.externalIPs", "spec.loadBalancerSourceRanges", "spec.selector",
 	"spec.limits", "spec.metrics", "spec.scaleTargetRef", "spec.behavior.scaleUp", "spec.behavior.scaleDown",
+	"spec.syncPolicy.automated",
 }
 
 func isCompleteRow(path string) bool {
@@ -1003,19 +1158,20 @@ var safeStringFields = map[string]bool{
 	"effect": true, "key": true, "resource": true, "resources": true, "verbs": true, "operations": true,
 	"apiGroups": true, "apiVersions": true, "scope": true, "schedule": true,
 	"timeZone": true, "image": true, "matchPolicy": true, "sideEffects": true, "failurePolicy": true,
-	"sizeLimit": true,
+	"sizeLimit": true, "strategy": true, "targetRevision": true,
 }
 
 // safeStringSuffixes cover enum and reference fields by naming convention
-// (restartPolicy, serviceAccountName, ingressClassName, pathType...).
-var safeStringSuffixes = []string{"Policy", "Name", "ClassName", "Type", "Mode"}
+// (restartPolicy, serviceAccountName, ingressClassName, pathType,
+// statefulSetUpdateStrategy...).
+var safeStringSuffixes = []string{"Policy", "Name", "ClassName", "Type", "Mode", "Strategy"}
 
 // freeFormMaps hold arbitrary user keys, so a key that happens to be called
 // "name" or "type" inside them says nothing about its value.
 var freeFormMaps = map[string]bool{
 	"labels": true, "annotations": true, "matchLabels": true, "nodeSelector": true,
 	"parameters": true, "data": true, "stringData": true, "options": true, "config": true,
-	"plugins": true, "args": true,
+	"plugins": true, "args": true, "valuesObject": true, "commonLabels": true, "commonAnnotations": true,
 }
 
 func inFreeFormMap(path string) bool {

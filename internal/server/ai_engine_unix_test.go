@@ -182,7 +182,10 @@ func TestListAgentsReportsOffOnceTheLastCLIIsRemoved(t *testing.T) {
 
 // A run that names an agent that isn't installed (picked before it was removed)
 // must fail, not start a different agent the user didn't pick or consent to.
-func TestDiagnoseStartRefusesAnAgentThatIsNotInstalled(t *testing.T) {
+// diagnoseTestServer is a connected, auth-off Server whose only installed
+// agent CLI is a stub claude.
+func diagnoseTestServer(t *testing.T) *Server {
+	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", "")
@@ -211,6 +214,11 @@ func TestDiagnoseStartRefusesAnAgentThatIsNotInstalled(t *testing.T) {
 		}
 	})
 	s.refreshAIEngine(t.Context())
+	return s
+}
+
+func TestDiagnoseStartRefusesAnAgentThatIsNotInstalled(t *testing.T) {
+	s := diagnoseTestServer(t)
 	if runs := s.aiRunManager(); runs == nil || runs.AgentName("codex") == "codex" {
 		t.Skip("Codex is installed in a fixed system directory on this machine")
 	}
@@ -221,5 +229,107 @@ func TestDiagnoseStartRefusesAnAgentThatIsNotInstalled(t *testing.T) {
 	s.handleDiagnoseStart(rec, req)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Codex isn't installed") {
 		t.Fatalf("start with an uninstalled agent = %d %s, want 409 naming Codex", rec.Code, rec.Body.String())
+	}
+}
+
+// A run opens with a resource, a question, or both; the question's scope is
+// validated before any agent is chosen.
+func TestDiagnoseStartValidatesTheOpening(t *testing.T) {
+	s := diagnoseTestServer(t)
+	for name, tc := range map[string]struct {
+		body string
+		want string
+	}{
+		"nothing":            {`{}`, "a resource or a question is required"},
+		"kind without name":  {`{"kind":"Pod","question":"why?"}`, "kind and name are required"},
+		"scope without text": {`{"namespaces":["shop"]}`, "namespaces and lookBack need a question"},
+		"bad look-back":      {`{"question":"why?","lookBack":"2d"}`, "lookBack must be one of 15m, 1h, 6h, 24h"},
+		"bad namespace":      {`{"question":"why?","namespaces":["Shop"]}`, "invalid namespace"},
+		"too long":           {`{"question":"` + strings.Repeat("x", 2001) + `"}`, "question is too long"},
+	} {
+		rec := httptest.NewRecorder()
+		s.handleDiagnoseStart(rec, httptest.NewRequest(http.MethodPost, "/api/diagnose/runs", strings.NewReader(tc.body)))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), tc.want) {
+			t.Errorf("%s: %d %s, want 400 %q", name, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
+}
+
+// The body is bounded before it is read, so an oversized one is refused as
+// too large rather than parsed and blamed on its content.
+func TestDiagnoseStartBoundsTheBody(t *testing.T) {
+	s := diagnoseTestServer(t)
+	rec := httptest.NewRecorder()
+	body := `{"question":"` + strings.Repeat("x", diagnoseStartBodyLimit) + `"}`
+	s.handleDiagnoseStart(rec, httptest.NewRequest(http.MethodPost, "/api/diagnose/runs", strings.NewReader(body)))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized start = %d %s, want 413", rec.Code, rec.Body.String())
+	}
+}
+
+func agentSignin(t *testing.T, s *Server, query string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.handleAgentSignin(rec, httptest.NewRequest(http.MethodGet, "/api/agents/signin?"+query, nil))
+	return rec
+}
+
+// The sign-in check spawns the agent CLI, so it is available exactly where
+// investigations are, and runs nothing anywhere else.
+func TestAgentSigninFollowsTheInvestigationGate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	marker := filepath.Join(home, "ran")
+	bin := filepath.Join(home, "codex")
+	script := "#!/bin/sh\ntouch " + marker + "\necho 'Not logged in' >&2\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RADAR_AI_CLI_BIN", bin)
+	mcp := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+
+	off := &Server{
+		authConfig:              auth.Config{Mode: "proxy"},
+		mcpInvestigationHandler: mcp,
+		aiInvestigationRefs:     investigationrefs.NewRegistry(),
+	}
+	off.refreshAIEngine(t.Context())
+	if rec := agentSignin(t, off, "agent=codex"); rec.Code != http.StatusNotImplemented {
+		t.Fatalf("auth-enabled Radar: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("auth-enabled Radar ran the agent CLI")
+	}
+
+	on := &Server{
+		authConfig:              auth.Config{Mode: "none"},
+		mcpInvestigationHandler: mcp,
+		aiInvestigationRefs:     investigationrefs.NewRegistry(),
+	}
+	on.refreshAIEngine(t.Context())
+	t.Cleanup(func() {
+		if runs := on.aiRunManager(); runs != nil {
+			runs.Shutdown()
+		}
+	})
+	if rec := agentSignin(t, on, ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("no agent: status=%d", rec.Code)
+	}
+	if rec := agentSignin(t, on, "agent=codex&profile=nope"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown profile: status=%d", rec.Code)
+	}
+	if rec := agentSignin(t, on, "agent=claude"); rec.Code != http.StatusNotFound {
+		t.Fatalf("agent that isn't a backend: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec := agentSignin(t, on, "agent=codex")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["agent"] != "codex" || got["state"] != "signed-out" || got["signinCmd"] != "codex login" {
+		t.Fatalf("answer: %s", rec.Body.String())
 	}
 }

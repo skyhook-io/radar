@@ -11,6 +11,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/skyhook-io/radar/internal/launchday"
 )
 
 func TestIsNewerVersion(t *testing.T) {
@@ -821,5 +824,90 @@ func TestManualUpdateCheckSupersedesInFlightAutomaticLookup(t *testing.T) {
 				t.Fatalf("requests = %d, want one automatic and one manual", got)
 			}
 		})
+	}
+}
+
+// A build of a commit past a release tag parses as a prerelease of that tag,
+// so the tag would always read as an update.
+func TestAutomaticCheckOffersNoUpdateToDevelopmentBuilds(t *testing.T) {
+	t.Setenv("RADAR_DISABLE_VERSION_CHECK", "")
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.18.2"})
+	}))
+	defer proxy.Close()
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+
+	for _, current := range []string{"1.18.2-22-ga0694c7fa", "1.18.2-22-ga0694c7fa-dirty", "1.18.2-dirty"} {
+		SetCurrent(current)
+		resetUpdateCache()
+		info := CheckForUpdate(context.Background())
+		if info.UpdateAvail || info.LatestVersion != "1.18.2" || info.Error != "" {
+			t.Errorf("CheckForUpdate with %q = %+v, want latest 1.18.2 and no update", current, info)
+		}
+	}
+	SetCurrent("1.18.1")
+	resetUpdateCache()
+	if info := CheckForUpdate(context.Background()); !info.UpdateAvail {
+		t.Errorf("a release behind the latest got no update: %+v", info)
+	}
+}
+
+func TestUpdateCheckCarriesTheProductHuntLaunch(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v1.3.0","productHuntLaunch":{"enabled":false,"url":"","start":"0001-01-01T00:00:00Z","end":"0001-01-01T00:00:00Z"}}`))
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion, previousLaunch := releasesURL, Current, launchday.Current()
+	releasesURL = proxy.URL
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+		_ = launchday.Set(previousLaunch)
+	})
+
+	SetCurrent("1.2.0")
+	resetUpdateCache()
+	CheckForUpdate(context.Background())
+	if launchday.ProductHunt(time.Date(2026, time.October, 29, 12, 0, 0, 0, time.UTC)) {
+		t.Error("a launch the update check turned off should not apply")
+	}
+}
+
+func TestUpdateCheckSaysHowADesktopInstallUpdates(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	SetCurrent("1.2.0")
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		SetManualUpdate("")
+		SetDisabled(false)
+		resetUpdateCache()
+	})
+
+	for _, how := range []string{"", "appimage", "package", "download"} {
+		SetManualUpdate(how)
+		resetUpdateCache()
+		SetDisabled(false)
+		if got := CheckForUpdate(context.Background()); got.ManualUpdate != how || !got.UpdateAvail {
+			t.Errorf("manual update %q: lookup returned %q (update available %v)", how, got.ManualUpdate, got.UpdateAvail)
+		}
+		SetDisabled(true)
+		if got := CheckForUpdate(context.Background()); got.ManualUpdate != how {
+			t.Errorf("manual update %q: lookup with checks off returned %q", how, got.ManualUpdate)
+		}
 	}
 }

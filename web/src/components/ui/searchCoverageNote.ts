@@ -21,6 +21,9 @@ export interface SearchCoverageNoteOptions {
   hits?: { kind: string; group?: string }[]
   query?: string
   recheckKind?: (kind: string) => void
+  /** Opt into Event search without changing the current terms or namespace. */
+  searchEvents?: () => void
+  eventSearchNeedsUpgrade?: boolean
   /** Re-querying a still-loading search ran out of budget. */
   pendingExhausted?: boolean
   /** Returns how to open a kind's resource list, or undefined when the host can't. */
@@ -110,6 +113,14 @@ function failedKinds(entries: SearchCoverageEntry[], label: (e: SearchCoverageEn
   return { text: `${shown.join(', ')} and ${more} more ${more === 1 ? 'kind' : 'kinds'}`, one: false }
 }
 
+function queryKinds(query: string): string[] {
+  const tokens = query.match(/(?:[^\s"]|"[^"]*(?:"|$))+/g) ?? []
+  return tokens.flatMap((token) => {
+    const match = /^(?:kind|k):(.+)$/i.exec(token.replaceAll('"', ''))
+    return match ? [match[1].toLowerCase()] : []
+  })
+}
+
 // Radar's ⌘K note for one search: what happened to the kinds and namespaces
 // the query named, whether results are still loading, and which kinds failed
 // to read. Broad searches keep access exclusions quiet; namespace collection
@@ -121,12 +132,26 @@ export function searchCoverageNote(coverage: SearchCoverage | undefined, opts: S
     if (coverage?.gaps.length === 0) {
       // Collection limits come from how Radar is installed, and nothing else
       // in the omnibar shows them, so they are said with hits too.
-      if (coverage.narrowedBy?.includes('namespace_collection')) {
-        return { text: "Radar collects some kinds only in some namespaces; matches for them elsewhere won't show." }
+      const collection = coverage.narrowedBy?.includes('namespace_collection')
+        ? "Radar collects some kinds only in some namespaces; matches for them elsewhere won't show."
+        : coverage.narrowedBy?.includes('kind_collection') && !opts.hits?.length
+          ? "Radar doesn't watch every kind; search kind:<name> to include one."
+          : undefined
+      const kinds = queryKinds(opts.query ?? '')
+      const emptyBroadSearch = opts.hits?.length === 0 && kinds.length === 0
+      const needsUpgrade = opts.eventSearchNeedsUpgrade && (emptyBroadSearch || kinds.some((kind) => kind === 'event' || kind === 'events' || kind === 'ev'))
+      if (opts.query?.trim() && (needsUpgrade || (opts.searchEvents && emptyBroadSearch))) {
+        const eventNote: OmnibarNotePart = needsUpgrade ? {
+          text: 'Update the connected Radar server to search Event reasons and messages.',
+        } : {
+          text: "Kubernetes Events aren't included in a broad search.",
+          action: opts.searchEvents ? { label: 'Search Events', onSelect: opts.searchEvents, keepOpen: true } : undefined,
+        }
+        return collection
+          ? { text: [collection, eventNote.text, eventNote.action?.label].filter(Boolean).join(' '), parts: [{ text: collection }, eventNote] }
+          : eventNote
       }
-      if (coverage.narrowedBy?.includes('kind_collection') && !opts.hits?.length) {
-        return { text: "Radar doesn't watch every kind; search kind:<name> to include one." }
-      }
+      if (collection) return { text: collection }
     }
     return undefined
   }
@@ -149,8 +174,7 @@ export function searchCoverageNote(coverage: SearchCoverage | undefined, opts: S
   if (failed.length) {
     const { text, one } = failedKinds(failed, (e) => label(e))
     const warning = `Couldn't read ${text}; matches of ${one ? 'that kind' : 'those kinds'} may be missing.`
-    const tokens = (opts.query ?? '').match(/(?:[^\s"]|"[^"]*(?:"|$))+/g) ?? []
-    const namedKind = tokens.some((token) => /^(kind|k):.+/i.test(token.replaceAll('"', '')))
+    const namedKind = queryKinds(opts.query ?? '').length > 0
     const retry = !namedKind && failed.find((e) => e.kind !== '*' && e.reason === 'read_error')
     const unnamedRetry = !namedKind && !retry && failed.some((e) => e.kind === '*' && e.count && e.reason === 'read_error')
     if (unnamedRetry) {

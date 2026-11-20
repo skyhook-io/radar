@@ -10,6 +10,7 @@ import {
   StatusDot,
   Tooltip,
   toneTextClass,
+  usePhoneLayout,
   type CNPGFleetRow,
   type CNPGProblemCategory,
 } from '@skyhook-io/k8s-ui'
@@ -225,7 +226,9 @@ export function CNPGOverview({
   const context = connection.context || data.context
   // Some namespaces were not read: the count is a floor, not the cluster's total.
   const totalText = `${clustersCov?.state === 'partial' ? '≥' : ''}${total}`
-  const createAction = onCreate ? (
+  // No cluster authoring on a phone (a YAML editor follows the dialog).
+  const isPhone = usePhoneLayout()
+  const createAction = onCreate && !isPhone ? (
     <button type="button" onClick={onCreate} className="btn-secondary inline-flex items-center gap-1.5 px-3 py-1.5 text-sm">
       <Plus className="h-3.5 w-3.5" />
       Create

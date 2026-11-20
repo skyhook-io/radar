@@ -114,6 +114,16 @@ func TestTerminationInventoryFollowsReadGranularity(t *testing.T) {
 			t.Fatalf("another namespace's inventory was authorized: %+v", resource)
 		}
 	}
+	// A Velero storage location is read as its kind is: namespace access does not authorize it.
+	bsl := issues.EvidenceRead{Group: "velero.io", Resource: "backupstoragelocations", Namespace: "team", Verb: "list"}
+	perms.SetCanI("list", "velero.io", "backupstoragelocations", "team", false)
+	if access(bsl) {
+		t.Fatal("namespace access must not authorize a Velero storage location read")
+	}
+	perms.SetCanI("list", "velero.io", "backupstoragelocations", "team", true)
+	if !access(bsl) {
+		t.Fatal("a caller who may list storage locations must see findings resting on them")
+	}
 	for _, resource := range []struct{ group, resource string }{
 		{karpenter.Group, "nodepools"}, {"", "pods"}, {"apps", "deployments"}, {"apps", "statefulsets"}, {"apps", "daemonsets"},
 	} {

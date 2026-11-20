@@ -2,9 +2,15 @@ import { createListRefetchInterval, normalizeResourceList, type ResourceListBody
 import type { CascadeDetail } from '@skyhook-io/k8s-ui/components/ui/ForceDeleteConfirmDialog'
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
+import type { ReadGap, ReadGapSet } from '@skyhook-io/k8s-ui/types/read-coverage'
+import type { WorkloadHistoryCoverage } from '@skyhook-io/k8s-ui/utils/workload-history-notes'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo } from 'react'
-import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
+import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
+import { useClusterConnected } from '../context/clusterConnected'
+import type { KueueAdmissionResponse, KueuePositionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
+import type { KueueQueueMembership, KueueQueueWorkloadsResponse } from '@skyhook-io/k8s-ui/types/kueue-queues'
+import { kueueQueueRetryable } from '@skyhook-io/k8s-ui/utils/kueue-queue-workloads'
 import { canonicalReadCode, readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import type { SearchCoverage } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
@@ -27,9 +33,10 @@ import type {
   YamlDocumentIdentity,
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
-import { useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
+import { focusManager, useInfiniteQuery, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
+import { applyTabPick, cleanPick, ownsTabPick, pruneTabPick, withActives, writeTabPick } from '../utils/namespacePick'
 import type {
   Topology,
   ClusterInfo,
@@ -39,8 +46,10 @@ import type {
   TimelineEvent,
   TimeRange,
   ResourceWithRelationships,
+  HelmInventory,
   HelmRelease,
   HelmReleaseDetail,
+  ObservedHelmReleaseDetail,
   HelmValues,
   ManifestDiff,
   NotesDiff,
@@ -68,17 +77,21 @@ import type {
   PodEnvironmentRevealResponse,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
-import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
+import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   RadarFeatureUnsupportedError,
   guardRadarFeature,
+  radarControlBlocked,
+  radarControlBlockedReason,
   radarFeatureSupport,
+  radarUpgradeRequirement,
   shouldRetryRadarQuery,
   type RadarFeature,
 } from './radarFeatures'
 import { useRadarUpgradeHost } from '../context/RadarUpgradeHost'
 import { apiVersionToGroup } from '../utils/navigation'
+import { isBadgeWorthy } from '../utils/auditBadges'
 import type { DeploymentMode } from '../types'
 
 // Auto-refresh cadences (ms) — named constants for each polled hook's
@@ -232,6 +245,18 @@ export class ApiError extends Error {
 
 export function isForbiddenError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403;
+}
+
+// Answers that won't change on the next poll: a rejected request, a denial, a
+// missing or recreated root. A 401 (an expired session) can recover.
+export function isStableClientError(error: unknown): boolean {
+  return error instanceof ApiError && [400, 403, 404, 409].includes(error.status)
+}
+
+// An owner-UID query stops polling on an answer that will repeat; a recreated
+// root recovers when its new UID changes the query key.
+export function workloadPodsRefetchInterval(error: unknown, options?: { ownerUID?: string; refetchInterval?: number | false }): number | false {
+  return options?.ownerUID && isStableClientError(error) ? false : options?.refetchInterval ?? false
 }
 
 export function isNotFoundError(error: unknown): boolean {
@@ -405,7 +430,12 @@ export async function fetchJSON<T>(
 // ============================================================================
 
 export interface DashboardCluster {
+  // Kubeconfig context, or "in-cluster". The kubeconfig cluster entry is in
+  // kubeconfigCluster.
   name: string;
+  // Kubeconfig cluster entry the context points at; several contexts can
+  // share one. Absent in in-cluster mode and from older Radar.
+  kubeconfigCluster?: string;
   platform: string;
   version: string;
   connected: boolean;
@@ -493,17 +523,8 @@ export interface DashboardChange {
   timestamp: string;
 }
 
-export interface DashboardTopFlow {
-  src: string;
-  dst: string;
-  requestsPerSec?: number;
-  connections: number;
-}
-
 export interface DashboardTrafficSummary {
   source: string;
-  flowCount: number;
-  topFlows: DashboardTopFlow[];
 }
 
 export interface DashboardHelmRelease {
@@ -513,18 +534,27 @@ export interface DashboardHelmRelease {
   chartVersion: string;
   status: string;
   resourceHealth?: string;
+  // Workloads and Pods whose live status wasn't read.
+  statusUnreadCount?: number;
 }
 
 export interface DashboardHelmSummary {
   total: number;
   releases: DashboardHelmRelease[];
-  restricted?: boolean; // True when user lacks permissions to list Helm releases (RBAC-denied)
+  // True when no Helm records could be read and the caller was refused. A
+  // refusal in only some namespaces leaves it false and fills unreadNamespaces.
+  restricted?: boolean;
   // error + errorCode populated when the Helm read failed for a non-RBAC
   // reason (client not initialized, unconfigured, network). Surfaced
   // via the dashboard widget so empty results aren't mistaken for
   // "this cluster has zero releases."
   error?: string;
   errorCode?: string;
+  // Namespaces whose Helm records weren't read: refused, or the permission
+  // check behind that went unanswered. Their releases are missing from total
+  // and releases. Absent when everything in scope was read, on a restricted or
+  // failed answer, and from an older Radar.
+  unreadNamespaces?: ReadGapSet<string>;
 }
 
 export interface DashboardCRDCount {
@@ -711,9 +741,60 @@ export function useDashboard(
 export function useAudit(namespaces: string[] = []) {
   const params =
     namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
+  // Without the connection check a mounted view keeps polling a cluster that
+  // is down.
+  const connected = useClusterConnected();
+  const queryClient = useQueryClient();
   return useQuery<AuditResponse>({
     queryKey: ["audit", namespaces],
-    queryFn: () => fetchJSON(`/audit${params}`),
+    queryFn: async () => {
+      const audit = await fetchJSON<AuditResponse>(`/audit${params}`);
+      // Resource badges read the same scan through their own smaller query.
+      // A fresher full scan has them refetch rather than show a different
+      // answer: invalidating, unlike writing the projection, can't install an
+      // older scan or one from before a context switch. An in-flight badges
+      // request may predate this scan, and a first request isn't restarted by
+      // invalidation, so it is cancelled first. This runs with the fetch, not
+      // the view, so leaving the page mid-fetch doesn't skip it.
+      const badges = ["audit", namespaces, "badges"];
+      await queryClient.cancelQueries({ queryKey: badges, exact: true });
+      void queryClient.invalidateQueries({ queryKey: badges, exact: true });
+      return audit;
+    },
+    enabled: connected,
+    staleTime: 30000,
+    refetchInterval: AUDIT_REFRESH_INTERVAL_MS,
+    placeholderData: (prev) => prev,
+  });
+}
+
+export type AuditBadges = Pick<AuditResponse, "findings" | "checks">;
+
+// Keeps only what a badge view shows: findings of badge-worthy checks and
+// those checks' catalog entries. A Radar that predates include=badges answers
+// with the full response, which this cuts down rather than retaining.
+export function projectAuditBadges(response: AuditBadges): AuditBadges {
+  const findings = (response.findings ?? []).filter((f) => isBadgeWorthy(f, response.checks));
+  const checks: AuditBadges["checks"] = {};
+  for (const f of findings) checks[f.checkID] = response.checks[f.checkID];
+  return { findings, checks };
+}
+
+// The audit as resource badges need it (topology, resource lists): the
+// badge-worthy findings only, a small fraction of the full scan, which repeats
+// every finding per resource and per check for the Checks page.
+export function useAuditBadges(
+  namespaces: string[] = [],
+  options: { enabled?: boolean } = {},
+) {
+  const params = new URLSearchParams({ include: "badges" });
+  if (namespaces.length > 0) params.set("namespaces", namespaces.join(","));
+  const connected = useClusterConnected();
+  return useQuery<AuditBadges>({
+    queryKey: ["audit", namespaces, "badges"],
+    // The signal lets a superseded request stop downloading, not just lose.
+    queryFn: async ({ signal }) => projectAuditBadges(await fetchJSON<AuditBadges>(`/audit?${params}`, signal)),
+    enabled: connected && (options.enabled ?? true),
     staleTime: 30000,
     refetchInterval: AUDIT_REFRESH_INTERVAL_MS,
     placeholderData: (prev) => prev,
@@ -787,8 +868,10 @@ export interface UncheckedSource {
   // The kinds within the source that went unchecked; absent means the whole
   // source, or that Radar couldn't tell which kinds.
   kinds?: { group?: string; kind: string }[];
-  // The namespaces whose read failed while the others were read; absent
-  // means the gap isn't limited to particular namespaces.
+  // The namespaces this entry's gap is limited to: the source was checked in
+  // the others, and these weren't (the read failed or was refused there, or
+  // Radar didn't read there because the caller can't). Absent means the gap
+  // isn't limited to particular namespaces.
   namespaces?: string[];
 }
 
@@ -812,12 +895,14 @@ export function useResourceAudit(
   name: string,
   group?: string,
 ) {
+  const { segment: emptyNamespaceSegment, pending: capabilitiesPending } = useEmptyNamespaceSegment();
   const params = new URLSearchParams();
   if (group) params.set("group", group);
   const query = params.toString();
   return useQuery<AuditFinding[]>({
-    queryKey: ["audit", "resource", kind, group ?? "", namespace, name],
-    queryFn: () => fetchJSON(`/audit/resource/${kind}/${namespace}/${name}${query ? `?${query}` : ""}`),
+    queryKey: ["audit", "resource", kind, group ?? "", namespace, name, namespace ? "" : emptyNamespaceSegment],
+    queryFn: () => fetchJSON(`/audit/resource/${resourcePathSegments(kind, namespace, name, emptyNamespaceSegment)}${query ? `?${query}` : ""}`),
+    enabled: namespace !== "" || !capabilitiesPending,
     staleTime: 30000,
   });
 }
@@ -827,12 +912,17 @@ export function useResourceAudit(
 // the "Operational Issues" section in the resource detail. Cluster-scoped
 // resources pass "_" for namespace; namespaced ones also scope the scan via
 // ?namespaces= for a cheap, bounded Compose.
+// rootObservation is an opaque root UID/resourceVersion token: changes schedule
+// a refresh at most every 10s, without creating a query key per version. Omit it
+// to retain the 60s visible-tab fallback and stale-view/focus refreshes.
+// Disabled hooks and cluster-scoped subjects do not poll for namespaced Issues.
 export function useResourceIssues(
   kind: string,
   group: string | undefined,
   namespace: string,
   name: string,
   enabled = true,
+  rootObservation?: string,
 ) {
   const clusterScoped = !namespace;
   const pathNs = clusterScoped ? "_" : encodeURIComponent(namespace);
@@ -842,16 +932,52 @@ export function useResourceIssues(
   const qs = params.toString();
   // An older Radar without the endpoint settles as unsupported, so the
   // renderers fall back to their own status-derived problem banners.
-  const { guard, gatedKey } = useRadarFeature("resourceIssues");
-  return useQuery<Issue[]>({
-    queryKey: ["issues", "resource", kind, group ?? "", namespace, name, ...gatedKey],
+  const { guard, gatedKey, support } = useRadarFeature("resourceIssues");
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(() => ["issues", "resource", kind, group ?? "", namespace, name, ...gatedKey],
+    [kind, group, namespace, name, gatedKey]);
+  const query = useQuery<Issue[]>({
+    queryKey,
     queryFn: () => guard(() => fetchJSON<Issue[]>(`${path}${qs ? `?${qs}` : ""}`)),
     retry: shouldRetryRadarQuery,
-    // No refetchInterval: a drawer doesn't need to poll; staleTime keeps it fresh
-    // on reopen without re-running an uncapped Compose every 30s.
     staleTime: 30000,
+    // Time-based detections can change without a resource watch update.
+    refetchInterval: (q) => clusterScoped || q.state.error instanceof RadarFeatureUnsupportedError ? false : 60000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: (q) => !(q.state.error instanceof RadarFeatureUnsupportedError),
     enabled: enabled && !!kind && !!name,
   });
+  const { error, refetch } = query;
+  useEffect(() => {
+    if (enabled && kind && name && support === "supported" && error instanceof RadarFeatureUnsupportedError) void refetch();
+  }, [enabled, kind, name, support, error, refetch]);
+  const identity = JSON.stringify(queryKey);
+  const previous = useRef<{ identity: string; rootObservation: string | undefined; refreshedAt: number } | null>(null);
+  useEffect(() => {
+    const prior = previous.current;
+    if (prior?.identity !== identity) {
+      previous.current = { identity, rootObservation, refreshedAt: Date.now() };
+      return;
+    }
+    if (prior.rootObservation === undefined) {
+      prior.rootObservation = rootObservation;
+      return;
+    }
+    if (clusterScoped || !enabled || !kind || !name || query.error instanceof RadarFeatureUnsupportedError ||
+      rootObservation === undefined || prior.rootObservation === rootObservation) return;
+
+    // Keep the rootObservation out of the query key, and bound Compose requests even
+    // when a busy workload's resource version changes continuously.
+    const delay = Math.max(0, 10000 - (Date.now() - Math.max(prior.refreshedAt, query.dataUpdatedAt)));
+    const timer = window.setTimeout(() => {
+      prior.rootObservation = rootObservation;
+      prior.refreshedAt = Date.now();
+      void queryClient.invalidateQueries({ queryKey, exact: true,
+        refetchType: focusManager.isFocused() ? 'active' : 'none' });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [identity, rootObservation, enabled, kind, name, clusterScoped, queryClient, query.error, query.dataUpdatedAt, queryKey]);
+  return query;
 }
 
 // The Issues page narrowed to one subject: the same per-resource lookup with
@@ -869,11 +995,27 @@ export interface CronJobSchedulingEvidence {
 }
 
 export interface SubjectIssuesResponse {
+	node_certificate_report?: NodeCertificateReport;
   scheduling_report?: CronJobSchedulingEvidence;
   issues: Issue[];
   coverage: "ok" | "syncing" | "notWatched" | "unknownKind";
   withheld?: { issues: number };
   visibility?: { state?: string; impact?: string };
+  /** Checks about this resource Radar couldn't make for the caller. */
+  unchecked_sources?: UncheckedSource[];
+}
+
+export interface NodeCertificateReport {
+  uid: string;
+  event_id?: string;
+  state: 'reported' | 'unverified' | 'ok';
+  reason: string;
+  message: string;
+  last_reported_at: string;
+  expires_at?: string;
+  not_before?: string;
+  history_incomplete?: boolean;
+  validity_unknown?: boolean;
 }
 
 export function useSubjectIssues(
@@ -1070,7 +1212,8 @@ export interface OpenCostNamespaceCost {
   hourlyCost: number;
   cpuCost: number;
   memoryCost: number;
-  storageCost?: number;
+  // null: the namespace has volumes whose cost could not be calculated.
+  storageCost?: number | null;
   cpuUsageCost?: number;
   memoryUsageCost?: number;
   efficiency?: number;
@@ -1085,6 +1228,8 @@ export type CostUnavailableReason =
   | "access_denied"
   | "not_found"
   | "source_unavailable"
+  | "metrics_port_forward_disabled"
+  | "kubecost_port_forward_disabled"
   | "authentication_error"
   | "configuration_mismatch"
   | "deployment_configuration_error"
@@ -1103,7 +1248,8 @@ export interface OpenCostSummary {
   currency?: string;
   window?: string;
   totalHourlyCost?: number;
-  totalStorageCost?: number;
+  // null: at least one namespace's storage cost is unknown.
+  totalStorageCost?: number | null;
   totalIdleCost?: number;
   clusterEfficiency?: number;
   namespaceScope?: string[];
@@ -1784,7 +1930,8 @@ export function useWhatsNewState(enabled: boolean) {
 export async function markWhatsNewSeen(version: string): Promise<void> {
   const response = await apiFetch(`${getApiBase()}/whats-new/seen`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    // Bookkeeping that follows the dialog, not a separate action.
+    headers: { "Content-Type": "application/json", ...automaticRequestHeaders() },
     body: JSON.stringify({ version }),
   });
   if (!response.ok) throw new ApiError(`HTTP ${response.status}`, response.status);
@@ -1799,7 +1946,14 @@ export interface VersionInfo {
   releaseNotes?: string;
   installMethod: InstallMethod;
   updateCommand?: string;
+  /**
+   * Desktop install that cannot update itself, and how the user updates instead:
+   * a new AppImage, a new .deb/.rpm through the package manager, or a download
+   * because Radar can't write to its folder. Absent: Update Now works.
+   */
+  manualUpdate?: 'appimage' | 'package' | 'download';
   error?: string;
+  productHuntLaunch?: { enabled: boolean; url: string; start: string; end: string };
 }
 
 const UPDATE_CHECK_STORAGE_KEY_PREFIX = 'radar-update-check';
@@ -1884,9 +2038,14 @@ export function useVersionCheck() {
  * (a host-supplied version before /capabilities answers) can lift later, and
  * the key change is what makes the query fetch for real; ungated keys are
  * unchanged.
+ *
+ * `upgrade` is set when a control the feature backs must render disabled with
+ * RadarUpgradeNote's copy: the Radar is known to be too old, or failed to
+ * answer /api/capabilities (see radarControlBlocked). Controls requiring
+ * affirmative support instead get `blockedReason` while checking or unavailable.
  */
 export function useRadarFeature(feature: RadarFeature) {
-  const { data: capabilities } = useCapabilities()
+  const { data: capabilities, isError: capabilitiesFailed } = useCapabilities()
   const { data: versionInfo } = useQuery<VersionInfo>(versionCheckQueryOptions(getApiBase()))
   const { radarVersion } = useRadarUpgradeHost()
   const currentVersion = versionInfo?.currentVersion || radarVersion
@@ -1898,8 +2057,17 @@ export function useRadarFeature(feature: RadarFeature) {
     [feature, support, currentVersion, latestVersion],
   )
   const gatedKey = useMemo(() => (support === 'unsupported' ? ['radar-feature-unsupported'] : []), [support])
+  const blockedReason = radarControlBlockedReason(feature, support, capabilitiesFailed)
 
-  return { support, gatedKey, guard }
+  return {
+    support,
+    blockedReason,
+    upgrade: !blockedReason && radarControlBlocked(support, capabilitiesFailed)
+      ? radarUpgradeRequirement(feature, { currentVersion, latestVersion })
+      : null,
+    gatedKey,
+    guard,
+  }
 }
 
 // ============================================================================
@@ -1956,9 +2124,10 @@ export function useApplyDesktopUpdate() {
       }
       return response.json();
     },
+    // No success toast: the update card shows the restart, in the corner a
+    // toast would cover.
     meta: {
       errorMessage: "Failed to apply update",
-      successMessage: "Update applied — restarting...",
     },
   });
 }
@@ -2023,15 +2192,15 @@ const SEARCH_MIN_QUERY = 2;
 
 // useSearch hits the resource-search engine. The caller supplies the (already
 // debounced) query; the hook is enabled only past the min length. include=none
-// keeps the per-hit payload identity-only; context=summary attaches
-// health/issueCount per hit (rich rows). React Query's AbortSignal cancels
+// keeps the per-hit payload identity-only; context=status attaches health/issueCount,
+// while context=summary also requests navigation. React Query's AbortSignal cancels
 // overlapping scans on a new query. keepPreviousData avoids flicker while the
 // next query resolves.
 export function useSearch(
   query: string,
   opts?: {
     limit?: number;
-    context?: "summary" | "none";
+    context?: "summary" | "status" | "none";
     enabled?: boolean;
     globalNs?: boolean;
     /** Re-query on an interval decided from the latest response. */
@@ -2077,12 +2246,38 @@ export function useRuntimeStats(enabled: boolean = true) {
 
 // Capabilities (RBAC-based feature flags)
 export function useCapabilities() {
+  const connected = useClusterConnected();
   return useQuery<Capabilities>({
     queryKey: ["capabilities"],
     queryFn: () => fetchJSON("/capabilities"),
     staleTime: 60000, // 1 minute - cached on backend too
-    refetchInterval: 60000, // Re-check periodically so transient failures self-correct
+    // Re-check periodically so transient failures self-correct, but not while
+    // the cluster is down: reconnecting refreshes every query anyway.
+    refetchInterval: (query) => connected ? capabilitiesRefetchInterval(query, 60000) : false,
   });
+}
+
+// A result built on a failed access check is kept by the server for only 5s;
+// ask again soon, backing off while the checks keep failing.
+export function capabilitiesRefetchInterval(
+  query: { state: { dataUpdatedAt: number; data?: Pick<Capabilities, "checksIncomplete"> } },
+  settled: number | false,
+): number | false {
+  return backoffRefetchInterval(query, query.state.dataUpdatedAt, !!query.state.data?.checksIncomplete, settled);
+}
+
+const failedAnswerStreaks = new WeakMap<object, { answeredAt: number; count: number }>();
+
+// backoffRefetchInterval polls 5s, 10s, 20s… up to 60s after consecutive
+// failed answers, so a struggling apiserver isn't asked more often the longer
+// it struggles; answeredAt identifies an answer, since React Query asks for
+// the interval more than once per fetch.
+export function backoffRefetchInterval(query: object, answeredAt: number, failing: boolean, settled: number | false): number | false {
+  const previous = failedAnswerStreaks.get(query) ?? { answeredAt: 0, count: 0 };
+  const streak = answeredAt === previous.answeredAt ? previous : { answeredAt, count: failing ? previous.count + 1 : 0 };
+  failedAnswerStreaks.set(query, streak);
+  if (!failing || streak.count === 0) return settled;
+  return Math.min(5000 * 2 ** (streak.count - 1), 60_000);
 }
 
 // ============================================================================
@@ -2134,7 +2329,7 @@ export interface CloudInstallAttempted {
   mode: 'fresh' | 'adopt' | 'gitops'
   namespace: string
   release: string
-  stage: 'inspect' | 'prepare' | 'preflight'
+  stage: CloudInstallStage
   // Discovery saw only the default namespace; a fresh plan is not proof that
   // no Radar exists elsewhere.
   partialScan?: boolean
@@ -2144,6 +2339,8 @@ export interface CloudInstallAttempted {
   // GitOps only: the Hub install-page tab of the verified owning controller.
   method?: 'argocd' | 'flux' | ''
 }
+
+export type CloudInstallStage = 'inspect' | 'prepare' | 'preflight'
 
 export interface CloudInstallBlocked {
   reason: 'gitops' | 'preflight' | 'unsupported'
@@ -2174,6 +2371,8 @@ export type CloudInstallState =
 export interface CloudInstallStatus {
   flowId?: string
   state: CloudInstallState
+  // Preparing only: the check the server is running now.
+  prepareStep?: CloudInstallStage
   plan?: CloudInstallPlanSummary
   clusterName?: string
   connectUrl?: string
@@ -2239,7 +2438,10 @@ export function useCloudConnectInfo(
   });
 }
 
-export function useCloudInstallStatus(enabled: boolean) {
+// preparing: the prepare request is in flight. It answers only once every
+// check has run, and the cached status from before it says idle, so without
+// this nothing would poll and the steps could not advance.
+export function useCloudInstallStatus(enabled: boolean, preparing = false) {
   const queryClient = useQueryClient()
   const query = useQuery<CloudInstallStatus>({
     queryKey: ['cloud-install-status'],
@@ -2247,7 +2449,10 @@ export function useCloudInstallStatus(enabled: boolean) {
     enabled,
     gcTime: 0,
     staleTime: 0,
-    refetchInterval: (q) => (cloudInstallActive(q.state.data?.state) ? 1500 : false),
+    refetchInterval: (q) => {
+      if (preparing || q.state.data?.state === 'preparing') return 1000
+      return cloudInstallActive(q.state.data?.state) ? 1500 : false
+    },
   })
   return {
     ...query,
@@ -2353,12 +2558,14 @@ export function useNamespaceCapabilities(
   globalCaps: Capabilities | undefined,
 ) {
   const needsCheck = namespace && globalCaps;
+  const connected = useClusterConnected();
   return useQuery<Capabilities>({
     queryKey: ["capabilities", namespace],
     queryFn: () =>
       fetchJSON(`/capabilities?namespace=${encodeURIComponent(namespace!)}`),
     enabled: !!needsCheck,
     staleTime: 60000,
+    refetchInterval: (query) => connected ? capabilitiesRefetchInterval(query, false) : false,
   });
 }
 
@@ -2479,11 +2686,24 @@ export function useCanHelmAct(namespace?: string): { allowed: boolean; reason?: 
 
 // Namespaces
 export function useNamespaces() {
+  const connected = useClusterConnected();
   return useQuery<Namespace[]>({
     queryKey: ["namespaces"],
     queryFn: () => fetchJSON("/namespaces"),
     staleTime: 30000, // 30 seconds
+    refetchInterval: (query) => namespacesRefetchInterval(query, connected),
   });
+}
+
+// A 5xx is a list Radar couldn't read (a timed-out LIST or access check), not
+// an empty one; ask again (backing off) until it answers. A denial won't
+// change by polling, and while the cluster is disconnected reconnecting
+// refreshes every query anyway.
+export function namespacesRefetchInterval(query: { state: { status: string; error: unknown; dataUpdatedAt: number; errorUpdatedAt: number } }, connected = true): number | false {
+  if (!connected) return false;
+  const { status, error, dataUpdatedAt, errorUpdatedAt } = query.state;
+  const failing = status === "error" && error instanceof ApiError && error.status >= 500;
+  return backoffRefetchInterval(query, Math.max(dataUpdatedAt, errorUpdatedAt), failing, false);
 }
 
 // Topology (for manual refresh)
@@ -2770,21 +2990,42 @@ export function useArgoRevisionMetadata(
   });
 }
 
+// A cluster-scoped resource sends "_" as its namespace segment: proxies in
+// front of Radar (Radar Cloud's among them) merge "//", which drops the
+// segment and leaves a path no route matches.
+function resourcePathSegments(
+  kind: string,
+  namespace: string,
+  name: string,
+  emptyNamespaceSegment = "_",
+): string {
+  return `${kind}/${namespace || emptyNamespaceSegment}/${name}`;
+}
+
+// A Radar without the clusterScopedPlaceholder flag reads "_" on the update and
+// audit routes as a real namespace, so until the flag is confirmed these
+// routes keep the empty segment every Radar accepts when reached directly.
+function useEmptyNamespaceSegment() {
+  const { data: capabilities, isPending } = useCapabilities();
+  return {
+    segment: capabilities?.features?.clusterScopedPlaceholder ? "_" : "",
+    pending: isPending,
+  };
+}
+
 // Generic resource fetching - returns resource with relationships
-// Uses '_' as placeholder for cluster-scoped resources (empty namespace)
 export function fetchResourceWithRelationships<T>(
   kind: string,
   namespace: string,
   name: string,
   group?: string,
 ): Promise<ResourceWithRelationships<T>> {
-  const ns = namespace || "_";
   const params = new URLSearchParams();
   if (group) params.set("group", group);
   const queryString = params.toString();
 
   return fetchJSON(
-    `/resources/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ""}`,
+    `/resources/${resourcePathSegments(kind, namespace, name)}${queryString ? `?${queryString}` : ""}`,
   );
 }
 
@@ -2823,6 +3064,32 @@ export function refetchOnResourceEvents(
   return namedObjects.has(resourceEventKey(kind, String(namespace ?? ""), String(name ?? "")));
 }
 
+// The query behind useResource, for callers that read several resources at
+// once (useQueries) and must keep its key, polling and retry rules.
+export function resourceQueryOptions<T>(
+  kind: string,
+  namespace: string,
+  name: string,
+  group?: string,
+  options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string },
+) {
+  return {
+    queryKey: ["resource", kind, namespace, name, group, ...(options?.cacheScope ? [options.cacheScope] : [])],
+    queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
+    enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
+    refetchInterval: (query: { state: { error: unknown } }) => goneRecheckInterval(query, options?.refetchInterval),
+    // Kind still completing its initial sync: stay in loading and poll until
+    // it becomes readable instead of erroring out (deep links during startup).
+    retry: (failureCount: number, error: unknown) => {
+      if (isStillLoadingError(error)) return true;
+      if (isKindSyncFailed(error)) return false;
+      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
+    },
+    retryDelay: (failureCount: number, error: unknown) =>
+      isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
+  };
+}
+
 // `cacheScope` keeps a caller's copy apart from the shared one, for hosts
 // that point one QueryClient at several clusters (see useGitOpsWriteGuard).
 export function useResource<T>(
@@ -2832,21 +3099,7 @@ export function useResource<T>(
   group?: string,
   options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string },
 ) {
-  const query = useQuery<ResourceWithRelationships<T>>({
-    queryKey: ["resource", kind, namespace, name, group, ...(options?.cacheScope ? [options.cacheScope] : [])],
-    queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
-    enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
-    refetchInterval: (query) => goneRecheckInterval(query, options?.refetchInterval),
-    // Kind still completing its initial sync: stay in loading and poll until
-    // it becomes readable instead of erroring out (deep links during startup).
-    retry: (failureCount, error) => {
-      if (isStillLoadingError(error)) return true;
-      if (isKindSyncFailed(error)) return false;
-      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
-    },
-    retryDelay: (failureCount, error) =>
-      isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
-  });
+  const query = useQuery<ResourceWithRelationships<T>>(resourceQueryOptions<T>(kind, namespace, name, group, options));
 
   // Extract resource and relationships from the response
   return {
@@ -2946,14 +3199,15 @@ export function useResources<T>(
   kind: string,
   namespace?: string,
   group?: string,
-  options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string },
+  options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string; refetchOnMount?: boolean | 'always'; staleTime?: number },
 ) {
   const loadingInterval = useMemo(() => createListRefetchInterval(options?.refetchInterval), [options?.refetchInterval])
   const query = useQuery<ResourceListResult<T>>({
     queryKey: ["resources", kind, group, namespace, ...(options?.cacheScope ? [options.cacheScope] : [])],
     queryFn: ({ signal }) => fetchResourceList<T>(kind, { namespaces: namespace ? [namespace] : [], group, signal }),
     enabled: (options?.enabled ?? true) && Boolean(kind),
-    staleTime: 30000, // 30 seconds - matches refetchInterval in ResourcesView
+    staleTime: options?.staleTime ?? 30000, // 30 seconds - matches refetchInterval in ResourcesView
+    ...(options?.refetchOnMount !== undefined ? { refetchOnMount: options.refetchOnMount } : {}),
     refetchInterval: loadingInterval,
     // Kind still completing its initial sync (progressive shell, or a
     // deferred kind shortly after connect): keep polling instead of
@@ -3227,8 +3481,12 @@ export interface WorkloadHistoryPage {
   events: TimelineEvent[];
   truncated: boolean;
   nextBeforeSeq?: number;
-  /** The workload has more related resources than the history follows. */
+  /** Related history may be missing because scope bounds or expired ownership records limit traversal. */
   incomplete?: boolean;
+  /** Radar may not hold every change since the workload existed; absent when it does, and from older Radars. */
+  historyCoverage?: WorkloadHistoryCoverage;
+  /** Related kinds this history can't include for the caller (a queued job's Kueue Workload); the same on every page. */
+  gaps?: ReadGap[];
 }
 
 function workloadHistoryPath(kind: string, namespace: string, name: string, group?: string, beforeSeq?: number): string {
@@ -3772,7 +4030,8 @@ export type RightsizingFit =
   | "oversized"
   | "under_requested"
   | "missing_request"
-  | "insufficient_history";
+  | "insufficient_history"
+  | "pod_level_request";
 export type RightsizingConfidence = "low" | "medium" | "high";
 export type RightsizingOwnerCoverage = "ksm_history" | "current_pods";
 
@@ -3785,6 +4044,9 @@ export interface RightsizingRow {
   currentRequestValue?: number;
   currentLimit?: string;
   currentLimitValue?: number;
+  /** The pod's fixed pod-level request (spec.resources), set when fit is pod_level_request. */
+  podLevelRequest?: string;
+  podLevelRequestValue?: number;
   observed?: {
     name: "P95" | "P99" | "Max";
     value: number;
@@ -4029,6 +4291,7 @@ export function useAutoPromConnect(): void {
       // meta-driven toast handler stays silent — the user didn't click anything.
       apiFetch(`${getApiBase()}/prometheus/connect?optional=true`, {
         method: "POST",
+        headers: automaticRequestHeaders(),
       })
         .then(async (resp) => {
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -4395,6 +4658,7 @@ export function useAvailablePorts(
 // Update a resource with new YAML
 export function useUpdateResource() {
   const queryClient = useQueryClient();
+  const { segment: emptyNamespaceSegment } = useEmptyNamespaceSegment();
 
   return useMutation({
     mutationFn: async ({
@@ -4415,7 +4679,7 @@ export function useUpdateResource() {
       reviewedContext?: string
     }) => {
       const url = new URL(
-        `${getApiBase()}/resources/${kind}/${namespace}/${name}`,
+        `${getApiBase()}/resources/${resourcePathSegments(kind, namespace, name, emptyNamespaceSegment)}`,
         window.location.origin,
       );
       if (!force) {
@@ -4512,7 +4776,7 @@ export function useCascadeDeletePreview(
     queryKey: ["cascade-preview", kind, group, namespace, name],
     queryFn: () =>
       fetchJSON<CascadeDeletePreview>(
-        `/resources/${kind}/${namespace}/${name}/cascade-preview${group ? `?group=${encodeURIComponent(group)}` : ""}`,
+        `/resources/${resourcePathSegments(kind, namespace, name)}/cascade-preview${group ? `?group=${encodeURIComponent(group)}` : ""}`,
       ),
     enabled,
     staleTime: 0,
@@ -4520,7 +4784,58 @@ export function useCascadeDeletePreview(
 }
 
 // Delete a resource
-export function useDeleteResource() {
+interface DeleteResourceResult {
+  deletionTimestamp?: string;
+  pendingFinalizers?: string[];
+  observationError?: string;
+  outcomeUnknown?: boolean;
+}
+
+async function readDeleteResult(request: Promise<Response>): Promise<DeleteResourceResult> {
+  let response: Response;
+  try {
+    response = await request;
+  } catch (error) {
+    return { outcomeUnknown: true, observationError: String(error) };
+  }
+  if (!response.ok) {
+    const error = await readErrorBody(response);
+    if (response.status >= 500 || response.status === 408) {
+      return { outcomeUnknown: true, observationError: error.error || `HTTP ${response.status}` };
+    }
+    throw new Error(error.error || `HTTP ${response.status}`);
+  }
+  const unconfirmed = { observationError: "Deletion accepted; the response did not confirm cleanup." };
+  try {
+    const result = JSON.parse(await response.text()) as DeleteResourceResult;
+    if (result === null || typeof result !== "object" || Array.isArray(result)
+      || (result.deletionTimestamp !== undefined && typeof result.deletionTimestamp !== "string")
+      || (result.observationError !== undefined && typeof result.observationError !== "string")
+      || (result.pendingFinalizers !== undefined && (!Array.isArray(result.pendingFinalizers) || result.pendingFinalizers.some(value => typeof value !== "string")))) {
+      return unconfirmed;
+    }
+    return result;
+  } catch {
+    return unconfirmed;
+  }
+}
+
+function deleteResourceNotification(result: DeleteResourceResult): { message: string; type: "info" | "success"; detail?: string } {
+  if (result.outcomeUnknown) return { message: "Deletion outcome unknown; inspect before retrying", type: "info", detail: result.observationError };
+  if (result.observationError) {
+    return { message: "Deletion accepted; completion unconfirmed", type: "info", detail: result.observationError };
+  }
+  if (result.pendingFinalizers?.length) {
+    return { message: `Deleting — waiting on finalizers: ${result.pendingFinalizers.join(", ")}`, type: "info" };
+  }
+  if (result.deletionTimestamp) return { message: "Deleting…", type: "info" };
+  return { message: "Resource deleted", type: "success" };
+}
+
+export function useDeleteResource(options?: {
+  /** Runs after any outcome, even when the caller unmounted meanwhile. */
+  onSettled?: () => void;
+}) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -4530,15 +4845,20 @@ export function useDeleteResource() {
       namespace,
       name,
       force,
+      uid,
+      resourceVersion,
     }: {
       kind: string;
       group?: string;
       namespace: string;
       name: string;
       force?: boolean;
+      /** Delete only the object reviewed: a Radar with resourceDeletePreconditions answers 409 when it changed. */
+      uid?: string;
+      resourceVersion?: string;
     }) => {
       const url = new URL(
-        `${getApiBase()}/resources/${kind}/${namespace}/${name}`,
+        apiUrl(`/resources/${resourcePathSegments(kind, namespace, name)}`),
         window.location.origin,
       );
       if (group) {
@@ -4547,26 +4867,26 @@ export function useDeleteResource() {
       if (force) {
         url.searchParams.set("force", "true");
       }
-      const response = await apiFetch(url.toString(), {
-        method: "DELETE",
-      });
-      if (!response.ok) {
-        const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
-      }
-      // DELETE returns 204 No Content, no body to parse
-      return { success: true };
+      if (uid) url.searchParams.set("uid", uid);
+      if (resourceVersion) url.searchParams.set("resourceVersion", resourceVersion);
+      return readDeleteResult(apiFetch(url.toString(), { method: "DELETE" }));
     },
     meta: {
       errorMessage: "Failed to delete resource",
-      successMessage: "Resource deleted",
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (result, variables) => {
+      const { message, detail, type } = deleteResourceNotification(result);
+      if (type === "success") {
+        showApiSuccess(message, detail);
+      } else {
+        showApiNotice(message, detail, type);
+      }
       queryClient.invalidateQueries({
         queryKey: ["resources", variables.kind],
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
+    onSettled: () => options?.onSettled?.(),
   });
 }
 
@@ -4589,32 +4909,60 @@ export function useBulkDeleteResources() {
       const results = await Promise.allSettled(
         items.map(async ({ kind, group, namespace, name }) => {
           const url = new URL(
-            `${getApiBase()}/resources/${kind}/${namespace}/${name}`,
+            apiUrl(`/resources/${resourcePathSegments(kind, namespace, name)}`),
             window.location.origin,
           );
           if (group) url.searchParams.set("group", group);
           if (force) url.searchParams.set("force", "true");
-          const response = await apiFetch(url.toString(), { method: "DELETE" });
-          if (!response.ok) {
-            const error = await readErrorBody(response);
-            throw new Error(
-              error.error || `Failed to delete ${namespace}/${name}`,
-            );
-          }
-          return { kind, namespace, name };
+          return { kind, namespace, name, result: await readDeleteResult(apiFetch(url.toString(), { method: "DELETE" })) };
         }),
       );
       const failed = results.filter((r) => r.status === "rejected");
       if (failed.length > 0) {
+        const unknown = results.filter(result => result.status === "fulfilled" && result.value.result.outcomeUnknown).length;
         throw new Error(
-          `Failed to delete ${failed.length} of ${items.length} resources`,
+          `Failed to delete ${failed.length} of ${items.length} ${items.length === 1 ? "resource" : "resources"}${unknown ? `; deletion outcome unknown for ${unknown}; inspect before retrying` : ""}`,
         );
       }
-      return { deleted: items.length };
+      return results.flatMap((r) => r.status === "fulfilled" ? [r.value] : []);
     },
     meta: {
       errorMessage: "Failed to delete some resources",
-      successMessage: "Resources deleted",
+    },
+    onSuccess: (deleted) => {
+      const pending = deleted.filter(({ result }) => result.pendingFinalizers?.length);
+      const unknown = deleted.filter(({ result }) => result.outcomeUnknown);
+      const unobserved = deleted.filter(({ result }) => result.observationError);
+      const deleting = deleted.filter(({ result }) => result.deletionTimestamp);
+      const resources = `${deleted.length} ${deleted.length === 1 ? "resource" : "resources"}`;
+      let message = `${resources} deleted`;
+      let type: "info" | "success" = "success";
+      const unread = `completion unconfirmed for ${unobserved.length}`;
+      if (unknown.length) {
+        message = `Deletion outcome unknown for ${unknown.length} ${unknown.length === 1 ? "resource" : "resources"}; inspect before retrying${pending.length ? `; ${pending.length} waiting on finalizers` : ""}`;
+        type = "info";
+      } else if (pending.length) {
+        message = `Deleting — ${pending.length} ${pending.length === 1 ? "resource" : "resources"} waiting on finalizers${unobserved.length ? `; ${unread}` : ""}`;
+        type = "info";
+      } else if (unobserved.length) {
+        message = `Deletion accepted for ${resources}; ${unread}`;
+        type = "info";
+      } else if (deleting.length) {
+        message = `Deleting ${deleting.length} ${deleting.length === 1 ? "resource" : "resources"}…`;
+        type = "info";
+      }
+      const details = deleted.flatMap(({ namespace, name, result }) => {
+        const notification = deleteResourceNotification(result);
+        return result.observationError || result.pendingFinalizers?.length || result.deletionTimestamp
+          ? [`${namespace}/${name}: ${notification.message}${notification.detail ? `: ${notification.detail}` : ""}`]
+          : [];
+      });
+      const detail = details.length ? listWithOverflow(details) : undefined;
+      if (type === "success") {
+        showApiSuccess(message, detail);
+      } else {
+        showApiNotice(message, detail, type);
+      }
     },
     // onSettled, not onSuccess — a partial failure still deleted some
     // resources, and the table must refetch to drop them.
@@ -5159,8 +5507,7 @@ export function useRestartWorkload() {
         },
       );
       if (!response.ok) {
-        const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new Error(restartErrorMessage(await readErrorBody(response), response.status));
       }
       return response.json();
     },
@@ -5174,6 +5521,63 @@ export function useRestartWorkload() {
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
+  });
+}
+
+function useSetDeploymentPaused(
+  action: "pause" | "resume",
+  meta: { errorMessage: string; successMessage: string },
+) {
+  const queryClient = useQueryClient();
+  const { guard } = useRadarFeature("deploymentPause");
+
+  return useMutation({
+    mutationFn: ({
+      kind,
+      namespace,
+      name,
+    }: {
+      kind: string;
+      namespace: string;
+      name: string;
+    }) =>
+      guard(async () => {
+        const response = await apiFetch(
+          `${getApiBase()}/workloads/${kind}/${namespace}/${name}/${action}`,
+          {
+            method: "POST",
+          },
+        );
+        if (!response.ok) {
+          const error = await readErrorBody(response);
+          throw new Error(error.error || `HTTP ${response.status}`);
+        }
+        return response.json();
+      }),
+    meta,
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["resources", variables.kind],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["resource", variables.kind, variables.namespace, variables.name],
+      });
+      queryClient.invalidateQueries({ queryKey: ["topology"] });
+    },
+  });
+}
+
+export function usePauseDeployment() {
+  return useSetDeploymentPaused("pause", {
+    errorMessage: "Failed to pause rollout",
+    successMessage: "Rollout paused",
+  });
+}
+
+export function useResumeDeployment() {
+  return useSetDeploymentPaused("resume", {
+    errorMessage: "Failed to resume rollout",
+    successMessage: "Rollout resumed",
   });
 }
 
@@ -5344,6 +5748,46 @@ export function useWorkloadRevisions(
   });
 }
 
+// A rollout can start long after its request returned, as when a resume releases
+// a held template, so nothing in the request says when its revision exists. The
+// controller records the Deployment's revision only after creating that ReplicaSet.
+// deploymentRevision is undefined until the resource loads, and empty on a loaded
+// Deployment with no revision yet, which is how one created paused starts out.
+export function useRefreshRevisionsOnNewRollout(
+  kind: string,
+  namespace: string,
+  name: string,
+  deploymentRevision: string | undefined,
+) {
+  const queryClient = useQueryClient();
+  const seen = useRef(deploymentRevision);
+
+  useEffect(() => {
+    const previous = seen.current;
+    seen.current = deploymentRevision;
+    if (previous === undefined || deploymentRevision === undefined || previous === deploymentRevision) return;
+    queryClient.invalidateQueries({
+      queryKey: ["workload-revisions", kind, namespace, name],
+    });
+  }, [queryClient, kind, namespace, name, deploymentRevision]);
+}
+
+// The server's paused-refusal text is written for API and agent callers; in the
+// UI the way out is the Resume rollout button on the same page.
+export function rollbackErrorMessage(body: { error?: string; error_code?: string }, status: number): string {
+  if (body.error_code === "workload_paused") {
+    return "This Deployment is paused. Click Resume rollout, then roll back.";
+  }
+  return body.error || `HTTP ${status}`;
+}
+
+export function restartErrorMessage(body: { error?: string; error_code?: string }, status: number): string {
+  if (body.error_code === "workload_paused") {
+    return "This Deployment is paused. Click Resume rollout, then restart.";
+  }
+  return body.error || `HTTP ${status}`;
+}
+
 export function useRollbackWorkload() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -5367,8 +5811,7 @@ export function useRollbackWorkload() {
         },
       );
       if (!response.ok) {
-        const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new Error(rollbackErrorMessage(await readErrorBody(response), response.status));
       }
       return response.json();
     },
@@ -5918,13 +6361,59 @@ function helmNamespaceParams(namespaces: string[] = []) {
   return namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
 }
 
-// List all Helm releases
-export function useHelmReleases(namespaces: string[] = []) {
+// Objects still loading clear on their own, so the list shouldn't wait for a
+// manual refresh to fill in. Some gaps outlast any quick retry, such as
+// permission checks spread over many namespaces, so polling slows rather than
+// repeating a full object read every few seconds.
+const HELM_INVENTORY_FAST_POLLS = 24;
+
+export function helmInventoryRefetchInterval(inventory: Pick<HelmInventory, "objectCoverage"> | undefined, updates: number): number | false {
+  const settling = inventory?.objectCoverage?.gaps.some((gap) => gap.action === "retry" || gap.action === "wait");
+  if (!settling) return false;
+  return updates < HELM_INVENTORY_FAST_POLLS ? 5000 : 60000;
+}
+
+// The Helm list as far as the caller's access reaches. An older Radar has no
+// inventory route: its list is the whole answer, and a denial stays a 403.
+export function useHelmInventory(namespaces: string[] = []) {
   const params = helmNamespaceParams(namespaces);
-  return useQuery<HelmRelease[]>({
-    queryKey: ["helm-releases", namespaces],
-    queryFn: () => fetchJSON(`/helm/releases${params}`),
+  const { isPending: capabilitiesPending } = useCapabilities();
+  const { support } = useRadarFeature("helmInventory");
+  const hasInventory = support === "supported";
+  return useQuery<HelmInventory>({
+    queryKey: ["helm-releases", namespaces, hasInventory],
+    queryFn: async () =>
+      hasInventory
+        ? fetchJSON<HelmInventory>(`/helm/inventory${params}`)
+        : { releases: await fetchJSON<HelmRelease[]>(`/helm/releases${params}`), observed: [] },
+    enabled: !capabilitiesPending,
     staleTime: 30000, // 30 seconds
+    refetchInterval: (query) => helmInventoryRefetchInterval(query.state.data, query.state.dataUpdateCount),
+  });
+}
+
+// Kubernetes refused the caller's own read of Helm's storage. Other 403s on the
+// same route mean something else, and a Radar without inventory sends no code.
+export function isHelmReleaseReadDenied(error: unknown): boolean {
+  return isForbiddenError(error) && (error as ApiError).data?.error_code === "release_read_denied";
+}
+
+// Each observed read walks every object the caller can see, so an open drawer
+// follows the list's schedule while objects settle and otherwise refreshes
+// once a minute. A retryable error retries sooner.
+export function observedHelmReleaseRefetchInterval(detail: ObservedHelmReleaseDetail | undefined, updates: number, error: unknown): number | false {
+  if (error) return isStableClientError(error) ? false : 15000
+  return helmInventoryRefetchInterval(detail, updates) || 60000
+}
+
+// One release built from the stamps on its objects, for a caller who can't read
+// Helm's storage.
+export function useObservedHelmRelease(namespace: string, name: string) {
+  return useQuery<ObservedHelmReleaseDetail>({
+    queryKey: ["helm-observed-release", namespace, name],
+    queryFn: () => fetchJSON(`/helm/inventory/${namespace}/${name}`),
+    staleTime: 5000,
+    refetchInterval: (query) => observedHelmReleaseRefetchInterval(query.state.data, query.state.dataUpdateCount, query.state.error),
   });
 }
 
@@ -5939,7 +6428,9 @@ export function useHelmRelease(
     queryFn: () => fetchJSON(`/helm/releases/${namespace}/${name}`),
     enabled: Boolean(namespace && name) && (options?.enabled ?? true),
     staleTime: 5000,
-    refetchInterval: 10000, // Poll for live resource status updates (post-upgrade/rollback)
+    // Poll for live resource status updates (post-upgrade/rollback); a refusal
+    // would only repeat.
+    refetchInterval: (query) => (isForbiddenError(query.state.error) ? false : 10000),
   });
 }
 
@@ -6813,12 +7304,15 @@ export function useArtifactHubChart(
 // GitOps Mutation Factory
 // ============================================================================
 
-interface GitOpsMutationConfig<TVariables> {
+interface GitOpsMutationConfig<TVariables, TContext = undefined> {
   getPath: (variables: TVariables) => string;
-  getBody?: (variables: TVariables) => unknown;
+  // Called by the hook on every render (so it may call hooks); its value is
+  // passed to getBody.
+  useRequestContext?: () => TContext;
+  getBody?: (variables: TVariables, context: TContext) => unknown;
   errorMessage: string;
   successMessage?: string;
-  getSuccessMessage?: (data: GitOpsOperationResponse) => string;
+  getSuccessMessage?: (data: GitOpsOperationResponse, variables: TVariables) => string;
   getInvalidateKeys: (variables: TVariables) => (string | undefined)[][];
 }
 
@@ -6826,11 +7320,12 @@ interface GitOpsMutationConfig<TVariables> {
  * Factory function for creating GitOps mutation hooks with consistent patterns.
  * Handles fetch, error handling, meta messages, and query invalidation.
  */
-function createGitOpsMutation<TVariables>(
-  config: GitOpsMutationConfig<TVariables>,
+function createGitOpsMutation<TVariables, TContext = undefined>(
+  config: GitOpsMutationConfig<TVariables, TContext>,
 ) {
   return function useGitOpsMutation() {
     const queryClient = useQueryClient();
+    const requestContext = config.useRequestContext?.() as TContext;
     return useMutation<GitOpsOperationResponse, Error, TVariables>({
       mutationFn: async (
         variables: TVariables,
@@ -6843,7 +7338,7 @@ function createGitOpsMutation<TVariables>(
               ? { "Content-Type": "application/json" }
               : undefined,
             body: config.getBody
-              ? JSON.stringify(config.getBody(variables))
+              ? JSON.stringify(config.getBody(variables, requestContext))
               : undefined,
           },
         );
@@ -6859,7 +7354,7 @@ function createGitOpsMutation<TVariables>(
       },
       onSuccess: (data, variables) => {
         if (config.getSuccessMessage)
-          showApiSuccess(config.getSuccessMessage(data));
+          showApiSuccess(config.getSuccessMessage(data, variables));
         config
           .getInvalidateKeys(variables)
           .forEach((key) => queryClient.invalidateQueries({ queryKey: key }));
@@ -6890,8 +7385,12 @@ export type ArgoSyncVars = ArgoAppVars & {
   applyOnly?: boolean;
   // Free-form Argo SyncOption strings, e.g. "Replace=true",
   // "ServerSideApply=true", "PruneLast=true". Caller is responsible for
-  // spelling.
+  // spelling. Omitted: the Application's own spec.syncPolicy.syncOptions.
   syncOptions?: string[];
+  // The Application's spec.syncPolicy.syncOptions as the caller last read
+  // them. Not a request field: sent as syncOptions only to a Radar that would
+  // otherwise drop them (see argoSyncRequestBody).
+  applicationSyncOptions?: string[];
 };
 
 export interface ArgoResourceValidationResult {
@@ -6912,11 +7411,13 @@ export function buildArgoResourceSyncVars(
   name: string,
   resource: GitOpsInsightRef,
   opts: ArgoSyncOpts,
+  applicationSyncOptions?: string[],
 ): ArgoSyncVars {
   return {
     namespace,
     name,
     ...opts,
+    applicationSyncOptions,
     resources: [
       {
         group: resource.group,
@@ -6999,24 +7500,45 @@ export const useFluxSyncWithSource = createGitOpsMutation<FluxResourceVars>({
 // ArgoCD API hooks
 // ============================================================================
 
-export const useArgoSync = createGitOpsMutation<ArgoSyncVars>({
-  getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/sync`,
-  getBody: (v) => ({
+// argoSyncRequestBody is the body POSTed to .../sync. A Radar that predates
+// argoSyncInheritance prunes when prune is omitted and syncs with no options
+// when syncOptions is omitted, so prune is always sent and, for such a Radar,
+// the Application's options are sent in place of an omission.
+export function argoSyncRequestBody(
+  v: ArgoSyncVars,
+  serverInheritsOptions: boolean,
+) {
+  return {
     resources: v.resources,
     revision: v.revision,
-    prune: v.prune,
+    prune: v.prune ?? false,
     dryRun: v.dryRun,
     force: v.force,
     applyOnly: v.applyOnly,
-    syncOptions: v.syncOptions,
-  }),
+    syncOptions: argoSyncOptionsForRequest(
+      v.syncOptions,
+      v.applicationSyncOptions,
+      serverInheritsOptions,
+    ),
+  };
+}
+
+function useArgoSyncInheritance(): boolean {
+  return useRadarFeature("argoSyncInheritance").support === "supported";
+}
+
+export const useArgoSync = createGitOpsMutation<ArgoSyncVars, boolean>({
+  getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/sync`,
+  useRequestContext: useArgoSyncInheritance,
+  getBody: argoSyncRequestBody,
   errorMessage: "Failed to trigger sync",
-  successMessage: "Sync initiated",
+  getSuccessMessage: (_data, v) => (v.dryRun ? "Dry run started" : "Sync initiated"),
   getInvalidateKeys: argoInvalidateKeys,
 });
 
 export function useArgoResourceValidation() {
   const queryClient = useQueryClient();
+  const serverInheritsOptions = useArgoSyncInheritance();
   return useMutation<ArgoResourceValidationResult, Error, ArgoSyncVars>({
     mutationFn: async (variables) => {
       const response = await apiFetch(
@@ -7027,7 +7549,11 @@ export function useArgoResourceValidation() {
           body: JSON.stringify({
             resources: variables.resources,
             force: variables.force,
-            syncOptions: variables.syncOptions,
+            syncOptions: argoSyncOptionsForRequest(
+              variables.syncOptions,
+              variables.applicationSyncOptions,
+              serverInheritsOptions,
+            ),
           }),
         },
       );
@@ -7049,7 +7575,7 @@ export const useArgoRollback = createGitOpsMutation<ArgoRollbackVars>({
   getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/rollback`,
   getBody: (v) => ({ id: v.id, prune: v.prune, dryRun: v.dryRun }),
   errorMessage: "Failed to roll back application",
-  successMessage: "Rollback initiated",
+  getSuccessMessage: (_data, v) => (v.dryRun ? "Rollback preview started" : "Rollback initiated"),
   getInvalidateKeys: argoInvalidateKeys,
 });
 
@@ -7159,6 +7685,19 @@ export async function fetchSessionCounts(): Promise<SessionCounts> {
 const CONTEXT_SWITCH_TIMEOUT = 45000; // 45 seconds
 
 // Switch to a different context
+// A refused context switch. errorType is set when the server checked the new
+// cluster before leaving the current one and it didn't answer; older Radar
+// servers never send it.
+export class SwitchContextError extends Error {
+  constructor(
+    message: string,
+    readonly errorType?: string,
+  ) {
+    super(message);
+    this.name = "SwitchContextError";
+  }
+}
+
 export function useSwitchContext() {
   const queryClient = useQueryClient();
 
@@ -7182,7 +7721,10 @@ export function useSwitchContext() {
 
         if (!response.ok) {
           const error = await readErrorBody(response);
-          throw new Error(error.error || `HTTP ${response.status}`);
+          throw new SwitchContextError(
+            error.error || `HTTP ${response.status}`,
+            typeof error.errorType === "string" ? error.errorType : undefined,
+          );
         }
         return response.json();
       } catch (error) {
@@ -7218,8 +7760,20 @@ export function useSwitchContext() {
 // ============================================================================
 
 export interface NamespaceScope {
+  /**
+   * This tab's pick. Outside --namespace-scope it is the tab's own (see
+   * utils/namespacePick); the server's remembered pick only seeds it.
+   */
   actives: string[];
   kubeconfigNamespace: string;
+  /** Context the scope was read under. Absent from servers older than per-tab picks. */
+  context?: string;
+  /**
+   * True when the server drops its own pick to `accessibleNamespaces` on this
+   * read; a tab drops its pick under the same rule. Absent from servers older
+   * than per-tab picks.
+   */
+  accessChecked?: boolean;
   /**
    * 'cluster-wide' — no per-user pick; user can list across namespaces.
    * 'namespace'    — per-user view filter pinned to one or more namespaces.
@@ -7238,15 +7792,44 @@ export interface NamespaceScope {
   cacheScopeNamespace?: string;
   /** true when this client may rebuild the local cache for another namespace. */
   namespaceRescope: boolean;
+  /**
+   * The server's namespace LIST failed for a reason other than RBAC (e.g. a
+   * timeout right after a context switch), so accessibleNamespaces is only
+   * its short fallback list. Absent from older servers.
+   */
+  listFailed?: boolean;
   /** Where Radar collects the kinds it keeps in only some namespaces; absent when none, or from an older Radar. */
   collection?: NamespaceCollection;
 }
 
+/**
+ * A failed namespace list is retried rather than kept as the answer: 3s after
+ * the first failure, doubling to 30s so a list that keeps failing doesn't add
+ * load to an apiserver that is already struggling.
+ */
+export function namespaceScopeRefetchInterval(
+  scope: Pick<NamespaceScope, "listFailed"> | undefined,
+  consecutiveFailures: number,
+): number | false {
+  if (!scope?.listFailed) return false;
+  return Math.min(3000 * 2 ** Math.max(0, consecutiveFailures - 1), 30000);
+}
+
+// Consecutive listFailed answers per apiBase, for the back-off above.
+const namespaceListFailures = new Map<string, number>();
+
 export function useNamespaceScope() {
   return useQuery<NamespaceScope>({
     queryKey: ["namespace-scope"],
-    queryFn: () => fetchJSON("/cluster/namespace-scope"),
+    queryFn: async ({ signal }) => {
+      const apiBase = getApiBase();
+      const scope = await fetchJSON<NamespaceScope>("/cluster/namespace-scope", signal);
+      namespaceListFailures.set(apiBase, scope.listFailed ? (namespaceListFailures.get(apiBase) ?? 0) + 1 : 0);
+      return applyTabPick(scope, apiBase);
+    },
     staleTime: 30000,
+    refetchInterval: (query) =>
+      namespaceScopeRefetchInterval(query.state.data, namespaceListFailures.get(getApiBase()) ?? 0),
   });
 }
 
@@ -7308,9 +7891,34 @@ export async function refreshAfterNamespaceSwitch(
   await queryClient.invalidateQueries({ predicate: notScope }, { cancelRefetch: false });
 }
 
+// Per apiBase, the last namespace switch this tab started, and the newest one
+// whose answer it applied. Answers can arrive out of order: an older switch
+// must not overwrite a newer one that already landed, but it still applies
+// while the newer one is in flight, in case that one is refused.
+const startedNamespaceSwitch = new Map<string, number>();
+const appliedNamespaceSwitch = new Map<string, number>();
+
+export interface NamespaceSwitchStart {
+  seq: number;
+  apiBase: string;
+  context: string | undefined;
+}
+
+/** True while `start` is the newest namespace switch this tab has applied. */
+export function isAppliedNamespaceSwitch(start: NamespaceSwitchStart | undefined): boolean {
+  return !start || appliedNamespaceSwitch.get(start.apiBase) === start.seq;
+}
+
+/** Records `start` as applied unless a newer switch already landed. */
+function claimNamespaceSwitch(start: NamespaceSwitchStart): boolean {
+  if (start.seq < (appliedNamespaceSwitch.get(start.apiBase) ?? 0)) return false;
+  appliedNamespaceSwitch.set(start.apiBase, start.seq);
+  return true;
+}
+
 export function useSetActiveNamespace() {
   const queryClient = useQueryClient();
-  return useMutation<NamespaceScope, Error, { namespaces: string[] }>({
+  return useMutation<NamespaceScope, Error, { namespaces: string[] }, NamespaceSwitchStart>({
     meta: {
       // Surface 403s (RBAC drift, denied bookmark) and network errors via the
       // global toast. Without this, App.tsx call sites that mutate without
@@ -7354,7 +7962,9 @@ export function useSetActiveNamespace() {
           const error = await readErrorBody(response);
           throw new Error(error.error || `HTTP ${response.status}`);
         }
-        return response.json();
+        // Awaited so a body lost in transfer reaches the catch below.
+        const scope: NamespaceScope = await response.json();
+        return scope;
       } catch (error) {
         clearTimeout(timeoutId);
         debugNamespaceLog("mutation:error", {
@@ -7377,10 +7987,45 @@ export function useSetActiveNamespace() {
             { cause: error },
           );
         }
+        // A network failure can hide a write the server already made; its
+        // scope says whether the pick landed. A refused pick (HTTP error) did
+        // not land.
+        if (!isRescope && error instanceof TypeError) {
+          const applied = await reconcileNamespaceSwitch(namespaces);
+          if (applied) {
+            debugNamespaceLog("mutation:network-error-but-applied", { namespaces });
+            return applied;
+          }
+        }
         throw error;
       }
     },
-    onSuccess: (scope) => {
+    onMutate: () => {
+      const apiBase = getApiBase();
+      const seq = (startedNamespaceSwitch.get(apiBase) ?? 0) + 1;
+      startedNamespaceSwitch.set(apiBase, seq);
+      const context = queryClient.getQueryData<NamespaceScope>(["namespace-scope"])?.context;
+      return { seq, apiBase, context };
+    },
+    onSuccess: (response, { namespaces }, start) => {
+      let scope = response;
+      if (ownsTabPick(response)) {
+        // The response renders the server's stored pick after the write, which
+        // another tab can change in between, and its context is read after the
+        // write too. Record what this tab asked for, under the context it
+        // asked in.
+        const context = start.context ?? response.context;
+        const cached = queryClient.getQueryData<NamespaceScope>(["namespace-scope"]);
+        // A context switch landed meanwhile: the tab starts again from the
+        // server's pick for the new context.
+        if (getApiBase() !== start.apiBase || (cached && cached.context !== context) || response.context !== context) return;
+        if (!claimNamespaceSwitch(start)) return;
+        const picked = pruneTabPick(response, cleanPick(namespaces));
+        writeTabPick(start.apiBase, context, picked);
+        scope = withActives(response, picked);
+      } else {
+        claimNamespaceSwitch(start);
+      }
       debugNamespaceLog("mutation:success-before-scope-cache-write", {
         actives: scope.actives,
         mode: scope.mode,
@@ -7576,8 +8221,8 @@ export function useWorkloadPods(
       fetchJSON(`/workloads/${kind}/${namespace}/${name}/pods${queryString}`),
     enabled: Boolean(kind && namespace && name),
     staleTime: 10000, // 10 seconds - pods can change
-    refetchInterval: options?.refetchInterval ?? false,
-    retry: options?.ownerUID ? (count, error) => !(error instanceof ApiError && error.status === 409) && count < 2 : undefined,
+    refetchInterval: (query) => workloadPodsRefetchInterval(query.state.error, options),
+    retry: options?.ownerUID ? (count, error) => !isStableClientError(error) && count < 2 : undefined,
   });
 }
 
@@ -7634,6 +8279,32 @@ export function useKueueAdmission(namespace: string, name: string, uid: string |
       return 5000
     },
     retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 2,
+  })
+}
+
+// Kueue's reported position for one pending Workload. Polls only while the
+// answer can change by itself: a refusal, an absent API or an unsupported
+// version gives the same answer until someone changes access or the cluster.
+const kueuePositionPolledStatuses = new Set(['listed', 'not_listed', 'limit_reached', 'queue_unknown'])
+
+export function kueuePositionRefetchInterval({ data, error }: { data?: KueuePositionResponse; error?: unknown }): number | false {
+  if (error && !shouldRetryRadarQuery(0, error)) return false
+  if (!data?.eligible || !data.position) return 30000
+  const { status, code } = data.position
+  return kueuePositionPolledStatuses.has(status) || (status === 'unavailable' && readActionFor(code) === 'retry') ? 30000 : false
+}
+
+/** UID and queueName invalidate the cache; the endpoint reads by namespace/name.
+ * Callers must check the returned UID and eligibility before displaying a position. */
+export function useKueuePendingPosition(namespace: string, name: string, uid: string | undefined, queueName: string | undefined, enabled: boolean) {
+  const { guard, gatedKey } = useRadarFeature('kueuePendingPosition')
+  return useQuery<KueuePositionResponse>({
+    queryKey: ['kueue-position', namespace, name, uid, queueName ?? '', ...gatedKey],
+    queryFn: () => guard(() => fetchJSON<KueuePositionResponse>(`/kueue/position/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`)),
+    enabled: enabled && Boolean(namespace && name && uid),
+    staleTime: 15000,
+    refetchInterval: (query) => kueuePositionRefetchInterval(query.state),
+    retry: shouldRetryRadarQuery,
   })
 }
 
@@ -7979,6 +8650,53 @@ export interface KueueProvisioningResponse {
     spec: { provisioningClassName: string }
     status?: { conditions: Array<{ type: string; status: string; reason?: string; message?: string; observedGeneration?: number }> }
   }>
+}
+
+// The Workloads that belong to a Kueue queue, page by page. Pages chain by
+// cursor; a refetch re-reads them from the first, so a list that changed is
+// traversed again rather than patched. Nothing is read until the queue's UID
+// is known, nor for a LocalQueue without its namespace.
+export function useKueueQueueWorkloads(queue: { kind: 'ClusterQueue' | 'LocalQueue'; namespace?: string; name: string; uid?: string }, filters: { membership?: KueueQueueMembership; state?: string }) {
+  const { membership, state } = filters
+  const { guard, gatedKey, support, upgrade } = useRadarFeature('kueueQueueWorkloads')
+  const path = queue.kind === 'ClusterQueue'
+    ? `/kueue/clusterqueues/${encodeURIComponent(queue.name)}/workloads`
+    : `/kueue/localqueues/${encodeURIComponent(queue.namespace ?? '')}/${encodeURIComponent(queue.name)}/workloads`
+  const query = useInfiniteQuery<KueueQueueWorkloadsResponse>({
+    queryKey: ['kueue-queue-workloads', queue.kind, queue.namespace ?? '', queue.name, queue.uid ?? '', membership ?? '', state ?? '', ...gatedKey],
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams()
+      if (membership) params.set('membership', membership)
+      if (state) params.set('state', state)
+      if (typeof pageParam === 'string') params.set('cursor', pageParam)
+      const qs = params.toString()
+      return guard(() => fetchJSON<KueueQueueWorkloadsResponse>(`${path}${qs ? `?${qs}` : ''}`, signal))
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: last => last.workloads?.next,
+    // A changed filter keeps the previous list on screen until the new one
+    // arrives; the renderer drops pages of another queue (by UID).
+    placeholderData: previous => previous,
+    enabled: Boolean(queue.name && queue.uid && (queue.kind === 'ClusterQueue' || queue.namespace)) && support !== 'unsupported',
+    staleTime: 5000,
+    // A paged list isn't replayed on mount (that would reread the queue once
+    // per page); the renderer restarts it from the first page instead.
+    refetchOnMount: query => (query.state.data?.pages.length ?? 0) <= 1,
+    refetchOnWindowFocus: query => (query.state.data?.pages.length ?? 0) <= 1,
+    refetchOnReconnect: query => (query.state.data?.pages.length ?? 0) <= 1,
+    // Poll the first page only: refetching an infinite query rereads every
+    // loaded page, so a list paged further waits for an explicit refresh.
+    // A part a retry can complete (still loading, a check that failed) is
+    // polled sooner.
+    refetchInterval: query => {
+      if (query.state.error instanceof ApiError && query.state.error.status < 500) return false
+      const pages = query.state.data?.pages ?? []
+      if (pages.length > 1) return false
+      return kueueQueueRetryable(pages[0]) ? 3000 : 15000
+    },
+    retry: shouldRetryRadarQuery,
+  })
+  return { ...query, upgrade, support }
 }
 
 export function useKueueProvisioning(namespace: string, name: string, uid: string | undefined, enabled: boolean) {

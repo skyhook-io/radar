@@ -27,6 +27,24 @@ func Metadata(kind string, obj metav1.Object) Object {
 
 type Reflection struct{ Source, Mirror Ref }
 
+// ReflectsAnnotation is the annotation by which a Reflector mirror names its
+// source, as namespace/name.
+const ReflectsAnnotation = reflectorPrefix + "reflects"
+
+// ReflectedSource returns the source a Reflector mirror of kind, in
+// namespace, names in its annotations: an object of the same kind, never
+// itself.
+func ReflectedSource(kind, namespace, name string, annotations map[string]string) (Ref, bool) {
+	ns, source, ok := strings.Cut(annotations[ReflectsAnnotation], "/")
+	if !ok || len(validation.IsDNS1123Label(ns)) != 0 || len(validation.IsDNS1123Subdomain(source)) != 0 {
+		return Ref{}, false
+	}
+	if ns == namespace && source == name {
+		return Ref{}, false
+	}
+	return Ref{kind, ns, source}, true
+}
+
 type Reflections struct {
 	Links      []Reflection
 	Sources    map[Ref]bool
@@ -52,12 +70,8 @@ func BuildReflections(objects []Object) Reflections {
 		if strings.EqualFold(o.Annotations[reflectorPrefix+"reflection-allowed"], "true") {
 			result.Sources[o.Ref] = true
 		}
-		ns, name, ok := strings.Cut(o.Annotations[reflectorPrefix+"reflects"], "/")
-		if !ok || len(validation.IsDNS1123Label(ns)) != 0 || len(validation.IsDNS1123Subdomain(name)) != 0 {
-			continue
-		}
-		source := Ref{o.Kind, ns, name}
-		if source == o.Ref {
+		source, ok := ReflectedSource(o.Kind, o.Namespace, o.Name, o.Annotations)
+		if !ok {
 			continue
 		}
 		if !observed[source] {

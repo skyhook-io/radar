@@ -22,6 +22,21 @@ const shell: Omit<GitOpsDetailLayoutProps, 'identity' | 'isArgoApp'> = {
 }
 
 describe('GitOpsDetailLayout', () => {
+  it.each([false, true])('shows tree limits without insights, including fullscreen=%s', (fullscreen) => {
+    const warning = 'Some generated resources could not be checked; the resource tree may be incomplete.'
+    const html = renderToString(
+      <GitOpsDetailLayout
+        {...shell}
+        identity={{ kind: 'applications', group: 'argoproj.io', namespace: 'shop', name: 'wordpress', kindLabel: 'Application' }}
+        isArgoApp
+        fullscreen={fullscreen}
+        warnings={[warning, warning]}
+      />,
+    )
+    expect(html).toContain('Limited resource view')
+    expect(html.split(warning)).toHaveLength(2)
+  })
+
   it('shows the tool chip, facts and Argo operations for an Argo CD Application', () => {
     const html = renderToString(
       <GitOpsDetailLayout
@@ -39,6 +54,7 @@ describe('GitOpsDetailLayout', () => {
     expect(html).toContain('ArgoCD')
     expect(html).toContain('Project')
     expect(html).toContain('Sync…')
+    expect(html).not.toContain('Limited resource view')
   })
 
   // A root that is not a GitOps resource gets one state: its name and why

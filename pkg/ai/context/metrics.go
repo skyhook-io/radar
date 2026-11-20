@@ -9,6 +9,9 @@ import (
 
 // FormatPodMetrics renders current pod metrics with request/limit context as a string for LLM consumption.
 // spec is optional — if nil, only current usage is shown (no request/limit comparison).
+// A pod-level budget (spec.resources) is rendered on its own line, and a
+// container that sets no value of its own for a resource is described as
+// drawing on that budget rather than as having no request or limit.
 func FormatPodMetrics(input *PodMetricsInput, spec *corev1.PodSpec) string {
 	if input == nil || len(input.Containers) == 0 {
 		return "No metrics available."
@@ -16,6 +19,7 @@ func FormatPodMetrics(input *PodMetricsInput, spec *corev1.PodSpec) string {
 
 	// Build a lookup of resource requests/limits from the pod spec
 	specLookup := make(map[string]corev1.ResourceRequirements)
+	var pod corev1.ResourceRequirements
 	if spec != nil {
 		for _, c := range spec.Containers {
 			specLookup[c.Name] = c.Resources
@@ -23,22 +27,23 @@ func FormatPodMetrics(input *PodMetricsInput, spec *corev1.PodSpec) string {
 		for _, c := range spec.InitContainers {
 			specLookup[c.Name] = c.Resources
 		}
+		if spec.Resources != nil {
+			pod = *spec.Resources
+		}
 	}
 
 	var b strings.Builder
+	if budget := formatPodBudget(pod); budget != "" {
+		b.WriteString("pod-level budget (shared by all containers): ")
+		b.WriteString(budget)
+		b.WriteByte('\n')
+	}
 	for _, cm := range input.Containers {
 		b.WriteString(cm.Name)
 		b.WriteString(": ")
-
-		// CPU
-		cpuStr := formatMetricLine("CPU", cm.CPU, specLookup[cm.Name])
-		b.WriteString(cpuStr)
-
-		// Memory
-		memStr := formatMetricLine("Memory", cm.Memory, specLookup[cm.Name])
+		b.WriteString(formatMetricLine("CPU", cm.CPU, specLookup[cm.Name], pod, corev1.ResourceCPU))
 		b.WriteString(", ")
-		b.WriteString(memStr)
-
+		b.WriteString(formatMetricLine("Memory", cm.Memory, specLookup[cm.Name], pod, corev1.ResourceMemory))
 		b.WriteByte('\n')
 	}
 
@@ -58,38 +63,51 @@ func FormatPodMetrics(input *PodMetricsInput, spec *corev1.PodSpec) string {
 	return b.String()
 }
 
-func formatMetricLine(metric string, currentValue string, reqs corev1.ResourceRequirements) string {
-	var request, limit string
-
-	if metric == "CPU" {
-		if req, ok := reqs.Requests[corev1.ResourceCPU]; ok {
-			request = req.String()
+func formatPodBudget(pod corev1.ResourceRequirements) string {
+	var parts []string
+	for _, r := range []struct {
+		label string
+		name  corev1.ResourceName
+	}{{"CPU", corev1.ResourceCPU}, {"Memory", corev1.ResourceMemory}} {
+		request, limit := requestAndLimit(pod, r.name)
+		if request == "" && limit == "" {
+			continue
 		}
-		if lim, ok := reqs.Limits[corev1.ResourceCPU]; ok {
-			limit = lim.String()
-		}
-	} else {
-		if req, ok := reqs.Requests[corev1.ResourceMemory]; ok {
-			request = req.String()
-		}
-		if lim, ok := reqs.Limits[corev1.ResourceMemory]; ok {
-			limit = lim.String()
-		}
+		parts = append(parts, r.label+requestLimitSuffix(request, limit))
 	}
+	return strings.Join(parts, ", ")
+}
 
+func formatMetricLine(metric string, currentValue string, reqs, pod corev1.ResourceRequirements, name corev1.ResourceName) string {
+	request, limit := requestAndLimit(reqs, name)
 	if request == "" && limit == "" {
+		if podRequest, podLimit := requestAndLimit(pod, name); podRequest != "" || podLimit != "" {
+			return fmt.Sprintf("%s %s (no container request/limit; uses the pod-level budget)", metric, currentValue)
+		}
 		return fmt.Sprintf("%s %s (no request/limit set)", metric, currentValue)
 	}
+	return metric + " " + currentValue + requestLimitSuffix(request, limit)
+}
 
-	parts := fmt.Sprintf("%s %s", metric, currentValue)
+func requestAndLimit(reqs corev1.ResourceRequirements, name corev1.ResourceName) (request, limit string) {
+	if q, ok := reqs.Requests[name]; ok {
+		request = q.String()
+	}
+	if q, ok := reqs.Limits[name]; ok {
+		limit = q.String()
+	}
+	return request, limit
+}
+
+func requestLimitSuffix(request, limit string) string {
+	var out string
 	if request != "" {
-		parts += fmt.Sprintf("/req:%s", request)
+		out += "/req:" + request
 	}
 	if limit != "" {
-		parts += fmt.Sprintf("/lim:%s", limit)
+		out += "/lim:" + limit
 	}
-
-	return parts
+	return out
 }
 
 func describeTrend(dataPoints []MetricsDataPoint) string {

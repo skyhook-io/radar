@@ -26,8 +26,23 @@ export function chartLayout(compact: boolean, dashboard = false, renderedWidth =
     : { width: 1000, height: 300, marginLeft: 84, marginRight: 40, marginTop: 10, marginBottom: 30, fontSize: 11, yIntervals: 4, xIntervals: 6 }
 }
 
+/**
+ * Widest X label, in ems, that leaves a gap of about two characters between
+ * neighbours. A centred label shares the spacing with half of each neighbour;
+ * an edge-anchored end label sits wholly on its side, so with two ticks both
+ * labels share the plot and with more the end label and half its neighbour
+ * share one spacing.
+ */
+export function xLabelMaxWidthEm(plotWidth: number, intervals: number, fontSize: number, edgeAnchored: boolean): number {
+  const spacing = plotWidth / Math.max(1, intervals) / fontSize
+  const share = !edgeAnchored ? 1 : intervals <= 1 ? 2 : 1.5
+  return (spacing - 1.2) / share
+}
+
+// avgCount: a count averaged across reporters, so values can be fractional
+// while the axis stays on whole numbers.
 export function isCountUnit(unit: string): boolean {
-  return unit === 'count' || unit === 'restarts'
+  return unit === 'count' || unit === 'restarts' || unit === 'avgCount'
 }
 
 /**

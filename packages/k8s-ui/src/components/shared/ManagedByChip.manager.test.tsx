@@ -24,16 +24,31 @@ describe('manager answer chip', () => {
     expect(html.match(/Application/g)?.length).toBe(1)
   })
   it.each([
-    ['omitted', "its status doesn't list this resource"],
-    ['unreadable', "Radar can't read its status"],
-    ['remote', "Radar can't confirm it deploys to this cluster"],
-    ['missing', 'no such Application here'],
-    ['withheld', "you can't view it"],
-    ['unresolved', "the label doesn't name its namespace"],
-    ['unchecked', "Radar couldn't check its status"],
+    ['omitted', "This resource's label names Application argocd/a, but its status doesn't list it."],
+    ['unreadable', "This resource's label names Application argocd/a, but Radar can't read its status."],
+    ['remote', "This resource's label names Application argocd/a, but Radar can't confirm it deploys to this cluster."],
+    ['missing', "This resource's label names Application argocd/a, but there's no such Application here."],
+    ['withheld', "This resource's label names Application argocd/a, but you can't view it."],
+    ['unresolved', "This resource's label names Application argocd/a, but Radar found no Application of that name listing it; it may be managed from another cluster."],
+    ['unchecked', "This resource's label names Application argocd/a, but Radar couldn't check its status."],
   ] as const)('claimed explains %s', (check, reason) => {
     const html = render({ state: 'claimed', lead: a, direct: { object, claims: [{ ...claim, check }] } })
     expect(html).toContain('Tracked by')
+    expect(html).toContain(reason)
+  })
+  it.each([
+    [{ kind: 'Kustomization', group: 'kustomize.toolkit.fluxcd.io', namespace: 'flux-system', name: 'apps' }, 'omitted',
+      "This resource's label names Kustomization flux-system/apps, but its inventory doesn't list it; it may have been removed from the source while pruning is off, or the latest apply hasn't finished."],
+    [{ kind: 'Kustomization', group: 'kustomize.toolkit.fluxcd.io', namespace: 'flux-system', name: 'apps' }, 'unreadable',
+      "This resource's label names Kustomization flux-system/apps, but Radar can't read an inventory in its status; Flux records one once an apply succeeds."],
+    [{ kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', namespace: 'demo', name: 'web' }, 'unreadable',
+      "This resource's label names HelmRelease demo/web, but Radar can't read an inventory in its status; Flux records one from version 2.8, at each install or upgrade, so a release installed earlier and not upgraded since has none."],
+    [{ kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', namespace: 'demo', name: 'web' }, 'omitted',
+      "This resource's label names HelmRelease demo/web, but its inventory doesn't list it; it may be a Helm hook, kept by helm.sh/resource-policy: keep, or the latest release hasn't finished."],
+    [{ kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', namespace: 'demo', name: 'web' }, 'withheld',
+      "This resource's label names HelmRelease demo/web, but you can't view it."],
+  ] as const)('claimed explains a Flux %o %s in Flux terms', (manager, check, reason) => {
+    const html = render({ state: 'claimed', lead: manager, direct: { object, claims: [{ manager, source: manager.kind === 'HelmRelease' ? 'flux-helm-labels' : 'flux-kustomize-labels', check }] } })
     expect(html).toContain(reason)
   })
   it('disagree names the claim and recorder with a warning', () => {
@@ -91,8 +106,15 @@ it('says on the chip itself that the answer comes through an ancestor', () => {
 })
 
 describe('manager answer chip wording', () => {
-  it("says up front that a claim isn't confirmed", () => {
-    expect(render({ state: 'claimed', lead: a, direct: { object, claims: [claim] } })).toContain("labels or annotations name Application argocd/a; Radar hasn't confirmed it manages it")
+  it("says up front, in one sentence, why one claim isn't confirmed", () => {
+    const html = render({ state: 'claimed', lead: a, direct: { object, claims: [claim] } })
+    expect(html).toContain("This resource's label names Application argocd/a, but its status doesn't list it.")
+    expect(html.match(/argocd\/a/g)).toHaveLength(2)
+  })
+  it("says up front that several claims aren't confirmed, then why each", () => {
+    const html = render({ state: 'claimed', direct: { object, claims: [claim, { ...claim, manager: b, source: 'argo-tracking-id' }] } })
+    expect(html).toContain("labels or annotations name Application argocd/a and Application argocd/b; Radar hasn't confirmed they manage it")
+    expect(html).toContain("Application argocd/b: its status doesn't list this resource.")
   })
   // A claim the walk passed shows even when no ancestor answered.
   it('names claims on the way without via', () => {

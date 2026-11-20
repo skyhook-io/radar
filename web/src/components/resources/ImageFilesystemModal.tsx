@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { X, Folder, File, Link2, ChevronRight, ChevronDown, AlertTriangle, Loader2, Search, Download, HardDrive, Shield, ShieldCheck, Terminal, Copy, Check, RefreshCw } from 'lucide-react'
+import { X, Folder, File, Link2, ChevronRight, ChevronDown, AlertTriangle, Loader2, Search, Download, HardDrive, Shield, ShieldCheck, Terminal, Copy, Check, RefreshCw, WifiOff } from 'lucide-react'
 import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
 import { assetUrl } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
@@ -78,6 +78,13 @@ export function ImageFilesystemModal({
   // Detect auth errors from metadata fetch
   const isAuthError = metadataError instanceof ApiError && metadataError.status === 401
   const registryType = isAuthError ? (metadataError.data?.registryType as string) : undefined
+  const unavailable = metadataError instanceof ApiError ? registryUnavailable(metadataError.data) : undefined
+
+  // The server may pin a tag to the digest the Pod pulled. Later requests
+  // name that exact reference, so the listing and file downloads can't drift
+  // to whatever the tag points at by then.
+  const inspectImage = metadata?.image || image
+  const pulledDigest = inspectImage !== image ? inspectImage.split('@')[1] : undefined
 
   // Use cached filesystem from metadata if available
   const displayFilesystem: ImageFilesystem | undefined = metadata?.cached
@@ -89,14 +96,14 @@ export function ImageFilesystemModal({
     setIsLoadingFilesystem(true)
     setFilesystemError(null)
     try {
-      const result = await fetchImageFilesystem(image, namespace, podName, pullSecrets)
+      const result = await fetchImageFilesystem(inspectImage, namespace, podName, pullSecrets)
       setFilesystem(result)
     } catch (err) {
       setFilesystemError(err instanceof Error ? err : new Error('Failed to fetch filesystem'))
     } finally {
       setIsLoadingFilesystem(false)
     }
-  }, [image, namespace, podName, pullSecrets])
+  }, [inspectImage, namespace, podName, pullSecrets])
 
   // Reset state when modal closes or image changes
   useEffect(() => {
@@ -153,6 +160,13 @@ export function ImageFilesystemModal({
               {image}
             </p>
             </Tooltip>
+            {pulledDigest && (
+              <Tooltip content={inspectImage} wrapperClassName="!block w-full">
+                <p className="text-xs text-theme-text-tertiary mt-1 truncate">
+                  Pulled digest: <span className="font-mono">{pulledDigest}</span>
+                </p>
+              </Tooltip>
+            )}
             {(displayFilesystem?.platform || metadata?.platform) && (
               <p className="text-xs text-theme-text-tertiary mt-1">
                 Platform: {displayFilesystem?.platform || metadata?.platform}
@@ -208,8 +222,16 @@ export function ImageFilesystemModal({
             />
           )}
 
-          {/* Non-auth errors keep the existing red error box */}
-          {error && !isAuthError && (
+          {unavailable && (
+            <RegistryUnavailable
+              {...unavailable}
+              liveFilesLinkShown={Boolean(onSwitchToPodFiles)}
+              onRetry={() => refetchMetadata()}
+            />
+          )}
+
+          {/* Other errors keep the existing red error box */}
+          {error && !isAuthError && !unavailable && (
             <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
               <div className="flex items-start gap-3">
                 <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
@@ -237,7 +259,7 @@ export function ImageFilesystemModal({
             <FileTreeView
               root={displayFilesystem.root}
               searchQuery={searchQuery}
-              image={image}
+              image={displayFilesystem.image || inspectImage}
               namespace={namespace}
               podName={podName}
               pullSecrets={pullSecrets}
@@ -508,6 +530,76 @@ function AuthenticationHelp({ image, registryType, onRetry }: AuthenticationHelp
       >
         <RefreshCw className={clsx('w-4 h-4', retrying && 'animate-spin')} />
         {retrying ? 'Retrying...' : 'Retry'}
+      </button>
+    </div>
+  )
+}
+
+// ============================================================================
+// Registry Unavailable Component (image Radar can't download)
+// ============================================================================
+
+interface RegistryUnavailableInfo {
+  reason: 'node_only' | 'registry_unreachable'
+  registry: string
+}
+
+function registryUnavailable(data: Record<string, unknown> | undefined): RegistryUnavailableInfo | undefined {
+  const reason = data?.reason
+  const registry = typeof data?.registry === 'string' ? data.registry : ''
+  if (reason === 'node_only' || reason === 'registry_unreachable') return { reason, registry }
+  return undefined
+}
+
+interface RegistryUnavailableProps extends RegistryUnavailableInfo {
+  liveFilesLinkShown: boolean
+  onRetry: () => void
+}
+
+function RegistryUnavailable({ reason, registry, liveFilesLinkShown, onRetry }: RegistryUnavailableProps) {
+  const liveFiles = liveFilesLinkShown && (
+    <p className="text-xs text-theme-text-tertiary text-center max-w-md mb-2">
+      To see the files now, use Browse live files from running pod below.
+    </p>
+  )
+
+  if (reason === 'node_only') {
+    return (
+      <div className="flex flex-col items-center justify-center py-8">
+        <HardDrive className="w-16 h-16 text-amber-400 mb-4" />
+        <h4 className="text-lg font-medium text-theme-text-primary mb-2">
+          This image was added to the node, not pulled
+        </h4>
+        <p className="text-sm text-theme-text-secondary text-center max-w-md mb-2">
+          The node didn't pull this image from a registry. It was added to the node directly, for example with <span className="font-mono">kind load</span> or <span className="font-mono">ctr images import</span>. Radar can only open images it downloads from a registry, and it couldn't get this one from <span className="inline-code">{registry}</span>.
+        </p>
+        <p className="text-xs text-theme-text-tertiary text-center max-w-md mb-2">
+          To browse it here, push the image to a registry Radar can reach and run the Pod from there.
+        </p>
+        {liveFiles}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col items-center justify-center py-8">
+      <WifiOff className="w-16 h-16 text-amber-400 mb-4" />
+      <h4 className="text-lg font-medium text-theme-text-primary mb-2">
+        Radar can't reach this image's registry
+      </h4>
+      <p className="text-sm text-theme-text-secondary text-center max-w-md mb-2">
+        The connection failed while fetching this image from <span className="inline-code">{registry}</span>. If your nodes pull images through a mirror or an internal copy of this registry, Radar doesn't use it, so it can't open this image.
+      </p>
+      <p className="text-xs text-theme-text-tertiary text-center max-w-md mb-2">
+        If <span className="inline-code">{registry}</span> should be reachable from where Radar runs, check the connection and retry.
+      </p>
+      {liveFiles}
+      <button
+        onClick={onRetry}
+        className="flex items-center gap-2 px-4 py-2 mt-4 text-sm btn-brand rounded-lg"
+      >
+        <RefreshCw className="w-4 h-4" />
+        Retry
       </button>
     </div>
   )

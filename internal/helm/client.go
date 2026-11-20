@@ -81,6 +81,10 @@ type Client struct {
 	// leave it nil and use locateChartPath, which wires Helm's registry client
 	// for OCI references.
 	chartPathLocator func(*action.Configuration, string, string) (string, error)
+	// ociTags is a test seam for OCI tag listing; production uses the registry client.
+	ociTags ociTagLister
+	// listings shares recent classic-index downloads between version listings.
+	listings recentIndexes
 	// restConfig, when set, is the explicit rest.Config all actions target —
 	// used by callers that resolve the cluster themselves before Radar's k8s
 	// singleton is up (the CLI install driver), so Helm can't diverge onto a
@@ -339,26 +343,26 @@ func (c *Client) GetActionConfigForUser(namespace string, user *pkgauth.User) (*
 // ListReleasesAsUser is ListReleases with K8s impersonation.
 // When username is empty, falls back to the ServiceAccount identity (same
 // behavior as ListReleases).
-func (c *Client) ListReleasesAsUser(ctx context.Context, namespace string, user *pkgauth.User) ([]HelmRelease, error) {
+func (c *Client) ListReleasesAsUser(ctx context.Context, namespace string, user *pkgauth.User, access StatusAccess) ([]HelmRelease, error) {
 	if user == nil {
-		return c.ListReleases(ctx, namespace)
+		return c.ListReleases(ctx, namespace, access)
 	}
 	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfigForUser(namespace, user)
 	if err != nil {
 		return nil, err
 	}
-	return c.listReleasesWith(ctx, actionConfig, contextName, namespace, user)
+	return c.listReleasesWith(ctx, actionConfig, contextName, namespace, user, access)
 }
 
 // ListReleases returns all Helm releases, optionally filtered by namespace
-func (c *Client) ListReleases(ctx context.Context, namespace string) ([]HelmRelease, error) {
+func (c *Client) ListReleases(ctx context.Context, namespace string, access StatusAccess) ([]HelmRelease, error) {
 	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return c.listReleasesWith(ctx, actionConfig, contextName, namespace, nil)
+	return c.listReleasesWith(ctx, actionConfig, contextName, namespace, nil, access)
 }
 
 // ListReleasesAcrossNamespaces lists releases for an explicit set of namespaces
@@ -374,7 +378,7 @@ func (c *Client) ListReleases(ctx context.Context, namespace string) ([]HelmRele
 // skipped so one of them doesn't blank releases the caller CAN see. Only when
 // every namespace is forbidden is the 403 surfaced, so the UI still shows
 // "Access Restricted" rather than a misleading empty list.
-func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []string, user *pkgauth.User) ([]HelmRelease, error) {
+func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []string, user *pkgauth.User, access StatusAccess) ([]HelmRelease, error) {
 	if namespaces != nil && len(namespaces) == 0 {
 		return []HelmRelease{}, nil
 	}
@@ -383,13 +387,29 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, namespaces, true)
+	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, namespaces, true, access)
+}
+
+// ListReleasesRecordingAccess is ListReleasesAcrossNamespaces that also says
+// which namespaces' storage was read and which the caller was refused, rather
+// than skipping refused namespaces silently. A refusal everywhere is a result
+// here (nothing read, something denied), not an error. A cluster-wide read
+// (nil namespaces) reports itself as "" in read or denied.
+func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []string, user *pkgauth.User, access StatusAccess) (rows []HelmRelease, read, denied []string, err error) {
+	if namespaces != nil && len(namespaces) == 0 {
+		return []HelmRelease{}, nil, nil, nil
+	}
+	client, err := c.storageClient(user)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return listReleasesRecordingAccess(ctx, client, k8s.GetContextName(), namespaces, access)
 }
 
 // contextName is the cluster context the read started on; a release history
 // analysed after a switch away from it records no uninstall start.
-func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool) ([]HelmRelease, error) {
-	rows, err := listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, false, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool, access StatusAccess) ([]HelmRelease, error) {
+	rows, err := listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, access, false, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
 		return helmReleaseStorageSnapshotWithClient(ctx, client, namespace)
 	})
 	if err != nil {
@@ -421,16 +441,19 @@ func (e *PartialReadError) Unwrap() error { return e.Err }
 // failure fails the whole read, unless keepGoing is set: then the remaining
 // namespaces are still read, and when at least one namespace was read the
 // rows come back with a *PartialReadError naming the namespaces that failed.
-func listReleaseRows(ctx context.Context, contextName string, namespaces []string, includeResourceHealth, keepGoing bool, denied func(error) bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
+func listReleaseRows(ctx context.Context, contextName string, namespaces []string, includeResourceHealth bool, access StatusAccess, keepGoing bool, denied func(error) bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
 	scopes := namespaces
 	if scopes == nil {
 		scopes = []string{""}
 	}
 	fluxMap := fluxHelmReleaseMap(ctx)
 	all := make([]HelmRelease, 0)
+	// Health is added once every scope is read, so the caller's access is
+	// checked once for the objects of every release; rels[i] is all[i]'s.
+	var rels []*release.Release
 	var lastForbidden, firstFailure error
-	var failed []string
-	var failures []error
+	var failed, deniedScopes []string
+	var failures, denials []error
 	authorized := false
 	for index, ns := range scopes {
 		if err := ctx.Err(); err != nil {
@@ -447,15 +470,18 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		snapshot, err := read(ctx, ns)
 		if err == nil {
 			var rows []HelmRelease
-			rows, err = helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, contextName, includeResourceHealth)
+			rows, err = helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, contextName, access)
 			if err == nil {
 				authorized = true
 				all = append(all, rows...)
+				rels = append(rels, snapshot.latest...)
 				continue
 			}
 		}
 		if denied(err) {
 			lastForbidden = err
+			deniedScopes = append(deniedScopes, ns)
+			denials = append(denials, err)
 			continue
 		}
 		if !keepGoing {
@@ -465,6 +491,19 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		failures = append(failures, err)
 		if firstFailure == nil {
 			firstFailure = err
+		}
+	}
+	if includeResourceHealth {
+		addReleasesHealth(all, rels, access)
+	}
+	// With keepGoing, a namespace the caller was denied is part of the answer
+	// once another was read: those releases weren't checked, and a caller that
+	// sees them elsewhere must be told.
+	if keepGoing && authorized && len(deniedScopes) > 0 {
+		failed = append(failed, deniedScopes...)
+		failures = append(failures, denials...)
+		if firstFailure == nil {
+			firstFailure = denials[0]
 		}
 	}
 	if firstFailure != nil {
@@ -583,7 +622,7 @@ func (c *Client) listManifestResourcesAsUser(ctx context.Context, namespace stri
 	return resources, parseErrors, nil
 }
 
-func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Configuration, contextName, namespace string, user *pkgauth.User) ([]HelmRelease, error) {
+func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Configuration, contextName, namespace string, user *pkgauth.User, access StatusAccess) ([]HelmRelease, error) {
 	if err := actionConfig.KubeClient.IsReachable(); err != nil {
 		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
@@ -592,10 +631,10 @@ func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Conf
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, []string{namespace}, true)
+	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, []string{namespace}, true, access)
 }
 
-func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, contextName string, includeResourceHealth bool) ([]HelmRelease, error) {
+func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, contextName string, access StatusAccess) ([]HelmRelease, error) {
 	if snapshot == nil {
 		return nil, nil
 	}
@@ -606,9 +645,6 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 		}
 		storageNs := snapshot.storageNamespaces[releaseStorageKey(rel)]
 		hr := toHelmReleaseSummary(rel, storageNs)
-		if includeResourceHealth {
-			addResourceHealth(&hr, rel)
-		}
 		// Match against the release's *actual* storage namespace (the
 		// un-normalized value), since toHelmRelease zeroes StorageNamespace
 		// when it equals Namespace for compactness.
@@ -620,7 +656,7 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 		analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, snapshot.histories[historyKey], helmhistory.Options{MaxOperations: releaseListMaxOperations})
 		hr.LastOperation = analysis.LastOperation
 		hr.Operations = analysis.Operations
-		hr.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxMap)
+		hr.ManagedByFlux, hr.ManagedByFluxHelmRelease = scopedFluxOwnership(rel.Name, effectiveStorage, fluxMap, access)
 		result = append(result, hr)
 	}
 	return result, nil
@@ -628,34 +664,39 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 
 // GetReleaseAsUser is GetRelease with K8s impersonation.
 // When username is empty, falls back to the ServiceAccount identity.
-func (c *Client) GetReleaseAsUser(namespace, name string, user *pkgauth.User) (*HelmReleaseDetail, error) {
+func (c *Client) GetReleaseAsUser(namespace, name string, user *pkgauth.User, access StatusAccess) (*HelmReleaseDetail, error) {
 	if user == nil {
-		return c.GetRelease(namespace, name)
+		return c.GetRelease(namespace, name, access)
 	}
 	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfigForUser(namespace, user)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(actionConfig, contextName, namespace, name)
+	return getReleaseWith(actionConfig, contextName, namespace, name, access)
 }
 
-// GetRelease returns details for a specific release
-func (c *Client) GetRelease(namespace, name string) (*HelmReleaseDetail, error) {
+// GetRelease returns details for a specific release. Its resources carry live
+// status only where access allows; see StatusAccess.
+func (c *Client) GetRelease(namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
 	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(actionConfig, contextName, namespace, name)
+	return getReleaseWith(actionConfig, contextName, namespace, name, access)
 }
 
-func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, name string) (*HelmReleaseDetail, error) {
+func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
 	// Get the latest release
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get helm release %s/%s: %w", namespace, name, err)
+	}
+
+	if rel.Chart == nil || rel.Chart.Metadata == nil || rel.Info == nil {
+		return nil, fmt.Errorf("release has no usable stored chart or status; ask an operator to recover it")
 	}
 
 	// Get release history
@@ -684,12 +725,8 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 	}
 	analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, revisions, helmhistory.Options{})
 
-	// Parse manifest to get owned resources
 	resources := parseManifestResources(rel.Manifest, rel.Namespace)
-
-	// Enrich resources with live status from k8s cache
-	enrichResourcesWithStatus(resources)
-	health, issue, summary := computeResourceHealth(resources)
+	health, issue, summary := readReleaseStatus(resources, access)
 
 	// Extract hooks
 	hooks := extractHooks(rel)
@@ -701,7 +738,7 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 	// Extract dependencies
 	dependencies := extractDependencies(rel)
 
-	managedByFlux := applyFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()))
+	managedByFlux, fluxReference := scopedFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()), access)
 
 	detail := &HelmReleaseDetail{
 		Name:                     rel.Name,
@@ -720,13 +757,15 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 		ResourceHealth:           health,
 		HealthIssue:              issue,
 		HealthSummary:            summary,
+		StatusUnreadCount:        statusUnreadCount(resources),
 		Hooks:                    hooks,
 		HookDiagnostics:          hookDiagnostics,
 		Readme:                   readme,
 		Dependencies:             dependencies,
 		LastOperation:            analysis.LastOperation,
 		Operations:               analysis.Operations,
-		ManagedByFluxHelmRelease: managedByFlux,
+		ManagedByFlux:            managedByFlux,
+		ManagedByFluxHelmRelease: fluxReference,
 	}
 	detail.OperationInsight = buildOperationInsight(detail)
 	if detail.StorageNamespace == detail.Namespace {
@@ -817,6 +856,9 @@ func getValuesWith(actionConfig *action.Configuration, name string, allValues bo
 	result := &HelmValues{UserSupplied: userSupplied}
 
 	if allValues {
+		if rel.Chart == nil || rel.Chart.Metadata == nil {
+			return nil, fmt.Errorf("release revision %d has no usable stored chart for computed values", rel.Version)
+		}
 		computed, err := chartutil.CoalesceValues(rel.Chart, rel.Config)
 		if err != nil {
 			return nil, fmt.Errorf("failed to compute helm release values: %w", err)
@@ -909,15 +951,26 @@ func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 in
 
 // GetNotesDiff returns a release notes diff between two revisions.
 func (c *Client) GetNotesDiff(namespace, name string, revision1, revision2 int) (*NotesDiff, error) {
-	return c.getNotesDiff(namespace, name, revision1, revision2, nil)
+	return c.getNotesDiff(namespace, name, revision1, revision2, nil, nil)
 }
 
 // GetNotesDiffAsUser is GetNotesDiff with K8s impersonation.
 func (c *Client) GetNotesDiffAsUser(namespace, name string, revision1, revision2 int, user *pkgauth.User) (*NotesDiff, error) {
-	return c.getNotesDiff(namespace, name, revision1, revision2, user)
+	return c.getNotesDiff(namespace, name, revision1, revision2, user, nil)
 }
 
-func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, user *pkgauth.User) (*NotesDiff, error) {
+// GetRedactedNotesDiffAsUser masks each revision before adding diff prefixes.
+// redact must mask known sensitive values from a notes string; nil is refused.
+// It receives raw values, first computed then user-supplied for each revision,
+// and must accept already-masked text. A values-read error returns no diff.
+func (c *Client) GetRedactedNotesDiffAsUser(namespace, name string, revision1, revision2 int, user *pkgauth.User, redact func(string, map[string]any) string) (*NotesDiff, error) {
+	if redact == nil {
+		return nil, fmt.Errorf("notes redactor is required")
+	}
+	return c.getNotesDiff(namespace, name, revision1, revision2, user, redact)
+}
+
+func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, user *pkgauth.User, redact func(string, map[string]any) string) (*NotesDiff, error) {
 	rel1, err := c.getReleaseRevisionAsUser(namespace, name, revision1, user)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get release revision %d: %w", revision1, err)
@@ -926,11 +979,17 @@ func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get release revision %d: %w", revision2, err)
 	}
-	return &NotesDiff{
-		Revision1: revision1,
-		Revision2: revision2,
-		Diff:      computeDiff(releaseNotes(rel1), releaseNotes(rel2), revision1, revision2),
-	}, nil
+	notes := []string{releaseNotes(rel1), releaseNotes(rel2)}
+	if redact != nil {
+		for i, rel := range []*release.Release{rel1, rel2} {
+			values, err := c.GetValuesRevisionAsUser(namespace, name, true, rel.Version, user)
+			if err != nil {
+				return nil, fmt.Errorf("could not read revision %d values to redact notes: %w", rel.Version, err)
+			}
+			notes[i] = redact(redact(notes[i], values.Computed), values.UserSupplied)
+		}
+	}
+	return &NotesDiff{Revision1: revision1, Revision2: revision2, Diff: computeDiff(notes[0], notes[1], revision1, revision2)}, nil
 }
 
 // computeRedactedManifestDiff diffs two manifests with every Secret's data and
@@ -1436,13 +1495,6 @@ func releaseUpgradeKey(rel *release.Release, storageNamespace string) string {
 	return storageNamespace + "/" + rel.Name
 }
 
-// toHelmRelease converts a helm release to our API type
-func toHelmRelease(rel *release.Release, storageNamespace string) HelmRelease {
-	hr := toHelmReleaseSummary(rel, storageNamespace)
-	addResourceHealth(&hr, rel)
-	return hr
-}
-
 func toHelmReleaseSummary(rel *release.Release, storageNamespace string) HelmRelease {
 	hr := HelmRelease{
 		Name:             rel.Name,
@@ -1459,14 +1511,6 @@ func toHelmReleaseSummary(rel *release.Release, storageNamespace string) HelmRel
 		hr.StorageNamespace = ""
 	}
 	return hr
-}
-
-// addResourceHealth computes health from the resources the release's
-// manifest declares.
-func addResourceHealth(hr *HelmRelease, rel *release.Release) {
-	resources := parseManifestResources(rel.Manifest, rel.Namespace)
-	enrichResourcesWithStatus(resources)
-	hr.ResourceHealth, hr.HealthIssue, hr.HealthSummary = computeResourceHealth(resources)
 }
 
 // fluxHelmReleaseMap returns a map keyed by "<storageNamespace>/<releaseName>"
@@ -1520,6 +1564,25 @@ func fluxHelmReleaseKeys(hrs []*unstructured.Unstructured) map[string]string {
 		out[storageNs+"/"+releaseName] = hr.GetNamespace() + "/" + hr.GetName()
 	}
 	return out
+}
+
+// scopedFluxOwnership preserves the ownership fact without returning a
+// controller reference from a namespace the caller cannot read. Nil access
+// is used by internal history/write checks: ownership still blocks direct
+// MCP Helm changes, while no controller identity is returned.
+func scopedFluxOwnership(name, storageNamespace string, fluxMap map[string]string, access StatusAccess) (bool, string) {
+	reference := applyFluxOwnership(name, storageNamespace, fluxMap)
+	if reference == "" {
+		return false, ""
+	}
+	namespace, _, valid := strings.Cut(reference, "/")
+	if noStatusAccess(access) || !valid {
+		return true, ""
+	}
+	if allowed, _ := access.statusDecision("HelmRelease", "helm.toolkit.fluxcd.io", namespace); !allowed {
+		return true, ""
+	}
+	return true, reference
 }
 
 // applyFluxOwnership stamps ManagedByFluxHelmRelease on a HelmRelease (or
@@ -1681,13 +1744,17 @@ func decodeHelmReleaseData(data string) (*release.Release, error) {
 	return &rel, nil
 }
 
-// computeResourceHealth analyzes owned resources and returns overall health status
+// computeResourceHealth analyzes owned resources and returns overall health
+// status. It counts built-in workloads and Pods only, and none whose status was
+// withheld from the caller; when one was, an unread part could be the broken
+// one, so it doesn't claim "healthy".
 func computeResourceHealth(resources []OwnedResource) (health, issue, summary string) {
 	if len(resources) == 0 {
 		return "unknown", "", ""
 	}
 
 	var unhealthyCount, degradedCount, healthyCount, unknownCount int
+	withheld := false
 	var primaryIssue string
 	var issueSeverity int // 0=none, 1=degraded, 2=unhealthy
 
@@ -1696,6 +1763,16 @@ func computeResourceHealth(resources []OwnedResource) (health, issue, summary st
 	var workloadIssues []string
 
 	for _, r := range resources {
+		if _, ok := builtInGroup(r); !ok {
+			continue
+		}
+		if r.StatusUnread != "" {
+			switch r.Kind {
+			case "Deployment", "DaemonSet", "StatefulSet", "ReplicaSet", "Pod":
+				withheld = true
+			}
+			continue
+		}
 		// Skip non-workload resources for health calculation
 		switch r.Kind {
 		case "Deployment", "DaemonSet", "StatefulSet", "ReplicaSet":
@@ -1748,7 +1825,7 @@ func computeResourceHealth(resources []OwnedResource) (health, issue, summary st
 		health = "unhealthy"
 	} else if degradedCount > 0 {
 		health = "degraded"
-	} else if healthyCount > 0 {
+	} else if healthyCount > 0 && !withheld {
 		health = "healthy"
 	} else {
 		health = "unknown"
@@ -1809,26 +1886,38 @@ type renderedResource struct {
 
 func parseManifestResourceObjects(manifest, defaultNamespace string) ([]renderedResource, int) {
 	resources := []renderedResource{}
-	manifests := releaseutil.SplitManifests(manifest)
 	parseErrorCount := 0
-
-	for _, m := range manifests {
-		m = strings.TrimSpace(m)
-		if m == "" {
-			continue
+	var appendObject func(*unstructured.Unstructured)
+	appendObject = func(obj *unstructured.Unstructured) {
+		// Kubernetes' decoder treats any present items key as a list, so an empty
+		// rendered loop (items: null) is an empty List, not an unidentified object.
+		if items, ok := obj.Object["items"]; ok && items == nil {
+			return
 		}
-		jsonBytes, err := yaml.YAMLToJSON([]byte(m))
-		if err != nil {
+		// Helm's resource builder flattens List and typed-list documents recursively.
+		// Do not silently report their children as absent from a preview.
+		if obj.IsList() {
+			items := obj.Object["items"].([]any)
+			for _, item := range items {
+				child, ok := item.(map[string]any)
+				if !ok {
+					parseErrorCount++
+					continue
+				}
+				itemObject := &unstructured.Unstructured{Object: child}
+				// Match Kubernetes' typed-list decoder; partially specified types
+				// stay invalid instead of having an inferred field filled in.
+				if itemObject.GetKind() == "" && itemObject.GetAPIVersion() == "" {
+					itemObject.SetKind(strings.TrimSuffix(obj.GetKind(), "List"))
+					itemObject.SetAPIVersion(obj.GetAPIVersion())
+				}
+				appendObject(itemObject)
+			}
+			return
+		}
+		if obj.GetKind() == "" || obj.GetName() == "" || obj.GetAPIVersion() == "" {
 			parseErrorCount++
-			continue
-		}
-		var obj unstructured.Unstructured
-		if err := json.Unmarshal(jsonBytes, &obj.Object); err != nil {
-			parseErrorCount++
-			continue
-		}
-		if obj.GetKind() == "" || obj.GetName() == "" {
-			continue
+			return
 		}
 		apiGroup := ""
 		if group, _, ok := strings.Cut(obj.GetAPIVersion(), "/"); ok {
@@ -1845,14 +1934,31 @@ func parseManifestResourceObjects(manifest, defaultNamespace string) ([]rendered
 				Name:       obj.GetName(),
 				Namespace:  obj.GetNamespace(),
 			},
-			Object: &obj,
+			Object: obj,
 		})
 	}
-
-	sort.Slice(resources, func(i, j int) bool {
-		return resourceRefKey(resources[i].Ref) < resourceRefKey(resources[j].Ref)
-	})
-
+	for _, m := range releaseutil.SplitManifests(manifest) {
+		if strings.TrimSpace(m) == "" {
+			continue
+		}
+		encoded, err := yaml.YAMLToJSON([]byte(m))
+		if err != nil {
+			parseErrorCount++
+			continue
+		}
+		// Helm's resource builder skips null documents, including templates
+		// that render only comments when their resource condition is false.
+		if string(encoded) == "null" {
+			continue
+		}
+		var obj unstructured.Unstructured
+		if err := json.Unmarshal(encoded, &obj.Object); err != nil {
+			parseErrorCount++
+			continue
+		}
+		appendObject(&obj)
+	}
+	sort.Slice(resources, func(i, j int) bool { return resourceRefKey(resources[i].Ref) < resourceRefKey(resources[j].Ref) })
 	return resources, parseErrorCount
 }
 
@@ -1880,14 +1986,24 @@ func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
 	return resources
 }
 
-// enrichResourcesWithStatus adds live status from k8s cache to resources
-func enrichResourcesWithStatus(resources []OwnedResource) {
+// enrichResourcesWithStatus adds live status from the k8s cache to the
+// built-in objects access lets the caller see, and marks the ones it withholds.
+func enrichResourcesWithStatus(resources []OwnedResource, access StatusAccess) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return
 	}
 
 	for i := range resources {
+		group, ok := builtInGroup(resources[i])
+		if !ok {
+			continue
+		}
+		lookup, reason := access.statusDecision(resources[i].Kind, group, resources[i].Namespace)
+		if !lookup {
+			resources[i].StatusUnread = reason
+			continue
+		}
 		status := cache.GetResourceStatus(resources[i].Kind, resources[i].Namespace, resources[i].Name)
 		if status != nil {
 			resources[i].Status = status.Status
@@ -2568,43 +2684,100 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVer
 // the supplied user values (WYSIWYG — ResetValues, no merge with prior overrides).
 // The plain upgradeWith path keeps ResetThenReuseValues for the blind carry-over case.
 func (c *Client) upgradeWithValues(actionConfig *action.Configuration, name, targetVersion, repositoryName string, newValues map[string]any, sendProgress func(phase, message, detail string)) error {
-	getAction := action.NewGet(actionConfig)
-	rel, err := getAction.Run(name)
+	_, _, err := c.runValuesUpgrade(actionConfig, name, targetVersion, repositoryName, newValues, valuesUpgradeOptions{replace: true}, sendProgress)
+	return err
+}
+
+type valuesUpgradeOptions struct {
+	replace          bool
+	dryRun           bool
+	allowStoredChart bool
+	expectedRevision int
+}
+
+func (c *Client) runValuesUpgrade(actionConfig *action.Configuration, name, targetVersion, repositoryName string, newValues map[string]any, options valuesUpgradeOptions, sendProgress func(phase, message, detail string)) (before, after *release.Release, err error) {
+	started := false
+	defer func() {
+		if err != nil && !started {
+			err = &OperationPreflightError{Err: err}
+		}
+	}()
+
+	op, err := releaseContext(actionConfig, name)
 	if err != nil {
-		return fmt.Errorf("failed to get current release: %w", err)
+		return nil, nil, fmt.Errorf("read release before upgrade: %w", err)
+	}
+	rel := op.Latest
+	if options.expectedRevision != 0 && rel.Version != options.expectedRevision {
+		return nil, nil, fmt.Errorf("release is now revision %d, expected %d; inspect it and preview again", rel.Version, options.expectedRevision)
+	}
+	if !options.replace {
+		if newValues == nil {
+			newValues = map[string]any{}
+		}
+		if err := validateOverrideReplacement(op.Baseline.Config, newValues); err != nil {
+			return nil, nil, err
+		}
+	}
+	if rel.Chart == nil || rel.Chart.Metadata == nil || op.Baseline.Chart == nil || op.Baseline.Chart.Metadata == nil {
+		return nil, nil, fmt.Errorf("release has no usable stored chart; ask an operator to recover it")
+	}
+	if failedSourceChange(op) {
+		return nil, nil, errSourceRequired
+	}
+	if targetVersion == "" {
+		if rel.Chart.Metadata.Version != op.Baseline.Chart.Metadata.Version || chartSourceBinding(rel.Chart) != chartSourceBinding(op.Baseline.Chart) {
+			return nil, nil, fmt.Errorf("latest revision %d uses chart %s with different version or content from deployed baseline revision %d (%s); choose an exact version to retry, or explicitly rollback to revision %d before editing values", rel.Version, rel.Chart.Metadata.Version, op.Baseline.Version, op.Baseline.Chart.Metadata.Version, op.Baseline.Version)
+		}
+		targetVersion = rel.Chart.Metadata.Version
 	}
 
-	source, sourceErr := c.normalUpgradeSource(actionConfig, rel, repositoryName)
-	if sourceErr != nil {
-		return sourceErr
+	var source *ChartSourceCandidate
+	if options.allowStoredChart && targetVersion == rel.Chart.Metadata.Version && repositoryName == "" && validateStoredChartDependencyBodies(rel.Chart, rel, op.Baseline) == nil {
+		if confirmed, ok := confirmedChartSource(rel); ok {
+			source = confirmed
+		}
+	} else {
+		source, err = c.normalUpgradeSource(actionConfig, rel, repositoryName)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	targetChart, err := c.chartForUpgradeTarget(actionConfig, rel, targetVersion, repositoryName, sendProgress)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second
-	upgradeAction.Labels = boundChartSourceLabels(rel.Labels, source, targetChart)
-	upgradeAction.ResetValues = true // WYSIWYG: apply only the edited values
+	if source != nil {
+		upgradeAction.Labels = boundChartSourceLabels(rel.Labels, source, targetChart)
+	}
+	upgradeAction.ResetValues = options.replace
+	upgradeAction.ResetThenReuseValues = !options.replace
+	if options.dryRun {
+		upgradeAction.DryRun = true
+		upgradeAction.DryRunOption = "server"
+	}
 
 	sendProgress("upgrading", fmt.Sprintf("Applying %s %s...", rel.Chart.Metadata.Name, targetVersion), "")
 
 	if err := releaseSourceUnchanged(actionConfig, rel); err != nil {
-		return err
+		return nil, nil, err
 	}
-	_, err = upgradeAction.Run(name, targetChart, newValues)
+	started = true
+	next, err := upgradeAction.Run(name, targetChart, newValues)
 	if err != nil {
-		return fmt.Errorf("upgrade failed: %w", err)
+		return nil, nil, fmt.Errorf("upgrade failed: %w", err)
 	}
 
 	sendProgress("complete", fmt.Sprintf("Successfully upgraded %s to %s", name, targetVersion), "")
-	return nil
+	return op.Baseline, next, nil
 }
 
 func (c *Client) chartForUpgradeTarget(actionConfig *action.Configuration, rel *release.Release, targetVersion, repositoryName string, sendProgress func(phase, message, detail string)) (*chart.Chart, error) {
@@ -2634,9 +2807,18 @@ func (c *Client) chartForUpgradeTargetWithLoader(actionConfig *action.Configurat
 		targetVersion = currentVersion
 	}
 
+	evidence := []*release.Release{rel}
+	if actionConfig != nil {
+		op, err := releaseReadContext(actionConfig, rel.Name)
+		if err != nil {
+			return nil, err
+		}
+		evidence = append(evidence, op.Baseline)
+	}
+
 	reconstructingStoredChart := false
 	if targetVersion == currentVersion {
-		if err := validateChartDependencyBodies(rel.Chart); err == nil {
+		if err := validateStoredChartDependencyBodies(rel.Chart, evidence...); err == nil {
 			return rel.Chart, nil
 		}
 		reconstructingStoredChart = true
@@ -2656,6 +2838,9 @@ func (c *Client) chartForUpgradeTargetWithLoader(actionConfig *action.Configurat
 		return nil, fmt.Errorf("cannot use chart %s version %s: the package declares subcharts but does not include them, so rendering it would delete the resources those subcharts created. The chart needs fixing where it is published: %w", rel.Chart.Metadata.Name, targetVersion, err)
 	}
 	if reconstructingStoredChart {
+		if err := validateStoredChartDependencyBodies(loaded, evidence...); err != nil {
+			return nil, fmt.Errorf("reconstructed chart still lacks previously rendered subcharts: %w", err)
+		}
 		if err := storedChartMatchesReconstructed(rel.Chart, loaded); err != nil {
 			return nil, fmt.Errorf("cannot edit values for this release: Radar found %s version %s in a configured Helm repository, but that copy does not match the chart this release was installed from, so applying it could replace your release with a different chart. Add the repository this release came from so Radar can pick the right one: %w", rel.Chart.Metadata.Name, targetVersion, err)
 		}
@@ -2752,6 +2937,63 @@ func canonicalMatch(label string, stored, loaded any) error {
 	}
 	if !bytes.Equal(storedJSON, loadedJSON) {
 		return fmt.Errorf("%s differ from the installed release", label)
+	}
+	return nil
+}
+
+// validateStoredChartDependencyBodies also checks rendered provenance: Helm permits
+// undeclared vendored subcharts, but release storage drops all child chart bodies.
+// Both latest and deployed manifests matter after a failed upgrade.
+func validateStoredChartDependencyBodies(ch *chart.Chart, releases ...*release.Release) error {
+	if err := validateChartDependencyBodies(ch); err != nil {
+		return err
+	}
+	paths := []string{}
+	for _, rel := range releases {
+		if rel == nil {
+			continue
+		}
+		// A deliberate version change may remove subcharts. Evidence from another
+		// version cannot require the target chart to keep those dependencies.
+		if rel.Chart != nil && rel.Chart.Metadata != nil && rel.Chart.Metadata.Version != ch.Metadata.Version {
+			continue
+		}
+		for _, line := range strings.Split(rel.Manifest, "\n") {
+			if strings.HasPrefix(line, "# Source: ") {
+				paths = append(paths, strings.TrimSpace(strings.TrimPrefix(line, "# Source: ")))
+			}
+		}
+		for _, hook := range rel.Hooks {
+			if hook != nil {
+				paths = append(paths, hook.Path)
+			}
+		}
+	}
+	for _, source := range paths {
+		parts := strings.Split(source, "/")
+		node := ch
+		for i := 1; i+1 < len(parts) && parts[i] == "charts"; i += 2 {
+			var child *chart.Chart
+			for _, candidate := range node.Dependencies() {
+				if candidate == nil || candidate.Metadata == nil {
+					continue
+				}
+				matches := candidate.Metadata.Name == parts[i+1]
+				for _, declared := range node.Metadata.Dependencies {
+					if declared != nil && declared.Alias == parts[i+1] && declared.Name == candidate.Metadata.Name {
+						matches = true
+					}
+				}
+				if matches {
+					child = candidate
+					break
+				}
+			}
+			if child == nil {
+				return fmt.Errorf("previously rendered dependency body %q is missing", strings.Join(parts[:i+2], "/"))
+			}
+			node = child
+		}
 	}
 	return nil
 }
@@ -3461,7 +3703,6 @@ func (c *Client) InstallAsUser(req *InstallRequest, user *pkgauth.User) (*HelmRe
 }
 
 func (c *Client) installWith(actionConfig *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
-
 	var chartURL string
 	var indexDigest string
 	var downloadEntry *repo.Entry
@@ -3865,7 +4106,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 	switch mode {
 	case installFresh:
 		sendProgress("installing", fmt.Sprintf("Installing %s to namespace %s...", req.ReleaseName, req.Namespace), "")
-		if req.CreateNamespace {
+		if createsNamespace(req) {
 			sendProgress("installing", fmt.Sprintf("Creating namespace %s if needed...", req.Namespace), "")
 		}
 	case installReplace:

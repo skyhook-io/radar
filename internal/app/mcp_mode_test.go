@@ -38,8 +38,9 @@ func TestServerMCPModes(t *testing.T) {
 				defer host.Close()
 				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 				defer cancel()
-				for _, path := range []string{"/mcp", "/mcp-readonly", "/mcp-investigation"} {
-					available := mode.enabled && (path != "/mcp" || !mode.readOnly)
+				for _, path := range []string{"/mcp", "/mcp-apply", "/mcp-readonly", "/mcp-investigation"} {
+					writeSurface := path == "/mcp" || path == "/mcp-apply"
+					available := mode.enabled && (!writeSurface || !mode.readOnly)
 					if !available {
 						for _, suffix := range []string{"", "/", "/tools/call"} {
 							for _, method := range []string{http.MethodGet, http.MethodPost} {
@@ -78,14 +79,20 @@ func TestServerMCPModes(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					hasWrite := false
+					hasWrite, hasDelete := false, false
 					for _, tool := range tools.Tools {
+						if tool.Name == "delete_resource" {
+							hasDelete = true
+						}
 						if tool.Name == "apply_resource" {
 							hasWrite = true
 						}
 					}
-					if hasWrite != (path == "/mcp") {
+					if hasWrite != writeSurface {
 						t.Fatalf("%s write tool present = %v", path, hasWrite)
+					}
+					if hasDelete != (path == "/mcp") {
+						t.Fatalf("%s delete tool present = %v", path, hasDelete)
 					}
 					result, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "list_namespaces", Arguments: struct{}{}})
 					if err != nil || result.IsError {

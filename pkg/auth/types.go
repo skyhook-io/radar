@@ -21,6 +21,9 @@ type Config struct {
 	UserHeader     string // default "X-Forwarded-User"
 	GroupsHeader   string // default "X-Forwarded-Groups"
 	ProxyLogoutURL string // optional, URL the logout button redirects to so the upstream proxy session is torn down (e.g. oauth2-proxy /oauth2/sign_out)
+	// ProxyLogoutCookies names the proxy's own session cookies on Radar's host.
+	// Logout expires them, for proxies that have no sign-out URL of their own.
+	ProxyLogoutCookies []string
 
 	// Session revocation (optional, used by backchannel logout)
 	Revoker SessionRevoker

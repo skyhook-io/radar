@@ -32,15 +32,20 @@ import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { FacetSection, FacetButton } from '../ui/Facet'
 import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
+import { TABLE_DENSITY } from '../ui/table-density'
 import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
+import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { BoardTableSkeleton, BoardRailSkeleton } from '../ui/BoardSkeleton'
 import { getGitOpsResourceStatus } from './detail-helpers'
-import { isArgoOperationInProgress, isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
+import { isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoOperationInProgress, isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
 import { toggleSet } from './GitOpsGraphFilterRail'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { parseContextName } from '../../utils/context-name'
+import { getFluxDeployedRelease, getFluxHelmChartVersion, getFluxLastApply, getFluxLastStatusChange } from '../../utils/flux-history'
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format'
+import { FilterRailPanel } from '../shared/FilterRailPanel'
 
 // =============================================================================
 // GitOpsTableView — the canonical GitOps fleet list (Argo + Flux).
@@ -90,6 +95,11 @@ export type SortKey = 'urgency' | 'name' | 'health' | 'sync' | 'lastSync' | 'pro
 
 function isGitOpsCountKey(key: string): boolean {
   return GITOPS_COUNT_GROUP_PREFIXES.some((prefix) => key.startsWith(prefix))
+}
+
+/** Whether objects of this API group count toward the GitOps table's totals. */
+export function isGitOpsCountGroup(group: string | undefined): boolean {
+  return GITOPS_COUNT_GROUP_PREFIXES.includes(`${group ?? ''}/`)
 }
 
 // Row-level actions surfaced from the table's three-dot menu. The set
@@ -168,6 +178,7 @@ export interface GitOpsRow {
   destinationNamespace: string
   createdAt: string
   lastSync: string
+  lastSyncLabel?: 'Applied' | 'Apply attempt' | 'Deployed' | 'Sync attempt' | 'Status changed'
   autoSync: boolean
   terminating: boolean
   terminationStartedAt?: string
@@ -216,6 +227,9 @@ export interface GitOpsTableViewProps {
   // rendered leading the header actions. The host owns the mode + data, so this
   // shared table makes no assumption about whether the view auto-updates.
   freshnessSlot?: ReactNode
+  // Optional host content shown inside the scrolling table area above the
+  // rows (Radar's Flux Operator card). Hosts that don't pass it are unchanged.
+  headerSlot?: ReactNode
   // Row click — caller routes to its own detail page. When the host also
   // passes `rowHrefFor`, the callback receives the MouseEvent so it can
   // `preventDefault()` for same-tree nav (e.g. react-router) or skip the
@@ -287,6 +301,10 @@ export interface GitOpsTableViewProps {
   // In-flight action state, keyed by `row.id`. Drives the per-item
   // spinner so the user can tell which Sync/Refresh is still running.
   pendingRowActions?: Map<string, Set<GitOpsRowAction>>
+  // Set when the connected Radar is too old to turn auto-sync back on for an
+  // Application with automated.enabled: false; its Resume renders disabled.
+  argoResumeUpgrade?: RadarUpgradeRequirement | null
+  argoResumeBlockedReason?: string
 }
 
 // ----- Main component --------------------------------------------------------
@@ -314,6 +332,7 @@ export function GitOpsTableView({
   countsPartial,
   coverageStatus = 'unknown',
   freshnessSlot,
+  headerSlot,
   onRowClick,
   rowHrefFor,
   onDestinationClick,
@@ -329,6 +348,8 @@ export function GitOpsTableView({
   onClearNamespaces,
   onRowAction,
   pendingRowActions,
+  argoResumeUpgrade,
+  argoResumeBlockedReason,
   filtersSide = 'left',
 }: GitOpsTableViewProps) {
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -565,15 +586,18 @@ export function GitOpsTableView({
   // be hidden behind a "nothing here" screen.
   if (totalGitOps === 0 && allRowsInput.length === 0 && !loading && !hasGlobalNamespaceFilter && !hasUnavailableGitOpsCounts && coverageStatus !== 'partial') {
     return (
-      <div className="flex h-full min-h-0 flex-1 items-start justify-center bg-theme-base px-4 pb-4 pt-[22vh]">
-        <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">
-          <GitBranch className="mx-auto h-8 w-8 text-theme-text-tertiary" />
-          <h2 className="mt-3 text-base font-semibold text-theme-text-primary">
-            {emptyStateTitle ?? 'No GitOps resources detected'}
-          </h2>
-          <p className="mt-1 text-sm text-theme-text-secondary">
-            {emptyStateBody ?? 'No ArgoCD Applications or FluxCD resources were found.'}
-          </p>
+      <div className="flex h-full min-h-0 flex-1 flex-col overflow-auto bg-theme-base">
+        {headerSlot}
+        <div className="flex flex-1 items-start justify-center px-4 pb-4 pt-[22vh]">
+          <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">
+            <GitBranch className="mx-auto h-8 w-8 text-theme-text-tertiary" />
+            <h2 className="mt-3 text-base font-semibold text-theme-text-primary">
+              {emptyStateTitle ?? 'No GitOps resources detected'}
+            </h2>
+            <p className="mt-1 text-sm text-theme-text-secondary">
+              {emptyStateBody ?? 'No ArgoCD Applications or FluxCD resources were found.'}
+            </p>
+          </div>
         </div>
       </div>
     )
@@ -732,7 +756,7 @@ export function GitOpsTableView({
           </div>
         )}
 
-        <div className="shrink-0 border-b border-theme-border bg-theme-surface/70 px-4 py-3">
+        <div className={clsx('shrink-0 border-b border-theme-border bg-theme-surface/70', TABLE_DENSITY.toolbarClass)}>
           <StatusDistribution rows={filteredRows} />
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <div className="relative w-full max-w-md">
@@ -816,8 +840,9 @@ export function GitOpsTableView({
             once the list fills the viewport. Only needed when the actions column
             is present — consumers without onRowAction (e.g. Hub) skip the slack. */}
         <div className={clsx('min-h-0 min-w-0 flex-1 overflow-auto bg-theme-base', onRowAction && 'pb-20')}>
+          {headerSlot}
           {mode !== 'applications' ? (
-            <div className="flex h-full items-center justify-center text-sm text-theme-text-secondary">
+            <div className={clsx('flex items-center justify-center text-sm text-theme-text-secondary', headerSlot ? 'py-12' : 'h-full')}>
               {modeLabel(mode)} view is queued behind the application list.
             </div>
           ) : initialLoading ? (
@@ -825,7 +850,7 @@ export function GitOpsTableView({
           ) : error ? (
             <div className="p-4 text-sm text-red-500">Failed to load GitOps applications: {error.message}</div>
           ) : filteredRows.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-theme-text-secondary">
+            <div className={clsx('flex flex-col items-center justify-center gap-3 text-sm text-theme-text-secondary', headerSlot ? 'py-12' : 'h-full')}>
               <p>{noApplicationsMessage(allRows.length > 0, coverageStatus, hasGlobalNamespaceFilter)}</p>
               {hasGlobalNamespaceFilter && globalNamespaces && (
                 <p className="text-xs text-theme-text-tertiary">
@@ -857,6 +882,8 @@ export function GitOpsTableView({
               destinationHrefFor={destinationHrefFor}
               onRowAction={onRowAction}
               pendingRowActions={pendingRowActions}
+              argoResumeUpgrade={argoResumeUpgrade}
+              argoResumeBlockedReason={argoResumeBlockedReason}
             />
           )}
         </div>
@@ -937,13 +964,17 @@ function GitOpsFilterSidebar({
         side === 'right' ? 'border-l max-[899px]:border-l-0' : 'border-r max-[899px]:border-r-0'
       }`}
     >
-      <div className="flex items-center justify-between border-b border-theme-border px-3 py-2">
-        <span className="text-sm font-medium text-theme-text-secondary">Filters</span>
-        <button type="button" onClick={onClear} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">
-          Clear
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto">
+      <FilterRailPanel
+        activeCount={
+          syncFilters.size + healthFilters.size + automationFilters.size + kindFilters.size +
+          projectFilters.size + namespaceFilters.size + (lifecycleFilter === 'all' ? 0 : 1)
+        }
+        clear={
+          <button type="button" onClick={onClear} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">
+            Clear
+          </button>
+        }
+      >
         {loading ? (
           <BoardRailSkeleton
             sections={[
@@ -1006,7 +1037,7 @@ function GitOpsFilterSidebar({
 
         <GitOpsFilterSection icon={CircleDot} title="Automation (Sync policy)">
           <GitOpsFacetButton label="Auto-sync" count={automationCounts.auto} active={automationFilters.has('auto')} onClick={() => onToggleAutomation('auto')} />
-          <GitOpsFacetButton label="Manual" count={automationCounts.manual} active={automationFilters.has('manual')} onClick={() => onToggleAutomation('manual')} />
+          <GitOpsFacetButton label="Auto-sync off" count={automationCounts.manual} active={automationFilters.has('manual')} onClick={() => onToggleAutomation('manual')} />
           <GitOpsFacetButton label="Suspended" count={automationCounts.suspended} active={automationFilters.has('suspended')} tone="warning" onClick={() => onToggleAutomation('suspended')} />
         </GitOpsFilterSection>
 
@@ -1062,7 +1093,7 @@ function GitOpsFilterSidebar({
         </GitOpsFilterSection>
           </>
         )}
-      </div>
+      </FilterRailPanel>
     </aside>
   )
 }
@@ -1097,7 +1128,7 @@ const SORT_OPTIONS: [SortKey, string][] = [
   ['urgency', 'Priority'],
   ['health', 'Health'],
   ['sync', 'Sync'],
-  ['lastSync', 'Last sync'],
+  ['lastSync', 'Activity'],
   ['project', 'Project'],
   ['name', 'Name'],
 ]
@@ -1287,6 +1318,8 @@ function GitOpsTable({
   destinationHrefFor,
   onRowAction,
   pendingRowActions,
+  argoResumeUpgrade,
+  argoResumeBlockedReason,
 }: {
   rows: GitOpsRow[]
   sort: { key: SortKey; dir: SortDir } | null
@@ -1298,6 +1331,8 @@ function GitOpsTable({
   destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
   onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
   pendingRowActions?: Map<string, Set<GitOpsRowAction>>
+  argoResumeUpgrade?: RadarUpgradeRequirement | null
+  argoResumeBlockedReason?: string
 }) {
   const showActions = !!onRowAction
   return (
@@ -1310,7 +1345,7 @@ function GitOpsTable({
           <SortableTh label="Health" sortKey="health" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[9%]" />
           <th className={clsx(TH_CLASS, showDestination ? 'w-[20%]' : 'w-[28%]')}>Source</th>
           {showDestination && <th className={clsx(TH_CLASS, 'w-[14%]')}>Destination</th>}
-          <SortableTh label="Last Sync" sortKey="lastSync" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[10%]" />
+          <SortableTh label="Activity" sortKey="lastSync" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} className="w-[10%]" />
           {showActions && (
             <th className={clsx(TH_CLASS, 'w-[6%] text-right')}>
               <span className="sr-only">Actions</span>
@@ -1397,14 +1432,14 @@ function GitOpsTable({
               <TableCell>
                 {row.terminating
                   ? <span className="text-orange-400/80">{pendingFor(row.terminationStartedAt)}</span>
-                  : row.lastSync ? formatRelativeAgeTime(row.lastSync, '') : row.createdAt ? `Created ${formatRelativeAgeTime(row.createdAt, '')}` : ''}
+                  : <ActivityTime row={row} />}
               </TableCell>
               {showActions && onRowAction && (
                 <td
                   className="overflow-visible border-b border-theme-border px-2 py-2 text-right align-middle"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions)} />
+                  <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions, argoResumeUpgrade, argoResumeBlockedReason)} />
                 </td>
               )}
             </tr>
@@ -1419,10 +1454,12 @@ function GitOpsTable({
 // the row's tool (Argo vs Flux), current suspend state, terminating state,
 // and Argo's operationState.phase (used to gate the Terminate entry — only
 // shown while a sync is mid-flight, mirroring the detail-page condition).
-function buildRowActionItems(
+export function buildRowActionItems(
   row: GitOpsRow,
   onAction: (row: GitOpsRow, action: GitOpsRowAction) => void,
   pending?: Map<string, Set<GitOpsRowAction>>,
+  argoResumeUpgrade?: RadarUpgradeRequirement | null,
+  argoResumeBlockedReason?: string,
 ): RowActionItem[] {
   const inFlight = pending?.get(row.id)
   const isPending = (action: GitOpsRowAction) => inFlight?.has(action) ?? false
@@ -1475,13 +1512,16 @@ function buildRowActionItems(
       pending: isPending('hard-refresh'),
     })
     if (suspended) {
+      const resumeBlockedReason = isArgoAutoSyncSwitchedOff(row.raw)
+        ? argoResumeBlockedReason || (argoResumeUpgrade ? radarUpgradeNoteText(argoResumeUpgrade) : undefined)
+        : undefined
       items.push({
         key: 'resume',
         label: 'Resume',
         icon: Play,
-        onClick: () => onAction(row, 'resume'),
-        disabled: terminating,
-        disabledReason: terminating ? terminatingReason : undefined,
+        onClick: () => !resumeBlockedReason && onAction(row, 'resume'),
+        disabled: terminating || !!resumeBlockedReason,
+        disabledReason: terminating ? terminatingReason : resumeBlockedReason,
         pending: isPending('resume'),
         divider: true,
       })
@@ -1589,8 +1629,7 @@ function GitOpsTile({
 }) {
   const source = compactRepoSource(row.repository || row.chart, row.path || row.chart)
   const revision = row.targetRevision || ''
-  const lastSyncRaw = row.lastSync || row.createdAt
-  const recencyClass = recencyTone(lastSyncRaw)
+  const activity = activityText(row)
   const dest = row.destination ? compactClusterURL(row.destination) : ''
   const ns = destinationNamespaceLabel(row)
   const tileClass = clsx(
@@ -1628,7 +1667,7 @@ function GitOpsTile({
           {row.terminating ? (
             <div className="font-medium text-orange-400/80">{pendingFor(row.terminationStartedAt)}</div>
           ) : (
-            lastSyncRaw && <div className={clsx('font-medium', recencyClass)}>{formatRelativeAgeTime(lastSyncRaw, '')}</div>
+            activity && <div className="font-medium text-theme-text-secondary">{activity}</div>
           )}
         </div>
         {(dest || ns || row.project) && (
@@ -1927,14 +1966,19 @@ function countLabels(rows: GitOpsRow[]) {
     .slice(0, 30)
 }
 
-function recencyTone(value: string): string {
-  if (!value) return 'text-theme-text-tertiary'
-  const time = Date.parse(value)
-  if (!Number.isFinite(time)) return 'text-theme-text-tertiary'
-  const diffMs = Date.now() - time
-  if (diffMs < 10 * 60_000) return 'text-emerald-600 dark:text-emerald-400'
-  if (diffMs > 7 * 24 * 60 * 60_000) return 'text-amber-600 dark:text-amber-400'
-  return 'text-theme-text-secondary'
+function activityText(row: GitOpsRow): string {
+  if (row.lastSync) return `${row.lastSyncLabel ? `${row.lastSyncLabel} ` : ''}${formatRelativeAgeTime(row.lastSync, '')}`
+  return row.createdAt ? `Created ${formatRelativeAgeTime(row.createdAt, '')}` : ''
+}
+
+function ActivityTime({ row }: { row: GitOpsRow }) {
+  const timestamp = row.lastSync || row.createdAt
+  const label = row.lastSync ? row.lastSyncLabel : 'Created'
+  if (!timestamp) return null
+  return <div className="min-w-0">
+    <span className="block whitespace-nowrap">{formatRelativeAgeTime(timestamp, '')}</span>
+    {label && <span className="block truncate text-xs text-theme-text-tertiary">{label}</span>}
+  </div>
 }
 
 function shortRevision(rev: string): string {
@@ -2002,7 +2046,8 @@ export function normalizeArgoApplication(resource: any): GitOpsRow {
     destinationNamespace: resource.spec?.destination?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
     lastSync: argoLastSync ?? '',
-    autoSync: Boolean(resource.spec?.syncPolicy?.automated),
+    lastSyncLabel: resource.status?.operationState?.finishedAt ? 'Sync attempt' : 'Deployed',
+    autoSync: isArgoAutoSyncEnabled(resource),
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),
     raw: resource,
@@ -2011,13 +2056,6 @@ export function normalizeArgoApplication(resource: any): GitOpsRow {
   }
 }
 
-// An ApplicationSet is a generator, not a deployed app — it has no sync/health
-// of its own in the sense the fleet table shows for Applications. Its own
-// status.conditions use a different vocabulary (ErrorOccurred,
-// ParametersGenerated, ResourcesUpToDate — never Ready), so the generic
-// getGitOpsResourceStatus fallback below correctly bottoms out at
-// Unknown/Unknown rather than us inventing a fleet-health rollup from
-// generator-run conditions that don't mean what a Synced/Healthy chip implies.
 // An ApplicationSet's template fields may carry generator placeholders
 // ({{path}}, {{cluster.name}}, …) that only resolve per generated Application.
 // Rendering the raw placeholder is worse than rendering nothing, so a value is
@@ -2089,6 +2127,7 @@ export function normalizeArgoApplicationSet(resource: any): GitOpsRow {
     // Left empty the Last Sync column falls back to the creation timestamp,
     // which dates the object rather than any activity on it.
     lastSync: status?.lastSyncTime ?? '',
+    lastSyncLabel: 'Status changed',
     // An ApplicationSet has no sync policy of its own; the template's policy
     // belongs to the Applications it generates. Automation counts and the
     // sync-policy filter skip this kind rather than read this field.
@@ -2103,6 +2142,7 @@ export function normalizeArgoApplicationSet(resource: any): GitOpsRow {
 
 export function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<string, string>): GitOpsRow {
   const status = getGitOpsResourceStatus('kustomizations', resource)
+  const lastApply = getFluxLastApply(resource)
   const sourceName = resource.spec?.sourceRef?.name ?? ''
   const sourceKind = resource.spec?.sourceRef?.kind ?? ''
   const repository = fluxSourceUrls?.get(`${sourceKind}/${resource.metadata?.namespace ?? ''}/${sourceName}`) ?? sourceName
@@ -2129,7 +2169,8 @@ export function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<s
     destination: 'in-cluster',
     destinationNamespace: resource.spec?.targetNamespace ?? resource.metadata?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
-    lastSync: newestConditionTime(resource),
+    lastSync: lastApply?.time ?? getFluxLastStatusChange(resource) ?? '',
+    lastSyncLabel: !lastApply ? 'Status changed' : lastApply.succeeded ? 'Applied' : 'Apply attempt',
     autoSync: !resource.spec?.suspend,
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),
@@ -2141,6 +2182,8 @@ export function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<s
 
 export function normalizeFluxHelmRelease(resource: any, fluxSourceUrls?: Map<string, string>): GitOpsRow {
   const status = getGitOpsResourceStatus('helmreleases', resource)
+  const deployedRelease = getFluxDeployedRelease(resource)
+  const lastDeployed = deployedRelease?.chartVersion ? deployedRelease.lastDeployed : undefined
   const chartSpec = resource.spec?.chart?.spec ?? {}
   const sourceName = chartSpec.sourceRef?.name ?? ''
   const sourceKind = chartSpec.sourceRef?.kind ?? ''
@@ -2162,13 +2205,14 @@ export function normalizeFluxHelmRelease(resource: any, fluxSourceUrls?: Map<str
     reconcilingSince: status?.reconcilingSince,
     suspended: status?.suspended ?? resource.spec?.suspend === true,
     repository,
-    targetRevision: chartSpec.version ?? resource.status?.lastAttemptedRevision ?? '',
+    targetRevision: getFluxHelmChartVersion(resource) || resource.status?.lastAttemptedRevision || '',
     path: '',
     chart: chartSpec.chart ?? '',
     destination: 'in-cluster',
     destinationNamespace: resource.spec?.targetNamespace ?? resource.metadata?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
-    lastSync: newestConditionTime(resource),
+    lastSync: lastDeployed ?? getFluxLastStatusChange(resource) ?? '',
+    lastSyncLabel: lastDeployed ? 'Deployed' : 'Status changed',
     autoSync: !resource.spec?.suspend,
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),
@@ -2201,12 +2245,4 @@ function isTerminating(resource: any): boolean {
 
 function terminationStartedAt(resource: any): string | undefined {
   return resource?.metadata?.deletionTimestamp || undefined
-}
-
-function newestConditionTime(resource: any): string {
-  const times = (resource.status?.conditions ?? [])
-    .map((condition: any) => condition.lastTransitionTime)
-    .filter(Boolean)
-    .sort()
-  return times[times.length - 1] ?? ''
 }

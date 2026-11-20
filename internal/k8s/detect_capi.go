@@ -3,6 +3,7 @@ package k8s
 import (
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
@@ -110,7 +111,8 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			// failing condition message for richer context.
 			msg := capiFailureDetail(m)
 			if msg == "" {
-				_, _, msg, _, _ = conditions.FindFalseCondition(m, "Ready", "InfrastructureReady", "BootstrapReady")
+				condition, _ := capiMachineFalseCondition(m, "Ready", "InfrastructureReady", "BootstrapReady")
+				msg = condition.Message
 			}
 			problems = append(problems, Detection{
 				Kind: "Machine", Namespace: m.GetNamespace(), Name: m.GetName(), Group: capiGroup,
@@ -123,7 +125,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 
 		// Phase-based: stuck Provisioning > 10m
 		if strings.EqualFold(phase, "provisioning") && ageDur > 10*time.Minute {
-			condition, _ := conditions.FindFalseConditionWithTime(m, "InfrastructureReady", "BootstrapReady")
+			condition, _ := capiMachineFalseCondition(m, "InfrastructureReady", "BootstrapReady")
 			reason, msg := condition.Reason, condition.Message
 			displayReason := fmt.Sprintf("Stuck provisioning for %s", timeutil.FormatAgeShort(ageDur))
 			if reason != "" {
@@ -143,11 +145,11 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 		// Condition-based: BootstrapReady=False, NodeHealthy=False, InfrastructureReady=False,
 		// with Ready=False as a fallback. Catches problems that phase alone misses,
 		// e.g. Running phase but NodeHealthy=False.
-		condition, ok := conditions.FindFalseConditionWithTime(m,
+		condition, ok := capiMachineFalseCondition(m,
 			"BootstrapReady", "NodeHealthy", "InfrastructureReady",
 		)
 		if !ok {
-			condition, ok = conditions.FindFalseConditionWithTime(m, "Ready")
+			condition, ok = capiMachineFalseCondition(m, "Ready")
 		}
 		ct, reason, msg := condition.Type, condition.Reason, condition.Message
 		if ok && capiConditionCurrent(m, reason) {
@@ -306,6 +308,23 @@ func capiIssueTiming(transitionAt time.Time, transitionKnown bool, createdAt tim
 	}
 	r := IssueTimingFromConditionLTT(transitionAt, createdAt, "condition")
 	return r.IssueTiming, r.Basis
+}
+
+// A modern True can resolve a deprecated failure; Unknown does not establish recovery.
+func capiMachineFalseCondition(u *unstructured.Unstructured, condTypes ...string) (conditions.FalseCondition, bool) {
+	for len(condTypes) > 0 {
+		condition, found := conditions.FindFalseConditionWithTime(u, condTypes...)
+		if !found {
+			break
+		}
+		current, _ := conditions.Find(u, condition.Type)
+		// Preserve an in-progress selection so source cleanup cannot reveal a new warning behind it.
+		if current.Status != "True" || conditions.IsInProgressForIssues(condition.Reason) {
+			return condition, true
+		}
+		condTypes = slices.DeleteFunc(slices.Clone(condTypes), func(typ string) bool { return typ == condition.Type })
+	}
+	return conditions.FalseCondition{}, false
 }
 
 func capiConditionCurrent(u *unstructured.Unstructured, reason string) bool {

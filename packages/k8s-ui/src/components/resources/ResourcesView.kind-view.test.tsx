@@ -3,6 +3,7 @@ import { act, type ComponentProps } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ResourcesView } from './ResourcesView'
+import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 import { KeyboardShortcutProvider } from '../../hooks/useKeyboardShortcuts'
 import type { APIResource } from '../../types'
 
@@ -252,7 +253,7 @@ it('can show selection from compare without turning off the saved preference', (
   expect(localStorage.getItem(checkboxKey)).toBe('true')
 })
 
-it('keeps delete confirmation and clears successful selection without hiding checkboxes', () => {
+it('confirms bulk deletion and clears successful selection without hiding checkboxes', () => {
   const { remove } = renderBulkTable()
   key('b')
   act(() => required<HTMLInputElement>('input[title="Select all"]').click())
@@ -266,6 +267,32 @@ it('keeps delete confirmation and clears successful selection without hiding che
   expect(host.textContent).not.toContain('1 selected')
   expect(host.querySelector('input[title="Select all"]')).not.toBeNull()
   expect(localStorage.getItem(checkboxKey)).toBe('true')
+})
+
+it('requires a new bulk confirmation after submission without clearing uncertain selection', async () => {
+  const { remove, render } = renderBulkTable()
+  const other = { ...pod, metadata: { ...pod.metadata, name: 'remaining', uid: 'remaining-id' } }
+  render(pods, [pod, other])
+  key('b')
+  act(() => required<HTMLInputElement>('input[title="Select all"]').click())
+  clickButton('Delete')
+  const dialog = required<HTMLElement>('[role="dialog"]', document)
+  clickButton('Delete 2 resources', dialog)
+  expect(remove).toHaveBeenCalledTimes(1)
+  expect(remove.mock.calls[0]?.[0]).toHaveLength(2)
+  expect(dialog.closest('[inert]')).not.toBeNull()
+  expect(host.textContent).toContain('2 selected')
+
+  render(pods, [other])
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+  expect(host.textContent).toContain('1 selected')
+  expect(remove).toHaveBeenCalledTimes(1)
+  clickButton('Delete')
+  const nextDialog = required<HTMLElement>('[role="dialog"]', document)
+  expect(nextDialog.textContent).toContain('Delete 1 Pod?')
+  clickButton('Delete 1 resource', nextDialog)
+  expect(remove.mock.calls[1]?.[0]).toEqual([{ kind: 'pods', group: '', namespace: 'test', name: 'remaining' }])
 })
 
 it.each(['false', 'garbage', 'null', '1'])('ignores invalid or disabled visibility value %s', value => {
@@ -293,4 +320,72 @@ it('does not offer selection without a bulk action callback even with saved visi
   key('b')
   expect(host.querySelector('input[title="Select all"]')).toBeNull()
   expect(localStorage.getItem(checkboxKey)).toBe('true')
+})
+
+it('closes single-delete confirmation on submission but keeps the inspected resource until known success', () => {
+  const remove = vi.fn<NonNullable<ComponentProps<typeof ResourceActionsBar>['onDelete']>>()
+  const close = vi.fn()
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  act(() => root.render(<ResourceActionsBar
+    resource={{ kind: 'pods', namespace: 'test', name: 'example' }}
+    data={pod}
+    onDelete={remove}
+    onClose={close}
+  />))
+  act(() => required<SVGElement>('svg[class*="trash"]').closest<HTMLButtonElement>('button')!.click())
+  const dialog = required<HTMLElement>('[role="dialog"]', document)
+  clickButton('Delete', dialog)
+  expect(remove).toHaveBeenCalledTimes(1)
+  expect(dialog.closest('[inert]')).not.toBeNull()
+  expect(close).not.toHaveBeenCalled()
+  act(() => remove.mock.calls[0]?.[1]?.onSuccess?.())
+  expect(close).toHaveBeenCalledTimes(1)
+})
+
+it('preserves rows selected after a bulk delete was submitted', () => {
+  const { remove, render } = renderBulkTable()
+  key('b')
+  act(() => required<HTMLInputElement>('input[title="Select all"]').click())
+  clickButton('Delete')
+  clickButton('Delete 1 resource', required<HTMLElement>('[role="dialog"]', document))
+  const other = { ...pod, metadata: { ...pod.metadata, name: 'remaining', uid: 'remaining-id' } }
+  render(pods, [pod, other])
+  act(() => required<HTMLInputElement>('input[title="Deselect all"]').click())
+  expect(host.textContent).toContain('2 selected')
+  act(() => remove.mock.calls[0]?.[1]?.onSuccess?.())
+  expect(host.textContent).toContain('1 selected')
+  render(pods, [other])
+  expect(host.textContent).toContain('1 selected')
+})
+
+it.each(['name', 'uid'])('does not close a newly inspected resource after an earlier delete succeeds (%s)', change => {
+  const remove = vi.fn<NonNullable<ComponentProps<typeof ResourceActionsBar>['onDelete']>>()
+  const close = vi.fn()
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  const render = (name: string, uid: string, deleting = false) => act(() => root.render(<ResourceActionsBar
+    resource={{ kind: 'pods', namespace: 'test', name }}
+    data={{ ...pod, metadata: { ...pod.metadata, name, uid } }}
+    onDelete={remove}
+    onClose={close}
+    isDeleting={deleting}
+  />))
+  render('example', 'original')
+  act(() => required<HTMLButtonElement>('button[aria-label="Delete resource"]').click())
+  clickButton('Delete', required<HTMLElement>('[role="dialog"]', document))
+  render(change === 'name' ? 'other' : 'example', 'replacement', true)
+  expect(required<HTMLButtonElement>('button[aria-label="Deleting resource"]').disabled).toBe(true)
+  act(() => remove.mock.calls[0]?.[1]?.onSuccess?.())
+  expect(close).not.toHaveBeenCalled()
+})
+
+it('ignores a delete success callback after its action bar is unmounted', () => {
+  const remove = vi.fn<NonNullable<ComponentProps<typeof ResourceActionsBar>['onDelete']>>()
+  const close = vi.fn()
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  act(() => root.render(<ResourceActionsBar resource={{ kind: 'pods', namespace: 'test', name: 'example' }} data={pod} onDelete={remove} onClose={close} />))
+  act(() => required<HTMLButtonElement>('button[aria-label="Delete resource"]').click())
+  clickButton('Delete', required<HTMLElement>('[role="dialog"]', document))
+  act(() => root.render(<div>Another view</div>))
+  act(() => remove.mock.calls[0]?.[1]?.onSuccess?.())
+  expect(close).not.toHaveBeenCalled()
 })

@@ -319,6 +319,8 @@ func isServiceEntrypointRoute(ref *ResourceRef) bool {
 // by the caller — the kind/name lookup used inside this entry point is
 // group-blind and can return the wrong typed object for CRDs whose plural
 // collides with a core resource (e.g. Knative Service vs core Service).
+//
+// Deprecated: Use RelationsAnswer with caller-scoped relation families.
 func GetRelationships(kind, namespace, name string, topo *Topology, provider ResourceProvider, dp DynamicProvider) *Relationships {
 	return GetRelationshipsWithObject(kind, namespace, name, nil, topo, provider, dp, nil)
 }
@@ -326,12 +328,13 @@ func GetRelationships(kind, namespace, name string, topo *Topology, provider Res
 // GetRelationshipsWithIndex is the indexed variant of GetRelationships. When
 // idx is non-nil, edge lookups go through the precomputed inverted index
 // instead of scanning topo.Edges; when nil, behavior matches GetRelationships
-// exactly. Callers that issue many per-resource queries against the same
-// topology (T6 BuildResourceContext, T12 get_neighborhood) should build idx
-// once and reuse it.
+// exactly. Graph consumers issuing many per-resource queries should build
+// idx once and reuse it.
 //
 // Prefer GetRelationshipsWithObject when the resource has already been fetched —
 // see the doc on GetRelationships for the kind/group collision rationale.
+//
+// Deprecated: Use RelationsAnswer with caller-scoped relation families.
 func GetRelationshipsWithIndex(kind, namespace, name string, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex) *Relationships {
 	return GetRelationshipsWithObject(kind, namespace, name, nil, topo, provider, dp, idx)
 }
@@ -349,6 +352,12 @@ func GetRelationshipsWithIndex(kind, namespace, name string, topo *Topology, pro
 // obj is nil, behavior matches the pre-refactor path: lookupObjectMetadata
 // is called, with the group-collision risk noted above.
 func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex) *Relationships {
+	return getRelationshipsWithObject(kind, namespace, name, obj, topo, provider, dp, idx, nil)
+}
+
+func getRelationshipsWithObject(kind, namespace, name string, obj any, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex, allow func(ResourceRef) bool) *Relationships {
+	readable := func(ref ResourceRef) bool { return allow == nil || allow(ref) }
+
 	if topo == nil {
 		return nil
 	}
@@ -401,6 +410,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	kindLower := strings.ToLower(kind)
 
 	for _, edge := range outgoingEdges {
+		if earlierJobRunEdge(edge, nodeByID) {
+			continue
+		}
 		// This resource points TO something (outgoing edge)
 		ref := refForNodeID(edge.Target)
 		if ref == nil {
@@ -459,6 +471,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	for _, edge := range incomingEdges {
+		if earlierJobRunEdge(edge, nodeByID) {
+			continue
+		}
 		// Something points TO this resource (incoming edge)
 		ref := refForNodeID(edge.Source)
 		if ref == nil {
@@ -609,39 +624,74 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if provider != nil && builtinKind && resourceGroup == builtinGroup {
 		switch kindLower {
 		case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
-			pvcs, _ := provider.PersistentVolumeClaims()
-			for _, pvc := range pvcs {
-				if pvc.Namespace == namespace && pvc.Name == name && pvc.Spec.VolumeName != "" {
+			// Prefer the object the caller fetched: the claim list can be
+			// empty while claims in another namespace are still loading.
+			pvc, _ := obj.(*corev1.PersistentVolumeClaim)
+			if pvc == nil || pvc.Namespace != namespace || pvc.Name != name {
+				pvc = nil
+				pvcs, _ := provider.PersistentVolumeClaims()
+				for _, candidate := range pvcs {
+					if candidate != nil && candidate.Namespace == namespace && candidate.Name == name {
+						pvc = candidate
+						break
+					}
+				}
+			}
+			if pvc != nil {
+				if pvc.Spec.VolumeName != "" && readable(ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}) {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}
 					enrichRef(&pvRef, dp)
 					rel.StorageRefs = append(rel.StorageRefs, pvRef)
-					break
+				}
+				// A claim names its class before it binds, so a Pending claim
+				// still leads to the class that should provision it.
+				if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != "" && readable(ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: *pvc.Spec.StorageClassName}) {
+					scRef := ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: *pvc.Spec.StorageClassName}
+					enrichRef(&scRef, dp)
+					rel.ConfigRefs = append(rel.ConfigRefs, scRef)
 				}
 			}
 		case "persistentvolume", "persistentvolumes", "pv", "pvs":
-			pvs, _ := provider.PersistentVolumes()
-			for _, pv := range pvs {
-				if pv.Name == name {
-					if pv.Spec.ClaimRef != nil {
-						claimRef := ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pv.Spec.ClaimRef.Namespace, Name: pv.Spec.ClaimRef.Name}
-						enrichRef(&claimRef, dp)
-						rel.Consumers = append(rel.Consumers, claimRef)
+			pv, _ := obj.(*corev1.PersistentVolume)
+			if pv == nil || pv.Name != name {
+				pv = nil
+				pvs, _ := provider.PersistentVolumes()
+				for _, candidate := range pvs {
+					if candidate != nil && candidate.Name == name {
+						pv = candidate
+						break
 					}
-					if pv.Spec.StorageClassName != "" {
-						scRef := ResourceRef{Kind: "StorageClass", Name: pv.Spec.StorageClassName}
-						enrichRef(&scRef, dp)
-						rel.ConfigRefs = append(rel.ConfigRefs, scRef)
-					}
-					break
+				}
+			}
+			if pv != nil {
+				if pv.Spec.ClaimRef != nil && readable(ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pv.Spec.ClaimRef.Namespace, Name: pv.Spec.ClaimRef.Name}) {
+					claimRef := ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pv.Spec.ClaimRef.Namespace, Name: pv.Spec.ClaimRef.Name}
+					enrichRef(&claimRef, dp)
+					rel.Consumers = append(rel.Consumers, claimRef)
+				}
+				if pv.Spec.StorageClassName != "" && readable(ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: pv.Spec.StorageClassName}) {
+					scRef := ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: pv.Spec.StorageClassName}
+					enrichRef(&scRef, dp)
+					rel.ConfigRefs = append(rel.ConfigRefs, scRef)
 				}
 			}
 		case "storageclass", "storageclasses", "sc":
 			pvs, _ := provider.PersistentVolumes()
 			for _, pv := range pvs {
-				if pv.Spec.StorageClassName == name {
+				if pv.Spec.StorageClassName == name && readable(ResourceRef{Kind: "PersistentVolume", Name: pv.Name}) {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
 					enrichRef(&pvRef, dp)
 					rel.Consumers = append(rel.Consumers, pvRef)
+				}
+			}
+			// Claims name their class in any namespace; a Pending claim has
+			// no volume yet, so only the claim shows which class it waits on.
+			pvcs, _ := provider.PersistentVolumeClaims()
+			for _, pvc := range pvcs {
+				if pvc != nil && pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == name && readable(ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pvc.Namespace, Name: pvc.Name}) {
+					claimRef := ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pvc.Namespace, Name: pvc.Name}
+					enrichRef(&claimRef, dp)
+					rel.Consumers = append(rel.Consumers, claimRef)
 				}
 			}
 		case "node", "nodes":
@@ -657,6 +707,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			for _, pod := range allPods {
 				if pod != nil && pod.Spec.NodeName == name && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
 					podRef := ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
+					if !readable(podRef) {
+						continue
+					}
 					enrichRef(&podRef, dp)
 					rel.Pods = append(rel.Pods, podRef)
 				}
@@ -692,12 +745,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.ConfigRefs = append(rel.ConfigRefs, ref)
 			}
 		}
-		if sa := pod.Spec.ServiceAccountName; sa != "" {
+		if sa := pod.Spec.ServiceAccountName; sa != "" && readable(ResourceRef{Kind: "ServiceAccount", Namespace: namespace, Name: sa}) {
 			saRef := ResourceRef{Kind: "ServiceAccount", Namespace: namespace, Name: sa}
 			enrichRef(&saRef, dp)
 			rel.ServiceAccount = &saRef
 		}
-		if nodeName := pod.Spec.NodeName; nodeName != "" {
+		if nodeName := pod.Spec.NodeName; nodeName != "" && readable(ResourceRef{Kind: "Node", Name: nodeName}) {
 			nodeRef := ResourceRef{Kind: "Node", Name: nodeName}
 			enrichRef(&nodeRef, dp)
 			rel.Node = &nodeRef
@@ -715,7 +768,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 					}
 				}
 			}
-			if claimName != "" {
+			if claimName != "" && readable(ResourceRef{Kind: "ResourceClaim", Namespace: namespace, Name: claimName, Group: "resource.k8s.io"}) {
 				rel.ResourceClaims = append(rel.ResourceClaims, ResourceRef{
 					Kind: "ResourceClaim", Namespace: namespace, Name: claimName, Group: "resource.k8s.io",
 				})
@@ -729,7 +782,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if endpoint, ok := queriedObj.(*unstructured.Unstructured); ok &&
 		(kindLower == "hostendpoint" || kindLower == "hostendpoints") &&
 		(endpoint.GroupVersionKind().Group == "crd.projectcalico.org" || endpoint.GroupVersionKind().Group == "projectcalico.org") {
-		if nodeName, _, _ := unstructured.NestedString(endpoint.Object, "spec", "node"); nodeName != "" {
+		if nodeName, _, _ := unstructured.NestedString(endpoint.Object, "spec", "node"); nodeName != "" && readable(ResourceRef{Kind: "Node", Name: nodeName}) {
 			nodeRef := ResourceRef{Kind: "Node", Name: nodeName}
 			enrichRef(&nodeRef, dp)
 			rel.Node = &nodeRef
@@ -763,7 +816,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 					}
 				}
 				for _, dc := range classNames {
-					if !seenClasses[dc] {
+					if !seenClasses[dc] && readable(ResourceRef{Kind: "DeviceClass", Name: dc, Group: "resource.k8s.io"}) {
 						seenClasses[dc] = true
 						rel.ConfigRefs = append(rel.ConfigRefs, ResourceRef{Kind: "DeviceClass", Name: dc, Group: "resource.k8s.io"})
 					}
@@ -779,6 +832,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				holderName, _, _ := unstructured.NestedString(ref, "name")
 				if resource == "pods" && holderName != "" {
 					podRef := ResourceRef{Kind: "Pod", Namespace: namespace, Name: holderName}
+					if !readable(podRef) {
+						continue
+					}
 					enrichRef(&podRef, dp)
 					rel.Consumers = append(rel.Consumers, podRef)
 				}
@@ -789,8 +845,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if m, ok := queriedObj.(metav1.Object); ok {
 		managedByMeta = m
 	}
-	if mb := synthesizeManagedByFromNode(managedByMeta, nodeID, topo, dp, idx); len(mb) > 0 {
-		rel.ManagedBy = mb
+	if allow == nil {
+		if mb := synthesizeManagedByFromNode(managedByMeta, nodeID, topo, dp, idx); len(mb) > 0 {
+			rel.ManagedBy = mb
+		}
 	}
 
 	// Return nil if no relationships found

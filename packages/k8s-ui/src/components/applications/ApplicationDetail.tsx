@@ -259,6 +259,8 @@ export type ApplicationDetailProps = {
   onHistoryRangeChange?: (range: ApplicationHistoryRange) => void;
   onOpenTimeline?: (timestamp?: string) => void;
   onOpenSource?: (source: AppSourceRef) => void;
+  /** Leading element in the header's right-hand cluster, before the health pill. */
+  headerActions?: ReactNode;
 } & SelectionProps &
   ViewProps;
 
@@ -353,6 +355,7 @@ export function ApplicationDetail({
   onHistoryRangeChange,
   onOpenTimeline,
   onOpenSource,
+  headerActions,
   selectedWorkloadKey,
   onSelectWorkload,
   selectedView,
@@ -628,7 +631,8 @@ export function ApplicationDetail({
             </>
           )}
         </div>
-        <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+        <div className="ml-auto flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
+          {headerActions}
           <span
             className={`inline-flex items-center gap-2 rounded-md px-2.5 py-1 ring-1 ring-inset ${verdictTone}`}
           >
@@ -1833,6 +1837,8 @@ function batchOverviewStats(activity: AppBatchActivity[]) {
   );
   const failed = activity.reduce((n, item) => n + item.failedRuns, 0);
   const active = activity.reduce((n, item) => n + item.activeRuns, 0);
+  const rootActivity = activity.filter(item => item.workload.kind === 'JobSet' && item.workload.group === 'jobset.x-k8s.io')
+  const rootStates = [...new Set(rootActivity.map(item => item.latestRunPhase || 'Unknown'))].join(', ')
 
   return {
     latestValue: latest?.latestRunPhase || latest?.label || "None",
@@ -1841,9 +1847,9 @@ function batchOverviewStats(activity: AppBatchActivity[]) {
       : "No retained runs",
     retainedValue:
       retained > 0 ? `${succeeded} succeeded / ${failed} failed` : "0 retained",
-    activeValue: active > 0 ? `${active} running` : "None",
+    activeValue: active > 0 ? `${active} running` : rootStates || "None",
     activeDetail:
-      active > 0 ? activeWorkloadNames(activity) : "No active batch work",
+      active > 0 ? activeWorkloadNames(activity) : rootStates ? "JobSet root lifecycle; running Pods are not inferred." : "No active batch work",
     scheduleValue:
       schedules.length === 0
         ? "None"
@@ -2068,6 +2074,9 @@ function workloadRuntimeStatus(workload: AppWorkload): {
       health: rolloutDisplayHealth(workload.rollout, workload.health),
     }
   }
+  if (workload.kind === 'JobSet' && workload.group === 'jobset.x-k8s.io') {
+    return { label: workload.batch?.latestRunPhase || 'Unknown', health: healthOf(workload.health) }
+  }
   const batch = workload.batch;
   if (!batch) {
     const health = healthOf(workload.health);
@@ -2085,6 +2094,7 @@ function workloadRuntimeStatus(workload: AppWorkload): {
 
 function workloadRuntimeDetail(workload: AppWorkload): string {
   if (workload.rollout && (workload.rollout.active || workload.rollout.phase === 'stalled')) return workload.rollout.detail || `${workload.ready}/${workload.desired} ready`
+  if (workload.kind === 'JobSet' && workload.group === 'jobset.x-k8s.io') return workload.batch?.message || `Root lifecycle: ${workload.batch?.latestRunPhase || 'Unknown'}`
   const batch = workload.batch;
   if (!batch) return `${workload.ready}/${workload.desired} ready`;
   if ((batch.activeRuns ?? 0) > 0)

@@ -23,4 +23,6 @@ export const EvidenceNavigationContext = createContext<{
   caseByGroup?: ReadonlyMap<string, InvestigationCaseItem[]>;
   /** The hypothesis each `rules_out` item excludes, keyed by item. */
   excludedByItem?: ReadonlyMap<string, string>;
+  /** The story card a reference just navigated to, so a folded chart opens. */
+  storyReveal?: { domId: string; requestId: number };
 }>({});

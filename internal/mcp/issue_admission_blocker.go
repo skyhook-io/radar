@@ -124,7 +124,7 @@ func admissionBlockerForIssue(ctx context.Context, iss *issuesapi.Issue, window 
 			res, err = meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
 				Namespaces: []string{namespace}, Kinds: []string{kind},
 				Since: window, Limit: admissionOrderFetchLimit, FieldLimit: correlationFieldLimit,
-				Viewer: recentChangeViewer(ctx),
+				Viewer: recentChangeViewer(ctx), TrackedOnly: true,
 			})
 		} else {
 			res, err = meaningfulchanges.RecentForResourceDetailed(ctx, kind, namespace, name, window, admissionOrderFetchLimit, correlationFieldLimit, recentChangeViewer(ctx))

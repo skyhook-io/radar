@@ -40,6 +40,9 @@ type Settings struct {
 	Audit       *AuditConfig `json:"audit,omitempty"`
 	// ActiveNamespaces maps kubeconfig context name → the user's namespace
 	// picks (the in-app multi-select switcher's last selection per cluster).
+	// It seeds a new browser tab or the next launch; an open tab keeps its own
+	// pick. Under --namespace-scope it is also the cache scope restored on
+	// reconnect.
 	// Tri-state: a missing key means the user never chose — the view defaults
 	// to the kubeconfig context's namespace (falling back to "All namespaces");
 	// an empty slice is an explicit "All namespaces" choice that suppresses

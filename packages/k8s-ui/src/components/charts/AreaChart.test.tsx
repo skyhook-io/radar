@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { AreaChart } from './AreaChart'
 import { layoutAnnotations, ANNOTATION_LABEL_ROWS } from './annotations'
-import { formatTimestamp } from './format'
+import { alignedTimeAxisTicks, formatTimestamp } from './format'
 import type { ChartAnnotation, TimeSeries } from './types'
 
 const t0 = 1_788_679_000
@@ -80,6 +80,29 @@ describe('AreaChart domain and axes', () => {
     expect(html).toContain(`>${formatTimestamp(t0 + 3600)}<`)
     const xs = attrs(html, 'text', 'x').map(Number).filter(x => x >= 84)
     expect(Math.max(...xs)).toBeCloseTo(960, 0)
+  })
+
+  it('labels a multi-day X axis on local midnights', () => {
+    const week = 7 * 86_400
+    const html = render({ series: [series([[0, 1], [week, 2]])], domain: { start: t0, end: t0 + week } })
+    const ticks = alignedTimeAxisTicks(t0, t0 + week, 7)!
+    expect(ticks.length).toBeGreaterThanOrEqual(2)
+    for (const { label } of ticks) expect(html).toContain(`>${label}<`)
+    expect(html).not.toContain(`>${formatTimestamp(t0)}<`)
+  })
+
+  it('keeps every X label inside the viewBox on a multi-day axis', () => {
+    for (const days of [1.5, 2, 3, 7, 11, 270]) {
+      const span = days * 86_400
+      const html = render({ series: [series([[0, 1], [span, 2]])], domain: { start: t0, end: t0 + span } })
+      const xLabels = [...html.matchAll(/<text x="([^"]+)" y="296" text-anchor="middle"[^>]*>([^<]*)<\/text>/g)]
+      expect(xLabels.length).toBeGreaterThanOrEqual(2)
+      for (const [, x, label] of xLabels) {
+        const half = (label.length * 11 * 0.6) / 2
+        expect(Number(x) - half).toBeGreaterThanOrEqual(0)
+        expect(Number(x) + half).toBeLessThanOrEqual(1000)
+      }
+    }
   })
 
   it('extends the Y axis below zero and draws a zero line for negative values', () => {
@@ -194,5 +217,20 @@ describe('AreaChart gaps and selection', () => {
     expect(html).not.toContain('data-chart-gap')
     expect(html).not.toContain('data-chart-selection')
     expect(html).toContain('cursor:crosshair')
+  })
+})
+
+describe('AreaChart dashboard height', () => {
+  const data = [series([[0, 1], [600, 2]])]
+
+  it('renders the dashboard layout at the height asked for, and 240 by default', () => {
+    const short = render({ series: data, layout: 'dashboard', height: 140 })
+    expect(short).toContain('height:140px')
+    expect(attrs(short, 'svg', 'viewBox')[0]).toMatch(/ 140$/)
+    expect(render({ series: data, layout: 'dashboard' })).toContain('height:240px')
+  })
+
+  it('ignores the height outside the dashboard layout', () => {
+    expect(render({ series: data, layout: 'auto', height: 140 })).not.toContain('height:140px')
   })
 })

@@ -39,6 +39,25 @@ export function gitOpsOwnerFromRelationships(
   return gitOpsOwnerFromRef(refs[0])
 }
 
+/**
+ * The Argo CD object that rewrites an Application's spec, and so can turn its
+ * auto-sync back on after a suspend: the ApplicationSet that owns it, else the
+ * Application whose recorded resources list it. A tracking claim alone can
+ * outlive a detached parent, so it names nothing.
+ */
+export function argoAutoSyncController(
+  rel: Relationships | undefined | null,
+  self: { namespace: string; name: string },
+): { kind: 'ApplicationSet' | 'Application'; name: string } | null {
+  const appSet = [rel?.owner, ...(rel?.owners ?? [])].find(ref => ref?.kind === 'ApplicationSet' && ref.group === ARGO_APPLICATION_GROUP)
+  if (appSet) return { kind: 'ApplicationSet', name: appSet.name }
+  const answer = rel?.ownership?.manager
+  const lead = answer?.state === 'agree' || answer?.state === 'listed' ? answer.lead : undefined
+  return lead?.kind === 'Application' && lead.group === ARGO_APPLICATION_GROUP && !(lead.namespace === self.namespace && lead.name === self.name)
+    ? { kind: 'Application', name: lead.name }
+    : null
+}
+
 /** A manager ref (relationships.managedBy, a workspace's managedBy) as a GitOps owner, or null when the manager is not a GitOps controller. */
 export function gitOpsOwnerFromRef(ref: ResourceRef): GitOpsOwnerRef | null {
   switch (true) {
@@ -125,21 +144,39 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
     remote: "Radar can't confirm it deploys to this cluster",
     missing: 'no such manager here',
     'not-recording': 'Helm records an installation, rather than continuously reconciling it',
-    unresolved: "the label doesn't name its namespace",
+    unresolved: 'Radar found no manager of that name listing this resource; it may be managed from another cluster',
     withheld: "you can't view it",
     unchecked: "Radar couldn't check its status",
   }
+  // Flux's list is its status.inventory, so name it and the usual reasons it disagrees with the labels.
+  const fluxReasons: Record<string, Partial<Record<ManagerClaim['check'], string>>> = {
+    'kustomize.toolkit.fluxcd.io': {
+      omitted: "its inventory doesn't list this resource; it may have been removed from the source while pruning is off, or the latest apply hasn't finished",
+      unreadable: "Radar can't read an inventory in its status; Flux records one once an apply succeeds",
+    },
+    'helm.toolkit.fluxcd.io': {
+      omitted: "its inventory doesn't list this resource; it may be a Helm hook, kept by helm.sh/resource-policy: keep, or the latest release hasn't finished",
+      unreadable: "Radar can't read an inventory in its status; Flux records one from version 2.8, at each install or upgrade, so a release installed earlier and not upgraded since has none",
+    },
+  }
   const subject = answer.via ? managerRefLabel(evidence.object) : 'this resource'
   const details: string[] = []
-  // Tracked by names what metadata says, which Radar hasn't confirmed.
-  if (answer.state === 'claimed') {
-    details.push(`${answer.via ? `${managerRefLabel(evidence.object)}'s` : "This resource's"} labels or annotations name ${names(claimed)}; Radar hasn't confirmed ${claimed.length === 1 ? 'it manages' : 'they manage'} it.`)
+  const whose = answer.via ? `${managerRefLabel(evidence.object)}'s` : "This resource's"
+  // A newer Radar may send a check this UI doesn't know.
+  const why = (c: ManagerClaim, object: string) => c.check === 'missing'
+    ? `there's no such ${c.manager.kind} here`
+    : (fluxReasons[c.manager.group ?? '']?.[c.check] ?? reasons[c.check] ?? "Radar couldn't confirm its status lists this resource").replace('manager of', `${c.manager.kind} of`).replace('this resource', object)
+  // Tracked by names what metadata says, which Radar hasn't confirmed: one
+  // claim says why in the same sentence.
+  const single = answer.state === 'claimed' && claims.length === 1 && claims[0].check !== 'recorded' ? claims[0] : null
+  if (single) {
+    details.push(`${whose} ${single.source.includes('label') ? 'label' : 'annotation'} names ${managerRefLabel(single.manager)}, but ${why(single, answer.via ? subject : 'it')}.`)
+  } else if (answer.state === 'claimed') {
+    details.push(`${whose} labels or annotations name ${names(claimed)}; Radar hasn't confirmed ${claimed.length === 1 ? 'it manages' : 'they manage'} it.`)
   }
   for (const c of claims) {
-    if (c.check === 'recorded') continue
-    // A newer Radar may send a check this UI doesn't know.
-    const reason = reasons[c.check] ?? "Radar couldn't confirm its status lists this resource"
-    details.push(`${managerRefLabel(c.manager)}: ${c.check === 'missing' ? `no such ${c.manager.kind} here` : reason.replace('this resource', subject)}.`)
+    if (c.check === 'recorded' || c === single) continue
+    details.push(`${managerRefLabel(c.manager)}: ${why(c, subject)}.`)
   }
   if (recorders.length) {
     // A claim its list confirms adds nothing but the agreement.

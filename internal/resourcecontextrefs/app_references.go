@@ -2,6 +2,7 @@ package resourcecontextrefs
 
 import (
 	"sort"
+	"strconv"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
@@ -74,7 +75,7 @@ func AppReferencesFromEnvChecks(serviceChecks []k8s.EnvServiceRefCheck, duplicat
 	groupsByKey := make(map[string]*staleGroup)
 	for _, check := range staleChecks {
 		key := check.Container + "\x00" + check.EnvName + "\x00" + check.ReferenceKind + "\x00" +
-			check.EvidenceSource + "\x00" + check.Prefix + "\x00" + check.SecretName + "\x00" + check.Key
+			check.EvidenceSource + "\x00" + check.Prefix + "\x00" + check.SecretName + "\x00" + check.Key + "\x00" + strconv.FormatBool(check.OrderOnly) + "\x00" + strconv.FormatBool(check.HistoryIncomplete)
 		group := groupsByKey[key]
 		if group == nil {
 			group = &staleGroup{check: check, pods: make(map[string]bool)}
@@ -96,6 +97,9 @@ func AppReferencesFromEnvChecks(serviceChecks []k8s.EnvServiceRefCheck, duplicat
 		a, b := groups[i].check, groups[j].check
 		if a.EvidenceSource != b.EvidenceSource {
 			return a.EvidenceSource == "observed_change"
+		}
+		if a.NoRestartNeeded != b.NoRestartNeeded {
+			return b.NoRestartNeeded
 		}
 		if a.SecretName != b.SecretName {
 			return a.SecretName < b.SecretName

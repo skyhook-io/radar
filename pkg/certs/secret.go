@@ -56,5 +56,8 @@ func FromTLSSecret(sec *corev1.Secret) (Input, bool) {
 	if t, err := time.Parse(time.RFC3339, leaf[0].NotAfter); err == nil {
 		in.NotAfter = &t
 	}
+	if t, err := time.Parse(time.RFC3339, leaf[0].NotBefore); err == nil {
+		in.NotBefore = &t
+	}
 	return in, true
 }

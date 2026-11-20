@@ -7,6 +7,23 @@ const searchCoverageNote = (entries: SearchCoverageEntry[] | undefined, opts: Pa
 const entry = (kind: string, reason: string, group = '', count?: number): SearchCoverageEntry => ({ kind, group, reason, count })
 
 describe('searchCoverageNote', () => {
+  it('keeps collection limits visible beside an Event search action', () => {
+    const searchEvents = vi.fn()
+    const note = noteFor({ status: 'complete', narrowedBy: ['kind_collection'], gaps: [] }, { hits: [], query: 'CertificateExpirationWarning', searchEvents })
+    expect(note?.parts?.[0].text).toContain("doesn't watch every kind")
+    expect(note?.parts?.[1].text).toBe("Kubernetes Events aren't included in a broad search.")
+    expect(note?.parts?.[1].action).toMatchObject({ label: 'Search Events', keepOpen: true })
+    note?.parts?.[1].action?.onSelect()
+    expect(searchEvents).toHaveBeenCalledOnce()
+  })
+
+  it('does not offer Event search for unread scope, existing hits or older coverage', () => {
+    const opts = { hits: [], query: 'CertificateExpirationWarning', searchEvents: vi.fn() }
+    expect(searchCoverageNote([entry('*', 'kind_sync_pending')], opts)?.action).toBeUndefined()
+    expect(noteFor(undefined, opts)).toBeUndefined()
+    expect(noteFor({ status: 'complete', gaps: [] }, { ...opts, hits: [{ kind: 'Pod' }] })).toBeUndefined()
+  })
+
   it('explains an empty search narrowed by kind collection, without an action', () => {
     expect(noteFor({ status: 'complete', narrowedBy: ['kind_collection'], gaps: [] }, { hits: [] })).toEqual({
       text: "Radar doesn't watch every kind; search kind:<name> to include one.",

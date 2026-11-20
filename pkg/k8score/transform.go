@@ -60,6 +60,7 @@ func DropManagedFields(obj any) (any, error) {
 				CreationTimestamp: event.CreationTimestamp,
 			},
 			InvolvedObject: event.InvolvedObject,
+			Related:        event.Related,
 			Reason:         event.Reason,
 			Message:        event.Message,
 			Type:           event.Type,

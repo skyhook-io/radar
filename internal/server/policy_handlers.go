@@ -651,7 +651,7 @@ func listDynamicSyncedWithin(ctx context.Context, cache *k8s.ResourceCache, kind
 
 // Long enough for a cold informer on a healthy apiserver, short enough that a
 // drawer section does not hang on one that will not sync.
-const dynamicSyncWait = 3 * time.Second
+var dynamicSyncWait = 3 * time.Second
 
 // policyRequestName is the value Kyverno records in `spec.policy` for this
 // policy. Exactly one form matches, never both: a namespaced Policy is recorded

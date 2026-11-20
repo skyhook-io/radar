@@ -18,6 +18,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/launchday"
 )
 
 var (
@@ -30,6 +31,8 @@ var (
 	// isDesktop is set to true when running as a desktop app (Wails).
 	// Controls install method detection and enables in-app update flow.
 	isDesktop bool
+	// manualUpdate is set when the desktop app cannot update itself.
+	manualUpdate string
 
 	mu               sync.Mutex
 	updateCache      = map[string]updateCacheEntry{}
@@ -66,7 +69,15 @@ type UpdateInfo struct {
 	ReleaseNotes   string        `json:"releaseNotes,omitempty"`
 	InstallMethod  InstallMethod `json:"installMethod"`
 	UpdateCommand  string        `json:"updateCommand,omitempty"`
-	Error          string        `json:"error,omitempty"`
+	// ManualUpdate is set for a desktop install that cannot update itself, and
+	// says how the user gets the new version instead: "appimage" (download the
+	// new AppImage), "package" (install the new .deb/.rpm with the package
+	// manager) or "download" (Radar can't write to its folder). Empty: the
+	// in-app updater works.
+	ManualUpdate string `json:"manualUpdate,omitempty"`
+	Error        string `json:"error,omitempty"`
+	// Added by WithProductHuntLaunch, not by the lookup.
+	ProductHuntLaunch *launchday.Launch `json:"productHuntLaunch,omitempty"`
 }
 
 // githubRelease represents a GitHub release response
@@ -74,11 +85,23 @@ type githubRelease struct {
 	TagName string `json:"tag_name"`
 	HTMLURL string `json:"html_url"`
 	Body    string `json:"body"`
+	// Added by releases.skyhook.io; absent from GitHub's own response.
+	ProductHuntLaunch *launchday.Launch `json:"productHuntLaunch,omitempty"`
 }
 
 type checkOptions struct {
 	source string
 	manual bool
+}
+
+// WithProductHuntLaunch returns a copy of info carrying the effective Product
+// Hunt launch, for any update result the UI reads. A copy, because a lookup can
+// hand back the cached result itself.
+func WithProductHuntLaunch(info *UpdateInfo) *UpdateInfo {
+	out := *info
+	launch := launchday.Current()
+	out.ProductHuntLaunch = &launch
+	return &out
 }
 
 // SetCurrent sets the current version (called from main)
@@ -91,6 +114,13 @@ func SetCurrent(v string) {
 // which triggers the in-app update flow instead of showing CLI commands.
 func SetDesktop(v bool) {
 	isDesktop = v
+}
+
+// SetManualUpdate marks this desktop install as unable to update itself, with
+// how the user updates instead (see UpdateInfo.ManualUpdate). Must be called
+// before any version checks.
+func SetManualUpdate(how string) {
+	manualUpdate = how
 }
 
 // IsDesktop returns whether the current instance is running as a desktop app.
@@ -159,6 +189,7 @@ func disabledUpdateInfo() *UpdateInfo {
 		BuildChannel:   BuildChannelName(),
 		InstallMethod:  method,
 		UpdateCommand:  getUpdateCommand(method),
+		ManualUpdate:   manualUpdate,
 		ReleaseURL:     defaultReleasesURL,
 	}
 }
@@ -293,6 +324,7 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 		BuildChannel:   BuildChannelName(),
 		InstallMethod:  method,
 		UpdateCommand:  getUpdateCommand(method),
+		ManualUpdate:   manualUpdate,
 	}
 
 	if !options.manual && (IsDisabled() || Current == "dev") {
@@ -365,10 +397,18 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 		return result
 	}
 
+	if release.ProductHuntLaunch != nil {
+		if err := launchday.Set(*release.ProductHuntLaunch); err != nil {
+			log.Printf("[version] Ignoring Product Hunt launch: %v", err)
+		}
+	}
+
 	result.LatestVersion = strings.TrimPrefix(release.TagName, "v")
 	result.ReleaseURL = release.HTMLURL
 	result.ReleaseNotes = truncateNotes(release.Body, 500)
-	if options.manual && IsDevelopmentBuild() {
+	// An unreleased build (git describe of a commit past a tag, a dirty tree)
+	// parses as a prerelease of its tag, so the tag would always read as newer.
+	if IsDevelopmentBuild() {
 		if _, err := semver.NewVersion(result.LatestVersion); err != nil {
 			result.Error = fmt.Sprintf("invalid latest release version: %v", err)
 			log.Printf("[version] %s", result.Error)

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -28,12 +29,24 @@ import (
 // Workload tool input types
 
 type manageWorkloadInput struct {
-	Action    string `json:"action" jsonschema:"action to perform: restart, scale, or rollback"`
+	Action    string `json:"action" jsonschema:"action to perform: restart, scale, rollback, pause, or resume"`
 	Kind      string `json:"kind" jsonschema:"workload kind: deployment, statefulset, daemonset, or rollout"`
 	Namespace string `json:"namespace" jsonschema:"workload namespace"`
 	Name      string `json:"name" jsonschema:"workload name"`
 	Replicas  *int32 `json:"replicas,omitempty" jsonschema:"target replica count (required for scale)"`
 	Revision  *int64 `json:"revision,omitempty" jsonschema:"target revision number (required for rollback); enumerate valid values with get_resource include=revisions"`
+}
+
+// manageWorkloadInputSchema publishes the replica count's real domain. The
+// generator emits int32 bounds, which advertise negative counts.
+func manageWorkloadInputSchema() *jsonschema.Schema {
+	schema, err := jsonschema.For[manageWorkloadInput](nil)
+	if err != nil {
+		panic(err)
+	}
+	minReplicas := float64(0)
+	schema.Properties["replicas"].Minimum = &minReplicas
+	return schema
 }
 
 type manageRolloutInput struct {
@@ -57,7 +70,7 @@ type manageCronJobInput struct {
 }
 
 type getWorkloadLogsInput struct {
-	Kind      string `json:"kind,omitempty" jsonschema:"workload kind: deployment, statefulset, daemonset, job, or workflow. Defaults to deployment when omitted."`
+	Kind      string `json:"kind,omitempty" jsonschema:"workload kind: deployment, statefulset, daemonset, rollout, job, or workflow. Defaults to deployment when omitted."`
 	Namespace string `json:"namespace" jsonschema:"workload namespace"`
 	Name      string `json:"name" jsonschema:"workload name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container name, defaults to all containers"`
@@ -107,7 +120,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 	case "restart":
 		warnings := schedulingBlockerWarnings(ctx, kind, input.Namespace, input.Name)
 		if err := k8s.RestartWorkloadWithClient(ctx, kind, input.Namespace, input.Name, dynClient); err != nil {
-			return nil, nil, fmt.Errorf("restart failed: %w", err)
+			return nil, nil, restartFailure(err)
 		}
 		resp := map[string]any{
 			"next":    fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), input.Name, input.Namespace),
@@ -140,24 +153,80 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 		if input.Revision == nil {
 			return nil, nil, fmt.Errorf("revision is required for rollback action (list valid numbers with get_resource include=revisions)")
 		}
-		if err := k8s.RollbackWorkloadWithClient(ctx, kind, input.Namespace, input.Name, *input.Revision, dynClient); err != nil {
-			return nil, nil, fmt.Errorf("rollback failed: %w", err)
-		}
-		resp := map[string]any{
-			"next":     fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), input.Name, input.Namespace),
-			"status":   "ok",
-			"message":  fmt.Sprintf("Rollback of %s %s/%s to revision %d initiated — the controller applies it", kind, input.Namespace, input.Name, *input.Revision),
-			"revision": *input.Revision,
-		}
-		if kind == "rollouts" {
-			resp["note"] = "This starts a new rollout of the old template — every canary step, pause, and analysis re-runs. " +
-				"Use manage_rollout action=promote-full to skip them, or action=abort to revert traffic immediately instead."
+		resp, err := rollbackResult(kind, input.Namespace, input.Name, *input.Revision,
+			k8s.RollbackWorkloadWithClient(ctx, kind, input.Namespace, input.Name, *input.Revision, dynClient))
+		if err != nil {
+			return nil, nil, err
 		}
 		return toJSONResult(resp)
 
+	case "pause", "resume":
+		action := strings.ToLower(input.Action)
+		if kind != "deployments" {
+			return nil, nil, fmt.Errorf("%s is only supported for Deployments", action)
+		}
+		paused := action == "pause"
+		if err := k8s.SetDeploymentPausedWithClient(ctx, input.Namespace, input.Name, paused, dynClient); err != nil {
+			return nil, nil, fmt.Errorf("%s failed: %w", action, err)
+		}
+		return toJSONResult(deploymentPausedResult(input.Namespace, input.Name, paused))
+
 	default:
-		return nil, nil, fmt.Errorf("unknown action %q: must be restart, scale, or rollback", input.Action)
+		return nil, nil, fmt.Errorf("unknown action %q: must be restart, scale, rollback, pause, or resume", input.Action)
 	}
+}
+
+// deploymentPausedResult offers wait_for only after a resume: a paused
+// Deployment starts no rollout, so there is nothing to wait for.
+func deploymentPausedResult(namespace, name string, paused bool) map[string]any {
+	if paused {
+		return map[string]any{
+			"status":  "ok",
+			"message": fmt.Sprintf("Paused rollouts of Deployment %s/%s: pod template changes wait, and rollback is refused, until action=resume", namespace, name),
+		}
+	}
+	return map[string]any{
+		"next":    fmt.Sprintf("wait_for Deployment %s in %s to see any held rollout finish", name, namespace),
+		"status":  "ok",
+		"message": fmt.Sprintf("Resumed rollouts of Deployment %s/%s", namespace, name),
+	}
+}
+
+func restartFailure(err error) error {
+	if errors.Is(err, k8score.ErrRestartPaused) {
+		return fmt.Errorf("restart failed: %w (manage_workload action=resume)", err)
+	}
+	return fmt.Errorf("restart failed: %w", err)
+}
+
+// rollbackResult builds the manage_workload rollback result. A revision whose
+// pod template is already live is reported as a skipped no-op, not a failure,
+// as kubectl rollout undo does.
+func rollbackResult(kind, namespace, name string, revision int64, err error) (map[string]any, error) {
+	if errors.Is(err, rollouts.ErrTemplateUnchanged) {
+		return map[string]any{
+			"status":   "unchanged",
+			"message":  fmt.Sprintf("Skipped rollback of %s %s/%s: its pod template already matches revision %d, so nothing was changed", kind, namespace, name, revision),
+			"revision": revision,
+		}, nil
+	}
+	if errors.Is(err, k8score.ErrWorkloadPaused) {
+		return nil, fmt.Errorf("rollback failed: %w (manage_workload action=resume)", err)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("rollback failed: %w", err)
+	}
+	resp := map[string]any{
+		"next":     fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), name, namespace),
+		"status":   "ok",
+		"message":  fmt.Sprintf("Rollback of %s %s/%s to revision %d initiated — the controller applies it", kind, namespace, name, revision),
+		"revision": revision,
+	}
+	if kind == "rollouts" {
+		resp["note"] = "This starts a new rollout of the old template — every canary step, pause, and analysis re-runs. " +
+			"Use manage_rollout action=promote-full to skip them, or action=abort to revert traffic immediately instead."
+	}
+	return resp, nil
 }
 
 func handleManageRollout(ctx context.Context, req *mcp.CallToolRequest, input manageRolloutInput) (*mcp.CallToolResult, any, error) {
@@ -235,10 +304,22 @@ func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input ma
 	}
 }
 
+// workloadPodsHaveContainer accepts every container a log read can target,
+// including init containers, which the default selection returns while one is
+// failing during initialization.
+func workloadPodsHaveContainer(pods []*corev1.Pod, name string) bool {
+	for _, pod := range pods {
+		if len(k8s.GetContainersForPod(pod, name, true)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input getWorkloadLogsInput) (*mcp.CallToolResult, any, error) {
 	kind := normalizeWorkloadLogsKind(input.Kind)
 	if kind == "" {
-		return nil, nil, fmt.Errorf("invalid kind %q: must be deployment, statefulset, daemonset, job, or workflow", input.Kind)
+		return nil, nil, fmt.Errorf("invalid kind %q: must be deployment, statefulset, daemonset, rollout, job, or workflow", input.Kind)
 	}
 
 	if !checkNamespaceAccess(ctx, input.Namespace) {
@@ -290,19 +371,7 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 
 	// Validate container name if specified
 	if input.Container != "" {
-		found := false
-		for _, pod := range pods {
-			for _, c := range pod.Spec.Containers {
-				if c.Name == input.Container {
-					found = true
-					break
-				}
-			}
-			if found {
-				break
-			}
-		}
-		if !found {
+		if !workloadPodsHaveContainer(pods, input.Container) {
 			return nil, nil, fmt.Errorf("container %q not found in any pod of %s %s/%s", input.Container, kind, input.Namespace, input.Name)
 		}
 	}

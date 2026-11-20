@@ -316,6 +316,9 @@ func TestResourceReadsReportFailedAndDisabledTypedKinds(t *testing.T) {
 }
 
 func TestResourceReadsDynamicPendingAndCollectorDenial(t *testing.T) {
+	previousWait := dynamicSyncWait
+	dynamicSyncWait = 200 * time.Millisecond
+	t.Cleanup(func() { dynamicSyncWait = previousWait })
 	for _, denied := range []bool{false, true} {
 		t.Run(fmt.Sprintf("collectorDenied=%v", denied), func(t *testing.T) {
 			if err := k8s.InitTestResourceCache(fake.NewClientset(fixtureNamespaces()...)); err != nil {
@@ -407,7 +410,7 @@ func TestResourceReadToolErrorTransport(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	_ = withClusterAdmin(t, "transport-reader")
 	denyClusterRead(t, "transport-reader", "/nodes")
-	server := newServer(false, "")
+	server := newServer(false, false, "")
 	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
 			return next(pkgauth.ContextWithUser(ctx, &pkgauth.User{Username: "transport-reader"}), method, req)
@@ -1150,7 +1153,7 @@ func TestListResourcesPartialCoverageTransport(t *testing.T) {
 	for _, tc := range fixture.Cases {
 		t.Run(tc.Name, func(t *testing.T) {
 			setupLoadingServicesFixture(t, tc.Objects...)
-			session := connectTo(t, newServer(false, ""))
+			session := connectTo(t, newServer(false, false, ""))
 			result, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "list_resources", Arguments: tc.Arguments})
 			if err != nil {
 				t.Fatal(err)
@@ -1246,7 +1249,7 @@ func TestResourceReadsHiddenCoverageDoesNotChangeTheError(t *testing.T) {
 // may have started a stalled one. A read of a namespace whose informer just
 // started is still loading: its own informer decides, not the kind's oldest.
 func TestResourceReadsDynamicStallIsPerNamespace(t *testing.T) {
-	const stallAfter = 5 * time.Second
+	const stallAfter = 2 * time.Second
 	previousWait := dynamicSyncWait
 	dynamicSyncWait = 200 * time.Millisecond
 	t.Cleanup(func() { dynamicSyncWait = previousWait })

@@ -1,4 +1,5 @@
 import { type Issue, type IssueRecentChange } from "@skyhook-io/k8s-ui";
+import { type UncheckedSource } from "../../../api/client";
 import { type TimeSeries } from "@skyhook-io/k8s-ui/components/charts";
 import {
   type DiagnosisChangeContext,
@@ -103,12 +104,14 @@ export interface InvestigationResourceContext extends DiagnosisResourceContext {
     highestSeverity?: string;
     topReason?: string;
     bySource?: Record<string, number>;
+    unchecked?: UncheckedSource[];
   };
   auditSummary?: {
     count: number;
     highestSeverity?: string;
     topFinding?: string;
   };
+  relatedFindings?: unknown;
   policySummary?: unknown;
   podSummary?: unknown;
   templateDivergence?: {
@@ -261,6 +264,8 @@ export interface InvestigationHelmOwnedResource {
   message?: string;
   summary?: string;
   issue?: string;
+  /** Why the caller isn't shown this object's live status (a read code). */
+  statusUnread?: string;
 }
 export interface InvestigationHelmRelease {
   name: string;
@@ -277,6 +282,9 @@ export interface InvestigationHelmRelease {
   resourceHealth?: string;
   healthIssue?: string;
   healthSummary?: string;
+  /** Workloads and Pods whose live status wasn't read. */
+  statusUnreadCount?: number;
+  managedByFlux?: boolean;
   managedByFluxHelmRelease?: string;
   lastOperation?: InvestigationHelmOperation;
   resources: InvestigationHelmOwnedResource[];
@@ -381,6 +389,8 @@ export type InvestigationEvidenceData =
   | {
       type: "issue";
       issue: Issue;
+      /** Association anchor; parent verification cannot establish recovery of this issue. */
+      associatedVia?: DiagnosisResourceRef;
       /**
        * A broad `issues` query can return failures from other resources. Keep
        * those factual observations, but do not let agent selection alone imply
@@ -560,6 +570,8 @@ export interface InvestigationMetricsEvidence {
   selectorsUnknown?: boolean;
   subject?: DiagnosisResourceRef;
   pods?: number;
+  /** The pods a diagnose chart summed, by name, when its bundle listed them all. */
+  podNames?: string[];
   partial?: boolean;
 }
 export interface InvestigationEvidenceObservation {

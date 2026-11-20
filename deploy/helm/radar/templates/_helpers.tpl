@@ -145,3 +145,52 @@ false
 {{- $e := .Values.cloud.enrollment | default dict -}}
 {{- $e.existingSecret | default (printf "%s-cloud-enrollment-key" (include "radar.fullname" .)) -}}
 {{- end -}}
+
+{{/*
+A binding to a ClusterRole: one ClusterRoleBinding, or with rbac.namespaces
+one RoleBinding per listed namespace, which grants the role's namespaced rules
+only there. Takes root, name, roleRef, and groups and/or serviceAccount.
+*/}}
+{{- define "radar.binding" -}}
+{{- range $namespace := .root.Values.rbac.namespaces | default (list "") }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ if $namespace }}RoleBinding{{ else }}ClusterRoleBinding{{ end }}
+metadata:
+  name: {{ $.name }}
+  {{- with $namespace }}
+  namespace: {{ . | quote }}
+  {{- end }}
+  labels:
+    {{- include "radar.labels" $.root | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $.roleRef }}
+subjects:
+  {{- with $.serviceAccount }}
+  - kind: ServiceAccount
+    name: {{ .name }}
+    namespace: {{ .namespace }}
+  {{- end }}
+  {{- range $.groups }}
+  - kind: Group
+    name: {{ . }}
+    apiGroup: rbac.authorization.k8s.io
+  {{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Cloud tier groups. Each tier also binds its pre-rename cloud:* group so
+rolling hub and chart upgrades stay compatible; remove those in v2.
+*/}}
+{{- define "radar.tierGroups" -}}
+{{- if has . (list "owner" "member" "viewer") -}}
+{{- list (printf "radar:%s" .) (printf "cloud:%s" .) | toJson -}}
+{{- else if eq . "ai" -}}
+{{- list "radar:ai:reader" | toJson -}}
+{{- else -}}
+{{- list (printf "radar:%s" .) | toJson -}}
+{{- end -}}
+{{- end -}}

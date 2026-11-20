@@ -14,7 +14,8 @@ interface ConfirmDialogProps {
   details?: string
   confirmLabel?: string
   cancelLabel?: string
-  variant?: 'danger' | 'warning'
+  /** default: an ordinary action (no warning icon, the brand button). */
+  variant?: 'danger' | 'warning' | 'default'
   isLoading?: boolean
   isClosable?: boolean // Allow closing even when isLoading (e.g., for long-running ops the user can dismiss)
   confirmDisabled?: boolean // Block the confirm action while custom content is invalid (e.g., bad YAML)
@@ -49,14 +50,16 @@ export function ConfirmDialog({
     <DialogPortal open={open} onClose={onClose} closable={canClose} className={clsx('w-full', className ?? 'max-w-md')} ariaLabelledBy={titleId}>
       {/* Header */}
       <div className="flex items-start gap-3 p-4 border-b border-theme-border">
-        <div
-          className={clsx(
-            'flex items-center justify-center w-10 h-10 rounded-full shrink-0',
-            isDanger ? 'bg-red-500/20' : 'bg-amber-500/20'
-          )}
-        >
-          <AlertTriangle className={clsx('w-5 h-5', SEVERITY_TEXT[severity])} />
-        </div>
+        {variant !== 'default' && (
+          <div
+            className={clsx(
+              'flex items-center justify-center w-10 h-10 rounded-full shrink-0',
+              isDanger ? 'bg-red-500/20' : 'bg-amber-500/20'
+            )}
+          >
+            <AlertTriangle className={clsx('w-5 h-5', SEVERITY_TEXT[severity])} />
+          </div>
+        )}
         <div className="flex-1 min-w-0">
           <h3 id={titleId} className="text-lg font-semibold text-theme-text-primary">{title}</h3>
           <p className="text-sm text-theme-text-secondary mt-1">{message}</p>
@@ -88,7 +91,7 @@ export function ConfirmDialog({
       )}
 
       {/* Warning message — hidden once the action is in progress */}
-      {showWarning && !isLoading && !children && (
+      {showWarning && variant !== 'default' && !isLoading && !children && (
         <div className="p-4">
           <div
             className={clsx(
@@ -120,9 +123,11 @@ export function ConfirmDialog({
           disabled={isLoading || confirmDisabled}
           className={clsx(
             'px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2',
-            isDanger
-              ? 'bg-red-600 hover:bg-red-700 text-theme-text-primary'
-              : 'bg-amber-600 hover:bg-amber-700 text-theme-text-primary'
+            variant === 'default'
+              ? 'btn-brand'
+              : isDanger
+                ? 'bg-red-600 hover:bg-red-700 text-theme-text-primary'
+                : 'bg-amber-600 hover:bg-amber-700 text-theme-text-primary'
           )}
         >
           {isLoading && (

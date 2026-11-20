@@ -267,6 +267,7 @@ export const NODE_DIMENSIONS: Record<
   HorizontalPodAutoscaler: { width: 280, height: 84 },
   Job: { width: 300, height: 84 },
   CronJob: { width: 200, height: 84 },
+  JobSet: { width: 260, height: 84 },
   Workflow: { width: 400, height: 84 },
   CronWorkflow: { width: 240, height: 84 },
   WorkflowTemplate: { width: 240, height: 84 },
@@ -391,6 +392,10 @@ export interface ServicePortEntry {
 }
 
 export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string {
+  if (typeof nodeData.earlierJobRun === 'string') {
+    const state = Number(nodeData.terminating) > 0 ? ' • terminating' : ''
+    return `Earlier run${state}`
+  }
   if (nodeData.deploymentMembership === 'source-only') {
     return `Declared by ${nodeData.deploymentSourceLabel ?? 'deployment source'}`
   }
@@ -433,8 +438,15 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       const branch = nodeData.branch as string;
       return branch ? `${ready} • ${branch}` : ready;
     }
-    case "Pod":
-      return (nodeData.phase as string) || "Unknown";
+    case "Pod": {
+      const phase = (nodeData.phase as string) || "Unknown";
+      if (Number(nodeData.terminating) > 0) {
+        // Phase stays Running while a deleted Pod drains; kubectl shows Terminating.
+        // A Pod that already finished keeps its outcome visible.
+        return phase === "Failed" || phase === "Succeeded" ? `${phase} • terminating` : "Terminating";
+      }
+      return phase;
+    }
     case "Service": {
       const svcType = (nodeData.type as string) || "ClusterIP";
       const ports = (nodeData.ports as ServicePortEntry[] | undefined) || [];
@@ -510,6 +522,14 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       const count = (nodeData.podCount as number) || 0;
       const healthy = (nodeData.healthy as number) || 0;
       const unhealthy = (nodeData.unhealthy as number) || 0;
+      // Termination and health are separate: a draining Pod can be healthy.
+      // The card is narrow, so the unhealthy count comes first and survives truncation.
+      const pods = (nodeData.pods as Array<{ terminating?: boolean }> | undefined) || [];
+      const terminating = pods.filter(p => p.terminating === true).length;
+      if (terminating > 0) {
+        const draining = `${terminating === count ? 'all' : terminating} terminating`;
+        return unhealthy > 0 ? `${count} pods • ${unhealthy} unhealthy • ${draining}` : `${count} pods • ${draining}`;
+      }
       if (unhealthy > 0) {
         return `${count} pods (${unhealthy} unhealthy)`;
       }
@@ -534,6 +554,18 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
     case "Node": {
       const instanceType = nodeData.instanceType as string;
       return instanceType || "";
+    }
+    case "JobSet": {
+      // Another API group's JobSet comes from the generic pass, without these fields.
+      if (!String(nodeData.apiVersion ?? "").startsWith("jobset.x-k8s.io/")) return "";
+      // Declared, not observed: a JobSet holding roles behind dependencies
+      // has created fewer Jobs than its spec asks for.
+      // An older Radar draws an owned JobSet without a phase; its status
+      // color then comes from generic conditions, so don't claim "Unknown".
+      const phase = (nodeData.phase as string) || "";
+      if (!phase) return "";
+      const declared = nodeData.declaredJobs as number | undefined;
+      return typeof declared === "number" ? `${phase} • ${declared} ${declared === 1 ? "Job" : "Jobs"} declared` : phase;
     }
     case "AnalysisRun": {
       const phase = (nodeData.phase as string) || "Unknown";
@@ -839,7 +871,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                 </div>
               </Tooltip>
             ) : (
-              <div className="text-xs text-theme-text-secondary truncate mt-0.5">
+              <div className="text-xs text-theme-text-secondary truncate mt-0.5" title={typeof nodeData.earlierJobRun === 'string' ? `Earlier run of Job ${nodeData.earlierJobRun}` : undefined}>
                 {subtitle}
               </div>
             )

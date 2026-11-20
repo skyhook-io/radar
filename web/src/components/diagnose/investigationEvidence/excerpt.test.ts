@@ -30,16 +30,29 @@ describe("storyExcerpt", () => {
     });
   });
 
-  it("shows a chart only when the card is the cause or the symptom, and never compact", () => {
+  it("shows a placed chart whatever its role, folding a compact one the story does not rest on", () => {
     const metrics = observation({ type: "metrics", origin: "query" } as never);
     expect(
       storyExcerpt(metrics, [{ role: "context" }], { compact: false }),
-    ).toBeUndefined();
+    ).toEqual({ kind: "chart", size: "short", folded: false });
     expect(
-      storyExcerpt(metrics, [{ role: "symptom" }], { compact: false }),
-    ).toEqual({ kind: "chart" });
+      storyExcerpt(metrics, [{ role: "rules_out" }], { compact: true }),
+    ).toEqual({ kind: "chart", size: "short", folded: true });
+    // The agent marks a card compact for the prose's flow, so a symptom
+    // placed compact still starts open.
     expect(
-      storyExcerpt(metrics, [{ role: "cause" }], { compact: true }),
+      storyExcerpt(metrics, [{ role: "symptom" }], { compact: true }),
+    ).toEqual({ kind: "chart", size: "full", folded: false });
+    expect(
+      storyExcerpt(metrics, [{ role: "context" }, { role: "cause" }], {
+        compact: true,
+      }),
+    ).toEqual({ kind: "chart", size: "full", folded: false });
+    expect(
+      storyExcerpt(metrics, [{ role: "cause" }], {
+        compact: true,
+        preview: true,
+      }),
     ).toBeUndefined();
   });
 

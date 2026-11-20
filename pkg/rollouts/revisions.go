@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,8 +25,10 @@ type Revision struct {
 	CreatedAt time.Time `json:"createdAt"`
 	Image     string    `json:"image"`
 	Replicas  int64     `json:"replicas"`
-	Template  string    `json:"template,omitempty"`
-	PodHash   string    `json:"podHash,omitempty"`
+	// ReadyReplicas is this revision's own ready pods, from the ReplicaSet status.
+	ReadyReplicas int64  `json:"readyReplicas"`
+	Template      string `json:"template,omitempty"`
+	PodHash       string `json:"podHash,omitempty"`
 	// IsCurrent marks the revision the Rollout is currently rolling out
 	// (status.currentPodHash), which during a canary is NOT the one serving
 	// stable traffic.
@@ -50,6 +53,17 @@ var workloadRefTargets = map[string]workloadRefTarget{
 }
 
 var specTemplatePath = []string{"spec", "template"}
+
+// WorkloadRefKinds are the workloads a Rollout's workloadRef may name, each in
+// its own API group.
+func WorkloadRefKinds() []schema.GroupKind {
+	out := make([]schema.GroupKind, 0, len(workloadRefTargets))
+	for kind, t := range workloadRefTargets {
+		out = append(out, schema.GroupKind{Group: t.gvr.Group, Kind: kind})
+	}
+	slices.SortFunc(out, func(a, b schema.GroupKind) int { return strings.Compare(a.String(), b.String()) })
+	return out
+}
 
 type TemplateTarget struct {
 	GVR          schema.GroupVersionResource
@@ -129,6 +143,7 @@ func BuildRevisions(replicaSets []unstructured.Unstructured, ro *unstructured.Un
 
 		podHash := rs.GetLabels()[PodTemplateHashLabel]
 		replicas, _, _ := unstructured.NestedInt64(rs.Object, "spec", "replicas")
+		readyReplicas, _, _ := unstructured.NestedInt64(rs.Object, "status", "readyReplicas")
 
 		var template string
 		if tmpl, found, _ := unstructured.NestedMap(rs.Object, "spec", "template"); found && tmpl != nil {
@@ -138,14 +153,15 @@ func BuildRevisions(replicaSets []unstructured.Unstructured, ro *unstructured.Un
 		}
 
 		revisions = append(revisions, Revision{
-			Number:    number,
-			CreatedAt: rs.GetCreationTimestamp().Time,
-			Image:     primaryContainerImage(rs.Object),
-			Replicas:  replicas,
-			Template:  template,
-			PodHash:   podHash,
-			IsCurrent: podHash != "" && podHash == currentHash,
-			IsStable:  podHash != "" && podHash == stableRS,
+			Number:        number,
+			CreatedAt:     rs.GetCreationTimestamp().Time,
+			Image:         primaryContainerImage(rs.Object),
+			Replicas:      replicas,
+			ReadyReplicas: readyReplicas,
+			Template:      template,
+			PodHash:       podHash,
+			IsCurrent:     podHash != "" && podHash == currentHash,
+			IsStable:      podHash != "" && podHash == stableRS,
 		})
 	}
 	return revisions

@@ -1,10 +1,12 @@
 import { type Issue, type IssueRecentChange } from "@skyhook-io/k8s-ui";
+import { type UncheckedSource } from "../../../../api/client";
 import { type DiagnosisDNSContext } from "../../diagnoseEvidenceTypes";
 import {
   ProjectionBuilder,
   addChanges,
   addIssueObservation,
   addNarrowHint,
+  addUncheckedIssueLimitations,
   evidenceTierForRelevance,
   invalidPayload,
   scopeFromArgs,
@@ -43,6 +45,13 @@ export function adaptIssues(
     return;
   }
   addNarrowHint(builder, source, value);
+  if (Array.isArray(value.unchecked_sources)) {
+    addUncheckedIssueLimitations(
+      builder,
+      source,
+      value.unchecked_sources as UncheckedSource[],
+    );
+  }
   if (
     value.total_matched > issues.length &&
     !nonEmptyString(value.narrowHint)
@@ -148,6 +157,7 @@ export function adaptIssues(
       "Issue-related changes",
       "Radar's change history is incomplete for part of the window, so earlier changes may be missing.",
       "unknown",
+      "history",
     );
   }
   if (nonEmptyString(value.recent_changes_error)) {

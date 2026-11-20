@@ -1,15 +1,14 @@
 import { AlertBanner } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
-import { FetchResult, useDockReservedHeight, compareVersions } from '@skyhook-io/k8s-ui'
+import { FetchResult, compareVersions, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
-import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink, SlidersHorizontal, Eye, Loader2 } from 'lucide-react'
 import yaml from 'yaml'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { useHelmRelease, useHelmManifest, useHelmValues, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress, useHelmPreviewValues, useHelmSourceVersions, useRadarFeature, HelmSourceSelectionError } from '../../api/client'
+import { useHelmRelease, useHelmManifest, useHelmValues, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress, useHelmPreviewValues, useHelmSourceVersions, useRadarFeature, HelmSourceSelectionError, isHelmReleaseReadDenied } from '../../api/client'
 import { ValuesDiffPreview } from './ValuesDiffPreview'
 import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
@@ -26,6 +25,8 @@ import { ManifestViewer } from './ManifestViewer'
 import { ValuesViewer } from './ValuesViewer'
 import { OwnedResources } from './OwnedResources'
 import { TrackChartSourceDialog } from './TrackChartSourceDialog'
+import { HelmDrawerFrame } from './HelmDrawerFrame'
+import { ObservedHelmReleaseDrawer } from './ObservedHelmReleaseDrawer'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 
@@ -142,18 +143,29 @@ export function upgradePickerVersions(available: string[] | undefined, current: 
   return entries.length > 1 ? entries : null
 }
 
-const MIN_WIDTH = 500
-const MAX_WIDTH_PERCENT = 0.8
-const DEFAULT_WIDTH = 1000
 export const DEFAULT_SHOW_EFFECTIVE_VALUES = false
 
 export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true, rightInset = 0 }: HelmReleaseDrawerProps) {
+  // A row built without Helm's storage says so, which spares a read that would
+  // only be refused. A shared link doesn't, so it learns from the refusal.
+  const { error } = useHelmRelease(effectiveHelmStorageNamespace(release), release.name, { enabled: !release.observed })
+  const { support } = useRadarFeature('helmInventory')
+  const observed = release.observed || (support === 'supported' && isHelmReleaseReadDenied(error))
+  return (
+    <HelmDrawerFrame onClose={onClose} isOpen={isOpen} rightInset={rightInset}>
+      {observed ? (
+        <ObservedHelmReleaseDrawer release={release} onClose={onClose} onNavigateToResource={onNavigateToResource} />
+      ) : (
+        <FullHelmRelease release={release} onClose={onClose} onNavigateToResource={onNavigateToResource} />
+      )}
+    </HelmDrawerFrame>
+  )
+}
+
+function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmReleaseDrawerProps, 'release' | 'onClose' | 'onNavigateToResource'>) {
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [copied, setCopied] = useState<string | null>(null)
-  const [drawerWidth, setDrawerWidth] = useState(DEFAULT_WIDTH)
-  const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? DEFAULT_WIDTH : window.innerWidth))
-  const [isResizing, setIsResizing] = useState(false)
   const [selectedRevision, setSelectedRevision] = useState<number | undefined>(undefined)
   const [showEffectiveValues, setShowEffectiveValues] = useState(DEFAULT_SHOW_EFFECTIVE_VALUES)
   const [rollbackRevision, setRollbackRevision] = useState<number | null>(null)
@@ -167,14 +179,16 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [selectedSourceUpgrade, setSelectedSourceUpgrade] = useState<SourceUpgradeSelection | null>(null)
   const selectedSourceRef = useRef<SourceUpgradeSelection | null>(null)
   const [adjustValues, setAdjustValues] = useState(false)
+  // Phones upgrade with the existing values. An adjustment already open when
+  // a phone rotates to portrait stays visible, since its edits would
+  // otherwise apply unseen.
+  const isPhone = usePhoneLayout()
   const [editedUpgradeYaml, setEditedUpgradeYaml] = useState('')
   const [upgradeYamlError, setUpgradeYamlError] = useState<string | null>(null)
   const [upgradeValuesSeeded, setUpgradeValuesSeeded] = useState(false)
   const [upgradePreview, setUpgradePreview] = useState<ValuesPreviewResponse | null>(null)
   const [upgradePreviewRequest, setUpgradePreviewRequest] = useState<UpgradePreviewRequest | null>(null)
   const [showUpgradePreview, setShowUpgradePreview] = useState(false)
-  const resizeStartX = useRef(0)
-  const resizeStartWidth = useRef(DEFAULT_WIDTH)
   const targetVersionRef = useRef('')
   const editedUpgradeYamlRef = useRef('')
   const helmNamespace = effectiveHelmStorageNamespace(release)
@@ -275,59 +289,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     setUpgradeProgress([])
     setIsUpgrading(false)
   }, [releaseKey])
-
-  // ESC key handler
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
-
-  useEffect(() => {
-    const handleWindowResize = () => setViewportWidth(window.innerWidth)
-    handleWindowResize()
-    window.addEventListener('resize', handleWindowResize)
-    return () => window.removeEventListener('resize', handleWindowResize)
-  }, [])
-
-  const minDrawerWidth = Math.min(MIN_WIDTH, viewportWidth)
-  const maxDrawerWidth = viewportWidth < MIN_WIDTH ? viewportWidth : Math.max(MIN_WIDTH, viewportWidth * MAX_WIDTH_PERCENT)
-  const renderedDrawerWidth = Math.max(minDrawerWidth, Math.min(drawerWidth, maxDrawerWidth))
-
-  // Resize handlers
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    setIsResizing(true)
-    resizeStartX.current = e.clientX
-    resizeStartWidth.current = renderedDrawerWidth
-  }, [renderedDrawerWidth])
-
-  useEffect(() => {
-    if (!isResizing) return
-
-    document.body.style.cursor = 'ew-resize'
-    document.body.style.userSelect = 'none'
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const deltaX = resizeStartX.current - e.clientX
-      const newWidth = resizeStartWidth.current + deltaX
-      const viewport = window.innerWidth
-      const minWidth = Math.min(MIN_WIDTH, viewport)
-      const maxWidth = viewport < MIN_WIDTH ? viewport : Math.max(MIN_WIDTH, viewport * MAX_WIDTH_PERCENT)
-      setDrawerWidth(Math.max(minWidth, Math.min(newWidth, maxWidth)))
-    }
-    const handleMouseUp = () => setIsResizing(false)
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-    return () => {
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isResizing])
 
   const copyToClipboard = useCallback((text: string, key: string) => {
     navigator.clipboard.writeText(text)
@@ -594,9 +555,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     void runUpgrade(upgradePreviewRequest.targetVersion, upgradePreviewRequest.values, upgradePreviewRequest.repositoryName, selection)
   }
 
-  const headerHeight = 49
-  const dockInset = useDockReservedHeight()
-
   const tabs: { id: TabId; label: string; icon: typeof Package }[] = [
     { id: 'overview', label: 'Overview', icon: Package },
     { id: 'history', label: 'History', icon: History },
@@ -607,24 +565,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   ]
 
   return (
-    <div
-      className={clsx(
-        'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-drawer z-40',
-        TRANSITION_DRAWER,
-        isOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
-      )}
-      style={{ width: renderedDrawerWidth, top: headerHeight, right: rightInset, height: `calc(100vh - ${headerHeight}px - ${dockInset}px)` }}
-    >
-      {/* Resize handle */}
-      <div
-        onMouseDown={handleResizeStart}
-        className={clsx(
-          'absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-10 hover:bg-blue-500/50 transition-colors',
-          'hidden sm:block',
-          isResizing && 'bg-blue-500/50'
-        )}
-      />
-
+    <>
       {/* Header */}
       <div className="border-b border-theme-border shrink-0">
         <div className="flex items-center justify-between px-4 pt-3 pb-2">
@@ -650,11 +591,12 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                 upgrade check failed
               </span>
               </Tooltip>
-            ) : upgradeInfo?.updateAvailable && releaseDetail?.managedByFluxHelmRelease ? (
+            ) : upgradeInfo?.updateAvailable && (releaseDetail?.managedByFlux || releaseDetail?.managedByFluxHelmRelease) ? (
               // Route-only for GitOps-managed releases: a direct `helm upgrade`
-              // would be reverted at the next reconcile, so surface the available
-              // version as info and point at GitOps rather than offer the upgrade.
-              <Tooltip content={`${upgradeInfo.latestVersion} available — managed by Flux, upgrade via the GitOps view (a direct upgrade would be reverted at the next reconcile).`}>
+              // may be reconciled back, so surface the available version as info.
+              <Tooltip content={releaseDetail?.managedByFluxHelmRelease
+                ? `${upgradeInfo.latestVersion} available - managed by Flux. Upgrade its HelmRelease from the GitOps view; direct Helm changes may be reconciled back.`
+                : `${upgradeInfo.latestVersion} available - managed by Flux. Ask the HelmRelease owner to upgrade it; Radar cannot show you the owning HelmRelease.`}>
               <span className={clsx('badge', SEVERITY_BADGE.warning, 'opacity-90')}>
                 <ArrowUpCircle className="w-3 h-3" />
                 {upgradeInfo.latestVersion}
@@ -681,10 +623,11 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               </span>
               </Tooltip>
             ) : upgradeInfo?.error ? (
-              releaseDetail?.managedByFluxHelmRelease ? (
-                // Managed by Flux — the "Managed by Flux" badge routes to GitOps,
-                // where the chart source lives. Don't push a Helm source here.
-                <Tooltip content="Chart source is managed by Flux — track upgrades from the GitOps view.">
+              (releaseDetail?.managedByFlux || releaseDetail?.managedByFluxHelmRelease) ? (
+                // Keep source changes with Flux even when its controller link is hidden.
+                <Tooltip content={releaseDetail?.managedByFluxHelmRelease
+                  ? "Chart source is managed by Flux. Track upgrades from its HelmRelease in the GitOps view."
+                  : "Chart source is managed by Flux. Ask the HelmRelease owner to manage upgrades; Radar cannot show you the owning HelmRelease."}>
                 <span className="badge bg-theme-hover/50 text-theme-text-secondary">
                   source via GitOps
                 </span>
@@ -720,7 +663,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
             ) : null}
           </div>
           <div className="flex items-center gap-1">
-            {sourceFeature.support === 'supported' && !releaseDetail?.managedByFluxHelmRelease && <Tooltip content="Choose chart source">
+            {sourceFeature.support === 'supported' && !releaseDetail?.managedByFlux && !releaseDetail?.managedByFluxHelmRelease && <Tooltip content="Choose chart source">
               <button type="button" aria-label="Choose chart source" disabled={!canHelmWrite} onClick={() => setShowTrackSource(true)} className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"><Link2 className="w-4 h-4" /></button>
             </Tooltip>}
             <Tooltip content="Refresh">
@@ -769,8 +712,15 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
             </Tooltip>
           </div>
           <p className="text-sm text-theme-text-tertiary">{release.namespace}</p>
+          {releaseDetail?.managedByFlux && !releaseDetail.managedByFluxHelmRelease && (
+            <Tooltip content="The owning Flux HelmRelease's namespace isn't available in this view, or Radar couldn't check your access. Manage this release through Flux; direct Helm changes may be reconciled back." wrapperClassName="mt-1">
+            <span className="inline-flex items-center gap-1 mt-1 text-xs text-theme-text-secondary">
+              <GitBranch className="w-3 h-3" />Managed by Flux
+            </span>
+            </Tooltip>
+          )}
           {releaseDetail?.managedByFluxHelmRelease && (
-            <Tooltip content={`Installed by Flux helm-controller via HelmRelease ${releaseDetail.managedByFluxHelmRelease}. Changes here would be reverted at the next reconcile.`} wrapperClassName="mt-1">
+            <Tooltip content={`Installed by Flux helm-controller via HelmRelease ${releaseDetail.managedByFluxHelmRelease}. Direct Helm changes may be reconciled back.`} wrapperClassName="mt-1">
             <button
               type="button"
               onClick={() => {
@@ -816,6 +766,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               operation={releaseDetail.lastOperation}
               operationInsight={releaseDetail.operationInsight}
               releaseNamespace={releaseDetail.namespace}
+              managedByFlux={releaseDetail.managedByFlux}
               managedByFluxHelmRelease={releaseDetail.managedByFluxHelmRelease}
               hookDiagnostics={releaseDetail.hookDiagnostics}
               onCompare={handleCompareRevisions}
@@ -1006,7 +957,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
             )}
           </div>
         )}
-        {upgradeProgress.length === 0 && canHelmWrite && (
+        {upgradeProgress.length === 0 && canHelmWrite && (!isPhone || adjustValues) && (
           <div className="mt-3 border-t border-theme-border pt-3">
             <Tooltip content="Edit the user-supplied Helm values that Radar will pass to this upgrade.">
               <button
@@ -1125,7 +1076,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         sourceIssue={upgradeSourceIssue}
         sourceError={upgradeInfo?.error}
       />
-    </div>
+    </>
   )
 }
 
@@ -1188,6 +1139,7 @@ function HelmOperationBanner({
   operation,
   operationInsight,
   releaseNamespace,
+  managedByFlux,
   managedByFluxHelmRelease,
   hookDiagnostics,
   onCompare,
@@ -1196,6 +1148,7 @@ function HelmOperationBanner({
   operation?: HelmOperation
   operationInsight?: HelmOperationInsight
   releaseNamespace: string
+  managedByFlux?: boolean
   managedByFluxHelmRelease?: string
   hookDiagnostics?: HookDiagnostic[]
   onCompare?: (rev1: number, rev2: number) => void
@@ -1272,9 +1225,9 @@ function HelmOperationBanner({
             onNavigateToResource={onNavigateToResource}
           />
           {primaryHookDiagnostic && <HookSignal diagnostic={primaryHookDiagnostic} />}
-          {managedByFluxHelmRelease && (
+          {(managedByFlux || managedByFluxHelmRelease) && (
             <p className="mt-1 text-xs text-theme-text-tertiary">
-              This release is managed by Flux HelmRelease {managedByFluxHelmRelease}; direct Helm changes may be reconciled back.
+              Managed by Flux{managedByFluxHelmRelease ? ` HelmRelease ${managedByFluxHelmRelease}` : ''}. Direct Helm changes may be reconciled back.
             </p>
           )}
         </div>

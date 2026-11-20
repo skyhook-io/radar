@@ -3,14 +3,17 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/subject"
@@ -586,7 +589,6 @@ func TestGroupApplications_ForeignManagerKindStaysRaw(t *testing.T) {
 	foreign.rootKind = "Application"
 	foreign.rootGroup = "apps.example.io"
 	foreign.rootIdentity = resourceid.ResourceKey(foreign.rootGroup, foreign.rootKind, "operators", "platform")
-	foreign.source = sourceRefForInput(nil, foreign.rootKind, foreign.rootGroup, foreign.rootKey)
 
 	rows := groupApplications([]appWorkloadInput{foreign})
 	if len(rows) != 1 {
@@ -601,17 +603,16 @@ func TestGroupApplications_ForeignManagerKindStaysRaw(t *testing.T) {
 func TestGroupApplications_SourceRefRequiresExactSource(t *testing.T) {
 	helmApp := overlayInput("Deployment", "prod", "api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 	helmApp.overlay.Winner.Ref = subject.Ref{Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
-	helmApp.source = sourceRefForInput(helmApp.overlay, helmApp.rootKind, helmApp.rootGroup, helmApp.rootKey)
+	helmApp.source = &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
 
 	labelApp := overlayInput("Deployment", "prod", "payments-worker", "1.0", "healthy", subject.TierPartOf, "prod/app/payments", subject.ConfidenceMedium)
 	labelApp.overlay.Winner.Ref = subject.Ref{Kind: "app", Namespace: "prod", Name: "payments"}
-	labelApp.source = sourceRefForInput(labelApp.overlay, labelApp.rootKind, labelApp.rootGroup, labelApp.rootKey)
 
 	structuralApp := rawInput("Deployment", "prod", "admin", "1.0", "healthy")
 	structuralApp.rootKey, structuralApp.rootKind = "argocd/Application/admin", "Application"
 	structuralApp.rootGroup = "argoproj.io"
 	structuralApp.rootIdentity = resourceid.ResourceKey("argoproj.io", "Application", "argocd", "admin")
-	structuralApp.source = sourceRefForInput(structuralApp.overlay, structuralApp.rootKind, structuralApp.rootGroup, structuralApp.rootKey)
+	structuralApp.source = &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "admin"}
 
 	rows := groupApplications([]appWorkloadInput{helmApp, labelApp, structuralApp})
 
@@ -632,7 +633,7 @@ func TestGroupApplications_SourceRefRequiresExactSource(t *testing.T) {
 func TestGroupApplications_SourceRefRequiresEveryWorkload(t *testing.T) {
 	api := overlayInput("Deployment", "prod", "checkout-api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 	api.overlay.Winner.Ref = subject.Ref{Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
-	api.source = sourceRefForInput(api.overlay, api.rootKind, api.rootGroup, api.rootKey)
+	api.source = &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
 
 	worker := overlayInput("Deployment", "prod", "checkout-worker", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 
@@ -895,7 +896,7 @@ func TestGroupApplications_EntrypointRefsDeduplicateAndClassify(t *testing.T) {
 	}
 }
 
-func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T) {
+func TestApplicationsRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T) {
 	// Route kinds are custom resources; the builder records their apiVersion.
 	apiVersions := map[string]string{
 		"HTTPRoute":      "gateway.networking.k8s.io/v1",
@@ -933,7 +934,7 @@ func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T
 			edge("httpproxy/prod/api-contour", "service/prod/api", topology.EdgeExposes),
 		},
 	}
-	g := &appGraph{topo: topo, idx: topology.IndexByResource(topo)}
+	g := applicationTopologyFixture(t, topo)
 
 	rels := g.relationshipsFor("Deployment", "prod", "api", nil)
 	if rels == nil {
@@ -962,7 +963,7 @@ func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T
 	}
 }
 
-func TestAppGraphRelationshipsForUsesFetchedObjectGroup(t *testing.T) {
+func TestApplicationsRelationshipsForUsesFetchedObjectGroup(t *testing.T) {
 	topo := &topology.Topology{
 		Nodes: []topology.Node{
 			{ID: "service/ml/core", Kind: topology.KindService, Name: "core", Data: map[string]any{"namespace": "ml"}},
@@ -980,7 +981,7 @@ func TestAppGraphRelationshipsForUsesFetchedObjectGroup(t *testing.T) {
 		"kind":       "Job",
 		"metadata":   map[string]any{"namespace": "ml", "name": "train"},
 	}}
-	g := &appGraph{topo: topo, idx: topology.IndexByResource(topo)}
+	g := applicationTopologyFixture(t, topo)
 
 	rels := g.relationshipsFor("Job", "ml", "train", volcano)
 	if rels == nil || len(rels.Services) != 1 || rels.Services[0] != "volcano" {
@@ -1022,13 +1023,7 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 			manages("ks-infra", "dep-grafana"), // manager → workload
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
-	for _, n := range topo.Nodes {
-		g.byID[n.ID] = n
-		ns, _ := n.Data["namespace"].(string)
-		kind := topology.KubernetesKindForNode(&n)
-		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&n, kind), kind, ns, n.Name)] = n.ID
-	}
+	g := applicationTopologyFixture(t, topo)
 
 	apiRoot, _, apiGroup, apiIdentity := g.rootOf("apps", "Deployment", "prod", "api")
 	grafanaRoot, _, _, _ := g.rootOf("apps", "Deployment", "monitoring", "grafana")
@@ -1050,6 +1045,40 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 	}
 }
 
+// A JobSet's member Jobs resolve to the JobSet as their structural root, as an
+// operator CR's workloads do, so they group as one application rather than one
+// per Job.
+func TestStructuralRoot_JobSetMembersShareTheJobSetRoot(t *testing.T) {
+	jobSetID := "jobset/ml/train/jobset.x-k8s.io"
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: jobSetID, Kind: topology.KindJobSet, Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "jobset.x-k8s.io/v1alpha2"}},
+			{ID: "job/ml/train-driver-0", Kind: topology.KindJob, Name: "train-driver-0", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+			{ID: "job/ml/train-workers-0", Kind: topology.KindJob, Name: "train-workers-0", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+			{ID: "job/ml/standalone", Kind: topology.KindJob, Name: "standalone", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+		},
+		Edges: []topology.Edge{
+			{Source: jobSetID, Target: "job/ml/train-driver-0", Type: topology.EdgeManages},
+			{Source: jobSetID, Target: "job/ml/train-workers-0", Type: topology.EdgeManages},
+		},
+	}
+	g := applicationTopologyFixture(t, topo)
+
+	want := resourceid.ResourceKey("jobset.x-k8s.io", "JobSet", "ml", "train")
+	if root, kind, group, identity := g.rootOf("jobset.x-k8s.io", "JobSet", "ml", "train"); root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {
+		t.Fatalf("JobSet workload root = %q %q %q %q", root, kind, group, identity)
+	}
+	for _, name := range []string{"train-driver-0", "train-workers-0"} {
+		root, kind, group, identity := g.rootOf("batch", "Job", "ml", name)
+		if root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {
+			t.Fatalf("%s root = %q %q %q %q, want the JobSet", name, root, kind, group, identity)
+		}
+	}
+	if root, _, _, _ := g.rootOf("batch", "Job", "ml", "standalone"); root != "ml/Job/standalone" {
+		t.Fatalf("a Job outside the JobSet resolved to %q", root)
+	}
+}
+
 func TestStructuralRoot_DoesNotStopAtForeignManagerKind(t *testing.T) {
 	topo := &topology.Topology{
 		Nodes: []topology.Node{
@@ -1062,13 +1091,7 @@ func TestStructuralRoot_DoesNotStopAtForeignManagerKind(t *testing.T) {
 			{Source: "application/prod/app/apps.example.io", Target: "deployment/prod/api", Type: topology.EdgeManages},
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
-	for _, node := range topo.Nodes {
-		g.byID[node.ID] = node
-		kind := topology.KubernetesKindForNode(&node)
-		ns, _ := node.Data["namespace"].(string)
-		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&node, kind), kind, ns, node.Name)] = node.ID
-	}
+	g := applicationTopologyFixture(t, topo)
 
 	root, _, group, _ := g.rootOf("apps", "Deployment", "prod", "api")
 	if root != "prod/Platform/root" || group != "platform.example.io" {
@@ -1093,8 +1116,7 @@ func TestRelationshipsFor_RoutesCarryConcreteKind(t *testing.T) {
 			{ID: "gw->web", Source: "gateway/prod/gw", Target: "httproute/prod/web", Type: topology.EdgeRoutesTo},
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
-
+	g := applicationTopologyFixture(t, topo)
 	rels := g.relationshipsFor("Gateway", "prod", "gw", nil)
 	if rels == nil {
 		t.Fatal("relationshipsFor returned nil; want Routes populated")
@@ -1190,6 +1212,50 @@ func TestGroupApplications_MixedHealthUsesServingWorkloads(t *testing.T) {
 	pureBatch := groupApplications([]appWorkloadInput{rawInput("CronWorkflow", "prod", "nightly", "", "unhealthy")})
 	if len(pureBatch) != 1 || pureBatch[0].Health != "unhealthy" {
 		t.Fatalf("pure batch health = %+v, want unhealthy batch verdict", pureBatch)
+	}
+}
+
+// A Deployment whose exposure went undecided still runs: its health is part of
+// the serving health and its class keeps a job-only row from reading as a job.
+func TestGroupApplications_UndecidedWorkloadKeepsClassAndHealth(t *testing.T) {
+	mk := func(kind, name, health string, rels *appRelationships) appWorkloadInput {
+		in := overlayInput(kind, "prod", name, "1.0", health, subject.TierPartOf, "prod/app/shop", subject.ConfidenceMedium)
+		in.wl.WorkloadClass = classifyWorkload(kind, rels)
+		in.rels = rels
+		return in
+	}
+	service := func() appWorkloadInput {
+		return mk("Deployment", "api", "healthy", &appRelationships{Services: []string{"api"}})
+	}
+	crashing := func() appWorkloadInput {
+		return mk("Deployment", "sync", "unhealthy", &appRelationships{exposureIncomplete: true})
+	}
+	cron := func() appWorkloadInput { return mk("CronJob", "nightly", "healthy", nil) }
+
+	for _, c := range []struct {
+		name      string
+		ins       []appWorkloadInput
+		wantClass string
+	}{
+		{"beside a service", []appWorkloadInput{service(), crashing()}, "service"},
+		{"beside a service and a job", []appWorkloadInput{service(), crashing(), cron()}, "mixed"},
+		{"beside a job", []appWorkloadInput{crashing(), cron()}, "mixed"},
+	} {
+		rows := groupApplications(c.ins)
+		row := rowByName(rows, "shop")
+		if row == nil || row.WorkloadClass != c.wantClass || row.Health != "unhealthy" || row.RuntimeHealth != "unhealthy" {
+			t.Errorf("%s: row = %+v, want class %s and unhealthy", c.name, row, c.wantClass)
+		}
+	}
+
+	root := overlayInput("JobSet", "prod", "train", "", "neutral", subject.TierPartOf, "prod/app/shop", subject.ConfidenceMedium)
+	member := rawInput("Job", "prod", "train-workers-0", "", "healthy")
+	member.rootKey, member.rootKind, member.rootGroup, member.rootIdentity = root.rootKey, root.rootKind, root.rootGroup, root.rootIdentity
+	member.wl.jobSetParent = root.rootIdentity
+	rows := groupApplications([]appWorkloadInput{service(), crashing(), member, root})
+	foldJobSetApplicationWorkloads(rows)
+	if row := rowByName(rows, "shop"); row == nil || row.WorkloadClass != "mixed" || row.Health != "unhealthy" || row.RuntimeHealth != "unhealthy" {
+		t.Fatalf("JobSet row = %+v, want mixed and unhealthy", row)
 	}
 }
 
@@ -1335,14 +1401,16 @@ func TestGroupApplications_MatchKeys(t *testing.T) {
 
 // A real class mix (service + scheduled job) reports "mixed", not "unknown" —
 // the per-workload classes are confident and the UI shows the composition.
-// service+worker stays "service" (operated primarily as a service), and an
-// unclassifiable member (bare Pod) doesn't poison a known class.
+// service+worker stays "service" (operated primarily as a service). A workload
+// whose exposure went undecided is a service or a worker, so the row takes the
+// class both readings give, and "unknown" when they differ.
 func TestWorkloadClass_MixedComposition(t *testing.T) {
 	mk := func(name, kind, class string) appWorkloadInput {
 		in := overlayInput(kind, "prod", name, "1.0", "healthy", subject.TierPartOf, "prod/app/shop", subject.ConfidenceMedium)
 		in.wl.WorkloadClass = class
 		return in
 	}
+	undecided := classifyWorkload("Deployment", &appRelationships{exposureIncomplete: true})
 	cases := []struct {
 		name string
 		ins  []appWorkloadInput
@@ -1351,8 +1419,11 @@ func TestWorkloadClass_MixedComposition(t *testing.T) {
 		{"service+job", []appWorkloadInput{mk("api", "Deployment", "service"), mk("nightly", "CronJob", "job")}, "mixed"},
 		{"worker+job", []appWorkloadInput{mk("proc", "Deployment", "worker"), mk("nightly", "CronJob", "job")}, "mixed"},
 		{"service+worker", []appWorkloadInput{mk("api", "Deployment", "service"), mk("proc", "Deployment", "worker")}, "service"},
-		{"service+unknown", []appWorkloadInput{mk("api", "Deployment", "service"), mk("dbg", "Pod", "unknown")}, "service"},
-		{"only-unknown", []appWorkloadInput{mk("dbg", "Pod", "unknown")}, "unknown"},
+		{"service+unknown", []appWorkloadInput{mk("api", "Deployment", "service"), mk("dbg", "Deployment", undecided)}, "service"},
+		{"unknown+job", []appWorkloadInput{mk("dbg", "Deployment", undecided), mk("nightly", "CronJob", "job")}, "mixed"},
+		{"unknown+worker", []appWorkloadInput{mk("dbg", "Deployment", undecided), mk("proc", "Deployment", "worker")}, "unknown"},
+		{"service+unknown+job", []appWorkloadInput{mk("api", "Deployment", "service"), mk("dbg", "Deployment", undecided), mk("nightly", "CronJob", "job")}, "mixed"},
+		{"only-unknown", []appWorkloadInput{mk("dbg", "Deployment", undecided)}, "unknown"},
 	}
 	for _, c := range cases {
 		rows := groupApplications(c.ins)
@@ -1525,15 +1596,16 @@ func TestWarningEventIndexResolvesOnlyUnambiguousGroups(t *testing.T) {
 	}
 	defer core.Stop()
 	cache := &k8s.ResourceCache{ResourceCache: core}
-	graph := &appGraph{byID: map[string]topology.Node{
-		"argo": {Kind: topology.KindRollout, Name: "api", Data: map[string]any{"namespace": "dev", "apiVersion": "argoproj.io/v1alpha1"}},
-	}}
-	index := indexWarningEventsByObject(cache, []string{"dev"}, graph)
+	argo := appTestObject("argoproj.io", "Rollout", "dev", "api")
+	session := appManagerSession(t, argo)
+	inventory := &applicationInventory{session: session.(relations.Session)}
+	index := indexWarningEventsByObject(cache, []string{"dev"}, inventory.resolveEventGroup)
 	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", "", nil); len(got) != 1 {
 		t.Fatalf("unambiguous warning missing: %+v", index)
 	}
-	graph.byID["other"] = topology.Node{Kind: topology.KindRollout, Name: "api", Data: map[string]any{"namespace": "dev", "apiVersion": "other.io/v1"}}
-	index = indexWarningEventsByObject(cache, []string{"dev"}, graph)
+	other := appTestObject("other.io", "Rollout", "dev", "api")
+	inventory.session = appManagerSession(t, argo, other).(relations.Session)
+	index = indexWarningEventsByObject(cache, []string{"dev"}, inventory.resolveEventGroup)
 	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", "", nil); len(got) != 0 {
 		t.Fatalf("ambiguous warning attributed: %+v", got)
 	}
@@ -1561,5 +1633,53 @@ func TestManagedSourceRefs_IgnoreRemoteArgoDestinations(t *testing.T) {
 	ref := commonManagedSourceRef([]appWorkload{{Group: "apps", Kind: "Deployment", Namespace: "sealed-secrets", Name: "controller"}}, sources)
 	if ref == nil || ref.Name != "sealed-secrets-hub" {
 		t.Fatalf("source ref = %+v, want the in-cluster Application only", ref)
+	}
+}
+
+func TestApplicationsViewRestricted(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		requested  []string
+		effective  []string
+		unreadable string
+		want       bool
+	}{
+		{name: "all namespaces, all visible", unreadable: "none", want: false},
+		{name: "all namespaces, user narrowed", effective: []string{"a"}, unreadable: "none", want: true},
+		{name: "all namespaces, no access", effective: []string{}, unreadable: "none", want: true},
+		{name: "all namespaces, Radar can't read them all", unreadable: "", want: true},
+		{name: "explicit filter fully granted", requested: []string{"a", "b"}, effective: []string{"a", "b"}, unreadable: "none", want: false},
+		{name: "explicit filter partly granted", requested: []string{"a", "b"}, effective: []string{"a"}, unreadable: "none", want: true},
+		{name: "explicit filter inside what Radar reads", requested: []string{"a"}, effective: []string{"a"}, unreadable: "b", want: false},
+		{name: "explicit filter outside what Radar reads", requested: []string{"b"}, effective: []string{"b"}, unreadable: "b", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readable := func(namespaces []string) bool { return !slices.Contains(namespaces, tc.unreadable) }
+			if got := applicationsViewRestricted(tc.requested, tc.effective, readable); got != tc.want {
+				t.Fatalf("applicationsViewRestricted() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewestRevisionByOwner(t *testing.T) {
+	older := metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	newer := metav1.NewTime(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC))
+	revision := func(owner types.UID, at metav1.Time) metav1.Object {
+		return &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+			CreationTimestamp: at,
+			OwnerReferences:   []metav1.OwnerReference{{UID: owner}},
+		}}
+	}
+
+	// A rollback bumps the revision number on an old object, so creation time
+	// has to win over listing order.
+	got := newestRevisionByOwner([]metav1.Object{
+		revision("api", newer),
+		revision("api", older),
+		revision("worker", older),
+	})
+	if !got["api"].Equal(newer.Time) || !got["worker"].Equal(older.Time) || len(got) != 2 {
+		t.Fatalf("newestRevisionByOwner() = %v", got)
 	}
 }

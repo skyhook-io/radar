@@ -38,6 +38,7 @@ export {
   getCalicoPolicyServiceAccountSelector,
 } from './resource-utils-calico'
 export * from './resource-utils-crossplane'
+export * from './resource-utils-csr'
 export * from './resource-utils-eso'
 export * from './resource-utils-flux'
 export * from './resource-utils-istio'

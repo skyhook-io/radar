@@ -76,3 +76,21 @@ tests:
     asserts:
       - hasDocuments:
           count: 8
+
+  - it: withholds credential-bearing Strimzi resources from caller roles
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-integration-read-namespaced
+    asserts:
+      - notContains:
+          path: rules[*].apiGroups
+          content: "core.strimzi.io"
+      - notContains:
+          path: rules[*].resources
+          content: "kafkaconnects"
+      - notContains:
+          path: rules[*].resources
+          content: "kafkaconnectors"
+      - notContains:
+          path: rules[*].resources
+          content: "strimzipodsets"

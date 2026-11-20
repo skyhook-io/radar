@@ -102,6 +102,12 @@ func ManualReviewReasons(row RightsizingRow) []string {
 	if IsWithheldRecommendationReason(row.RecommendationReason) {
 		reasons = append(reasons, "recommendation_withheld")
 	}
+	// Radar sizes container requests, and this pod's reservation is the
+	// pod-level request it does not size. Left out of review, the workload
+	// would classify in_range: a verdict about a budget nobody evaluated.
+	if row.Fit == FitPodLevelRequest {
+		reasons = append(reasons, "pod_level_request")
+	}
 	// Burst and throttling only matter against a cut: they say the smaller
 	// request would be met by a workload that already wants more.
 	if isReduction(row) {

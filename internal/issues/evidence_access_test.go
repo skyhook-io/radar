@@ -17,6 +17,8 @@ func degradedIssue(id string) Issue {
 	i := evidenceIssue(id, secretList)
 	i.Message, i.RawMessage = "Secret/db key password changed at 10:02", "Secret/db key password changed at 10:02"
 	i.Cause, i.Action = "Secret/db changed after the container started", "Restart the pod"
+	i.Hazard = "Secret/db private warning"
+	i.ActionPrimary, i.ActionSecondaryTitle, i.ActionSecondary = "Secret/db primary", "Secret/db details", []string{"password changed at 10:02"}
 	i.FirstSeen, i.IssueTiming, i.IssueTimingBasis = time.Date(2026, 10, 1, 10, 2, 0, 0, time.UTC), "started_after_resource_was_healthy", "exact"
 	i.Degraded = &DegradedFinding{Message: "A container may hold stale values", Cause: "A Secret it reads changed", Action: "Restart the pod"}
 	return i
@@ -67,6 +69,9 @@ func TestForEvidenceDegradesWithoutTheEvidence(t *testing.T) {
 	}
 	if !shown.FirstSeen.IsZero() || !shown.OnsetUnknown || shown.IssueTiming != "" || shown.IssueTimingBasis != "" || shown.OnsetCoverage != nil {
 		t.Fatalf("degraded finding kept the evidence's onset: %+v", shown)
+	}
+	if shown.Hazard != "" || shown.ActionPrimary != "" || shown.ActionSecondaryTitle != "" || shown.ActionSecondary != nil {
+		t.Fatalf("degraded finding kept original action presentation: %+v", shown)
 	}
 	if shown.RequiredReads != nil || shown.Degraded != nil {
 		t.Fatalf("degraded finding kept its evidence bookkeeping: %+v", shown)

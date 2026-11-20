@@ -295,6 +295,41 @@ func TestBuildSummary_UnstructuredReadyCondition(t *testing.T) {
 	}
 }
 
+// A CertificateSigningRequest has no Ready condition; its health follows the
+// same approval/issuance state the UI badge shows.
+func TestBuildSummary_CertificateSigningRequestHealth(t *testing.T) {
+	cases := []struct {
+		name     string
+		metadata map[string]any
+		status   map[string]any
+		want     string
+	}{
+		{name: "pending", status: map[string]any{}, want: `{"health":"neutral"}`},
+		{name: "pending_stuck", metadata: map[string]any{"creationTimestamp": "2020-01-01T00:00:00Z"}, status: map[string]any{}, want: `{"health":"degraded"}`},
+		{name: "approved_not_issued", status: map[string]any{"conditions": []any{map[string]any{"type": "Approved", "status": "True"}}}, want: `{"health":"neutral"}`},
+		{name: "approved_not_issued_stuck", status: map[string]any{"conditions": []any{map[string]any{"type": "Approved", "status": "True", "lastUpdateTime": "2020-01-01T00:00:00Z"}}}, want: `{"health":"degraded"}`},
+		{name: "issued", status: map[string]any{"certificate": "Y2VydA==", "conditions": []any{map[string]any{"type": "Approved", "status": "True"}}}, want: `{"health":"healthy"}`},
+		{name: "failed", status: map[string]any{"conditions": []any{
+			map[string]any{"type": "Approved", "status": "True"},
+			map[string]any{"type": "Failed", "status": "True"},
+		}}, want: `{"health":"unhealthy"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			u := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "certificates.k8s.io/v1",
+				"kind":       "CertificateSigningRequest",
+				"metadata":   c.metadata,
+				"status":     c.status,
+			}}
+			b, _ := json.Marshal(BuildSummary(u, SummaryOptions{}))
+			if string(b) != c.want {
+				t.Errorf("got %s\nwant %s", b, c.want)
+			}
+		})
+	}
+}
+
 // TestBuildSummary_HealthOverride pins that caller-supplied Health
 // short-circuits the per-kind heuristic.
 func TestBuildSummary_HealthOverride(t *testing.T) {

@@ -1,5 +1,5 @@
-import type { ComponentType } from "react";
-import type { ReactNode } from "react";
+import type { ComponentType, ReactNode, RefObject } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   Home,
   Network,
@@ -17,11 +17,17 @@ import {
   Megaphone,
   PanelLeftClose,
   PanelLeftOpen,
+  Rocket,
 } from "lucide-react";
 import { clsx } from "clsx";
 import type { MainView } from "../../types";
 import { Tooltip } from "../ui/Tooltip";
 import { assetUrl } from "@skyhook-io/k8s-ui";
+import {
+  COMMUNITY_HINT,
+  SLACK_COLORS_ON_ROW_HOVER,
+  SlackIcon,
+} from "../community";
 
 const radarLogoUrl = assetUrl("/images/radar/radar-icon.svg");
 
@@ -100,6 +106,9 @@ interface PrimaryNavRailProps {
   accountSlot?: ReactNode;
   // Present only when release notes exist for this version; unread adds a dot.
   whatsNew?: { unread: boolean; onOpen: () => void };
+  // Present during the Product Hunt launch: the launch card opens from it.
+  productHunt?: { onOpen: () => void; id: string; badge: string };
+  communityUrl?: string;
 }
 
 export function PrimaryNavRail({
@@ -111,9 +120,22 @@ export function PrimaryNavRail({
   onOpenSettings,
   accountSlot,
   whatsNew,
+  productHunt,
+  communityUrl,
 }: PrimaryNavRailProps) {
+  const asideRef = useRef<HTMLElement>(null);
+  const communityRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLElement>(null);
+  const communityFits = useSlimRailRoomFor(
+    asideRef,
+    communityRef,
+    navRef,
+    !pinned && !!communityUrl,
+    [showPinToggle],
+  );
   return (
     <aside
+      ref={asideRef}
       aria-label="Primary navigation"
       className={clsx(
         // Dedicated sidebar token = the DEEPEST layer of the elevation scale, so
@@ -138,6 +160,7 @@ export function PrimaryNavRail({
           in slim mode. The slim short-window case is doubly-rare (slim is
           width-triggered) and yields to keeping fly-outs intact. */}
       <nav
+        ref={navRef}
         className={clsx(
           "flex flex-col gap-0.5 pt-3 px-2",
           pinned && "flex-1 min-h-0 overflow-y-auto",
@@ -154,13 +177,24 @@ export function PrimaryNavRail({
         ))}
       </nav>
 
-      {!pinned && <div className="flex-1" />}
+      {!pinned && <div data-rail-spacer className="flex-1" />}
 
       {/* "Me & my tools" — account + settings, the conventional rail-bottom
           cluster (VS Code / Discord / ArgoCD / Radar Cloud's own UserOrgMenu).
           accountSlot self-nulls without auth, so no-auth OSS shows only Settings. */}
       <nav className="flex flex-col gap-0.5 px-2 pt-1 border-t border-theme-border/50">
         {accountSlot}
+        {productHunt && (
+          <RailActionRow
+            icon={Rocket}
+            label="Product Hunt"
+            pinned={pinned}
+            onClick={productHunt.onOpen}
+            iconClassName="text-emerald-600 dark:text-emerald-400"
+            id={productHunt.id}
+            badge={productHunt.badge}
+          />
+        )}
         {whatsNew && (
           <RailActionRow
             icon={Megaphone}
@@ -169,6 +203,21 @@ export function PrimaryNavRail({
             onClick={whatsNew.onOpen}
             unread={whatsNew.unread}
           />
+        )}
+        {/* Yields first on a short slim rail (useSlimRailRoomFor); ⌘K and
+            Diagnostics still link the community. */}
+        {communityUrl && (
+          <div ref={communityRef} hidden={!pinned && !communityFits}>
+            <RailActionRow
+              icon={SlackIcon}
+              label="Community"
+              ariaLabel="Radar community on Slack"
+              hint={COMMUNITY_HINT}
+              iconHoverClassName={SLACK_COLORS_ON_ROW_HOVER}
+              pinned={pinned}
+              href={communityUrl}
+            />
+          </div>
         )}
         {onOpenSettings && (
           <RailActionRow
@@ -218,6 +267,54 @@ export function PrimaryNavRail({
       )}
     </aside>
   );
+}
+
+// The slim rail can't scroll (see the nav comment), so an optional row renders
+// only while everything else still fits with it; otherwise it would push
+// Settings and the pin toggle off-screen. It measures the rail as rendered,
+// because the rows vary (the account row only with auth, launch-window rows)
+// and so does the room (the Windows desktop title bar sits inside the page).
+// The row's own height is left out of the measurement so hiding it can't flip
+// the answer back. Every length is read from rendered boxes, so the comparison
+// holds under the desktop app's body zoom and any root font size; the row's
+// size comes from two consecutive main-nav rows, which share its h-9 and
+// gap-0.5.
+function useSlimRailRoomFor(
+  asideRef: RefObject<HTMLElement | null>,
+  rowRef: RefObject<HTMLElement | null>,
+  sampleRowsRef: RefObject<HTMLElement | null>,
+  active: boolean,
+  deps: unknown[],
+): boolean {
+  const [fits, setFits] = useState(true);
+  useLayoutEffect(() => {
+    const aside = asideRef.current;
+    if (!active || !aside || typeof ResizeObserver === "undefined") {
+      setFits(true);
+      return;
+    }
+    const measure = () => {
+      const [first, second] = Array.from(sampleRowsRef.current?.children ?? []);
+      if (!first || !second) return;
+      const rowPx =
+        second.getBoundingClientRect().top - first.getBoundingClientRect().top;
+      let used = 0;
+      for (const child of Array.from(aside.children)) {
+        if (child instanceof HTMLElement && "railSpacer" in child.dataset)
+          continue;
+        used += child.getBoundingClientRect().height;
+      }
+      if (rowRef.current && !rowRef.current.hidden) used -= rowPx;
+      setFits(used + rowPx <= aside.getBoundingClientRect().height);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(aside);
+    for (const child of Array.from(aside.children)) observer.observe(child);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, ...deps]);
+  return fits;
 }
 
 function BrandRow({
@@ -343,51 +440,131 @@ function NavRailItem({
 }
 
 // A rail-bottom action row — same icon-column + fly-out treatment as NavRailItem
-// but it's an action (onClick), not navigation, so no active-state/accent bar.
+// but it's an action (onClick) or an external link (href), not navigation, so
+// no active-state/accent bar.
 // Exported so the account control (UserMenu rail variant) can match the look.
 export function RailActionRow({
   icon: Icon,
   label,
+  ariaLabel,
   pinned,
   onClick,
+  href,
   unread = false,
+  iconClassName,
+  iconHoverClassName,
+  hint,
+  id,
+  badge,
 }: {
   icon: ComponentType<{ className?: string }>;
   label: string;
+  ariaLabel?: string;
   pinned: boolean;
-  onClick: () => void;
   unread?: boolean;
-}) {
-  return (
-    <div className={clsx("group/item relative", !pinned && "w-10")}>
-      <button
-        type="button"
-        onClick={onClick}
+  iconClassName?: string;
+  // Added to the default icon classes rather than replacing them.
+  iconHoverClassName?: string;
+  // A line under the label: in the fly-out when slim, a tooltip when pinned.
+  hint?: string;
+  id?: string;
+  // A small tilted tag on the corner, for an item that's only here for now.
+  badge?: string;
+} & (
+  { onClick: () => void; href?: never } | { href: string; onClick?: never }
+)) {
+  const rowClassName = clsx(
+    "relative flex h-9 w-full items-center rounded-md text-sm font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors",
+    !pinned && "max-w-10 overflow-hidden",
+  );
+  const content = (
+    <>
+      <span className="relative flex w-10 shrink-0 items-center justify-center">
+        <Icon
+          className={clsx(
+            "w-[18px] h-[18px]",
+            iconClassName ??
+              clsx(
+                "group-hover/item:text-theme-text-secondary",
+                unread ? "text-accent" : "text-theme-text-tertiary",
+              ),
+            iconHoverClassName,
+          )}
+        />
+        {unread && (
+          <span
+            aria-hidden
+            className="absolute top-1.5 right-2 h-2 w-2 rounded-full bg-accent ring-2 ring-theme-sidebar"
+          />
+        )}
+      </span>
+      <span
         className={clsx(
-          "relative flex h-9 w-full items-center rounded-md text-sm font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors",
-          !pinned && "max-w-10 overflow-hidden",
+          "pr-3 truncate",
+          !pinned && "opacity-0",
+          unread && "text-theme-text-primary",
         )}
       >
-        <span className="relative flex w-10 shrink-0 items-center justify-center">
-          <Icon className={clsx(
-            "w-[18px] h-[18px] group-hover/item:text-theme-text-secondary",
-            unread ? "text-accent" : "text-theme-text-tertiary",
-          )} />
-          {unread && (
-            <span aria-hidden className="absolute top-1.5 right-2 h-2 w-2 rounded-full bg-accent ring-2 ring-theme-sidebar" />
-          )}
+        {label}
+        {badge && <span className="sr-only"> ({badge})</span>}
+        {unread && <span className="sr-only"> (unread)</span>}
+      </span>
+    </>
+  );
+  const row = href ? (
+    <a
+      id={id}
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={ariaLabel}
+      className={rowClassName}
+    >
+      {content}
+    </a>
+  ) : (
+    <button
+      type="button"
+      id={id}
+      onClick={onClick}
+      aria-label={ariaLabel}
+      className={rowClassName}
+    >
+      {content}
+    </button>
+  );
+  return (
+    <div className={clsx("group/item relative", !pinned && "w-10")}>
+      {pinned && hint ? (
+        <Tooltip
+          content={hint}
+          position="right"
+          wrapperClassName="!block w-full"
+        >
+          {row}
+        </Tooltip>
+      ) : (
+        row
+      )}
+      {badge && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute -top-1 -right-1 rotate-12 rounded-sm bg-emerald-500 px-1 text-[8px] font-bold uppercase leading-3 tracking-wide text-white shadow-sm dark:text-emerald-950"
+        >
+          {badge}
         </span>
-        <span className={clsx("pr-3 truncate", !pinned && "opacity-0", unread && "text-theme-text-primary")}>
-          {label}
-          {unread && <span className="sr-only"> (unread)</span>}
-        </span>
-      </button>
+      )}
       {!pinned && (
         <span
           aria-hidden
           className="pointer-events-none absolute left-full top-1/2 z-50 ml-1 hidden -translate-y-1/2 whitespace-nowrap rounded-md border border-theme-border bg-theme-hover px-2.5 py-1 text-[13px] font-medium text-theme-text-primary opacity-0 shadow-lg shadow-black/30 transition-opacity duration-75 group-hover/item:block group-hover/item:opacity-100"
         >
           {label}
+          {hint && (
+            <span className="block w-56 whitespace-normal text-xs font-normal text-theme-text-secondary">
+              {hint}
+            </span>
+          )}
         </span>
       )}
     </div>

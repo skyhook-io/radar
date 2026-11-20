@@ -242,8 +242,12 @@ export function TurnView({
   onViewEvidence,
   sourceRevealRequest,
   assessmentSources,
+  openingQuestion,
 }: {
   turn: Turn;
+  /** The question the run opened with, shown as the engineer's message on
+   *  the opening turn (whose own question is empty by design). */
+  openingQuestion?: string;
   agentLabel?: string;
   onApply?: (fix: string) => void;
   onViewExplanation?: () => void;
@@ -304,6 +308,8 @@ export function TurnView({
               : "Plain-language explanation"}
           <span className="text-theme-text-tertiary">· View in Findings</span>
         </button>
+      ) : openingQuestion ? (
+        <QuestionBubble text={openingQuestion} />
       ) : (
         turn.question &&
         (turn.verify ? (
@@ -317,18 +323,7 @@ export function TurnView({
             </span>
           </div>
         ) : (
-          <div className="flex justify-end">
-            <div className="max-w-[85%]">
-              {turn.actor && (
-                <div className="mb-0.5 text-right text-[10px] text-theme-text-tertiary">
-                  {turn.actor}
-                </div>
-              )}
-              <div className="rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
-                {turn.question}
-              </div>
-            </div>
-          </div>
+          <QuestionBubble text={turn.question} actor={turn.actor} />
         ))
       )}
       <Timeline
@@ -419,6 +414,23 @@ export function TurnView({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function QuestionBubble({ text, actor }: { text: string; actor?: string }) {
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[85%]">
+        {actor && (
+          <div className="mb-0.5 text-right text-[10px] text-theme-text-tertiary">
+            {actor}
+          </div>
+        )}
+        <div className="whitespace-pre-wrap rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
+          {text}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1137,10 +1149,18 @@ function ToolResultDialog({
     };
   }, [open, display, language, theme]);
   return (
-    <DialogPortal ariaLabelledBy={titleId} open={open} onClose={onClose} className="w-[min(90vw,820px)]">
+    <DialogPortal
+      ariaLabelledBy={titleId}
+      open={open}
+      onClose={onClose}
+      className="w-[min(90vw,820px)]"
+    >
       <div className="flex items-center justify-between gap-3 border-b border-theme-border p-3">
         <div className="min-w-0">
-          <div id={titleId} className="truncate font-mono text-sm text-theme-text-primary">
+          <div
+            id={titleId}
+            className="truncate font-mono text-sm text-theme-text-primary"
+          >
             {title}
           </div>
           {truncated && (

@@ -30,6 +30,7 @@ export function StoryExcerpt({
   open,
   canExpand,
   changeCoverage,
+  chartId,
 }: {
   excerpt: Excerpt;
   data: InvestigationEvidenceData;
@@ -37,6 +38,8 @@ export function StoryExcerpt({
   open: boolean;
   canExpand: boolean;
   changeCoverage?: MetricsChangeCoverage;
+  /** Panel id for the card header's aria-controls when the chart folds. */
+  chartId?: string;
 }) {
   const padding = prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2";
   switch (excerpt.kind) {
@@ -129,9 +132,15 @@ export function StoryExcerpt({
       );
     case "chart":
       return data.type === "metrics" ? (
-        <div data-story-metrics className={padding}>
-          <MetricsBody data={data} changeCoverage={changeCoverage} />
-        </div>
+        <Collapse open={open} mountLazily id={chartId}>
+          <div data-story-metrics className={padding}>
+            <MetricsBody
+              data={data}
+              changeCoverage={changeCoverage}
+              size={excerpt.size}
+            />
+          </div>
+        </Collapse>
       ) : null;
   }
 }

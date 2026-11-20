@@ -13,6 +13,7 @@ import {
   type PrometheusMetricCategory,
   type PrometheusTimeRange,
 } from '../../api/client'
+import { parseQuantity } from '@skyhook-io/k8s-ui/utils/format'
 
 // ============================================================================
 // Radar-specific category config (lives here, not in k8s-ui, so consumers
@@ -164,8 +165,8 @@ export function computeRequestLimitLines(
   let reqSum = 0, reqAny = false
   let limSum = 0, limAll = true
   for (const c of runtimeContainers) {
-    const req = readQuantity(c.resources?.requests?.[category], category)
-    const lim = readQuantity(c.resources?.limits?.[category], category)
+    const req = parseQuantity(c.resources?.requests?.[category])
+    const lim = parseQuantity(c.resources?.limits?.[category])
     if (req != null) { reqSum += req; reqAny = true }
     if (lim != null && lim > 0) { limSum += lim } else { limAll = false }
   }
@@ -204,44 +205,6 @@ function collectRuntimeContainers(podSpec: any): any[] {
     if (c?.restartPolicy === 'Always') out.push(c)
   }
   return out
-}
-
-const CPU_SUFFIXES: Record<string, number> = { n: 1e-9, u: 1e-6, m: 1e-3 }
-const MEMORY_SUFFIXES: Record<string, number> = {
-  Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4, Pi: 1024 ** 5, Ei: 1024 ** 6,
-  n: 1e-9, u: 1e-6, m: 1e-3, k: 1e3, K: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18,
-}
-
-// NOT a duplicate of @skyhook-io/k8s-ui/utils/format's parseCPUToNanocores /
-// parseMemoryToBytes — those return 0 on invalid input. We need null so that
-// "abcMi" doesn't silently poison the caller's running sum and produce a
-// missing/zeroed reference line on the chart (real garbage data must be
-// distinguishable from a legit 0).
-function readQuantity(raw: unknown, category: 'cpu' | 'memory'): number | null {
-  if (raw == null) return null
-  const s = String(raw).trim()
-  if (s === '') return null
-  if (category === 'cpu') {
-    if (s.endsWith('m')) return scaleOrNull(s, CPU_SUFFIXES.m)
-    if (s.endsWith('n')) return scaleOrNull(s, CPU_SUFFIXES.n)
-    if (s.endsWith('u')) return scaleOrNull(s, CPU_SUFFIXES.u)
-    const v = parseFloat(s)
-    return isNaN(v) ? null : v
-  }
-  // Memory: try two-character then one-character suffixes (Mi before M).
-  for (const suffix of ['Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei']) {
-    if (s.endsWith(suffix)) return scaleOrNull(s, MEMORY_SUFFIXES[suffix])
-  }
-  for (const suffix of ['n', 'u', 'm', 'k', 'K', 'M', 'G', 'T', 'P', 'E']) {
-    if (s.endsWith(suffix)) return scaleOrNull(s, MEMORY_SUFFIXES[suffix])
-  }
-  const v = parseFloat(s)
-  return isNaN(v) ? null : v
-}
-
-function scaleOrNull(s: string, scale: number): number | null {
-  const v = parseFloat(s)
-  return isNaN(v) ? null : v * scale
 }
 
 function formatRequestLimitLabel(value: number, category: 'cpu' | 'memory'): string {

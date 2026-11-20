@@ -17,6 +17,7 @@ import {
   type GitOpsWriteGuard,
 } from '../../utils/gitops-write-guard'
 import { GitOpsWriteWarning } from './GitOpsWriteWarning'
+import type { GitOpsOwnerRef } from '../../utils/gitops-owner'
 
 /** The GitOps write guard for the object whose Pod template the dialog
  *  writes, evaluated by the host: for {@link SET_IMAGE_WRITES} until the
@@ -25,6 +26,7 @@ import { GitOpsWriteWarning } from './GitOpsWriteWarning'
 export interface SetImageOwnership {
   guard: GitOpsWriteGuard
   onOpenOwner?: () => void
+  onOpenManager?: (owner: GitOpsOwnerRef) => void
   /** The containers the dialog lists and the ones being changed, so the
    *  guard can judge exactly those (null until the containers load). */
   onSelectionChange?: (selection: SetImageSelection | null) => void
@@ -435,6 +437,7 @@ export function SetImageDialog({
                 acknowledged={acknowledged}
                 onAcknowledgedChange={(value) => setAckedKey(value ? guardKey : '')}
                 onOpenOwner={ownership?.onOpenOwner}
+                onOpenManager={ownership?.onOpenManager}
                 disabled={busy}
               />
             )}

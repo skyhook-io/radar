@@ -13,6 +13,7 @@ import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { Facet, type FacetTone } from '../ui/Facet'
 import { SortableTh, TH_CLASS } from '../ui/SortableTh'
+import { TABLE_DENSITY } from '../ui/table-density'
 import { DistributionBar } from '../ui/DistributionBar'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { pluralize } from '../../utils/pluralize'
@@ -46,6 +47,7 @@ import {
 import { ReadyBar } from './ReadyBar'
 import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo, BatchSignalChip } from './AppChips'
 import { AppIdentityTooltip, EnvHint, RolloutSummaryTooltip } from './AppTooltips'
+import { FilterRailPanel } from '../shared/FilterRailPanel'
 
 function ApplicationRuntimeCell({ apps, workloadClass, ready, desired }: { apps: AppRow[]; workloadClass: AppWorkloadClass; ready: number; desired: number }) {
   if (workloadClass !== 'job') {
@@ -122,6 +124,29 @@ function compareEntries(a: AppEntry, b: AppEntry, key: SortKey): number {
   }
 }
 
+// Whatever a host puts here acts by itself. A click would otherwise open the row,
+// and Enter would reach the table's shortcut and open the highlighted one instead.
+// A key the control used is kept from the table too. Anything else still reaches
+// it, so j and k work after clicking something in a row. A row-moving key also
+// takes focus off the control, so the next Enter opens the highlighted row rather
+// than pressing the control on the row it came from.
+const ROW_MOVE_KEYS = new Set(['j', 'k', 'ArrowDown', 'ArrowUp', 'g', 'G'])
+function RowLeading({ children }: { children: ReactNode }) {
+  if (children == null || children === false) return null
+  return (
+    <span
+      className="inline-flex shrink-0 items-center"
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.defaultPrevented) event.stopPropagation()
+        else if (ROW_MOVE_KEYS.has(event.key) && event.target instanceof HTMLElement) event.target.blur()
+      }}
+    >
+      {children}
+    </span>
+  )
+}
+
 function runtimeSortValue(entry: AppEntry): number {
   return entry.workloadClass === 'job' ? (HEALTH_RANK[entry.health] ?? 0) : entry.readyRatio
 }
@@ -147,6 +172,10 @@ export interface ApplicationsViewProps {
   /** First fetch in flight — render the shape-stable skeleton (pulsing tiles,
    *  rail stubs, table rows) instead of collapsing the chassis. */
   loading?: boolean
+  /** Rendered before the app name. On a folded group `entry` is its first member
+   *  and `group` holds them all. Clicks, Enter and any key the control prevents
+   *  stay in the slot. Other keys still reach the table's shortcuts. */
+  renderRowLeading?: (entry: AppEntry, group?: AppEntry[]) => ReactNode
 }
 
 const APPS_FILTER_SCHEMA = defineFilterSchema({
@@ -159,7 +188,7 @@ const APPS_FILTER_SCHEMA = defineFilterSchema({
   system: { param: 'system', type: 'boolean' },
 })
 
-export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading }: ApplicationsViewProps) {
+export function ApplicationsView({ entries: allEntries, variant, onSelect, title = 'Applications', description, emptySlot, headerActions, loading, renderRowLeading }: ApplicationsViewProps) {
   // Facets + search + show-system live in the URL (shareable, bookmarkable) via
   // the shared filter-state contract. Sort stays local: it's a compound
   // {key, dir} view-preference, not a result-narrowing filter, so it isn't
@@ -337,6 +366,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
   // showSystem lives in the Filters rail, so Clear resets it too (and its
   // non-default ON state counts as an active filter that surfaces the button).
   const anyFilterActive = filters.isActive
+  const activeFilterCount = fHealth.size + fClass.size + fType.size + fEnv.size + fSource.size + (systemCount > 0 && showSystem ? 1 : 0)
   const clearAllFilters = () => {
     filters.clearAll()
   }
@@ -355,7 +385,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
           actions={
             <>
               {headerActions}
-              <SummaryTile label={total === 1 ? 'application' : 'applications'} value={total} loading={initialLoading} />
+              <SummaryTile label={total === 1 ? 'application' : 'applications'} phoneLabel={total === 1 ? 'app' : 'apps'} value={total} loading={initialLoading} />
               {healthTile('unhealthy', 'error')}
               {healthTile('degraded', 'warning')}
               {healthTile('healthy', 'success')}
@@ -381,13 +411,12 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
             Arbitrary 900px breakpoint (not `sm`) so the collapse is independent of
             the consuming app's Tailwind breakpoint config (Hub uses defaults). */}
         <aside className="flex w-52 shrink-0 flex-col overflow-hidden border-r border-theme-border bg-theme-surface/90 max-[899px]:max-h-72 max-[899px]:w-full max-[899px]:border-b max-[899px]:border-r-0">
-          <div className="flex items-center justify-between border-b border-theme-border px-3 py-2">
-            <span className="text-sm font-medium text-theme-text-secondary">Filters</span>
-            {anyFilterActive && (
+          <FilterRailPanel
+            activeCount={activeFilterCount}
+            clear={anyFilterActive && (
               <button type="button" onClick={clearAllFilters} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">Clear</button>
             )}
-          </div>
-          <div className="flex-1 overflow-y-auto">
+          >
             {initialLoading ? (
               <BoardRailSkeleton
                 sections={[
@@ -414,12 +443,12 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
             )}
               </>
             )}
-          </div>
+          </FilterRailPanel>
         </aside>
 
         {/* Content: toolbar (search + sort) over the scrollable table. */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="flex shrink-0 items-center gap-3 border-b border-theme-border px-4 py-3">
+          <div className={clsx('flex shrink-0 items-center gap-3 border-b border-theme-border', TABLE_DENSITY.toolbarClass)}>
             <SearchBox
               value={textFilter}
               onChange={(v) => filters.setString('q', v)}
@@ -499,6 +528,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[r.health].bar)} />
                           </Tooltip>
                           <CollapseChevron open={r.expanded} className="h-3.5 w-3.5" />
+                          {renderRowLeading && <RowLeading>{renderRowLeading(r.members[0], r.members)}</RowLeading>}
                           <span className="truncate font-semibold text-theme-text-primary">{r.label}</span>
                           {r.workloadClass !== 'job' && <BatchSignalChip signal={firstBatchSignal(r.members.map((m) => m.row))} />}
                           <Tooltip
@@ -578,6 +608,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <Tooltip content={applicationRuntimeLabel([e.row], e.workloadClass, e.health)} delay={150}>
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[e.health].bar)} />
                           </Tooltip>
+                          {renderRowLeading && <RowLeading>{renderRowLeading(e)}</RowLeading>}
                           <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
                           {e.workloadClass !== 'job' && <BatchSignalChip signal={batchSignalForApp(e.row)} />}
                           <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />

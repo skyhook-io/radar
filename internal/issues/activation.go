@@ -3,7 +3,8 @@ package issues
 // issueToActivation projects an Issue into the top-level CEL bindings
 // declared by internal/filter.envIssue. Time is exposed as a unix-second
 // integer so the agent can compare with `last_seen > 1700000000` or
-// `last_seen > timestamp("2025-01-01T00:00:00Z").getSeconds()` —
+// `last_seen > int(timestamp("2025-01-01T00:00:00Z"))` (getSeconds() would be the
+// seconds field, 0-59, not the epoch) —
 // CEL's int domain is the lowest-friction lingua franca.
 func issueToActivation(i Issue) map[string]any {
 	var lastSeen, firstSeen, resourceCreatedAt int64

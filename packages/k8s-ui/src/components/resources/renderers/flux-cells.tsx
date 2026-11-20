@@ -2,6 +2,8 @@
 
 import { clsx } from 'clsx'
 import { Tooltip } from '../../ui/Tooltip'
+import { TruncatedText } from '../../ui/TruncatedText'
+import { getFluxDeployedRelease, getFluxLastApply } from '../../../utils/flux-history'
 import {
   getGitRepositoryUrl,
   getGitRepositoryRef,
@@ -32,12 +34,7 @@ import {
 export function GitRepositoryCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'url': {
-      const url = getGitRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getGitRepositoryUrl(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'ref': {
       const ref = getGitRepositoryRef(resource)
@@ -65,12 +62,7 @@ export function GitRepositoryCell({ resource, column }: { resource: any; column:
 export function OCIRepositoryCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'url': {
-      const url = getOCIRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getOCIRepositoryUrl(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'ref': {
       const ref = getOCIRepositoryRef(resource)
@@ -98,12 +90,7 @@ export function OCIRepositoryCell({ resource, column }: { resource: any; column:
 export function HelmRepositoryCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'url': {
-      const url = getHelmRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={getHelmRepositoryUrl(resource)} className="text-sm text-theme-text-secondary" />
     }
     case 'type': {
       const type = getHelmRepositoryType(resource)
@@ -167,13 +154,15 @@ export function KustomizationCell({ resource, column }: { resource: any; column:
       )
     }
     case 'lastUpdated': {
-      // Kustomization uses history[0].lastReconciled or conditions[Ready].lastTransitionTime
-      const lastReconcile = resource.status?.history?.[0]?.lastReconciled ||
+      const lastApply = getFluxLastApply(resource)
+      const lastUpdated = lastApply?.time ||
         resource.status?.conditions?.find((c: any) => c.type === 'Ready')?.lastTransitionTime
       return (
-        <span className="text-sm text-theme-text-secondary">
-          {lastReconcile ? formatAge(lastReconcile) : '-'}
-        </span>
+        <Tooltip content={!lastApply ? 'Last Ready status change, not an apply time' : lastApply.succeeded ? 'Last successful apply recorded by Flux' : 'Last apply attempt recorded by Flux, which did not succeed'}>
+          <span className="text-sm text-theme-text-secondary">
+            {lastUpdated ? formatAge(lastUpdated) : '-'}
+          </span>
+        </Tooltip>
       )
     }
     default:
@@ -193,7 +182,10 @@ export function FluxHelmReleaseCell({ resource, column }: { resource: any; colum
     }
     case 'version': {
       const version = getFluxHelmReleaseVersion(resource)
-      return <span className="text-sm text-theme-text-secondary">{version}</span>
+      const requested = resource.spec?.chart?.spec?.version
+      const source = resource.spec?.chartRef
+      const detail = requested ? `Requested constraint: ${requested}` : source ? `Source: ${source.kind}/${source.name}` : 'Currently deployed chart version'
+      return <Tooltip content={detail}><span className="text-sm text-theme-text-secondary">{version}</span></Tooltip>
     }
     case 'status': {
       const status = getFluxHelmReleaseStatus(resource)
@@ -208,11 +200,7 @@ export function FluxHelmReleaseCell({ resource, column }: { resource: any; colum
       if (!message) {
         return <span className="text-sm text-theme-text-tertiary">-</span>
       }
-      return (
-        <Tooltip content={message}>
-          <span className="text-sm text-theme-text-secondary truncate block">{message}</span>
-        </Tooltip>
-      )
+      return <TruncatedText text={message} className="text-sm text-theme-text-secondary" />
     }
     case 'revision': {
       const revision = getFluxHelmReleaseRevision(resource)
@@ -223,13 +211,15 @@ export function FluxHelmReleaseCell({ resource, column }: { resource: any; colum
       )
     }
     case 'lastUpdated': {
-      // HelmRelease uses history[0].lastDeployed or conditions[Ready].lastTransitionTime
-      const lastReconcile = resource.status?.history?.[0]?.lastDeployed ||
+      const lastDeployed = getFluxDeployedRelease(resource)?.lastDeployed
+      const lastUpdated = lastDeployed ||
         resource.status?.conditions?.find((c: any) => c.type === 'Ready')?.lastTransitionTime
       return (
-        <span className="text-sm text-theme-text-secondary">
-          {lastReconcile ? formatAge(lastReconcile) : '-'}
-        </span>
+        <Tooltip content={lastDeployed ? 'Deployment time of the currently deployed release' : 'Last Ready status change, not a deployment time'}>
+          <span className="text-sm text-theme-text-secondary">
+            {lastUpdated ? formatAge(lastUpdated) : '-'}
+          </span>
+        </Tooltip>
       )
     }
     default:

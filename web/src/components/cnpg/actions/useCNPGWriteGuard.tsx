@@ -51,6 +51,7 @@ export function useCNPGWriteGuard({
         acknowledged={acked}
         onAcknowledgedChange={setAcked}
         onOpenOwner={route ? () => navigate(route) : undefined}
+        onOpenManager={(owner) => navigate(gitOpsRouteForOwner(owner))}
       />
     ),
     satisfied: canConfirmGitOpsWrite(guard, acked),

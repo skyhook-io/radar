@@ -31,6 +31,7 @@ func fromObject(obj runtime.Object, kind string) (candidate, bool) {
 		Annotations: m.GetAnnotations(),
 	}
 	c.Images = imagesForTyped(obj)
+	c.IPs = ipsForTyped(obj)
 	c.Content = contentForTyped(obj, kind)
 	return c, true
 }
@@ -82,7 +83,18 @@ func contentForTyped(obj runtime.Object, kind string) []ContentField {
 	if err != nil {
 		return nil
 	}
+	if _, ok := obj.(*corev1.Event); ok {
+		return eventContent(m)
+	}
 	return contentFromMap(m, kind)
+}
+
+func eventContent(obj map[string]any) []ContentField {
+	var out []ContentField
+	for _, field := range []string{"reason", "message", "type", "involvedObject", "related"} {
+		walkContent(field, obj[field], &out)
+	}
+	return out
 }
 
 func contentFromUnstructured(u *unstructured.Unstructured, kind string) []ContentField {

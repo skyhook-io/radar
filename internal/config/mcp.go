@@ -15,17 +15,21 @@ type MCPMode struct {
 
 // MCPFlags shares flag names and mode resolution between CLI and Desktop.
 type MCPFlags struct {
-	fs       *flag.FlagSet
-	file     Config
-	noMCP    *bool
-	readOnly *bool
+	fs        *flag.FlagSet
+	file      Config
+	noMCP     *bool
+	readOnly  *bool
+	execTools *bool
+	httpTools *bool
 }
 
 // RegisterMCPFlags registers the shared CLI and Desktop MCP mode switches.
 func RegisterMCPFlags(fs *flag.FlagSet, file Config) MCPFlags {
 	return MCPFlags{
 		fs: fs, file: file,
-		noMCP: fs.Bool("no-mcp", !file.MCPEnabledOr(true), "Disable all MCP endpoints"),
+		execTools: fs.Bool("mcp-exec-tools", file.MCPExecTools != nil && *file.MCPExecTools, "Enable exec_pod: run container commands with Kubernetes permission checks (off by default; ignored with --disable-exec or --mcp-read-only)"),
+		httpTools: fs.Bool("mcp-http-tools", file.MCPHTTPTools != nil && *file.MCPHTTPTools, "Enable curl_service for in-cluster Service GETs (off by default; requires services/proxy; unavailable locally or in MCP read-only mode)"),
+		noMCP:     fs.Bool("no-mcp", !file.MCPEnabledOr(true), "Disable all MCP endpoints"),
 		readOnly: fs.Bool("mcp-read-only", file.MCPReadOnly != nil && *file.MCPReadOnly,
 			"Expose only read-only MCP tools (env: RADAR_MCP_READ_ONLY)"),
 	}
@@ -95,3 +99,9 @@ func resolveMCP(file Config, lookup func(string) (string, bool), noMCP, readOnly
 	}
 	return MCPMode{Enabled: !disabled, ReadOnly: ro}, nil
 }
+
+// ExecToolsEnabled reports the operator opt-in; server policy applies the final gate.
+func (f MCPFlags) ExecToolsEnabled() bool { return *f.execTools }
+
+// HTTPToolsEnabled reports the HTTP opt-in; in-cluster and MCP mode gates apply at startup.
+func (f MCPFlags) HTTPToolsEnabled() bool { return *f.httpTools }

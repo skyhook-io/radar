@@ -17,6 +17,7 @@ const overridesQuery = vi.hoisted(() => ({
 
 vi.mock('@skyhook-io/k8s-ui', () => ({
   PaneLoader: ({ label }: { label: string }) => <div>{label}</div>,
+  usePhoneLayout: () => false,
 }))
 vi.mock('../../api/client', () => ({
   useCanHelmAct: () => ({ allowed: true }),

@@ -590,12 +590,34 @@ describe('manager answer composition', () => {
     expect(g.summary).toContain('Helm release db/chart')
   })
 
+  const agree = { state: 'agree' as const, lead: a, direct: { object: subject, recorders: [a], claims: [{ manager: a, source: 'argo-tracking-id' as const, check: 'recorded' as const }] } }
+
   it('a refused live answer drops the cached answer and the owner hint', () => {
-    const agree = { state: 'agree' as const, lead: a, direct: { object: subject, recorders: [a], claims: [{ manager: a, source: 'argo-tracking-id' as const, check: 'recorded' as const }] } }
     const g = run(agree, [hibernate], { evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present', ignored: 'effective' })], { managerUnavailable: 'objects_changed' }) })
     expect(g.level).toBe('may-revert')
     expect(g.owner).toBeNull()
-    expect(g.summary).toContain('objects_changed')
+    expect(g.summary).toContain("Radar couldn't check what manages this resource right now (the read failed)")
+    expect(g.summary).not.toContain('objects_changed')
+  })
+
+  it.each([
+    ['kind_sync_pending', '(still loading)', true],
+    ['read_error', '(the read failed)', true],
+    ['user_forbidden', '(you may not list it)', false],
+    // Spellings an older Radar sends read as the code they became.
+    ['kind_sync_failed', '(loading is overdue)', true],
+    ['rbac_denied', '(you may not list it)', false],
+  ])('a refused live answer explains %s in words', (code, words, reopen) => {
+    const g = run(agree, [hibernate], { evidence: evidence(selfHeal, [], { managerUnavailable: code }) })
+    expect(g.summary).toContain(words)
+    expect(g.summary).not.toContain(code)
+    expect(g.summary.includes('Close and reopen this dialog to check again.')).toBe(reopen)
+  })
+
+  it("a failed request keeps the request's own message", () => {
+    const g = run(agree, [hibernate], { evidence: undefined, evidenceError: 'Request timed out' })
+    expect(g.summary).toContain('(Request timed out)')
+    expect(g.summary).not.toContain('reopen')
   })
 
   it("a failed live check doesn't keep a cached via answer's reassurance", () => {

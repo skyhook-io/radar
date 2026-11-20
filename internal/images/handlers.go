@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	corev1 "k8s.io/api/core/v1"
@@ -61,10 +64,15 @@ func (h *Handlers) handleMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.inspector.GetMetadata(r.Context(), req)
+	result, req, err := withTagFallback(req, func(req InspectRequest) (*ImageMetadata, error) {
+		return h.inspector.GetMetadata(r.Context(), req)
+	})
 	if err != nil {
 		if isRefused(err) {
 			writeBlockedError(w, err)
+			return
+		}
+		if writeFetchError(w, req, err) {
 			return
 		}
 		errLower := strings.ToLower(err.Error())
@@ -97,11 +105,16 @@ func (h *Handlers) handleInspect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.inspector.Inspect(r.Context(), req)
+	result, req, err := withTagFallback(req, func(req InspectRequest) (*ImageFilesystem, error) {
+		return h.inspector.Inspect(r.Context(), req)
+	})
 	if err != nil {
 		// Check for common errors
 		if isRefused(err) {
 			writeBlockedError(w, err)
+			return
+		}
+		if writeFetchError(w, req, err) {
 			return
 		}
 		errLower := strings.ToLower(err.Error())
@@ -140,10 +153,21 @@ func (h *Handlers) handleGetFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	content, filename, err := h.inspector.GetFileContent(r.Context(), req, filePath)
+	type file struct {
+		content  []byte
+		filename string
+	}
+	got, req, err := withTagFallback(req, func(req InspectRequest) (file, error) {
+		content, filename, err := h.inspector.GetFileContent(r.Context(), req, filePath)
+		return file{content, filename}, err
+	})
+	content, filename := got.content, got.filename
 	if err != nil {
 		if isRefused(err) {
 			writeBlockedError(w, err)
+			return
+		}
+		if writeFetchError(w, req, err) {
 			return
 		}
 		errLower := strings.ToLower(err.Error())
@@ -181,8 +205,14 @@ func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, ima
 		if pullSecrets := r.URL.Query().Get("pullSecrets"); pullSecrets != "" {
 			req.PullSecretNames = strings.Split(pullSecrets, ",")
 		}
-		if req.PodName != "" && req.Namespace != "" && len(req.PullSecretNames) == 0 {
-			req.PullSecretNames = GetPullSecretsFromPod(req.Namespace, req.PodName)
+		if pod := cachedPod(req.Namespace, req.PodName); pod != nil {
+			if len(req.PullSecretNames) == 0 {
+				req.PullSecretNames = podPullSecrets(pod)
+			}
+			if c, ok := findContainerImage(pod, image); ok {
+				req.nodeOnly = c.nodeOnly
+				req = pinToPulledDigest(req, c.pinned)
+			}
 		}
 		return req, true
 	}
@@ -232,33 +262,103 @@ func (h *Handlers) inspectionRequest(w http.ResponseWriter, r *http.Request, ima
 		}
 		return req, false
 	}
-	if !podUsesImage(pod, image) {
+	c, ok := findContainerImage(pod, image)
+	if !ok {
 		writeError(w, http.StatusForbidden, "image is not used by pod "+req.Namespace+"/"+req.PodName)
 		return req, false
 	}
-	// Exec holders may also use Radar's own registry credentials, but only for
-	// the digest the kubelet already pulled for this container: a tag can move,
-	// and a Pod that never pulled its image proves nothing.
-	useAmbient := false
-	if digestRef := pulledDigest(pod, image); digestRef != "" && h.authorizeExec != nil {
-		if allowed, authoritative := h.authorizeExec(r, req.Namespace); allowed && authoritative {
-			req.Image, useAmbient = digestRef, true
-		}
-	}
+	req.nodeOnly = c.nodeOnly
 	req.guarded = true
-	req.keychain = getPodKeychain(req.Namespace, pod, useAmbient, func(secretName string) bool {
+	canUseSecret := func(secretName string) bool {
 		if h.authorizeSecret == nil {
 			return false
 		}
 		allowed, authoritative := h.authorizeSecret(r, req.Namespace, secretName)
 		return allowed && authoritative
-	})
+	}
+	req.keychain = getPodKeychain(req.Namespace, pod, false, canUseSecret)
+	// Exec holders may also use Radar's own registry credentials, but only for
+	// the digest the kubelet already pulled for this container: a tag can move,
+	// and a Pod that never pulled its image proves nothing. The tag fallback
+	// keeps the credentials every other caller gets.
+	if c.pinned != "" && h.authorizeExec != nil {
+		if allowed, authoritative := h.authorizeExec(r, req.Namespace); allowed && authoritative {
+			req = pinToPulledDigest(req, c.pinned)
+			req.keychain = getPodKeychain(req.Namespace, pod, true, canUseSecret)
+		}
+	}
 	return req, true
 }
 
-// pulledDigest returns the repo@sha256 reference the kubelet recorded for a
-// container running image, or "" when no container has pulled it.
-func pulledDigest(pod *corev1.Pod, image string) string {
+// pinToPulledDigest points req at the digest the kubelet pulled, keeping the
+// tag request as its fallback.
+func pinToPulledDigest(req InspectRequest, pinned string) InspectRequest {
+	if pinned == "" || pinned == req.Image {
+		return req
+	}
+	tag := req
+	req.Image = pinned
+	req.tagFallback = &tag
+	return req
+}
+
+// withTagFallback runs fetch on req and, when the registry no longer has the
+// digest req was pinned to, on the tag the caller named. A tag that moved can
+// lose its old manifest to the registry's retention policy while the tag
+// itself still resolves; the tag's current image beats an "Image not found"
+// for a tag that exists. It returns the request that produced the result.
+func withTagFallback[T any](req InspectRequest, fetch func(InspectRequest) (T, error)) (T, InspectRequest, error) {
+	result, err := fetch(req)
+	var fetchErr *registryFetchError
+	if err == nil || req.tagFallback == nil || !errors.As(err, &fetchErr) ||
+		!(isManifestUnknown(fetchErr.err) || isManifestUnknown(fetchErr.anonymous)) {
+		return result, req, err
+	}
+	log.Printf("[images] Pulled digest %s is no longer in its registry; inspecting %s instead", k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(req.tagFallback.Image))
+	fallback := *req.tagFallback
+	fallbackResult, fallbackErr := fetch(fallback)
+	var tagFetchErr *registryFetchError
+	if fallbackErr == nil || isManifestUnknown(fetchErr.err) || !errors.As(fallbackErr, &tagFetchErr) || isRefused(fallbackErr) {
+		return fallbackResult, fallback, fallbackErr
+	}
+	// Neither manifest could be read, and only the anonymous read said the
+	// digest is missing. A registry that hides private images answers it that
+	// way too, so the credentialed answer for the digest is the one to explain.
+	log.Printf("[images] Tag %s failed too: %v", k8s.SanitizeForLog(fallback.Image), k8s.SanitizeForLog(fallbackErr.Error()))
+	return result, req, err
+}
+
+// isManifestUnknown reports a registry that answered a manifest request with
+// "no such manifest".
+func isManifestUnknown(err error) bool {
+	var terr *transport.Error
+	if !errors.As(err, &terr) {
+		return false
+	}
+	if terr.StatusCode == http.StatusNotFound {
+		return true
+	}
+	for _, diag := range terr.Errors {
+		if diag.Code == transport.ManifestUnknownErrorCode {
+			return true
+		}
+	}
+	return false
+}
+
+// containerImage is what one of a Pod's containers runs.
+type containerImage struct {
+	// pinned is the reference the kubelet recorded as pulled for this image,
+	// or "" when there is none Radar can trust to name it.
+	pinned string
+	// nodeOnly is set when the node holds the image without having pulled it
+	// from a registry, as after kind load or ctr images import.
+	nodeOnly bool
+}
+
+// findContainerImage finds the containers running image, named by their spec
+// image or the reference the kubelet recorded.
+func findContainerImage(pod *corev1.Pod, image string) (containerImage, bool) {
 	specImages := map[string]string{}
 	for _, containers := range [][]corev1.Container{pod.Spec.InitContainers, pod.Spec.Containers} {
 		for _, container := range containers {
@@ -268,45 +368,133 @@ func pulledDigest(pod *corev1.Pod, image string) string {
 	for _, container := range pod.Spec.EphemeralContainers {
 		specImages[container.Name] = container.Image
 	}
+	var matches []containerImage
 	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses, pod.Status.EphemeralContainerStatuses} {
 		for _, status := range statuses {
+			spec, ok := specImages[status.Name]
+			if !ok || status.ImageID == "" {
+				continue
+			}
+			delete(specImages, status.Name)
 			imageID := status.ImageID
 			if _, ref, ok := strings.Cut(imageID, "://"); ok {
 				imageID = ref
 			}
-			if strings.Contains(imageID, "@sha256:") && (specImages[status.Name] == image || imageID == image) {
-				return imageID
+			recorded := strings.Contains(imageID, "@sha256:")
+			if spec != image && !(recorded && imageID == image) {
+				continue
 			}
+			match := containerImage{nodeOnly: strings.HasPrefix(imageID, "sha256:") && nodeRecordsPulledDigests(pod.Spec.NodeName)}
+			if recorded && sameRepository(spec, imageID) {
+				match.pinned = imageID
+			}
+			matches = append(matches, match)
 		}
 	}
-	return ""
+	if len(matches) > 0 {
+		// Containers that pulled the same tag at different times can hold
+		// different digests, and the request doesn't say which container it
+		// means.
+		for _, m := range matches[1:] {
+			if m.pinned != matches[0].pinned {
+				matches[0].pinned = ""
+			}
+			matches[0].nodeOnly = matches[0].nodeOnly && m.nodeOnly
+		}
+		return matches[0], true
+	}
+	// Containers that haven't pulled their image yet say nothing about it.
+	for _, spec := range specImages {
+		if spec == image {
+			return containerImage{}, true
+		}
+	}
+	return containerImage{}, false
 }
 
-func podUsesImage(pod *corev1.Pod, image string) bool {
-	for _, containers := range [][]corev1.Container{pod.Spec.InitContainers, pod.Spec.Containers} {
-		for _, container := range containers {
-			if container.Image == image {
-				return true
-			}
-		}
+// sameRepository reports whether the kubelet's recorded reference is in the
+// repository the Pod spec names. A runtime holding one image under several
+// names reports the first, which can be another registry's, and its digest
+// need not exist in the spec's repository.
+func sameRepository(spec, recorded string) bool {
+	specRef, err := name.ParseReference(spec)
+	if err != nil {
+		return false
 	}
-	for _, container := range pod.Spec.EphemeralContainers {
-		if container.Image == image {
-			return true
-		}
+	recordedRef, err := name.ParseReference(recorded)
+	if err != nil {
+		return false
 	}
-	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses, pod.Status.EphemeralContainerStatuses} {
-		for _, status := range statuses {
-			imageID := status.ImageID
-			if _, ref, ok := strings.Cut(imageID, "://"); ok {
-				imageID = ref
-			}
-			if strings.Contains(imageID, "@sha256:") && imageID == image {
-				return true
-			}
-		}
+	return specRef.Context().Name() == recordedRef.Context().Name()
+}
+
+// nodeRecordsPulledDigests reports a node whose runtime always records a
+// repository digest for an image it pulls, so an image without one was put
+// on the node some other way. CRI-O reports a bare image ID even for pulled
+// images, so it doesn't qualify.
+func nodeRecordsPulledDigests(nodeName string) bool {
+	cache := k8s.GetResourceCache()
+	if cache == nil || nodeName == "" {
+		return false
+	}
+	nodes := cache.Nodes()
+	if nodes == nil {
+		return false
+	}
+	node, err := nodes.Get(nodeName)
+	if err != nil {
+		return false
+	}
+	runtime := node.Status.NodeInfo.ContainerRuntimeVersion
+	return strings.HasPrefix(runtime, "containerd://") || strings.HasPrefix(runtime, "docker://")
+}
+
+// writeFetchError answers a failure to download the image that Radar can
+// explain, and reports whether it did.
+func writeFetchError(w http.ResponseWriter, req InspectRequest, err error) bool {
+	if isRefused(err) {
+		return false
+	}
+	registry := registryHost(req.Image)
+	if isConnectFailure(err) {
+		writeErrorFields(w, http.StatusBadGateway, "Radar couldn't connect while fetching this image from "+registry+".", map[string]string{
+			"reason":   "registry_unreachable",
+			"registry": registry,
+		})
+		return true
+	}
+	var fetchErr *registryFetchError
+	if req.nodeOnly && errors.As(err, &fetchErr) {
+		writeErrorFields(w, http.StatusNotFound, "The node didn't pull this image from a registry, and Radar couldn't get it from "+registry+".", map[string]string{
+			"reason":   "node_only",
+			"registry": registry,
+		})
+		return true
 	}
 	return false
+}
+
+// isConnectFailure reports a connection that was never established: a host
+// name that doesn't resolve, or a dial that was refused or timed out.
+func isConnectFailure(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
+}
+
+// registryHost names the image's registry as people write it.
+func registryHost(image string) string {
+	ref, err := name.ParseReference(image)
+	if err != nil {
+		return image
+	}
+	if host := ref.Context().RegistryStr(); host != name.DefaultRegistry {
+		return host
+	}
+	return "docker.io"
 }
 
 func writeJSON(w http.ResponseWriter, data any) {
@@ -317,14 +505,9 @@ func writeJSON(w http.ResponseWriter, data any) {
 }
 
 func writeAuthError(w http.ResponseWriter, image string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusUnauthorized)
-	if err := json.NewEncoder(w).Encode(map[string]string{
-		"error":        "Authentication required for this image",
+	writeErrorFields(w, http.StatusUnauthorized, "Authentication required for this image", map[string]string{
 		"registryType": string(DetectRegistryType(image)),
-	}); err != nil {
-		log.Printf("[images] Failed to encode auth error response: %v", err)
-	}
+	})
 }
 
 func writeBlockedError(w http.ResponseWriter, err error) {
@@ -335,10 +518,24 @@ func writeBlockedError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusForbidden, "Radar doesn't connect to this registry address (loopback, link-local, or an internal IP the registry pointed it to), so it can't open this image.")
 }
 
+// writeError answers {"error": message}.
 func writeError(w http.ResponseWriter, status int, message string) {
+	writeErrorFields(w, status, message, nil)
+}
+
+// writeErrorFields answers {"error": message} plus fields the UI reads to
+// explain the failure, such as "reason". Every error response in this package
+// goes through it.
+func writeErrorFields(w http.ResponseWriter, status int, message string, fields map[string]string) {
+	body := map[string]string{"error": message}
+	for k, v := range fields {
+		if k != "error" {
+			body[k] = v
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+	if err := json.NewEncoder(w).Encode(body); err != nil {
 		log.Printf("[images] Failed to encode error response: %v", err)
 	}
 }

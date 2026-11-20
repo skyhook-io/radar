@@ -46,7 +46,7 @@ it('names an unresolved candidate without linking it', async () => {
   expect(items).toHaveLength(2)
   const a0 = items.find(i => i.textContent!.startsWith('Application a'))!
   expect(a0.disabled).toBe(true)
-  expect(a0.textContent).toContain("its label doesn't name its namespace")
+  expect(a0.textContent).toContain('Radar found no Application of this name listing it; it may be managed from another cluster')
   await act(async () => root.unmount())
   element.remove()
 })
@@ -74,4 +74,30 @@ it('links a manager one claim found though another left it unresolved', () => {
     { manager: { ...a, namespace: '' }, source: 'argo-instance-label', check: 'unresolved' },
   ] } }
   expect(renderToStaticMarkup(<ManagedByChip manager={both} onOpen={() => {}} />)).toContain('<button')
+})
+
+// A label naming an Application of a name more than one has, without its
+// namespace, isn't unresolved unless its check says so: the menu says it
+// doesn't pick one, not that none exists.
+const teamA = { ...a, namespace: 'team-a', name: 'web' }
+const teamB = { ...a, namespace: 'team-b', name: 'web' }
+const label = { ...a, namespace: '', name: 'web' }
+it.each<[string, ManagerAnswer]>([
+  ['shared', { state: 'shared', direct: { object, recorders: [teamA, teamB], claims: [{ manager: label, source: 'argo-instance-label', check: 'recorded' }] } }],
+  ['disagree', { state: 'disagree', direct: { object, recorders: [teamA], claims: [
+    { manager: teamB, source: 'argo-tracking-id', check: 'omitted' },
+    { manager: label, source: 'argo-instance-label', check: 'recorded' },
+  ] } }],
+  ['an unfamiliar check', { state: 'shared', direct: { object, recorders: [teamA, teamB], claims: [{ manager: label, source: 'argo-instance-label', check: 'installation-mismatch' as never }] } }],
+])('a label naming no single Application of its name (%s) is not called unresolved', async (_, shared) => {
+  const element = document.createElement('div')
+  document.body.append(element)
+  const root = createRoot(element)
+  await act(async () => root.render(<ManagedByChip manager={shared} onOpen={() => {}} />))
+  await act(async () => { element.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]')!.click() })
+  const text = element.textContent!
+  expect(text).toContain("its label doesn't say which Application of this name")
+  expect(text).not.toContain('Radar found no Application')
+  await act(async () => root.unmount())
+  element.remove()
 })

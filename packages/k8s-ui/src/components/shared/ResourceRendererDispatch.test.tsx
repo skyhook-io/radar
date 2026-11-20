@@ -1,6 +1,8 @@
+import { HEALTH_BADGE_COLORS } from '../../utils/badge-colors'
+import { getGenericResourceStatus } from '../resources/generic-status'
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from './ResourceRendererDispatch'
+import { ResourceRendererDispatch, diagnoseHealthHint, getResourceStatus, type RendererOverrides } from './ResourceRendererDispatch'
 import { getCellFilterValue } from '../resources/resource-utils'
 import type { ResourceRef } from '../../types'
 
@@ -34,6 +36,55 @@ describe('ResourceRendererDispatch', () => {
 
     expect(html).toContain('HorizontalPodAutoscaler,ScaledObject')
     expect(html).not.toContain('VerticalPodAutoscaler')
+  })
+
+  describe('ValidatingAdmissionPolicy dispatch', () => {
+    it('uses dedicated renderers only for the exact native API group', () => {
+      const nativePolicy = renderKind('validatingadmissionpolicies', {
+        apiVersion: 'admissionregistration.k8s.io/v1',
+        kind: 'ValidatingAdmissionPolicy',
+        metadata: { name: 'native', generation: 1 },
+        spec: { validations: [{ expression: 'true', message: 'native validation' }] },
+      })
+      expect(nativePolicy).toContain('Failure Policy')
+      expect(nativePolicy).toContain('native validation')
+
+      const nativeBinding = renderKind('validatingadmissionpolicybindings', {
+        apiVersion: 'admissionregistration.k8s.io/v1',
+        kind: 'ValidatingAdmissionPolicyBinding',
+        metadata: { name: 'native-binding' },
+        spec: { policyName: 'native', validationActions: ['Warn'] },
+      })
+      expect(nativeBinding).toContain('Validation Actions')
+      expect(nativeBinding).toContain('effective scope')
+
+      for (const kind of ['validatingadmissionpolicies', 'validatingadmissionpolicybindings']) {
+        const foreign = renderKind(kind, {
+          apiVersion: 'policies.example.io/v1',
+          kind: 'ForeignPolicy',
+          metadata: { name: 'foreign' },
+          spec: { collisionProbe: COLLISION_PROBE },
+        })
+        expect(foreign).toContain(COLLISION_PROBE)
+        expect(foreign).not.toContain('Failure Policy')
+        expect(foreign).not.toContain('Validation Actions')
+      }
+    })
+  })
+
+  describe('Flux Operator dispatch', () => {
+    it('uses the Flux Operator drawers only for fluxcd.controlplane.io', () => {
+      const own = renderKind('fluxreports', { apiVersion: 'fluxcd.controlplane.io/v1', kind: 'FluxReport', metadata: { name: 'flux', namespace: 'flux-system' }, spec: { reconcilers: [] }, status: {} })
+      expect(own).toContain('Reconcilers')
+      for (const kind of ['resourcesets', 'fluxinstances', 'fluxreports', 'resourcesetinputproviders']) {
+        const data = { apiVersion: 'example.com/v1', kind: 'Foreign', metadata: { name: 'foreign' }, spec: { collisionProbe: COLLISION_PROBE } }
+        const foreign = renderKind(kind, data)
+        expect(foreign).toContain(COLLISION_PROBE)
+        expect(foreign).not.toContain('Reconcilers')
+        expect(foreign).not.toContain('Distribution')
+        expect(getResourceStatus(kind, data)).toBeNull()
+      }
+    })
   })
 
   it('does not block manual replica scaling for VPA-only relationships', () => {
@@ -1027,11 +1078,11 @@ describe('Kueue Workload detail dispatch', () => {
 describe('Kueue queue detail dispatch', () => {
   it.each(['localqueues', 'clusterqueues'])('curates supported %s and preserves foreign and future versions', (kind) => {
     for (const version of ['v1beta1', 'v1beta2']) {
-      expect(renderKind(kind, { apiVersion: `kueue.x-k8s.io/${version}`, spec: {} })).toContain('Queue Status')
+      expect(renderKind(kind, { apiVersion: `kueue.x-k8s.io/${version}`, spec: {} })).toContain('Reported by controller')
     }
     for (const apiVersion of ['example.com/v1', 'fake.kueue.x-k8s.io/v1', 'kueue.x-k8s.io/v99']) {
       const html = renderKind(kind, { apiVersion, spec: { foreignField: 'preserved-value' } })
-      expect(html).not.toContain('Queue Status')
+      expect(html).not.toContain('Reported by controller')
       expect(html).toContain('preserved-value')
     }
   })
@@ -1136,3 +1187,162 @@ describe('Flux kind collisions', () => {
     }
   })
 })
+
+describe('Strimzi KafkaConnector exact group', () => {
+  const data = {apiVersion: 'kafka.strimzi.io/v1', kind: 'KafkaConnector', metadata: {name:'connector',generation:1}, spec: {class:'Example'}, status:{observedGeneration:1,conditions:[{type:'Ready',status:'True'}],connectorStatus:{connector:{state:'RUNNING'},tasks:[{id:0,state:'FAILED'}]}}}
+  it('shows failed tasks despite Ready=True', () => {
+    expect(getResourceStatus('kafkaconnectors', data)?.text).toBe('Tasks failed')
+    expect(renderKind('kafkaconnectors', data)).toContain('Reported Runtime')
+  })
+  it('leaves unrelated and lookalike groups generic', () => {
+    for (const apiVersion of ['other.io/v1', 'fake.kafka.strimzi.io/v1']) {
+      const other = {...data,apiVersion}
+      expect(getResourceStatus('kafkaconnectors',other)?.text).not.toBe('Tasks failed')
+      expect(renderKind('kafkaconnectors',other)).not.toContain('Reported Runtime')
+    }
+  })
+})
+
+describe('Strimzi Kafka and KafkaNodePool exact group', () => {
+  const kafka = {apiVersion: 'kafka.strimzi.io/v1', kind: 'Kafka', metadata: {name:'main',generation:1}, spec: {kafka: {version:'4.0.0'}}, status:{observedGeneration:1,conditions:[{type:'NotReady',status:'True'}]}}
+  const pool = {apiVersion: 'kafka.strimzi.io/v1', kind: 'KafkaNodePool', metadata: {name:'brokers',generation:1}, spec: {replicas:3}, status:{observedGeneration:1,conditions:[{type:'Warning',status:'True',reason:'KafkaStorage'}]}}
+  it('renders curated drawers and Strimzi status', () => {
+    expect(getResourceStatus('kafkas', kafka)?.text).toBe('Not ready')
+    expect(renderKind('kafkas', kafka)).toContain('Kafka Cluster')
+    expect(getResourceStatus('kafkanodepools', pool)?.text).toBe('Warnings')
+    expect(renderKind('kafkanodepools', pool)).toContain('Node IDs')
+  })
+  it('leaves unrelated and lookalike groups generic', () => {
+    for (const apiVersion of ['other.io/v1', 'fake.kafka.strimzi.io/v1']) {
+      for (const [kind, data, marker, curated] of [['kafkas', kafka, 'Kafka Cluster', 'Not ready'], ['kafkanodepools', pool, 'Node IDs', 'Warnings']] as const) {
+        const other = {...data, apiVersion}
+        expect(getResourceStatus(kind, data)?.text).toBe(curated)
+        expect(getResourceStatus(kind, other)?.text).not.toBe(curated)
+        expect(renderKind(kind, other)).not.toContain(marker)
+      }
+    }
+  })
+})
+
+describe('CSI VolumeSnapshot exact group', () => {
+  const snapshot = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshot', metadata: {name: 'data-snap', namespace: 'demo'}, spec: {source: {persistentVolumeClaimName: 'data'}}, status: {error: {message: 'class not found'}}}
+  const content = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshotContent', metadata: {name: 'snapcontent-1'}, spec: {driver: 'hostpath.csi.k8s.io', deletionPolicy: 'Retain', source: {volumeHandle: 'v'}, volumeSnapshotRef: {name: 'data-snap', namespace: 'demo', uid: 'u'}}, status: {readyToUse: true}}
+  const snapshotClass = {apiVersion: 'snapshot.storage.k8s.io/v1', kind: 'VolumeSnapshotClass', metadata: {name: 'csi'}, driver: 'hostpath.csi.k8s.io', deletionPolicy: 'Delete'}
+  it('renders curated drawers and snapshot status', () => {
+    expect(getResourceStatus('volumesnapshots', snapshot)?.text).toBe('Error')
+    expect(renderKind('volumesnapshots', snapshot, 'demo')).toContain('Source PVC')
+    expect(getResourceStatus('volumesnapshotcontents', content)?.text).toBe('Ready')
+    expect(renderKind('volumesnapshotcontents', content)).toContain('Deletion policy')
+    expect(getResourceStatus('volumesnapshotclasses', snapshotClass)).toBeNull()
+    expect(renderKind('volumesnapshotclasses', snapshotClass)).toContain('Default class')
+  })
+  it('leaves unrelated and lookalike groups generic', () => {
+    for (const apiVersion of ['volumesnapshot.external-storage.k8s.io/v1', 'fake.snapshot.storage.k8s.io/v1']) {
+      for (const [kind, data, marker] of [['volumesnapshots', snapshot, 'Source PVC'], ['volumesnapshotcontents', content, 'Deletion policy'], ['volumesnapshotclasses', snapshotClass, 'Default class']] as const) {
+        const other = {...data, apiVersion}
+        expect(renderKind(kind, other)).not.toContain(marker)
+      }
+      expect(getResourceStatus('volumesnapshots', {...snapshot, apiVersion})?.text).not.toBe('Error')
+      expect(getResourceStatus('volumesnapshotcontents', {...content, apiVersion})?.text).not.toBe('Ready')
+    }
+  })
+})
+
+it('keeps foreign customresourcedefinitions on generic renderer and status', () => {
+  const data = { apiVersion: 'foreign.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'foreign' }, spec: { example: 'generic-sentinel' }, status: { conditions: [{ type: 'Established', status: 'True' }] } }
+  const html = renderToString(<ResourceRendererDispatch resource={{ kind: 'customresourcedefinitions', name: 'foreign', namespace: '' }} data={data} onCopy={() => {}} copied={null} showCommonSections={false} />)
+  expect(html).toContain('generic-sentinel')
+  expect(html).not.toContain('Names &amp; conversion')
+  expect(getGenericResourceStatus(data)).toEqual({ text: 'Established', tone: 'unknown' })
+  expect(getResourceStatus('customresourcedefinitions', data)).toEqual({ text: 'Established', color: HEALTH_BADGE_COLORS.unknown })
+})
+
+it('gives Diagnose the CRD health the header badge shows', () => {
+  const crd = (conditions: any[], extra: any = {}) => ({ apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'widgets.example.io', ...extra }, status: { conditions } })
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'Established', status: 'True' }]))).toBe('healthy')
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'NamesAccepted', status: 'False', reason: 'ListKindConflict' }]))).toBe('problem')
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'Established', status: 'True' }], { deletionTimestamp: '2026-01-01T00:00:00Z' }))).toBe('problem')
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([]))).toBe('unknown')
+})
+
+describe('Gateway API route plural collision', () => {
+  const routeData = (apiVersion: string, kind: string) => ({
+    apiVersion,
+    kind,
+    metadata: { name: 'shop', namespace: 'default' },
+    spec: { parentRefs: [{ name: 'main-gw' }], hostnames: ['shop.example.com'], collisionProbe: COLLISION_PROBE },
+    status: {},
+  })
+  const render = (kind: string, data: any) => {
+    const reads: string[] = []
+    const overrides: RendererOverrides = {
+      HTTPRouteRenderer: ({ data }) => {
+        reads.push(data.metadata.name)
+        return <span>gateway-lookup-override</span>
+      },
+    }
+    const html = renderToString(
+      <ResourceRendererDispatch
+        resource={{ kind, namespace: 'default', name: 'shop' }}
+        data={data}
+        onCopy={() => {}}
+        copied={null}
+        rendererOverrides={overrides}
+        showCommonSections={false}
+      />,
+    )
+    return { html, reads }
+  }
+
+  it('gives a foreign httproutes resource the generic renderer, with no Gateway lookups or host buttons', () => {
+    const { html, reads } = render('httproutes', routeData('routes.example.io/v1', 'HTTPRoute'))
+    expect(reads).toEqual([])
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('aria-label="Copy')
+  })
+
+  it('gives a foreign grpcroutes resource the generic renderer, with no Copy button', () => {
+    const { html } = render('grpcroutes', routeData('routes.example.io/v1', 'GRPCRoute'))
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('aria-label="Copy')
+  })
+
+  it('keeps the Gateway API renderers for gateway.networking.k8s.io routes', () => {
+    const http = render('httproutes', routeData('gateway.networking.k8s.io/v1', 'HTTPRoute'))
+    expect(http.reads).toEqual(['shop'])
+    const grpc = render('grpcroutes', routeData('gateway.networking.k8s.io/v1', 'GRPCRoute'))
+    expect(grpc.html).toContain('aria-label="Copy hostname shop.example.com"')
+  })
+
+  it('reads no route status for a foreign httproutes or grpcroutes resource', () => {
+    for (const kind of ['httproutes', 'grpcroutes']) {
+      expect(getResourceStatus(kind, { apiVersion: 'routes.example.io/v1', status: {} })).toBeNull()
+      expect(getResourceStatus(kind, { apiVersion: 'gateway.networking.k8s.io/v1', status: {} })).not.toBeNull()
+    }
+  })
+})
+
+describe('Plan kind collision (upgrade.cattle.io vs other plans CRDs)', () => {
+  const planData = (apiVersion: string) => ({
+    apiVersion, kind: 'Plan', metadata: { name: 'p', namespace: 'system-upgrade' },
+    spec: { version: 'v1', collisionProbe: COLLISION_PROBE }, status: { conditions: [{ type: 'Complete', status: 'True' }] },
+  })
+  const draw = (apiVersion: string) => renderToString(
+    <ResourceRendererDispatch resource={{ kind: 'plans', namespace: 'system-upgrade', name: 'p' }} data={planData(apiVersion)} onCopy={() => {}} copied={null} showCommonSections={false} />,
+  ).replace(/<!-- -->/g, '')
+
+  it('routes upgrade.cattle.io Plan to the Plan renderer and a foreign plans CRD to the generic one', () => {
+    const ours = draw('upgrade.cattle.io/v1')
+    expect(ours).toContain('Target')
+    expect(ours).not.toContain(COLLISION_PROBE)
+    expect(draw('example.com/v1')).toContain(COLLISION_PROBE)
+  })
+
+  it('gives a foreign plans CRD no Plan status', () => {
+    // A Plan applying to a Node is in progress even when Complete=True is still set.
+    const applying = (apiVersion: string) => ({ ...planData(apiVersion), status: { applying: ['n1'], conditions: [{ type: 'Complete', status: 'True' }] } })
+    expect(getResourceStatus('plans', applying('upgrade.cattle.io/v1'))?.text).toBe('In progress')
+    expect(getResourceStatus('plans', applying('example.com/v1'))?.text).not.toBe('In progress')
+  })
+})
+

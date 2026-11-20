@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/skyhook-io/radar/internal/desktopenv"
 	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
@@ -81,17 +82,23 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	}
 	base = append(base, "-c", fmt.Sprintf("model_reasoning_effort=%q", effort))
 
+	// The prompt goes over stdin ("-"), not as an argument. It is unbounded (the
+	// saved story and every claim on an explanation turn), and one argument is
+	// capped at 128 KiB on Linux and a whole command line at 32K characters on
+	// Windows. An npm install on Windows is also a .cmd shim, and cmd.exe would
+	// re-parse an argument: it stops at the first newline and acts on & and %.
 	var args []string
 	if s.sessionID != "" {
 		// resume lacks --sandbox; set sandbox via -c (cwd via cmd.Dir below).
 		args = append([]string{"exec", "resume"}, base...)
-		args = append(args, "-c", `sandbox_mode="read-only"`, s.sessionID, prompt)
+		args = append(args, "-c", `sandbox_mode="read-only"`, s.sessionID, "-")
 	} else {
 		args = append([]string{"exec"}, base...)
-		args = append(args, "--sandbox", "read-only", prompt)
+		args = append(args, "--sandbox", "read-only", "-")
 	}
 
 	cmd := exec.CommandContext(ctx, a.bin, args...)
+	cmd.Stdin = strings.NewReader(prompt)
 
 	cleanup := func() {}
 	if s.profile == ExecutionProfileSafeguarded {
@@ -103,11 +110,19 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 		cleanup = func() { _ = os.RemoveAll(dir) }
 		cmd.Dir = dir
 		cmd.Env = codexEnv()
+	} else if dir := launchDir(); dir != "" {
+		// Inside an AppImage Radar's own cwd is the read-only image.
+		cmd.Dir = dir
 	}
-	// Full-local: inherit radar's cwd + full env so the user's auth/config/MCPs work.
+	// Full-local: inherit radar's launch directory + full env so the user's auth/config/MCPs work.
 
 	return cmd, cleanup, nil
 }
+
+// launchDir is the working directory for agent processes inside the AppImage
+// (the folder Radar was launched from), else "". A variable so tests can
+// stand in for an AppImage launch.
+var launchDir = desktopenv.ChildDir
 
 // codexEnv is the minimal environment Codex needs (auth via HOME/CODEX_HOME, PATH
 // to exec, locale). Cloud-provider secrets are deliberately omitted — the shell

@@ -12,16 +12,20 @@ func TestSplitChart(t *testing.T) {
 		{"cert-manager-1.14.0", "cert-manager", "1.14.0"},
 		{"cert-manager-v1.14.0", "cert-manager", "v1.14.0"},
 		{"kube-prometheus-stack-45.27.2", "kube-prometheus-stack", "45.27.2"},
-		// scans backwards for first hyphen-followed-by-digit; finds 0.32.0-dev.
+		// A whole dotted version anchors the split, pre-release included.
 		{"karpenter-0.32.0-dev", "karpenter", "0.32.0-dev"},
 		{"foo", "foo", ""},
 		{"", "", ""},
 		{"-1.0.0", "", "1.0.0"},
+		{"foo-1.2.3-1", "foo", "1.2.3-1"},
+		{"foo-2-bar-1.2.3", "foo-2-bar", "1.2.3"},
+		{"foo-1", "foo", "1"},
+		{"tool-1.2.3_build.4", "tool", "1.2.3_build.4"},
 	}
 	for _, c := range cases {
-		gotName, gotV := splitChart(c.in)
+		gotName, gotV := SplitChart(c.in)
 		if gotName != c.wantName || gotV != c.wantV {
-			t.Errorf("splitChart(%q) = (%q, %q), want (%q, %q)", c.in, gotName, gotV, c.wantName, c.wantV)
+			t.Errorf("SplitChart(%q) = (%q, %q), want (%q, %q)", c.in, gotName, gotV, c.wantName, c.wantV)
 		}
 	}
 }
@@ -159,6 +163,47 @@ func TestAggregate_RawOperator_KnownGroup(t *testing.T) {
 	crd := findContrib(r, SourceCRDs)
 	if crd.APIVersion != "v1" {
 		t.Errorf("CRD contribution APIVersion = %+v, want v1", crd)
+	}
+}
+
+// Gateway API has no chart, so its CRDs keep their group as their identity:
+// a user's release named gateway-api must neither absorb them nor share a
+// chart key with them, since consumers key packages by chart.
+func TestAggregate_ChartlessIntegrationKeepsItsOwnRow(t *testing.T) {
+	rows := Aggregate(Sources{
+		Helm: []HelmRelease{{
+			Name:           "gateway-api",
+			Namespace:      "payments",
+			Chart:          "gateway-api-2.3.0",
+			ResourceHealth: "healthy",
+		}},
+		CRDs: []CRD{{
+			Name:     "gateways.gateway.networking.k8s.io",
+			Group:    "gateway.networking.k8s.io",
+			Kind:     "Gateway",
+			Plural:   "gateways",
+			Versions: []string{"v1"},
+		}},
+	})
+	if len(rows) != 2 {
+		t.Fatalf("want the user release and a separate Gateway API row, got %d: %+v", len(rows), rows)
+	}
+	for _, r := range rows {
+		switch r.Namespace {
+		case "payments":
+			if !equalSources(r.Sources, []SourceCode{SourceHelm}) {
+				t.Errorf("user release took CRD evidence: sources=%v", r.Sources)
+			}
+		case "":
+			if !equalSources(r.Sources, []SourceCode{SourceCRDs}) {
+				t.Errorf("Gateway API row sources=%v, want [C]", r.Sources)
+			}
+			if r.Chart != "gateway.networking.k8s.io" || r.FromCRDGroup != "gateway.networking.k8s.io" {
+				t.Errorf("Gateway API row must be keyed by its group, got chart=%q fromCRDGroup=%q", r.Chart, r.FromCRDGroup)
+			}
+		default:
+			t.Errorf("unexpected row %+v", r)
+		}
 	}
 }
 

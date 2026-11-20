@@ -28,6 +28,7 @@ import {
 } from "../parse";
 import {
   type InvestigationEventEvidence,
+  type InvestigationEvidenceRelevance,
   type InvestigationEvidenceSource,
   type InvestigationResourceSummary,
 } from "../types";
@@ -299,7 +300,7 @@ export function adaptListResources(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
   payload: unknown,
-  options: { title?: string } = {},
+  options: { title?: string; relevance?: InvestigationEvidenceRelevance } = {},
 ): void {
   const listed = listedRows(payload);
   if (!listed) {
@@ -363,7 +364,7 @@ export function adaptListResources(
     source,
     {
       tier: "context",
-      relevance: "broader",
+      relevance: options.relevance ?? "broader",
       tone: hasAdverseResource ? "warning" : "neutral",
       title,
       summary: [

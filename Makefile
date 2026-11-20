@@ -1,4 +1,4 @@
-.PHONY: build install clean dev frontend backend test test-e2e test-chart lint help restart restart-fe kill watch-backend watch-frontend loadtest
+.PHONY: build install clean dev frontend backend test test-changed test-e2e test-chart lint help restart restart-fe kill watch-backend watch-frontend loadtest bench-relationships
 .PHONY: calico-demo calico-demo-down calico-demo-status
 .PHONY: kueue-demo kueue-demo-down kueue-demo-status kueue-demo-verify
 .PHONY: cilium-demo cilium-demo-down cilium-demo-status
@@ -158,6 +158,11 @@ test:
 	go test -v ./...
 	cd pkg && go test -v ./...
 
+# Fast dev loop: vet/test only the changed Go packages, tsc, and `vitest related`
+# for changed frontend files. BASE defaults to origin/main. Not a completion check.
+test-changed:
+	./scripts/test-changed.sh $(BASE)
+
 # Run e2e tests against the current kubeconfig cluster (on-demand, not in CI)
 test-e2e:
 	go test -tags e2e -v -timeout 5m ./internal/k8s/
@@ -238,6 +243,16 @@ LOADTEST_PORT ?= 9281
 PODS ?= 50000
 loadtest: frontend embed
 	go run ./cmd/testserver -port $(LOADTEST_PORT) -pods $(PODS)
+
+# Measure what Radar's relationship answers cost today: the shared relationship
+# graph's retained heap and rebuild, drawer and summary reads from it, and the
+# relist and churn cost of cache indexes. Fixtures and how to read the numbers:
+# docs/loadtest.md#relationship-cost-baselines. Takes a few minutes; run it on
+# an otherwise idle machine.
+bench-relationships:
+	cd pkg && go test ./k8score -run '^$$' -bench 'BenchmarkIndexRelist|BenchmarkIndexedStoreChurn|BenchmarkOwnerIndexUpdate' -benchtime 2s -count 1
+	cd pkg && go test ./topology -run '^$$' -bench 'BenchmarkRelationshipGraphRetained|BenchmarkSharedRelationshipBuild|BenchmarkDrawerRelationships|BenchmarkSummaryRelationshipsPage' -benchtime 3x -count 1 -timeout 30m
+	cd pkg && go test ./relations -run '^$$' -bench 'BenchmarkConfigConsumers' -benchtime 2s -count 1
 
 # Bootstrap a kind cluster pre-loaded with curated Velero fixtures (all 13
 # Backup phases, the supersession series, a paused+invalid Schedule, an
@@ -527,6 +542,8 @@ help:
 	@echo "  make watch-backend   - Go with air hot reload (port 9280)"
 	@echo "  make run             - Run built binary"
 	@echo "  make test            - Run tests"
+	@echo "  make test-changed    - Fast loop: only what the change touches (BASE=origin/main)"
+	@echo "  make bench-relationships - Relationship graph and cache-index cost baselines"
 	@echo ""
 	@echo "Demo clusters:"
 	@echo "  make gitops-demo      - GitOps fixtures (Argo CD + Flux)"

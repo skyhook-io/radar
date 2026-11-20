@@ -49,6 +49,8 @@ type Input struct {
 	Issuer    string
 	Domains   []string
 	NotAfter  *time.Time
+	// NotBefore is set only for TLS secrets; cert-manager rows don't carry it.
+	NotBefore *time.Time
 	Source    Source
 	// SecretName is set only for cert-manager Certificates: the Secret the
 	// Certificate writes to. Used to dedup the TLS-secret leg against the

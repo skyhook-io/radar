@@ -29,3 +29,121 @@ func TestGatewayReferenceDefaults(t *testing.T) {
 		t.Errorf("explicit namespace = %q", got)
 	}
 }
+
+func TestGatewayParentRefInSpec(t *testing.T) {
+	const routeNS = "app"
+	spec := func(refs ...map[string]any) []any {
+		out := make([]any, len(refs))
+		for i, r := range refs {
+			out[i] = r
+		}
+		return out
+	}
+	for _, tt := range []struct {
+		name   string
+		status map[string]any
+		spec   []any
+		want   bool
+	}{
+		{
+			name:   "exact scoped match",
+			status: map[string]any{"name": "gw", "namespace": "infra", "sectionName": "https"},
+			spec:   spec(map[string]any{"name": "gw", "namespace": "infra", "sectionName": "https"}),
+			want:   true,
+		},
+		{
+			name:   "fully defaulted group/kind/namespace match",
+			status: map[string]any{"name": "gw"},
+			spec:   spec(map[string]any{"name": "gw", "namespace": routeNS}),
+			want:   true,
+		},
+		{
+			name:   "explicit core group differs from omitted group",
+			status: map[string]any{"group": "", "kind": "Service", "name": "mesh"},
+			spec:   spec(map[string]any{"name": "mesh"}),
+			want:   false,
+		},
+		{
+			name:   "explicit core Service matches explicit core Service",
+			status: map[string]any{"group": "", "kind": "Service", "name": "mesh"},
+			spec:   spec(map[string]any{"group": "", "kind": "Service", "name": "mesh"}),
+			want:   true,
+		},
+		{
+			name:   "different kind (ListenerSet vs Gateway) does not match",
+			status: map[string]any{"kind": "ListenerSet", "name": "gw"},
+			spec:   spec(map[string]any{"name": "gw"}),
+			want:   false,
+		},
+		{
+			name:   "omitted status namespace does not inherit explicit spec namespace",
+			status: map[string]any{"name": "gw"},
+			spec:   spec(map[string]any{"name": "gw", "namespace": "infra"}),
+			want:   false,
+		},
+		{
+			name:   "both omitted namespace resolve to route namespace",
+			status: map[string]any{"name": "gw", "namespace": routeNS},
+			spec:   spec(map[string]any{"name": "gw"}),
+			want:   true,
+		},
+		{
+			name:   "sectionName present in status only",
+			status: map[string]any{"name": "gw", "sectionName": "https"},
+			spec:   spec(map[string]any{"name": "gw"}),
+			want:   false,
+		},
+		{
+			name:   "sectionName present in spec only",
+			status: map[string]any{"name": "gw"},
+			spec:   spec(map[string]any{"name": "gw", "sectionName": "https"}),
+			want:   false,
+		},
+		{
+			name:   "equal port matches across int64 and float64",
+			status: map[string]any{"name": "gw", "port": int64(443)},
+			spec:   spec(map[string]any{"name": "gw", "port": float64(443)}),
+			want:   true,
+		},
+		{
+			name:   "differing port does not match",
+			status: map[string]any{"name": "gw", "port": int64(443)},
+			spec:   spec(map[string]any{"name": "gw", "port": int64(80)}),
+			want:   false,
+		},
+		{
+			name:   "port present in one only",
+			status: map[string]any{"name": "gw", "port": int64(443)},
+			spec:   spec(map[string]any{"name": "gw"}),
+			want:   false,
+		},
+		{
+			name:   "scoped status entry not re-admitted by unscoped spec ref",
+			status: map[string]any{"name": "gw", "namespace": "infra", "sectionName": "old"},
+			spec:   spec(map[string]any{"name": "gw", "namespace": "infra"}),
+			want:   false,
+		},
+		{
+			name:   "matches second spec entry",
+			status: map[string]any{"name": "gw", "namespace": "infra", "sectionName": "b"},
+			spec:   spec(map[string]any{"name": "gw", "namespace": "infra", "sectionName": "a"}, map[string]any{"name": "gw", "namespace": "infra", "sectionName": "b"}),
+			want:   true,
+		},
+		{
+			name:   "empty spec never matches",
+			status: map[string]any{"name": "gw", "namespace": "infra"},
+			spec:   nil,
+			want:   false,
+		},
+		{
+			name:   "empty status never matches",
+			status: map[string]any{},
+			spec:   spec(map[string]any{"name": "gw", "namespace": "infra"}),
+			want:   false,
+		},
+	} {
+		if got := GatewayParentRefInSpec(tt.status, tt.spec, routeNS); got != tt.want {
+			t.Errorf("%s: GatewayParentRefInSpec = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
