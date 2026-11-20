@@ -99,8 +99,10 @@ import {
   fetchJSON,
   fetchYamlSchemas,
 } from '../../api/client'
-import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
+import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
+import { DatadogWorkloadCharts, useDatadogWorkloadCharts } from '../resource/DatadogWorkloadCharts'
+import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
 import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
@@ -2271,6 +2273,22 @@ function MetricsTabContent({
   /** False when content follows, so the tab scrolls everything as one. */
   fill?: boolean
 }) {
+  const [params, setParams] = useSearchParams()
+  const range = TIME_RANGES.find((option) => option.value === params.get('metricsRange'))?.value ?? '1h'
+  const workload = { kind, namespace, name }
+  const { embedded = false } = useNavCustomization()
+  const { charts, checking, configured } = useDatadogWorkloadCharts(workload, range, embedded)
+  if (configured) {
+    return <DatadogWorkloadCharts workload={workload} charts={charts.data?.configured ? charts.data.charts : undefined}
+      range={range} fill={fill} loading={charts.isLoading} error={charts.error} onRetry={() => void charts.refetch()}
+      onRangeChange={(value) => setParams((current) => {
+        const next = new URLSearchParams(current)
+        next.set('metricsRange', value)
+        return next
+      }, { replace: true })} />
+  }
+  if (checking) return <p role="status" className="p-4 text-sm text-theme-text-secondary">Loading workload metrics…</p>
+
   if (expanded) {
     if (!fill) return <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} fill={false} />
     return (
