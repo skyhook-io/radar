@@ -92,14 +92,22 @@ func TestLonghornLinksWithholdWhatTheCallerMayNotRead(t *testing.T) {
 	vol := longhornVolume("longhorn-system", "vol-1")
 	pv := csiPV("pv-a", "driver.longhorn.io", "vol-1")
 	s := newProjectionSession(t, vol, pv)
-	if rel, _ := longhornAnswer(t, s, pv, projectionAccess{denied: []string{"Volume"}}); len(rel.StorageRefs) != 0 {
+	rel, coverage := longhornAnswer(t, s, pv, projectionAccess{denied: []string{"Volume"}})
+	if len(rel.StorageRefs) != 0 {
 		t.Errorf("Volume withheld: PV storage refs = %+v, want none", rel.StorageRefs)
+	}
+	if !coverage["special"].Narrowed {
+		t.Errorf("Volume withheld: PV coverage = %+v, want narrowed", coverage)
 	}
 	if rel, _ := longhornAnswer(t, s, pv, projectionAccess{namespaces: []string{"shop"}}); len(rel.StorageRefs) != 0 {
 		t.Errorf("Longhorn namespace not readable: PV storage refs = %+v, want none", rel.StorageRefs)
 	}
-	if rel, _ := longhornAnswer(t, s, vol, projectionAccess{denied: []string{"PersistentVolume"}}); len(rel.Consumers) != 0 {
+	rel, coverage = longhornAnswer(t, s, vol, projectionAccess{denied: []string{"PersistentVolume"}})
+	if len(rel.Consumers) != 0 {
 		t.Errorf("PV withheld: Volume consumers = %+v, want none", rel.Consumers)
+	}
+	if !coverage["special"].Narrowed {
+		t.Errorf("PV withheld: Volume coverage = %+v, want narrowed", coverage)
 	}
 }
 

@@ -62,6 +62,12 @@ func (n *neighborhood) longhornStorage(session relations.Session, subject resour
 		if volumes, ok := n.longhornVolumesNamed(session, subject.Name); !ok || len(volumes) != 1 || volumes[0] != subject {
 			return
 		}
+		// The shared provider answers a denied kind with an empty list; a
+		// caller who can't read PVs must see a narrowed answer, not "unused".
+		if n.access.CanRead(resourceid.GroupKind{Kind: "PersistentVolume"}, "") == ownership.Denied {
+			n.cover("special", relations.Coverage{Narrowed: true})
+			return
+		}
 		provider := relationDirectProvider{session: session, n: n}
 		pvs, err := provider.PersistentVolumes()
 		if err != nil {
