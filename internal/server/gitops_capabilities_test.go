@@ -205,7 +205,8 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 		{name: "token review failed", tokenMode: true, reviewFail: true, unknown: true},
 		{name: "token evaluation failed", tokenMode: true, evaluation: "authorizer unavailable", unknown: true},
 		{name: "token allowed despite evaluation error", tokenMode: true, allowed: true, evaluation: "another authorizer failed"},
-		{name: "system in token mode", tokenMode: true, system: true, noToken: true, allowed: true},
+		{name: "system without a token can only read", tokenMode: true, system: true, noToken: true, allowed: true, unknown: true},
+		{name: "system with a token uses the token", tokenMode: true, system: true, allowed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			previousMode := pkgauth.CurrentCredentialMode()
@@ -215,7 +216,8 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 			}
 			pkgauth.SetCredentialMode(mode)
 			t.Cleanup(func() { pkgauth.SetCredentialMode(previousMode) })
-			selfReview := tc.local || (tc.tokenMode && !tc.system)
+			useToken := tc.tokenMode && !tc.noToken
+			selfReview := tc.local || useToken
 			reviewCalls := 0
 			api := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
@@ -227,7 +229,7 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 					t.Errorf("unexpected review request: %s %s", r.Method, r.URL.Path)
 				}
 				wantToken := "Bearer sa-token"
-				if tc.tokenMode && !tc.system {
+				if useToken {
 					wantToken = "Bearer alice-token"
 				}
 				if r.Header.Get("Authorization") != wantToken || r.Header.Get("Impersonate-User") != "" || len(r.Header.Values("Impersonate-Group")) != 0 {
@@ -296,6 +298,8 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 			wantCalls := 2
 			if tc.noConfig || (tc.tokenMode && !tc.system && tc.noToken) {
 				wantCalls = 0
+			} else if tc.tokenMode && tc.system && tc.noToken {
+				wantCalls = 1
 			}
 			if w.Code != 200 || reviewCalls != wantCalls || len(body.Actions) != 7 {
 				t.Fatalf("response=%d %s review calls=%d, want %d", w.Code, w.Body, reviewCalls, wantCalls)
