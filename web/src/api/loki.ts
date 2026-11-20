@@ -122,15 +122,20 @@ export async function withLokiRunFallback(kind: string, namespace: string, name:
   }
   // Loki narrows to the container when it labels containers (an older Radar
   // ignores the parameter, hence the filter). Without a container label every
-  // line is the whole pod's: keep them all.
+  // line is the whole pod's: keep them all, attributed to no container, so the
+  // picker doesn't offer the whole-pod key as if it were one.
   const wholePod = run.logs.length > 0 && run.logs.every(l => l.container === ALL_CONTAINERS)
-  const logs = container && !wholePod ? run.logs.filter(l => l.container === container) : run.logs
+  const logs = wholePod
+    ? run.logs.map(l => ({ ...l, container: '' }))
+    : container ? run.logs.filter(l => l.container === container) : run.logs
   if (logs.length === 0) return data
-  const notice = [
-    `From Loki, ${timeOf(run.window.start)}–${timeOf(run.window.end)}`,
-    container && wholePod && 'all containers (Loki has no container label)',
+  const pods = wholePod ? run.pods.map(p => ({ ...p, containers: p.containers.filter(c => c !== ALL_CONTAINERS) })) : run.pods
+  const summary = [
+    `From Loki, ${timeOf(run.window.start)}–${timeOf(run.window.end)}, the whole run (the line count and time range don't apply)`,
+    wholePod && 'all containers (Loki has no container label)',
     run.truncated && `the newest ${run.limit.toLocaleString()} lines (the limit; older lines may be missing)`,
-    run.notice,
-  ].filter(Boolean).join('. ')
-  return { pods: run.pods, logs, notice }
+  ].filter(Boolean).join(', ')
+  // The server's notice is whole sentences; the summary is not.
+  const notice = run.notice ? `${summary}. ${run.notice}` : summary
+  return { pods, logs, notice, fixedRangeReason: "This run is read whole from Loki; the line count and time range don't apply" }
 }

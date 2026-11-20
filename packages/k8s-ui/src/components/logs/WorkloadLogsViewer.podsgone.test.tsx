@@ -85,3 +85,46 @@ it('keeps the pods the user deselected while the stream ran', async () => {
   await act(async () => root.unmount())
   host.remove()
 })
+
+// A run read from a log store lists every container of the run, so after
+// choosing one the user can switch straight to another.
+it('switches container all → A → B on a snapshot host', async () => {
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host)
+  const asked: (string | undefined)[] = []
+  const fetchAll = vi.fn(async ({ container }: { container?: string }) => {
+    asked.push(container)
+    return { pods: [{ name: 'run-1-abcde', containers: ['setup', 'work'], ready: false }], logs: [{ pod: 'run-1-abcde', container: container ?? 'work', timestamp: '2026-11-13T02:00:00.000000000Z', content: `from ${container ?? 'all'}` }], notice: 'From Loki' }
+  })
+  await act(async () => root.render(<WorkloadLogsViewer name="run-1" fetchAll={fetchAll} />))
+  await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+  const picker = () => host.querySelector('select')!
+  const choose = async (value: string) => {
+    await act(async () => { picker().value = value; picker().dispatchEvent(new Event('change', { bubbles: true })) })
+    await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+  }
+  await choose('setup')
+  expect([...picker().options].map(o => o.value)).toEqual(['', 'setup', 'work'])
+  await choose('work')
+  expect(asked).toEqual([undefined, 'setup', 'work'])
+  await act(async () => root.unmount())
+  host.remove()
+})
+
+// A run read whole from a log store ignores the line count and time range, so
+// the control is disabled while that answer is shown, and enabled again after.
+it('disables the range control while the answer has a fixed range', async () => {
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host)
+  let fixed = true
+  const fetchAll = vi.fn(async () => ({ ...loki, fixedRangeReason: fixed ? 'Read whole from Loki' : undefined }))
+  await act(async () => root.render(<WorkloadLogsViewer name="run-1" fetchAll={fetchAll} />))
+  await act(async () => { await new Promise(r => setTimeout(r, 50)) })
+  const range = () => [...host.querySelectorAll('select')].find(s => s.querySelector('optgroup[label="Lines"]'))!
+  expect(range().disabled).toBe(true)
+  fixed = false
+  const refresh = [...host.querySelectorAll('button')].find(b => b.getAttribute('title')?.toLowerCase().includes('refresh') || b.getAttribute('aria-label')?.toLowerCase().includes('refresh'))
+  expect(refresh).toBeTruthy()
+  await act(async () => { refresh!.click(); await new Promise(r => setTimeout(r, 50)) })
+  expect(range().disabled).toBe(false)
+  await act(async () => root.unmount())
+  host.remove()
+})

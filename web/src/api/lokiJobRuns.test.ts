@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false, container: 'job' }))
+const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false, container: 'job', notice: '' }))
 vi.mock('./client', async (orig) => ({
   ...(await orig<typeof import('./client')>()),
   fetchJSON: async (url: string) => {
     calls.urls.push(url)
     if (calls.fail) throw new Error('Loki is not connected')
     return {
-      pods: [{ name: 'nightly-1-aaaaa', containers: ['job'], ready: false }],
+      pods: [{ name: 'nightly-1-aaaaa', containers: [calls.container], ready: false }],
       logs: [{ pod: 'nightly-1-aaaaa', container: calls.container, timestamp: '2026-11-13T02:00:00.000000000Z', content: 'done' }],
-      notice: '', source: 'loki', truncated: true, limit: 5000,
+      notice: calls.notice, source: 'loki', truncated: true, limit: 5000,
       window: { start: '2026-11-13T01:59:00Z', end: '2026-11-13T02:11:00Z' },
     }
   },
@@ -28,6 +28,17 @@ describe('withLokiRunFallback', () => {
     expect(got.pods.map(p => p.name)).toEqual(['nightly-1-aaaaa'])
     expect(got.notice).toContain('From Loki')
     expect(got.notice).toContain('newest 5,000 lines')
+    expect(got.notice).toMatch(/, the whole run \(the line count and time range don't apply\), the newest 5,000 lines \(the limit; older lines may be missing\)$/)
+    expect(got.fixedRangeReason).toBeTruthy()
+  })
+  it("ends the summary before the server's own sentences", async () => {
+    calls.notice = 'Selected by pod name; Loki has no Job label in this run\'s window.'
+    try {
+      const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true)
+      expect(got.notice).toMatch(/older lines may be missing\)\. Selected by pod name; /)
+    } finally {
+      calls.notice = ''
+    }
   })
   it('keeps the original answer when Loki is not available', async () => {
     calls.urls = []
@@ -63,6 +74,17 @@ describe('withLokiRunFallback', () => {
       const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true, undefined, 'job')
       expect(got.logs.map(l => l.content)).toEqual(['done'])
       expect(got.notice).toContain('all containers (Loki has no container label)')
+    } finally {
+      calls.container = 'job'
+    }
+  })
+  it('says on load that Loki has no container label, and offers no whole-pod container', async () => {
+    calls.container = '(all containers)'
+    try {
+      const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true)
+      expect(got.notice).toContain('all containers (Loki has no container label)')
+      expect(got.pods[0].containers).toEqual([])
+      expect(got.logs.map(l => l.container)).toEqual([''])
     } finally {
       calls.container = 'job'
     }

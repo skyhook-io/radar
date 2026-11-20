@@ -37,6 +37,12 @@ export interface WorkloadLogsResult {
   emptyReason?: string
   emptyMessage?: string
   command?: string
+  /**
+   * Set when the answer covers a span the line count and time range can't
+   * change, such as a finished run read whole from a log store: the range
+   * control is disabled, with this as the reason.
+   */
+  fixedRangeReason?: string
 }
 
 export interface WorkloadLogsViewerProps {
@@ -93,6 +99,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [selectedPods, setSelectedPods] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
   const [notice, setNotice] = useState('')
+  const [fixedRangeReason, setFixedRangeReason] = useState('')
   const [capturedAt, setCapturedAt] = useState('')
   const [sourceLabels, setSourceLabels] = useState<Record<string, string>>({})
   // Containers that produced a line since their Pod's status was last read,
@@ -151,6 +158,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       const result = await fetchAll({ container: selectedContainer || undefined, tailLines, sinceSeconds, signal: controller.signal })
       if (controller.signal.aborted) return
       setNotice(result.notice || '')
+      setFixedRangeReason(result.fixedRangeReason || '')
       setCapturedAt(result.capturedAt || '')
       setSourceLabels(result.sourceLabels ?? {})
       const resultPods = result.pods ?? []
@@ -237,6 +245,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     fetchController.current?.abort()
     setIsLoading(false)
     setNotice('')
+    setFixedRangeReason('')
     setCapturedAt('')
     setFetchError(null)
     clear()
@@ -501,8 +510,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         lineOptions={[50, 100, 500, 1000]}
         tooltip="How many logs to load per pod — by line count or time range"
         isDark={isDark}
-        disabled={isStreaming || sourceUnavailable}
-        disabledReason={sourceUnavailable ? 'No log source is available yet' : undefined}
+        disabled={isStreaming || sourceUnavailable || !!fixedRangeReason}
+        disabledReason={sourceUnavailable ? 'No log source is available yet' : fixedRangeReason || undefined}
       />
       </fieldset>
     </>
