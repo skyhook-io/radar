@@ -5940,7 +5940,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	// Traffic flow: Internet → HTTPProxy (root) → HTTPProxy (child) → Service → Pods
 	trafficHTTPProxyIDs := make([]string, 0)
 
-	// Phase 1: Create all HTTPProxy nodes and populate ID map
+	// Create all HTTPProxy nodes; their edges are drawn with the other routing
+	// edges once the Service nodes are.
 	for _, hp := range trafficHTTPProxies {
 		ns := hp.GetNamespace()
 		if !opts.MatchesNamespaceFilter(ns) {
