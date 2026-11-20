@@ -31,6 +31,12 @@ export function formatMetricValue(value: number, unit: string): string {
       if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB/s`
       return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GiB/s`
     }
+    case 'avgCount': {
+      // Never rounded to a whole count: 1.5 averaged workers is not 2.
+      if (value < 10000) return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1)
+      if (value < 1e6) return `${(value / 1e3).toFixed(1)}k`
+      return `${(value / 1e6).toFixed(1)}M`
+    }
     case 'count':
     case 'restarts': {
       if (value < 10000) return value.toFixed(0)

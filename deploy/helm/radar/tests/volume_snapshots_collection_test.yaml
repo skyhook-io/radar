@@ -1,0 +1,22 @@
+suite: CSI VolumeSnapshot collection reads only the three snapshot kinds
+templates:
+  - clusterrole.yaml
+tests:
+  - it: grants read access to snapshots, contents and classes by default
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["snapshot.storage.k8s.io"]
+            resources: ["volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses"]
+            verbs: ["get", "list", "watch"]
+  - it: removes the grant when disabled
+    set:
+      rbac.crdGroups.volumeSnapshots: false
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["snapshot.storage.k8s.io"]
+            resources: ["volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses"]
+            verbs: ["get", "list", "watch"]

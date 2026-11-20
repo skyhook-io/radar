@@ -23,8 +23,6 @@
 //     ResolveHistorical serves stored observations and never guesses.
 package resourceid
 
-import "fmt"
-
 // ResourceKey returns the index key for a resource:
 // "group|Kind|namespace|name". Group goes first because both group and
 // namespace can legitimately be empty independently — encoding group last would
@@ -32,5 +30,5 @@ import "fmt"
 // under any 3-part parse. "|" is a safe delimiter — Kubernetes API groups follow
 // DNS subdomain rules and can't contain it.
 func ResourceKey(group, kind, namespace, name string) string {
-	return fmt.Sprintf("%s|%s|%s|%s", group, kind, namespace, name)
+	return group + "|" + kind + "|" + namespace + "|" + name
 }

@@ -153,6 +153,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"disagree means a manager's list and the metadata of the resource (or, with via, its controller) name different managers: " +
 			"check both). children: direct owner-reference preview; complete covers readable scope, not all runtime. " +
 			"Absent is not empty; coverage is not health. Absent `stale` does not establish freshness. " +
+			"A reference with `state: denied` is one the resource names that you may not read; `state: access_unverified` means Radar couldn't check your access to it; neither says whether it exists. " +
 			"For broad incidents rank with issues, get_dashboard, search or list_resources first. " +
 			"Search ConfigMaps, CRD specs, env refs or object content with search. " +
 			"Set group for ambiguous kinds (Knative Service vs core Service). In recentChanges, " +
@@ -192,7 +193,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"from the root kind; profile all expands every edge type and is heavier, " +
 			"use it only when auto produced a too-narrow neighborhood. Hops defaults to " +
 			"1 and maxes at 2. Nodes are RBAC-filtered; denied neighbors appear only as " +
-			"aggregate omitted counts.",
+			"one unnamed omitted entry.",
 		Annotations: readOnly,
 	}, logToolCall("get_neighborhood", handleGetNeighborhood))
 
@@ -1277,8 +1278,7 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 	var resourceCtx *resourcecontext.ResourceContext
 	var warnings []string
 	if !skipContext {
-		// Batch diagnosis must not start unrelated discovery through a cold graph rebuild.
-		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, tier, issueSummary, tier != resourcecontext.TierDiagnostic)
+		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, tier, issueSummary)
 
 		// State-derived advisory warnings (deletionTimestamp, external manager,
 		// terminating namespace, workload health-condition history, PVC stuck
@@ -1344,7 +1344,7 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 
 	result := map[string]any{"resource": resourceData}
 	if tier == resourcecontext.TierDiagnostic {
-		result["coverage"] = "Cached resource and Issues evidence, with a bounded sample of this resource's events. Pods, runtime logs and metrics were not collected. Graph-derived networking/scaling relationships were not collected; an empty Issues list does not establish runtime health. Follow Workload references with get_resource or diagnose for admission context, and Pod references with diagnose for runtime evidence."
+		result["coverage"] = "Cached resource and Issues evidence, with a bounded sample of this resource's events. Pods, runtime logs and metrics were not collected. An empty Issues list does not establish runtime health. Follow Workload references with get_resource or diagnose for admission context, and Pod references with diagnose for runtime evidence."
 	}
 	if nodeCertificateReport != nil {
 		result["nodeCertificateReport"] = nodeCertificateReport
@@ -1406,15 +1406,9 @@ func recentChangesSourceTracked(gvk schema.GroupVersionKind) bool {
 	return (gvk.Kind == "Secret" && gvk.Group == "") || meaningfulchanges.TrackedKindForGroup(gvk.Kind, gvk.Group)
 }
 
-// buildMCPResourceContext assembles the resourceContext section for MCP
-// get_resource. Mirrors the REST handler's buildAIResourceContext: pre-
-// computes IssueSummary + AuditSummary in the caller, threads the
-// PolicyReport index when Kyverno is installed, hands a request-scoped
-// RBAC checker to Build for per-ref gating, and lets Build's own
-// fallback resolve Relationships via topology.GetRelationshipsWithObject
-// (which applies KindForGVK so cross-group CRDs map to the right
-// topology node).
-func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, issueSummary *resourcecontext.IssueSummary, includeTopology bool) *resourcecontext.ResourceContext {
+// buildMCPResourceContext assembles the same access-checked family and
+// ownership answers as REST, with precomputed issue and audit facts.
+func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, issueSummary *resourcecontext.IssueSummary) *resourcecontext.ResourceContext {
 	return buildMCPResourceContextWithOperatorChildren(
 		ctx,
 		obj,
@@ -1425,15 +1419,14 @@ func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, name
 		k8s.FindStaleSecretEnvChecksForObject(ctx, k8s.GetResourceCache(), obj),
 		issueSummary,
 		nil,
-		includeTopology,
 	)
 }
 
 func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary) *resourcecontext.ResourceContext {
-	return buildMCPResourceContextWithOperatorChildren(ctx, obj, kind, namespace, name, tier, staleChecks, issueSummary, nil, true)
+	return buildMCPResourceContextWithOperatorChildren(ctx, obj, kind, namespace, name, tier, staleChecks, issueSummary, nil)
 }
 
-func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary, children *k8s.OperatorChildren, includeTopology bool) *resourcecontext.ResourceContext {
+func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary, children *k8s.OperatorChildren) *resourcecontext.ResourceContext {
 	if obj == nil {
 		return nil
 	}
@@ -1487,13 +1480,12 @@ func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtim
 		}),
 	}
 
-	if includeTopology {
-		if topo, index, prov, dyn, ok := mcpTopologyForContext(); ok {
-			opts.RelIndex = index
-			opts.Topology = topo
-			opts.Provider = prov
-			opts.DynamicProv = dyn
-		}
+	access := func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) }
+	traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+	opts.Relationships, _, opts.RelationshipExtras = k8s.AnswerResourceContextRelationships(cache, obj, access, traverse)
+	if cache != nil {
+		opts.Provider = k8s.NewTopologyResourceProvider(cache)
+		opts.DynamicProv = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 	}
 	opts.OpenTelemetryAutoInstrumentation, opts.OpenTelemetryAutoInstrumentationUnavailable = k8s.OpenTelemetryAutoInstrumentationForObject(obj, func(group, resource, namespace, verb string) bool {
 		return (namespace == "" || checkNamespaceAccess(ctx, namespace)) && canReadInNamespace(ctx, group, resource, namespace, verb)
@@ -1509,13 +1501,7 @@ func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtim
 		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
 	}
 
-	rc := resourcecontext.Build(ctx, obj, opts)
-	if !includeTopology {
-		for _, field := range []string{"exposes", "exposedBy", "backends", "selectedBy", "scaledBy"} {
-			rc.Omitted = append(rc.Omitted, resourcecontext.OmittedField{Field: field, Reason: resourcecontext.OmittedUnavailable})
-		}
-	}
-	return rc
+	return resourcecontext.Build(ctx, obj, opts)
 }
 
 // attachResourceExtras populates optional extras (events, metrics, logs) on

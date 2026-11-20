@@ -1,9 +1,9 @@
 package topology
 
 import (
-	"maps"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -35,8 +35,8 @@ func ResolveProfile(s string) Profile {
 	}
 }
 
-// NeighborhoodOptions configures a BuildNeighborhood call. Zero values are
-// replaced with sensible defaults: Profile=auto, Hops=1, MaxNodes=25.
+// NeighborhoodOptions configures WalkNeighborhood. Zero values are replaced
+// with sensible defaults: Profile=auto, Hops=1, MaxNodes=25.
 type NeighborhoodOptions struct {
 	Profile  Profile
 	Hops     int
@@ -45,10 +45,14 @@ type NeighborhoodOptions struct {
 	// Allow gates each candidate node during BFS expansion. nil means
 	// allow all. When non-nil, BFS skips nodes for which Allow returns
 	// false — they don't consume the MaxNodes budget, can't appear as
-	// path-fragments between two allowed nodes, and bump
+	// path-fragments between two allowed nodes, and set
 	// Subgraph.RBACDenied so callers can report omissions to the user.
 	// The root node is also checked so callers can hide roots that pass
 	// coarse preflight checks but fail per-kind gates such as Secrets.
+	//
+	// Allow must decide by kind and namespace alone: WalkNeighborhood calls
+	// it once for each (group, kind, namespace), with a node that has no
+	// name, and applies the answer to every object of that kind there.
 	//
 	// This is the security boundary: forbidden nodes must not influence
 	// the visible graph shape. Post-hoc filtering would let an
@@ -68,17 +72,28 @@ type Subgraph struct {
 	Edges     []Edge      `json:"edges"`
 	Truncated bool        `json:"truncated,omitempty"`
 
-	// RBACDenied counts nodes skipped during BFS because Allow returned
-	// false. Reported as a single aggregated omission by the caller; we
-	// intentionally do NOT track which specific nodes were denied, since
-	// surfacing those names would re-introduce the existence-leak the
-	// Allow gate exists to prevent.
+	// RBACDenied is nonzero when Allow withheld some related node. Reported
+	// as a single aggregated omission by the caller; we intentionally do NOT
+	// track which specific nodes were denied, since surfacing those names
+	// would re-introduce the existence-leak the Allow gate exists to prevent.
 	RBACDenied int `json:"-"`
 
 	// AmbiguousRoot is set when the root lookup matched more than one API
 	// group and the caller omitted ResourceRef.Group. Callers should ask the
 	// user/agent to provide group instead of returning an arbitrary first match.
 	AmbiguousRoot bool `json:"-"`
+
+	// RootUnavailable is the read reason Radar couldn't read the root for,
+	// when no candidate the caller may read was found and at least one
+	// couldn't be read: its kind still loading, not collected, or refused to
+	// Radar's identity, for example. Empty when the root was found or is
+	// absent. It is set only for candidates Allow admitted, so it reveals
+	// nothing about one the caller may not read.
+	RootUnavailable readreason.Code `json:"-"`
+
+	// UncollectedRoots are the root candidates Allow admitted whose kind Radar
+	// doesn't collect, which a host may start collecting before asking again.
+	UncollectedRoots []resourceid.Ref `json:"-"`
 }
 
 // neighborhoodMaxHops is the hard ceiling on BFS depth. Two hops is enough
@@ -93,265 +108,6 @@ const neighborhoodDefaultHops = 1
 // unset. 25 fits roughly a workload + its owners + selecting services +
 // attached policies without spilling into cluster-level dependencies.
 const neighborhoodDefaultMaxNodes = 25
-
-// BuildNeighborhood returns the BFS expansion of root in t, filtered by
-// opts.Profile. Returns a non-nil Subgraph even when the root is missing
-// from the topology — callers can check len(s.Nodes) == 0 for that case.
-//
-// Thin shim over BuildNeighborhoodWithIndex(nil, nil) — every per-step neighbor
-// enumeration falls back to a linear scan over t.Edges, and root resolution
-// uses the lowercase-kind ID heuristic without CRD plural lookup. Hot callers
-// that already hold a RelationshipsIndex + DynamicProvider (REST + MCP
-// handlers) should call BuildNeighborhoodWithIndex directly to skip the index
-// rebuild and to enable group-aware root ID construction for CRDs.
-func BuildNeighborhood(t *Topology, root ResourceRef, opts NeighborhoodOptions) *Subgraph {
-	return BuildNeighborhoodWithIndex(t, root, opts, nil, nil)
-}
-
-// BuildNeighborhoodWithIndex is the indexed variant of BuildNeighborhood.
-// When idx is non-nil, per-node edge lookups go through idx.EdgesFor in O(1)
-// (well, O(degree)) instead of pre-computing an adjacency map from t.Edges.
-// When idx is nil, behavior matches BuildNeighborhood exactly: the BFS pays
-// a single O(E) adjacency build up front, which is fine for one-shot library
-// callers and tests.
-//
-// dp threads the topology's DynamicProvider into root ID construction so
-// CRD plurals resolve correctly (e.g. "certificaterequests" → "certificaterequest").
-// Without dp, buildNodeID's static kindMap covers the built-in kinds only —
-// fine for tests but insufficient for ambiguous CRDs (CAPI vs CNPG Cluster).
-// When root.Group is non-empty it's also used by findNodeByRef to disambiguate
-// kind-collisions across API groups.
-//
-// Hot callers — REST handleAINeighborhood, MCP handleGetNeighborhood — fetch
-// idx from Memoizer.GetIndex so the topology-wide inverted index is shared
-// with GetRelationshipsWithIndex / SynthesizeManagedBy on the same request,
-// and pass the same dp they used to build the topology.
-func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts NeighborhoodOptions, idx *RelationshipsIndex, dp DynamicProvider) *Subgraph {
-	hops := opts.Hops
-	if hops <= 0 {
-		hops = neighborhoodDefaultHops
-	}
-	if hops > neighborhoodMaxHops {
-		hops = neighborhoodMaxHops
-	}
-	maxNodes := opts.MaxNodes
-	if maxNodes <= 0 {
-		maxNodes = neighborhoodDefaultMaxNodes
-	}
-
-	sub := &Subgraph{
-		Root:  root,
-		Nodes: []Node{},
-		Edges: []Edge{},
-	}
-	if t == nil {
-		return sub
-	}
-
-	nodeByID := make(map[string]*Node, len(t.Nodes))
-	for i := range t.Nodes {
-		nodeByID[t.Nodes[i].ID] = &t.Nodes[i]
-	}
-
-	// Use the same dp the topology was built with so CRD plurals resolve
-	// (e.g. "certificaterequests" → "certificaterequest"). Without it,
-	// buildNodeID's static map can't construct the right ID for arbitrary CRDs.
-	rootID := buildNodeID(root.Kind, root.Namespace, root.Name, dp)
-	rootNode, ok := nodeByID[rootID]
-	// When root.Group is set, the rootID match alone isn't enough: two CRDs
-	// sharing the same lowercase plural collide on the ID (e.g. CAPI
-	// cluster.x-k8s.io/Cluster vs CNPG postgresql.cnpg.io/Cluster — whichever
-	// was inserted last wins in nodeByID). Verify the candidate's apiGroup
-	// matches; otherwise fall through to findNodeByRef which does the
-	// group-aware tuple match.
-	if ok && root.Group != "" && !nodeMatchesAPIGroup(rootNode, root.Group) {
-		ok = false
-	}
-	if !ok || root.Group == "" && !nodeIsCanonicalBuiltin(rootNode) {
-		// Match by (kind, namespace, name [+ group]) tuple. A group-less known
-		// built-in keeps the established default-to-core behavior; custom kinds
-		// must be unambiguous when their group is omitted.
-		// Mostly for CRDs whose topology node ID uses a different prefix than
-		// the lowercase kind (e.g. "knativeservice/"). When root.Group is set,
-		// findNodeByRef also disambiguates kind-collisions across API groups
-		// (CAPI cluster.x-k8s.io/Cluster vs Fleet cluster.fleet.io/Cluster).
-		matched, ambiguous := findNodeByRef(t.Nodes, root, dp)
-		if ambiguous {
-			sub.AmbiguousRoot = true
-			return sub
-		}
-		if matched == nil {
-			return sub
-		}
-		rootNode = matched
-		rootID = rootNode.ID
-	}
-	resolvedKind := KubernetesKindForNode(rootNode)
-	resolvedGroup := root.Group
-	if resolvedGroup == "" {
-		resolvedGroup = nodeGroup(rootNode)
-	}
-	sub.Root = ResourceRef{
-		Kind:      resolvedKind,
-		Namespace: nodeNamespaceFromData(rootNode),
-		Name:      rootNode.Name,
-		Group:     resolvedGroup,
-	}
-
-	// Apply the Allow gate to the root itself. Callers' upfront RBAC checks
-	// (REST: kind+namespace, MCP: kind+namespace) authorize the kind class but
-	// don't catch per-kind tightening inside an allowed namespace — a Secret
-	// root in a namespace the user can list still needs `get secrets` for
-	// THAT namespace. Without this gate the root Secret leaks (name+status+
-	// data preview) even though the matching neighbor-Secret would be hidden.
-	//
-	// Empty subgraph + RBACDenied=1 lets callers translate to 404 (same as
-	// "root not in topology") so the response doesn't act as an existence
-	// oracle: a user with namespace-list access but no `get secrets` can't
-	// distinguish "Secret doesn't exist" from "Secret exists, you can't read".
-	if opts.Allow != nil && !opts.Allow(rootNode) {
-		sub.RBACDenied = 1
-		return sub
-	}
-
-	allowedEdges := edgeTypesForProfile(opts.Profile, rootNode.Kind)
-	rootOnly := rootOnlyEdgeTypes(opts.Profile, rootNode.Kind)
-
-	// neighbors yields every edge touching id that passes the profile filter,
-	// preferring the precomputed index when supplied. The undirected walk
-	// matters: a Pod is the target of Service→Pod (exposes), but the agent
-	// wants to find the Service from the Pod just as much as vice versa.
-	//
-	// Without idx we walk t.Edges once per BFS step. That's O(E) per step
-	// instead of O(degree), but the index-free path is reserved for tests
-	// and library callers without a Memoizer — hot REST/MCP traffic always
-	// supplies idx.
-	follows := func(e Edge, from string) bool {
-		return allowedEdges[e.Type] && (!rootOnly[e.Type] || from == rootID)
-	}
-	neighbors := func(id string) []Edge {
-		if idx != nil {
-			incoming, outgoing := idx.EdgesFor(id)
-			// Filter both sides by allowed edge types. Concatenate into a
-			// fresh slice so the caller can't accidentally mutate the
-			// index's internal storage.
-			out := make([]Edge, 0, len(incoming)+len(outgoing))
-			for _, e := range outgoing {
-				if follows(e, id) {
-					out = append(out, e)
-				}
-			}
-			for _, e := range incoming {
-				if follows(e, id) {
-					out = append(out, e)
-				}
-			}
-			return out
-		}
-		var out []Edge
-		for _, e := range t.Edges {
-			if !follows(e, id) {
-				continue
-			}
-			if e.Source == id || e.Target == id {
-				out = append(out, e)
-			}
-		}
-		return out
-	}
-
-	// BFS by hop level. visited[id] = hop at which the node entered the
-	// frontier, so we can stop when we'd exceed hops. RBAC-denied nodes
-	// are skipped here (not post-filtered) so they neither consume budget
-	// nor act as path-fragments to allowed nodes downstream.
-	included := map[string]bool{rootID: true}
-	order := []string{rootID}
-	frontier := []string{rootID}
-	truncated := false
-	rbacDenied := 0
-	deniedIDs := make(map[string]bool) // dedupe — same denied node may surface via multiple edges
-
-	for hop := 0; hop < hops; hop++ {
-		var next []string
-		for _, id := range frontier {
-			for _, e := range neighbors(id) {
-				other := e.Source
-				if other == id {
-					other = e.Target
-				}
-				if included[other] {
-					continue
-				}
-				if deniedIDs[other] {
-					// Same denied node may surface via multiple edges; skip
-					// re-evaluating Allow (SAR cache hit, but still wasted work).
-					continue
-				}
-				candidate, exists := nodeByID[other]
-				if !exists {
-					// Edge dangles off a node that isn't in the topology.
-					continue
-				}
-				if opts.Allow != nil && !opts.Allow(candidate) {
-					deniedIDs[other] = true
-					rbacDenied++
-					continue
-				}
-				if len(included) >= maxNodes {
-					truncated = true
-					continue
-				}
-				included[other] = true
-				order = append(order, other)
-				next = append(next, other)
-			}
-			if truncated {
-				break
-			}
-		}
-		if truncated || len(next) == 0 {
-			break
-		}
-		frontier = next
-	}
-
-	sub.Truncated = truncated
-	sub.RBACDenied = rbacDenied
-
-	// Materialize nodes in BFS order so the root is always first and the
-	// rest follow predictable expansion order.
-	sub.Nodes = make([]Node, 0, len(order))
-	for _, id := range order {
-		if n, ok := nodeByID[id]; ok {
-			node := *n
-			_, hasPolicyStatus := node.Data["policyStatus"]
-			if opts.Allow != nil && (node.Data["policyCoverageWorkloads"] != nil || hasPolicyStatus) {
-				// These annotations were computed against the full graph. BFS
-				// authorization does not validate policy evidence outside its
-				// bounded neighborhood, so do not serialize them here.
-				node.Data = maps.Clone(node.Data)
-				delete(node.Data, "policyCoverageWorkloads")
-				delete(node.Data, "policyStatus")
-			}
-			sub.Nodes = append(sub.Nodes, node)
-		}
-	}
-	// Edges: include only edges whose type is allowed AND both endpoints
-	// are in the included set. Walking t.Edges once here keeps the output
-	// edge order stable regardless of whether we used the index or not —
-	// tests and clients depend on that ordering.
-	for _, e := range t.Edges {
-		if !allowedEdges[e.Type] {
-			continue
-		}
-		if !included[e.Source] || !included[e.Target] {
-			continue
-		}
-		sub.Edges = append(sub.Edges, e)
-	}
-
-	return sub
-}
 
 // edgeTypesForProfile returns the set of edge types a profile traverses.
 // rootKind is used for ProfileAuto only. Unknown profile values normalize to
@@ -472,7 +228,7 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 // Pseudo-kinds: some CRDs are stored in the topology under a synthesized kind
 // distinct from their API kind (KnativeService for serving.knative.dev/Service,
 // CAPICluster for cluster.x-k8s.io/Cluster, …). We map (ref.Kind, ref.Group)
-// through pseudoKindFor BEFORE the direct kind comparison so a caller asking
+// through NodeKindForGVK BEFORE the direct kind comparison so a caller asking
 // for kind=Service&group=serving.knative.dev finds the KnativeService topology
 // node. Without this, the comparison Node.Kind="KnativeService" vs
 // ref.Kind="Service" never matches and the root lookup silently fails.
@@ -480,7 +236,7 @@ func findNodeByRef(nodes []Node, ref ResourceRef, dp DynamicProvider) (*Node, bo
 	// Resolve plural API resource names through discovery before comparing the
 	// caller-facing Kubernetes kind and Radar's topology pseudo-kind.
 	resourceKind := normalizeKindWithGroup(ref.Kind, ref.Group, dp)
-	wantKind := pseudoKindFor(resourceKind, ref.Group)
+	wantKind := NodeKindForGVK(resourceKind, ref.Group)
 	builtinGroup, builtin := resourceid.BuiltinGroup(resourceKind)
 	var match *Node
 	matchGroup := ""
@@ -522,7 +278,7 @@ func nodeIsCanonicalBuiltin(node *Node) bool {
 	return ok && (advertisedGroup == "" || advertisedGroup == group)
 }
 
-// pseudoKindFor maps an (API kind, API group) to the synthesized topology
+// NodeKindForGVK maps an (API kind, API group) to the synthesized topology
 // kind the builder assigns when both differ. For (kind, group) pairs that
 // aren't pseudo-mapped (or when group is empty), returns kind unchanged.
 //
@@ -537,7 +293,7 @@ func nodeIsCanonicalBuiltin(node *Node) bool {
 // see the NodeKind constants prefixed Knative*/CAPI* in types.go. Missing an
 // entry here means the caller-supplied API kind never matches the topology
 // node, so the neighborhood root lookup silently returns "not found."
-func pseudoKindFor(kind, group string) string {
+func NodeKindForGVK(kind, group string) string {
 	if group == "" {
 		return kind
 	}

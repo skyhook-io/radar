@@ -42,6 +42,20 @@ func ViewEvidence(reads []EvidenceRead, degraded *DegradedFinding, expected bool
 	return EvidenceWithheld
 }
 
+// ExactEvidenceRead reports a namespaced read that namespace access does not
+// authorize, so the evidence gates check the caller's own permission for it,
+// as the views read those kinds: Secrets, and Velero storage locations, whose
+// name and access mode a schedule's finding would otherwise reveal.
+func ExactEvidenceRead(read EvidenceRead) bool {
+	switch {
+	case read.Group == "" && read.Resource == "secrets":
+		return true
+	case read.Group == VeleroGroup && read.Resource == "backupstoragelocations":
+		return true
+	}
+	return false
+}
+
 // ForEvidence returns the issue as the caller sees it, and false when the
 // caller doesn't get it.
 func ForEvidence(issue Issue, canRead func(EvidenceRead) bool, allowUnfiltered bool) (Issue, bool) {

@@ -133,11 +133,19 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 	if rev, ok, _ := unstructured.NestedString(obj.Object, "status", "operationState", "syncResult", "revision"); ok && rev != "" {
 		node.Data["lastSyncRevision"] = truncateRevision(rev)
 	}
+	// A Flux HelmRelease's revisions are chart versions, not Git revisions.
+	// Cut to 12 characters, a version with build metadata (1.4.2+0f3c9a1b7e)
+	// no longer equals the whole version status.history records, and the tree
+	// flags a healthy release as a failed attempt.
+	displayRevision := truncateRevision
+	if obj.GetKind() == "HelmRelease" && gitops.ToolOf(obj) == gitops.ToolFluxCD {
+		displayRevision = func(rev string) string { return rev }
+	}
 	if rev, ok, _ := unstructured.NestedString(obj.Object, "status", "lastAppliedRevision"); ok && rev != "" {
-		node.Data["revision"] = truncateRevision(rev)
+		node.Data["revision"] = displayRevision(rev)
 	}
 	if rev, ok, _ := unstructured.NestedString(obj.Object, "status", "lastAttemptedRevision"); ok && rev != "" {
-		node.Data["attemptedRevision"] = truncateRevision(rev)
+		node.Data["attemptedRevision"] = displayRevision(rev)
 	}
 	if rev, ok, _ := unstructured.NestedInt64(obj.Object, "status", "lastReleaseRevision"); ok && rev > 0 {
 		node.Data["revision"] = fmt.Sprintf("rev:%d", rev)

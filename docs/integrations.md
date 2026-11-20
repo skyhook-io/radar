@@ -718,7 +718,17 @@ resource, including core Secrets and these excluded kinds. See the
 
 ### Checks › Vulnerabilities
 
-**Checks → Vulnerabilities** (REST `/api/vulnerabilities`, MCP `list_vulnerabilities`) rolls the VulnerabilityReports up to the images that run now: which images carry Critical and High CVEs, which of those have a fix, and which workloads and namespaces run them. Radar doesn't scan images itself. The tab, its line on Home's Checks card and the workload drawer's Vulnerabilities section appear only where the cluster serves the VulnerabilityReport kind. The rollup is not part of Issues or of the Best practices queue and score.
+**Checks → Vulnerabilities** (REST `/api/vulnerabilities`, MCP `list_vulnerabilities`) rolls the VulnerabilityReports up to the images that run now: which images carry Critical and High CVEs, which of those have a fix, and which workloads and namespaces run them. General image scanning requires Trivy Operator. The report views in Checks and workload drawers and the vulnerability summary on Home require the VulnerabilityReport kind. The rollup is not part of Issues or of the Best practices queue and score.
+
+**Check for Java4Shell** runs on demand in the same tab, including in clusters without Trivy Operator. It uses image metadata for the digest of each visible running container to compare its declared `JAVA_VERSION` with the [Java4Shell advisory](https://github.com/advisories/GHSA-6g7j-4xh3-xq2q). An affected version declaration is a reason to confirm the installed JVM and its vendor's fix. The table groups replicas by workload, container and image build, and prioritizes groups with Pods running on nodes that report AVX-512 VBMI via Node Feature Discovery. Missing CPU labels or access to Nodes leave the capability unknown. A flag in the Pod spec is shown as declared, and does not change the priority. Where Trivy serves reports, **Find in Trivy reports** searches what those reports recorded for the same CVE.
+
+**Unassessed containers** lists the images whose Java version Radar could not assess, with the reason and the number of running Pods. When the image sets `JAVA_HOME` and Radar finds no version declaration, the row appears first with a prompt to verify the installed Java version. Rows link to the workload when Radar can resolve its owner, or to the visible Pod. Results list up to 100 matching and 100 unassessed groups and keep container totals for the full scope Radar checked. **Download JSON** saves the displayed result, its check time and its namespace coverage.
+
+Deployment, StatefulSet and DaemonSet drawers also run **Check for Java4Shell** under **Vulnerabilities**, with or without Trivy. The check reads the current workload's owned Pods before making registry requests, and shows matches, unassessed containers and a JSON export for that workload. The caller needs read access to the workload kind and list access to Pods in its namespace.
+
+For headless checks, run `radar check java4shell` or `kubectl radar check java4shell`. [Java4Shell CLI flags and exit codes](configuration.md#java4shell-cli)
+
+The check follows the namespace selection, Radar's collection and the caller's list access to Pods and Nodes. It reads image manifests and configs for the registry digests those Pods report. Private lookups follow [image inspection permissions](authentication.md#image-inspection), and images Radar cannot read stay unassessed. The check separately counts images with no declared Java version. Radar checks up to 200 image, platform and credential groups with up to 24 groups from Docker Hub, 200 registry attempts in total, four lookups in flight and a 40-second registry lookup budget. Radar runs one advisory check at a time and shares registry rate-limit backoff with its runtime inventory.
 
 - **By image** (default): one row per running image, however many workloads run it, with its findings by severity, how many have a fix, and the workloads that run it.
 - **By CVE**: each CVE with the images and workloads that carry it, and how many of its images have a fixed release.
@@ -777,6 +787,16 @@ Severity and has-a-fix filters apply to every view. A finding Trivy left unrated
 
 **SealedSecret Detail View:** Encrypted data keys, template metadata, and the target Secret's scope and namespace.
 
+**Controller and sealing keys** (a section of the SealedSecret drawer): the controller that serves the SealedSecret's namespace and whether it is ready, how many SealedSecrets are synced and not synced (marked as limited to the namespaces you can list when that is not cluster-wide), and that controller's sealing keys with their certificate dates, marking the one that seals new secrets. When the controller reports `Synced=False` for a reason other than an existing Secret it does not manage, it suggests re-sealing as one possible fix: the SealedSecret may have been sealed for another cluster or with a key the controller no longer holds. Radar shows dates only and never calls a key expired or compromised.
+
+**Which controller.** Candidates are Deployments labelled `app.kubernetes.io/name=sealed-secrets` or named `sealed-secrets-controller`. Radar reads each candidate's flags from its Deployment (arguments, or the `SEALED_SECRETS_*` environment variables the controller also accepts) to know which namespaces it serves, as the controller decides: with `--additional-namespaces` its own namespace plus that list, with `--all-namespaces=false` only its own, otherwise every namespace. A controller that names the SealedSecret's namespace (an upstream multi-tenant setup) beats one that serves every namespace. Among controllers serving every namespace, kubeseal's default `kube-system/sealed-secrets-controller` wins, then the only one in `kube-system`, so a look-alike Deployment elsewhere can't blank the section. When no controller serves the namespace the section says so; when several serve it equally, or one's scope can't be read (a flag set from a ConfigMap or Secret, `envFrom`, or a `--label-selector`, which Radar can't check here), the section says Radar can't tell which one unseals it and reads no keys. The only controller on the cluster is used even when its scope can't be read. "Ambiguous" is the same answer for every caller and never names the candidates: like "denied" versus "not found", it only reveals that look-alike controllers exist.
+
+**Which key seals new secrets.** The controller loads the Secrets labelled `sealedsecrets.bitnami.com/sealed-secrets-key: active` plus the Secret named by its `--key-prefix` (default `sealed-secrets-key`) whatever that one's label; other label values read "Not used". It seals with the newest loaded key by its `--key-order-priority`: certificate start date by default, or Secret creation time (common after restoring keys from a backup), ties going to the earliest created. Radar follows the same setting; when it can't be read, no key is marked and the section says why.
+
+**Re-seal command.** The section shows a `kubeseal --fetch-cert` command only where Radar knows it reaches the controller serving the namespace: `kubeseal --controller-namespace <namespace> --controller-name <Deployment name> --fetch-cert` when the caller can see that controller, or a bare `kubeseal --fetch-cert` when the caller can't see it but it sits at kubeseal's default location (`kube-system/sealed-secrets-controller`). The answer's `atKubesealDefault` says so even to a caller denied the controller: upstream installs let every authenticated user `get` that Service by name, so kubeseal already reveals it. Otherwise (ambiguous, not served, not found, loading or failed) it gives the advice in words, since a guessed command could fetch another controller's certificate and a re-seal with it fails without saying why. `kubeseal --controller-name` names a Service; the standard installs (upstream manifest, upstream and Bitnami charts) name it like the Deployment. Where a hand-written install names them differently, kubeseal reports the missing Service.
+
+The section reads `GET /api/sealedsecrets/controller?sealedSecretNamespace=<SealedSecret namespace>` (without it, kubeseal's defaults pick the controller). Each part has its own gate, and a denied part is a state in a 200, never a 403 for the whole answer: the controller needs `get deployments` in its namespace, the keys need `list secrets` there, and the totals cover the SealedSecrets the caller can list. Keys come from Radar's Secret cache and only the public `tls.crt` is read: key names and certificate dates are returned, never `tls.key`, the certificate, labels or annotations. When Radar does not collect Secrets in that namespace, is still loading them (the section refreshes until they arrive) or failed to load them, the section says so instead of showing none; likewise for the controller while Deployments are loading or failed to load, or when Radar watches Deployments in some namespaces only and the controller is not among them. Only the key's first certificate counts. A key whose certificate does not parse is listed without dates and never marked as the one sealing new secrets. On a Radar without the endpoint (Radar Hub against an older cluster) the section is absent, including when that Radar answers before its capabilities have loaded.
+
 ### Supported CRDs
 
 | CRD | Group | Topology | Detail View | AI Summary |
@@ -808,11 +828,33 @@ observed Flux sources in both directions within Radar's namespace scope.
 Kustomizations use `spec.sourceRef`; HelmReleases use `spec.chart.spec.sourceRef`
 or `spec.chartRef`. Inline releases also link the generated HelmChart named by
 `status.helmChart`; an observed HelmChart links its source in its own namespace.
+`spec.dependsOn` links a Kustomization or HelmRelease to the objects of the same
+kind it waits for (an entry without a namespace means its own namespace).
 These are dependencies, not owners: topology draws each source upstream, with
 the edge pointing into the object that reads it. A link does not prove that Flux
 permits the reference or has produced an artifact.
 
 **Diagnosis**: Conditions extracted to issues (Ready=False, Stalled=True, Reconciling=True). Per-resource diff and recent events not yet available for Flux (HelmRelease-installed resources don't carry `last-applied-configuration`; tracked in [#601](https://github.com/skyhook-io/radar/issues/601)).
+
+### Flux Operator
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| FluxInstance | `fluxcd.controlplane.io/v1` | — | Yes | — |
+| FluxReport | `fluxcd.controlplane.io/v1` | — | Yes | — |
+| ResourceSet | `fluxcd.controlplane.io/v1` | — | Yes | — |
+| ResourceSetInputProvider | `fluxcd.controlplane.io/v1` | — | Yes | — |
+
+When the cluster serves FluxReport and the caller can read one, the GitOps page
+shows a collapsed **Flux** card above the table: the distribution version, the
+operator version, controller readiness and per-kind reconciler counts (total,
+failing, suspended), all read from the report. The counts are the operator's
+own, so the card attributes them to it. No readable report means
+no card; Radar never shows zeros for a report it could not read. The status of
+all four kinds reads `Suspended` when the object carries
+`fluxcd.controlplane.io/reconcile: disabled` (they have no `spec.suspend`).
+In a ResourceSetInputProvider URL, user info, every query value and the fragment
+are redacted in its column and drawer; the YAML view and MCP show the object as stored.
 
 ### ArgoCD
 
@@ -956,6 +998,8 @@ The volume filter uses request rate: setting it above zero hides TCP-only edges.
 
 ### What Radar Shows
 
+**Velero views** (the Overview at `/velero`, under the Velero category in the Resources sidebar, and Radar's own lists for the Schedule and BackupStorageLocation kinds): what needs attention, every schedule read against Velero's controller (next run, late or held, newest and newest successful run), and each storage location with the backups targeting it and the schedules writing to it. The Schedule drawer adds a Schedule activity section with recent runs. A Backup's drawer offers **Delete backup**, which asks Velero to delete it through a DeleteBackupRequest; the generic Delete, which would only remove the object, is not offered. Sources, certainty and states: [velero.md](velero.md).
+
 **Backup Detail View:**
 - Phase with color-coded badge, start/completion timestamps, duration
 - Progress bar during in-progress backups (items backed up percentage)
@@ -1001,16 +1045,32 @@ Velero reports every outcome through `status.phase` and has no `status.condition
 | `BackupStorageLocationUnavailable` | `BSL.status.phase == Unavailable` | critical |
 | `BackupRepositoryNotReady` | `BackupRepository.status.phase == NotReady` | warning |
 | `VeleroRunStalled` | a `Backup` or `Restore` still in `InProgress`, `WaitingForPluginOperations` or `Finalizing` whose `status.startTimestamp` is older than its `spec.itemOperationTimeout` (Velero's built-in four hours when it declares none). `Deleting` is excluded — its `startTimestamp` belongs to the original run. The message is worded per phase: see the limitation below | warning |
+| `BackupRepositoryMaintenanceFailed` | the newest entry in a usable (not NotReady) `BackupRepository`'s `status.recentMaintenance` has `result: Failed`. Its maintenance Jobs crash-loop in Velero's namespace with nothing else naming the repository | warning |
+| `VeleroServerNotRunning` | the Velero server Deployment (the one running `velero server`) is readable and has no pods. Filed on the Deployment | critical |
+| `VeleroScheduleLate` | the Velero views' **Late** reading: past the next run by 5 minutes with the zone certain and the namespace's Backups read, while the server runs. Critical from three missed scheduled times | warning / critical |
+| `VeleroScheduleCannotRun` | **Cannot run** (name over 63 characters, or its storage location is `ReadOnly`, so Velero rejects every backup; that finding reaches only a caller who may list storage locations there, since namespace access does not authorize them) or **Always due** (a cron with no future time) | critical |
+| `VeleroScheduleHeld` | **Held** by a run Velero has not started for 10 minutes, unless the server is down | warning |
+| `VeleroScheduleNotValidated` | not validated 5 minutes after creation, unless the server is down | warning |
+| `VeleroLocationValidationOverdue` | a location's validation is overdue or never happened, unless the server is down | warning |
 
-They roll up under three categories, split by what you'd go and look at: `backup_failed` for runs that already have an outcome, `backup_target_unavailable` for the location/repository kinds, and `backup_stalled` for `VeleroRunStalled`. A run with no verdict is not a failed run — it has no error to read, only a controller to check — and calling it one puts "Backup failed" above a message saying it is still in progress.
+The last six are readings, from the same rules as the Velero views (`pkg/velero`), raised only when certain: a schedule is judged only with its namespace's Backups read in full, and "probably late" (zone not confirmed) or "late or held" stay readings on the Velero views. While the server is down its consequences (held runs, overdue validation) are not raised again; late schedules are, since each is a backup that will not exist. Each records the reads it rests on (`RequiredReads`: schedules, backups and the namespace's Deployments). Like the other Velero Issues, they are shown to a caller with access to the namespace; Radar checks namespaced evidence at namespace granularity, and per kind only for the kinds the authentication model lists (Secrets and a few others). The Velero views check each kind exactly.
 
-**Supersession.** Velero retains failed `Backup` objects until their TTL expires, so a raw phase-to-issue mapping would keep one bad night red for days. Backups group by the `velero.io/schedule-name` label; only the newest run that already has an outcome raises an issue (the two `*PartiallyFailed` phases count — the partial failure is a fact even though Velero is still finalizing), a later `Completed` clears the series, and an in-progress run neither clears nor raises. Ad-hoc (unlabelled) backups are their own series, so nothing supersedes them. Restores get no supersession — they are one-off operator actions, not a recurring series.
+They roll up under three categories, split by what you'd go and look at: `backup_failed` for runs that already have an outcome, `backup_target_unavailable` for the location/repository kinds, and `backup_stalled` for `VeleroRunStalled`, a stopped server and schedules that are late, held or not validated. A run with no verdict is not a failed run — it has no error to read, only a controller to check — and calling it one puts "Backup failed" above a message saying it is still in progress.
+
+**Supersession.** Velero retains failed `Backup` objects until their TTL expires, so a raw phase-to-issue mapping would keep one bad night red for days. Backups group by the `velero.io/schedule-name` label; only the newest run that already has an outcome raises an issue (the two `*PartiallyFailed` phases count — the partial failure is a fact even though Velero is still finalizing), a later `Completed` clears the series, and an in-progress run neither clears nor raises. Ad-hoc (unlabelled) backups are their own series, so nothing clears them, and a failed or rejected one stays critical. When a `Completed` backup in the same Velero namespace started after it was created, its Cause names that backup as context, without judging whether it saved the same data. The start time is what counts, since backup sync recreates an old backup with a new creation time, and a backup created earlier but queued until after the failure still saved its data later. A schedule's run created with Back up now carries the schedule label, so it supersedes the schedule's failures like any run. Restores get no supersession — they are one-off operator actions, not a recurring series.
+
+<a id="one-fault-one-issue"></a>**One fault, one issue.** A stopped server stops every schedule, and an unavailable location fails every run that writes to it, so a cluster with a hundred schedules would otherwise raise a hundred and one Issues for one fault. The fault's own Issue names what it covers as affected resources (the Issues page's *Missed runs* and *Rejected runs*), and those raise nothing of their own while it lasts, as a Kueue queue's Issue covers the runs it blocks:
+
+- **Stopped server:** every schedule that is **Late** in that namespace while the Deployment has no pods. Lateness from before the outage is included: the schedule is missing backups and nothing runs it until the server starts. A schedule wrong for another reason (cannot run, rejected, held while the server runs) stays its own Issue, and while the server can't be read lateness is its own Issue too.
+- **Unavailable location:** a Backup or Restore in `FailedValidation` whose only validation error is Velero's own statement that this location is unavailable (`backup can't be created because BackupStorageLocation <name> is in Unavailable status.` or `The BSL <name> is unavailable, cannot retrieve the backup`). Any other error, another location, or a run that failed later (`Failed`, `PartiallyFailed`) stays its own Issue: depending on a location is not being failed by it.
+
+When the fault clears, its Issue goes and each covered run that a later run has not superseded is raised again on its own. The covered resources are redacted to what the caller can read, with no count of the rest; they also make the fault's Issue appear on each covered resource, so a schedule's drawer shows the stopped server.
 
 **A paused Schedule is not an issue.** Pausing is operator intent; the Schedule list and detail view show the state without adding queue noise.
 
 **Namespace attribution.** Issues attribute to the Velero object's own namespace (`velero`, or `kommander` on NKP). They are therefore admin-visible, but *not* visible to a user whose namespace view-filter excludes the Velero namespace — including one scoped only to the namespace whose data was lost. Surfacing a failure against the *protected* namespaces needs the protection-coverage model and is not part of this.
 
-**What is not detected yet.** Every detection above is driven by something Velero wrote — a phase, or in the stalled case a `startTimestamp` measured against the run's own budget. Radar does not yet detect the *absence* of a run: a schedule that quietly stopped firing (controller down, wrong cron, schedule deleted) leaves its last run `Completed`, so no issue is raised even though backups have silently stopped. That needs the schedule cadence modelled against Velero's real controller semantics (a due run is *skipped* while a prior backup is in flight), which is tracked separately. **Treat "no Velero issues" as "nothing Velero recorded looks wrong", not as "backups are healthy."**
+**What is not an Issue.** A run's *absence* is raised only when Radar is certain of it: a stopped server, a late schedule with its zone known and its Backups read, a schedule that cannot run, a held run, a schedule never validated (the readings above). Estimates — "probably late" under an unconfirmed zone, "late or held" when Backups were not read — stay readings on the [Velero views](velero.md). Whether a namespace or workload is covered by any schedule at all is not modelled. **Treat "no Velero issues" as "nothing Radar can be sure of looks wrong", not as "every workload is backed up."**
 
 ### Supported CRDs
 
@@ -1024,9 +1084,9 @@ They roll up under three categories, split by what you'd go and look at: `backup
 | BackupRepository | `velero.io/v1` | — | Yes | Yes | — |
 
 **Limitations**:
-- **A backup's phase is not its restorability.** A `Completed` backup can sit on an Unavailable storage location or be past its TTL. The BackupStorageLocation page shows stored and restorable counts. Unavailable means it cannot restore now; expired means Velero intends to delete it, so Radar excludes it even if garbage collection has not run yet.
+- **A backup's phase is not its restorability.** A `Completed` backup can sit on an Unavailable storage location or be past its TTL. The BackupStorageLocation page shows stored and restorable counts. Unavailable means it cannot restore now; expired means Velero intends to delete it, so Radar excludes it even if garbage collection has not run yet. A backup counts against a location by its `spec.storageLocation`, which Velero fills when it first processes the backup; one Velero has not processed yet counts against none.
 - **Stalled-run detection depends on the phase.** `WaitingForPluginOperations` is measured against Velero's `spec.itemOperationTimeout`. For `InProgress` and `Finalizing`, that duration is only a yardstick because Velero defines no deadline. Radar reports the distinction and elapsed time without guessing at a cause. If the field is absent, Radar uses Velero's built-in four-hour default; a controller-level override is not visible in the resource.
-- **Fetching run messages needs a live controller and reachable storage.** Radar creates a `DownloadRequest` and follows Velero's pre-signed object-storage URL. A stopped controller or a URL unreachable from Radar returns an explicit error; configure the storage location's `publicUrl` when needed. Data-mover objects (`DataUpload`/`DataDownload`) and full backup logs remain unavailable.
+- **Fetching run messages needs a live controller and reachable storage.** Radar creates a `DownloadRequest` and follows Velero's pre-signed object-storage URL. A stopped controller or a URL unreachable from Radar returns an explicit error; configure the storage location's `publicUrl` when needed. Contents and log tabs use the same mechanism, with explicit size limits and coverage (see [Velero pages](velero.md#contents-and-log)). The Volumes tab adds the durable volume record and UID-matched current PodVolumeBackup/Restore and DataUpload/Download operations, with per-kind coverage and optional node-agent context; see [Volumes](velero.md#volumes).
 
 ---
 
@@ -1111,6 +1171,49 @@ Provider `parameters` are not summarized. This is presentation only, not a redac
 Collection is on by default in the Helm chart (`rbac.crdGroups.secretsStoreCsi`) and reads only these two kinds. For Radar Cloud callers, SecretProviderClass is withheld from the default integration-read grants (its `parameters` are free-form) and SecretProviderClassPodStatus is granted; see [the default read policy](cloud-rbac-baseline.md).
 
 Tested with driver 1.6.1 and the HashiCorp Vault provider (chart 0.34.1) on kind.
+
+---
+
+## CSI Volume Snapshots
+
+[CSI volume snapshots](https://kubernetes.io/docs/concepts/storage/volume-snapshots/) (`snapshot.storage.k8s.io`) are served by the external-snapshotter CRDs and its snapshot controller, and taken by each CSI driver's `csi-snapshotter` sidecar. A VolumeSnapshot (namespaced) is bound to a VolumeSnapshotContent (cluster-scoped), which records the snapshot on the storage system; a VolumeSnapshotClass (cluster-scoped) names the driver and deletion policy.
+
+### What Radar Shows
+
+**VolumeSnapshot:** status, ready to use, the source PVC or, for a pre-provisioned snapshot, the content it names, the snapshot class, the bound content (`status.boundVolumeSnapshotContentName`, the observed binding rather than the requested source), restore size, when the snapshot was taken, and the controller's error. Source PVC, class and content are links.
+
+**VolumeSnapshotContent:** status, the VolumeSnapshot it names (marked "not bound yet" until the controller records the snapshot's UID), driver, deletion policy and what it means, class, the source volume handle or pre-provisioned snapshot handle, the reported snapshot handle, restore size (reported in bytes), creation time (reported in nanoseconds) and the error.
+
+**VolumeSnapshotClass:** driver, deletion policy, whether it is the default class for its driver (`snapshot.storage.kubernetes.io/is-default-class`) and its parameters. CSI parameters name credential Secrets; they do not hold their values.
+
+All three kinds have curated table columns. Status reads:
+
+| Status | Source |
+|---|---|
+| Ready | `status.readyToUse: true` |
+| Error | `status.error` while not ready. The snapshot controller keeps retrying and clears the error once the snapshot is ready, so an error never outranks `readyToUse` |
+| Not ready | `status.readyToUse: false` with no error, for example while the driver uploads the snapshot |
+| Pending | A VolumeSnapshot not yet bound to a content, or a content with no status (its driver's sidecar has not processed it) |
+| Readiness unknown | Bound, but no `readyToUse` reported |
+| Terminating | `metadata.deletionTimestamp` is set |
+
+A missing restore size or creation time reads "Not reported", never zero. Ready means the CSI driver can restore a volume from the snapshot; it does not establish application consistency or that a restore was ever tested. Not every snapshot has a source PVC: a pre-provisioned snapshot names an existing content instead.
+
+A VolumeSnapshot with `status.error` that is not ready to use produces one warning in Issues (including the API and MCP), `VolumeSnapshotError`, quoting the controller's message, which the API says should not contain sensitive information. Its onset is the error's own time. A VolumeSnapshotContent produces no separate Issue: the controller copies its error onto the bound snapshot, and the content drawer shows it. MCP list summaries carry the same status, readiness, source, driver, deletion policy and restore size.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| VolumeSnapshot | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+| VolumeSnapshotContent | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+| VolumeSnapshotClass | `snapshot.storage.k8s.io/v1` | — | Yes | Yes |
+
+Collection is on by default in the Helm chart (`rbac.crdGroups.volumeSnapshots`) and reads only these three kinds. Radar Cloud's default integration-read role grants all three, as the cluster read already grants PersistentVolumes and StorageClasses; see [the default read policy](cloud-rbac-baseline.md).
+
+Checked against snapshot-controller v8.6.0 and the csi-hostpath driver on kind: ready dynamic snapshots with Delete and Retain classes, a missing class, a missing PVC, an unbound PVC, and pre-provisioned contents with a valid and an unknown snapshot handle.
+
+Not covered: topology and Related Resources edges, VolumeGroupSnapshots, PVCs restored from a snapshot (`dataSource`), and snapshot creation, deletion or restore actions.
 
 ---
 
@@ -1964,8 +2067,9 @@ coverage on affected resource pages and counts, rather than a healthy answer.
 ClusterQueue findings appear only in views not narrowed to namespaces.
 
 `diagnose` on Job, JobSet, RayJob or Kueue Workload returns cached context,
-related Issues and resource events. It collects no Pods, runtime logs, metrics
-or relationship graph. Follow Workload references for admission and Pods for
+related Issues and resource events, with relationships answered as
+`get_resource` answers them. It collects no Pods, runtime logs or metrics.
+Follow Workload references for admission and Pods for
 runtime diagnosis. An empty Issues list does not establish runtime health;
 undecided Workloads, unrecognized reasons and MultiKueue handoff are not covered.
 
@@ -2176,6 +2280,81 @@ Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share ki
 | DeviceConfig (AMD GPU Operator) | `amd.com/v1alpha1` | Ready condition + component DaemonSet rollout counts |
 
 ---
+
+## Agent runtimes: Agent Sandbox and Agent Substrate
+
+Two projects run AI agents on Kubernetes, and Radar reads both: [Agent Sandbox](https://github.com/kubernetes-sigs/agent-sandbox) (Kubernetes SIG Apps) gives each agent its own sandboxed Pod, and [Agent Substrate](https://github.com/agent-substrate/substrate) (CNCF Sandbox) runs many mostly idle agents on a small pool of warm worker Pods. Radar reads their status the way their controllers mean it, with status badges, table columns, status filters, Issues and sidebar grouping; drawers use the standard spec/status renderer.
+
+| Resource | Group | Status source |
+|----------|-------|---------------|
+| Sandbox | `agents.x-k8s.io` (v1beta1) | `Ready` condition and its reason; `Suspended` while `spec.operatingMode` is Suspended |
+| SandboxClaim | `extensions.agents.x-k8s.io` (v1beta1) | `Ready` condition and its reason |
+| SandboxWarmPool | `extensions.agents.x-k8s.io` (v1beta1) | ready versus desired sandboxes; `observedGeneration` |
+| SandboxTemplate | `extensions.agents.x-k8s.io` (v1beta1) | — |
+| WorkerPool | `ate.dev` (v1) | per-class `Resolved` condition in `status.sandboxClasses[]`; ready versus desired workers |
+| SandboxConfig, CSIDriverConfig | `ate.dev` (v1, cluster-scoped) | — (printer columns) |
+
+**Ready=False is not always a failure.** Agent Sandbox reports every non-running state as `Ready=False`, so Radar reads the reason, in the controller's own order (reconcile errors first, then the suspension, then Pod state). One reading in `pkg/health` serves Issues and AI summaries; the UI mirrors it, and `pkg/health/testdata/agent_sandbox.json` pins both:
+
+- **Settled** (neutral, never an Issue): Suspended once the `Suspended` condition says the Pod is gone, Expired (`SandboxExpired`, a claim's `ClaimExpired`), Finished (`PodSucceeded`).
+- **In progress** (amber): Suspending (`SandboxSuspended` while the Pod still terminates), Provisioning (`DependenciesNotReady`, a claim's `SandboxNotReady` and `SandboxCreatePending`), Binding (`AdoptionConflict`), Terminating, the scheduler's reason when `PodScheduled` is False (orange), and Updating when the condition was recorded for an older generation. These raise no Issue for 30 minutes; one that lasts longer is reported, because a sandbox whose Pod or Service is never created has no other finding to fall back on. The clock starts at the resume when the `Suspended` condition records one, since Kubernetes keeps Ready's transition time across a reason change. A suspension has no reliable start time, so Suspending never raises an Issue of its own; a Pod that never terminates is reported as a stuck deletion.
+- **Attention** (orange, an Issue): `ReconcilerError` (the controller retries it), and **Suspension blocked** (Issue reason `PodNotOwned`) when a suspension is refused because the Pod the controller tracks for the Sandbox is not owned by it. Ready keeps its ordinary suspension reason then, so Radar reads the refusal from the `Suspended` condition, adds what unblocks it (remove that Pod, the one its `agents.x-k8s.io/pod-name` annotation names or else the one with its own name, or recreate the Sandbox under another name), and reports it at once: nothing is being torn down, so waiting changes nothing.
+- **Failed** (red, an Issue): a hard container failure the controller names in its message (`ImagePullBackOff`, `CrashLoopBackOff` and the like), `PodFailed`, `InvalidConfiguration`, `MultiplePods`, and a claim's `TemplateNotFound`, `WarmPoolNotFound`, `InvalidMetadata`, `EnvVarsInjectionRejected`, `VolumeClaimTemplatesError` and `SandboxMissing`.
+
+A claim forwards its Sandbox's reason; an in-progress or settled forwarded reason is left for the Sandbox to report, so it raises no Issue on the claim.
+
+<p align="center">
+  <img src="screenshots/integrations/agent-sandbox-list.png" alt="Sandbox list with status readings" width="800">
+  <br><em>Sandboxes: each status names the reason Agent Sandbox reports, colored by how much it needs attention</em>
+</p>
+
+**WorkerPool.** Its only condition, `Resolved`, sits per sandbox class in `status.sandboxClasses[]`, where Radar's generic condition handling never looks. A class that does not resolve to a usable SandboxConfig (`SandboxConfigNotFound`, `SandboxConfigDeleting`, `SandboxClassMismatch`, `DefaultConfigNotFound`) is an Issue, since Substrate keeps ready workers running on the last resolved config but cannot start new ones. Severity follows one rule: **critical** (red) when workers are wanted and none is ready; otherwise a warning (orange). A condition recorded for an older generation is reported as such rather than trusted, and a spec edit is not read as recovery. `pkg/health` holds this reading for AI summaries, and `pkg/health/testdata/substrate_workerpool.json` pins the UI to it. Workers that are not ready are left to the worker Deployment the pool owns. A Deployment that is never created has nothing to report it, and Substrate's controller only logs a rejected create (an admission policy, or a ServiceAccount or Deployment it may not create), so Radar raises a critical `DeploymentNotCreated` Issue when a pool wants workers, every class has resolved on the current generation, and 10 minutes later there is still no `status.selector` and no worker Pod. The pool's status then reads **Provisioning stalled** (red), from the same rule in `pkg/health`, so the badge and the Issue agree. A SandboxConfig stuck deleting because a pool still uses it is attributed to `ate-controller` (finalizer `sandboxconfig.ate.dev/workerpool-protection`).
+
+**Worker Pods.** A Pod labelled `ate.dev/worker-pool` gets a note in its drawer: Substrate places actors on it in turn, so its logs, metrics and restarts are shared by every actor it has hosted.
+
+**Agent Substrate health (Prometheus).** With [Prometheus connected](workload-metrics.md#what-radar-discovers-automatically), a WorkerPool, and a Node that runs Substrate's `atelet`, get an Agent Substrate section at the top of their Overview tab (capacity on a WorkerPool, snapshot uploads on a Node) and charts on their Metrics tab, from the metrics Substrate exports. The section gives the verdict, a sentence saying what it means for someone who has not met Substrate before, and the facts behind it. They are aggregates: Substrate keeps actor names out of metric labels.
+
+<p align="center">
+  <img src="screenshots/integrations/agent-substrate-workerpool.png" alt="WorkerPool drawer with the Agent Substrate capacity section" width="800">
+  <br><em>A WorkerPool short of workers: the verdict, what it means, and the facts behind it</em>
+</p>
+
+The verdict and the capacity and snapshot facts read now; resume p95, failed resumes and crashes summarize the charts' hour:
+
+| Resource | Verdict (wire `state`) | Means | Facts |
+|---|---|---|---|
+| WorkerPool | **Short of workers** (amber), `workerShortfall` | Substrate's own `SubstrateWorkerPoolCapacityNotDelivered` condition has held at every minute for the last five (six one-minute points), and holds now: schedulable workers, the highest count any API replica reports for each state and class summed, are below the fewest desired | Schedulable workers of desired, first: the comparison Substrate's alert makes, the highest count any API replica reports for each worker state and class, summed (while replicas disagree, more than any one replica's total), out of the fewest desired over five minutes; workers with free slots, of schedulable workers in the states Substrate defines (averaged across replicas, shown as approximate when fractional); resume p95 and failed resumes of actors placed on this pool, and crashes, over the hour |
+| WorkerPool | **Full** (neutral), `noFreeActorSlots` | No API replica sees a free actor slot (an idle or partial worker) | |
+| WorkerPool | Free slots, `freeActorSlots` | Some worker has a free actor slot. Substrate counts slots by actors alone, so an actor that needs more CPU or memory than a worker has left can still fail to place, and that failure names no pool: it is in neither the pool's charts nor its failed resumes | |
+| WorkerPool | No schedulable workers, `noSchedulableWorkers` | No schedulable worker of a known class, and none short | |
+| Node | **Uploads overdue** (amber), `uploadsOverdue` | Some actor's snapshot upload to object storage is overdue | Overdue uploads by band, worst first; oldest snapshot not yet in storage |
+| Node | No overdue uploads, `noUploadsOverdue` | atelet counts no overdue upload. Snapshots with no storage destination are not counted, so this is not proof that every snapshot is saved; the oldest unsaved snapshot fact shows that | |
+
+Facts are uncolored. An hourly fact is computed from the data Prometheus holds for the hour, so a gap in collection makes the crash count cover less than the hour; the fact's tooltip says so. One Radar could not read says **Unavailable** with the reason (the same reason its chart gives), never 0, and so does an hourly fact whose own population (successful resumes, all resumes, crashes) stopped reporting: the hour's number would count only the time before. One whose series exist but recorded nothing for this pool or node says **None**. When the verdict cannot be read it says **Unknown** with the reason, as it does when workers report a state Substrate's registry does not define.
+
+Only Short of workers needs the controller's `ate.workerpool.desired_workers`. Substrate's bundled Prometheus does not collect the controller's metrics, so without it the pool is still judged Full, Free slots or No schedulable workers from the API server's counts, and the section's sentence says the shortfall cannot be judged and why. An info mark carries the note when Radar could not confirm the series belong to this cluster.
+
+| Resource | Chart | Series (each counts only what Substrate attributes) |
+|---|---|---|
+| WorkerPool | Workers by state | `ate_workerpool_workers`, averaged across API replicas (each reports the whole fleet) by pool, state and sandbox class; each line names its class, and class `unknown` is not capacity |
+| WorkerPool | Ready and desired workers | `ate_workerpool_{desired,ready}_workers` |
+| WorkerPool | Resume time (p50, p95), Failed resumes (%) | `ate_actor_lifecycle_operation_duration_seconds`, operation `resume`: only resumes of actors placed on this pool |
+| WorkerPool | Placement time (p95) | `ate_scheduler_assignment_duration_seconds`, outcome `assigned`. A placement that found no capacity names no pool, so it is not counted |
+| WorkerPool | Actor crashes per minute | `ate_actor_crashes_total`: only actors that had a worker of this pool |
+| Node | Oldest snapshot not yet in storage | `atelet_snapshot_undurable_age_max_seconds` |
+| Node | Actors with overdue uploads | `atelet_snapshot_upload_overdue_actors` by band |
+| Node | Snapshot upload time, Failed uploads | `atelet_snapshot_upload_duration_seconds` |
+| Node | Restore and checkpoint time | `ate_actor_{restore,checkpoint}_duration_seconds`, phase `total` (the two overlap; they are not added) |
+
+- **Names.** The table uses the names Substrate's exporter and Prometheus's OTLP receiver produce by default (`ate_actor_crashes_total`, `*_seconds_bucket`, labels such as `ate_workerpool_name`). Radar also reads the dotted UTF-8 names Google Managed Prometheus keeps, with or without unit suffixes (`ate.actor.lifecycle.operation.duration_bucket`, labels such as `ate.workerpool.name`), and copies dotted labels to underscore names before grouping, since GMP rejects dotted labels in a `by` clause. It finds which names Prometheus holds by listing metric names over the range (a partial list is an error). Each component (`ateapi`, `atecontroller`, `atelet`) is resolved on its own, so an API server scraped under underscore names next to a controller pushing dotted names over OTLP reads correctly. When Prometheus holds more than one name for a component's series (both spellings, or with and without unit suffixes), the one with series for this pool or node within this cluster is read. Two spellings with series refuse that component's charts, and two suffix styles of one instrument with series refuse only the charts reading that instrument: after a pipeline changes how it names metrics, that lasts until the range no longer spans the change, and for good if the component is exported twice. Native histograms read as not found.
+- **Empty and sparse charts.** A chart whose first sample comes well after the range starts says so ("No samples before 08:33"), rather than leaving most of the plot blank unexplained. A WorkerPool with no metrics whose status reports 0 worker Pods says so, instead of explaining metric names.
+- **Nodes.** atelet's series are attributed by the `node` label a Kubernetes scrape adds, as in Substrate's reference Prometheus configuration. Series without it are reported as not attributable rather than guessed from current Pods. A Node whose cluster serves no WorkerPools, or that runs no atelet, shows no section.
+- **Accuracy.** Each family's cluster identity is checked over the chart's range (ambiguous and mismatched identities are reported, not charted). A partial or warning answer from Prometheus is an error, not a chart. A family that is summed or averaged and arrives through more than one scrape job is reported instead of being counted twice, and copies that differ only by an HA Prometheus pair's or a deduplicating store's replica label (`prometheus`, `prometheus_replica`, `replica`, `__replica__`) are collapsed. On a Node, duplicate scrape jobs are judged within that node's series. A chart that combines two families is drawn only when both resolve to the same cluster identity, and a Node's attribution is decided within this cluster's series.
+- **Access.** `GET /api/prometheus/substrate/workerpools/{namespace}/{name}` requires `get` on that WorkerPool; `GET /api/prometheus/substrate/nodes/{name}` requires `get` on Nodes. A Node's verdict and charts count every actor Substrate places on that node, including actors of WorkerPools in namespaces the caller cannot read: they show counts, timings and overdue state, never actor or pool names, the same policy as the Node's CPU and memory charts. Both take `range` (`10m` … `14d`, default `1h`; an unknown value is served as `1h` and the response's `range` says so), are read-only, and are advertised by the `substrateHealthMetrics` capability, so Radar Hub asks only a Radar that serves them.
+
+**Not covered:** Substrate's actors, actor templates and worker assignments live in Substrate's own control plane (PostgreSQL behind a gRPC API), not in Kubernetes, so Radar does not see them. kagent's `api.kagent.dev` kinds are grouped in the sidebar but otherwise use generic discovery; the chart does not collect them by default. The drawer's conditions list shows each condition as recorded, so a settled sandbox's `Ready=False` keeps its red mark there. Topology shows the generic owner edges only (WorkerPool → Deployment → Pods; Sandbox → Pod).
+
+**Chart RBAC.** `rbac.crdGroups.agentSandbox` (`agents.x-k8s.io`, `extensions.agents.x-k8s.io`) and `rbac.crdGroups.agentSubstrate` (`ate.dev`) grant read access and are on by default. Sandboxes and SandboxTemplates carry Pod templates, which can hold inline environment values; with authentication on, users see them in namespaces they can read, like the Pods and Deployments there.
 
 ## Local runtime evidence: RabbitMQ, NATS and Vault
 

@@ -293,6 +293,19 @@ This setting applies only to that launch. If the window opens black or the app c
 
 For the separate [upstream NVIDIA crash](https://bugs.webkit.org/show_bug.cgi?id=327542), run `kubectl radar` and open the printed URL in your browser.
 
+## Java4Shell CLI
+
+`radar check java4shell` runs the same declared-Java-version check as **Checks → Vulnerabilities**. It connects directly to Kubernetes using `KUBECONFIG` or the standard Kubernetes configuration and uses the selected context's namespace by default. Pass `--kubeconfig`, `--context`, and `--namespace` to select a different target. `--all-namespaces` (`-A`) requires cluster-wide permission to list Pods.
+
+```bash
+radar check java4shell -n payments
+kubectl radar check java4shell --context staging -n payments -o json --fail-on-match
+```
+
+The default table summarizes matches and unassessed containers. JSON uses the same format as the UI download, including the check time, namespace coverage, matches, and unassessed reasons. Progress goes to stderr, and the finished report goes to stdout. The command uses the caller's Kubernetes access and registry credentials, including readable pull secrets referenced by the Pods. CPU placement remains unknown where Node facts are unavailable. If a Pod reports a multi-platform image index digest, Radar needs the Node's platform to assess its Java version.
+
+The command exits with `0` after a completed check and `1` if the check cannot run. With `--fail-on-match`, it exits with `2` after writing a result with at least one affected version declaration. This policy uses the declared Java version, including where CPU capability is unknown. Check the unassessed counts when deciding whether a result covers the containers your CI policy expects. For images where Radar finds no version declaration, `java_home_declared` counts containers whose image sets `JAVA_HOME`, and `no_java_declaration` counts the rest.
+
 ## AI Investigations Agent CLI
 
 Built-in AI investigations run an agent CLI installed on the machine Radar runs
@@ -972,6 +985,8 @@ The pick belongs to the browser tab. Picking in one tab doesn't change your othe
 The pick narrows Radar's own views only, and only because the UI sends it with each request. An API read that names no namespace (`?namespace=` / `?namespaces=`) never inherits a remembered pick: it returns everything you're allowed to see, within the `--namespace-scope` pin when one is set. So the same user reading through another client — AI tools over MCP, Radar Cloud's fleet-wide views and background pollers, or `curl` — is never quietly narrowed to a namespace picked while browsing. A few UI surfaces deliberately cover all your namespaces regardless of the pick: the namespace list in the ⌘K palette, the **My permissions** dialog, and the standalone Cost view (which disables the picker). Home's Cost Insights card follows the pick.
 
 Until you make a pick, local sessions default to the namespace set on the kubeconfig context (kubectl parity — the same namespace `kubectl` would use, including one set via `kubectl config set-context` or `kubens`). An explicit `--namespace` / `--namespaces` flag outranks the kubeconfig value, and contexts without either default to **All namespaces**. Once you pick namespaces or explicitly choose **All namespaces**, that choice is what new tabs start from for the context and the kubeconfig value is no longer consulted.
+
+The picker's list comes from a live namespace LIST. When that LIST fails for a reason other than RBAC (a timeout right after switching clusters, while caches are still loading, is the usual one), Radar answers from its namespace cache once that has synced, and otherwise with only the context and `--namespace` namespaces. Either way the response carries `listFailed`: the UI asks again until a LIST succeeds (after 3s, backing off to 30s), and doesn't drop a tab's pick by a list that may lag a namespace created moments ago.
 
 When Radar starts with `--namespace-scope`, the picker controls the process-wide cache scope instead of just a view filter, so it is one setting for every tab and every user. Namespaced informer caches are pinned to one namespace while cluster-scoped resources remain cluster-wide. Local/no-auth sessions can switch the scoped namespace, which rebuilds the cache in place. Auth-enabled and Radar Cloud sessions lock the picker to the startup namespace so one user cannot reshape the shared backend cache for everyone.
 

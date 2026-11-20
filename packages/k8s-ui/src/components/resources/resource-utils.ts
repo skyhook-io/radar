@@ -1,8 +1,10 @@
 import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
+import { getVolumeSnapshotColumnValue } from './resource-utils-volumesnapshot'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
+import { FLUX_OPERATOR_GROUP, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
 // Utility functions for resource display in tables
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
@@ -30,6 +32,7 @@ import { getInferencePoolStatus as _getInferencePoolStatus, getInferenceObjectiv
 import { getVolcanoJobStatus as _getVolcanoJobStatus, getVolcanoQueueStatus as _getVolcanoQueueStatus, getVolcanoPodGroupStatus as _getVolcanoPodGroupStatus, getJobFlowStatus as _getJobFlowStatus, getJobTemplateStatus as _getJobTemplateStatus } from './resource-utils-volcano'
 import { getKaiQueueStatus as _getKaiQueueStatus, getKaiPodGroupStatus as _getKaiPodGroupStatus } from './resource-utils-kai'
 import { getKaitoWorkspaceStatus as _getKaitoWorkspaceStatus, getRAGEngineStatus as _getRAGEngineStatus } from './resource-utils-kaito'
+import { getAgentRuntimeColumnValue, getSandboxClaimStatus as _getSandboxClaimStatus, getSandboxStatus as _getSandboxStatus, getSandboxWarmPoolStatus as _getSandboxWarmPoolStatus, getWorkerPoolStatus as _getWorkerPoolStatus } from './resource-utils-agent-runtimes'
 import { getNIMServiceStatus as _getNIMServiceStatus, getNIMCacheStatus as _getNIMCacheStatus, getNIMPipelineStatus as _getNIMPipelineStatus } from './resource-utils-nim'
 import { getAMDDeviceConfigStatus as _getAMDDeviceConfigStatus } from './resource-utils-amd-gpu'
 import { getPyTorchJobStatus as _getPyTorchJobStatus, getTFJobStatus as _getTFJobStatus, getMPIJobStatus as _getMPIJobStatus, getTrainJobStatus as _getTrainJobStatus } from './resource-utils-kubeflow-training'
@@ -239,7 +242,7 @@ function containerSettledOk(cs: any): boolean {
 // isFatalWaitingReason. These escalate immediately regardless of pod age or a
 // Terminating overlay (a bad image / config error is a real failure now, not a
 // benign young-Pending pod).
-const FATAL_WAITING_REASONS = new Set([
+export const FATAL_WAITING_REASONS = new Set([
   'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'InvalidImageName',
   'ImageInspectError', 'CreateContainerConfigError', 'CreateContainerError', 'RunContainerError',
 ])
@@ -1703,8 +1706,22 @@ export function cronToHuman(cron: string): string {
   ) {
     return `Weekdays at ${hour}:${minute.padStart(2, '0')}`
   }
+  // A literal time on every day, or on one day of the week. Literal means a
+  // plain number: a list or range ("1,13", "9-17") is not one time.
+  const literal = (v: string, max: number) => /^\d{1,2}$/.test(v) && Number(v) <= max
+  if (literal(minute, 59) && literal(hour, 23) && dayOfMonth === '*' && month === '*') {
+    const at = `${hour}:${minute.padStart(2, '0')}`
+    if (dayOfWeek === '*') return `Daily at ${at}`
+    const day = CRON_WEEKDAYS[dayOfWeek.toUpperCase()]
+    if (day) return `Weekly on ${day} at ${at}`
+  }
 
   return cron
+}
+
+const CRON_WEEKDAYS: Record<string, string> = {
+  '0': 'Sunday', '1': 'Monday', '2': 'Tuesday', '3': 'Wednesday', '4': 'Thursday', '5': 'Friday', '6': 'Saturday',
+  SUN: 'Sunday', MON: 'Monday', TUE: 'Tuesday', WED: 'Wednesday', THU: 'Thursday', FRI: 'Friday', SAT: 'Saturday',
 }
 
 // ============================================================================
@@ -2568,12 +2585,21 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (connectorValue !== undefined) return connectorValue
   const strimziClusterValue = getStrimziClusterColumnValue(resource, column)
   if (strimziClusterValue !== undefined) return strimziClusterValue
+  const volumeSnapshotValue = getVolumeSnapshotColumnValue(resource, column)
+  if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
   const otelValue = getOpenTelemetryColumnValue(resource, column)
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
   if (flaggerValue !== undefined) return flaggerValue
+  const agentRuntimeValue = getAgentRuntimeColumnValue(resource, column)
+  if (agentRuntimeValue !== undefined) return agentRuntimeValue
   const planValue = getUpgradePlanColumnValue(resource, column)
   if (planValue !== undefined) return planValue
+  if (_isApiGroup(resource?.apiVersion, FLUX_OPERATOR_GROUP)) {
+    if (column === 'status') return getFluxOperatorStatus(resource).text
+    const fluxOperatorValue = getFluxOperatorColumnValue(kind.toLowerCase(), resource, column)
+    if (fluxOperatorValue !== undefined) return fluxOperatorValue
+  }
   const crdValue = getCRDColumnValue(resource, column)
   if (crdValue !== undefined) return crdValue
   const kindLower = kind.toLowerCase()
@@ -2660,6 +2686,10 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'kaiqueues') return _getKaiQueueStatus(resource).text
       if (kindLower === 'kaipodgroups') return _getKaiPodGroupStatus(resource).text
       if (kindLower === 'kaitoworkspaces') return _getKaitoWorkspaceStatus(resource).text
+      if (kindLower === 'substrateworkerpools') return _getWorkerPoolStatus(resource).text
+      if (kindLower === 'agentsandboxes') return _getSandboxStatus(resource).text
+      if (kindLower === 'agentsandboxclaims') return _getSandboxClaimStatus(resource).text
+      if (kindLower === 'agentsandboxwarmpools') return _getSandboxWarmPoolStatus(resource).text
       if (kindLower === 'ragengines') return _getRAGEngineStatus(resource).text
       if (kindLower === 'nimservices') return _getNIMServiceStatus(resource).text
       if (kindLower === 'nimcaches') return _getNIMCacheStatus(resource).text

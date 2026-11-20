@@ -9,9 +9,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// ArgoRolloutsGroup is the API group of Argo Rollouts, whose Rollout declares
-// a pod template the way a Deployment does.
-const ArgoRolloutsGroup = "argoproj.io"
+// ArgoGroup is Argo's API group, shared by Rollouts and Workflows.
+const ArgoGroup = "argoproj.io"
 
 // VisitObjectReferences visits the ConfigMaps, Secrets,
 // PersistentVolumeClaims and ServiceAccount an object declares for its Pods,
@@ -67,7 +66,7 @@ func IsArgoRollout(u *unstructured.Unstructured) bool {
 		return false
 	}
 	group := u.GroupVersionKind().Group
-	return group == ArgoRolloutsGroup
+	return group == ArgoGroup
 }
 
 // VisitPodSpecMapReferences visits the declarations of a PodSpec held as an

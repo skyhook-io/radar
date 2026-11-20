@@ -30,7 +30,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"golang.org/x/sync/singleflight"
-	authv1 "k8s.io/api/authorization/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -38,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -685,10 +685,25 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/poolers/{namespace}/{name}/capabilities", s.handleCNPGPoolerCapabilities)
 			r.Get("/cnpg/poolers/{namespace}/{name}/pgbouncer-state", s.handleCNPGPgBouncerState)
 			r.Post("/cnpg/poolers/{namespace}/{name}/actions/{action}", s.handleCNPGPoolerAction)
+			r.Get("/velero/workspace", s.handleVeleroWorkspace)
+			r.Get("/velero/schedules/{namespace}/{name}/activity", s.handleVeleroScheduleActivity)
 			r.Get("/velero/backupstoragelocations/{namespace}/{name}/backups", s.handleVeleroStoredBackups)
+			r.Get("/velero/runs/{kind}", s.handleVeleroRuns)
 			// POST: creates a DownloadRequest, which is the only supported way to
 			// read the messages behind a run's error and warning counts.
 			r.Post("/velero/{kind}/{namespace}/{name}/messages", s.handleVeleroRunMessages)
+			r.Post("/velero/{kind}/{namespace}/{name}/contents", s.handleVeleroRunContents)
+			r.Post("/velero/{kind}/{namespace}/{name}/log", s.handleVeleroRunLog)
+			r.Post("/velero/{kind}/{namespace}/{name}/volumes", s.handleVeleroRunVolumes)
+			r.Get("/velero/{kind}/{namespace}/{name}/volume-operations", s.handleVeleroVolumeOperations)
+			// POST: creates a Backup from the schedule's template, as the caller.
+			r.Post("/velero/schedules/{namespace}/{name}/backup", s.handleVeleroBackupNow)
+			// POST: sets spec.paused as the caller, as `velero schedule pause|unpause` does.
+			r.Post("/velero/schedules/{namespace}/{name}/pause", s.handleVeleroSchedulePause(true))
+			r.Post("/velero/schedules/{namespace}/{name}/resume", s.handleVeleroSchedulePause(false))
+			// POST: creates a DeleteBackupRequest, the way Velero deletes a backup.
+			r.Post("/velero/backups/{namespace}/{name}/delete", s.handleVeleroDeleteBackup)
+			r.Get("/velero/backups/{namespace}/{name}/deletion", s.handleVeleroBackupDeletion)
 
 			r.Get("/namespaces", s.handleNamespaces)
 			r.Get("/api-resources", s.handleAPIResources)
@@ -703,6 +718,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/resources/{kind}/{namespace}/{name}/cascade-preview", s.handleCascadeDeletePreview)
 			r.Delete("/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
+			r.Get("/sealedsecrets/controller", s.handleSealedSecretsController)
 			r.Get("/certificates", s.handleCertificates)
 
 			// Cluster audit
@@ -719,6 +735,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/upgrade-readiness", s.handleUpgradeReadiness)
 			// Scanner findings rolled up to the images that run now.
 			r.Get("/vulnerabilities", s.handleVulnerabilities)
+			r.Get("/vulnerabilities/java4shell", s.handleJava4Shell)
 
 			// Network path trace - path-shaped diagnosis for Service /
 			// Ingress / HTTPRoute / GRPCRoute / Gateway. See internal/trace.
@@ -848,49 +865,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
-			imageHandlers := images.NewHandlers(func(r *http.Request, namespace string) (bool, bool) {
-				if auth.UserFromContext(r.Context()) != nil && s.permCache == nil {
-					return false, false
-				}
-				return s.canReadDecision(r, "", "pods", namespace, "get")
-			}, func(r *http.Request, namespace string) (bool, bool) {
-				if auth.UserFromContext(r.Context()) == nil || s.permCache == nil {
-					return false, false
-				}
-				return s.grantDecision(r, Grant{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace})
-			}, func(r *http.Request, namespace, secretName string) (bool, bool) {
-				user := auth.UserFromContext(r.Context())
-				if user == nil || s.permCache == nil {
-					return false, false
-				}
-				if allowed, authoritative := s.grantDecision(r, Grant{Verb: "create", Resource: "pods", Subresource: "exec", Namespace: namespace}); allowed && authoritative {
-					return true, true
-				}
-				perms := s.permCache.Get(user.Username, user.Groups)
-				key := "secrets/" + secretName
-				if perms != nil {
-					if allowed, ok := perms.CanI("get", "", key, namespace); ok {
-						return allowed, true
-					}
-				}
-				client := k8s.GetClient()
-				if client == nil {
-					return false, false
-				}
-				// Include Name so resourceNames-restricted Secret grants apply.
-				status, err := pkgauth.ReviewSubjectAccess(r.Context(), client, user.Username, user.Groups, authv1.ResourceAttributes{
-					Verb: "get", Resource: "secrets", Namespace: namespace, Name: secretName,
-				})
-				if err != nil {
-					log.Printf("[images] Failed to authorize pull secret %s/%s: %v", k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(secretName), err)
-					return false, false
-				}
-				authoritative := status.EvaluationError == ""
-				if authoritative && perms != nil {
-					perms.SetCanI("get", "", key, namespace, status.Allowed)
-				}
-				return status.Allowed, authoritative
-			})
+			imageHandlers := images.NewHandlers(s.imagePodReadDecision, s.imageExecDecision, s.imagePullSecretDecision)
 			imageHandlers.RegisterRoutes(r)
 
 			// Prometheus metrics routes. Every metrics read runs with Radar's
@@ -1550,37 +1525,48 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 // an older binary simply lacks it.
 func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
-		ApplicationEvidence:      true,
-		ResourceReadCoverage:     true,
-		SearchCoverage:           true,
-		SearchEventContent:       true,
-		YAMLReview:               true,
-		YAMLSchemas:              true,
-		WorkloadImages:           true,
-		DeploymentPause:          true,
-		ResourceIssues:           true,
-		ResourceIssueCoverage:    true,
-		PodEnvironment:           true,
-		PolicyResource:           true,
-		WorkloadHistory:          true,
-		CNPGWorkspace:            true,
-		CNPGProtectionSetup:      true,
-		ServiceEndpointSlices:    true,
-		TrafficRecords:           true,
-		GitOpsWriteEvidence:      true,
-		ArgoRollbackSync:         true,
-		ArgoSyncInheritance:      true,
-		ArgoEnableSelfHealOff:    true,
-		AgentSigninCheck:         true,
-		HelmSourceIdentity:       true,
-		HelmInventory:            true,
-		ClusterScopedPlaceholder: true,
-		KueuePendingPosition:     true,
-		RayClusterPods:           true,
-		PodSidecarMarks:          true,
-		KueueQueueWorkloads:      true,
-		PodFileUpload:            true,
-		Vulnerabilities:          true,
+		ApplicationEvidence:         true,
+		SealedSecretsController:     true,
+		ResourceReadCoverage:        true,
+		SearchCoverage:              true,
+		SearchEventContent:          true,
+		YAMLReview:                  true,
+		YAMLSchemas:                 true,
+		WorkloadImages:              true,
+		DeploymentPause:             true,
+		SubstrateHealthMetrics:      true,
+		ResourceIssues:              true,
+		ResourceIssueCoverage:       true,
+		PodEnvironment:              true,
+		PolicyResource:              true,
+		WorkloadHistory:             true,
+		CNPGWorkspace:               true,
+		CNPGProtectionSetup:         true,
+		VeleroWorkspace:             true,
+		VeleroBackupNow:             true,
+		VeleroSchedulePause:         true,
+		VeleroRuns:                  true,
+		VeleroDeleteBackup:          true,
+		ResourceDeletePreconditions: true,
+		VeleroRunVolumes:            true,
+		VeleroRunArtifacts:          true,
+		ServiceEndpointSlices:       true,
+		TrafficRecords:              true,
+		GitOpsWriteEvidence:         true,
+		ArgoRollbackSync:            true,
+		ArgoSyncInheritance:         true,
+		ArgoEnableSelfHealOff:       true,
+		AgentSigninCheck:            true,
+		HelmSourceIdentity:          true,
+		HelmInventory:               true,
+		ClusterScopedPlaceholder:    true,
+		KueuePendingPosition:        true,
+		RayClusterPods:              true,
+		PodSidecarMarks:             true,
+		KueueQueueWorkloads:         true,
+		PodFileUpload:               true,
+		Vulnerabilities:             true,
+		RuntimeAdvisoryChecks:       true,
 	}
 }
 
@@ -1638,6 +1624,9 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[capabilities] namespace-scoped check for %q failed: %v", ns, err)
 		} else if nsCaps != nil {
 			mergeNamespaceCapabilities(caps, nsCaps)
+			if nsCaps.Errors != (k8s.NamespaceCapabilityErrors{}) {
+				caps.ChecksIncomplete = true
+			}
 		}
 	}
 
@@ -2242,8 +2231,12 @@ func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 	// permCache.Get back after a transient discovery failure conflates
 	// "cluster-admin sentinel" with "cache miss" and would silently leak the
 	// full namespace list to a restricted user during apiserver flakes.
-	allowedNames := s.parseNamespacesForUser(r)
+	allowedNames, discoveryFailed := s.parseNamespacesForUserWithStatus(r)
 	if allowedNames != nil && len(allowedNames) == 0 {
+		if discoveryFailed {
+			s.writeCollectionFailure(w, "namespaces", permissionFailure(false, ""))
+			return
+		}
 		s.writeJSON(w, []map[string]any{})
 		return
 	}
@@ -2261,7 +2254,12 @@ func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 		// GetAccessibleNamespaces (SA-listed). Apply the same per-user
 		// filter so restricted users don't see SA-visible names they
 		// have no access to.
-		accessible, _ := k8s.GetAccessibleNamespaces(r.Context())
+		accessible, source := k8s.GetAccessibleNamespacesWithSource(r.Context())
+		if source == k8s.NamespaceListFailed {
+			// The seeds alone would read as the whole list.
+			s.writeCollectionFailure(w, "namespaces", readFailuref(readreason.ReadError, "Radar couldn't list namespaces; retry shortly"))
+			return
+		}
 		result := make([]map[string]any, 0, len(accessible))
 		for _, name := range accessible {
 			if allowedSet != nil && !allowedSet[name] {
@@ -3037,9 +3035,22 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// "namespaces" is cluster-scoped at the K8s API but exposed as a per-user
 	// filtered list — gate the GET via the user's namespace access for the
 	// requested name, not via cluster-scoped SAR.
+	objectOnly := false
 	if failure := s.preflightResourceGetFrom(r, started, kind, namespace, name, group); failure != nil {
-		s.writeReadFailure(w, kind, failure, nil)
-		return
+		// The Velero lists can be visible without general namespace access.
+		// An exact get grants the object on the row, but no related evidence.
+		if failure.code == readreason.UserNamespaceNotVisible && group == veleroGroup &&
+			slices.Contains([]string{"backups", "restores", "schedules", "backupstoragelocations"}, kind) && outsideNamespacePin(namespace) == nil {
+			allowed, checked := s.canReadDecision(r, group, kind, namespace, "get")
+			objectOnly = allowed && checked
+			if !checked {
+				failure = permissionFailure(false, "")
+			}
+		}
+		if !objectOnly {
+			s.writeReadFailure(w, kind, failure, nil)
+			return
+		}
 	}
 	if failure := outsideNamespacePin(namespace); failure != nil {
 		if readCache() != started {
@@ -3148,18 +3159,18 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// Pass the already-fetched resource so ManagedBy synthesis
 		// disambiguates by group (avoids kind/plural collisions like Knative
 		// Service vs core Service).
-		relationships := s.relationshipsFor(r, kind, namespace, name, resource)
+		read := topology.ResourceWithRelationships{Resource: resource}
+		if !objectOnly {
+			read.Relationships = s.relationshipsFor(r, resource)
+			read.RelatedFindings = issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+			read.HPADiagnosis = hpaDiagnosisFor(resource)
+		}
 		if readCache() != cache {
 			s.writeCollectionFailure(w, kind, errReadHandlesChanged)
 			return
 		}
 
-		s.writeJSON(w, newResourceReadResponse(topology.ResourceWithRelationships{
-			RelatedFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
-			Resource:        resource,
-			Relationships:   relationships,
-			HPADiagnosis:    hpaDiagnosisFor(resource),
-		}))
+		s.writeJSON(w, newResourceReadResponse(read))
 		return
 	}
 
@@ -3391,7 +3402,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	response := topology.ResourceWithRelationships{
 		RelatedFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
 		Resource:        resource,
-		Relationships:   s.relationshipsFor(r, kind, namespace, name, resource),
+		Relationships:   s.relationshipsFor(r, resource),
 		HPADiagnosis:    hpaDiagnosisFor(resource),
 	}
 
@@ -4571,6 +4582,10 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, result)
 }
 
+// deletePreconditionFailed is the API server's own message when a delete's UID
+// or resourceVersion precondition doesn't match the stored object.
+var deletePreconditionFailed = regexp.MustCompile(`Precondition failed: (UID|ResourceVersion) in precondition`)
+
 // handleDeleteResource deletes a Kubernetes resource
 func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	kind := chi.URLParam(r, "kind")
@@ -4578,6 +4593,12 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	force := r.URL.Query().Get("force") == "true"
 	group := r.URL.Query().Get("group")
+	// Optional: delete only the object the caller reviewed (409 when it changed).
+	uid, resourceVersion := r.URL.Query().Get("uid"), r.URL.Query().Get("resourceVersion")
+	if force && (uid != "" || resourceVersion != "") {
+		s.writeError(w, http.StatusBadRequest, "force cannot be combined with uid or resourceVersion")
+		return
+	}
 
 	auth.AuditLog(r, namespace, name)
 	if !s.requireConnectedForAction(w) {
@@ -4589,11 +4610,13 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := k8s.DeleteResourceWithClient(r.Context(), k8s.DeleteResourceOptions{
-		Kind:      kind,
-		Group:     group,
-		Namespace: namespace,
-		Name:      name,
-		Force:     force,
+		Kind:            kind,
+		Group:           group,
+		Namespace:       namespace,
+		Name:            name,
+		Force:           force,
+		UID:             types.UID(uid),
+		ResourceVersion: resourceVersion,
 	}, client)
 	if err != nil {
 		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
@@ -4605,6 +4628,11 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if apierrors.IsConflict(err) {
+			// A precondition the API server checked, not an admission webhook's 409.
+			if (uid != "" || resourceVersion != "") && deletePreconditionFailed.MatchString(err.Error()) {
+				s.writeError(w, http.StatusConflict, "it changed since you reviewed it, so it was not deleted; review it again")
+				return
+			}
 			s.writeError(w, http.StatusConflict, err.Error())
 			return
 		}

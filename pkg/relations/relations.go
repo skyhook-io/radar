@@ -28,7 +28,8 @@ type Session interface {
 	// Indexed reads the objects of gk in scope that index files under any of
 	// keys, from stores loaded in full, each object once, with a gap for each
 	// part of scope it couldn't read. An empty index reads every object of
-	// gk in scope. A kind discovery doesn't serve is read as empty only when
+	// gk in scope; an index with no keys reads no object but reports the
+	// same gaps. A kind discovery doesn't serve is read as empty only when
 	// discovery covered its group, so one failing API group leaves other
 	// groups' absent kinds empty. The objects are the cached ones: callers
 	// must not modify or keep them.
@@ -53,6 +54,9 @@ type IndexedObject struct {
 
 // Coverage says what an answer couldn't cover.
 type Coverage struct {
+	// SubjectState is "replaced" when the cache holds another incarnation.
+	SubjectState string
+
 	// NotChecked are the kinds and namespaces Radar couldn't read, or where
 	// it couldn't check the caller's access, and why.
 	NotChecked []ownership.Gap
@@ -71,17 +75,18 @@ type Coverage struct {
 // set out to read. Narrowed doesn't affect it: a narrowed answer can be
 // complete for what the caller may read.
 func (c Coverage) Complete() bool {
-	return len(c.NotChecked) == 0 && !c.Truncated
+	return c.SubjectState == "" && len(c.NotChecked) == 0 && !c.Truncated
 }
 
 // View answers for one caller from one session. Like ownership.View it is
 // not safe for concurrent use, and its answers hold only if the session's
 // ValidateCaches passes once they are built.
 type View struct {
-	session Session
-	access  ownership.Access
-	limit   int
-	decided map[accessKey]ownership.Decision
+	session       Session
+	lookupSession Session
+	access        ownership.Access
+	limit         int
+	decided       map[accessKey]ownership.Decision
 }
 
 type accessKey struct {
@@ -89,18 +94,27 @@ type accessKey struct {
 	namespace string
 }
 
-// DefaultLimit is the most referrers a Referrers answer lists. References
-// lists every declaration.
+// DefaultLimit is the most objects a Referrers, Selected, SelectedBy
+// or Composed answer lists. References lists every declaration.
 const DefaultLimit = 500
 
 // NewView answers for the caller access describes, from s, listing at most
-// DefaultLimit referrers per Referrers answer.
+// DefaultLimit objects per Referrers, Selected, SelectedBy or Composed
+// answer.
 func NewView(s Session, access ownership.Access) *View {
-	return &View{session: s, access: access, limit: DefaultLimit, decided: map[accessKey]ownership.Decision{}}
+	return &View{session: s, lookupSession: s, access: access, limit: DefaultLimit, decided: map[accessKey]ownership.Decision{}}
 }
 
-// WithLimit sets, on v itself, the most referrers a Referrers answer lists;
-// a limit of zero or less lists every one. It returns v.
+// WithAuxiliarySession supplies non-emitted selector inputs such as Namespace
+// labels. Emission reads still use the original session and Access.
+func (v *View) WithAuxiliarySession(s Session) *View {
+	v.lookupSession = s
+	return v
+}
+
+// WithLimit sets, on v itself, the most objects a Referrers, Selected,
+// SelectedBy or Composed answer lists; a limit of zero or less lists every one. It
+// returns v.
 func (v *View) WithLimit(limit int) *View {
 	v.limit = limit
 	return v
@@ -131,6 +145,14 @@ func (v *View) mayRead(gk resourceid.GroupKind, namespace string, c *Coverage) b
 		c.Narrowed = true
 	}
 	return false
+}
+
+// merge adds what other records to c.
+func (c *Coverage) merge(other Coverage) {
+	for _, g := range other.NotChecked {
+		c.addGap(g)
+	}
+	c.Narrowed = c.Narrowed || other.Narrowed
 }
 
 func (c *Coverage) addGap(g ownership.Gap) {

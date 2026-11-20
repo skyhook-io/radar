@@ -110,6 +110,12 @@ than silently passing.
 | `sched-errors-no-phase` | validation errors with **no phase set** — synthetic (v1.18 always writes both), guarding the detector's defensive branch; the row must still be filterable |
 | `sched-paused` | paused and otherwise healthy |
 | `sched-paused-invalid` | **paused *and* rejected** — the row that used to read only "Paused" and gave no sign it was broken |
+| `sched-held` + `sched-held-unstarted` | held behind a run Velero never started (`New`, no `spec.storageLocation`); the Velero views flag it once the run has been `New` for ten minutes, and count the run as "not yet assigned" a location |
+| `sched-name-exceeds-…-by-one1` | a 64-character name: Velero cannot label its backups, so it never runs, although it validates |
+
+With the controller at 0, every enabled schedule is genuinely late: nothing is
+submitting its runs. The Velero views say so for `sched-enabled`, which is the
+state a real cluster reaches when the Velero pod is gone.
 
 `sched-errors-no-phase` is also the counter-example that stops "invalid cron"
 being derived from the status: it is rejected for a *missing storage location*
@@ -161,6 +167,8 @@ the script asserts each one before it reports success.
 | `dr-replica` — `Unavailable` | a second location is backed by its own bucket, which is then deleted with `mc rb` | the BSL renderer's unavailable state, decided by Velero's own validation loop |
 | `live-stranded` — `Completed`, in `dr-replica` | the backup is taken *before* that bucket is deleted | **the central claim.** A `Completed` backup whose storage is gone. The Backup's own status cannot see this; the location's "Stored Here" section and the backup-side warning are the only places it surfaces |
 | `live-rejected` — `FailedValidation` | a backup aimed at `dr-replica` *after* its bucket is deleted | the rejection path, with Velero's own `validationErrors` attached. A pre-run refusal, so unlike the phases above it needs no working storage of its own |
+| `live-schedule` — real runs, then late | a `*/2` schedule into the healthy location: the running controller submits and completes a run, then the stall step stops the controller | the Velero views' schedule reading against real `lastBackup` and runs, and the late state once nothing submits |
+| 64-character schedule — `Enabled`, never runs | created alongside `live-schedule`; the script checks it validated and never submitted | the views' "cannot run" state: Velero writes the name into a label, which cannot hold 64 characters |
 | `live-stalled` — `InProgress`, not moving | a pre-backup hook execs `sleep 600` into the workload, `itemOperationTimeout` is set to `1m`, and the controller is scaled to 0 mid-run | the stall detector, against a run that has outlived **the timeout it declares** with a real `startTimestamp` — no clock is edited anywhere. `InProgress` is deliberate: it is the phase Velero puts no limit on, so it exercises the wording that reports elapsed time rather than a breach |
 
 Three details in there are load-bearing, and each one breaks the run if changed:
