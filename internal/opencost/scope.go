@@ -151,8 +151,12 @@ func costViewMetric(name string, s costSubject) prometheuspkg.ViewMetric {
 	// OpenCost's allocations and cost totals carry the Pod's namespace in
 	// namespace or, when the scrape renamed it, exported_namespace. A subject
 	// can't say "either", so they are checked across the whole store; their
-	// anchor and foreign checks read either label.
-	return prometheuspkg.ViewMetric{Name: name, AnchorLabel: "pod", AnchorValues: s.pods, AnchorNamespace: s.anchorNamespace, AnchorNamespaceExported: true, Foreign: prometheuspkg.PodForeignCheck(true)}
+	// anchor and foreign checks read either label. A namespace's costs read
+	// only its own Pods, so its foreign check keeps to that namespace: another
+	// cluster's Pods elsewhere never reach those sums.
+	foreign := prometheuspkg.PodForeignCheck(true)
+	foreign.Namespace = s.namespace
+	return prometheuspkg.ViewMetric{Name: name, AnchorLabel: "pod", AnchorValues: s.pods, AnchorNamespace: s.anchorNamespace, AnchorNamespaceExported: true, Foreign: foreign}
 }
 
 func costScopeRequest(view string, metrics []string, s costSubject, span time.Duration) prometheuspkg.ViewScopeRequest {

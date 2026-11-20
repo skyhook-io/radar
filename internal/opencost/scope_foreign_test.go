@@ -28,11 +28,15 @@ var scopeProbeTag = regexp.MustCompile(`"(radar_[a-z_]+)", "([^"]+)"`)
 // next to kube-state-metrics that does. Every metric shows one identity
 // holding this cluster's objects; foreign names the metrics whose series
 // also hold objects kube-state-metrics lists only under another cluster.
+// foreignPodsIn, when set, is the one namespace holding another cluster's
+// Pods among every Pod-keyed metric: a check whose selector keeps to another
+// namespace, under either spelling, doesn't find them.
 type unlabeledCostStore struct {
-	foreign map[string]bool
-	mu      sync.Mutex
-	probes  []string
-	costs   []string
+	foreign       map[string]bool
+	foreignPodsIn string
+	mu            sync.Mutex
+	probes        []string
+	costs         []string
 }
 
 func (s *unlabeledCostStore) serve(t *testing.T) *httptest.Server {
@@ -44,7 +48,7 @@ func (s *unlabeledCostStore) serve(t *testing.T) *httptest.Server {
 			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prometheus"},"value":[1700000000,"1"]}]}}`))
 			return
 		}
-		tags := scopeProbeTag.FindAllStringSubmatch(q, -1)
+		tags := scopeProbeTag.FindAllStringSubmatchIndex(q, -1)
 		var rows []string
 		row := func(label, value string) {
 			rows = append(rows, fmt.Sprintf(`{"metric":{%q:%q},"value":[1700000000,"1"]}`, label, value))
@@ -53,22 +57,25 @@ func (s *unlabeledCostStore) serve(t *testing.T) *httptest.Server {
 		switch {
 		case len(tags) > 0:
 			s.probes = append(s.probes, q)
-			for _, tag := range tags {
-				switch tag[1] {
+			partStart := 0
+			for _, idx := range tags {
+				tag, metric, part := q[idx[2]:idx[3]], q[idx[4]:idx[5]], q[partStart:idx[0]]
+				partStart = idx[1]
+				switch tag {
 				case "radar_metric":
 					// A readback finds no series with this cluster's
 					// label; an identity check finds one, with none.
 					if strings.Contains(q, "topk(2") {
-						row(tag[1], tag[2])
+						row(tag, metric)
 					}
 				case "radar_foreign":
-					if s.foreign[tag[2]] {
-						row(tag[1], tag[2])
+					if s.foreign[metric] || s.foreignPodsSeen(part, metric) {
+						row(tag, metric)
 					}
 				default:
 					// Anchors are found, and kube-state-metrics holds this
 					// cluster's objects and another cluster's.
-					row(tag[1], tag[2])
+					row(tag, metric)
 				}
 			}
 		case strings.Contains(q, "uid"):
@@ -82,6 +89,27 @@ func (s *unlabeledCostStore) serve(t *testing.T) *httptest.Server {
 	}))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+var namespaceMatcher = regexp.MustCompile(`(?:^|,)(?:exported_namespace|namespace)="([^"]*)"`)
+
+// foreignPodsSeen reports whether one foreign-check part, checking metric
+// against kube_pod_info, selects the namespace holding another cluster's
+// Pods: its metric selector keeps to no namespace, or to that one.
+func (s *unlabeledCostStore) foreignPodsSeen(part, metric string) bool {
+	if s.foreignPodsIn == "" || !strings.Contains(part, "kube_pod_info{") {
+		return false
+	}
+	sel := regexp.MustCompile(regexp.QuoteMeta(metric) + `\{([^}]*)\}`).FindStringSubmatch(part)
+	if sel == nil {
+		return false
+	}
+	for _, m := range namespaceMatcher.FindAllStringSubmatch(sel[1], -1) {
+		if m[1] != "" && m[1] != s.foreignPodsIn {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *unlabeledCostStore) foreignProbes() (reference, foreign int) {
@@ -183,6 +211,73 @@ func TestCostSummaryWithTwoUnlabeledClusters(t *testing.T) {
 			}
 			if !tc.configured && references+foreign != 0 {
 				t.Errorf("store without cluster labels sent %d foreign-check probes", references+foreign)
+			}
+		})
+	}
+}
+
+// A namespace's costs check its allocations for other clusters' Pods in that
+// namespace only, under either spelling of it: another cluster's Pods in
+// other namespaces never reach its sums. The cluster-wide summary still
+// checks the whole store.
+func TestNamespaceCostsCheckOnlyTheirNamespace(t *testing.T) {
+	objects := []runtime.Object{
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: "coredns-a", UID: "aaaaaaaa-0000-4000-8000-000000000001"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-1", UID: "aaaaaaaa-0000-4000-8000-000000000002"}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "n1"}},
+		&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv-1"}},
+	}
+	if err := k8s.InitTestResourceCache(fakeclientset.NewSimpleClientset(objects...)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	t.Cleanup(func() {
+		prometheuspkg.Reset()
+		prometheuspkg.Initialize(nil, nil, "")
+	})
+
+	workloads := func(p PromCost) (bool, string, *pkgopencost.ClusterScope) {
+		r := p.Workloads(context.Background(), "shop", nil)
+		return r.Available, r.Reason, r.ClusterScope
+	}
+	summary := func(p PromCost) (bool, string, *pkgopencost.ClusterScope) {
+		r := p.Summary(context.Background(), pkgopencost.SummaryOptions{})
+		return r.Available, r.Reason, r.ClusterScope
+	}
+	for _, tc := range []struct {
+		name      string
+		run       func(PromCost) (bool, string, *pkgopencost.ClusterScope)
+		foreignIn string
+		want      prometheuspkg.ViewScopeState
+	}{
+		{"namespace view, another cluster's Pods in another namespace", workloads, "pay", prometheuspkg.ViewScopeUnlabeled},
+		{"namespace view, another cluster's Pods in the namespace", workloads, "shop", prometheuspkg.ViewScopeLabelMissing},
+		{"cluster view, another cluster's Pods in any namespace", summary, "pay", prometheuspkg.ViewScopeLabelMissing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &unlabeledCostStore{foreignPodsIn: tc.foreignIn}
+			prometheuspkg.Reset()
+			prometheuspkg.Initialize(nil, nil, "test")
+			prometheuspkg.SetManualURL(store.serve(t).URL)
+			if err := prometheuspkg.SetWorkloadMetricsScope(prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "a"}}, ""); err != nil {
+				t.Fatal(err)
+			}
+			client, err := prometheuspkg.ClientForOperation()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := client.EnsureConnected(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			available, reason, scope := tc.run(NewPromCost(client))
+			if scope == nil || scope.State != string(tc.want) {
+				t.Fatalf("available=%v reason=%q clusterScope=%+v", available, reason, scope)
+			}
+			if withheld := tc.want == prometheuspkg.ViewScopeLabelMissing; available == withheld || (reason == pkgopencost.ReasonClusterScope) != withheld {
+				t.Fatalf("available=%v reason=%q clusterScope=%+v", available, reason, scope)
+			}
+			if tc.want == prometheuspkg.ViewScopeLabelMissing && !strings.Contains(scope.Note, pkgopencost.MetricCPUAllocation) {
+				t.Errorf("note %q doesn't name the allocations", scope.Note)
 			}
 		})
 	}

@@ -359,7 +359,10 @@ func checkCostRequests(t *testing.T, ep costEndpoint, requests []prometheuspkg.V
 			case isUsageMetric(m.Name):
 				wantForeign = prometheuspkg.PodForeignCheck(false)
 			case label == "pod" && !namespaced:
+				// A namespace's allocations are checked in that namespace
+				// only; the cluster-wide views check the whole store.
 				wantForeign = prometheuspkg.PodForeignCheck(true)
+				wantForeign.Namespace = req.Namespace
 			}
 			if !reflect.DeepEqual(m.Foreign, wantForeign) {
 				t.Errorf("%s foreign check %+v, want %+v", m.Name, m.Foreign, wantForeign)
