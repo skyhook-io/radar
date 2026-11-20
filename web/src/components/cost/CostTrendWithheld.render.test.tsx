@@ -89,8 +89,15 @@ describe('CostTrendChart', () => {
     expect(html).toContain(sharedStore.note)
   })
 
+  it('says a Prometheus trend was withheld for a partial answer instead of hiding it', () => {
+    namespaceTrend = { available: false, reason: 'partial_data', source: 'prometheus', range: '24h' }
+    const html = renderToStaticMarkup(<CostTrendChart />)
+    expect(html).toContain(COST_TREND_PARTIAL_NOTE)
+    expect(html).not.toContain(COST_TREND_WITHHELD_TITLE)
+  })
+
   it('keeps hiding other unavailable Prometheus trends', () => {
-    for (const reason of ['partial_data', 'query_error', 'no_metrics']) {
+    for (const reason of ['query_error', 'no_metrics']) {
       namespaceTrend = { available: false, reason, source: 'prometheus', range: '24h' }
       expect(renderToStaticMarkup(<CostTrendChart />)).toBe('')
     }

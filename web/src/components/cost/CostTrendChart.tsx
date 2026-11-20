@@ -52,10 +52,10 @@ export function CostTrendChart({ namespaceScoped = false }: { namespaceScoped?: 
   }
 
   const showKubecostUnavailable = data?.source === 'kubecost' && data.available === false
-  // Hiding a withheld trend would read as "no history"; other unavailable
-  // Prometheus trends stay hidden.
+  // Hiding a withheld trend (cluster scope, or a partial answer) would read as
+  // "no history"; other unavailable Prometheus trends stay hidden.
   const withholding = costTrendWithholding(data)
-  const withheld = !showKubecostUnavailable && withholding?.reason === 'cluster_scope' && withholding.scope ? withholding : undefined
+  const withheld = !showKubecostUnavailable && withholding && (withholding.reason === 'partial_data' || withholding.scope) ? withholding : undefined
   if (!data || ((!data.available || !data.series?.length) && !showKubecostUnavailable && !withheld)) {
     return null
   }
