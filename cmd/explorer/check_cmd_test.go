@@ -160,7 +160,7 @@ func TestJava4ShellTablePrioritizesActionableGaps(t *testing.T) {
 	if err := writeJava4ShellCheck(&output, "table", report, false); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"No affected Java declarations among assessed containers (1).", "1 without a Java version in image metadata", "11 could not be checked", "Registry authentication required · 11 containers",
+	want := []string{"No affected Java version declared in 1 assessed container.", "1 without a Java version in image metadata", "11 could not be checked", "Registry authentication required · 11 containers",
 		"private-09", "Showing 10 of 11 rows", "docker login REGISTRY", "  example.com\n", java4ShellRegistryDocs}
 	for _, phrase := range want {
 		if !strings.Contains(output.String(), phrase) {
@@ -284,16 +284,42 @@ func TestJava4ShellCLIShowsCPUInferenceAlongsideMatch(t *testing.T) {
 		if err := writeJava4ShellCheck(&output, "table", report, details); err != nil {
 			t.Fatal(err)
 		}
-		want := []string{"Affected Java versions declared in 3 containers"}
-		if details {
-			want = append(want, "VBMI ABSENT (INFERRED)", "2 (m6a.large)")
-		} else {
-			want = append(want, "2 VBMI absent (inferred from m6a.large)")
-		}
+		want := []string{"Check node CPU · 1 container", "1 CPU unknown", "2 VBMI absent (inferred from m6a.large)"}
 		for _, want := range want {
 			if !strings.Contains(output.String(), want) {
 				t.Errorf("details %t: missing %q in %s", details, want, output.String())
 			}
+		}
+	}
+}
+
+func TestJava4ShellReportSeparatesPatchFromOtherActions(t *testing.T) {
+	report := images.Java4ShellReport{Java4ShellResult: images.Java4ShellResult{
+		Containers: 6, Matches: 6,
+		Findings: []images.Java4ShellFinding{
+			{Workload: resourceid.NewRef("apps", "Deployment", "team", "later"), Pods: 2},
+			{Workload: resourceid.NewRef("apps", "Deployment", "team", "investigate"), Pods: 1, UnknownCPUPods: 1},
+			{Workload: resourceid.NewRef("apps", "Deployment", "team", "now"), Container: "jvm", Pods: 3, VBMIPods: 1, UnknownCPUPods: 1, Version: "21.0.8", FixedIn: "21.0.13.1", MitigationDeclaredPods: 1},
+		},
+	}}
+	for _, details := range []bool{false, true} {
+		var out bytes.Buffer
+		if err := writeJava4ShellCheck(&out, "table", report, details); err != nil {
+			t.Fatal(err)
+		}
+		got := out.String()
+		last := -1
+		for _, part := range []string{"PATCH FIRST · 1 container", "team/Deployment/now · container jvm",
+			"Declared 21.0.8 → advisory fix 21.0.13.1", "1 VBMI reported · 1 CPU unknown · 1 non-x86", "Mitigation flag declared on 1 of 3 pods",
+			"Check node CPU · 1 container", "Deployment/investigate", "Lower priority on current nodes · 2 containers", "Coverage"} {
+			i := strings.Index(got, part)
+			if i <= last {
+				t.Fatalf("missing or misplaced %q (details=%t): %s", part, details, got)
+			}
+			last = i
+		}
+		if strings.Count(got, "Deployment/now") != 1 || strings.Contains(got, "Deployment/later") != details || strings.Contains(got, "\x1b") {
+			t.Fatalf("wrong rows or style for details=%t: %s", details, got)
 		}
 	}
 }
@@ -341,7 +367,7 @@ func TestJava4ShellSavedReportOpensOffline(t *testing.T) {
 		t.Fatalf("offline report: exit %d, stderr %s", code, progress.String())
 	}
 	brief := out.String()
-	finding, coverage := strings.Index(brief, "Deployment/adservice"), strings.Index(brief, "Running containers")
+	finding, coverage := strings.Index(brief, "Deployment/adservice"), strings.Index(brief, "Coverage")
 	if finding < 0 || coverage < finding || !strings.Contains(brief, "pod-100") ||
 		!strings.Contains(brief, "Showing 10 of 101 rows") || !strings.Contains(brief, "without a rescan") {
 		t.Fatalf("brief report lost finding or clear path to the full result: %s", brief)
@@ -375,7 +401,7 @@ func TestJava4ShellCombinesDockerHubRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"Docker Hub · 5 containers", "3 hit HTTP 429", "2 skipped by Radar", "context prod-eu",
+		"Docker Hub · 5 containers", "3 hit HTTP 429", "2 skipped by Radar", "Context prod-eu",
 		"--context 'prod-eu' --kubeconfig '/tmp/test kubeconfig' -n 'payments'",
 		"--fail-on-match --docker-hub-auth --save-report 'check.json.retry.json'",
 		radarCLIInvocation() + " check java4shell --from-report 'check.json' --details",

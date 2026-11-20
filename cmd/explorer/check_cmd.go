@@ -102,6 +102,7 @@ func runCheckCommand(args []string, out, errOut io.Writer) int {
 			return 1
 		}
 		report, err = readJava4ShellReport(*fromReport)
+		report.replay = true
 	} else {
 		var file *os.File
 		if *saveReport != "" || output == "table" {
@@ -369,6 +370,7 @@ type java4ShellCLIReport struct {
 	images.Java4ShellReport
 
 	dockerHubRetry string
+	replay         bool
 }
 
 func readJava4ShellReport(path string) (java4ShellCLIReport, error) {
@@ -413,11 +415,15 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 	if namespaces := report.Coverage.Scope.Namespaces; namespaces != nil && len(namespaces.Names) > 0 {
 		scope = "namespace " + checkTableValue(strings.Join(namespaces.Names, ", "))
 	}
-	fmt.Fprintf(&table, "\n%s", style.Bold("Java4Shell ("+images.Java4ShellCVE+")"))
+	fmt.Fprintln(&table, "\n"+style.Bold("Java4Shell ("+images.Java4ShellCVE+")"))
 	if snapshot.Context != "" {
-		fmt.Fprintf(&table, " · context %s", checkTableValue(snapshot.Context))
+		fmt.Fprintf(&table, "Context %s · ", checkTableValue(snapshot.Context))
 	}
-	fmt.Fprintf(&table, " · %s\n\n", scope)
+	fmt.Fprintln(&table, scope)
+	if snapshot.replay {
+		fmt.Fprintf(&table, "Saved report · checked %s\n", snapshot.CheckedAt.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintln(&table)
 	unassessed := 0
 	for _, count := range report.Unassessed {
 		unassessed += count
@@ -425,117 +431,11 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 	noDeclaration := report.Unassessed["no_java_declaration"]
 	gaps := unassessed - noDeclaration
 	outside := report.Containers - report.Matches - unassessed
-	if len(report.Findings) > 0 {
-		title := fmt.Sprintf("Affected Java versions declared in %d containers", report.Matches)
-		if report.Matches == 1 {
-			title = "Affected Java version declared in 1 container"
-		}
-		vbmi, cpuUnknown, priorityRows := 0, 0, 0
-		var firstPriority images.Java4ShellFinding
-		for _, row := range report.Findings {
-			if row.VBMIPods > 0 {
-				if priorityRows == 0 {
-					firstPriority = row
-				}
-				priorityRows++
-				vbmi += row.VBMIPods
-			}
-			cpuUnknown += row.UnknownCPUPods
-		}
-		if vbmi > 0 {
-			priority := fmt.Sprintf("PATCH FIRST · %d %s with an affected Java declaration and AVX-512 VBMI", vbmi, java4ShellContainerUnit(vbmi))
-			fmt.Fprintln(&table, style.Apply(cliui.Bold+cliui.Red, priority))
-			if priorityRows == 1 {
-				row := firstPriority
-				fmt.Fprintf(&table, "%s/%s/%s · container %s\n", checkTableValue(row.Workload.Namespace), checkTableValue(row.Workload.Kind), checkTableValue(row.Workload.Name), checkTableValue(row.Container))
-			}
-			fmt.Fprintln(&table, "\n"+style.Bold(title))
-		} else {
-			fmt.Fprintln(&table, style.Apply(cliui.Bold+cliui.Amber, title))
-		}
-		if cpuUnknown > 0 {
-			fmt.Fprintf(&table, "CPU capability unknown for %d matching %s. Check the node CPU flags.\n", cpuUnknown, java4ShellContainerUnit(cpuUnknown))
-		}
-		if vbmi == 0 && cpuUnknown == 0 && report.FindingGroups <= len(report.Findings) {
-			fmt.Fprintln(&table, "Current CPU evidence points away from exposure. The vulnerable path needs AVX-512 VBMI.")
-		}
-		fmt.Fprintln(&table)
-		w := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
-		fmt.Fprint(w, "NAMESPACE\tWORKLOAD\tCONTAINER\t")
-		if details {
-			fmt.Fprint(w, "IMAGE\t")
-		}
-		fmt.Fprint(w, "DECLARED JAVA\tADVISORY FIX\tPODS")
-		if details {
-			fmt.Fprint(w, "\tAVX-512 VBMI\tCPU UNKNOWN\tVBMI ABSENT (INFERRED)\tNON-X86\tMITIGATION FLAG")
-		} else {
-			fmt.Fprint(w, "\tCPU EVIDENCE")
-		}
-		fmt.Fprintln(w)
-		findings := report.Findings
-		if !details {
-			findings = findings[:min(len(findings), java4ShellTableMatchLimit)]
-		}
-		for _, row := range findings {
-			fix := row.FixedIn
-			if fix == "" {
-				fix = "Check vendor"
-			}
-			workload := checkTableValue(row.Workload.Kind + "/" + row.Workload.Name)
-			fmt.Fprintf(w, "%s\t%s\t%s\t", checkTableValue(row.Workload.Namespace), workload, checkTableValue(row.Container))
-			if details {
-				fmt.Fprintf(w, "%s\t", checkTableValue(row.Image))
-			}
-			fmt.Fprintf(w, "%s\t%s\t%d", checkTableValue(row.Version), checkTableValue(fix), row.Pods)
-			inferredNoVBMI := 0
-			for _, count := range row.NoVBMIByInstanceType {
-				inferredNoVBMI += count
-			}
-			nonX86 := row.Pods - row.VBMIPods - row.UnknownCPUPods - inferredNoVBMI
-			if details {
-				fmt.Fprintf(w, "\t%d\t%d\t%d", row.VBMIPods, row.UnknownCPUPods, inferredNoVBMI)
-				if inferredNoVBMI > 0 {
-					fmt.Fprintf(w, " (%s)", checkTableValue(strings.Join(slices.Sorted(maps.Keys(row.NoVBMIByInstanceType)), ", ")))
-				}
-				fmt.Fprintf(w, "\t%d\t%d", nonX86, row.MitigationDeclaredPods)
-			} else {
-				var evidence []string
-				if row.VBMIPods > 0 {
-					evidence = append(evidence, java4ShellCPUCount(row.Pods, row.VBMIPods, "AVX-512 VBMI reported"))
-				}
-				if row.UnknownCPUPods > 0 {
-					evidence = append(evidence, java4ShellCPUCount(row.Pods, row.UnknownCPUPods, "CPU capability unknown"))
-				}
-				if inferredNoVBMI > 0 {
-					source := "instance types"
-					if len(row.NoVBMIByInstanceType) == 1 {
-						for instanceType := range row.NoVBMIByInstanceType {
-							source = instanceType
-						}
-					}
-					evidence = append(evidence, java4ShellCPUCount(row.Pods, inferredNoVBMI, "VBMI absent (inferred from "+checkTableValue(source)+")"))
-				}
-				if nonX86 > 0 {
-					evidence = append(evidence, java4ShellCPUCount(row.Pods, nonX86, "non-x86"))
-				}
-				fmt.Fprintf(w, "\t%s", strings.Join(evidence, " · "))
-			}
-			fmt.Fprintln(w)
-		}
-		_ = w.Flush()
-		if len(findings) < len(report.Findings) {
-			fmt.Fprintf(&table, "Showing %d of %d matching rows. Use --details for all of them.\n", len(findings), len(report.Findings))
-		} else if report.FindingGroups > len(report.Findings) {
-			fmt.Fprintf(&table, "This report contains %d of %d matching rows.\n", len(report.Findings), report.FindingGroups)
-		}
-		fmt.Fprintln(&table, "Confirm the installed Java version and check its vendor's advisory.")
-		if details {
-			fmt.Fprintln(&table, "Node capability and mitigation flag columns count Pods. Flags are read from Pod specs.")
-		}
+	singleNamespace := ""
+	if ns := report.Coverage.Scope.Namespaces; ns != nil && len(ns.Names) == 1 {
+		singleNamespace = ns.Names[0]
 	}
-	if report.Matches > 0 {
-		fmt.Fprintln(&table, "\n"+style.Bold("Coverage"))
-	}
+	writeJava4ShellFindings(&table, style, report, singleNamespace, details)
 	if report.Containers == 0 {
 		fmt.Fprintln(&table, "No running containers in the requested scope.")
 		fmt.Fprintln(&table, "Check the Kubernetes context and namespace if you expected running Pods.")
@@ -547,18 +447,44 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 		case outside == 0:
 			fmt.Fprintln(&table, "No Java versions could be assessed.")
 		default:
-			fmt.Fprintf(&table, "No affected Java declarations among assessed containers (%d).\n", outside)
+			tone := cliui.Success
+			if unassessed > 0 {
+				tone = cliui.Attention
+			}
+			fmt.Fprintln(&table, style.Tone(tone, fmt.Sprintf("No affected Java version declared in %d assessed %s.", outside, java4ShellContainerUnit(outside))))
 		}
-		fmt.Fprintf(&table, "Running containers %d · Assessed %d · Outside affected ranges %d\n", report.Containers, report.Matches+outside, outside)
-		if unassessed > 0 {
-			fmt.Fprintf(&table, "%d without a Java version in image metadata · %d could not be checked\n", noDeclaration, gaps)
+		var assessed, unchecked []string
+		if report.Matches > 0 {
+			assessed = append(assessed, fmt.Sprintf("%d in affected version ranges", report.Matches))
+		}
+		if outside > 0 {
+			majors := make([]string, 0, len(report.UnaffectedByMajor))
+			for _, major := range slices.Sorted(maps.Keys(report.UnaffectedByMajor)) {
+				label := fmt.Sprintf("Java %d", major)
+				if len(report.UnaffectedByMajor) > 1 {
+					label += fmt.Sprintf(" × %d", report.UnaffectedByMajor[major])
+				}
+				majors = append(majors, label)
+			}
+			label := fmt.Sprintf("%d outside affected ranges", outside)
+			if len(majors) > 0 {
+				label += " (" + strings.Join(majors, ", ") + ")"
+			}
+			assessed = append(assessed, label)
 		}
 		if noDeclaration > 0 {
-			fmt.Fprintln(&table, "For images with no Java version in their metadata, verify the installed version in workloads that use Java.")
+			unchecked = append(unchecked, fmt.Sprintf("%d without a Java version in image metadata", noDeclaration))
 		}
-	}
-	for _, major := range slices.Sorted(maps.Keys(report.UnaffectedByMajor)) {
-		fmt.Fprintf(&table, "Java %d declarations outside affected ranges: %d\n", major, report.UnaffectedByMajor[major])
+		if gaps > 0 {
+			unchecked = append(unchecked, fmt.Sprintf("%d could not be checked", gaps))
+		}
+		fmt.Fprintf(&table, "\n%s · %d running %s\n", style.Bold("Coverage"), report.Containers, java4ShellContainerUnit(report.Containers))
+		if len(assessed) > 0 {
+			fmt.Fprintln(&table, "  "+strings.Join(assessed, " · "))
+		}
+		if len(unchecked) > 0 {
+			fmt.Fprintln(&table, "  "+strings.Join(unchecked, " · "))
+		}
 	}
 	if gaps > 0 {
 		fmt.Fprintf(&table, "\n%s\n", style.Tone(cliui.Attention, "Could not check · next steps"))
@@ -636,19 +562,118 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 		}
 	}
 	writeJava4ShellAssessmentRows(&table, style, report, details)
-	if report.Matches > 0 || report.Unassessed["image_identity_unknown"] > 0 ||
-		report.Unassessed["java_home_declared"] > 0 || gaps > 0 && snapshot.DockerHubLogin && slices.Contains(report.RateLimitedRegistries, name.DefaultRegistry) {
+	if details && (report.Matches > 0 || report.Unassessed["image_identity_unknown"] > 0 ||
+		report.Unassessed["java_home_declared"] > 0 || gaps > 0 && snapshot.DockerHubLogin && slices.Contains(report.RateLimitedRegistries, name.DefaultRegistry)) {
 		fmt.Fprintln(&table, "\nTo check installed Java in a workload that uses it:")
 		fmt.Fprintf(&table, "    kubectl%s -n NAMESPACE exec POD -c CONTAINER -- java -version\n", java4ShellContextArg(snapshot.Context))
 	}
 	if savedPath != "" {
-		fmt.Fprintf(&table, "\nReport file %s · checked %s\n", strconv.Quote(savedPath), snapshot.CheckedAt.UTC().Format(time.RFC3339))
 		if !details && (len(report.Findings) > 0 || unassessed > 0) {
-			fmt.Fprintf(&table, "See every row without a rescan:\n    %s check java4shell --from-report %s --details\n", radarCLIInvocation(), shellQuote(savedPath))
+			fmt.Fprintf(&table, "\nFull report · view all rows without a rescan\n  %s check java4shell --from-report %s --details\n", radarCLIInvocation(), shellQuote(savedPath))
+		} else {
+			fmt.Fprintf(&table, "\nReport file %s\n", strconv.Quote(savedPath))
 		}
 	}
 	_, err := table.WriteTo(out)
 	return err
+}
+
+func writeJava4ShellFindings(out io.Writer, style cliui.Styler, report images.Java4ShellReport, namespace string, details bool) {
+	var patch, verify, lower []images.Java4ShellFinding
+	var reported, unknown, lowerCount int
+	for _, row := range report.Findings {
+		switch {
+		case row.VBMIPods > 0:
+			patch = append(patch, row)
+			reported += row.VBMIPods
+		case row.UnknownCPUPods > 0:
+			verify = append(verify, row)
+			unknown += row.UnknownCPUPods
+		default:
+			lower = append(lower, row)
+			lowerCount += row.Pods
+		}
+	}
+	if reported > 0 {
+		fmt.Fprintln(out, style.Apply(cliui.Bold+cliui.Red, fmt.Sprintf("PATCH FIRST · %d %s", reported, java4ShellContainerUnit(reported))))
+		writeJava4ShellFindingRows(out, style, patch, namespace, details)
+		fmt.Fprintln(out, "  Node evidence: AVX-512 VBMI reported on matching placements.")
+		fmt.Fprintln(out, "  Confirm the installed JVM, then deploy the fixed build from its vendor.")
+	}
+	if unknown > 0 {
+		if reported > 0 {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintln(out, style.Tone(cliui.Attention, fmt.Sprintf("Check node CPU · %d %s", unknown, java4ShellContainerUnit(unknown))))
+		fmt.Fprintln(out, "Affected Java version declared. Check whether the node supports AVX-512 VBMI.")
+		writeJava4ShellFindingRows(out, style, verify, namespace, details)
+	}
+	if lowerCount > 0 {
+		higherPriority := reported+unknown > 0
+		if higherPriority {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintf(out, "Lower priority on current nodes · %d %s\n", lowerCount, java4ShellContainerUnit(lowerCount))
+		fmt.Fprintln(out, "  Affected version declared. Current nodes appear to lack AVX-512 VBMI.")
+		if details || !higherPriority {
+			writeJava4ShellFindingRows(out, style, lower, namespace, details)
+		}
+	}
+	if report.FindingGroups > len(report.Findings) {
+		fmt.Fprintf(out, "This report contains %d of %d matching rows.\n", len(report.Findings), report.FindingGroups)
+	}
+}
+
+func writeJava4ShellFindingRows(out io.Writer, style cliui.Styler, rows []images.Java4ShellFinding, namespace string, details bool) {
+	total := len(rows)
+	if !details {
+		rows = rows[:min(len(rows), java4ShellTableMatchLimit)]
+	}
+	for _, row := range rows {
+		workload := row.Workload.Kind + "/" + row.Workload.Name
+		if row.Workload.Namespace != namespace {
+			workload = row.Workload.Namespace + "/" + workload
+		}
+		fmt.Fprintf(out, "  %s · container %s\n", style.Bold(checkTableValue(workload)), checkTableValue(row.Container))
+		fmt.Fprintf(out, "    Declared %s", checkTableValue(row.Version))
+		if row.FixedIn != "" {
+			fmt.Fprintf(out, " → advisory fix %s", checkTableValue(row.FixedIn))
+		} else {
+			fmt.Fprint(out, " · check vendor for fixed build")
+		}
+		fmt.Fprintln(out)
+		var evidence []string
+		if row.VBMIPods > 0 {
+			evidence = append(evidence, java4ShellCPUCount(row.Pods, row.VBMIPods, "VBMI reported"))
+		}
+		if row.UnknownCPUPods > 0 {
+			evidence = append(evidence, java4ShellCPUCount(row.Pods, row.UnknownCPUPods, "CPU unknown"))
+		}
+		nonX86 := row.Pods - row.VBMIPods - row.UnknownCPUPods
+		for _, instance := range slices.Sorted(maps.Keys(row.NoVBMIByInstanceType)) {
+			count := row.NoVBMIByInstanceType[instance]
+			nonX86 -= count
+			evidence = append(evidence, java4ShellCPUCount(row.Pods, count, "VBMI absent (inferred from "+checkTableValue(instance)+")"))
+		}
+		if nonX86 > 0 {
+			evidence = append(evidence, java4ShellCPUCount(row.Pods, nonX86, "non-x86"))
+		}
+		if details || row.Pods > 1 || row.VBMIPods+row.UnknownCPUPods == 0 {
+			fmt.Fprintf(out, "    CPU: %s\n", strings.Join(evidence, " · "))
+		}
+		if row.MitigationDeclaredPods > 0 || details {
+			fmt.Fprintf(out, "    Mitigation flag declared on %d of %d pods\n", row.MitigationDeclaredPods, row.Pods)
+		}
+		if details {
+			fmt.Fprintf(out, "    Image: %s\n", checkTableValue(row.Image))
+			if row.Digest != "" {
+				fmt.Fprintf(out, "    Digest: %s\n", checkTableValue(row.Digest))
+			}
+		}
+	}
+	if len(rows) < total {
+		fmt.Fprintf(out, "  Showing %d of %d rows. Use --details for all rows.\n", len(rows), total)
+	}
 }
 
 func (snapshot java4ShellCLIReport) writeDockerHubRecovery(out io.Writer, style cliui.Styler, throttled, skipped int) {
