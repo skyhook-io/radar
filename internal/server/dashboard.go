@@ -104,6 +104,7 @@ type DashboardProblem struct {
 	// degraded is what a caller who can't make them sees instead.
 	requiredReads []issues.EvidenceRead
 	degraded      *issues.DegradedFinding
+	expected      bool
 }
 
 // mergeResourceCounts adds src's per-namespace counts into dst. Cluster-scoped
@@ -393,12 +394,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			if !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) {
 				continue
 			}
-			switch issues.ViewEvidence(p.requiredReads, p.degraded, canReadEvidence, false) {
-			case issues.EvidenceWithheld:
+			switch issues.ViewEvidence(p.requiredReads, p.degraded, p.expected, canReadEvidence, false) {
+			case issues.EvidenceWithheld, issues.EvidenceExpected:
 				continue
 			case issues.EvidenceDegraded:
 				p.Message = p.degraded.Message
-				p.Duration, p.DurationSeconds, p.OnsetUnknown = "", 0, true
+				if !p.degraded.KeepSubjectOnset {
+					p.Duration, p.DurationSeconds, p.OnsetUnknown = "", 0, true
+				}
 			}
 			resp.Problems = append(resp.Problems, p)
 		}
@@ -734,6 +737,7 @@ func detectionToDashboardProblem(p k8s.Detection) DashboardProblem {
 		OnsetUnknown:    p.OnsetUnknown,
 		requiredReads:   p.RequiredReads,
 		degraded:        p.Degraded,
+		expected:        p.ExpectedWhenVerified,
 	}
 }
 
