@@ -16,7 +16,7 @@ func FamiliesIn(istioDomain func() string) []*Family {
 		IstioGateways, IstioServiceHostsIn(istioDomain),
 		TraefikBackends, TraefikRouteConfig, TraefikSecrets, ContourBackends, ContourSecrets,
 		KnativeEventDestinations, KnativeTriggerBrokers, KnativeRouteRevisions,
-		CertificateSecrets, CertManagerIssuers, FluxSources,
+		CertificateSecrets, CertManagerIssuers, FluxSources, FluxDependsOn,
 		NodeClasses, ClusterClasses, MachineNodes, PodPlacement, AnalysisRuns, ArgoWorkflowTemplates,
 	}
 }

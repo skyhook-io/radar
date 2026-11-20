@@ -76,4 +76,38 @@ func FluxSourceReferences(root *unstructured.Unstructured) []FluxSourceRef {
 	return append([]FluxSourceRef{{Ref: resourceid.NewRef(group, kind, namespace, name), Role: role, Path: strings.Join(fields, ".")}}, chartRefs...)
 }
 
+// FluxDependsOn reads a Kustomization's or HelmRelease's spec.dependsOn: each
+// entry names an object of the root's own kind and API group, the only
+// targets Flux accepts there, in the root's namespace unless the entry names
+// another. An entry without a name, or naming the root itself, names nothing.
+func FluxDependsOn(root *unstructured.Unstructured) []resourceid.Ref {
+	if root == nil {
+		return nil
+	}
+	kind := resourceid.GroupKind{Group: resourceid.GroupFromAPIVersion(root.GetAPIVersion()), Kind: root.GetKind()}
+	if kind != fluxKustomizationKind && kind != fluxHelmReleaseKind {
+		return nil
+	}
+	entries, _, _ := unstructured.NestedSlice(root.Object, "spec", "dependsOn")
+	var refs []resourceid.Ref
+	for _, entry := range entries {
+		dep, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, namespace := StringValue(dep["name"]), StringValue(dep["namespace"])
+		if name == "" {
+			continue
+		}
+		if namespace == "" {
+			namespace = root.GetNamespace()
+		}
+		if namespace == root.GetNamespace() && name == root.GetName() {
+			continue
+		}
+		refs = append(refs, resourceid.NewRef(kind.Group, kind.Kind, namespace, name))
+	}
+	return refs
+}
+
 func isSourceMap(raw any) bool { _, ok := raw.(map[string]any); return ok }

@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -283,6 +284,26 @@ func TestFluxSourcesNameTheirArtifactsAcrossNamespaces(t *testing.T) {
 	charts := object("source.toolkit.fluxcd.io/v1", "HelmRepository", "charts", nil)
 	hr := object("helm.toolkit.fluxcd.io/v2", "HelmRelease", "web", map[string]any{"chart": map[string]any{"spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "charts"}}}})
 	checkFamily(t, FluxSources, []runtime.Object{charts, hr}, hr, ref("source.toolkit.fluxcd.io", "HelmRepository", "charts"), "spec.chart.spec.sourceRef")
+}
+
+func TestFluxDependsOnNamesItsOwnKindAcrossNamespaces(t *testing.T) {
+	infra := inNamespace(object("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "infra", nil), "flux-system")
+	apps := object("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "apps", map[string]any{"dependsOn": []any{map[string]any{"name": "infra", "namespace": "flux-system"}}})
+	checkFamily(t, FluxDependsOn, []runtime.Object{infra, apps}, apps, resourceid.Ref{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "infra"}, "spec.dependsOn[]")
+
+	db := object("helm.toolkit.fluxcd.io/v2", "HelmRelease", "db", nil)
+	web := object("helm.toolkit.fluxcd.io/v2", "HelmRelease", "web", map[string]any{"dependsOn": []any{map[string]any{"name": "db"}}})
+	checkFamily(t, FluxDependsOn, []runtime.Object{db, web}, web, ref("helm.toolkit.fluxcd.io", "HelmRelease", "db"), "spec.dependsOn[]")
+
+	odd := object("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "odd", map[string]any{"dependsOn": []any{
+		map[string]any{"name": "odd"}, map[string]any{"name": ""}, map[string]any{"namespace": "flux-system"}, "infra",
+	}})
+	if got := gitops.FluxDependsOn(odd); len(got) != 0 {
+		t.Errorf("a self-reference, an entry without a name and a non-object entry name %v", got)
+	}
+	if FluxDependsOn.Covers(resourceid.GroupKind{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository"}) {
+		t.Error("FluxDependsOn covers a Flux source")
+	}
 }
 
 func TestNodePoolsNameTheirProvidersNodeClass(t *testing.T) {
