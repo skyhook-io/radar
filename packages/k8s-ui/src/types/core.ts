@@ -193,10 +193,14 @@ export interface FeatureCapabilities {
   veleroWorkspace?: boolean
   /** POST /api/velero/schedules/{namespace}/{name}/backup */
   veleroBackupNow?: boolean
+  /** POST /api/velero/schedules/{namespace}/{name}/{pause|resume} */
+  veleroSchedulePause?: boolean
   /** GET /api/velero/runs/{backups|restores} */
   veleroRuns?: boolean
   /** POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion */
   veleroDeleteBackup?: boolean
+  veleroRunArtifacts?: boolean
+  veleroRunVolumes?: boolean
   /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
   resourceDeletePreconditions?: boolean
   gitopsWriteEvidence?: boolean
@@ -217,6 +221,7 @@ export interface FeatureCapabilities {
   podFileUpload?: boolean
   lokiConnection?: boolean
   vulnerabilities?: boolean
+  runtimeAdvisoryChecks?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
