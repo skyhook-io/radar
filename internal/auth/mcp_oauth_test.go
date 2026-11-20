@@ -684,6 +684,9 @@ func TestMCPOAuthConsentWarnsWhenAccessLeavesTheMachine(t *testing.T) {
 			if !strings.Contains(body, "Up to 24 hours") {
 				t.Fatal("consent page does not state how long access lasts")
 			}
+			if strings.Contains(body, "Logging out") {
+				t.Fatal("consent page promises that logging out ends access")
+			}
 		})
 	}
 }
