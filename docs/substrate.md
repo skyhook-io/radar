@@ -13,7 +13,7 @@ Reading never writes. Radar does not create, suspend, resume or delete actors.
 
 ## Where it lives
 
-When the `ate.dev` CRDs are discovered, the Resources sidebar's **Integrations** block lists Substrate as **Agent actors**, with "Agent Substrate" beneath and the number of attention items on the row. Each destination’s badge counts the objects named by that destination’s fleet checks. The Actors inventory also has a **Needs attention** filter for reported crashes, worker disruptions and stuck transitions. Opened, it lists these destinations; SandboxConfig and CSIDriverConfig stay under **Other kinds**.
+When the `ate.dev` CRDs are discovered, the Resources sidebar's **Integrations** block lists Substrate in the **Agents** row, with the agent runtimes present beneath ("Agent Substrate", or "Agent Substrate · Agent Sandbox" when [Agent Sandbox](integrations.md#agent-sandbox-workspace) is installed too). The row's badge adds up each runtime's attention items. With both runtimes, the opened row groups destinations under **Substrate** and **Sandbox**. Each runtime has its own Overview and screens, and moving between them keeps the row open. Each destination's badge counts the objects named by that destination's fleet checks. The Actors inventory also has a **Needs attention** filter for reported crashes, worker disruptions and stuck transitions. SandboxConfig and CSIDriverConfig stay under **Other kinds**.
 
 | Destination | Route | Answers |
 |---|---|---|
