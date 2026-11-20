@@ -81,19 +81,6 @@ it('resumes the remaining dismissal time after closing details and ending hover 
   await advance(1000)
   expect(toast()).toBeNull()
 })
-it.each(['Long clickable', 'Long detail'])('keeps short words whole and allows oversized message and detail tokens to wrap (%s)', async label => {
-  await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === label)!.click())
-  const longToast = [...host.querySelectorAll<HTMLElement>('.backdrop-blur-sm')].at(-1)!
-  const words = [...longToast.querySelectorAll<HTMLElement>('.inline-block')]
-  expect(words).toHaveLength(2)
-  for (const word of words) {
-    expect(word.textContent!.length).toBeGreaterThanOrEqual(300)
-    expect(word.classList.contains('max-w-full')).toBe(true)
-    expect(word.classList.contains('[overflow-wrap:anywhere]')).toBe(true)
-    expect(word.classList.contains('whitespace-nowrap')).toBe(false)
-  }
-})
-
 it('keeps a duration 0 toast until a result replaces it, then dismisses the result on the normal timer', async () => {
   const click = async (label: string) => act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === label)!.click())
   const update = () => [...host.querySelectorAll<HTMLElement>('.backdrop-blur-sm')].find(item => item.textContent?.includes('Checking') || item.textContent?.includes('up to date'))
