@@ -3,6 +3,7 @@ package images
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,8 +31,8 @@ type DeclaredRuntime struct {
 // runtimeEnv maps the version ENV that Docker official images set (and every
 // image built FROM them inherits) to the runtime it names. Each key was
 // checked against the upstream Dockerfile; helper versions those images also
-// set (GOSU_VERSION, YARN_VERSION, …) are deliberately absent. No other env
-// key is ever read: image env can carry baked-in credentials.
+// set (GOSU_VERSION, YARN_VERSION, …) are deliberately absent. Image env can
+// carry baked-in credentials, so only these keys supply version values.
 var runtimeEnv = map[string]string{
 	"PHP_VERSION":     "php",
 	"NODE_VERSION":    "node",
@@ -92,6 +93,18 @@ func DeclaredRuntimes(cfg *v1.ConfigFile) (runtimes []DeclaredRuntime, baseImage
 		return runtimes[i].Source < runtimes[j].Source
 	})
 	return runtimes, baseImage
+}
+
+func declaresJavaHome(cfg *v1.ConfigFile) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, entry := range slices.Backward(cfg.Config.Env) {
+		if value, ok := strings.CutPrefix(entry, "JAVA_HOME="); ok {
+			return strings.TrimSpace(value) != ""
+		}
+	}
+	return false
 }
 
 // Fix classifications.

@@ -323,7 +323,7 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	individual := func(refs []resourceid.Ref) []resourceid.Ref {
 		return slices.DeleteFunc(slices.Clone(refs), func(r resourceid.Ref) bool { return grouped[r] != "" })
 	}
-	graph.declaredEdges(admitted, lastHop{families, selectors, compositions, allowed[EdgeManages], allowed[EdgeExposes]}, individual(unanswered))
+	graph.declaredEdges(admitted, lastHop{families: families, selectors: selectors, compositions: compositions, manages: allowed[EdgeManages], protects: allowed[EdgeProtects], exposes: allowed[EdgeExposes]}, individual(unanswered))
 	graph.declaredEdges(admitted, lastHop{families: unfollowedFamilies, selectors: unfollowedSelectors, compositions: unfollowedCompositions}, individual(answered))
 	displayObjects := make(map[resourceid.Ref]runtime.Object, len(order))
 	for _, r := range order {
@@ -474,24 +474,32 @@ func (n *neighborhood) ownerEdges(admitted admittedSession, refs []resourceid.Re
 }
 
 // lastHop is what declaredEdges draws: the families' forward references, the
-// selections, the compositions and, with members, a GitOps manager's recorded
-// members; with knative, Knative Serving's links.
+// selections and the compositions; with manages, a GitOps manager's recorded
+// members, a Karpenter NodeClaim's NodePool and Crossplane's links; with
+// protects, a MachineHealthCheck's Cluster; with exposes, Knative Serving's
+// links.
 type lastHop struct {
 	families     []*relations.Family
 	selectors    []*relations.SelectorFamily
 	compositions []*relations.Composition
-	members      bool
-	knative      bool
+	manages      bool
+	protects     bool
+	exposes      bool
 }
 
 // declaredEdges draws what refs declare of one another and of the other
 // admitted objects: their families' forward references, the admitted objects
 // their selectors choose, the admitted objects they compose with through
-// coordinates neither holds, Knative Serving's links and, for a GitOps
-// manager, its recorded members. It reads no object the walk didn't admit,
-// searches only the admitted objects, and asks no permission the walk didn't
-// already ask, so it can neither add a node nor reveal one.
+// coordinates neither holds, and the special producers' links. It reads no
+// object the walk didn't admit, searches only the admitted objects, and asks
+// no permission the walk didn't already ask, so it can neither add a node nor
+// reveal one.
 func (n *neighborhood) declaredEdges(admitted admittedSession, draw lastHop, refs []resourceid.Ref) {
+	// The special producers read through the neighborhood's own access; here
+	// that is the walk's decisions alone.
+	walk := n.access
+	n.access = admitted.access
+	defer func() { n.access = walk }()
 	// The admitted objects bound every answer here, so none is paged.
 	v := relations.NewView(admitted, admitted.access).WithLimit(0)
 	ov := ownership.NewView(admitted, admitted.access)
@@ -527,18 +535,27 @@ func (n *neighborhood) declaredEdges(admitted admittedSession, draw lastHop, ref
 				}
 			}
 		}
-		if draw.members && ownership.IsRecordingManager(r.GroupKind()) {
-			for _, m := range ov.Members(r).Members {
-				n.edge(r, m.Ref, relationEdge{edge: EdgeManages})
+		if draw.manages {
+			if ownership.IsRecordingManager(r.GroupKind()) {
+				for _, m := range ov.Members(r).Members {
+					n.edge(r, m.Ref, relationEdge{edge: EdgeManages})
+				}
 			}
+			// From a NodePool's side its NodeClaims are a list; each admitted
+			// NodeClaim names its own NodePool.
+			if pool, ok := n.nodePool(admitted, r); ok {
+				n.edge(pool, r, relationEdge{edge: EdgeManages})
+			}
+			n.crossplane(admitted, ov, r, obj)
 		}
-		if draw.knative {
-			// Knative's links read through the neighborhood's own access;
-			// here that is the walk's decisions alone.
-			walk := n.access
-			n.access = admitted.access
+		if draw.protects {
+			// A Cluster's MachineHealthChecks are a search of its dependents,
+			// which the admitted objects don't answer; each admitted
+			// MachineHealthCheck's owner reference names its Cluster.
+			n.healthChecks(ov, r, ownership.ChildrenAnswer{})
+		}
+		if draw.exposes {
 			n.knativeServing(admitted, r, obj)
-			n.access = walk
 		}
 	}
 }

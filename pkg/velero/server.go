@@ -72,6 +72,10 @@ type ServerConfig struct {
 	// --disable-controllers=gc), so expired backups are not deleted. Encoded
 	// as SchedulingDisabled is.
 	GCDisabled bool `json:"gcDisabled,omitempty"`
+	// ScheduleSkipImmediately is --schedule-skip-immediately, what the
+	// controller does with a Schedule whose spec.skipImmediately is unset; nil
+	// when the flags could not be read.
+	ScheduleSkipImmediately *bool `json:"scheduleSkipImmediately,omitempty"`
 	// Replicas counts non-terminating pods, including Pending and CrashLoop.
 	// Readiness is separate: a pod can fail its readiness probe while still
 	// processing schedules. Terminating pods stop their controllers on SIGTERM.
@@ -260,6 +264,7 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 	// A repeated flag takes its last value, as pflag does.
 	freq := defaultValidationFrequency
 	restoreOnly := false
+	skipImmediately := false
 	cfg.DefaultLocation = defaultLocationName
 	for i := 0; i < len(tokens); i++ {
 		name, value, hasValue := strings.Cut(strings.TrimLeft(tokens[i], "-"), "=")
@@ -293,6 +298,17 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 				return
 			}
 			freq = d
+		case "schedule-skip-immediately":
+			// A boolean flag: a separate "false" token is not its value.
+			if !hasValue {
+				skipImmediately = true
+				break
+			}
+			v, err := strconv.ParseBool(value)
+			if err != nil {
+				return
+			}
+			skipImmediately = v
 		case "restore-only":
 			// Velero's server.go disables the backup, schedule,
 			// backup-deletion and gc controllers (among others) in this mode.
@@ -331,6 +347,7 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 	}
 	secs := int64(freq / time.Second)
 	cfg.ValidationFrequencySeconds = &secs
+	cfg.ScheduleSkipImmediately = &skipImmediately
 	cfg.flagsSet = true
 }
 

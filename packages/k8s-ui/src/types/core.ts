@@ -193,10 +193,14 @@ export interface FeatureCapabilities {
   veleroWorkspace?: boolean
   /** POST /api/velero/schedules/{namespace}/{name}/backup */
   veleroBackupNow?: boolean
+  /** POST /api/velero/schedules/{namespace}/{name}/{pause|resume} */
+  veleroSchedulePause?: boolean
   /** GET /api/velero/runs/{backups|restores} */
   veleroRuns?: boolean
   /** POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion */
   veleroDeleteBackup?: boolean
+  veleroRunArtifacts?: boolean
+  veleroRunVolumes?: boolean
   /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
   resourceDeletePreconditions?: boolean
   gitopsWriteEvidence?: boolean
@@ -216,6 +220,8 @@ export interface FeatureCapabilities {
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
   vulnerabilities?: boolean
+  runtimeAdvisoryChecks?: boolean
+  sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -1678,7 +1684,7 @@ export interface TrafficFlow {
    *  measures a rate rather than observing individual responses, so it has a
    *  status code for no single flow. */
   errorRate?: number
-  verdict: string // forwarded, dropped, error
+  verdict: string // forwarded, dropped, error; empty when the source reports none
   /** The network plugin's own account of which policies decided this flow
    *  (Hubble reports it). Absent when the plugin said nothing. */
   policyVerdict?: {
