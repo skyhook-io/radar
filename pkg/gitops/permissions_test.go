@@ -90,12 +90,12 @@ func TestGitOpsForbiddenClassification(t *testing.T) {
 		want    string // "rbac", "admission" or "" for unclassified
 		summary string
 	}{
-		{"policy default reason", policy(`ValidatingAdmissionPolicy 'freeze' with binding 'freeze-binding' denied request: Application demo is change-frozen`, metav1.StatusReasonInvalid, 422), "admission", "Rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
-		{"policy forbidden reason", policy(`ValidatingAdmissionPolicy 'freeze' with binding 'freeze-binding' denied request: Application demo is change-frozen`, metav1.StatusReasonForbidden, 403), "admission", "Rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
-		{"policy without binding", policy(`ValidatingAdmissionPolicy 'freeze' denied request: frozen`, metav1.StatusReasonInvalid, 422), "admission", "Rejected by ValidatingAdmissionPolicy freeze: frozen"},
-		{"webhook", forbidden(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`), "admission", "Rejected by admission webhook validation.gatekeeper.sh: missing owner"},
-		{"webhook without code", webhookWithoutCode, "admission", "Rejected by admission webhook policy.example.com: owner label required"},
-		{"webhook without explanation", forbidden(`admission webhook "validation.gatekeeper.sh" denied the request without explanation`), "admission", "Rejected by admission webhook validation.gatekeeper.sh."},
+		{"policy default reason", policy(`ValidatingAdmissionPolicy 'freeze' with binding 'freeze-binding' denied request: Application demo is change-frozen`, metav1.StatusReasonInvalid, 422), "admission", "Request for Application argocd/demo rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
+		{"policy forbidden reason", policy(`ValidatingAdmissionPolicy 'freeze' with binding 'freeze-binding' denied request: Application demo is change-frozen`, metav1.StatusReasonForbidden, 403), "admission", "Request for Application argocd/demo rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
+		{"policy without binding", policy(`ValidatingAdmissionPolicy 'freeze' denied request: frozen`, metav1.StatusReasonInvalid, 422), "admission", "Request for Application argocd/demo rejected by ValidatingAdmissionPolicy freeze: frozen"},
+		{"webhook", forbidden(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`), "admission", "Request for Application argocd/demo rejected by admission webhook validation.gatekeeper.sh: missing owner"},
+		{"webhook without code", webhookWithoutCode, "admission", "Request for Application argocd/demo rejected by admission webhook policy.example.com: owner label required"},
+		{"webhook without explanation", forbidden(`admission webhook "validation.gatekeeper.sh" denied the request without explanation`), "admission", "Request for Application argocd/demo rejected by admission webhook validation.gatekeeper.sh."},
 		{"authorization webhook reason", forbidden(`User "alice" cannot patch resource "applications": denied by webhook policy.example`), "rbac", "Kubernetes denied permission to patch Argo CD Application demo in argocd."},
 		{"authorization reason resembling admission", forbidden(`User "alice" cannot patch resource "applications": admission webhook "policy.example" denied the request: frozen`), "rbac", "Kubernetes denied permission to patch Argo CD Application demo in argocd."},
 		{"unrecognized webhook text", forbidden(`denied by a webhook`), "", ""},

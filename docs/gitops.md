@@ -198,9 +198,10 @@ GitOps actions run with Radar's configured Kubernetes identity for the request.
 Kubernetes authorization denials return HTTP 403 with `error_code: "rbac_denied"`,
 a readable summary and the exact verb, resource, namespace and object name.
 Recognized admission webhook and policy refusals return HTTP 403 with
-`error_code: "admission_denied"` and a summary of the policy's message.
-Both responses retain the original message as `error`. The UI shows the summary
-and keeps the original response under **Error details** for copying.
+`error_code: "admission_denied"` and a summary naming the object and the policy.
+Both responses retain the original message as `error`. Sync and selective dry-run
+errors appear beside the dialog controls. Notifications identify the original
+request target, and **Error details** exposes the original message for copying.
 
 If Flux Sync with source fails after requesting earlier reconciles, the response
 and UI identify the accepted requests. Controller completion is reported by Flux.

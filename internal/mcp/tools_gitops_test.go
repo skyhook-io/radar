@@ -80,8 +80,8 @@ func TestManageGitOpsReportsAdmissionDenied(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"webhook", apierrors.NewForbidden(gvr.GroupResource(), "demo", errors.New(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`)), "Rejected by admission webhook validation.gatekeeper.sh: missing owner"},
-		{"validating admission policy", policy, "Rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
+		{"webhook", apierrors.NewForbidden(gvr.GroupResource(), "demo", errors.New(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`)), "Request for Application argocd/demo rejected by admission webhook validation.gatekeeper.sh: missing owner"},
+		{"validating admission policy", policy, "Request for Application argocd/demo rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dyn := setupMCPDynamicResource(t, gvr, "ApplicationList", k8s.APIResource{Group: gvr.Group, Version: gvr.Version, Kind: "Application", Name: gvr.Resource, Namespaced: true})

@@ -286,7 +286,10 @@ describe("the drawer's Sync with an options dialog", () => {
     await act(async () => dialogButton('Sync now').click())
     expect(onArgoSync).toHaveBeenCalledTimes(1)
     expect(dialog().textContent).toContain('Sync now')
-    expect(dialog().querySelector('[role="alert"]')?.textContent).toBe('Sync failed: denied')
+    const alert = dialog().querySelector('[role="alert"]')
+    expect(alert?.textContent).toBe('Sync failed: denied')
+    const syncControls = dialogButton('Sync now').closest('[role="group"][aria-label="Sync controls"]')
+    expect(syncControls?.contains(alert)).toBe(true)
     expect(prune().checked).toBe(true)
     fail = false
     await act(async () => dialogButton('Sync now').click())

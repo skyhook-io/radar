@@ -99,8 +99,20 @@ describe('GitOpsActionError', () => {
     const note = 'Reconcile already requested for HelmRepository charts/repo.'
     const raw = `upstream error. ${note}`
     const error = new GitOpsActionError({ error: raw, error_code, summary: 'Request rejected', note }, 403)
-    expect(error.message).toBe(`Request rejected ${note}`)
+    expect(error.message).toBe(`Request rejected\n${note}`)
     expect(error.rawDetail).toBe(raw)
+  })
+
+  it('adds request context only to the notification', () => {
+    const error = new GitOpsActionError({
+      error: 'original webhook error',
+      error_code: 'admission_denied',
+      summary: 'Request for HelmChart charts/shared rejected by admission webhook freeze',
+      note: 'Reconcile already requested for HelmRepository charts/repo.',
+    }, 403, 'apps/storefront on prod')
+    expect(error.notificationDetail).toBe(`apps/storefront on prod\n${error.message}`)
+    expect(error.rawDetail).toBe('original webhook error')
+    expect(error.message).not.toContain('apps/storefront')
   })
 
   it('preserves a plain 403 from an older connected Radar without guessing its cause', () => {

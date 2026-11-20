@@ -57,6 +57,7 @@ import {
   type GitOpsTreePreset,
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
+import { GitOpsActionError } from '../../api/httpErrors'
 import { useToast } from '../ui/Toast'
 import { useContextSwitchFlow } from '../useContextSwitchFlow'
 import { FluxOperatorCard } from './FluxOperatorCard'
@@ -820,7 +821,11 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                 if (isArgoApp) {
                   void remediationSync.mutateAsync({ namespace, name, applicationSyncOptions: appSyncOptions }).then(
                     () => showSuccess(`Created namespace ${nsName}`, 'Sync triggered to retry the apply.'),
-                    (error: Error & { rawDetail?: string }) => showError(`Created namespace ${nsName}, but sync failed`, error.message, error.rawDetail),
+                    (error: Error) => {
+                      const title = `Created namespace ${nsName}, but sync failed`
+                      if (error instanceof GitOpsActionError) showError(title, error.notificationDetail, error.rawDetail)
+                      else showError(title, error.message)
+                    },
                   )
                 } else {
                   showSuccess(`Created namespace ${nsName}`)
@@ -989,11 +994,13 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             onCancel={closeArgoSyncDialog}
             onValidationReset={() => argoResourceValidation.reset()}
             onValidate={syncDialogTarget?.scope === 'resource' ? (opts) => {
+              argoSync.reset()
               setValidatedTargetKey(deployTargetKey)
               argoResourceValidation.mutate(buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts, appSyncOptions))
             } : undefined}
             onConfirm={(opts) => {
               if (!syncDialogTarget) return
+              if (argoResourceValidation.isError) argoResourceValidation.reset()
               const variables = syncDialogTarget.scope === 'resource'
                 ? buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts, appSyncOptions)
                 : { namespace, name, ...opts, applicationSyncOptions: appSyncOptions }

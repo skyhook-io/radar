@@ -296,7 +296,7 @@ type OperationResult struct {
 	NoChange    bool       // request was already in the desired in-progress state
 }
 
-// SourceRef identifies the source resource in sync-with-source operations.
+// SourceRef identifies a GitOps resource in a sync or denial.
 type SourceRef struct {
 	Kind      string
 	Namespace string
