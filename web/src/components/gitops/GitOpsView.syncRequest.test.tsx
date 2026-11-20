@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useNavigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { normalizeArgoApplication } from '@skyhook-io/k8s-ui'
@@ -33,13 +33,15 @@ vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => {
     GitOpsTableView: (props: { rows: GitOpsRow[]; onRowAction: (row: GitOpsRow, action: GitOpsRowAction) => void }) => (
       <button type="button" onClick={() => props.onRowAction(props.rows[0], 'sync')}>Open sync</button>
     ),
-    GitOpsDetailLayout: (props: { argo?: ArgoActionHandlers; renderTabBody: (ctx: { tab: 'changes'; fullscreen: boolean }) => React.ReactNode; children?: React.ReactNode }) => (
-      <div data-resume-settings={JSON.stringify(props.argo?.resumeSettings ?? null)}>
+    GitOpsDetailLayout: (props: { argo?: ArgoActionHandlers; renderTabBody: (ctx: { tab: 'changes'; fullscreen: boolean }) => React.ReactNode; children?: React.ReactNode }) => {
+      const navigate = useNavigate()
+      return <div data-resume-settings={JSON.stringify(props.argo?.resumeSettings ?? null)}>
         <button type="button" onClick={() => props.argo?.onSyncRequested()}>Open sync</button>
+        <button type="button" onClick={() => navigate('/gitops/detail/applications/argocd/other?apiGroup=argoproj.io')}>Open other Application</button>
         {props.renderTabBody({ tab: 'changes', fullscreen: false })}
         {props.children}
       </div>
-    ),
+    },
     GitOpsChangesView: (props: { onSyncResource?: (ref: GitOpsInsightRef) => void }) => (
       <button type="button" onClick={() => props.onSyncResource?.(deployment)}>Open resource sync</button>
     ),
@@ -393,5 +395,18 @@ it.each([
   expect(document.querySelector('[role="dialog"] pre')?.textContent).toBe(syncDenial.error)
   await click(button('Cancel'))
   await click(button('Open sync'))
+  expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull()
+})
+
+it('closes a failed sync when the detail page changes Applications', async () => {
+  syncDenial = { error: 'denied', error_code: 'admission_denied', summary: 'Change window is closed' }
+  await click(button('Open sync'))
+  await click(button('Sync now'))
+  expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain(syncDenial.summary)
+  await click(button('Open other Application'))
+  const dialog = document.querySelector('[role="dialog"]')
+  expect(!dialog || dialog.closest('[inert]')).toBeTruthy()
+  await click(button('Open sync'))
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('argocd/other')
   expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull()
 })

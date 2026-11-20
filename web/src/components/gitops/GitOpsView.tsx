@@ -86,6 +86,7 @@ import {
   useResource,
 } from '../../api/client'
 import { useAPIResources, GITOPS_KINDS } from '../../api/apiResources'
+import { getApiBase } from '../../api/config'
 import { combinedListStatus, lowerBound } from '../../api/resourceLists'
 import { useConnection } from '../../context/ConnectionContext'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
@@ -150,7 +151,10 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
   const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
 
-  const [syncDialogRowId, setSyncDialogRowId] = useState<string | null>(null)
+  const clusterKey = JSON.stringify([getApiBase(), connection.context])
+  const [syncSelection, setSyncSelection] = useState<{ rowId: string; clusterKey: string } | null>(null)
+  if (syncSelection && syncSelection.clusterKey !== clusterKey) setSyncSelection(null)
+  const syncDialogRowId = syncSelection?.clusterKey === clusterKey ? syncSelection.rowId : null
   const [pendingActions, setPendingActions] = useState<Map<string, Set<GitOpsRowAction>>>(new Map())
 
   // Mark an action as in-flight (or done) for a given row. Cloning the
@@ -251,7 +255,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
 
   const syncDialogRow = rowsQuery.data?.rows.find((row) => row.id === syncDialogRowId)
   useEffect(() => {
-    if (syncDialogRowId && !syncDialogRow) setSyncDialogRowId(null)
+    if (syncDialogRowId && !syncDialogRow) setSyncSelection(null)
   }, [syncDialogRowId, syncDialogRow])
 
   // Row mutations invalidate granular keys (['resource', …], ['gitops-tree', …])
@@ -305,7 +309,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         // in-flight flag here since the dialog now owns the lifecycle.
         markAction(id, action, false)
         argoSync.reset()
-        setSyncDialogRowId(id)
+        setSyncSelection({ rowId: id, clusterKey })
         return
       case 'refresh':
         argoRefresh.mutate({ namespace, name, hard: false }, settle)
@@ -381,7 +385,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         pending={argoSync.isPending}
         syncError={argoSync.error?.message}
         syncRawError={argoSync.error?.rawDetail}
-        onCancel={() => setSyncDialogRowId(null)}
+        onCancel={() => setSyncSelection(null)}
         onConfirm={(opts) => {
           if (!syncDialogRow) return
           const { namespace, name } = syncDialogRow
@@ -389,7 +393,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
             { namespace, name, ...opts, applicationSyncOptions: argoApplicationSyncOptions(syncDialogRow.raw) },
             { onSuccess: () => {
               refetchTableAfterMutation()
-              setSyncDialogRowId(null)
+              setSyncSelection(null)
             } },
           )
         }}
@@ -401,6 +405,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
 function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOpsViewProps) {
   const location = useLocation()
   const navigate = useNavigate()
+  const { connection } = useConnection()
   const { showError, showSuccess, showToast } = useToast()
   const parts = location.pathname.split('/').filter(Boolean)
   const kind = parts[2] || 'applications'
@@ -494,6 +499,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const [helmValuesOpen, setHelmValuesOpen] = useState(false)
 
   const argoSync = useArgoSync({ reportErrors: false })
+  const remediationSync = useArgoSync({ reportErrors: false })
   const argoResourceValidation = useArgoResourceValidation()
   const argoRefresh = useArgoRefresh()
   const argoTerminate = useArgoTerminate()
@@ -510,7 +516,11 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const fluxSuspend = useFluxSuspend()
   const fluxResume = useFluxResume()
 
-  const [syncDialogTarget, setSyncDialogTarget] = useState<ArgoSyncDialogTarget | null>(null)
+  const appKey = JSON.stringify([getApiBase(), connection.context, kind, effectiveGroup, namespace, name])
+  const [syncDialog, setSyncDialog] = useState<{ appKey: string; target: ArgoSyncDialogTarget } | null>(null)
+  if (syncDialog && syncDialog.appKey !== appKey) setSyncDialog(null)
+  const syncDialogTarget = syncDialog?.appKey === appKey ? syncDialog.target : null
+  const argoSyncBusy = argoSync.isPending || remediationSync.isPending || applyResource.isPending
   const [validatedTargetKey, setValidatedTargetKey] = useState<string | null>(null)
   const validationStale = validatedTargetKey !== null && validatedTargetKey !== deployTargetKey
   // Doubles as the "open" flag (truthy = dialog open) and the data carrier
@@ -520,14 +530,15 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const [refreshKind, setRefreshKind] = useState<'normal' | 'hard'>('normal')
 
   function openArgoSyncDialog(target: ArgoSyncDialogTarget) {
+    if (argoSyncBusy) return
     argoSync.reset()
     argoResourceValidation.reset()
-    setSyncDialogTarget(target)
+    setSyncDialog({ appKey, target })
   }
 
   function closeArgoSyncDialog() {
     argoResourceValidation.reset()
-    setSyncDialogTarget(null)
+    setSyncDialog(null)
   }
 
   const detailRow = tool && resourceQ.data ? normalizeDetailResource(kind, effectiveGroup, tool, resourceQ.data) : null
@@ -639,7 +650,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       if (isArgoApp) openArgoSyncDialog({ scope: 'application' })
       else if (isFlux) fluxReconcile.mutate({ kind, namespace, name })
     },
-    enabled: shortcutsEnabled && (isArgoApp || isFlux) && !effectiveSuspended && !terminating && !(isArgoApp && operationInProgress),
+    enabled: shortcutsEnabled && (isArgoApp || isFlux) && !effectiveSuspended && !terminating && !(isArgoApp && (operationInProgress || argoSyncBusy)),
   })
   useRegisterShortcut({
     id: 'gitops-detail-refresh',
@@ -711,7 +722,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       if (isArgoAutoSyncSwitchedOff(resourceQ.data) && (argoResumeUpgrade || argoResumeBlockedReason)) return
       argoResume.mutate({ namespace, name })
     },
-    syncing: argoSync.isPending,
+    syncing: argoSyncBusy,
     refreshing: argoRefresh.isPending,
     refreshingKind: refreshKind,
     terminating: argoTerminate.isPending,
@@ -779,7 +790,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
         // away and back.
         window.setTimeout(() => setChangesFocusKey(null), 4000)
       }}
-      remediationPending={applyResource.isPending || argoSync.isPending}
+      remediationPending={argoSyncBusy}
       onRemediate={(remediation) => {
         if (remediation.kind === 'create-namespace' && remediation.target) {
           const nsName = remediation.target
@@ -792,7 +803,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                 // sync was triggered, so a successful create-namespace + sync
                 // failure doesn't yield a misleading "sync triggered" toast.
                 if (isArgoApp) {
-                  argoSync.mutate(
+                  remediationSync.mutate(
                     { namespace, name, applicationSyncOptions: appSyncOptions },
                     {
                       onSuccess: () => {
@@ -893,7 +904,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                   ? terminatingActionTooltip
                   : effectiveSuspended
                     ? 'Resume the Application before syncing a resource.'
-                    : operationInProgress || argoSync.isPending
+                    : operationInProgress || argoSyncBusy
                       ? 'Wait for the current sync operation to finish.'
                       : undefined
               ) : undefined}
