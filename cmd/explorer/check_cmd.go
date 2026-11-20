@@ -728,7 +728,7 @@ func shellQuote(path string) string {
 
 func java4ShellNarrowerScope(report images.Java4ShellReport, reason string) string {
 	if report.Coverage.Scope.Namespaces != nil {
-		return "Open the affected workload in Radar. Its Vulnerabilities section checks that workload alone."
+		return "Verify installed Java directly in any affected workload that uses it."
 	}
 	for _, row := range report.UnassessedRows {
 		if row.Reason == reason {

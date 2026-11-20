@@ -32,7 +32,7 @@ it('shows Java home and check limit counts before opening details and counts oth
   expect(html).toContain('14 with assessment gaps')
   expect(html).toContain('Check scope</span> · All namespaces')
   expect(html).toContain('Could not check · next steps')
-  expect(html).toContain('Radar applies this cap each time. Select fewer namespaces or open an affected workload and check it there.')
+  expect(html).toContain('Radar applies this cap each time. Select fewer namespaces or verify Java directly in the skipped containers.')
   expect(html).toContain('Registry throttling affected 2 containers · public.ecr.aws')
   expect(html).toContain('Radar pauses calls to throttled registries for five minutes.')
   expect(html).toContain('verify the installed version in workloads that use Java')

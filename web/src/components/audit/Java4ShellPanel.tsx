@@ -243,13 +243,13 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
           {checkLimitReached > 0 && (
             <p className="text-theme-text-secondary">
               <span className="text-warning-text">{reasonLabels.not_checked} for {pluralize(checkLimitReached, 'container')}.</span>{' '}
-              {data.workload ? 'Retry this workload. If the check still stops early, verify Java in the skipped containers.' : 'Select fewer namespaces or open an affected workload and check it there.'}
+              {data.workload ? 'Retry this workload. If the check still stops early, verify Java in the skipped containers.' : 'Select fewer namespaces or verify Java directly in the skipped containers.'}
             </p>
           )}
           {dockerHubLimit > 0 && (
             <p className="text-theme-text-secondary">
               <span className="text-warning-text">{reasonLabels.docker_hub_limit} for {pluralize(dockerHubLimit, 'container')}.</span>{' '}
-              {data.workload ? 'Retry to reuse any image metadata Radar cached. If the cap is reached again, verify Java in the skipped containers.' : 'Radar applies this cap each time. Select fewer namespaces or open an affected workload and check it there.'}
+              {data.workload ? 'Retry to reuse any image metadata Radar cached. If the cap is reached again, verify Java in the skipped containers.' : 'Radar applies this cap each time. Select fewer namespaces or verify Java directly in the skipped containers.'}
             </p>
           )}
           {registryRateLimit > 0 && (
