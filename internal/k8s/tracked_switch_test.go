@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/internal/errorlog"
 )
 
 func awaitSwitchPhase(t *testing.T, tracker *ContextSwitchTracker, phase string) ContextSwitchStatus {
@@ -179,8 +181,13 @@ func TestStopCommittedSwitchWhileWaitingForDiscovery(t *testing.T) {
 	defer unblock()
 	_, sessionsClosed := setupCheckedSwitch(t, api.URL, true)
 	var completed atomic.Int32
-	OnContextSwitch(func(string) { completed.Add(1) })
 	var tracker ContextSwitchTracker
+	OnContextSwitchComplete(func(name, id string) {
+		if tracker.StopSwitch(id, name) {
+			t.Error("accepted Stop after completion callbacks began")
+		}
+		completed.Add(1)
+	})
 	op, _ := tracker.Start("target", nil)
 	select {
 	case <-entered:
@@ -197,6 +204,7 @@ func TestStopCommittedSwitchWhileWaitingForDiscovery(t *testing.T) {
 		t.Fatalf("could not stop only the matching switch: %+v", tracker.Snapshot())
 	}
 	awaitSwitchPhase(t, &tracker, "stopped")
+	assertNoSwitchFailureLogged(t, op)
 	status := GetConnectionStatus()
 	if !*sessionsClosed || status.State != StateDisconnected || status.Context != "target" || status.ErrorType != switchStoppedErrorType || RuntimeAuthRecoveryOwed() || completed.Load() != 0 {
 		t.Fatalf("stopped switch: %+v, callbacks %d", status, completed.Load())
@@ -215,5 +223,43 @@ func TestStopCommittedSwitchWhileWaitingForDiscovery(t *testing.T) {
 	unblock()
 	if GetConnectionStatus().State != StateConnected || completed.Load() != 1 || versionHits.Load() != 2 {
 		t.Fatalf("replacement switch: %+v, callbacks %d, probes %d", GetConnectionStatus(), completed.Load(), versionHits.Load())
+	}
+}
+
+func TestStopCommittedSwitchDuringConnectivityCheck(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer api.Close()
+	defer close(release)
+	_, sessionsClosed := setupCheckedSwitch(t, api.URL, false)
+	var tracker ContextSwitchTracker
+	op, _ := tracker.Start("target", nil)
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("target connectivity check never started")
+	}
+	if !tracker.StopSwitch(op.ID, op.Target) {
+		t.Fatalf("could not stop target connectivity check: %+v", tracker.Snapshot())
+	}
+	awaitSwitchPhase(t, &tracker, "stopped")
+	if !*sessionsClosed || GetConnectionStatus().ErrorType != switchStoppedErrorType || GetClient() != nil {
+		t.Fatalf("stopped connectivity check: %+v", GetConnectionStatus())
+	}
+	assertNoSwitchFailureLogged(t, op)
+}
+
+func assertNoSwitchFailureLogged(t *testing.T, op ContextSwitchStatus) {
+	t.Helper()
+	for _, entry := range errorlog.GetEntries() {
+		if entry.Source == "context-switch" && entry.Level == "error" && !entry.Time.Before(op.StartedAt) {
+			t.Errorf("user Stop recorded as a failure: %s", entry.Message)
+		}
 	}
 }

@@ -124,6 +124,10 @@ async function switchFixture(page: Page, { lostAcknowledgement, sourceDisconnect
   }
 }
 
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: 'wait' })
+})
+
 test('a slow switch survives reload and completes from server status when SSE is lost', async ({ page }) => {
   const fixture = await switchFixture(page)
   fixture.warming()

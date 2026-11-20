@@ -552,28 +552,30 @@ func RetryCurrentConnection() error {
 	if err := contextOperationsBlockedErr(); err != nil {
 		return fmt.Errorf("%w: %w", ErrContextSwitchPreflight, err)
 	}
-	var contextName string
-	var inCluster, stopped bool
-	var observedOperationGen uint64
-	if !CaptureClusterReads(func() {
-		contextName = GetContextName()
-		inCluster = IsInCluster()
-		stopped = GetConnectionStatus().ErrorType == switchStoppedErrorType
-		if inCluster && contextName != "" && !stopped {
-			_, observedOperationGen = CancelOngoingOperations()
-		} else {
-			observedOperationGen = currentOperationGen()
+	if !IsInCluster() {
+		var contextName string
+		var generation uint64
+		var stopped bool
+		if !CaptureClusterReads(func() {
+			contextName = GetContextName()
+			generation = currentOperationGen()
+			stopped = GetConnectionStatus().ErrorType == switchStoppedErrorType
+		}) || stopped {
+			return ErrReconnectSuperseded
 		}
-	}) || stopped {
-		return ErrReconnectSuperseded
+		if contextName == "" {
+			return errors.New("no context configured")
+		}
+		return performContextSwitch(contextName, generation, true, &checkedSwitch{ctx: context.Background()})
 	}
+
+	contextName := GetContextName()
 	if contextName == "" {
 		return errors.New("no context configured")
 	}
-	if !inCluster {
-		return performContextSwitch(contextName, observedOperationGen, true, &checkedSwitch{ctx: context.Background()})
-	}
-
+	// In-cluster recovery can be blocked in cache initialization while
+	// holding contextOpMu. A manual retry must interrupt it before probing.
+	_, observedOperationGen := CancelOngoingOperations()
 	probeCtx, probeCancel, ok := newOperationContextForGeneration(
 		observedOperationGen,
 		connectionTestOperationTimeout(),
@@ -857,6 +859,9 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 			defer stop()
 		}
 		if err := TestClusterConnection(connCtx); err != nil {
+			if tracker != nil && !tracker.setCanStop(checked.ctx, false) {
+				return context.Canceled
+			}
 			elapsed := time.Since(switchStart).Truncate(time.Millisecond)
 			log.Printf("[ops] Context switch FAILED at connectivity test: %v (%v since switch start)", err, elapsed)
 			errorlog.Record("context-switch", "error",
@@ -890,6 +895,9 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	}
 	defer initCancel()
 	if err := initAllSubsystems(initCtx, progress, discoveryWait, tracker); err != nil {
+		if tracker != nil && !tracker.setCanStop(checked.ctx, false) {
+			return context.Canceled
+		}
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
 		log.Printf("[ops] Context switch FAILED at subsystem init: %v (%v since switch start)", err, elapsed)
 		errorlog.Record("context-switch", "error",
