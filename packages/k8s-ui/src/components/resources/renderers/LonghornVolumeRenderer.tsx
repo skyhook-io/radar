@@ -2,6 +2,7 @@ import { HardDrive, HeartPulse, Archive } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import { formatBytes } from '../../../utils/format'
 import { formatDuration } from '../resource-utils'
+import { TimeValue } from '../../ui/ScheduleValue'
 import { longhornHealthyReplicas, longhornRebuilds, longhornReplicaUnschedulable, longhornVolumeConditionTone, longhornVolumeHealth } from '../resource-utils-longhorn'
 
 interface Props {
@@ -53,7 +54,7 @@ export function LonghornVolumeRenderer({ data, engine, engineUnknown, engineLook
             : rebuilding
               ? 'Fewer healthy replicas than requested; Longhorn is rebuilding them, which is routine after a node drain or restart.'
               : 'Fewer healthy replicas than requested. Longhorn rebuilds them when it can place a replica; routine after a node drain or restart.'}
-          items={rebuilds.map((r) => (r.error ? `${r.replica}: ${r.error}` : `${r.replica}: ${r.progress}%`))}
+          items={rebuilds.map((r) => (r.error ? `${r.replica}: ${r.error}` : `${r.replica}: ${r.progress === undefined ? 'progress unknown' : `${r.progress}%`}`))}
         />
       )}
 
@@ -61,7 +62,7 @@ export function LonghornVolumeRenderer({ data, engine, engineUnknown, engineLook
         <PropertyList>
           <Property label="Size" value={bytes(spec.size)} />
           <Property label="Actual size" value={bytes(status.actualSize)} />
-          <Property label="Healthy replicas" value={desired ? `${healthy ?? '?'} of ${desired}${engineIdle ? ' (Engine not running)' : ''}` : undefined} />
+          <Property label="Healthy replicas" value={`${healthy ?? '?'} of ${desired ?? '?'}${engineIdle ? ' (Engine not running)' : ''}`} />
           <Property label="Data locality" value={spec.dataLocality} />
           <Property label="Access mode" value={spec.accessMode} />
           <Property label="Frontend" value={spec.frontend} />
@@ -74,14 +75,14 @@ export function LonghornVolumeRenderer({ data, engine, engineUnknown, engineLook
           <Property label="State" value={status.state} />
           <Property label="Robustness" value={status.robustness} />
           <Property label="Node" value={status.currentNodeID || undefined} />
-          <Property label="Degraded since" value={status.lastDegradedAt || undefined} />
-          <Property label="Last auto-salvaged" value={status.lastAutoSalvagedAt || undefined} />
+          <Property label="Degraded since" value={status.lastDegradedAt ? <TimeValue timestamp={status.lastDegradedAt} /> : undefined} />
+          <Property label="Last auto-salvaged" value={status.lastAutoSalvagedAt ? <TimeValue timestamp={status.lastAutoSalvagedAt} /> : undefined} />
         </PropertyList>
       </Section>
 
       <Section title="Backups" icon={Archive} defaultExpanded>
         <PropertyList>
-          <Property label="Last backup" value={status.lastBackupAt || '-'} />
+          <Property label="Last backup" value={<TimeValue timestamp={status.lastBackupAt || undefined} />} />
         </PropertyList>
       </Section>
 

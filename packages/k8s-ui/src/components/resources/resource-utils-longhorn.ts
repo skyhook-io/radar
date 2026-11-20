@@ -33,7 +33,8 @@ export function longhornHealthyReplicas(engine: any): number | undefined {
   return Object.values(modes).filter((mode) => mode === 'RW').length
 }
 
-export interface LonghornRebuild { replica: string; progress: number; state: string; error: string }
+/** progress is undefined when the Engine hasn't reported it. */
+export interface LonghornRebuild { replica: string; progress?: number; state: string; error: string }
 
 /** Rebuilds in progress or failed, from the Engine's rebuildStatus (keyed by replica address). */
 export function longhornRebuilds(engine: any): LonghornRebuild[] {
@@ -42,7 +43,7 @@ export function longhornRebuilds(engine: any): LonghornRebuild[] {
   const names = new Map<string, string>()
   for (const [name, addr] of Object.entries(engine?.status?.currentReplicaAddressMap ?? {})) names.set(String(addr), name)
   return Object.entries(statuses)
-    .map(([addr, s]: [string, any]) => ({ replica: names.get(addr.replace(/^tcp:\/\//, '')) ?? addr, progress: Number(s?.progress) || 0, state: s?.state || '', error: s?.error || '', rebuilding: !!s?.isRebuilding }))
+    .map(([addr, s]: [string, any]) => ({ replica: names.get(addr.replace(/^tcp:\/\//, '')) ?? addr, progress: typeof s?.progress === 'number' && Number.isFinite(s.progress) ? s.progress : undefined, state: s?.state || '', error: s?.error || '', rebuilding: !!s?.isRebuilding }))
     .filter((r) => r.rebuilding || r.error)
     .sort((a, b) => a.replica.localeCompare(b.replica))
     .map(({ rebuilding: _rebuilding, ...r }) => r)

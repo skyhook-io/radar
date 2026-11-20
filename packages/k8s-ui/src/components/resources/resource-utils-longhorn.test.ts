@@ -34,7 +34,7 @@ describe('longhornRebuilds', () => {
       'tcp://c': { isRebuilding: false, state: 'error', error: 'disk full' },
     } } })).toEqual([
       { replica: 'tcp://b', progress: 40, state: 'in_progress', error: '' },
-      { replica: 'tcp://c', progress: 0, state: 'error', error: 'disk full' },
+      { replica: 'tcp://c', progress: undefined, state: 'error', error: 'disk full' },
     ])
   })
 
@@ -49,5 +49,12 @@ describe('longhornRebuilds', () => {
       { replica: 'tcp://10.0.0.9:10352', progress: 5, state: 'in_progress', error: '' },
       { replica: 'vol-r-1', progress: 40, state: 'in_progress', error: '' },
     ])
+  })
+})
+
+describe('longhornRebuilds progress', () => {
+  it('keeps unreported progress unknown, not zero', () => {
+    const [r] = longhornRebuilds({ status: { rebuildStatus: { 'tcp://a': { isRebuilding: true, state: 'in_progress' } } } })
+    expect(r.progress).toBeUndefined()
   })
 })

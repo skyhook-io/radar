@@ -70,4 +70,24 @@ describe('LonghornVolumeRenderer', () => {
     expect(html).toContain('? of 3')
     expect(html).toContain('Engine not running')
   })
+
+  it('reads unreported rebuild progress and a missing replica count as unknown, not zero or absent', () => {
+    const engine = { status: { replicaModeMap: { a: 'RW' }, rebuildStatus: { 'tcp://10.0.0.9:10000': { isRebuilding: true, state: 'in_progress' } } } }
+    const data = volume({ state: 'attached', robustness: 'degraded' })
+    delete (data.spec as any).numberOfReplicas
+    const html = renderToStaticMarkup(<LonghornVolumeRenderer data={data} engine={engine} />)
+    expect(html).toContain('progress unknown')
+    expect(html).not.toContain('0%')
+    expect(html).toContain('1 of ?')
+  })
+
+  it('shows moments as ages, not raw timestamps', () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-15T12:00:00Z'))
+    const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume({ state: 'attached', robustness: 'degraded', lastDegradedAt: '2026-11-15T10:00:00Z', lastBackupAt: '2026-11-15T11:00:00Z' })} />)
+    vi.useRealTimers()
+    expect(html).not.toContain('2026-11-15T10:00:00Z')
+    expect(html).not.toContain('2026-11-15T11:00:00Z')
+    expect(html).toContain('2h ago')
+    expect(html).toContain('1h ago')
+  })
 })
