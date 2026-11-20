@@ -248,8 +248,10 @@ type FeatureCapabilities struct {
 	PodFileUpload         bool `json:"podFileUpload"`         // POST /api/pods/{namespace}/{name}/files/upload
 	Vulnerabilities       bool `json:"vulnerabilities"`       // GET /api/vulnerabilities
 	RuntimeAdvisoryChecks bool `json:"runtimeAdvisoryChecks"` // GET /api/vulnerabilities/java4shell
-	LoggingPodShipping    bool `json:"loggingPodShipping"`    // GET /api/logging/pods/{namespace}/{name}
-	LoggingPipeline       bool `json:"loggingPipeline"`       // GET /api/logging/pipeline
+	// GET /api/sealedsecrets/controller
+	SealedSecretsController bool `json:"sealedSecretsController"`
+	LoggingPodShipping      bool `json:"loggingPodShipping"` // GET /api/logging/pods/{namespace}/{name}
+	LoggingPipeline         bool `json:"loggingPipeline"`    // GET /api/logging/pipeline
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
