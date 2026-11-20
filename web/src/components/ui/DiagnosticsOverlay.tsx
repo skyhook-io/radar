@@ -19,7 +19,7 @@ interface DiagnosticsOverlayProps {
 }
 
 export function DiagnosticsOverlay({ onClose, isOpen = true, focus, communityUrl }: DiagnosticsOverlayProps) {
-  const { data, isLoading, error } = useDiagnostics(true)
+  const { data, isLoading, error, refetch } = useDiagnostics(true)
   const [copied, setCopied] = useState<'json' | 'formatted' | null>(null)
   const [reportOpened, setReportOpened] = useState(false)
   const timelineRef = useRef<HTMLDivElement>(null)
@@ -124,7 +124,12 @@ export function DiagnosticsOverlay({ onClose, isOpen = true, focus, communityUrl
             <div className="text-sm text-theme-text-tertiary text-center py-8">Loading diagnostics…</div>
           )}
           {error && (
-            <div className="text-sm text-red-400 text-center py-8">Failed to load diagnostics: {(error as Error).message}</div>
+            <div role="alert" className="text-sm text-center py-8 space-y-3">
+              <p className="text-error-text">
+                Failed to load diagnostics: {error.message}
+              </p>
+              <button type="button" className="btn-brand" onClick={() => void refetch()}>Retry diagnostics</button>
+            </div>
           )}
           {data && (
             <>
@@ -236,6 +241,7 @@ function ConnectionSection({ data }: { data: DiagnosticsSnapshot }) {
       <Row label="State" value={c.state} warn={warn} />
       <Row label="Context" value={c.context} />
       {c.clusterName && <Row label="Cluster" value={c.clusterName} />}
+      {c.progressMessage && <Row label="Progress" value={c.progressMessage} />}
       {c.error && <Row label="Error" value={c.error} warn />}
       {c.errorType && <Row label="Error Type" value={c.errorType} warn />}
     </Section>
@@ -679,6 +685,7 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
     lines.push(`### Connection`)
     lines.push(`- State: \`${c.state}\``)
     lines.push(`- Context: \`${c.context}\``)
+    if (c.progressMessage) lines.push(`- Progress: ${c.progressMessage}`)
     if (c.clusterName) lines.push(`- Cluster: \`${c.clusterName}\``)
     if (c.error) lines.push(`- Error: ${c.error}`)
     if (c.errorType) lines.push(`- Error Type: \`${c.errorType}\``)

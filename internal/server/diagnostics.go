@@ -75,11 +75,12 @@ type DiagnosticsSnapshot struct {
 
 // DiagConnection holds connection state info.
 type DiagConnection struct {
-	State       string `json:"state"`
-	Context     string `json:"context"`
-	ClusterName string `json:"clusterName,omitempty"`
-	Error       string `json:"error,omitempty"`
-	ErrorType   string `json:"errorType,omitempty"`
+	State           string `json:"state"`
+	Context         string `json:"context"`
+	ClusterName     string `json:"clusterName,omitempty"`
+	Error           string `json:"error,omitempty"`
+	ErrorType       string `json:"errorType,omitempty"`
+	ProgressMessage string `json:"progressMessage,omitempty"`
 }
 
 // DiagKubeconfig holds non-sensitive kubeconfig loading state. It never
@@ -242,11 +243,12 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 			connectionError = "Kubeconfig initialization failed; see local Radar logs for details"
 		}
 		snap.Connection = &DiagConnection{
-			State:       string(status.State),
-			Context:     status.Context,
-			ClusterName: status.ClusterName,
-			Error:       connectionError,
-			ErrorType:   status.ErrorType,
+			State:           string(status.State),
+			Context:         status.Context,
+			ClusterName:     status.ClusterName,
+			Error:           connectionError,
+			ErrorType:       status.ErrorType,
+			ProgressMessage: status.ProgressMsg,
 		}
 	})
 
@@ -269,6 +271,12 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	// Cluster info — requires connection, but errors are captured
 	collectSafe("cluster", &errs, func() {
+		// With no ready cache, cluster detection falls back to live API calls.
+		// Diagnostics must remain readable while that connection is being repaired.
+		if k8s.GetConnectionStatus().State != k8s.StateConnected || k8s.ContextOperationInProgress() || k8s.GetResourceCache() == nil {
+			errs = append(errs, "Cluster details skipped while the Kubernetes connection or its cache is unavailable.")
+			return
+		}
 		info, err := k8s.GetClusterInfo(r.Context())
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("cluster: %v", err))

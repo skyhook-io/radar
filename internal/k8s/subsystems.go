@@ -88,20 +88,19 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 		log.Printf("Resource cache initialized with %d resources", cache.GetResourceCount())
 	}
 
-	// Wait for discovery to complete before dynamic cache (which needs discovery data).
-	// If context is canceled, skip the wait — let discovery drain in background.
-	if discoveryStarted && ctx.Err() == nil {
-		if discoveryErr := <-discoveryErrCh; discoveryErr != nil {
-			log.Printf("Warning: resource discovery init failed: %v", discoveryErr)
+	if discoveryStarted {
+		progress("Waiting for Kubernetes API discovery...")
+		select {
+		case discoveryErr := <-discoveryErrCh:
+			if discoveryErr != nil {
+				log.Printf("Warning: resource discovery init failed: %v", discoveryErr)
+			}
+		case <-ctx.Done():
+			return fmt.Errorf("waiting for Kubernetes API discovery: %w", ctx.Err())
 		}
-	} else if discoveryStarted {
-		logTiming("   [ops] Skipping discovery wait: context canceled")
 	}
-
-	// Bail if context was canceled while we were waiting
-	if ctx.Err() != nil {
-		log.Printf("[ops] InitAllSubsystems bailing: context canceled (%v since start)", time.Since(subsystemStart))
-		return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// 3. Dynamic cache (factory init is synchronous; CRD warmup and discovery kick off async)

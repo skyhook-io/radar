@@ -73,6 +73,24 @@ func TestDiagnosticsRedactsLocalKubeconfigError(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsDuringConnectionReturnsPartialSnapshot(t *testing.T) {
+	previous := k8s.GetConnectionStatus()
+	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+		State:       k8s.StateConnecting,
+		ProgressMsg: "Loading workloads...",
+	})
+
+	body := diagnosticsBody(t)
+	var connection DiagConnection
+	if err := json.Unmarshal(body["connection"], &connection); err != nil {
+		t.Fatal(err)
+	}
+	if connection.ProgressMessage != "Loading workloads..." || body["runtime"] == nil || body["cluster"] != nil {
+		t.Fatalf("progress = %q, runtime present = %t, cluster present = %t", connection.ProgressMessage, body["runtime"] != nil, body["cluster"] != nil)
+	}
+}
+
 func diagnosticsBody(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
 
