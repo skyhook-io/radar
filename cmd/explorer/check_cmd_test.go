@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 func TestJava4ShellCommandFlags(t *testing.T) {
@@ -74,7 +76,7 @@ func TestJava4ShellCLIListsScopedPodsAndResolvesWorkloads(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	if err := writeJava4ShellCheck(&output, "json", result); err != nil {
+	if err := writeJava4ShellCheck(&output, "json", result, false); err != nil {
 		t.Fatal(err)
 	}
 	var decoded struct {
@@ -86,9 +88,9 @@ func TestJava4ShellCLIListsScopedPodsAndResolvesWorkloads(t *testing.T) {
 		t.Fatalf("invalid report JSON: %s (%v)", output.String(), err)
 	}
 	output.Reset()
-	if err := writeJava4ShellCheck(&output, "table", result); err != nil ||
-		!strings.Contains(output.String(), "Java version could not be assessed") ||
-		!strings.Contains(output.String(), "image identity unknown") {
+	if err := writeJava4ShellCheck(&output, "table", result, false); err != nil ||
+		!strings.Contains(output.String(), "Assessment gaps: 1") ||
+		!strings.Contains(output.String(), "Running image digest unavailable") {
 		t.Fatalf("invalid report table: %s (%v)", output.String(), err)
 	}
 }
@@ -103,6 +105,9 @@ func TestJava4ShellCLIRefusesUnreadablePodScope(t *testing.T) {
 	if !apierrors.IsForbidden(err) || report.Coverage.Status == resourceapi.CoverageComplete || len(kube.Actions()) != 1 {
 		t.Fatalf("denied scope reported as readable: %+v, %v, %v", report, err, kube.Actions())
 	}
+	if !strings.Contains(err.Error(), "Use -n NAMESPACE") {
+		t.Errorf("missing narrower-scope instruction: %v", err)
+	}
 }
 
 func TestJava4ShellCLIPrintsJavaHomeAsUnassessed(t *testing.T) {
@@ -111,12 +116,81 @@ func TestJava4ShellCLIPrintsJavaHomeAsUnassessed(t *testing.T) {
 		Unassessed: map[string]int{"java_home_declared": 1},
 	}}
 	var output bytes.Buffer
-	if err := writeJava4ShellCheck(&output, "table", report); err != nil {
+	if err := writeJava4ShellCheck(&output, "table", report, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Java version could not be assessed", "Image sets JAVA_HOME. Java version unknown"} {
+	for _, want := range []string{"No Java versions could be assessed.", "Assessment gaps: 1", "Verify the installed Java version for images that set JAVA_HOME."} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("expected %q in %s", want, output.String())
+		}
+	}
+}
+
+func TestJava4ShellTablePrioritizesActionableGaps(t *testing.T) {
+	const gapCount = java4ShellTableGapLimit + 1
+	report := images.Java4ShellReport{Java4ShellResult: images.Java4ShellResult{
+		Containers:        gapCount + 2,
+		UnaffectedByMajor: map[int]int{11: 1},
+		Unassessed:        map[string]int{images.StatusAuthRequired: gapCount, "no_java_declaration": 1},
+		UnassessedGroups:  gapCount + 1,
+	}}
+	for i := range gapCount {
+		report.UnassessedRows = append(report.UnassessedRows, images.Java4ShellUnassessed{
+			Workload:  resourceid.NewRef("apps", "Deployment", "prod", fmt.Sprintf("private-%02d", i)),
+			Image:     "example.com/team/image",
+			Container: "server",
+			Reason:    images.StatusAuthRequired,
+			Pods:      1,
+		})
+	}
+	report.UnassessedRows = append(report.UnassessedRows, images.Java4ShellUnassessed{
+		Workload: resourceid.NewRef("apps", "Deployment", "prod", "busybox"),
+		Image:    "busybox",
+		Reason:   "no_java_declaration",
+		Pods:     1,
+	})
+	var output bytes.Buffer
+	if err := writeJava4ShellCheck(&output, "table", report, false); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"No affected Java declarations among assessed containers (1).", "No Java version declared: 1", "Assessment gaps: 11", "Registry authentication required: 11",
+		"private-09", "Showing the first 10 workload groups with gaps", java4ShellRegistryDocs}
+	for _, phrase := range want {
+		if !strings.Contains(output.String(), phrase) {
+			t.Errorf("missing %q in %s", phrase, output.String())
+		}
+	}
+	for _, hidden := range []string{"private-10", "busybox", "example.com/team/image"} {
+		if strings.Contains(output.String(), hidden) {
+			t.Errorf("unexpected %q in %s", hidden, output.String())
+		}
+	}
+	for _, format := range []string{"table", "json"} {
+		output.Reset()
+		if err := writeJava4ShellCheck(&output, format, report, format == "table"); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), "private-10") || !strings.Contains(output.String(), "busybox") {
+			t.Errorf("%s lost detailed rows: %s", format, output.String())
+		}
+	}
+}
+
+func TestCheckImageProgressTerminalAndRedirect(t *testing.T) {
+	for _, interactive := range []bool{true, false} {
+		var output bytes.Buffer
+		update, finish := checkImageProgress(&output, interactive)
+		update(0, 0)
+		update(0, 121)
+		update(1, 121)
+		update(121, 121)
+		finish()
+		want := "Processed 0 of 121 image groups\nProcessed 121 of 121 image groups\n"
+		if interactive {
+			want = "\rProcessed 0 of 121 image groups\rProcessed 121 of 121 image groups\n"
+		}
+		if output.String() != want {
+			t.Errorf("interactive %t: got %q, want %q", interactive, output.String(), want)
 		}
 	}
 }
