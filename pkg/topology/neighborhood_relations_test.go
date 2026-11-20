@@ -14,9 +14,11 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -981,5 +983,112 @@ func TestWalkNeighborhoodLastHopKnativeAsksNothingNew(t *testing.T) {
 	}
 	if answers[0] != answers[1] {
 		t.Errorf("a hidden Knative Service changed the answer:\n%s\n%s", answers[0], answers[1])
+	}
+}
+
+// lastHopPair is two objects only one special producer links, the first of
+// them the one that producer reads the link from.
+type lastHopPair struct {
+	name                 string
+	subject, counterpart *unstructured.Unstructured
+	source, target       string
+	edge                 EdgeType
+}
+
+// lastHopPairs are the special producers' pairs under a cluster-scoped
+// Controller that owns each subject, and with ownCounterpart each counterpart
+// too, so one hop admits both and answers neither.
+func lastHopPairs(ownCounterpart bool) (*unstructured.Unstructured, []lastHopPair) {
+	controller := true
+	root := projectionCR("example.io", "Controller", "", "fleet", map[string]any{})
+	root.SetUID("ctl")
+	own := func(u *unstructured.Unstructured, owned bool, refs ...metav1.OwnerReference) *unstructured.Unstructured {
+		if owned {
+			refs = append([]metav1.OwnerReference{{APIVersion: "example.io/v1", Kind: "Controller", Name: "fleet", UID: "ctl", Controller: &controller}}, refs...)
+		}
+		u.SetOwnerReferences(refs)
+		return u
+	}
+	nodeClaim := projectionCR(karpenter.Group, "NodeClaim", "", "default-abc", map[string]any{})
+	nodeClaim.SetLabels(map[string]string{karpenter.NodePoolLabelKey: "default"})
+	nodePool := projectionCR(karpenter.Group, "NodePool", "", "default", map[string]any{})
+	composite := projectionCR("example.org", "XPostgreSQLInstance", "", "db-x7k", map[string]any{"spec": map[string]any{
+		"compositionRef": map[string]any{"name": "pg"},
+		"resourceRefs":   []any{},
+		"claimRef":       map[string]any{"apiVersion": "example.org/v1", "kind": "PostgreSQLInstance", "namespace": "shop", "name": "db"},
+	}})
+	claim := projectionCR("example.org", "PostgreSQLInstance", "shop", "db", map[string]any{"spec": map[string]any{
+		"compositionRef": map[string]any{"name": "pg"},
+		"resourceRef":    map[string]any{"apiVersion": "example.org/v1", "kind": "XPostgreSQLInstance", "name": "db-x7k"},
+	}})
+	mhc := projectionCR("cluster.x-k8s.io", "MachineHealthCheck", "shop", "prod-workers", map[string]any{})
+	cluster := projectionCR("cluster.x-k8s.io", "Cluster", "shop", "prod", map[string]any{})
+	cluster.SetUID("capi")
+	return root, []lastHopPair{
+		{"Karpenter NodePool label", own(nodeClaim, true), own(nodePool, ownCounterpart), "default", "default-abc", EdgeManages},
+		{"Crossplane claim", own(composite, true), own(claim, ownCounterpart), "db", "db-x7k", EdgeManages},
+		{"MachineHealthCheck", own(mhc, true, metav1.OwnerReference{APIVersion: "cluster.x-k8s.io/v1", Kind: "Cluster", Name: "prod", UID: "capi"}), own(cluster, ownCounterpart), "prod-workers", "prod", EdgeProtects},
+	}
+}
+
+// The special producers link the last hop's objects too: a Karpenter
+// NodeClaim's NodePool by its label, a Crossplane claim's composite, and a
+// MachineHealthCheck's Cluster, admitted together at one hop.
+func TestWalkNeighborhoodLinksLastHopSpecialProducers(t *testing.T) {
+	root, pairs := lastHopPairs(true)
+	for _, p := range pairs {
+		t.Run(p.name, func(t *testing.T) {
+			sub := walkTestNeighborhood(t, newProjectionSession(t, root, p.subject, p.counterpart), root, NeighborhoodOptions{Hops: 1})
+			names := map[string]string{}
+			for _, n := range sub.Nodes {
+				names[n.ID] = n.Name
+			}
+			if len(sub.Nodes) != 3 {
+				t.Fatalf("the fixture no longer admits both at one hop: %v", names)
+			}
+			if !slices.ContainsFunc(sub.Edges, func(e Edge) bool {
+				return e.Type == p.edge && names[e.Source] == p.source && names[e.Target] == p.target
+			}) {
+				t.Errorf("missing %s %s %s; edges %+v", p.source, p.edge, p.target, sub.Edges)
+			}
+		})
+	}
+}
+
+// Those links ask nothing new: an object at the last hop whose counterpart's
+// kind the caller may not read gets the same answer whether the counterpart
+// exists or not, with no permission question about its kind and no omission.
+func TestWalkNeighborhoodLastHopSpecialProducersAskNothingNew(t *testing.T) {
+	root, pairs := lastHopPairs(false)
+	for _, p := range pairs {
+		t.Run(p.name, func(t *testing.T) {
+			hidden := p.counterpart.GroupVersionKind()
+			var answers []string
+			for _, present := range []bool{false, true} {
+				objects := []runtime.Object{root, p.subject}
+				if present {
+					objects = append(objects, p.counterpart)
+				}
+				var asked int
+				sub := walkTestNeighborhood(t, newProjectionSession(t, objects...), root, NeighborhoodOptions{Allow: func(n *Node) bool {
+					deny := n.Data["resourceKind"] == hidden.Kind && strings.HasPrefix(n.Data["apiVersion"].(string), hidden.Group+"/")
+					if deny {
+						asked++
+					}
+					return !deny
+				}})
+				if len(sub.Nodes) != 2 {
+					t.Fatalf("the fixture no longer admits the subject at one hop: %+v", sub.Nodes)
+				}
+				if asked != 0 || sub.RBACDenied != 0 {
+					t.Errorf("counterpart present=%v: asked about %s %d times, RBACDenied %d", present, hidden.Kind, asked, sub.RBACDenied)
+				}
+				body, _ := json.Marshal(sub)
+				answers = append(answers, string(body))
+			}
+			if answers[0] != answers[1] {
+				t.Errorf("a hidden %s changed the answer:\n%s\n%s", hidden.Kind, answers[0], answers[1])
+			}
+		})
 	}
 }

@@ -1,0 +1,6 @@
+{
+  "apps/v1/Deployment": ["demo-app/web(created)", "demo-app/api(updated)", "demo-app/worker(failed)"],
+  "v1/ConfigMap": ["demo-app/kube-root-ca.crt(skipped)"],
+  "v1/Namespace": ["demo-app(created)", "empty-app(created)"],
+  "v1/PersistentVolume": ["pvc-a12(failed)"]
+}

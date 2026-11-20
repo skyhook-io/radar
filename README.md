@@ -262,7 +262,7 @@ radar
 
 </details>
 
-`radar --help` is authoritative for the installed version. `radar cloud status` inspects an in-cluster Radar Cloud installation without changing it ([details](docs/configuration.md#radar-cloud)).
+`radar --help` is authoritative for the installed version. `radar cloud status` inspects an in-cluster Radar Cloud installation without changing it ([details](docs/configuration.md#radar-cloud)). `radar check java4shell` runs the Java4Shell check from the terminal ([CLI flags and exit codes](docs/configuration.md#java4shell-cli)).
 
 ---
 
