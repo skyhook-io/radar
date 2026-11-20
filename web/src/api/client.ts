@@ -8487,7 +8487,7 @@ export interface DiagnosticsSnapshot {
     enrichedFromShell: boolean;
     kubeconfigEnvIgnored: boolean;
     kubeconfigEnvIgnoredReason: string;
-    currentContextUsesExec: boolean;
+    currentContextUsesExec?: boolean;
     execPluginsPresent?: string[];
     execPluginsMissing?: string[];
   };

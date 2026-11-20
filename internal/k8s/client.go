@@ -938,6 +938,20 @@ type KubeconfigSummary struct {
 // still gets accurate data.
 func GetKubeconfigSummary() KubeconfigSummary {
 	clientMu.RLock()
+	return kubeconfigSummaryAndUnlock()
+}
+
+// TryKubeconfigSummary also identifies the context whose exec setting was read.
+// A kubeconfig writer can hold clientMu during file I/O.
+func TryKubeconfigSummary() (KubeconfigSummary, string, bool) {
+	if !clientMu.TryRLock() {
+		return KubeconfigSummary{}, "", false
+	}
+	name := contextName
+	return kubeconfigSummaryAndUnlock(), name, true
+}
+
+func kubeconfigSummaryAndUnlock() KubeconfigSummary {
 	mode := kubeconfigMode
 	fileCount := 0
 	if contextRegistry != nil {

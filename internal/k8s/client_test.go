@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
@@ -1070,5 +1071,23 @@ func TestExtractAWSProfile(t *testing.T) {
 				t.Errorf("extractAWSProfile() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTryKubeconfigSummaryWhileWriterIsBusy(t *testing.T) {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	returned := make(chan bool, 1)
+	go func() {
+		_, _, ok := TryKubeconfigSummary()
+		returned <- ok
+	}()
+	select {
+	case available := <-returned:
+		if available {
+			t.Fatal("read kubeconfig while a writer held its lock")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("diagnostics waited for the kubeconfig writer")
 	}
 }

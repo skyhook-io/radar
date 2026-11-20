@@ -182,7 +182,7 @@ func TestDiagnosticsClusterUsesOnlyCurrentCacheObservations(t *testing.T) {
 	}
 }
 
-func TestDiagnosticsOmitsClusterSectionsWhenConnectionChangesDuringCollection(t *testing.T) {
+func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 	if k8s.GetResourceCache() == nil {
 		if err := k8s.InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
 			t.Fatal(err)
@@ -190,42 +190,86 @@ func TestDiagnosticsOmitsClusterSectionsWhenConnectionChangesDuringCollection(t 
 		t.Cleanup(k8s.ResetResourceCache)
 	}
 	previousStatus := k8s.GetConnectionStatus()
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "old"})
 	t.Cleanup(func() { k8s.SetConnectionStatus(previousStatus) })
+	previousName := k8s.SetTestContextName("old")
+	t.Cleanup(func() { k8s.SetTestContextName(previousName) })
+	t.Cleanup(k8s.SetTestContextCount(25))
 	timeline.RecordDrop("Pod", "default", "old-pod", "no_diff", "update", k8s.ActiveClusterContext())
 	t.Cleanup(timeline.ResetMetricsForContextSwitch)
 
-	// Change sessions while the handler authorizes a named drop, after it has
-	// captured the cache and begun collecting cluster sections.
-	var reviewed atomic.Bool
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/apis/authorization.k8s.io/v1/subjectaccessreviews" {
-			reviewed.Store(true)
-			k8s.CancelOngoingOperations()
-			k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnecting, Context: "new"})
-		}
-		http.Error(w, "unavailable", http.StatusForbidden)
-	}))
-	t.Cleanup(api.Close)
-	previous := k8s.SetTestClient(kubernetes.NewForConfigOrDie(&rest.Config{Host: api.URL}))
-	t.Cleanup(func() { k8s.SetTestClient(previous) })
+	for _, tc := range []struct {
+		name  string
+		start k8s.ConnectionState
+		next  k8s.ConnectionStatus
+	}{
+		{"switch", k8s.StateConnected, k8s.ConnectionStatus{State: k8s.StateConnecting, Context: "new"}},
+		{"startup progress", k8s.StateConnecting, k8s.ConnectionStatus{State: k8s.StateConnecting, Context: "old", ProgressMsg: "Loading workloads"}},
+		{"connection lost", k8s.StateConnected, k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: "old", Error: "connection lost"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k8s.SetConnectionStatus(k8s.ConnectionStatus{State: tc.start, Context: "old"})
+			switched := tc.next.Context != "old"
+			var reviewed atomic.Bool
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/version" {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"gitVersion":"v1.35.3"}`))
+					return
+				}
+				if r.URL.Path == "/apis/authorization.k8s.io/v1/subjectaccessreviews" {
+					reviewed.Store(true)
+					if switched {
+						k8s.CancelOngoingOperations()
+					}
+					k8s.SetConnectionStatus(tc.next)
+				}
+				http.Error(w, "unavailable", http.StatusForbidden)
+			}))
+			t.Cleanup(api.Close)
+			previous := k8s.SetTestClient(kubernetes.NewForConfigOrDie(&rest.Config{Host: api.URL}))
+			t.Cleanup(func() { k8s.SetTestClient(previous) })
+			k8s.InvalidateServerVersionCache()
+			t.Cleanup(k8s.InvalidateServerVersionCache)
+			if info, err := k8s.GetClusterInfo(t.Context()); err != nil || info.KubernetesVersion != "v1.35.3" {
+				t.Fatalf("could not seed cluster observation: %+v, %v", info, err)
+			}
 
-	s := &Server{broadcaster: &SSEBroadcaster{}, permCache: auth.NewPermissionCache(), diagConfig: &DiagConfig{Port: 9280}}
-	s.permCache.Set("viewer", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
-	rec := httptest.NewRecorder()
-	s.handleDiagnostics(rec, requestWithUser("GET", "/api/diagnostics", &auth.User{Username: "viewer"}))
-	var snap DiagnosticsSnapshot
-	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+			s := &Server{broadcaster: &SSEBroadcaster{}, permCache: auth.NewPermissionCache(), diagConfig: &DiagConfig{Port: 9280}}
+			s.permCache.Set("viewer", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
+			rec := httptest.NewRecorder()
+			s.handleDiagnostics(rec, requestWithUser("GET", "/api/diagnostics", &auth.User{Username: "viewer"}))
+			var snap DiagnosticsSnapshot
+			if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+				t.Fatal(err)
+			}
+			if !reviewed.Load() || snap.Connection == nil || snap.Connection.Context != tc.next.Context || snap.Connection.State != string(tc.next.State) || snap.Connection.ProgressMessage != tc.next.ProgressMsg || snap.Runtime == nil {
+				t.Errorf("reviewed=%v connection=%+v runtime present=%v", reviewed.Load(), snap.Connection, snap.Runtime != nil)
+			}
+			if snap.Kubeconfig == nil || snap.Kubeconfig.ContextCount != 25 || (snap.Kubeconfig.CurrentContextUsesExec == nil) != switched {
+				t.Errorf("kubeconfig = %+v, switched = %v", snap.Kubeconfig, switched)
+			}
+			if (snap.Cache == nil) != switched || (snap.EventPipeline == nil) != switched || (snap.Informers == nil) != switched {
+				t.Errorf("cache=%t events=%t informers=%t, switched=%v", snap.Cache != nil, snap.EventPipeline != nil, snap.Informers != nil, switched)
+			}
+			if snap.Cluster != nil || snap.Traffic != nil || len(snap.Errors) == 0 {
+				t.Errorf("offline cluster=%+v traffic=%+v errors=%v", snap.Cluster, snap.Traffic, snap.Errors)
+			}
+			if snap.Config == nil || snap.Config.Port != 9280 || (snap.Config.OpenCostCurrency == "") != switched {
+				t.Errorf("configuration = %+v, switched = %v", snap.Config, switched)
+			}
+		})
+	}
+}
+
+func TestDiagnosticsKeepsKubeconfigDuringSwitch(t *testing.T) {
+	t.Cleanup(k8s.SetTestContextCount(25))
+	t.Cleanup(k8s.SetTestContextOperationInProgress(true))
+	var cfg map[string]any
+	if err := json.Unmarshal(diagnosticsBody(t)["kubeconfig"], &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if !reviewed.Load() || snap.Connection == nil || snap.Connection.Context != "new" || snap.Runtime == nil {
-		t.Errorf("reviewed=%v connection=%+v runtime present=%v", reviewed.Load(), snap.Connection, snap.Runtime != nil)
-	}
-	if snap.Config == nil || snap.Config.Port != 9280 || snap.Config.OpenCostCurrency != "" {
-		t.Errorf("process configuration retained a cluster currency or lost its port: %+v", snap.Config)
-	}
-	if snap.Kubeconfig != nil || snap.Cache != nil || snap.Cluster != nil || snap.EventPipeline != nil || snap.Informers != nil || len(snap.Errors) == 0 {
-		t.Errorf("stale cluster data: cache=%t cluster=%t events=%t informers=%t, errors=%v", snap.Cache != nil, snap.Cluster != nil, snap.EventPipeline != nil, snap.Informers != nil, snap.Errors)
+	if _, hasCurrentExec := cfg["currentContextUsesExec"]; cfg["contextCount"] != float64(25) || hasCurrentExec {
+		t.Fatalf("kubeconfig during switch: %+v", cfg)
 	}
 }
 

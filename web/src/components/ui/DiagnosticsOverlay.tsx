@@ -271,10 +271,9 @@ function KubeconfigSection({ data }: { data: DiagnosticsSnapshot }) {
         value={k.kubeconfigEnvIgnored ? `Yes — ${k.kubeconfigEnvIgnoredReason}` : 'No'}
         warn={k.kubeconfigEnvIgnored}
       />
-      <Row
-        label="Current Context Uses Exec"
-        value={k.currentContextUsesExec ? 'Yes' : 'No'}
-      />
+      {k.currentContextUsesExec !== undefined && (
+        <Row label="Current Context Uses Exec" value={k.currentContextUsesExec ? 'Yes' : 'No'} />
+      )}
       {present.length > 0 && (
         <Row label="Exec Plugins on PATH" value={present.join(', ')} />
       )}
@@ -701,7 +700,9 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
       : ''
     lines.push(`- Mode: \`${k.mode || '(not initialized)'}\` | Files: ${k.fileCount}${directoryFiles} | Contexts (after source resolution): ${k.contextCount}`)
     lines.push(`- KUBECONFIG Captured From Shell: ${k.enrichedFromShell ? 'Yes' : 'No'} | Ignored: ${k.kubeconfigEnvIgnored ? `Yes — ${k.kubeconfigEnvIgnoredReason}` : 'No'}`)
-    lines.push(`- Current Context Uses Exec: ${k.currentContextUsesExec ? 'Yes' : 'No'}`)
+    if (k.currentContextUsesExec !== undefined) {
+      lines.push(`- Current Context Uses Exec: ${k.currentContextUsesExec ? 'Yes' : 'No'}`)
+    }
     if (k.execPluginsPresent && k.execPluginsPresent.length > 0) {
       lines.push(`- Exec Plugins on PATH: \`${k.execPluginsPresent.join('`, `')}\``)
     }

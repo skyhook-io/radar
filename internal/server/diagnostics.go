@@ -52,6 +52,7 @@ type DiagnosticsSnapshot struct {
 	UptimeSec    int64  `json:"uptimeSec"`
 
 	Connection *DiagConnection `json:"connection,omitempty"`
+	Kubeconfig *DiagKubeconfig `json:"kubeconfig,omitempty"`
 	diagClusterSections
 	SSE                 *DiagSSE              `json:"sse,omitempty"`
 	Perf                *perfstats.Snapshot   `json:"perf,omitempty"`
@@ -65,7 +66,6 @@ type DiagnosticsSnapshot struct {
 
 // diagClusterSections are published together only if the connection stays current.
 type diagClusterSections struct {
-	Kubeconfig    *DiagKubeconfig              `json:"kubeconfig,omitempty"`
 	Cluster       *DiagCluster                 `json:"cluster,omitempty"`
 	Cache         *DiagCache                   `json:"cache,omitempty"`
 	Metrics       *k8s.MetricsCollectionHealth `json:"metrics,omitempty"`
@@ -97,16 +97,16 @@ type DiagConnection struct {
 // collisions, shell env enrichment, or an exec auth plugin missing from
 // the desktop app's PATH.
 type DiagKubeconfig struct {
-	Mode                       string   `json:"mode"`                         // in-cluster, single, multi-env, multi-dir, multi-source, or "" if not initialized
-	FileCount                  int      `json:"fileCount"`                    // Number of kubeconfig files loaded
-	DirectoryFileCount         int      `json:"directoryFileCount"`           // Loaded files discovered from configured directories
-	ContextCount               int      `json:"contextCount"`                 // Contexts exposed after source resolution
-	EnrichedFromShell          bool     `json:"enrichedFromShell"`            // Desktop app captured KUBECONFIG from login shell
-	KubeconfigEnvIgnored       bool     `json:"kubeconfigEnvIgnored"`         // KUBECONFIG suppressed by configured sources
-	KubeconfigEnvIgnoredReason string   `json:"kubeconfigEnvIgnoredReason"`   // Non-sensitive reason KUBECONFIG was suppressed
-	CurrentContextUsesExec     bool     `json:"currentContextUsesExec"`       // Current context's AuthInfo uses an exec credential plugin
-	ExecPluginsPresent         []string `json:"execPluginsPresent,omitempty"` // Exec plugin command basenames resolvable on $PATH
-	ExecPluginsMissing         []string `json:"execPluginsMissing,omitempty"` // Exec plugin command basenames NOT resolvable on $PATH (smoking gun for desktop-app multi-cluster failures)
+	Mode                       string   `json:"mode"`                             // in-cluster, single, multi-env, multi-dir, multi-source, or "" if not initialized
+	FileCount                  int      `json:"fileCount"`                        // Number of kubeconfig files loaded
+	DirectoryFileCount         int      `json:"directoryFileCount"`               // Loaded files discovered from configured directories
+	ContextCount               int      `json:"contextCount"`                     // Contexts exposed after source resolution
+	EnrichedFromShell          bool     `json:"enrichedFromShell"`                // Desktop app captured KUBECONFIG from login shell
+	KubeconfigEnvIgnored       bool     `json:"kubeconfigEnvIgnored"`             // KUBECONFIG suppressed by configured sources
+	KubeconfigEnvIgnoredReason string   `json:"kubeconfigEnvIgnoredReason"`       // Non-sensitive reason KUBECONFIG was suppressed
+	CurrentContextUsesExec     *bool    `json:"currentContextUsesExec,omitempty"` // Current context's AuthInfo uses an exec credential plugin
+	ExecPluginsPresent         []string `json:"execPluginsPresent,omitempty"`     // Exec plugin command basenames resolvable on $PATH
+	ExecPluginsMissing         []string `json:"execPluginsMissing,omitempty"`     // Exec plugin command basenames NOT resolvable on $PATH (smoking gun for desktop-app multi-cluster failures)
 }
 
 // DiagCluster holds cluster detection info.
@@ -264,9 +264,12 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Includes the current context’s exec-plugin setting.
-	collectClusterSection("kubeconfig", func() {
-		summary := k8s.GetKubeconfigSummary()
+	collectSafe("kubeconfig", &errs, func() {
+		summary, name, ok := k8s.TryKubeconfigSummary()
+		if !ok {
+			errs = append(errs, "Kubeconfig details are temporarily busy.")
+			return
+		}
 		snap.Kubeconfig = &DiagKubeconfig{
 			Mode:                       summary.Mode,
 			FileCount:                  summary.FileCount,
@@ -275,30 +278,11 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 			EnrichedFromShell:          summary.EnrichedFromShell,
 			KubeconfigEnvIgnored:       summary.KubeconfigEnvIgnored,
 			KubeconfigEnvIgnoredReason: summary.KubeconfigEnvIgnoredReason,
-			CurrentContextUsesExec:     summary.CurrentContextUsesExec,
 			ExecPluginsPresent:         summary.ExecPluginsPresent,
 			ExecPluginsMissing:         summary.ExecPluginsMissing,
 		}
-	})
-
-	// Cluster info — requires connection, but errors are captured
-	collectClusterSection("cluster", func() {
-		if status.State != k8s.StateConnected || cache == nil {
-			clusterErrors = append(clusterErrors, "Cluster details are unavailable while the connection changes or its cache is offline.")
-			return
-		}
-		info, observed := cache.LastClusterInfo()
-		if observed.IsZero() {
-			clusterErrors = append(clusterErrors, "Cluster details have not been collected for the current connection.")
-			return
-		}
-		snap.Cluster = &DiagCluster{
-			ObservedAt:        observed.UTC().Format(time.RFC3339),
-			Platform:          info.Platform,
-			KubernetesVersion: info.KubernetesVersion,
-			NodeCount:         info.NodeCount,
-			NamespaceCount:    info.NamespaceCount,
-			InCluster:         info.InCluster,
+		if stable && status.Context == name && (name != "" || summary.Mode == "in-cluster") {
+			snap.Kubeconfig.CurrentContextUsesExec = &summary.CurrentContextUsesExec
 		}
 	})
 
@@ -617,13 +601,46 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	current := false
 	if stable {
 		k8s.CaptureClusterReads(func() {
-			current = operation.Err() == nil && cache == k8s.GetResourceCache() && status == k8s.GetConnectionStatus()
+			latest := k8s.GetConnectionStatus()
+			current = operation.Err() == nil && cache == k8s.GetResourceCache() && status.Context == latest.Context
+			status = latest
 		})
 	}
 	if current {
+		// Cluster info — requires connection, but errors are captured
+		collectClusterSection("cluster", func() {
+			if status.State != k8s.StateConnected || cache == nil {
+				clusterErrors = append(clusterErrors, "Cluster details are unavailable while the connection changes or its cache is offline.")
+				return
+			}
+			info, observed := cache.LastClusterInfo()
+			if observed.IsZero() {
+				clusterErrors = append(clusterErrors, "Cluster details have not been collected for the current connection.")
+				return
+			}
+			snap.Cluster = &DiagCluster{
+				ObservedAt:        observed.UTC().Format(time.RFC3339),
+				Platform:          info.Platform,
+				KubernetesVersion: info.KubernetesVersion,
+				NodeCount:         info.NodeCount,
+				NamespaceCount:    info.NamespaceCount,
+				InCluster:         info.InCluster,
+			}
+		})
+
+		if status.State != k8s.StateConnected {
+			snap.Traffic = nil
+			if snap.Informers != nil {
+				snap.Informers.DynamicCount = nil
+				snap.Informers.WatchedCRDs = nil
+			}
+		}
 		errs = append(errs, clusterErrors...)
 	} else {
 		snap.diagClusterSections = diagClusterSections{}
+		if snap.Kubeconfig != nil {
+			snap.Kubeconfig.CurrentContextUsesExec = nil
+		}
 		if snap.Config != nil {
 			snap.Config.OpenCostCurrency = ""
 		}
