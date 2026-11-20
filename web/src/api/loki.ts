@@ -130,13 +130,6 @@ export async function withLokiRunFallback(kind: string, namespace: string, name:
     // A pod Loki can't split is read whole, so its lines stay beside the chosen container's.
     : container ? run.logs.filter(l => l.container === container || l.container === ALL_CONTAINERS) : run.logs
   const fixedRangeReason = "This run is read whole from Loki; the line count and time range don't apply"
-  // Loki answered for the chosen container only: its silence says nothing about
-  // the run's other containers, so the viewer keeps the run's pods to switch to.
-  if (logs.length === 0 && container) {
-    return { pods: [], logs: [], keepPreviousSources: true, emptyMessage: `Loki has no lines from container ${container} for this run`, fixedRangeReason }
-  }
-  if (logs.length === 0) return data
-  const pods = wholePod ? run.pods.map(p => ({ ...p, containers: [], containerStatuses: undefined })) : run.pods
   const summary = [
     `From Loki, ${timeOf(run.window.start)}–${timeOf(run.window.end)}, the whole run (the line count and time range don't apply)`,
     wholePod && 'all containers (Loki has no container label)',
@@ -144,5 +137,16 @@ export async function withLokiRunFallback(kind: string, namespace: string, name:
   ].filter(Boolean).join(', ')
   // The server's notice is whole sentences; the summary is not.
   const notice = run.notice ? `${summary}. ${run.notice}` : summary
+  // Loki answered for the chosen container only: its silence says nothing about
+  // the run's other containers, so the viewer keeps the run's pods to switch to.
+  // A truncated answer only covers the newest entries, so it can't say more.
+  if (logs.length === 0 && container) {
+    const emptyMessage = run.truncated
+      ? `Loki has no lines from container ${container} among the newest ${run.limit.toLocaleString()} entries it returned for this run`
+      : `Loki has no lines from container ${container} for this run`
+    return { pods: [], logs: [], keepPreviousSources: true, emptyMessage, notice, fixedRangeReason }
+  }
+  if (logs.length === 0) return data
+  const pods = wholePod ? run.pods.map(p => ({ ...p, containers: [], containerStatuses: undefined })) : run.pods
   return { pods, logs, notice, fixedRangeReason }
 }

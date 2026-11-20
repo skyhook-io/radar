@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false, container: 'job', notice: '', extra: [] as { pod: string, container: string, timestamp: string, content: string }[] }))
+const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false, container: 'job', notice: '', truncated: true, extra: [] as { pod: string, container: string, timestamp: string, content: string }[] }))
 vi.mock('./client', async (orig) => ({
   ...(await orig<typeof import('./client')>()),
   fetchJSON: async (url: string) => {
@@ -9,7 +9,7 @@ vi.mock('./client', async (orig) => ({
     return {
       pods: [{ name: 'nightly-1-aaaaa', containers: [calls.container], ready: false }],
       logs: [{ pod: 'nightly-1-aaaaa', container: calls.container, timestamp: '2026-11-13T02:00:00.000000000Z', content: 'done' }, ...calls.extra],
-      notice: calls.notice, source: 'loki', truncated: true, limit: 5000,
+      notice: calls.notice, source: 'loki', truncated: calls.truncated, limit: 5000,
       window: { start: '2026-11-13T01:59:00Z', end: '2026-11-13T02:11:00Z' },
     }
   },
@@ -70,12 +70,26 @@ describe('withLokiRunFallback', () => {
   })
   // A chosen container with no lines is Loki's answer for that container, not
   // the run's pods being gone: the viewer keeps the run's pods and containers.
-  it('says the chosen container has no lines, keeping the run inventory', async () => {
+  // The mock answer is truncated: an empty filtered read only covers the
+  // newest entries Loki returned, so it must not claim the container is silent.
+  it('keeps the limit in view when a truncated read has no lines for the container', async () => {
     const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true, undefined, 'sidecar')
+    expect(got.emptyMessage).toBe('Loki has no lines from container sidecar among the newest 5,000 entries it returned for this run')
+    expect(got.notice).toContain('the newest 5,000 lines (the limit; older lines may be missing)')
     expect(got.keepPreviousSources).toBe(true)
-    expect(got.emptyReason).toBeUndefined()
-    expect(got.emptyMessage).toBe('Loki has no lines from container sidecar for this run')
-    expect(got.fixedRangeReason).toBeTruthy()
+  })
+  it('says the chosen container has no lines, keeping the run inventory', async () => {
+    calls.truncated = false
+    try {
+      const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true, undefined, 'sidecar')
+      expect(got.keepPreviousSources).toBe(true)
+      expect(got.emptyReason).toBeUndefined()
+      expect(got.emptyMessage).toBe('Loki has no lines from container sidecar for this run')
+      expect(got.notice).not.toContain('newest')
+      expect(got.fixedRangeReason).toBeTruthy()
+    } finally {
+      calls.truncated = true
+    }
   })
   it('shows a run Loki can\'t split by container, whatever container is chosen', async () => {
     calls.container = '(all containers)'
