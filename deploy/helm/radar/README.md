@@ -665,6 +665,8 @@ delegates Radar-to-Service network access; it doesn't control where a Service
 routes. On a shared cluster, constrain who can change EndpointSlices, directly or
 through GitOps controllers, and use network policy.
 
+For a Java4Shell check that reports **Registry authentication required**, see [workload pull secrets and private ECR setup for in-cluster Radar](../../../docs/authentication.md#java4shell-registry-access).
+
 ### Turning exec off
 
 `disableExec: true` turns off pod exec through Radar for everyone on this cluster,

@@ -42,7 +42,7 @@ const (
 	java4ShellTableGapLimit   = 10
 	java4ShellTableMatchLimit = 20
 	java4ShellHintHostLimit   = 4
-	java4ShellRegistryDocs    = "https://github.com/skyhook-io/radar/blob/main/docs/authentication.md#image-inspection"
+	java4ShellRegistryDocs    = "https://github.com/skyhook-io/radar/blob/main/docs/configuration.md#java4shell-cli"
 )
 
 func runCheckCommand(args []string, out, errOut io.Writer) int {

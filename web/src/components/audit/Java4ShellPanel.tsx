@@ -12,7 +12,7 @@ import { ImageName } from '../vulnerabilities/parts'
 import { Tooltip } from '../ui/Tooltip'
 
 const advisoryURL = 'https://github.com/advisories/GHSA-6g7j-4xh3-xq2q'
-const registryAccessURL = 'https://github.com/skyhook-io/radar/blob/main/docs/authentication.md#image-inspection'
+const registryAccessURL = 'https://github.com/skyhook-io/radar/blob/main/docs/authentication.md#java4shell-registry-access'
 
 interface Java4ShellPanelProps {
   namespaces?: string[]
@@ -237,8 +237,8 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
           <h3 className="font-medium text-theme-text-primary">Could not check · next steps</h3>
           {registryAuthRequired > 0 && (
             <p className="text-warning-text">
-              Registry authentication required for {pluralize(registryAuthRequired, 'container')}{registryNames(data.authRequiredRegistries)}. Shared installations also restrict which credentials each user can use.{' '}
-              <a className="text-accent-text hover:underline" href={registryAccessURL} target="_blank" rel="noreferrer">Check registry credentials and permissions</a>
+              Registry authentication required for {pluralize(registryAuthRequired, 'container')}{registryNames(data.authRequiredRegistries)}. The node pulled the image, but Radar needs its own access to read the image metadata.{' '}
+              <a className="text-accent-text hover:underline" href={registryAccessURL} target="_blank" rel="noreferrer">Set up registry access for Radar</a>
             </p>
           )}
           {checkLimitReached > 0 && (
