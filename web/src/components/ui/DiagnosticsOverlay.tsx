@@ -125,10 +125,8 @@ export function DiagnosticsOverlay({ onClose, isOpen = true, focus, communityUrl
           )}
           {error && (
             <div role="alert" className="text-sm text-center py-8 space-y-3">
-              <p className="text-error-text">
-                Failed to load diagnostics: {error.message}
-              </p>
-              <button type="button" className="btn-brand" onClick={() => void refetch()}>Retry diagnostics</button>
+              <p className="text-theme-text-primary">{error.message}</p>
+              <button type="button" className="btn-brand px-3 py-1.5 text-sm font-medium" onClick={() => void refetch()}>Retry diagnostics</button>
             </div>
           )}
           {data && (
@@ -161,8 +159,8 @@ export function DiagnosticsOverlay({ onClose, isOpen = true, focus, communityUrl
 
         {/* Footer */}
         <div className="flex items-center gap-2 px-5 py-3 border-t border-theme-border shrink-0">
-          <CopyButton label="Copy as Markdown" onClick={() => copyToClipboard('formatted')} copied={copied === 'formatted'} />
-          <CopyButton label="Copy Raw JSON" onClick={() => copyToClipboard('json')} copied={copied === 'json'} />
+          <CopyButton disabled={!data} label="Copy as Markdown" onClick={() => copyToClipboard('formatted')} copied={copied === 'formatted'} />
+          <CopyButton disabled={!data} label="Copy Raw JSON" onClick={() => copyToClipboard('json')} copied={copied === 'json'} />
           <div className="flex-1" />
           {communityUrl && (
             <a
@@ -654,12 +652,13 @@ function ConfigSection({ data }: { data: DiagnosticsSnapshot }) {
 
 // --- Copy button ---
 
-function CopyButton({ label, onClick, copied }: { label: string; onClick: () => void; copied: boolean }) {
+function CopyButton({ label, onClick, copied, disabled }: { label: string; onClick: () => void; copied: boolean; disabled: boolean }) {
   return (
     <button
+      disabled={disabled}
       onClick={onClick}
       className={clsx(
-        'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors',
+        'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-50',
         copied
           ? 'bg-green-500/20 text-green-400'
           : 'bg-theme-elevated text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated/80'
