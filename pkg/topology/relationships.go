@@ -15,10 +15,10 @@ import (
 
 // RelationshipsIndex is a precomputed map from node ID to the edges touching
 // that node, derived from a single pass over Topology.Edges. Repeated
-// per-resource lookups via GetRelationshipsWithIndex skip the O(E) edge scan
+// per-resource lookups via GetRelationshipsWithObject skip the O(E) edge scan
 // in exchange for one O(E) build per topology refresh.
 //
-// Build once via IndexByResource(topo). Pass to GetRelationshipsWithIndex on
+// Build once via IndexByResource(topo). Pass to GetRelationshipsWithObject on
 // each call. Lookups are read-only and goroutine-safe; mutation is not.
 type RelationshipsIndex struct {
 	byNodeID           map[string]*nodeEdgeSlots
@@ -308,38 +308,9 @@ func isServiceEntrypointRoute(ref *ResourceRef) bool {
 	return false
 }
 
-// GetRelationships computes relationships for a specific resource by finding
-// all edges in the topology that involve this resource. The topology should be
-// pre-built and cached for performance. Builds a per-call inline index for
-// edge lookups; callers with many GetRelationships calls against the same
-// topology should use GetRelationshipsWithIndex with a shared
-// RelationshipsIndex instead.
-//
-// Prefer GetRelationshipsWithObject when the resource has already been fetched
-// by the caller — the kind/name lookup used inside this entry point is
-// group-blind and can return the wrong typed object for CRDs whose plural
-// collides with a core resource (e.g. Knative Service vs core Service).
-//
-// Deprecated: Use RelationsAnswer with caller-scoped relation families.
-func GetRelationships(kind, namespace, name string, topo *Topology, provider ResourceProvider, dp DynamicProvider) *Relationships {
-	return GetRelationshipsWithObject(kind, namespace, name, nil, topo, provider, dp, nil)
-}
-
-// GetRelationshipsWithIndex is the indexed variant of GetRelationships. When
-// idx is non-nil, edge lookups go through the precomputed inverted index
-// instead of scanning topo.Edges; when nil, behavior matches GetRelationships
-// exactly. Graph consumers issuing many per-resource queries should build
-// idx once and reuse it.
-//
-// Prefer GetRelationshipsWithObject when the resource has already been fetched —
-// see the doc on GetRelationships for the kind/group collision rationale.
-//
-// Deprecated: Use RelationsAnswer with caller-scoped relation families.
-func GetRelationshipsWithIndex(kind, namespace, name string, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex) *Relationships {
-	return GetRelationshipsWithObject(kind, namespace, name, nil, topo, provider, dp, idx)
-}
-
-// GetRelationshipsWithObject is the canonical entry point. When obj is non-nil
+// GetRelationshipsWithObject classifies a graph's edges into Related Resources
+// for one resource. When idx is non-nil, edge lookups go through the inverted
+// index instead of scanning topo.Edges. When obj is non-nil
 // it is used directly for Pod spec extraction (ServiceAccountName, NodeName)
 // and ManagedBy synthesis, eliminating the group-blind kind/name lookup
 // inside lookupObjectMetadata. Callers that have already fetched the resource

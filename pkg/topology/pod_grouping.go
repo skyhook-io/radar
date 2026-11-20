@@ -214,17 +214,6 @@ func CreatePodNode(pod *corev1.Pod, provider ResourceProvider, includeNodeName b
 	}
 }
 
-// PodDetail represents pod details for PodGroup expansion
-type PodDetail struct {
-	Name        string `json:"name"`
-	Namespace   string `json:"namespace"`
-	Phase       string `json:"phase"`
-	Restarts    int32  `json:"restarts"`
-	Containers  int    `json:"containers"`
-	StatusIssue string `json:"statusIssue"`
-	Status      string `json:"status"`
-}
-
 // CreatePodGroupNode creates a Node for a group of pods
 func CreatePodGroupNode(group *PodGroup, provider ResourceProvider) Node {
 	podGroupID := fmt.Sprintf("podgroup-%s", strings.ReplaceAll(group.Key, "/", "-"))

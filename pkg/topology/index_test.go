@@ -56,7 +56,7 @@ func TestRelationshipsIndex_NilReceiver(t *testing.T) {
 // TestGetRelationshipsWithIndex_MatchesUnindexed pins the back-compat
 // contract: passing a non-nil index must yield identical output to the inline
 // scan. If this drifts, T6/T12 callers (using the index) will silently see
-// different relationships than REST users (using GetRelationships).
+// different relationships than callers that scan (graphRelationships).
 func TestGetRelationshipsWithIndex_MatchesUnindexed(t *testing.T) {
 	topo := buildSyntheticTopology(500)
 	idx := IndexByResource(topo)
@@ -73,8 +73,8 @@ func TestGetRelationshipsWithIndex_MatchesUnindexed(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.kind, func(t *testing.T) {
-			plain := GetRelationships(c.kind, c.ns, c.name, topo, nil, nil)
-			indexed := GetRelationshipsWithIndex(c.kind, c.ns, c.name, topo, nil, nil, idx)
+			plain := graphRelationships(c.kind, c.ns, c.name, topo, nil, nil)
+			indexed := graphRelationshipsWithIndex(c.kind, c.ns, c.name, topo, nil, nil, idx)
 			if !reflect.DeepEqual(plain, indexed) {
 				t.Errorf("%s/%s/%s: indexed result differs from unindexed\n plain:   %+v\n indexed: %+v",
 					c.kind, c.ns, c.name, plain, indexed)
@@ -86,7 +86,7 @@ func TestGetRelationshipsWithIndex_MatchesUnindexed(t *testing.T) {
 // edgesEqual treats slice ordering as significant — IndexByResource preserves
 // the original iteration order over topo.Edges, so an order-sensitive
 // comparison catches accidental reordering that would alter "first wins"
-// semantics in GetRelationships (e.g. rel.Owner).
+// semantics in graphRelationships (e.g. rel.Owner).
 func edgesEqual(a, b []Edge) bool {
 	if len(a) != len(b) {
 		return false
