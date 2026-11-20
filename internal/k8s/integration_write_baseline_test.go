@@ -57,8 +57,8 @@ func integrationWriteBaseline(t *testing.T) integrationWritePolicy {
 func TestIntegrationWriteBaselinePolicy(t *testing.T) {
 	policy := integrationWriteBaseline(t)
 	for name, capability := range policy.Capabilities {
-		if !slices.Contains([]string{"auto", "true", "false"}, capability.Default) {
-			t.Errorf("capability %s must declare default auto, true or false, got %q", name, capability.Default)
+		if capability.Default != "true" && capability.Default != "false" {
+			t.Errorf("capability %s must declare default true or false, got %q", name, capability.Default)
 		}
 	}
 	chart, err := loader.Load(filepath.Join("..", "..", "deploy", "helm", "radar"))

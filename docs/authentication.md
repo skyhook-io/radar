@@ -403,8 +403,9 @@ Set `auth.kubernetesCredentials: user-token` (flag `--auth-k8s-credentials=user-
 GitOps action capabilities and Service curl authorization use a
 `SelfSubjectAccessReview` through the person's token client in this mode; the API
 server supplies the identity and groups. Without a token, GitOps permission
-reviews stay unknown and Service curl is refused. System identities continue to
-use `SubjectAccessReview` with their username and normalized groups.
+reviews stay unknown and Service curl is refused. For system identities without
+a token, GitOps checks read access with a `SubjectAccessReview` using their
+username and normalized groups. Their write access is unavailable in this mode.
 
 **Requirements:**
 

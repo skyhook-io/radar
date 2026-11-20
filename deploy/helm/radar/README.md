@@ -328,7 +328,7 @@ cloud:
   defaultRbac:
     integrationWrite:
       gitops:
-        owner: false  # false (default) | true | auto
+        owner: false  # Set true to opt in
 ```
 
 Today the table grants one thing: `get` and `patch` on Argo CD Applications
