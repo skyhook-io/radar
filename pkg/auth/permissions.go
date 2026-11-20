@@ -308,8 +308,14 @@ func DiscoverNamespaces(ctx context.Context, client kubernetes.Interface, userna
 }
 
 // ReviewSubjectAccess asks the apiserver authorizer whether a subject can
-// perform the action described by attrs.
+// perform the action described by attrs. It adds the implicit authentication
+// group as Kubernetes impersonation does, without mutating the caller's groups.
 func ReviewSubjectAccess(ctx context.Context, client kubernetes.Interface, username string, groups []string, attrs authv1.ResourceAttributes) (authv1.SubjectAccessReviewStatus, error) {
+	if username == "system:anonymous" && !slices.Contains(groups, "system:unauthenticated") {
+		groups = append(slices.Clone(groups), "system:unauthenticated")
+	} else if username != "" && !slices.Contains(groups, "system:authenticated") && !slices.Contains(groups, "system:unauthenticated") {
+		groups = append(slices.Clone(groups), "system:authenticated")
+	}
 	review := &authv1.SubjectAccessReview{
 		Spec: authv1.SubjectAccessReviewSpec{
 			User:               username,

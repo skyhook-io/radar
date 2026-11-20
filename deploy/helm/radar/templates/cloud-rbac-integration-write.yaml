@@ -1,0 +1,45 @@
+{{- /*
+Owner write add-on for integration actions. A missing setting uses the
+capability's default from files/integration-write-baseline.yaml.
+*/}}
+{{- $rbac := .Values.cloud.defaultRbac -}}
+{{- if and .Values.cloud.enabled .Values.rbac.create $rbac.create $rbac.owner -}}
+{{- $root := . -}}
+{{- $policy := .Files.Get "files/integration-write-baseline.yaml" | fromYaml -}}
+{{- $switches := dict -}}
+{{- if and (hasKey $rbac "integrationWrite") (kindIs "map" $rbac.integrationWrite) -}}
+{{- $switches = $rbac.integrationWrite -}}
+{{- end -}}
+{{- $enabled := dict -}}
+{{- range $capability, $spec := $policy.capabilities -}}
+{{- $on := eq (toString $spec.default) "true" -}}
+{{- $switch := index $switches $capability -}}
+{{- if and (kindIs "map" $switch) (hasKey $switch "owner") (not (kindIs "invalid" $switch.owner)) -}}
+{{- $on = and (kindIs "bool" $switch.owner) $switch.owner -}}
+{{- end -}}
+{{- $_ := set $enabled $capability $on -}}
+{{- end -}}
+{{- $rules := list -}}
+{{- range $entry := $policy.entries -}}
+{{- if and (eq $entry.decision "grant") (index $enabled $entry.capability) (or $root.Values.rbac.crdGroups.all (index $root.Values.rbac.crdGroups $entry.collection)) -}}
+{{- $rules = append $rules (dict "apiGroups" (list $entry.group) "resources" $entry.resources "verbs" $entry.verbs) -}}
+{{- end -}}
+{{- end -}}
+{{- if $rules }}
+{{- $name := printf "%s-integration-write" (include "radar.fullname" $root) }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "radar.labels" $root | nindent 4 }}
+rules:
+  {{- toYaml $rules | nindent 2 }}
+{{- include "radar.binding" (dict
+  "root" $root
+  "name" (printf "%s-cloud-owner-integration-write" (include "radar.fullname" $root))
+  "roleRef" $name
+  "groups" (include "radar.tierGroups" "owner" | fromJsonArray)
+) }}
+{{- end }}
+{{- end }}

@@ -3,7 +3,9 @@ import { AlertTriangle, CheckCircle2, CircleAlert, Loader2, RefreshCw, ShieldChe
 
 import { DialogPortal } from '../ui/DialogPortal'
 import { Input } from '../ui/Input'
+import { AlertBanner } from '../ui/drawer-components'
 import { Tooltip } from '../ui/Tooltip'
+import { RawErrorDetails } from '../ui/RawErrorDetails'
 import { SEVERITY_TEXT } from '../../utils/badge-colors'
 import type { GitOpsInsightRef } from '../../types/gitops-insights'
 
@@ -52,6 +54,7 @@ export interface SyncOptionsDialogProps {
   // when the sync runs.
   pinsComparedRevision?: boolean
   resource?: GitOpsInsightRef
+  disabledReason?: string
   // The Application's spec.syncPolicy.syncOptions. Without it the toggles
   // are disabled and the submitted syncOptions are omitted.
   applicationSyncOptions?: string[]
@@ -61,8 +64,10 @@ export interface SyncOptionsDialogProps {
   operationInProgress?: boolean
   validationResult?: ResourceValidationResult | null
   validationError?: string | null
+  validationRawError?: string
   // Why the last confirm failed, for a host that keeps the dialog open to retry.
   syncError?: string | null
+  syncRawError?: string
   onCancel: () => void
   onConfirm: (opts: ArgoSyncOpts) => void
   onValidate?: (opts: ArgoSyncOpts) => void
@@ -78,7 +83,7 @@ export interface ResourceValidationResult {
   }
 }
 
-export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevision, pinsComparedRevision, resource, applicationSyncOptions, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, syncError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
+export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevision, pinsComparedRevision, resource, disabledReason, applicationSyncOptions, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, validationRawError, syncError, syncRawError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
   const titleId = useId()
   const syncOptionsUnknown = applicationSyncOptions === undefined
   const liveAppOptions = applicationSyncOptions ?? EMPTY_OPTIONS
@@ -103,7 +108,7 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
   const [serverSideApply, setServerSideApply] = useState(appServerSideApply)
   const richResourceValidation = !!resource && !!onValidate
   const busy = !!pending || !!validationPending
-  const optionsDisabled = busy || !!operationInProgress
+  const optionsDisabled = busy || !!operationInProgress || !!disabledReason
   const revisionDisabled = !!autoSyncEnabled && !dryRun
   const targetLabel = pinsComparedRevision
     ? `the revision Argo last compared${comparedRevisionLabel ? ` (${comparedRevisionLabel})` : ''}`
@@ -161,10 +166,12 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
   const syncLabel = resource ? 'Sync resource' : 'Sync now'
 
   function submit() {
+    if (optionsDisabled) return
     onConfirm(buildArgoSyncOpts({ resourceMode: !!resource, revision: multiSource || revisionDisabled ? '' : revision, prune, dryRun: richResourceValidation ? false : dryRun, force, applyOnly, ...optionEdits }))
   }
 
   function validate() {
+    if (optionsDisabled) return
     onValidate?.(buildArgoSyncOpts({ resourceMode: true, revision, prune, dryRun: true, force, applyOnly, ...optionEdits }))
   }
 
@@ -258,10 +265,15 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
           )}
         </fieldset>
         {syncError && !pending && (
-          <p role="alert" className={`flex items-start gap-1.5 text-xs ${SEVERITY_TEXT.error}`}>
-            <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span className="max-h-20 min-w-0 overflow-auto break-words">Sync failed: {syncError}</span>
-          </p>
+          <div>
+            <p role="alert" className={`flex items-start gap-1.5 text-xs ${SEVERITY_TEXT.error}`}>
+              <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span className="max-h-20 min-w-0 overflow-auto break-words">Sync failed: {syncError}</span>
+            </p>
+            {syncRawError && <div className="mt-2 text-theme-text-secondary">
+              <RawErrorDetails key={syncRawError} detail={syncRawError} />
+            </div>}
+          </div>
         )}
         {disruptive.length > 0 && (
           <p className={`flex items-start gap-1.5 text-xs ${SEVERITY_TEXT.warning}`}>
@@ -273,7 +285,7 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
           </p>
         )}
         {richResourceValidation && (validationPending || validationResult || validationError) && (
-          <ValidationResult pending={!!validationPending} result={validationResult} error={validationError} />
+          <ValidationResult pending={!!validationPending} result={validationResult} error={validationError} rawError={validationRawError} />
         )}
         {richResourceValidation && !validationPending && operationInProgress && (
           <p className="text-[11px] leading-relaxed text-theme-text-secondary">
@@ -281,7 +293,9 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
           </p>
         )}
       </div>
-      <div className="flex items-center justify-end gap-2 border-t border-theme-border bg-theme-base px-4 py-3">
+      <div className="border-t border-theme-border bg-theme-base px-4 py-3">
+        {disabledReason && <AlertBanner variant="warning" title="Action unavailable" message={disabledReason} />}
+        <div className="flex items-center justify-end gap-2">
         <button
           type="button"
           onClick={onCancel}
@@ -304,12 +318,13 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
           </Tooltip>
         )}
         <PrimaryButton onClick={submit} disabled={optionsDisabled} icon={pending ? Loader2 : RefreshCw} loading={pending} label={dryRun && !richResourceValidation ? 'Run dry-run' : disruptive.length > 0 ? `${syncLabel === 'Sync now' ? 'Sync' : syncLabel} with ${disruptive.join(' and ')}` : syncLabel} warning={disruptive.length > 0} />
+        </div>
       </div>
     </DialogPortal>
   )
 }
 
-function ValidationResult({ pending, result, error }: { pending: boolean; result?: ResourceValidationResult | null; error?: string | null }) {
+function ValidationResult({ pending, result, error, rawError }: { pending: boolean; result?: ResourceValidationResult | null; error?: string | null; rawError?: string }) {
   if (pending) {
     return (
       <div className="card-inner flex items-start gap-2 px-3 py-2.5">
@@ -329,6 +344,11 @@ function ValidationResult({ pending, result, error }: { pending: boolean; result
           <div>
             <div className="text-xs font-medium text-theme-text-primary">Dry-run could not start or complete</div>
             <p className="mt-0.5 max-h-20 overflow-auto break-words text-[11px] text-theme-text-secondary">{error}</p>
+            {rawError && (
+              <div className="mt-2 text-theme-text-secondary">
+                <RawErrorDetails key={rawError} detail={rawError} />
+              </div>
+            )}
           </div>
         </div>
       </div>

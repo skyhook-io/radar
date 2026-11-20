@@ -355,7 +355,20 @@
                 "owner": { "type": "boolean" }
               }
             },
-            "nodeOps": { "type": "boolean" }
+            "nodeOps": { "type": "boolean" },
+            "integrationWrite": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "gitops": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "owner": { "type": "boolean" }
+                  }
+                }
+              }
+            }
           }
         },
         "systemRbac": { "type": "boolean" },
