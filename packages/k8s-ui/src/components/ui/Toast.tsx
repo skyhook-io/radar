@@ -190,6 +190,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string,
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
+  const toastRef = useRef<HTMLDivElement>(null)
   const duration = toast.duration ?? (toast.type === 'error' ? 10000 : 7000)
   const remaining = useRef(duration)
   // A replacement starts over: full duration, details collapsed (it may have
@@ -197,6 +198,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string,
   useEffect(() => {
     remaining.current = duration
     setDetailsOpen(false)
+    setFocused(toastRef.current?.contains(document.activeElement) ?? false)
   }, [toast.shown, duration])
   useEffect(() => {
     if (duration <= 0 || hovered || focused || detailsOpen || toast.dismissing) return
@@ -232,6 +234,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string,
 
   return (
     <div
+      ref={toastRef}
       role="status"
       className={clsx(
         'flex items-start gap-3 p-4 rounded-lg shadow-2xl border backdrop-blur-sm',

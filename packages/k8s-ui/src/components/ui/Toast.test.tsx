@@ -100,7 +100,8 @@ it('dismisses a result that replaces an expanded error, whose details control is
   const click = async (label: string) => act(async () => [...host.querySelectorAll('button')].find(button => button.textContent === label)!.click())
   await advance(11000)
   await click('Failed check')
-  await act(async () => [...host.querySelectorAll('button')].find(button => button.textContent?.includes('Error details'))!.click())
+  const details = [...host.querySelectorAll('button')].find(button => button.textContent?.includes('Error details'))!
+  await act(async () => { details.focus(); details.click() })
   await advance(20000)
   await click('Result')
   expect(host.textContent).not.toContain('Error details')

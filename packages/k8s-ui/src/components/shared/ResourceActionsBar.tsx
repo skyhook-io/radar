@@ -966,7 +966,6 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
   const [syncError, setSyncError] = useState<(Error & { rawDetail?: string }) | null>(null)
   const operationRunning = isArgoOperationInProgress(data)
   const applicationSyncOptions = argoApplicationSyncOptions(data)
-  // A failed request is reported by the host; it only keeps the dialog open.
   const sync = (opts?: ArgoSyncOpts) => Promise.resolve(onSync?.({ namespace: resource.namespace, name: resource.name, applicationSyncOptions, ...opts }))
 
   return (
