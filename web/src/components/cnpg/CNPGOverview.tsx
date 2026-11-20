@@ -4,7 +4,9 @@ import { ArrowRight, Database, FileText, Plus, Search } from 'lucide-react'
 import {
   CNPG_PROBLEM_CATEGORIES,
   CNPG_PROBLEM_TONE,
+  CNPG_POSTURE_FILTERS,
   cnpgDimensions,
+  cnpgMatchesPostureFilter,
   cnpgReadyInstances,
   FactValue,
   StatusDot,
@@ -12,7 +14,9 @@ import {
   toneTextClass,
   usePhoneLayout,
   type CNPGFleetRow,
+  type CNPGPostureFilter,
   type CNPGProblemCategory,
+  type StatusTone,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
@@ -189,6 +193,52 @@ function AttentionCell({ row, onOpenAll }: { row: CNPGFleetRow; onOpenAll: () =>
   )
 }
 
+const POSTURE_LABELS: Record<CNPGPostureFilter, string> = {
+  none: 'No backup destination',
+  nowal: 'No WAL archiving',
+  single: 'Single instance',
+  intree: 'In-tree backup',
+}
+
+// What CNPG is configured to do across the fleet, counted as the posture
+// Checks define each cause. Each count but the last narrows the table.
+function PostureSummary({ posture, lowerBound, active, onToggle }: {
+  posture: { noDestination: number; noWalArchiving: number; singleInstance: number; inTree: number; withDestination: number }
+  lowerBound: boolean
+  active: CNPGPostureFilter | null
+  onToggle: (filter: CNPGPostureFilter) => void
+}) {
+  const n = (v: number) => `${lowerBound ? '≥' : ''}${v}`
+  const items: { id: CNPGPostureFilter; value: number; tone: StatusTone }[] = [
+    { id: 'none', value: posture.noDestination, tone: 'alert' },
+    { id: 'nowal', value: posture.noWalArchiving, tone: 'alert' },
+    { id: 'single', value: posture.singleInstance, tone: 'degraded' },
+    { id: 'intree', value: posture.inTree, tone: 'degraded' },
+  ]
+  return (
+    <div role="group" className="flex flex-wrap items-center gap-2 text-xs" aria-label="Backup and availability configuration">
+      {items.map(({ id, value, tone }) => {
+        const on = active === id
+        return (
+          <button
+            key={id}
+            type="button"
+            aria-pressed={on}
+            aria-label={`${POSTURE_LABELS[id]}: ${n(value)}`}
+            disabled={value === 0 && !on}
+            onClick={() => onToggle(id)}
+            className={clsx(
+              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 transition-colors',
+              on ? 'border-accent bg-accent-muted text-accent-text' : 'border-theme-border text-theme-text-secondary enabled:hover:bg-theme-hover disabled:opacity-60',
+            )}
+          ><span>{POSTURE_LABELS[id]}</span><span className={clsx('font-mono', value > 0 && !on && toneTextClass(tone))}>{n(value)}</span></button>
+        )
+      })}
+      <span className="inline-flex items-center gap-1.5 px-1 text-theme-text-tertiary"><span>With a destination</span><span className="font-mono">{n(posture.withDestination)}</span></span>
+    </div>
+  )
+}
+
 export function CNPGOverview({
   data,
   fleet,
@@ -209,23 +259,26 @@ export function CNPGOverview({
   const rawFilter = searchParams.get('filter') as Filter | null
   // The view is the list of clusters: all of them unless asked for less.
   const filter: Filter = rawFilter === 'attention' ? 'attention' : 'all'
+  const rawProtect = searchParams.get('protect')
+  const protect = (CNPG_POSTURE_FILTERS as readonly string[]).includes(rawProtect ?? '') ? rawProtect as CNPGPostureFilter : null
 
   const rows = useMemo(() => {
     let list = fleet.rows
     if (filter === 'attention') list = list.filter((r) => r.attention)
     if (cat) list = list.filter((r) => r.categories.has(cat))
+    if (protect) list = list.filter((r) => cnpgMatchesPostureFilter(r, protect))
     if (q) {
       const needle = q.toLowerCase()
       list = list.filter((r) => r.name.toLowerCase().includes(needle) || r.namespace.toLowerCase().includes(needle))
     }
     return list
-  }, [fleet, filter, cat, q])
+  }, [fleet, filter, cat, protect, q])
 
   const clustersCov = data.coverage.clusters
   const total = fleet.rows.length
   const context = connection.context || data.context
   // Some namespaces were not read: the count is a floor, not the cluster's total.
-  const totalText = `${clustersCov?.state === 'partial' ? '≥' : ''}${total}`
+  const totalText = `${fleet.incompleteKinds.includes('clusters') ? '≥' : ''}${total}`
   // No cluster authoring on a phone (a YAML editor follows the dialog).
   const isPhone = usePhoneLayout()
   const createAction = onCreate && !isPhone ? (
@@ -270,6 +323,7 @@ export function CNPGOverview({
 
   const chips: { label: string; onClear: () => void }[] = []
   if (cat) chips.push({ label: `Problem: ${CNPG_PROBLEM_CATEGORIES.find((c) => c.id === cat)?.label ?? cat}`, onClear: () => onSetParams({ cat: null }) })
+  if (protect) chips.push({ label: `Posture: ${POSTURE_LABELS[protect]}`, onClear: () => onSetParams({ protect: null }) })
   if (q) chips.push({ label: `Search: ${q}`, onClear: () => onSetParams({ q: null }) })
   if (namespaces.length > 0) chips.push({ label: `Namespace: ${namespaces.join(', ')}`, onClear: onClearNamespaces })
 
@@ -313,6 +367,8 @@ export function CNPGOverview({
         <div className="space-y-3 px-5 pb-6 pt-3 xl:px-7">
           <CoverageNotice fleet={fleet} data={data} kinds={['clusters', 'pods', 'backups', 'scheduledBackups', 'objectStores', 'poolers', 'databases', 'databaseRoles', 'publications', 'subscriptions']} includeJobs />
           <CNPGOperatorBanner namespaces={fleet.rows.map((r) => r.namespace)} className="" />
+
+          <PostureSummary posture={fleet.posture} lowerBound={fleet.incompleteKinds.includes('clusters')} active={protect} onToggle={(f) => onSetParams({ protect: protect === f ? null : f })} />
 
           <div className="flex flex-wrap items-center gap-2">
             <div role="tablist" aria-label="Clusters" className="inline-flex rounded-lg bg-theme-elevated p-0.5">
@@ -469,10 +525,10 @@ export function CNPGOverview({
             </div>
             {rows.length === 0 && (
               <div className="px-4 py-6 text-sm text-theme-text-tertiary">
-                {filter === 'attention' && !cat && !q
+                {filter === 'attention' && !cat && !q && !protect
                   ? lowerBound ? 'No attention findings in the readable data; other data was not read.' : 'No clusters need attention.'
                   : 'No clusters match these filters.'}{' '}
-                <button type="button" onClick={() => onSetParams({ filter: 'all', cat: null, q: null })} className="font-medium text-accent-text hover:underline">
+                <button type="button" onClick={() => onSetParams({ filter: 'all', cat: null, q: null, protect: null })} className="font-medium text-accent-text hover:underline">
                   Show all clusters
                 </button>
               </div>

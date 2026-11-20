@@ -1,4 +1,4 @@
-import { cnpgBackupDeclaration, cnpgBarmanPlugin, cnpgWALArchiverUnknown } from '../../utils/cnpg-backup'
+import { cnpgArchivesWAL, cnpgBackupDeclaration, cnpgBarmanPlugin, cnpgHasBackupDestination, cnpgWALArchiverUnknown } from '../../utils/cnpg-backup'
 // CloudNativePG workspace model: pure derivations over the /api/cnpg/workspace
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
@@ -223,6 +223,53 @@ export interface CNPGFleet {
   categoryCounts: Record<CNPGProblemCategory, number>
   /** Kinds whose coverage is not complete, so counts built on them are lower bounds. */
   incompleteKinds: CNPGWorkspaceKey[]
+  /** Clusters by what CNPG is configured to do, counted as the posture Checks define each cause. */
+  posture: CNPGFleetPosture
+}
+
+export type CNPGPostureFilter = 'none' | 'nowal' | 'single' | 'intree'
+export const CNPG_POSTURE_FILTERS: readonly CNPGPostureFilter[] = ['none', 'nowal', 'single', 'intree']
+
+export interface CNPGFleetPosture {
+  total: number
+  noDestination: number
+  noWalArchiving: number
+  singleInstance: number
+  inTree: number
+  withDestination: number
+}
+
+/**
+ * One Cluster's posture, by the same rule as checkCNPGClusterPosture in pkg/audit
+ * (settings that turn a Check off live on the server and don't apply here):
+ * WAL is judged only with a destination and a known archiver, an unset
+ * spec.instances is CNPG's default of 1, and an in-tree destinationPath counts
+ * even beside the barman-cloud plugin.
+ */
+export function cnpgPostureFlags(cluster: any): { noDestination: boolean; noWalArchiving: boolean; singleInstance: boolean; inTree: boolean } {
+  const d = cnpgBackupDeclaration(cluster)
+  const hasDestination = cnpgHasBackupDestination(d)
+  // Like cnpgDesiredInstances: a number is truncated, anything else is CNPG's default of 1.
+  const raw = cluster?.spec?.instances
+  const instances = typeof raw === 'number' && Number.isFinite(raw) ? Math.trunc(raw) : 1
+  // radarhq.io/ignore-checks withdraws the Cluster from that Check, so from its count too.
+  const ignored = new Set(String(cluster?.metadata?.annotations?.['radarhq.io/ignore-checks'] ?? '').split(',').map((id) => id.trim()).filter(Boolean))
+  return {
+    noDestination: !hasDestination && !ignored.has('cnpgNoBackupDestination'),
+    noWalArchiving: hasDestination && !cnpgWALArchiverUnknown(d) && !cnpgArchivesWAL(d) && !ignored.has('cnpgNoWALArchiving'),
+    singleInstance: instances <= 1 && !ignored.has('cnpgSingleInstance'),
+    inTree: !!d.inTreeDestination && !ignored.has('cnpgInTreeBackupDeprecated'),
+  }
+}
+
+export function cnpgMatchesPostureFilter(row: Pick<CNPGFleetRow, 'cluster'>, filter: CNPGPostureFilter): boolean {
+  const f = cnpgPostureFlags(row.cluster)
+  switch (filter) {
+    case 'none': return f.noDestination
+    case 'nowal': return f.noWalArchiving
+    case 'single': return f.singleInstance
+    case 'intree': return f.inTree
+  }
 }
 
 const PROTECTION_ISSUE_REASONS = new Set([
@@ -1181,11 +1228,21 @@ function finishFleet(rows: CNPGFleetRow[], incompleteKinds: CNPGWorkspaceKey[]):
   rows.sort(compareCNPGFleetUrgency)
   const categoryCounts = { availability: 0, protection: 0, declarations: 0, pooling: 0 } as Record<CNPGProblemCategory, number>
   for (const r of rows) for (const c of r.categories) categoryCounts[c]++
+  const posture: CNPGFleetPosture = { total: rows.length, noDestination: 0, noWalArchiving: 0, singleInstance: 0, inTree: 0, withDestination: 0 }
+  for (const r of rows) {
+    const f = cnpgPostureFlags(r.cluster)
+    if (f.noDestination) posture.noDestination++
+    if (f.noWalArchiving) posture.noWalArchiving++
+    if (f.singleInstance) posture.singleInstance++
+    if (f.inTree) posture.inTree++
+    if (cnpgHasBackupDestination(cnpgBackupDeclaration(r.cluster))) posture.withDestination++
+  }
   return {
     rows,
     attentionCount: rows.filter((r) => r.attention).length,
     categoryCounts,
     incompleteKinds,
+    posture,
   }
 }
 
