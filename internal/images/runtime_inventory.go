@@ -48,6 +48,9 @@ const (
 	maxConfigBytes             = 1 << 20
 	inventoryCallBudget        = 40 * time.Second
 	java4ShellScanBudget       = 5 * time.Minute
+	java4ShellAttemptRate      = 8
+	java4ShellAttemptBurst     = 4
+	java4ShellCLIFetchSlots    = 8
 	configFetchTimeout         = 15 * time.Second
 	registryFetchSlots         = 4
 	configCacheEntries         = 4096
@@ -177,11 +180,12 @@ type keychainSource func(c credential, ref name.Reference) (kc authn.Keychain, i
 // backoff are shared by every caller, so concurrent requests can't multiply
 // registry traffic.
 type RuntimeInventory struct {
-	lookup       configLookup
-	keychain     keychainSource
-	now          func() time.Time
-	slots        chan struct{}
-	fetchTimeout time.Duration
+	lookup         configLookup
+	keychain       keychainSource
+	now            func() time.Time
+	slots          chan struct{}
+	dockerHubSlots chan struct{}
+	fetchTimeout   time.Duration
 	// outstanding counts lookups still running, including ones that timed
 	// out: a credential helper can hang without honoring cancellation, and
 	// timed-out lookups must not pile up behind it.
@@ -217,17 +221,24 @@ var (
 // DefaultRuntimeInventory returns the process-wide inventory.
 func DefaultRuntimeInventory(inCluster bool) *RuntimeInventory {
 	defaultInventoryOnce.Do(func() {
-		defaultInventory = newRuntimeInventory(registryConfigLookup(newGuardedTransport(inCluster)), clusterKeychain)
+		defaultInventory = newRuntimeInventory(registryConfigLookup(newGuardedTransport(inCluster)), clusterKeychain, registryFetchSlots)
 	})
 	return defaultInventory
 }
 
-func newRuntimeInventory(lookup configLookup, keychain keychainSource) *RuntimeInventory {
+// NewCLIJava4ShellInventory gives a standalone check its own registry slots.
+func NewCLIJava4ShellInventory() *RuntimeInventory {
+	r := newRuntimeInventory(registryConfigLookup(newGuardedTransport(false)), clusterKeychain, java4ShellCLIFetchSlots)
+	r.dockerHubSlots = make(chan struct{}, registryFetchSlots)
+	return r
+}
+
+func newRuntimeInventory(lookup configLookup, keychain keychainSource, slots int) *RuntimeInventory {
 	return &RuntimeInventory{
 		lookup:       lookup,
 		keychain:     keychain,
 		now:          time.Now,
-		slots:        make(chan struct{}, registryFetchSlots),
+		slots:        make(chan struct{}, slots),
 		fetchTimeout: configFetchTimeout,
 		cache:        make(map[string]*list.Element),
 		order:        list.New(),
@@ -349,7 +360,7 @@ func (r *RuntimeInventory) lookupConfigs(ctx context.Context, items []*work, rad
 		budget.Store(maxLookupsPerCall)
 	} else {
 		duration = java4ShellScanBudget
-		limiter = rate.NewLimiter(8, registryFetchSlots)
+		limiter = rate.NewLimiter(java4ShellAttemptRate, java4ShellAttemptBurst)
 		if slices.ContainsFunc(items, func(w *work) bool { return w.advisory && (radarCredentials || w.radarCredentials) }) {
 			runtimeECRKeychain()
 		}
@@ -371,10 +382,19 @@ func (r *RuntimeInventory) lookupConfigs(ctx context.Context, items []*work, rad
 			progressMu.Unlock()
 		}
 	}
-	workers := make(chan struct{}, registryFetchSlots)
+	workers := make(chan struct{}, cap(r.slots))
+	acquire := func(slots chan struct{}, i int) bool {
+		select {
+		case slots <- struct{}{}:
+			return true
+		case <-ctx.Done():
+			complete(i, configResult{status: StatusNotChecked, err: "time budget for this call ran out"})
+			return false
+		}
+	}
 	advisoryLookups, dockerHubLookups := 0, 0
 	for i, w := range items {
-		onDockerHub := w.advisory && w.ref.Context().RegistryStr() == name.DefaultRegistry
+		onDockerHub := w.advisory && registryBudgetHost(w.ref) == name.DefaultRegistry
 		dockerHubLimit := onDockerHub && dockerHubLookups >= java4ShellDockerHubLookups
 		if dockerHubLimit || (progress == nil && w.advisory && advisoryLookups >= maxLookupsPerCall) {
 			// Public results can still answer after the limit. Avoid resolving
@@ -401,15 +421,24 @@ func (r *RuntimeInventory) lookupConfigs(ctx context.Context, items []*work, rad
 				dockerHubLookups++
 			}
 		}
-		select {
-		case workers <- struct{}{}:
-		case <-ctx.Done():
-			complete(i, configResult{status: StatusNotChecked, err: "time budget for this call ran out"})
+		limitDockerHub := onDockerHub && r.dockerHubSlots != nil
+		if !limitDockerHub && !acquire(workers, i) {
 			continue
 		}
 		wg.Add(1)
 		go func(i int, w *work, untried []credential) {
 			defer wg.Done()
+			// At most 24 Docker Hub groups can queue here. Let them wait for
+			// their own cap before occupying a worker other registries need.
+			if limitDockerHub {
+				if !acquire(r.dockerHubSlots, i) {
+					return
+				}
+				defer func() { <-r.dockerHubSlots }()
+				if !acquire(workers, i) {
+					return
+				}
+			}
 			defer func() { <-workers }()
 			complete(i, r.fetch(ctx, w, untried, budget, limiter))
 		}(i, w, untried)
@@ -537,6 +566,14 @@ func (r *RuntimeInventory) backOff(registry string) {
 	r.backoff[registry] = r.now().Add(rateLimitBackoff)
 }
 
+func registryBudgetHost(ref name.Reference) string {
+	host := ref.Context().RegistryStr()
+	if host == "registry-1.docker.io" || host == "registry.hub.docker.com" {
+		return name.DefaultRegistry
+	}
+	return host
+}
+
 var (
 	errLookupTimeout       = errors.New("registry did not answer in time")
 	errRateLimitedRecently = errors.New("registry rate limited recently")
@@ -546,7 +583,7 @@ var (
 // fetch tries the remaining credentials until one reads the config. Every
 // attempt spends the call's lookup budget.
 func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credential, budget *atomic.Int32, limiter *rate.Limiter) configResult {
-	registry := w.ref.Context().RegistryStr()
+	registry := registryBudgetHost(w.ref)
 	res := configResult{status: StatusNotChecked, err: "per-call lookup limit reached; narrow by namespace"}
 	for _, c := range creds {
 		if budget != nil && budget.Add(-1) < 0 {

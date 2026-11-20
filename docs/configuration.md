@@ -306,6 +306,16 @@ The default table reports affected declarations, assessed versions outside the a
 
 The command uses the caller's Kubernetes access and registry credentials, including readable pull secrets referenced by the Pods and [opt-in Amazon ECR access](authentication.md#image-inspection). CPU placement remains unknown where Node facts are unavailable. If a Pod reports a multi-platform image index digest, Radar needs the Node's platform to assess its Java version.
 
+For a private Amazon ECR image, use `--details` to find the registry hostname. Choose a local AWS profile with pull access to that repository. If the profile uses AWS IAM Identity Center, run `aws sso login --profile your-profile` first. Replace the example registry host with the one shown in the report.
+
+```bash
+AWS_PROFILE=your-profile \
+  RADAR_JAVA4SHELL_ECR_REGISTRIES=123456789012.dkr.ecr.us-east-1.amazonaws.com \
+  radar check java4shell -A
+```
+
+Use a comma-separated list for multiple registry hosts. The AWS profile supplies the registry identity. Kubernetes admin access covers Kubernetes reads. For registries that use Docker credentials, run `docker login REGISTRY` on the machine running the CLI, then rerun the check.
+
 The command exits with `0` after a completed check and `1` if the check cannot run. With `--fail-on-match`, it exits with `2` after writing a result with at least one affected version declaration. This policy uses the declared Java version, including where CPU capability is unknown. Check the unassessed counts when deciding whether a result covers the containers your CI policy expects. For images where Radar finds no version declaration, `java_home_declared` counts containers whose image sets `JAVA_HOME`, and `no_java_declaration` counts the rest.
 
 ## AI Investigations Agent CLI

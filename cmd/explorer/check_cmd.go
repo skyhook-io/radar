@@ -204,7 +204,7 @@ func checkJava4Shell(ctx context.Context, client kubernetes.Interface, namespace
 	updateProgress, finishProgress := checkImageProgress(progress, isFile && term.IsTerminal(int(terminal.Fd())) && os.Getenv("TERM") != "dumb")
 	defer finishProgress()
 	var err error
-	report.Java4ShellResult, err = images.DefaultRuntimeInventory(false).ScanJava4Shell(ctx, pods, func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
+	report.Java4ShellResult, err = images.NewCLIJava4ShellInventory().ScanJava4Shell(ctx, pods, func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
 		if ownerDeadline.IsZero() {
 			ownerDeadline = time.Now().Add(java4ShellMetadataBudget)
 		}
@@ -406,8 +406,11 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 			}
 		}
 		if report.Unassessed[images.StatusAuthRequired] > 0 {
-			fmt.Fprintf(&table, "Configure registry credentials for Radar, then rerun. See registry setup for Amazon ECR and other registries.\n  %s\n", java4ShellRegistryDocs)
-			fmt.Fprintln(&table, "For private ECR, set RADAR_JAVA4SHELL_ECR_REGISTRIES and use an AWS identity with read access.")
+			fmt.Fprintln(&table, "Use --details to see the image registry. The CLI can use your local registry credentials.")
+			fmt.Fprintln(&table, "For private Amazon ECR, use an AWS profile with pull access and replace the example registry host:")
+			fmt.Fprintln(&table, "  AWS_PROFILE=your-profile RADAR_JAVA4SHELL_ECR_REGISTRIES=123456789012.dkr.ecr.us-east-1.amazonaws.com radar check java4shell -A")
+			fmt.Fprintln(&table, "For other registries, run docker login REGISTRY, then rerun the same check.")
+			fmt.Fprintln(&table, "Registry setup", java4ShellRegistryDocs)
 		}
 		if report.Unassessed["docker_hub_limit"]+report.Unassessed[images.StatusNotChecked] > 0 {
 			if report.Coverage.Scope.Namespaces == nil {

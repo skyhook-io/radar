@@ -119,7 +119,7 @@ func fakeInventory(f *fakeLookup) *RuntimeInventory {
 			}
 		}
 		return credKeychain{c.id()}, c.identity, true
-	})
+	}, registryFetchSlots)
 }
 
 // refKey is how the fake keys a reference: the form lookup receives.
@@ -358,7 +358,7 @@ func TestInventory_FailuresAreCachedThenRetried(t *testing.T) {
 func TestInventory_RateLimitStopsQueuedLookups(t *testing.T) {
 	f := &fakeLookup{errs: map[string]error{}}
 	var pods []*corev1.Pod
-	for _, img := range []string{"php:8.1", "php:8.2", "php:8.3", "php:8.4"} {
+	for _, img := range []string{"registry-1.docker.io/library/php:8.1", "php:8.2", "registry.hub.docker.com/library/php:8.3", "index.docker.io/library/php:8.4"} {
 		f.errs[refKey(t, img)+"|anonymous"] = &transport.Error{StatusCode: http.StatusTooManyRequests}
 		pods = append(pods, runningPod("shop", "p-"+img, "x86-node", img, map[string][2]string{"c": {img, ""}}))
 	}
@@ -367,6 +367,69 @@ func TestInventory_RateLimitStopsQueuedLookups(t *testing.T) {
 	got := inv.Inventory(context.Background(), podSourceWithoutSecrets(pods...), InventoryOptions{})
 	if got.Totals.RateLimited != 4 || f.calls.Load() != 1 {
 		t.Fatalf("one 429 must stop every lookup queued for that registry: totals %+v, calls %v", got.Totals, f.seenCopy())
+	}
+}
+
+func TestJava4ShellCLIRegistryConcurrency(t *testing.T) {
+	const groups = 9
+	dockerHubHosts := []string{"docker.io", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com"}
+	for _, tc := range []struct {
+		name         string
+		dockerGroups int
+		concurrent   int
+	}{
+		{"other registries", 0, 8},
+		{"docker hub aliases", groups, 4},
+		{"mixed registries", 5, 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			started := make(chan struct{}, groups)
+			release := make(chan struct{})
+			inv := NewCLIJava4ShellInventory()
+			inv.lookup = func(ctx context.Context, _ name.Reference, _ v1.Platform, _ authn.Keychain) (*v1.ConfigFile, string, error) {
+				started <- struct{}{}
+				select {
+				case <-release:
+					return &v1.ConfigFile{}, "test digest", nil
+				case <-ctx.Done():
+					return nil, "", ctx.Err()
+				}
+			}
+			items := make([]*work, 0, groups)
+			for i := range groups {
+				registry := "registry.example.com"
+				if i < tc.dockerGroups {
+					registry = dockerHubHosts[i%len(dockerHubHosts)]
+				}
+				ref, err := name.ParseReference(fmt.Sprintf("%s/test/app-%d:1", registry, i))
+				if err != nil {
+					t.Fatal(err)
+				}
+				items = append(items, &work{key: ref.String(), ref: ref, advisory: true})
+			}
+			done := make(chan []configResult, 1)
+			go func() { done <- inv.lookupConfigs(ctx, items, false, func(_, _ int) {}) }()
+			for i := range tc.concurrent {
+				select {
+				case <-started:
+				case <-ctx.Done():
+					t.Fatalf("only %d of %d lookups started", i, tc.concurrent)
+				}
+			}
+			select {
+			case <-started:
+				t.Errorf("more than %d concurrent lookups started", tc.concurrent)
+			case <-time.After(250 * time.Millisecond):
+			}
+			close(release)
+			for i, result := range <-done {
+				if result.status != StatusOK {
+					t.Errorf("group %d: status %s, error %s", i, result.status, result.err)
+				}
+			}
+		})
 	}
 }
 

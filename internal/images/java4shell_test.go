@@ -284,7 +284,7 @@ func TestJava4ShellNeverDialsRadarLoopback(t *testing.T) {
 		"app": {image + ":1", image + "@sha256:" + strings.Repeat("a", 64)},
 	})
 	pod.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
-	got, err := newRuntimeInventory(registryConfigLookup(newGuardedTransport(false)), clusterKeychain).
+	got, err := newRuntimeInventory(registryConfigLookup(newGuardedTransport(false)), clusterKeychain, registryFetchSlots).
 		CheckJava4Shell(context.Background(), []Java4ShellPod{{Pod: pod}}, nil, nil)
 	if err != nil || requests.Load() != 0 || got.Unassessed[StatusBlocked] != 1 {
 		t.Fatalf("got %+v, %v, and %d loopback requests", got, err, requests.Load())

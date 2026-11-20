@@ -154,7 +154,9 @@ func TestJava4ShellTablePrioritizesActionableGaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"No affected Java declarations among assessed containers (1).", "No Java version declared: 1", "Assessment gaps: 11", "Registry authentication required: 11",
-		"private-09", "Showing the first 10 workload groups with gaps", java4ShellRegistryDocs}
+		"private-09", "Showing the first 10 workload groups with gaps", "Use --details to see the image registry",
+		"AWS_PROFILE=your-profile RADAR_JAVA4SHELL_ECR_REGISTRIES=123456789012.dkr.ecr.us-east-1.amazonaws.com radar check java4shell -A",
+		"docker login REGISTRY", java4ShellRegistryDocs}
 	for _, phrase := range want {
 		if !strings.Contains(output.String(), phrase) {
 			t.Errorf("missing %q in %s", phrase, output.String())
