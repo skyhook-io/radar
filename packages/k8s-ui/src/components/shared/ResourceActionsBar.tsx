@@ -988,7 +988,7 @@ function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, syncD
   const [syncDialogFor, setSyncDialogFor] = useState<string | null>(null)
   if (syncDialogFor !== null && syncDialogFor !== appKey) setSyncDialogFor(null)
   const syncDialogOpen = syncDialogFor === appKey
-  const [syncError, setSyncError] = useState<string | null>(null)
+  const [syncError, setSyncError] = useState<{ message: string; rawDetail?: string } | null>(null)
   const operationRunning = isArgoOperationInProgress(data)
   const applicationSyncOptions = argoApplicationSyncOptions(data)
   // A failed request is reported by the host; it only keeps the dialog open.
@@ -1028,12 +1028,17 @@ function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, syncD
           pending={isSyncing}
           autoSyncEnabled={isArgoAutoSyncEnabled(data)}
           operationInProgress={operationRunning}
-          syncError={syncError}
+          syncError={syncError?.message}
+          syncRawError={syncError?.rawDetail}
           disabledReason={disabledReasons?.sync}
           onCancel={() => setSyncDialogFor(null)}
           onConfirm={(opts) => {
             setSyncError(null)
-            sync(opts).then(() => setSyncDialogFor(null), (error: unknown) => setSyncError(error instanceof Error ? error.message : 'the request was refused'))
+            sync(opts).then(() => setSyncDialogFor(null), (error: unknown) => {
+              setSyncError(error instanceof Error
+                ? { message: error.message, rawDetail: 'rawDetail' in error && typeof error.rawDetail === 'string' ? error.rawDetail : undefined }
+                : { message: 'the request was refused' })
+            })
           }}
         />
       )}

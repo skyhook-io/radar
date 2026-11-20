@@ -40,7 +40,7 @@ func (e *PermissionDenied) Summary() string {
 	if verb == "get" {
 		verb = "read"
 	}
-	return fmt.Sprintf("Your role can't %s %s in %s.", verb, label, e.Namespace)
+	return fmt.Sprintf("Kubernetes denied permission to %s %s in %s.", verb, label, e.Namespace)
 }
 
 // AdmissionDenied is a write that an admission webhook or a

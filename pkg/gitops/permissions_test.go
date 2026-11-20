@@ -98,7 +98,7 @@ func TestGitOpsForbiddenClassification(t *testing.T) {
 		{"webhook without explanation", forbidden(`admission webhook "validation.gatekeeper.sh" denied the request without explanation`), "admission", "Rejected by admission webhook validation.gatekeeper.sh."},
 		{"denied by a webhook", forbidden(`User "alice" cannot patch resource "applications": denied by a webhook`), "admission", ""},
 		{"denied by webhook policy", forbidden(`User "alice" cannot patch resource "applications": denied by webhook policy.example`), "admission", ""},
-		{"rbac", forbidden(`User "alice" cannot patch resource "applications" in API group "argoproj.io" in the namespace "argocd"`), "rbac", "Your role can't patch Argo CD Application demo in argocd."},
+		{"rbac", forbidden(`User "alice" cannot patch resource "applications" in API group "argoproj.io" in the namespace "argocd"`), "rbac", "Kubernetes denied permission to patch Argo CD Application demo in argocd."},
 		{"radar impersonation refused", forbidden(`User "system:serviceaccount:radar:radar" cannot impersonate resource "users" in API group "" at the cluster scope`), "", ""},
 		{"unrecognized forbidden", forbidden(`policy rejected this change`), "", ""},
 		{"invalid without policy", apierrors.NewInvalid(schema.GroupKind{Group: "argoproj.io", Kind: "Application"}, "demo", nil), "", ""},
@@ -132,8 +132,8 @@ func TestPermissionDeniedSummaryNamesTheObject(t *testing.T) {
 		denied PermissionDenied
 		want   string
 	}{
-		{PermissionDenied{Verb: "get", Group: "argoproj.io", Resource: "applications", Kind: "Application", Namespace: "argocd", Name: "demo"}, "Your role can't read Argo CD Application demo in argocd."},
-		{PermissionDenied{Verb: "patch", Group: "source.toolkit.fluxcd.io", Resource: "gitrepositories", Kind: "GitRepository", Namespace: "sources", Name: "repo"}, "Your role can't patch Flux GitRepository repo in sources."},
+		{PermissionDenied{Verb: "get", Group: "argoproj.io", Resource: "applications", Kind: "Application", Namespace: "argocd", Name: "demo"}, "Kubernetes denied permission to read Argo CD Application demo in argocd."},
+		{PermissionDenied{Verb: "patch", Group: "source.toolkit.fluxcd.io", Resource: "gitrepositories", Kind: "GitRepository", Namespace: "sources", Name: "repo"}, "Kubernetes denied permission to patch Flux GitRepository repo in sources."},
 	} {
 		if got := tc.denied.Summary(); got != tc.want {
 			t.Errorf("Summary()=%q, want %q", got, tc.want)

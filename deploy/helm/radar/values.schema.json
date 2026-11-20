@@ -364,7 +364,7 @@
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
-                    "owner": { "enum": ["auto", true, false] }
+                    "owner": { "type": "boolean" }
                   }
                 }
               }

@@ -38,17 +38,17 @@ export function gitOpsDenialMessage(denials: GitOpsPermission[]): string {
       const object = target[0]
       clauses.unshift(`${verbsText(target)} Flux ${object.kind || object.resource}${object.name ? ` ${object.name}` : ''} in ${object.namespace}`)
     }
-    return `Your role can't ${clauses.join(' or ')}.`
+    return `Kubernetes denied permission to ${clauses.join(' or ')}.`
   }
   const sourceLabel = source[0] && `${source[0].kind || source[0].resource} ${source[0].namespace}/${source[0].name}`
   if (target.length === 0) {
     return sourceLabel
-      ? `Sync with source also reconciles ${sourceLabel} — your role can't ${verbsText(source)} it.`
-      : "Your role can't perform this action."
+      ? `Sync with source also reconciles ${sourceLabel} — Kubernetes denied permission to ${verbsText(source)} it.`
+      : "Kubernetes denied permission to perform this action."
   }
   const object = target[0]
   const tool = object.group === 'argoproj.io' ? 'Argo CD' : 'Flux'
-  let message = `Your role can't ${verbsText(target)} ${tool} ${object.kind || object.resource}${object.name ? ` ${object.name}` : ''} in ${object.namespace}`
+  let message = `Kubernetes denied permission to ${verbsText(target)} ${tool} ${object.kind || object.resource}${object.name ? ` ${object.name}` : ''} in ${object.namespace}`
   if (sourceLabel) {
     message += verbsText(source) === verbsText(target)
       ? ` or its source ${sourceLabel}`

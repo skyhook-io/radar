@@ -444,14 +444,10 @@ assert_not_contains 'name: radar-integration-write$'                 "no write r
 assert_not_contains 'name: radar-cloud-owner-integration-write$'     "no owner write binding by default"
 echo
 
-render "auto with the stock admin owner grants Argo CD actions" $CLOUD --set cloud.defaultRbac.integrationWrite.gitops.owner=auto
+render "opt-in with the stock admin owner grants Argo CD actions" $CLOUD --set cloud.defaultRbac.integrationWrite.gitops.owner=true
 assert_contains 'name: radar-integration-write$'                     "write role rendered"
 assert_contains 'name: radar-cloud-owner-integration-write$'         "owner-only write binding rendered"
 assert_not_contains 'name: radar-cloud-member-integration-write$'    "no member write binding"
-echo
-
-render "auto with a custom owner role grants no integration writes" $CLOUD --set cloud.defaultRbac.ownerClusterRole=platform-owner --set cloud.defaultRbac.integrationWrite.gitops.owner=auto
-assert_not_contains 'name: radar-integration-write$'                 "custom owner role stays off under auto"
 echo
 
 render "explicit true with a custom owner role grants integration writes" $CLOUD --set cloud.defaultRbac.ownerClusterRole=platform-owner --set cloud.defaultRbac.integrationWrite.gitops.owner=true

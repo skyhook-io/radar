@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useId, useState, type ComponentType, type ReactNode } from 'react'
 import { ArrowDownUp, Clock3, GitBranch, GitCommit, Loader2, Pause, Play, RefreshCw, Settings, Trash2, XCircle, Zap } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { gitOpsDenialMessage, uniqueGitOpsPermissions, type GitOpsPermission } from '../../utils/gitops-permissions'
@@ -338,7 +338,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
     .filter(([action]) => props.actionPermissions?.[action]?.allowed === false && !props.actionPermissions[action].unsupported)
     .map(([, label]) => label))]
   const argoDenialReason = deniedArgoActions.length > 0
-    ? `Your role can't ${deniedArgoActions.length === 1 ? deniedArgoActions[0] : `${deniedArgoActions.slice(0, -1).join(', ')} or ${deniedArgoActions.at(-1)}`} for this Application.`
+    ? `Kubernetes denied permission to ${deniedArgoActions.length === 1 ? deniedArgoActions[0] : `${deniedArgoActions.slice(0, -1).join(', ')} or ${deniedArgoActions.at(-1)}`} for this Application.`
     : undefined
   // With permission details, one merged sentence covers every denied action;
   // a host passing only reasons gets them listed as-is.
@@ -349,7 +349,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
       .map(([, reason]) => reason)
       .filter((reason): reason is string => !!reason))]
   const deniedGrants = [...new Set(deniedPermissions
-    .map(denial => `${denial.verb} ${denial.resource}${denial.group ? `.${denial.group}` : ''} in ${denial.namespace}`))]
+    .map(denial => `${denial.verb} ${denial.resource}${denial.group ? `.${denial.group}` : ''}${denial.name ? ` named ${denial.name}` : ''} in ${denial.namespace}`))]
 
   // Document title side effect — opt-in so hub-web can take ownership of
   // its own title format.
@@ -581,18 +581,19 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
               {denialReasons.length > 0 && (
                 <div className="flex flex-col items-end text-[11px] text-theme-text-tertiary">
                   <button type="button" {...permissionsDisclosure.buttonProps} onClick={() => setPermissionsOpen(value => !value)} className="inline-flex items-center gap-1 rounded px-1 hover:text-theme-text-secondary">
-                    {allActionsRestricted ? 'Read-only for your role' : 'Some actions restricted for your role'} · <span className="underline decoration-dotted underline-offset-2">Why?</span>
+                    {allActionsRestricted ? 'Read-only' : 'Some actions restricted'} · <span className="underline decoration-dotted underline-offset-2">Why?</span>
                     <CollapseChevron open={permissionsOpen} />
                   </button>
                   <Collapse open={permissionsOpen} id={permissionsDisclosure.panelId}>
                     <div className="mt-1 w-[min(36rem,calc(100vw-2rem))] space-y-2 rounded border border-theme-border bg-theme-surface p-3 text-left text-xs text-theme-text-secondary">
                       {denialReasons.map(reason => <p key={reason}>{reason}</p>)}
-                      {props.isCloudDeployment && isArgoApp && <p>Radar Cloud owners: the Argo CD write grant is off by default because it delegates the Argo CD controller's deployment authority. To turn it on, see Chart RBAC settings, then apply it with <code>helm upgrade</code>; one-click upgrades update only the image.</p>}
-                      <p>{props.isCloudDeployment && isArgoApp ? 'For other roles, an admin can grant access with' : 'An admin can grant access with'} a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
+                      {props.isCloudDeployment && isArgoApp && <p>The Cloud owner grant is off by default because it delegates the Argo CD controller's deployment authority. Cluster administrators can opt in with a Helm chart upgrade.</p>}
+                      <p>{props.isCloudDeployment && isArgoApp ? 'For targeted access, an admin can use' : 'An admin can grant the Kubernetes identity access with'} a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
                       {deniedGrants.length > 0 && <ul className="list-disc space-y-1 pl-4">
                         {deniedGrants.slice(0, 4).map(grant => <li key={grant}>{grant.split(' ').map((word, index) => <span key={index}><span className="inline-block max-w-full [overflow-wrap:anywhere]">{word}</span>{' '}</span>)}</li>)}
                         {deniedGrants.length > 4 && <li>And {deniedGrants.length - 4} more denied permission{deniedGrants.length === 5 ? '' : 's'}.</li>}
                       </ul>}
+                      {deniedPermissions.some(denial => denial.name) && <p>Use <code>resourceNames</code> to limit access to the listed objects.</p>}
                       <div className="flex flex-wrap gap-3">
                         <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/gitops.md#action-permissions" target="_blank" rel="noopener noreferrer">Action permissions</a>
                         {props.isCloudDeployment && isArgoApp && <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/deploy/helm/radar/README.md#cloud-owner-integration-writes" target="_blank" rel="noopener noreferrer">Chart RBAC settings</a>}
@@ -778,18 +779,25 @@ function ActionButton({
     : danger
       ? 'border border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/20'
       : 'border border-theme-border bg-theme-surface text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
-  const tooltip = disabled && disabledReason ? disabledReason : description
+  const reasonId = useId()
+  const hasDisabledReason = !!(disabled && disabledReason)
+  const tooltip = hasDisabledReason ? disabledReason : description
   return (
-    <Tooltip content={tooltip} disabled={!tooltip} preserveWords={!!disabledReason}>
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={loading || disabled}
-        className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${variantClass}`}
-      >
-        {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5" />}
-        {label}
-      </button>
-    </Tooltip>
+    <>
+      {hasDisabledReason && <span id={reasonId} className="sr-only">{disabledReason}</span>}
+      <Tooltip content={tooltip} disabled={!tooltip} preserveWords={hasDisabledReason}>
+        <button
+          type="button"
+          onClick={() => { if (!disabled && !loading) onClick() }}
+          disabled={loading || (disabled && !hasDisabledReason)}
+          aria-disabled={disabled || undefined}
+          aria-describedby={hasDisabledReason ? reasonId : undefined}
+          className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 ${variantClass}`}
+        >
+          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5" />}
+          {label}
+        </button>
+      </Tooltip>
+    </>
   )
 }

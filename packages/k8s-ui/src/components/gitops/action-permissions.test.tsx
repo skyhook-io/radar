@@ -5,7 +5,7 @@ import { GitOpsDetailLayout, type GitOpsDetailLayoutProps } from './GitOpsDetail
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 
 const noop = () => {}
-const reason = "Your role can't patch Argo CD Application demo in argocd."
+const reason = "Kubernetes denied permission to patch Argo CD Application demo in argocd."
 const appPatch = { verb: 'patch', resource: 'applications', group: 'argoproj.io', namespace: 'argocd', kind: 'Application', name: 'demo' }
 const argoDenial = { allowed: false, denied: [appPatch] }
 const base: GitOpsDetailLayoutProps = {
@@ -29,19 +29,19 @@ function actionButton(html: string, label: string): string {
 describe('GitOps permission gates on rendered controls', () => {
   it('disables refresh and sync while retaining buttons on the detail page', () => {
     const html = renderToString(<GitOpsDetailLayout {...base} actionDisabledReasons={{ sync: reason, refresh: reason, suspend: reason }} actionPermissions={{ sync: argoDenial, refresh: argoDenial, suspend: argoDenial, validate: { allowed: true } }} />)
-    expect(html).toContain('Some actions restricted for your role')
+    expect(html).toContain('Some actions restricted')
     expect(html).toContain('Action permissions')
     expect(html).not.toContain('cloud.defaultRbac.integrationWrite')
     expect(html).not.toContain('Chart RBAC settings')
     expect(html).toContain('a RoleBinding')
     const doc = new DOMParser().parseFromString(html, 'text/html')
-    expect(doc.body.textContent).toContain("Your role can't sync, refresh or change auto-sync for this Application.")
-    expect(doc.body.textContent).toContain('An admin can grant access with a RoleBinding allowing:')
+    expect(doc.body.textContent).toContain("Kubernetes denied permission to sync, refresh or change auto-sync for this Application.")
+    expect(doc.body.textContent).toContain('An admin can grant the Kubernetes identity access with a RoleBinding allowing:')
     expect(doc.body.textContent).not.toContain('helm upgrade')
     expect(html).toContain('applications.argoproj.io')
     expect(html).not.toContain('Sync with source also needs')
     for (const label of ['Sync…', 'Refresh', 'Hard refresh', 'Disable auto-sync']) {
-      expect(actionButton(html, label)).toContain('disabled=""')
+      expect(actionButton(html, label)).toContain('aria-disabled="true"')
     }
   })
   it('explains why the Cloud owner grant defaults off and how to turn it on', () => {
@@ -49,9 +49,9 @@ describe('GitOps permission gates on rendered controls', () => {
       actionDisabledReasons={{ sync: reason, refresh: reason, suspend: reason }}
       actionPermissions={{ sync: argoDenial, refresh: argoDenial, suspend: argoDenial }} />)
     const doc = new DOMParser().parseFromString(html, 'text/html')
-    expect(doc.body.textContent).toContain("Your role can't sync, refresh or change auto-sync for this Application.")
-    expect(doc.body.textContent).toContain("Radar Cloud owners: the Argo CD write grant is off by default because it delegates the Argo CD controller's deployment authority. To turn it on, see Chart RBAC settings, then apply it with helm upgrade; one-click upgrades update only the image.")
-    expect(doc.querySelector('code')?.textContent).toBe('helm upgrade')
+    expect(doc.body.textContent).toContain("Kubernetes denied permission to sync, refresh or change auto-sync for this Application.")
+    expect(doc.body.textContent).toContain("The Cloud owner grant is off by default because it delegates the Argo CD controller's deployment authority. Cluster administrators can opt in with a Helm chart upgrade.")
+    expect(doc.querySelector('code')?.textContent).toBe('resourceNames')
     expect(html).toContain('Chart RBAC settings')
     expect(html).toContain('README.md#cloud-owner-integration-writes')
     expect(doc.body.textContent).not.toContain('cloud.defaultRbac.integrationWrite.gitops.owner')
@@ -60,9 +60,9 @@ describe('GitOps permission gates on rendered controls', () => {
     const html = renderToString(<GitOpsDetailLayout {...base} isCloudDeployment
       actionDisabledReasons={{ refresh: reason }} actionPermissions={{ refresh: argoDenial }} />)
     const doc = new DOMParser().parseFromString(html, 'text/html')
-    expect(doc.body.textContent).toContain("Your role can't refresh for this Application.")
-    expect(doc.body.textContent).toContain('For other roles, an admin can grant access with a RoleBinding allowing:')
-    expect([...doc.querySelectorAll('li')].map(item => item.textContent!.trim())).toEqual(['patch applications.argoproj.io in argocd'])
+    expect(doc.body.textContent).toContain("Kubernetes denied permission to refresh for this Application.")
+    expect(doc.body.textContent).toContain('For targeted access, an admin can use a RoleBinding allowing:')
+    expect([...doc.querySelectorAll('li')].map(item => item.textContent!.trim())).toEqual(['patch applications.argoproj.io named demo in argocd'])
   })
   it('does not point Flux denials at the chart setting, which grants Argo CD Applications only', () => {
     const kustomizationPatch = { verb: 'patch', resource: 'kustomizations', group: 'kustomize.toolkit.fluxcd.io', namespace: 'apps', kind: 'Kustomization', name: 'demo' }
@@ -72,7 +72,7 @@ describe('GitOps permission gates on rendered controls', () => {
       actionDisabledReasons={{ reconcile: reason }}
       actionPermissions={{ reconcile: { allowed: false, denied: [kustomizationPatch] } }}
     />)
-    expect(html).toContain('Read-only for your role')
+    expect(html).toContain('Read-only')
     expect(html).not.toContain('cloud.defaultRbac.integrationWrite')
     expect(html).not.toContain('Chart RBAC settings')
     expect(html).not.toContain('helm upgrade')
@@ -88,9 +88,9 @@ describe('GitOps permission gates on rendered controls', () => {
     />)
     const doc = new DOMParser().parseFromString(html, 'text/html')
     const grants = [...doc.querySelectorAll('li')].map(item => item.textContent!.trim())
-    expect(grants).toEqual(['get gitrepositories.source.toolkit.fluxcd.io in gaps-r4-source', 'patch gitrepositories.source.toolkit.fluxcd.io in gaps-r4-source'])
-    expect(html).toContain('Some actions restricted for your role')
-    expect(doc.body.textContent).toContain("Sync with source also reconciles GitRepository gaps-r4-source/repo — your role can't read or patch it.")
+    expect(grants).toEqual(['get gitrepositories.source.toolkit.fluxcd.io named repo in gaps-r4-source', 'patch gitrepositories.source.toolkit.fluxcd.io named repo in gaps-r4-source'])
+    expect(html).toContain('Some actions restricted')
+    expect(doc.body.textContent).toContain("Sync with source also reconciles GitRepository gaps-r4-source/repo — Kubernetes denied permission to read or patch it.")
     expect(html).not.toContain('per-action reason')
     expect(html).toContain('class="inline-block max-w-full [overflow-wrap:anywhere]">gaps-r4-source</span>')
   })
@@ -101,26 +101,29 @@ describe('GitOps permission gates on rendered controls', () => {
       actionDisabledReasons={{ refresh: reason, sync: 'sync reason', suspend: 'suspend reason' }}
       actionPermissions={{ refresh: argoDenial, sync: both, suspend: both }} />)
     const doc = new DOMParser().parseFromString(html, 'text/html')
-    expect(doc.body.textContent).toContain('Read-only for your role')
+    expect(doc.body.textContent).toContain('Read-only')
     expect(doc.body.textContent).not.toContain('Some actions restricted')
-    expect(doc.body.textContent).toContain("Your role can't sync, refresh or change auto-sync for this Application.")
+    expect(doc.body.textContent).toContain("Kubernetes denied permission to sync, refresh or change auto-sync for this Application.")
     expect(doc.body.textContent).not.toContain('Radar reads it with its own access')
-    expect(html).not.toContain('sync reason')
-    expect([...doc.querySelectorAll('li')].map(item => item.textContent!.trim())).toEqual(['patch applications.argoproj.io in argocd', 'get applications.argoproj.io in argocd'])
+    const disclosure = doc.querySelector<HTMLButtonElement>('button[aria-controls]')!
+    expect(doc.getElementById(disclosure.getAttribute('aria-controls')!)?.textContent).not.toContain('sync reason')
+    const sync = [...doc.querySelectorAll('button')].find(button => button.textContent === 'Sync…')!
+    expect(doc.getElementById(sync.getAttribute('aria-describedby')!)?.textContent).toBe('sync reason')
+    expect([...doc.querySelectorAll('li')].map(item => item.textContent!.trim())).toEqual(['patch applications.argoproj.io named demo in argocd', 'get applications.argoproj.io named demo in argocd'])
   })
   it('words the full backend denial without validate, and names terminate only while a sync runs', () => {
     const all = Object.fromEntries(['sync', 'refresh', 'terminate', 'suspend', 'resume', 'rollback', 'validate'].map(action => [action, argoDenial]))
     const idle = new DOMParser().parseFromString(renderToString(<GitOpsDetailLayout {...base} actionPermissions={all} />), 'text/html')
-    expect(idle.body.textContent).toContain("Your role can't sync, refresh, change auto-sync or roll back for this Application.")
+    expect(idle.body.textContent).toContain("Kubernetes denied permission to sync, refresh, change auto-sync or roll back for this Application.")
     const running = new DOMParser().parseFromString(renderToString(<GitOpsDetailLayout {...base} argo={{ ...base.argo!, isRunning: true }} actionPermissions={all} />), 'text/html')
-    expect(running.body.textContent).toContain("Your role can't sync, refresh, terminate a sync, change auto-sync or roll back for this Application.")
+    expect(running.body.textContent).toContain("Kubernetes denied permission to sync, refresh, terminate a sync, change auto-sync or roll back for this Application.")
   })
   it('names only denied Argo actions and combines both auto-sync directions', () => {
     const html = renderToString(<GitOpsDetailLayout {...base}
       actionPermissions={{ sync: { allowed: true }, refresh: { allowed: true }, suspend: argoDenial, resume: argoDenial, rollback: { allowed: false, unsupported: true } }} />)
     const doc = new DOMParser().parseFromString(html, 'text/html')
-    expect(doc.body.textContent).toContain("Your role can't change auto-sync for this Application.")
-    expect(doc.body.textContent).not.toContain("Your role can't sync")
+    expect(doc.body.textContent).toContain("Kubernetes denied permission to change auto-sync for this Application.")
+    expect(doc.body.textContent).not.toContain("Kubernetes denied permission to sync")
     expect(doc.body.textContent).not.toContain('roll back')
   })
   it.each([
@@ -134,9 +137,9 @@ describe('GitOps permission gates on rendered controls', () => {
       actionDisabledReasons={{ 'sync-with-source': disabledReason }}
       actionPermissions={{ reconcile: { allowed: true }, 'sync-with-source': { unsupported: true } }}
     />)
-    expect(html).not.toContain('restricted for your role')
+    expect(html).not.toContain('Some actions restricted')
     expect(html).not.toContain('Why?')
-    expect(actionButton(html, 'Sync with source')).toContain('disabled=""')
+    expect(actionButton(html, 'Sync with source')).toContain('aria-disabled="true"')
     const doc = new DOMParser().parseFromString(html, 'text/html')
     const note = [...doc.querySelectorAll('p')].find(p => p.textContent === disabledReason)
     expect(note).toBeDefined()
@@ -156,10 +159,10 @@ describe('GitOps permission gates on rendered controls', () => {
     const list = new DOMParser().parseFromString(html, 'text/html').querySelector('ul')!
     expect(list.querySelectorAll('li')).toHaveLength(5)
     const text = list.textContent!
-    expect(text.match(/patch applications.argoproj.io in argocd/g)).toHaveLength(1)
-    expect(text).toContain('get applications.argoproj.io in argocd')
-    expect(text).toContain('patch applications.argoproj.io in other')
-    expect(text).toContain('patch applications.other.io in argocd')
+    expect(text.match(/patch applications.argoproj.io named demo in argocd/g)).toHaveLength(1)
+    expect(text).toContain('get applications.argoproj.io named demo in argocd')
+    expect(text).toContain('patch applications.argoproj.io named demo in other')
+    expect(text).toContain('patch applications.other.io named demo in argocd')
     expect(text).toContain('And 1 more denied permission.')
     expect(text).not.toContain('otherresources')
     expect(text).not.toContain('undefined')
@@ -172,8 +175,8 @@ describe('GitOps permission gates on rendered controls', () => {
     const note = [...doc.querySelectorAll('p')].find(p => p.textContent === "Couldn't check your permissions. You can still try.")!
     expect(note).toBeDefined()
     expect(note.closest('[inert], [hidden], [aria-hidden="true"]')).toBeNull()
-    expect(actionButton(html, 'Sync…')).not.toContain('disabled=""')
-    expect(html).not.toContain('restricted for your role')
+    expect(actionButton(html, 'Sync…')).not.toContain('aria-disabled="true"')
+    expect(html).not.toContain('Some actions restricted')
   })
   it.each([['buckets', 'Bucket'], ['helmcharts', 'HelmChart']])('shows denied detail actions for %s', (kind, kindLabel) => {
     const denied = { verb: 'patch', group: 'source.toolkit.fluxcd.io', resource: kind, kind: kindLabel, namespace: 'sources', name: 'demo' }
@@ -184,15 +187,15 @@ describe('GitOps permission gates on rendered controls', () => {
       actionDisabledReasons={{ reconcile: reason, suspend: reason }}
       actionPermissions={{ reconcile: { allowed: false, denied: [denied] }, suspend: { allowed: false, denied: [denied] } }}
     />)
-    expect(html).toContain('Read-only for your role')
+    expect(html).toContain('Read-only')
     expect(html).toContain(`${kind}.source.toolkit.fluxcd.io`)
-    expect(actionButton(html, 'Reconcile')).toContain('disabled=""')
-    expect(actionButton(html, 'Suspend')).toContain('disabled=""')
+    expect(actionButton(html, 'Reconcile')).toContain('aria-disabled="true"')
+    expect(actionButton(html, 'Suspend')).toContain('aria-disabled="true"')
   })
   it('preserves enabled refresh during deletion for an allowed caller', () => {
     const html = renderToString(<GitOpsDetailLayout {...base} terminating />)
-    expect(actionButton(html, 'Sync…')).toContain('disabled=""')
-    expect(actionButton(html, 'Refresh')).not.toContain('disabled=""')
+    expect(actionButton(html, 'Sync…')).toContain('aria-disabled="true"')
+    expect(actionButton(html, 'Refresh')).not.toContain('aria-disabled="true"')
   })
   it('gates compact resource controls with the same permission map', () => {
     const html = renderToString(<ResourceActionsBar

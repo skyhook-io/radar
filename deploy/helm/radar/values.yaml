@@ -625,8 +625,7 @@ cloud:
     # rendered from files/integration-write-baseline.yaml. Per capability:
     #   false - off (default; other roles still apply)
     #   true  - on with any owner role
-    #   auto  - on only when ownerClusterRole is exactly admin or cluster-admin
-    # gitops: get/patch on Argo CD Applications in every namespace. That
+    # gitops: get/patch on Argo CD Applications, scoped by rbac.namespaces. That
     # delegates the Argo CD controller's deployment authority; Argo CD's own
     # RBAC isn't consulted. Read the chart README before relying on it.
     # Requires cloud.enabled, rbac.create, defaultRbac.create and owner=true.

@@ -188,6 +188,44 @@ entries:
     source: "internal/server/velero_results.go; https://github.com/vmware-tanzu/velero/blob/v1.16.0/pkg/apis/velero/v1/download_request_types.go"
     actions:
       - "POST /api/velero/{kind}/{namespace}/{name}/messages"
+      - "POST /api/velero/{kind}/{namespace}/{name}/contents"
+      - "POST /api/velero/{kind}/{namespace}/{name}/log"
+      - "POST /api/velero/{kind}/{namespace}/{name}/volumes"
+  - group: "velero.io"
+    resources: ["schedules"]
+    verbs: ["get", "patch"]
+    scope: Namespaced
+    collection: "velero"
+    capability: velero
+    decision: withhold
+    reason: "Schedule changes use the caller's existing roles."
+    source: "internal/server/velero_schedule_pause.go; internal/server/velero_backup_now.go"
+    actions:
+      - "POST /api/velero/schedules/{namespace}/{name}/backup"
+      - "POST /api/velero/schedules/{namespace}/{name}/pause"
+      - "POST /api/velero/schedules/{namespace}/{name}/resume"
+  - group: "velero.io"
+    resources: ["backups"]
+    verbs: ["get", "create"]
+    scope: Namespaced
+    collection: "velero"
+    capability: velero
+    decision: withhold
+    reason: "Manual backups use the caller's existing roles."
+    source: "internal/server/velero_backup_now.go"
+    actions:
+      - "POST /api/velero/schedules/{namespace}/{name}/backup"
+  - group: "velero.io"
+    resources: ["deletebackuprequests"]
+    verbs: ["list", "create"]
+    scope: Namespaced
+    collection: "velero"
+    capability: velero
+    decision: withhold
+    reason: "Deleting stored backup data uses the caller's existing roles."
+    source: "internal/server/velero_delete.go"
+    actions:
+      - "POST /api/velero/backups/{namespace}/{name}/delete"
   - group: "postgresql.cnpg.io"
     resources: ["clusters"]
     verbs: ["get", "patch"]

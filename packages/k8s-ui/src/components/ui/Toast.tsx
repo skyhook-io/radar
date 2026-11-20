@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef, Fragment } from 'react'
-import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
+import { RawErrorDetails } from './RawErrorDetails'
 import { DURATION_TOAST_EXIT } from '../../utils/animation'
 import { Check, Terminal, X, AlertTriangle, Info } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -182,10 +182,8 @@ const TOAST_Z_INDEX = 200
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   const [detailsOpen, setDetailsOpen] = useState(false)
-  const disclosure = useDisclosure(detailsOpen)
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
-  const [copied, setCopied] = useState(false)
   const duration = toast.duration ?? (toast.type === 'error' ? 10000 : 7000)
   const remaining = useRef(duration)
   // A replacement starts over: full duration, details collapsed (it may have
@@ -297,13 +295,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
         )}
         {toast.rawDetail && (
           <div className={clsx('mt-2 rounded bg-current/10 p-2', textTone)}>
-            <button type="button" onClick={() => setDetailsOpen(value => !value)} aria-expanded={detailsOpen} aria-controls={disclosure.panelId} className="flex items-center gap-1 text-xs">
-              <CollapseChevron open={detailsOpen} inheritColor /> Error details
-            </button>
-            <Collapse open={detailsOpen} id={disclosure.panelId}>
-              <button type="button" onClick={async () => { await navigator.clipboard.writeText(toast.rawDetail!); setCopied(true) }} className="mt-2 rounded border border-current px-2 py-1 text-xs">{copied ? 'Copied' : 'Copy raw error'}</button>
-              <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs">{toast.rawDetail}</pre>
-            </Collapse>
+            <RawErrorDetails key={toast.shown} detail={toast.rawDetail} onOpenChange={setDetailsOpen} />
           </div>
         )}
         {toast.command && (

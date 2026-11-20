@@ -349,15 +349,13 @@ built-in `default` AppProject allows them), widening that boundary. For a
 - `false` (default): off. This removes only this add-on. Kubernetes RBAC is additive:
   vendor aggregation, other roles and your own bindings still apply.
 - `true`: on with any owner role, including a custom one.
-- `auto`: on only when `cloud.defaultRbac.ownerClusterRole` is exactly
-  `admin` or `cluster-admin`. This compares the name; a modified `admin` role is
-  not detected. With a custom owner role, `auto` grants nothing.
 
 The add-on also requires `cloud.enabled`, `rbac.create`,
 `cloud.defaultRbac.create`, `cloud.defaultRbac.owner`, and the `argo`
-collection (`rbac.crdGroups.argo` or `all`). These are caller permissions;
-`rbac.additionalRules` extends Radar's collector ServiceAccount, not callers,
-and can't grant these actions.
+collection (`rbac.crdGroups.argo` or `all`). If `rbac.namespaces` is set, the
+chart creates a RoleBinding in each listed namespace. Cloud actions use the
+caller's Kubernetes identity. `rbac.additionalRules` extends the collector
+ServiceAccount, which is the identity used for in-cluster actions without authentication.
 
 **What `get` and `patch` on Applications allow.** Kubernetes RBAC can't limit
 a patch to the fields an action sets, and the grant works from any client, not
@@ -387,10 +385,9 @@ project's destination, kind and namespace limits. The controller also enforces
 sync windows (Argo CD 2.11 and later). Source integrity (GPG) covers Git sources
 only; on Argo CD 3.x, a sync with local manifests can bypass it.
 
-A namespace RoleBinding can't narrow this add-on or any other cluster-wide
-default binding. For narrower access, leave the add-on off (or set
-`cloud.defaultRbac.create=false`) and bind your own namespace- or
-resource-name-scoped roles.
+The default binding covers every namespace. To limit access to specific
+Applications, leave the add-on off and use a RoleBinding with `resourceNames`.
+Even one Application can delegate the controller's deployment authority.
 
 **Upgrades.** To turn it on, set
 `cloud.defaultRbac.integrationWrite.gitops.owner=true` and apply it with a chart
@@ -403,7 +400,7 @@ helm upgrade radar skyhook/radar -n radar --reuse-values \
 
 On `helm upgrade --reuse-values` from an older chart, a missing key follows the
 capability's declared default (`false` for gitops), so it stays off. An existing
-explicit `true` or `auto` setting is preserved. Updating only the Radar binary,
+explicit `true` setting is preserved. Updating only the Radar binary,
 including Radar Cloud one-click self-upgrade, installs no RBAC.
 
 GitOps action controls check the caller's permissions per object and disable

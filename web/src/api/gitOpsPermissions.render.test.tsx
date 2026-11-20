@@ -113,7 +113,7 @@ it('refreshes confirmation times separately for each action', async () => {
   answer = async () => Response.json({ actions: { sync: { reason: 'Review unavailable' }, refresh: denied } })
   await act(async () => { await vi.advanceTimersByTimeAsync(120_000) })
   expect(query.disabledReasons.sync).toBeUndefined()
-  expect(query.disabledReasons.refresh).toContain("Your role can't")
+  expect(query.disabledReasons.refresh).toContain("Kubernetes denied permission to")
   answer = async () => Response.json({ actions: { sync: { allowed: true }, refresh: { reason: 'Review unavailable' } } })
   await act(async () => { await query.refetch(); await vi.advanceTimersByTimeAsync(1) })
   expect(query.permissions?.sync.allowed).toBe(true)

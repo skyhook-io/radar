@@ -819,10 +819,10 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 		if argoApplicationSetOwned(app) && ArgoAutoSyncEnabled(app) {
 			if keepsEnabled == nil {
 				kept, probeErr := argoKeepsAutomatedEnabled(ctx, dynClient, namespace, name)
-				// A caller denied the dry run is denied the write. Any other
-				// refusal (a webhook that rejects dry runs) leaves the
-				// answer unknown, and removal works with every controller.
-				if apierrors.IsForbidden(probeErr) {
+				// Surface authorization and admission denials. If the schema
+				// probe is unavailable, removal works with every controller.
+				var admission *AdmissionDenied
+				if apierrors.IsForbidden(probeErr) || errors.As(probeErr, &admission) {
 					return nil, fmt.Errorf("failed to check whether the Application keeps automated.enabled: %w", probeErr)
 				}
 				keepsEnabled = &kept
@@ -916,7 +916,7 @@ func argoKeepsAutomatedEnabled(ctx context.Context, dynClient dynamic.Interface,
 	}
 	stored, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}})
 	if err != nil {
-		return false, err
+		return false, ClassifyPermissionError(err, "patch", argoAppGVR, namespace, name)
 	}
 	enabled, found, _ := unstructured.NestedBool(stored.Object, "spec", "syncPolicy", "automated", "enabled")
 	return found && !enabled, nil

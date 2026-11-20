@@ -64,7 +64,7 @@ it('names a role denial ahead of the auto-sync advice on Rollback', async () => 
   const element = document.createElement('div')
   document.body.appendChild(element)
   const root = createRoot(element)
-  const role = "Your role can't patch Argo CD Applications in argocd."
+  const role = "Kubernetes denied permission to patch Argo CD Applications in argocd."
   await act(async () => { root.render(<GitOpsActivityInsightView insight={insight('Auto · prune')} onRollback={() => {}} rollbackDisabledReason={role} />) })
   const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Rollback')!
   await act(async () => {

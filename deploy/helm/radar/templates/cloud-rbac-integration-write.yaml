@@ -1,13 +1,6 @@
 {{- /*
-Owner write add-on for integration actions, rendered from the grant rows of
-files/integration-write-baseline.yaml. Each capability has its own switch,
-cloud.defaultRbac.integrationWrite.<capability>.owner:
-  false - off (default)
-  true  - on with any owner role
-  auto  - on only when ownerClusterRole is exactly admin or cluster-admin
-An absent switch (older --reuse-values trees) follows the capability's default
-in the table. Helm's `default` would also replace an explicit false, so presence
-is checked with hasKey instead.
+Owner write add-on for integration actions. A missing setting uses the
+capability's default from files/integration-write-baseline.yaml.
 */}}
 {{- $rbac := .Values.cloud.defaultRbac -}}
 {{- if and .Values.cloud.enabled .Values.rbac.create $rbac.create $rbac.owner -}}
@@ -17,18 +10,14 @@ is checked with hasKey instead.
 {{- if and (hasKey $rbac "integrationWrite") (kindIs "map" $rbac.integrationWrite) -}}
 {{- $switches = $rbac.integrationWrite -}}
 {{- end -}}
-{{- $stockOwner := has (toString $rbac.ownerClusterRole) (list "admin" "cluster-admin") -}}
 {{- $enabled := dict -}}
 {{- range $capability, $spec := $policy.capabilities -}}
-{{- $mode := toString $spec.default -}}
+{{- $on := eq (toString $spec.default) "true" -}}
 {{- $switch := index $switches $capability -}}
 {{- if and (kindIs "map" $switch) (hasKey $switch "owner") (not (kindIs "invalid" $switch.owner)) -}}
-{{- $mode = toString $switch.owner -}}
+{{- $on = and (kindIs "bool" $switch.owner) $switch.owner -}}
 {{- end -}}
-{{- if not (has $mode (list "auto" "true" "false")) -}}
-{{- fail (printf "cloud.defaultRbac.integrationWrite.%s.owner must be auto, true or false (got %q)" $capability $mode) -}}
-{{- end -}}
-{{- $_ := set $enabled $capability (or (eq $mode "true") (and (eq $mode "auto") $stockOwner)) -}}
+{{- $_ := set $enabled $capability $on -}}
 {{- end -}}
 {{- $rules := list -}}
 {{- range $entry := $policy.entries -}}
@@ -46,23 +35,11 @@ metadata:
     {{- include "radar.labels" $root | nindent 4 }}
 rules:
   {{- toYaml $rules | nindent 2 }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" $root }}-cloud-owner-integration-write
-  labels:
-    {{- include "radar.labels" $root | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ $name }}
-subjects:
-  - kind: Group
-    name: radar:owner
-    apiGroup: rbac.authorization.k8s.io
-  - kind: Group
-    name: cloud:owner
-    apiGroup: rbac.authorization.k8s.io
+{{- include "radar.binding" (dict
+  "root" $root
+  "name" (printf "%s-cloud-owner-integration-write" (include "radar.fullname" $root))
+  "roleRef" $name
+  "groups" (include "radar.tierGroups" "owner" | fromJsonArray)
+) }}
 {{- end }}
 {{- end }}

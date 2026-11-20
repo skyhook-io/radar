@@ -16,7 +16,7 @@ beforeEach(async () => {
     const { showError, showToast } = useToast()
     return <>
       <button onClick={() => showError('Permission denied', undefined, 'opaque raw error')}>Show</button>
-      <button onClick={() => showToast("Your role can't patch Argo CD Applications in gaps-r4-demo.", { type: 'info', id: 'gitops-denied:patch' })}>Denied shortcut</button>
+      <button onClick={() => showToast("Kubernetes denied permission to patch Argo CD Applications in gaps-r4-demo.", { type: 'info', id: 'gitops-denied:patch' })}>Denied shortcut</button>
       <button onClick={() => showToast('Another denial', { type: 'info', id: 'gitops-denied:get' })}>Other shortcut</button>
       <button onClick={() => showToast('x'.repeat(300), { detail: 'https://example.test/' + 'y'.repeat(300), onDetailClick: () => {} })}>Long clickable</button>
       <button onClick={() => showToast('z'.repeat(300), { detail: 'a'.repeat(300) })}>Long detail</button>

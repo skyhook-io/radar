@@ -26,13 +26,13 @@ describe('GitOps action permission states', () => {
     const reason = gitOpsDisabledReasons('supported', { actions: { 'sync-with-source': {
       allowed: false, denied: [{ ...gitRepository, verb: 'get' }, { ...gitRepository, verb: 'patch' }],
     } } }, false)['sync-with-source']
-    expect(reason).toBe("Sync with source also reconciles GitRepository sources/repo — your role can't read or patch it.")
+    expect(reason).toBe("Sync with source also reconciles GitRepository sources/repo — Kubernetes denied permission to read or patch it.")
   })
   it('names both the target and its source when the role can patch neither', () => {
     const reason = gitOpsDisabledReasons('supported', { actions: { 'sync-with-source': {
       allowed: false, denied: [{ ...kustomization, verb: 'patch' }, { ...gitRepository, verb: 'patch' }],
     } } }, false)['sync-with-source']
-    expect(reason).toBe("Your role can't patch Flux Kustomization web in apps or its source GitRepository sources/repo.")
+    expect(reason).toBe("Kubernetes denied permission to patch Flux Kustomization web in apps or its source GitRepository sources/repo.")
   })
   it('names the Argo CD Application and every denied operation without an access parenthetical', () => {
     const reasons = gitOpsDisabledReasons('supported', { actions: {
@@ -40,9 +40,9 @@ describe('GitOps action permission states', () => {
       sync: { allowed: false, denied: [{ ...argoApp, verb: 'get' }, { ...argoApp, verb: 'patch' }] },
       suspend: { allowed: false, denied: [{ ...argoApp, verb: 'get' }] },
     } }, false)
-    expect(reasons.refresh).toBe("Your role can't patch Argo CD Application demo in argocd.")
-    expect(reasons.sync).toBe("Your role can't read or patch Argo CD Application demo in argocd.")
-    expect(reasons.suspend).toBe("Your role can't read Argo CD Application demo in argocd.")
+    expect(reasons.refresh).toBe("Kubernetes denied permission to patch Argo CD Application demo in argocd.")
+    expect(reasons.sync).toBe("Kubernetes denied permission to read or patch Argo CD Application demo in argocd.")
+    expect(reasons.suspend).toBe("Kubernetes denied permission to read Argo CD Application demo in argocd.")
   })
   it('disables an unsupported action with its reason, outside the role permissions', () => {
     const reason = "no source reference found in Kustomization apps/web."
@@ -53,18 +53,18 @@ describe('GitOps action permission states', () => {
   it('names both missing grants on a Flux target the role can neither read nor patch', () => {
     const denied = [{ ...kustomization, verb: 'get' }, { ...kustomization, verb: 'patch' }]
     expect(gitOpsActionPermissions('supported', { actions: { reconcile: { allowed: false, denied } } }, false)?.reconcile.denied).toEqual(denied)
-    expect(gitOpsDisabledReasons('supported', { actions: { reconcile: { allowed: false, denied } } }, false).reconcile).toBe("Your role can't read or patch Flux Kustomization web in apps.")
+    expect(gitOpsDisabledReasons('supported', { actions: { reconcile: { allowed: false, denied } } }, false).reconcile).toBe("Kubernetes denied permission to read or patch Flux Kustomization web in apps.")
   })
   it('shares denial copy with runtime errors and keeps the raw text as detail', () => {
     const error = new GitOpsActionError({ error: 'raw', error_code: 'rbac_denied', verb: 'patch', ...gitRepository, source: undefined }, 403)
-    expect(error.message).toBe("Your role can't patch Flux GitRepository repo in sources.")
+    expect(error.message).toBe("Kubernetes denied permission to patch Flux GitRepository repo in sources.")
     expect(error.rawDetail).toBe('raw')
   })
   it('shares denied-read copy between capability checks and structured HTTP errors', () => {
     const denied = { ...argoApp, verb: 'get' }
     const reason = gitOpsDisabledReasons('supported', { actions: { sync: { allowed: false, denied: [denied] } } }, false).sync
     const error = new GitOpsActionError({ error: 'raw', error_code: 'rbac_denied', ...denied }, 403)
-    expect(error.message).toBe("Your role can't read Argo CD Application demo in argocd.")
+    expect(error.message).toBe("Kubernetes denied permission to read Argo CD Application demo in argocd.")
     expect(error.message).toBe(reason)
     expect(error.rawDetail).toBe('raw')
   })
@@ -104,7 +104,7 @@ describe('GitOps action permission states', () => {
   it('humanizes structured denial and preserves opaque identity only in raw details', () => {
     const raw = 'applications.argoproj.io is forbidden: User "opaque-user" cannot patch resource "applications"'
     const error = new GitOpsActionError({ error: raw, error_code: 'rbac_denied', verb: 'patch', ...argoApp }, 403)
-    expect(error.message).toBe("Your role can't patch Argo CD Application demo in argocd.")
+    expect(error.message).toBe("Kubernetes denied permission to patch Argo CD Application demo in argocd.")
     expect(error.message).not.toContain('opaque-user')
     expect(error.rawDetail).toBe(raw)
   })
@@ -123,14 +123,14 @@ it('names every source in a denied HelmChart chain with its own verbs', () => {
       { group: 'source.toolkit.fluxcd.io', resource: 'helmcharts', kind: 'HelmChart', namespace: 'charts', name: 'shared', source: true, verb: 'patch' },
     ],
   } } }, false)['sync-with-source']
-  expect(reason).toBe("Your role can't read or patch source GitRepository sources/repo or patch source HelmChart charts/shared.")
+  expect(reason).toBe("Kubernetes denied permission to read or patch source GitRepository sources/repo or patch source HelmChart charts/shared.")
 })
 
 it.each(['rbac_denied', 'admission_denied'])('keeps partial source requests visible for %s toast errors', error_code => {
   const note = 'Reconcile already requested for HelmRepository charts/repo, HelmChart charts/shared.'
   const raw = `failed to reconcile HelmRelease apps/web: refused. ${note}`
   const error = new GitOpsActionError({ error: raw, error_code, summary: 'Rejected by admission webhook freeze: frozen', verb: 'patch', ...kustomization, note }, 403)
-  const summary = error_code === 'rbac_denied' ? "Your role can't patch Flux Kustomization web in apps." : 'Rejected by admission webhook freeze: frozen'
+  const summary = error_code === 'rbac_denied' ? "Kubernetes denied permission to patch Flux Kustomization web in apps." : 'Rejected by admission webhook freeze: frozen'
   expect(error.message).toBe(`${summary} ${note}`)
   expect(error.rawDetail).toBe(raw)
 })

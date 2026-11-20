@@ -26,7 +26,7 @@ var (
 	// capi's connect reads a kubeconfig Secret and switches Radar's context; it
 	// writes no Cluster API object.
 	nonIntegrationRouteFamilies = []string{
-		"agent", "capi", "cloud", "cluster", "config", "connection", "contexts", "cronjobs", "curl",
+		"agent", "application-evidence", "capi", "cloud", "cluster", "config", "connection", "contexts", "cronjobs", "curl",
 		"desktop", "diagnose", "github", "helm", "integrations", "nodes", "opencost", "pods",
 		"portforwards", "prometheus", "resources", "settings", "trace", "traffic", "usage-data",
 		"version-check", "whats-new",
@@ -47,6 +47,9 @@ func integrationWriteActions(method, route string) ([]string, error) {
 	family, _, _ := strings.Cut(strings.TrimPrefix(route, "/api/"), "/")
 	action := method + " " + route
 	switch {
+	case action == "POST /api/workloads/{kind}/{namespace}/{name}/pause",
+		action == "POST /api/workloads/{kind}/{namespace}/{name}/resume":
+		return nil, nil
 	case family == "workloads":
 		return []string{action + " kind=rollouts"}, nil
 	case slices.Contains(nonIntegrationRouteFamilies, family):

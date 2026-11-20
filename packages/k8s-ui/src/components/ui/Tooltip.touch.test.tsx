@@ -76,7 +76,7 @@ it.each(['button', 'input', 'select', 'textarea', 'a'] as const)('explains an ar
 
 it('describes a denied row action before focus and explains a touch attempt without running it', () => {
   const onClick = vi.fn()
-  const reason = "Your role can't patch Argo CD Application demo in argocd."
+  const reason = "Kubernetes denied permission to patch Argo CD Application demo in argocd."
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)

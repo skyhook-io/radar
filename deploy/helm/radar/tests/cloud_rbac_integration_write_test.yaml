@@ -17,9 +17,9 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
-  - it: auto grants owners get and patch on Argo CD Applications with the stock admin role
+  - it: explicit opt-in grants owners get and patch on Argo CD Applications with the stock admin role
     set:
-      cloud.defaultRbac.integrationWrite.gitops.owner: auto
+      cloud.defaultRbac.integrationWrite.gitops.owner: true
     asserts:
       - hasDocuments:
           count: 2
@@ -61,27 +61,27 @@ tests:
               name: cloud:owner
               apiGroup: rbac.authorization.k8s.io
         documentIndex: 1
-  - it: auto grants with a cluster-admin owner role
+  - it: scopes the owner add-on to configured namespaces
     set:
-      cloud.defaultRbac.integrationWrite.gitops.owner: auto
-      cloud.defaultRbac.ownerClusterRole: cluster-admin
+      cloud.defaultRbac.integrationWrite.gitops.owner: true
+      rbac.namespaces: [argocd, apps]
     asserts:
       - hasDocuments:
-          count: 2
-  - it: auto grants nothing with a custom owner role
-    set:
-      cloud.defaultRbac.integrationWrite.gitops.owner: auto
-      cloud.defaultRbac.ownerClusterRole: platform-owner
-    asserts:
-      - hasDocuments:
-          count: 0
-  - it: auto compares the role name exactly
-    set:
-      cloud.defaultRbac.integrationWrite.gitops.owner: auto
-      cloud.defaultRbac.ownerClusterRole: Admin
-    asserts:
-      - hasDocuments:
-          count: 0
+          count: 3
+      - isKind:
+          of: RoleBinding
+        documentIndex: 1
+      - equal:
+          path: metadata.namespace
+          value: argocd
+        documentIndex: 1
+      - isKind:
+          of: RoleBinding
+        documentIndex: 2
+      - equal:
+          path: metadata.namespace
+          value: apps
+        documentIndex: 2
   - it: true grants with a custom owner role
     set:
       cloud.defaultRbac.ownerClusterRole: platform-owner
@@ -203,9 +203,9 @@ tests:
             name: radar:viewer
             apiGroup: rbac.authorization.k8s.io
         documentIndex: 1
-  - it: rejects switch values other than auto, true or false
+  - it: rejects the auto switch
     set:
-      cloud.defaultRbac.integrationWrite.gitops.owner: "yes"
+      cloud.defaultRbac.integrationWrite.gitops.owner: auto
     asserts:
       - failedTemplate:
           errorPattern: "integrationWrite[./]gitops[./]owner"

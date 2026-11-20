@@ -78,13 +78,13 @@ const enableAutoSync = (markup: string) => buttonAttrs(markup, 'Enable auto-sync
 describe('Enable auto-sync on the GitOps detail page', () => {
   it('is disabled with the upgrade note when the Radar cannot clear enabled: false', () => {
     const markup = html(layout(argo({ resumeUpgrade: upgrade })))
-    expect(enableAutoSync(markup)).toMatch(/\sdisabled=""/)
+    expect(enableAutoSync(markup)).toMatch(/\saria-disabled="true"/)
     expect(markup).toContain(NOTE_MARKUP)
   })
 
   it('is enabled, with no note, when the Radar advertises the behavior', () => {
     const markup = html(layout(argo({ resumeUpgrade: null })))
-    expect(enableAutoSync(markup)).not.toMatch(/\sdisabled=""/)
+    expect(enableAutoSync(markup)).not.toMatch(/\saria-disabled="true"/)
     expect(markup).not.toContain('need the latest Radar')
     expect(markup).toContain('Auto-sync off')
   })
@@ -326,12 +326,12 @@ describe("the drawer's Sync with an options dialog", () => {
         data={application}
         onArgoSync={onArgoSync}
         argoSyncDialog={{ pinsComparedRevision: true }}
-        gitOpsActionDisabledReasons={{ sync: "Your role can't patch Argo CD Application guestbook in argocd." }}
+        gitOpsActionDisabledReasons={{ sync: "Kubernetes denied permission to patch Argo CD Application guestbook in argocd." }}
       />,
     ))
     const sync = [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Sync…')!
     expect(sync.getAttribute('aria-disabled')).toBe('true')
-    expect(host.textContent).toContain("Your role can't patch Argo CD Application guestbook in argocd.")
+    expect(host.textContent).toContain("Kubernetes denied permission to patch Argo CD Application guestbook in argocd.")
     await act(async () => sync.click())
     expect(document.body.textContent).not.toContain('Sync now')
     expect(onArgoSync).not.toHaveBeenCalled()
@@ -380,7 +380,7 @@ describe("the drawer's Sync with an options dialog", () => {
 describe('auto-sync support pending or unavailable', () => {
   it.each(["Checking this cluster's Radar…", "Couldn't check this cluster's Radar support. Refresh to try again."])('disables each affected control with its reason: %s', reason => {
     const markup = html(layout(argo({ resumeBlockedReason: reason })))
-    expect(enableAutoSync(markup)).toMatch(/\sdisabled=""/)
+    expect(enableAutoSync(markup)).toMatch(/\saria-disabled="true"/)
     expect(markup).toContain(reason.replace(/'/g, '&#x27;'))
     const raw = app({ enabled: false }, { 'radarhq.io/suspended-prune': 'true' })
     const onAction = vi.fn()
@@ -398,7 +398,7 @@ describe('auto-sync support pending or unavailable', () => {
 // A role grant cannot supply behavior an older Radar lacks, so when both gates
 // apply the upgrade reason wins; the role reason still disables on its own.
 describe('upgrade and role gates together', () => {
-  const ROLE = "Your role can't patch Argo CD Applications in argocd."
+  const ROLE = "Kubernetes denied permission to patch Argo CD Applications in argocd."
 
   it('names the upgrade, not the role, on Enable Auto-Sync in the actions bar', () => {
     const props = { resource: { kind: 'applications', group: 'argoproj.io', namespace: 'argocd', name: 'guestbook' }, onArgoResume: () => {}, gitOpsActionDisabledReasons: { resume: ROLE } }
@@ -412,7 +412,7 @@ describe('upgrade and role gates together', () => {
 
   it('disables Enable auto-sync on the detail page for either gate', () => {
     const withRole = (handlers: ArgoActionHandlers) => html(<GitOpsDetailLayout {...layout(handlers).props} actionDisabledReasons={{ resume: ROLE }} />)
-    expect(enableAutoSync(withRole(argo()))).toMatch(/\sdisabled=""/)
-    expect(enableAutoSync(withRole(argo({ resumeUpgrade: upgrade })))).toMatch(/\sdisabled=""/)
+    expect(enableAutoSync(withRole(argo()))).toMatch(/\saria-disabled="true"/)
+    expect(enableAutoSync(withRole(argo({ resumeUpgrade: upgrade })))).toMatch(/\saria-disabled="true"/)
   })
 })

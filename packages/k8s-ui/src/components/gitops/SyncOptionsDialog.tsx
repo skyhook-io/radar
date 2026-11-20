@@ -5,7 +5,7 @@ import { DialogPortal } from '../ui/DialogPortal'
 import { Input } from '../ui/Input'
 import { AlertBanner } from '../ui/drawer-components'
 import { Tooltip } from '../ui/Tooltip'
-import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
+import { RawErrorDetails } from '../ui/RawErrorDetails'
 import { SEVERITY_TEXT } from '../../utils/badge-colors'
 import type { GitOpsInsightRef } from '../../types/gitops-insights'
 
@@ -67,6 +67,7 @@ export interface SyncOptionsDialogProps {
   validationRawError?: string
   // Why the last confirm failed, for a host that keeps the dialog open to retry.
   syncError?: string | null
+  syncRawError?: string
   onCancel: () => void
   onConfirm: (opts: ArgoSyncOpts) => void
   onValidate?: (opts: ArgoSyncOpts) => void
@@ -82,7 +83,7 @@ export interface ResourceValidationResult {
   }
 }
 
-export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevision, pinsComparedRevision, resource, disabledReason, applicationSyncOptions, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, validationRawError, syncError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
+export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevision, pinsComparedRevision, resource, disabledReason, applicationSyncOptions, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, validationRawError, syncError, syncRawError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
   const titleId = useId()
   const syncOptionsUnknown = applicationSyncOptions === undefined
   const liveAppOptions = applicationSyncOptions ?? EMPTY_OPTIONS
@@ -264,10 +265,15 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
           )}
         </fieldset>
         {syncError && !pending && (
-          <p role="alert" className={`flex items-start gap-1.5 text-xs ${SEVERITY_TEXT.error}`}>
-            <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span className="max-h-20 min-w-0 overflow-auto break-words">Sync failed: {syncError}</span>
-          </p>
+          <div>
+            <p role="alert" className={`flex items-start gap-1.5 text-xs ${SEVERITY_TEXT.error}`}>
+              <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span className="max-h-20 min-w-0 overflow-auto break-words">Sync failed: {syncError}</span>
+            </p>
+            {syncRawError && <div className="mt-2 text-theme-text-secondary">
+              <RawErrorDetails key={syncRawError} detail={syncRawError} />
+            </div>}
+          </div>
         )}
         {disruptive.length > 0 && (
           <p className={`flex items-start gap-1.5 text-xs ${SEVERITY_TEXT.warning}`}>
@@ -319,8 +325,6 @@ export function SyncOptionsDialog({ open, appLabel, multiSource, comparedRevisio
 }
 
 function ValidationResult({ pending, result, error, rawError }: { pending: boolean; result?: ResourceValidationResult | null; error?: string | null; rawError?: string }) {
-  const [detailsOpen, setDetailsOpen] = useState(false)
-  const disclosure = useDisclosure(detailsOpen)
   if (pending) {
     return (
       <div className="card-inner flex items-start gap-2 px-3 py-2.5">
@@ -342,12 +346,7 @@ function ValidationResult({ pending, result, error, rawError }: { pending: boole
             <p className="mt-0.5 max-h-20 overflow-auto break-words text-[11px] text-theme-text-secondary">{error}</p>
             {rawError && (
               <div className="mt-2 text-theme-text-secondary">
-                <button type="button" onClick={() => setDetailsOpen(value => !value)} aria-expanded={detailsOpen} aria-controls={disclosure.panelId} className="flex items-center gap-1 text-xs">
-                  <CollapseChevron open={detailsOpen} /> Error details
-                </button>
-                <Collapse open={detailsOpen} id={disclosure.panelId}>
-                  <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs">{rawError}</pre>
-                </Collapse>
+                <RawErrorDetails key={rawError} detail={rawError} />
               </div>
             )}
           </div>

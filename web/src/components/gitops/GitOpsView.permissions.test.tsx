@@ -84,7 +84,7 @@ it('keeps capabilities active while table Sync is open and blocks a later denial
   await flush()
   expect(count()).toBe(2)
   expect(confirm().disabled).toBe(true)
-  expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Your role can't patch Argo CD Application demo in argocd.")
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Kubernetes denied permission to patch Argo CD Application demo in argocd.")
   await act(async () => harness.confirm!({ prune: false, dryRun: false, force: false, applyOnly: false, syncOptions: [] }))
   expect(harness.sync).not.toHaveBeenCalled()
   const cancel = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button => button.textContent === 'Cancel')!

@@ -127,8 +127,8 @@ func TestIntegrationWriteBaselinePolicy(t *testing.T) {
 		node, _ := schemaCapabilities[name].(map[string]interface{})
 		owner, _ := node["properties"].(map[string]interface{})["owner"].(map[string]interface{})
 		if node["additionalProperties"] != false || len(node["properties"].(map[string]interface{})) != 1 ||
-			!reflect.DeepEqual(owner["enum"], []interface{}{"auto", true, false}) {
-			t.Errorf("schema for integrationWrite.%s must accept only owner: auto|true|false, got %v", name, node)
+			owner["type"] != "boolean" {
+			t.Errorf("schema for integrationWrite.%s must accept only a boolean owner switch, got %v", name, node)
 		}
 	}
 	sort.Strings(declared)
@@ -197,10 +197,6 @@ func TestIntegrationWriteOwnerSwitch(t *testing.T) {
 		{name: "default with stock admin"},
 		{name: "default with cluster-admin", overrides: "cloud.defaultRbac.ownerClusterRole=cluster-admin"},
 		{name: "default with a custom owner role", overrides: "cloud.defaultRbac.ownerClusterRole=platform-owner"},
-		{name: "auto with stock admin", overrides: "cloud.defaultRbac.integrationWrite.gitops.owner=auto", granted: true},
-		{name: "auto with cluster-admin", overrides: "cloud.defaultRbac.ownerClusterRole=cluster-admin,cloud.defaultRbac.integrationWrite.gitops.owner=auto", granted: true},
-		{name: "auto with a custom owner role", overrides: "cloud.defaultRbac.ownerClusterRole=platform-owner,cloud.defaultRbac.integrationWrite.gitops.owner=auto"},
-		{name: "auto matches the role name exactly", overrides: "cloud.defaultRbac.ownerClusterRole=admin-lite,cloud.defaultRbac.integrationWrite.gitops.owner=auto"},
 		{name: "true with a custom owner role", overrides: "cloud.defaultRbac.ownerClusterRole=platform-owner,cloud.defaultRbac.integrationWrite.gitops.owner=true", granted: true},
 		{name: "true with stock admin", overrides: "cloud.defaultRbac.integrationWrite.gitops.owner=true", granted: true},
 		{name: "false", overrides: "cloud.defaultRbac.integrationWrite.gitops.owner=false"},

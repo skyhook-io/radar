@@ -117,13 +117,13 @@ route and MCP tool action that uses the row, including indirect targets). Only
 `radar:owner` and `cloud:owner`. Flux and Argo Rollouts writes are `existing`
 (vendor aggregation already grants them), and Velero `downloadrequests` are withheld.
 Each capability has one switch, `cloud.defaultRbac.integrationWrite.<capability>.owner`
-(`false | true | auto`); gitops defaults to `false` for every owner role, including
+(boolean); gitops defaults to `false` for every owner role, including
 when the key is absent on `--reuse-values`. The default owner role is `admin` bound
 cluster-wide, deliberately without cluster-scoped writes; Application patch access
 lets the Argo CD controller create cluster-scoped resources (the built-in `default`
 AppProject allows them), widening that boundary. For a `cluster-admin` owner it
-adds nothing. Set `true` to opt in; `auto` remains available to enable only when
-`ownerClusterRole` is named `admin` or `cluster-admin`. Tests fail when a new integration
+adds nothing. Set `true` to opt in. The grant follows `rbac.namespaces` when
+configured. Tests fail when a new integration
 action route or MCP tool action has no row. The
 [chart README](../deploy/helm/radar/README.md#cloud-owner-integration-writes)
 describes what the Applications grant allows and how upgrades apply it.

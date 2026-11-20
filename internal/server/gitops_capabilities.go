@@ -77,7 +77,11 @@ func (s *Server) handleGitOpsCapabilities(w http.ResponseWriter, r *http.Request
 
 	review := func(ctx context.Context, attrs authv1.ResourceAttributes) (bool, error) {
 		user := auth.UserFromContext(ctx)
-		useToken := user != nil && pkgauth.UserTokenMode() && !user.System
+		userTokenMode := user != nil && pkgauth.UserTokenMode()
+		useToken := userTokenMode && (!user.System || user.Token != "")
+		if userTokenMode && !useToken && attrs.Verb == "patch" {
+			return false, fmt.Errorf("system identities have read-only access in user token mode")
+		}
 		var kubeClient kubernetes.Interface
 		if useToken {
 			if user.Token == "" {
