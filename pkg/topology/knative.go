@@ -48,10 +48,6 @@ func addKnativeReferenceEdges(nodes []Node, edges []Edge, triggers, sources, cha
 	for _, trigger := range triggers {
 		id := "trigger/" + trigger.GetNamespace() + "/" + trigger.GetName()
 		appendDestinations(id, trigger)
-		// The older same-namespace broker field is drawn with the Broker nodes.
-		if broker, ok := configrefs.KnativeTriggerBroker(trigger); ok && broker.Path == "spec.brokerRef" {
-			appendResolvedRef(id, broker.Ref, true, EdgeExposes)
-		}
 	}
 	for _, source := range sources {
 		// Source node identities are indexed by their API group, not guessed
