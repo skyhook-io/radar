@@ -20,6 +20,7 @@ const (
 	Java4ShellCVE           = "CVE-2026-114938"
 	java4ShellVBMILabel     = "feature.node.kubernetes.io/cpu-cpuid.AVX512VBMI"
 	java4ShellRowLimit      = 100
+	CredentialCheckTimeout  = "credential_check_timeout"
 	javaHomeDeclaredReason  = "java_home_declared"
 	noJavaDeclarationReason = "no_java_declaration"
 )
@@ -39,6 +40,7 @@ type Java4ShellPod struct {
 }
 
 type Java4ShellRegistryAccess struct {
+	TimedOut         bool
 	PullSecrets      []*corev1.Secret
 	RadarCredentials bool
 }
@@ -86,6 +88,7 @@ type Java4ShellUnassessed struct {
 }
 
 type java4ShellContainer struct {
+	accessTimedOut     bool
 	pod                *corev1.Pod
 	container          string
 	image              string
@@ -205,6 +208,7 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 					secrets: secrets, radarCredentials: access.RadarCredentials})
 			}
 			c.lookup = i
+			c.accessTimedOut = access.TimedOut
 			c.platformAssumed = assumed
 			c.cpu = cpu
 			c.noVBMIInstanceType = noVBMIInstanceType
@@ -216,20 +220,6 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 	results := r.lookupConfigs(context.WithValue(ctx, strictRegistryLookupKey{}, true), items, false, progress)
 	authRegistries := map[string]struct{}{}
 	throttledRegistries := map[string]struct{}{}
-	for i, result := range results {
-		switch result.status {
-		case StatusAuthRequired:
-			authRegistries[registryBudgetHost(items[i].ref)] = struct{}{}
-		case StatusRateLimited:
-			throttledRegistries[registryBudgetHost(items[i].ref)] = struct{}{}
-		}
-	}
-	out.AuthRequiredRegistries = slices.Sorted(maps.Keys(authRegistries))
-	out.RateLimitedRegistries = slices.Sorted(maps.Keys(throttledRegistries))
-	if !r.cli {
-		out.AuthRequiredRegistries = out.AuthRequiredRegistries[:min(len(out.AuthRequiredRegistries), java4ShellRowLimit)]
-		out.RateLimitedRegistries = out.RateLimitedRegistries[:min(len(out.RateLimitedRegistries), java4ShellRowLimit)]
-	}
 	groups := map[java4ShellGroup]*Java4ShellFinding{}
 	workloads := map[*corev1.Pod]resourceid.Ref{}
 	resolveWorkload := func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
@@ -251,6 +241,14 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 		res := results[c.lookup]
 		if res.status != StatusOK {
 			c.unassessedReason = res.status
+			switch {
+			case c.accessTimedOut && (res.status == StatusAuthRequired || res.status == StatusNotFound):
+				c.unassessedReason = CredentialCheckTimeout
+			case res.status == StatusAuthRequired:
+				authRegistries[registryBudgetHost(items[c.lookup].ref)] = struct{}{}
+			case res.status == StatusRateLimited:
+				throttledRegistries[registryBudgetHost(items[c.lookup].ref)] = struct{}{}
+			}
 			continue
 		}
 		// An image index can point at several platform manifests. Without
@@ -311,12 +309,19 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 			row.MitigationDeclaredPods++
 		}
 	}
+	out.AuthRequiredRegistries = slices.Sorted(maps.Keys(authRegistries))
+	out.RateLimitedRegistries = slices.Sorted(maps.Keys(throttledRegistries))
+	if !r.cli {
+		out.AuthRequiredRegistries = out.AuthRequiredRegistries[:min(len(out.AuthRequiredRegistries), java4ShellRowLimit)]
+		out.RateLimitedRegistries = out.RateLimitedRegistries[:min(len(out.RateLimitedRegistries), java4ShellRowLimit)]
+	}
 	for _, row := range groups {
 		out.Findings = append(out.Findings, *row)
 	}
 	slices.SortFunc(out.Findings, func(a, b Java4ShellFinding) int {
 		return cmp.Or(
 			cmp.Compare(b.VBMIPods, a.VBMIPods),
+			cmp.Compare(b.UnknownCPUPods, a.UnknownCPUPods),
 			strings.Compare(a.Workload.Namespace, b.Workload.Namespace),
 			strings.Compare(a.Workload.Name, b.Workload.Name),
 			strings.Compare(a.Workload.Kind, b.Workload.Kind),

@@ -69,6 +69,11 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
             <SharedWith others={[...new Set(img.workloads.filter((w) => !isThis(w)).map((w) => `${w.namespace}/${w.name}`))]} partial={img.workloads.length < img.workloadsTotal} />
           </>
         )))}
+        {Boolean(data?.unscanned?.length) && (
+          <button type="button" onClick={() => open()} className="self-start text-xs text-accent-text hover:underline">
+            View unscanned images in this workload →
+          </button>
+        )}
         {upgrades.length > 0 && (
           // One grid so packages, targets and counts line up; Critical and
           // High are what decide which upgrade comes first.

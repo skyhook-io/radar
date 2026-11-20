@@ -21,7 +21,7 @@ const image: VulnerableImage = {
   report: { kind: 'VulnerabilityReport', namespace: 'team', name: 'deployment-api' },
 }
 
-function renderDrawer(available: boolean, reports: { images: VulnerableImage[]; clean?: VulnerableImage[] }) {
+function renderDrawer(available: boolean, reports: { images: VulnerableImage[]; clean?: VulnerableImage[]; unscanned?: { image: string }[] }) {
   vi.mocked(useAPIResources).mockReturnValue({
     data: available ? [{ group: 'aquasecurity.github.io', name: 'vulnerabilityreports' }] : [],
   } as ReturnType<typeof useAPIResources>)
@@ -44,5 +44,11 @@ it('shows reported findings without an advisory scan action', () => {
   const html = renderDrawer(true, { images: [image] })
   expect(html).toContain('Vulnerabilities · 1 critical')
   expect(html).toContain('1 with a fix')
+  expect(html).not.toContain('Java4Shell')
+})
+
+it('discloses missing scans alongside reported findings', () => {
+  const html = renderDrawer(true, { images: [image], unscanned: [{ image: 'example.com/sidecar' }] })
+  expect(html).toContain('View unscanned images in this workload')
   expect(html).not.toContain('Java4Shell')
 })

@@ -395,6 +395,26 @@ func TestJava4ShellBoundsUnassessedRowsAndKeepsTotals(t *testing.T) {
 	}
 }
 
+func TestJava4ShellPrioritizesUnknownCPUAtRowLimit(t *testing.T) {
+	digest := "registry.example/team/java@sha256:" + strings.Repeat("a", 64)
+	lookup := &fakeLookup{configs: map[string]*v1.ConfigFile{refKey(t, digest): {Config: v1.Config{Env: []string{"JAVA_VERSION=21.0.8"}}}}}
+	var targets []Java4ShellPod
+	for i := range java4ShellRowLimit + 1 {
+		pod := runningPod("team", fmt.Sprintf("app-%03d", i), "node", "", map[string][2]string{"app": {"registry.example/team/java:1", digest}})
+		pod.Status.ContainerStatuses[0].State.Running = &corev1.ContainerStateRunning{}
+		arch := "arm64"
+		if i == java4ShellRowLimit {
+			arch = "amd64"
+		}
+		node := &corev1.Node{Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{Architecture: arch, OperatingSystem: "linux"}}}
+		targets = append(targets, Java4ShellPod{Pod: pod, Node: node})
+	}
+	got, err := fakeInventory(lookup).CheckJava4Shell(context.Background(), targets, nil, nil)
+	if err != nil || got.FindingGroups != len(targets) || len(got.Findings) != java4ShellRowLimit || got.Findings[0].UnknownCPUPods != 1 {
+		t.Fatalf("expected the unknown CPU row first in capped results: groups=%d rows=%d err=%v", got.FindingGroups, len(got.Findings), err)
+	}
+}
+
 func TestJava4ShellScopesAndRevalidatesPrivateRegistryAccess(t *testing.T) {
 	digest := "registry.example/team/java@sha256:" + strings.Repeat("a", 64)
 	ref := refKey(t, digest)
@@ -432,6 +452,15 @@ func TestJava4ShellScopesAndRevalidatesPrivateRegistryAccess(t *testing.T) {
 	got, err = inventory.CheckJava4Shell(context.Background(), pods, workloadFor, nil)
 	if err != nil || got.Matches != 0 || got.Unassessed[StatusAuthRequired] != 2 {
 		t.Fatalf("private evidence reached a later unprivileged check: %+v, %v", got, err)
+	}
+
+	got, err = inventory.CheckJava4Shell(context.Background(), pods, workloadFor, func(p *corev1.Pod) Java4ShellRegistryAccess {
+		access := accessFor(p)
+		access.TimedOut = true
+		return access
+	})
+	if err != nil || got.Matches != 1 || got.Unassessed[CredentialCheckTimeout] != 1 || len(got.AuthRequiredRegistries) != 0 {
+		t.Fatalf("credential deadline should qualify only unsuccessful private reads: %+v, %v", got, err)
 	}
 
 	f.errs[ref+"|allowed/pull@rv1"] = unauthorized()

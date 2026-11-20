@@ -306,14 +306,22 @@ func checkJava4Shell(ctx context.Context, client kubernetes.Interface, inventory
 	}, func(pod *corev1.Pod) images.Java4ShellRegistryAccess {
 		access := images.Java4ShellRegistryAccess{RadarCredentials: true}
 		for _, ref := range pod.Spec.ImagePullSecrets {
-			if ref.Name == "" || accessCtx.Err() != nil {
+			if ref.Name == "" {
 				continue
 			}
 			key := types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}
 			secret, found := secrets[key]
 			if !found {
+				if accessCtx.Err() != nil {
+					access.TimedOut = true
+					continue
+				}
 				var err error
 				secret, err = client.CoreV1().Secrets(pod.Namespace).Get(accessCtx, ref.Name, metav1.GetOptions{})
+				if err != nil && accessCtx.Err() != nil {
+					access.TimedOut = true
+					continue
+				}
 				if err != nil {
 					secret = nil
 				}
@@ -412,8 +420,24 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 	var table bytes.Buffer
 	style := cliui.New(out)
 	scope := "all namespaces"
-	if namespaces := report.Coverage.Scope.Namespaces; namespaces != nil && len(namespaces.Names) > 0 {
-		scope = "namespace " + checkTableValue(strings.Join(namespaces.Names, ", "))
+	readScope := report.Coverage.Scope
+	if report.Coverage.Read != nil {
+		readScope = *report.Coverage.Read
+	}
+	singleNamespace := ""
+	if ns := readScope.Namespaces; ns != nil {
+		switch len(ns.Names) {
+		case 0:
+			scope = fmt.Sprintf("%d namespaces", ns.Count)
+		case 1:
+			singleNamespace = ns.Names[0]
+			scope = "namespace " + checkTableValue(singleNamespace)
+		default:
+			scope = "namespaces " + checkTableValue(strings.Join(ns.Names, ", "))
+		}
+	}
+	if ref := report.Workload; ref != nil {
+		scope = "workload " + checkTableValue(ref.Namespace+"/"+ref.Kind+"/"+ref.Name)
 	}
 	fmt.Fprintln(&table, "\n"+style.Bold("Java4Shell ("+images.Java4ShellCVE+")"))
 	if snapshot.Context != "" {
@@ -431,13 +455,13 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 	noDeclaration := report.Unassessed["no_java_declaration"]
 	gaps := unassessed - noDeclaration
 	outside := report.Containers - report.Matches - unassessed
-	singleNamespace := ""
-	if ns := report.Coverage.Scope.Namespaces; ns != nil && len(ns.Names) == 1 {
-		singleNamespace = ns.Names[0]
+	partial := report.Coverage.Status == resourceapi.CoveragePartial
+	if partial {
+		fmt.Fprintln(&table, style.Tone(cliui.Attention, "Partial Pod coverage · results cover only the Pods Radar could read."))
 	}
 	writeJava4ShellFindings(&table, style, report, singleNamespace, details)
 	if report.Containers == 0 {
-		fmt.Fprintln(&table, "No running containers in the requested scope.")
+		fmt.Fprintln(&table, "No running containers found among the Pods Radar read.")
 		fmt.Fprintln(&table, "Check the Kubernetes context and namespace if you expected running Pods.")
 	} else {
 		switch {
@@ -448,7 +472,7 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 			fmt.Fprintln(&table, "No Java versions could be assessed.")
 		default:
 			tone := cliui.Success
-			if unassessed > 0 {
+			if unassessed > 0 || partial {
 				tone = cliui.Attention
 			}
 			fmt.Fprintln(&table, style.Tone(tone, fmt.Sprintf("No affected Java version declared in %d assessed %s.", outside, java4ShellContainerUnit(outside))))
@@ -503,7 +527,7 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 			fmt.Fprintf(&table, "\n  %s · %d %s\n", style.Bold(checkTableValue(checkReasonLabel(reason))), count, java4ShellContainerUnit(count))
 			switch reason {
 			case images.StatusAuthRequired:
-				writeJava4ShellAuthHint(&table, report.AuthRequiredRegistries, snapshot.DockerHubLogin)
+				snapshot.writeAuthHint(&table, report.AuthRequiredRegistries)
 			case images.StatusRateLimited:
 				if len(hosts) > 0 {
 					displayHosts := slices.Clone(hosts[:min(len(hosts), java4ShellHintHostLimit)])
@@ -538,7 +562,7 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 				}
 				fmt.Fprintln(&table, "    If throttling continues, verify Java directly in the affected workloads.")
 
-			case images.StatusNotChecked:
+			case images.CredentialCheckTimeout, images.StatusNotChecked:
 				fmt.Fprintln(&table, "    "+java4ShellNarrowerScope(report, reason))
 			case "java_home_declared":
 				fmt.Fprintln(&table, "    Verify the installed Java version for images that set JAVA_HOME.")
@@ -566,7 +590,11 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 	}
 	if savedPath != "" {
 		if !details && (len(report.Findings) > 0 || unassessed > 0) {
-			fmt.Fprintf(&table, "\nFull report · view all rows without a rescan\n  %s check java4shell --from-report %s --details\n", radarCLIInvocation(), shellQuote(savedPath))
+			heading := "Full report · view all rows without a rescan"
+			if report.FindingGroups > len(report.Findings) || report.UnassessedGroups > len(report.UnassessedRows) {
+				heading = "Saved report · view the rows included in this export without a rescan"
+			}
+			fmt.Fprintf(&table, "\n%s\n  %s check java4shell --from-report %s --details\n", heading, radarCLIInvocation(), shellQuote(savedPath))
 		} else {
 			fmt.Fprintf(&table, "\nReport file %s\n", strconv.Quote(savedPath))
 		}
@@ -773,13 +801,13 @@ func java4ShellNarrowerScope(report images.Java4ShellReport, reason string) stri
 	return "Replace -A with -n NAMESPACE."
 }
 
-func writeJava4ShellAuthHint(out io.Writer, registries []string, dockerHubLogin bool) {
+func (snapshot java4ShellCLIReport) writeAuthHint(out io.Writer, registries []string) {
 	var ecrHosts, otherHosts []string
 	for _, host := range registries {
 		if images.IsPrivateECRRegistry(host) {
 			ecrHosts = append(ecrHosts, host)
 		} else if host == name.DefaultRegistry {
-			if dockerHubLogin {
+			if snapshot.DockerHubLogin {
 				fmt.Fprintln(out, "    Run docker login again and verify the account has pull access to the affected Docker Hub repository.")
 			} else {
 				fmt.Fprintln(out, "    For Docker Hub, run docker login and rerun with --docker-hub-auth.")
@@ -788,7 +816,9 @@ func writeJava4ShellAuthHint(out io.Writer, registries []string, dockerHubLogin 
 			otherHosts = append(otherHosts, host)
 		}
 	}
-	if len(ecrHosts) > 0 {
+	if len(ecrHosts) > 0 && snapshot.replay {
+		fmt.Fprintf(out, "    On the machine running the check, verify %s includes %s and the AWS identity can pull the image.\n", images.ECRRegistriesEnv, strings.Join(ecrHosts[:min(len(ecrHosts), java4ShellHintHostLimit)], ", "))
+	} else if len(ecrHosts) > 0 {
 		configured := strings.TrimSpace(os.Getenv(images.ECRRegistriesEnv))
 		configuredHosts := strings.Split(configured, ",")
 		var unconfigured []string
@@ -894,6 +924,8 @@ func checkReasonLabel(reason string) string {
 	switch reason {
 	case images.StatusAuthRequired:
 		return "Registry authentication required"
+	case images.CredentialCheckTimeout:
+		return "Registry credential check timed out"
 	case images.StatusNotChecked:
 		return "Scan limit reached"
 	case "image_identity_unknown":

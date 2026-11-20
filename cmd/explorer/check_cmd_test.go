@@ -188,7 +188,7 @@ func TestJava4ShellTableShowsECRRegistryHosts(t *testing.T) {
 	const second = "987654321012.dkr.ecr.eu-west-1.amazonaws.com"
 	t.Setenv(images.ECRRegistriesEnv, "")
 	var output bytes.Buffer
-	writeJava4ShellAuthHint(&output, []string{first, second, "ghcr.io"}, false)
+	(java4ShellCLIReport{}).writeAuthHint(&output, []string{first, second, "ghcr.io"})
 	for _, want := range []string{
 		"export AWS_PROFILE=your-profile",
 		"export RADAR_JAVA4SHELL_ECR_REGISTRIES=" + first + "," + second + "\n",
@@ -200,14 +200,14 @@ func TestJava4ShellTableShowsECRRegistryHosts(t *testing.T) {
 	}
 	t.Setenv(images.ECRRegistriesEnv, first)
 	output.Reset()
-	writeJava4ShellAuthHint(&output, []string{first, second}, false)
+	(java4ShellCLIReport{}).writeAuthHint(&output, []string{first, second})
 	for _, want := range []string{"For ECR hosts already configured, verify", `export RADAR_JAVA4SHELL_ECR_REGISTRIES="$RADAR_JAVA4SHELL_ECR_REGISTRIES,` + second + `"`} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("missing %q in %s", want, output.String())
 		}
 	}
 	output.Reset()
-	writeJava4ShellAuthHint(&output, []string{first}, false)
+	(java4ShellCLIReport{}).writeAuthHint(&output, []string{first})
 	if strings.Contains(output.String(), "export RADAR_JAVA4SHELL_ECR_REGISTRIES") {
 		t.Errorf("suggested reconfiguring a host already set: %s", output.String())
 	}
@@ -321,6 +321,27 @@ func TestJava4ShellReportSeparatesPatchFromOtherActions(t *testing.T) {
 		if strings.Count(got, "Deployment/now") != 1 || strings.Contains(got, "Deployment/later") != details || strings.Contains(got, "\x1b") {
 			t.Fatalf("wrong rows or style for details=%t: %s", details, got)
 		}
+	}
+}
+
+func TestJava4ShellReportKeepsBrowserExportScope(t *testing.T) {
+	report := images.Java4ShellReport{Coverage: resourceapi.Coverage{
+		Status: resourceapi.CoveragePartial,
+		Scope:  resourceapi.Scope{Type: resourceapi.ScopeAllNamespaces},
+		Read:   &resourceapi.Scope{Type: resourceapi.ScopeNamespaces, Namespaces: &resourceapi.NameSet{Count: 72}},
+	}}
+	var out bytes.Buffer
+	if err := writeJava4ShellCheck(&out, "table", report, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "72 namespaces") || !strings.Contains(out.String(), "Partial Pod coverage") || strings.Contains(out.String(), "all namespaces") {
+		t.Fatal(out.String())
+	}
+	ref := resourceid.NewRef("apps", "Deployment", "team", "api")
+	report.Workload = &ref
+	out.Reset()
+	if err := writeJava4ShellCheck(&out, "table", report, false); err != nil || !strings.Contains(out.String(), "workload team/Deployment/api") {
+		t.Fatal(err, out.String())
 	}
 }
 

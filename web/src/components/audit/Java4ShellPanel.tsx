@@ -56,7 +56,7 @@ export function Java4ShellPanel({ namespaces = [], context, connected, trivySear
               type="button"
               className="btn-secondary inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium"
               onClick={() => triggerDownload(
-                JSON.stringify({ cve: JAVA4SHELL_CVE, checkedAt, ...data }, null, 2),
+                JSON.stringify({ cve: JAVA4SHELL_CVE, checkedAt, context, ...data }, null, 2),
                 'application/json',
                 `java4shell-${checkedAt.replace(/[:.]/g, '-')}.json`,
               )}
@@ -107,6 +107,7 @@ const reasonLabels: Record<string, string> = {
   version_unknown: 'Unrecognized Java version',
   platform_unknown: 'Image platform unknown',
   auth_required: 'Registry authentication required',
+  credential_check_timeout: 'Registry credential check timed out',
   not_found: 'Image missing or private',
   blocked: 'Registry address blocked',
   rate_limited: 'Registry rate limit',
@@ -236,8 +237,8 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
           <h3 className="font-medium text-theme-text-primary">Could not check · next steps</h3>
           {registryAuthRequired > 0 && (
             <p className="text-warning-text">
-              Registry authentication required for {pluralize(registryAuthRequired, 'container')}{registryNames(data.authRequiredRegistries)}.{' '}
-              <a className="text-accent-text hover:underline" href={registryAccessURL} target="_blank" rel="noreferrer">Set up Radar’s registry access</a>
+              Registry authentication required for {pluralize(registryAuthRequired, 'container')}{registryNames(data.authRequiredRegistries)}. Shared installations also restrict which credentials each user can use.{' '}
+              <a className="text-accent-text hover:underline" href={registryAccessURL} target="_blank" rel="noreferrer">Check registry credentials and permissions</a>
             </p>
           )}
           {checkLimitReached > 0 && (
@@ -249,7 +250,7 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
           {dockerHubLimit > 0 && (
             <p className="text-theme-text-secondary">
               <span className="text-warning-text">{reasonLabels.docker_hub_limit} for {pluralize(dockerHubLimit, 'container')}.</span>{' '}
-              {data.workload ? 'Retry to reuse any image metadata Radar cached. If the cap is reached again, verify Java in the skipped containers.' : 'Radar applies this cap each time. Select fewer namespaces or verify Java directly in the skipped containers.'}
+              Retry to reuse cached public image metadata. If the cap persists, narrow the scope or verify Java in the skipped containers.
             </p>
           )}
           {registryRateLimit > 0 && (
@@ -264,13 +265,13 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
             </p>
           )}
           {remainingReasons.map(([reason, count]) => (
-            <p key={reason} className="text-theme-text-secondary">{reasonLabels[reason] ?? reason} · {pluralize(count, 'container')}</p>
+            <p key={reason} className="text-theme-text-secondary">{reasonLabels[reason] ?? reason} · {pluralize(count, 'container')}{reason === 'credential_check_timeout' && '. Retry with a smaller scope.'}</p>
           ))}
         </div>
       )}
       {data.unassessedGroups > 0 && <UnassessedDetails data={data} onOpen={onOpen} />}
       {!data.workload && data.containers > 0 && (
-        <p className="text-theme-text-tertiary">Workload rows show affected declarations and unassessed containers. Open a workload’s Vulnerabilities section to check it on its own.</p>
+        <p className="text-theme-text-tertiary">Workload rows show affected declarations and unassessed containers.</p>
       )}
     </div>
   )

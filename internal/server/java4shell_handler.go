@@ -230,9 +230,10 @@ func (s *Server) serveJava4Shell(w http.ResponseWriter, r *http.Request, stream 
 		return s.java4ShellWorkload(r.WithContext(ctx), cache, pod)
 	}, func(pod *corev1.Pod) images.Java4ShellRegistryAccess {
 		if accessCtx.Err() != nil || !current() {
-			return images.Java4ShellRegistryAccess{}
+			return images.Java4ShellRegistryAccess{TimedOut: accessCtx.Err() != nil}
 		}
 		access := s.java4ShellRegistryAccess(accessRequest, cache, pod)
+		access.TimedOut = accessCtx.Err() != nil
 		if !current() {
 			return images.Java4ShellRegistryAccess{}
 		}
