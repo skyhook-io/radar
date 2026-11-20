@@ -675,7 +675,7 @@ func (h *OIDCHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if session := ParseSessionCookie(r, h.cfg.Secret); session != nil {
 		idToken = session.IDToken
 		if h.mcpOAuth != nil {
-			h.mcpOAuth.RevokeSession(session.SID)
+			h.mcpOAuth.RevokeSession(session.SID, "logout")
 		}
 	}
 
@@ -843,7 +843,7 @@ func (h *OIDCHandler) HandleBackchannelLogout(w http.ResponseWriter, r *http.Req
 	if sid != "" {
 		h.revoker.Revoke(sid, revocationExpiry)
 		if h.mcpOAuth != nil {
-			h.mcpOAuth.RevokeSession(sid)
+			h.mcpOAuth.RevokeSession(sid, "back-channel logout")
 		}
 		log.Printf("[oidc] Backchannel logout: revoked sid=%s (sub=%s, jti=%s)", sid, sub, jti)
 	} else {

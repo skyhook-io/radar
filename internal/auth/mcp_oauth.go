@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -50,6 +51,7 @@ type mcpAuthorization struct {
 
 type mcpGrant struct {
 	ClientID, Resource, SID string
+	ReturnHost              string
 	AccessHash, RefreshID   string
 	User                    User
 	Expires                 time.Time
@@ -232,6 +234,13 @@ func (s *MCPOAuthServer) HandleRegister(w http.ResponseWriter, r *http.Request) 
 	// the long-lived client store without a user's consent.
 	client.Expires = s.now().Add(mcpPendingTTL)
 	s.clients[client.ID] = client
+	var hosts []string
+	for _, raw := range client.RedirectURIs {
+		if u, err := url.Parse(raw); err == nil && !slices.Contains(hosts, u.Host) {
+			hosts = append(hosts, u.Host)
+		}
+	}
+	mcpAuditLog("client registered", mcpAuditFields{ClientID: client.ID, ClientName: client.Name, ReturnHost: strings.Join(hosts, ",")})
 	mcpJSON(w, http.StatusCreated, client)
 }
 
@@ -412,17 +421,22 @@ func (s *MCPOAuthServer) consent(w http.ResponseWriter, r *http.Request) {
 	if pending.State != "" {
 		q.Set("state", pending.State)
 	}
+	returnHost, _ := mcpLocalRedirect(pending.RedirectURI)
+	fields := mcpAuditFields{User: session.User.Username, ClientID: client.ID, ClientName: client.Name, ReturnHost: returnHost, Resource: pending.Resource}
 	if r.PostForm.Get("decision") == "deny" {
 		q.Set("error", "access_denied")
+		fields.Reason = "user denied consent"
+		mcpAuditLog("access denied", fields)
 	} else {
 		client.Expires = s.now().Add(mcpClientTTL)
 		s.clients[client.ID] = client
 		code := mcpRandom()
-		grant := &mcpGrant{ClientID: pending.ClientID, Resource: pending.Resource, SID: session.SID,
+		grant := &mcpGrant{ClientID: pending.ClientID, Resource: pending.Resource, SID: session.SID, ReturnHost: returnHost,
 			User: User{Username: session.User.Username, Groups: slices.Clone(session.User.Groups)}, Expires: s.now().Add(mcpGrantTTL)}
 		s.codes[mcpHash(code)] = &mcpCode{mcpAuthorization: *pending, Grant: grant}
 		s.codes[mcpHash(code)].Expires = s.now().Add(time.Minute)
 		q.Set("code", code)
+		mcpAuditLog("access approved", fields)
 	}
 	u.RawQuery = q.Encode()
 	http.Redirect(w, r, u.String(), http.StatusSeeOther)
@@ -455,6 +469,7 @@ func (s *MCPOAuthServer) HandleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var grant *mcpGrant
+	event := "tokens issued"
 	switch r.PostForm.Get("grant_type") {
 	case "authorization_code":
 		code := s.codes[mcpHash(r.PostForm.Get("code"))]
@@ -464,6 +479,9 @@ func (s *MCPOAuthServer) HandleToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if code.Used {
+			if !code.Grant.Revoked {
+				s.auditGrant("replay detected, grant revoked", code.Grant, "authorization code reused")
+			}
 			code.Grant.Revoked = true
 			mcpError(w, 400, "invalid_grant")
 			return
@@ -483,11 +501,15 @@ func (s *MCPOAuthServer) HandleToken(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if token.RefreshHash != mcpHash(raw) {
+			if !token.Grant.Revoked {
+				s.auditGrant("replay detected, grant revoked", token.Grant, "superseded refresh token reused")
+			}
 			token.Grant.Revoked = true
 			mcpError(w, 400, "invalid_grant")
 			return
 		}
 		grant = token.Grant
+		event = "tokens refreshed"
 	default:
 		mcpError(w, 400, "unsupported_grant_type")
 		return
@@ -507,6 +529,7 @@ func (s *MCPOAuthServer) HandleToken(w http.ResponseWriter, r *http.Request) {
 	grant.AccessHash = mcpHash(access)
 	s.access[grant.AccessHash] = &mcpToken{Grant: grant, Expires: expires}
 	s.refresh[grant.RefreshID] = &mcpToken{Grant: grant, Expires: grant.Expires, RefreshHash: mcpHash(refresh)}
+	s.auditGrant(event, grant, "")
 	mcpJSON(w, 200, map[string]any{"access_token": access, "token_type": "Bearer", "expires_in": int(expires.Sub(s.now()).Seconds()), "refresh_token": refresh, "scope": "mcp"})
 }
 
@@ -525,6 +548,9 @@ func (s *MCPOAuthServer) HandleRevoke(w http.ResponseWriter, r *http.Request) {
 	raw := r.PostForm.Get("token")
 	for _, token := range []*mcpToken{s.access[mcpHash(raw)], s.refresh[s.refreshFamily(raw)]} {
 		if token != nil && token.Grant.ClientID == r.PostForm.Get("client_id") {
+			if !token.Grant.Revoked {
+				s.auditGrant("grant revoked", token.Grant, "revoked by the client")
+			}
 			token.Grant.Revoked = true
 		}
 	}
@@ -551,7 +577,8 @@ func (s *MCPOAuthServer) refreshFamily(value string) string {
 }
 
 // RevokeSession invalidates grants permanently, beyond the browser revoker's TTL.
-func (s *MCPOAuthServer) RevokeSession(sid string) {
+// The reason names the logout that triggered it for the audit log.
+func (s *MCPOAuthServer) RevokeSession(sid, reason string) {
 	if sid == "" {
 		return
 	}
@@ -562,18 +589,55 @@ func (s *MCPOAuthServer) RevokeSession(sid string) {
 			delete(s.pending, id)
 		}
 	}
-	for _, code := range s.codes {
-		if code.Grant.SID == sid {
-			code.Grant.Revoked = true
+	revoke := func(grant *mcpGrant) {
+		if grant.SID == sid && !grant.Revoked {
+			grant.Revoked = true
+			s.auditGrant("grant revoked", grant, reason)
 		}
+	}
+	for _, code := range s.codes {
+		revoke(code.Grant)
 	}
 	for _, tokens := range []map[string]*mcpToken{s.access, s.refresh} {
 		for _, token := range tokens {
-			if token.Grant.SID == sid {
-				token.Grant.Revoked = true
-			}
+			revoke(token.Grant)
 		}
 	}
+}
+
+type mcpAuditFields struct {
+	User, ClientID, ClientName, ReturnHost, Resource, Reason string
+}
+
+// mcpAuditLog records the grant lifecycle. Callers pass only identities and
+// hosts: never token, code, verifier or secret values, nor a redirect URI,
+// whose query string may carry client state.
+func mcpAuditLog(event string, f mcpAuditFields) {
+	line := "[auth] MCP " + event + ":"
+	if f.User != "" {
+		line += fmt.Sprintf(" user=%q", f.User)
+	}
+	line += fmt.Sprintf(" client_id=%q client_name_self_reported=%q", f.ClientID, f.ClientName)
+	if f.ReturnHost != "" {
+		line += fmt.Sprintf(" return_host=%q", f.ReturnHost)
+	}
+	if f.Resource != "" {
+		endpoint := "full"
+		if strings.HasSuffix(f.Resource, "/mcp-readonly") {
+			endpoint = "read-only"
+		}
+		line += fmt.Sprintf(" endpoint=%q", endpoint)
+	}
+	if f.Reason != "" {
+		line += fmt.Sprintf(" reason=%q", f.Reason)
+	}
+	log.Print(line)
+}
+
+// auditGrant must be called with s.mu held.
+func (s *MCPOAuthServer) auditGrant(event string, grant *mcpGrant, reason string) {
+	mcpAuditLog(event, mcpAuditFields{User: grant.User.Username, ClientID: grant.ClientID, ClientName: s.clients[grant.ClientID].Name,
+		ReturnHost: grant.ReturnHost, Resource: grant.Resource, Reason: reason})
 }
 
 // Authenticate authenticates MCP bearer tokens, retaining browser cookie support.
