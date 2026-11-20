@@ -106,6 +106,7 @@ type DiagKubeconfig struct {
 
 // DiagCluster holds cluster detection info.
 type DiagCluster struct {
+	ObservedAt        string `json:"observedAt"`
 	Platform          string `json:"platform"`
 	KubernetesVersion string `json:"kubernetesVersion"`
 	NodeCount         int    `json:"nodeCount"`
@@ -155,7 +156,7 @@ type DiagEventPipeline struct {
 // DiagInformers holds informer counts and sync status.
 type DiagInformers struct {
 	TypedCount   int                      `json:"typedCount"`
-	DynamicCount int                      `json:"dynamicCount"`
+	DynamicCount *int                     `json:"dynamicCount,omitempty"`
 	WatchedCRDs  []string                 `json:"watchedCRDs"`
 	SyncStatus   *k8score.CacheSyncStatus `json:"syncStatus,omitempty"`
 }
@@ -234,10 +235,21 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var errs []string
+	var cache *k8s.ResourceCache
+	var dynCache *k8s.DynamicResourceCache
+	var trafficManager *traffic.Manager
+	status := k8s.GetConnectionStatus()
+	stable := k8s.CaptureClusterReads(func() {
+		cache = k8s.GetResourceCache()
+		status = k8s.GetConnectionStatus()
+		if status.State == k8s.StateConnected {
+			dynCache = k8s.GetDynamicResourceCache()
+			trafficManager = traffic.GetManager()
+		}
+	})
 
 	// Connection — always available, no cluster needed
 	collectSafe("connection", &errs, func() {
-		status := k8s.GetConnectionStatus()
 		connectionError := status.Error
 		if status.ErrorType == "config" && connectionError != "" {
 			connectionError = "Kubeconfig initialization failed; see local Radar logs for details"
@@ -271,18 +283,21 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	// Cluster info — requires connection, but errors are captured
 	collectSafe("cluster", &errs, func() {
-		// With no ready cache, cluster detection falls back to live API calls.
-		// Diagnostics must remain readable while that connection is being repaired.
-		if k8s.GetConnectionStatus().State != k8s.StateConnected || k8s.ContextOperationInProgress() || k8s.GetResourceCache() == nil {
-			errs = append(errs, "Cluster details skipped while the Kubernetes connection or its cache is unavailable.")
+		if !stable {
+			errs = append(errs, "Cluster, cache and informer details are unavailable during a connection change.")
 			return
 		}
-		info, err := k8s.GetClusterInfo(r.Context())
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("cluster: %v", err))
+		if status.State != k8s.StateConnected || cache == nil {
+			errs = append(errs, "Cluster details are unavailable while the connection changes or its cache is offline.")
+			return
+		}
+		info, observed := cache.LastClusterInfo()
+		if observed.IsZero() {
+			errs = append(errs, "Cluster details have not been collected for the current connection.")
 			return
 		}
 		snap.Cluster = &DiagCluster{
+			ObservedAt:        observed.UTC().Format(time.RFC3339),
 			Platform:          info.Platform,
 			KubernetesVersion: info.KubernetesVersion,
 			NodeCount:         info.NodeCount,
@@ -293,7 +308,6 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	// Cache
 	collectSafe("cache", &errs, func() {
-		cache := k8s.GetResourceCache()
 		if cache == nil {
 			return
 		}
@@ -410,26 +424,26 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	// Informers
 	collectSafe("informers", &errs, func() {
+		if cache == nil {
+			return
+		}
 		diag := &DiagInformers{}
 
 		// Get typed informer count and sync status from cache
-		cache := k8s.GetResourceCache()
-		if cache != nil {
-			enabled := cache.GetEnabledResources()
-			count := 0
-			for _, ok := range enabled {
-				if ok {
-					count++
-				}
+		enabled := cache.GetEnabledResources()
+		count := 0
+		for _, ok := range enabled {
+			if ok {
+				count++
 			}
-			diag.TypedCount = count
-			syncStatus := cache.GetSyncStatus()
-			diag.SyncStatus = &syncStatus
 		}
+		diag.TypedCount = count
+		syncStatus := cache.GetSyncStatus()
+		diag.SyncStatus = &syncStatus
 
-		dynCache := k8s.GetDynamicResourceCache()
 		if dynCache != nil {
-			diag.DynamicCount = dynCache.GetInformerCount()
+			count := dynCache.GetInformerCount()
+			diag.DynamicCount = &count
 			watched := dynCache.GetWatchedResources()
 			crds := make([]string, 0, len(watched))
 			for _, gvr := range watched {
@@ -461,12 +475,16 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	// Traffic — only read cached state, never trigger network I/O
 	collectSafe("traffic", &errs, func() {
-		manager := traffic.GetManager()
-		if manager == nil {
+		if trafficManager == nil {
+			return
+		}
+		name, ok := trafficManager.ActiveSourceNameIfIdle()
+		if !ok {
+			errs = append(errs, "Traffic source details are temporarily busy.")
 			return
 		}
 		snap.Traffic = &DiagTraffic{
-			ActiveSource: manager.GetActiveSourceName(),
+			ActiveSource: name,
 		}
 	})
 

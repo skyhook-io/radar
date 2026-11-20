@@ -8492,6 +8492,7 @@ export interface DiagnosticsSnapshot {
     execPluginsMissing?: string[];
   };
   cluster?: {
+    observedAt?: string;
     platform: string;
     kubernetesVersion: string;
     nodeCount: number;
@@ -8529,7 +8530,7 @@ export interface DiagnosticsSnapshot {
   };
   informers?: {
     typedCount: number;
-    dynamicCount: number;
+    dynamicCount?: number;
     watchedCRDs: string[];
     syncStatus?: DiagCacheSyncStatus;
   };
@@ -8612,9 +8613,11 @@ export function useDiagnostics(enabled: boolean) {
             return await fetchJSON<DiagnosticsSnapshot>("/diagnostics", request.signal);
           } catch (error) {
             if (request.signal.aborted && !signal.aborted) {
-              throw new Error("Radar did not return diagnostics within 15 seconds.");
+              throw new Error("Radar did not return diagnostics within 15 seconds.", { cause: error });
             }
-            throw error;
+            if (signal.aborted) throw error;
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`Could not load diagnostics. ${message}`, { cause: error });
           } finally {
             clearTimeout(timeout);
             signal.removeEventListener("abort", cancel);

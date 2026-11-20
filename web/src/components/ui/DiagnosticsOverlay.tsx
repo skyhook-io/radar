@@ -19,7 +19,7 @@ interface DiagnosticsOverlayProps {
 }
 
 export function DiagnosticsOverlay({ onClose, isOpen = true, focus, communityUrl }: DiagnosticsOverlayProps) {
-  const { data, isLoading, error, refetch } = useDiagnostics(true)
+  const { data, isLoading, isFetching, error, refetch } = useDiagnostics(true)
   const [copied, setCopied] = useState<'json' | 'formatted' | null>(null)
   const [reportOpened, setReportOpened] = useState(false)
   const timelineRef = useRef<HTMLDivElement>(null)
@@ -126,7 +126,8 @@ export function DiagnosticsOverlay({ onClose, isOpen = true, focus, communityUrl
           {error && (
             <div role="alert" className="text-sm text-center py-8 space-y-3">
               <p className="text-theme-text-primary">{error.message}</p>
-              <button type="button" className="btn-brand px-3 py-1.5 text-sm font-medium" onClick={() => void refetch()}>Retry diagnostics</button>
+              {data && <p className="text-theme-text-secondary">Showing the snapshot from {new Date(data.timestamp).toLocaleTimeString()}.</p>}
+              <button type="button" className="btn-brand px-3 py-1.5 text-sm font-medium" disabled={isFetching} onClick={() => void refetch()}>{isFetching ? 'Retrying…' : 'Retry diagnostics'}</button>
             </div>
           )}
           {data && (
@@ -293,6 +294,7 @@ function ClusterSection({ data }: { data: DiagnosticsSnapshot }) {
   const c = data.cluster
   return (
     <Section title="Cluster">
+      {c.observedAt && <Row label="Last observed" value={new Date(c.observedAt).toLocaleString()} />}
       <Row label="Platform" value={c.platform} />
       <Row label="Kubernetes" value={c.kubernetesVersion} />
       <Row label="Nodes" value={c.nodeCount} />
@@ -389,7 +391,7 @@ function InformersSection({ data }: { data: DiagnosticsSnapshot }) {
   return (
     <Section title="Informers" warn={sectionWarn}>
       <Row label="Typed" value={inf.typedCount} />
-      <Row label="Dynamic (CRDs)" value={inf.dynamicCount} />
+      <Row label="Dynamic (CRDs)" value={inf.dynamicCount ?? 'Unavailable'} />
       {sync && (
         <>
           <Row
@@ -712,6 +714,7 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
   if (data.cluster) {
     const c = data.cluster
     lines.push(`### Cluster`)
+    if (c.observedAt) lines.push(`- Last observed: ${c.observedAt}`)
     lines.push(`- Platform: \`${c.platform}\` | K8s: \`${c.kubernetesVersion}\` | Nodes: ${c.nodeCount} | Namespaces: ${c.namespaceCount}${c.inCluster ? ' | In-Cluster' : ''}`)
     lines.push(``)
   }
@@ -760,7 +763,7 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
   if (data.informers) {
     const inf = data.informers
     lines.push(`### Informers`)
-    lines.push(`- Typed: ${inf.typedCount} | Dynamic: ${inf.dynamicCount}`)
+    lines.push(`- Typed: ${inf.typedCount} | Dynamic: ${inf.dynamicCount ?? 'unavailable'}`)
     if (inf.syncStatus) {
       const sync = inf.syncStatus
       lines.push(`- Sync Phase: \`${sync.phase}\` (${formatElapsed(sync.elapsedSec)})`)

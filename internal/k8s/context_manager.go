@@ -783,6 +783,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 
 	// Step 5: Notify all registered callbacks
 	reportProgress("Building topology...")
+	log.Printf("[ops] Context switch to %q COMPLETE (%v total)", newContext, time.Since(switchStart))
 	notifyContextSwitchCallbacks(newContext)
 
 	// Publish success while still holding contextOpMu: a caller publishing
@@ -794,7 +795,6 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		Context:     newContext,
 		ClusterName: GetClusterName(),
 	})
-	log.Printf("[ops] Context switch to %q COMPLETE (%v total)", newContext, time.Since(switchStart))
 
 	return nil
 }
@@ -895,8 +895,8 @@ func PerformNamespaceRescope(namespace string) error {
 	}
 
 	reportProgress("Building topology...")
-	notifyNamespaceRescopeCallbacks(namespace)
 	log.Printf("[ops] Namespace rescope to %q COMPLETE (%v total)", safeNamespace, time.Since(rescopeStart))
+	notifyNamespaceRescopeCallbacks(namespace)
 
 	return nil
 }

@@ -1,15 +1,23 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/desktopenv"
 	"github.com/skyhook-io/radar/internal/k8s"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/version"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 )
 
 func TestDiagnosticsReportsRunningOpenCostCurrency(t *testing.T) {
@@ -91,11 +99,100 @@ func TestDiagnosticsDuringConnectionReturnsPartialSnapshot(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsClusterUsesOnlyCurrentCacheObservations(t *testing.T) {
+	var requests atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(api.Close)
+	client := kubernetes.NewForConfigOrDie(&rest.Config{Host: api.URL})
+	previousClient := k8s.SetTestClient(client)
+	previousStatus := k8s.GetConnectionStatus()
+	k8s.InvalidateServerVersionCache()
+	k8s.InvalidatePlatformCache()
+	t.Cleanup(func() {
+		k8s.SetTestClient(previousClient)
+		k8s.ResetResourceCache()
+		k8s.InvalidateServerVersionCache()
+		k8s.InvalidatePlatformCache()
+		k8s.SetConnectionStatus(previousStatus)
+	})
+	initCache := func() {
+		t.Helper()
+		if err := k8s.InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	initCache()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+
+	if body := diagnosticsBody(t); body["cluster"] != nil || requests.Load() != 0 {
+		t.Fatalf("cold diagnostics cluster = %s, API requests = %d", body["cluster"], requests.Load())
+	}
+	if _, err := k8s.GetClusterInfo(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reads := requests.Load()
+	if reads == 0 {
+		t.Fatal("fixture did not exercise the live cluster detection fallback")
+	}
+	var cluster DiagCluster
+	if err := json.Unmarshal(diagnosticsBody(t)["cluster"], &cluster); err != nil || cluster.ObservedAt == "" || requests.Load() != reads {
+		t.Fatalf("cached observation = %+v, error = %v, extra API reads = %d", cluster, err, requests.Load()-reads)
+	}
+	k8s.ResetResourceCache()
+	initCache()
+	if body := diagnosticsBody(t); body["cluster"] != nil || requests.Load() != reads {
+		t.Fatalf("replacement cache reused cluster data or contacted API: %s, reads %d", body["cluster"], requests.Load()-reads)
+	}
+}
+
+func TestDiagnosticsDuringTrafficSourceDetection(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var expired atomic.Bool
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			close(started)
+			select {
+			case <-release:
+			case <-time.After(3 * time.Second):
+				expired.Store(true)
+			}
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(api.Close)
+	previous := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+	if err := traffic.Initialize(kubernetes.NewForConfigOrDie(&rest.Config{Host: api.URL})); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(traffic.Reset)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = traffic.GetManager().DetectSources(ctx)
+	}()
+	t.Cleanup(func() { cancel(); close(release); <-done })
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("traffic source detection did not reach the API")
+	}
+	body := diagnosticsBody(t)
+	if body["runtime"] == nil || body["traffic"] != nil || !strings.Contains(string(body["errors"]), "Traffic source details") || expired.Load() {
+		t.Fatalf("expected partial diagnostics during detection, got traffic=%s errors=%s", body["traffic"], body["errors"])
+	}
+}
+
 func diagnosticsBody(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
 
 	rec := httptest.NewRecorder()
-	(&Server{}).handleDiagnostics(rec, httptest.NewRequest(http.MethodGet, "/api/diagnostics", nil))
+	(&Server{broadcaster: &SSEBroadcaster{}}).handleDiagnostics(rec, httptest.NewRequest(http.MethodGet, "/api/diagnostics", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
