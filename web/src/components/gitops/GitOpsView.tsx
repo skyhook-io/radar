@@ -960,6 +960,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             operationInProgress={operationInProgress}
             validationResult={validationStale ? null : argoResourceValidation.data}
             validationError={validationStale ? undefined : argoResourceValidation.error?.message}
+            validationRawError={validationStale ? undefined : argoResourceValidation.error?.rawDetail}
             onCancel={closeArgoSyncDialog}
             onValidationReset={() => argoResourceValidation.reset()}
             onValidate={syncDialogTarget?.scope === 'resource' ? (opts) => {

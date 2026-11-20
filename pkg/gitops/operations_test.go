@@ -2744,12 +2744,27 @@ func TestSetArgoAutoSyncRemovesTheBlockWhenTheDryRunIsRefused(t *testing.T) {
 // A caller denied the dry run is denied the write it precedes.
 func TestSetArgoAutoSyncFailsWhenTheDryRunIsForbidden(t *testing.T) {
 	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
-	refuseDryRun(client, apierrors.NewForbidden(argoAppGVR.GroupResource(), "demo", errors.New("denied")))
-	if _, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", false); !apierrors.IsForbidden(err) {
-		t.Fatalf("err = %v, want Forbidden", err)
+	refuseDryRun(client, apierrors.NewForbidden(argoAppGVR.GroupResource(), "demo", errors.New(`User "reader" cannot patch resource "applications" in API group "argoproj.io" in the namespace "argocd"`)))
+	_, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", false)
+	var denied *PermissionDenied
+	if !errors.As(err, &denied) || denied.Verb != "patch" || denied.Name != "demo" {
+		t.Fatalf("err = %v, want a named patch denial", err)
 	}
 	if _, found := automatedOf(getTestApp(t, client)); !found {
 		t.Fatal("a forbidden dry run still changed the Application")
+	}
+}
+
+func TestSetArgoAutoSyncFailsWhenAdmissionDeniesTheDryRun(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	refuseDryRun(client, apierrors.NewBadRequest(`admission webhook "freeze.example.org" denied the request: sync policy is frozen`))
+	_, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", false)
+	var denied *AdmissionDenied
+	if !errors.As(err, &denied) || denied.Policy != "freeze.example.org" {
+		t.Fatalf("err = %v, want the admission denial", err)
+	}
+	if _, found := automatedOf(getTestApp(t, client)); !found {
+		t.Fatal("an admission denial still changed the Application")
 	}
 }
 
