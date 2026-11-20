@@ -1236,7 +1236,12 @@ export type CostUnavailableReason =
   | "metrics_settings_error"
   | "cost_settings_error"
   | "history_unsupported"
-  | "insufficient_history";
+  | "insufficient_history"
+  // The metrics store holds several clusters and these costs couldn't be
+  // kept to this one; clusterScope says why.
+  | "cluster_scope"
+  // The metrics store answered partially, so totals could miss series.
+  | "partial_data";
 
 export type CostDataSource = "prometheus" | "kubecost";
 
@@ -1254,6 +1259,11 @@ export interface OpenCostSummary {
   clusterEfficiency?: number;
   namespaceScope?: string[];
   namespaces?: OpenCostNamespaceCost[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
+  /** Efficiency and idle couldn't be measured (not zero); usageClusterScope says why. */
+  efficiencyUnavailable?: boolean;
+  usageClusterScope?: ClusterScope;
 }
 
 const costDiscoveryFirstSeenAt = new Map<string, number>();
@@ -1332,6 +1342,11 @@ export interface OpenCostWorkloadResponse {
   currency?: string;
   namespace: string;
   workloads: OpenCostWorkloadCost[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
+  /** Efficiency and idle couldn't be measured (not zero); usageClusterScope says why. */
+  efficiencyUnavailable?: boolean;
+  usageClusterScope?: ClusterScope;
 }
 
 export function useOpenCostWorkloads(
@@ -1365,6 +1380,11 @@ export interface OpenCostWorkloadDetailResponse {
   kind: string;
   name: string;
   current?: OpenCostWorkloadCost;
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
+  /** Efficiency and idle couldn't be measured (not zero); usageClusterScope says why. */
+  efficiencyUnavailable?: boolean;
+  usageClusterScope?: ClusterScope;
 }
 
 export function useOpenCostWorkload(
@@ -1412,6 +1432,8 @@ export interface OpenCostTrendResponse {
   windowEnd?: number;
   dataThrough?: string;
   series?: OpenCostTrendSeries[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
 }
 
 export function useOpenCostTrend(range_: CostTimeRange = "24h") {
@@ -1439,6 +1461,8 @@ export interface OpenCostWorkloadTrendResponse {
   range: string;
   windowTotalCost?: number;
   dataPoints?: OpenCostTrendDataPoint[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
 }
 
 export function useOpenCostWorkloadTrend(
@@ -1513,6 +1537,8 @@ export interface OpenCostApplicationCostResponse {
   totals: OpenCostApplicationCostTotals;
   coverage: OpenCostApplicationCostCoverage;
   workloads?: OpenCostApplicationWorkloadCost[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
 }
 
 export interface OpenCostApplicationCostTrendSeries extends OpenCostApplicationWorkloadRef {
@@ -1531,6 +1557,8 @@ export interface OpenCostApplicationCostTrendResponse {
   dataPoints?: OpenCostTrendDataPoint[];
   series?: OpenCostApplicationCostTrendSeries[];
   coverage: OpenCostApplicationCostCoverage;
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
 }
 
 function stableOpenCostWorkloadRefs(
@@ -1620,6 +1648,8 @@ export interface OpenCostNodeResponse {
   dataThrough?: string;
   currency?: string;
   nodes?: OpenCostNodeCost[];
+  /** How a metrics-store answer was kept to this cluster; older Radar omits it. */
+  clusterScope?: ClusterScope;
 }
 
 export function useOpenCostNodes() {

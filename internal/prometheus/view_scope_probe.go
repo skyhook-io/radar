@@ -157,20 +157,24 @@ func viewIdentityParts(metrics []ViewMetric, keys []string, span time.Duration, 
 			matchers: subject,
 		})
 		if anchors && m.AnchorLabel != "" && len(m.AnchorValues) > 0 {
-			parts = append(parts, viewProbePart{
-				tag: viewScopeAnchorLabel, metric: m.Name,
-				head:     "count(count_over_time(",
-				tail:     window + "))",
-				matchers: append(viewAnchorSubject(m, subject), viewAnchorMatchers(m)...),
-			})
+			for _, anchor := range viewAnchorMatchers(m) {
+				parts = append(parts, viewProbePart{
+					tag: viewScopeAnchorLabel, metric: m.Name,
+					head:     "count(count_over_time(",
+					tail:     window + "))",
+					matchers: append(viewAnchorSubject(m, subject), anchor...),
+				})
+			}
 		}
 	}
 	return parts
 }
 
 // viewAnchorMatchers select the metric's series holding one of this
-// cluster's live objects, in the anchor namespace when there is one.
-func viewAnchorMatchers(m ViewMetric) []viewMatcher {
+// cluster's live objects, in the anchor namespace when there is one: one
+// selector, or with exported_namespace accepted, one per spelling of the
+// namespace (each its own anchor check, any of them vouching).
+func viewAnchorMatchers(m ViewMetric) [][]viewMatcher {
 	names := make([]string, len(m.AnchorValues))
 	for i, v := range m.AnchorValues {
 		names[i] = regexp.QuoteMeta(v)
@@ -179,11 +183,17 @@ func viewAnchorMatchers(m ViewMetric) []viewMatcher {
 	if m.AnchorOptionalPort {
 		pattern = "(" + pattern + ")(:[0-9]+)?"
 	}
-	var out []viewMatcher
-	if m.AnchorNamespace != "" {
-		out = append(out, viewMatcher{label: "namespace", op: "=", value: m.AnchorNamespace})
+	anchor := viewMatcher{label: m.AnchorLabel, op: "=~", value: pattern}
+	switch {
+	case m.AnchorNamespace == "":
+		return [][]viewMatcher{{anchor}}
+	case m.AnchorNamespaceExported:
+		return [][]viewMatcher{
+			{{label: "exported_namespace", op: "=", value: m.AnchorNamespace}, anchor},
+			{{label: "namespace", op: "=", value: m.AnchorNamespace}, {label: "exported_namespace", op: "=", value: ""}, anchor},
+		}
 	}
-	return append(out, viewMatcher{label: m.AnchorLabel, op: "=~", value: pattern})
+	return [][]viewMatcher{{{label: "namespace", op: "=", value: m.AnchorNamespace}, anchor}}
 }
 
 // viewAnchorSubject is the subject's part the anchor check still needs: a
@@ -200,7 +210,7 @@ func viewAnchorSubject(m ViewMetric, subject []viewMatcher) []viewMatcher {
 			out = append(out, sm)
 			continue
 		}
-		if sm.label == "namespace" && sm.op == "=" && m.AnchorNamespace != "" && sm.value == m.AnchorNamespace {
+		if sm.label == "namespace" && sm.op == "=" && m.AnchorNamespace != "" && !m.AnchorNamespaceExported && sm.value == m.AnchorNamespace {
 			continue
 		}
 		if sm.label == m.AnchorLabel && !m.AnchorOptionalPort && allAnchorsMatch(sm, m.AnchorValues) {

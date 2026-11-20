@@ -42,11 +42,13 @@ import { RightsizingScanView } from '../rightsizing/RightsizingScanView'
 import { CostViewTabs } from './CostViewTabs'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { CostConnectionAction } from './CostConnectionAction'
+import { ClusterScopeNote } from '@skyhook-io/k8s-ui/components/ui/ClusterScopeNote'
 import {
   costFreshnessLabel,
   costIntegrationUnavailableMessage,
   costRateLabels,
   costSourceLabel,
+  costWithheldScope,
   isCostDiscoveryPending,
 } from './source'
 
@@ -132,13 +134,18 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
       settingsAvailable,
       namespaceScoped: namespaceScopeCount > 0,
     })
+    const withheld = costWithheldScope(data)
 
     return (
       <CostOverviewState>
         <div className="flex min-h-64 items-center justify-center">
           <div className="flex flex-col items-center gap-3 text-theme-text-secondary">
             <Coins className="w-8 h-8 text-theme-text-tertiary/40" />
-            <p className="text-sm">{message}</p>
+            {withheld ? (
+              <ClusterScopeNote scope={withheld} title="Costs withheld for this cluster" className="max-w-md" />
+            ) : (
+              <p className="text-sm">{message}</p>
+            )}
             <CostConnectionAction reason={reason}>
             {(reason === 'no_prometheus' || reason === 'no_cost_source' || reason === 'source_unavailable') && (
               <button

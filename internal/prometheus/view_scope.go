@@ -65,18 +65,22 @@ const (
 // and AnchorValues are this cluster's live object names for it.
 // AnchorNamespace, when set, restricts the anchor check to that namespace, so
 // another cluster's same-named object in a different namespace cannot vouch
-// for this cluster's; set it for namespaced objects. AnchorOptionalPort lets
-// an anchor value carry a ":<port>" suffix, as node-exporter's instance label
-// does when it holds the node's name. Foreign, when set, guards a view that
-// sums the metric over a namespace or the cluster; see ForeignCheck.
+// for this cluster's; set it for namespaced objects. AnchorNamespaceExported
+// also accepts the namespace in exported_namespace (with namespace then
+// naming the exporter's own), as a scrape that renamed a clashing namespace
+// label leaves it. AnchorOptionalPort lets an anchor value carry a ":<port>"
+// suffix, as node-exporter's instance label does when it holds the node's
+// name. Foreign, when set, guards a view that sums the metric over a
+// namespace or the cluster; see ForeignCheck.
 type ViewMetric struct {
-	Name               string
-	Subject            string
-	AnchorLabel        string
-	AnchorValues       []string
-	AnchorNamespace    string
-	AnchorOptionalPort bool
-	Foreign            ForeignCheck
+	Name                    string
+	Subject                 string
+	AnchorLabel             string
+	AnchorValues            []string
+	AnchorNamespace         string
+	AnchorNamespaceExported bool
+	AnchorOptionalPort      bool
+	Foreign                 ForeignCheck
 }
 
 // ForeignCheck names the kube-state-metrics series that list the objects a
@@ -92,11 +96,16 @@ type ViewMetric struct {
 // Keys map each of the metric's key labels to the reference's label for the
 // same thing. NamespaceExported reads the metric's namespace from
 // exported_namespace when that is set, as a scrape that renamed a clashing
-// namespace label leaves it.
+// namespace label leaves it. Namespace, when set, checks only the metric's
+// objects in that namespace (under either spelling with NamespaceExported):
+// a view of one namespace reads only its series, so another cluster's objects
+// in other namespaces never reach its sums. Set it for a metric whose Subject
+// can't select the namespace because the label naming it varies.
 type ForeignCheck struct {
 	Reference         string
 	Keys              []ForeignKey
 	NamespaceExported bool
+	Namespace         string
 }
 
 // ForeignKey maps one of the metric's labels to the reference's.
@@ -214,6 +223,9 @@ func normalizeViewScopeRequest(req ViewScopeRequest) (ViewScopeRequest, error) {
 		if m.AnchorLabel == "" || len(m.AnchorValues) == 0 {
 			m.AnchorNamespace = ""
 		}
+		if m.AnchorNamespace == "" {
+			m.AnchorNamespaceExported = false
+		}
 		foreign, err := normalizeForeignCheck(m.Foreign)
 		if err != nil {
 			return req, fmt.Errorf("view scope: metric %q: %w", m.Name, err)
@@ -256,6 +268,9 @@ func normalizeForeignCheck(f ForeignCheck) (ForeignCheck, error) {
 	}
 	if f.NamespaceExported && !labels["namespace"] {
 		return f, errors.New("foreign check reads exported_namespace but has no namespace key")
+	}
+	if f.Namespace != "" && !labels["namespace"] {
+		return f, errors.New("foreign check keeps to a namespace but has no namespace key")
 	}
 	f.Keys = slices.Clone(f.Keys)
 	slices.SortFunc(f.Keys, func(a, b ForeignKey) int { return strings.Compare(a.Label, b.Label) })
@@ -390,9 +405,9 @@ func viewScopeKey(generation, epoch uint64, config prom.WorkloadMetricsScope, be
 	}
 	write("view", req.View, strconv.FormatBool(req.Joined), req.Namespace, promSeconds(req.Span))
 	for _, m := range req.Metrics {
-		write(append([]string{"metric", m.Name, m.Subject, m.AnchorLabel, m.AnchorNamespace, strconv.FormatBool(m.AnchorOptionalPort)}, m.AnchorValues...)...)
+		write(append([]string{"metric", m.Name, m.Subject, m.AnchorLabel, m.AnchorNamespace, strconv.FormatBool(m.AnchorNamespaceExported), strconv.FormatBool(m.AnchorOptionalPort)}, m.AnchorValues...)...)
 		if f := m.Foreign; f.Reference != "" {
-			foreign := []string{"foreign", f.Reference, strconv.FormatBool(f.NamespaceExported)}
+			foreign := []string{"foreign", f.Reference, strconv.FormatBool(f.NamespaceExported), f.Namespace}
 			for _, k := range f.Keys {
 				foreign = append(foreign, k.Label, k.Reference)
 			}

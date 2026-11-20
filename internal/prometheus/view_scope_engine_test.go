@@ -477,6 +477,29 @@ func TestEngineViewScope(t *testing.T) {
 		}
 	})
 
+	// The anchor check runs in the anchors' namespace: the same Pod names in
+	// another namespace don't vouch. With exported_namespace accepted, the
+	// unrenamed spelling (namespace, no exported_namespace) still matches.
+	t.Run("anchor namespace keeps the anchor check to that namespace", func(t *testing.T) {
+		for _, tc := range []struct {
+			namespace string
+			exported  bool
+			want      ViewScopeState
+		}{
+			{engineNS, false, ViewScopeUnlabeled},
+			{"elsewhere", false, ViewScopeLabelMissing},
+			{engineNS, true, ViewScopeUnlabeled},
+			{"elsewhere", true, ViewScopeLabelMissing},
+		} {
+			m := ownUnlabeled
+			m.AnchorNamespace, m.AnchorNamespaceExported = tc.namespace, tc.exported
+			scope := resolve(t, configuredA, time.Hour, false, m, owner)
+			if scope.State != tc.want {
+				t.Errorf("namespace %q exported=%v: scope = %+v, want %s", tc.namespace, tc.exported, scope, tc.want)
+			}
+		}
+	})
+
 	var proven map[string]string
 	t.Run("UID proof finds each cluster's label from kube_pod_info", func(t *testing.T) {
 		client := prom.NewClient(prom.NewHTTPTransport(url, "", &http.Client{Timeout: 10 * time.Second}))

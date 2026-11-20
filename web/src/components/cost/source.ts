@@ -1,4 +1,5 @@
 import type { CostDataSource, CostUnavailableReason } from '../../api/client'
+import { isClusterScopeWithheld, type ClusterScope } from '@skyhook-io/k8s-ui/types/cluster-scope'
 import { previousSettingsNote, type PreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
 
 export function isCostConfigurable(reason?: string): boolean {
@@ -7,6 +8,35 @@ export function isCostConfigurable(reason?: string): boolean {
     || reason === 'authentication_error' || reason === 'configuration_mismatch'
     || reason === 'metrics_settings_error' || reason === 'cost_settings_error'
 }
+
+/**
+ * The scope a cost answer was withheld under, when its costs couldn't be kept
+ * to this cluster in a shared metrics store. Older Radar never sends one.
+ */
+export function costWithheldScope(data?: { available?: boolean; reason?: CostUnavailableReason; clusterScope?: ClusterScope }): ClusterScope | undefined {
+  if (!data || data.available || data.reason !== 'cluster_scope') return undefined
+  return isClusterScopeWithheld(data.clusterScope) ? data.clusterScope : undefined
+}
+
+/**
+ * Why an unavailable cost trend was withheld, when the trend view should say
+ * so rather than read as "no history": its costs couldn't be kept to this
+ * cluster, or the store answered only in part.
+ */
+export type CostTrendWithholding =
+  | { reason: 'cluster_scope'; scope?: ClusterScope }
+  | { reason: 'partial_data' }
+
+export function costTrendWithholding(trend?: { available?: boolean; reason?: CostUnavailableReason; clusterScope?: ClusterScope }): CostTrendWithholding | undefined {
+  if (!trend || trend.available) return undefined
+  if (trend.reason === 'cluster_scope') return { reason: 'cluster_scope', scope: costWithheldScope(trend) }
+  if (trend.reason === 'partial_data') return { reason: 'partial_data' }
+  return undefined
+}
+
+export const COST_TREND_WITHHELD_TITLE = 'Cost history withheld for this cluster'
+export const COST_TREND_PARTIAL_NOTE =
+  'The metrics store answered only in part for this range, so cost history is withheld rather than shown too low.'
 
 export type CostSourcePreference = 'auto' | CostDataSource
 
@@ -134,6 +164,10 @@ export function costIntegrationUnavailableMessage(
       return 'This cluster’s saved metrics settings need review before cost data can load. Review them in Settings → Metrics.'
     case 'cost_settings_error':
       return 'This cluster’s saved cost settings need review before cost data can load. Review them in Settings → Cost.'
+    case 'cluster_scope':
+      return "This metrics store holds several clusters, and Radar couldn't keep these costs to this one, so it withholds them rather than show another cluster's spend."
+    case 'partial_data':
+      return 'The metrics store answered only partially, so cost totals could be missing data. Try again shortly.'
     case 'deployment_configuration_error':
       return "Radar's operator-supplied cost or metrics configuration is invalid. Check local launch flags or the deployment environment variables and Helm values."
     case 'authentication_error':

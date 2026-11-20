@@ -211,3 +211,18 @@ describe('getWorkloadCostState', () => {
     expect(getWorkloadCostState(current, undefined, { trendLoading: true })).toBe('no_prometheus')
   })
 })
+
+describe('getWorkloadCostState cluster scope', () => {
+  it.each(['cluster_scope', 'partial_data'] as const)('reports %s instead of no data', (reason) => {
+    const current: OpenCostWorkloadDetailResponse = {
+      available: false,
+      reason,
+      currency: 'USD',
+      namespace: 'shop',
+      kind: 'Deployment',
+      name: 'api',
+      clusterScope: { state: 'several_clusters', note: 'several' },
+    }
+    expect(getWorkloadCostState(current, undefined, false)).toBe(reason)
+  })
+})
