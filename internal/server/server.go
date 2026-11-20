@@ -5161,7 +5161,7 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query()
-	if (query.Has("cancelSwitch") || query.Get("track") == "1") && s.configManagement() != "local" {
+	if query.Has("cancelSwitch") && s.configManagement() != "local" {
 		s.writeError(w, http.StatusForbidden, "Tracked context switches are available on local Radar.")
 		return
 	}
@@ -5173,7 +5173,7 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if query.Get("track") == "1" {
+	if query.Get("track") == "1" && s.configManagement() == "local" {
 		op, ok := s.contextSwitch.Start(name, countRefusedSwitch)
 		if !ok {
 			s.writeError(w, http.StatusConflict, "Another cluster switch is already in progress.")

@@ -247,20 +247,35 @@ func TestOperatorConfigReadPrivacy(t *testing.T) {
 	}
 }
 
-func TestTrackedContextSwitchRefusesManagedInstallations(t *testing.T) {
+func TestTrackedContextSwitchInManagedInstallations(t *testing.T) {
 	t.Cleanup(k8s.SetTestLocalMode())
-	for _, s := range []*Server{
-		{authConfig: auth.Config{Mode: "proxy"}},
-		{cloudConnectCfg: CloudConnectConfig{CloudTunnelConfigured: true}},
+	t.Setenv("RADAR_CLOUD_MODE", "false")
+	for _, tc := range []struct {
+		name   string
+		server *Server
+		cloud  bool
+	}{
+		{name: "operator", server: &Server{authConfig: auth.Config{Mode: "proxy"}}},
+		{name: "cloud", server: &Server{cloudConnectCfg: CloudConnectConfig{CloudTunnelConfigured: true}}, cloud: true},
 	} {
-		router := chi.NewRouter()
-		router.Post("/contexts/{name}", s.handleSwitchContext)
-		for _, q := range []string{"track=1", "cancelSwitch=abc"} {
-			resp := httptest.NewRecorder()
-			router.ServeHTTP(resp, httptest.NewRequest("POST", "/contexts/target?"+q, nil))
-			if resp.Code != http.StatusForbidden || s.contextSwitch.Snapshot() != nil {
-				t.Fatalf("managed switch %s: %d %s", q, resp.Code, resp.Body.String())
+		t.Run(tc.name, func(t *testing.T) {
+			router := chi.NewRouter()
+			router.Post("/contexts/{name}", tc.server.handleSwitchContext)
+			post := func(query string) *httptest.ResponseRecorder {
+				w := httptest.NewRecorder()
+				router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/contexts/radar-nonexistent-test-context"+query, nil))
+				return w
 			}
-		}
+			legacy, requested := post(""), post("?track=1")
+			if !tc.cloud && requested.Code != http.StatusForbidden {
+				t.Fatalf("operator could start switch: %d", requested.Code)
+			}
+			if requested.Code != legacy.Code || requested.Body.String() != legacy.Body.String() || tc.server.contextSwitch.Snapshot() != nil {
+				t.Fatalf("tracked request changed managed behavior: %d %s vs %d %s", requested.Code, requested.Body, legacy.Code, legacy.Body)
+			}
+			if cancelled := post("?cancelSwitch=abc"); cancelled.Code != http.StatusForbidden {
+				t.Fatalf("managed cancellation: %d %s", cancelled.Code, cancelled.Body)
+			}
+		})
 	}
 }

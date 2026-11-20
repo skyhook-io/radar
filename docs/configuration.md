@@ -606,6 +606,8 @@ Switching contexts in the UI never rewrites your kubeconfig — `kubectl` keeps 
 
 While you're connected, Radar first checks that the new cluster answers and accepts your credentials. If it doesn't, Radar shows why and how to fix it, and your current cluster stays connected: **Back to** returns to it at once. If a switch fails after Radar has already left the previous cluster, the same button switches back to it.
 
+In local Radar, **Cancel switch** keeps the current cluster while Radar checks the target. Once Radar begins closing the old cluster's sessions, it shows progress as the new cluster's resources load. **Hide progress** lets the switch continue. Select the switching indicator to reopen progress, or refresh the tab to follow the same switch. The connectivity timeout and initial workload sync limit apply to different stages.
+
 ### Expired credentials
 
 If an active context's credentials expire or are rejected, Radar disconnects cluster-backed work and retries automatically. After you re-authenticate, exec-based credentials are re-probed and static credentials are reloaded from kubeconfig on disk, so Radar can reconnect without a restart. Retries start after 30 seconds and back off to 5 minutes; a credential plugin that stops responding is retried less frequently.
