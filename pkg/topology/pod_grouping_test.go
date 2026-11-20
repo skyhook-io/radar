@@ -1,6 +1,8 @@
 package topology
 
 import (
+	"encoding/json"
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -34,5 +36,35 @@ func TestGroupPodsKeepsJobRunsSeparate(t *testing.T) {
 	}
 	if groups["dev/Job/job-a"] == nil || groups["dev/Job/job-b"] == nil {
 		t.Fatalf("expected Job run groups, got %#v", groups)
+	}
+}
+
+// Listers hand GroupPods pods in map order. The pod-group node must not
+// depend on it, or an unchanged cluster serializes differently on every build
+// and the SSE stream re-sends a graph the client already has.
+func TestPodGroupNodeIgnoresPodOrder(t *testing.T) {
+	var pods []*corev1.Pod
+	for _, name := range []string{"web-c", "web-a", "web-d", "web-b"} {
+		pods = append(pods, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "dev", Name: name, Labels: map[string]string{"app": "web"}}})
+	}
+	node := func(pods []*corev1.Pod) string {
+		groups := GroupPods(pods, PodGroupingOptions{}).Groups
+		if len(groups) != 1 {
+			t.Fatalf("expected one group, got %d", len(groups))
+		}
+		for _, g := range groups {
+			b, err := json.Marshal(CreatePodGroupNode(g, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(b)
+		}
+		return ""
+	}
+	want := node(pods)
+	reversed := slices.Clone(pods)
+	slices.Reverse(reversed)
+	if got := node(reversed); got != want {
+		t.Fatalf("pod-group node depends on pod order:\n got %s\nwant %s", got, want)
 	}
 }

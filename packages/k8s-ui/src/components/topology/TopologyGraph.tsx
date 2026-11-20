@@ -808,7 +808,9 @@ export function TopologyGraph({
         )
         setEdges(builtEdges)
       }
-      if (groupingMode === 'none') setLayoutEpoch(e => e + 1)
+      // A layout carries the frame it started from; the syncs below re-read
+      // the latest one once it lands.
+      setLayoutEpoch(e => e + 1)
     }).catch((err) => {
       console.error('[TopologyGraph] Layout post-processing error:', err)
       setLayoutError(err instanceof Error ? err.message : String(err))
@@ -958,7 +960,9 @@ export function TopologyGraph({
 
   // Data-only topology updates must repaint existing nodes without forcing an
   // ELK relayout. Structure hashing deliberately ignores status and metadata;
-  // keep the React Flow node payload in sync on that fast path.
+  // keep the React Flow node payload in sync on that fast path. It also runs
+  // after every layout lands (layoutEpoch): a layout started on an older frame
+  // installs that frame's data, and the server sends no repeat to correct it.
   useEffect(() => {
     const topologyById = new Map(workingNodes.map(node => [node.id, node]))
     setNodes(nds => {
@@ -1003,7 +1007,7 @@ export function TopologyGraph({
       })
       return changed ? updated : nds
     })
-  }, [workingNodes, expandedPodGroups, handleExpandPodGroup, handleCollapsePodGroup, onToggleReplicaSets, setNodes])
+  }, [workingNodes, expandedPodGroups, handleExpandPodGroup, handleCollapsePodGroup, onToggleReplicaSets, setNodes, layoutEpoch])
 
   if (!topology) {
     return <PaneLoader label="Loading topology…" className="absolute inset-0" />

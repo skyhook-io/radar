@@ -1,6 +1,8 @@
 package server
 
 import (
+	"cmp"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -114,6 +116,41 @@ type clientRegistration struct {
 type SSEEvent struct {
 	Event string `json:"event"` // "topology", "k8s_event", "heartbeat"
 	Data  any    `json:"data"`
+	// fingerprint identifies a topology frame's graph regardless of node and
+	// edge order; zero when not computed. See topologyFingerprint.
+	fingerprint [sha256.Size]byte
+}
+
+// topologyFingerprint hashes a topology with its nodes and edges sorted by ID.
+// The builder emits them in informer-lister order, which is map order and
+// changes on every build, so an unchanged graph marshals to different bytes
+// each cycle. The wire order is left as built, since the UI's layout follows
+// it; only the comparison ignores it.
+func topologyFingerprint(t *topology.Topology) ([sha256.Size]byte, error) {
+	sorted := *t
+	sorted.Nodes = slices.SortedFunc(slices.Values(t.Nodes), func(a, b topology.Node) int { return cmp.Compare(a.ID, b.ID) })
+	sorted.Edges = slices.SortedFunc(slices.Values(t.Edges), func(a, b topology.Edge) int {
+		return cmp.Or(cmp.Compare(a.ID, b.ID), cmp.Compare(a.Source, b.Source), cmp.Compare(a.Target, b.Target), cmp.Compare(a.Type, b.Type), cmp.Compare(a.Label, b.Label))
+	})
+	data, err := json.Marshal(sorted)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(data), nil
+}
+
+// newTopologyEvent marshals a topology frame once for every client it goes
+// to, with its fingerprint.
+func newTopologyEvent(t *topology.Topology) (SSEEvent, error) {
+	data, err := json.Marshal(t)
+	if err != nil {
+		return SSEEvent{}, err
+	}
+	fp, err := topologyFingerprint(t)
+	if err != nil {
+		return SSEEvent{}, err
+	}
+	return SSEEvent{Event: "topology", Data: json.RawMessage(data), fingerprint: fp}, nil
 }
 
 // topologyDebounceFor returns the topology-broadcast debounce duration based
@@ -782,13 +819,12 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 			filtered.StripClusterScopedDynamicExcept(authGroup.allowedDynamic)
 			filtered.StripCalicoPoliciesExcept(authGroup.allowedCalico)
 			filtered.StripSecretsExcept(authGroup.allowedSecrets)
-			data, marshalErr := json.Marshal(filtered)
+			event, marshalErr := newTopologyEvent(filtered)
 			if marshalErr != nil {
 				log.Printf("Error marshaling topology for broadcast: %v", marshalErr)
 				continue
 			}
-			perfstats.RecordTopologyPayload(len(data))
-			event := SSEEvent{Event: "topology", Data: json.RawMessage(data)}
+			perfstats.RecordTopologyPayload(len(event.Data.(json.RawMessage)))
 			for _, ch := range authGroup.channels {
 				safeSend(ch, event)
 			}
@@ -1124,6 +1160,12 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 		flusher.Flush()
 	}
 
+	// A broadcast cycle runs on any change in the cluster, so most frames
+	// repeat the graph this client already has. Those are skipped: the client
+	// would parse and re-render an identical graph. Cleared on
+	// context_changed, after which the client waits for a fresh frame.
+	var lastTopology [sha256.Size]byte
+
 	// Send initial topology immediately (only if connected)
 	if status.State == k8s.StateConnected {
 		// Same rule as the broadcast cycle: this build reads the caches for as
@@ -1143,12 +1185,13 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 			topo.StripClusterScopedDynamicExcept(authorizedClusterScopedDynamicTuples(topo, nodeClassAuthorizer(authorize)))
 			topo.StripCalicoPoliciesExcept(authorizedCalicoPolicyTuples(topo, authorize))
 			topo.StripSecretsExcept(authorizedSecretTuples(topo, authorize))
-			data, marshalErr := json.Marshal(topo)
+			event, marshalErr := newTopologyEvent(topo)
 			if marshalErr != nil {
 				log.Printf("SSE: failed to marshal initial topology: %v", marshalErr)
 			} else {
-				fmt.Fprintf(w, "event: topology\ndata: %s\n\n", data)
+				fmt.Fprintf(w, "event: topology\ndata: %s\n\n", event.Data)
 				flusher.Flush()
+				lastTopology = event.fingerprint
 			}
 		}
 	}
@@ -1184,6 +1227,15 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 				fmt.Fprintf(w, "event: error\ndata: %s\n\n", errorData)
 				flusher.Flush()
 				continue
+			}
+			switch event.Event {
+			case "topology":
+				if event.fingerprint != ([sha256.Size]byte{}) && event.fingerprint == lastTopology {
+					continue
+				}
+				lastTopology = event.fingerprint
+			case "context_changed":
+				lastTopology = [sha256.Size]byte{}
 			}
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Event, data)
 			flusher.Flush()

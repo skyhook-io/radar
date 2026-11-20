@@ -67,8 +67,21 @@ export function useEventSource(
   const optionsRef = useRef(options)
   optionsRef.current = options
 
+  // The server sends a topology frame only when the graph changed, so a frame
+  // queued by the throttle must never outlive the connection or cluster it
+  // came from: no later identical frame would correct it.
+  const dropPendingTopology = useCallback(() => {
+    if (throttleTimeoutRef.current) {
+      clearTimeout(throttleTimeoutRef.current)
+      throttleTimeoutRef.current = null
+    }
+    pendingTopologyRef.current = null
+  }, [])
+
   const connect = useCallback(() => {
     setConnecting(true)
+    dropPendingTopology()
+    lastTopologyUpdateRef.current = 0
     // Clean up existing connection
     if (eventSourceRef.current) {
       eventSourceRef.current.close()
@@ -137,6 +150,7 @@ export function useEventSource(
         // If waiting for topology after context switch, update immediately
         if (waitingForTopologyAfterSwitch.current) {
           waitingForTopologyAfterSwitch.current = false
+          dropPendingTopology()
           lastTopologyUpdateRef.current = now
           setTopology(data)
           optionsRef.current?.onContextSwitchComplete?.()
@@ -204,6 +218,7 @@ export function useEventSource(
         const data = JSON.parse(event.data) as { context: string }
         console.log('Context changed to:', data.context)
         // Clear topology and events - new data will come via topology event
+        dropPendingTopology()
         setTopology(null)
         setEvents([])
         // Mark that we're waiting for new topology data
@@ -229,7 +244,7 @@ export function useEventSource(
         console.error('Failed to parse connection_state event:', e)
       }
     })
-  }, [sseNamespaceFilter, viewMode, showPolicyEffect])
+  }, [sseNamespaceFilter, viewMode, showPolicyEffect, dropPendingTopology])
 
   // Reconnect function for manual reconnection
   const reconnect = useCallback(() => {
@@ -247,11 +262,9 @@ export function useEventSource(
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current)
       }
-      if (throttleTimeoutRef.current) {
-        clearTimeout(throttleTimeoutRef.current)
-      }
+      dropPendingTopology()
     }
-  }, [connect])
+  }, [connect, dropPendingTopology])
 
   // Clear events when namespaces change
   useEffect(() => {

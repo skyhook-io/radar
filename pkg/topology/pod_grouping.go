@@ -1,7 +1,9 @@
 package topology
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -55,6 +57,12 @@ func GroupPods(pods []*corev1.Pod, opts PodGroupingOptions) *PodGroupingResult {
 		Groups: make(map[string]*PodGroup),
 	}
 
+	// Listers return pods in map order. Sorting here fixes the order of each
+	// group's pod list and which pod's issue becomes the group's, so an
+	// unchanged cluster builds the same pod-group nodes every time.
+	pods = slices.SortedFunc(slices.Values(pods), func(a, b *corev1.Pod) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
+	})
 	for _, pod := range pods {
 		if !opts.matchesNamespaceFilter(pod.Namespace) {
 			continue
