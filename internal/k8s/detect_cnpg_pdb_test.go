@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -239,6 +240,59 @@ func TestDetectCNPGPrimaryPDBBlockingExplainsTheOperator(t *testing.T) {
 	}
 	if got.Severity != plain.Severity || got.Reason != plain.Reason || got.Fingerprint != plain.Fingerprint {
 		t.Fatalf("blocking changed severity/reason/fingerprint: %+v", got)
+	}
+}
+
+// A rolling update or switchover passes through not-ready states; while the
+// Cluster's Ready=False is recent, a verified caller doesn't get the budget,
+// so routine operations don't open and close an Issue.
+func TestDetectCNPGPrimaryPDBSettlesDuringRoutineTransitions(t *testing.T) {
+	ready := func(f *CNPGPDBTestFixture, ago time.Duration) {
+		_ = unstructured.SetNestedSlice(f.Cluster.Object, []any{map[string]any{
+			"type": "Ready", "status": "False", "reason": "ClusterIsNotReady",
+			"lastTransitionTime": time.Now().Add(-ago).UTC().Format(time.RFC3339),
+		}}, "status", "conditions")
+	}
+	transitioning := func(f *CNPGPDBTestFixture) {
+		_ = unstructured.SetNestedField(f.Cluster.Object, "Switchover in progress", "status", "phase")
+		_ = unstructured.SetNestedField(f.Cluster.Object, int64(1), "status", "readyInstances")
+	}
+	for _, tc := range []struct {
+		name    string
+		mutate  func(*CNPGPDBTestFixture)
+		settled bool
+	}{
+		{"recent Ready=False during a switchover", func(f *CNPGPDBTestFixture) { transitioning(f); ready(f, time.Minute) }, true},
+		{"recent Ready=False with a pending switchover", func(f *CNPGPDBTestFixture) {
+			_ = unstructured.SetNestedField(f.Cluster.Object, "pg-2", "status", "targetPrimary")
+			ready(f, time.Minute)
+		}, true},
+		{"Ready=False past the grace", func(f *CNPGPDBTestFixture) { transitioning(f); ready(f, 2*cnpgPDBSettleGrace) }, false},
+		{"no Ready condition", transitioning, false},
+		{"layout reason is not routine", func(f *CNPGPDBTestFixture) {
+			f.Nodes["node-2"].Spec.Unschedulable = true
+			ready(f, time.Minute)
+		}, false},
+		{"reconciliation disabled is not routine", func(f *CNPGPDBTestFixture) {
+			f.Cluster.SetAnnotations(map[string]string{"cnpg.io/reconciliationLoop": "disabled"})
+			transitioning(f)
+			ready(f, time.Minute)
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := NewCNPGPDBTestFixture(2)
+			tc.mutate(f)
+			if verdict, _ := f.classify(); verdict != cnpgPDBBlocking {
+				t.Fatalf("fixture must be blocking, got %q", verdict)
+			}
+			got, plain := detectCNPGPDB(t, f, "")
+			if got.ExpectedWhenVerified != tc.settled {
+				t.Fatalf("settled = %v, want %v: %+v", got.ExpectedWhenVerified, tc.settled, got)
+			}
+			if tc.settled && (got.Message != plain.Message || got.Degraded == nil || got.Degraded.Message != plain.Message || len(got.RequiredReads) != 3) {
+				t.Fatalf("a settling budget keeps the generic warning for restricted callers: %+v", got)
+			}
+		})
 	}
 }
 

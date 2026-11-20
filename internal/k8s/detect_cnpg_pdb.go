@@ -4,6 +4,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -15,6 +16,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/skyhook-io/radar/pkg/cnpg"
+	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -43,6 +45,19 @@ var cnpgDrainTaints = []string{
 }
 
 const cnpgHealthyPhase = "Cluster in healthy state"
+
+// Reasons a routine rolling update or switchover passes through on its own.
+const (
+	cnpgReasonNotAllReady       = "not all instances are ready"
+	cnpgReasonNotHealthy        = "the cluster is not in a healthy state"
+	cnpgReasonSwitchoverPending = "a switchover is pending"
+)
+
+// cnpgPDBSettleGrace keeps a verified HA Cluster's budget out of Issues while
+// its Ready=False is younger than this and the reason is one a rolling update
+// or switchover passes through, so routine operations don't open and close an
+// Issue. Same window as the CloudNativePG down debounce in the Issues source.
+const cnpgPDBSettleGrace = 5 * time.Minute
 
 var cnpgClusterGVR = schema.GroupVersionResource{Group: cnpg.Group, Version: "v1", Resource: "clusters"}
 
@@ -108,11 +123,11 @@ func cnpgPrimaryHAGap(pdb *policyv1.PodDisruptionBudget, cluster *unstructured.U
 	case cluster.GetAnnotations()["cnpg.io/reconciliationLoop"] == "disabled":
 		return "reconciliation is disabled on the Cluster"
 	case ready != instances:
-		return "not all instances are ready"
+		return cnpgReasonNotAllReady
 	case phase != cnpgHealthyPhase:
-		return "the cluster is not in a healthy state"
+		return cnpgReasonNotHealthy
 	case current == "" || current != target:
-		return "a switchover is pending"
+		return cnpgReasonSwitchoverPending
 	case maintenance:
 		return "a node maintenance window is in progress"
 	}
@@ -317,12 +332,30 @@ func (c cnpgPDBContext) apply(d *Detection, pdb *policyv1.PodDisruptionBudget) {
 		d.Degraded, d.RequiredReads = generic, layout
 	case cnpgPDBBlocking:
 		d.Degraded, d.RequiredReads = generic, layout
+		if c.settling(pdb, reason, time.Now()) {
+			d.ExpectedWhenVerified = true
+			break
+		}
 		d.Message, d.Action = cnpgBlockingPDBMessage(reason), cnpgBlockingPDBAction
 	case cnpgPDBSingleInstance:
 		d.Degraded = generic
 		d.RequiredReads = []issuesapi.EvidenceRead{clusters}
 		d.Message, d.Action = cnpgSingleInstancePDBMessage, cnpgSingleInstancePDBAction
 	}
+}
+
+// settling: the Cluster turned not Ready less than cnpgPDBSettleGrace ago,
+// for a reason a routine operation passes through. No Ready=False with a
+// timestamp means nothing dates the transition, so it never settles.
+func (c cnpgPDBContext) settling(pdb *policyv1.PodDisruptionBudget, reason string, now time.Time) bool {
+	switch reason {
+	case cnpgReasonNotAllReady, cnpgReasonNotHealthy, cnpgReasonSwitchoverPending:
+	default:
+		return false
+	}
+	cluster := c.clusters[pdb.Namespace+"/"+strings.TrimSuffix(pdb.Name, "-primary")]
+	cond, ok := conditions.FindFalseConditionWithTime(cluster, "Ready")
+	return ok && cond.HasLastTransitionTime && now.Sub(cond.LastTransitionTime) < cnpgPDBSettleGrace
 }
 
 const cnpgBlockingPDBAction = "Check the Cluster's status and its standby instances: whether they are ready and which nodes they run on. Don't relax this budget by hand; the operator recreates it."
