@@ -25,8 +25,11 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
-import { ApiError } from '../../api/client'
+import { ApiError, useCapabilities } from '../../api/client'
+import { useAPIResources } from '../../api/apiResources'
 import {
+  hasVulnerabilityReports,
+  JAVA4SHELL_CVE,
   useVulnerabilities,
   isKindUnknown,
   parseWorkloadParam,
@@ -43,6 +46,7 @@ import {
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { ChecksViewTabs } from './ChecksViewTabs'
+import { Java4ShellPanel } from './Java4ShellPanel'
 import {
   SEVERITIES,
   SeverityBadge,
@@ -79,6 +83,7 @@ const VIEWS: { key: VulnerabilityView; label: string }[] = [
 
 const CHIP = 'min-h-8 rounded-full border px-3 text-xs font-medium transition-colors'
 const CHIP_ON = 'selection-strong border-accent text-theme-text-primary'
+const TRIVY_INSTALL_URL = 'https://aquasecurity.github.io/trivy-operator/latest/getting-started/installation/'
 
 // Each table's columns, shared by its header, rows and expanded sub-rows so
 // detail lines up under the column it belongs to. Short values get fixed
@@ -106,6 +111,10 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const workload = parseWorkloadParam(params.get('workload'))
   const query = useDebouncedValue(queryDraft.trim(), 300)
   const { connection } = useConnection()
+  const { data: capabilities } = useCapabilities()
+  const { data: resources } = useAPIResources()
+  const java4ShellSupported = capabilities?.features?.runtimeAdvisoryChecks === true
+  const reportsAbsent = java4ShellSupported && resources !== undefined && !hasVulnerabilityReports(resources)
 
   // Typing and chip toggles replace the entry; a new view or a drill-down
   // pushes one, so Back returns to the list it came from.
@@ -114,7 +123,22 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     mutate(next)
     setParams(next, { replace: !push })
   }
-  const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities({ view, namespaces, severities, fixableOnly, query, workload })
+  const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities({ view, namespaces, severities, fixableOnly, query, workload }, !reportsAbsent)
+  const hasReports = !reportsAbsent && (hasVulnerabilityReports(resources) || !!data)
+  const trivySearch = new URLSearchParams({ by: 'cve', q: JAVA4SHELL_CVE })
+  for (const key of ['namespace', 'namespaces']) {
+    const value = params.get(key)
+    if (value) trivySearch.set(key, value)
+  }
+  const advisory = java4ShellSupported && (
+    <Java4ShellPanel
+      namespaces={namespaces}
+      context={connection.context}
+      connected={connection.state === 'connected'}
+      trivySearch={hasReports ? trivySearch.toString() : undefined}
+      onNavigateToResource={onNavigateToResource}
+    />
+  )
 
   const toggleSeverity = (s: VulnerabilitySeverity) => update((p) => {
     const next = severities.includes(s) ? severities.filter((x) => x !== s) : [...severities, s]
@@ -122,19 +146,31 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     else p.delete('severity')
   })
 
-  if (isLoading) {
+  if (isLoading && !reportsAbsent) {
     return (
-      <div className="flex-1 flex flex-col min-h-0 p-4 gap-4">
+      <div className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
         <ChecksViewTabs />
+        {advisory && <PageHeader icon={ShieldAlert} title="Vulnerabilities" />}
+        {advisory}
         <PaneLoader label="Reading vulnerability reports…" className="flex-1" />
       </div>
     )
   }
-  if (!data) {
+  if (!data || reportsAbsent) {
+    const showInstallNote = advisory && (reportsAbsent || isKindUnknown(error))
     return (
-      <div className="flex-1 flex flex-col min-h-0 p-4 gap-4">
+      <div className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
         <ChecksViewTabs />
-        <div className="flex flex-1 items-center justify-center"><VulnerabilitiesError error={error} /></div>
+        {advisory && <PageHeader icon={ShieldAlert} title="Vulnerabilities" />}
+        {advisory}
+        {showInstallNote ? (
+          <p className="text-xs text-theme-text-secondary">
+            General image vulnerability scanning requires Trivy Operator.{' '}
+            <a href={TRIVY_INSTALL_URL} target="_blank" rel="noreferrer" className="text-accent-text hover:underline">Installation guide</a>
+          </p>
+        ) : (
+          <div className="flex flex-1 items-center justify-center"><VulnerabilitiesError error={error} /></div>
+        )}
       </div>
     )
   }
@@ -160,6 +196,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         description="Known CVEs in the images that run now, from Trivy Operator's reports."
         actions={<FreshnessControl mode="auto" dataUpdatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => refetch()} connectionState={connection.state} />}
       />
+      {advisory}
 
       {/* Triage header, as on Best practices: the headline, the severity
           distribution, and its legend as the severity filters. */}
@@ -310,8 +347,8 @@ function VulnerabilitiesError({ error }: { error: unknown }) {
         tone="neutral"
         icon={ShieldAlert}
         headline="No vulnerability reports in this cluster"
-        body="Radar doesn't scan images itself. It reads the VulnerabilityReports Trivy Operator writes, and this cluster doesn't serve that kind."
-        action={<a href="https://aquasecurity.github.io/trivy-operator/latest/getting-started/installation/" target="_blank" rel="noreferrer" className="btn-brand px-3 py-1.5 text-xs font-medium">How to install Trivy Operator</a>}
+        body="General image vulnerability scanning requires Trivy Operator. When installed, its reports appear here."
+        action={<a href={TRIVY_INSTALL_URL} target="_blank" rel="noreferrer" className="btn-brand px-3 py-1.5 text-xs font-medium">How to install Trivy Operator</a>}
       />
     )
   }

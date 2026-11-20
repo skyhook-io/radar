@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import type { ReadGap } from '@skyhook-io/k8s-ui/types/read-coverage'
+import type { ResourceReadCoverage } from '@skyhook-io/k8s-ui/types/resource-coverage'
 import type { APIResource } from '../types'
 import { ApiError, fetchJSON, useRadarFeature } from './client'
 import { readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
+import { getApiBase } from './config'
 import { shouldRetryRadarQuery } from './radarFeatures'
 
 // Mirrors internal/vulnerabilities/types.go.
@@ -170,6 +172,62 @@ export interface VulnerabilitiesParams {
   fixableOnly?: boolean
   query?: string
   workload?: { kind: string; group?: string; namespace: string; name: string }
+}
+
+export interface Java4ShellFinding {
+  workload: VulnerabilityWorkloadRef
+  container: string
+  image: string
+  digest: string
+  version: string
+  fixedIn?: string
+  pods: number
+  vbmiPods: number
+  unknownCPUPods: number
+  mitigationDeclaredPods: number
+}
+
+export const JAVA4SHELL_CVE = 'CVE-2026-114938'
+
+export interface Java4ShellUnassessed {
+  workload: VulnerabilityWorkloadRef
+  container: string
+  image: string
+  digest?: string
+  reason: string
+  pods: number
+}
+
+export interface Java4ShellResult {
+  findings: Java4ShellFinding[]
+  containers: number
+  matches: number
+  findingGroups: number
+  unassessed: Record<string, number>
+  unassessedRows: Java4ShellUnassessed[]
+  unassessedGroups: number
+  coverage: ResourceReadCoverage
+  workload?: VulnerabilityWorkloadRef
+}
+
+export function useJava4ShellCheck(namespaces: string[], context: string, workload?: VulnerabilityWorkloadRef) {
+  const { guard } = useRadarFeature('runtimeAdvisoryChecks')
+  const query = new URLSearchParams()
+  if (workload) {
+    query.set('workloadKind', workload.kind)
+    query.set('workloadGroup', workload.group)
+    query.set('workloadNamespace', workload.namespace)
+    query.set('workloadName', workload.name)
+  } else if (namespaces.length > 0) {
+    query.set('namespaces', [...namespaces].sort().join(','))
+  }
+  const path = '/vulnerabilities/java4shell' + (query.size ? `?${query}` : '')
+  return useQuery({
+    queryKey: ['java4shell', getApiBase(), context, path],
+    queryFn: ({ signal }) => guard(() => fetchJSON<Java4ShellResult>(path, { signal, cache: 'no-store' })),
+    enabled: false,
+    retry: false,
+  })
 }
 
 // What an answer is about, apart from its filters: the workload and the
