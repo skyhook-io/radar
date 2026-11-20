@@ -401,7 +401,7 @@ function useActionsBarProps(
   const fluxSuspendMutation = useFluxSuspend()
   const fluxResumeMutation = useFluxResume()
 
-  const argoSyncMutation = useArgoSync({ reportErrors: false })
+  const argoSyncMutation = useArgoSync()
   const argoRefreshMutation = useArgoRefresh()
   const argoSuspendMutation = useArgoSuspend()
   const argoResumeMutation = useArgoResume()

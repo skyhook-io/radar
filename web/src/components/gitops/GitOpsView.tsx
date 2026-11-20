@@ -1,5 +1,5 @@
 import type { ResourceCoverage } from '@skyhook-io/k8s-ui'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import yaml from 'yaml'
@@ -103,6 +103,15 @@ type ArgoSyncDialogTarget =
   | { scope: 'application' }
   | { scope: 'resource'; resource: GitOpsInsightRef }
 
+function useActiveSyncDialog<T>(dialog: T | null) {
+  const active = useRef<T | null>(null)
+  useLayoutEffect(() => {
+    active.current = dialog
+    return () => { active.current = null }
+  }, [dialog])
+  return active
+}
+
 const KIND_BY_NAME = new Map(GITOPS_KINDS.map((k) => [k.name, k]))
 
 // Fallback poll for the rows; SSE changes to row kinds refetch them within 15s (App.tsx slow tier).
@@ -139,7 +148,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   const { data: apiResources, isLoading: apiResourcesLoading } = useAPIResources()
   const fluxReportsServed = !!apiResources?.some((r) => r.name === 'fluxreports' && r.group === 'fluxcd.controlplane.io')
 
-  const argoSync = useArgoSync({ reportErrors: false })
+  const argoSync = useArgoSync()
   const argoRefresh = useArgoRefresh()
   const argoTerminate = useArgoTerminate()
   const argoSuspend = useArgoSuspend()
@@ -254,6 +263,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   })
 
   const syncDialogRow = rowsQuery.data?.rows.find((row) => row.id === syncDialogRowId)
+  const activeSyncDialog = useActiveSyncDialog(syncDialogRow ? syncSelection : null)
   useEffect(() => {
     if (syncDialogRowId && !syncDialogRow) setSyncSelection(null)
   }, [syncDialogRowId, syncDialogRow])
@@ -390,7 +400,11 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
           if (!syncDialogRow) return
           const { namespace, name } = syncDialogRow
           argoSync.mutate(
-            { namespace, name, ...opts, applicationSyncOptions: argoApplicationSyncOptions(syncDialogRow.raw) },
+            {
+              namespace, name, ...opts,
+              applicationSyncOptions: argoApplicationSyncOptions(syncDialogRow.raw),
+              isErrorShownInline: () => activeSyncDialog.current === syncSelection,
+            },
             { onSuccess: () => {
               refetchTableAfterMutation()
               setSyncSelection(null)
@@ -498,7 +512,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const [graphFullscreen, setGraphFullscreen] = useState(false)
   const [helmValuesOpen, setHelmValuesOpen] = useState(false)
 
-  const argoSync = useArgoSync({ reportErrors: false })
+  const argoSync = useArgoSync()
   const remediationSync = useArgoSync({ reportErrors: false })
   const argoResourceValidation = useArgoResourceValidation()
   const argoRefresh = useArgoRefresh()
@@ -520,6 +534,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const [syncDialog, setSyncDialog] = useState<{ appKey: string; target: ArgoSyncDialogTarget } | null>(null)
   if (syncDialog && syncDialog.appKey !== appKey) setSyncDialog(null)
   const syncDialogTarget = syncDialog?.appKey === appKey ? syncDialog.target : null
+  const activeSyncDialog = useActiveSyncDialog(syncDialogTarget ? syncDialog : null)
   const argoSyncBusy = argoSync.isPending || remediationSync.isPending || applyResource.isPending
   const [validatedTargetKey, setValidatedTargetKey] = useState<string | null>(null)
   const validationStale = validatedTargetKey !== null && validatedTargetKey !== deployTargetKey
@@ -803,16 +818,9 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                 // sync was triggered, so a successful create-namespace + sync
                 // failure doesn't yield a misleading "sync triggered" toast.
                 if (isArgoApp) {
-                  remediationSync.mutate(
-                    { namespace, name, applicationSyncOptions: appSyncOptions },
-                    {
-                      onSuccess: () => {
-                        showSuccess(`Created namespace ${nsName}`, 'Sync triggered to retry the apply.')
-                      },
-                      onError: (error) => {
-                        showError(`Created namespace ${nsName}, but sync failed`, error.message, error.rawDetail)
-                      },
-                    },
+                  void remediationSync.mutateAsync({ namespace, name, applicationSyncOptions: appSyncOptions }).then(
+                    () => showSuccess(`Created namespace ${nsName}`, 'Sync triggered to retry the apply.'),
+                    (error: Error & { rawDetail?: string }) => showError(`Created namespace ${nsName}, but sync failed`, error.message, error.rawDetail),
                   )
                 } else {
                   showSuccess(`Created namespace ${nsName}`)
@@ -989,9 +997,10 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
               const variables = syncDialogTarget.scope === 'resource'
                 ? buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts, appSyncOptions)
                 : { namespace, name, ...opts, applicationSyncOptions: appSyncOptions }
-              argoSync.mutate(variables, {
-                onSuccess: closeArgoSyncDialog,
-              })
+              argoSync.mutate({
+                ...variables,
+                isErrorShownInline: () => activeSyncDialog.current === syncDialog,
+              }, { onSuccess: closeArgoSyncDialog })
             }}
           />
           <RollbackDialog

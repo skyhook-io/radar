@@ -1,7 +1,7 @@
 import { isCoreNode } from '../resources/resource-utils'
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
 import { resourceRefKey } from '../../utils/resource-refs'
-import { useEffect, useState, useRef, useId } from 'react'
+import { useEffect, useLayoutEffect, useState, useRef, useId } from 'react'
 import {
   RefreshCw,
   Terminal,
@@ -50,6 +50,13 @@ import { formatRelativeAgeTime } from '../../utils/format'
 // ============================================================================
 
 const FLUX_ACTION_KINDS = new Set(['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'])
+
+type ArgoSyncRequest = {
+  namespace: string
+  name: string
+  applicationSyncOptions?: string[]
+  isErrorShownInline?: () => boolean
+} & Partial<ArgoSyncOpts>
 
 interface ResourceActionsBarProps {
   resource: SelectedResource
@@ -150,7 +157,7 @@ interface ResourceActionsBarProps {
   // Argo actions
   // May return a promise that settles with the request: the options dialog
   // then stays open, with its choices, when it rejects.
-  onArgoSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void | Promise<unknown>
+  onArgoSync?: (params: ArgoSyncRequest) => void | Promise<unknown>
   isArgoSyncing?: boolean
   // Set when onArgoSync forwards the options in its params: Sync then opens
   // the options dialog. Without it Sync syncs at once with the Application's
@@ -1011,7 +1018,7 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
 
 function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming, resumeUpgrade, resumeBlockedReason }: {
   resource: SelectedResource; data: any
-  onSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void | Promise<unknown>; isSyncing?: boolean
+  onSync?: (params: ArgoSyncRequest) => void | Promise<unknown>; isSyncing?: boolean
   syncDialog?: { pinsComparedRevision: boolean }
   onRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void; isRefreshing?: boolean
   onSuspend?: (params: { namespace: string; name: string }) => void; isSuspending?: boolean
@@ -1030,10 +1037,21 @@ function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh,
   const [syncDialogFor, setSyncDialogFor] = useState<string | null>(null)
   if (syncDialogFor !== null && syncDialogFor !== appKey) setSyncDialogFor(null)
   const syncDialogOpen = syncDialogFor === appKey
+  const activeSyncDialog = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    activeSyncDialog.current = syncDialogOpen ? appKey : null
+    return () => { activeSyncDialog.current = null }
+  }, [appKey, syncDialogOpen])
   const [syncError, setSyncError] = useState<(Error & { rawDetail?: string }) | null>(null)
   const operationRunning = isArgoOperationInProgress(data)
   const applicationSyncOptions = argoApplicationSyncOptions(data)
-  const sync = (opts?: ArgoSyncOpts) => Promise.resolve(onSync?.({ namespace: resource.namespace, name: resource.name, applicationSyncOptions, ...opts }))
+  const sync = (opts?: ArgoSyncOpts) => Promise.resolve(onSync?.({
+    namespace: resource.namespace,
+    name: resource.name,
+    applicationSyncOptions,
+    ...opts,
+    ...(opts && { isErrorShownInline: () => activeSyncDialog.current === appKey }),
+  }))
 
   return (
     <>
