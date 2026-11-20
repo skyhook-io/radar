@@ -1,13 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 const volume = { apiVersion: 'longhorn.io/v1beta2', kind: 'Volume', metadata: { name: 'pvc-1', namespace: 'longhorn-system' }, spec: { numberOfReplicas: 3 }, status: { state: 'attached', robustness: 'healthy', kubernetesStatus: { namespace: 'shop', pvcName: 'data-db-0', lastPVCRefAt: '' } } }
 
-async function render(engines: { data?: any[]; error?: unknown; isLoading?: boolean }, namespaces?: { name: string }[], authEnabled?: boolean) {
+async function render(engines: { data?: any[]; error?: unknown; isLoading?: boolean; coverage?: { status: string } }, namespaces?: { name: string }[], authEnabled?: boolean) {
   vi.resetModules()
   vi.doMock('../../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: () => ({ authEnabled }) }))
   vi.doMock('../../../api/client', () => ({
-    useResources: () => ({ data: engines.data, error: engines.error ?? null, isError: !!engines.error, isLoading: !!engines.isLoading }),
+    useResources: () => ({ data: engines.data, coverage: engines.coverage, error: engines.error ?? null, isError: !!engines.error, isLoading: !!engines.isLoading }),
     useNamespaces: () => ({ data: namespaces }),
   }))
   const { LonghornVolumeRenderer } = await import('./LonghornVolumeRenderer')
@@ -18,6 +18,12 @@ async function render(engines: { data?: any[]; error?: unknown; isLoading?: bool
 }
 
 describe('LonghornVolumeRenderer (host)', () => {
+  // The first dynamic import transforms the renderer's whole k8s-ui graph; pay
+  // that once here so each test's own timeout still catches a real hang.
+  beforeAll(async () => {
+    await render({})
+  }, 30_000)
+
   it('counts healthy replicas from the volume\'s own Engine', async () => {
     const html = await render({ data: [
       { spec: { volumeName: 'other' }, status: { replicaModeMap: { x: 'RW' } } },
@@ -53,7 +59,7 @@ describe('LonghornVolumeRenderer (host)', () => {
   })
 
   it('says the Engine is not running once the lookup finds none for this volume', async () => {
-    const html = await render({ data: [{ spec: { volumeName: 'other' }, status: { replicaModeMap: { x: 'RW' } } }] })
+    const html = await render({ data: [{ spec: { volumeName: 'other' }, status: { replicaModeMap: { x: 'RW' } } }], coverage: { status: 'complete' } })
     expect(html).toContain('? of 3 (Engine not running)')
   })
 
@@ -67,5 +73,30 @@ describe('LonghornVolumeRenderer (host)', () => {
     expect(await render({ data: [] }, [{ name: 'other' }], false)).toContain('shop/data-db-0')
     expect(await render({ data: [] }, [{ name: 'other' }], undefined)).not.toContain('data-db-0')
     expect(await render({ data: [] }, [{ name: 'other' }], true)).not.toContain('data-db-0')
+  })
+
+  it('does not call the Engine stopped when the read was partial or its coverage unknown', async () => {
+    for (const coverage of [{ status: 'partial' }, { status: 'unknown' }, undefined]) {
+      const html = await render({ data: [], coverage })
+      expect(html).toContain('? of 3')
+      expect(html).not.toContain('Engine not running')
+    }
+  })
+
+  it('reads unknown when more than one Engine is marked active', async () => {
+    const html = await render({ data: [
+      { spec: { volumeName: 'pvc-1', active: true }, status: { replicaModeMap: { a: 'RW' } } },
+      { spec: { volumeName: 'pvc-1', active: true }, status: { replicaModeMap: { a: 'RW', b: 'RW' } } },
+    ], coverage: { status: 'complete' } })
+    expect(html).toContain('? of 3')
+    expect(html).not.toContain('1 of 3')
+    expect(html).not.toContain('2 of 3')
+  })
+
+  it('drops the last count when a refresh fails', async () => {
+    const html = await render({ data: [{ spec: { volumeName: 'pvc-1', active: true }, status: { replicaModeMap: { a: 'RW', b: 'RW', c: 'RW' } } }], error: new Error('boom') })
+    expect(html).toContain('? of 3')
+    expect(html).not.toContain('3 of 3')
+    expect(html).toContain('Could not check')
   })
 })
