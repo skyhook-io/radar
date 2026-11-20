@@ -1,11 +1,13 @@
 package topology
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/pkg/relations"
 )
 
 func TestKnativeObservedBackingChannelAndGroupReference(t *testing.T) {
@@ -76,10 +78,15 @@ func TestTriggerBrokerAndObservedChannelOwnership(t *testing.T) {
 		{ID: "channel/app/c", Kind: KindChannel, Name: "c", Data: map[string]any{"namespace": "app", "apiVersion": "messaging.knative.dev/v1"}},
 		{ID: "inmemorychannel/app/c", Kind: NodeKind("InMemoryChannel"), Name: "c", Data: map[string]any{"namespace": "app", "apiVersion": "messaging.knative.dev/v1"}},
 	}
-	trigger := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"namespace": "app", "name": "t"}, "spec": map[string]any{"brokerRef": map[string]any{"namespace": "events", "name": "b", "kind": "Service", "apiVersion": "v1"}}}}
+	// A brokerRef names a Broker whatever kind it spells, here in another namespace.
+	trigger := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "eventing.knative.dev/v1", "kind": "Trigger", "metadata": map[string]any{"namespace": "app", "name": "t"}, "spec": map[string]any{"brokerRef": map[string]any{"namespace": "events", "name": "b", "kind": "Service", "apiVersion": "v1"}}}}
+	brokers := drawFamilies(nil, newDrawnNodes(), nodes, unstructuredSources([]*unstructured.Unstructured{trigger}), relations.KnativeTriggerBrokers)
+	if len(brokers) != 1 || brokers[0].Source != "broker/events/b" || brokers[0].Target != "trigger/app/t" || brokers[0].Type != EdgeExposes {
+		t.Fatalf("broker edges=%+v", brokers)
+	}
 	channel := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "messaging.knative.dev/v1", "kind": "InMemoryChannel", "metadata": map[string]any{"namespace": "app", "name": "c", "ownerReferences": []any{map[string]any{"apiVersion": "messaging.knative.dev/v1", "kind": "Channel", "name": "c"}}}}}
 	edges := addKnativeReferenceEdges(nodes, nil, []*unstructured.Unstructured{trigger}, nil, []*unstructured.Unstructured{channel})
-	if len(edges) != 2 || edges[0].Source != "broker/events/b" || edges[1].Type != EdgeManages {
+	if len(edges) != 1 || edges[0].Source != "channel/app/c" || edges[0].Type != EdgeManages {
 		t.Fatalf("edges=%+v", edges)
 	}
 }
