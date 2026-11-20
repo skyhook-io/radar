@@ -112,3 +112,21 @@ func TestHelmReleaseRevisionIsTheInstalledChart(t *testing.T) {
 		t.Fatalf("failed upgrade: revision = %v attempted = %v", node.Data["revision"], node.Data["attemptedRevision"])
 	}
 }
+
+func TestFluxSourceRecordsArtifactUpdateTime(t *testing.T) {
+	for _, kind := range []string{"ExternalArtifact", "GitRepository", "HelmRepository"} {
+		obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": kind,
+			"status": map[string]any{"artifact": map[string]any{"revision": "main@sha1:abc", "lastUpdateTime": "2026-11-10T09:00:00Z"}}}}
+		node := enrichNodeFromObject(Node{Tool: ToolFluxCD}, obj)
+		got, present := node.Data["artifactUpdatedAt"]
+		if kind == "HelmRepository" {
+			if present {
+				t.Fatalf("HelmRepository index time recorded: %v", got)
+			}
+			continue
+		}
+		if got != "2026-11-10T09:00:00Z" {
+			t.Fatalf("%s artifactUpdatedAt = %v", kind, got)
+		}
+	}
+}

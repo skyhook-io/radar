@@ -469,6 +469,9 @@ func enrichFluxSource(node Node, obj *unstructured.Unstructured) Node {
 		// nothing a user would look for; the chart carries the version.
 		if obj.GetKind() != "HelmRepository" {
 			node.Data["revision"] = sourceRevisionDisplay(obj.GetKind(), revision)
+			if updated := gitops.StringValue(artifact["lastUpdateTime"]); updated != "" {
+				node.Data["artifactUpdatedAt"] = updated
+			}
 		}
 	}
 	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
