@@ -414,11 +414,13 @@ remain in a collapsed **Basic CPU / memory · identity unverified** section
 (the label lists only the affected charts). They do not establish Pod UID or
 historical workload membership, and they never substitute for a verified workload
 total. Network/storage retain this same older name-matched contract independently.
-Both sections are now kept to this cluster like the
+Both sections are kept to this cluster like the
 [other views in a shared store](#other-views-in-a-shared-metrics-store): the label
 reads "matched by cluster label" or "operator declared single-cluster" when they
 are, and keeps "identity unverified" (matching names in a shared backend may
-include another cluster) for unlabeled stores and older Radar.
+include another cluster) for unlabeled stores and older Radar. It also reads
+"identity unverified" when a chart in the section was withheld because Radar
+couldn't keep it to this cluster; that chart says why in place of its data.
 HTTP error and coverage ratios are calculated from matching timestamps in the
 returned counters; histogram quantiles remain calculated by the metrics backend.
 Warnings or `isPartial: true` withhold the response; informational annotations
