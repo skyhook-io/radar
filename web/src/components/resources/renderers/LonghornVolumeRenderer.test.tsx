@@ -5,15 +5,14 @@ const volume = { apiVersion: 'longhorn.io/v1beta2', kind: 'Volume', metadata: { 
 
 async function render(engines: { data?: any[]; error?: unknown; isLoading?: boolean; coverage?: { status: string } }, namespaces?: { name: string }[], authEnabled?: boolean) {
   vi.resetModules()
-  vi.doMock('../../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: () => ({ authEnabled }) }))
   vi.doMock('../../../api/client', () => ({
     useResources: () => ({ data: engines.data, coverage: engines.coverage, error: engines.error ?? null, isError: !!engines.error, isLoading: !!engines.isLoading }),
     useNamespaces: () => ({ data: namespaces }),
+    useAuthMe: () => ({ data: authEnabled === undefined ? undefined : { authEnabled } }),
   }))
   const { LonghornVolumeRenderer } = await import('./LonghornVolumeRenderer')
   const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume} />)
   vi.doUnmock('../../../api/client')
-  vi.doUnmock('../../../contexts/CapabilitiesContext')
   return html
 }
 
@@ -69,10 +68,13 @@ describe('LonghornVolumeRenderer (host)', () => {
     expect(await render({ data: [] })).not.toContain('data-db-0')
   })
 
-  it('keeps the history of a deleted namespace when auth is off, and decides from the list while capabilities load', async () => {
+  it('keeps the history of a deleted namespace when auth is off, and decides from the list while the auth status loads', async () => {
     expect(await render({ data: [] }, [{ name: 'other' }], false)).toContain('shop/data-db-0')
+    expect(await render({ data: [] }, undefined, false)).toContain('shop/data-db-0')
     expect(await render({ data: [] }, [{ name: 'other' }], undefined)).not.toContain('data-db-0')
+    expect(await render({ data: [] }, [{ name: 'shop' }], undefined)).toContain('shop/data-db-0')
     expect(await render({ data: [] }, [{ name: 'other' }], true)).not.toContain('data-db-0')
+    expect(await render({ data: [] }, undefined, true)).not.toContain('data-db-0')
   })
 
   it('does not call the Engine stopped when the read was partial or its coverage unknown', async () => {

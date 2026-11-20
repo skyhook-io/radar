@@ -61,6 +61,7 @@ describe('LonghornVolumeRenderer', () => {
     vi.useRealTimers()
     expect(html).not.toContain('still referenced')
     expect(html).toContain('last seen 2026-11-15T12:00:30Z')
+    expect(html).toContain('last seen garbage')
   })
 
   it('names no PVC, pod or workload (last-seen history comes separately)', () => {
