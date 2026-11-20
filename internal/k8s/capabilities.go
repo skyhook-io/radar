@@ -249,6 +249,8 @@ type FeatureCapabilities struct {
 	Vulnerabilities         bool `json:"vulnerabilities"`         // GET /api/vulnerabilities
 	RuntimeAdvisoryChecks   bool `json:"runtimeAdvisoryChecks"`   // GET /api/vulnerabilities/java4shell
 	RuntimeAdvisoryProgress bool `json:"runtimeAdvisoryProgress"` // GET /api/vulnerabilities/java4shell/stream
+	// GET /api/sealedsecrets/controller
+	SealedSecretsController bool `json:"sealedSecretsController"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
