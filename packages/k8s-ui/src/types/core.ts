@@ -222,6 +222,7 @@ export interface FeatureCapabilities {
   lokiConnection?: boolean
   vulnerabilities?: boolean
   runtimeAdvisoryChecks?: boolean
+  runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
 }
 
