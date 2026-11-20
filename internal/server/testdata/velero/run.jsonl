@@ -1,0 +1,6 @@
+{"time":"2026-11-16T10:00:00Z","level":"info","msg":"Starting restore","restore":"velero/recovery"}
+{"time":"2026-11-16T10:00:01Z","level":"warn","msg":"Item already exists","resource":"configmaps"}
+{"time":"2026-11-16T10:00:02Z","level":"error","msg":"Error restoring item","error":"permission denied"}
+{"level":"debug","msg":"Restored item"}
+{"level":"trace","msg":"Unknown level"}
+{"level":42,"msg":"Non-string level"}

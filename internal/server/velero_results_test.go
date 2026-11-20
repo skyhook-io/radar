@@ -314,6 +314,7 @@ func TestVeleroRunMessagesRoutesEachFailureToItsOwnAnswer(t *testing.T) {
 		dyn.PrependReactor("get", "downloadrequests", func(k8stesting.Action) (bool, runtime.Object, error) {
 			return true, downloadRequest(map[string]interface{}{"downloadURL": url, "phase": "Processed"}), nil
 		})
+		answerVeleroRun(dyn, "Completed")
 		return dyn
 	}
 
@@ -397,6 +398,7 @@ func TestVeleroRunMessagesRoutesEachFailureToItsOwnAnswer(t *testing.T) {
 	t.Run("separates no Velero from a silent Velero", func(t *testing.T) {
 		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 			map[schema.GroupVersionResource]string{downloadRequestGVR: "DownloadRequestList"})
+		answerVeleroRun(dyn, "Completed")
 		dyn.PrependReactor("create", "downloadrequests", func(k8stesting.Action) (bool, runtime.Object, error) {
 			return true, nil, apierrors.NewNotFound(
 				schema.GroupResource{Group: veleroGroup, Resource: "downloadrequests"}, "")
@@ -410,6 +412,7 @@ func TestVeleroRunMessagesRoutesEachFailureToItsOwnAnswer(t *testing.T) {
 	t.Run("passes a denial back as a denial", func(t *testing.T) {
 		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 			map[schema.GroupVersionResource]string{downloadRequestGVR: "DownloadRequestList"})
+		answerVeleroRun(dyn, "Completed")
 		dyn.PrependReactor("create", "downloadrequests", func(k8stesting.Action) (bool, runtime.Object, error) {
 			return true, nil, apierrors.NewForbidden(
 				schema.GroupResource{Group: veleroGroup, Resource: "downloadrequests"}, "", errors.New("nope"))

@@ -227,9 +227,9 @@ func TestBuildLinksHelmReleasesByInventoryElseOriginLabels(t *testing.T) {
 	}
 }
 
-// A HelmRelease's auto neighborhood reaches what its inventory records, in
-// another namespace too, as well as its chart source.
-func TestHelmReleaseNeighborhoodReachesRecordedWorkloads(t *testing.T) {
+// A HelmRelease manages what its inventory records, in another namespace too,
+// not what merely carries its instance label.
+func TestHelmReleaseManagesRecordedWorkloads(t *testing.T) {
 	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
 	release := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
@@ -251,13 +251,18 @@ func TestHelmReleaseNeighborhoodReachesRecordedWorkloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	sub := BuildNeighborhood(topo, ResourceRef{Kind: "HelmRelease", Namespace: "flux-system", Name: "podinfo", Group: "helm.toolkit.fluxcd.io"}, NeighborhoodOptions{Profile: ProfileAuto, Hops: 1})
+	drawn, _ := findNodeByRef(topo.Nodes, ResourceRef{Kind: "HelmRelease", Namespace: "flux-system", Name: "podinfo", Group: "helm.toolkit.fluxcd.io"}, nil)
+	if drawn == nil {
+		t.Fatal("the HelmRelease is not drawn")
+	}
 	got := map[string]bool{}
-	for _, n := range sub.Nodes {
-		got[n.ID] = true
+	for _, e := range topo.Edges {
+		if e.Type == EdgeManages && e.Source == drawn.ID {
+			got[e.Target] = true
+		}
 	}
 	if !got["deployment/apps/podinfo"] || got["deployment/apps/unrelated"] {
-		t.Fatalf("HelmRelease neighborhood = %v, want its recorded Deployment and not the instance-label match", slices.Sorted(maps.Keys(got)))
+		t.Fatalf("HelmRelease manages %v, want its recorded Deployment and not the instance-label match", slices.Sorted(maps.Keys(got)))
 	}
 }
 

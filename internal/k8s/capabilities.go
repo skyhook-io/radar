@@ -203,9 +203,12 @@ type FeatureCapabilities struct {
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`
 	// GET /api/velero/workspace and GET /api/velero/schedules/{namespace}/{name}/activity
-	VeleroWorkspace bool `json:"veleroWorkspace"`
-	VeleroBackupNow bool `json:"veleroBackupNow"` // POST /api/velero/schedules/{namespace}/{name}/backup
-	VeleroRuns      bool `json:"veleroRuns"`      // GET /api/velero/runs/{backups|restores}
+	VeleroWorkspace     bool `json:"veleroWorkspace"`
+	VeleroBackupNow     bool `json:"veleroBackupNow"`     // POST /api/velero/schedules/{namespace}/{name}/backup
+	VeleroSchedulePause bool `json:"veleroSchedulePause"` // POST /api/velero/schedules/{namespace}/{name}/{pause|resume}
+	VeleroRunVolumes    bool `json:"veleroRunVolumes"`    // Run volume record and current operations
+	VeleroRunArtifacts  bool `json:"veleroRunArtifacts"`  // POST /api/velero/{backups|restores}/{namespace}/{name}/{contents|log}
+	VeleroRuns          bool `json:"veleroRuns"`          // GET /api/velero/runs/{backups|restores}
 	// POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion
 	VeleroDeleteBackup bool `json:"veleroDeleteBackup"`
 	// DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions
@@ -241,11 +244,12 @@ type FeatureCapabilities struct {
 	PodSidecarMarks bool `json:"podSidecarMarks"`
 	// GET /api/kueue/clusterqueues/{name}/workloads and
 	// /api/kueue/localqueues/{namespace}/{name}/workloads
-	KueueQueueWorkloads bool `json:"kueueQueueWorkloads"`
-	PodFileUpload       bool `json:"podFileUpload"`      // POST /api/pods/{namespace}/{name}/files/upload
-	Vulnerabilities     bool `json:"vulnerabilities"`    // GET /api/vulnerabilities
-	LoggingPodShipping  bool `json:"loggingPodShipping"` // GET /api/logging/pods/{namespace}/{name}
-	LoggingPipeline     bool `json:"loggingPipeline"`    // GET /api/logging/pipeline
+	KueueQueueWorkloads   bool `json:"kueueQueueWorkloads"`
+	PodFileUpload         bool `json:"podFileUpload"`         // POST /api/pods/{namespace}/{name}/files/upload
+	Vulnerabilities       bool `json:"vulnerabilities"`       // GET /api/vulnerabilities
+	RuntimeAdvisoryChecks bool `json:"runtimeAdvisoryChecks"` // GET /api/vulnerabilities/java4shell
+	LoggingPodShipping    bool `json:"loggingPodShipping"`    // GET /api/logging/pods/{namespace}/{name}
+	LoggingPipeline       bool `json:"loggingPipeline"`       // GET /api/logging/pipeline
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
