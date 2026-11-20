@@ -332,7 +332,7 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 		default:
 			fmt.Fprintf(&table, "No affected Java declarations among assessed containers (%d).\n", outside)
 		}
-		fmt.Fprintf(&table, "%d running containers · %d Java versions assessed · %d outside affected ranges\n", report.Containers, report.Matches+outside, outside)
+		fmt.Fprintf(&table, "Running containers %d · Assessed %d · Outside affected ranges %d\n", report.Containers, report.Matches+outside, outside)
 		if unassessed > 0 {
 			fmt.Fprintf(&table, "%d without a Java version in image metadata · %d could not be checked\n", noDeclaration, gaps)
 		}
@@ -407,7 +407,12 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 			if reason == "no_java_declaration" {
 				continue
 			}
-			fmt.Fprintf(&table, "\n  %s · %d containers\n", style.Bold(checkReasonLabel(reason)), report.Unassessed[reason])
+			count := report.Unassessed[reason]
+			unit := "containers"
+			if count == 1 {
+				unit = "container"
+			}
+			fmt.Fprintf(&table, "\n  %s · %d %s\n", style.Bold(checkReasonLabel(reason)), count, unit)
 			switch reason {
 			case images.StatusAuthRequired:
 				writeJava4ShellAuthHint(&table, report.AuthRequiredRegistries)
@@ -433,6 +438,7 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 				} else {
 					fmt.Fprintf(&table, "    %s, then rerun this namespace.\n", wait)
 				}
+				fmt.Fprintln(&table, "    If throttling continues, verify Java directly in the affected workloads.")
 			case "docker_hub_limit":
 				fmt.Fprintln(&table, "    Radar checks at most 24 uncached Docker Hub image groups per scan.")
 				fmt.Fprintln(&table, "    "+java4ShellNarrowerScope(report, reason))
@@ -442,6 +448,14 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 				fmt.Fprintln(&table, "    Verify the installed Java version for images that set JAVA_HOME.")
 			case "image_identity_unknown", "version_unknown":
 				fmt.Fprintln(&table, "    If these workloads use Java, confirm the installed version directly.")
+			case "platform_unknown":
+				fmt.Fprintln(&table, "    Confirm the installed Java version on the Pod's actual platform.")
+			case images.StatusNotFound:
+				fmt.Fprintln(&table, "    Use --details to find the image. Check that the digest exists and your registry credentials can read it.")
+			case images.StatusBlocked:
+				fmt.Fprintln(&table, "    Use --details to check the image's registry address. Radar refused the connection.")
+			case images.StatusError:
+				fmt.Fprintln(&table, "    Check connectivity to the image registry, then retry the affected workload or namespace.")
 			}
 		}
 	}
@@ -455,7 +469,7 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 
 func java4ShellNarrowerScope(report images.Java4ShellReport, reason string) string {
 	if report.Coverage.Scope.Namespaces != nil {
-		return "Check the affected workload on its own in Radar’s Vulnerabilities tab."
+		return "Open the affected workload in Radar. Its Vulnerabilities section checks that workload alone."
 	}
 	for _, row := range report.UnassessedRows {
 		if row.Reason == reason {
