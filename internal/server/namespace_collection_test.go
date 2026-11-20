@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -61,7 +62,7 @@ func describeCollection(c *NamespaceCollection) []string {
 func TestNamespaceCollectionGroupsKindsByNamespaces(t *testing.T) {
 	cache := newCollectionTestCache(t, collectionScopes, collectionNamespaces)
 
-	got := namespaceCollectionFor(cache, nil, []string{"alpha", "beta", "gamma"})
+	got := namespaceCollectionFor(cache, nil, nil, []string{"alpha", "beta", "gamma"}, nil)
 	want := []string{"ConfigMap,Pod: alpha", "Service: alpha,beta"}
 	if described := describeCollection(got); !slices.Equal(described, want) {
 		t.Fatalf("collection = %v, want %v (cluster-wide, cluster-only and uncollected kinds are left out)", described, want)
@@ -80,7 +81,7 @@ func TestNamespaceCollectionGroupsKindsByNamespaces(t *testing.T) {
 func TestNamespaceCollectionNamesOnlyVisibleNamespaces(t *testing.T) {
 	cache := newCollectionTestCache(t, collectionScopes, collectionNamespaces)
 
-	got := namespaceCollectionFor(cache, nil, []string{"beta"})
+	got := namespaceCollectionFor(cache, nil, nil, []string{"beta"}, nil)
 	if want := []string{"ConfigMap,Pod: ", "Service: beta"}; !slices.Equal(describeCollection(got), want) {
 		t.Fatalf("collection = %v, want %v", describeCollection(got), want)
 	}
@@ -92,7 +93,7 @@ func TestNamespaceCollectionNamesOnlyVisibleNamespaces(t *testing.T) {
 	}
 
 	// Kinds that differ only in namespaces the caller can't see form one group.
-	got = namespaceCollectionFor(cache, nil, nil)
+	got = namespaceCollectionFor(cache, nil, nil, nil, nil)
 	if want := []string{"ConfigMap,Pod,Service: "}; !slices.Equal(describeCollection(got), want) {
 		t.Fatalf("collection with nothing visible = %v, want %v", describeCollection(got), want)
 	}
@@ -105,10 +106,10 @@ func TestNamespaceCollectionIsAbsentWhenNothingIsNarrowed(t *testing.T) {
 		k8score.Nodes:       {Enabled: true},
 	}, nil)
 
-	if got := namespaceCollectionFor(cache, &k8s.PermissionCheckResult{ScopeCandidatesTruncated: true}, []string{"alpha"}); got != nil {
+	if got := namespaceCollectionFor(cache, &k8s.PermissionCheckResult{ScopeCandidatesTruncated: true}, nil, []string{"alpha"}, nil); got != nil {
 		t.Fatalf("collection = %v, want none: nothing is collected in only some namespaces", describeCollection(got))
 	}
-	if got := namespaceCollectionFor(nil, nil, []string{"alpha"}); got != nil {
+	if got := namespaceCollectionFor(nil, nil, nil, []string{"alpha"}, nil); got != nil {
 		t.Fatalf("collection without a cache = %v, want none", describeCollection(got))
 	}
 }
@@ -124,9 +125,80 @@ func TestNamespaceCollectionMayBeIncompleteWhenCandidatesWereTruncated(t *testin
 		{&k8s.PermissionCheckResult{}, false},
 		{&k8s.PermissionCheckResult{ScopeCandidatesTruncated: true}, true},
 	} {
-		if got := namespaceCollectionFor(cache, tc.permissions, []string{"alpha"}); got.MayBeIncomplete != tc.want {
+		if got := namespaceCollectionFor(cache, tc.permissions, nil, []string{"alpha"}, nil); got.MayBeIncomplete != tc.want {
 			t.Errorf("permissions %+v: MayBeIncomplete = %v, want %v", tc.permissions, got.MayBeIncomplete, tc.want)
 		}
+	}
+}
+
+// Radar's namespace list can shrink after startup (its LIST is denied mid-run);
+// collecting where it can no longer name a namespace leaves the groups short.
+func TestNamespaceCollectionMayBeIncompleteWhenRadarCollectsBeyondItsList(t *testing.T) {
+	cache := newCollectionTestCache(t, collectionScopes, collectionNamespaces)
+
+	for _, tc := range []struct {
+		name      string
+		radarList []string
+		want      bool
+	}{
+		{"complete list", nil, false},
+		{"short list holding every collected namespace", []string{"alpha", "beta"}, false},
+		{"short list missing a collected namespace", []string{"alpha"}, true},
+		{"empty short list", []string{}, true},
+	} {
+		if got := namespaceCollectionFor(cache, nil, nil, []string{"alpha"}, tc.radarList); got.MayBeIncomplete != tc.want {
+			t.Errorf("%s: MayBeIncomplete = %v, want %v", tc.name, got.MayBeIncomplete, tc.want)
+		}
+	}
+}
+
+type fakeDynamicObservations map[schema.GroupVersionResource]k8score.DynamicResourceObservation
+
+func (f fakeDynamicObservations) NamespaceObservation(gvr schema.GroupVersionResource, namespace string) k8score.DynamicResourceObservation {
+	o, ok := f[gvr]
+	if !ok {
+		return k8score.DynamicResourceObservation{}
+	}
+	if namespace != "" {
+		return k8score.DynamicResourceObservation{State: k8score.DynamicObservationSynced, Scope: k8score.DynamicObservationScopeExplicitNamespaces, Namespaces: []string{namespace}}
+	}
+	return o
+}
+
+func TestDynamicBuiltinKindsArePlannedLikeCounts(t *testing.T) {
+	list := []string{"get", "list", "watch"}
+	resources := []k8score.APIResource{
+		{Group: "resource.k8s.io", Version: "v1beta2", Kind: "ResourceClaim", Name: "resourceclaims", Namespaced: true, IsCRD: true, Verbs: list},
+		{Group: "resource.k8s.io", Version: "v1", Kind: "ResourceClaim", Name: "resourceclaims", Namespaced: true, IsCRD: true, Verbs: list},
+		{Group: "resource.k8s.io", Version: "v1", Kind: "ResourceClaimTemplate", Name: "resourceclaimtemplates", Namespaced: true, IsCRD: true, Verbs: list},
+		{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass", Name: "deviceclasses", IsCRD: true, Verbs: list},
+		{Group: "example.com", Version: "v1", Kind: "Widget", Name: "widgets", Namespaced: true, IsCRD: true, Verbs: list},
+		{Group: "authorization.k8s.io", Version: "v1", Kind: "LocalSubjectAccessReview", Name: "localsubjectaccessreviews", Namespaced: true, IsCRD: true, Verbs: []string{"create"}},
+	}
+	kinds := dynamicBuiltinKinds(resources)
+	var picked []string
+	for _, k := range kinds {
+		picked = append(picked, k.Kind+"@"+k.Version)
+	}
+	if want := []string{"ResourceClaim@v1", "ResourceClaimTemplate@v1"}; !slices.Equal(picked, want) {
+		t.Fatalf("picked %v, want %v (custom, cluster-scoped and unwatchable kinds are left out)", picked, want)
+	}
+
+	claims := schema.GroupVersionResource{Group: "resource.k8s.io", Version: "v1", Resource: "resourceclaims"}
+	templates := schema.GroupVersionResource{Group: "resource.k8s.io", Version: "v1", Resource: "resourceclaimtemplates"}
+	observations := fakeDynamicObservations{
+		claims:    {State: k8score.DynamicObservationSynced, Scope: k8score.DynamicObservationScopeExplicitNamespaces, Namespaces: []string{"alpha"}},
+		templates: {State: k8score.DynamicObservationSynced, Scope: k8score.DynamicObservationScopeCluster},
+	}
+	dynamic := collectedDynamicKinds(kinds, observations)
+	if len(dynamic) != 1 || dynamic[0].ref.Kind != "ResourceClaim" || dynamic[0].ref.Group != "resource.k8s.io" || !slices.Equal(dynamic[0].namespaces, []string{"alpha"}) {
+		t.Fatalf("dynamic collection = %+v, want ResourceClaims in alpha only (templates are collected everywhere)", dynamic)
+	}
+
+	cache := newCollectionTestCache(t, collectionScopes, collectionNamespaces)
+	got := namespaceCollectionFor(cache, nil, dynamic, []string{"alpha", "beta"}, nil)
+	if want := []string{"ConfigMap,Pod,ResourceClaim: alpha", "Service: alpha,beta"}; !slices.Equal(describeCollection(got), want) {
+		t.Fatalf("collection = %v, want %v", describeCollection(got), want)
 	}
 }
 

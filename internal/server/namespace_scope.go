@@ -568,8 +568,15 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	// Pinned, the picker already says what Radar watches; a failed load leaves no visible list.
 	var collection *NamespaceCollection
 	if !k8s.ForceNamespaceScope && !discoveryFailed && source != k8s.NamespaceListFailed {
+		var radarList []string
+		if !source.Complete() {
+			radarList = saAccessible
+			if radarList == nil {
+				radarList = []string{}
+			}
+		}
 		cache := readCache()
-		collection = namespaceCollectionFor(cache, cache.PermissionResult(), namespaces)
+		collection = namespaceCollectionFor(cache, cache.PermissionResult(), dynamicBuiltinCollection(), namespaces, radarList)
 	}
 
 	s.writeJSON(w, NamespaceScopeResponse{

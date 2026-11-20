@@ -9,7 +9,7 @@ export interface NamespaceCollectionGroup {
 
 /**
  * Where Radar keeps the built-in kinds it collects in only some namespaces.
- * `mayBeIncomplete`: the namespace list was cut short, so Radar may collect in more than the groups name.
+ * `mayBeIncomplete`: Radar can't name every namespace it collects in, so it may collect in more than the groups name.
  */
 export interface NamespaceCollection {
   groups: NamespaceCollectionGroup[]
