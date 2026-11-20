@@ -1352,6 +1352,21 @@ describe('Longhorn kind collisions', () => {
     expect(getResourceStatus('nodes', lhNode)?.text).not.toBe(coreReading)
   })
 
+  it('offers the metrics panel to a core Node only', () => {
+    const renderWithMetrics = (apiVersion: string) => renderToString(
+      <ResourceRendererDispatch
+        resource={{ kind: 'nodes', namespace: '', name: 'n1' }}
+        data={{ apiVersion, kind: 'Node', metadata: { name: 'n1' }, status: {} }}
+        onCopy={() => {}}
+        copied={null}
+        rendererOverrides={nodeOverride}
+        renderMetrics={() => <span>METRICS-PANEL</span>}
+      />,
+    )
+    expect(renderWithMetrics('v1')).toContain('METRICS-PANEL')
+    expect(renderWithMetrics('longhorn.io/v1beta2')).not.toContain('METRICS-PANEL')
+  })
+
   it('renders a Longhorn Volume with its own drawer and status', () => {
     const volume = { apiVersion: 'longhorn.io/v1beta2', kind: 'Volume', metadata: { name: 'pvc-1', namespace: 'longhorn-system' }, spec: { size: '10737418240', numberOfReplicas: 3 }, status: { state: 'attached', robustness: 'degraded', currentNodeID: 'worker-1' } }
     const html = renderToString(
