@@ -23,9 +23,9 @@ export function ContextSwitchActions({ operation, syncing, onDismiss }: { operat
   })
 
   let stageLimit = ''
-  if (operation.phase === 'preflight') {
+  if (operation.phase === 'preflight' && operation.preflightTimeoutSeconds !== undefined) {
     stageLimit = `Connectivity check limit ${formatDuration(operation.preflightTimeoutSeconds * 1000, true)}`
-  } else if (syncing) {
+  } else if (operation.phase === 'switching' && syncing) {
     stageLimit = `Initial workload sync limit ${formatDuration(operation.syncTimeoutSeconds * 1000, true)}`
   }
 

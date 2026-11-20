@@ -5,11 +5,12 @@ interface SwitchFixtureOptions {
   lostAcknowledgement?: 'connection' | 'body'
   holdStatusAfterAck?: boolean
   sourceDisconnected?: boolean
+  awaitingTargetAuth?: boolean
   synchronous?: boolean
   omnibar?: boolean
 }
 
-async function switchFixture(page: Page, { lostAcknowledgement, holdStatusAfterAck, sourceDisconnected, synchronous, omnibar }: SwitchFixtureOptions = {}) {
+async function switchFixture(page: Page, { lostAcknowledgement, holdStatusAfterAck, sourceDisconnected, synchronous, omnibar, awaitingTargetAuth }: SwitchFixtureOptions = {}) {
   let current = 'source-cluster'
   let operation: ContextSwitchOperation | undefined
   let starts = 0
@@ -79,7 +80,7 @@ async function switchFixture(page: Page, { lostAcknowledgement, holdStatusAfterA
     }
     operation = {
       id: 'test-switch', startedAt: new Date().toISOString(), target: 'target-cluster', phase: 'preflight',
-      preflightTimeoutSeconds: 47, syncTimeoutSeconds: 125, progress: 'Testing cluster connectivity…',
+      preflightTimeoutSeconds: awaitingTargetAuth ? undefined : 47, syncTimeoutSeconds: 125, progress: 'Testing cluster connectivity…',
     }
     if (lostAcknowledgement === 'connection') return route.abort('connectionreset')
     if (lostAcknowledgement === 'body') return route.fulfill({ status: 202, contentType: 'application/json', body: '{' })
@@ -130,7 +131,11 @@ async function switchFixture(page: Page, { lostAcknowledgement, holdStatusAfterA
     await page.evaluate(() => window.dispatchEvent(new Event('test-legacy-complete')))
   } else {
     await expect(page.getByRole('button', { name: 'Cancel switch' })).toBeVisible()
-    await expect(page.getByText(/Connectivity check limit 47s/)).toBeVisible()
+    if (awaitingTargetAuth) {
+      await expect(page.getByText(/Connectivity check limit/)).toBeHidden()
+    } else {
+      await expect(page.getByText(/Connectivity check limit 47s/)).toBeVisible()
+    }
   }
   return {
     get starts() { return starts },
@@ -253,7 +258,7 @@ test('cancelling an omnibar switch keeps the source namespace filter', async ({ 
 })
 
 test('an accepted switch keeps progress visible until the first status read completes', async ({ page }) => {
-  const fixture = await switchFixture(page, { holdStatusAfterAck: true })
+  const fixture = await switchFixture(page, { holdStatusAfterAck: true, awaitingTargetAuth: true })
   fixture.succeed()
   await expect(page.getByText('nginx-abc-111-target-cluster', { exact: true }).first()).toBeVisible()
   expect(fixture.starts).toBe(1)
@@ -265,4 +270,29 @@ test('a kubeconfig refusal reports its reason and keeps the source Pods availabl
   await expect(page.getByText('The kubeconfig changed while Radar was checking it. Try again.', { exact: true })).toBeVisible()
   await expect(page.getByText('nginx-abc-111-source-cluster', { exact: true }).first()).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Cannot Connect to Cluster' })).toBeHidden()
+})
+
+test('the omnibar can select the current-named target after stopping its switch', async ({ page }) => {
+  const fixture = await switchFixture(page)
+  fixture.warming()
+  await page.getByRole('button', { name: 'Stop switch', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Cluster switch stopped' })).toBeVisible()
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(page.getByRole('heading', { name: 'Cluster switch stopped' })).toBeVisible()
+  await page.getByRole('textbox', { name: 'Search resources and commands' }).fill('target-cluster')
+  await page.getByRole('button', { name: /target-cluster current/ }).click()
+  await expect(page.getByRole('button', { name: 'Cancel switch' })).toBeVisible()
+  expect(fixture.starts).toBe(2)
+})
+
+test('a busy manual retry explains why the disconnected cluster was not retried', async ({ page }) => {
+  const fixture = await switchFixture(page, { sourceDisconnected: true })
+  fixture.refuse()
+  await page.getByRole('button', { name: 'Back to source-cluster' }).click()
+  await page.route('**/api/connection/retry', route => route.fulfill({
+    status: 409, json: { error: 'Another cluster switch is already in progress.' },
+  }))
+  await page.getByRole('button', { name: 'Retry Connection' }).click()
+  await expect(page.getByText('Another cluster switch is already in progress.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Cannot Load Cluster Configuration' })).toBeVisible()
 })

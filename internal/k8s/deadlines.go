@@ -22,9 +22,9 @@ import (
 // reads any of these (i.e. before InitializeK8s). No locking is provided —
 // the contract is "configure once at startup".
 var (
-	// ContextSwitchTimeout bounds the tracked switch's target connectivity check.
-	// Synchronous switch, rescope and recovery callers also use it for initialization.
-	ContextSwitchTimeout = 30 * time.Second
+	// ContextSwitchTimeout bounds synchronous switch, rescope and recovery initialization.
+	ContextSwitchTimeout      = 30 * time.Second
+	localProbeTimeoutOverride time.Duration
 
 	// FirstPaintBackstop is the hard upper bound on the critical-sync wait
 	// during initial cluster connect. Past this, Radar gives up waiting and
@@ -70,6 +70,7 @@ func ConfigureDeadlines(opts DeadlineOptions) {
 		log.Printf("[k8s] ignoring negative ContextSwitchTimeout %v, keeping default %v", opts.ContextSwitchTimeout, ContextSwitchTimeout)
 	} else if opts.ContextSwitchTimeout > 0 {
 		ContextSwitchTimeout = opts.ContextSwitchTimeout
+		localProbeTimeoutOverride = opts.ContextSwitchTimeout
 	}
 
 	if opts.FirstPaintBackstop < 0 {

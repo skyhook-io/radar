@@ -40,13 +40,16 @@ func TestTrackedSwitchCancellationPreservesCurrentCluster(t *testing.T) {
 	_, stopped := setupCheckedSwitch(t, api.URL, true)
 	var tracker ContextSwitchTracker
 	op, ok := tracker.Start("target", nil)
-	if !ok || op.Phase != "preflight" || op.PreflightTimeoutSeconds != ContextSwitchTimeout.Seconds() || op.SyncTimeoutSeconds != FirstPaintBackstop.Seconds() {
+	if !ok || op.Phase != "preflight" || op.PreflightTimeoutSeconds != 0 || op.SyncTimeoutSeconds != FirstPaintBackstop.Seconds() {
 		t.Fatalf("start: %+v", op)
 	}
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("no preflight")
+	}
+	if limit := tracker.Snapshot().PreflightTimeoutSeconds; limit != ConnectionTestTimeout.Seconds() {
+		t.Fatalf("plain target advertised a %v-second probe", limit)
 	}
 	again, ok := tracker.Start("target", nil)
 	if !ok || again.ID != op.ID {
@@ -80,9 +83,9 @@ func TestTrackedSwitchRefusalKeepsOldConnection(t *testing.T) {
 func TestTrackedSwitchFinishesAfterPreflightBudget(t *testing.T) {
 	var versionHits atomic.Int32
 	setupCheckedSwitch(t, versionOnlyServer(t, &versionHits), true)
-	old := ContextSwitchTimeout
-	ContextSwitchTimeout = 250 * time.Millisecond
-	defer func() { ContextSwitchTimeout = old }()
+	withDeadlinesRestored(t, func() {
+		ConfigureDeadlines(DeadlineOptions{ContextSwitchTimeout: 250 * time.Millisecond})
+	})
 	release := make(chan struct{})
 	entered := make(chan struct{})
 	RegisterTimelineFuncs(nil, func() error { close(entered); <-release; return nil })
@@ -326,13 +329,13 @@ func TestTrackedSwitchAdmittedDuringLocalRetry(t *testing.T) {
 	targetPath, _ := setupCheckedSwitch(t, versionOnlyServer(t, &targetProbes), false)
 	writeServerKubeconfig(t, filepath.Dir(targetPath), "current.yaml", "current", current.URL)
 	var tracker ContextSwitchTracker
-	finish := tracker.BeginRetry()
+	retryCtx, finish := tracker.BeginRetry()
 	if finish == nil {
 		t.Fatal("initial retry refused")
 	}
 	retried := make(chan error, 1)
 	go func() {
-		err := RetryCurrentConnection()
+		err := RetryLocalConnection(retryCtx)
 		finish()
 		retried <- err
 	}()
@@ -341,12 +344,13 @@ func TestTrackedSwitchAdmittedDuringLocalRetry(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("retry did not reach its connectivity probe")
 	}
-	queued := tracker.BeginRetry()
+	_, queued := tracker.BeginRetry()
 	if queued == nil {
 		t.Fatal("second retry was not admitted before the selection")
 	}
 	op, ok := tracker.Start("target", nil)
-	if !ok || op.Phase != "preflight" || op.Progress != "Waiting for the current connection retry…" || tracker.BeginRetry() != nil {
+	_, later := tracker.BeginRetry()
+	if !ok || op.Phase != "preflight" || op.Progress != "Waiting for the current connection retry…" || later != nil {
 		t.Fatalf("selection during Retry: %+v, accepted %t", op, ok)
 	}
 	if !tracker.Cancel(op.ID, op.Target) {
@@ -356,9 +360,13 @@ func TestTrackedSwitchAdmittedDuringLocalRetry(t *testing.T) {
 	if !ok || next.ID == op.ID || targetProbes.Load() != 0 {
 		t.Fatalf("replacement selection: %+v, probes %d", next, targetProbes.Load())
 	}
-	unblock()
-	if err := <-retried; err == nil {
-		t.Fatal("unreachable current cluster unexpectedly recovered")
+	select {
+	case err := <-retried:
+		if !errors.Is(err, ErrReconnectSuperseded) {
+			t.Fatalf("picker interruption = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("picker waited for the old target connectivity check")
 	}
 	if snapshot := tracker.Snapshot(); snapshot.ID != next.ID || snapshot.Progress != next.Progress || targetProbes.Load() != 0 {
 		t.Fatalf("selection skipped an admitted retry: %+v", snapshot)
@@ -367,5 +375,77 @@ func TestTrackedSwitchAdmittedDuringLocalRetry(t *testing.T) {
 	awaitSwitchPhase(t, &tracker, "succeeded")
 	if status := GetConnectionStatus(); status.Context != "target" || status.State != StateConnected || targetProbes.Load() != 1 {
 		t.Fatalf("Retry overwrote the selected target: %+v, target probes %d", status, targetProbes.Load())
+	}
+}
+
+func TestLocalRetryWarmupOutlivesSwitchTimeoutAndYieldsToPicker(t *testing.T) {
+	for _, interrupt := range []bool{false, true} {
+		name := "ready"
+		if interrupt {
+			name = "select"
+		}
+		t.Run(name, func(t *testing.T) {
+			entered, release := make(chan struct{}), make(chan struct{})
+			var first atomic.Bool
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/version" {
+					_, _ = w.Write([]byte(`{"gitVersion":"v1.31.0"}`))
+					return
+				}
+				if (r.URL.Path == "/api" || r.URL.Path == "/apis") && first.CompareAndSwap(false, true) {
+					close(entered)
+					<-release
+				}
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403}`))
+			}))
+			defer api.Close()
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			defer unblock()
+			var hits atomic.Int32
+			target, _ := setupCheckedSwitch(t, versionOnlyServer(t, &hits), false)
+			writeServerKubeconfig(t, filepath.Dir(target), "current.yaml", "current", api.URL)
+			withDeadlinesRestored(t, func() {
+				ConfigureDeadlines(DeadlineOptions{ContextSwitchTimeout: 100 * time.Millisecond, FirstPaintBackstop: 5 * time.Second})
+			})
+			var tracker ContextSwitchTracker
+			ctx, finish := tracker.BeginRetry()
+			done := make(chan error, 1)
+			go func() { err := RetryLocalConnection(ctx); finish(); done <- err }()
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("discovery did not start")
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("warmup stopped at the connectivity deadline: %v", err)
+			case <-time.After(2 * ContextSwitchTimeout):
+			}
+			if !interrupt {
+				unblock()
+				if err := <-done; err != nil {
+					t.Fatalf("slow reachable cluster failed: %v", err)
+				}
+				return
+			}
+			if _, ok := tracker.Start("target", nil); !ok {
+				t.Fatal("picker refused during warmup")
+			}
+			select {
+			case err := <-done:
+				if !errors.Is(err, ErrReconnectSuperseded) {
+					t.Fatalf("superseded warmup: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("picker did not interrupt discovery")
+			}
+			awaitSwitchPhase(t, &tracker, "succeeded")
+			if GetContextName() != "target" || hits.Load() != 1 {
+				t.Fatal("picker did not connect to the replacement")
+			}
+		})
 	}
 }

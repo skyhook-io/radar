@@ -5299,7 +5299,7 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
-	release := s.contextSwitch.BeginRetry()
+	retryCtx, release := s.contextSwitch.BeginRetry()
 	if release == nil {
 		s.writeError(w, http.StatusConflict, "Another cluster switch is already in progress.")
 		return
@@ -5309,7 +5309,13 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "no context configured")
 		return
 	}
-	if err := k8s.RetryCurrentConnection(); err != nil {
+	var err error
+	if s.configManagement() == "local" && !k8s.IsInCluster() {
+		err = k8s.RetryLocalConnection(retryCtx)
+	} else {
+		err = k8s.RetryCurrentConnection()
+	}
+	if err != nil {
 		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return

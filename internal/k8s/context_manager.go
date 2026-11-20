@@ -380,6 +380,13 @@ func connectionTestTimeoutFor(usesExec bool) time.Duration {
 	return ConnectionTestTimeout
 }
 
+func localProbeTimeout(usesExec bool) time.Duration {
+	if localProbeTimeoutOverride > 0 {
+		return localProbeTimeoutOverride
+	}
+	return connectionTestTimeoutFor(usesExec)
+}
+
 func connectionProbeHTTPTimeout(ctx context.Context) time.Duration {
 	timeout := ConnectionTestTimeout
 	if deadline, ok := ctx.Deadline(); ok {
@@ -490,9 +497,10 @@ func credentialPluginStuck(ctx context.Context, prepared *preparedContext, probe
 // checkedSwitch carries a context that was prepared and found reachable
 // before the switch took contextOpMu.
 type checkedSwitch struct {
-	ctx      context.Context
-	prepared *preparedContext
-	tracker  *ContextSwitchTracker
+	ctx        context.Context
+	prepared   *preparedContext
+	tracker    *ContextSwitchTracker
+	localRetry bool
 }
 
 // PerformCheckedContextSwitch is the switch a person asks for. While the
@@ -519,7 +527,8 @@ func performCheckedContextSwitch(ctx context.Context, newContext string, tracker
 	}
 	timeout := connectionTestTimeoutFor(prepared.usesExec)
 	if tracker != nil {
-		timeout = ContextSwitchTimeout
+		timeout = localProbeTimeout(prepared.usesExec)
+		tracker.recordProbeTimeout(ctx, timeout)
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	probeErr := testConnection(probeCtx, prepared.config, prepared.usesExec)
@@ -549,6 +558,16 @@ func shouldCheckBeforeSwitch(newContext string) bool {
 // kubeconfig source to reload, so it verifies connectivity before rebuilding
 // caches around the existing client configuration.
 func RetryCurrentConnection() error {
+	return retryCurrentConnection(nil)
+}
+
+// RetryLocalConnection gives the local picker ownership of a manual retry's
+// lifetime. It can yield to a new selection after the previous sessions closed.
+func RetryLocalConnection(ctx context.Context) error {
+	return retryCurrentConnection(&checkedSwitch{ctx: ctx, localRetry: true})
+}
+
+func retryCurrentConnection(retry *checkedSwitch) error {
 	if err := contextOperationsBlockedErr(); err != nil {
 		return fmt.Errorf("%w: %w", ErrContextSwitchPreflight, err)
 	}
@@ -566,7 +585,10 @@ func RetryCurrentConnection() error {
 		if contextName == "" {
 			return errors.New("no context configured")
 		}
-		return performContextSwitch(contextName, generation, true, &checkedSwitch{ctx: context.Background()})
+		if retry == nil {
+			retry = &checkedSwitch{ctx: context.Background()}
+		}
+		return performContextSwitch(contextName, generation, true, retry)
 	}
 
 	contextName := GetContextName()
@@ -730,6 +752,9 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// something else: a CAPI merge or a kubeconfig edit doesn't bump the
 	// operation generation.
 	if checked != nil && checked.ctx.Err() != nil {
+		if checked.localRetry {
+			return ErrReconnectSuperseded
+		}
 		return fmt.Errorf("%w: switch to %q was cancelled", ErrContextSwitchPreflight, newContext)
 	}
 	if checked != nil && checked.prepared != nil {
@@ -739,6 +764,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		}
 	}
 
+	localRetry := checked != nil && checked.localRetry
 	progress := reportProgress
 	var tracker *ContextSwitchTracker
 	if checked != nil {
@@ -761,20 +787,23 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 			if p := recover(); p != nil {
 				switchErr = contextSwitchPanic(p)
 			}
-			if switchErr != nil && !tracker.setCanStop(checked.ctx, false) {
-				CancelOngoingOperations()
-				dropClusterClients()
-				ResetAllSubsystems()
-				InvalidateCapabilitiesCache()
-				InvalidateResourcePermissionsCache()
-				InvalidateServerVersionCache()
-				InvalidatePlatformCache()
-				SetConnectionStatus(ConnectionStatus{
-					State: StateDisconnected, Context: newContext, ErrorType: switchStoppedErrorType,
-					Error: "Cluster switch stopped. The previous connection was closed. Choose a cluster to connect.",
-				})
-				return
+		}
+		retryInterrupted := localRetry && checked.ctx.Err() != nil
+		if switchErr != nil && (retryInterrupted || (tracker != nil && !tracker.setCanStop(checked.ctx, false))) {
+			CancelOngoingOperations()
+			dropClusterClients()
+			ResetAllSubsystems()
+			InvalidateCapabilitiesCache()
+			InvalidateResourcePermissionsCache()
+			InvalidateServerVersionCache()
+			InvalidatePlatformCache()
+			msg := "Cluster switch stopped. The previous connection was closed. Choose a cluster to connect."
+			if retryInterrupted {
+				switchErr = ErrReconnectSuperseded
+				msg = "Connection retry stopped for a new cluster selection. Choose a cluster to connect."
 			}
+			SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: newContext, ErrorType: switchStoppedErrorType, Error: msg})
+			return
 		}
 		if switchErr != nil && (checked != nil || !requireOperationCurrent) {
 			SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: GetContextName(), Error: switchErr.Error(), ErrorType: ClassifyError(switchErr)})
@@ -846,20 +875,23 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		t = time.Now()
 		log.Println("Testing cluster connectivity...")
 		timeout := connectionTestOperationTimeout()
+		if tracker != nil || localRetry {
+			timeout = localProbeTimeout(UsesExecAuth())
+		}
 		if tracker != nil {
-			timeout = ContextSwitchTimeout
+			tracker.recordProbeTimeout(checked.ctx, timeout)
 		}
 		connCtx, connCancel := NewOperationContext(timeout)
 		defer connCancel()
-		if tracker != nil {
-			if !tracker.setCanStop(checked.ctx, true) {
-				return context.Canceled
-			}
+		if tracker != nil && !tracker.setCanStop(checked.ctx, true) {
+			return context.Canceled
+		}
+		if tracker != nil || localRetry {
 			stop := context.AfterFunc(checked.ctx, connCancel)
 			defer stop()
 		}
 		if err := TestClusterConnection(connCtx); err != nil {
-			if tracker != nil && !tracker.setCanStop(checked.ctx, false) {
+			if (tracker != nil && !tracker.setCanStop(checked.ctx, false)) || (localRetry && checked.ctx.Err() != nil) {
 				return context.Canceled
 			}
 			elapsed := time.Since(switchStart).Truncate(time.Millisecond)
@@ -881,7 +913,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	var initCtx context.Context
 	var initCancel context.CancelFunc
 	var discoveryWait time.Duration
-	if tracker != nil {
+	if tracker != nil || localRetry {
 		// Once the target answers, informer readiness uses the same first-paint
 		// backstop as startup. A cluster replacement still cancels this work.
 		initCtx, initCancel = context.WithCancel(OperationContext())
@@ -895,7 +927,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	}
 	defer initCancel()
 	if err := initAllSubsystems(initCtx, progress, discoveryWait, tracker); err != nil {
-		if tracker != nil && !tracker.setCanStop(checked.ctx, false) {
+		if (tracker != nil && !tracker.setCanStop(checked.ctx, false)) || (localRetry && checked.ctx.Err() != nil) {
 			return context.Canceled
 		}
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
@@ -909,10 +941,10 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// Step 5: Notify all registered callbacks
 	progress("Building topology...")
 	var switchID string
+	if (tracker != nil || localRetry) && checked.ctx.Err() != nil {
+		return context.Canceled
+	}
 	if tracker != nil {
-		if checked.ctx.Err() != nil {
-			return context.Canceled
-		}
 		switchID = tracker.Snapshot().ID
 	}
 	notifyContextSwitchCallbacks(newContext, switchID)

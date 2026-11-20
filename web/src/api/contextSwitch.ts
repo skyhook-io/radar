@@ -6,7 +6,7 @@ export interface ContextSwitchOperation {
   target: string
   phase: 'preflight' | 'switching' | 'stopping' | 'stopped' | 'succeeded' | 'failed' | 'cancelled'
   startedAt: string
-  preflightTimeoutSeconds: number
+  preflightTimeoutSeconds?: number
   syncTimeoutSeconds: number
   progress: string
   canStop?: boolean

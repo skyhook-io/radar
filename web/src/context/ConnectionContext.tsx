@@ -4,6 +4,7 @@ import { automaticRequestHeaders, getApiBase } from '../api/config'
 import { readErrorBody } from '../api/httpErrors'
 import { apiFetch, type SyncStatusSnapshot, type NodeDrainActivity } from '../api/client'
 import { followSwitch, switchInProgress, type ContextSwitchOperation } from '../api/contextSwitch'
+import { showApiNotice } from '../components/ui/Toast'
 import { ClusterConnectedContext } from './clusterConnected'
 
 export type ConnectionStateType = 'connected' | 'disconnected' | 'connecting'
@@ -308,20 +309,23 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const retryMutation = useMutation({
     mutationFn: () => retryConnection(),
     onMutate: () => {
+      const previousConnection = connectionRef.current
       manualRetryPendingRef.current = true
       // Until SSE re-delivers state, a failed retry may report its own error
       // rather than deferring to a stale "connected"
       sseActiveRef.current = false
       // Set connecting state while retrying
-      setConnection(prev => ({
-        ...prev,
+      const pendingConnection: ConnectionState = {
+        ...previousConnection,
         state: 'connecting',
         error: undefined,
         progressMessage: 'Connecting to cluster...',
         // A retry is a fresh attempt — per-kind progress from the previous
         // attempt would mislabel readiness until the next poll.
         syncStatus: undefined,
-      }))
+      }
+      setConnection(prev => prev === previousConnection ? pendingConnection : prev)
+      return { previousConnection, pendingConnection }
     },
     onSuccess: (result) => {
       const previousContext = connectionRef.current.context
@@ -334,9 +338,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       }
       refreshQueriesAfterReconnect(queryClient, previousContext, result.context)
     },
-    onError: (error: Error) => {
+    onError: (error: Error, _variables, attempt) => {
       const retryError = error as ConnectionRetryError
-      if (retryError.status === 409) return
+      if (retryError.status === 409) {
+        if (attempt) setConnection(prev => prev === attempt.pendingConnection ? attempt.previousConnection : prev)
+        showApiNotice('Retry when the current cluster operation finishes', error.message, 'info')
+        return
+      }
       setConnection(prev => {
         if (sseActiveRef.current && prev.state === 'connected') return prev
         return {

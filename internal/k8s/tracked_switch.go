@@ -16,7 +16,7 @@ type ContextSwitchStatus struct {
 	Target                  string    `json:"target"`
 	Phase                   string    `json:"phase"`
 	StartedAt               time.Time `json:"startedAt"`
-	PreflightTimeoutSeconds float64   `json:"preflightTimeoutSeconds"`
+	PreflightTimeoutSeconds float64   `json:"preflightTimeoutSeconds,omitempty"`
 	SyncTimeoutSeconds      float64   `json:"syncTimeoutSeconds"`
 	CanStop                 bool      `json:"canStop,omitempty"`
 	Progress                string    `json:"progress"`
@@ -25,12 +25,14 @@ type ContextSwitchStatus struct {
 }
 
 type ContextSwitchTracker struct {
-	mu          sync.Mutex
-	status      ContextSwitchStatus
-	cancel      context.CancelFunc
-	untracked   int
-	retries     int
-	retriesDone chan struct{}
+	mu            sync.Mutex
+	status        ContextSwitchStatus
+	cancel        context.CancelFunc
+	untracked     int
+	retries       int
+	retriesDone   chan struct{}
+	retryContext  context.Context
+	cancelRetries context.CancelFunc
 }
 
 func (t *ContextSwitchTracker) Snapshot() *ContextSwitchStatus {
@@ -62,21 +64,24 @@ func (t *ContextSwitchTracker) BeginUntracked() (release func()) {
 
 // BeginRetry lets a later picker selection join the current retries' wait
 // before taking its preflight generation. Once selected, it excludes new retries.
-func (t *ContextSwitchTracker) BeginRetry() (release func()) {
+func (t *ContextSwitchTracker) BeginRetry() (ctx context.Context, release func()) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.cancel != nil {
-		return nil
+		return nil, nil
 	}
 	if t.retries == 0 {
 		t.retriesDone = make(chan struct{})
+		t.retryContext, t.cancelRetries = context.WithCancel(context.Background())
 	}
 	t.retries++
-	return func() {
+	return t.retryContext, func() {
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		t.retries--
 		if t.retries == 0 {
+			t.cancelRetries()
+			t.retryContext, t.cancelRetries = nil, nil
 			close(t.retriesDone)
 			t.retriesDone = nil
 		}
@@ -97,9 +102,10 @@ func (t *ContextSwitchTracker) Start(target string, onFailure func(error)) (Cont
 	t.status = ContextSwitchStatus{
 		ID: rand.Text(), Target: target, StartedAt: time.Now().UTC(),
 		Phase: "preflight", Progress: "Checking target cluster…",
-		PreflightTimeoutSeconds: ContextSwitchTimeout.Seconds(), SyncTimeoutSeconds: FirstPaintBackstop.Seconds(),
+		SyncTimeoutSeconds: FirstPaintBackstop.Seconds(),
 	}
 	if t.retriesDone != nil {
+		t.cancelRetries()
 		t.status.Progress = "Waiting for the current connection retry…"
 	}
 	go t.run(ctx, t.status, onFailure, t.retriesDone)
@@ -170,6 +176,14 @@ func (t *ContextSwitchTracker) setCanStop(ctx context.Context, canStop bool) boo
 	}
 	t.status.CanStop = canStop
 	return true
+}
+
+func (t *ContextSwitchTracker) recordProbeTimeout(ctx context.Context, timeout time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if ctx.Err() == nil {
+		t.status.PreflightTimeoutSeconds = timeout.Seconds()
+	}
 }
 
 func (t *ContextSwitchTracker) progress(stage string) {

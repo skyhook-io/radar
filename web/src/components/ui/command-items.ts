@@ -239,9 +239,7 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
           sublabel: sub || undefined,
           category: "Clusters",
           icon: Server,
-          action: () => {
-            if (!ctx.isCurrent) cb.onSwitchContext(ctx);
-          },
+          action: () => cb.onSwitchContext(ctx),
           searchTerms: [ctx.name, account || ""].filter(Boolean),
         });
       }
