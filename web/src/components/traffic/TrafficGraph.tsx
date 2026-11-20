@@ -19,7 +19,7 @@ import type { ELK } from 'elkjs/lib/elk.bundled.js'
 import type { AggregatedFlow } from '../../types'
 import { clsx } from 'clsx'
 import { X, ArrowRight, Globe, Server, Activity, Puzzle, Crosshair } from 'lucide-react'
-import { PaneLoader } from '@skyhook-io/k8s-ui'
+import { MiddleEllipsis, PaneLoader } from '@skyhook-io/k8s-ui'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
@@ -208,7 +208,7 @@ const NODE_PORT_HEIGHT = 18 // Height per port row
 const MAX_VISIBLE_PORTS = 4 // Maximum ports to show before "+N more"
 
 // Custom node component
-function TrafficNode({ data }: { data: TrafficNodeData }) {
+export function TrafficNode({ data }: { data: TrafficNodeData }) {
   const isExternal = isExternalKind(data.kind)
   const isInternet = data.kind === 'Internet'
   const isAddonInternet = data.kind === 'AddonInternet' // Separate internet for addon traffic
@@ -269,10 +269,15 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
           />
         )}
         <div className="flex-1 min-w-0">
-          <div className={clsx(
-            'text-sm font-medium truncate',
-            isAddonInternet ? 'text-purple-300' : isInternet ? 'text-sky-300' : (isAddon || isAddonNode) ? 'text-purple-200' : hasNamespaceColor ? 'text-white' : 'text-theme-text-primary'
-          )}>{data.label}</div>
+          {/* Middle-cut: workloads of one release share a long prefix and differ only at the end.
+              MiddleEllipsis exposes only the cut text, so screen readers get the full name instead. */}
+          <span className="sr-only">{data.label}</span>
+          <div aria-hidden="true">
+            <MiddleEllipsis text={data.label} title={data.label} className={clsx(
+              'text-sm font-medium',
+              isAddonInternet ? 'text-purple-300' : isInternet ? 'text-sky-300' : (isAddon || isAddonNode) ? 'text-purple-200' : hasNamespaceColor ? 'text-white' : 'text-theme-text-primary'
+            )} />
+          </div>
           {data.namespace ? (
             <div className={clsx(
               'text-xs truncate',

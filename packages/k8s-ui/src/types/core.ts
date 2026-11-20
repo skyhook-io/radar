@@ -1684,7 +1684,7 @@ export interface TrafficFlow {
    *  measures a rate rather than observing individual responses, so it has a
    *  status code for no single flow. */
   errorRate?: number
-  verdict: string // forwarded, dropped, error
+  verdict: string // forwarded, dropped, error; empty when the source reports none
   /** The network plugin's own account of which policies decided this flow
    *  (Hubble reports it). Absent when the plugin said nothing. */
   policyVerdict?: {
