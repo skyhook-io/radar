@@ -226,7 +226,7 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 	view, err := prometheus.ResolveChartScope(budgetCtx, prometheus.BoundResolver(client, conn, diagnoseScopeResolverFor(client, k8s.GetResourceCache())),
 		prometheus.PodSetScopeRequest("diagnose_vitals", scope.Selection, diagnoseMetricsCategories, prometheus.ChartScopeSpan(since, prom.CategoryRestarts)))
 	if err != nil {
-		out.Error = fmt.Sprintf("metrics omitted: %s budget exceeded before all queries answered", diagnoseMetricsBudget)
+		out.Error = diagnoseMetricsStopped(budgetCtx)
 		return out
 	}
 	out.ClusterScope = prometheus.ClusterScopeOf(view)
@@ -256,7 +256,7 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 		if r.err != nil {
 			if budgetCtx.Err() != nil {
 				out.Series = []diagnoseMetricSeries{}
-				out.Error = fmt.Sprintf("metrics omitted: %s budget exceeded before all queries answered", diagnoseMetricsBudget)
+				out.Error = diagnoseMetricsStopped(budgetCtx)
 				log.Printf("[mcp] diagnose: metrics for %d pods in %s dropped: %s", out.Pods, namespace, out.Error)
 				return out
 			}
@@ -440,4 +440,13 @@ func roundSignificant(v float64, digits int) float64 {
 	}
 	scale := math.Pow(10, float64(-exp))
 	return math.Round(v*scale) / scale
+}
+
+// diagnoseMetricsStopped says why the vitals stopped once their budget
+// context ended: the caller cancelling is not the metrics budget running out.
+func diagnoseMetricsStopped(budgetCtx context.Context) string {
+	if errors.Is(budgetCtx.Err(), context.Canceled) {
+		return "metrics omitted: the request was cancelled before all queries answered"
+	}
+	return fmt.Sprintf("metrics omitted: %s budget exceeded before all queries answered", diagnoseMetricsBudget)
 }

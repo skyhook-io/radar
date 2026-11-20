@@ -301,8 +301,9 @@ different cluster labels:
   identity and holds this cluster's own live objects (Pods, Nodes, ReplicaSets,
   volumes or the HPA, depending on the metric). Views that join metrics, like
   rightsizing and costs, need every input to land on this cluster.
-- Views that add series over a namespace or the whole cluster (the cluster
-  overview, namespace charts and costs) also check that such a metric holds no
+- Views that add series over a namespace, the whole cluster or a workload's
+  Pods found by owner name (the cluster overview, namespace charts, costs and
+  rightsizing) also check that such a metric holds no
   object kube-state-metrics lists under another cluster's labels and not this
   cluster's (Pods, Nodes or volumes); if it does, the view is withheld
   (`label_missing`), and if kube-state-metrics has no series with this

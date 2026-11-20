@@ -60,17 +60,21 @@ type rightsizingAnchors struct {
 // rightsizingScopeRequest checks every metric over the subject's namespaces.
 // Pod-keyed metrics are anchored on this cluster's Pods, ReplicaSet ownership
 // on its ReplicaSets; ReplicaSet ownership is read only when a Deployment is
-// sized.
+// sized. The queries select Pods by their owner's name, which another
+// cluster's same-named workload shares, so Pod-keyed metrics also carry the
+// foreign check. ReplicaSet ownership needs none: another cluster's
+// ReplicaSet only reaches a recommendation through its Pods.
 func rightsizingScopeRequest(subject, proofNamespace string, deployments bool, anchors rightsizingAnchors, at time.Time) ViewScopeRequest {
 	pods := BoundViewAnchors(anchors.pods)
 	req := ViewScopeRequest{View: rightsizingScopeView, Joined: true, Span: rightsizingScopeSpan, At: at, Namespace: proofNamespace}
 	for _, name := range rightsizingMetricNames {
-		m := ViewMetric{Name: name, Subject: subject, AnchorLabel: "pod", AnchorValues: pods, AnchorNamespace: anchors.podNamespace}
+		m := ViewMetric{Name: name, Subject: subject, AnchorLabel: "pod", AnchorValues: pods, AnchorNamespace: anchors.podNamespace, Foreign: PodForeignCheck(false)}
 		if name == metricReplicaSetOwner {
 			if !deployments {
 				continue
 			}
 			m.AnchorLabel, m.AnchorValues, m.AnchorNamespace = "replicaset", BoundViewAnchors(anchors.replicaSets), anchors.replicaSetNamespace
+			m.Foreign = ForeignCheck{}
 		}
 		req.Metrics = append(req.Metrics, m)
 	}

@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -121,6 +122,10 @@ func TestRightsizingLabeledOwnershipUnlabeledAnchoredUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &fakeViewQuerier{answer: func(query string) (*prom.QueryResult, error) {
+		if strings.Contains(query, `"`+viewScopeReferenceLabel+`"`) {
+			// kube_pod_info lists this cluster's Pods and no other cluster's.
+			return rows(vec(map[string]string{viewScopeReferenceLabel: PodForeignCheck(false).id()}, 1))
+		}
 		if isReadback(query) {
 			var out []prom.Series
 			for _, m := range rightsizingMetricNames {
@@ -264,6 +269,13 @@ func TestRightsizingScopeRequestShape(t *testing.T) {
 		if m.AnchorLabel != wantLabel || !slices.Equal(m.AnchorValues, wantValues) || m.AnchorNamespace != "payments" {
 			t.Errorf("%s anchors %s=%v in %q", m.Name, m.AnchorLabel, m.AnchorValues, m.AnchorNamespace)
 		}
+		wantForeign := PodForeignCheck(false)
+		if m.Name == metricReplicaSetOwner {
+			wantForeign = ForeignCheck{}
+		}
+		if !reflect.DeepEqual(m.Foreign, wantForeign) {
+			t.Errorf("%s foreign check %+v, want %+v", m.Name, m.Foreign, wantForeign)
+		}
 	}
 	if _, err := normalizeViewScopeRequest(req); err != nil {
 		t.Fatal(err)
@@ -284,6 +296,52 @@ func TestRightsizingScopeRequestShape(t *testing.T) {
 	}
 	if slices.ContainsFunc(scan.Metrics, func(m ViewMetric) bool { return m.Name == metricReplicaSetOwner }) {
 		t.Error("scan without Deployments checks ReplicaSet ownership")
+	}
+}
+
+// Two clusters send ownership and cAdvisor without a cluster label, and both
+// run a Deployment named api in shop; kube-state-metrics' labeled Pod list
+// names cluster b's Pod. The scan joins Pods by owner name, so it would size
+// api from both clusters: it is withheld. With only this cluster's Pods in
+// those series, it reads them unfiltered.
+func TestRightsizingWithTwoUnlabeledClusters(t *testing.T) {
+	ksm := []map[string]string{ksmPod(clusterA, "shop", "api-a-1"), ksmPod(clusterB, "shop", "api-b-1")}
+	series := func(pods ...string) []map[string]string {
+		var out []map[string]string
+		for _, pod := range pods {
+			out = append(out,
+				unlabeledSeries(metricPodOwner, "shop", pod, "owner_kind", "ReplicaSet", "owner_name", "api-6c"),
+				unlabeledSeries(metricCPUUsage, "shop", pod, "container", "app"))
+		}
+		return out
+	}
+	req := scanRightsizingScopeRequestFrom([]scanWorkload{scanTestWorkload("Deployment", "shop", "api", "api")},
+		func(string) []string { return []string{"api-a-1"} }, func(string) []string { return nil }, time.Time{})
+	norm, err := normalizeViewScopeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		series []map[string]string
+		want   ViewScopeState
+	}{
+		{"both clusters' Pods", series("api-a-1", "api-b-1"), ViewScopeLabelMissing},
+		{"only this cluster's Pods", series("api-a-1"), ViewScopeUnlabeled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &evaluatingStore{t: t, series: append(slices.Clone(ksm), tc.series...)}
+			scope, err := decideViewScope(context.Background(), store, norm, time.Now(), clusterA, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scope.State != tc.want {
+				t.Fatalf("scope = %+v, want %s", scope, tc.want)
+			}
+			if tc.want == ViewScopeLabelMissing && !strings.Contains(scope.Note, "another cluster") {
+				t.Errorf("note %q", scope.Note)
+			}
+		})
 	}
 }
 

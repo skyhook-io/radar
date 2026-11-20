@@ -452,6 +452,23 @@ func TestHandleDiagnoseMetricsDropsSeriesOnTimeBudget(t *testing.T) {
 	}
 }
 
+// A caller that cancels is not told the metrics budget ran out.
+func TestDiagnoseMetricsStoppedNamesTheCause(t *testing.T) {
+	expired, cancelExpired := context.WithTimeout(context.Background(), time.Nanosecond)
+	defer cancelExpired()
+	<-expired.Done()
+	if got := diagnoseMetricsStopped(expired); !strings.Contains(got, "budget exceeded") {
+		t.Errorf("budget ran out: %q", got)
+	}
+	caller, cancel := context.WithCancel(context.Background())
+	cancelled, cancelBudget := context.WithTimeout(caller, time.Minute)
+	defer cancelBudget()
+	cancel()
+	if got := diagnoseMetricsStopped(cancelled); !strings.Contains(got, "cancelled") || strings.Contains(got, "budget") {
+		t.Errorf("cancelled caller: %q", got)
+	}
+}
+
 func TestHandleDiagnoseMetricsDropsSeriesOnSizeBudget(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	timeline.ResetStore()
