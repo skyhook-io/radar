@@ -1,6 +1,8 @@
 package k8s
 
 import (
+	"strings"
+
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
@@ -9,9 +11,11 @@ import (
 )
 
 // RequiresExactNamespaceAccess reports whether namespace visibility alone is
-// insufficient to read the resolved resource. Trivy findings can quote secrets.
+// insufficient to read the resolved resource. Trivy findings can quote secrets,
+// and a MetalLB BGPPeer can hold its session password inline.
 func RequiresExactNamespaceAccess(gvr schema.GroupVersionResource) bool {
 	return gvr.Group == aicontext.TrivyGroup ||
+		gvr.Group == metalLBGroup && gvr.Resource == "bgppeers" ||
 		gvr.Group == "" && (gvr.Resource == "secrets" || gvr.Resource == "limitranges") ||
 		gvr.Group == "rbac.authorization.k8s.io" && (gvr.Resource == "roles" || gvr.Resource == "rolebindings")
 }
@@ -22,7 +26,7 @@ func ExactNamespaceAccessResource(kind, requestedGroup string) (group, resource 
 	gvr, ok := BuiltinGVRAnyGroup(kind)
 	ok = ok && (requestedGroup == "" || requestedGroup == gvr.Group)
 	if !ok {
-		gvr, ok = TrivyReportGVR(kind, requestedGroup)
+		gvr, ok = ExactAccessCRDGVR(kind, requestedGroup)
 	}
 	if ok && RequiresExactNamespaceAccess(gvr) {
 		return gvr.Group, gvr.Resource
@@ -41,7 +45,7 @@ func ExactNamespaceAccessNode(n *topology.Node) (group, resource string, resolve
 	if resource == "" {
 		kind, _ := n.Data["resourceKind"].(string)
 		b, builtin := resourceid.BuiltinForKind(kind)
-		exact := group == aicontext.TrivyGroup || builtin && b.Group == group && RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: b.Group, Resource: b.Resource})
+		exact := group == aicontext.TrivyGroup || group == metalLBGroup && strings.EqualFold(kind, "BGPPeer") || builtin && b.Group == group && RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: b.Group, Resource: b.Resource})
 		return "", "", !exact
 	}
 	if RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: group, Resource: resource}) {

@@ -28,11 +28,12 @@ These kinds are gated more tightly, per-resource-kind, because the shared cache 
 - **Secrets** (and Secret-derived data such as TLS certificate metadata) — shown only if the user can list Secrets in that namespace.
 - **Roles, RoleBindings and LimitRanges** — lists, detail pages, counts, search and MCP reads require the caller’s exact permission on that kind in the namespace (`list` for inventories, `get` for a single object).
 - **Trivy Operator reports** (the `aquasecurity.github.io` group: VulnerabilityReports, ExposedSecretReports, ConfigAuditReports, SbomReports and the rest): shown only if the user can list that report kind in that namespace, and across all namespaces at once only with a cluster-wide grant. An ExposedSecretReport holds the secret Trivy found in an image, so reports are treated like Secrets in lists, detail pages, counts, search and the MCP tools.
+- **MetalLB BGPPeers** (`metallb.io`) — a peer can hold its BGP session password inline, so lists, detail pages, counts, search and MCP reads require the caller's exact permission on BGPPeers in the namespace, as for Roles. Calico's BGPPeer, in another API group, uses namespace visibility.
 - **Cluster-scoped resources** (Nodes, PersistentVolumes, ClusterRoles, cluster-scoped CRDs, etc.) — shown only if the user's RBAC permits listing that kind.
 
 Issues follow the same rule: you see an issue only if you could open its resource. A namespaced resource needs namespace access, the tightly gated namespaced kinds above also need exact kind access, and a cluster-scoped resource needs list on its kind. A cluster-scoped resource's issues are composed across namespaces, so a Node's issues can draw on Pods anywhere, but only rows from namespaces you can access feed them: another namespace's Pods never appear among its members or in its blast radius. Issues roll up to a resource's owner, such as a Pod's Deployment, only if you could open the owner; otherwise the issue stays on the resource. A finding drawn from a Secret's history reaches you without that history if you can't read the Secret: a Pod still running with environment values from a Secret that changed is flagged, with the restart it needs, but not which Secret or keys changed, or when. A finding that something your resource names does not exist (an Ingress's TLS Secret or IngressClass, a PVC's StorageClass, a RoleBinding's ClusterRole) is shown with namespace access: it says only that a name you can already read is missing, and Kubernetes reports a missing StorageClass in the PVC's events too. The Home dashboard's problem list and the MCP tools follow the same rules. The per-resource Issues view says when something was withheld, rather than showing an empty list as "none".
 
-Search uses the same exact list permissions as resource reads for Secrets, Roles, RoleBindings, LimitRanges and Trivy reports. Ordinary namespaced kinds, including ServiceAccounts, NetworkPolicies, ResourceQuotas and dynamic CRDs, use namespace visibility, as resource lists do. Sensitive-kind checks try a cluster-wide SAR first and fan out over visible namespaces only after a denial. Your own access is the scope of a search, so its coverage response reports a denial only for a kind or namespace the query names, keeping caller denial, failed permission checks and collector limitations apart; see [Search coverage](mcp.md#search-coverage-and-cel-object-filters).
+Search uses the same exact list permissions as resource reads for Secrets, Roles, RoleBindings, LimitRanges, Trivy reports and MetalLB BGPPeers. Ordinary namespaced kinds, including ServiceAccounts, NetworkPolicies, ResourceQuotas and dynamic CRDs, use namespace visibility, as resource lists do. Sensitive-kind checks try a cluster-wide SAR first and fan out over visible namespaces only after a denial. Your own access is the scope of a search, so its coverage response reports a denial only for a kind or namespace the query names, keeping caller denial, failed permission checks and collector limitations apart; see [Search coverage](mcp.md#search-coverage-and-cel-object-filters).
 
 **If namespace-level isn't tight enough for you**, scope the boundary at the cache instead of at read time: run a Radar instance per trust boundary and give each one a **namespace-scoped ServiceAccount** (a `Role`/`RoleBinding`, no `ClusterRole`) limited to that boundary's namespaces. Radar detects the restricted permissions at startup and only watches and caches what its ServiceAccount can list — so the instance simply never holds another team's data, and there's nothing to over-expose. Point each team at their own instance (an ingress or auth proxy can route them). With the Helm chart, set `rbac.namespaces` to that boundary's namespaces; see [In-Cluster Deployment → namespace-scoped RBAC](in-cluster.md) for this and for the `rbac.create: false` + custom `Role` setup.
 
@@ -94,20 +95,47 @@ from that same repository.
 Without an authenticated user, local image inspection keeps its existing
 credential discovery and network behavior.
 
-The on-demand Java4Shell check starts with the Pods the caller may list and
-their reported running image digests. It tries anonymous reads first. With
-authentication enabled, a private read requires the same `get pods` and
-pull-secret or `pods/exec` grants as per-Pod inspection. `pods/exec` is a
-permission check for credential access. The advisory reads manifests and
-configs over the registry connection. It can use Radar's own registry
-credentials for exec-authorized callers and in standalone loopback mode with
-auth disabled. On an unauthenticated shared listener, it can use the running
-Pod's pull secrets available to Radar's Kubernetes identity.
+### Java4Shell registry access
 
-Credentialed reads are authorized and revalidated for each check. Only
-Pods with matching credential access share a private result within the
-same check. Credentials go over HTTPS, and the advisory pins registry
-connections to checked addresses and refuses loopback and link-local addresses.
+A running Pod tells Radar which image the node pulled. To check its Java version,
+Radar makes a separate request to the registry for the manifest and image config.
+A node can pull an image with its own IAM role even when Radar has no access to
+that repository. If the report says **Registry authentication required**, that
+image's Java version is still unknown.
+
+| Where you run the check | How Radar can read private images |
+| --- | --- |
+| In-cluster UI, default Helm install (`auth.mode: none`) | Radar can use a Docker config Secret named in the workload Pod's `spec.imagePullSecrets` if Radar's ServiceAccount can read it into the cache. The default chart grants no Secret reads. Radar's own cloud and Docker credentials are disabled in this mode. |
+| In-cluster UI, signed in | You need to list and get Pods in the workload namespace. Radar can use the Pod's pull Secret if it is in Radar's cache and you can `get` that Secret or `create pods/exec` there. With exec access, Radar can also use its own registry credentials. The check itself never executes a command in a Pod. |
+| CLI or local loopback UI with auth off | Radar can use readable workload pull secrets and registry credentials on the machine running Radar. For private ECR, configure the registry host and a local AWS identity with pull access. [CLI setup and example](configuration.md#java4shell-cli) |
+
+**Private ECR on EKS.** If the workload already names a usable pull secret,
+Radar can use it as described above. For workloads pulled with node IAM and
+no pull secret, choose where to run the check. If you use the default Helm
+install, the quickest option is the [CLI with your AWS profile](configuration.md#java4shell-cli).
+To run the check in a signed-in Radar UI, configure the installation once.
+
+1. Associate a dedicated IAM role with **Radar's ServiceAccount** using EKS Pod Identity or IRSA.
+   Allow `ecr:GetAuthorizationToken` on `*` and `ecr:BatchGetImage` and
+   `ecr:GetDownloadUrlForLayer` on the repositories Radar should read.
+   [Configure AWS access for a Kubernetes ServiceAccount](https://docs.aws.amazon.com/eks/latest/userguide/service-accounts.html)
+2. Add the exact registry host from the report to Radar's Helm values and apply
+   them to the release. Use a comma-separated value for multiple hosts.
+
+   ```yaml
+   env:
+     - name: RADAR_JAVA4SHELL_ECR_REGISTRIES
+       value: "123456789012.dkr.ecr.us-east-1.amazonaws.com"
+   ```
+
+3. Once the updated Radar Pod is running, rerun the check as a signed-in user
+   with the Pod read and exec permissions above.
+
+Radar tries anonymous reads first and disables EC2 instance metadata credential
+discovery. It checks private access on every scan. Only Pods with matching
+credential access share a private result within a scan. Credentials travel over
+HTTPS, and Radar pins registry connections to checked addresses and refuses
+loopback and link-local addresses.
 
 ### Prometheus metrics
 

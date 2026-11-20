@@ -2,6 +2,7 @@ import { CRDVersionsCell } from './renderers/crd-cells'
 import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getVolumeSnapshotColumnValue, getVolumeSnapshotSortValue } from './resource-utils-volumesnapshot'
+import { getMetalLBColumnValue, getMetalLBSortValue } from './resource-utils-metallb'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import { getAgentRuntimeSortValue } from './resource-utils-agent-runtimes'
@@ -417,6 +418,8 @@ const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
   'connectCluster', 'connectorClass', 'connectorTasks', 'artifacts',
   'kafkaVersion', 'kafkaWarnings', 'kafkaPools', 'kafkaListeners', 'poolKafka', 'poolRoles', 'poolReplicas',
   'snapshotSource', 'restoreSize', 'snapshotClass', 'snapshotContent', 'snapshotTaken', 'snapshotRef', 'snapshotDriver', 'deletionPolicy', 'defaultClass',
+  'poolAddresses', 'poolAssigned', 'poolAutoAssign', 'poolAvoidBuggyIPs', 'advertisedPools', 'advertisedNodes', 'l2Interfaces', 'bgpPeers', 'bgpCommunities',
+  'peerAddress', 'peerASN', 'myASN', 'bfdProfile', 'ebgpMultiHop', 'configComponent', 'configErrors',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -663,6 +666,51 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'snapshotDriver', label: 'Driver', width: 'w-56 shrink-0' },
     { key: 'deletionPolicy', label: 'Deletion Policy', width: 'w-32 shrink-0', tooltip: 'Policy for contents created from this class: Delete removes the storage snapshot with its VolumeSnapshot; Retain keeps it.' },
     { key: 'defaultClass', label: 'Default', width: 'w-24 shrink-0', tooltip: 'Used for snapshots of this driver that name no class.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  ipaddresspools: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-36 shrink-0', tooltip: 'Address availability from the counters MetalLB 0.15+ writes. Not reported without them.' },
+    { key: 'poolAddresses', label: 'Addresses', width: 'min-w-48' },
+    { key: 'poolAssigned', label: 'Assigned', width: 'w-44 shrink-0', tooltip: 'Addresses assigned / addresses in the pool, per IP family. Services can share an address, so this is not a Service count.' },
+    { key: 'poolAutoAssign', label: 'Auto Assign', width: 'w-28 shrink-0', tooltip: 'No: only Services that request this pool get its addresses.' },
+    { key: 'poolAvoidBuggyIPs', label: 'Avoid Buggy IPs', width: 'w-32 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  l2advertisements: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'advertisedPools', label: 'IP Address Pools', width: 'min-w-48', tooltip: 'Pools this advertisement announces. With no pools or selectors it covers every pool.' },
+    { key: 'advertisedNodes', label: 'Nodes', width: 'min-w-40', tooltip: 'Nodes allowed to announce the addresses.' },
+    { key: 'l2Interfaces', label: 'Interfaces', width: 'w-40 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  bgpadvertisements: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'advertisedPools', label: 'IP Address Pools', width: 'min-w-48', tooltip: 'Pools this advertisement announces. With no pools or selectors it covers every pool.' },
+    { key: 'bgpPeers', label: 'Peers', width: 'min-w-40' },
+    { key: 'bgpCommunities', label: 'Communities', width: 'w-44 shrink-0' },
+    { key: 'advertisedNodes', label: 'Nodes', width: 'min-w-40', tooltip: 'Nodes allowed to announce the addresses.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  bgppeers: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'peerAddress', label: 'Address', width: 'min-w-40' },
+    { key: 'peerASN', label: 'Peer ASN', width: 'w-32 shrink-0' },
+    { key: 'myASN', label: 'My ASN', width: 'w-28 shrink-0' },
+    { key: 'bfdProfile', label: 'BFD Profile', width: 'w-36 shrink-0' },
+    { key: 'ebgpMultiHop', label: 'Multi Hop', width: 'w-24 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  configurationstates: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Result', width: 'w-32 shrink-0', tooltip: 'Invalid: the component could not parse the configuration and keeps the last one it accepted.' },
+    { key: 'configComponent', label: 'Component', width: 'w-48 shrink-0' },
+    { key: 'configErrors', label: 'Errors', width: 'min-w-48' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   opentelemetrycollectors: [
@@ -3128,6 +3176,11 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   volumesnapshots: ['snapshot.storage.k8s.io'],
   volumesnapshotcontents: ['snapshot.storage.k8s.io'],
   volumesnapshotclasses: ['snapshot.storage.k8s.io'],
+  ipaddresspools: ['metallb.io'],
+  l2advertisements: ['metallb.io'],
+  bgpadvertisements: ['metallb.io'],
+  bgppeers: ['metallb.io'],
+  configurationstates: ['metallb.io'],
   opentelemetrycollectors: ['opentelemetry.io'],
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
@@ -5772,6 +5825,8 @@ export function ResourcesView({
     }
     const volumeSnapshotValue = getVolumeSnapshotSortValue(resource, column)
     if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
+    const metalLBValue = getMetalLBSortValue(resource, column)
+    if (metalLBValue !== undefined) return metalLBValue
     const otelValue = getOpenTelemetryColumnValue(resource, column)
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
@@ -8255,6 +8310,11 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (volumeSnapshotValue !== undefined) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{volumeSnapshotValue || '-'}</span>
+  }
+  const metalLBValue = getMetalLBColumnValue(resource, column)
+  if (metalLBValue !== undefined) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-words">{metalLBValue || '-'}</span>
   }
   if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />

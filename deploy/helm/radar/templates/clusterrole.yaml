@@ -101,6 +101,12 @@ rules:
   - apiGroups: ["operator.victoriametrics.com"]
     resources: ["vmagents", "vmclusters", "vmsingles"]
     verbs: ["get", "list", "watch"]
+  {{- if .Values.rbac.crdGroups.metallb }}
+  # spec.password can hold the BGP session password inline.
+  - apiGroups: ["metallb.io"]
+    resources: ["bgppeers"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- end }}
 
   # Workload resources (read-only)
@@ -460,6 +466,14 @@ rules:
   {{- if .Values.rbac.crdGroups.mariadb }}
   - apiGroups: ["mariadb.mmontes.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.metallb }}
+  # The kinds Radar curates and the controller's ConfigurationState reports.
+  # BGPPeers are granted with Secrets, below. BFD profiles, communities and
+  # the per-Service announcement statuses are not read.
+  - apiGroups: ["metallb.io"]
+    resources: ["ipaddresspools", "l2advertisements", "bgpadvertisements", "configurationstates"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.multus }}
