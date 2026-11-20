@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -130,5 +131,49 @@ func TestFluxSourceGraphFollowsArtifactChain(t *testing.T) {
 	rel := GetRelationships("ArtifactGenerator", "team", "gen", &Topology{Nodes: nodes, Edges: edges}, nil, p)
 	if rel == nil || len(rel.Dependents) != 1 || rel.Dependents[0].Kind != "ExternalArtifact" || len(rel.Dependencies) != 1 || rel.Dependencies[0].Kind != "GitRepository" {
 		t.Fatalf("generator relationships: %+v", rel)
+	}
+}
+
+func TestFluxSourceGraphGeneratorCycleTerminates(t *testing.T) {
+	obj := func(apiVersion, kind, name string, spec map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"namespace": "team", "name": name}, "spec": spec}}
+	}
+	genRef := map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "gen"}
+	hr := obj("helm.toolkit.fluxcd.io/v2", "HelmRelease", "app", map[string]any{"chartRef": map[string]any{"kind": "ExternalArtifact", "name": "app"}})
+	ea := obj("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "app", map[string]any{"sourceRef": genRef})
+	gen := obj("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "gen", map[string]any{"sources": []any{
+		map[string]any{"alias": "self", "kind": "ExternalArtifact", "name": "app"},
+		map[string]any{"alias": "repo", "kind": "GitRepository", "name": "platform"},
+	}})
+	repo := obj("source.toolkit.fluxcd.io/v1", "GitRepository", "platform", nil)
+	gvrs := map[string]schema.GroupVersionResource{
+		"ExternalArtifact":  {Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "externalartifacts"},
+		"ArtifactGenerator": {Group: "source.extensions.fluxcd.io", Version: "v1beta1", Resource: "artifactgenerators"},
+		"GitRepository":     {Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"},
+	}
+	p := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{gvrs: gvrs, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+		gvrs["ExternalArtifact"]: {ea}, gvrs["ArtifactGenerator"]: {gen}, gvrs["GitRepository"]: {repo},
+	}}, listCalls: map[string]int{}}
+	nodes := []Node{{ID: "helmrelease/team/app", Kind: KindHelmRelease, Name: "app", Data: map[string]any{"namespace": "team", "apiVersion": hr.GetAPIVersion()}}}
+	nodes, edges, warnings := addFluxSourceEdges(nodes, nil, []*unstructured.Unstructured{hr}, p, DefaultBuildOptions())
+	if len(warnings) != 0 || len(nodes) != 4 {
+		t.Fatalf("nodes=%+v warnings=%v", nodes, warnings)
+	}
+	seen := map[string]bool{}
+	for _, n := range nodes {
+		if seen[n.ID] {
+			t.Fatalf("duplicate node %s", n.ID)
+		}
+		seen[n.ID] = true
+	}
+	// release←artifact, artifact←generator, generator←repository, generator←artifact (the generator's own input).
+	if len(edges) != 4 {
+		t.Fatalf("edges = %+v", edges)
+	}
+	// Cached lists stay bounded by the level cap, not by the cycle.
+	for resource, n := range p.listCalls {
+		if n > gitops.MaxFluxSourceLevels+1 {
+			t.Fatalf("%s listed %d times", resource, n)
+		}
 	}
 }

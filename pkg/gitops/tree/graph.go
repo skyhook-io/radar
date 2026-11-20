@@ -408,8 +408,14 @@ func enrichFluxSource(node Node, obj *unstructured.Unstructured) Node {
 		node.Sync = ""
 		state := gitops.FluxStatus(obj)
 		node.Health = state.Health
+		// source-watcher pauses a generator with an annotation, not spec.suspend,
+		// and leaves its last Ready condition in place.
+		if strings.EqualFold(obj.GetAnnotations()["source.extensions.fluxcd.io/reconcile"], "disabled") {
+			node.Health = "Suspended"
+			node.Data["paused"] = true
+		}
 		node.HealthSource = HealthSourceController
-		node.TopologyStatus = healthToTopology(state.Health)
+		node.TopologyStatus = healthToTopology(node.Health)
 		node.Info = nil
 		// source-watcher 2.3 also lists the Namespaces it manages; entries from
 		// earlier versions carry no kind. No inventory leaves the count unknown.

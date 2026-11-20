@@ -7,6 +7,7 @@ import {
   getExternalArtifactGenerator,
   getExternalArtifactRevision,
   getExternalArtifactStatus,
+  isArtifactGeneratorPaused,
   shortArtifactRevision,
 } from './resource-utils-flux'
 import { isColumnSortable } from './ResourcesView'
@@ -66,5 +67,13 @@ describe('ArtifactGenerator helpers', () => {
     expect(getArtifactGeneratorArtifacts(mixed)?.map((a) => a.name)).toEqual(['a', 'b'])
     expect(getArtifactGeneratorCount({ ...ag, status: {} })).toBeUndefined()
     expect(getArtifactGeneratorArtifacts({ ...ag, status: {} })).toBeUndefined()
+  })
+
+  it('reads a generator paused by annotation as suspended, whatever its last Ready says', () => {
+    const paused = { ...ag, metadata: { annotations: { 'source.extensions.fluxcd.io/reconcile': 'Disabled' } }, status: ready('False') }
+    expect(isArtifactGeneratorPaused(paused)).toBe(true)
+    expect(getArtifactGeneratorStatus(paused).text).toBe('Suspended')
+    expect(isArtifactGeneratorPaused({ ...ag, metadata: { annotations: { 'source.extensions.fluxcd.io/reconcile': 'enabled' } } })).toBe(false)
+    expect(getArtifactGeneratorStatus({ ...ag, status: ready('False') }).text).toBe('Not Ready')
   })
 })

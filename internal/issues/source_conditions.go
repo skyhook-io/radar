@@ -704,6 +704,12 @@ func isTransientCRDCondition(u *unstructured.Unstructured, reason string) bool {
 	if suspend, ok, _ := unstructured.NestedBool(u.Object, "spec", "suspend"); ok && suspend {
 		return true
 	}
+	// source-watcher pauses an ArtifactGenerator with an annotation and keeps
+	// its last Ready condition.
+	if u.GetKind() == "ArtifactGenerator" && strings.HasPrefix(u.GetAPIVersion(), "source.extensions.fluxcd.io/") &&
+		strings.EqualFold(u.GetAnnotations()["source.extensions.fluxcd.io/reconcile"], "disabled") {
+		return true
+	}
 	// observedGeneration lags generation → controller hasn't caught up yet.
 	gen := u.GetGeneration()
 	if gen > 0 {

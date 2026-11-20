@@ -343,4 +343,10 @@ func TestFluxSourceWarningForGenerator(t *testing.T) {
 	if len(issues) != 1 || issues[0].Reason != "SourceNotReady" || !reflect.DeepEqual(issues[0].Refs, []Ref{want}) {
 		t.Fatalf("issues = %+v", issues)
 	}
+	// Paused on purpose: the stale Ready=False is not a failure to fix.
+	gen.SetAnnotations(map[string]string{"source.extensions.fluxcd.io/reconcile": "disabled"})
+	tree = fluxIssueTree(t, root, []*unstructured.Unstructured{ea, gen}, "")
+	if issues := fluxSourceWarnings(tree, nil); len(issues) != 0 {
+		t.Fatalf("paused generator warned: %+v", issues)
+	}
 }

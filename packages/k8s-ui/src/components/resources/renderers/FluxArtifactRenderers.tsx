@@ -5,7 +5,7 @@ import { GitOpsStatusBadge } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
 import { Tooltip } from '../../ui/Tooltip'
-import { getArtifactGeneratorArtifacts, getExternalArtifactGenerator, shortArtifactRevision } from '../resource-utils-flux'
+import { getArtifactGeneratorArtifacts, getExternalArtifactGenerator, isArtifactGeneratorPaused, shortArtifactRevision } from '../resource-utils-flux'
 
 type NavigateRef = { kind: string; namespace: string; name: string; group?: string }
 
@@ -24,9 +24,9 @@ const SOURCE_PLURALS: Record<string, string> = {
 const MAX_ARTIFACTS = 50
 const MAX_COPY_RULES = 5
 
-function FluxStatus({ data }: { data: any }) {
+function FluxStatus({ data, paused = false }: { data: any; paused?: boolean }) {
   const conditions = (data.status?.conditions || []) as FluxCondition[]
-  const status = fluxConditionsToGitOpsStatus(conditions, data.spec?.suspend === true, {
+  const status = fluxConditionsToGitOpsStatus(conditions, paused || data.spec?.suspend === true, {
     generation: data.metadata?.generation,
     observedGeneration: data.status?.observedGeneration,
   })
@@ -76,7 +76,7 @@ export function ArtifactGeneratorRenderer({ data, onNavigate }: Props) {
   const artifacts: any[] = data.spec?.artifacts || []
   return (
     <>
-      <FluxStatus data={data} />
+      <FluxStatus data={data} paused={isArtifactGeneratorPaused(data)} />
       {sources.length > 0 && (
         <Section title={`Sources (${sources.length})`} icon={GitBranch}>
           <div className="space-y-1 text-sm">

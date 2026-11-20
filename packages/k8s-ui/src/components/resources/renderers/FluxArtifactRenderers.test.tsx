@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { ArtifactGeneratorRenderer, ExternalArtifactRenderer } from './FluxArtifactRenderers'
+import { ExternalArtifactCell } from './flux-cells'
 
 const text = (html: string) => html.replace(/<!-- -->/g, '')
 const navigate = () => {}
@@ -51,5 +52,32 @@ describe('ArtifactGeneratorRenderer', () => {
     const none = text(renderToString(<ArtifactGeneratorRenderer onNavigate={navigate} data={{ ...data, status: {} }} />))
     expect(none).toContain('Radar can&#x27;t read an inventory in this generator&#x27;s status.')
     expect(none).not.toContain('Artifacts (0)')
+  })
+
+  it('shows a generator paused by annotation as suspended, not as its stale failure', () => {
+    const failing = {
+      apiVersion: 'source.extensions.fluxcd.io/v1beta1', kind: 'ArtifactGenerator',
+      metadata: { name: 'gen', namespace: 'flux-system' },
+      spec: { sources: [{ alias: 'repo', kind: 'GitRepository', name: 'platform' }] },
+      status: { inventory: [], conditions: [{ type: 'Ready', status: 'False', reason: 'BuildFailed', message: 'old failure' }] },
+    }
+    const paused = { ...failing, metadata: { ...failing.metadata, annotations: { 'source.extensions.fluxcd.io/reconcile': 'disabled' } } }
+    const count = (html: string) => html.split('old failure').length - 1
+    const failingHtml = text(renderToString(<ArtifactGeneratorRenderer onNavigate={navigate} data={failing} />))
+    const pausedHtml = text(renderToString(<ArtifactGeneratorRenderer onNavigate={navigate} data={paused} />))
+    expect(pausedHtml).toContain('Suspended')
+    expect(failingHtml).not.toContain('Suspended')
+    // The failure banner and status message go; the condition history keeps it.
+    expect(count(pausedHtml)).toBe(1)
+    expect(count(failingHtml)).toBeGreaterThan(1)
+  })
+})
+
+describe('ExternalArtifactCell', () => {
+  it('names the generator, or another producer by kind and name', () => {
+    const cell = (sourceRef: any) => renderToString(<ExternalArtifactCell column="generator" resource={{ apiVersion: 'source.toolkit.fluxcd.io/v1', kind: 'ExternalArtifact', spec: { sourceRef } }} />)
+    expect(cell({ apiVersion: 'source.extensions.fluxcd.io/v1beta1', kind: 'ArtifactGenerator', name: 'gen' })).toContain('>gen<')
+    expect(cell({ apiVersion: 'example.com/v1', kind: 'Builder', name: 'b' })).toContain('>Builder/b<')
+    expect(cell(undefined)).toContain('>-<')
   })
 })

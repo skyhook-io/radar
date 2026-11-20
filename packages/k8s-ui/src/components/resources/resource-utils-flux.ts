@@ -204,7 +204,17 @@ export function getFluxAlertEventCount(alert: any): number {
 // ============================================================================
 
 export const getExternalArtifactStatus = getFluxResourceStatus
-export const getArtifactGeneratorStatus = getFluxResourceStatus
+
+// source-watcher pauses a generator with an annotation rather than
+// spec.suspend, and keeps its last Ready condition while paused.
+export function isArtifactGeneratorPaused(ag: any): boolean {
+  return String(ag?.metadata?.annotations?.['source.extensions.fluxcd.io/reconcile'] ?? '').toLowerCase() === 'disabled'
+}
+
+export function getArtifactGeneratorStatus(ag: any): StatusBadge {
+  if (isArtifactGeneratorPaused(ag)) return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+  return getFluxResourceStatus(ag)
+}
 
 export function getExternalArtifactRevision(ea: any): string {
   return ea.status?.artifact?.revision || ''

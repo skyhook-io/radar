@@ -149,7 +149,7 @@ install_flux() {
 }
 
 # install_source_watcher applies source-watcher from the same Flux release.
-# install.yaml leaves it out (it is opt-in); the release's manifests.tar.gz
+# Flux 2.7's install.yaml leaves it out (2.8's includes it); the release's manifests.tar.gz
 # carries it without a namespace, so it is applied into flux-system.
 install_source_watcher() {
   [ "${FLUX_SOURCE_WATCHER}" = "1" ] || return 0
@@ -169,7 +169,7 @@ install_source_watcher() {
   kubectl --context "${KUBECTL_CTX}" -n flux-system apply -f "$tmp/source-watcher.yaml" >/dev/null
   rm -rf "$tmp"
   kubectl --context "${KUBECTL_CTX}" -n flux-system rollout status deployment/source-watcher --timeout=180s >/dev/null
-  # On Flux 2.7 helm-controller refuses chartRef ExternalArtifact
+  # On Flux 2.7 and 2.8 helm-controller refuses chartRef ExternalArtifact
   # ("AccessDenied: ExternalArtifact feature gate is disabled") unless the
   # gate is on.
   if ! kubectl --context "${KUBECTL_CTX}" -n flux-system get deployment helm-controller -o jsonpath='{.spec.template.spec.containers[0].args}' | grep -q 'ExternalArtifact=true'; then

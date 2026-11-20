@@ -266,7 +266,11 @@ export function ExternalArtifactCell({ resource, column }: { resource: any; colu
   switch (column) {
     case 'generator': {
       const generator = getExternalArtifactGenerator(resource)
-      return <span className="text-sm text-theme-text-secondary truncate block">{generator || '-'}</span>
+      if (generator) return <span className="text-sm text-theme-text-secondary truncate block">{generator}</span>
+      // Another controller can produce an ExternalArtifact; name it as the CRD's own column did.
+      const ref = resource.spec?.sourceRef
+      const other = ref?.kind && ref?.name ? `${ref.kind}/${ref.name}` : ''
+      return <span className="text-sm text-theme-text-tertiary truncate block">{other || '-'}</span>
     }
     case 'status': {
       const status = getExternalArtifactStatus(resource)
