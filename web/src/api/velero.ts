@@ -81,6 +81,35 @@ export function useVeleroBackupNow() {
   })
 }
 
+// POST /api/velero/schedules/{namespace}/{name}/{pause|resume}
+//
+// Sets spec.paused, bound to the version of the schedule the user reviewed (a
+// schedule edited since is refused, 409). skipImmediately is written to the
+// schedule: true skips the run due on resume, null leaves it to the server.
+export function useVeleroSchedulePause() {
+  const queryClient = useQueryClient()
+  const { guard } = useRadarFeature('veleroSchedulePause')
+  return useMutation({
+    mutationFn: ({ namespace, name, paused, resourceVersion, skipImmediately = null }: {
+      namespace: string
+      name: string
+      paused: boolean
+      resourceVersion: string
+      skipImmediately?: boolean | null
+    }) =>
+      guard(() =>
+        fetchJSON<{ paused: boolean; changed: boolean }>(
+          `/velero/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${paused ? 'pause' : 'resume'}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resourceVersion, skipImmediately }) },
+        ),
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['velero'] })
+      void queryClient.invalidateQueries({ queryKey: ['resource'] })
+    },
+  })
+}
+
 /** internal/velero RunRow: one Backup or Restore as its list and pages show it. */
 export interface VeleroRunRow {
   namespace: string
@@ -197,5 +226,152 @@ export function useVeleroBackupDeletion(namespace: string, name: string, uid: st
       const status = (error as { status?: number } | null)?.status
       return status && status >= 400 && status < 500 ? false : shouldRetryRadarQuery(count, error)
     },
+  })
+}
+export interface VeleroRunContentsResponse {
+  groups: { kind: string; count: number; matched: number; items: { namespace: string; name: string; action?: string }[] }[]
+  total: number
+  matched: number
+  namespaces: string[]
+  actions: Record<string, number>
+  truncated: boolean
+}
+
+export type VeleroLogLevel = 'error' | 'warning' | 'info' | 'debug' | 'other'
+export interface VeleroRunLogResponse {
+  lines: { number: number; level: VeleroLogLevel; text: string }[]
+  counts: Record<VeleroLogLevel, number>
+  matched: number
+  truncated: boolean
+  partial: boolean
+  decodedBytes: number
+  limit?: string
+  /** The levels the lines were selected from; with levels=auto, the server's choice. */
+  levels: VeleroLogLevel[]
+}
+
+function useVeleroRunArtifact<T>(kind: 'backups' | 'restores', namespace: string, name: string, artifact: 'contents' | 'log' | 'volumes', params: URLSearchParams) {
+  const { guard, gatedKey } = useRadarFeature(artifact === 'volumes' ? 'veleroRunVolumes' : 'veleroRunArtifacts')
+  const base = getApiBase()
+  const search = params.toString()
+  return useQuery<T>({
+    queryKey: ['velero', artifact, base, kind, namespace, name, search, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<T>(`/velero/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/${artifact}?${search}`, { method: 'POST', signal })),
+    enabled: !!namespace && !!name,
+    // A tab or filter is the user's request; don't create DownloadRequests on focus or a timer.
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: false,
+  })
+}
+
+export function useVeleroRunContents(kind: 'backups' | 'restores', namespace: string, name: string, filters: { q: string; action: string; namespace: string }) {
+  return useVeleroRunArtifact<VeleroRunContentsResponse>(kind, namespace, name, 'contents', new URLSearchParams(filters))
+}
+
+export function useVeleroRunLog(kind: 'backups' | 'restores', namespace: string, name: string, levels: string, q: string) {
+  return useVeleroRunArtifact<VeleroRunLogResponse>(kind, namespace, name, 'log', new URLSearchParams({ levels, q }))
+}
+
+export interface VeleroVolumeDetails {
+  snapshotHandle?: string
+  size?: number
+  incrementalSize?: number
+  driver?: string
+  vscName?: string
+  operationID?: string
+  readyToUse?: boolean
+  volumeGroupSnapshotHandle?: string
+  dataMover?: string
+  uploaderType?: string
+  retainedSnapshot?: string
+  volumeType?: string
+  volumeAZ?: string
+  iops?: string
+  volumeName?: string
+  podName?: string
+  podNamespace?: string
+  nodeName?: string
+  phase?: string
+}
+
+export interface VeleroVolumeRecord {
+  pvcName?: string
+  pvcNamespace?: string
+  pvName?: string
+  method?: string
+  snapshotDataMoved: boolean
+  preserveLocalSnapshot?: boolean
+  result?: string
+  skipped?: boolean
+  skippedReason?: string
+  started?: string
+  completed?: string
+  csiSnapshotInfo?: VeleroVolumeDetails
+  snapshotDataMovementInfo?: VeleroVolumeDetails
+  nativeSnapshotInfo?: VeleroVolumeDetails
+  podVolumeInfo?: VeleroVolumeDetails
+}
+
+export interface VeleroRunVolumesResponse {
+  volumes: VeleroVolumeRecord[]
+  total: number
+  truncated: boolean
+  /** The run had finished when Radar read it, just before fetching the file; otherwise Velero may still rewrite the record. */
+  finishedAtRead: boolean
+}
+
+export interface VeleroVolumeOperation {
+  kind: string
+  name: string
+  pod?: string
+  podNamespace?: string
+  volume?: string
+  pvc?: string
+  pvcNamespace?: string
+  node?: string
+  phase?: string
+  bytesDone?: number
+  bytesTotal?: number
+  message?: string
+  started?: string
+  completed?: string
+  longRunning: boolean
+  nodeAgent?: 'running' | 'notRunning' | 'unknown'
+}
+
+export interface VeleroVolumeOperationsResponse {
+  observedAt: string
+  runPhase: string
+  coverage: Record<string, import('@skyhook-io/k8s-ui').VeleroKindCoverage>
+  operations: VeleroVolumeOperation[]
+}
+
+export function useVeleroRunVolumes(kind: 'backups' | 'restores', namespace: string, name: string) {
+  return useVeleroRunArtifact<VeleroRunVolumesResponse>(kind, namespace, name, 'volumes', new URLSearchParams())
+}
+
+export function isVeleroRunFinished(phase: string | undefined): boolean {
+  return phase !== undefined && ['Completed', 'Failed', 'PartiallyFailed', 'FailedValidation', 'Deleting'].includes(phase)
+}
+
+export function useVeleroVolumeOperations(kind: 'backups' | 'restores', namespace: string, name: string) {
+  const { guard, gatedKey } = useRadarFeature('veleroRunVolumes')
+  const base = getApiBase()
+  return useQuery<VeleroVolumeOperationsResponse>({
+    queryKey: ['velero', 'volume-operations', base, kind, namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<VeleroVolumeOperationsResponse>(`/velero/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/volume-operations`, signal)),
+    enabled: !!namespace && !!name,
+    staleTime: 10_000,
+    refetchInterval: (query) => {
+      const data = query.state.data
+      if (!data) return false
+      // Velero leaves finished operation objects in place, so only an
+      // unfinished one, a run still going or a kind still loading needs polling.
+      const settled = (phase?: string) => phase === 'Completed' || phase === 'Failed' || phase === 'Canceled'
+      return data.operations.some((row) => !settled(row.phase)) || Object.values(data.coverage).some((coverage) => coverage.state === 'syncing') || !isVeleroRunFinished(data.runPhase) ? 10_000 : false
+    },
+    retry: shouldRetryRadarQuery,
   })
 }

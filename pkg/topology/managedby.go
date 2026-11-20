@@ -4,6 +4,9 @@ import (
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // GitOps / Helm ownership signal keys. Detection precedence mirrors
@@ -135,6 +138,31 @@ func ManagedByFromMeta(obj metav1.Object) *ResourceRef {
 	}
 
 	return nil
+}
+
+// ManagedByFromMetaIn is ManagedByFromMeta with an Argo CD Application it names
+// without a namespace placed in its namespace when that is known: the one
+// Application of that name that records subject and readable allows. Argo
+// CD's default tracking id and its instance label carry no Application
+// namespace, so with no such Application, or several, the name stays
+// without one; it is never guessed.
+func ManagedByFromMetaIn(obj metav1.Object, ov *ownership.View, subject resourceid.Ref, readable func(resourceid.Ref) bool) *ResourceRef {
+	ref := ManagedByFromMeta(obj)
+	if ref == nil || ref.Namespace != "" || ref.Group != argoApplicationGroup || ref.Kind != "Application" || ov == nil {
+		return ref
+	}
+	found := ""
+	for _, m := range ov.RecordingManagers(subject).Managers {
+		if m.Ref.GroupKind() != ownership.ArgoApplication || m.Ref.Name != ref.Name || readable != nil && !readable(m.Ref) {
+			continue
+		}
+		if found != "" && found != m.Ref.Namespace {
+			return ref
+		}
+		found = m.Ref.Namespace
+	}
+	ref.Namespace = found
+	return ref
 }
 
 // parseArgoTrackingID parses ArgoCD's tracking-id annotation in either format:
