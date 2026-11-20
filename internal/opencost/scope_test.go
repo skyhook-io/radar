@@ -155,7 +155,7 @@ func useFakeResolver(t *testing.T, mode scopeMode) *fakeCostResolver {
 }
 
 // costEndpoint is one metrics-store cost endpoint: its run through PromCost
-// and the same call unscoped, as it was made before scoping existed.
+// and the same call through the unscoped entry point.
 type costEndpoint struct {
 	name     string
 	run      func(context.Context, PromCost) (available bool, reason string, scope *pkgopencost.ClusterScope, total float64)
@@ -370,7 +370,7 @@ func TestCostEndpointsWithheldSendNoCostQuery(t *testing.T) {
 	}
 }
 
-func TestCostEndpointsUnlabeledSendTodaysQueries(t *testing.T) {
+func TestCostEndpointsUnlabeledSendUnscopedQueries(t *testing.T) {
 	for _, ep := range costEndpoints() {
 		t.Run(ep.name, func(t *testing.T) {
 			useFakeResolver(t, modeUnlabeled)
@@ -620,7 +620,7 @@ func TestCostScopeCheckOnAMovedConnectionIsAQueryError(t *testing.T) {
 	}
 }
 
-// Unmoved, a bound PromCost answers as before.
+// Unmoved, a bound PromCost checks and queries its own store.
 func TestCostScopeCheckOnTheSameConnectionAnswers(t *testing.T) {
 	if err := k8s.InitTestResourceCache(fakeclientset.NewSimpleClientset()); err != nil {
 		t.Fatal(err)

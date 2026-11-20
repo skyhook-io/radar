@@ -233,7 +233,7 @@ func TestStrictScopeTurnsPartialAnswersUnavailable(t *testing.T) {
 		check("application-trend", at.Available, at.Reason, at.ClusterScope)
 	}
 
-	// Without a strict scope, a partial answer still counts, as before.
+	// Without a strict scope, a partial answer still counts toward the totals.
 	s := ComputeCostSummaryFromProm(ctx, annotatedStore(t, true, nil), SummaryOptions{})
 	if !s.Available {
 		t.Fatalf("unscoped partial answer = %+v", s)

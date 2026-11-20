@@ -16,7 +16,7 @@ import (
 )
 
 // unlabeledCostScope decides every cost check as a single unlabeled store
-// does: nothing filtered, today's queries.
+// does: nothing filtered, the unscoped queries.
 func unlabeledCostScope(_ context.Context, req prometheuspkg.ViewScopeRequest) (prometheuspkg.ViewScope, error) {
 	filters := map[string]string{}
 	for _, m := range req.Metrics {

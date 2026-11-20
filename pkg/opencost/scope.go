@@ -28,8 +28,8 @@ const (
 )
 
 // StoreScope keeps the metrics-store cost queries to one cluster in a store
-// several clusters share. The zero value sends the queries exactly as they
-// were before scoping existed.
+// several clusters share. The zero value sends the unscoped queries: no
+// filter, no strict mode, nothing withheld.
 type StoreScope struct {
 	// Filter returns the matchers that keep one metric to this cluster.
 	Filter prom.ClusterFilter

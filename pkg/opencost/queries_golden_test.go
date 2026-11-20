@@ -14,9 +14,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
-// The golden file holds the exact cost queries each metrics-store compute
-// path sent before cluster scoping existed. A single-cluster store, whose
-// filters are all empty, must keep receiving them byte for byte.
+// The golden file pins the exact cost queries each metrics-store compute
+// path sends with no cluster filter. A single-cluster store, whose filters
+// are all empty, must keep receiving them byte for byte.
 
 const goldenCostNamespace = "pay-ments"
 
@@ -75,7 +75,7 @@ var goldenAppRefs = []ApplicationWorkloadRef{
 }
 
 // costGoldenCases runs every compute path; a nil scope calls the unscoped
-// entry points exactly as callers did before scoping existed.
+// entry points.
 func costGoldenCases(scope *StoreScope) []costGoldenCase {
 	summary := func(skip bool) func(context.Context, *prom.Client) {
 		return func(ctx context.Context, c *prom.Client) {
