@@ -250,7 +250,7 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
           {dockerHubLimit > 0 && (
             <p className="text-theme-text-secondary">
               <span className="text-warning-text">{reasonLabels.docker_hub_limit} for {pluralize(dockerHubLimit, 'container')}.</span>{' '}
-              Retry to reuse cached public image metadata. If the cap persists, narrow the scope or verify Java in the skipped containers.
+              {data.workload ? 'Retry to reuse any image metadata Radar cached. If the cap is reached again, verify Java in the skipped containers.' : 'Retry to reuse cached public image metadata. If the cap persists, narrow the scope or verify Java in the skipped containers.'}
             </p>
           )}
           {registryRateLimit > 0 && (
