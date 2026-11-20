@@ -248,6 +248,8 @@ type FeatureCapabilities struct {
 	PodFileUpload         bool `json:"podFileUpload"`         // POST /api/pods/{namespace}/{name}/files/upload
 	Vulnerabilities       bool `json:"vulnerabilities"`       // GET /api/vulnerabilities
 	RuntimeAdvisoryChecks bool `json:"runtimeAdvisoryChecks"` // GET /api/vulnerabilities/java4shell
+	// GET /api/sealedsecrets/controller
+	SealedSecretsController bool `json:"sealedSecretsController"`
 	// GET /api/traefik/routes
 	TraefikRoutes bool `json:"traefikRoutes"`
 }

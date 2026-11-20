@@ -718,6 +718,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/resources/{kind}/{namespace}/{name}/cascade-preview", s.handleCascadeDeletePreview)
 			r.Delete("/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
+			r.Get("/sealedsecrets/controller", s.handleSealedSecretsController)
 			r.Get("/traefik/routes", s.handleTraefikRoutes)
 			r.Get("/certificates", s.handleCertificates)
 
@@ -1526,6 +1527,7 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
 		ApplicationEvidence:         true,
+		SealedSecretsController:     true,
 		TraefikRoutes:               true,
 		ResourceReadCoverage:        true,
 		SearchCoverage:              true,

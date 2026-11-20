@@ -39,6 +39,7 @@ import { KyvernoPolicyCoverage } from '../components/resources/renderers/Kyverno
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
+import { SealedSecretRenderer } from '../components/resources/renderers/SealedSecretRenderer'
 import { TraefikIngressRouteRenderer } from '../components/resources/renderers/TraefikIngressRouteRenderer'
 import { TraefikMiddlewareRenderer } from '../components/resources/renderers/TraefikMiddlewareRenderer'
 import { UpgradePlanRenderer } from '../components/resources/renderers/UpgradePlanRenderer'
@@ -51,6 +52,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
   { id: 'gateway-api', renderers: { HTTPRouteRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
+  { id: 'sealed-secrets', renderers: { SealedSecretRenderer } },
   { id: 'traefik', renderers: { TraefikIngressRouteRenderer, TraefikMiddlewareRenderer } },
   { id: 'system-upgrade', renderers: { UpgradePlanRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },

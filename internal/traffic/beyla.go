@@ -1118,7 +1118,6 @@ func (s *BeylaSource) queryUnorientable(ctx context.Context, opts FlowOptions, s
 			Source:      Endpoint{Name: conv.key.srcWorkload, Namespace: conv.key.srcNs, Kind: mapBeylaKind(att.srcType), Workload: conv.key.srcWorkload},
 			Destination: Endpoint{Name: conv.key.dstWorkload, Namespace: conv.key.dstNs, Kind: mapBeylaKind(att.dstType), Workload: conv.key.dstWorkload},
 			Protocol:    mapBeylaTransport(conv.transport),
-			Verdict:     "forwarded",
 			LastSeen:    time.Now(),
 			BytesSent:   h.forward,
 			BytesRecv:   h.backward,
@@ -1314,7 +1313,6 @@ func (s *BeylaSource) parseL4Flows(result *prom.QueryResult, w rateWindow) (map[
 			Destination: Endpoint{Name: dstName, Namespace: dstNs, Kind: mapBeylaKind(dstType), Workload: dstName, Port: port},
 			Protocol:    mapBeylaTransport(labels["transport"]),
 			Port:        port,
-			Verdict:     "forwarded",
 			LastSeen:    time.Now(),
 			BytesSent:   int64(val * w.seconds),
 			// Deliberately not set here. Beyla exports rates, not connection counts,
@@ -1379,7 +1377,6 @@ func (s *BeylaSource) parseL7Flows(result *prom.QueryResult) []Flow {
 			HTTPMethod:  labels["http_request_method"],
 			HTTPPath:    labels["http_route"],
 			HTTPStatus:  parseIntLabel(labels["http_response_status_code"]),
-			Verdict:     "forwarded",
 			LastSeen:    time.Now(),
 			// val is a per-second request rate over a 5m window, not a
 			// connection count; Connections here is only a non-zero weight for
