@@ -131,7 +131,7 @@ func JobSelector(l StreamLabels, namespace, job string, indexed bool, container 
 	}
 	var notices []string
 	if indexed {
-		notices = append(notices, fmt.Sprintf("Pods are matched by name; a Job named %s-<index> has pods with the same names, and its lines would be included.", job))
+		notices = append(notices, fmt.Sprintf("A Job named %s-<index> has pods with the same names, and its lines would be included.", job))
 	}
 	if cut {
 		notices = append(notices, "Job names this long are shortened in pod names; lines from another Job with the same prefix may be included.")

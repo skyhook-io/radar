@@ -485,6 +485,16 @@ type Lines struct {
 // else reaches the query. labels map the streams back to
 // pods and containers.
 func QueryRange(ctx context.Context, labels StreamLabels, selector string, w Window, limit int) (Lines, error) {
+	release, err := acquireRead(readerKey(ctx))
+	if err != nil {
+		return Lines{}, err
+	}
+	defer release()
+	return queryRange(ctx, labels, selector, w, limit)
+}
+
+// queryRange is QueryRange for a caller that already holds a read.
+func queryRange(ctx context.Context, labels StreamLabels, selector string, w Window, limit int) (Lines, error) {
 	params := url.Values{
 		"query":     {selector},
 		"start":     {strconv.FormatInt(w.Start.UnixNano(), 10)},
@@ -492,11 +502,6 @@ func QueryRange(ctx context.Context, labels StreamLabels, selector string, w Win
 		"limit":     {strconv.Itoa(limit)},
 		"direction": {"backward"},
 	}
-	release, err := acquireRead(readerKey(ctx))
-	if err != nil {
-		return Lines{}, err
-	}
-	defer release()
 	body, err := Get(ctx, "/loki/api/v1/query_range", params)
 	if err != nil {
 		return Lines{}, err

@@ -140,3 +140,11 @@ func TestParseWindow(t *testing.T) {
 		t.Errorf("explicit = %+v %v", w, err)
 	}
 }
+
+// A hostile container value is quoted, never part of the selector syntax.
+func TestJobSelectorQuotesContainer(t *testing.T) {
+	got, _, _ := JobSelector(plain, "team", "backup", false, `x"} or {a=~".+\`)
+	if want := `{namespace="team", pod=~"^backup-[a-z0-9]{5}$", container="x\"} or {a=~\".+\\"}`; got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}

@@ -260,10 +260,10 @@ func jobRunWindow(job *batchv1.Job, now time.Time) (loki.Window, bool) {
 // (start/end override it, within 7 days). Gate: the workload logs gate
 // (namespace, get jobs, list pods, get pods/log) plus lokiWithinRadar, all
 // before Loki is contacted. The query selects the Job's pods by a Job stream
-// label when Loki has one, else by the Job controller's pod names, which other
-// pods can share (a DaemonSet's "<job>-<random>", a Job "<job>-<index>" for an
-// Indexed Job); only the namespace, Job name, container, window and the
-// --loki-cluster value reach it.
+// label when Loki has one in the run's window and it finds lines, else by the
+// Job controller's pod names, which other pods can share (a DaemonSet's
+// "<job>-<random>", a Job "<job>-<index>" for an Indexed Job); only the
+// namespace, Job name, container, window and the --loki-cluster value reach it.
 func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	if !s.authorizeWorkloadLogRead(w, r, "jobs", namespace) || !s.lokiWithinRadar(w, r, namespace) {
@@ -307,18 +307,17 @@ func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 		s.writeLokiError(w, err)
 		return
 	}
-	indexed := job.Spec.CompletionMode != nil && *job.Spec.CompletionMode == batchv1.IndexedCompletion
-	selector, notice, err := loki.JobSelector(labels, namespace, name, indexed, q.Get("container"))
-	if err != nil {
-		s.writeError(w, http.StatusServiceUnavailable, err.Error())
+	if reason := labels.HistoryReason(); reason != "" {
+		s.writeError(w, http.StatusServiceUnavailable, reason)
 		return
 	}
-	lines, err := loki.QueryRange(r.Context(), labels, selector, window, limit)
+	indexed := job.Spec.CompletionMode != nil && *job.Spec.CompletionMode == batchv1.IndexedCompletion
+	lines, err := loki.ReadJobRun(r.Context(), labels, namespace, name, indexed, q.Get("container"), window, limit)
 	if err != nil {
 		s.writeLokiError(w, err)
 		return
 	}
-	resp := lokiJobLogsResponse{Pods: []lokiJobPod{}, Logs: []lokiJobLine{}, Notice: notice, Source: "loki", Truncated: lines.Truncated, Limit: limit, Window: lokiWindow{window.Start, window.End}}
+	resp := lokiJobLogsResponse{Pods: []lokiJobPod{}, Logs: []lokiJobLine{}, Notice: lines.Notice, Source: "loki", Truncated: lines.Truncated, Limit: limit, Window: lokiWindow{window.Start, window.End}}
 	containers := map[string]map[string]bool{}
 	for _, l := range lines.Items {
 		c := l.Container
@@ -337,7 +336,10 @@ func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 	for pod, cs := range containers {
 		p := lokiJobPod{Name: pod, Containers: []string{}}
 		for _, t := range template {
-			if cs[t.Name] {
+			// Every template container stays listed, with or without lines in
+			// this answer, so the viewer can switch to it (Loki's line limit
+			// or a chosen container may have left it out).
+			if cs[t.Name] || labels.Container != "" {
 				p.Containers = append(p.Containers, t.Name)
 				p.ContainerStatuses = append(p.ContainerStatuses, t)
 				delete(cs, t.Name)

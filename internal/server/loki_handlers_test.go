@@ -142,6 +142,11 @@ type lokiRecorder struct {
 	status  int
 	body    string
 	hold    chan struct{} // when set, the next query_range waits for it to close
+	// labelNames is what /labels answers; labelCalls are the label reads after connecting.
+	labelNames string
+	labelCalls []url.Values
+	// byQuery, when set, answers query_range by its LogQL instead of body.
+	byQuery func(query string) string
 }
 
 func newLokiRecorder(t *testing.T, streams string) *lokiRecorder {
@@ -151,15 +156,25 @@ func newLokiRecorder(t *testing.T, streams string) *lokiRecorder {
 
 func newLokiRecorderWithLabels(t *testing.T, labelNames, streams string) *lokiRecorder {
 	t.Helper()
-	rec := &lokiRecorder{status: 200, body: streams}
+	rec := &lokiRecorder{status: 200, body: streams, labelNames: labelNames}
+	connected := false
 	rec.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/loki/api/v1/labels":
-			_, _ = w.Write([]byte(`{"status":"success","data":` + labelNames + `}`))
+			rec.mu.Lock()
+			if connected {
+				rec.labelCalls = append(rec.labelCalls, r.URL.Query())
+			}
+			names := rec.labelNames
+			rec.mu.Unlock()
+			_, _ = w.Write([]byte(`{"status":"success","data":` + names + `}`))
 		case "/loki/api/v1/query_range":
 			rec.mu.Lock()
 			rec.queries = append(rec.queries, r.URL.Query())
 			status, body, hold := rec.status, rec.body, rec.hold
+			if rec.byQuery != nil {
+				body = rec.byQuery(r.URL.Query().Get("query"))
+			}
 			rec.hold = nil
 			rec.mu.Unlock()
 			if hold != nil {
@@ -178,6 +193,9 @@ func newLokiRecorderWithLabels(t *testing.T, labelNames, streams string) *lokiRe
 	if err := loki.EnsureConnected(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	rec.mu.Lock()
+	connected = true
+	rec.mu.Unlock()
 	return rec
 }
 
