@@ -155,7 +155,7 @@ describe('cnpgPDBFact', () => {
   })
   it('names the single-instance drain wait and the downtime of a maintenance window', () => {
     const f = fact(primary({ protection: 'singleInstance' }))
-    expect(f.tone).toBe('degraded')
+    expect(f.tone).toBe('neutral')
     expect(f.text).toBe(
       "primary: 0 disruptions allowed (1/1 healthy) — a drain of this instance's node waits: there is no standby. For planned maintenance use spec.nodeMaintenanceWindow with reusePVC: true and expect downtime until the node returns.",
     )
@@ -167,9 +167,16 @@ describe('cnpgPDBFact', () => {
     expect(f.text).toBe("primary: 0 disruptions allowed (1/1 healthy) — not the normal idle state (a standby shares the primary's node); a drain of the primary's node may stall.")
   })
   it('summarises a blocking primary budget as a drain risk, not a missing budget', () => {
-    const summary = cnpgHASummary(ha({ pdbs: { state: 'ok', enabled: true, items: [primary({ protection: 'singleInstance' })] }, operatorLease: { state: 'ok' } }), [] as never)
-    expect(summary.text).toContain("a drain of the primary's node waits")
+    const summary = cnpgHASummary(ha({ pdbs: { state: 'ok', enabled: true, items: [primary({ protection: 'blocking', protectionReason: 'x' })] }, operatorLease: { state: 'ok' } }), [] as never)
+    expect(summary.text).toContain("a drain of the primary's node may stall")
     expect(summary.text).not.toContain('disruption budgets missing')
+    expect(summary.attention).toBe(true)
+  })
+  it('says a single instance waits on a drain in words, without asking for attention', () => {
+    const summary = cnpgHASummary(ha({ pdbs: { state: 'ok', enabled: true, items: [primary({ protection: 'singleInstance' })] }, operatorLease: { state: 'ok' } }), [] as never)
+    expect(summary.text).toContain('single instance: a drain of its node waits')
+    expect(summary.text).not.toContain('disruption budgets missing')
+    expect(summary.attention).toBe(false)
   })
 })
 

@@ -268,7 +268,8 @@ export function cnpgPDBFact(pdbs: CNPGClusterHA['pdbs'] | undefined): Fact {
   }
   const parts = pdbs.items.map((p) => `${p.role === 'primary' ? 'primary' : p.role === 'replicas' ? 'standbys' : p.name}: ${p.disruptionsAllowed} disruption${p.disruptionsAllowed === 1 ? '' : 's'} allowed (${p.currentHealthy}/${p.expectedPods} healthy)${cnpgPDBProtectionText(p)}`)
   const stale = pdbs.items.some((p) => !p.observed)
-  const atRisk = pdbs.items.some((p) => p.protection === 'singleInstance' || p.protection === 'blocking')
+  // A single instance is posture: said in words, without a mark.
+  const atRisk = pdbs.items.some((p) => p.protection === 'blocking')
   return {
     text: parts.join(' · '),
     tone: stale ? 'unknown' : atRisk ? 'degraded' : 'neutral',
@@ -344,7 +345,7 @@ export function cnpgHASummary(
   if (quorum.tone === 'degraded' || quorum.tone === 'unhealthy') issues.push('failover quorum does not hold')
   const pdb = cnpgPDBFact(ha.pdbs)
   const primaryPDB = ha.pdbs.state === 'ok' ? ha.pdbs.items.find((p) => p.role === 'primary') : undefined
-  if (primaryPDB?.protection === 'singleInstance') issues.push("a drain of the primary's node waits")
+  if (primaryPDB?.protection === 'singleInstance') calm.push("single instance: a drain of its node waits")
   else if (primaryPDB?.protection === 'blocking') issues.push("a drain of the primary's node may stall")
   else if (pdb.tone === 'degraded' || pdb.tone === 'unhealthy') issues.push('disruption budgets missing')
   for (const [lease, what] of [[ha.primaryLease, 'primary lease'], [ha.operatorLease, 'operator lease']] as const) {
