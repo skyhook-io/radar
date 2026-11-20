@@ -28,7 +28,8 @@ function since(timestamp?: string): string | undefined {
 }
 
 function lastSeen(timestamp?: string): string {
-  if (!timestamp) return "still referenced at Longhorn's last update"
+  // Longhorn clears the time while the reference holds, as of its last update.
+  if (!timestamp) return 'no end recorded'
   const ago = since(timestamp)
   return ago ? `last seen ${ago} ago` : `last seen ${timestamp}`
 }

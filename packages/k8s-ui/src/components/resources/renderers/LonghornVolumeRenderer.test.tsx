@@ -49,17 +49,17 @@ describe('LonghornVolumeRenderer', () => {
     expect(html).toContain('db-0')
     expect(html).toContain('StatefulSet db')
     expect(html).toContain('3h ago')
-    expect(html).toContain('still referenced at Longhorn&#x27;s last update')
+    expect(html).toContain('no end recorded')
     expect(hidden).not.toContain('data-db-0')
     expect(hidden).not.toContain('Last seen by Longhorn')
   })
 
-  it('never reads a recorded time it cannot place as still referenced', () => {
+  it('never reads a recorded time it cannot place as having no end', () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-15T12:00:00Z'))
     const data = volume({ state: 'detached', robustness: 'unknown', kubernetesStatus: { namespace: 'shop', pvcName: 'data-db-0', lastPVCRefAt: '2026-11-15T12:00:30Z', lastPodRefAt: 'garbage', workloadsStatus: [{ podName: 'db-0' }] } })
     const html = renderToStaticMarkup(<LonghornVolumeRenderer data={data} canReadNamespace={() => true} />)
     vi.useRealTimers()
-    expect(html).not.toContain('still referenced')
+    expect(html).not.toContain('no end recorded')
     expect(html).toContain('last seen 2026-11-15T12:00:30Z')
     expect(html).toContain('last seen garbage')
   })
