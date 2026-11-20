@@ -1201,7 +1201,7 @@ export function ResourceRendererDispatch({
             <ExternalLinksSection data={data} />
 
             {/* Prometheus Metrics Charts — skip for Pending pods, and when parent has dedicated Metrics tab */}
-            {showMetrics && renderMetrics && !(kind === 'pods' && data?.status?.phase === 'Pending') && (
+            {showMetrics && renderMetrics && !(kind === 'pods' && data?.status?.phase === 'Pending') && !(kind === 'nodes' && !isCoreNode(data)) && (
               renderMetrics({ kind: data?.kind || resource.kind, namespace: resource.namespace, name: resource.name })
             )}
 
