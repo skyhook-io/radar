@@ -312,6 +312,8 @@ interface WorkloadViewProps {
   gitOpsOwnerSource?: string | null
   /** Sync/health status for the GitOps owner, when the host can resolve it. */
   gitOpsOwnerStatus?: GitOpsStatus | null
+  // Host slot after the GitOps chip, e.g. OutsideEditChip for hand edits.
+  gitOpsEditChip?: ReactNode
   /** Native Helm release that manages this resource, when detected. */
   helmOwner?: HelmOwnerRef | null
   /** Metadata key/value that caused native Helm ownership inference, when known. */
@@ -574,6 +576,7 @@ export function WorkloadView({
   gitOpsOwnerPending = false,
   gitOpsOwnerSource,
   gitOpsOwnerStatus,
+  gitOpsEditChip,
   helmOwner: resolvedHelmOwner,
   helmOwnerSource,
   onOpenHelmRelease,
@@ -1118,6 +1121,7 @@ export function WorkloadView({
             {(showGitOpsChip || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath) || onOpenLiveTraffic) && (
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 {showGitOpsChip && <ManagedByChip manager={manager} owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} listing={listing} onOpen={onOpenGitOpsResource} />}
+                {showGitOpsChip && gitOpsEditChip}
                 {helmOwner && <HelmManagedByChip manager={manager} owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} />}
                 {gitOpsResourcePath && onNavigateGitOpsPath && (
                   <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
@@ -1326,6 +1330,7 @@ export function WorkloadView({
           showGitOpsChip && (
             <ManagedByChip key="gitops" manager={manager} owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} listing={listing} onOpen={onOpenGitOpsResource} variant="block" />
           ),
+          showGitOpsChip && gitOpsEditChip && <span key="gitops-edit" className="inline-flex">{gitOpsEditChip}</span>,
           helmOwner && (
             <HelmManagedByChip key="helm" manager={manager} owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} variant="block" />
           ),

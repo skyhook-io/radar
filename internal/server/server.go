@@ -195,6 +195,7 @@ type Server struct {
 	yamlSchemaBundleCache map[string]yamlSchemaBundleCacheEntry
 	yamlSchemaCacheBytes  int
 	yamlSchemaFetchGroup  singleflight.Group
+	outsideChangesFlight  singleflight.Group
 
 	// accessReviews collapses identical access reviews in flight at once.
 	accessReviews singleflight.Group
@@ -639,6 +640,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/gitops/tree/{kind}/{namespace}/{name}", s.handleGitOpsTree)
 			r.Get("/gitops/destination/{kind}/{namespace}/{name}", s.handleGitOpsDestination)
 			r.Get("/gitops/insights/{kind}/{namespace}/{name}", s.handleGitOpsInsights)
+			r.Get("/gitops/outside-changes/{kind}/{namespace}/{name}", s.handleGitOpsOutsideChanges)
+			r.Get("/gitops/field-writers/{kind}/{namespace}/{name}", s.handleGitOpsFieldWriters)
 			r.Get("/gitops/managed-resources", s.handleGitOpsManagedResources)
 			r.Post("/gitops/write-evidence", s.handleGitOpsWriteEvidence)
 
@@ -1553,6 +1556,8 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		ServiceEndpointSlices:       true,
 		TrafficRecords:              true,
 		GitOpsWriteEvidence:         true,
+		GitOpsOutsideChanges:        true,
+		GitOpsFieldWriters:          true,
 		ArgoRollbackSync:            true,
 		ArgoSyncInheritance:         true,
 		ArgoEnableSelfHealOff:       true,
