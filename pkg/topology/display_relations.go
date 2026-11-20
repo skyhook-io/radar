@@ -24,6 +24,7 @@ type declaring struct {
 type drawnNodes struct {
 	nodes   []Node
 	indexed int
+	first   string           // the ID of nodes[0] when last indexed
 	pending map[string][]int // Kubernetes kind -> drawn nodes not yet keyed
 	byKey   map[string]string
 }
@@ -33,6 +34,15 @@ func newDrawnNodes() *drawnNodes {
 }
 
 func (d *drawnNodes) update(nodes []Node) {
+	if d.indexed > len(nodes) || d.indexed > 0 && nodes[0].ID != d.first {
+		// The slice was rebuilt (a node prepended, say), not grown: positions
+		// moved, so index it again. Identities already worked out still stand.
+		d.indexed = 0
+		d.pending = map[string][]int{}
+	}
+	if len(nodes) > 0 {
+		d.first = nodes[0].ID
+	}
 	for i := d.indexed; i < len(nodes); i++ {
 		kind := KubernetesKindForNode(&nodes[i])
 		d.pending[kind] = append(d.pending[kind], i)
