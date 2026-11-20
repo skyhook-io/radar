@@ -154,6 +154,9 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		if gvr.Group == cnpgGroup && kind == "ScheduledBackup" {
 			out = append(out, detectCNPGScheduleDestinationIssues(p, gvr, items)...)
 		}
+		if gvr.Group == agentSandboxExtensionsGroup && kind == "SandboxWarmPool" {
+			out = append(out, detectWarmPoolTemplateMissing(p, gvr, items)...)
+		}
 
 		for _, u := range items {
 			if gvr.Group == "" && kind == "Pod" {
@@ -218,6 +221,9 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			}
 			condType, reason, msg := condition.Type, condition.Reason, condition.Message
 			severity := SeverityWarning
+			if s, ok := agentSandboxFailedSeverity(gvr.Group, kind, u); ok {
+				severity = s
+			}
 			issReason := condTypeReason(condType, reason)
 			issMsg := msg
 			// issueTransition anchors FirstSeen/LastSeen; timingTransition gates issue_timing.
@@ -305,7 +311,12 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 	case "postgresql.cnpg.io":
 		return detectCNPGIssues(gvr, kind, u)
 	case agentSandboxGroup:
-		return detectSandboxSuspensionBlocked(gvr, kind, u)
+		if out := detectSandboxSuspensionBlocked(gvr, kind, u); len(out) > 0 {
+			return out
+		}
+		return detectAgentSandboxNotReported(gvr, kind, u, time.Now())
+	case agentSandboxExtensionsGroup:
+		return detectAgentSandboxNotReported(gvr, kind, u, time.Now())
 	case substrateGroup:
 		if kind == "WorkerPool" {
 			return detectWorkerPoolIssues(gvr, kind, u)

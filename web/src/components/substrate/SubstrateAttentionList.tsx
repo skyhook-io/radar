@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { Collapse, CollapseChevron, Tooltip, toneTextClass, useDisclosure } from '@skyhook-io/k8s-ui'
+import { Collapse, CollapseChevron, RowDetails, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
 import type { SubstrateAttention, SubstrateSubject } from '../../api/substrateWorkspace'
 import { SUBJECT_KIND_LABEL, attentionTone, splitReading, subjectLabel } from './readings'
 import { CommandChip, Tokens, When } from './shared'
@@ -335,22 +335,6 @@ function WorkerActorsLink({ row, onOpen }: { row: SubstrateAttention; onOpen?: O
     <button type="button" onClick={() => onOpen({ kind: 'Actors', filter: { worker: row.subject.name! } })} className="whitespace-nowrap text-accent-text hover:underline">{label} →</button>
   ) : (
     <span>{label}</span>
-  )
-}
-
-/** A row's Details fold: a compact header under the step, so a row costs one line for it. */
-function RowDetails({ open, onToggle, children }: { open: boolean; onToggle: () => void; children: ReactNode }) {
-  const d = useDisclosure(open)
-  return (
-    <div className="mt-1">
-      <button type="button" {...d.buttonProps} onClick={onToggle} className="inline-flex items-center gap-1 rounded text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
-        <CollapseChevron open={open} className="h-3 w-3" />
-        Details
-      </button>
-      <Collapse open={open} id={d.panelId}>
-        <div className="space-y-1.5 pb-0.5 pl-4 pt-1">{children}</div>
-      </Collapse>
-    </div>
   )
 }
 

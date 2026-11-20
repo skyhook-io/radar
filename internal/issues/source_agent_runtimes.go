@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/agentsandbox"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -16,29 +17,28 @@ const (
 	substrateGroup              = "ate.dev"
 )
 
-const agentSandboxProgressGrace = 30 * time.Minute
-
 // agentSandboxSuppressesGenericConditions reports whether the generic
 // Ready=False warning should stay silent for an Agent Sandbox Sandbox or
-// SandboxClaim (pkg/health reads the reasons). A settled state is never an
-// Issue. A state still in progress is one only once it has lasted the grace
-// period: a Sandbox whose Pod or Service is never created has no other finding
-// to fall back on. A claim's state forwarded from its Sandbox is the Sandbox's
-// to report. Anything else keeps the generic warning.
+// SandboxClaim. The rule is agentsandbox.SuppressesIssue, which the Agent
+// Sandbox workspace applies too.
 func agentSandboxSuppressesGenericConditions(group, kind string, u *unstructured.Unstructured) bool {
 	if !(group == agentSandboxGroup && kind == "Sandbox") && !(group == agentSandboxExtensionsGroup && kind == "SandboxClaim") {
 		return false
 	}
-	r := health.ReadAgentSandbox(u)
-	switch {
-	case r.Settled:
-		return true
-	case r.InProgress && r.Mirrored:
-		return true
-	case r.InProgress:
-		return !r.SinceKnown || time.Since(r.Since) <= agentSandboxProgressGrace
+	return agentsandbox.SuppressesIssue(health.ReadAgentSandbox(u), time.Now())
+}
+
+// agentSandboxFailedSeverity is critical for an Agent Sandbox Sandbox or
+// SandboxClaim reporting a terminal failure (agentsandbox.Failed), which the
+// workspace shows at the same severity.
+func agentSandboxFailedSeverity(group, kind string, u *unstructured.Unstructured) (Severity, bool) {
+	if !(group == agentSandboxGroup && kind == "Sandbox") && !(group == agentSandboxExtensionsGroup && kind == "SandboxClaim") {
+		return "", false
 	}
-	return false
+	if !agentsandbox.Failed(u, health.ReadAgentSandbox(u)) {
+		return "", false
+	}
+	return SeverityCritical, true
 }
 
 // detectSandboxSuspensionBlocked reports a Sandbox whose suspension the

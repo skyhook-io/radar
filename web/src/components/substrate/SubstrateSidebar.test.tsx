@@ -6,7 +6,8 @@ import type { SubstrateWorkspace } from '../../api/substrateWorkspace'
 import type { APIResource } from '../../types'
 import { RadarFeatureUnsupportedError, type RadarFeatureSupport } from '../../api/radarFeatures'
 import { SubstrateScreenGate } from './shared'
-import { SUBSTRATE_SIDEBAR_LABEL, useSubstrateSidebarWorkspace } from './useSubstrateSidebarWorkspace'
+import { AGENTS_SIDEBAR_CATEGORY } from '../workspace/sidebar'
+import { useSubstrateSidebarWorkspace } from './useSubstrateSidebarWorkspace'
 import { notConnectedWorkspace, workspace } from './substrate.fixtures'
 
 const state = vi.hoisted(() => ({ support: 'supported' as RadarFeatureSupport, data: undefined as SubstrateWorkspace | undefined }))
@@ -30,16 +31,19 @@ function sidebar(apiResources: APIResource[] | undefined = substrate): SidebarCa
     return null
   }
   renderToStaticMarkup(<MemoryRouter><Probe /></MemoryRouter>)
-  return out?.['Agent Substrate']
+  return out?.[AGENTS_SIDEBAR_CATEGORY]
 }
 
 describe('Agent Substrate in the sidebar', () => {
-  it('is one Integrations row named for its job, opening to its screens and Radar’s pool table', () => {
+  it('is its part of the Agents row, the tool beneath, opening to its screens and Radar’s pool table', () => {
     state.data = workspace()
     const w = sidebar()!
-    expect(w.label).toBe(SUBSTRATE_SIDEBAR_LABEL)
+    // The row is named by the category, "Agents"; the tool sits beneath it.
+    expect(w.label).toBeUndefined()
+    expect(w.tools).toBe('Agent Substrate')
     expect(w.count).toBe(3)
     expect(w.destinations.map((d) => d.label)).toEqual(['Overview', 'Actors', 'Templates', 'Workers', 'Pools'])
+    expect(new Set(w.destinations.map((d) => d.section))).toEqual(new Set(['Substrate']))
     // The badge counts actors needing attention, as the Actors screen shows them: the fixture's 14 crashed.
     expect(w.destinations.find((d) => d.id === 'actors')).toMatchObject({ active: true, count: 14 })
     // The Pools row is the WorkerPool kind's list, so the kind is not listed again under Other kinds.

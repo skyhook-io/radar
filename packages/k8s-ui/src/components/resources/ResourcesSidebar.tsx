@@ -47,19 +47,26 @@ export interface SidebarCategoryDestination {
   /** The kind whose list this destination is. While that kind is selected the
    *  destination is highlighted, and the kind is not listed again under Other kinds. */
   kind?: SelectedKindInfo
+  /** The tool this destination belongs to, when several share one row (e.g.
+   *  "Substrate"). Headings show only when the destinations span two or more. */
+  section?: string
   onSelect: () => void
 }
 
 /**
  * An integration with screens of its own. It is listed under Integrations, one
  * row until opened, named by the job it does with the tool beneath (the
- * category name), and opens to its destinations with its remaining kinds
- * folded under "Other kinds".
+ * category name, or `tools`), and opens to its destinations with its
+ * remaining kinds folded under "Other kinds".
  */
 export interface SidebarCategoryWorkspace {
   destinations: SidebarCategoryDestination[]
   /** The job the integration does, e.g. "Backups". Defaults to the category name. */
   label?: string
+  /** The tools present, shown beneath the label, for a row that names its job
+   *  by the category, e.g. "Agent Substrate · Agent Sandbox" under "Agents".
+   *  Defaults to the category name when `label` is set, and to nothing otherwise. */
+  tools?: string
   icon?: ComponentType<{ className?: string }>
   /** What needs attention across the integration, on its row. Same rendering as a destination's count. */
   count?: number | null
@@ -153,7 +160,7 @@ export function sidebarDestinationsMatching(
   if (!normalized) return destinations
   if (categoryName.toLowerCase().includes(normalized) || label?.toLowerCase().includes(normalized) || resources.some((r) => r.group.toLowerCase().includes(normalized))) return destinations
   // A destination is also found by the kind it lists ("BackupStorageLocation" finds Storage locations).
-  return destinations.filter((d) => [d.label, d.kind?.kind, d.kind?.name].some((s) => s?.toLowerCase().includes(normalized)))
+  return destinations.filter((d) => [d.label, d.section, d.kind?.kind, d.kind?.name].some((s) => s?.toLowerCase().includes(normalized)))
 }
 
 export function resourceMatchesSidebarFilter(resource: Pick<APIResource, 'kind' | 'name' | 'group'>, term: string): boolean {
@@ -739,6 +746,7 @@ export function ResourcesSidebar({
                 const workspace = categoryWorkspaces![category.name]
                 const open = integrationOpen(category.name)
                 const label = workspace.label ?? category.name
+                const beneath = workspace.tools ?? (workspace.label ? category.name : undefined)
                 const panelId = disclosurePanelId(categoryPanelBase, category.name)
                 const Icon = workspace.icon
                 return (
@@ -767,7 +775,7 @@ export function ResourcesSidebar({
                         {Icon && <Icon className="w-4 h-4 shrink-0" />}
                         <span className="flex-1 min-w-0 text-left leading-tight">
                           <span className="block truncate">{label}</span>
-                          {workspace.label && <span className="block truncate text-xs font-normal text-theme-text-tertiary">{category.name}</span>}
+                          {beneath && <span className="block line-clamp-2 text-xs font-normal text-theme-text-tertiary">{beneath}</span>}
                         </span>
                         <AttentionCount count={workspace.count} lowerBound={workspace.countLowerBound} title={workspace.countTitle} />
                       </button>
@@ -1026,13 +1034,20 @@ function IntegrationContents({
   highlightedId?: string
   highlightedRef: React.RefObject<HTMLButtonElement | null>
 }) {
+  const sectioned = new Set(workspace.destinations.map((d) => d.section).filter(Boolean)).size > 1
   return (
     <div className="space-y-0.5 pt-0.5">
-      {destinations.map((d) => {
+      {destinations.map((d, index) => {
         const active = isActive(d)
         const pinned = !!d.kind && isPinned(d.kind)
+        const heading = sectioned && d.section && (index === 0 || destinations[index - 1].section !== d.section) ? d.section : undefined
         return (
           <div key={d.id}>
+            {heading && (
+              <div className={clsx('pl-9 xl:pl-10 pr-2 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary', index === 0 ? 'pt-1' : 'pt-2')}>
+                {heading}
+              </div>
+            )}
             <button
               ref={highlightedId === d.id ? highlightedRef : undefined}
               onClick={() => onSelect(d)}
