@@ -307,6 +307,11 @@ different cluster labels:
   cluster's (Pods, Nodes or volumes); if it does, the view is withheld
   (`label_missing`), and if kube-state-metrics has no series with this
   cluster's labels over the view's time range, it is withheld as `unknown`.
+  Another cluster's labels means every one of this cluster's label keys, one
+  of them with another value: a kube-state-metrics job that leaves a label off
+  is not taken for another cluster. A Pod's namespace is read from
+  `exported_namespace` when kube-state-metrics was scraped without
+  `honor_labels`. A namespace's costs check only that namespace's Pods.
   Objects named alike in both clusters, and history older than
   kube-state-metrics' retention, can't be told apart this way.
 - With no cluster labels anywhere, a metric showing one identity is used as
