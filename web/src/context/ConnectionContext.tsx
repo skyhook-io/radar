@@ -521,9 +521,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshCachesOnConnect])
 
+  // Connection state may come from a newer SSE frame or still be applying this
+  // poll. Consume the terminal switch result alongside the matching connection.
+  const polledSwitch = data?.contextSwitch
+  const switchMatchesConnection = data?.state === connection.state && data?.context === connection.context
   const value: ConnectionContextValue = {
     connection,
-    contextSwitch: data?.contextSwitch,
+    contextSwitch: switchInProgress(polledSwitch) || switchMatchesConnection ? polledSwitch : undefined,
     retry,
     isRetrying: retryMutation.isPending || isAutoRetrying,
     updateFromSSE,

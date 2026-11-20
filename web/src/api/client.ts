@@ -7711,7 +7711,7 @@ export function useSwitchContext() {
           const error = await readErrorBody(response);
           throw new SwitchContextError(error.error || `HTTP ${response.status}`, typeof error.errorType === "string" ? error.errorType : undefined);
         }
-        // Older servers finish the synchronous switch before returning 200.
+        // Cloud-managed and older servers finish the switch before returning 200.
         return response.status === 202 ? await response.json() as ContextSwitchOperation : null;
       } catch (error) {
         if (error instanceof SwitchContextError) throw error;
@@ -7733,8 +7733,10 @@ export function useSwitchContext() {
       if (operation) {
         followSwitch(operation.id);
         await queryClient.cancelQueries({ queryKey: ["connection-status"] });
-        queryClient.setQueryData(["connection-status"], (existing: { contextSwitch?: ContextSwitchOperation } | undefined) =>
-          existing ? { ...existing, contextSwitch: operation } : existing);
+        if (switchInProgress(operation)) {
+          queryClient.setQueryData(["connection-status"], (existing: { contextSwitch?: ContextSwitchOperation } | undefined) =>
+            existing ? { ...existing, contextSwitch: operation } : existing);
+        }
         void queryClient.invalidateQueries({ queryKey: ["connection-status"] });
       } else {
         queryClient.removeQueries();

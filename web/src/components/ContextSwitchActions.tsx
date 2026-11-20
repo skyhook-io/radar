@@ -6,7 +6,7 @@ import { apiUrl } from '../api/config'
 import type { ContextSwitchOperation } from '../api/contextSwitch'
 import { readErrorBody } from '../api/httpErrors'
 
-export function ContextSwitchActions({ operation, onDismiss }: { operation: ContextSwitchOperation; onDismiss: () => void }) {
+export function ContextSwitchActions({ operation, syncing, onDismiss }: { operation: ContextSwitchOperation; syncing: boolean; onDismiss: () => void }) {
   const queryClient = useQueryClient()
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
@@ -22,11 +22,18 @@ export function ContextSwitchActions({ operation, onDismiss }: { operation: Cont
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['connection-status'] }),
   })
 
+  let stageLimit = ''
+  if (operation.phase === 'preflight') {
+    stageLimit = `Connectivity check limit ${formatDuration(operation.preflightTimeoutSeconds * 1000, true)}`
+  } else if (syncing) {
+    stageLimit = `Initial workload sync limit ${formatDuration(operation.syncTimeoutSeconds * 1000, true)}`
+  }
+
   return <span className="mt-2 block text-sm font-normal">
-    <span aria-live="off" className="block text-xs text-theme-text-tertiary">Elapsed {formatDuration(Math.max(0, now - Date.parse(operation.startedAt)), true)}</span>
+    <span aria-live="off" className="block text-xs text-theme-text-tertiary">Elapsed {formatDuration(Math.max(0, now - Date.parse(operation.startedAt)), true)}{stageLimit && ` · ${stageLimit}`}</span>
     {operation.phase === 'preflight'
       ? <button type="button" disabled={cancel.isPending} className="btn-secondary mt-3 px-3 py-1.5" onClick={() => cancel.mutate()}>Cancel switch</button>
-      : <button type="button" className="btn-secondary mt-3 px-3 py-1.5" onClick={onDismiss}>Dismiss</button>}
+      : <button type="button" className="btn-secondary mt-3 px-3 py-1.5" onClick={onDismiss}>Hide progress</button>}
     {cancel.error && operation.phase === 'preflight' && <span role="alert" className="block">{cancel.error.message}</span>}
   </span>
 }

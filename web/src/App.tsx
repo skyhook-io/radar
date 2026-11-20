@@ -36,6 +36,7 @@ import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalT
 import { TerminalPreferences } from './components/dock/TerminalPreferences'
 import { DURATION_DOCK, overlayExitMs } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
+import { useContextSwitchFlow } from './components/useContextSwitchFlow'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
 import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
@@ -68,7 +69,7 @@ import { useProductHuntRailEntry } from './components/product-hunt/useProductHun
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAuditBadges, useClusterInfo, useCapabilities } from './api/client'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useAuthMe, useAuditBadges, useClusterInfo, useCapabilities } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
@@ -921,7 +922,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Theme toggle for keyboard shortcut
   const { toggleTheme } = useTheme()
 
-  const switchContext = useSwitchContext()
+  const commandSwitch = useContextSwitchFlow()
 
   // Refs for dropdown components to trigger them via shortcuts
   const namespaceSwitcherRef = useRef<NamespaceSwitcherHandle>(null)
@@ -1090,17 +1091,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   useEffect(() => {
     if (connection.state === 'connected' && connection.context) setLastConnectedContext(connection.context)
   }, [connection.state, connection.context])
-  // A refused switch is about the cluster that was still connected. Once that
-  // connection changes in any way (dropped, reconnecting, or switched from
-  // another tab), the screen is stale.
-  const failedSwitchFrom = useRef<string | undefined>(undefined)
+  // A refused switch belongs to the source connection at the time of refusal.
+  // A reconnect or a switch in another tab supersedes that screen.
+  const failedSwitchFrom = useRef<{ context: string; state: typeof connection.state } | undefined>(undefined)
   useEffect(() => {
     if (!failedSwitch) {
       failedSwitchFrom.current = undefined
       return
     }
-    failedSwitchFrom.current ??= connection.context
-    if (connection.state !== 'connected' || connection.context !== failedSwitchFrom.current) setFailedSwitch(null)
+    failedSwitchFrom.current ??= { context: connection.context, state: connection.state }
+    if (connection.state !== failedSwitchFrom.current.state || connection.context !== failedSwitchFrom.current.context) setFailedSwitch(null)
   }, [failedSwitch, connection.state, connection.context, setFailedSwitch])
 
   // Progressive shell during the initial informer sync: once the server
@@ -1367,11 +1367,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (contextSwitch.phase === 'failed' && connection.state === 'connecting') return
     followSwitch('')
     endSwitch()
-    if (contextSwitch.phase === 'succeeded') {
+    if (contextSwitch.phase === 'succeeded' && connection.context === contextSwitch.target) {
       applyContextChange(contextSwitch.target, contextSwitch.id)
     } else {
       setOpenAfterSwitch(null)
-      if (contextSwitch.phase === 'failed' && connection.state === 'connected') {
+      if (contextSwitch.phase === 'failed' && (connection.state === 'connected' || connection.context !== contextSwitch.target)) {
         setFailedSwitch({ context: contextSwitch.target, error: contextSwitch.error || 'Cluster switch failed', errorType: contextSwitch.errorType || 'unknown' })
       }
     }
@@ -2024,9 +2024,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               params.delete('tab')
               navigate({ pathname: `/resources/${kind}`, search: params.toString() })
             }}
-            onSwitchContext={(name) => {
-              if (!isSwitching && !switchContext.isPending) switchContext.mutate({ name }, { onSettled: () => setNamespaces([]) })
-            }}
+            onSwitchContext={commandSwitch.requestSwitch}
             onSetNamespaces={(ns) => { setNamespaces(ns); setActiveNamespace.mutate({ namespaces: ns }) }}
             onToggleTheme={toggleTheme}
             onShowDiagnostics={() => setShowDiagnostics(true)}
@@ -2101,7 +2099,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       )}
 
       {/* Connection error view - show when disconnected */}
-      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'disconnected' && (
+      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'disconnected' && !failedSwitch && (
         <DisconnectedView
           connection={connection}
           onRetry={retryConnection}
@@ -2110,9 +2108,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         />
       )}
 
-      {/* A switch refused before leaving the current cluster: the error screen
-          for the cluster that didn't answer, over the still-connected app. */}
-      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected' && failedSwitch && (
+      {/* A refused switch preserves whatever connection state the source was in. */}
+      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state !== 'connecting' && failedSwitch && (
         <FailedSwitchView currentContext={connection.context} />
       )}
 
@@ -2170,12 +2167,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           )}
           {progressMessage && <span className="mt-3 block text-sm font-normal text-theme-text-secondary">{progressMessage}</span>}
           {contextSwitch && switchInProgress(contextSwitch) && (
-            <ContextSwitchActions operation={contextSwitch} onDismiss={() => setDismissed(true)} />
+            <ContextSwitchActions
+              operation={contextSwitch}
+              syncing={connection.context === contextSwitch.target && connection.syncStatus?.phase === 'syncing_critical'}
+              onDismiss={() => setDismissed(true)}
+            />
           )}
         </PaneLoader>
       )}
 
-      {dismissed && <p className="m-auto text-sm text-theme-text-secondary">Resources will appear when the cluster is ready.</p>}
+      {dismissed && <p className="m-auto text-sm text-theme-text-secondary">The switch is still running. Resources will appear when the cluster is ready.</p>}
       {contentReady && <NoClusterAccessBanner />}
       {/* Main content - only show when connected and authenticated */}
       {/* inert while a fullscreen detail overlay covers the views — keeps the
@@ -2678,6 +2679,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
       {/* Port Forward floating panel (indicator lives in header) */}
       <PortForwardPanel />
+      {commandSwitch.confirmDialog}
 
       {/* Update notification — hidden in embedded mode (OSS download nudge). */}
       {!navCustomization.embedded && <UpdateNotification />}
