@@ -46,6 +46,7 @@ func (e *PermissionDenied) Summary() string {
 // ValidatingAdmissionPolicy refused. Mechanism, Policy and Message are parsed
 // from the apiserver's denial when its shape is recognized.
 type AdmissionDenied struct {
+	Target    SourceRef
 	Mechanism string
 	Policy    string
 	Message   string
@@ -55,10 +56,11 @@ type AdmissionDenied struct {
 func (e *AdmissionDenied) Error() string { return e.Err.Error() }
 func (e *AdmissionDenied) Unwrap() error { return e.Err }
 func (e *AdmissionDenied) Summary() string {
+	summary := fmt.Sprintf("Request for %s %s/%s rejected by %s %s", e.Target.Kind, e.Target.Namespace, e.Target.Name, e.Mechanism, e.Policy)
 	if e.Message == "" {
-		return fmt.Sprintf("Rejected by %s %s.", e.Mechanism, e.Policy)
+		return summary + "."
 	}
-	return fmt.Sprintf("Rejected by %s %s: %s", e.Mechanism, e.Policy, e.Message)
+	return summary + ": " + e.Message
 }
 
 var (
@@ -76,6 +78,10 @@ func ClassifyPermissionError(err error, verb string, gvr schema.GroupVersionReso
 	if !errors.As(err, &status) {
 		return err
 	}
+	kind := "Application"
+	if entry, lookupErr := ResolveFluxKind(gvr.Resource); lookupErr == nil {
+		kind = entry.Kind
+	}
 	message := forbiddenEnvelope.ReplaceAllString(status.Status().Message, "")
 	if match := authorizerDenial.FindStringSubmatch(message); match != nil {
 		// The authorizer can append a reason in its own words. Classify the
@@ -83,18 +89,15 @@ func ClassifyPermissionError(err error, verb string, gvr schema.GroupVersionReso
 		if !apierrors.IsForbidden(err) || match[1] != verb || match[2] != gvr.Resource {
 			return err
 		}
-		kind := "Application"
-		if entry, lookupErr := ResolveFluxKind(gvr.Resource); lookupErr == nil {
-			kind = entry.Kind
-		}
 		return &PermissionDenied{Kind: kind, Verb: verb, Group: gvr.Group, Resource: gvr.Resource, Namespace: namespace, Name: name, Err: err}
 	}
 	if verb == "patch" {
+		target := SourceRef{Kind: kind, Namespace: namespace, Name: name}
 		if match := policyDenial.FindStringSubmatch(message); match != nil {
-			return &AdmissionDenied{Mechanism: "ValidatingAdmissionPolicy", Policy: match[1], Message: match[2], Err: err}
+			return &AdmissionDenied{Target: target, Mechanism: "ValidatingAdmissionPolicy", Policy: match[1], Message: match[2], Err: err}
 		}
 		if match := webhookDenial.FindStringSubmatch(message); match != nil {
-			return &AdmissionDenied{Mechanism: "admission webhook", Policy: match[1], Message: match[2], Err: err}
+			return &AdmissionDenied{Target: target, Mechanism: "admission webhook", Policy: match[1], Message: match[2], Err: err}
 		}
 	}
 	return err

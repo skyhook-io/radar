@@ -455,9 +455,9 @@ func TestWriteGitOpsAdmissionDenied(t *testing.T) {
 		err     error
 		summary string
 	}{
-		{"webhook", apierrors.NewForbidden(gr, "demo", errors.New(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`)), "Rejected by admission webhook validation.gatekeeper.sh: missing owner"},
-		{"policy default reason", policyDenial(metav1.StatusReasonInvalid, http.StatusUnprocessableEntity), "Rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
-		{"policy forbidden reason", policyDenial(metav1.StatusReasonForbidden, http.StatusForbidden), "Rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
+		{"webhook", apierrors.NewForbidden(gr, "demo", errors.New(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`)), "Request for Application argocd/demo rejected by admission webhook validation.gatekeeper.sh: missing owner"},
+		{"policy default reason", policyDenial(metav1.StatusReasonInvalid, http.StatusUnprocessableEntity), "Request for Application argocd/demo rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
+		{"policy forbidden reason", policyDenial(metav1.StatusReasonForbidden, http.StatusForbidden), "Request for Application argocd/demo rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := gitops.ClassifyPermissionError(tc.err, "patch", schema.GroupVersionResource{Group: "argoproj.io", Resource: "applications"}, "argocd", "demo")
@@ -497,6 +497,9 @@ func TestWriteGitOpsPartialSourceErrorPreservesStatusAndNote(t *testing.T) {
 			}
 			if w.Code != tc.status || body["error_code"] != tc.code || body["note"] != "Reconcile already requested for HelmRepository charts/repo." || !strings.Contains(body["error"], body["note"]) {
 				t.Fatalf("status=%d body=%v", w.Code, body)
+			}
+			if tc.code == "admission_denied" && body["summary"] != "Request for HelmChart charts/shared rejected by admission webhook freeze: frozen" {
+				t.Fatalf("summary lost the denied source: %v", body)
 			}
 		})
 	}

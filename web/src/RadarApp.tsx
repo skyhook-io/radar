@@ -204,7 +204,11 @@ export function makeDefaultQueryClient(): QueryClient {
       onError: (error, _variables, _context, mutation) => {
         const message = mutation.options.meta?.errorMessage;
         if (message && !isShownInline(error)) {
-          showApiError(message, (error as Error).message, error instanceof GitOpsActionError ? error.rawDetail : undefined);
+          if (error instanceof GitOpsActionError) {
+            showApiError(message, error.notificationDetail, error.rawDetail);
+          } else {
+            showApiError(message, (error as Error).message);
+          }
         }
       },
       onSuccess: (_data, _variables, _context, mutation) => {
