@@ -1,0 +1,527 @@
+# Submitted after 30-jobs-first.yaml has settled.
+# Scenario 1: fits nominal quota, but fits already holds it.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: waits-for-quota
+  namespace: ${PREFIX}-quota
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    kueue.x-k8s.io/queue-name: quota
+spec:
+  suspend: true
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        radar.skyhook.io/fixture: ${FIXTURE}
+        radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 64Mi
+---
+# Scenario 1: larger than the queue's whole quota.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: too-big
+  namespace: ${PREFIX}-quota
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    kueue.x-k8s.io/queue-name: quota
+spec:
+  suspend: true
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        radar.skyhook.io/fixture: ${FIXTURE}
+        radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 1
+              memory: 64Mi
+---
+# Scenario 2: together with borrower-2 exceeds the 200m nominal CPU and borrows.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: borrower-1
+  namespace: ${PREFIX}-busy
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    kueue.x-k8s.io/queue-name: busy
+spec:
+  suspend: true
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        radar.skyhook.io/fixture: ${FIXTURE}
+        radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 150m
+              memory: 64Mi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: borrower-2
+  namespace: ${PREFIX}-busy
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    kueue.x-k8s.io/queue-name: busy
+spec:
+  suspend: true
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        radar.skyhook.io/fixture: ${FIXTURE}
+        radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 150m
+              memory: 64Mi
+---
+# Scenario 2: quota reserved; the admission check stays Pending.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: check-pending
+  namespace: ${PREFIX}-busy
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    kueue.x-k8s.io/queue-name: busy
+spec:
+  suspend: true
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        radar.skyhook.io/fixture: ${FIXTURE}
+        radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 16Mi
+---
+# Scenario 2: `up` reports the admission check as Retry once.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: check-retry
+  namespace: ${PREFIX}-busy
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    kueue.x-k8s.io/queue-name: busy
+spec:
+  suspend: true
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        radar.skyhook.io/fixture: ${FIXTURE}
+        radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 16Mi
+---
+# Scenario 2: `up` reports the admission check as Rejected.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: check-rejected
+  namespace: ${PREFIX}-busy
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    kueue.x-k8s.io/queue-name: busy
+spec:
+  suspend: true
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        radar.skyhook.io/fixture: ${FIXTURE}
+        radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 16Mi
+---
+# Scenario 2: Workloads in a namespace the restricted viewer cannot read.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hidden-1
+  namespace: ${PREFIX}-busy-hidden
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    kueue.x-k8s.io/queue-name: busy
+spec:
+  suspend: true
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        radar.skyhook.io/fixture: ${FIXTURE}
+        radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 16Mi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hidden-2
+  namespace: ${PREFIX}-busy-hidden
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    kueue.x-k8s.io/queue-name: busy
+spec:
+  suspend: true
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        radar.skyhook.io/fixture: ${FIXTURE}
+        radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 16Mi
+---
+# Scenario 2: larger than nominal plus everything the cohort can lend.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hidden-pending
+  namespace: ${PREFIX}-busy-hidden
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    kueue.x-k8s.io/queue-name: busy
+spec:
+  suspend: true
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        radar.skyhook.io/fixture: ${FIXTURE}
+        radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 2
+              memory: 16Mi
+---
+# Preempts low-priority within the ClusterQueue.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: high-priority
+  namespace: ${PREFIX}-lifecycle
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    kueue.x-k8s.io/queue-name: preempt
+    kueue.x-k8s.io/priority-class: ${PREFIX}-high
+spec:
+  suspend: true
+  parallelism: 1
+  completions: 1
+  backoffLimit: 0
+  # A node drain, consolidation or spot interruption must not end the Job and
+  # with it the admitted state; only the busybox Jobs are meant to finish.
+  podFailurePolicy:
+    rules:
+      - action: Ignore
+        onPodConditions:
+          - type: DisruptionTarget
+            status: "True"
+  template:
+    metadata:
+      labels:
+        radar.skyhook.io/fixture: ${FIXTURE}
+        radar.skyhook.io/kueue-scenarios: ${PREFIX}
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: hold
+          image: registry.k8s.io/pause:3.10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 150m
+              memory: 64Mi

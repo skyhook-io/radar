@@ -10,6 +10,10 @@ collisions, Radar discovery, and chart RBAC. This focused lane validates one
 controller lifecycle deeply without turning the breadth suite into a fragile
 mega-cluster.
 
+For the Kueue queue design's broader scenario set (cohort borrowing, admission
+checks, evictions, a restricted viewer) on an existing cluster that already runs
+Kueue, use [`kueue-scenarios`](../kueue-scenarios/README.md) instead.
+
 ## Quick start
 
 ```bash

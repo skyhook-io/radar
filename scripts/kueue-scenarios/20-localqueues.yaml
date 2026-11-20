@@ -1,0 +1,121 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: quota
+  namespace: ${PREFIX}-quota
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  clusterQueue: ${PREFIX}-quota
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: busy
+  namespace: ${PREFIX}-busy
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  clusterQueue: ${PREFIX}-busy
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: busy
+  namespace: ${PREFIX}-busy-hidden
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  clusterQueue: ${PREFIX}-busy
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: held
+  namespace: ${PREFIX}-held
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  clusterQueue: ${PREFIX}-held
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: missing-flavor
+  namespace: ${PREFIX}-missing-flavor
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  clusterQueue: ${PREFIX}-missing-flavor
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: workloads-hidden
+  namespace: ${PREFIX}-lq-denied
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  clusterQueue: ${PREFIX}-lq-denied
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: empty
+  namespace: ${PREFIX}-empty
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  clusterQueue: ${PREFIX}-empty
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: lifecycle
+  namespace: ${PREFIX}-lifecycle
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  clusterQueue: ${PREFIX}-lifecycle
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: preempt
+  namespace: ${PREFIX}-lifecycle
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  clusterQueue: ${PREFIX}-preempt
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: drain
+  namespace: ${PREFIX}-drain
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  clusterQueue: ${PREFIX}-drain
+---
+# Points at an eligible ClusterQueue from a namespace its selector excludes.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  name: lifecycle
+  namespace: ${PREFIX}-ineligible
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  clusterQueue: ${PREFIX}-lifecycle

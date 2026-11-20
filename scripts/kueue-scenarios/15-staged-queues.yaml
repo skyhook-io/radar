@@ -1,0 +1,60 @@
+# ClusterQueues whose spec `up` changes on purpose after Workloads are admitted.
+# `up` creates them only when absent, so re-running it never undoes a step.
+# Scenario 2: the busy queue. CPU borrows from the cohort; memory on the default
+# flavor has an explicit borrowingLimit of 0. `up` first admits one Workload on
+# ${PREFIX}-spare, then removes that flavor from this spec.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: ${PREFIX}-busy
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  cohortName: ${PREFIX}-cohort
+  namespaceSelector:
+    matchLabels:
+      radar.skyhook.io/kueue-eligible: ${PREFIX}
+  admissionChecksStrategy:
+    admissionChecks:
+      - name: ${PREFIX}-check
+  resourceGroups:
+    - coveredResources: [cpu, memory]
+      flavors:
+        - name: ${PREFIX}-default
+          resources:
+            - name: cpu
+              nominalQuota: 200m
+            - name: memory
+              nominalQuota: 256Mi
+              borrowingLimit: "0"
+        - name: ${PREFIX}-spare
+          resources:
+            - name: cpu
+              nominalQuota: 100m
+            - name: memory
+              nominalQuota: 512Mi
+---
+# Evictions: `up` admits both Workloads, holds the queue, evicts one as
+# PodsReadyTimeout, then switches to HoldAndDrain to evict the other.
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: ${PREFIX}-drain
+  labels:
+    radar.skyhook.io/fixture: ${FIXTURE}
+    radar.skyhook.io/kueue-scenarios: ${PREFIX}
+spec:
+  namespaceSelector:
+    matchLabels:
+      radar.skyhook.io/kueue-eligible: ${PREFIX}
+  stopPolicy: None
+  resourceGroups:
+    - coveredResources: [cpu, memory]
+      flavors:
+        - name: ${PREFIX}-default
+          resources:
+            - name: cpu
+              nominalQuota: 200m
+            - name: memory
+              nominalQuota: 256Mi
