@@ -741,7 +741,7 @@ retain their finite grants.
 | `externalDns` | `externaldns.k8s.io` |
 | `externalSecrets` | `external-secrets.io` |
 | `flagger` | `flagger.app` (`canaries`, `metrictemplates` only); **off by default**. Enable `rbac.crdGroups.flagger=true` for native browsing and failed-rollout Issues. |
-| `flux` | `*.toolkit.fluxcd.io` |
+| `flux` | `*.toolkit.fluxcd.io`, `source.extensions.fluxcd.io` (ArtifactGenerator) |
 | `fluxOperator` | `fluxcd.controlplane.io` (FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider) |
 | `gatewayApi` | `gateway.networking.k8s.io` |
 | `gcpMonitoring` | `monitoring.googleapis.com` |
