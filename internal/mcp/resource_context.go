@@ -238,10 +238,6 @@ func issueEvidenceAccess(ctx context.Context) func(issues.EvidenceRead) bool {
 		if read.Namespace == "" {
 			return canReadInNamespace(ctx, read.Group, read.Resource, "", read.Verb)
 		}
-		// A read marked Exact gets its exact check, never namespace access alone.
-		if read.Exact {
-			return inNamespace(read.Namespace) && canReadInNamespace(ctx, read.Group, read.Resource, read.Namespace, read.Verb)
-		}
 		if !inNamespace(read.Namespace) {
 			return false
 		}

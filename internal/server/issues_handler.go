@@ -567,10 +567,6 @@ func (s *Server) issueEvidenceAccess(r *http.Request) func(issues.EvidenceRead) 
 		if read.Namespace == "" {
 			return s.canRead(r, read.Group, read.Resource, "", read.Verb)
 		}
-		// A read marked Exact gets its exact check, never namespace access alone.
-		if read.Exact {
-			return inNamespace(read.Namespace) && s.canRead(r, read.Group, read.Resource, read.Namespace, read.Verb)
-		}
 		if !inNamespace(read.Namespace) {
 			return false
 		}

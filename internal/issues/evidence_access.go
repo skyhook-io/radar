@@ -46,8 +46,11 @@ func ViewEvidence(reads []EvidenceRead, degraded *DegradedFinding, expected bool
 // authorize, so the evidence gates check the caller's own permission for it,
 // as the views read those kinds: Secrets, and Velero storage locations, whose
 // name and access mode a schedule's finding would otherwise reveal.
+// A read marked Exact asks for the same check whatever its kind.
 func ExactEvidenceRead(read EvidenceRead) bool {
 	switch {
+	case read.Exact:
+		return true
 	case read.Group == "" && read.Resource == "secrets":
 		return true
 	case read.Group == VeleroGroup && read.Resource == "backupstoragelocations":

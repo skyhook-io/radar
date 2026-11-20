@@ -104,6 +104,9 @@ func cnpgPrimaryHAGap(pdb *policyv1.PodDisruptionBudget, cluster *unstructured.U
 	target, _, _ := unstructured.NestedString(cluster.Object, "status", "targetPrimary")
 	maintenance, _, _ := unstructured.NestedBool(cluster.Object, "spec", "nodeMaintenanceWindow", "inProgress")
 	switch {
+	// The operator skips a Cluster with this annotation entirely, switchovers included.
+	case cluster.GetAnnotations()["cnpg.io/reconciliationLoop"] == "disabled":
+		return "reconciliation is disabled on the Cluster"
 	case ready != instances:
 		return "not all instances are ready"
 	case phase != cnpgHealthyPhase:
@@ -165,7 +168,7 @@ func cnpgPrimaryHAGap(pdb *policyv1.PodDisruptionBudget, cluster *unstructured.U
 		}
 	}
 	if !standby {
-		return "no ready standby is on a schedulable node (a standby on a cordoned or draining node doesn't count)"
+		return "no ready standby is on a schedulable node; a standby on a cordoned or draining node doesn't count"
 	}
 	return ""
 }

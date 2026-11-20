@@ -66,6 +66,9 @@ func TestClassifyCNPGPrimaryPDB(t *testing.T) {
 		{"not all instances ready", 2, func(f *CNPGPDBTestFixture) {
 			_ = unstructured.SetNestedField(f.Cluster.Object, int64(1), "status", "readyInstances")
 		}, cnpgPDBBlocking},
+		{"reconciliation disabled", 2, func(f *CNPGPDBTestFixture) {
+			f.Cluster.SetAnnotations(map[string]string{"cnpg.io/reconciliationLoop": "disabled"})
+		}, cnpgPDBBlocking},
 		{"maintenance window in progress", 2, func(f *CNPGPDBTestFixture) {
 			_ = unstructured.SetNestedField(f.Cluster.Object, true, "spec", "nodeMaintenanceWindow", "inProgress")
 		}, cnpgPDBBlocking},
