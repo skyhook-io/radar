@@ -37,6 +37,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
+import { isCoreNode as isCoreNodeObject } from '@skyhook-io/k8s-ui/components/resources/resource-utils'
 import { SUBSTRATE_GROUP } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import { CronJobSchedulingContext, CronJobSchedulingDetails } from './CronJobSchedulingEvidence'
@@ -176,6 +177,14 @@ export function supportsBatchExecution(kind: string, apiKind: string, group?: st
     return group === 'jobset.x-k8s.io' && isJobSetV1Alpha2({ kind, apiVersion })
   }
   return true
+}
+
+// Longhorn serves a `nodes` plural whose objects are also Kind Node; node metrics
+// only exist for the core Node.
+export function isPrometheusMetricsAvailable(kind: string, resource: any, coreNodeRoute: boolean): boolean {
+  if (!isPrometheusSupported(kind)) return false
+  if (kind === 'Node') return coreNodeRoute && isCoreNodeObject(resource)
+  return !(kind === 'Pod' && resource?.status?.phase === 'Pending')
 }
 
 // ============================================================================
@@ -1377,7 +1386,7 @@ export function WorkloadView({
           />
         )}
         isMetricsAvailable={(kind, res) =>
-          isSubstrateWorkerPool || (isPrometheusSupported(kind) && !(kind === 'Pod' && res?.status?.phase === 'Pending'))
+          isSubstrateWorkerPool || isPrometheusMetricsAvailable(kind, res, isNode)
         }
         isCostAvailable={(kind) => isOpenCostWorkloadKind(kind)}
         onDuplicate={handleDuplicate}
