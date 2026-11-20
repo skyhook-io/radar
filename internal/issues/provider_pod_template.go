@@ -463,26 +463,33 @@ func compileTemplateWebhooks(config *admissionv1.MutatingWebhookConfiguration) [
 		candidate := templateWebhook{configuration: Ref{Kind: "MutatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Name: config.Name},
 			created: config.CreationTimestamp, name: webhook.Name, namespace: ns, object: obj,
 			loopback: loopbackWebhookURL(webhook.ClientConfig.URL), matchConditions: len(webhook.MatchConditions) > 0}
-		for _, rule := range webhook.Rules {
-			if rule.Scope != nil && *rule.Scope == admissionv1.ClusterScope {
-				continue
-			}
-			if !ruleIncludes(rule.APIGroups, "") || !ruleIncludes(rule.APIVersions, "v1") {
-				continue
-			}
-			if !ruleIncludes(rule.Resources, "pods") && !slices.Contains(rule.Resources, "*/*") {
-				continue
-			}
-			for _, operation := range rule.Operations {
-				candidate.create = candidate.create || operation == admissionv1.Create || operation == admissionv1.OperationAll
-				candidate.update = candidate.update || operation == admissionv1.Update || operation == admissionv1.OperationAll
-			}
-		}
+		candidate.create, candidate.update = podRuleOperations(webhook.Rules)
 		if candidate.create || candidate.update {
 			out = append(out, candidate)
 		}
 	}
 	return out
+}
+
+// podRuleOperations reports whether a webhook's rules match Pod CREATE and
+// Pod UPDATE requests.
+func podRuleOperations(rules []admissionv1.RuleWithOperations) (create, update bool) {
+	for _, rule := range rules {
+		if rule.Scope != nil && *rule.Scope == admissionv1.ClusterScope {
+			continue
+		}
+		if !ruleIncludes(rule.APIGroups, "") || !ruleIncludes(rule.APIVersions, "v1") {
+			continue
+		}
+		if !ruleIncludes(rule.Resources, "pods") && !slices.Contains(rule.Resources, "*/*") {
+			continue
+		}
+		for _, operation := range rule.Operations {
+			create = create || operation == admissionv1.Create || operation == admissionv1.OperationAll
+			update = update || operation == admissionv1.Update || operation == admissionv1.OperationAll
+		}
+	}
+	return create, update
 }
 
 func (w templateWebhook) matchingOperations(pod *corev1.Pod, namespaceLabels labels.Set, allowUpdate bool) []string {

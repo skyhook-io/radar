@@ -16,6 +16,8 @@ export interface DockTab {
   podName?: string
   containerName?: string
   containers?: string[]
+  /** Logs: which of `containers` are init containers, labelled in the selector. */
+  initContainers?: string[]
   /** Terminal: run this command instead of a shell (one argv element, e.g. "psql"). */
   shell?: string
   /** Terminal: a short line shown in the toolbar, e.g. what the session is connected to. */
@@ -182,6 +184,15 @@ export function useDock() {
 }
 
 /**
+ * Whether the dock's content is on screen. A collapsed dock keeps its tabs
+ * mounted and the selected one still reports itself active. Safe without a
+ * DockProvider ancestor (treated as shown).
+ */
+export function useDockContentVisible(): boolean {
+  return useContext(DockContext)?.isExpanded ?? true
+}
+
+/**
  * Reserved vertical space at the bottom of the viewport for the dock, in px.
  * Drawers and main-content spacers subtract this so they don't sit behind the dock.
  * Maximized returns 0 — the dock covers everything by design.
@@ -244,6 +255,7 @@ export function useOpenLogs() {
     podName: string
     containers: string[]
     containerName?: string
+    initContainers?: string[]
     orgId?: string
     clusterId?: string
     clusterName?: string
@@ -259,6 +271,7 @@ export function useOpenLogs() {
       podName: opts.podName,
       containerName: opts.containerName,
       containers: opts.containers,
+      initContainers: opts.initContainers,
       orgId: opts.orgId,
       clusterId: opts.clusterId,
       clusterName: opts.clusterName,

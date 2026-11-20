@@ -85,6 +85,24 @@ describe("DiffViewer", () => {
     expect(html).toContain("kubernetes.io/tls");
   });
 
+  it("shows a key whose entries were only reordered as order changed, not as changed", () => {
+    const html = renderToStaticMarkup(
+      <DiffViewer
+        diff={{
+          summary: "",
+          fields: [
+            { path: "data (modified keys)", oldValue: ["hosts", "password"], newValue: ["hosts", "password"] },
+            { path: "data (reordered keys)", oldValue: ["hosts"], newValue: ["hosts"] },
+          ],
+        }}
+      />,
+    );
+    expect(html.match(/>data</g)).toHaveLength(1);
+    expect(html).toContain("keys changed: <span class=\"font-mono\">password</span>");
+    expect(html).toContain("order changed: <span class=\"font-mono\">hosts</span>");
+    expect(html).not.toContain("Old value:");
+  });
+
   it("keeps the old→new rendering when a key-list path does not carry a list", () => {
     const html = renderToStaticMarkup(
       <DiffViewer diff={{ summary: "", fields: [{ path: "data (modified keys)", oldValue: "x", newValue: "y" }] }} />,

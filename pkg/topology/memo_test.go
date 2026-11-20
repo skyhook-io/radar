@@ -176,58 +176,6 @@ func TestMemoizer_EvictsStaleEntries(t *testing.T) {
 	}
 }
 
-// TestMemoizer_GetIndex_CachesAlongsideTopology pins that GetIndex returns
-// the same *RelationshipsIndex across calls for the same key, proving the
-// lazy index is cached on the memoEntry (not rebuilt per call). T6/T12
-// hot paths depend on this: they call Get + GetIndex on every per-resource
-// request.
-func TestMemoizer_GetIndex_CachesAlongsideTopology(t *testing.T) {
-	m := NewMemoizer(1 * time.Second)
-	topo := &Topology{
-		Nodes: []Node{{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"}},
-		Edges: []Edge{},
-	}
-	build := func() (*Topology, error) { return topo, nil }
-	opts := DefaultBuildOptions()
-
-	idx1, err := m.GetIndex(opts, build)
-	if err != nil {
-		t.Fatalf("GetIndex 1: %v", err)
-	}
-	idx2, err := m.GetIndex(opts, build)
-	if err != nil {
-		t.Fatalf("GetIndex 2: %v", err)
-	}
-	if idx1 != idx2 {
-		t.Errorf("expected same *RelationshipsIndex across calls (cached), got two distinct pointers")
-	}
-}
-
-// TestMemoizer_GetIndex_ZeroTTL_BuildsInline mirrors TestMemoizer_ZeroTTLDisables:
-// with caching disabled, every GetIndex call must produce a fresh index.
-// Required for tests that drive Memoizer with ttl=0.
-func TestMemoizer_GetIndex_ZeroTTL_BuildsInline(t *testing.T) {
-	m := NewMemoizer(0)
-	topo := &Topology{
-		Nodes: []Node{{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"}},
-		Edges: []Edge{},
-	}
-	build := func() (*Topology, error) { return topo, nil }
-	opts := DefaultBuildOptions()
-
-	idx1, err := m.GetIndex(opts, build)
-	if err != nil {
-		t.Fatalf("GetIndex 1: %v", err)
-	}
-	idx2, err := m.GetIndex(opts, build)
-	if err != nil {
-		t.Fatalf("GetIndex 2: %v", err)
-	}
-	if idx1 == idx2 {
-		t.Errorf("ttl=0 should rebuild index inline each call, got identical pointers")
-	}
-}
-
 func TestMemoizer_DoesNotCacheErrors(t *testing.T) {
 	m := NewMemoizer(1 * time.Second)
 	var calls int32
@@ -338,65 +286,5 @@ func TestMemoizer_StraddlingBuildNeverReachesNewScope(t *testing.T) {
 	}
 	if got != fresh {
 		t.Errorf("new-scope Get after the old build stored got %+v", got.Nodes)
-	}
-}
-
-func TestMemoizer_ScopedIndexFollowsScope(t *testing.T) {
-	m := NewMemoizer(5 * time.Second)
-	opts := DefaultBuildOptions()
-	old := &Topology{Nodes: []Node{{ID: "deployment/demo/old"}}}
-	fresh := &Topology{Nodes: []Node{{ID: "deployment/demo/fresh"}}}
-
-	oldIdx, err := m.GetIndexScoped(oldScope, opts, func() (*Topology, error) { return old, nil })
-	if err != nil {
-		t.Fatalf("old-scope GetIndex: %v", err)
-	}
-	newIdx, err := m.GetIndexScoped(newScope, opts, func() (*Topology, error) { return fresh, nil })
-	if err != nil {
-		t.Fatalf("new-scope GetIndex: %v", err)
-	}
-	if oldIdx == newIdx {
-		t.Error("new-scope GetIndex returned the old scope's index")
-	}
-	again, err := m.GetIndexScoped(newScope, opts, func() (*Topology, error) { return fresh, nil })
-	if err != nil {
-		t.Fatalf("second new-scope GetIndex: %v", err)
-	}
-	if again != newIdx {
-		t.Error("second new-scope GetIndex rebuilt the index instead of reusing the memoized one")
-	}
-}
-
-func TestMemoizer_GetWithIndexKeepsSnapshotPairAndReusesIndex(t *testing.T) {
-	m := NewMemoizer(time.Hour)
-	opts := DefaultBuildOptions()
-	var count int
-	build := func() (*Topology, error) {
-		count++
-		name := "first"
-		if count > 1 {
-			name = "replacement"
-		}
-		return &Topology{Nodes: []Node{{ID: "deployment/team/" + name, Kind: KindDeployment, Name: name, Data: map[string]any{"namespace": "team"}}}}, nil
-	}
-	first, idx, err := m.GetWithIndexScoped(0, opts, build)
-	if err != nil {
-		t.Fatal(err)
-	}
-	again, same, err := m.GetWithIndexScoped(0, opts, build)
-	if err != nil || first != again || idx != same || count != 1 {
-		t.Fatalf("snapshot/index rebuilt on cache hit: %v %d", err, count)
-	}
-	// Force a genuine refresh without timing a sleep; old readers keep their
-	// coherent snapshot while the next call receives the replacement index.
-	m.mu.Lock()
-	m.entries[scopedKey(0, opts)].builtAt = time.Now().Add(-2 * time.Hour)
-	m.mu.Unlock()
-	next, nextIdx, err := m.GetWithIndexScoped(0, opts, build)
-	if err != nil || next == first || nextIdx == idx || count != 2 {
-		t.Fatalf("refresh = %v %d", err, count)
-	}
-	if idx.nodesByID[first.Nodes[0].ID] != &first.Nodes[0] || nextIdx.nodesByID[next.Nodes[0].ID] != &next.Nodes[0] || nextIdx.nodesByID[first.Nodes[0].ID] != nil {
-		t.Fatal("index paired with another snapshot")
 	}
 }

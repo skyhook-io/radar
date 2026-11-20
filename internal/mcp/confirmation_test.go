@@ -98,3 +98,52 @@ func TestMutationConfirmationEmptyGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMutationConfirmationSingleUse(t *testing.T) {
+	ctx := auth.ContextWithUser(context.WithValue(t.Context(), confirmationContextKey{}, "ctx-a"), &auth.User{Username: "u"})
+	first, err := issueMutationConfirmation(ctx, "uninstall_helm", "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := issueMutationConfirmation(ctx, "uninstall_helm", "target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("two previews of the same state must issue distinct tokens")
+	}
+	if !consumeMutationConfirmation(first) || consumeMutationConfirmation(first) {
+		t.Fatal("a token must be usable exactly once")
+	}
+	if !consumeMutationConfirmation(second) {
+		t.Fatal("consuming one token must not consume another preview's token")
+	}
+
+	// A re-encoded copy (different trailing bits, same payload) is the same token.
+	for _, target := range []string{"t", "tt", "ttt"} {
+		token, err := issueMutationConfirmation(ctx, "uninstall_helm", target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, signature, _ := strings.Cut(token, ".")
+		raw, _ := base64.RawURLEncoding.DecodeString(payload)
+		for _, c := range "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" {
+			alt := payload[:len(payload)-1] + string(c)
+			if alt == payload {
+				continue
+			}
+			if decoded, err := base64.RawURLEncoding.DecodeString(alt); err != nil || string(decoded) != string(raw) {
+				continue
+			}
+			reencoded := alt + "." + signature
+			if _, err := verifyMutationConfirmation(ctx, "uninstall_helm", reencoded); err != nil {
+				t.Fatalf("fixture: re-encoded token should still verify: %v", err)
+			}
+			if !consumeMutationConfirmation(token) || consumeMutationConfirmation(reencoded) {
+				t.Fatal("a re-encoded copy of a used token must be refused")
+			}
+			return
+		}
+	}
+	t.Fatal("fixture: no payload length left slack for a re-encoding")
+}

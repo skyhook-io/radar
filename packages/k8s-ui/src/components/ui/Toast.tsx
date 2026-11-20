@@ -26,11 +26,15 @@ type ToastOptions = Omit<Toast, 'id' | 'message' | 'dismissing' | 'shown'> & {
   id?: string
 }
 
+type NoticeOptions = Pick<ToastOptions, 'id' | 'duration' | 'action'>
+
 interface ToastContextType {
   showToast: (message: string, options?: ToastOptions) => void
   showCopied: (command: string, label?: string, event?: React.MouseEvent) => void
   showError: (message: string, detail?: string, rawDetail?: string) => void
   showSuccess: (message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) => void
+  /** Removes the toast shown with this id, if it is still on screen. */
+  dismissToast: (id: string) => void
 }
 
 const ToastContext = createContext<ToastContextType | null>(null)
@@ -69,8 +73,8 @@ class ToastManager {
     this.showSuccessFn ? this.showSuccessFn(message, detail, action, onDetailClick) : console.log('[Toast]', message, detail)
   }
 
-  showNotice(message: string, detail: string | undefined, type: 'warning' | 'info') {
-    this.showToastFn ? this.showToastFn(message, { detail, type }) : console.warn('[Toast]', message, detail)
+  showNotice(message: string, detail: string | undefined, type: 'warning' | 'info', options?: NoticeOptions) {
+    this.showToastFn ? this.showToastFn(message, { ...options, detail, type }) : console.warn('[Toast]', message, detail)
   }
 }
 
@@ -84,8 +88,8 @@ export function showApiSuccess(message: string, detail?: string, action?: Toast[
   toastManager.showSuccess(message, detail, action, onDetailClick)
 }
 
-export function showApiNotice(message: string, detail: string | undefined, type: 'warning' | 'info') {
-  toastManager.showNotice(message, detail, type)
+export function showApiNotice(message: string, detail: string | undefined, type: 'warning' | 'info', options?: NoticeOptions) {
+  toastManager.showNotice(message, detail, type, options)
 }
 
 export function useToast() {
@@ -161,7 +165,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, [showError, showSuccess, showToast])
 
   return (
-    <ToastContext.Provider value={{ showToast, showCopied, showError, showSuccess }}>
+    <ToastContext.Provider value={{ showToast, showCopied, showError, showSuccess, dismissToast }}>
       {children}
 
       {/* Render toasts */}
@@ -171,6 +175,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     </ToastContext.Provider>
   )
 }
+
+// Above every dialog and overlay layer (the highest is z-[130]) so an error
+// raised from inside an open dialog stays visible. Tooltips stay above toasts.
+const TOAST_Z_INDEX = 200
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -201,13 +209,13 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
         position: 'fixed',
         left: Math.min(toast.position.x, window.innerWidth - 520),
         top: toast.position.y,
-        zIndex: 50,
+        zIndex: TOAST_Z_INDEX,
       }
     : {
         position: 'fixed',
         bottom: 16,
         right: 16,
-        zIndex: 50,
+        zIndex: TOAST_Z_INDEX,
       }
 
   const isError = toast.type === 'error'

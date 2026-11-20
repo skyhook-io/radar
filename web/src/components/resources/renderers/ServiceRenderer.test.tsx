@@ -4,6 +4,7 @@ import { RadarFeatureUnsupportedError } from '../../../api/radarFeatures'
 import { ServiceRenderer } from './ServiceRenderer'
 
 const mock = vi.hoisted(() => ({
+  local: true,
   serviceQuery: {} as any,
   namespaceQuery: {} as any,
   serviceReads: [] as any[],
@@ -13,9 +14,9 @@ vi.mock('../../../api/client', () => ({
   useServiceEndpointSlices: (...args: any[]) => { mock.serviceReads.push(args); return mock.serviceQuery },
   useResources: (...args: any[]) => { mock.namespaceReads.push(args); return mock.namespaceQuery },
 }))
-vi.mock('../../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canPortForward: false }), useIsLocalDeployment: () => true }))
+vi.mock('../../../contexts/CapabilitiesContext', () => ({ useNamespacedCapabilities: () => ({ canPortForward: false }), useIsLocalDeployment: () => mock.local }))
 vi.mock('../../portforward/PortForwardButton', () => ({ PortForwardInlineButton: () => null }))
-vi.mock('../../curl/ServiceCurlButton', () => ({ CurlButton: () => null, CurlPanel: () => null, isHttpishPort: () => false, defaultScheme: () => '', defaultPathForPort: () => '' }))
+vi.mock('../../curl/ServiceCurlButton', () => ({ CurlButton: () => <button>Service curl</button>, CurlPanel: () => null, isHttpishPort: () => true, defaultScheme: () => '', defaultPathForPort: () => '' }))
 
 const service = { apiVersion: 'v1', kind: 'Service', metadata: { name: 'web', namespace: 'team' }, spec: { selector: { app: 'web' } } }
 const selectorless = { ...service, spec: {} }
@@ -24,6 +25,7 @@ const render = (data: any = service) => renderToStaticMarkup(<ServiceRenderer da
 const unsupported = () => new RadarFeatureUnsupportedError('serviceEndpointSlices', { currentVersion: 'v1.7.0' })
 
 beforeEach(() => {
+  mock.local = true
   mock.serviceQuery = {}
   mock.namespaceQuery = {}
   mock.serviceReads = []
@@ -78,4 +80,15 @@ it('keeps selector Services free of slice lookups on an older Radar', () => {
   const html = render()
   expect(mock.namespaceReads[0][3].enabled).toBe(false)
   expect(html).not.toContain('EndpointSlices')
+})
+
+it('preserves in-cluster UI curl for all Service types', () => {
+  mock.local = false
+  const ports = [{ port: 80, name: 'http', protocol: 'TCP' }]
+  expect(render({ ...service, spec: { ...service.spec, ports } })).toContain('Service curl')
+  expect(render({ ...service, spec: { ports } })).toContain('Service curl')
+  expect(render({ ...service, spec: { type: 'ExternalName', externalName: 'example.org', ports } })).toContain('Service curl')
+  expect(render({ ...service, spec: { ...service.spec, clusterIP: 'None', ports } })).toContain('Service curl')
+  mock.local = true
+  expect(render({ ...service, spec: { ...service.spec, ports } })).not.toContain('Service curl')
 })

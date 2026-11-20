@@ -12,10 +12,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func withWorkloadHistoryStore(t *testing.T) timeline.EventStore {
@@ -473,5 +478,36 @@ func TestWorkloadHistory_StandalonePodNotAdoptedByName(t *testing.T) {
 	_, resp := getWorkloadHistory(t, "/api/workloads/statefulsets/default/web/history")
 	if got := fmt.Sprint(historyIDs(resp.Events)); got != "[missed-pod sts]" {
 		t.Errorf("StatefulSet web history = %s, want [missed-pod sts]: the unknown-owner Pod by name, not the standalone one", got)
+	}
+}
+
+func TestWorkloadAttachmentsFromFamiliesRespectAccessAndNamespace(t *testing.T) {
+	withOwnershipDiscovery(t)
+	workload := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "app"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{Volumes: []corev1.Volume{
+		{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "config"}}}},
+		{Name: "secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "hidden"}}},
+	}}}}}
+	useTestResourceCache(t, fake.NewClientset(workload,
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "config"}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "hidden"}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "front"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "beta", Name: "other"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}},
+	))
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"alpha"}}
+	perms.SetCanI("list", "*", "*", "", false)
+	perms.SetCanI("list", "", "secrets", "alpha", false)
+	env.srv.permCache.Set("history", nil, perms)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "history"}))
+	key := resourceid.NewRef("apps", "Deployment", "alpha", "app")
+	got := env.srv.workloadAttachments(r, key, workload)
+	if len(got) != 2 {
+		t.Fatalf("attachments = %v", got)
+	}
+	for _, ref := range got {
+		if ref.Namespace != "alpha" || ref.Kind != "Service" && ref.Kind != "ConfigMap" {
+			t.Fatalf("unexpected attachment %v", ref)
+		}
 	}
 }

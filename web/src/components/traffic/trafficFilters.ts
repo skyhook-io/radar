@@ -1,4 +1,5 @@
-import type { AggregatedFlow, TrafficFlow } from '../../types'
+import { formatBytes } from '@skyhook-io/k8s-ui/utils/format'
+import type { AggregatedFlow, TrafficFlow, TrafficWarningKind } from '../../types'
 import type { TrafficEndpointPair, TrafficEndpointRef, TrafficMatch } from '../../api/traffic'
 import type { TrafficGraphSelection } from './TrafficGraph'
 
@@ -72,6 +73,96 @@ export function errorRateOf(flow: Pick<AggregatedFlow, 'errorRate' | 'errorCount
 }
 
 /**
+ * An edge's protocol as "application / transport", or one name when the two
+ * are the same: a mesh source reports HTTP as both, and "HTTP / HTTP" reads as
+ * two protocols.
+ */
+export function protocolLabel(l7Protocol: string | undefined, protocol: string): string {
+  if (!l7Protocol || l7Protocol.toLowerCase() === protocol.toLowerCase()) return l7Protocol || protocol
+  return `${l7Protocol} / ${protocol}`
+}
+
+export function protocolName(protocol: string): string {
+  return protocol.toLowerCase() === 'grpc' ? 'gRPC' : protocol.toUpperCase() || 'Unknown'
+}
+
+export interface ProtocolData {
+  protocol: string | null
+  sent: number
+  recv: number
+}
+
+type ByteFigures = Pick<AggregatedFlow, 'bytesByProtocol' | 'bytesSent' | 'bytesRecv'>
+
+const transportProtocols = new Set(['tcp', 'udp', 'icmp', 'icmpv6', 'sctp'])
+
+export function isPayloadProtocol(protocol: string): boolean {
+  return !transportProtocols.has(protocol.toLowerCase())
+}
+
+/** The protocols an edge's traffic was observed on, payload protocols first,
+ *  whether or not they carried byte figures. */
+export function protocolsOf(flow: Pick<AggregatedFlow, 'bytesByProtocol'>): string[] {
+  return Object.keys(flow.bytesByProtocol ?? {})
+    .sort((a, b) => Number(isPayloadProtocol(b)) - Number(isPayloadProtocol(a)) || a.localeCompare(b))
+}
+
+/** An edge's Data per protocol, payload protocols first. Only protocols that
+ *  carried bytes: a zero there usually means not measured (a failed byte query,
+ *  a source that reports none), and "0 B" would read as a measurement. A Radar
+ *  that predates the breakdown sends only the cross-protocol sum, which can
+ *  already mix HTTP and gRPC under one protocol name, so it comes back as one
+ *  figure with no protocol claimed. */
+export function dataByProtocol(flow: ByteFigures): ProtocolData[] {
+  const buckets = flow.bytesByProtocol
+  if (!buckets) return [{ protocol: null, sent: flow.bytesSent, recv: flow.bytesRecv }]
+  return protocolsOf(flow)
+    .map(protocol => ({ protocol, sent: buckets[protocol].bytesSent, recv: buckets[protocol].bytesRecv }))
+    .filter(e => e.sent + e.recv > 0)
+}
+
+/** The span a rate-based source's byte totals cover, in seconds: the view's
+ *  range, five minutes when it is under a minute, at most an hour — the same
+ *  rule the server's rate window follows. */
+export function rateWindowSeconds(timeRange: string): number {
+  const m = /^(\d+)([smh])$/.exec(timeRange)
+  const seconds = m ? Number(m[1]) * ({ s: 1, m: 60, h: 3600 } as const)[m[2] as 's' | 'm' | 'h'] : 0
+  return seconds < 60 ? 300 : Math.min(seconds, 3600)
+}
+
+/** Label for an edge a rate-based source measured only in bytes: its
+ *  throughput per protocol over the window, never added across protocols.
+ *  Empty without a per-protocol breakdown: an older Radar's byte sum can mix
+ *  TCP and UDP under one protocol name, so no protocol can be claimed for it. */
+export function throughputLabel(flow: ByteFigures, windowSeconds: number): string {
+  if (!flow.bytesByProtocol) return ''
+  return dataByProtocol(flow)
+    .map(e => {
+      const perSecond = (e.sent + e.recv) / windowSeconds
+      return `${protocolName(e.protocol!)} · ${perSecond < 1 ? '<1 B' : formatBytes(perSecond)}/s`
+    })
+    .join(' · ')
+}
+
+/** Data across several edges, added only within each protocol. */
+export function totalDataByProtocol(flows: ByteFigures[]): ProtocolData[] {
+  if (!flows.some(f => f.bytesByProtocol)) {
+    return [{ protocol: null, sent: flows.reduce((n, f) => n + f.bytesSent, 0), recv: flows.reduce((n, f) => n + f.bytesRecv, 0) }]
+  }
+  return dataByProtocol({ bytesSent: 0, bytesRecv: 0, bytesByProtocol: flows.reduce<AggregatedFlow['bytesByProtocol']>((acc, f) => mergeProtocolBytes(acc, f.bytesByProtocol), undefined) })
+}
+
+function mergeProtocolBytes(a: AggregatedFlow['bytesByProtocol'], b: AggregatedFlow['bytesByProtocol']): AggregatedFlow['bytesByProtocol'] {
+  if (!b) return a
+  const merged = { ...a }
+  for (const [protocol, bytes] of Object.entries(b)) {
+    const prev = merged[protocol]
+    merged[protocol] = { bytesSent: (prev?.bytesSent ?? 0) + bytes.bytesSent, bytesRecv: (prev?.bytesRecv ?? 0) + bytes.bytesRecv }
+  }
+  return merged
+}
+
+/**
  * The volume shown for an edge. For a rate-based source `connections` is its
  * request rate rounded with a floor of one — the graph sizes, sorts and filters
  * on that integer — so what is printed is the unrounded rate where the edge has
@@ -130,6 +221,7 @@ export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): voi
   }
   const weighted: LatencyWeighted = into
   weighted.latencyWeight = wInto + wFlow
+  into.bytesByProtocol = mergeProtocolBytes(into.bytesByProtocol, flow.bytesByProtocol)
   into.connections += flow.connections
   into.bytesSent += flow.bytesSent
   into.bytesRecv += flow.bytesRecv
@@ -370,6 +462,53 @@ export function endpointPair(flow: AggregatedFlow): TrafficEndpointPair {
 export function mergeRawPairs(into: GraphFlow, from: GraphFlow): void {
   const target = into.rawPairs ?? (into.rawPairs = [])
   for (const pair of from.rawPairs ?? []) target.push(pair)
+}
+
+export function groupAddonFlows(flows: GraphFlow[], isAddon: (name: string, namespace: string | undefined) => boolean): GraphFlow[] {
+  let internet: GraphFlow | undefined
+  let kubernetes: GraphFlow | undefined
+  const grouped: GraphFlow[] = []
+  for (const flow of flows) {
+    if (flow.source.kind === 'Internet' && isAddon(flow.destination.name, flow.destination.namespace)) {
+      if (!internet) {
+        internet = {
+          connections: 0, bytesSent: 0, bytesRecv: 0, flowCount: 0, lastSeen: flow.lastSeen,
+          source: { name: 'addon-internet', namespace: '', kind: 'AddonInternet' },
+          destination: { name: 'addon-group-target', namespace: '', kind: 'AddonGroupTarget' },
+          protocol: flow.protocol, port: flow.port, l7Protocol: flow.l7Protocol,
+          rawPairs: [],
+        }
+      }
+      internet.port = mergedEdgePort(internet.port, flow.port)
+      if (internet.protocol !== flow.protocol) internet.protocol = 'mixed'
+      if (internet.l7Protocol !== flow.l7Protocol) internet.l7Protocol = 'mixed'
+      mergeFlowVolume(internet, flow)
+      mergeRawPairs(internet, flow)
+      grouped.push({ ...flow, source: { name: 'addon-internet', namespace: '', kind: 'SkipEdge' } })
+    } else if (isAddon(flow.source.name, flow.source.namespace) && flow.destination.name === 'kubernetes' &&
+      (!flow.destination.namespace || flow.destination.namespace === 'default')) {
+      if (!kubernetes) {
+        kubernetes = {
+          connections: 0, bytesSent: 0, bytesRecv: 0, flowCount: 0, lastSeen: flow.lastSeen,
+          source: { name: 'addon-group-source', namespace: '', kind: 'AddonGroupSource' },
+          destination: { name: 'kubernetes', namespace: 'default', kind: 'Service' },
+          protocol: flow.protocol, port: flow.port, l7Protocol: flow.l7Protocol,
+          rawPairs: [],
+        }
+      }
+      kubernetes.port = mergedEdgePort(kubernetes.port, flow.port)
+      if (kubernetes.protocol !== flow.protocol) kubernetes.protocol = 'mixed'
+      if (kubernetes.l7Protocol !== flow.l7Protocol) kubernetes.l7Protocol = 'mixed'
+      mergeFlowVolume(kubernetes, flow)
+      mergeRawPairs(kubernetes, flow)
+      grouped.push({ ...flow, destination: { ...flow.destination, kind: 'SkipEdge' } })
+    } else {
+      grouped.push(flow)
+    }
+  }
+  if (internet) grouped.push(internet)
+  if (kubernetes) grouped.push(kubernetes)
+  return grouped
 }
 
 // The renderer draws the addon group's virtual endpoints as one group node.
@@ -707,4 +846,33 @@ export function verdictChoices(seen: Iterable<string>): string[] {
   const present = new Set(seen)
   if (present.size === 1 && present.has('forwarded')) return []
   return ['forwarded', 'dropped', 'error'].filter(v => present.has(v))
+}
+
+/** Whether an empty map with this warning is worth fetching again at once. Only
+ *  a transient one (or one from a Radar that sends no kind) may clear on its own;
+ *  the rest are the answer, and polling them costs the source a burst of queries. */
+export function warningRetries(kind: TrafficWarningKind | undefined): boolean {
+  return kind !== 'partial' && kind !== 'incomplete' && kind !== 'cluster'
+}
+
+/** Title of the banner shown beside flows that carry a warning. */
+export function warningBannerTitle(kind: TrafficWarningKind | undefined): string {
+  switch (kind) {
+    // About values on edges that are shown - a port reported as 0, UDP as TCP -
+    // so "unreliable", not "incomplete", which would send the reader looking
+    // for missing workloads.
+    case 'partial': return 'Some values on this map are unreliable'
+    case 'cluster': return "This map may include other clusters' traffic"
+    default: return 'Some traffic may be missing from this map'
+  }
+}
+
+/** Headline of the empty map when the source explained why it is empty. */
+export function emptyWarningHeadline(kind: TrafficWarningKind | undefined): string {
+  switch (kind) {
+    case 'partial': return 'No traffic Radar can place on the map'
+    case 'incomplete': return 'No traffic seen, but some may be missing'
+    case 'cluster': return 'No traffic labeled as this cluster'
+    default: return 'Unable to fetch traffic data'
+  }
 }

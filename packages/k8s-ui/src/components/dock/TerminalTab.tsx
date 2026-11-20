@@ -7,8 +7,13 @@ import { RefreshCw, ChevronDown, Bug } from 'lucide-react'
 import { clsx } from 'clsx'
 import { setupTerminalClipboard, copyTerminalSelection } from './terminalClipboard'
 import { TerminalClipboardToolbar } from './TerminalClipboardToolbar'
+import { showApiError, showApiNotice } from '../ui/Toast'
 import { useMultilinePasteConfirm } from './useMultilinePasteConfirm'
+import { attachTerminalKeys } from './terminalKeys'
+import { useTerminalSearch } from './useTerminalSearch'
+import { TerminalSearchBar, TerminalSearchButton } from './TerminalSearchBar'
 import { toneTextClass } from '../ui/status-tone'
+import { useTerminalCopyOnSelect } from './terminalPreferences'
 
 export interface TerminalTabProps {
   namespace: string
@@ -58,6 +63,9 @@ export function TerminalTab({
   const [selectedContainer, setSelectedContainer] = useState(containerName)
   const [hasSelection, setHasSelection] = useState(false)
   const { confirmPaste, pasteDialog } = useMultilinePasteConfirm()
+  const search = useTerminalSearch(isActive)
+  const { getState: copyOnSelect } = useTerminalCopyOnSelect()
+  const { attach: attachSearch, open: openSearch, restoreFocus } = search
 
   const handleCopy = useCallback(() => {
     if (xtermRef.current) copyTerminalSelection(xtermRef.current)
@@ -81,6 +89,8 @@ export function TerminalTab({
       fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
       fontSize: 13,
       lineHeight: 1.2,
+      // Search highlights use xterm's decoration API, which is still marked proposed.
+      allowProposedApi: true,
       theme: {
         background: '#0f172a',
         foreground: '#e2e8f0',
@@ -119,7 +129,12 @@ export function TerminalTab({
     const disposeClipboard = setupTerminalClipboard(xterm, terminalRef.current, {
       confirmPaste,
       onSelectionChange: setHasSelection,
+      copyOnSelect,
+      onCopyError: () => showApiError('Could not copy the selection. Check clipboard access before pasting.'),
+      onCopyPending: () => showApiNotice('Selection not copied. Account information is unavailable.', 'Wait for it to load, or switch to another tab or window and back to retry.', 'warning'),
     })
+    const detachSearch = attachSearch(xterm)
+    attachTerminalKeys(xterm, { onFind: openSearch })
 
     const doFit = (ws?: WebSocket) => {
       const dims = fitAddon.proposeDimensions()
@@ -165,6 +180,7 @@ export function TerminalTab({
     cleanupRef.current = () => {
       resizeObserver.disconnect()
       disposeClipboard()
+      detachSearch()
     }
 
     createSessionRef.current(selectedContainer)
@@ -177,7 +193,7 @@ export function TerminalTab({
           setIsConnected(true)
           setIsConnecting(false)
           doFit(ws)
-          xterm.focus()
+          restoreFocus()
         }
 
         ws.onmessage = (event) => {
@@ -223,7 +239,7 @@ export function TerminalTab({
         setErrorType('exec_error')
         setIsConnecting(false)
       })
-  }, [namespace, podName, selectedContainer])
+  }, [namespace, podName, selectedContainer, attachSearch, openSearch, restoreFocus])
 
   useEffect(() => {
     connect()
@@ -260,9 +276,9 @@ export function TerminalTab({
     if (isActive && fitAddonRef.current && xtermRef.current) {
       const dims = fitAddonRef.current.proposeDimensions()
       if (dims) xtermRef.current.resize(dims.cols, dims.rows)
-      xtermRef.current.focus()
+      restoreFocus()
     }
-  }, [isActive])
+  }, [isActive, restoreFocus])
 
   return (
     <div className="relative h-full w-full bg-theme-base overflow-hidden">
@@ -303,7 +319,13 @@ export function TerminalTab({
           </button>
         )}
 
-        {!error && <TerminalClipboardToolbar hasSelection={hasSelection} onCopy={handleCopy} />}
+        {!error && (
+          <TerminalClipboardToolbar
+            hasSelection={hasSelection}
+            onCopy={handleCopy}
+            leading={<TerminalSearchButton onClick={openSearch} />}
+          />
+        )}
       </div>
 
       <div ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
@@ -360,6 +382,7 @@ export function TerminalTab({
           )}
         </div>
       )}
+      {!error && <TerminalSearchBar search={search} />}
       {pasteDialog}
     </div>
   )

@@ -38,6 +38,20 @@ export function canSetWorkloadImages(
   return supported && canPatchWorkloadKind(kind, writes)
 }
 
+export function canPauseDeployment(
+  kind: BulkWorkloadKindInfo | null | undefined,
+  writes: WorkloadWritePermissions | undefined,
+  supported: boolean,
+): boolean {
+  return supported && kind?.name.toLowerCase() === 'deployments' && canPatchWorkloadKind(kind, writes)
+}
+
+export function isPausedDeployment(
+  resource: { apiVersion?: string; kind?: string; spec?: { paused?: unknown } } | null | undefined,
+): boolean {
+  return resource?.kind === 'Deployment' && resource.apiVersion?.startsWith('apps/') === true && resource.spec?.paused === true
+}
+
 export function canBulkScaleKind(
   kind: BulkWorkloadKindInfo | null | undefined,
   writes: WorkloadWritePermissions | undefined,

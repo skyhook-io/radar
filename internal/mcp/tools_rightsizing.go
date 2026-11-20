@@ -60,6 +60,9 @@ type rightsizingRowDTO struct {
 	Confidence     prometheuspkg.RightsizingConfidence `json:"confidence"`
 	CurrentRequest *string                             `json:"currentRequest,omitempty"`
 	CurrentLimit   *string                             `json:"currentLimit,omitempty"`
+	// The pod's fixed pod-level request on fit=pod_level_request rows: what the
+	// scheduler reserves instead of the containers' requests.
+	PodLevelRequest *string `json:"podLevelRequest,omitempty"`
 	// No omitempty: a withheld recommendation must arrive as an explicit null
 	// beside its recommendationReason. Omitting the field turns "Radar declined
 	// to recommend, and here is why" into a key the reader never sees.
@@ -842,6 +845,7 @@ func filterRightsizingRows(rows []prometheuspkg.RightsizingRow, includeAll, keep
 			Confidence:           row.Confidence,
 			CurrentRequest:       row.CurrentRequest,
 			CurrentLimit:         row.CurrentLimit,
+			PodLevelRequest:      row.PodLevelRequest,
 			RecommendedRequest:   row.RecommendedReq,
 			Coverage:             row.Coverage,
 			RecommendationReason: row.RecommendationReason,
@@ -1141,7 +1145,7 @@ func rightsizingGuidance(in rightsizingGuidanceInput) []string {
 		parts = append(parts, "Rows with reductionLimited=true were clamped: recommendedRequest is a bounded step, not the full cut: at most half for memory, for CPU of 1 core or more, and for bursty or throttled CPU; up to three quarters for smaller CPU requests. demandTarget is the demand-based end state, not a value to apply: apply recommendedRequest, observe a full 7-day window, then re-check. For memory, demandTarget comes from the 7-day max, so a monthly or batch peak outside the window is not seen and jumping straight to it risks OOM.")
 	}
 	if in.needsManualReview {
-		parts = append(parts, "Rows with needsManualReview=true are excluded from the workload's requestDelta, and reviewReasons says why — an autoscaler owns the request, the container has OOM history, its limit conflicts with the recommendation, or the cut runs against bursty or throttled usage. Most of those rows carry no recommendedRequest at all, because the same signal withheld it; where one is present, weigh it against the reason instead of applying it unattended. The flag marks a row that needs judgement, not one that must never change: raising a request on a container with OOM history is often exactly what the evidence asks for.")
+		parts = append(parts, "Rows with needsManualReview=true are excluded from the workload's requestDelta, and reviewReasons says why — an autoscaler owns the request, the container has OOM history, its limit conflicts with the recommendation, the cut runs against bursty or throttled usage, or (pod_level_request) the pod sets a fixed pod-level request in spec.resources, which the scheduler reserves instead of container requests and which Radar does not size; podLevelRequest gives its value, and observed usage is still reported per container. Most of those rows carry no recommendedRequest at all, because the same signal withheld it; where one is present, weigh it against the reason instead of applying it unattended. The flag marks a row that needs judgement, not one that must never change: raising a request on a container with OOM history is often exactly what the evidence asks for.")
 	}
 	if in.workloadsShown {
 		parts = append(parts, "requestDelta is replica-weighted request capacity, not bill savings. An absent cpu or memory delta means zero net change or no eligible evidence; read rows to distinguish them. Rows lacking evidence or needing manual review are excluded. If liveInventoryUnavailable=true, currentPodOOM being absent does not establish that no pod has OOMed.")

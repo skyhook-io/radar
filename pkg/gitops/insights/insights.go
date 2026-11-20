@@ -53,6 +53,9 @@ type Summary struct {
 	// no rollback happened.
 	RollbackRevision string `json:"rollbackRevision,omitempty"`
 	LastReconcile    string `json:"lastReconcile,omitempty"`
+	LastApplied      string `json:"lastApplied,omitempty"`
+	LastApplyAttempt string `json:"lastApplyAttempt,omitempty"`
+	LastDeployed     string `json:"lastDeployed,omitempty"`
 	PartialReason    string `json:"partialReason,omitempty"`
 	// AutoSyncMode is the human-readable syncPolicy chip label, e.g.
 	// "Manual", "Auto", "Auto · prune", "Auto · self-heal",
@@ -488,7 +491,12 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 		s.OperationMessage, s.RawOperationMessage = diagnose.CleanArgoControllerMessageWithRaw(opMessage)
 		s.TargetRevision, _, _ = unstructured.NestedString(root.Object, "status", "sync", "revision")
 		s.LastRevision, _, _ = unstructured.NestedString(root.Object, "status", "operationState", "syncResult", "revision")
-		s.LastReconcile, _, _ = unstructured.NestedString(root.Object, "status", "reconciledAt")
+		if root.GetKind() == "Application" {
+			value, _, _ := unstructured.NestedString(root.Object, "status", "reconciledAt")
+			if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil && !parsed.IsZero() {
+				s.LastReconcile = parsed.UTC().Format(time.RFC3339Nano)
+			}
+		}
 		source, _, _ := unstructured.NestedMap(root.Object, "spec", "source")
 		if len(source) == 0 {
 			sources, _, _ := unstructured.NestedSlice(root.Object, "spec", "sources")
@@ -509,9 +517,14 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 	s.Health = status.health
 	s.TargetRevision, _, _ = unstructured.NestedString(root.Object, "status", "lastAttemptedRevision")
 	s.LastRevision, _, _ = unstructured.NestedString(root.Object, "status", "lastAppliedRevision")
-	s.LastReconcile, _, _ = unstructured.NestedString(root.Object, "status", "lastHandledReconcileAt")
-	if s.LastReconcile == "" {
-		s.LastReconcile = newestConditionTime(root)
+	if at, succeeded := gitops.FluxLastApply(root); succeeded {
+		s.LastApplied = at
+	} else {
+		s.LastApplyAttempt = at
+	}
+	if release := gitops.FluxDeployedRelease(root); release != nil && release.ChartVersion != "" {
+		s.LastRevision = release.ChartVersion
+		s.LastDeployed = release.LastDeployed
 	}
 	if sources := gitops.FluxSourceReferences(root); len(sources) > 0 {
 		s.Source = sources[0].Kind + "/" + sources[0].Name
@@ -587,10 +600,12 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			operationFailed = true
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(opMessage)
 			parsed := diagnose.ParseArgoOperationError(msg)
+			createNamespaceSet := gitops.ArgoCreateNamespaceEnabled(root)
+			parsed = diagnose.WithCreateNamespaceState(parsed, createNamespaceSet)
 			action := fallback(parsed.Action, "Open Activity for operation details.")
 			if !gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root) {
 				var remoteAction string
-				if parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed); remoteAction != "" {
+				if parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed, createNamespaceSet); remoteAction != "" {
 					action = remoteAction
 				}
 			}
@@ -652,11 +667,6 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			// OutOfSync badge — which the user has been staring at for hours.
 			out = append(out, *stuck)
 		} else if drift := detectManualDriftWithoutAutoSync(root, syncHazard); drift != nil {
-			// Manual drift without auto-sync: app is OutOfSync but auto-sync
-			// is off, so nothing will reconcile until a human clicks Sync.
-			// Common operator confusion: "I see drift, why isn't anything
-			// happening?" Answer: nothing is *supposed* to happen
-			// automatically.
 			out = append(out, *drift)
 		} else if drift := detectAutoDriftSelfHealOff(root, syncHazard); drift != nil {
 			// Auto-sync on but self-heal off: Argo deploys new Git revisions
@@ -866,7 +876,7 @@ func degradedResourceFromEvents(root *unstructured.Unstructured, resolver Resolv
 // path's framing.
 func resourceHealthIssue(change Change, resolver Resolver) Issue {
 	if change.Missing {
-		action := "Sync the application to create the resource."
+		action := "Review the desired changes and sync policy before deciding whether to sync."
 		if change.Sync == "Synced" {
 			action = "Refresh the application to check its status."
 		}
@@ -1826,16 +1836,6 @@ func parseWave(value string) (int, bool) {
 	return i, err == nil
 }
 
-func newestConditionTime(root *unstructured.Unstructured) string {
-	newest := ""
-	for _, c := range conditions(root) {
-		if c.lastTransitionTime > newest {
-			newest = c.lastTransitionTime
-		}
-	}
-	return newest
-}
-
 func stringData(data map[string]any, key string) string {
 	if data == nil {
 		return ""
@@ -2224,15 +2224,14 @@ func detectStuckDriftLoop(root *unstructured.Unstructured) *Issue {
 		Reason:   "StuckDriftLoop",
 		Message:  "Sync succeeded but the application is still OutOfSync. A controller or admission webhook is likely mutating resources after each apply.",
 		Cause:    "Auto-sync ran successfully and the controller's last reconcile is recent, but live state keeps diverging from Git. Common causes: a mutating admission webhook adds defaults Argo isn't told to ignore; a sibling controller (e.g. Karpenter, Istio, cert-manager) writes back into spec; the Git manifest uses a deprecated API schema that the conversion webhook rewrites.",
-		Action:   "Open Changes to see the per-resource drift. Match the diff against your Git manifest, the resource's controller, and any mutating webhooks.",
+		Action:   "Open Resources to see the per-resource drift. Match the diff against your Git manifest, the resource's controller, and any mutating webhooks.",
 		Stuck:    true,
 	}
 }
 
 // detectManualDriftWithoutAutoSync emits a warning when an Argo Application
-// is OutOfSync but auto-sync is disabled. The user otherwise has no signal
-// that the drift won't resolve on its own. A proven successful rollback
-// instead records the last rollback without claiming the live state is unchanged.
+// is OutOfSync but auto-sync is disabled. A proven successful rollback
+// records the last rollback without claiming the live state is unchanged.
 //
 // Returns nil when conditions don't match — caller appends only on hit.
 func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured, syncHazard string) *Issue {
@@ -2260,7 +2259,7 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured, syncHazar
 			Scope:    ScopeOperation,
 			Reason:   "RolledBack",
 			Message:  message + ".",
-			Cause:    "Auto-sync is off, so Argo won't deploy a new revision on its own. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current " + revisionLabel + " and can undo the rollback.",
+			Cause:    "Auto-sync is off. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current " + revisionLabel + " and can undo the rollback.",
 		}
 		if syncHazard != "" {
 			issue.Action = syncHazard
@@ -2272,11 +2271,10 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured, syncHazar
 		Severity: SeverityWarning,
 		Scope:    ScopeOperation,
 		Reason:   "ManualDrift",
-		Message:  "Application is OutOfSync and auto-sync is disabled — nothing will reconcile until you click Sync.",
-		Action:   "Open Changes to review the per-resource diff, then click Sync to apply. Enable auto-sync if you want this to fix itself going forward.",
+		Message:  "Application is OutOfSync and auto-sync is disabled.",
+		Action:   "Review the desired changes and sync policy before deciding whether to sync.",
 	}
 	if syncHazard != "" {
-		issue.Message = "Application is OutOfSync and auto-sync is disabled, so nothing reconciles it automatically."
 		issue.Action = syncHazard
 		issue.Hazard = syncHazard
 	}
@@ -2341,7 +2339,7 @@ func detectAutoDriftSelfHealOff(root *unstructured.Unstructured, syncHazard stri
 		Scope:    ScopeOperation,
 		Reason:   "SelfHealDisabled",
 		Message:  "Application is OutOfSync and self-heal is disabled — auto-sync deploys new Git revisions but won't correct drift in the live cluster, so it will stay OutOfSync until you sync.",
-		Action:   "Open Changes to review the per-resource diff, then click Sync. Enable self-heal on the sync policy if you want Argo to auto-correct drift going forward.",
+		Action:   "Open Resources to review the per-resource diff, then click Sync. Enable self-heal on the sync policy if you want Argo to auto-correct drift going forward.",
 	}
 	if syncHazard != "" {
 		issue.Message = "Application is OutOfSync and self-heal is disabled — auto-sync deploys new Git revisions but won't correct drift in the live cluster."
@@ -2398,6 +2396,8 @@ func argoApplicationConditions(root *unstructured.Unstructured, syncHazard strin
 		action := guidance.Action
 		if typ == argoSyncErrorConditionType {
 			parsed := diagnose.ParseArgoOperationError(msg)
+			createNamespaceSet := gitops.ArgoCreateNamespaceEnabled(root)
+			parsed = diagnose.WithCreateNamespaceState(parsed, createNamespaceSet)
 			if parsed.Reason != "" {
 				if parsed.Reason == diagnose.ReasonAutoSyncBlockedEmpty && !gitops.ArgoEmptyRenderGuardHolds(root) {
 					continue
@@ -2410,7 +2410,7 @@ func argoApplicationConditions(root *unstructured.Unstructured, syncHazard strin
 			}
 			if !gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root) {
 				var remoteAction string
-				parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed)
+				parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed, createNamespaceSet)
 				if remoteAction != "" {
 					action = remoteAction
 				}

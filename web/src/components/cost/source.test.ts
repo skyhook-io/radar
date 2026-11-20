@@ -12,6 +12,11 @@ describe('cost source presentation', () => {
     expect(costConfigurationAction('authentication_error', { ...both, cost: undefined }).label).toBe('Configure cost source')
     expect(costConfigurationAction('configuration_mismatch', both).section).toBe('cost')
   })
+  it('sends a turned-off port-forward to the integration that needed it', () => {
+    const both = { metrics: 'previous', cost: 'previous', explicitCostBackend: true } as const
+    expect(costConfigurationAction('metrics_port_forward_disabled', both).section).toBe('prometheus')
+    expect(costConfigurationAction('kubecost_port_forward_disabled', both).section).toBe('cost')
+  })
   it('keeps the neutral action and explains reuse in the note', () => {
     const copy = { metrics: 'copy', explicitCostBackend: false } as const
     expect(costConfigurationAction('no_prometheus', copy)).toMatchObject({ section: 'prometheus', label: 'Configure metrics' })

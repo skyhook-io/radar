@@ -155,7 +155,11 @@ func observeCronJobEventTestSchedules(cj *batchv1.CronJob, tracker *cronJobSched
 }
 
 func TestCronJobControllerEventsChildJobs(t *testing.T) {
-	for _, childState := range []string{"none", "failed", "stuck"} {
+	// A terminally failed child is its own diagnosis and suppresses the parent
+	// aggregate. A merely active child is work in progress, not a failure: it
+	// produces no child diagnosis and does not suppress the aggregate, so the
+	// parent's repeated-without-success still surfaces (same as no child).
+	for _, childState := range []string{"none", "failed", "active"} {
 		for _, withEvent := range []bool{false, true} {
 			t.Run(childState+"/event="+strconv.FormatBool(withEvent), func(t *testing.T) {
 				now := time.Now()
@@ -190,21 +194,42 @@ func TestCronJobControllerEventsChildJobs(t *testing.T) {
 				if len(got) != wantCount {
 					t.Fatalf("lost/duplicated child or schedule diagnosis: %+v", got)
 				}
+				// Only a terminally failed child replaces the parent aggregate
+				// with its own diagnosis; "none" and "active" keep the aggregate.
+				// Count each diagnosis so the schedule event and the aggregate /
+				// child row are required to coexist, not substitute for each other.
+				aggregateExpected := childState != "failed"
+				var miss, aggregate, child int
 				for _, d := range got {
 					switch d.Reason {
 					case "MissSchedule":
-						if !withEvent || d.Kind != "CronJob" {
-							t.Errorf("unexpected schedule event: %+v", d)
+						miss++
+						if d.Kind != "CronJob" {
+							t.Errorf("schedule event on wrong kind: %+v", d)
 						}
 					case "repeated-without-success":
-						if childState != "none" {
-							t.Errorf("child diagnosis duplicated on parent: %+v", d)
+						aggregate++
+						if d.Kind != "CronJob" {
+							t.Errorf("aggregate on wrong kind: %+v", d)
 						}
 					default:
-						if d.Kind != "Job" || d.Name != "current-job" || d.OwnerKind != "" || (childState == "failed" && d.Reason != "BackoffLimitExceeded") || (childState == "stuck" && !strings.HasPrefix(d.Reason, "Running for ")) {
+						child++
+						if d.Kind != "Job" || d.Name != "current-job" || d.OwnerKind != "" || d.Reason != "BackoffLimitExceeded" {
 							t.Errorf("child diagnosis changed: %+v", d)
 						}
 					}
+				}
+				wantMiss := 0
+				if withEvent {
+					wantMiss = 1
+				}
+				wantAggregate, wantChild := 1, 0
+				if !aggregateExpected {
+					wantAggregate, wantChild = 0, 1
+				}
+				if miss != wantMiss || aggregate != wantAggregate || child != wantChild {
+					t.Errorf("childState=%s withEvent=%v: got miss=%d aggregate=%d child=%d; want miss=%d aggregate=%d child=%d; problems=%+v",
+						childState, withEvent, miss, aggregate, child, wantMiss, wantAggregate, wantChild, got)
 				}
 			})
 		}

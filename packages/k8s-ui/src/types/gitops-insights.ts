@@ -60,6 +60,9 @@ export interface GitOpsInsightSummary {
   // effective auto-sync is off. Absence does not mean no rollback happened.
   rollbackRevision?: string
   lastReconcile?: string
+  lastApplied?: string
+  lastApplyAttempt?: string
+  lastDeployed?: string
   partialReason?: string
   // Human-readable sync mode for the chip in the status strip.
   // Argo: "Manual" | "Auto" | "Auto · prune" | "Auto · self-heal" | "Auto · prune · self-heal"

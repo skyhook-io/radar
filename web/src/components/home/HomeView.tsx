@@ -11,6 +11,9 @@ import { CertificateHealthCard } from './CertificateHealthCard'
 import { NetworkPolicyCoverageCard } from './NetworkPolicyCoverageCard'
 import { CostCard } from './CostCard'
 import { GitOpsControllersCard } from './GitOpsControllersCard'
+import { useVulnerabilitiesRow } from './useVulnerabilitiesRow'
+import { useAPIResources } from '../../api/apiResources'
+import { hasVulnerabilityReports } from '../../api/vulnerabilities'
 import { CapacityCard } from './CapacityCard'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { Tooltip } from '../ui/Tooltip'
@@ -36,6 +39,7 @@ import { clsx } from 'clsx'
 import { getVersionUpdateStatus } from '../../utils/version'
 import { RadarVersionLine } from './RadarVersionLine'
 import { IssueDiagnoseButton, useIssueDiagnoseShown } from '../diagnose/LocalDiagnoseAction'
+import { recordUsageEvent } from '../../api/usage-data'
 import { HOVER_REVEAL_ACTION, HOVER_REVEAL_HIT, HOVER_REVEAL_REST } from '../../utils/animation'
 
 interface HomeViewProps {
@@ -68,6 +72,8 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   const capacityCardPossible =
     karpenterState === 'available' || karpenterState === 'denied' || karpenterState === 'not_detected'
   const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboard(namespaces)
+  const vulnerabilitiesRow = useVulnerabilitiesRow(namespaces)
+  const { data: apiResources } = useAPIResources()
   const { connection } = useConnection()
   const { data: issuesData, isLoading: issuesLoading, isFetching: issuesFetching, error: issuesError, refetch: refetchIssues } = useIssues(namespaces)
   const issues = issuesData?.issues ?? []
@@ -142,6 +148,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
         )}
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
         <ClusterHealthCard
+          vulnerabilityTools={hasVulnerabilityReports(apiResources)}
           // A local install shows its version in Settings and upgrades through
           // the update notification; an in-cluster one is upgraded by whoever
           // manages it, and this line is where they confirm the new version.
@@ -263,6 +270,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
                     <AuditCard
                       data={data.audit}
                       onNavigate={() => onNavigateToView('checks')}
+                      vulnerabilities={vulnerabilitiesRow}
                     />
                   </BandItem>
                 )}
@@ -465,12 +473,15 @@ export function ProblemsPanel({
                       <button
                         type="button"
                         className="w-full flex items-center gap-2 px-3 py-1.5 group-hover:bg-theme-hover group-has-[:focus-visible]:bg-theme-hover transition-colors text-left"
-                        onClick={() => onResourceClick({
-                          kind: ref.kind,
-                          namespace: ref.namespace ?? '',
-                          name: ref.name,
-                          group: ref.group ?? '',
-                        })}
+                        onClick={() => {
+                          recordUsageEvent({ type: 'ui', name: 'issue_action:open' })
+                          onResourceClick({
+                            kind: ref.kind,
+                            namespace: ref.namespace ?? '',
+                            name: ref.name,
+                            group: ref.group ?? '',
+                          })
+                        }}
                       >
                         <StatusDot tone={issue.severity === 'critical' ? 'unhealthy' : 'degraded'} className="shrink-0" />
                         <div className="min-w-0 flex-1">

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { useTrafficSources, useTrafficFlows, useTrafficRecords, useTrafficConnect, useSetTrafficSource, type TrafficEndpointPair } from '../../api/traffic'
+import { useTrafficSources, useTrafficFlows, useTrafficRecords, useTrafficConnect, useSetTrafficSource } from '../../api/traffic'
 import { useClusterInfo, useNamespaceScope } from '../../api/client'
 import { useSearchParams } from 'react-router-dom'
 import type { TrafficWizardState, AggregatedFlow, TrafficFlow } from '../../types'
@@ -11,13 +11,26 @@ import { Filter, Plug, List, Activity, AlertTriangle, Clock, Crosshair, X } from
 import { TrafficFocusSearch } from './TrafficFocusSearch'
 import { TrafficSourcePill } from './TrafficSourcePill'
 import { TrafficGraphTooLarge } from './TrafficGraphTooLarge'
+import { TrafficGraphUnavailable } from './TrafficGraphUnavailable'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, mergedEdgePort, selectedEdgeMatcher, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, verdictChoices, type TrafficFocus } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, groupAddonFlows, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, mergedEdgePort, selectedEdgeMatcher, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, verdictChoices, type TrafficFocus, warningRetries, warningBannerTitle, emptyWarningHeadline, rateWindowSeconds } from './trafficFilters'
+
+// Where a warning about which cluster the traffic belongs to points: how the map
+// keeps to this cluster in a shared metrics store, and how to set its label.
+const CLUSTER_SCOPE_DOCS_URL = 'https://github.com/skyhook-io/radar/blob/main/docs/configuration.md#traffic-map-in-a-shared-metrics-store'
+
+function ClusterScopeDocsLink() {
+  return (
+    <a className="text-xs text-accent hover:underline" href={CLUSTER_SCOPE_DOCS_URL} target="_blank" rel="noopener noreferrer">
+      How to fix this
+    </a>
+  )
+}
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
@@ -413,6 +426,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // The view the graph was last drawn for, and so keeps drawing (up to the
   // ceiling) as refreshes move its size: set by drawing it or by Draw anyway.
   const [drawnViewKey, setDrawnViewKey] = useState<string | null>(null)
+  const [layoutUnavailable, setLayoutUnavailable] = useState(false)
   const dock = useDock()
   const graphPaneRef = useRef<HTMLDivElement>(null)
 
@@ -498,27 +512,16 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     enabled: wizardState === 'ready' && !isConnecting && !connectionError,
   })
 
-  // A 'partial' warning is the source telling us this is as complete as it gets —
-  // an attribute it does not export, traffic it cannot orient. Retrying returns
-  // the same answer, so retrying forever is all cost and no progress.
-  const warningIsPermanent = flowsData?.warningKind === 'partial'
+  // A partial, incomplete or cluster warning is the source's answer rather than
+  // a hiccup, so retrying it is all cost and no progress.
+  const warningRetriable = warningRetries(flowsData?.warningKind)
   const coverage = coverageLabel(flowsData?.coveredSince, flowsData?.timestamp)
-  // An 'incomplete' one is a fetch that worked but could not see everything
-  // (events lost, nodes unreachable). Not a failure, so not retried at once.
-  const warningIsIncomplete = flowsData?.warningKind === 'incomplete'
   const flowsWarning = flowsData?.warning ? (
     <AlertBanner
       variant="warning"
-      // The title follows the kind. A partial warning is about values
-      // on edges that are shown — a port reported as 0, UDP as TCP, a
-      // 5xx rate that failed to load — so it says "unreliable", not
-      // "incomplete", which would send the reader looking for missing
-      // workloads. An incomplete or transient one beside flows is
-      // exactly that: a stream cut short, events lost, a node the
-      // relay could not reach, a TCP query that failed — edges may
-      // be missing from what is drawn.
-      title={warningIsPermanent ? 'Some values on this map are unreliable' : 'Some traffic may be missing from this map'}
+      title={warningBannerTitle(flowsData.warningKind)}
       message={flowsData.warning}
+      action={flowsData.warningClusterScope ? <ClusterScopeDocsLink /> : undefined}
     />
   ) : null
 
@@ -537,14 +540,14 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       emptyRetriesRef.current = 0
       return
     }
-    if (!warningIsPermanent && !warningIsIncomplete && !flowsFetching && emptyRetriesRef.current < MAX_EMPTY_RETRIES) {
+    if (warningRetriable && !flowsFetching && emptyRetriesRef.current < MAX_EMPTY_RETRIES) {
       const timer = setTimeout(() => {
         emptyRetriesRef.current += 1
         refetchFlowsRaw()
       }, 2000)
       return () => clearTimeout(timer)
     }
-  }, [flowsData, warningIsPermanent, warningIsIncomplete, flowsFetching, refetchFlowsRaw])
+  }, [flowsData, warningRetriable, flowsFetching, refetchFlowsRaw])
 
   // Filter flows based on user preferences
   // Note: namespace filtering is done server-side via the global namespace selector
@@ -931,113 +934,9 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // A focused view draws its endpoints as they are: grouping the addons would
   // fold the focus or its neighbors into the group.
   const groupAddons = addonMode === 'group' && !focus
-  const finalFlows = useMemo<GraphFlow[]>(() => {
-    if (!groupAddons) return focusedFlows
-
-    // Track totals for aggregated edges
-    let addonInternetTotal = 0
-    let addonToK8sTotal = 0
-    let addonInternetRate = 0
-    let addonToK8sRate = 0
-    const addonInternetPairs: TrafficEndpointPair[] = []
-    const addonToK8sPairs: TrafficEndpointPair[] = []
-    const processedFlows: GraphFlow[] = []
-
-    // Check if destination is the kubernetes API server
-    const isKubernetesAPI = (name: string, namespace: string | undefined) => {
-      return name === 'kubernetes' && (!namespace || namespace === 'default')
-    }
-
-    focusedFlows.forEach(flow => {
-      const sourceIsAddon = isClusterAddon(flow.source.name, flow.source.namespace)
-      const destIsAddon = isClusterAddon(flow.destination.name, flow.destination.namespace)
-      const sourceIsInternet = flow.source.kind === 'Internet'
-      const destIsK8sAPI = isKubernetesAPI(flow.destination.name, flow.destination.namespace)
-
-      // Internet → Addon: aggregate into single edge to group
-      if (sourceIsInternet && destIsAddon) {
-        addonInternetTotal += flow.connections
-        addonInternetRate += flow.requestRate ?? 0
-        for (const pair of flow.rawPairs ?? []) addonInternetPairs.push(pair)
-        processedFlows.push({
-          ...flow,
-          source: {
-            name: 'addon-internet',
-            namespace: '',
-            kind: 'SkipEdge', // Create addon node but skip individual edge
-          },
-        })
-      }
-      // Addon → Kubernetes API: aggregate into single edge from group
-      else if (sourceIsAddon && destIsK8sAPI) {
-        addonToK8sTotal += flow.connections
-        addonToK8sRate += flow.requestRate ?? 0
-        for (const pair of flow.rawPairs ?? []) addonToK8sPairs.push(pair)
-        processedFlows.push({
-          ...flow,
-          destination: {
-            ...flow.destination,
-            kind: 'SkipEdge', // Create kubernetes node but skip individual edge
-          },
-        })
-      }
-      else {
-        processedFlows.push(flow)
-      }
-    })
-
-    // Add virtual flow for Internet → Addon Group edge
-    if (addonInternetTotal > 0) {
-      processedFlows.push({
-        source: {
-          name: 'addon-internet',
-          namespace: '',
-          kind: 'AddonInternet',
-        },
-        destination: {
-          name: 'addon-group-target',
-          namespace: '',
-          kind: 'AddonGroupTarget',
-        },
-        protocol: 'tcp',
-        port: 0,
-        connections: addonInternetTotal,
-        ...(addonInternetRate > 0 && { requestRate: addonInternetRate }),
-        rawPairs: addonInternetPairs,
-        bytesSent: 0,
-        bytesRecv: 0,
-        flowCount: 1,
-        lastSeen: new Date().toISOString(),
-      })
-    }
-
-    // Add virtual flow for Addon Group → Kubernetes edge
-    if (addonToK8sTotal > 0) {
-      processedFlows.push({
-        source: {
-          name: 'addon-group-source',
-          namespace: '',
-          kind: 'AddonGroupSource',
-        },
-        destination: {
-          name: 'kubernetes',
-          namespace: 'default',
-          kind: 'Service',
-        },
-        protocol: 'tcp',
-        port: 443,
-        connections: addonToK8sTotal,
-        ...(addonToK8sRate > 0 && { requestRate: addonToK8sRate }),
-        rawPairs: addonToK8sPairs,
-        bytesSent: 0,
-        bytesRecv: 0,
-        flowCount: 1,
-        lastSeen: new Date().toISOString(),
-      })
-    }
-
-    return processedFlows
-  }, [focusedFlows, groupAddons])
+  const finalFlows = useMemo<GraphFlow[]>(() =>
+    groupAddons ? groupAddonFlows(focusedFlows, isClusterAddon) : focusedFlows,
+  [focusedFlows, groupAddons])
 
   // The map is laid out on the main thread, so a view too large to draw is
   // listed as a table instead of freezing the tab.
@@ -1055,9 +954,13 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     if (finalFlows.length > 0 && fitsBudget) setDrawnViewKey(viewKey)
   }, [finalFlows.length, fitsBudget, viewKey])
 
+  // Listed as a table instead of drawn: too large, or the map's layout engine
+  // could not load.
+  const listed = tooLargeToDraw || layoutUnavailable
+
   // The table lists the endpoints as they are, so a selection made from it is
   // traced through the same flows.
-  const selectableFlows = tooLargeToDraw ? focusedFlows : finalFlows
+  const selectableFlows = listed ? focusedFlows : finalFlows
   // The server edges behind the selection, as drawn: what its records are
   // narrowed to, whichever form the lookup is sent in.
   // The flow list follows the focus while nothing else is selected: closing
@@ -1066,8 +969,8 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     () => graphSelection ?? (focusFound && focusKey ? { type: 'node', nodeId: focusKey } : null),
     [graphSelection, focusFound, focusKey])
   const selectionPairs = useMemo(
-    () => selectionRawPairs(selectableFlows, listSelection, groupAddons && !tooLargeToDraw ? e => isClusterAddon(e.name, e.namespace) : undefined),
-    [listSelection, selectableFlows, groupAddons, tooLargeToDraw])
+    () => selectionRawPairs(selectableFlows, listSelection, groupAddons && !listed ? e => isClusterAddon(e.name, e.namespace) : undefined),
+    [listSelection, selectableFlows, groupAddons, listed])
   const selection = useMemo(() => selectionMatch(selectionPairs, listSelection), [selectionPairs, listSelection])
   // Ungrouped, a workload focus is drawn as its pods, so no node carries its
   // id; its records are still the workload's.
@@ -1086,12 +989,12 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // A selection names something in the representation it was made in: the
   // table lists endpoints as they are, the graph may group addons. Switching
   // between them keeps only a focus's selection, which means the same in both.
-  const prevTooLargeRef = useRef(tooLargeToDraw)
+  const prevListedRef = useRef(listed)
   useEffect(() => {
-    if (prevTooLargeRef.current === tooLargeToDraw) return
-    prevTooLargeRef.current = tooLargeToDraw
+    if (prevListedRef.current === listed) return
+    prevListedRef.current = listed
     setGraphSelection(prev => (prev?.type === 'node' && prev.nodeId === focusKey ? prev : null))
-  }, [tooLargeToDraw, focusKey])
+  }, [listed, focusKey])
 
   // Namespaces hidden in the sidebar are dropped at the source too, when the
   // request has room, so their traffic can't fill the records limit. Only
@@ -1308,7 +1211,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // source it names may since have gone. A retry detects again first, which
   // also picks another available source, and the first failed connect gets
   // one such retry on its own.
-  const handleConnect = useCallback((redetect: boolean) => {
+  const handleConnect = useCallback((redetect: boolean, automatic = false) => {
     setIsConnecting(true)
     setConnectionError(null)
     queryClient.removeQueries({ queryKey: ['traffic-flows'] })
@@ -1324,7 +1227,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       }
       const detected = fresh ? detectSourcesAgain() : Promise.resolve(undefined)
       detected.then(
-        () => connectMutation.mutate(undefined, {
+        () => connectMutation.mutate({ automatic }, {
           onSuccess: (data) => {
             if (!data.connected && data.error) {
               fail(data.error)
@@ -1355,7 +1258,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   useEffect(() => {
     if (wizardState === 'ready' && !hasAutoConnectedRef.current && !isConnecting) {
       hasAutoConnectedRef.current = true
-      handleConnect(false)
+      handleConnect(false, true)
     }
   }, [wizardState, isConnecting, handleConnect])
 
@@ -1553,7 +1456,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
             />
           ) : finalFlows.length > 0 ? (
             <>
-              {flowsWarning && !tooLargeToDraw && (
+              {flowsWarning && !listed && (
                 // Sits below the two chip rows (both top-3) rather than beside
                 // them: centred at that height it would cover the flow count and
                 // the refresh control at common widths. role/aria-live because it
@@ -1585,18 +1488,33 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                   notice={flowsWarning && <div role="status" aria-live="polite">{flowsWarning}</div>}
                 />
               ) : (
-                <TrafficGraph
-                  flows={finalFlows}
-                  hotPathThreshold={hotPathThreshold}
-                  showNamespaceGroups={showNamespaceGroups}
-                  serviceCategories={serviceCategories}
-                  addonMode={groupAddons ? 'group' : addonMode === 'group' ? 'show' : addonMode}
-                  trafficSource={sourcesData?.active || ''}
-                  selection={graphSelection}
-                  onSelectionChange={setGraphSelection}
-                  onFocus={setFocus}
-                  focusedId={focusKey}
-                />
+                <>
+                  {layoutUnavailable && (
+                    <TrafficGraphUnavailable
+                      flows={focusedFlows}
+                      isRateBased={isRateBased}
+                      selection={graphSelection}
+                      onSelect={setGraphSelection}
+                      onFocus={setFocus}
+                      focusedId={focusKey}
+                      notice={flowsWarning && <div role="status" aria-live="polite">{flowsWarning}</div>}
+                    />
+                  )}
+                  <TrafficGraph
+                    flows={finalFlows}
+                    hotPathThreshold={hotPathThreshold}
+                    showNamespaceGroups={showNamespaceGroups}
+                    serviceCategories={serviceCategories}
+                    addonMode={groupAddons ? 'group' : addonMode === 'group' ? 'show' : addonMode}
+                    trafficSource={sourcesData?.active || ''}
+                    selection={graphSelection}
+                    onSelectionChange={setGraphSelection}
+                    onFocus={setFocus}
+                    focusedId={focusKey}
+                    onLayoutUnavailable={setLayoutUnavailable}
+                    windowSeconds={rateWindowSeconds(timeRange)}
+                  />
+                </>
               )}
             </>
           ) : focus && flowsData && !connectionError ? (
@@ -1612,6 +1530,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                 onShowSystem={() => setHideSystem(false)}
                 onSwitchNamespace={onSetNamespaces && !namespaceLocked && focus.namespace ? () => onSetNamespaces([focus.namespace!]) : undefined}
                 warning={flowsData.warning}
+                warningClusterScope={flowsData.warningClusterScope}
                 onLeave={() => setFocus(null)}
               />
             </div>
@@ -1660,14 +1579,9 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                   tone="neutral"
                   variant="card"
                   icon={AlertTriangle}
-                  headline={
-                    warningIsPermanent
-                      ? 'No traffic Radar can place on the map'
-                      : warningIsIncomplete
-                        ? 'No traffic seen, but some may be missing'
-                        : 'Unable to fetch traffic data'
-                  }
+                  headline={emptyWarningHeadline(flowsData.warningKind)}
                   body={flowsData.warning}
+                  action={flowsData.warningClusterScope ? <ClusterScopeDocsLink /> : undefined}
                   className="max-w-md"
                 />
               ) : (
@@ -1697,12 +1611,14 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
  * one of them means the workload is quiet: Radar may have hidden its traffic,
  * or never fetched it.
  */
-function FocusNotFound({ focus, hiddenByFilters, systemHidden, hideSystem, outsideNamespaces, window, onShowAll, onShowSystem, onSwitchNamespace, warning, onLeave }: {
+function FocusNotFound({ focus, hiddenByFilters, systemHidden, hideSystem, outsideNamespaces, window, onShowAll, onShowSystem, onSwitchNamespace, warning, warningClusterScope, onLeave }: {
   focus: TrafficFocus
   /** Hide System is on: traffic with system namespaces was never fetched. */
   hideSystem: boolean
   /** The fetch's own warning: with it, absence is not proof of quiet. */
   warning?: string
+  /** The warning is about which cluster the traffic belongs to. */
+  warningClusterScope?: boolean
   hiddenByFilters: boolean
   systemHidden: boolean
   outsideNamespaces: boolean
@@ -1755,6 +1671,7 @@ function FocusNotFound({ focus, hiddenByFilters, systemHidden, hideSystem, outsi
           >
             Leave focus
           </button>
+          {warningClusterScope && <ClusterScopeDocsLink />}
         </div>
       }
       className="max-w-md"

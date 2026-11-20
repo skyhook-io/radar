@@ -10,8 +10,13 @@ const nav = vi.hoisted(() => ({ embedded: false }))
 vi.mock('../diagnose/DiagnoseContext', () => ({ useDiagnose: () => diagnose.current }))
 vi.mock('../../context/NavCustomization', () => ({ useNavCustomization: () => nav }))
 vi.mock('./MCPSetupDialog', () => ({
-  MCPSetupDialog: ({ open, readOnly }: { open: boolean; readOnly?: boolean }) =>
-    open ? <div data-testid="mcp-dialog">{readOnly ? 'read-only' : 'full'}</div> : null,
+  MCPSetupDialog: ({ open, readOnly, onInvestigate }: { open: boolean; readOnly?: boolean; onInvestigate?: () => void }) =>
+    open ? (
+      <div data-testid="mcp-dialog">
+        {readOnly ? 'read-only' : 'full'}
+        {onInvestigate && <button onClick={onInvestigate}>dialog-investigate</button>}
+      </div>
+    ) : null,
 }))
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -108,6 +113,29 @@ describe('HomeAgentBlock', () => {
     expect(host.textContent).toContain('localhost:9280/mcp')
     expect(host.querySelector('[data-testid="mcp-dialog"]')).toBeNull()
     act(() => button(/^Connect$/)!.click())
-    expect(host.querySelector('[data-testid="mcp-dialog"]')?.textContent).toBe('read-only')
+    expect(host.querySelector('[data-testid="mcp-dialog"]')?.textContent).toContain('read-only')
+  })
+
+  it.each([
+    [true, 'openQuestion'],
+    [false, 'openWorkspace'],
+  ])('lets the dialog open the composer when an agent is ready (questions=%s)', (questions, opener) => {
+    setDiagnose({ questions })
+    render()
+    act(() => button(/^Connect$/)!.click())
+    act(() => button(/dialog-investigate/)!.click())
+    expect(diagnose.current[opener]).toHaveBeenCalled()
+  })
+
+  it.each([
+    ['no agent is ready', () => setDiagnose({ available: false, setupState: 'needs-install' })],
+    ['investigations are off', () => setDiagnose({ available: false, setupState: 'off' })],
+    ['the host is embedded', () => { nav.embedded = true }],
+  ])('gives the dialog no in-Radar link when %s', (_, arrange) => {
+    arrange()
+    render()
+    act(() => button(/^Connect$/)!.click())
+    expect(host.querySelector('[data-testid="mcp-dialog"]')).toBeTruthy()
+    expect(button(/dialog-investigate/)).toBeUndefined()
   })
 })

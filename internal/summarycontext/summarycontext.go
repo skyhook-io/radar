@@ -24,6 +24,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -150,55 +151,19 @@ func WithinContext[T any](ctx context.Context, gate *BudgetGate, build func() T)
 	}
 }
 
-// IndexedTopology pairs a graph with its own index; a nil Index permits inline
-// edge scans. A nil Topology means the graph is unavailable.
-type IndexedTopology struct {
-	Topology *topology.Topology
-	Index    *topology.RelationshipsIndex
-}
-
-// BuilderFromIndexes composes canonical ownership next hops and optional issue
-// counts. The graph is obtained only for residual spec-declared relations.
-// canRead gates Trivy scan targets. A nil owners skips other ownership enrichment
-// without an omission note; production callers supply a caller-scoped session.
-func BuilderFromIndexes(ctx context.Context, topologySource func() IndexedTopology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
-	return builderFromIndexes(ctx, topologySource, namespacedIdx, clusterIdx, canRead, owners, true)
+// BuilderFromIndexes composes canonical ownership next hops and optional
+// issue counts. canRead gates Trivy scan targets; owners reads other leads.
+func BuilderFromIndexes(ctx context.Context, namespacedIdx, clusterIdx *IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
+	return builderFromIndexes(ctx, namespacedIdx, clusterIdx, canRead, owners, true)
 }
 
 // StatusBuilderFromIndexes uses already-authorized issue counts and cached health;
 // it performs no ownership, topology or live scan-target reads.
-func StatusBuilderFromIndexes(ctx context.Context, namespacedIdx, clusterIdx IssueIndex) Builder {
-	return builderFromIndexes(ctx, nil, namespacedIdx, clusterIdx, nil, nil, false)
+func StatusBuilderFromIndexes(ctx context.Context, namespacedIdx, clusterIdx *IssueIndex) Builder {
+	return builderFromIndexes(ctx, namespacedIdx, clusterIdx, nil, nil, false)
 }
 
-func builderFromIndexes(ctx context.Context, topologySource func() IndexedTopology, namespacedIdx, clusterIdx IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership, navigation bool) Builder {
-	var topo *topology.Topology
-	var relIdx *topology.RelationshipsIndex
-	var resourceProvider topology.ResourceProvider
-	var dynamicProvider topology.DynamicProvider
-	loaded := false
-	relationships := func(kind, namespace, name string, obj any) *topology.Relationships {
-		if !loaded {
-			loaded = true
-			if topologySource != nil {
-				snapshot := topologySource()
-				topo, relIdx = snapshot.Topology, snapshot.Index
-			}
-			if topo != nil {
-				resourceProvider = k8s.NewTopologyResourceProvider(k8s.GetResourceCache())
-				dynamicProvider = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-			}
-		}
-		if topo == nil {
-			return nil
-		}
-		rel := topology.GetRelationshipsWithObject(kind, namespace, name, obj, topo,
-			resourceProvider, dynamicProvider, relIdx)
-		if rel == nil {
-			return &topology.Relationships{}
-		}
-		return rel
-	}
+func builderFromIndexes(ctx context.Context, namespacedIdx, clusterIdx *IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership, navigation bool) Builder {
 	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
 		var source runtime.Object = obj
 		if source == nil && u != nil {
@@ -209,7 +174,7 @@ func builderFromIndexes(ctx context.Context, topologySource func() IndexedTopolo
 			idx = clusterIdx
 		}
 		if !navigation {
-			return resourcecontext.BuildSummary(source, resourcecontext.SummaryOptions{IssueCount: idx.Count(group, kind, namespace, name)})
+			return resourcecontext.BuildSummary(source, resourcecontext.SummaryOptions{IssueCount: idx.Count(group, kind, namespace, name), Omitted: idx.omissions(group, kind, namespace, name)})
 		}
 		var managedBy *resourcecontext.ManagedByRef
 		var scanned *resourcecontext.ScannedRef
@@ -227,19 +192,31 @@ func builderFromIndexes(ctx context.Context, topologySource func() IndexedTopolo
 			managedBy, scanned = trivyScanTarget(k8s.GetResourceCache(), u, canRead)
 		} else if m, ok := source.(metav1.Object); ok && owners != nil {
 			ref := resourceid.Ref{Group: group, Kind: kind, Namespace: namespace, Name: name}
-			chain := owners.Of(m, ref)
+			chain := owners.Of(m, ref).ToManager()
 			if top := chain.Top(); top != nil {
 				managedBy = resourcecontext.ControllerSummary(*top)
 			} else if chain == nil || chain.Stop != "" || len(chain.Refs) > 0 {
 				var other []topology.ResourceRef
 				if chain != nil && chain.Stop == "" && len(chain.Refs) > 0 {
-					rel := relationships(kind, namespace, name, source)
-					other, residualUnavailable = owners.OtherManagers(rel, ref)
+					// owners' session is shared by every row. A read abandoned
+					// at the deadline can't race a later row's: ctx stays done,
+					// so no later row reads owners.
+					answer := WithinContext(ctx, specGeneratorGate, func() *specGenerators {
+						refs, incomplete := owners.OtherManagers(source, ref)
+						return &specGenerators{refs: refs, incomplete: incomplete}
+					})
+					residualUnavailable = answer == nil || answer.incomplete
+					if answer != nil {
+						other = answer.refs
+					}
 				}
 				if len(other) > 0 {
 					managedBy = resourcecontext.ControllerSummary(other[0])
 				} else {
-					answer := owners.Manager(ref)
+					answer := ownership.ManagerAnswer{}
+					if ctx.Err() == nil {
+						answer = owners.Manager(ref)
+					}
 					managedBy = resourcecontext.ManagerSummary(answer)
 					if managedBy == nil && answer.State != ownership.ManagerNone {
 						omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: resourcecontext.OmittedUnavailable}}
@@ -266,7 +243,7 @@ func builderFromIndexes(ctx context.Context, topologySource func() IndexedTopolo
 			}
 		}
 		return resourcecontext.BuildSummary(source, resourcecontext.SummaryOptions{
-			ManagedBy: managedBy, IssueCount: idx.Count(group, kind, namespace, name), Scanned: scanned, Omitted: omitted,
+			ManagedBy: managedBy, IssueCount: idx.Count(group, kind, namespace, name), Scanned: scanned, Omitted: append(omitted, idx.omissions(group, kind, namespace, name)...),
 		})
 	}
 }
@@ -280,12 +257,41 @@ func builderFromIndexes(ctx context.Context, topologySource func() IndexedTopolo
 // (Deployment) while callers may pass the URL plural (deployments) —
 // canonicalization normalizes both. "|" can't appear in a Kubernetes API
 // group (groups follow DNS subdomain rules), so it's a safe delimiter.
-type IssueIndex map[string]int
+type IssueIndex struct {
+	counts    map[string]int
+	unchecked []issuesapi.UncheckedSource
+}
 
 // Count returns the per-resource issue count, keyed by the group-aware
 // composite key. Zero on miss.
-func (i IssueIndex) Count(group, kind, namespace, name string) int {
-	return i[issueIndexKey(group, kind, namespace, name)]
+func (i *IssueIndex) Count(group, kind, namespace, name string) int {
+	if i == nil {
+		return 0
+	}
+	return i.counts[issueIndexKey(group, kind, namespace, name)]
+}
+
+func (i *IssueIndex) omissions(group, kind, namespace, name string) []resourcecontext.OmittedField {
+	if i == nil {
+		return nil
+	}
+	gaps := issues.UncheckedFor(i.unchecked, group, CanonicalSingular(kind), namespace, name)
+	if len(gaps) == 0 {
+		return nil
+	}
+	reason := resourcecontext.OmittedCacheCold
+	for _, gap := range gaps {
+		switch gap.Reason {
+		case issuesapi.UncheckedReasonCallerAccessDenied, issuesapi.UncheckedReasonCollectorAccessDenied:
+			reason = resourcecontext.OmittedRBACDenied
+		case issuesapi.UncheckedReasonSyncPending:
+		default:
+			if reason != resourcecontext.OmittedRBACDenied {
+				reason = resourcecontext.OmittedUnavailable
+			}
+		}
+	}
+	return []resourcecontext.OmittedField{{Field: "issueCount", Reason: reason}}
 }
 
 func issueIndexKey(group, kind, namespace, name string) string {
@@ -362,7 +368,7 @@ func CanonicalSingular(kind string) string {
 // engine emits "Application", silently zeroing issueCount on every CRD
 // row. Bucketing is O(N) over the at-most-namespace-bounded issue set,
 // which the consumer materialises anyway.
-func BuildIssueIndex(p issues.Provider, filters issues.Filters) IssueIndex {
+func BuildIssueIndex(p issues.Provider, filters issues.Filters) *IssueIndex {
 	filters.SkipPodTemplateContext = true
 	filters.Limit = issues.NoLimit
 	filters.Grouped = false
@@ -375,7 +381,7 @@ func BuildIssueIndex(p issues.Provider, filters issues.Filters) IssueIndex {
 	// the same issue. Iterating the grouped issue's inline Members instead would
 	// drop members past the maxInlineMembers cap; keying only the evidence (the
 	// old flat index) dropped the owner.
-	flat := issues.Compose(p, filters)
+	flat, stats := issues.ComposeWithStats(p, filters)
 	seen := make(map[string]map[string]bool, len(flat)) // resourceKey -> set of grouped issue IDs
 	mark := func(group, kind, namespace, name, id string) {
 		k := issueIndexKey(group, kind, namespace, name)
@@ -395,13 +401,28 @@ func BuildIssueIndex(p issues.Provider, filters issues.Filters) IssueIndex {
 		// can't read; without an authorizer it didn't, so count none.
 		if filters.CanReadRelated != nil {
 			for _, ref := range f.AffectedRefs {
+				// Resource detail composes namespaced subjects within their
+				// namespace, which excludes cluster-scoped incident parents.
+				if f.Namespace == "" && ref.Namespace != "" {
+					continue
+				}
 				mark(ref.Group, ref.Kind, ref.Namespace, ref.Name, f.ID)
 			}
 		}
 	}
-	idx := make(IssueIndex, len(seen))
+	idx := &IssueIndex{counts: make(map[string]int, len(seen)), unchecked: stats.Unchecked}
 	for k, ids := range seen {
-		idx[k] = len(ids)
+		idx.counts[k] = len(ids)
 	}
 	return idx
+}
+
+// Rows of one page already read one at a time; this bounds the lookups left
+// running past their callers' deadlines without letting one of them stall
+// every other caller's page, as preparationGate does for preparations.
+var specGeneratorGate = NewBudgetGate(8)
+
+type specGenerators struct {
+	refs       []topology.ResourceRef
+	incomplete bool
 }

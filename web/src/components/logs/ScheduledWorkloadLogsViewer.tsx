@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { useWorkloadRuns, useResource, type WorkloadRun } from '../../api/client'
 import { WorkloadLogsViewer } from './WorkloadLogsViewer'
 import { pickDefaultRun, selectedRunMissing, workloadRunKey } from '../execution/BatchExecutionView'
+import { runStateLabel } from '../execution/runState'
 
 interface ScheduledWorkloadLogsViewerProps {
   kind: string
@@ -127,7 +128,7 @@ function ScheduledWorkloadLogsContent({ kind, namespace, name, selectedRunKey, o
             ))}
           </select>
           <span className={clsx('badge-sm', phaseBadgeClass(selectedRun.phase))}>
-            {selectedRun.phase}{selectedRun.deleting ? ' · deleting' : ''}
+            {runStateLabel(selectedRun)}
           </span>
           <span className="text-xs text-theme-text-tertiary">
             {formatRunTime(selectedRun)}
@@ -173,7 +174,7 @@ function formatRunTime(run: WorkloadRun): string {
 }
 
 function formatRunOption(run: WorkloadRun, showNamespace: boolean, memberCollection: boolean): string {
-  const bits = [showNamespace ? `${run.namespace}/${run.name}` : run.name, `${run.phase}${run.deleting ? ' · deleting' : ''}`]
+  const bits = [showNamespace ? `${run.namespace}/${run.name}` : run.name, runStateLabel(run)]
   if (memberCollection && run.jobset?.replicatedJob) {
     bits.push(`${run.jobset?.replicatedJob}${run.jobset?.jobIndex ? ` #${run.jobset?.jobIndex}` : ''}`)
   }

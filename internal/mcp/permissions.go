@@ -168,10 +168,17 @@ func resolveUserPermsDecision(ctx context.Context) (*pkgauth.User, *pkgauth.User
 		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
 	}
 
-	allNamespaces := mcpAllNamespaceNames(ctx)
+	allNamespaces, listed := mcpAllNamespaceNamesDecision(ctx)
 	allowed, err := pkgauth.DiscoverNamespaces(ctx, client, user.Username, user.Groups, allNamespaces)
 	if err != nil {
 		log.Printf("[mcp] DiscoverNamespaces failed for %s: %v — denying access (fail-closed)", user.Username, err)
+		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
+	}
+	// Cluster-wide access needs no namespace list. A per-namespace answer
+	// does: checked against a list that couldn't be read, it would say "no
+	// access" where the truth is unknown.
+	if allowed != nil && !listed {
+		log.Printf("[mcp] namespace list unavailable for discovery (user=%s), denying access (fail-closed, not cached)", k8s.SanitizeForLog(user.Username))
 		return user, &pkgauth.UserPermissions{AllowedNamespaces: []string{}}, false
 	}
 
@@ -186,21 +193,36 @@ func resolveUserPermsWithStatus(ctx context.Context) (*pkgauth.User, *pkgauth.Us
 }
 
 func mcpAllNamespaceNames(ctx context.Context) []string {
+	namespaces, _ := mcpAllNamespaceNamesDecision(ctx)
+	return namespaces
+}
+
+// mcpAllNamespaceNamesDecision is mcpAllNamespaceNames plus whether the list
+// could be read. It reports false when the namespace LIST failed for a reason
+// other than RBAC: discovery over that best-effort list would answer "no
+// access" when the truth is "unknown". The list itself is the same either way.
+func mcpAllNamespaceNamesDecision(ctx context.Context) ([]string, bool) {
 	var allNamespaces []string
+	listed := true
 	if rc := k8s.GetResourceCache(); rc != nil {
 		if nsLister := rc.Namespaces(); nsLister != nil {
-			nsList, _ := nsLister.List(labels.Everything())
+			nsList, err := nsLister.List(labels.Everything())
+			if err != nil {
+				listed = false
+			}
 			for _, ns := range nsList {
 				allNamespaces = append(allNamespaces, ns.Name)
 			}
 		}
 	}
 	if len(allNamespaces) == 0 {
-		if accessible, _ := k8s.GetAccessibleNamespaces(ctx); len(accessible) > 0 {
+		accessible, source := k8s.GetAccessibleNamespacesWithSource(ctx)
+		listed = source != k8s.NamespaceListFailed
+		if len(accessible) > 0 {
 			allNamespaces = accessible
 		}
 	}
-	return allNamespaces
+	return allNamespaces, listed
 }
 
 // filterNamespacesForUser intersects requested namespaces with the user's

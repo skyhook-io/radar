@@ -2926,11 +2926,93 @@ describe("failedStepMessage", () => {
     );
   });
   it("keeps any other failure text as it came", () => {
-    expect(failedStepMessage("user_forbidden: your role cannot list pods")).toBe(
-      "user_forbidden: your role cannot list pods",
-    );
+    expect(
+      failedStepMessage("user_forbidden: your role cannot list pods"),
+    ).toBe("user_forbidden: your role cannot list pods");
     expect(failedStepMessage('{"error":"no code"}')).toBe(
       '{"error":"no code"}',
     );
   });
+});
+
+describe("Kueue diagnosis evidence boundaries", () => {
+  it.each(["get_resource", "diagnose"])(
+    "preserves unchecked Issues in %s",
+    (name) => {
+      const resource = {
+        apiVersion: "kueue.x-k8s.io/v1beta2",
+        kind: "Workload",
+        metadata: { namespace: "shop", name: "run" },
+      };
+      const result = project([
+        tool("batch", name, {
+          resource,
+          resourceContext: {
+            tier: "diagnostic",
+            issueSummary: {
+              count: 0,
+              unchecked: [
+                {
+                  source: "kueue",
+                  reason: "caller_access_denied",
+                  kinds: [{ group: "kueue.x-k8s.io", kind: "ClusterQueue" }],
+                },
+              ],
+            },
+          },
+          relatedIssues: [],
+          ...(name === "diagnose"
+            ? {
+                coverage:
+                  "Cached resource only. Pods, runtime logs and metrics were not collected.",
+              }
+            : {}),
+        }),
+      ]);
+      expect(
+        result.limitations.some(
+          (limit) =>
+            limit.source === "Issue scan" &&
+            limit.message.includes("can't read ClusterQueues"),
+        ),
+      ).toBe(true);
+      if (name === "diagnose") {
+        expect(
+          result.limitations.some(
+            (limit) =>
+              limit.source === "Diagnosis coverage" &&
+              limit.message.includes(
+                "runtime logs and metrics were not collected",
+              ),
+          ),
+        ).toBe(true);
+        expect(
+          groupsOf(result.groups, "receipt").some(
+            (group) => group.latest.title === "No warning events",
+          ),
+        ).toBe(false);
+      }
+    },
+  );
+});
+
+it("does not turn unchecked Kueue scans into no-issue receipts", () => {
+  const result = project([
+    tool("partial", "issues", {
+      issues: [],
+      total: 0,
+      total_matched: 0,
+      unchecked_sources: [
+        {
+          source: "kueue",
+          reason: "kind_sync_pending",
+          kinds: [{ kind: "Workload", group: "kueue.x-k8s.io" }],
+        },
+      ],
+    }),
+  ]);
+  expect(
+    result.limitations.some((limit) => limit.source === "Issue scan"),
+  ).toBe(true);
+  expect(groupsOf(result.groups, "receipt")).toHaveLength(0);
 });

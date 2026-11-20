@@ -14,10 +14,19 @@ export function HomeAgentBlock({
   mcpUrl,
   readOnly,
   execTools,
+  httpTools,
+  helmTools,
+  vulnerabilityTools,
+  applicationEvidenceAvailable,
 }: {
   mcpUrl: string
   readOnly?: boolean
   execTools?: boolean
+  httpTools?: boolean
+  /** Whether the native Helm MCP tool is registered; target Kubernetes permissions still required. */
+  helmTools?: boolean
+  vulnerabilityTools?: boolean
+  applicationEvidenceAvailable?: boolean
 }) {
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
   const d = useDiagnose()
@@ -52,9 +61,19 @@ export function HomeAgentBlock({
         mcpUrl={mcpUrl}
         readOnly={readOnly}
         execTools={execTools}
+        httpTools={httpTools}
+        helmTools={helmTools}
+        vulnerabilityTools={vulnerabilityTools}
+        onInvestigate={showInvestigate && d.available ? () => openComposer(d) : undefined}
+        applicationEvidenceAvailable={applicationEvidenceAvailable}
       />
     </div>
   )
+}
+
+function openComposer(d: ReturnType<typeof useDiagnose>) {
+  if (d.questions) d.openQuestion({})
+  else d.openWorkspace()
 }
 
 function InvestigateLine() {
@@ -81,7 +100,7 @@ function InvestigateLine() {
         type="button"
         // Opens the investigations panel's question composer, focused: the
         // composer is where the scope and look-back are chosen before a run.
-        onClick={() => (d.questions ? d.openQuestion({}) : d.openWorkspace())}
+        onClick={() => openComposer(d)}
         className="flex w-full items-center gap-2 rounded border border-theme-border bg-theme-surface px-2 py-1.5 text-left text-xs text-theme-text-tertiary transition-colors hover:border-purple-500/40 hover:text-theme-text-secondary"
       >
         <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />

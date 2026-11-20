@@ -56,7 +56,7 @@ function layout(handlers: ArgoActionHandlers, status: GitOpsDetailStatus | null 
       terminating={false}
       terminatingChipTooltip=""
       terminatingActionTooltip=""
-      detail={{ project: 'default' }}
+      detail={{ project: 'default', autoSyncMode: 'Manual' }}
       insight={null}
       insightLoading={false}
       isArgoApp
@@ -86,6 +86,7 @@ describe('Enable auto-sync on the GitOps detail page', () => {
     const markup = html(layout(argo({ resumeUpgrade: null })))
     expect(enableAutoSync(markup)).not.toMatch(/\sdisabled=""/)
     expect(markup).not.toContain('need the latest Radar')
+    expect(markup).toContain('Auto-sync off')
   })
 
   // Disable auto-sync works on every Radar; only the way back on is gated.
@@ -104,13 +105,15 @@ describe('Enable auto-sync on the GitOps detail page', () => {
       { name: 'first-time enable on a Radar that starts self-heal off', status: { sync: 'OutOfSync', health: 'Healthy', suspended: false } as GitOpsDetailStatus, settings: { prune: false, selfHeal: false }, copy: 'Argo applies new commits. Resources removed from Git are kept (prune off).' },
       { name: 'a block switched off in place with prune on', status: { sync: 'OutOfSync', health: 'Healthy', suspended: false } as GitOpsDetailStatus, settings: { prune: true, selfHeal: false }, copy: 'Argo applies new commits. Resources removed from Git are deleted (prune on).' },
       { name: 'unknown settings', status: null, settings: null, copy: 'Turn on automated sync, so Argo applies new commits from Git.' },
-    ])('explains $name', async ({ status, settings, copy }) => {
+      { name: 'known ApplicationSet parent', status: null, settings: null, controller: { kind: 'ApplicationSet' as const, name: 'clusters' }, copy: 'Turn on automated sync, so Argo applies new commits from Git. ApplicationSet clusters may overwrite this setting. Enabling may apply pending changes immediately and bypass ApplicationSet rollout ordering. Review its template and rollout policy first.' },
+      { name: 'known parent Application', status: null, settings: null, controller: { kind: 'Application' as const, name: 'bootstrap' }, copy: 'Turn on automated sync, so Argo applies new commits from Git. Application bootstrap manages this one from Git and may overwrite this setting when it syncs. Review its source before changing auto-sync.' },
+    ])('explains $name', async ({ status, settings, controller, copy }) => {
       vi.useFakeTimers()
       const element = document.createElement('div')
       document.body.appendChild(element)
       const root = createRoot(element)
       try {
-        await act(async () => { root.render(layout(argo({ resumeSettings: settings }), status)) })
+        await act(async () => { root.render(layout(argo({ resumeSettings: settings, autoSyncController: controller }), status)) })
         const button = [...element.querySelectorAll('button')].find((b) => b.textContent === 'Enable auto-sync')!
         await act(async () => {
           button.parentElement!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
@@ -127,9 +130,9 @@ describe('Enable auto-sync on the GitOps detail page', () => {
       { name: 'Sync is available', copy: 'Stop Argo from automatically syncing Git changes. Manual Sync still works.' },
       { name: 'an operation holds Sync', running: true, copy: 'Stop Argo from automatically syncing Git changes.' },
       { name: 'the Application is suspended', suspended: true, copy: 'Stop Argo from automatically syncing Git changes.' },
-      { name: 'an ApplicationSet owns it', controller: { kind: 'ApplicationSet' as const, name: 'clusters' }, copy: "Stop Argo from automatically syncing Git changes. Manual Sync still works. ApplicationSet clusters can turn it back on; to keep it off, change the ApplicationSet's template." },
-      { name: 'a parent Application manages it', controller: { kind: 'Application' as const, name: 'apps' }, copy: 'Stop Argo from automatically syncing Git changes. Manual Sync still works. Application apps manages this one from Git and can turn it back on when it syncs; to keep it off, change it in Git.' },
-      { name: 'an operation holds Sync on an ApplicationSet-owned app', running: true, controller: { kind: 'ApplicationSet' as const, name: 'clusters' }, copy: "Stop Argo from automatically syncing Git changes. ApplicationSet clusters can turn it back on; to keep it off, change the ApplicationSet's template." },
+      { name: 'an ApplicationSet owns it', controller: { kind: 'ApplicationSet' as const, name: 'clusters' }, copy: "Stop Argo from automatically syncing Git changes. Manual Sync still works. ApplicationSet clusters may overwrite this setting or control when this Application syncs. Review its template and rollout policy before changing auto-sync." },
+      { name: 'a parent Application manages it', controller: { kind: 'Application' as const, name: 'apps' }, copy: 'Stop Argo from automatically syncing Git changes. Manual Sync still works. Application apps manages this one from Git and may overwrite this setting when it syncs. Review its source before changing auto-sync.' },
+      { name: 'an operation holds Sync on an ApplicationSet-owned app', running: true, controller: { kind: 'ApplicationSet' as const, name: 'clusters' }, copy: "Stop Argo from automatically syncing Git changes. ApplicationSet clusters may overwrite this setting or control when this Application syncs. Review its template and rollout policy before changing auto-sync." },
     ] as Array<{ name: string; running?: boolean; suspended?: boolean; controller?: ArgoActionHandlers['autoSyncController']; copy: string }>)('describes Disable auto-sync when $name', async ({ running = false, suspended, controller, copy }) => {
       vi.useFakeTimers()
       const element = document.createElement('div')

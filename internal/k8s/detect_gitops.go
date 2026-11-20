@@ -368,7 +368,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 				setDetectionOnset(&d, now, outOfSyncAt)
 				d.Stuck = true
 				d.Cause = "Auto-sync applied cleanly and reconciled recently, yet live state keeps diverging from Git. Common causes: a mutating admission webhook adds defaults Argo isn't told to ignore; a sibling controller (Karpenter, Istio, cert-manager) writes back into spec; or a conversion webhook rewrites a deprecated API schema."
-				d.Action = "Open Changes to see the per-resource drift, then match it against your Git manifest, the resource's controller, and any mutating webhooks."
+				d.Action = "Open Resources to see the per-resource drift, then match it against your Git manifest, the resource's controller, and any mutating webhooks."
 				out = append(out, d)
 			} else {
 				dd := gitopsProblem(now, "Application", argoGroup, ns, name, "high",
@@ -380,18 +380,16 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 				out = append(out, dd)
 			}
 		}
-		// A manual-sync app legitimately sits OutOfSync until an operator syncs
-		// it, so unlike the auto-synced branch above we only warn once the drift
-		// has persisted past manualDriftGate — long enough to be a forgotten
-		// change rather than one mid-review.
+		// Drift with auto-sync off can be intentional, so warn only after the
+		// existing grace period rather than during review or orchestration.
 		if !automated && outOfSync && manualDriftFor >= manualDriftGate {
 			dd := gitopsProblem(now, "Application", argoGroup, ns, name, "warning", "OutOfSyncManual",
 				fmt.Sprintf("Application has been out of sync for %s and auto-sync is not enabled", timeutil.FormatAgeShort(manualDriftFor)), createdAt)
 			setDetectionOnset(&dd, now, outOfSyncAt)
-			dd.Action = "Review the drift in Changes, then Sync the application (or enable auto-sync) if the drift is unintended."
+			dd.Action = "Review the desired changes and sync policy before deciding whether to sync."
 			if revision, _ := gitops.ArgoSuccessfulRollback(app); revision != "" {
 				dd.Message = "Last rollback deployed " + revision + "; the live state differs from the desired state and auto-sync is off."
-				dd.Action = "Syncing or enabling auto-sync applies the current source and can undo the rollback. Fix or revert the source first, or keep auto-sync off. Review Changes for later edits."
+				dd.Action = "Syncing or enabling auto-sync applies the current source and can undo the rollback. Fix or revert the source before syncing again. Review Resources for later edits."
 			}
 			if hazard := argoSyncHazardAction(app); hazard != "" {
 				dd.Action = hazard
@@ -515,6 +513,8 @@ func argoSyncHazardAction(app *unstructured.Unstructured) string {
 
 func applyArgoOperationDiagnosis(d *Detection, app *unstructured.Unstructured, msg string) {
 	parsed := diagnose.ParseArgoOperationError(msg)
+	createNamespaceSet := gitops.ArgoCreateNamespaceEnabled(app)
+	parsed = diagnose.WithCreateNamespaceState(parsed, createNamespaceSet)
 	if parsed.Reason != "" {
 		d.Reason = parsed.Reason
 	}
@@ -530,7 +530,7 @@ func applyArgoOperationDiagnosis(d *Detection, app *unstructured.Unstructured, m
 	d.ActionSecondary = parsed.ActionSecondary
 	if !gitops.IsInClusterDestination(app) {
 		var remoteAction string
-		parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed)
+		parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed, createNamespaceSet)
 		if remoteAction != "" {
 			d.Action = remoteAction
 		}

@@ -48,6 +48,7 @@ describe('resource host composition', () => {
 
   it('catches summary and tab conflicts even if a contribution omitted its declaration', () => {
     expect(() => composeDetailSlots(['one', 'two'].map(id => ({ id, slots: { renderSummary: () => null } })))).toThrow('summary ownership conflict')
+    expect(() => composeDetailSlots(['one', 'two'].map(id => ({ id, slots: { renderStatusBadge: () => null } })))).toThrow('status badge ownership conflict')
     const tab = { id: 'runs', label: 'Runs', render: () => null }
     expect(composeDetailSlots([], [tab, tab]).extraTabs).toEqual([tab, tab])
     expect(() => composeDetailSlots([{ id: 'execution', slots: { extraTabs: [tab] } }], [tab])).toThrow('tab ownership conflict: runs')

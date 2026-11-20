@@ -112,6 +112,9 @@
           }
         }
       },
+      "networkPolicies": [
+        {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
+      ],
       "managedBy": [
         {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
       ]
@@ -165,8 +168,8 @@
           }
         }
       },
-      "pods": [
-        {"kind": "Pod", "namespace": "shop", "name": "api-6b7-a"}
+      "networkPolicies": [
+        {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
       ]
     }
   },
@@ -220,7 +223,19 @@
             "object": {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
           }
         }
-      }
+      },
+      "networkPolicies": [
+        {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
+      ],
+      "pods": [
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-0"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-1"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-2"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-3"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-4"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-5"},
+        {"kind": "Pod", "namespace": "shop", "name": "big-8f9-6"}
+      ]
     }
   },
   {
@@ -288,6 +303,9 @@
           }
         }
       },
+      "networkPolicies": [
+        {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
+      ],
       "pods": [
         {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"}
       ],
@@ -348,6 +366,9 @@
           }
         }
       },
+      "networkPolicies": [
+        {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
+      ],
       "managedBy": [
         {"kind": "Service", "namespace": "shop", "name": "hello", "group": "serving.knative.dev"}
       ]
@@ -409,6 +430,9 @@
           }
         }
       },
+      "networkPolicies": [
+        {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
+      ],
       "managedBy": [
         {"kind": "HelmRelease", "namespace": "shop", "name": "legacy"}
       ]
@@ -476,6 +500,9 @@
       "services": [
         {"kind": "Service", "namespace": "shop", "name": "redis"}
       ],
+      "networkPolicies": [
+        {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
+      ],
       "managedBy": [
         {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
       ]
@@ -484,9 +511,6 @@
   {
     "root": "apps|Deployment|shop|redis-legacy",
     "relationships": {
-      "managers": [
-        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
-      ],
       "ownership": {
         "children": {
           "complete": false,
@@ -532,8 +556,8 @@
           }
         }
       },
-      "managedBy": [
-        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
+      "networkPolicies": [
+        {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
       ]
     }
   },
@@ -614,6 +638,9 @@
       "ingresses": [
         {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"}
       ],
+      "gateways": [
+        {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"}
+      ],
       "routes": [
         {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
       ],
@@ -627,6 +654,9 @@
       ],
       "pdbs": [
         {"kind": "PodDisruptionBudget", "namespace": "shop", "name": "web", "group": "policy"}
+      ],
+      "networkPolicies": [
+        {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
       ],
       "pods": [
         {"kind": "Pod", "namespace": "shop", "name": "web-7d9f8-0"},
@@ -695,10 +725,7 @@
             "owner": {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
           }
         }
-      },
-      "managedBy": [
-        {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
-      ]
+      }
     }
   },
   {
@@ -837,7 +864,7 @@
         }
       },
       "managedBy": [
-        {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+        {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"}
       ]
     }
   },
@@ -1037,7 +1064,7 @@
         }
       },
       "managedBy": [
-        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
       ]
     }
   },
@@ -1100,6 +1127,9 @@
           }
         }
       },
+      "networkPolicies": [
+        {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
+      ],
       "managedBy": [
         {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
       ]
@@ -1157,7 +1187,8 @@
         }
       },
       "configRefs": [
-        {"kind": "Secret", "namespace": "team", "name": "db-creds"}
+        {"kind": "Secret", "namespace": "team", "name": "db-creds"},
+        {"kind": "SealedSecret", "namespace": "team", "name": "db-creds", "group": "bitnami.com"}
       ]
     }
   },
@@ -1674,9 +1705,6 @@
   {
     "root": "batch|Job|shop|redis-migrate",
     "relationships": {
-      "managers": [
-        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
-      ],
       "ownership": {
         "children": {
           "complete": false,
@@ -1962,7 +1990,11 @@
             "object": {"kind": "SealedSecret", "namespace": "team", "name": "db-creds", "group": "bitnami.com"}
           }
         }
-      }
+      },
+      "consumers": [
+        {"kind": "Pod", "namespace": "team", "name": "db-0"},
+        {"kind": "StatefulSet", "namespace": "team", "name": "db", "group": "apps"}
+      ]
     }
   },
   {
@@ -2426,9 +2458,6 @@
       "children": [
         {"kind": "Object", "namespace": "", "name": "orders-db-config", "group": "kubernetes.crossplane.io"}
       ],
-      "managers": [
-        {"kind": "DatabaseClaim", "namespace": "shop", "name": "orders-db", "group": "demo.example.io"}
-      ],
       "ownership": {
         "children": {
           "complete": false,
@@ -2440,6 +2469,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -2518,10 +2557,7 @@
             "object": {"kind": "XDatabase", "namespace": "", "name": "orders-db-xr", "group": "demo.example.io"}
           }
         }
-      },
-      "managedBy": [
-        {"kind": "DatabaseClaim", "namespace": "shop", "name": "orders-db", "group": "demo.example.io"}
-      ]
+      }
     }
   },
   {
@@ -2649,7 +2685,7 @@
         }
       },
       "managedBy": [
-        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
       ]
     }
   },
@@ -2670,6 +2706,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -2804,9 +2850,6 @@
       },
       "backends": [
         {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}
-      ],
-      "managedBy": [
-        {"kind": "GatewayClass", "namespace": "", "name": "envoy", "group": "gateway.networking.k8s.io"}
       ]
     }
   },
@@ -2876,11 +2919,9 @@
         {"kind": "Service", "namespace": "shop", "name": "redis"},
         {"kind": "DaemonSet", "namespace": "shop", "name": "redis-exporter", "group": "apps"},
         {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"},
-        {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
         {"kind": "StatefulSet", "namespace": "shop", "name": "redis-replica", "group": "apps"},
         {"kind": "Rollout", "namespace": "shop", "name": "redis-proxy", "group": "argoproj.io"},
-        {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"},
-        {"kind": "Job", "namespace": "shop", "name": "redis-migrate", "group": "batch"}
+        {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"}
       ],
       "ownership": {
         "children": {
@@ -2967,6 +3008,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -3068,6 +3119,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -3224,6 +3285,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -3300,7 +3371,7 @@
         }
       },
       "managedBy": [
-        {"kind": "DatabaseClaim", "namespace": "shop", "name": "orders-db", "group": "demo.example.io"}
+        {"kind": "XDatabase", "namespace": "", "name": "orders-db-xr", "group": "demo.example.io"}
       ]
     }
   },
@@ -3433,6 +3504,9 @@
       ],
       "dependencies": [
         {"kind": "GitRepository", "namespace": "flux-system", "name": "repo", "group": "source.toolkit.fluxcd.io"}
+      ],
+      "managedBy": [
+        {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"}
       ]
     }
   },
@@ -3553,6 +3627,9 @@
       ],
       "backends": [
         {"kind": "Service", "namespace": "shop", "name": "web"}
+      ],
+      "managedBy": [
+        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
       ]
     }
   },
@@ -3603,7 +3680,19 @@
             "object": {"kind": "NetworkPolicy", "namespace": "shop", "name": "default-deny", "group": "networking.k8s.io"}
           }
         }
-      }
+      },
+      "protects": [
+        {"kind": "DaemonSet", "namespace": "shop", "name": "redis-exporter", "group": "apps"},
+        {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"},
+        {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"},
+        {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+        {"kind": "Deployment", "namespace": "shop", "name": "hello-00001-deployment", "group": "apps"},
+        {"kind": "Deployment", "namespace": "shop", "name": "legacy-helm", "group": "apps"},
+        {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"},
+        {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"},
+        {"kind": "StatefulSet", "namespace": "shop", "name": "redis-replica", "group": "apps"}
+      ]
     }
   },
   {
@@ -4086,6 +4175,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -4177,7 +4276,7 @@
         {"kind": "Pod", "namespace": "team", "name": "nightly-29001-x"}
       ],
       "managedBy": [
-        {"kind": "Cluster", "namespace": "capi", "name": "prod", "group": "cluster.x-k8s.io"}
+        {"kind": "Machine", "namespace": "capi", "name": "prod-md-abc-x", "group": "cluster.x-k8s.io"}
       ]
     }
   },
@@ -4198,6 +4297,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -4286,7 +4395,7 @@
         {"kind": "Pod", "namespace": "team", "name": "report-1700-main"}
       ],
       "managedBy": [
-        {"kind": "NodePool", "namespace": "", "name": "default", "group": "karpenter.sh"}
+        {"kind": "NodeClaim", "namespace": "", "name": "default-x1", "group": "karpenter.sh"}
       ]
     }
   },
@@ -4338,6 +4447,9 @@
           }
         }
       },
+      "configRefs": [
+        {"kind": "StorageClass", "namespace": "", "name": "standard", "group": "storage.k8s.io"}
+      ],
       "consumers": [
         {"kind": "Pod", "namespace": "team", "name": "db-0"}
       ],
@@ -4360,6 +4472,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -4623,7 +4745,7 @@
       },
       "node": {"kind": "Node", "namespace": "", "name": "node-a"},
       "managedBy": [
-        {"kind": "Deployment", "namespace": "shop", "name": "api", "group": "apps"}
+        {"kind": "ReplicaSet", "namespace": "shop", "name": "api-6b7", "group": "apps"}
       ]
     }
   },
@@ -4680,7 +4802,10 @@
           }
         }
       },
-      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
+      ]
     }
   },
   {
@@ -4736,7 +4861,10 @@
           }
         }
       },
-      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
+      ]
     }
   },
   {
@@ -4792,7 +4920,10 @@
           }
         }
       },
-      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
+      ]
     }
   },
   {
@@ -4848,7 +4979,10 @@
           }
         }
       },
-      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
+      ]
     }
   },
   {
@@ -4904,7 +5038,10 @@
           }
         }
       },
-      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
+      ]
     }
   },
   {
@@ -4960,7 +5097,10 @@
           }
         }
       },
-      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
+      ]
     }
   },
   {
@@ -5016,7 +5156,10 @@
           }
         }
       },
-      "node": {"kind": "Node", "namespace": "", "name": "node-a"}
+      "node": {"kind": "Node", "namespace": "", "name": "node-a"},
+      "managedBy": [
+        {"kind": "Deployment", "namespace": "shop", "name": "big", "group": "apps"}
+      ]
     }
   },
   {
@@ -5066,15 +5209,29 @@
           "unreadable": 1
         },
         "manager": {
-          "state": "claimed",
-          "lead": {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
+          "state": "agree",
+          "lead": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
           "direct": {
             "object": {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"},
             "claims": [
               {
                 "manager": {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
                 "source": "flux-kustomize-labels",
-                "check": "omitted"
+                "check": "omitted",
+                "weak": true
+              }
+            ]
+          },
+          "via": {
+            "object": {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+            "recorders": [
+              {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+            ],
+            "claims": [
+              {
+                "manager": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
+                "source": "flux-kustomize-labels",
+                "check": "recorded"
               }
             ]
           }
@@ -5281,7 +5438,7 @@
       ],
       "node": {"kind": "Node", "namespace": "", "name": "node-a"},
       "managedBy": [
-        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
       ]
     }
   },
@@ -5364,7 +5521,7 @@
       ],
       "node": {"kind": "Node", "namespace": "", "name": "node-a"},
       "managedBy": [
-        {"kind": "Application", "namespace": "argocd", "name": "shop", "group": "argoproj.io"}
+        {"kind": "Deployment", "namespace": "shop", "name": "web", "group": "apps"}
       ]
     }
   },
@@ -5421,7 +5578,8 @@
         }
       },
       "configRefs": [
-        {"kind": "Secret", "namespace": "team", "name": "db-creds"}
+        {"kind": "Secret", "namespace": "team", "name": "db-creds"},
+        {"kind": "SealedSecret", "namespace": "team", "name": "db-creds", "group": "bitnami.com"}
       ],
       "storageRefs": [
         {"kind": "PersistentVolumeClaim", "namespace": "team", "name": "data-db-0"}
@@ -5907,6 +6065,9 @@
       },
       "ingresses": [
         {"kind": "Ingress", "namespace": "shop", "name": "web", "group": "networking.k8s.io"}
+      ],
+      "gateways": [
+        {"kind": "Gateway", "namespace": "shop", "name": "public", "group": "gateway.networking.k8s.io"}
       ],
       "routes": [
         {"kind": "HTTPRoute", "namespace": "shop", "name": "web", "group": "gateway.networking.k8s.io"}

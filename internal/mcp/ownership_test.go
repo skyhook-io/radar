@@ -30,7 +30,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
-	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 func TestAgentMCPListBoundsSlowOwnershipAuthorization(t *testing.T) {
@@ -88,13 +87,6 @@ func TestAgentMCPListBoundsSlowOwnershipAuthorization(t *testing.T) {
 			}
 			previousClient := k8s.SetTestClient(&kubernetes.Clientset{})
 			t.Cleanup(func() { k8s.SetTestClient(previousClient) })
-			relationshipTopology.RLock()
-			previousSource := relationshipTopology.source
-			relationshipTopology.RUnlock()
-			graph := &topology.Topology{}
-			index := topology.IndexByResource(graph)
-			SetRelationshipTopologySource(func() (*topology.Topology, *topology.RelationshipsIndex) { return graph, index })
-			t.Cleanup(func() { SetRelationshipTopologySource(previousSource) })
 			ctx, cancel := context.WithTimeout(withTestUserPerms(t, "budget-"+tc.name, nil, nil), 15*time.Second)
 			defer cancel()
 			resource := "pods"
@@ -284,6 +276,7 @@ func TestResourceContextOwnerAsksNothingAboutChildren(t *testing.T) {
 	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatal(err)
 	}
+	k8s.GetServerVersion()
 	prev := k8s.SetTestClient(&kubernetes.Clientset{})
 	defer k8s.SetTestClient(prev)
 	ctx := withTestUserPerms(t, "viewer", nil, nil)

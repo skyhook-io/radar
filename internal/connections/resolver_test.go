@@ -57,6 +57,9 @@ func TestResolverLaunchIsolationAndTrustChange(t *testing.T) {
 	apply(t, r, a, Update{Kind: config.IntegrationMetrics, Action: "save", URL: stringPtr("https://saved-a"), Headers: []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "saved-secret"}}})
 	apply(t, r, b, Update{Kind: config.IntegrationMetrics, Action: "save", URL: stringPtr("https://saved-b")})
 	r = NewResolver(r.Store, a, map[config.Integration]Bundle{config.IntegrationMetrics: {Settings: config.IntegrationSettings{Prometheus: &prom.Connection{URL: "https://launch"}}}})
+	if !r.HasLaunchOverride(config.IntegrationMetrics) || r.HasLaunchOverride(config.IntegrationArgoCD) {
+		t.Fatal("HasLaunchOverride must report exactly the integrations set for this launch")
+	}
 	for i := 0; i < 2; i++ {
 		got := r.Resolve(a, config.IntegrationMetrics, false)
 		if got.View.State != "launch" || got.Settings.Prometheus.URL != "https://launch" || len(got.Settings.Prometheus.Headers) != 0 {

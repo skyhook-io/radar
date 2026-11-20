@@ -23,7 +23,8 @@ type uncheckedKey struct {
 }
 
 type uncheckedEntry struct {
-	kinds map[issuesapi.UncheckedKind]bool
+	kinds    map[issuesapi.UncheckedKind]bool
+	subjects map[Ref]bool
 	// whole is set when the gap couldn't be pinned to kinds, so listing the
 	// kinds that were pinned would understate it.
 	whole bool
@@ -51,6 +52,22 @@ func (u *uncheckedSet) add(source issuesapi.UncheckedSourceName, reason issuesap
 	}
 }
 
+// addFor records the gap as add does, naming the resources whose own issues
+// it may hide.
+func (u *uncheckedSet) addFor(source issuesapi.UncheckedSourceName, reason issuesapi.UncheckedReason, kind issuesapi.UncheckedKind, subjects []Ref) {
+	if u == nil {
+		return
+	}
+	u.add(source, reason, kind)
+	entry := u.entries[uncheckedKey{source: source, reason: reason}]
+	if entry.subjects == nil {
+		entry.subjects = map[Ref]bool{}
+	}
+	for _, ref := range subjects {
+		entry.subjects[ref] = true
+	}
+}
+
 // list returns the entries in a stable order, kinds sorted.
 func (u *uncheckedSet) list() []issuesapi.UncheckedSource {
 	if u == nil || len(u.entries) == 0 {
@@ -64,6 +81,12 @@ func (u *uncheckedSet) list() []issuesapi.UncheckedSource {
 				source.Kinds = append(source.Kinds, kind)
 			}
 		}
+		for ref := range entry.subjects {
+			source.Subjects = append(source.Subjects, ref)
+		}
+		slices.SortFunc(source.Subjects, func(a, b Ref) int {
+			return strings.Compare(resourceKey(a.Group, a.Kind, a.Namespace, a.Name), resourceKey(b.Group, b.Kind, b.Namespace, b.Name))
+		})
 		slices.SortFunc(source.Kinds, func(a, b issuesapi.UncheckedKind) int {
 			if c := strings.Compare(a.Kind, b.Kind); c != 0 {
 				return c
@@ -214,4 +237,65 @@ func (p *CacheProvider) dynamicSyncGap(gvr schema.GroupVersionResource, namespac
 		return issuesapi.UncheckedReasonSyncFailed
 	}
 	return issuesapi.UncheckedReasonSyncPending
+}
+
+// UncheckedFor projects subject-specific and applicable inventory gaps onto
+// one resource, without exposing the internal subject lists.
+func UncheckedFor(sources []issuesapi.UncheckedSource, group, kind, namespace, name string) []issuesapi.UncheckedSource {
+	wantGroup := resolveGroup(group, kind)
+	var out []issuesapi.UncheckedSource
+	for _, source := range sources {
+		if kueueInventoryGapCovers(source, wantGroup, kind) {
+			source.Subjects = nil
+			out = append(out, source)
+			continue
+		}
+		if slices.ContainsFunc(source.Subjects, func(ref Ref) bool {
+			return strings.EqualFold(ref.Kind, kind) && ref.Namespace == namespace && ref.Name == name && resolveGroup(ref.Group, ref.Kind) == wantGroup
+		}) {
+			source.Subjects = nil
+			out = append(out, source)
+		}
+	}
+	return out
+}
+
+// kueueRunKinds are the kinds whose own page can hold a Kueue run row.
+var kueueRunKinds = map[string]bool{
+	"kueue.x-k8s.io/Workload":   true,
+	"kueue.x-k8s.io/LocalQueue": true,
+	"batch/Job":                 true,
+	"batch/CronJob":             true,
+	"jobset.x-k8s.io/JobSet":    true,
+	"ray.io/RayJob":             true,
+}
+
+// kueueInventoryGapCovers includes a kind's own failed inventory. When Radar
+// couldn't read Workloads or LocalQueues it can't tell which runs that hides,
+// so the gap also concerns every page a Kueue run row could be on.
+func kueueInventoryGapCovers(source issuesapi.UncheckedSource, group, kind string) bool {
+	if source.Source != issuesapi.UncheckedSourceKueue {
+		return false
+	}
+	if slices.ContainsFunc(source.Kinds, func(k issuesapi.UncheckedKind) bool {
+		return k.Group == group && strings.EqualFold(k.Kind, kind)
+	}) {
+		return true
+	}
+	if !kueueRunKinds[group+"/"+canonicalKueueKind(kind)] {
+		return false
+	}
+	return slices.ContainsFunc(source.Kinds, func(k issuesapi.UncheckedKind) bool {
+		return k.Group == "kueue.x-k8s.io" && (k.Kind == "Workload" || k.Kind == "LocalQueue")
+	})
+}
+
+func canonicalKueueKind(kind string) string {
+	for key := range kueueRunKinds {
+		_, k, _ := strings.Cut(key, "/")
+		if strings.EqualFold(k, kind) {
+			return k
+		}
+	}
+	return kind
 }

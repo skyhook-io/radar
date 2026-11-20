@@ -18,6 +18,8 @@ export interface LogEntry {
    * viewer's isDark state toggles at runtime.
    */
   podColorIndex?: number
+  /** The line's container was an init container or native sidecar of its Pod when it arrived. */
+  containerRole?: 'init' | 'sidecar'
   level: LogLevel
   levelSource: LevelSource
   isJson: boolean

@@ -3,7 +3,7 @@
 **The missing open-source Kubernetes UI, with a built-in MCP server for your AI agent.**
 <br>Single binary. No account required. Free forever.
 
-🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Benchmarks](https://radarhq.io/benchmark) · [Releases](https://github.com/skyhook-io/radar/releases)
+🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Benchmarks](https://radarhq.io/benchmark) · [Releases](https://github.com/skyhook-io/radar/releases) · [Slack](https://radarhq.io/slack)
 
 Radar shows you what's broken in a Kubernetes cluster, why, and what changed: issues, topology, a timeline of events and resource changes, Helm, GitOps, traffic, audit, and upgrade impact. Your AI agent reads the same cluster data and relationships through Radar's MCP server, and Radar can run an AI investigation for you with the agent CLI you already use. It runs on your laptop as a `kubectl` plugin or desktop app, or in-cluster with Helm.
 
@@ -14,7 +14,7 @@ Radar shows you what's broken in a Kubernetes cluster, why, and what changed: is
 [![Release](https://img.shields.io/github/v/release/skyhook-io/radar?logo=github)](https://github.com/skyhook-io/radar/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/skyhook-io/radar/total?logo=github)](https://github.com/skyhook-io/radar/releases)
 [![Helm repo downloads](https://img.shields.io/github/downloads/skyhook-io/helm-charts/total?logo=helm&label=Helm%20repo%20downloads)](https://artifacthub.io/packages/helm/skyhook/radar)
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://radarhq.io/community/chat)
+[![Slack](https://img.shields.io/badge/Slack-Join%20the%20community-4A154B?logo=slack&logoColor=white)](https://radarhq.io/slack)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 <details>
@@ -25,9 +25,10 @@ Radar shows you what's broken in a Kubernetes cluster, why, and what changed: is
 - [Installation](#installation)
 - [Usage](#usage)
 - [Views](#views) — Issues · Topology · Resources · Image Filesystem · Timeline · Helm · Compare · TLS · GitOps · Traffic · Metrics · Capacity · Cost · Audit · Network path · Upgrade impact · RBAC · Auth
-- [Supported Resources](#supported-resources)
+- [Supported Resources & Integrations](#supported-resources--integrations)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [Security](#security)
+- [Community and support](#community-and-support)
 - [Development](#development) · [Contributing](#contributing)
 
 </details>
@@ -190,8 +191,19 @@ sudo apt install ./radar-desktop_*.deb
 
 **Fedora/RHEL** — download the `.rpm` from [GitHub Releases](https://github.com/skyhook-io/radar/releases), then:
 ```bash
-sudo rpm -i radar-desktop_*.rpm
+sudo dnf install ./radar-desktop_*.rpm
 ```
+
+**Linux (AppImage, any distro)** — download the `.AppImage` from [GitHub Releases](https://github.com/skyhook-io/radar/releases), then:
+```bash
+chmod +x radar-desktop_*_linux_amd64.AppImage
+./radar-desktop_*_linux_amd64.AppImage
+```
+The AppImage doesn't update itself. When a new version is out, Radar links to the download.
+
+If the Linux desktop app flashes black, shows black icons or crashes on NVIDIA, see [Linux desktop rendering](docs/configuration.md#linux-desktop-rendering).
+
+Kubeconfig login plugins (`exec`) run from inside the AppImage, not from the folder you started it in. If a plugin's `args` name a file by a relative path, such as `--token-file token.json`, the plugin can't find it and Radar shows "Authentication Failed". Give the full path instead, such as `--token-file /home/you/.kube/token.json`. A relative `command`, such as `./token.sh`, works: it's looked up next to the kubeconfig file.
 
 **Scoop (Windows):**
 ```powershell
@@ -236,7 +248,7 @@ radar
 | `--listen-address` | `127.0.0.1` | HTTP listen IP address (IPv4 or IPv6), or `localhost`. Bind a specific local IP or use `0.0.0.0` for all interfaces. Non-loopback access needs authentication and network controls. |
 | `--no-browser` | `false` | Don't auto-open browser |
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory`, `sqlite`, or `postgres` |
-| `--disable-exec` | `false` | Disable pod terminal, debug shells and pod file browsing |
+| `--disable-exec` | `false` | Disable pod terminal, debug shells, pod file browsing, CloudNativePG sessions and MCP `exec_pod` |
 | `--auth-mode` | `none` | Authentication mode: `none`, `proxy`, or `oidc` ([details](docs/authentication.md)) |
 | `--no-mcp` | `false` | Disable all MCP endpoints |
 | `--mcp-read-only` | `false` | Expose only read-only MCP tools; disable `/mcp` (env: `RADAR_MCP_READ_ONLY`) |
@@ -250,7 +262,7 @@ radar
 
 </details>
 
-`radar --help` is authoritative for the installed version. `radar cloud status` inspects an in-cluster Radar Cloud installation without changing it ([details](docs/configuration.md#radar-cloud)).
+`radar --help` is authoritative for the installed version. `radar cloud status` inspects an in-cluster Radar Cloud installation without changing it ([details](docs/configuration.md#radar-cloud)). `radar check java4shell` runs the Java4Shell check from the terminal ([CLI flags and exit codes](docs/configuration.md#java4shell-cli)).
 
 ---
 
@@ -284,9 +296,11 @@ Table-based resource browser with smart columns per resource kind.
 </p>
 
 - Browse all resource types including CRDs
+- Inspect CRD definitions, versions, instances, and searchable schemas
 - Search by name, filter by status or problems (CrashLoopBackOff, ImagePullBackOff, etc.)
 - Add custom columns from any label or annotation — sortable, filterable, and resizable
 - Click any resource for YAML manifest, related resources, logs, and events
+- Pod logs list init containers, marked `(init)`, and open on the init container a Pod is stuck on, so a Pod that never starts still shows why
 - Set regular or init-container images on Deployments, StatefulSets, DaemonSets, and Argo Rollouts, with live rollout progress in tables, drawers, workload views, and Applications
 
 ### Image Filesystem Viewer
@@ -352,6 +366,7 @@ Monitor, diagnose, and manage FluxCD and ArgoCD resources in one place.
 </p>
 
 - Fleet view + per-app detail page for **ArgoCD** (`Application`, `ApplicationSet`, `AppProject`) and **FluxCD** (`GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `Kustomization`, `HelmRelease`, `Alert`)
+- **Flux Operator** — a Flux card on the GitOps page (version, controllers, reconciler counts from `FluxReport`) and views for `FluxInstance`, `FluxReport`, `ResourceSet`, `ResourceSetInputProvider`
 - **Diagnosis** — field-level drift, recent events per resource, stuck-drift-loop detection, parsed operation failures, one-click remediation
 - Sync, suspend, resume, reconcile, and rollback from the UI or through MCP
 
@@ -393,10 +408,10 @@ Track Kubernetes spending from OpenCost metrics in a PromQL-compatible backend o
 
 ### Cluster Audit
 
-Proactive best-practices scanner with 44 checks across security, reliability, and efficiency — inspired by Polaris, Kubescape, Trivy, and NSA/CISA guidelines. Runs instantly against cached data with zero cluster-side installation.
+Proactive best-practices scanner with 48 checks across security, reliability, and efficiency — inspired by Polaris, Kubescape, Trivy, and NSA/CISA guidelines. Runs instantly against cached data with zero cluster-side installation.
 
 - Security: privileged containers, privilege escalation, host namespaces, runtime socket mounts, secrets in ConfigMaps, and more
-- Reliability: missing probes, image tag `latest`, single-replica deployments, missing PDB/topology spread, deprecated API versions
+- Reliability: missing probes, image tag `latest`, single-replica deployments, missing PDB/topology spread, deprecated API versions, CloudNativePG clusters with no backup destination, no WAL archiving, a single instance or the deprecated in-tree Barman backup
 - Efficiency: missing requests and limits, orphan ConfigMaps/Secrets, PVCs with no consumer observed, long-Pending PVCs, and Released or Failed PVs
 - Remediation guidance per finding, NSA/CISA and CIS framework labels, and per-resource opt-out via the `radarhq.io/ignore-checks` annotation
 
@@ -408,9 +423,18 @@ Hop-ordered diagnosis for Service, Ingress, HTTPRoute, GRPCRoute, and Gateway �
 
 ### Kubernetes Upgrade Impact
 
-Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action — APIs removed in the target release, kubelet and kube-proxy skew, overlapping PodDisruptionBudgets, removed feature gates — using live resources, Helm release manifests, last-applied configuration, and API server metrics.
+Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action — APIs removed in the target release, kubelet and kube-proxy skew, overlapping PodDisruptionBudgets, removed feature gates — using live resources, Helm release manifests, last-applied configuration, and API server metrics. On k3s and RKE2 it also lists the system-upgrade-controller Plans that upgrade the distribution, with their version and state.
 
 See the [Kubernetes upgrade impact guide](https://radarhq.io/docs/features/upgrade-impact) for the check catalog, coverage semantics, and RBAC notes.
+
+### Vulnerabilities in Deployed Images
+
+With [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) installed, **Checks → Vulnerabilities** rolls its VulnerabilityReports up to the images that run now: which images carry Critical and High CVEs, which have a fix, and which workloads and namespaces run them, by image, by CVE or by workload. **By fix** turns the fixable findings into a list of package upgrades: each row says what to upgrade to and every CVE that clears. Reports about older revisions are left out, an image used by many workloads is one row, and running images without a report are listed as not scanned rather than clean. The tab appears only when the cluster serves Trivy's VulnerabilityReport kind. See [Trivy Operator](docs/integrations.md#trivy-operator).
+
+<p align="center">
+  <img src="docs/screenshots/vulnerabilities-view.png" alt="Checks → Vulnerabilities by image: 62 images with Critical CVEs of 99 scanned and 16 not scanned yet, a severity bar, and one row per running image with its findings, how many have a fix, and the workloads that run it" width="800">
+  <br><em>Vulnerabilities — Critical and High CVEs in the images that run now</em>
+</p>
 
 ### Access Control (RBAC visibility)
 
@@ -435,13 +459,13 @@ No auth by default (local use). See the **[Authentication Guide](docs/authentica
 
 ---
 
-## Supported Resources
+## Supported Resources & Integrations
 
-Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integrations](docs/integrations.md) with topology edges, detail views, and AI summaries.
+Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integrations](docs/integrations.md) with resource views, topology, AI context and application evidence. Coverage varies by integration.
 
-The Helm chart grants read access to common built-in Kubernetes kinds; Secrets and RBAC objects depend on chart settings and the authentication mode. CRD-based integrations need the CRD installed in your cluster *and* read access; most API groups are granted by default, and the chart's [RBAC](deploy/helm/radar/README.md#rbac) and [CRD access](deploy/helm/radar/README.md#crd-access) sections list what is on, what is opt-in, and how to add rules.
+The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, RBAC objects and CertificateSigningRequests depend on chart settings and the authentication mode. CRD-based integrations need the CRD installed in your cluster *and* read access; most API groups are granted by default, and the chart's [RBAC](deploy/helm/radar/README.md#rbac) and [CRD access](deploy/helm/radar/README.md#crd-access) sections list what is on, what is opt-in, and how to add rules.
 
-| Category | Resources |
+| Category / integration | Coverage |
 |----------|-----------|
 | **Workloads** | Deployments, DaemonSets, StatefulSets, ReplicaSets, Pods, Jobs, CronJobs |
 | **Networking** | Services, Ingresses, NetworkPolicies, Endpoints, EndpointSlices, PodDisruptionBudgets |
@@ -449,8 +473,9 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 | **Storage** | PersistentVolumeClaims, PersistentVolumes, StorageClasses |
 | **Autoscaling** | HorizontalPodAutoscalers, VerticalPodAutoscalers |
 | **Cluster** | Nodes, Namespaces, ServiceAccounts, Events |
-| **Other Kubernetes APIs** | Workloads, PodGroups, CompositePodGroups, PodCertificateRequests, ClusterTrustBundles (only when served by the cluster) |
+| **Other Kubernetes APIs** | CertificateSigningRequests; Workloads, PodGroups, CompositePodGroups, PodCertificateRequests, ClusterTrustBundles (only when served by the cluster) |
 | **GitOps (FluxCD)** | GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease, Alert |
+| **GitOps (Flux Operator)** | FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider |
 | **GitOps (ArgoCD)** | Application, ApplicationSet, AppProject |
 | **Argo Rollouts** | Rollout |
 | **Argo Workflows** | Workflow, WorkflowTemplate |
@@ -467,13 +492,19 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 | **Knative Networking** | Ingress, Certificate, ServerlessService |
 | **Karpenter** | NodePool, NodeClaim (+ provider-specific NodeClasses via auto-discovery) |
 | **OpenTelemetry Operator** | [OpenTelemetryCollector and Instrumentation](docs/integrations.md#opentelemetry-operator): reconciliation, configured pipelines and injection settings |
+| **System Upgrade Controller** | [Plan](docs/integrations.md#system-upgrade-controller): per-node upgrade progress, an Issue for an invalid Plan, and k3s/RKE2 upgrade Plans on the Upgrade impact page |
 | **Flagger** | [Canary and MetricTemplate](docs/integrations.md#flagger): recorded rollout state, target/autoscaler/template links and failed-rollout Issues |
 | **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication, ClusterTriggerAuthentication |
 | **Prometheus Operator** | ServiceMonitor, PodMonitor, PrometheusRule, Alertmanager |
 | **Security (Trivy)** | VulnerabilityReport, ConfigAuditReport, ExposedSecretReport, ClusterComplianceReport, SbomReport, RbacAssessmentReport, InfraAssessmentReport |
 | **Strimzi** | [KafkaConnector failure evidence](docs/integrations.md#strimzi-kafka-connectors) (connector/task status) |
+| **[RabbitMQ](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | Node-reported disk and memory alarms - **local collection** |
+| **[NATS](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | JetStream consumer backlog, acknowledgment-pending and redelivery counters - **local collection** |
 | **Velero** | Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation |
 | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore |
+| **CSI Volume Snapshots** | [VolumeSnapshot, VolumeSnapshotContent and VolumeSnapshotClass](docs/integrations.md#csi-volume-snapshots): readiness, errors, restore size, source, binding and deletion policy |
+| **Secrets Store CSI Driver** | [SecretProviderClass and Pod mounts](docs/integrations.md#secrets-store-csi-driver): mount state, object versions and synced Secrets in the Pod drawer |
+| **[Vault](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | Initialization, seal and standby state - **local collection** |
 | **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler, Database, Publication, Subscription, ImageCatalog, ClusterImageCatalog, ObjectStore — plus [dedicated views](docs/cnpg.md) for fleet, protection and declaration triage |
 | **Crossplane** | Managed Resources (any provider), Composite Resources, Claims, Provider, ProviderConfig, Function, Configuration, Composition, CompositionRevision, XRD |
 | **Kyverno** | Policy, ClusterPolicy, PolicyReport, ClusterPolicyReport |
@@ -488,8 +519,15 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 | **Batch** | LeaderWorkerSet, JobSet, Volcano (Job/Queue/PodGroup/JobFlow/JobTemplate), Kubeflow (PyTorchJob/TFJob/MPIJob/TrainJob) — basic |
 | **KAI Scheduler** | Queue, PodGroup — basic |
 | **Model serving** | KAITO (Workspace, RAGEngine), NVIDIA NIM (NIMService/NIMCache/NIMPipeline), AMD GPU Operator (DeviceConfig) — basic |
+| **Agent runtimes** | [Agent Sandbox and Agent Substrate](docs/integrations.md#agent-runtimes-agent-sandbox-and-agent-substrate): sandbox and WorkerPool status read the way their controllers mean it, Issues for stuck sandboxes and broken pools, and with Prometheus a WorkerPool capacity verdict and a Node snapshot-upload verdict with charts |
 | **Cost (OpenCost / Kubecost)** | Namespace/workload/node cost via compatible Prometheus metrics or the Kubecost 3 Aggregator (no CRDs) |
 | **CRDs** | Any Custom Resource Definition in your cluster (auto-discovered) |
+
+### Local runtime evidence
+
+When Radar runs locally, use **Collect RabbitMQ evidence**, **Collect NATS evidence** or **Collect Vault evidence** in resource details to select a Pod and collect explicitly. MCP clients can also collect after operator approval.
+
+These observations describe one Pod endpoint, not overall application health, and do not add automatic Issues detection. See the [collection requirements and limitations](docs/mcp.md#explicit-local-runtime-evidence).
 
 ---
 
@@ -503,6 +541,14 @@ Radar is keyboard-first: `?` lists every shortcut, `⌘K` opens the command pale
 ## Security
 
 Radar reads your cluster through your own credentials and keeps cluster data local. It does not upload manifests, logs, events, metrics, or resource data to Skyhook, and it does not require an account, agent, or cloud backend. When you connect an AI agent or run an AI investigation, what Radar returns goes to that agent and its model provider. Found a vulnerability? Please report it privately to **security@skyhook.io** — see [SECURITY.md](SECURITY.md) for the process and response timelines.
+
+---
+
+## Community and support
+
+- **[Slack](https://radarhq.io/slack)** is the fastest way to get help. Ask in `#radar-help`, share feedback, and talk Kubernetes with the Radar team and other users.
+- **[GitHub Discussions](https://github.com/skyhook-io/radar/discussions)** for ideas and longer questions you want others to find later.
+- **[GitHub Issues](https://github.com/skyhook-io/radar/issues)** for bugs and feature requests.
 
 ---
 
@@ -529,7 +575,7 @@ make watch-backend
 
 Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details on the development workflow, pull request process, and coding standards.
 
-Questions or ideas? [GitHub Discussions](https://github.com/skyhook-io/radar/discussions) is the place — or come say hi at [radarhq.io/community](https://radarhq.io/community).
+Questions about a change? Ask in [Slack](https://radarhq.io/slack) before you start, or open a [Discussion](https://github.com/skyhook-io/radar/discussions).
 
 ---
 

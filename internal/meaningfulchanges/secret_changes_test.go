@@ -185,6 +185,66 @@ func TestSecretCollapseKeepsNonKeyFields(t *testing.T) {
 	}
 }
 
+func TestSecretReorderNotesOrderOnlyPreviousValue(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	pod := feedPod("bare", now.Add(-10*time.Minute), feedEnv("Secret", "db", "A"))
+	store := secretFeedFixture(t, feedSecret("db"), pod)
+	if err := store.Append(context.Background(), timeline.TimelineEvent{ID: "reorder", Kind: "Secret", APIVersion: "v1", Namespace: "shop", Name: "db", Timestamp: now.Add(-time.Minute), Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(), EventType: timeline.EventTypeUpdate, Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{
+		{Path: "data (modified keys)", OldValue: []string{"A"}, NewValue: []string{"A"}},
+		{Path: "data (reordered keys)", OldValue: []string{"A"}, NewValue: []string{"A"}},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	rows := feedRecent(t, Query{})
+	if len(rows) != 1 || rows[0].RunningPreviousValue == nil || rows[0].RunningPreviousValue.Note != runningPreviousOrderOnlyValueNote {
+		t.Fatalf("rows=%+v", rows)
+	}
+}
+
+// Readers that missed a real change and readers that only missed a reorder
+// of the same key stay on separate rows, so neither loses its readers.
+func TestSecretCollapseKeepsRealAndOrderOnlyReadersApart(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	row := func(at time.Time, pods int, note string) issuesapi.RecentChange {
+		return issuesapi.RecentChange{Kind: "Secret", Namespace: "shop", Name: "db", ChangeType: "update", Timestamp: at.Format(time.RFC3339),
+			Fields:               []issuesapi.ChangeField{{Path: "data (modified keys)", OldValue: []string{"HOSTS"}, NewValue: []string{"HOSTS"}}},
+			RunningPreviousValue: &issuesapi.RunningPreviousValue{Pods: pods, Keys: []string{"HOSTS"}, Note: note}}
+	}
+	rows := collapseSecretUpdates([]issuesapi.RecentChange{
+		row(now.Add(-time.Minute), 1, runningPreviousOrderOnlyValueNote),
+		row(now.Add(-2*time.Minute), 1, runningPreviousValueNote),
+	})
+	if len(rows) != 2 || rows[0].RunningPreviousValue.Note != runningPreviousOrderOnlyValueNote || rows[1].RunningPreviousValue.Note != runningPreviousValueNote {
+		t.Fatalf("rows=%+v", rows)
+	}
+}
+
+// A key one update reordered and another really changed must read as changed
+// in the collapsed row, whichever update is newer.
+func TestSecretCollapseKeepsARealChangeOverAReorder(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	reorder := func(at time.Time) issuesapi.RecentChange {
+		return issuesapi.RecentChange{Kind: "Secret", Namespace: "shop", Name: "db", ChangeType: "update", Timestamp: at.Format(time.RFC3339), Fields: []issuesapi.ChangeField{
+			{Path: "data (modified keys)", OldValue: []string{"HOSTS", "PEERS"}, NewValue: []string{"HOSTS", "PEERS"}},
+			{Path: "data (reordered keys)", OldValue: []string{"HOSTS", "PEERS"}, NewValue: []string{"HOSTS", "PEERS"}},
+		}}
+	}
+	real := func(at time.Time) issuesapi.RecentChange {
+		return issuesapi.RecentChange{Kind: "Secret", Namespace: "shop", Name: "db", ChangeType: "update", Timestamp: at.Format(time.RFC3339), Fields: []issuesapi.ChangeField{
+			{Path: "data (modified keys)", OldValue: []string{"HOSTS"}, NewValue: []string{"HOSTS"}},
+		}}
+	}
+	for name, changes := range map[string][]issuesapi.RecentChange{
+		"reorder newer": {reorder(now.Add(-time.Minute)), real(now.Add(-2 * time.Minute))},
+		"real newer":    {real(now.Add(-time.Minute)), reorder(now.Add(-2 * time.Minute))},
+	} {
+		rows := collapseSecretUpdates(changes)
+		if len(rows) != 1 || rows[0].Summary != "data modified keys: [HOSTS PEERS]; data reordered keys: [PEERS]" {
+			t.Fatalf("%s: collapsed row=%+v", name, rows)
+		}
+	}
+}
+
 // rank_reason claims references only when consumed_by names them.
 func TestSecretRankReasonStatesOnlyEstablishedFacts(t *testing.T) {
 	store := secretFeedFixture(t, feedSecret("loose"))

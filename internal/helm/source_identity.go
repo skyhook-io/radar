@@ -19,7 +19,7 @@ const chartSourceAttemptLabel = "radarhq.io/chart-source-attempt"
 
 var errSourceRequired = errors.New("select and confirm a chart source to continue")
 var errSourceAlreadyConfirmed = errors.New("release already has a confirmed source; choose a source for the next upgrade to replace it")
-var errSourceConflict = errors.New("chart source changed; select the source and preview again")
+var errSourceConflict = errors.New("release or chart source changed; inspect the current revision and source status before retrying")
 
 // Helm alters values and dependency metadata before storing a chart. Only bind
 // material that survives that transformation and the release storage roundtrip.

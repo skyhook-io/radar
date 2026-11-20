@@ -24,10 +24,6 @@ const (
 	// (wired to --beyla-job-selector) for clusters running Alloy/Beyla under a
 	// non-default Prometheus job name.
 	defaultBeylaJobSelector = prom.DefaultBeylaJobSelector
-	// Rate window in the PromQL queries; used to turn per-second rates back
-	// into absolute counts for the window.
-	beylaRateWindowSeconds = 300
-
 	// Grafana's Beyla vendors upstream OBI and renames the flow metric back to
 	// beyla_*; OBI itself emits obi_*. Both distributions are current, so the
 	// prefix is resolved once in Detect rather than assumed.
@@ -43,6 +39,95 @@ func beylaJobSelector() string {
 		return selector
 	}
 	return defaultBeylaJobSelector
+}
+
+// beylaScopes keeps each Beyla metric family to this cluster's series. The
+// families are checked separately: one scraped without the cluster label must
+// not empty the others.
+type beylaScopes struct {
+	l4, l7 clusterScope
+	// l7Unchecked is set when Radar could not check which cluster the HTTP
+	// series belong to. They are left out, and named as missing, rather than
+	// drawn unchecked or taking the network flows down with them.
+	l7Unchecked bool
+}
+
+// l4Selector and l7Selector are the full matcher fragments for each family:
+// the job selector plus the family's cluster matchers. Operator-facing messages
+// name beylaJobSelector instead, since that is the flag the operator can change.
+func (sc beylaScopes) l4Selector() string { return sc.l4.with(beylaJobSelector()) }
+func (sc beylaScopes) l7Selector() string { return sc.l7.with(beylaJobSelector()) }
+
+// resolveScopes decides each family's cluster scope. Filtering applies only to
+// a configured metrics store: one Radar discovered in the cluster holds this
+// cluster's metrics.
+func (s *BeylaSource) resolveScopes(ctx context.Context, w rateWindow) (beylaScopes, error) {
+	url, _ := metricsConfig()
+	l4, err := scopeForMetric(ctx, s.flowMetricName(), beylaJobSelector(), url != "", w.span())
+	if err != nil {
+		return beylaScopes{}, err
+	}
+	l7, err := scopeForMetric(ctx, beylaL7Metric, beylaJobSelector(), url != "", w.span())
+	return beylaScopes{l4: l4, l7: l7, l7Unchecked: err != nil}, nil
+}
+
+func (s *BeylaSource) identityRows(ctx context.Context, query string) ([]map[string]string, error) {
+	qr, err := s.query(ctx, query)
+	if err != nil || qr == nil {
+		return nil, err
+	}
+	rows := make([]map[string]string, 0, len(qr.Series))
+	for _, series := range qr.Series {
+		rows = append(rows, series.Labels)
+	}
+	return rows, nil
+}
+
+// clusterMismatch explains an empty map when the cluster matchers removed
+// every series present in the window: L4 first, then HTTP.
+func (s *BeylaSource) clusterMismatch(ctx context.Context, opts FlowOptions, sc beylaScopes) string {
+	if warning := s.l4Mismatch(ctx, opts, sc.l4); warning != "" {
+		return warning
+	}
+	return s.l7Mismatch(ctx, opts, sc.l7)
+}
+
+func (s *BeylaSource) l4Mismatch(ctx context.Context, opts FlowOptions, sc clusterScope) string {
+	return s.familyMismatch(ctx, sc, "Beyla network", beylaActiveSeries(s.flowMetricName(), beylaJobSelector(), opts.Namespace,
+		[]string{"k8s_src_namespace", "k8s_dst_namespace"}, rateWindowFor(opts.Since)))
+}
+
+func (s *BeylaSource) l7Mismatch(ctx context.Context, opts FlowOptions, sc clusterScope) string {
+	return s.familyMismatch(ctx, sc, "Beyla HTTP", beylaActiveSeries(beylaL7Metric, beylaJobSelector(), opts.Namespace,
+		[]string{"k8s_namespace_name"}, rateWindowFor(opts.Since)))
+}
+
+func (s *BeylaSource) familyMismatch(ctx context.Context, sc clusterScope, family, active string) string {
+	if sc.matchers == "" {
+		return ""
+	}
+	rows, err := s.identityRows(ctx, sc.identityCountQuery(active))
+	if err != nil {
+		return ""
+	}
+	return sc.clusterMismatchWarning(rows, family)
+}
+
+// beylaActiveSeries selects the series present in the window, filtered to
+// namespace on any of nsLabels. Present rather than increasing: an idle series
+// carrying this cluster's labels means a quiet cluster, not a label mismatch.
+func beylaActiveSeries(metric, sel, namespace string, nsLabels []string, w rateWindow) string {
+	active := func(more string) string {
+		return fmt.Sprintf(`last_over_time(%s{%s%s}[%s])`, metric, sel, more, w.promQL)
+	}
+	if namespace == "" {
+		return active("")
+	}
+	parts := make([]string, len(nsLabels))
+	for i, label := range nsLabels {
+		parts[i] = active(fmt.Sprintf(`, %s=%q`, label, namespace))
+	}
+	return strings.Join(parts, " or ")
 }
 
 type promQueryFunc func(ctx context.Context, query string) (*prom.QueryResult, error)
@@ -320,6 +405,8 @@ type l4LabelPresence struct {
 	// long-lived connections keep a stable port and measure fine — so it is
 	// measured rather than assumed from the configuration.
 	replyLossFraction float64
+	// l7Flows counts the HTTP records the scoped HTTP query returned.
+	l7Flows int
 	// failed names the enrichment queries that errored. Their figures are absent
 	// from the edges, which without a warning reads as measured zero: no errors,
 	// no requests, nothing received.
@@ -327,7 +414,11 @@ type l4LabelPresence struct {
 }
 
 func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
-	flows, presence, err := s.getFlowsInternal(ctx, opts)
+	scopes, err := s.resolveScopes(ctx, rateWindowFor(opts.Since))
+	if err != nil {
+		return scopeCheckFailed("beyla"), nil
+	}
+	flows, presence, err := s.getFlowsInternal(ctx, opts, scopes)
 	if err != nil {
 		log.Printf("[beyla] Error fetching flows: %v", err)
 		return &FlowsResponse{Source: "beyla", Timestamp: time.Now(), Flows: []Flow{},
@@ -341,7 +432,7 @@ func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	// Only when dst.port is exported: without it replies carry no port, so they
 	// aggregate into a handful of stable counters and nothing is lost.
 	if presence.port {
-		presence.replyLossFraction = s.replyLossFraction(ctx, beylaWindow(opts.Since))
+		presence.replyLossFraction = s.replyLossFraction(ctx, rateWindowFor(opts.Since), scopes.l4Selector())
 	}
 
 	response := &FlowsResponse{Source: "beyla", Timestamp: time.Now(), Flows: flows}
@@ -354,11 +445,30 @@ func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	}
 	if len(presence.failed) > 0 && len(flows) > 0 {
 		failed := fmt.Sprintf("Beyla metrics are incomplete: %s could not be read from Prometheus, so those figures are missing from these edges rather than zero.", strings.Join(presence.failed, ", "))
+		if scopes.l7Unchecked {
+			failed += " " + uncheckedFamilyNote
+			response.WarningClusterScope = true
+		}
 		response.Warning = strings.TrimSpace(failed + " " + response.Warning)
 		// About figures on the edges shown, like the attribute warning it may
 		// join: shown beside them, and gone when they are filtered away.
 		response.WarningKind = WarningPartial
 	}
+	mismatch := ""
+	if len(flows) == 0 {
+		mismatch = s.clusterMismatch(ctx, opts, scopes)
+	} else if presence.l7Flows == 0 && !scopes.l7Unchecked {
+		// The network flows drew, but the cluster filter may have removed every
+		// HTTP series. Say so, or the edges read as carrying no requests.
+		if l7 := s.l7Mismatch(ctx, opts, scopes.l7); l7 != "" {
+			response.Warning = strings.TrimSpace("HTTP request rates, errors and latency are missing from these edges. " + l7 + " " + response.Warning)
+			response.WarningClusterScope = true
+			if response.WarningKind == "" {
+				response.WarningKind = WarningPartial
+			}
+		}
+	}
+	applyClusterScopeWarning(response, mismatch, scopes.l4.mixed || scopes.l7.mixed)
 	return response, nil
 }
 
@@ -435,18 +545,21 @@ func (p l4LabelPresence) warning(flowCount int) string {
 	return strings.Join(parts, " ")
 }
 
-func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions) ([]Flow, l4LabelPresence, error) {
-	l4Map, presence, err := s.queryL4(ctx, opts)
+func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions, sc beylaScopes) ([]Flow, l4LabelPresence, error) {
+	l4Map, presence, err := s.queryL4(ctx, opts, sc.l4Selector())
 	if err != nil {
 		return nil, presence, fmt.Errorf("L4 query: %w", err)
 	}
 
-	l7Flows, err := s.queryL7(ctx, opts)
-	if err != nil {
+	var l7Flows []Flow
+	if sc.l7Unchecked {
+		presence.failed = append(presence.failed, "HTTP request rates")
+	} else if l7Flows, err = s.queryL7(ctx, opts, sc.l7Selector()); err != nil {
 		log.Printf("[beyla] L7 query failed (continuing with L4 only): %v", err)
 		l7Flows = nil
 		presence.failed = append(presence.failed, "HTTP request rates")
 	}
+	presence.l7Flows = len(l7Flows)
 
 	// Fill in what came back before anything else reads BytesRecv: the L7 split
 	// below weights each caller by its share of the conversation, and half a
@@ -456,7 +569,7 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions) ([
 	// pair's edges. Where a pair has several edges the total is divided between
 	// them by their share of bytes sent — copying it onto each would count the same
 	// return traffic once per port.
-	received, err := s.queryReceivedBytes(ctx, opts)
+	received, err := s.queryReceivedBytes(ctx, opts, sc.l4Selector())
 	if err != nil {
 		log.Printf("[beyla] Received-bytes query failed (continuing without them): %v", err)
 		presence.failed = append(presence.failed, "received bytes")
@@ -523,8 +636,12 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions) ([
 	// could not name, in which case no bucket carries that port at all.
 	portedDsts := presence.portedDsts
 
-	latency, errorRates, detailFailed := s.queryL7Detail(ctx, opts)
-	presence.failed = append(presence.failed, detailFailed...)
+	var latency, errorRates l7Detail
+	if !sc.l7Unchecked {
+		var detailFailed []string
+		latency, errorRates, detailFailed = s.queryL7Detail(ctx, opts, sc.l7Selector())
+		presence.failed = append(presence.failed, detailFailed...)
+	}
 	perPort, perDst := l7ByPortAndDestination(l7Flows)
 	for key, edges := range byDstPort {
 		l7, ok := perPort[key]
@@ -607,7 +724,7 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions) ([
 	// Conversations Beyla could not orient are still conversations, and are drawn
 	// without an arrowhead rather than left out. Leaving them out takes the
 	// workload on the far end off the map with them — for DNS, that is coredns.
-	result = append(result, s.queryUnorientable(ctx, opts)...)
+	result = append(result, s.queryUnorientable(ctx, opts, sc.l4Selector())...)
 	return result, presence, nil
 }
 
@@ -737,37 +854,12 @@ const (
 	beylaL7DetailGroupBy = `k8s_namespace_name, k8s_owner_name, k8s_pod_name, server_port`
 )
 
-// rateWindow is the span every query in this source rates over, and the span the
-// byte totals are derived for. Both have to come from the same place: a rate is
-// per-second, so turning it back into a total means multiplying by exactly the
-// window that produced it.
-type rateWindow struct {
-	promQL  string
-	seconds float64
-}
-
-// beylaWindow turns the caller's requested span into a window these queries can
-// use. The traffic view offers 1m to 1h and the value arrives here; ignoring it
-// leaves the control inert, which is what it was.
-//
-// Anything shorter than a minute cannot be rated: Prometheus needs two samples in
-// the window, and a scrape interval of 15s makes a sub-minute span a coin toss. The
-// default matches the view's own default rather than being an arbitrary floor.
-func beylaWindow(since time.Duration) rateWindow {
-	if since < time.Minute {
-		return rateWindow{promQL: "5m", seconds: beylaRateWindowSeconds}
-	}
-	// Expressed in seconds so any duration the caller asks for is valid PromQL.
-	// time.Duration'''s own format is not: it renders an hour as "1h0m0s".
-	return rateWindow{promQL: fmt.Sprintf("%ds", int(since.Seconds())), seconds: since.Seconds()}
-}
-
 // beylaRateQuery builds `sum by (groupBy) (rate(metric{job=~...,extra}[window]))`. A
 // namespace filter has to become two OR'd selectors: PromQL cannot express
 // "src OR dst namespace matches" inside a single label selector.
-func beylaRateQuery(groupBy, metric, namespace, extra string, w rateWindow) string {
+func beylaRateQuery(groupBy, metric, sel, namespace, extra string, w rateWindow) string {
 	sum := func(more string) string {
-		return fmt.Sprintf(`sum by (%s) (rate(%s{%s%s%s}[%s]))`, groupBy, metric, beylaJobSelector(), extra, more, w.promQL)
+		return fmt.Sprintf(`sum by (%s) (rate(%s{%s%s%s}[%s]))`, groupBy, metric, sel, extra, more, w.promQL)
 	}
 	if namespace == "" {
 		return sum("")
@@ -780,46 +872,46 @@ func beylaRateQuery(groupBy, metric, namespace, extra string, w rateWindow) stri
 // Beyla exports the histogram's sum and count; their ratio over the same window is
 // the mean, which is what the flow list's Latency column shows. Hubble fills the
 // same field from packet timing.
-func beylaL7LatencyQuery(namespace string, w rateWindow) string {
+func beylaL7LatencyQuery(sel, namespace string, w rateWindow) string {
 	extra := ""
 	if namespace != "" {
 		extra = fmt.Sprintf(`, k8s_namespace_name=%q`, namespace)
 	}
 	group := beylaL7DetailGroupBy
 	return fmt.Sprintf(`sum by (%s) (rate(http_server_request_duration_seconds_sum{%s%s}[%s])) / sum by (%s) (rate(%s{%s%s}[%s]))`,
-		group, beylaJobSelector(), extra, w.promQL, group, beylaL7Metric, beylaJobSelector(), extra, w.promQL)
+		group, sel, extra, w.promQL, group, beylaL7Metric, sel, extra, w.promQL)
 }
 
 // beylaL7ErrorQuery is the 5xx share of requests, the same definition the Istio
 // source uses for ErrorRate and what the graph's "Errors (5xx)" legend entry means.
-func beylaL7ErrorQuery(namespace string, w rateWindow) string {
+func beylaL7ErrorQuery(sel, namespace string, w rateWindow) string {
 	extra := ""
 	if namespace != "" {
 		extra = fmt.Sprintf(`, k8s_namespace_name=%q`, namespace)
 	}
 	group := beylaL7DetailGroupBy
 	return fmt.Sprintf(`sum by (%s) (rate(%s{%s%s, http_response_status_code=~"5.."}[%s]))`,
-		group, beylaL7Metric, beylaJobSelector(), extra, w.promQL)
+		group, beylaL7Metric, sel, extra, w.promQL)
 }
 
 // beylaL7RateQuery builds the L7 query. Unlike beylaRateQuery, there's only
 // one namespace label to filter on (k8s_namespace_name) since the metric has
 // no source side.
-func beylaL7RateQuery(namespace string, w rateWindow) string {
+func beylaL7RateQuery(sel, namespace string, w rateWindow) string {
 	extra := ""
 	if namespace != "" {
 		extra = fmt.Sprintf(`, k8s_namespace_name=%q`, namespace)
 	}
-	return fmt.Sprintf(`sum by (%s) (rate(%s{%s%s}[%s]))`, beylaL7GroupBy, beylaL7Metric, beylaJobSelector(), extra, w.promQL)
+	return fmt.Sprintf(`sum by (%s) (rate(%s{%s%s}[%s]))`, beylaL7GroupBy, beylaL7Metric, sel, extra, w.promQL)
 }
 
-func (s *BeylaSource) queryL4(ctx context.Context, opts FlowOptions) (map[l4Key]*Flow, l4LabelPresence, error) {
-	query := beylaRateQuery(beylaL4GroupBy, s.flowMetricName(), opts.Namespace, beylaL4DirectionFilter, beylaWindow(opts.Since))
+func (s *BeylaSource) queryL4(ctx context.Context, opts FlowOptions, sel string) (map[l4Key]*Flow, l4LabelPresence, error) {
+	query := beylaRateQuery(beylaL4GroupBy, s.flowMetricName(), sel, opts.Namespace, beylaL4DirectionFilter, rateWindowFor(opts.Since))
 	result, err := s.query(ctx, query)
 	if err != nil {
 		return nil, l4LabelPresence{}, err
 	}
-	flows, presence := s.parseL4Flows(result, beylaWindow(opts.Since))
+	flows, presence := s.parseL4Flows(result, rateWindowFor(opts.Since))
 	presence.metric = s.flowMetricName()
 	return flows, presence, nil
 }
@@ -846,7 +938,7 @@ func (s *BeylaSource) queryL4(ctx context.Context, opts FlowOptions) (map[l4Key]
 // of inferring severity from the configuration. Returns 0 when nothing is missing
 // or the probe cannot be answered — this drives a warning, and a warning invented
 // from a failed query is worse than none.
-func (s *BeylaSource) replyLossFraction(ctx context.Context, w rateWindow) float64 {
+func (s *BeylaSource) replyLossFraction(ctx context.Context, w rateWindow, sel string) float64 {
 	metric := s.flowMetricName()
 	// Deliberately not scoped to the namespace filter. This measures whether the
 	// cluster's reply counters are measurable at all, which is a property of how
@@ -854,7 +946,7 @@ func (s *BeylaSource) replyLossFraction(ctx context.Context, w rateWindow) float
 	// scoping it would mean an `or` of two counts and no single value to read.
 	query := fmt.Sprintf(
 		`1 - ((count(rate(%s{%s, direction="response"}[%s]) > 0) or vector(0)) / (count(%s{%s, direction="response"}) or vector(1)))`,
-		metric, beylaJobSelector(), w.promQL, metric, beylaJobSelector())
+		metric, sel, w.promQL, metric, sel)
 	result, err := s.query(ctx, query)
 	if err != nil || result == nil || len(result.Series) == 0 || len(result.Series[0].DataPoints) == 0 {
 		return 0
@@ -868,15 +960,15 @@ func (s *BeylaSource) replyLossFraction(ctx context.Context, w rateWindow) float
 	return val
 }
 
-func (s *BeylaSource) queryReceivedBytes(ctx context.Context, opts FlowOptions) (map[flowKey]int64, error) {
+func (s *BeylaSource) queryReceivedBytes(ctx context.Context, opts FlowOptions, sel string) (map[flowKey]int64, error) {
 	// k8s_*_owner_type belongs in the group-by even though the key ignores it.
 	// Beyla reports a Service-routed conversation twice, once attributed to the
 	// workload and once to the Service, with identical values; without the label
 	// here PromQL's sum by adds the two together and every such edge reports
 	// double the bytes coming back.
 	groupBy := `k8s_src_owner_name, k8s_src_namespace, k8s_src_owner_type, k8s_dst_owner_name, k8s_dst_namespace, k8s_dst_owner_type`
-	w := beylaWindow(opts.Since)
-	query := beylaRateQuery(groupBy, s.flowMetricName(), opts.Namespace, `, direction="response"`, w)
+	w := rateWindowFor(opts.Since)
+	query := beylaRateQuery(groupBy, s.flowMetricName(), sel, opts.Namespace, `, direction="response"`, w)
 	result, err := s.query(ctx, query)
 	if err != nil {
 		// Received bytes are an enrichment; without them edges still draw.
@@ -932,10 +1024,10 @@ func (s *BeylaSource) queryReceivedBytes(ctx context.Context, opts FlowOptions) 
 // Ports are not carried. In a default install they are absent anyway, and where
 // they exist one side holds the client's ephemeral port, so there is no single
 // port that describes the conversation.
-func (s *BeylaSource) queryUnorientable(ctx context.Context, opts FlowOptions) []Flow {
+func (s *BeylaSource) queryUnorientable(ctx context.Context, opts FlowOptions, sel string) []Flow {
 	groupBy := `k8s_src_owner_name, k8s_src_namespace, k8s_src_owner_type, k8s_dst_owner_name, k8s_dst_namespace, k8s_dst_owner_type, transport`
-	w := beylaWindow(opts.Since)
-	query := beylaRateQuery(groupBy, s.flowMetricName(), opts.Namespace, beylaUnknownDirection, w)
+	w := rateWindowFor(opts.Since)
+	query := beylaRateQuery(groupBy, s.flowMetricName(), sel, opts.Namespace, beylaUnknownDirection, w)
 	result, err := s.query(ctx, query)
 	if err != nil || result == nil {
 		return nil
@@ -1083,7 +1175,7 @@ func serviceEnds(a attribution) int {
 // queryL7Detail reads mean latency and 5xx rate per destination and port. Both are
 // enrichments: a failure leaves the fields unset rather than blocking the edges,
 // and is named in failed so the gap is reported rather than read as zero.
-func (s *BeylaSource) queryL7Detail(ctx context.Context, opts FlowOptions) (latency, errors l7Detail, failed []string) {
+func (s *BeylaSource) queryL7Detail(ctx context.Context, opts FlowOptions, sel string) (latency, errors l7Detail, failed []string) {
 	read := func(query, what string, combine func(a, b float64) float64) l7Detail {
 		out := l7Detail{perPort: map[dstPortKey]float64{}, perDst: map[dstKey]float64{}}
 		result, err := s.query(ctx, query)
@@ -1132,9 +1224,9 @@ func (s *BeylaSource) queryL7Detail(ctx context.Context, opts FlowOptions) (late
 	// combined figure is the largest of them rather than their sum — an average of
 	// averages would need per-series request counts to weight it, and overstating
 	// the worst port is safer than understating it.
-	w := beylaWindow(opts.Since)
-	latency = read(beylaL7LatencyQuery(opts.Namespace, w), "latency", math.Max)
-	errors = read(beylaL7ErrorQuery(opts.Namespace, w), "5xx error rates", func(a, b float64) float64 { return a + b })
+	w := rateWindowFor(opts.Since)
+	latency = read(beylaL7LatencyQuery(sel, opts.Namespace, w), "latency", math.Max)
+	errors = read(beylaL7ErrorQuery(sel, opts.Namespace, w), "5xx error rates", func(a, b float64) float64 { return a + b })
 	return latency, errors, failed
 }
 
@@ -1157,8 +1249,8 @@ func (d l7Detail) forEdge(key dstPortKey, portless bool) (float64, bool) {
 	return v, ok
 }
 
-func (s *BeylaSource) queryL7(ctx context.Context, opts FlowOptions) ([]Flow, error) {
-	query := beylaL7RateQuery(opts.Namespace, beylaWindow(opts.Since))
+func (s *BeylaSource) queryL7(ctx context.Context, opts FlowOptions, sel string) ([]Flow, error) {
+	query := beylaL7RateQuery(sel, opts.Namespace, rateWindowFor(opts.Since))
 	result, err := s.query(ctx, query)
 	if err != nil {
 		return nil, err
@@ -1368,7 +1460,12 @@ func (s *BeylaSource) StreamFlows(ctx context.Context, opts FlowOptions) (<-chan
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				flows, _, err := s.getFlowsInternal(ctx, opts)
+				scopes, err := s.resolveScopes(ctx, rateWindowFor(opts.Since))
+				if err != nil {
+					log.Printf("[beyla] Not streaming flows: %v", err)
+					continue
+				}
+				flows, _, err := s.getFlowsInternal(ctx, opts, scopes)
 				if err != nil {
 					log.Printf("[beyla] Error fetching flows: %v", err)
 					continue

@@ -5,7 +5,7 @@ import (
 	"log"
 	"slices"
 	"sort"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 
@@ -86,11 +86,6 @@ type PermissionCache struct {
 	contextName func() string // current K8s context; entries with a different stamp are invisible
 }
 
-// cacheKeySep separates the username from the groups fingerprint in a cache
-// key. It is a control byte that cannot appear in a Kubernetes username or
-// group name, so a username's entries remain enumerable by splitting on it.
-const cacheKeySep = "\x00"
-
 // cacheKey builds the composite cache key for an identity. The verdicts stored
 // in a UserPermissions entry are computed by SubjectAccessReviews that run with
 // the username AND its groups, so an entry is only valid for that exact
@@ -98,25 +93,46 @@ const cacheKeySep = "\x00"
 // set inherit another identity's RBAC ceiling for the cache TTL. Groups are
 // canonicalized (sorted + deduped) so order and duplicates don't fork the key;
 // empty/nil groups is a valid, distinct identity (not a wildcard).
+//
+// Each name is length-prefixed rather than joined with a separator: names come
+// from identity-provider claims without any restriction on their bytes, so no
+// separator is guaranteed absent, and with one "alice" in group
+// "team<sep>prod" would key the same as "alice<sep>team" in group "prod".
 func cacheKey(username string, groups []string) string {
-	return username + cacheKeySep + groupsFingerprint(groups)
+	canonical := canonicalGroups(groups)
+	n := len(username) + 4
+	for _, g := range canonical {
+		n += len(g) + 4
+	}
+	b := make([]byte, 0, n)
+	b = appendKeyPart(b, username)
+	for _, g := range canonical {
+		b = appendKeyPart(b, g)
+	}
+	return string(b)
+}
+
+func appendKeyPart(b []byte, s string) []byte {
+	b = strconv.AppendInt(b, int64(len(s)), 10)
+	b = append(b, ':')
+	return append(b, s...)
 }
 
 // IdentityCacheKey is cacheKey for callers outside this package that cache
-// per-user SubjectAccessReview results.
+// per-user SubjectAccessReview results. The key is self-delimiting, so a
+// caller may append further fields to it.
 func IdentityCacheKey(username string, groups []string) string {
 	return cacheKey(username, groups)
 }
 
-// groupsFingerprint returns a deterministic fingerprint of a group set:
-// sorted, deduped, and joined. Empty-string elements are dropped (an empty
-// group is not a real principal), so nil, [], [""], and ["", ""] all
-// fingerprint to "" — one identity. The proxy path already trims empties, but
-// the OIDC path (internal/auth/oidc.go) does not; dropping them here makes the
-// no-groups collision explicit rather than accidental.
-func groupsFingerprint(groups []string) string {
+// canonicalGroups returns a group set sorted and deduped. Empty-string
+// elements are dropped (an empty group is not a real principal), so nil, [],
+// [""], and ["", ""] are all one identity. The proxy path already trims
+// empties, but the OIDC path (internal/auth/oidc.go) does not; dropping them
+// here makes the no-groups collision explicit rather than accidental.
+func canonicalGroups(groups []string) []string {
 	if len(groups) == 0 {
-		return ""
+		return nil
 	}
 	uniq := make([]string, 0, len(groups))
 	seen := make(map[string]struct{}, len(groups))
@@ -131,7 +147,7 @@ func groupsFingerprint(groups []string) string {
 		uniq = append(uniq, g)
 	}
 	sort.Strings(uniq)
-	return strings.Join(uniq, cacheKeySep)
+	return uniq
 }
 
 // NewPermissionCache creates a new permission cache with a 2-minute TTL.

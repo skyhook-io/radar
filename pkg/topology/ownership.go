@@ -68,9 +68,9 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 	// The GitOps managers whose member lists name the subject manage it,
 	// whether or not the graph draws the edge. A GitOps manager's edge counts
 	// only where the search couldn't read its list; a list it read says
-	// itself. The graph draws a HelmRelease's edges from its members' labels,
-	// and an Application's or Kustomization's from the same status list, for
-	// the workload and network kinds it draws.
+	// itself. The graph draws a manager's edges from the same status list, for
+	// the workload and network kinds it draws, and a HelmRelease's that
+	// records none from its members' origin labels.
 	cov.Manager = managerAnswer(v.Manager(subject))
 	managers := v.RecordingManagers(subject)
 	if len(managers.Unreadable)+len(managers.Remote)+len(managers.Gaps) > 0 {
@@ -120,8 +120,8 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 			return
 		}
 		// With no list to read, the graph's edges are all there is: by the
-		// members' labels for a HelmRelease, from the same status list for an
-		// Application or Kustomization.
+		// members' origin labels for a HelmRelease that records none, from the
+		// same status list otherwise.
 	}
 	gitops := ownership.IsRecordingManager(subject.GroupKind())
 	listed := map[resourceid.Ref]bool{}
@@ -411,6 +411,22 @@ func (c *ControllerChain) Readable(readable func(ResourceRef) bool) *ControllerC
 	for i := 1; i < len(c.Refs); i++ {
 		if !readable(c.Refs[i]) {
 			return &ControllerChain{Refs: c.Refs[:i], Stop: "withheld"}
+		}
+	}
+	return c
+}
+
+// ToManager is c cut at the first GitOps manager above the resource
+// (ownership.IsRecordingManager), which settles it: past one lies a parent
+// such as an ApplicationSet, shared by apps that are separate. A chain with
+// no GitOps manager above the resource is c.
+func (c *ControllerChain) ToManager() *ControllerChain {
+	if c == nil {
+		return nil
+	}
+	for i := 1; i < len(c.Refs); i++ {
+		if ownership.IsRecordingManager(refIdentity(c.Refs[i]).GroupKind()) {
+			return &ControllerChain{Refs: c.Refs[:i+1]}
 		}
 	}
 	return c

@@ -880,3 +880,34 @@ func TestUpdateCheckCarriesTheProductHuntLaunch(t *testing.T) {
 		t.Error("a launch the update check turned off should not apply")
 	}
 }
+
+func TestUpdateCheckSaysHowADesktopInstallUpdates(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	SetCurrent("1.2.0")
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		SetManualUpdate("")
+		SetDisabled(false)
+		resetUpdateCache()
+	})
+
+	for _, how := range []string{"", "appimage", "package", "download"} {
+		SetManualUpdate(how)
+		resetUpdateCache()
+		SetDisabled(false)
+		if got := CheckForUpdate(context.Background()); got.ManualUpdate != how || !got.UpdateAvail {
+			t.Errorf("manual update %q: lookup returned %q (update available %v)", how, got.ManualUpdate, got.UpdateAvail)
+		}
+		SetDisabled(true)
+		if got := CheckForUpdate(context.Background()); got.ManualUpdate != how {
+			t.Errorf("manual update %q: lookup with checks off returned %q", how, got.ManualUpdate)
+		}
+	}
+}

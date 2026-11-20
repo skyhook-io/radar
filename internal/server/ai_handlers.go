@@ -49,11 +49,13 @@ import (
 	"github.com/skyhook-io/radar/internal/auditcontext"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/kueuevisibility"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	bpaudit "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/executioninsight"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/policyreports"
@@ -486,10 +488,22 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
 		return
 	}
-	s.writeJSON(w, map[string]any{
+	response := map[string]any{
 		"resource":        minified,
 		"resourceContext": rc,
-	})
+	}
+	if node, ok := obj.(*corev1.Node); ok && s.canRead(r, "", "nodes", "", "list") {
+		if provider := issues.NewCacheProvider(); provider != nil {
+			if report := provider.NodeCertificateReport(node.Name); report != nil && report.UID == string(node.UID) {
+				response["nodeCertificateReport"] = report
+			}
+		}
+	}
+	if readCache() != cache {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+		return
+	}
+	s.writeJSON(w, response)
 }
 
 // fetchAIResource resolves the resource from the typed cache or dynamic cache.
@@ -577,15 +591,19 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	issueSum := computeIssueSummaryForResource(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), s.issueSubjectAccess(r), s.issueEvidenceAccess(r), canonicalGroup, canonicalKind, namespace, name)
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
+	scheduling := schedulinginsight.ForResource(obj, resourcecontext.TierBasic)
+	kueuevisibility.Attach(r.Context(), scheduling, obj)
+
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          resourcecontext.TierBasic,
-		AccessChecker: s.newRequestScopedChecker(r),
-		IssueSummary:  issueSum,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
-		Execution:     executioninsight.ForResource(obj, resourcecontext.TierBasic),
-		Serving:       servinginsight.ForResource(obj),
+		RelatedFindings: issues.CachedStrimziEvidence(obj, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }),
+		Reflections:     k8s.ReflectionLookup{Cache: cache},
+		Tier:            resourcecontext.TierBasic,
+		AccessChecker:   s.newRequestScopedChecker(r),
+		IssueSummary:    issueSum,
+		AuditSummary:    auditSum,
+		Scheduling:      scheduling,
+		Execution:       executioninsight.ForResource(obj, resourcecontext.TierBasic),
+		Serving:         servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
@@ -615,59 +633,25 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		families: s.readablePolicyReportFamilies(r, namespace),
 	}
 
-	if topo, index, prov, dyn, ok := s.topologyForContext(); ok {
-		opts.RelIndex = index
-		opts.Topology = topo
-		opts.Provider = prov
-		opts.DynamicProv = dyn
-		// Relationships are computed inside Build via GetRelationshipsWithObject,
-		// which applies the same KindForGVK pseudo-kind remap we used to do
-		// here. Pre-computing in the handler doubled the work whenever the
-		// lookup returned nil (no edges): handler call returned nil, Build's
-		// `rel == nil && opts.Topology != nil` fallback re-ran the identical
-		// scan. Leaving opts.Relationships unset is the canonical path.
+	access := func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }
+	traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+	opts.Relationships, _, opts.RelationshipExtras = k8s.AnswerResourceContextRelationships(cache, obj, access, traverse)
+	if cache != nil {
+		opts.Provider = k8s.NewTopologyResourceProvider(cache)
+		opts.DynamicProv = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
+	}
+	opts.OpenTelemetryAutoInstrumentation, opts.OpenTelemetryAutoInstrumentationUnavailable = k8s.OpenTelemetryAutoInstrumentationForObject(obj, func(group, resource, namespace, verb string) bool {
+		return (namespace == "" || len(s.getUserNamespaces(r, []string{namespace})) > 0) && s.canRead(r, group, resource, namespace, verb)
+	})
+	if children := k8s.OperatorChildrenForObject(obj, func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) }); children != nil {
+		opts.Children = children.Context
+		opts.ChildrenUnavailable = children.Unavailable != ""
 	}
 	opts.Ownership = func(rel *topology.Relationships, fetched ownership.Observation) {
 		k8s.AnswerOwner(rel, fetched, func(c *ownership.Catalog) ownership.Access { return s.agentOwnershipAccess(r, c) })
 	}
 
 	return resourcecontext.Build(r.Context(), obj, opts)
-}
-
-// topologyForContext uses the complete relationship graph the broadcaster
-// already keeps for drawer lookups, so resource context never holds a second
-// copy of the cluster. The resource context checker gates each target,
-// including other namespaces. Before that graph exists it builds one through
-// the memo. Returns ok=false when the cache is not available.
-func (s *Server) topologyForContext() (*topology.Topology, *topology.RelationshipsIndex, topology.ResourceProvider, topology.DynamicProvider, bool) {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil, nil, nil, nil, false
-	}
-	provider := k8s.NewTopologyResourceProvider(cache)
-	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-	if topo, index := s.RelationshipTopology(); topo != nil {
-		return topo, index, provider, dyn, true
-	}
-	opts := topology.RelationshipBuildOptions()
-	opts.IncludeSecrets = true
-
-	topo, index, err := s.topoMemo.GetWithIndexScoped(cache.Generation(), opts, func() (*topology.Topology, error) {
-		return topology.NewBuilder(provider).WithDynamic(dyn).Build(opts)
-	})
-	if err != nil || topo == nil {
-		return nil, nil, nil, nil, false
-	}
-	return topo, index, provider, dyn, true
-}
-
-// RelationshipTopology returns the broadcaster's full relationship graph and
-// its index, or nil before it has been built.
-func (s *Server) RelationshipTopology() (*topology.Topology, *topology.RelationshipsIndex) {
-	if s == nil || s.broadcaster == nil {
-		return nil, nil
-	}
-	return s.broadcaster.GetCachedTopologyWithIndex()
 }
 
 // computeIssueSummaryForResource rolls up per-resource issue-composer rows
@@ -711,7 +695,9 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 	// surfaces the grouped issues its pods are evidence for, and on a pod beyond
 	// the inline-Members cap too. The old flat-by-exact-resource match missed
 	// both (a Deployment matched no Kind=Pod evidence rows → empty summary).
+	var unchecked []issuesapi.UncheckedSource
 	matched := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		OnUnchecked:            func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
 		SkipPodTemplateContext: !includeFacts,
 		Namespaces:             namespaces,
 		CanReadClusterScoped:   canReadClusterScoped,
@@ -720,6 +706,9 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		CanReadEvidence:        canReadEvidence,
 	}, group, kind, namespace, name)
 	if len(matched) == 0 {
+		if len(unchecked) > 0 {
+			return &resourcecontext.IssueSummary{Unchecked: unchecked}, nil
+		}
 		return nil, nil
 	}
 	bySource := make(map[string]int, len(matched))
@@ -745,6 +734,7 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		TopReason:       topReason,
 		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
+		Unchecked:       unchecked,
 	}, matched
 }
 

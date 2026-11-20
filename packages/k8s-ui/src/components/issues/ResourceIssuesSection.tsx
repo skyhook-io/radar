@@ -10,10 +10,12 @@ export function ResourceIssuesSection({
   subjectResource,
   compact,
   renderDetailSection,
+  heading = "Operational issues",
 }: {
   compact?: boolean
   renderDetailSection?: (ctx: IssueRowSlotContext) => ReactNode
   issues: Issue[] | undefined
+  heading?: string
   /** When provided, related resources in a causal link become clickable. */
   onResourceClick?: (ref: IssueResourceRef) => void
   /** The resource this section is embedded under. When an issue's subject IS
@@ -31,7 +33,7 @@ export function ResourceIssuesSection({
     <section className="space-y-2">
       <div className="flex items-center gap-2 px-1 text-xs font-semibold uppercase tracking-wide text-theme-text-secondary">
         <AlertTriangle className="h-4 w-4 text-theme-text-tertiary" aria-hidden />
-        <span>Operational issues ({sorted.length})</span>
+        <span>{heading} ({sorted.length})</span>
       </div>
       <ol className="flex flex-col gap-1.5">
         {sorted.map((issue) => {
@@ -55,11 +57,15 @@ export function ResourceIssuesSection({
 }
 
 // Identity match tolerant of singular/plural + casing on kind (the subject ref
-// carries the wire kind, the host typically passes the plural API name) — group
-// is deliberately ignored: a per-resource issue feed is already scoped to one
-// resource, and kind+namespace+name uniquely identifies it there.
+// carries the wire kind, the host typically passes the plural API name). A
+// match hides the card's kind and name, and a resource's feed also holds issues
+// about its owners, so the API group must match exactly: a missing group is the
+// core group. An issue that carries no group for a non-core kind (an older
+// Radar) then keeps its name, which repeats the header rather than hiding
+// another resource.
 export function sameResource(a: IssueResourceRef, b: IssueResourceRef): boolean {
   return (
+    (a.group ?? '') === (b.group ?? '') &&
     a.name === b.name &&
     (a.namespace ?? '') === (b.namespace ?? '') &&
     kindToPluralWithGroup(a.kind, a.group ?? '').toLowerCase() ===

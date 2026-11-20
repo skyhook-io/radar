@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/skyhook-io/radar/internal/desktopenv"
 	"github.com/skyhook-io/radar/internal/version"
 )
 
@@ -36,12 +37,12 @@ func (s *Server) handleDesktopOpenURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	openSystemBrowser(req.URL)
+	OpenSystemBrowser(req.URL)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// openSystemBrowser opens a URL in the default browser using OS-specific commands.
-func openSystemBrowser(url string) {
+// OpenSystemBrowser opens a URL in the default browser using OS-specific commands.
+func OpenSystemBrowser(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
@@ -54,6 +55,7 @@ func openSystemBrowser(url string) {
 		log.Printf("[desktop] Cannot open browser on %s: %s", runtime.GOOS, url)
 		return
 	}
+	cmd.Dir = desktopenv.ChildDir()
 	if err := cmd.Start(); err != nil {
 		log.Printf("[desktop] Failed to open URL: %v", err)
 	}

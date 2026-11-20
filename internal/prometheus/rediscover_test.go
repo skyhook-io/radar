@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	listerscorev1 "k8s.io/client-go/listers/core/v1"
+	"k8s.io/client-go/rest"
 	toolscache "k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -502,6 +503,30 @@ func TestCachedServicesDeclinesPartialView(t *testing.T) {
 	}
 	if _, ok := (&Client{k8sClient: fake.NewClientset()}).cachedServices(); ok {
 		t.Fatal("a cache built from another cluster connection must not be used")
+	}
+}
+
+// TestCachedServicesUsesCacheBuiltFromInformerClient pins that the cache,
+// which production builds from the informer clientset, still counts as this
+// client's cluster when the client holds the request clientset.
+func TestCachedServicesUsesCacheBuiltFromInformerClient(t *testing.T) {
+	request, err := kubernetes.NewForConfig(&rest.Config{Host: "http://localhost:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	informer := fake.NewClientset(promService("monitoring", "prometheus"))
+	t.Cleanup(k8s.SetTestInformerClient(request, informer))
+	if err := k8s.InitTestResourceCache(informer); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+
+	c := &Client{k8sClient: request}
+	if c.cachedServiceLister() == nil {
+		t.Error("cachedServiceLister() = nil for a cache built from this connection's informer client")
+	}
+	if cached, ok := c.cachedServices(); !ok || len(cached) != 1 {
+		t.Errorf("cachedServices() = %v, %v; want the cached Service", cached, ok)
 	}
 }
 

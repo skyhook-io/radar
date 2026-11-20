@@ -1006,3 +1006,58 @@ func antiAffinityTo(app string) *corev1.Affinity {
 		}},
 	}}
 }
+
+// A pod deliberately held by a scheduling gate must not age into a generic
+// high-severity "Pending" problem, while an ungated aged Pending pod
+// still does, and a gated pod that is ALSO stuck terminating still surfaces its
+// terminating row (the guarantee is "a gate alone raises no Pending warning",
+// not "gated pods emit no row").
+func TestDetectProblems_SchedulingGatedPendingAging(t *testing.T) {
+	defer ResetTestState()
+	oldCreate := metav1.NewTime(time.Now().Add(-30 * time.Minute))
+	oldDelete := metav1.NewTime(time.Now().Add(-30 * time.Minute))
+
+	gated := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "gated", Namespace: "prod", CreationTimestamp: oldCreate},
+		Spec:       corev1.PodSpec{SchedulingGates: []corev1.PodSchedulingGate{{Name: "kueue.x-k8s.io/admission"}}},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	ungated := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "ungated", Namespace: "prod", CreationTimestamp: oldCreate},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending},
+	}
+	gatedTerminating := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gated-term", Namespace: "prod",
+			CreationTimestamp: oldCreate,
+			DeletionTimestamp: &oldDelete,
+			Finalizers:        []string{"example.com/cleanup"},
+		},
+		Spec:   corev1.PodSpec{SchedulingGates: []corev1.PodSchedulingGate{{Name: "kueue.x-k8s.io/admission"}}},
+		Status: corev1.PodStatus{Phase: corev1.PodPending},
+	}
+
+	if err := InitTestResourceCache(fake.NewClientset(gated, ungated, gatedTerminating)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectProblems(GetResourceCache(), "prod")
+
+	hasRowFor := func(name string) bool {
+		for _, p := range problems {
+			if p.Kind == "Pod" && p.Name == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	if hasRowFor("gated") {
+		t.Errorf("a scheduling-gated Pending pod must not raise a Pending-aging row: %+v", problems)
+	}
+	if !findProblem(problems, "Pod", "prod", "ungated", "Pending") {
+		t.Errorf("an ungated Pending pod past the threshold must still raise a Pending row: %+v", problems)
+	}
+	if !hasRowFor("gated-term") {
+		t.Errorf("a gated pod stuck terminating must still raise its terminating row: %+v", problems)
+	}
+}

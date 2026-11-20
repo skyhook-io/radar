@@ -780,6 +780,29 @@ func TestDetectManualDriftWithoutAutoSync(t *testing.T) {
 	}
 }
 
+func TestManualDriftGuidanceDoesNotInferWhoInitiatesSync(t *testing.T) {
+	for _, explicitFalse := range []bool{false, true} {
+		t.Run(fmt.Sprint("explicit disabled: ", explicitFalse), func(t *testing.T) {
+			root := stuckLoopApp(t, func(u *unstructured.Unstructured) {
+				unstructured.RemoveNestedField(u.Object, "spec", "syncPolicy", "automated")
+				if explicitFalse {
+					_ = unstructured.SetNestedField(u.Object, false, "spec", "syncPolicy", "automated", "enabled")
+				}
+				_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{
+					"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet", "name": "clusters", "uid": "parent", "controller": true,
+				}}, "metadata", "ownerReferences")
+			})
+			if describeArgoAutoSync(root) != "Manual" {
+				t.Fatal("auto-sync wire value changed")
+			}
+			issue := detectManualDriftWithoutAutoSync(root, "")
+			if issue == nil || issue.Message != "Application is OutOfSync and auto-sync is disabled." || issue.Action != "Review the desired changes and sync policy before deciding whether to sync." {
+				t.Fatalf("unexpected guidance: %+v", issue)
+			}
+		})
+	}
+}
+
 func TestBuildIssuesArgoRollbackState(t *testing.T) {
 	ctx := context.Background()
 	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
@@ -838,7 +861,7 @@ func TestBuildIssuesArgoRollbackState(t *testing.T) {
 		{
 			name: "multi-source result names every revision", reason: "RolledBack",
 			message: "Last rollback deployed rev-a, rev-b by alice.",
-			cause:   "Auto-sync is off, so Argo won't deploy a new revision on its own. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current revisions and can undo the rollback.",
+			cause:   "Auto-sync is off. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current revisions and can undo the rollback.",
 			mutate: func(u *unstructured.Unstructured) {
 				unstructured.RemoveNestedField(u.Object, "status", "operationState", "syncResult", "revision")
 				_ = unstructured.SetNestedStringSlice(u.Object, []string{"rev-a", "rev-b"}, "status", "operationState", "syncResult", "revisions")
@@ -929,13 +952,13 @@ func TestBuildIssuesArgoRollbackState(t *testing.T) {
 			if tc.reason == "RolledBack" {
 				wantCause := tc.cause
 				if wantCause == "" {
-					wantCause = "Auto-sync is off, so Argo won't deploy a new revision on its own. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current revision and can undo the rollback."
+					wantCause = "Auto-sync is off. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current revision and can undo the rollback."
 				}
 				if issue.Cause != wantCause {
 					t.Fatalf("cause = %q, want %q", issue.Cause, wantCause)
 				}
 			}
-			if tc.reason == "ManualDrift" && (issue.Severity != SeverityWarning || issue.Message != "Application is OutOfSync and auto-sync is disabled — nothing will reconcile until you click Sync." || issue.Action != "Open Changes to review the per-resource diff, then click Sync to apply. Enable auto-sync if you want this to fix itself going forward.") {
+			if tc.reason == "ManualDrift" && (issue.Severity != SeverityWarning || issue.Message != "Application is OutOfSync and auto-sync is disabled." || issue.Action != "Review the desired changes and sync policy before deciding whether to sync.") {
 				t.Fatalf("manual drift changed: %+v", issue)
 			}
 		})
@@ -2332,7 +2355,7 @@ func TestBuildIssuesArgoDriftAdviceRespectsSyncHazards(t *testing.T) {
 		{"manual, shared", "ManualDrift", "also tracked by Application payments", nil, map[string]any{"conditions": shared}},
 		{"self-heal off, shared", "SelfHealDisabled", "also tracked by Application payments", map[string]any{"prune": true}, map[string]any{"conditions": shared}},
 		{"manual, empty render", "ManualDrift", "The render includes none of the resources this Application manages. A sync with Prune enabled could delete all of them. Prune=false blocks direct Argo pruning; Prune=confirm requires confirmation. Pruning a rendered Namespace deletes its contents, regardless of their Prune options.", nil, map[string]any{"resources": prunedResources()}},
-		{"manual, plain drift", "ManualDrift", "click Sync", nil, map[string]any{}},
+		{"manual, plain drift", "ManualDrift", "before deciding whether to sync", nil, map[string]any{}},
 	} {
 		status := map[string]any{"sync": map[string]any{"status": "OutOfSync"}}
 		for k, v := range tc.status {
@@ -2354,14 +2377,14 @@ func TestBuildIssuesArgoDriftAdviceRespectsSyncHazards(t *testing.T) {
 		if !strings.Contains(drift.Action, tc.wantAction) {
 			t.Errorf("%s: action %q, want %q", tc.name, drift.Action, tc.wantAction)
 		}
-		if tc.wantAction == "click Sync" {
+		if tc.wantAction == "before deciding whether to sync" {
 			if drift.Hazard != "" {
 				t.Errorf("%s: plain drift must not carry a hazard: %+v", tc.name, drift)
 			}
 		} else if drift.Hazard != drift.Action {
 			t.Errorf("%s: resource rows need the same hazard as the drift advice: %+v", tc.name, drift)
 		}
-		if tc.wantAction != "click Sync" && (strings.Contains(drift.Action, "click Sync") || strings.Contains(drift.Message, "click Sync") || strings.Contains(drift.Message, "until you sync")) {
+		if tc.wantAction != "before deciding whether to sync" && (strings.Contains(drift.Action, "click Sync") || strings.Contains(drift.Message, "click Sync") || strings.Contains(drift.Message, "until you sync")) {
 			t.Errorf("%s: sync advice despite the hazard: %+v", tc.name, drift)
 		}
 	}
@@ -2855,4 +2878,171 @@ func TestDegradedRollupQualifiesIncompleteTree(t *testing.T) {
 			t.Fatalf("partial=%t issues=%+v", partial, issues)
 		}
 	}
+}
+
+// missingNamespaceApp builds a failed Argo Application whose operation failed
+// because a namespace is missing, with the CreateNamespace sync option set or
+// not and deploying to this cluster or a remote one.
+func missingNamespaceApp(createNamespaceSet, remote bool) *unstructured.Unstructured {
+	root := argoApp(map[string]any{
+		"operationState": map[string]any{
+			"phase":   "Failed",
+			"message": `one or more objects failed to apply, reason: namespaces "observability" not found (retried 5 times).`,
+		},
+	})
+	if createNamespaceSet {
+		_ = unstructured.SetNestedStringSlice(root.Object, []string{"CreateNamespace=true"}, "spec", "syncPolicy", "syncOptions")
+	}
+	if remote {
+		_ = unstructured.SetNestedField(root.Object, "https://remote.example.com", "spec", "destination", "server")
+	}
+	return root
+}
+
+func operationIssue(t *testing.T, issues []Issue) Issue {
+	t.Helper()
+	for _, iss := range issues {
+		if iss.Scope == ScopeOperation {
+			return iss
+		}
+	}
+	t.Fatalf("no operation-scope issue in %+v", issues)
+	return Issue{}
+}
+
+const addOptionAdvice = "add the CreateNamespace=true sync option"
+const optionInSyncOptionsAdvice = "CreateNamespace=true in the Application's syncOptions"
+
+// TestBuildIssuesCreateNamespaceAlreadySet pins the operation-failed branch:
+// when the Application already sets CreateNamespace=true, Radar must not
+// re-suggest it, in either the local Cause or the remote Action.
+func TestBuildIssuesCreateNamespaceAlreadySet(t *testing.T) {
+	t.Run("unset local keeps the add-the-option advice (regression guard)", func(t *testing.T) {
+		got := operationIssue(t, buildIssues(missingNamespaceApp(false, false), nil, "argocd", nil))
+		if !strings.Contains(got.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("unset Cause should still advise enabling the option: %q", got.Cause)
+		}
+		if got.Remediation == nil || got.Remediation.Kind != RemediationCreateNamespace {
+			t.Errorf("unset local should keep the one-click remediation, got %+v", got.Remediation)
+		}
+	})
+
+	t.Run("set local drops the suggestion but keeps the one-click fix", func(t *testing.T) {
+		got := operationIssue(t, buildIssues(missingNamespaceApp(true, false), nil, "argocd", nil))
+		if strings.Contains(got.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("set Cause must not re-suggest the option: %q", got.Cause)
+		}
+		if !strings.Contains(got.Cause, "already sets CreateNamespace=true") {
+			t.Errorf("set Cause should say the option is already set: %q", got.Cause)
+		}
+		if got.Remediation == nil || got.Remediation.Kind != RemediationCreateNamespace {
+			t.Errorf("set local should keep the one-click remediation, got %+v", got.Remediation)
+		}
+	})
+
+	t.Run("set remote drops the suggestion and strips the local fix", func(t *testing.T) {
+		got := operationIssue(t, buildIssues(missingNamespaceApp(true, true), nil, "argocd", nil))
+		if strings.Contains(got.Action, addOptionAdvice) {
+			t.Errorf("set remote Action must not re-suggest the option: %q", got.Action)
+		}
+		if !strings.Contains(got.Action, "already sets CreateNamespace=true") {
+			t.Errorf("set remote Action should say the option is already set: %q", got.Action)
+		}
+		if got.Remediation != nil {
+			t.Errorf("remote remediation should be stripped, got %+v", got.Remediation)
+		}
+	})
+
+	t.Run("unset remote keeps the add-the-option action", func(t *testing.T) {
+		got := operationIssue(t, buildIssues(missingNamespaceApp(false, true), nil, "argocd", nil))
+		if !strings.Contains(got.Action, addOptionAdvice) {
+			t.Errorf("unset remote Action should offer the option: %q", got.Action)
+		}
+	})
+
+	// A pruning hazard clears the one-click fix; that must hold even when
+	// CreateNamespace=true is set, so a retrying sync can't prune everything.
+	t.Run("sync hazard still wins over the one-click fix", func(t *testing.T) {
+		root := missingNamespaceApp(true, false)
+		_ = unstructured.SetNestedField(root.Object, "OutOfSync", "status", "sync", "status")
+		_ = unstructured.SetNestedSlice(root.Object, []any{
+			map[string]any{"kind": "ConfigMap", "name": "a", "requiresPruning": true},
+		}, "status", "resources")
+		got := operationIssue(t, buildIssues(root, nil, "argocd", nil))
+		if got.Hazard == "" {
+			t.Fatalf("expected a sync hazard to be set, got %+v", got)
+		}
+		if got.Remediation != nil {
+			t.Errorf("hazard should keep the one-click fix cleared, got %+v", got.Remediation)
+		}
+	})
+}
+
+// TestArgoApplicationConditionsCreateNamespaceAlreadySet pins the SyncError
+// condition branch (the third call site).
+func TestArgoApplicationConditionsCreateNamespaceAlreadySet(t *testing.T) {
+	appWithSyncError := func(createNamespaceSet, remote bool) *unstructured.Unstructured {
+		root := argoApp(map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "SyncError", "message": `namespaces "observability" not found`},
+			},
+		})
+		if createNamespaceSet {
+			_ = unstructured.SetNestedStringSlice(root.Object, []string{"CreateNamespace=true"}, "spec", "syncPolicy", "syncOptions")
+		}
+		if remote {
+			_ = unstructured.SetNestedField(root.Object, "https://remote.example.com", "spec", "destination", "server")
+		}
+		return root
+	}
+	syncErrorIssue := func(t *testing.T, issues []Issue) Issue {
+		t.Helper()
+		for _, iss := range issues {
+			if iss.Reason == "SyncError" {
+				return iss
+			}
+		}
+		t.Fatalf("no SyncError issue in %+v", issues)
+		return Issue{}
+	}
+
+	t.Run("set local drops the suggestion, keeps the fix", func(t *testing.T) {
+		got := syncErrorIssue(t, argoApplicationConditions(appWithSyncError(true, false), ""))
+		if strings.Contains(got.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("set Cause must not re-suggest the option: %q", got.Cause)
+		}
+		if got.Remediation == nil || got.Remediation.Kind != RemediationCreateNamespace {
+			t.Errorf("set local should keep the one-click remediation, got %+v", got.Remediation)
+		}
+	})
+
+	t.Run("set remote drops the suggestion and the fix", func(t *testing.T) {
+		got := syncErrorIssue(t, argoApplicationConditions(appWithSyncError(true, true), ""))
+		if strings.Contains(got.Action, addOptionAdvice) {
+			t.Errorf("set remote Action must not re-suggest the option: %q", got.Action)
+		}
+		if !strings.Contains(got.Action, "already sets CreateNamespace=true") {
+			t.Errorf("set remote Action should give real guidance that the option is set, not empty: %q", got.Action)
+		}
+		if strings.Contains(got.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("set remote Cause must not re-suggest the option: %q", got.Cause)
+		}
+		if got.Remediation != nil {
+			t.Errorf("remote remediation should be stripped, got %+v", got.Remediation)
+		}
+	})
+
+	t.Run("unset local keeps the suggestion (regression guard)", func(t *testing.T) {
+		got := syncErrorIssue(t, argoApplicationConditions(appWithSyncError(false, false), ""))
+		if !strings.Contains(got.Cause, optionInSyncOptionsAdvice) {
+			t.Errorf("unset Cause should still advise enabling the option: %q", got.Cause)
+		}
+	})
+
+	t.Run("unset remote keeps the add-the-option action", func(t *testing.T) {
+		got := syncErrorIssue(t, argoApplicationConditions(appWithSyncError(false, true), ""))
+		if !strings.Contains(got.Action, addOptionAdvice) {
+			t.Errorf("unset remote Action should offer the option: %q", got.Action)
+		}
+	})
 }

@@ -459,7 +459,7 @@ func TestParse_CaseDropsBadItemsIndividually(t *testing.T) {
 		`{"ref":"` + ref + `","role":"verdict","claim":"a"},` +
 		`{"ref":"` + ref + `","role":"demoted","claim":"","subject":{"kind":"Pod","name":"p","name":"` + strings.Repeat("n", maxIdentifierRunes+1) + `"}},` +
 		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"name":"p"}},` +
-		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"kind":"Pod","name":"p","stream":"older"}},` +
+		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"kind":"Pod","name":"p","group":7}},` +
 		`{"ref":"` + ref + `","role":"context","claim":"fine"}` +
 		`],"ruled_out":[{"hypothesis":"","evidence_index":5},{"hypothesis":"h","evidence_index":-1},{"hypothesis":"h"},"not-an-object",{"hypothesis":"kept","evidence_index":5}]`)
 	request := Parse(text).Citations.theCase
@@ -622,6 +622,21 @@ func TestParseCaseRequestReportsAMalformedEvidenceEnvelope(t *testing.T) {
 
 // A fence that carries no verdict field is the agent quoting something; the
 // answer is prose and keeps it, and nothing in it is handed back as a field.
+// The prompt calls it "the fenced ```json verdict block"; a model that writes
+// that label into the fence still wrote the verdict.
+func TestParse_FenceLabelAfterJSON(t *testing.T) {
+	for _, open := range []string{"```json verdict\n", "```json\tverdict block\n", "```json \n", "```json "} {
+		d := Parse("Story.\n\n" + open + `{"summary": "s", "root_cause": "x", "nested": {"a": 1}}` + "\n```").Verdict
+		if d.RootCause != "x" || d.Report != "Story." {
+			t.Errorf("fence %q: root cause %q report %q", open, d.RootCause, d.Report)
+		}
+	}
+	// No space after json is another language, not a label.
+	if d := Parse("```jsonc\n{\"root_cause\": \"x\"}\n```").Verdict; d.RootCause != "" {
+		t.Errorf("```jsonc read as the verdict: %q", d.RootCause)
+	}
+}
+
 func TestParse_AnswerWithOnlyAQuotedFenceIsProse(t *testing.T) {
 	text := "Set it like this:\n\n```json\n{\"spec\": {\"replicas\": 2}}\n```\n\nThen wait."
 	p := Parse(text)
@@ -696,5 +711,129 @@ func TestParse_TextFieldsAreKeptWhole(t *testing.T) {
 		`"evidence":[{"ref":"` + ref + `","role":"context","claim":"c","gap":"` + long + `"}],"ruled_out":[{"hypothesis":"` + long + `","evidence_index":0}]`))
 	if p.Verdict.Unresolved[0] != long || p.Verdict.Steps[0].Precondition != long || p.Citations.theCase.items[0].gap != long || p.Citations.theCase.ruledOut[0].Hypothesis != long {
 		t.Fatal("a text field was cut or dropped")
+	}
+}
+
+// stream only tells a container's current and previous logs apart. Agents
+// put evidence words there (stream "resource"); that slip must not cost the
+// citation, and an evidence word is kept as the observation it meant.
+func TestParse_StreamSlipKeepsTheCitation(t *testing.T) {
+	ref := testRef('a', 'b')
+	cases := []struct {
+		name, subject, stream, observation string
+	}{
+		{"evidence word moves to observation", `"stream":"resource"`, "", "resource"},
+		{"evidence word, any case", `"stream":" Events "`, "", "events"},
+		{"metrics chart word", `"stream":"metrics:cpu"`, "", "metrics:cpu"},
+		{"stated observation wins", `"stream":"resource","observation":"logs"`, "", "logs"},
+		{"unknown word is dropped", `"stream":"bogus"`, "", ""},
+		{"unknown word keeps the observation", `"stream":"older","observation":"logs"`, "", "logs"},
+		{"current is kept", `"stream":"current","observation":"logs"`, "current", "logs"},
+		{"previous is kept", `"stream":"previous"`, "previous", ""},
+		{"stream word, any case", `"stream":" Current "`, "current", ""},
+		{"no stream", `"observation":"events"`, "", "events"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			text := verdictJSON(`"root_cause":"x","evidence":[{"ref":"` + ref +
+				`","role":"cause","claim":"c","subject":{"kind":"Pod","name":"api-1",` + tc.subject + `}}]`)
+			items := Parse(text).Citations.theCase.items
+			if len(items) != 1 || !items[0].valid || items[0].subject == nil {
+				t.Fatalf("citation dropped: %+v", items)
+			}
+			if got := items[0].subject; got.Stream != tc.stream || got.Observation != tc.observation {
+				t.Fatalf("stream %q observation %q, want %q %q", got.Stream, got.Observation, tc.stream, tc.observation)
+			}
+		})
+	}
+	missingKind := Parse(verdictJSON(`"root_cause":"x","evidence":[{"ref":"` + ref +
+		`","role":"cause","claim":"c","subject":{"name":"api-1","stream":"resource"}}]`)).Citations.theCase.items
+	if len(missingKind) != 1 || missingKind[0].valid {
+		t.Fatalf("a subject without kind must stay invalid: %+v", missingKind)
+	}
+}
+
+// Every evidence word the parser moves out of stream is one the prompt offers.
+func TestObservationKindsMatchPrompt(t *testing.T) {
+	contract := verdictContract(CiteRun)
+	for word := range observationKinds {
+		if !strings.Contains(contract, word) {
+			t.Errorf("observation %q is accepted but the prompt never offers it", word)
+		}
+	}
+}
+
+func TestParse_RepairsUnescapedQuotes(t *testing.T) {
+	ref := testRef('a', 'b')
+	block := "```json\n{\"summary\": \"The \"api\" Service has no endpoints\", \"root_cause\": \"the \"foo\" Service is missing\",\n" +
+		"\"root_cause_evidence_refs\": [\"" + ref + "\"], \"evidence\": [{\"ref\": \"" + ref + "\", \"role\": \"cause\", \"claim\": \"selector \"app=api\" matches nothing\"}],\n" +
+		"\"steps\": [{\"text\": \"Fix the selector\", \"kind\": \"mitigate\"}]}\n```\nThe story [[radar:evidence=0]]."
+	p := Parse(block)
+	if p.Verdict.RootCause != `the "foo" Service is missing` {
+		t.Fatalf("root cause = %q", p.Verdict.RootCause)
+	}
+	if p.Verdict.Summary != `The "api" Service has no endpoints` {
+		t.Fatalf("summary = %q", p.Verdict.Summary)
+	}
+	if items := p.Citations.theCase.items; len(items) != 1 || !items[0].valid || items[0].claim != `selector "app=api" matches nothing` {
+		t.Fatalf("evidence = %+v", items)
+	}
+	if p.Verdict.Report != "The story [[radar:evidence=0]]." {
+		t.Fatalf("story = %q", p.Verdict.Report)
+	}
+	if len(p.Verdict.Steps) != 1 {
+		t.Fatalf("steps = %+v", p.Verdict.Steps)
+	}
+}
+
+// A prose quote may sit beside punctuation that is not JSON's.
+func TestParse_RepairsQuotesBesideProsePunctuation(t *testing.T) {
+	cases := map[string]string{
+		`{"root_cause": "pods (see "app"), all down"}`: `pods (see "app"), all down`,
+		`{"root_cause": "the "api"-"web" link"}`:       `the "api"-"web" link`,
+	}
+	for block, want := range cases {
+		if got := Parse("```json\n" + block + "\n```").Verdict.RootCause; got != want {
+			t.Errorf("root cause = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestParse_QuoteRepairStaysConservative(t *testing.T) {
+	cases := map[string]string{
+		// Broken in a way quotes do not explain.
+		"missing comma":  `{"root_cause": "x" "summary": "y"}`,
+		"trailing comma": `{"root_cause": "x",}`,
+		// A missing comma must not merge two entries into one action.
+		"missing comma in an array":     `{"root_cause": "x", "remediation": ["cmd1" "cmd2"]}`,
+		"missing comma across lines":    "{\"root_cause\": \"x\", \"remediation\": [\"cmd1\"\n\"cmd2\"]}",
+		"missing comma before a number": `{"root_cause": "x", "remediation": ["a" 1, "b"]}`,
+		// In a list these bytes are also two entries with a missing quote.
+		"quote beside a comma":                    `{"root_cause": "x", "remediation": ["the "api", "web" pods"]}`,
+		"quote before a colon":                    `{"root_cause": "set "key": value"}`,
+		"missing comma after a formatted command": "{\"root_cause\": \"x\", \"remediation\": [\"`cmd1`\"1,\"`cmd2`\"], \"recommended_index\": 1}",
+		"missing comma before a glued number":     `{"root_cause": "x", "remediation": ["cmd1"1,"cmd2"], "recommended_index": 1}`,
+		"missing comma, no space":                 `{"root_cause": "x", "remediation": ["cmd1""cmd2","cmd3"], "recommended_index": 2}`,
+		"unpaired stray quote":                    `{"root_cause": "the "foo Service is missing"}`,
+		"stray quote after a space, closing":      `{"root_cause": "the "foo " Service"}`,
+		// Repairs, but carries no verdict field.
+		"no verdict field": `{"note": "the "foo" thing"}`,
+	}
+	for name, block := range cases {
+		t.Run(name, func(t *testing.T) {
+			text := "Prose.\n```json\n" + block + "\n```"
+			p := Parse(text)
+			if p.Verdict.RootCause != "" || p.Verdict.Report != text {
+				t.Fatalf("expected no verdict, got root cause %q report %q", p.Verdict.RootCause, p.Verdict.Report)
+			}
+		})
+	}
+}
+
+func TestVerdictBlockJSON_ValidJSONUntouched(t *testing.T) {
+	block := `{"root_cause": "the \"foo\" Service", "summary":"a:b, c}d]e", "x": ["\\"]}`
+	got, ok := verdictBlockJSON(block)
+	if !ok || string(got) != block {
+		t.Fatalf("valid JSON changed: %q", got)
 	}
 }

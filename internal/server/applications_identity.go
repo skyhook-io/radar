@@ -20,7 +20,7 @@ import (
 // resourceLister is the slice of the resource cache the app identity resolver
 // needs — an interface so tests can stub the Argo Application feed.
 type resourceLister interface {
-	ListDynamicWithGroup(ctx context.Context, kind, namespace, group string) ([]*unstructured.Unstructured, error)
+	ListDynamicReadOnlyWithGroup(ctx context.Context, kind, namespace, group string) ([]*unstructured.Unstructured, error)
 }
 
 // App identity classification — grouping per-env instances of one logical app
@@ -819,7 +819,7 @@ func fluxKustomizationFacts(ctx context.Context, cache resourceLister) map[strin
 	out := map[string]string{}
 	byName := map[string]string{}
 	ambiguous := map[string]bool{}
-	items, err := cache.ListDynamicWithGroup(ctx, "Kustomization", "", "kustomize.toolkit.fluxcd.io")
+	items, err := cache.ListDynamicReadOnlyWithGroup(ctx, "Kustomization", "", "kustomize.toolkit.fluxcd.io")
 	if err != nil {
 		return out
 	}
@@ -900,7 +900,7 @@ func argoApplicationFacts(ctx context.Context, cache resourceLister) (sourcePath
 	appSetChildren = map[string][]argoChild{}
 	byName := map[string]string{}
 	ambiguous := map[string]bool{}
-	items, err := cache.ListDynamicWithGroup(ctx, "Application", "", "argoproj.io")
+	items, err := cache.ListDynamicReadOnlyWithGroup(ctx, "Application", "", "argoproj.io")
 	if err != nil {
 		return sourcePaths, appSetChildren, nil
 	}
@@ -1017,7 +1017,7 @@ func collectArgoClaims(items []*unstructured.Unstructured, sourcePaths map[strin
 
 		spec, _ := item.Object["spec"].(map[string]any)
 		dest, _ := spec["destination"].(map[string]any)
-		claim := argoClaim{Identity: id}
+		claim := argoClaim{Identity: id, AppNamespace: item.GetNamespace(), AppName: name}
 		if dest != nil {
 			claim.DestServer, _ = dest["server"].(string)
 			claim.DestName, _ = dest["name"].(string)
@@ -1191,7 +1191,7 @@ func addArgoManagedSourceRefs(out map[string][]appSourceRef, items []*unstructur
 }
 
 func addFluxKustomizationManagedSourceRefs(ctx context.Context, cache resourceLister, out map[string][]appSourceRef) {
-	items, err := cache.ListDynamicWithGroup(ctx, "Kustomization", "", "kustomize.toolkit.fluxcd.io")
+	items, err := cache.ListDynamicReadOnlyWithGroup(ctx, "Kustomization", "", "kustomize.toolkit.fluxcd.io")
 	if err != nil {
 		return
 	}

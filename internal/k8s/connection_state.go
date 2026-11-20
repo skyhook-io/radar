@@ -29,6 +29,27 @@ type ConnectionStatus struct {
 	Error       string          `json:"error,omitempty"`
 	ErrorType   string          `json:"errorType,omitempty"` // config, auth, auth-rejected, auth-plugin-stuck, rbac, network, timeout, tls, unknown
 	ProgressMsg string          `json:"progressMessage,omitempty"`
+	// DisconnectedAt is when this context stopped working (RFC 3339, UTC).
+	// It survives retries and their changing errors, and clears on connect,
+	// so the UI can say how long the cluster has been down. Set by
+	// SetConnectionStatus; callers leave it empty.
+	DisconnectedAt string `json:"disconnectedAt,omitempty"`
+}
+
+// outageStart carries DisconnectedAt from one status to the next: it starts
+// when a context first reports disconnected and holds through retries until
+// the context connects or another context takes over.
+func outageStart(prev, next ConnectionStatus, now time.Time) string {
+	if next.State == StateConnected {
+		return ""
+	}
+	if prev.DisconnectedAt != "" && prev.Context == next.Context {
+		return prev.DisconnectedAt
+	}
+	if next.State == StateDisconnected {
+		return now.UTC().Format(time.RFC3339)
+	}
+	return ""
 }
 
 // ConnectionChangeCallback is called when the connection status changes
@@ -52,6 +73,7 @@ func GetConnectionStatus() ConnectionStatus {
 // SetConnectionStatus updates the connection status and notifies callbacks
 func SetConnectionStatus(status ConnectionStatus) {
 	connectionStatusMu.Lock()
+	status.DisconnectedAt = outageStart(connectionStatus, status, time.Now())
 	if connectionStatus == status {
 		connectionStatusMu.Unlock()
 		return

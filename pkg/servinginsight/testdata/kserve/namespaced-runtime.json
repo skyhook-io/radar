@@ -1,0 +1,87 @@
+{
+  "apiVersion": "serving.kserve.io/v1beta1",
+  "kind": "InferenceService",
+  "metadata": {
+    "name": "iris-ns-runtime",
+    "namespace": "ml-serving",
+    "generation": 1,
+    "annotations": {
+      "modelFormat": "sklearn",
+      "serving.kserve.io/deploymentMode": "Standard"
+    }
+  },
+  "spec": {
+    "predictor": {
+      "maxReplicas": 1,
+      "minReplicas": 1,
+      "model": {
+        "modelFormat": {
+          "name": "sklearn"
+        },
+        "name": "",
+        "resources": {
+          "limits": {
+            "cpu": "500m",
+            "memory": "512Mi"
+          },
+          "requests": {
+            "cpu": "50m",
+            "memory": "192Mi"
+          }
+        },
+        "runtime": "team-sklearn",
+        "storageUri": "gs://kfserving-examples/models/sklearn/1.0/model"
+      }
+    }
+  },
+  "status": {
+    "address": {
+      "url": "http://iris-ns-runtime-predictor.ml-serving.svc.cluster.local"
+    },
+    "components": {
+      "predictor": {
+        "url": "http://iris-ns-runtime-predictor-ml-serving.example.com"
+      }
+    },
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-11-03T02:21:56Z",
+        "status": "True",
+        "type": "IngressReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:22:21Z",
+        "message": "ReplicaSet \"iris-ns-runtime-predictor-b95c5dd66\" has successfully progressed.",
+        "reason": "NewReplicaSetAvailable",
+        "status": "True",
+        "type": "PredictorReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:22:21Z",
+        "status": "True",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:21:56Z",
+        "severity": "Info",
+        "status": "False",
+        "type": "Stopped"
+      }
+    ],
+    "deploymentMode": "Standard",
+    "modelStatus": {
+      "copies": {
+        "failedCopies": 0,
+        "totalCopies": 1
+      },
+      "states": {
+        "activeModelState": "Loaded",
+        "targetModelState": "Loaded"
+      },
+      "transitionStatus": "UpToDate"
+    },
+    "observedGeneration": 1,
+    "servingRuntimeName": "team-sklearn",
+    "url": "http://iris-ns-runtime-ml-serving.example.com"
+  }
+}

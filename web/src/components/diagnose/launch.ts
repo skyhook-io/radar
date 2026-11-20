@@ -4,6 +4,7 @@
 // from the contained in-panel engine. The endpoint follows the server MCP mode.
 // In full mode, the client approval prompts gate changes.
 import { type RunSummary } from "../../api/diagnose";
+import { agentLabelFor } from "./DiagnoseContext";
 
 // sq POSIX-single-quotes a string so it's a safe single shell argument regardless
 // of content. Findings carry backticks, quotes, and newlines — inside single
@@ -13,11 +14,26 @@ function sq(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+// Radar also creates it before each Claude turn, but a run from before Radar
+// used it can be continued first. Unquoted so the shell expands ~.
+const AGENT_DIR = "~/.radar/agent";
+
+// A run with no recorded agent predates recording it, when Claude Code was
+// the only one. Any other agent is named by its own label, with no Claude
+// specifics, and gets no resume command it hasn't been taught.
+function isClaudeRun(run: RunSummary): boolean {
+  return !run.agent || run.agent === "claude";
+}
+
 export function launchAgentLabel(run: RunSummary): string {
-  if (run.agent === "codex") return "Codex";
-  if (run.agent === "opencode") return "OpenCode";
-  if (run.agent === "cursor-agent") return "Cursor";
-  return "Claude Code";
+  return isClaudeRun(run) ? "Claude Code" : agentLabelFor(run.agent ?? "");
+}
+
+// Claude Code asks once whether to trust the folder the resume runs in, and
+// its default answer exits, so a user who presses Enter loses the session.
+export function launchTrustHint(run: RunSummary): string | null {
+  if (!isClaudeRun(run)) return null;
+  return "The first time, Claude Code may ask to trust Radar's agent folder. Select Yes before pressing Enter; the default exits.";
 }
 
 // openInTerminal asks App (which owns the DockProvider) to open Radar's local
@@ -40,6 +56,7 @@ export function openInTerminal(command: string, title: string) {
 export function buildLaunchCommand(
   run: RunSummary,
   mcpUrl: string,
+  shell: "posix" | "powershell" = "posix",
 ): string | null {
   if (!run.sessionId || run.status === "stale") return null;
 
@@ -55,15 +72,45 @@ export function buildLaunchCommand(
   }
   if (run.agent === "codex") {
     // Codex threads are stored globally by id (cwd-independent); -c re-attaches MCP.
+    if (shell === "powershell") {
+      if (!psSafe(run.sessionId, mcpUrl)) return null;
+      return psNative(
+        "codex",
+        `resume ${run.sessionId} -c "mcp_servers.radar.url=\\"${mcpUrl}\\""`,
+      );
+    }
     return `codex resume ${sq(run.sessionId)} -c ${sq(`mcp_servers.radar.url="${mcpUrl}"`)}`;
   }
-  // Claude Code: --resume is cwd-scoped, and Radar runs its headless sessions from
-  // the home dir (see claudeAgent). The Radar terminal starts there too, but a user
-  // pasting this into their own terminal is usually in a project dir — so prefix
-  // `cd ~` to resolve the session wherever it's run (harmless in the home-dir case).
-  // --mcp-config MERGES radar alongside the user's own servers.
+  if (!isClaudeRun(run)) return null;
+  // Claude Code: resume from the folder Radar runs Claude turns in (claudeWorkDir
+  // in agent_claude.go). Older versions find a session only from the folder it
+  // was created in, and Claude Code remembers the folder-trust answer there,
+  // which it never does for the home dir. --mcp-config MERGES radar alongside
+  // the user's own servers.
   const cfg = JSON.stringify({
     mcpServers: { radar: { type: "http", url: mcpUrl } },
   });
-  return `cd ~ && claude --resume ${sq(run.sessionId)} --mcp-config ${sq(cfg)}`;
+  if (shell === "powershell") {
+    if (!psSafe(run.sessionId, mcpUrl)) return null;
+    const dir = '"$HOME\\.radar\\agent"';
+    return `New-Item -ItemType Directory -Force -Path ${dir} -ErrorAction Stop | Out-Null; Set-Location -LiteralPath ${dir} -ErrorAction Stop; ${psNative("claude", `--resume ${run.sessionId} --mcp-config "${cfg.replace(/"/g, '\\"')}"`)}`;
+  }
+  return `mkdir -p -m 700 ${AGENT_DIR} && cd ${AGENT_DIR} && claude --resume ${sq(run.sessionId)} --mcp-config ${sq(cfg)}`;
+}
+
+// Radar's terminal on Windows is Windows PowerShell 5.1, which has no `&&`
+// or `mkdir -p`, and drops the double quotes inside an argument it passes to a
+// program. `--%` hands the rest of the line to the program unparsed, where the
+// C runtime turns \" back into ". It applies to programs, not to npm's .ps1
+// shims, so the program is found as an application (.exe or .cmd). A failing
+// step stops the line (-ErrorAction Stop), so the agent never starts in the
+// wrong folder.
+function psNative(program: string, rawArgs: string): string {
+  return `& (Get-Command ${program} -CommandType Application -ErrorAction Stop)[0].Source --% ${rawArgs}`;
+}
+
+// The --% text can't carry a quote, a % or a backslash, so a session id or URL
+// holding one gets no command rather than a broken one.
+function psSafe(sessionId: string, mcpUrl: string): boolean {
+  return /^[\w-]+$/.test(sessionId) && !/["%\\]/.test(mcpUrl);
 }

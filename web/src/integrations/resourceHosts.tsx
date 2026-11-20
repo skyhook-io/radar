@@ -6,6 +6,8 @@ import type { RenderDiagnoseAction } from '../context/DiagnoseCustomization'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { SelectedResource } from '../types'
 import { cnpgResourceHost } from '../components/cnpg/host'
+import { veleroResourceHost } from '../components/velero/host'
+import { crdResourceHost } from '../components/resources/crd/host'
 import {
   composeDetailSlots, composeResourceHosts, hostsForResource, hostSupport, resourceHostForSlot,
   type DetailSlots, type HostResource, type HostFeatures, type HostKind, type KindListProps,
@@ -14,8 +16,10 @@ import {
 import { RayJobRenderer } from '../components/resources/renderers/RayJobRenderer'
 import { JobRenderer, JobSetRenderer } from '../components/resources/renderers/JobAdmissionRenderers'
 import { RayClusterRenderer } from '../components/resources/renderers/RayClusterRenderer'
+import { OpenTelemetryCollectorRenderer } from '../components/resources/renderers/OpenTelemetryCollectorRenderer'
 import { RayServiceRenderer } from '../components/resources/renderers/RayServiceRenderer'
 import { KueueWorkloadRenderer } from '../components/resources/renderers/KueueWorkloadRenderer'
+import { ClusterQueueRenderer, LocalQueueRenderer, LocalQueueStatusBadge } from '../components/resources/renderers/KueueQueueRenderers'
 import { PodRenderer } from '../components/resources/renderers/PodRenderer'
 import { KarpenterNodePoolRenderer } from '../components/resources/renderers/KarpenterNodePoolRenderer'
 import { NodeRenderer } from '../components/resources/renderers/NodeRenderer'
@@ -29,27 +33,44 @@ import { NamespaceRenderer } from '../components/resources/renderers/NamespaceRe
 import { CAPIClusterRenderer } from '../components/resources/renderers/CAPIClusterRenderer'
 import { HPARenderer } from '../components/resources/renderers/HPARenderer'
 import { PVCRenderer } from '../components/resources/renderers/PVCRenderer'
+import { HTTPRouteRenderer } from '../components/resources/renderers/HTTPRouteRenderer'
 import { RolloutRenderer } from '../components/resources/renderers/RolloutRenderer'
 import { KyvernoPolicyCoverage } from '../components/resources/renderers/KyvernoPolicyCoverage'
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
-import { VeleroBSLRenderer } from '../components/resources/renderers/VeleroBSLRenderer'
-import { VeleroBackupRenderer } from '../components/resources/renderers/VeleroBackupRenderer'
-import { VeleroRestoreRenderer } from '../components/resources/renderers/VeleroRestoreRenderer'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
+import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
+import { UpgradePlanRenderer } from '../components/resources/renderers/UpgradePlanRenderer'
+import {
+  ValidatingAdmissionPolicyBindingRenderer,
+  ValidatingAdmissionPolicyRenderer,
+} from '../components/resources/renderers/ValidatingAdmissionPolicyRenderer'
 
 export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
+  { id: 'gateway-api', renderers: { HTTPRouteRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
+  { id: 'system-upgrade', renderers: { UpgradePlanRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
+  {
+    id: 'kueue-queues',
+    renderers: { LocalQueueRenderer, ClusterQueueRenderer },
+    // The header badge reads the LocalQueue's ClusterQueue like its detail does, so header and detail agree; the table keeps the LocalQueue's own report.
+    resources: [{ name: 'localqueues', group: 'kueue.x-k8s.io' }],
+    detailSlots: () => ({ renderStatusBadge: (resource: any) => <LocalQueueStatusBadge data={resource} /> }),
+  },
+  { id: 'opentelemetry', renderers: { OpenTelemetryCollectorRenderer } },
   { id: 'ray', renderers: { RayJobRenderer, RayServiceRenderer, RayClusterRenderer } },
   { id: 'capacity', renderers: { KarpenterNodePoolRenderer } },
   { id: 'capi', renderers: { CAPIClusterRenderer } },
   { id: 'crossplane', renderers: { CompositeRenderer } },
   { id: 'rollouts', renderers: { RolloutRenderer } },
   { id: 'kyverno', renderers: { KyvernoPolicyCoverage, KyvernoPolicyQueued } },
-  { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
+  veleroResourceHost,
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
+  { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
+  { id: 'admission-policy', renderers: { ValidatingAdmissionPolicyRenderer, ValidatingAdmissionPolicyBindingRenderer } },
   cnpgResourceHost,
+  crdResourceHost,
 ]
 
 export const resourceRendererOverrides = composeResourceHosts(resourceHosts)
@@ -60,6 +81,14 @@ export function resourceExpandedPath(resource: HostResource, context?: string, t
 
 export function resourceDetailRedirect(resource: HostResource, search: URLSearchParams): string | null {
   return resourceHostForSlot(resourceHosts, resource, 'destination')?.detailRedirect?.(resource, search) ?? null
+}
+
+export function resourceIssueDetail(resource: HostResource, props: { issue: { kind?: string; reason?: string }; resource: any }) {
+  for (const host of hostsForResource(resourceHosts, resource)) {
+    const detail = host.issueDetail?.(props)
+    if (detail) return detail
+  }
+  return null
 }
 
 export function resourceDetailSlots(resource: HostResource, inheritedTabs?: WorkloadExtraTab[]): DetailSlots {
@@ -86,8 +115,9 @@ export function ResourceDrawerNavigation({ resource }: { resource: SelectedResou
 
 export function useResourceHostFeatures(): HostFeatures {
   // Hook order is fixed here; selected adapters mount components that own their data hooks.
-  const { support } = useRadarFeature('cnpgWorkspace')
-  return useMemo(() => ({ cnpgWorkspace: support }), [support])
+  const { support: cnpgWorkspace } = useRadarFeature('cnpgWorkspace')
+  const { support: veleroWorkspace } = useRadarFeature('veleroWorkspace')
+  return useMemo(() => ({ cnpgWorkspace, veleroWorkspace }), [cnpgWorkspace, veleroWorkspace])
 }
 
 
@@ -104,6 +134,13 @@ function kindListHost(kind: Pick<HostKind, 'name' | 'group'> | null) {
 export function resourceKindListMode(kind: Pick<HostKind, 'name' | 'group'> | null, features: HostFeatures, pending: boolean) {
   const contribution = kindListHost(kind)
   return contribution?.list.mode(hostSupport(contribution.host, features), pending) ?? 'table'
+}
+
+/** The disabled picker's tooltip while a kind's own list, which ignores the namespace filter, is on screen. */
+export function resourceKindListNamespaceFilterTooltip(kind: Pick<HostKind, 'name' | 'group'> | null, features: HostFeatures, pending: boolean): string | undefined {
+  const contribution = kindListHost(kind)
+  if (!contribution?.list.namespaceFilterTooltip) return undefined
+  return contribution.list.mode(hostSupport(contribution.host, features), pending) === 'view' ? contribution.list.namespaceFilterTooltip : undefined
 }
 
 export function resourceKindListTitle(kind: Pick<HostKind, 'name' | 'group'>): string | null {

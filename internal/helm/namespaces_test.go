@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func TestResolveNoAuthListNamespaces_ChecksClusterSecretsWithFallbackNamespaces(t *testing.T) {
@@ -150,5 +151,75 @@ func writeTestJSON(t *testing.T, w http.ResponseWriter, v any) {
 	t.Helper()
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		t.Fatalf("write JSON response: %v", err)
+	}
+}
+
+// On a default install Radar can't list Secrets anywhere. The permission probe
+// already saw every namespace refused, so after one cluster-wide check the
+// resolver doesn't fan out a read per namespace: one cluster-wide list, whose
+// denial speaks for the cluster.
+func TestResolveNoAuthStorageScope_UsesTheProbeInsteadOfAReadPerNamespace(t *testing.T) {
+	var capture selfSubjectAccessReviewCapture
+	client := newNoAuthNamespaceClient(t, []string{"alpha", "beta"}, nil, false, nil, &capture)
+	withNoAuthNamespaceClient(t, client, "")
+	t.Cleanup(k8s.SetTestPermissionResult(&k8s.PermissionCheckResult{
+		Perms:            &k8s.ResourcePermissions{},
+		Scopes:           map[string]k8score.ResourceScope{"secrets": {Enabled: false}},
+		ScopeCandidates:  []string{"alpha", "beta"},
+		DeniedNamespaces: map[string][]string{"secrets": {"alpha", "beta"}},
+	}))
+
+	namespaces, skipped := ResolveNoAuthStorageScope(context.Background())
+	if namespaces != nil || skipped != nil {
+		t.Fatalf("namespaces %v skipped %v, want one cluster-wide read", namespaces, skipped)
+	}
+	capture.assertClusterSecretList(t)
+}
+
+func TestProbedSecretNamespaces(t *testing.T) {
+	probe := func(denied []string) *k8s.PermissionCheckResult {
+		return &k8s.PermissionCheckResult{DeniedNamespaces: map[string][]string{"secrets": denied}}
+	}
+	for _, tc := range []struct {
+		name        string
+		probe       *k8s.PermissionCheckResult
+		accessible  []string
+		wantRead    []string
+		wantSkipped []string
+		wantOK      bool
+	}{
+		{name: "no probe yet", accessible: []string{"a"}},
+		{name: "nothing recorded for Secrets", probe: &k8s.PermissionCheckResult{}, accessible: []string{"a"}},
+		{
+			name:       "credentials rejected: let the read report it",
+			probe:      &k8s.PermissionCheckResult{ProbeErrors: map[string]error{"secrets": errors.New("401")}, DeniedNamespaces: map[string][]string{"secrets": {"a"}}},
+			accessible: []string{"a"},
+		},
+		{name: "denied everywhere", probe: probe([]string{"a", "b"}), accessible: []string{"a", "b"}, wantOK: true},
+		{
+			name:        "denied in some namespaces",
+			probe:       probe([]string{"b"}),
+			accessible:  []string{"a", "b", "c"},
+			wantRead:    []string{"a", "c"},
+			wantSkipped: []string{"b"},
+			wantOK:      true,
+		},
+		{
+			// Out of time, a transient error, past the cap, or created since:
+			// only a confirmed 403 is skipped.
+			name:        "namespaces without a confirmed denial are read",
+			probe:       probe([]string{"a"}),
+			accessible:  []string{"a", "untried", "new"},
+			wantRead:    []string{"untried", "new"},
+			wantSkipped: []string{"a"},
+			wantOK:      true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			read, skipped, ok := probedSecretNamespaces(tc.probe, tc.accessible)
+			if ok != tc.wantOK || !slices.Equal(read, tc.wantRead) || !slices.Equal(skipped, tc.wantSkipped) {
+				t.Fatalf("read %v skipped %v ok %v, want %v %v %v", read, skipped, ok, tc.wantRead, tc.wantSkipped, tc.wantOK)
+			}
+		})
 	}
 }

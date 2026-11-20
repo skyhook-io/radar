@@ -2,6 +2,8 @@ import { Globe, Shield, Clock } from 'lucide-react'
 import type { ResourceRef } from '../../../types'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { kindToPluralWithGroup } from '../../../utils/navigation'
+import { ingressHostUsesTLS, ingressRuleTarget } from '../../../utils/host-url'
+import { HostLinkActions } from '../../ui/HostLinkActions'
 
 interface IngressRendererProps {
   data: any
@@ -83,13 +85,17 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
 
       {rules.length > 0 && <Section title="Rules" defaultExpanded>
         <div className="space-y-3">
-          {rules.map((rule: any, i: number) => (
+          {rules.map((rule: any, i: number) => {
+            const target = ingressRuleTarget(rule, tls)
+            return (
             <div key={i} className="card-inner-lg">
               <div className="flex items-center gap-2 mb-2">
-                {tls.some((t: any) => t.hosts?.includes(rule.host)) && (
+                {ingressHostUsesTLS(rule.host, tls) && (
                   <Shield className="w-3.5 h-3.5 text-green-400" />
                 )}
-                <span className="text-sm font-medium text-theme-text-primary">{rule.host || '*'}</span>
+                <span className="text-sm font-medium text-theme-text-primary break-all">{rule.host || '*'}</span>
+                {target?.kind === 'url' && <HostLinkActions url={target.url} />}
+                {target?.kind === 'hostname' && <HostLinkActions hostname={target.hostname} />}
               </div>
               <div className="space-y-1">
                 {rule.http?.paths?.map((path: any) => (
@@ -112,7 +118,8 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
                 ))}
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       </Section>}
 

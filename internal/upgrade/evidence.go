@@ -2,6 +2,7 @@ package upgrade
 
 import (
 	"context"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -37,8 +38,9 @@ type EvidenceAuthorizer interface {
 	// (nodes/proxy for kubelet metrics and effective configuration).
 	CanGetSubresource(group, resource, subresource string) EvidenceAuthorizationDecision
 	// FilterNamespacesByCanList returns the subset of namespaces where the
-	// identity can list the resource.
-	FilterNamespacesByCanList(group, resource string, namespaces []string) []string
+	// identity can list the resource. complete is false when some namespace's
+	// check couldn't be answered, so it was left out without being denied.
+	FilterNamespacesByCanList(group, resource string, namespaces []string) (allowed []string, complete bool)
 }
 
 // EvidenceAuthorizationDecision keeps an explicit denial distinct from an
@@ -57,8 +59,20 @@ func canListEvidence(authz EvidenceAuthorizer, group, resource, namespace string
 // Shared by Server.resolveHelmNamespacesForScope (HTTP) and the upgrade scan
 // (both surfaces via the authorizer seam).
 func ResolveHelmNamespaces(ctx context.Context, authz EvidenceAuthorizer, namespaces []string) ([]string, bool) {
+	resolved, ok, _, _ := ResolveHelmNamespacesChecked(ctx, authz, namespaces)
+	return resolved, ok
+}
+
+// ResolveHelmNamespacesChecked is ResolveHelmNamespaces that also returns
+// checked and unread. unread are the namespaces it left out because the
+// caller can't list Secrets there, or because that check went unanswered;
+// checked is false when any check that decided what to leave out went
+// unanswered, so a caller that treats a left-out namespace as a denial must
+// not do so. resolved nil means one cluster-wide read; ok false means no
+// namespace access at all, so nothing should be read.
+func ResolveHelmNamespacesChecked(ctx context.Context, authz EvidenceAuthorizer, namespaces []string) (resolved []string, ok bool, checked bool, unread []string) {
 	if readscope.NoNamespaceAccess(namespaces) {
-		return nil, false
+		return nil, false, true, nil
 	}
 	if namespaces == nil {
 		if auth.UserFromContext(ctx) == nil {
@@ -69,8 +83,8 @@ func ResolveHelmNamespaces(ctx context.Context, authz EvidenceAuthorizer, namesp
 			// impersonate them directly, so narrowing them with the backend
 			// client's fallback namespaces would under-list users whose RBAC is
 			// wider than Radar's own ServiceAccount.
-			if fallback := helm.ResolveNoAuthListNamespaces(ctx); len(fallback) > 0 {
-				return fallback, true
+			if fallback, skipped := helm.ResolveNoAuthStorageScope(ctx); len(fallback) > 0 {
+				return fallback, true, true, skipped
 			}
 		} else if !canListEvidence(authz, "", "secrets", "") {
 			// Authenticated user with cluster-wide pod access but NOT
@@ -80,12 +94,20 @@ func ResolveHelmNamespaces(ctx context.Context, authz EvidenceAuthorizer, namesp
 			// per-namespace SAR memoized on the user's perms (2-min TTL), so
 			// repeat scans don't re-probe. Falls through to the cluster-wide
 			// path (→ honest 403) when they can't read secrets anywhere.
-			if allowed := authz.FilterNamespacesByCanList("", "secrets", k8s.AllNamespaceNames()); len(allowed) > 0 {
-				return allowed, true
+			all := k8s.AllNamespaceNames()
+			allowed, complete := authz.FilterNamespacesByCanList("", "secrets", all)
+			if len(allowed) > 0 {
+				for _, ns := range all {
+					if !slices.Contains(allowed, ns) {
+						unread = append(unread, ns)
+					}
+				}
+				return allowed, true, complete, unread
 			}
+			return namespaces, true, complete, nil
 		}
 	}
-	return namespaces, true
+	return namespaces, true, true, nil
 }
 
 func resolveCachedEvidenceNamespaces(authz EvidenceAuthorizer, group, resource string, namespaces []string) []string {
@@ -99,7 +121,7 @@ func resolveCachedEvidenceNamespaces(authz EvidenceAuthorizer, group, resource s
 	if candidates == nil {
 		candidates = k8s.AllNamespaceNames()
 	}
-	allowed := authz.FilterNamespacesByCanList(group, resource, candidates)
+	allowed, _ := authz.FilterNamespacesByCanList(group, resource, candidates)
 	if allowed == nil {
 		return []string{}
 	}

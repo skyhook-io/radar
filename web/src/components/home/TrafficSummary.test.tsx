@@ -29,11 +29,7 @@ function render(data: DashboardTrafficSummary | null, onNavigate = vi.fn()) {
 const header = () => container.querySelector('button > div > div')!.textContent
 const drawing = () => container.querySelector('svg')!.outerHTML
 
-const observed: DashboardTrafficSummary = {
-  source: 'hubble',
-  flowCount: 2,
-  topFlows: [{ src: 'k8s-infra-otel-agent', dst: 'coredns', connections: 1981 }],
-}
+const observed: DashboardTrafficSummary = { source: 'hubble' }
 
 describe('TrafficSummary', () => {
   it('names no source until the server has detected one', () => {
@@ -47,12 +43,11 @@ describe('TrafficSummary', () => {
     expect(header()).toBe('Live TrafficHubble')
   })
 
-  it('draws the same picture whatever the cluster reports, so observed flows never reach it', () => {
+  it('draws the same picture with or without a detected source', () => {
     render(null)
     const empty = drawing()
     render(observed)
     expect(drawing()).toBe(empty)
-    expect(drawing()).not.toContain('coredns')
   })
 
   it('opens Live Traffic from anywhere on the card', () => {

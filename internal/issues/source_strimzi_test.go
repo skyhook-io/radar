@@ -26,7 +26,7 @@ func strimziConnectorFixture() *unstructured.Unstructured {
 
 func TestStrimziConnectorFailureEvidence(t *testing.T) {
 	u := strimziConnectorFixture()
-	got := detectStrimziConnectorIssues(strimziConnectorGVR, u)
+	got := StrimziConnectorIssues(strimziConnectorGVR, u)
 	if len(got) != 1 {
 		t.Fatalf("got %v", got)
 	}
@@ -90,7 +90,7 @@ func TestStrimziConnectorConservativeScenarios(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			u := strimziConnectorFixture()
 			tc.change(u)
-			got := detectStrimziConnectorIssues(strimziConnectorGVR, u)
+			got := StrimziConnectorIssues(strimziConnectorGVR, u)
 			if tc.want == "" {
 				if len(got) != 0 {
 					t.Fatalf("unexpected issue: %+v", got)
@@ -106,7 +106,7 @@ func TestStrimziConnectorConservativeScenarios(t *testing.T) {
 			unstructured.RemoveNestedField(u.Object, "status", "conditions")
 			_ = unstructured.SetNestedField(u.Object, state, "status", "connectorStatus", "connector", "state")
 			_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"state": state}}, "status", "connectorStatus", "tasks")
-			if got := detectStrimziConnectorIssues(strimziConnectorGVR, u); len(got) != 0 {
+			if got := StrimziConnectorIssues(strimziConnectorGVR, u); len(got) != 0 {
 				t.Fatalf("state alone is not a failure: %+v", got)
 			}
 		})
@@ -120,7 +120,7 @@ func TestStrimziConnectorTaskIDsBounded(t *testing.T) {
 		tasks = append(tasks, map[string]any{"id": id, "state": "FAILED"})
 	}
 	_ = unstructured.SetNestedSlice(u.Object, tasks, "status", "connectorStatus", "tasks")
-	got := detectStrimziConnectorIssues(strimziConnectorGVR, u)
+	got := StrimziConnectorIssues(strimziConnectorGVR, u)
 	if len(got) != 1 || !strings.Contains(got[0].Message, "0, 1, 2, 3, 4, 5, 6, 7, 8, 9; 10 more") {
 		t.Fatalf("unstable/unbounded task list: %+v", got)
 	}
@@ -161,4 +161,84 @@ func (p strimziScopedProvider) ListDynamic(gvr schema.GroupVersionResource, ns s
 		}
 	}
 	return out, nil
+}
+
+func TestStrimziConnectorRecoveryObserved(t *testing.T) {
+	recovered := func() *unstructured.Unstructured {
+		u := strimziConnectorFixture()
+		_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "Ready", "status": "True"}}, "status", "conditions")
+		_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"id": int64(0), "state": "RUNNING"}}, "status", "connectorStatus", "tasks")
+		return u
+	}
+	if !StrimziConnectorRecoveryObserved(recovered()) {
+		t.Fatal("explicit current recovery omitted")
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*unstructured.Unstructured)
+	}{
+		{"stale", func(u *unstructured.Unstructured) { u.SetGeneration(3) }},
+		{"missing status", func(u *unstructured.Unstructured) { unstructured.RemoveNestedField(u.Object, "status") }},
+		{"missing conditions", func(u *unstructured.Unstructured) { unstructured.RemoveNestedField(u.Object, "status", "conditions") }},
+		{"missing tasks", func(u *unstructured.Unstructured) {
+			unstructured.RemoveNestedField(u.Object, "status", "connectorStatus", "tasks")
+		}},
+		{"empty tasks", func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(u.Object, []any{}, "status", "connectorStatus", "tasks")
+		}},
+		{"malformed tasks", func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(u.Object, []any{nil}, "status", "connectorStatus", "tasks")
+		}},
+		{"failed task", func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"state": "FAILED"}}, "status", "connectorStatus", "tasks")
+		}},
+		{"paused", func(u *unstructured.Unstructured) {
+			u.SetAnnotations(map[string]string{"strimzi.io/pause-reconciliation": "true"})
+		}},
+		{"paused condition", func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "ReconciliationPaused", "status": "True"}}, "status", "conditions")
+		}},
+		{"not ready", func(u *unstructured.Unstructured) {
+			_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "NotReady", "status": "True"}}, "status", "conditions")
+		}},
+		{"terminating", func(u *unstructured.Unstructured) { now := metav1.Now(); u.SetDeletionTimestamp(&now) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := recovered()
+			tc.change(u)
+			if StrimziConnectorRecoveryObserved(u) {
+				t.Fatal("incomplete observation cleared failure")
+			}
+		})
+	}
+}
+
+func TestStrimziSnapshotAssessmentSeparatesReadinessAndRuntime(t *testing.T) {
+	u := strimziConnectorFixture()
+	_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "Ready", "status": "True", "message": "secret-sentinel"}}, "status", "conditions")
+	got := AssessStrimziSnapshot(strimziConnectorGVR, u)
+	if got.State != "failing" || got.Readiness != "ready" {
+		t.Fatalf("Ready hid failed task: %+v", got)
+	}
+	u.SetGeneration(3)
+	got = AssessStrimziSnapshot(strimziConnectorGVR, u)
+	if got.State != "unknown" || got.Reason != "stale" || got.GenerationCurrent {
+		t.Fatalf("stale snapshot: %+v", got)
+	}
+	u.SetGeneration(2)
+	u.SetKind("KafkaConnect")
+	_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "NotReady", "status": "True", "message": "secret-sentinel"}}, "status", "conditions")
+	got = AssessStrimziSnapshot(strimziConnectorGVR, u)
+	if got.State != "observed" || got.Readiness != "not_ready" {
+		t.Fatalf("parent readiness omitted: %+v", got)
+	}
+	raw, _ := json.Marshal(got)
+	if strings.Contains(string(raw), "secret-sentinel") {
+		t.Fatal("raw condition message leaked")
+	}
+	u.SetAnnotations(map[string]string{"strimzi.io/pause-reconciliation": "true"})
+	got = AssessStrimziSnapshot(strimziConnectorGVR, u)
+	if got.State != "unknown" || got.Reason != "paused" {
+		t.Fatalf("paused snapshot: %+v", got)
+	}
 }

@@ -2,6 +2,7 @@
 
 import type { BadgeSeverity } from '../ui/Badge'
 import type { StatusBadge } from './resource-utils'
+import type { KueueAdmissionState } from '../../types/scheduling'
 import { healthColors } from './resource-utils'
 
 const failedFinishedReasons = new Set(['Failed', 'FailedToStart', 'OutOfSync', 'OwnerNotFound'])
@@ -41,12 +42,34 @@ export function getKueueQueueCondition(resource: any): any {
   return findCondition(resource, 'Active')
 }
 
-function queueConditionStatus(resource: any): StatusBadge {
+/**
+ * The queue reports an intentional stop and nothing else. Kueue names only the
+ * first of a ClusterQueue's inactive causes as the reason, and Stopped always
+ * comes first, so a stopped ClusterQueue that is also missing a flavor or a
+ * check still says Stopped; its message lists every cause. A LocalQueue's
+ * Stopped has the one cause.
+ */
+export function isKueueStopOnly(condition: any, clusterQueue: boolean): boolean {
+  if (condition?.status !== 'False' || condition.reason !== 'Stopped') return false
+  // Only Kueue's multi-cause wording ("is stopped, <more>") counts as more; unfamiliar wording keeps the stop.
+  return !clusterQueue || !/^Can't admit new workloads: is stopped, /.test(condition.message ?? '')
+}
+
+/**
+ * The ClusterQueue's message is Kueue's single-cause stop wording. Stricter
+ * than isKueueStopOnly: lending a stop to another object's tone needs the
+ * positive form, not just the absence of more causes.
+ */
+export function isKueueClusterQueueStopOnlyMessage(condition: any): boolean {
+  return isKueueStopOnly(condition, true) && /^Can't admit new workloads: is stopped\.?$/.test(condition.message ?? '')
+}
+
+function queueConditionStatus(resource: any, clusterQueue: boolean): StatusBadge {
   const active = getKueueQueueCondition(resource)
   if (isKueueConditionStale(active, resource?.metadata?.generation)) {
     return { text: `${active.status === 'True' ? 'Active' : active.reason || 'Unknown'} (stale)`, color: healthColors.unknown, level: 'unknown' }
   }
-  if (active?.status === 'False' && active.reason === 'Stopped') {
+  if (isKueueStopOnly(active, clusterQueue)) {
     return { text: 'Stopped', color: healthColors.neutral, level: 'neutral' }
   }
   return activeConditionStatus(resource)
@@ -124,7 +147,7 @@ function formatWorkloadCount(value: any): string {
 // ============================================================================
 
 export function getClusterQueueStatus(resource: any): StatusBadge {
-  return queueConditionStatus(resource)
+  return queueConditionStatus(resource, true)
 }
 
 export function getClusterQueueCohort(resource: any): string {
@@ -134,6 +157,11 @@ export function getClusterQueueCohort(resource: any): string {
 
 export function getClusterQueuePendingWorkloads(resource: any): string {
   return formatWorkloadCount(resource?.status?.pendingWorkloads)
+}
+
+/** Reserving includes admitted Workloads; the two counts are not additive. */
+export function getKueueQueueReservingWorkloads(resource: any): string {
+  return formatWorkloadCount(resource?.status?.reservingWorkloads)
 }
 
 export function getClusterQueueAdmittedWorkloads(resource: any): string {
@@ -155,7 +183,7 @@ export function getClusterQueueFlavors(resource: any): string {
 // ============================================================================
 
 export function getLocalQueueStatus(resource: any): StatusBadge {
-  return queueConditionStatus(resource)
+  return queueConditionStatus(resource, false)
 }
 
 export function getLocalQueueClusterQueue(resource: any): string {
@@ -174,6 +202,10 @@ export function getLocalQueueAdmittedWorkloads(resource: any): string {
 // KUEUE WORKLOAD UTILITIES
 // ============================================================================
 
+// The Workload's most notable native condition, for its status badge. This is
+// not the admission-state classification, which only the server decides
+// (kueue.admission); the two can differ, e.g. an Evicted Workload now blocked
+// by a missing LocalQueue.
 export function getKueueWorkloadStatusCondition(resource: any): any {
   for (const type of ['Finished', 'Evicted', 'Preempted', 'Admitted', 'QuotaReserved']) {
     const condition = findCondition(resource, type)
@@ -200,12 +232,113 @@ export function getKueueWorkloadStatus(resource: any): StatusBadge {
   }
 }
 
+export interface KueueAdmissionStatePresentation {
+  label: string
+  severity: BadgeSeverity
+}
+
+// Presentation only: the server decides every code and its attention class
+// (pkg/schedulinginsight). A code this UI has no label for renders as sent;
+// an attention class it does not know renders in a neutral tone. Stale
+// evidence is always neutral.
+const kueueAdmissionLabels: Record<string, string> = {
+  finished: 'Finished',
+  admitted: 'Admitted',
+  quota_reserved: 'Quota reserved',
+  deactivated: 'Deactivated',
+  deactivated_by_kueue: 'Deactivated by Kueue',
+  deactivation_pending: 'Deactivating',
+  on_hold: 'On hold',
+  no_decision: 'Awaiting evaluation',
+  insufficient_quota: 'Waiting for quota',
+  exceeds_quota: 'Too large for the flavors tried',
+  no_matching_flavor: 'No fit among the flavors tried',
+  resource_unavailable: 'Resource not in the queue',
+  topology_placement_failed: 'Topology placement failed',
+  waiting_for_preemption: 'Waiting for preempted workloads',
+  preemption_gated: 'Preemption gated',
+  admission_gated: 'Admission gated',
+  namespace_not_eligible: 'Namespace not eligible',
+  local_queue_missing: 'LocalQueue missing',
+  local_queue_inactive: 'LocalQueue inactive',
+  cluster_queue_missing: 'ClusterQueue missing',
+  cluster_queue_inactive: 'ClusterQueue inactive',
+  admission_check_rejected: 'Admission check rejected',
+  admission_checks_pending: 'Waiting for admission checks',
+  topology_assignment_pending: 'Waiting for topology assignment',
+  waiting_for_pods_ready: 'Waiting for admitted workloads to start',
+  requeue_backoff: 'Waiting to requeue',
+  dra_resources_unresolved: 'DRA resources unresolved',
+  invalid_workload: 'Invalid workload',
+  unrecognized: 'Unclassified reason',
+  preempted: 'Preempted',
+  pods_ready_timeout: 'Pods not ready in time',
+  evicted: 'Evicted',
+}
+
+const kueueAttentionSeverity: Record<string, BadgeSeverity> = {
+  none: 'neutral',
+  waiting: 'neutral',
+  paused: 'neutral',
+  action_needed: 'alert',
+  unknown: 'info',
+}
+
+// What the reported state usually asks of someone, worded as a suggestion:
+// the classification reads only the Workload, never its queue.
+const kueueAdmissionHints: Record<string, string> = {
+  exceeds_quota: "In its last attempt, Kueue found the requests too large for every flavor it tried. If the queue has no larger flavor, reduce them or ask an admin to raise its quota.",
+  no_matching_flavor: "In its last attempt, no flavor Kueue tried fits the Workload's node selectors, tolerations or topology, or the flavor an earlier slice was admitted to.",
+  resource_unavailable: 'The ClusterQueue has no quota for a resource the job requests. If the request is required, use a queue that offers it or ask an admin to add quota. Remove it only if unintended.',
+  namespace_not_eligible: "The ClusterQueue does not accept this namespace. Use another LocalQueue, or ask an admin.",
+  local_queue_missing: "Check the job's queue name, or ask an admin to create the LocalQueue.",
+  cluster_queue_missing: "The LocalQueue points at a ClusterQueue that doesn't exist or is being deleted. An admin needs to restore it or repoint the LocalQueue.",
+  local_queue_inactive: 'The LocalQueue may be stopped on purpose or misconfigured. Its status says which.',
+  cluster_queue_inactive: 'The ClusterQueue may be stopped on purpose or misconfigured. Its status says which.',
+  admission_check_rejected: 'An admission check rejected the Workload. Kueue usually deactivates it next.',
+  deactivation_pending: 'Kueue is deactivating the Workload. It will not be admitted until reactivated.',
+  deactivated_by_kueue: 'Kueue deactivated this Workload. Fix the cause it reports, then set it active again to retry.',
+  invalid_workload: "Kueue rejects the job's resource requests. Fix them and resubmit.",
+}
+
+export function kueueAdmissionStateHint(admission: Pick<KueueAdmissionState, 'state' | 'attention'>): string | undefined {
+  if (admission.state === 'deactivated' && admission.attention === 'unknown') {
+    return "The Workload doesn't say whether Kueue or a person deactivated it. The earlier eviction it still reports may or may not be why."
+  }
+  return kueueAdmissionHints[admission.state]
+}
+
+export function kueueAdmissionStateLabel(code: string): string {
+  return kueueAdmissionLabels[code] ?? code
+}
+
+export function kueueAdmissionStatePresentation(admission: Pick<KueueAdmissionState, 'state' | 'attention' | 'stale'>): KueueAdmissionStatePresentation {
+  return {
+    label: kueueAdmissionStateLabel(admission.state),
+    severity: admission.stale ? 'neutral' : kueueAttentionSeverity[admission.attention] ?? 'neutral',
+  }
+}
+
 export function getKueueWorkloadQueueName(resource: any): string {
   return resource?.spec?.queueName || '-'
 }
 
 export function getKueueWorkloadAdmittedBy(resource: any): string {
   return resource?.status?.admission?.clusterQueue || '-'
+}
+
+/**
+ * Whether this Workload snapshot permits a pending-position lookup.
+ * True does not establish that Kueue has observed or queued it. Mirrors Go's
+ * schedulinginsight.KueueWorkloadEligibleForPendingPosition; both read
+ * pkg/schedulinginsight/testdata/kueue_awaiting_admission.json.
+ */
+export function isKueueWorkloadEligibleForPendingPosition(resource: any): boolean {
+  if (resource?.spec?.active === false) return false
+  const conditions: any[] = Array.isArray(resource?.status?.conditions) ? resource.status.conditions : []
+  const byType = new Map<string, any>()
+  for (const condition of conditions) if (condition?.type) byType.set(condition.type, condition)
+  return !['Finished', 'Admitted', 'QuotaReserved'].some(type => byType.get(type)?.status === 'True')
 }
 
 export function getKueueWorkloadPriority(resource: any): string {

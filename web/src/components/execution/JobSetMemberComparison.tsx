@@ -1,6 +1,7 @@
 import { Badge, EmptyState, FetchResult } from '@skyhook-io/k8s-ui'
 import { formatCPUNanocores, formatMemoryBytes } from '@skyhook-io/k8s-ui/utils/format'
 import type { JobSetResources, JobSetUsage, WorkloadRun } from '../../api/client'
+import { runStateLabel } from './runState'
 
 interface Props {
   runs: WorkloadRun[]
@@ -74,7 +75,7 @@ export function JobSetMemberComparison(props: Props) {
           return <tr key={key} className={`border-b border-theme-border-subtle last:border-0 ${props.selected === key ? 'selection' : 'hover:bg-theme-hover'}`}>
             <td className="px-3 py-2 text-theme-text-secondary">{run.jobset?.replicatedJob ?? 'Not reported'}{run.jobset?.jobIndex !== undefined && ` #${run.jobset.jobIndex}`}</td>
             <th scope="row" className="max-w-xs px-3 py-2 font-medium"><button type="button" aria-pressed={props.selected === key} className="block max-w-full truncate text-accent-text hover:underline" onClick={() => props.onSelect?.(key)}>{run.name}</button></th>
-            <td className="px-3 py-2"><Badge severity={run.phase === 'Failed' || run.phase === 'Error' ? 'error' : run.phase === 'Succeeded' ? 'success' : run.active ? 'info' : 'neutral'}>{run.phase}{run.deleting ? ' · deleting' : ''}</Badge></td>
+            <td className="px-3 py-2"><Badge severity={run.phase === 'Failed' || run.phase === 'Error' ? 'error' : run.phase === 'Succeeded' ? 'success' : run.active ? 'info' : 'neutral'}>{runStateLabel(run)}</Badge></td>
             <td className="whitespace-nowrap px-3 py-2 text-theme-text-secondary">{props.durationFor(run) || '—'}</td>
             <td className="whitespace-nowrap px-3 py-2"><UsageValue usage={usage} resource="cpu" /></td>
             <td className="whitespace-nowrap px-3 py-2"><UsageValue usage={usage} resource="memory" /></td>

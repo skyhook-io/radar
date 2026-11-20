@@ -28,6 +28,12 @@ tests:
       - contains:
           path: rules
           content:
+            apiGroups: ["admissionregistration.k8s.io"]
+            resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
             apiGroups: ["storage.k8s.io"]
             resources: ["storageclasses"]
             verbs: ["get", "list", "watch"]
@@ -91,6 +97,9 @@ tests:
       - notContains:
           path: rules[*].resources
           content: secrets
+      - notContains:
+          path: rules[*].resources
+          content: certificatesigningrequests
 
   - it: follows the API registration collection gate
     set:

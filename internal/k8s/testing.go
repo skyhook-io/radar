@@ -7,6 +7,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/policyreports"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
@@ -255,8 +256,12 @@ func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIRe
 
 	// Bootstrap discovery from a fake clientset so NewResourceDiscovery has a
 	// non-nil discovery client; AddAPIResource then registers the test-only
-	// GVRs (e.g. serving.knative.dev/Service) the test depends on.
-	fakeDisc := fakeclientset.NewSimpleClientset().Discovery()
+	// GVRs (e.g. serving.knative.dev/Service) the test depends on. The fake
+	// serves the same resources, so a later discovery refresh finds them
+	// again instead of dropping them.
+	fake := fakeclientset.NewSimpleClientset()
+	fake.Resources = servedAPIResources(resources)
+	fakeDisc := fake.Discovery()
 	core, err := k8score.NewResourceDiscovery(fakeDisc)
 	if err != nil {
 		clientMu.Lock()
@@ -278,6 +283,23 @@ func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIRe
 	discoveryMu.Unlock()
 
 	return InitDynamicResourceCache(nil)
+}
+
+// servedAPIResources is resources as a discovery endpoint lists them.
+func servedAPIResources(resources []APIResource) []*metav1.APIResourceList {
+	byGV := map[string]*metav1.APIResourceList{}
+	var lists []*metav1.APIResourceList
+	for _, r := range resources {
+		gv := schema.GroupVersion{Group: r.Group, Version: r.Version}.String()
+		list := byGV[gv]
+		if list == nil {
+			list = &metav1.APIResourceList{GroupVersion: gv}
+			byGV[gv] = list
+			lists = append(lists, list)
+		}
+		list.APIResources = append(list.APIResources, metav1.APIResource{Name: r.Name, Kind: r.Kind, Namespaced: r.Namespaced, Verbs: r.Verbs})
+	}
+	return lists
 }
 
 // SetTestDynamicSyncStallAfter sets how long a dynamic informer may stay
@@ -395,6 +417,37 @@ func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
 	k8sClient = c
 	clientMu.Unlock()
 	return prev
+}
+
+// SetTestInformerClient installs request as the request clientset and
+// informer as the informer clientset of the same client set, the pairing
+// production builds, and returns a restore func.
+func SetTestInformerClient(request *kubernetes.Clientset, informer kubernetes.Interface) func() {
+	clientMu.Lock()
+	prevClient, prevActive := k8sClient, activeClients
+	k8sClient = request
+	activeClients = &sharedKubernetesClients{clientset: request, informerClientset: informer}
+	clientMu.Unlock()
+	return func() {
+		clientMu.Lock()
+		k8sClient, activeClients = prevClient, prevActive
+		clientMu.Unlock()
+	}
+}
+
+// ReconnectTestClient installs c as a new connection under the current context
+// name, as a reconnect does, and returns a func that restores the previous one.
+func ReconnectTestClient(c *kubernetes.Clientset) func() {
+	clientMu.Lock()
+	prevClient, prevGeneration := k8sClient, activeClientGeneration
+	k8sClient = c
+	activeClientGeneration = clientGenerationCounter.Add(1)
+	clientMu.Unlock()
+	return func() {
+		clientMu.Lock()
+		k8sClient, activeClientGeneration = prevClient, prevGeneration
+		clientMu.Unlock()
+	}
 }
 
 // SetTestPolicyReportIndex publishes a PolicyReport index directly, bypassing
@@ -525,6 +578,7 @@ func ResetTestState() {
 	k8sClient = nil
 	discoveryClient = nil
 	dynamicClient = nil
+	activeClients = nil
 	activeClientGeneration = 0
 	kubeconfigMode = ""
 	contextBinding = ""
@@ -682,4 +736,36 @@ func InitTestDynamicResourceCacheWithFallbacks(dynClient dynamic.Interface, reso
 		resourcePermsMu.Unlock()
 	}()
 	return InitTestDynamicResourceCache(dynClient, resources)
+}
+
+func SetTestContextOperationInProgress(active bool) func() {
+	var value int32
+	if active {
+		value = 1
+	}
+	previous := activeContextOperations.Swap(value)
+	return func() { activeContextOperations.Store(previous) }
+}
+
+// SwapResourceCacheForTest publishes rc (nil hides the cache) and returns a
+// func that restores the previous one, without resetting the package state
+// other tests share.
+func SwapResourceCacheForTest(rc *ResourceCache) (restore func()) {
+	prev := resourceCache.Swap(rc)
+	return func() { resourceCache.Store(prev) }
+}
+
+// InitTestReplayClients retains the supplied discovery client so refreshes see
+// the frozen catalog, rather than reverting to an empty bootstrap catalog.
+func InitTestReplayClients(client dynamic.Interface, catalog discovery.DiscoveryInterface) error {
+	clientMu.Lock()
+	dynamicClient = client
+	clientMu.Unlock()
+	if _, err := SetTestResourceDiscovery(catalog); err != nil {
+		return err
+	}
+	discoveryMu.Lock()
+	resourceDiscoveryClient = GetDiscoveryClient()
+	discoveryMu.Unlock()
+	return InitDynamicResourceCache(nil)
 }

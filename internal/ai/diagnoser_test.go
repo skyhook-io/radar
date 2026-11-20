@@ -169,10 +169,10 @@ func TestDiagnoseStreamUsesListenerAddress(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := "http://" + address + "/radar/mcp"
-				if !apply {
-					want += "-investigation?scope=" + scope
-				} else {
+				if apply {
 					want += "-apply"
+				} else {
+					want += "-investigation?scope=" + scope
 				}
 				if agent.spec.mcpURL != want {
 					t.Fatalf("agent MCP URL = %q, want %q", agent.spec.mcpURL, want)
@@ -210,13 +210,15 @@ func (*captureTurnAgent) parseStream(reader io.Reader, onEvent func(StreamEvent)
 }
 
 type adapterAuthoredEvidenceAgent struct {
+	spec  turnSpec
 	event StreamEvent
 }
 
 func (*adapterAuthoredEvidenceAgent) Name() string      { return "claude" }
 func (*adapterAuthoredEvidenceAgent) Path() string      { return "printf" }
 func (*adapterAuthoredEvidenceAgent) SigninCmd() string { return "claude auth login" }
-func (*adapterAuthoredEvidenceAgent) command(ctx context.Context, _ turnSpec) (*exec.Cmd, func(), error) {
+func (agent *adapterAuthoredEvidenceAgent) command(ctx context.Context, spec turnSpec) (*exec.Cmd, func(), error) {
+	agent.spec = spec
 	return exec.CommandContext(ctx, "printf", ""), func() {}, nil
 }
 func (agent *adapterAuthoredEvidenceAgent) parseStream(_ io.Reader, onEvent func(StreamEvent)) Diagnosis {
@@ -247,6 +249,18 @@ func TestDiagnoseStreamClearsAdapterProvenanceOnApplyTurn(t *testing.T) {
 	}
 	if delivered == nil || delivered.RadarEvidence {
 		t.Fatalf("apply event retained adapter-authored provenance: %+v", delivered)
+	}
+}
+
+func TestDiagnoseStreamUsesRestrictedApplyMount(t *testing.T) {
+	agent := &adapterAuthoredEvidenceAgent{event: StreamEvent{Type: "step"}}
+	diagnoser := &Diagnoser{agents: map[string]Agent{"claude": agent}, defName: "claude"}
+	_, err := diagnoser.DiagnoseStream(context.Background(), Request{Kind: "Pod", Namespace: "lab", Name: "test", MCPAddress: "localhost:9280", MCPBasePath: "/radar", Apply: true}, func(StreamEvent) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := agent.spec.mcpURL, "http://localhost:9280/radar/mcp-apply"; got != want {
+		t.Fatalf("URL %q, want %q", got, want)
 	}
 }
 
@@ -477,6 +491,39 @@ func TestAgentExitError_Classifies(t *testing.T) {
 	}
 }
 
+// Only Cursor's exact policy sentences get the policy message; any other
+// Cursor failure, or the same words from another agent, keeps today's text.
+func TestAgentExitError_CursorRunEverythingPolicy(t *testing.T) {
+	for _, detail := range []string{
+		"Your team administrator has disabled the 'Run Everything' option.",
+		"Please run without '--force' to approve commands individually.",
+		"Error: Your team administrator has disabled the 'Run Everything' option.\nPlease run without '--force' to approve commands individually.",
+	} {
+		got := agentExitError("cursor-agent", "cursor-agent login", detail, "").Error()
+		const want = "Cursor refused to start because a Cursor policy on this account turns off Run Everything, which Radar needs to run investigations through Cursor.\n"
+		if !strings.HasPrefix(got, want) {
+			t.Errorf("detail %q → %q, want it to start with %q", detail, got, want)
+		}
+		if first, _, _ := strings.Cut(detail, "\n"); !strings.Contains(got, first) {
+			t.Errorf("detail %q → %q, want Cursor's own text kept", detail, got)
+		}
+	}
+	for _, c := range []struct{ name, detail string }{
+		{"cursor-agent", "run everything is disabled"},
+		{"cursor-agent", "Error: --force is not supported"},
+		{"cursor-agent", "panic: nil pointer"},
+		{"claude", "Your team administrator has disabled the 'Run Everything' option."},
+	} {
+		got := agentExitError(c.name, "login", c.detail, "").Error()
+		if strings.Contains(got, "Cursor policy") {
+			t.Errorf("%s detail %q → %q, must not read as a Cursor policy block", c.name, c.detail, got)
+		}
+		if !strings.Contains(got, "stopped unexpectedly") {
+			t.Errorf("%s detail %q → %q, want today's fallback", c.name, c.detail, got)
+		}
+	}
+}
+
 // TestClaudeResultText covers the tool_result.content shapes: a plain JSON string
 // (pinned in the format test), an MCP content array, multipart text, and a raw
 // JSON object passed through.
@@ -602,6 +649,7 @@ func TestParseStream_InterleavesNarration(t *testing.T) {
 // JSON block) — free-text alone means the process died mid-stream and must
 // surface as an error, never as a calm "done".
 func TestDiagnoseStream_ProcessAndStreamErrors(t *testing.T) {
+	isolateHome(t)
 	mkCLI := func(t *testing.T, resultLine, exitCode string) string {
 		t.Helper()
 		dir := t.TempDir()
@@ -719,6 +767,7 @@ func TestParseStream_InitReportsAgentReady(t *testing.T) {
 // phase: the private mount's handshake produces exactly one event per turn, no
 // matter how many times the scope is marked, and it lands before the stream ends.
 func TestDiagnoseStreamReportsHandshakeOnce(t *testing.T) {
+	isolateHome(t)
 	dir := t.TempDir()
 	flag := filepath.Join(dir, "handshake-observed")
 	bin := filepath.Join(dir, "claude")

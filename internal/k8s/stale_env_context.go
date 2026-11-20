@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -37,7 +38,13 @@ type StaleEnvFact struct {
 	EvidenceSource     string
 	ContainerStartedAt time.Time
 	ChangedAt          time.Time
-	Message            string
+	// OrderOnly: every change Radar observed to the key since the container
+	// started only reordered the value's comma-separated entries.
+	OrderOnly bool
+	// NoRestartNeeded and HistoryIncomplete: see StaleSecretEnvCheck.
+	NoRestartNeeded   bool
+	HistoryIncomplete bool
+	Message           string
 }
 
 // FindStaleEnvForPods returns the stale env facts of these Pods' Secret- and
@@ -107,6 +114,9 @@ func findStaleEnv(ctx context.Context, cache *ResourceCache, pods []*corev1.Pod,
 						EvidenceSource:     check.EvidenceSource,
 						ContainerStartedAt: check.ContainerStartedAt,
 						ChangedAt:          check.SecretChangedAt,
+						OrderOnly:          check.OrderOnly,
+						NoRestartNeeded:    check.NoRestartNeeded,
+						HistoryIncomplete:  check.HistoryIncomplete,
 						Message:            check.Message,
 					})
 				}
@@ -186,8 +196,12 @@ func findStaleConfigMapEnv(ctx context.Context, cache *ResourceCache, namespace 
 	if len(changes) == 0 {
 		return nil
 	}
-	stale := func(change podEnvSourceChange, startedAt time.Time) bool {
-		return (change.kind == "modified" || change.kind == "removed") && startedAt.Before(change.changedAt)
+	completeSince := envHistoryCompleteSince(now)
+	stale := func(change podEnvSourceChange, startedAt time.Time) (time.Time, bool, bool) {
+		if change.kind != "modified" && change.kind != "removed" {
+			return time.Time{}, false, false
+		}
+		return change.classify(startedAt, completeSince)
 	}
 	var out []StaleEnvFact
 	for _, pod := range consumers {
@@ -204,8 +218,11 @@ func findStaleConfigMapEnv(ctx context.Context, cache *ResourceCache, namespace 
 				}
 				ref := env.ValueFrom.ConfigMapKeyRef
 				change, ok := changes[podEnvSourceKey{kind: "ConfigMap", namespace: namespace, name: ref.Name, key: ref.Key}]
-				if ok && stale(change, startedAt) {
-					out = append(out, newStaleConfigMapEnvFact(pod, container.Name, env.Name, "configMapKeyRef", ref.Name, ref.Key, startedAt, change.changedAt))
+				if !ok {
+					continue
+				}
+				if changedAt, orderOnly, isStale := stale(change, startedAt); isStale {
+					out = append(out, newStaleConfigMapEnvFact(pod, container.Name, env.Name, "configMapKeyRef", ref.Name, ref.Key, startedAt, changedAt, orderOnly))
 				}
 			}
 			for _, from := range container.EnvFrom {
@@ -213,7 +230,11 @@ func findStaleConfigMapEnv(ctx context.Context, cache *ResourceCache, namespace 
 					continue
 				}
 				for identity, change := range changes {
-					if identity.kind != "ConfigMap" || identity.name != from.ConfigMapRef.Name || !stale(change, startedAt) {
+					if identity.kind != "ConfigMap" || identity.name != from.ConfigMapRef.Name {
+						continue
+					}
+					changedAt, orderOnly, isStale := stale(change, startedAt)
+					if !isStale {
 						continue
 					}
 					if _, binary := binaryKeys[identity.name][identity.key]; binary {
@@ -223,7 +244,7 @@ func findStaleConfigMapEnv(ctx context.Context, cache *ResourceCache, namespace 
 					if len(validation.IsEnvVarName(variable)) != 0 || envFromKeyOverridden(container, variable) {
 						continue
 					}
-					out = append(out, newStaleConfigMapEnvFact(pod, container.Name, variable, "envFrom", from.ConfigMapRef.Name, identity.key, startedAt, change.changedAt))
+					out = append(out, newStaleConfigMapEnvFact(pod, container.Name, variable, "envFrom", from.ConfigMapRef.Name, identity.key, startedAt, changedAt, orderOnly))
 				}
 			}
 		}
@@ -231,7 +252,7 @@ func findStaleConfigMapEnv(ctx context.Context, cache *ResourceCache, namespace 
 	return out
 }
 
-func newStaleConfigMapEnvFact(pod *corev1.Pod, container, env, referenceKind, name, key string, startedAt, changedAt time.Time) StaleEnvFact {
+func newStaleConfigMapEnvFact(pod *corev1.Pod, container, env, referenceKind, name, key string, startedAt, changedAt time.Time, orderOnly bool) StaleEnvFact {
 	return StaleEnvFact{
 		Pod:                pod.Name,
 		Container:          container,
@@ -243,6 +264,7 @@ func newStaleConfigMapEnvFact(pod *corev1.Pod, container, env, referenceKind, na
 		EvidenceSource:     staleSecretEvidenceObservedChange,
 		ContainerStartedAt: startedAt,
 		ChangedAt:          changedAt,
+		OrderOnly:          orderOnly,
 	}
 }
 
@@ -301,7 +323,7 @@ func groupStaleEnvFacts(rows []StaleEnvFact) []StaleEnvFact {
 	byKey := make(map[string]*group)
 	for _, row := range rows {
 		key := row.Container + "\x00" + row.Env + "\x00" + row.SourceKind + "\x00" + row.SourceName + "\x00" +
-			row.Key + "\x00" + row.ReferenceKind + "\x00" + row.EvidenceSource
+			row.Key + "\x00" + row.ReferenceKind + "\x00" + row.EvidenceSource + "\x00" + strconv.FormatBool(row.OrderOnly) + "\x00" + strconv.FormatBool(row.HistoryIncomplete)
 		current := byKey[key]
 		if current == nil {
 			current = &group{fact: row, pods: make(map[string]bool)}
@@ -327,6 +349,9 @@ func groupStaleEnvFacts(rows []StaleEnvFact) []StaleEnvFact {
 		a, b := out[i], out[j]
 		if a.EvidenceSource != b.EvidenceSource {
 			return a.EvidenceSource == staleSecretEvidenceObservedChange
+		}
+		if a.NoRestartNeeded != b.NoRestartNeeded {
+			return b.NoRestartNeeded
 		}
 		if a.SourceKind != b.SourceKind {
 			return a.SourceKind > b.SourceKind // Secret before ConfigMap
@@ -357,6 +382,11 @@ func staleEnvFactMessage(fact StaleEnvFact) string {
 	via := ""
 	if fact.ReferenceKind == "envFrom" {
 		via = " through envFrom"
+	}
+	if fact.OrderOnly {
+		return fmt.Sprintf("%s container %s reads %s/%s key %s%s as env %s and started at %s, before Radar observed that key's comma-separated entries reordered at %s, with none added or removed. Env values don't refresh, so it keeps the old order until it restarts, which matters only if the app treats the new order differently.",
+			pod, fact.Container, fact.SourceKind, fact.SourceName, fact.Key, via, fact.Env,
+			fact.ContainerStartedAt.UTC().Format(time.RFC3339), fact.ChangedAt.UTC().Format(time.RFC3339))
 	}
 	return fmt.Sprintf("%s container %s reads %s/%s key %s%s as env %s and started at %s, before Radar observed a write to that key at %s. Env values don't refresh, so it likely still holds the earlier value until it restarts.",
 		pod, fact.Container, fact.SourceKind, fact.SourceName, fact.Key, via, fact.Env,

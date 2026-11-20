@@ -1,0 +1,84 @@
+{
+  "memory": 220,
+  "storage": 0,
+  "reserved_memory": 0,
+  "reserved_storage": 0,
+  "accounts": 1,
+  "ha_assets": 0,
+  "api": {
+    "level": 1,
+    "total": 2,
+    "errors": 0
+  },
+  "server_id": "NAE7YGRJ25VKR3TPNUBFG4SPOFHK5IVYNCJXEGQF2MPNUYQJZFTTSYZP",
+  "now": "2026-11-03T01:44:18.742481469Z",
+  "config": {
+    "max_memory": 3015512064,
+    "max_storage": 11649506304,
+    "store_dir": "/data/jetstream",
+    "sync_interval": 120000000000
+  },
+  "limits": {},
+  "streams": 1,
+  "consumers": 1,
+  "messages": 5,
+  "bytes": 220,
+  "account_details": [
+    {
+      "name": "$G",
+      "id": "$G",
+      "memory": 220,
+      "storage": 0,
+      "reserved_memory": 18446744073709551615,
+      "reserved_storage": 18446744073709551615,
+      "accounts": 0,
+      "ha_assets": 0,
+      "api": {
+        "level": 0,
+        "total": 2,
+        "errors": 0
+      },
+      "stream_detail": [
+        {
+          "name": "DEPTH",
+          "created": "2026-11-03T01:44:16.617499544Z",
+          "cluster": {
+            "leader": "NAE7YGRJ25VKR3TPNUBFG4SPOFHK5IVYNCJXEGQF2MPNUYQJZFTTSYZP"
+          },
+          "state": {
+            "messages": 5,
+            "bytes": 220,
+            "first_seq": 1,
+            "first_ts": "2026-11-03T01:44:16.933756404Z",
+            "last_seq": 5,
+            "last_ts": "2026-11-03T01:44:17.56602379Z",
+            "num_subjects": 1,
+            "consumer_count": 1
+          },
+          "consumer_detail": [
+            {
+              "stream_name": "DEPTH",
+              "name": "progress",
+              "created": "2026-11-03T01:44:16.773999522Z",
+              "delivered": {
+                "consumer_seq": 5,
+                "stream_seq": 5,
+                "last_active": "2026-11-03T01:44:18.273878959Z"
+              },
+              "ack_floor": {
+                "consumer_seq": 0,
+                "stream_seq": 0
+              },
+              "num_ack_pending": 5,
+              "num_redelivered": 0,
+              "num_waiting": 0,
+              "num_pending": 0,
+              "ts": "2026-11-03T01:44:18.742523892Z"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "total": 1
+}

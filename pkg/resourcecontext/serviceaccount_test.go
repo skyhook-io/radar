@@ -1,0 +1,175 @@
+package resourcecontext
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/topology"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"slices"
+	"testing"
+)
+
+type serviceAccountReferenceProvider struct {
+	mockResourceProvider
+	accounts []*corev1.ServiceAccount
+	err      error
+}
+
+func (p serviceAccountReferenceProvider) ServiceAccounts() ([]*corev1.ServiceAccount, error) {
+	return p.accounts, p.err
+}
+
+func TestBuild_ServiceAccountSecretRolesAndReverse(t *testing.T) {
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: "prod"}, Secrets: []corev1.ObjectReference{{Name: "credentials"}}, ImagePullSecrets: []corev1.LocalObjectReference{{Name: "credentials"}}}
+	rc := fixtureContext(context.Background(), sa, nil, Options{Tier: TierBasic})
+	if rc.ServiceAccountSummary == nil || len(rc.ServiceAccountSummary.SecretRefs) != 1 || len(rc.ServiceAccountSummary.ImagePullSecrets) != 1 {
+		t.Fatalf("roles: %+v", rc)
+	}
+	if rc.Uses != nil {
+		t.Fatalf("SA declarations asserted as Pod use: %+v", rc.Uses)
+	}
+	other := sa.DeepCopy()
+	other.Namespace = "other"
+	provider := serviceAccountReferenceProvider{accounts: []*corev1.ServiceAccount{nil, other, sa}}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "prod"}}
+	rc = fixtureContext(context.Background(), secret, nil, Options{Tier: TierBasic, Provider: provider})
+	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 1 {
+		t.Fatalf("reverse: %+v", rc)
+	}
+	ref := rc.ReferencedBy.Items[0]
+	if ref.Kind != "ServiceAccount" || ref.Name != "runner" || ref.Namespace != "prod" || len(ref.Paths) != 2 {
+		t.Fatalf("reverse roles: %+v", ref)
+	}
+	rc = fixtureContext(context.Background(), secret, nil, Options{Tier: TierBasic, Provider: provider, AccessChecker: denyChecker{kind: "ServiceAccount", namespace: "prod"}})
+	if rc.ReferencedBy != nil || !hasOmitted(rc.Omitted, "referencedBy") {
+		t.Fatalf("denied SA: %+v", rc)
+	}
+	rc = fixtureContext(context.Background(), sa, nil, Options{Tier: TierBasic, AccessChecker: denyChecker{kind: "Secret", namespace: "prod"}})
+	denied := []ContextRef{{Kind: "Secret", Namespace: "prod", Name: "credentials", State: topology.ResourceStateDenied}}
+	if s := rc.ServiceAccountSummary; s == nil || !slices.Equal(s.SecretRefs, denied) || !slices.Equal(s.ImagePullSecrets, denied) || marksField(rc.Omitted, "serviceAccountSummary.secretRefs") || marksField(rc.Omitted, "serviceAccountSummary.imagePullSecrets") {
+		t.Fatalf("denied Secrets: %+v", rc)
+	}
+	custom := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "custom.example/v1", "kind": "Secret", "metadata": map[string]interface{}{"namespace": "prod", "name": "credentials"}}}
+	if rc := fixtureContext(context.Background(), custom, nil, Options{Tier: TierBasic, Provider: provider}); rc.ReferencedBy != nil {
+		t.Fatalf("custom Secret got core refs: %+v", rc)
+	}
+	if rc := fixtureContext(context.Background(), &corev1.ServiceAccount{}, nil, Options{Tier: TierBasic}); rc.ServiceAccountSummary != nil {
+		t.Fatalf("projected tokens fabricated: %+v", rc)
+	}
+}
+
+func TestBuild_ServiceAccountReferenceSourceUnavailable(t *testing.T) {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "prod"}}
+	rc := fixtureContext(context.Background(), secret, nil, Options{Tier: TierBasic, Provider: serviceAccountReferenceProvider{err: errors.New("account source unavailable")}})
+	found := false
+	for _, field := range rc.Omitted {
+		if field.Field == "referencedBy" && field.Reason == OmittedUnavailable {
+			found = true
+		}
+	}
+	if !found || rc.ReferencedBy != nil {
+		t.Fatalf("unavailability hidden: %+v", rc)
+	}
+}
+
+func TestBuild_SecretReferenceCapRetainsDeclaringAccount(t *testing.T) {
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: "prod"}, Secrets: []corev1.ObjectReference{{Name: "credentials"}}, ImagePullSecrets: []corev1.LocalObjectReference{{Name: "credentials"}}}
+	provider := serviceAccountReferenceProvider{accounts: []*corev1.ServiceAccount{sa}}
+	for i := 0; i < 25; i++ {
+		provider.deploys = append(provider.deploys, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("consumer-%02d", i), Namespace: "prod"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{ImagePullSecrets: []corev1.LocalObjectReference{{Name: "credentials"}}}}}})
+	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "prod"}}
+	rc := fixtureContext(context.Background(), secret, nil, Options{Provider: provider})
+	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 26 || !rc.ReferencedBy.Truncated || len(rc.ReferencedBy.Items) != maxReferencedByItems {
+		t.Fatalf("visible count or cap changed: %+v", rc.ReferencedBy)
+	}
+	account := -1
+	for i, ref := range rc.ReferencedBy.Items {
+		if ref.Kind == "ServiceAccount" {
+			account = i
+		}
+		if len(ref.Paths) == 0 {
+			t.Fatalf("selected reference lost provenance: %+v", ref)
+		}
+	}
+	if account < 0 || !slices.Equal(rc.ReferencedBy.Items[account].Paths, []string{"secrets[]", "imagePullSecrets[]"}) {
+		t.Fatalf("busy Secret hid account declaration roles: %+v", rc.ReferencedBy.Items)
+	}
+	if account != 1 || rc.ReferencedBy.Items[0].Name != "consumer-00" {
+		t.Fatalf("kind round-robin changed display order: %+v", rc.ReferencedBy.Items)
+	}
+	if slices.Contains(rc.Omitted, OmittedField{Field: "referencedBy", Reason: OmittedBudgetExceeded}) {
+		t.Fatalf("truncated flag was duplicated by an omission: %+v", rc.Omitted)
+	}
+	rc = fixtureContext(context.Background(), secret, nil, Options{Provider: provider, AccessChecker: denyChecker{kind: "ServiceAccount", namespace: "prod"}})
+	if rc.ReferencedBy.Total != 25 || len(rc.ReferencedBy.Items) != maxReferencedByItems || slices.ContainsFunc(rc.ReferencedBy.Items, func(ref ReferenceUse) bool { return ref.Kind == "ServiceAccount" }) {
+		t.Fatalf("hidden account affected visible count or cap: %+v", rc.ReferencedBy)
+	}
+	rc = fixtureContext(context.Background(), secret, nil, Options{Provider: provider, AccessChecker: denyChecker{group: "apps", kind: "Deployment", namespace: "prod"}})
+	if rc.ReferencedBy.Total != 1 || rc.ReferencedBy.Truncated || len(rc.ReferencedBy.Items) != 1 || rc.ReferencedBy.Items[0].Kind != "ServiceAccount" {
+		t.Fatalf("denied workloads consumed slots: %+v", rc.ReferencedBy)
+	}
+}
+
+// syncingServiceAccountProvider finishes its initial sync while the
+// ServiceAccount list is being read, so the snapshot is partial but any
+// assessment taken afterwards says the namespace is complete.
+type syncingServiceAccountProvider struct {
+	mockResourceProvider
+	synced bool
+}
+
+func (p *syncingServiceAccountProvider) ServiceAccounts() ([]*corev1.ServiceAccount, error) {
+	p.synced = true
+	return nil, nil
+}
+
+func (p *syncingServiceAccountProvider) AssessKindRead(_ string, namespaces []string) k8score.KindReadAssessment {
+	if p.synced {
+		return k8score.KindReadAssessment{Readiness: k8score.KindReady, Requested: namespaces, AllNamespaces: true, Read: namespaces, Complete: true}
+	}
+	return k8score.KindReadAssessment{Readiness: k8score.KindPending, Requested: namespaces, AllNamespaces: true, Read: []string{}, Loading: namespaces}
+}
+
+func TestServiceAccountCoverageAssessedBeforeTheSnapshot(t *testing.T) {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "prod"}}
+	rc := fixtureContext(context.Background(), secret, nil, Options{Tier: TierBasic, Provider: &syncingServiceAccountProvider{}})
+	if !slices.Contains(rc.Omitted, OmittedField{Field: "referencedBy", Reason: OmittedCacheCold}) {
+		t.Fatalf("snapshot taken while loading was reported complete: %+v", rc.Omitted)
+	}
+}
+
+// A Secret a ServiceAccount declares whose access couldn't be checked is
+// listed by name and marked unverified, in the role the account gives it.
+func TestBuild_ServiceAccountSecretCheckFailedIsUnverified(t *testing.T) {
+	ctx := context.Background()
+	sa := &corev1.ServiceAccount{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ServiceAccount"}, ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: "prod"}, ImagePullSecrets: []corev1.LocalObjectReference{{Name: "registry"}}}
+	subject := resourceid.NewRef("", "ServiceAccount", "prod", "runner")
+	session := newContextFixtureSession(subject, sa, nil)
+	access := undecidedSecrets{}
+	rel, extras := topology.RelationsContextAnswer(session, access, access, ownership.NewView(session, access), subject, sa, nil, nil)
+	rc := Build(ctx, sa, Options{Relationships: rel, RelationshipExtras: extras})
+	want := []ContextRef{{Kind: "Secret", Namespace: "prod", Name: "registry", State: topology.ResourceStateAccessUnverified}}
+	if s := rc.ServiceAccountSummary; s == nil || len(s.SecretRefs) != 0 || !slices.Equal(s.ImagePullSecrets, want) {
+		t.Fatalf("summary = %+v", rc.ServiceAccountSummary)
+	}
+}
+
+// undecidedSecrets can't decide Secrets.
+type undecidedSecrets struct{}
+
+func (undecidedSecrets) CanRead(gk resourceid.GroupKind, _ string) ownership.Decision {
+	if gk == (resourceid.GroupKind{Kind: "Secret"}) {
+		return ownership.Undecided
+	}
+	return ownership.Allowed
+}
+func (undecidedSecrets) Namespaces() ([]string, bool) { return nil, true }

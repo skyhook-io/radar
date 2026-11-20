@@ -44,6 +44,9 @@ var (
 
 func main() {
 	// Subcommand dispatch (before flag parsing — subcommands own their flags).
+	if len(os.Args) > 1 && os.Args[1] == "check" {
+		os.Exit(runCheckCommand(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	// `radar diagnose <kind>/<name>` is a thin client for a RUNNING instance.
 	if len(os.Args) > 1 && os.Args[1] == "diagnose" {
 		os.Exit(diagnosecli.Run(os.Args[2:], func(url string) {
@@ -102,13 +105,15 @@ func main() {
 	historyLimit := flag.Int("history-limit", fileCfg.HistoryLimitOr(10000), "Maximum number of events to retain in timeline")
 	debugEvents := flag.Bool("debug-events", false, "Enable verbose event debugging (logs all event drops)")
 	fakeInCluster := flag.Bool("fake-in-cluster", false, "Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)")
-	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)")
-	disableExec := flag.Bool("disable-exec", false, "Disable pod exec: terminal, debug shells and pod file browsing")
+	disableHelmWrite := flag.Bool("disable-helm-write", false, "Disable Helm release writes, per-release source updates, values previews and manage_helm; also global repository/OCI changes without auth. Signed-in global source management and Cloud install/upgrade continue")
+	disableExec := flag.Bool("disable-exec", false, "Disable pod exec: terminal, debug shells, pod file browsing, CloudNativePG sessions and MCP exec_pod")
 	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable the host local terminal")
+	disableAutoPortForward := flag.Bool("disable-auto-port-forward", fileCfg.DisableAutoPortForward, "Never open port-forwards on Radar's own initiative (metrics, traffic, cost and Argo CD discovery); port-forwards you start still work")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	debugImage := flag.String("debug-image", fileCfg.DebugImage, "Image for ephemeral debug containers and node debug pods (empty = busybox:latest; point at a mirror for air-gapped/private-registry clusters)")
 	reachabilityImage := flag.String("reachability-image", fileCfg.ReachabilityImage, "Image for the in-cluster reachability probe Job (empty = RADAR_IMAGE env, then the version-matched published Radar image; point at a mirror for air-gapped clusters)")
 	listPageSize := flag.Int64("list-page-size", 0, "Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this page size on clusters without WatchList streaming. 0 = off (single LIST). Try 2000 if a very large cluster fails to sync.")
+	rbacNamespaces := flag.String("rbac-namespaces", os.Getenv("RADAR_RBAC_NAMESPACES"), "Every namespace this install's ServiceAccount is granted, as a comma-separated list. Set by the Helm chart's rbac.namespaces. When the ServiceAccount cannot list namespaces cluster-wide, Radar treats this list as its complete namespace set. Env: RADAR_RBAC_NAMESPACES")
 	namespaceScope := flag.Bool("namespace-scope", false, "Scope namespaced informer caches to a single namespace (multiple namespaces are not supported yet). Requires --namespace or a kubeconfig context namespace. Local mode can rescope by switching namespaces; auth/cloud mode locks to the startup namespace.")
 	// Timeline storage options
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory, sqlite, or postgres")
@@ -121,7 +126,7 @@ func main() {
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	workloadSingleCluster := flag.Bool("prometheus-single-cluster", false, "Optional workload/PVC metrics scope override: assert that the backend contains only this Kubernetes cluster. Replaces automatic matching; not saved, and cleared when the cluster, backend or credentials change. Does not scope rightsizing, node/HPA or legacy network/storage metrics.")
 	workloadClusterLabels := map[string]string{}
-	flag.Func("prometheus-cluster-label", "Optional workload/PVC metrics scope override: exact label=value identifying this cluster, e.g. cluster=production (repeatable, ANDed). Alternative to --prometheus-single-cluster, with the same lifetime and scope; leave both unset for automatic matching.", func(raw string) error {
+	flag.Func("prometheus-cluster-label", "Optional workload/PVC metrics scope override, also used for the Caretta/Beyla/Istio traffic map on a metrics store you configured: exact label=value identifying this cluster, e.g. cluster=production (repeatable, ANDed). Alternative to --prometheus-single-cluster, with the same lifetime and scope; leave both unset for automatic matching.", func(raw string) error {
 		key, value, ok := strings.Cut(raw, "=")
 		if !ok {
 			return fmt.Errorf("expected label=value")
@@ -156,6 +161,7 @@ func main() {
 	authUserHeader := flag.String("auth-user-header", "X-Forwarded-User", "Header for username (proxy mode)")
 	authGroupsHeader := flag.String("auth-groups-header", "X-Forwarded-Groups", "Header for groups (proxy mode)")
 	authProxyLogoutURL := flag.String("auth-proxy-logout-url", "", "URL the logout button redirects to in proxy mode, to tear down the upstream proxy session (e.g. oauth2-proxy's /oauth2/sign_out). The proxy must actually invalidate the session at this URL — Radar only clears its own cookie (Basic Auth has no logout). Empty = clear Radar's cookie only.")
+	authProxyLogoutCookies := flag.String("auth-proxy-logout-cookies", "", "Comma-separated names of the auth proxy's session cookies, for example '_oauth2_proxy*' (* matches any characters). In proxy mode, logout deletes every matching cookie the browser sends, so the next request goes back through the proxy's sign-in. Use it when the proxy has no sign-out URL, or together with --auth-proxy-logout-url.")
 	authOIDCIssuer := flag.String("auth-oidc-issuer", "", "OIDC issuer URL")
 	authOIDCInternalIssuer := flag.String("auth-oidc-internal-issuer", "", "Internal OIDC issuer base URL used by Radar for discovery and derived server-side endpoints; tokens are still validated against --auth-oidc-issuer")
 	authOIDCAuthorizationURL := flag.String("auth-oidc-authorization-url", "", "Browser-facing OIDC authorization endpoint URL (overrides discovery)")
@@ -262,6 +268,9 @@ func main() {
 		*authUserHeader = "X-Forwarded-User"
 		*authGroupsHeader = "X-Forwarded-Groups"
 		log.Printf("[cloud] RADAR_CLOUD_MODE=true: auth-mode forced to proxy, trusting tunnel-supplied identity headers")
+	}
+	if err := pkgauth.ValidateProxyLogoutCookies(parseCSV(*authProxyLogoutCookies)); err != nil {
+		log.Fatalf("--auth-proxy-logout-cookies: %v", err)
 	}
 	credentialMode, err := pkgauth.ParseCredentialMode(*k8sCredentials)
 	if err != nil {
@@ -391,8 +400,12 @@ func main() {
 		resolvedNamespace = resolvedNamespaces[0]
 		resolvedNamespaces = nil
 	}
-	if len(resolvedNamespaces) > *maxScopeCandidates {
-		log.Fatalf("--namespaces lists %d namespaces but the RBAC probe fanout cap is %d; raise --max-scope-candidates (or RADAR_MAX_SCOPE_CANDIDATES) to cover all of them", len(resolvedNamespaces), *maxScopeCandidates)
+	resolvedRBACNamespaces := app.ParseNamespaces(*rbacNamespaces)
+	if *namespaceScope && len(resolvedRBACNamespaces) > 0 {
+		log.Fatalf("--namespace-scope cannot be combined with --rbac-namespaces")
+	}
+	if err := app.CheckNamespaceCount(resolvedNamespaces, *maxScopeCandidates); err != nil {
+		log.Fatalf("%v", err)
 	}
 	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
@@ -416,6 +429,7 @@ func main() {
 		KubeconfigDirs:              resolvedKubeconfigDirs,
 		Namespace:                   resolvedNamespace,
 		Namespaces:                  resolvedNamespaces,
+		RBACNamespaces:              resolvedRBACNamespaces,
 		Port:                        *port,
 		ListenAddress:               normalizedListenAddress,
 		ShowRemoteAccessHint:        true,
@@ -431,6 +445,7 @@ func main() {
 		FakeInCluster:               *fakeInCluster,
 		DisableHelmWrite:            *disableHelmWrite,
 		DisableExec:                 *disableExec,
+		DisableAutoPortForward:      *disableAutoPortForward,
 		DisableLocalTerminal:        *disableLocalTerminal,
 		PodShellDefault:             *podShellDefault,
 		DebugImage:                  *debugImage,
@@ -463,6 +478,7 @@ func main() {
 		MCPEnabled:                  mcpEnabled,
 		MCPReadOnly:                 mcpMode.ReadOnly,
 		MCPExecTools:                mcpFlags.ExecToolsEnabled(),
+		MCPHTTPTools:                mcpFlags.HTTPToolsEnabled(),
 		AIHistory:                   *aiHistory,
 		AIHistoryDBPath:             fileCfg.AIHistoryDBPath,
 		Version:                     version,
@@ -477,6 +493,7 @@ func main() {
 			UserHeader:                *authUserHeader,
 			GroupsHeader:              *authGroupsHeader,
 			ProxyLogoutURL:            *authProxyLogoutURL,
+			ProxyLogoutCookies:        parseCSV(*authProxyLogoutCookies),
 			OIDCIssuer:                *authOIDCIssuer,
 			OIDCInternalIssuer:        *authOIDCInternalIssuer,
 			OIDCAuthorizationURL:      *authOIDCAuthorizationURL,
@@ -499,6 +516,10 @@ func main() {
 		},
 	}
 
+	if (*mcpCatalogOnly || *mcpCatalogStdio) && !cfg.FakeInCluster {
+		cfg.MCPHTTPTools = false
+	}
+
 	// Set global flags
 	app.SetGlobals(cfg)
 
@@ -510,7 +531,7 @@ func main() {
 		log.Printf("MCP catalog stdio mode enabled (%s): skipping Kubernetes initialization", mode)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := mcppkg.RunStdioMode(ctx, mcpMode.ReadOnly); err != nil && !errors.Is(err, context.Canceled) {
+		if err := mcppkg.RunStdioMode(ctx, mcpMode.ReadOnly, !cfg.AuthConfig.Enabled() && !cfg.CloudTunnelConfigured); err != nil && !errors.Is(err, context.Canceled) {
 			log.Fatalf("MCP stdio server failed: %v", err)
 		}
 		return

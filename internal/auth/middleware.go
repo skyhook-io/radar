@@ -257,8 +257,13 @@ type AuditActionDetails struct {
 	RequestedName string
 	SelectedUID   string
 	Node          string
-	ExitCode      *int
-	Duration      time.Duration
+	// File is a file a write targets; Directory and Bytes describe it.
+	// Never the file's contents.
+	Directory string
+	File      string
+	Bytes     int64
+	ExitCode  *int
+	Duration  time.Duration
 }
 
 func AuditLogAction(r *http.Request, details AuditActionDetails) {
@@ -285,6 +290,9 @@ func AuditLogAction(r *http.Request, details AuditActionDetails) {
 	}
 	if details.Node != "" {
 		line += fmt.Sprintf(" node=%q", details.Node)
+	}
+	if details.File != "" {
+		line += fmt.Sprintf(" dir=%q file=%q bytes=%d", details.Directory, details.File, details.Bytes)
 	}
 	if details.ExitCode != nil {
 		line += fmt.Sprintf(" exitCode=%d", *details.ExitCode)

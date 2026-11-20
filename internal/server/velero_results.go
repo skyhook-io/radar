@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -22,6 +24,8 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
+	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
 
 // A Backup's status carries how many errors and warnings a run produced, and
@@ -43,13 +47,10 @@ var downloadRequestGVR = schema.GroupVersionResource{
 	Group: veleroGroup, Version: "v1", Resource: "downloadrequests",
 }
 
-// veleroResultTargets maps the route's kind to the DownloadRequest target that
-// holds that kind's per-item messages. Deliberately a closed set: the enum has
-// fourteen targets, and the rest are contents listings and volume metadata that
-// answer a different question.
-var veleroResultTargets = map[string]struct{ target, kind string }{
-	"backups":  {target: "BackupResults", kind: "Backup"},
-	"restores": {target: "RestoreResults", kind: "Restore"},
+// Only Backups and Restores have run artifacts.
+var veleroRunKinds = map[string]string{
+	"backups":  "Backup",
+	"restores": "Restore",
 }
 
 // VeleroMessage is one warning or error, with the scope Velero filed it under.
@@ -82,11 +83,13 @@ type veleroResults struct {
 // strings. The reader is sent somewhere different by each one, and the handler
 // needs to distinguish them without matching on error text.
 var (
-	errStorageUnreachable = errors.New("the object store did not answer")
-	errStorageRefused     = errors.New("the object store refused the request")
-	errStorageRedirected  = errors.New("the object store redirected, which is not followed")
-	errNotAResultsFile    = errors.New("what came back is not a Velero results file")
-	errMalformedURL       = errors.New("Velero returned a URL that cannot be parsed")
+	errStorageMissing      = errors.New("the object store has no file for this run")
+	errStorageUnreachable  = errors.New("the object store did not answer")
+	errStorageRefused      = errors.New("the object store refused the request")
+	errStorageRedirected   = errors.New("the object store redirected, which is not followed")
+	errNotAResultsFile     = errors.New("what came back is not a Velero results file")
+	errDownloadDestination = errors.New("download destination is not allowed")
+	errMalformedURL        = errors.New("Velero returned a URL that cannot be parsed")
 )
 
 // urlSafeCause strips the URL out of an HTTP client error.
@@ -124,21 +127,60 @@ const (
 // decides whether this caller may ask — a reader who cannot create
 // DownloadRequests gets the apiserver's own answer rather than Radar's guess.
 func (s *Server) handleVeleroRunMessages(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	s.handleVeleroRunArtifact(w, r, "messages", "Results", maxResultsBytes, maxResultsBytes, decodeVeleroMessages)
+}
+
+// All run artifacts use the same run-read gate and impersonated DownloadRequest
+// lifecycle, including on unauthenticated shared listeners.
+func (s *Server) handleVeleroRunArtifact(w http.ResponseWriter, r *http.Request, artifact, suffix string, compressedLimit, decodedLimit int64, decode func(io.Reader) (any, error)) {
+	run, ok := s.openVeleroRun(w, r, artifact)
+	if !ok {
 		return
+	}
+	result, failure := s.downloadVeleroRunArtifact(r.Context(), run, artifact, suffix, compressedLimit, decodedLimit, decode)
+	if failure != nil {
+		s.writeError(w, failure.status, failure.message)
+		return
+	}
+	s.writeJSON(w, result)
+}
+
+// veleroRun is a Backup or Restore the caller may read, with the caller's
+// client for the DownloadRequests that fetch its files.
+type veleroRun struct {
+	client    dynamic.Interface
+	kind      string
+	namespace string
+	name      string
+	object    *unstructured.Unstructured
+}
+
+type veleroArtifactFailure struct {
+	status  int
+	message string
+}
+
+// openVeleroRun applies the gates every run artifact shares, writing the
+// refusal itself when it refuses.
+func (s *Server) openVeleroRun(w http.ResponseWriter, r *http.Request, artifact string) (veleroRun, bool) {
+	if !s.requireConnected(w) {
+		return veleroRun{}, false
 	}
 	kindParam := strings.ToLower(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	target, ok := veleroResultTargets[kindParam]
+	targetKind, ok := veleroRunKinds[kindParam]
 	if !ok {
-		s.writeError(w, http.StatusBadRequest, "messages are available for backups and restores")
-		return
+		s.writeError(w, http.StatusBadRequest, "only backups and restores have run "+artifact)
+		return veleroRun{}, false
 	}
 	if namespace == "" || name == "" {
 		s.writeError(w, http.StatusBadRequest, "namespace and name are required")
-		return
+		return veleroRun{}, false
+	}
+	if s.refuseOutsideVeleroPin(w, namespace) {
+		return veleroRun{}, false
 	}
 
 	// Creating a DownloadRequest is the mechanism, not the permission being
@@ -148,19 +190,60 @@ func (s *Server) handleVeleroRunMessages(w http.ResponseWriter, r *http.Request)
 	// open. Gate on the run itself, the way the sibling lookup gates on
 	// listing Backups.
 	if !s.canRead(r, veleroGroup, kindParam, namespace, "get") {
-		s.writeError(w, http.StatusForbidden, "no access to this Velero "+target.kind)
-		return
+		s.writeError(w, http.StatusForbidden, "no access to this Velero "+targetKind)
+		return veleroRun{}, false
 	}
 
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[velero] Dynamic client unavailable for %s messages %s/%s",
-			target.kind, sanitizeForLog(namespace), sanitizeForLog(name))
+		log.Printf("[velero] Dynamic client unavailable for %s %s %s/%s",
+			targetKind, artifact, sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
-		return
+		return veleroRun{}, false
+	}
+	// Read the run itself as the caller. Velero issues no download link for a
+	// run that is gone or that it has not started, so either would otherwise
+	// wait out the full timeout and read as a silent controller.
+	object, err := client.Resource(schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: kindParam}).
+		Namespace(namespace).Get(r.Context(), name, metav1.GetOptions{})
+	switch {
+	case err == nil:
+	case apierrors.IsNotFound(err):
+		s.writeError(w, http.StatusNotFound, "Velero "+targetKind+" not found")
+		return veleroRun{}, false
+	case apierrors.IsForbidden(err):
+		s.writeError(w, http.StatusForbidden, "no access to this Velero "+targetKind)
+		return veleroRun{}, false
+	default:
+		log.Printf("[velero] Failed to read %s %s/%s: %v", targetKind, sanitizeForLog(namespace), sanitizeForLog(name), err)
+		s.writeError(w, http.StatusServiceUnavailable, "could not read this Velero "+targetKind)
+		return veleroRun{}, false
+	}
+	// A run not yet started may not have its storage location resolved, and
+	// Velero writes no files for it before it starts.
+	switch phase, _, _ := unstructured.NestedString(object.Object, "status", "phase"); phase {
+	case "", "New", "Queued", "ReadyToStart":
+		s.writeError(w, http.StatusNotFound, "Velero has not started this "+strings.ToLower(targetKind)+" yet, so it has no "+artifact)
+		return veleroRun{}, false
+	}
+	// Only the Velero server answers a DownloadRequest. When the caller can see
+	// that it is not running, say so now rather than after the full wait.
+	if deployments, read := s.veleroDeployments(r, k8s.GetResourceCache(), namespace); read {
+		if server := veleropkg.ServerConfigFromDeployments(deployments, true); server.Down() {
+			s.writeError(w, http.StatusServiceUnavailable,
+				fmt.Sprintf("The Velero server (Deployment %s in namespace %s) has no pods, and only it can serve the run %s. Start it, then try again.",
+					server.Deployment, namespace, artifact))
+			return veleroRun{}, false
+		}
 	}
 
+	return veleroRun{client: client, kind: targetKind, namespace: namespace, name: name, object: object}, true
+}
+
+// downloadVeleroRunArtifact asks Velero for one of the run's files and decodes it.
+func (s *Server) downloadVeleroRunArtifact(ctx context.Context, run veleroRun, artifact, suffix string, compressedLimit, decodedLimit int64, decode func(io.Reader) (any, error)) (any, *veleroArtifactFailure) {
+	client, targetKind, namespace, name := run.client, run.kind, run.namespace, run.name
 	req := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": veleroGroup + "/v1",
 		"kind":       "DownloadRequest",
@@ -171,49 +254,47 @@ func (s *Server) handleVeleroRunMessages(w http.ResponseWriter, r *http.Request)
 			"namespace":    namespace,
 		},
 		"spec": map[string]interface{}{
-			"target": map[string]interface{}{"kind": target.target, "name": name},
+			"target": map[string]interface{}{"kind": targetKind + suffix, "name": name},
 		},
 	}}
 
 	created, err := client.Resource(downloadRequestGVR).Namespace(namespace).
-		Create(r.Context(), req, metav1.CreateOptions{})
+		Create(ctx, req, metav1.CreateOptions{})
 	switch {
 	case err == nil:
 	case apierrors.IsForbidden(err):
-		s.writeError(w, http.StatusForbidden, "no access to create Velero download requests")
-		return
+		return nil, &veleroArtifactFailure{http.StatusForbidden, "no access to create Velero download requests"}
+	case (suffix == "VolumeInfos" || suffix == "VolumeInfo") && invalidDownloadTarget(err):
+		return nil, &veleroArtifactFailure{http.StatusUnprocessableEntity, "Velero rejected the volume-information DownloadRequest. Its CRD must support " + targetKind + suffix + " (Backup volumes require Velero 1.13+, Restore volumes require 1.14+)."}
 	case apierrors.IsNotFound(err):
 		// No DownloadRequest CRD — Velero is not installed, or predates it.
-		s.writeError(w, http.StatusNotFound, "this cluster has no Velero download requests")
-		return
+		return nil, &veleroArtifactFailure{http.StatusNotFound, "this cluster has no Velero download requests"}
 	default:
 		log.Printf("[velero] Failed to create DownloadRequest for %s %s/%s: %v",
-			target.kind, sanitizeForLog(namespace), sanitizeForLog(name), err)
-		s.writeError(w, http.StatusServiceUnavailable, "could not ask Velero for the messages")
-		return
+			targetKind, sanitizeForLog(namespace), sanitizeForLog(name), err)
+		return nil, &veleroArtifactFailure{http.StatusServiceUnavailable, "could not ask Velero for the " + artifact}
 	}
 
 	// Best-effort cleanup. Velero garbage-collects processed DownloadRequests on
 	// its own TTL, so a leaked one is untidy rather than harmful — but only if
 	// the controller is running, which is exactly what is in doubt here.
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = client.Resource(downloadRequestGVR).Namespace(namespace).
-			Delete(ctx, created.GetName(), metav1.DeleteOptions{})
+			Delete(cleanup, created.GetName(), metav1.DeleteOptions{})
 	}()
 
-	downloadURL, err := awaitDownloadURL(r.Context(), client, namespace, created.GetName(), downloadRequestTimeout)
+	downloadURL, err := awaitDownloadURL(ctx, client, namespace, created.GetName(), downloadRequestTimeout)
 	if err != nil {
 		log.Printf("[velero] No download URL for %s %s/%s: %v",
-			target.kind, sanitizeForLog(namespace), sanitizeForLog(name), err)
+			targetKind, sanitizeForLog(namespace), sanitizeForLog(name), err)
 		// A denial is not a silent controller. Reading back the DownloadRequest
 		// needs `get downloadrequests`, and a caller who can create but not get
 		// them would otherwise be told Velero is down — sending them to look at
 		// a controller that is running fine.
 		if apierrors.IsForbidden(err) {
-			s.writeError(w, http.StatusForbidden, "no access to read Velero download requests")
-			return
+			return nil, &veleroArtifactFailure{http.StatusForbidden, "no access to read Velero download requests"}
 		}
 		// 503 rather than 500: nothing is wrong with the request, something in
 		// the cluster is not answering, and the message says which.
@@ -221,25 +302,26 @@ func (s *Server) handleVeleroRunMessages(w http.ResponseWriter, r *http.Request)
 		// namespace is where Velero is installed, but the controller's name
 		// varies by distribution (OADP does not call it `velero`), so pointing
 		// at one would be a guess dressed as a fact.
-		s.writeError(w, http.StatusServiceUnavailable,
-			fmt.Sprintf("Velero did not answer within %s. These messages are served by the Velero controller in namespace %s — check that it is running.",
-				downloadRequestTimeout, namespace))
-		return
+		return nil, &veleroArtifactFailure{http.StatusServiceUnavailable,
+			fmt.Sprintf("Velero issued no download link within %s. The Velero controller in namespace %s issues it — check that it is running. Velero also issues none when the run's backup or its storage location no longer exists.",
+				downloadRequestTimeout, namespace)}
 	}
 
-	results, err := fetchVeleroResults(r.Context(), downloadURL)
+	results, err := fetchVeleroArtifact(ctx, downloadURL, s.veleroDownloadPolicy(), compressedLimit, decodedLimit, decode)
 	if err != nil {
-		log.Printf("[velero] Failed to fetch results for %s %s/%s: %v",
-			target.kind, sanitizeForLog(namespace), sanitizeForLog(name), err)
+		log.Printf("[velero] Failed to fetch %s for %s %s/%s: %v",
+			artifact, targetKind, sanitizeForLog(namespace), sanitizeForLog(name), err)
 		// Which failure it was decides where the reader goes, so they are
 		// distinguished — but from sentinels, never by pasting the error in.
 		// The error can carry Velero's pre-signed URL, which is a credential
 		// for the results file, and a response body is not a place to publish
 		// one.
-		s.writeError(w, http.StatusServiceUnavailable, veleroFetchMessage(err))
-		return
+		if errors.Is(err, errStorageMissing) {
+			return nil, &veleroArtifactFailure{http.StatusNotFound, "Velero has no " + artifact + " for this run"}
+		}
+		return nil, &veleroArtifactFailure{http.StatusServiceUnavailable, veleroArtifactFetchMessage(err, artifact)}
 	}
-	s.writeJSON(w, results)
+	return results, nil
 }
 
 // veleroFetchMessage turns a results-fetch failure into what the reader should
@@ -247,22 +329,35 @@ func (s *Server) handleVeleroRunMessages(w http.ResponseWriter, r *http.Request)
 // a different thing to check from the Velero controller, and a store that
 // answered with the wrong bytes is different again.
 func veleroFetchMessage(err error) string {
+	return veleroArtifactFetchMessage(err, "messages")
+}
+
+func veleroArtifactFetchMessage(err error, artifact string) string {
+	link := "Velero returned a link to the " + artifact
+	file := "a Velero " + artifact + " file"
+	if artifact == "messages" {
+		file = "a results file"
+	}
 	const reach = "Radar reaches the object store directly, so it has to be reachable from wherever Radar runs."
 	switch {
+	case errors.Is(err, errDownloadDestination):
+		return "Radar refused the " + artifact + " download destination: link-local, unspecified and multicast addresses are never allowed, and loopback is allowed only on a local private listener."
+	case errors.Is(err, errVeleroCompressedLimit), errors.Is(err, errVeleroDecodedLimit):
+		return "The Velero file exceeds Radar’s download or decoded size limit; its complete counts could not be read."
 	case errors.Is(err, errStorageUnreachable):
-		return "Velero returned a link to the messages, but the object store did not answer. " + reach
+		return link + ", but the object store did not answer. " + reach
 	case errors.Is(err, errStorageRefused):
-		return "Velero returned a link to the messages, but the object store refused it. " +
+		return link + ", but the object store refused it. " +
 			"A pre-signed link is only valid for a short window, and the credentials Velero signed it with must still be valid."
 	case errors.Is(err, errStorageRedirected):
-		return "Velero returned a link to the messages, but the object store redirected it. " +
+		return link + ", but the object store redirected it. " +
 			"Radar does not follow redirects on a signed link, because that is how a link reaches a host nobody named."
 	case errors.Is(err, errNotAResultsFile):
-		return "Velero returned a link to the messages, but what came back is not a results file."
+		return link + ", but what came back is not " + file + "."
 	case errors.Is(err, errMalformedURL):
-		return "Velero returned a link to the messages that Radar could not parse."
+		return link + " that Radar could not parse."
 	default:
-		return "Velero returned a link to the messages, but Radar could not read it. " + reach
+		return link + ", but Radar could not read it. " + reach
 	}
 }
 
@@ -295,20 +390,18 @@ func awaitDownloadURL(ctx context.Context, client dynamic.Interface, namespace, 
 	}
 }
 
-// fetchVeleroResults reads the gzipped JSON the pre-signed URL points at.
-//
-// The URL comes from Velero's status, which comes from the storage location a
-// cluster administrator configured — the same trust boundary as every other
-// field Radar reads. It is still bounded: http(s) only, one timeout, one size
-// cap, and redirects are not followed at all.
-//
-// Not following them is the point. Radar is not always run by whoever
-// administers the cluster — in a hosted deployment this process sits on a
-// different network — and a redirect is how a location's URL reaches a host the
-// caller never named. Object storage answers a pre-signed GET directly; it has
-// no reason to bounce us elsewhere.
-func fetchVeleroResults(ctx context.Context, rawURL string) (VeleroRunMessagesResponse, error) {
-	var out VeleroRunMessagesResponse
+func fetchVeleroResults(ctx context.Context, rawURL string, destinationAllowed func(net.IP) bool) (VeleroRunMessagesResponse, error) {
+	result, err := fetchVeleroArtifact(ctx, rawURL, destinationAllowed, maxResultsBytes, maxResultsBytes, decodeVeleroMessages)
+	if err != nil {
+		return VeleroRunMessagesResponse{}, err
+	}
+	return result.(VeleroRunMessagesResponse), nil
+}
+
+// Signed object-store links must answer directly. Redirects and proxies could
+// reach a destination that the dial-time policy never checked.
+func fetchVeleroArtifact(ctx context.Context, rawURL string, destinationAllowed func(net.IP) bool, compressedLimit, decodedLimit int64, decode func(io.Reader) (any, error)) (any, error) {
+	var out any
 
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -327,14 +420,27 @@ func fetchVeleroResults(ctx context.Context, rawURL string) (VeleroRunMessagesRe
 		// line it costs. NewRequest wraps its parse failure in *url.Error.
 		return out, errMalformedURL
 	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second, Control: func(network, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil || !destinationAllowed(net.ParseIP(host)) {
+			return errDownloadDestination
+		}
+		return nil
+	}}
+	transport := &http.Transport{DialContext: dialer.DialContext, TLSHandshakeTimeout: 10 * time.Second, ForceAttemptHTTP2: true}
+	defer transport.CloseIdleConnections()
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Transport: transport,
+		Timeout:   30 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if errors.Is(err, errDownloadDestination) {
+			return out, errDownloadDestination
+		}
 		return out, fmt.Errorf("%w: %v", errStorageUnreachable, urlSafeCause(err))
 	}
 	defer resp.Body.Close()
@@ -343,18 +449,36 @@ func fetchVeleroResults(ctx context.Context, rawURL string) (VeleroRunMessagesRe
 		// URL, and it is chosen by whatever answered rather than by us.
 		return out, errStorageRedirected
 	}
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, errStorageMissing
+	}
 	if resp.StatusCode != http.StatusOK {
 		return out, fmt.Errorf("%w: %s", errStorageRefused, resp.Status)
 	}
 
-	gz, err := gzip.NewReader(io.LimitReader(resp.Body, maxResultsBytes))
+	gz, err := gzip.NewReader(&veleroLimitReader{reader: resp.Body, remaining: compressedLimit, limitError: errVeleroCompressedLimit})
 	if err != nil {
+		if errors.Is(err, errVeleroCompressedLimit) {
+			return nil, err
+		}
 		return out, fmt.Errorf("%w: not gzip", errNotAResultsFile)
 	}
 	defer gz.Close()
 
+	result, err := decode(&veleroLimitReader{reader: gz, remaining: decodedLimit, limitError: errVeleroDecodedLimit})
+	if err != nil {
+		if errors.Is(err, errVeleroCompressedLimit) || errors.Is(err, errVeleroDecodedLimit) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: unreadable", errNotAResultsFile)
+	}
+	return result, nil
+}
+
+func decodeVeleroMessages(reader io.Reader) (any, error) {
+	var out VeleroRunMessagesResponse
 	var raw map[string]veleroResults
-	if err := json.NewDecoder(io.LimitReader(gz, maxResultsBytes)).Decode(&raw); err != nil {
+	if err := json.NewDecoder(reader).Decode(&raw); err != nil {
 		return out, fmt.Errorf("%w: unreadable", errNotAResultsFile)
 	}
 
@@ -392,4 +516,33 @@ func flattenVeleroResult(r veleroResults) ([]VeleroMessage, bool) {
 		return out[:maxMessages], true
 	}
 	return out, false
+}
+
+// veleroDownloadPolicy is the destination check every Velero download dials
+// through: loopback only for a local Radar on a private listener.
+func (s *Server) veleroDownloadPolicy() func(net.IP) bool {
+	allowLoopback := !k8s.IsInCluster() && !s.sharedListener()
+	return func(ip net.IP) bool { return veleroDownloadAddressAllowed(ip, allowLoopback) }
+}
+
+// Control receives the resolved dial address, so DNS changes cannot bypass this
+// check. The transport does not use proxies, which would hide that destination.
+func veleroDownloadAddressAllowed(ip net.IP, allowLoopback bool) bool {
+	return ip != nil && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsUnspecified() && !ip.IsMulticast() && (allowLoopback || !ip.IsLoopback())
+}
+
+// invalidDownloadTarget reports the apiserver refusing spec.target.kind, which
+// an older DownloadRequest CRD's enum does for a target it predates. Any other
+// invalid request is not a version question.
+func invalidDownloadTarget(err error) bool {
+	var status apierrors.APIStatus
+	if !apierrors.IsInvalid(err) || !errors.As(err, &status) || status.Status().Details == nil {
+		return false
+	}
+	for _, cause := range status.Status().Details.Causes {
+		if cause.Field == "spec.target.kind" && cause.Type == metav1.CauseTypeFieldValueNotSupported {
+			return true
+		}
+	}
+	return false
 }

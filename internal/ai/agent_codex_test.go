@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 
@@ -191,6 +192,32 @@ func TestCodexExecutionProfiles(t *testing.T) {
 	}
 }
 
+func TestCodexFullLocalUsesAppImageLaunchDir(t *testing.T) {
+	launch := t.TempDir()
+	defer func(orig func() string) { launchDir = orig }(launchDir)
+	launchDir = func() string { return launch }
+	a := &codexAgent{bin: "codex"}
+	ctx := context.Background()
+
+	my, cleanup, err := a.command(ctx, turnSpec{mcpURL: "http://localhost:1/mcp-readonly", prompt: "go", profile: ExecutionProfileFullLocal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if my.Dir != launch {
+		t.Errorf("full-local in an AppImage: Dir = %q, want the launch directory %q", my.Dir, launch)
+	}
+
+	iso, cleanup2, err := a.command(ctx, turnSpec{mcpURL: "http://localhost:1/mcp-readonly", prompt: "go", profile: ExecutionProfileSafeguarded})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup2()
+	if iso.Dir == "" || iso.Dir == launch {
+		t.Errorf("safeguarded in an AppImage must keep its empty temp cwd; got %q", iso.Dir)
+	}
+}
+
 // TestResolveAgentCodex pins binary-name routing to the Codex backend.
 func TestResolveAgentCodex(t *testing.T) {
 	cases := map[string]string{
@@ -203,6 +230,36 @@ func TestResolveAgentCodex(t *testing.T) {
 	for bin, want := range cases {
 		if got := resolveAgent(bin).Name(); got != want {
 			t.Errorf("resolveAgent(%q).Name() = %q, want %q", bin, got, want)
+		}
+	}
+}
+
+func TestCodexPromptGoesOverStdin(t *testing.T) {
+	a := &codexAgent{bin: "codex"}
+	prompt := "line one\nline two & 100% \"quoted\""
+	for _, session := range []string{"", "0199-session"} {
+		cmd, cleanup, err := a.command(context.Background(), turnSpec{
+			mcpURL: "http://localhost:1/mcp-readonly", prompt: prompt, systemPrompt: "framing",
+			sessionID: session, profile: ExecutionProfileFullLocal,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cleanup()
+		if last := cmd.Args[len(cmd.Args)-1]; last != "-" {
+			t.Errorf("session %q: last arg = %q, want - (read the prompt from stdin)", session, last)
+		}
+		for _, arg := range cmd.Args {
+			if strings.Contains(arg, "line one") {
+				t.Errorf("session %q: prompt leaked into argv: %q", session, arg)
+			}
+		}
+		if cmd.Stdin == nil {
+			t.Fatalf("session %q: no stdin", session)
+		}
+		b, _ := io.ReadAll(cmd.Stdin)
+		if got, want := string(b), "framing\n\n"+prompt; got != want {
+			t.Errorf("session %q: stdin = %q, want %q", session, got, want)
 		}
 	}
 }

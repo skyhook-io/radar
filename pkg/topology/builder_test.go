@@ -247,22 +247,6 @@ func TestAddArgoWorkflowTemplateEdges(t *testing.T) {
 	}
 }
 
-func TestArgoWorkflowCronOwnerNamePrefersControllerOwnerReference(t *testing.T) {
-	controller := true
-	wf := &unstructured.Unstructured{}
-	wf.SetLabels(map[string]string{"workflows.argoproj.io/cron-workflow": "label-owner"})
-	wf.SetOwnerReferences([]metav1.OwnerReference{{
-		APIVersion: "argoproj.io/v1alpha1",
-		Kind:       "CronWorkflow",
-		Name:       "owner-ref",
-		Controller: &controller,
-	}})
-
-	if got := argoWorkflowCronOwnerName(wf); got != "owner-ref" {
-		t.Fatalf("argoWorkflowCronOwnerName = %q, want owner-ref", got)
-	}
-}
-
 func TestCreatePodOwnerEdgesAddsScaledJobShortcut(t *testing.T) {
 	controller := true
 	pod := &corev1.Pod{
@@ -288,6 +272,7 @@ func TestCreatePodOwnerEdgesAddsScaledJobShortcut(t *testing.T) {
 		map[string]string{"demo/scaled-run": "job/demo/scaled-run"},
 		nil,
 		map[string]string{"demo/scaled-run": "scaledjob/demo/importer"},
+		jobIncarnations{},
 		nil,
 		nil,
 	)

@@ -36,6 +36,7 @@ rules:
       - persistentvolumes
       - persistentvolumeclaims
       - serviceaccounts
+      - podtemplates
       - endpoints
       - limitranges
       - resourcequotas
@@ -176,6 +177,13 @@ rules:
       - clusterroles
       - clusterrolebindings
     verbs: ["get", "list", "watch"]
+  # CertificateSigningRequests record the requester's username, groups and
+  # authenticator extra data, which is the same authorization information,
+  # so they share this gate.
+  - apiGroups: ["certificates.k8s.io"]
+    resources:
+      - certificatesigningrequests
+    verbs: ["get", "list", "watch"]
   {{- end }}
 
   {{- if or .Values.rbac.viewWebhooks (ne .Values.auth.mode "none") .Values.cloud.enabled }}
@@ -189,6 +197,17 @@ rules:
     resources:
       - mutatingwebhookconfigurations
       - validatingwebhookconfigurations
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+
+  {{- if or .Values.rbac.viewAdmissionPolicies (ne .Values.auth.mode "none") .Values.cloud.enabled }}
+  # Native validating admission policies (read). Kept separate from
+  # rbac.viewWebhooks so no-auth installs can grant either admission surface
+  # independently. Auth/cloud reads are re-checked per requesting user.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - validatingadmissionpolicies
+      - validatingadmissionpolicybindings
     verbs: ["get", "list", "watch"]
   {{- end }}
 
@@ -210,7 +229,7 @@ rules:
     verbs: ["get"]
   {{- end }}
 
-  {{- if and .Values.rbac.podExec (include "radar.userTokenMode" . | eq "false") }}
+  {{- if and .Values.rbac.podExec (not .Values.disableExec) (include "radar.userTokenMode" . | eq "false") }}
   # Pod exec (opt-in - enables terminal feature)
   - apiGroups: [""]
     resources:
@@ -260,6 +279,16 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- else }}
   # Per-group CRD access
+  {{- if .Values.rbac.crdGroups.agentSandbox }}
+  - apiGroups: ["agents.x-k8s.io", "extensions.agents.x-k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.agentSubstrate }}
+  - apiGroups: ["ate.dev"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.antrea }}
   # Antrea policies can allow traffic a core NetworkPolicy denies; the
   # NetworkPolicy deny-all check treats an unreadable kind as "may allow" and
@@ -361,6 +390,11 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.fluxOperator }}
+  - apiGroups: ["fluxcd.controlplane.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.gatewayApi }}
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["*"]
@@ -395,6 +429,9 @@ rules:
   - apiGroups: ["serving.knative.dev", "eventing.knative.dev", "sources.knative.dev", "messaging.knative.dev", "flows.knative.dev", "networking.internal.knative.dev"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["sinks.knative.dev"]
+    resources: ["jobsinks"]
+    verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.kubeshark }}
   - apiGroups: ["kubeshark.io"]
@@ -423,6 +460,13 @@ rules:
   {{- if .Values.rbac.crdGroups.mariadb }}
   - apiGroups: ["mariadb.mmontes.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.multus }}
+  # Pod details link each secondary network to its NetworkAttachmentDefinition;
+  # nothing else in the group is read.
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.networkPolicyApi }}
@@ -460,6 +504,12 @@ rules:
   - apiGroups: ["kueue.x-k8s.io", "autoscaling.x-k8s.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
+  # Kueue's visibility API: where a pending Workload sits in its LocalQueue.
+  # Without authentication Radar asks as itself; signed-in users are asked as
+  # themselves and need this through their own roles (Kueue aggregates it to view).
+  - apiGroups: ["visibility.kueue.x-k8s.io"]
+    resources: ["localqueues/pendingworkloads"]
+    verbs: ["get"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.kserve }}
   - apiGroups: ["serving.kserve.io"]
@@ -523,6 +573,11 @@ rules:
     resources: ["canaries", "metrictemplates"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.systemUpgrade }}
+  - apiGroups: ["upgrade.cattle.io"]
+    resources: ["plans"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.opentelemetry }}
   - apiGroups: ["opentelemetry.io"]
     resources: ["*"]
@@ -548,9 +603,22 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.secretsStoreCsi }}
+  - apiGroups: ["secrets-store.csi.x-k8s.io"]
+    resources: ["secretproviderclasses", "secretproviderclasspodstatuses"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.volumeSnapshots }}
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.strimzi }}
   - apiGroups: ["strimzi.io", "kafka.strimzi.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["core.strimzi.io"]
+    resources: ["strimzipodsets"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.tekton }}

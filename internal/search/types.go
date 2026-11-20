@@ -1,6 +1,8 @@
 package search
 
 import (
+	"net/netip"
+
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
@@ -32,6 +34,9 @@ type Query struct {
 	ImageFilter []string  // image:foo modifiers; substring match on container images
 	Cluster     string    // cluster: modifier — radar ignores; hub uses for routing
 	Raw         string    // original query string, for debugging / round-tripping
+
+	// ips holds the free tokens that are IP addresses, keyed by token.
+	ips map[string]netip.Addr
 }
 
 // LabelEq is a label equality or presence filter parsed from "label:k=v" or
@@ -65,7 +70,7 @@ type Hit struct {
 // MatchedField records where a query token landed (debug + UI highlight).
 type MatchedField struct {
 	Token string `json:"token"`
-	Site  string `json:"site"` // "name" | "namespace" | "label:k" | "annotation:k" | "image" | "kind" | "content:path"
+	Site  string `json:"site"` // "name" | "namespace" | "label:k" | "annotation:k" | "image" | "kind" | "content:path" | "ip:role" (see ipField)
 	Score int    `json:"score"`
 }
 

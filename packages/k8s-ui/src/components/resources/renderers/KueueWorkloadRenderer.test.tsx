@@ -26,7 +26,7 @@ describe('Kueue Workload detail', () => {
       admissionChecks: [{ name: 'capacity', state: 'Pending', message: 'Waiting for provisioned nodes' }],
       conditions: [{ type: 'QuotaReserved', status: 'True' }, { type: 'Admitted', status: 'False', reason: 'AdmissionCheck' }],
     }, { ...base, apiVersion: `kueue.x-k8s.io/${version}` })
-    for (const text of ['QuotaReserved', 'Pods at Reservation', 'Resources at Reservation', 'CPU: 4', 'nvidia.com/gpu: a100', 'team-quota', 'Waiting for provisioned nodes']) expect(html).toContain(text)
+    for (const text of ['QuotaReserved', 'Pods at Reservation', 'Resources at Reservation', 'CPU: 4', 'nvidia.com/gpu', '>a100<', 'team-quota', 'Waiting for provisioned nodes']) expect(html).toContain(text)
     expect(html).not.toContain('Admitted Pods')
     expect(html).not.toContain('Admitted Demand')
   })

@@ -29,7 +29,7 @@ import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
-import { getDefaultContainerName, getExecContainerNames } from '../resources/resource-utils'
+import { getDefaultContainerName, getDefaultLogContainerName, getExecContainerNames, getInitContainerNames, getLogContainerNames } from '../resources/resource-utils'
 import { argoApplicationSyncOptions, argoComparedRevisionCurrent, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoMultiSource, isArgoOperationInProgress } from '../resources/resource-utils-argo'
 import { SyncOptionsDialog, type ArgoSyncOpts } from '../gitops/SyncOptionsDialog'
 import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
@@ -78,7 +78,7 @@ interface ResourceActionsBarProps {
 
   // Dock actions (injected by platform)
   onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
-  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string }) => void
+  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   onCopyCommand?: (text: string, message: string, event: React.MouseEvent) => void
 
@@ -98,6 +98,12 @@ interface ResourceActionsBarProps {
   // Workload restart
   onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isRestarting?: boolean
+
+  // Deployment rollout pause. A host passes both callbacks only when the caller may patch Deployments.
+  onPauseDeployment?: (params: { kind: string; namespace: string; name: string }) => void
+  onResumeDeployment?: (params: { kind: string; namespace: string; name: string }) => void
+  isPausingDeployment?: boolean
+  isResumingDeployment?: boolean
 
   onLoadImages?: (params: { kind: string; namespace: string; name: string }) => Promise<WorkloadImageInventory>
   onSetImages?: (params: { kind: string; namespace: string; name: string; updates: WorkloadImageUpdate[] }) => Promise<unknown>
@@ -188,6 +194,7 @@ export function ResourceActionsBar({
   renderPortForward,
   onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
   onRestart, isRestarting,
+  onPauseDeployment, onResumeDeployment, isPausingDeployment, isResumingDeployment,
   onLoadImages, onSetImages, isSettingImages, imageOwnership,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
   onRolloutPromoteFull,
@@ -281,6 +288,8 @@ export function ResourceActionsBar({
 
   const isRunning = kind === 'pods' ? data?.status?.phase === 'Running' : true
   const containers = data?.spec?.containers?.map((c: any) => c.name) || []
+  const logContainers = getLogContainerNames(data)
+  const initContainers = getInitContainerNames(data)
 
   const handleOpenTerminal = () => {
     if (resource.namespace && resource.name && containers.length > 0) {
@@ -294,12 +303,13 @@ export function ResourceActionsBar({
   }
 
   const handleOpenLogs = (containerName?: string) => {
-    if (resource.namespace && resource.name && containers.length > 0) {
+    if (resource.namespace && resource.name && logContainers.length > 0) {
       openLogs?.({
         namespace: resource.namespace,
         podName: resource.name,
-        containers,
-        containerName: containerName || getDefaultContainerName(data),
+        containers: logContainers,
+        containerName: containerName || getDefaultLogContainerName(data),
+        initContainers,
       })
     }
   }
@@ -319,7 +329,7 @@ export function ResourceActionsBar({
 
   const handleLogsMouseEnter = () => {
     if (logsMenuTimeout.current) clearTimeout(logsMenuTimeout.current)
-    if (containers.length > 1) setShowLogsMenu(true)
+    if (logContainers.length > 1) setShowLogsMenu(true)
   }
   const handleLogsMouseLeave = () => {
     logsMenuTimeout.current = setTimeout(() => setShowLogsMenu(false), 150)
@@ -348,16 +358,16 @@ export function ResourceActionsBar({
               onMouseLeave={handleLogsMouseLeave}
             >
               <button
-                onClick={() => handleOpenLogs(containers.length === 1 ? containers[0] : undefined)}
+                onClick={() => handleOpenLogs()}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
               >
                 <FileText className="w-3.5 h-3.5" />
                 Logs
-                {containers.length > 1 && <ChevronDown className="w-3 h-3 ml-0.5" />}
+                {logContainers.length > 1 && <ChevronDown className="w-3 h-3 ml-0.5" />}
               </button>
-              {showLogsMenu && containers.length > 1 && (
+              {showLogsMenu && logContainers.length > 1 && (
                 <div className="absolute top-full left-0 mt-1 min-w-[160px] py-1 bg-theme-surface border border-theme-border rounded-lg shadow-lg z-50">
-                  {containers.map((container: string) => (
+                  {logContainers.map((container: string) => (
                     <button
                       key={container}
                       onClick={() => {
@@ -368,6 +378,7 @@ export function ResourceActionsBar({
                     >
                       <Box className="w-3 h-3 text-theme-text-tertiary shrink-0" />
                       <span className="truncate">{container}</span>
+                      {initContainers.includes(container) && <span className="ml-auto shrink-0 text-theme-text-tertiary">init</span>}
                     </button>
                   ))}
                 </div>
@@ -480,6 +491,17 @@ export function ResourceActionsBar({
                 {isRestarting ? 'Restarting workload' : ''}
               </span>
             </>
+          )}
+          {onPauseDeployment && onResumeDeployment && kind === 'deployments' && isApiGroup(data?.apiVersion, 'apps') && !data?.metadata?.deletionTimestamp && (
+            <DeploymentPauseButton
+              paused={data?.spec?.paused === true}
+              busy={isPausingDeployment || isResumingDeployment}
+              onClick={() => {
+                const target = { kind: resource.kind, namespace: resource.namespace, name: resource.name }
+                if (data?.spec?.paused === true) onResumeDeployment(target)
+                else onPauseDeployment(target)
+              }}
+            />
           )}
           {isRollbackKind && onRollback && (
             <Tooltip content={hasMultipleRevisions ? 'View revision history and rollback' : 'Only one revision exists'} delay={150}>
@@ -816,6 +838,28 @@ export function ResourceActionsBar({
 // ============================================================================
 // FLUX ACTIONS
 // ============================================================================
+
+function DeploymentPauseButton({ paused, busy, onClick }: { paused: boolean; busy?: boolean; onClick: () => void }) {
+  const Icon = paused ? Play : Pause
+  return (
+    <>
+      <Tooltip content={paused ? 'Roll out any pod template changes held while paused' : 'Hold pod template changes until the rollout is resumed'} delay={150}>
+        <button
+          onClick={onClick}
+          disabled={busy}
+          aria-busy={busy}
+          className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+        >
+          <Icon className={`w-3.5 h-3.5 ${busy ? 'animate-pulse' : ''}`} />
+          {paused ? 'Resume rollout' : 'Pause rollout'}
+        </button>
+      </Tooltip>
+      <span className="sr-only" aria-live="polite">
+        {busy ? (paused ? 'Resuming rollout' : 'Pausing rollout') : ''}
+      </span>
+    </>
+  )
+}
 
 function FluxActions({ disabledReasons, resource, data, onReconcile, isReconciling, onSyncWithSource, isSyncing, onSuspend, isSuspending, onResume, isResuming }: {
   disabledReasons?: Record<string, string | undefined>

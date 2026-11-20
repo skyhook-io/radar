@@ -1,6 +1,9 @@
 package gitops
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -133,6 +136,20 @@ func ArgoEmptyRenderGuardHolds(app *unstructured.Unstructured) bool {
 	}
 	sync, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
 	return strings.EqualFold(sync, "OutOfSync") && ArgoSyncPrunesEverything(app)
+}
+
+// ArgoCreateNamespaceEnabled reports whether an Application's
+// spec.syncPolicy.syncOptions turns on Argo's CreateNamespace behavior. Matches
+// Argo's own check (exact string equality on "CreateNamespace=true", as
+// SyncOptions.HasOption does): a differently-cased or mistyped value is not the
+// enabled option, so Radar must not treat it as set and mask the misconfiguration.
+// A nil Application or missing syncOptions is not set.
+func ArgoCreateNamespaceEnabled(app *unstructured.Unstructured) bool {
+	if app == nil {
+		return false
+	}
+	opts, _, _ := unstructured.NestedStringSlice(app.Object, "spec", "syncPolicy", "syncOptions")
+	return slices.Contains(opts, "CreateNamespace=true")
 }
 
 // ArgoConditionMessages returns the messages of an Argo Application's
@@ -279,4 +296,38 @@ func ToolOf(obj *unstructured.Unstructured) string {
 		return ""
 	}
 	return ToolFor(resourceid.GroupFromAPIVersion(obj.GetAPIVersion()), obj.GetKind())
+}
+
+// FluxHelmTarget names the Helm release a Flux HelmRelease's spec implies: the
+// release name helm-controller defaults to, the namespace it deploys into, and
+// the namespace Helm stores it in. status.history and status.storageNamespace
+// record the actual values once a release has been installed.
+func FluxHelmTarget(obj *unstructured.Unstructured) (releaseName, targetNamespace, storageNamespace string) {
+	spec, _ := obj.Object["spec"].(map[string]any)
+	targetNamespace, _ = spec["targetNamespace"].(string)
+	if targetNamespace == "" {
+		targetNamespace = obj.GetNamespace()
+	}
+	releaseName, _ = spec["releaseName"].(string)
+	if releaseName == "" {
+		if configuredTarget, _ := spec["targetNamespace"].(string); configuredTarget != "" {
+			releaseName = configuredTarget + "-" + obj.GetName()
+		} else {
+			releaseName = obj.GetName()
+		}
+		releaseName = shortenFluxReleaseName(releaseName)
+	}
+	storageNamespace, _ = spec["storageNamespace"].(string)
+	if storageNamespace == "" {
+		storageNamespace = obj.GetNamespace()
+	}
+	return releaseName, targetNamespace, storageNamespace
+}
+
+func shortenFluxReleaseName(name string) string {
+	if len(name) <= 53 {
+		return name
+	}
+	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
+	return name[:40] + "-" + sum[:12]
 }

@@ -35,6 +35,7 @@ import {
   type ResourceStatusFacet,
 } from './insights-helpers'
 import { DriftPanel } from './DriftPanel'
+import { TABLE_DENSITY } from '../../ui/table-density'
 
 interface GitOpsStatusStripProps {
   insight?: GitOpsInsight | null
@@ -77,7 +78,6 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
   const revision = summary.lastRevision || summary.targetRevision || ''
   const shortRev = shortRevisionForCommit(revision)
   const commitUrl = revision ? commitURLForRepo(summary.source, revision) : null
-  const reconcileAge = formatRelativeAgeTime(summary.lastReconcile)
   const healthSummary = buildHealthSummary(insight.changes ?? [])
   // STUCK belongs with the operation chip — it's a property of the same
   // state ("failed AND won't self-recover"). Co-locating FAILED + STUCK ·
@@ -128,7 +128,7 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-theme-text-tertiary">
           {shortRev && (
             <span className="inline-flex items-baseline gap-1">
-              <span className="shrink-0">Latest revision:</span>
+              <span className="shrink-0">Revision:</span>
               {commitUrl ? (
                 <Tooltip content={`Open commit ${revision} on the remote`} delay={400}>
                   <a
@@ -145,11 +145,10 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
                   <span className="font-mono font-medium text-theme-text-primary">{shortRev}</span>
                 </Tooltip>
               )}
-              {reconcileAge && <span className="text-theme-text-tertiary">· {reconcileAge}</span>}
               {revision && renderRevisionMeta?.(revision)}
             </span>
           )}
-          {!shortRev && reconcileAge && <MetaFact label="Last reconcile" value={reconcileAge} />}
+          <SummaryTiming summary={summary} />
           {healthSummary && (
             <span className={clsx('inline-flex items-baseline gap-1 font-medium', healthSummary.tone)}>
               {healthSummary.text}
@@ -291,12 +290,39 @@ function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsigh
           {(summary.lastRevision || summary.targetRevision) && (
             <MetaFact label="Revision" value={summary.lastRevision || summary.targetRevision || '-'} mono />
           )}
-          {summary.lastReconcile && <MetaFact label="Last reconcile" value={formatRelativeAgeTime(summary.lastReconcile)} />}
-          {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode} />}
+          <SummaryTiming summary={summary} />
+          {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode === 'Manual' ? 'Auto-sync off' : summary.autoSyncMode} />}
         </div>
       </Collapse>
     </div>
   )
+}
+
+function SummaryTiming({ summary }: { summary: NonNullable<GitOpsInsight['summary']> }) {
+  let label: string
+  let timestamp: string | undefined
+  let description: string
+  if (summary.tool === 'fluxcd' && summary.kind === 'Kustomization' && summary.lastApplied) {
+    label = 'Last applied'
+    timestamp = summary.lastApplied
+    description = 'Latest successful apply recorded by Flux, including routine re-applies with no changes.'
+  } else if (summary.tool === 'fluxcd' && summary.kind === 'Kustomization') {
+    label = 'Last apply attempt'
+    timestamp = summary.lastApplyAttempt
+    description = 'Latest apply attempt recorded by Flux. It did not succeed. Failures before apply may not add a history entry.'
+  } else if (summary.tool === 'fluxcd' && summary.kind === 'HelmRelease') {
+    label = 'Last deployed'
+    timestamp = summary.lastRevision ? summary.lastDeployed : undefined
+    description = 'Deployment time of the currently deployed Helm release.'
+  } else if (summary.tool === 'argocd' && summary.kind === 'Application') {
+    label = 'Last checked'
+    timestamp = summary.lastReconcile
+    description = 'When Argo CD last compared the application with Git. This is not its deployment or commit date.'
+  } else {
+    return null
+  }
+  if (!timestamp || !Number.isFinite(Date.parse(timestamp))) return null
+  return <MetaFact label={label} value={formatRelativeAgeTime(timestamp)} tooltip={`${description} ${new Date(timestamp).toLocaleString()}`} />
 }
 
 function isInFlightPhase(phase: string): boolean {
@@ -316,14 +342,14 @@ function liveOperationPhase(phase?: string): string | null {
   return phase
 }
 
-function MetaFact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function MetaFact({ label, value, mono = false, tooltip }: { label: string; value: string; mono?: boolean; tooltip?: string }) {
   // inline-flex so each fact sizes to content; flex-wrap on the parent
   // handles row breaks. max-w-full guards the pathological "value wider
   // than viewport" case where truncate + tooltip take over.
   return (
     <span className="inline-flex min-w-0 max-w-full items-baseline gap-1">
       <span className="shrink-0">{label}:</span>
-      <Tooltip content={value} delay={400} wrapperClassName="min-w-0">
+      <Tooltip content={tooltip ?? value} delay={400} wrapperClassName="min-w-0">
         <span className={clsx('block truncate font-medium text-theme-text-primary', mono && 'font-mono')}>{value}</span>
       </Tooltip>
     </span>
@@ -1113,7 +1139,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 border-b border-theme-border bg-theme-base/40 px-4 py-2">
+            <div className={clsx('grid grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 border-b border-theme-border bg-theme-base/40 py-2', TABLE_DENSITY.cellXClass)}>
               <ResSortHeader label="Resource" sortKey="name" sort={sort} onSort={onSort} />
               <ResSortHeader label="Sync" sortKey="sync" sort={sort} onSort={onSort} />
               <ResSortHeader label="Health" sortKey="health" sort={sort} onSort={onSort} />
@@ -1297,10 +1323,6 @@ function refKey(ref: { kind: string; namespace?: string; name: string }): string
 // nor a health message is available — otherwise those carry the truth and
 // this would just add noise. Empty string falls through to no row content.
 //
-// The "what to do" framing is intentional: badges already communicate state
-// ("OutOfSync"); the row should communicate what the operator should do
-// about it. With auto-sync on the answer is usually "wait, Argo will fix
-// it"; with manual mode the answer is "click Sync".
 function explainChangeStatus(
   sync: string | undefined,
   health: string | undefined,
@@ -1324,11 +1346,11 @@ function explainChangeStatus(
     if (inFlight) return 'Live state differs from Git. A sync is in progress — wait for it to finish.'
     if (context?.rolledBack) return 'Live state differs from Git after a rollback. Sync applies the desired state and can undo the rollback.'
     if (isAuto) return 'Live state differs from Git. Auto-sync should reconcile this within a few minutes; click Sync to force it.'
-    return 'Live state differs from Git. Click Sync to apply the desired state.'
+    return 'Live state differs from Git. Review the desired changes and sync policy before deciding whether to sync.'
   }
   if (health === 'Missing' && parentFailed) return 'Resource was not created — see the operation error above for the cause.'
   if (health === 'Degraded') return 'Resource reports an unhealthy state. Open the resource for events and logs.'
-  if (health === 'Missing') return 'Declared in Git but not present in the cluster. Sync to create it.'
+  if (health === 'Missing') return missingResourceMessage(sync, context)
   if (health === 'Progressing') return 'Resource is mid-rollout (e.g. pods coming up). Should converge shortly.'
   if (health === 'Suspended') return 'Resource is paused (e.g. CronJob suspended, HPA disabled). Intentional unless surprising.'
   return ''
@@ -1445,7 +1467,7 @@ function ChangeRow({
           across rows regardless of how long "Open <Kind> <name> →" is. With
           an `auto` last column, each row's 1fr column got a different
           residual width, pushing the badges to inconsistent offsets. */}
-      <div className="grid w-full grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 px-4 py-3 text-sm">
+      <div className={clsx('grid w-full grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 text-sm', TABLE_DENSITY.cellClass)}>
         <button
           type="button"
           onClick={handleRowClick}

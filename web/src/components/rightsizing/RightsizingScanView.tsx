@@ -19,7 +19,7 @@ import {
   useRightsizingScan,
   type RightsizingRow,
 } from '../../api/client'
-import { RIGHTSIZING_DOCS_URL } from '../resource/RightsizingStrip'
+import { podLevelOverUseNote, RIGHTSIZING_DOCS_URL } from '../resource/RightsizingStrip'
 import { buildWorkloadPath } from '../../utils/navigation'
 import { CostViewTabs } from '../cost/CostViewTabs'
 import {
@@ -37,6 +37,7 @@ import {
 } from './presentation'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
+import { clsx } from 'clsx'
 
 export const RIGHTSIZING_SCAN_DESCRIPTION =
   'Find CPU and memory requests to increase, reduce, or review. Radar never changes them.'
@@ -396,7 +397,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
                   />
                 ) : (
                   <div>
-                    <div className="grid grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] gap-3 border-b border-theme-border px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+                    <div className="grid grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] gap-3 border-b border-theme-border px-3.5 py-2 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
                       <span>Workload / container</span>
                       <span>CPU request</span>
                       <span>Memory request</span>
@@ -796,7 +797,7 @@ function ScanResultRow({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className="grid w-full grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] items-center gap-3 px-4 py-3 text-left hover:bg-theme-hover/50"
+        className={clsx('grid w-full grid-cols-[minmax(230px,1.15fr)_minmax(190px,1fr)_minmax(200px,1fr)_minmax(220px,.9fr)_28px] items-center gap-3 text-left hover:bg-theme-hover/50', 'px-3.5 py-2.5' /* TABLE_DENSITY.cellClass in k8s-ui */)}
       >
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -962,6 +963,13 @@ function EvidenceNote({ row }: { row: RightsizingRow }) {
 }
 
 function primaryEvidenceNote(row: RightsizingRow) {
+  if (row.fit === 'pod_level_request' && !row.queryError)
+    return (
+      <p className="mt-1 text-xs text-theme-text-tertiary">
+        {podLevelOverUseNote(row) ??
+          "This pod sets a pod-level request in spec.resources, which the scheduler reserves instead of container requests. Radar shows this container's usage but doesn't size the pod-level request."}
+      </p>
+    )
   if (row.hpaManaged)
     return (
       <p className="mt-1 text-xs text-theme-text-tertiary">
@@ -985,6 +993,14 @@ function primaryEvidenceNote(row: RightsizingRow) {
     return (
       <p className="mt-1 text-xs text-theme-text-tertiary">
         Radar could not verify restart history before suggesting a lower memory request.
+      </p>
+    )
+  if (row.recommendationReason === 'requests_exceed_pod_limit')
+    return (
+      <p className="mt-1 text-xs text-theme-text-tertiary">
+        Together with the other containers&apos; requests and suggested increases, the calculated
+        request would take the pod above its pod-level limit. Decide how to split the limit, or
+        raise it.
       </p>
     )
   if (row.limitConflict)

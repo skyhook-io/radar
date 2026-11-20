@@ -15,6 +15,11 @@ import {
 } from './radarFeatures'
 
 describe('radarFeatureSupport', () => {
+  it('requires explicit Event content support even when the older search endpoint is available', () => {
+    expect(radarFeatureSupport('searchEventContent', { features: { searchCoverage: true } }, 'v99.0.0')).toBe('unsupported')
+    expect(radarFeatureSupport('searchEventContent', { features: { searchEventContent: true } }, 'v1.0.0')).toBe('supported')
+    expect(radarFeatureSupport('searchEventContent', undefined, 'dev')).toBe('unknown')
+  })
   it('trusts the advertised flag over the version', () => {
     expect(radarFeatureSupport('policyResource', { features: { policyResource: true } }, 'v1.7.2')).toBe('supported')
     expect(radarFeatureSupport('policyResource', { features: { policyResource: true } }, undefined)).toBe('supported')
@@ -176,5 +181,14 @@ describe('affirmative mutation support', () => {
   it('preserves permissive loading for other features', () => {
     expect(radarControlBlockedReason('workloadHistory', 'unknown', false)).toBeUndefined()
     expect(radarControlBlocked('unknown', false)).toBe(false)
+  })
+})
+
+describe('RayCluster runtime Pods, whose flag came after its route', () => {
+  it('trusts the flag, and otherwise the first release that served the route', () => {
+    expect(radarFeatureSupport('rayClusterPods', { features: { rayClusterPods: true } }, 'v1.14.0')).toBe('supported')
+    expect(radarFeatureSupport('rayClusterPods', { features: { resourceIssues: true } }, 'v1.15.0')).toBe('supported')
+    expect(radarFeatureSupport('rayClusterPods', { features: { resourceIssues: true } }, 'v1.14.1')).toBe('unsupported')
+    expect(radarFeatureSupport('rayClusterPods', { features: {} }, 'dev')).toBe('unknown')
   })
 })

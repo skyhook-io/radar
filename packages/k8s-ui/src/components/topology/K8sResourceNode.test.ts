@@ -2,11 +2,42 @@ import { describe, expect, it } from 'vitest'
 import { baseSubtitle, knativeDomainsTooltipLines } from './K8sResourceNode'
 
 describe('baseSubtitle', () => {
+  it('explains earlier Job runs on grouped and loose Pods', () => {
+    expect(baseSubtitle('PodGroup', { earlierJobRun: 'train-workers-0', terminating: 6 })).toBe('Earlier run • terminating')
+    expect(baseSubtitle('Pod', { earlierJobRun: 'hook', terminating: 0 })).toBe('Earlier run')
+    expect(baseSubtitle('Pod', { earlierJobRun: 'hook', terminating: 1 })).toBe('Earlier run • terminating')
+  })
+
+  it('counts terminating members on a collapsed Pod group', () => {
+    const pods = (n: number) => Array.from({ length: 6 }, (_, i) => ({ terminating: i < n }))
+    expect(baseSubtitle('PodGroup', { podCount: 6, healthy: 6, pods: pods(0) })).toBe('6 pods (6 healthy)')
+    expect(baseSubtitle('PodGroup', { podCount: 6, healthy: 6, pods: pods(2) })).toBe('6 pods • 2 terminating')
+    expect(baseSubtitle('PodGroup', { podCount: 6, healthy: 0, pods: pods(6) })).toBe('6 pods • all terminating')
+    expect(baseSubtitle('PodGroup', { podCount: 6, healthy: 5, unhealthy: 1, pods: pods(2) })).toBe('6 pods • 1 unhealthy • 2 terminating')
+  })
+
+  it('names a Pod being deleted Terminating, not its Running phase', () => {
+    expect(baseSubtitle('Pod', { phase: 'Running', terminating: 1 })).toBe('Terminating')
+    expect(baseSubtitle('Pod', { phase: 'Running', terminating: 0 })).toBe('Running')
+    expect(baseSubtitle('Pod', { phase: 'Running' })).toBe('Running')
+    expect(baseSubtitle('Pod', { phase: 'Failed', terminating: 1 })).toBe('Failed • terminating')
+    expect(baseSubtitle('Pod', { phase: 'Succeeded', terminating: 1 })).toBe('Succeeded • terminating')
+  })
   it('describes workflow templates without dropping newer topology kinds', () => {
     expect(baseSubtitle('WorkflowTemplate', { entrypoint: 'main', templateCount: 3 })).toBe('main • 3 templates')
     expect(baseSubtitle('ClusterWorkflowTemplate', { templateCount: 2 })).toBe('2 templates')
     expect(baseSubtitle('ServiceAccount', {})).toBe('Workload identity')
     expect(baseSubtitle('ServiceMonitor', { endpointCount: 1 })).toBe('1 scrape endpoint')
+  })
+
+  it('describes a JobSet by its lifecycle and the Jobs it declares, not Jobs it has created', () => {
+    const apiVersion = 'jobset.x-k8s.io/v1alpha2'
+    expect(baseSubtitle('JobSet', { apiVersion, phase: 'Active', declaredJobs: 8 })).toBe('Active • 8 Jobs declared')
+    expect(baseSubtitle('JobSet', { apiVersion, phase: 'Pending', declaredJobs: 1 })).toBe('Pending • 1 Job declared')
+    expect(baseSubtitle('JobSet', { apiVersion, phase: 'Unknown' })).toBe('Unknown')
+    expect(baseSubtitle('JobSet', { apiVersion })).toBe('')
+    // Another group's JobSet has no lifecycle fields to describe.
+    expect(baseSubtitle('JobSet', { apiVersion: 'jobset.example.com/v1' })).toBe('')
   })
 
   it('describes a Service by its first port, capping additional ports to a count', () => {

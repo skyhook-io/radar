@@ -33,6 +33,8 @@ type mutationConfirmation struct {
 	CallerDigest string `json:"callerDigest"`
 	Target       string `json:"target"`
 	Expires      int64  `json:"expires"`
+	// Nonce keeps two previews of the same state apart for single-use tokens.
+	Nonce string `json:"nonce,omitempty"`
 }
 
 func confirmationBinding(ctx context.Context, action, target string) mutationConfirmation {
@@ -59,6 +61,11 @@ func confirmationBinding(ctx context.Context, action, target string) mutationCon
 func issueMutationConfirmation(ctx context.Context, action, target string) (string, error) {
 	binding := confirmationBinding(ctx, action, target)
 	binding.Expires = time.Now().Add(5 * time.Minute).Unix()
+	nonce := make([]byte, 12)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	binding.Nonce = base64.RawURLEncoding.EncodeToString(nonce)
 	raw, err := json.Marshal(binding)
 	if err != nil {
 		return "", err
@@ -118,4 +125,36 @@ func verifyMutationConfirmation(ctx context.Context, action, token string) (stri
 		return "", malformed
 	}
 	return binding.Target, nil
+}
+
+var usedConfirmations = struct {
+	sync.Mutex
+	expires map[[sha256.Size]byte]time.Time
+}{expires: map[[sha256.Size]byte]time.Time{}}
+
+// consumeMutationConfirmation marks a verified token used and reports whether
+// this was its first use, so a repeated confirm (a retry after a client
+// timeout, say) can't start the action twice in this Radar process. It keys
+// on the signed payload, not the token text, so a re-encoded copy counts as
+// the same token. Entries outlive any token's 5-minute validity.
+func consumeMutationConfirmation(token string) bool {
+	payload, _, _ := strings.Cut(token, ".")
+	raw, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return false
+	}
+	key := sha256.Sum256(raw)
+	now := time.Now()
+	usedConfirmations.Lock()
+	defer usedConfirmations.Unlock()
+	for k, expires := range usedConfirmations.expires {
+		if now.After(expires) {
+			delete(usedConfirmations.expires, k)
+		}
+	}
+	if _, used := usedConfirmations.expires[key]; used {
+		return false
+	}
+	usedConfirmations.expires[key] = now.Add(6 * time.Minute)
+	return true
 }

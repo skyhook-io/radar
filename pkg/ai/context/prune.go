@@ -160,12 +160,14 @@ func simplifyVolumeMounts(container map[string]any) {
 	container["volumeMounts"] = names
 }
 
+// sanitizeSpecEnvLists sanitizes env lists under spec and, for a core
+// PodTemplate, whose pod spec sits at template.spec, under template.
 func sanitizeSpecEnvLists(m map[string]any, compact bool) {
-	spec, ok := m["spec"]
-	if !ok {
-		return
+	for _, root := range []string{"spec", "template"} {
+		if node, ok := m[root]; ok {
+			sanitizeEnvLists(node, compact)
+		}
 	}
-	sanitizeEnvLists(spec, compact)
 }
 
 func sanitizeEnvLists(node any, compact bool) {
@@ -272,13 +274,16 @@ func sanitizeEnvEntries(envList []any, compact bool) any {
 // package; unconditional key deletion — including per-container-element
 // drops — routes through the shared mechanism.
 
-// containerElementPaths covers both direct pod specs (Pod) and workload
-// template specs (Deployment/StatefulSet/DaemonSet/ReplicaSet/Job).
+// containerElementPaths covers direct pod specs (Pod), workload template
+// specs (Deployment/StatefulSet/DaemonSet/ReplicaSet/Job) and a core
+// PodTemplate's template.
 var containerElementPaths = [][]string{
 	{"spec", "containers"},
 	{"spec", "initContainers"},
 	{"spec", "template", "spec", "containers"},
 	{"spec", "template", "spec", "initContainers"},
+	{"template", "spec", "containers"},
+	{"template", "spec", "initContainers"},
 }
 
 // forEachContainer runs fn over every container map at each known container

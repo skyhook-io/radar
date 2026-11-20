@@ -40,13 +40,32 @@ Issues follow the same rule: you see an issue only if you could open its resourc
 
 Search uses the same exact list permissions as resource reads for Secrets, Roles, RoleBindings, LimitRanges and Trivy reports. Ordinary namespaced kinds, including ServiceAccounts, NetworkPolicies, ResourceQuotas and dynamic CRDs, use namespace visibility, as resource lists do. Sensitive-kind checks try a cluster-wide SAR first and fan out over visible namespaces only after a denial. Your own access is the scope of a search, so its coverage response reports a denial only for a kind or namespace the query names, keeping caller denial, failed permission checks and collector limitations apart; see [Search coverage](mcp.md#search-coverage-and-cel-object-filters).
 
-**If namespace-level isn't tight enough for you**, scope the boundary at the cache instead of at read time: run a Radar instance per trust boundary and give each one a **namespace-scoped ServiceAccount** (a `Role`/`RoleBinding`, no `ClusterRole`) limited to that boundary's namespaces. Radar detects the restricted permissions at startup and only watches and caches what its ServiceAccount can list — so the instance simply never holds another team's data, and there's nothing to over-expose. Point each team at their own instance (an ingress or auth proxy can route them). See [In-Cluster Deployment → namespace-scoped RBAC](in-cluster.md) for the `rbac.create: false` + custom `Role` setup.
+**If namespace-level isn't tight enough for you**, scope the boundary at the cache instead of at read time: run a Radar instance per trust boundary and give each one a **namespace-scoped ServiceAccount** (a `Role`/`RoleBinding`, no `ClusterRole`) limited to that boundary's namespaces. Radar detects the restricted permissions at startup and only watches and caches what its ServiceAccount can list — so the instance simply never holds another team's data, and there's nothing to over-expose. Point each team at their own instance (an ingress or auth proxy can route them). With the Helm chart, set `rbac.namespaces` to that boundary's namespaces; see [In-Cluster Deployment → namespace-scoped RBAC](in-cluster.md) for this and for the `rbac.create: false` + custom `Role` setup.
 
 Ownership answers (owners, children, and which GitOps manager manages an object) follow the same namespace rule in the UI.
 REST AI context and MCP additionally require exact-kind `get` access for ownership and manager references, so their
 answers can be narrower than the UI's. A manager the caller can't read contributes no evidence; a name in the object's
 own metadata stays as a `withheld` claim, and the answer says it is `narrowed`. These reference checks do not support
-`resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object).
+`resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object). The object's own
+relationships (what it routes to, declares or selects) need only the access that opened it: its kind in its namespace
+counts as readable for them, so a route you read through namespace access lists its readable backends even without a
+`get` grant on its kind. Every reference the answer emits still needs its own `get` check.
+
+Related Resources, the AI resource context and MCP `get_resource` name the ConfigMaps, Secrets, PVCs and ServiceAccount
+a readable object's pod template references, a Pod's Node, an Ingress's TLS Secrets and a ServiceAccount's Secrets, and
+Related Resources also the ResourceClaims a Pod's spec names and a Calico HostEndpoint's Node, even when you
+can't read them, since the object's own YAML already shows those names. Such a reference carries `state: "denied"` (or `"access_unverified"` when Radar couldn't check your access), says
+nothing about whether the object exists or its state, and opens nothing. Workload history never follows it. Objects
+Radar finds by searching, such as a policy or monitor elsewhere that selects the object, are still withheld when you
+can't read them; the answer says only that something related was withheld.
+
+Relationship answers (what uses a ConfigMap, what a selector matches, what routes to a Service) follow the same
+namespace rule. A search that spans namespaces, such as a ServiceMonitor's with `namespaceSelector: any`, matches
+against Radar's cache first and then drops what you may not read, and the answer says it is `narrowed`. It never
+returns the identities or bodies of what it dropped, but because you can write your own selectors, the mark can
+reveal whether hidden cached objects match one: whether something in a namespace you can't see carries those labels.
+A `narrowed` mark is not proof of a match, since a namespace Radar couldn't read also narrows the answer. If that is
+too much for your setup, run a Radar instance per trust boundary, as described above.
 
 Deletion-impact previews fetch the root as the caller and use caller-readable ownership data. Permission and collection gaps make the result partial; remote or unknown GitOps destinations expose no local inventory. See [Shared deletion preview](mcp.md#shared-deletion-preview). Policy coverage metadata is filtered alongside its referenced workloads; it does not reveal names from hidden namespaces.
 
@@ -80,6 +99,21 @@ digest, so a cached image is only served after the caller has read its manifest
 from that same repository.
 Without an authenticated user, local image inspection keeps its existing
 credential discovery and network behavior.
+
+The on-demand Java4Shell check starts with the Pods the caller may list and
+their reported running image digests. It tries anonymous reads first. With
+authentication enabled, a private read requires the same `get pods` and
+pull-secret or `pods/exec` grants as per-Pod inspection. `pods/exec` is a
+permission check for credential access. The advisory reads manifests and
+configs over the registry connection. It can use Radar's own registry
+credentials for exec-authorized callers and in standalone loopback mode with
+auth disabled. On an unauthenticated shared listener, it can use the running
+Pod's pull secrets available to Radar's Kubernetes identity.
+
+Credentialed reads are authorized and revalidated for each check. Only
+Pods with matching credential access share a private result within the
+same check. Credentials go over HTTPS, and the advisory pins registry
+connections to checked addresses and refuses loopback and link-local addresses.
 
 ### Prometheus metrics
 
@@ -122,6 +156,12 @@ Two things still hold on a shared listener without authentication:
      configured for;
    - connecting the cluster to Radar Cloud, which outlasts the request, needs an
      explicit acknowledgement.
+
+The browser request guard also covers `/metrics` and `/debug/pprof/*`. It refuses
+`Sec-Fetch-Site: cross-site` and `same-site`. Headerless requests still pass that
+guard, including browser requests over plain HTTP to non-localhost addresses;
+the listener's authentication and profiling policy still apply. See
+[Profiling](configuration.md#profiling) for diagnostic access.
 
 ## Auth Modes
 
@@ -173,7 +213,14 @@ Groups can arrive as one comma-separated header or as one header per group, as p
 
 The user menu always shows a **Logout** button. Clicking it clears Radar's session cookie. On its own, that isn't enough to switch users: your proxy re-injects the identity header on the next request and signs the same user back in.
 
-To make logout actually switch users, point Radar at your proxy's sign-out URL with `--auth-proxy-logout-url` (or `auth.proxy.logoutURL` in Helm) — e.g. oauth2-proxy's `/oauth2/sign_out`. Radar then redirects the browser there after clearing its own cookie, so the upstream session is torn down too. When unset, the menu shows a note that the proxy may re-authenticate automatically.
+To make logout actually switch users, use one or both of these:
+
+- **The proxy's sign-out URL:** `--auth-proxy-logout-url` (or `auth.proxy.logoutURL` in Helm), e.g. oauth2-proxy's `/oauth2/sign_out`. Radar redirects the browser there after clearing its own cookie, so the proxy ends its session.
+- **The proxy's session cookies:** `--auth-proxy-logout-cookies` (or `auth.proxy.logoutCookies` in Helm), a list of cookie names where `*` matches any characters, e.g. `_oauth2_proxy*`. Logout deletes every matching cookie the browser sends, whether it was set for Radar's host or a parent domain, at `/` or on a path down to Radar's base path. The next request then goes back through the proxy's sign-in. Use it when the proxy has no sign-out URL, or when its sign-out URL leaves cookies behind on Radar's host. Each matching cookie adds one `Set-Cookie` header per parent domain and path, so list only the proxy's session cookies: behind nginx, a long hostname, a deep base path and many matches can exceed its default 4 KB response header buffer. Radar can only delete cookies the browser sends to Radar's address, and deleting them doesn't revoke them on the proxy: a copy taken from the browser keeps working until it expires.
+
+If the proxy signs people in through a single sign-on provider that remembers them, the next sign-in can still happen without a password. Only that provider's own sign-out changes that.
+
+When neither is set, the menu shows a note that the proxy may sign the user back in automatically.
 
 > **Note:** HTTP Basic Auth has no reliable logout mechanism — browsers cache credentials and resend them. If you need user-switching, prefer a proxy with a real sign-out endpoint (oauth2-proxy, Authelia) over plain Basic Auth.
 
@@ -320,13 +367,14 @@ Under cloud-mode (`RADAR_CLOUD_MODE=true`, set automatically by the chart when `
 
 - Forces `--auth-mode=proxy` with pinned `X-Forwarded-User` / `X-Forwarded-Groups` headers. Radar accepts those headers only on requests marked in-process by its authenticated Cloud tunnel; the ordinary pod TCP listener cannot assert Cloud identity.
 - Ships three default ClusterRoleBindings mapping Cloud's `radar:owner` / `radar:member` / `radar:viewer` groups to the standard K8s `admin` / `edit` / `view` ClusterRoles. Configurable via `cloud.defaultRbac.*` in `values.yaml`.
-- Adds a **cluster-read add-on** (`cloud.defaultRbac.clusterScopedRead.{viewer,member,owner}`, each default on) granting `get/list/watch` on infrastructure the built-in `view`/`edit`/`admin` roles exclude — Nodes, PersistentVolumes, StorageClasses, IngressClasses, PriorityClasses, RuntimeClasses, Leases (namespaced; the spec is only a holder and renew times — `edit`/`admin` already include them, so only viewers and the view-based system and AI grants gain), ClusterTrustBundles, CRDs, and admission webhook configurations — plus list-only Upgrade impact evidence for CSIDrivers, CSIStorageCapacities, legacy PodSecurityPolicies, and API flow-control configuration. When the matching collection is enabled, it also grants APIServices, PrometheusRules, Karpenter kinds, and node metrics. It does not grant Secrets, RBAC objects, API-server metrics, or kubelet proxy access. It's an independent axis per tier: set a tier `false` to make it namespaced-only (e.g. `clusterScopedRead.viewer: false`). Owner node cordon/drain is a separate cluster-scoped *write*, off by default (`cloud.defaultRbac.nodeOps`). Owner `get`/`patch` on Argo CD Applications is a separate write add-on, off by default for every owner role (`cloud.defaultRbac.integrationWrite.gitops.owner: false`) because it delegates the Argo CD controller's deployment authority. Set `true` to opt in, or `auto` for enablement only when the owner role is named `admin` or `cluster-admin`, then apply a chart upgrade; see [action permissions](gitops.md#action-permissions) and the [chart README](../deploy/helm/radar/README.md#cloud-owner-integration-writes).
+- Adds a **cluster-read add-on** (`cloud.defaultRbac.clusterScopedRead.{viewer,member,owner}`, each default on) granting `get/list/watch` on infrastructure the built-in `view`/`edit`/`admin` roles exclude — Nodes, PersistentVolumes, StorageClasses, IngressClasses, PriorityClasses, RuntimeClasses, Leases (namespaced; the spec is only a holder and renew times — `edit`/`admin` already include them, so only viewers and the view-based system and AI grants gain), ClusterTrustBundles, CRDs, admission webhook configurations, and ValidatingAdmissionPolicies and their bindings — plus list-only Upgrade impact evidence for CSIDrivers, CSIStorageCapacities, legacy PodSecurityPolicies, and API flow-control configuration. When the matching collection is enabled, it also grants APIServices, PrometheusRules, Karpenter kinds, and node metrics. It does not grant Secrets, RBAC objects, API-server metrics, or kubelet proxy access. It's an independent axis per tier: set a tier `false` to make it namespaced-only (e.g. `clusterScopedRead.viewer: false`). Owner node cordon/drain is a separate cluster-scoped *write*, off by default (`cloud.defaultRbac.nodeOps`).
+- Owner `get`/`patch` on Argo CD Applications is a separate write add-on, off by default for every owner role (`cloud.defaultRbac.integrationWrite.gitops.owner: false`) because it delegates the Argo CD controller's deployment authority. Set `true` to opt in, or `auto` for enablement only when the owner role is named `admin` or `cluster-admin`, then apply a chart upgrade; see [action permissions](gitops.md#action-permissions) and the [chart README](../deploy/helm/radar/README.md#cloud-owner-integration-writes).
 - Creates the default read grant for `radar:system`, Radar Cloud's alerts worker and timeline puller: a chart-owned role aggregated to match `view`, the cluster-read and integration-read add-ons, and cluster-wide Secret read. Helm release alerts and Secret changes in the timeline need Secret read; Helm stores releases as Secrets. No writes. Controlled by `cloud.systemRbac` (default `true`).
 - Creates the default read grant for alert-triggered AI investigations, recorded in Kubernetes audit logs as `radar:ai:<org>`: `radar:ai:reader` receives permissions based on `view` plus the cluster-read and integration-read add-ons. Stock `view` excludes Secrets, but includes pod logs and ConfigMaps; roles labelled `aggregate-to-view` widen this grant too. Controlled by `cloud.aiRbac` (default `true`). Requests a person starts or follows up on use that person's identity and groups, including follow-ups on alert-triggered investigations. MCP clients also use the user's permissions.
 - Treats `cloud.aiRbac` and `cloud.systemRbac` as controls for the chart's default grants, independent of `cloud.defaultRbac`. False or absent (including after a plain `--reuse-values` upgrade from an older chart) creates no default grant and leaves customer-created bindings untouched. These settings do not disable background jobs or automatic analysis; they control their default Kubernetes access.
 - Requires cluster-admin-equivalent authority or `escalate` on ClusterRoles to create or update the AI/system aggregated roles, in addition to normal chart installation permissions. Restricted installers can set `cloud.aiRbac=false` and `cloud.systemRbac=false` and supply their own read-only group bindings.
 - Uses the Cloud role (`radar:owner` / `radar:member` / `radar:viewer`) only to gate Radar's own configuration (settings, integrations, audit settings, registered OCI chart sources, self-upgrade), which runs as Radar's ServiceAccount. A Cloud request with no role group (such as the Hub's `radar:system` background identity) is refused there. Operations that run as the impersonated user — Helm reads and writes, in-cluster probe pods — are decided by Kubernetes RBAC alone.
-- Does **not** grant `PodCertificateRequest` access through the default Cloud tier bindings. Radar surfaces the API when Kubernetes 1.37 serves it, but a Cloud user can browse requests only when their Kubernetes RBAC independently grants `get/list` access. To opt in, bind a Role or ClusterRole granting `get/list/watch` on `certificates.k8s.io/podcertificaterequests` to the intended `radar:*` groups. This stays separate because certificate-request metadata is more sensitive than ordinary workload inventory.
+- Does **not** grant `PodCertificateRequest` or `CertificateSigningRequest` access through the default Cloud tier bindings. Radar surfaces both APIs (PodCertificateRequests when Kubernetes 1.37 serves them), but a Cloud user can browse requests only when their Kubernetes RBAC independently grants `get/list` access. To opt in, bind a Role or ClusterRole granting `get/list/watch` on `certificates.k8s.io/podcertificaterequests` or a ClusterRole granting it on `certificates.k8s.io/certificatesigningrequests` to the intended `radar:*` groups. This stays separate because certificate-request metadata, including the requester's username, groups and authenticator extra data, is more sensitive than ordinary workload inventory.
 - Restricts the ordinary pod/ClusterIP TCP listener to `/api/health`; the full handler is served only over yamux streams from the outbound Cloud tunnel. Cloud mode also omits `/debug/pprof/*` and narrows auth exemptions to health only.
 
 <a id="cloud-mode-helm-bindings"></a>
@@ -419,9 +467,9 @@ K8s ships with built-in ClusterRoles that work well with Radar. You don't need t
 
 | Built-in Role | What Users Can Do in Radar |
 |---------------|---------------------------|
-| `view` | See resources, topology, events, logs. No restart, scale, or Helm writes. |
-| `edit` | Everything in `view` + restart, scale, edit resources. Does NOT include exec or port-forward (those require `pods/exec` and `pods/portforward` subresources — use the custom `radar-operator` role below). |
-| `admin` | Everything in `edit` + manage RBAC within namespaces. Same exec/port-forward caveat as `edit`. |
+| `view` | See resources, topology, events, logs. No Secrets, exec, port-forward, restart, scale, or Helm writes. |
+| `edit` | Everything in `view` + restart, scale, edit resources, exec, and full access to Secrets. Also grants `pods/portforward`, which in-cluster Radar turns into a `kubectl` command to copy. To withhold exec or Secrets, use a custom role such as `radar-operator` below, without its optional exec rule. |
+| `admin` | Everything in `edit` + manage RBAC within namespaces. |
 | `cluster-admin` | Full access to everything across all namespaces, including exec and port-forward. |
 
 ```yaml
@@ -542,7 +590,7 @@ When auth is enabled:
 - The **namespace selector** only shows namespaces the user can access
 - **Topology, resources, events, dashboard** are filtered to accessible namespaces
 - **Cluster-scoped resources** (Nodes, PersistentVolumes, StorageClasses) are gated per-kind via `SubjectAccessReview` — a user sees them only if their own RBAC permits listing that kind, independent of namespace access
-- **Helm releases** are read with the user's own identity, like everything else. Helm stores releases as Secrets, so a user sees a release only where their RBAC grants `list secrets` in the storage namespace — and the K8s built-in `view` role deliberately does not. Radar resolves the namespaces the user can actually read release storage in and lists only there, returning 403 when there are none. Write operations (install, upgrade, rollback, uninstall) are impersonated and need the matching RBAC.
+- **Helm releases** are read with the user's own identity, like everything else. Helm stores releases as Secrets, so a user gets Helm's own records only where their RBAC grants `list secrets` in the storage namespace — and the K8s built-in `view` role deliberately does not. Radar resolves the namespaces the user can actually read release storage in and reads only there. Elsewhere the Helm view falls back to the Helm metadata on objects the user can already read, with status and Helm history unknown (Flux's recorded history still shows if they can read the `HelmRelease`), and reads no Secret; see [Without access to Secrets](helm.md#without-access-to-secrets). `/api/helm/releases` itself still returns 403 when there are none. Write operations (install, upgrade, rollback, uninstall) are impersonated and need the matching RBAC.
 - **Write buttons** (restart, scale, exec, Helm install, etc.) only appear if the user has permission
 - Write operations return **403** from K8s if RBAC denies them (shown as an error toast)
 - The **/api/auth/me** endpoint returns the current user info and whether auth is enabled
@@ -586,6 +634,7 @@ Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contain
 | User header (proxy) | `--auth-user-header` | `auth.proxy.userHeader` | `X-Forwarded-User` |
 | Groups header (proxy) | `--auth-groups-header` | `auth.proxy.groupsHeader` | `X-Forwarded-Groups` |
 | Proxy logout URL (proxy) | `--auth-proxy-logout-url` | `auth.proxy.logoutURL` | — |
+| Proxy logout cookies (proxy) | `--auth-proxy-logout-cookies` | `auth.proxy.logoutCookies` | — |
 | OIDC issuer | `--auth-oidc-issuer` | `auth.oidc.issuerURL` | — |
 | OIDC internal issuer | `--auth-oidc-internal-issuer` | `auth.oidc.internalIssuerURL` | — |
 | OIDC authorization URL | `--auth-oidc-authorization-url` | `auth.oidc.authorizationURL` | — |

@@ -3,7 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { KueueWorkloadRenderer } from './KueueWorkloadRenderer'
 
 const mock = vi.hoisted(() => ({ query: {} as any }))
-vi.mock('../../../api/client', () => ({ useKueueProvisioning: () => mock.query }))
+vi.mock('../../../api/client', () => ({ useKueueProvisioning: () => mock.query, useKueuePendingPosition: () => ({ isPending: false, refetch: vi.fn() }) }))
+// The admission-path reads have their own tests; here they stay unread.
+vi.mock('../../kueue/useRelatedReads', () => ({
+  relatedReadKey: () => '',
+  useRelatedObjects: () => ({ byName: {}, all: { state: 'loading' }, completeness: 'unknown' }),
+  useRelatedReads: (refs: unknown[]) => refs.map(() => ({ state: 'loading' })),
+}))
 const data = { metadata: { name: 'work', namespace: 'ml', uid: 'new' }, status: { admissionChecks: [{ name: 'capacity', state: 'Rejected', message: 'Capacity unavailable' }] } }
 const render = () => renderToStaticMarkup(<KueueWorkloadRenderer data={data} />)
 

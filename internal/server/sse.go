@@ -43,25 +43,8 @@ type SSEBroadcaster struct {
 	watchStopCh chan struct{}
 	watchMu     sync.Mutex
 
-	// Cached topology for relationship lookups (rebuilt on broadcast or lazily on access)
-	cachedTopology      *topology.Topology
-	cachedTopologyMu    sync.RWMutex
-	cachedTopologyDirty bool // true when changes occurred but topology not yet rebuilt
-	// cachedTopologyIndex is the inverted edge index over cachedTopology, built
-	// lazily on first relationship lookup and reused across drawer opens until
-	// the topology is replaced. Nil whenever cachedTopology changes (set under
-	// cachedTopologyMu alongside it). Guarded by cachedTopologyMu.
-	cachedTopologyIndex *topology.RelationshipsIndex
-	// cachedTopologyFlight is the on-demand rebuild in flight for the current
-	// cluster view, nil while none is. Guarded by cachedTopologyMu.
-	cachedTopologyFlight *topologyFlight
-	// rebuildTopology rebuilds the relationship cache on demand, reporting
-	// whether it stored a graph; a seam for tests.
-	rebuildTopology func() bool
-
 	// warmupDone is closed when deferred informers finish syncing. During warmup,
-	// topology broadcasts use longer debounce and skip the expensive full-topology
-	// cache build. Protected by watchMu (same as watchStopCh).
+	// topology broadcasts use longer debounce. Protected by watchMu (same as watchStopCh).
 	warmupDone chan struct{}
 
 	// topoTrigger carries broadcast requests to the topology worker. One slot:
@@ -81,7 +64,7 @@ type SSEBroadcaster struct {
 	// that started before a reset describes a cluster the UI has already left
 	// by the time it finishes. Every build captures the epoch up front and
 	// every publish re-checks it, so an in-flight build is discarded rather
-	// than shown or cached.
+	// than shown.
 	topoEpoch atomic.Uint64
 
 	// topoEpochAtCycleStart reads the epoch a cycle is built against. A real
@@ -199,17 +182,11 @@ func NewSSEBroadcaster() *SSEBroadcaster {
 	}
 	b.topoEpochAtCycleStart = b.topoEpoch.Load
 	b.topoBuild = b.broadcastTopologyUpdate
-	b.rebuildTopology = b.rebuildCachedTopology
 	return b
 }
 
 // Start begins the broadcaster's main loop
 func (b *SSEBroadcaster) Start() {
-	// Build initial topology cache (only if connected)
-	if k8s.IsConnected() {
-		b.initCachedTopology()
-	}
-
 	// Register for context switch notifications
 	b.registerContextSwitchCallback()
 
@@ -242,12 +219,6 @@ func (b *SSEBroadcaster) requestTopologyBroadcast() {
 // fires — but the token it consumed stood for every request that coalesced into
 // it, so dropping it silently strands the graph until the next cluster change.
 const topologyRetryDelay = 2 * time.Second
-
-// relationshipGraphWait bounds how long a reader waits for the relationship
-// graph another reader is building: long enough for a large cluster's build,
-// short of the request timeout. Past it the reader answers from what is
-// cached, possibly nothing.
-const relationshipGraphWait = 20 * time.Second
 
 // topologyWorker owns every broadcast build, so concurrent triggers (debounce
 // fire, context switch, CRD discovery) coalesce into a single build instead of
@@ -370,6 +341,7 @@ func (b *SSEBroadcaster) registerConnectionStateCallback() {
 				"error":           status.Error,
 				"errorType":       status.ErrorType,
 				"progressMessage": status.ProgressMsg,
+				"disconnectedAt":  status.DisconnectedAt,
 			},
 		})
 
@@ -382,7 +354,7 @@ func (b *SSEBroadcaster) registerConnectionStateCallback() {
 }
 
 // registerContextSwitchCallback registers for context switch notifications
-// When context switches, we clear the cached topology and notify clients
+// When context switches, we invalidate in-flight builds and notify clients
 func (b *SSEBroadcaster) registerContextSwitchCallback() {
 	// Register for progress updates during context switch
 	k8s.OnContextSwitchProgress(func(message string) {
@@ -395,7 +367,7 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 	})
 
 	resetCacheView := func() {
-		b.resetCachedTopology()
+		b.topoEpoch.Add(1)
 
 		// Reset warmup phase for the new context (under watchMu to synchronize
 		// with isWarmingUp and watchDeferredSync which read this field)
@@ -409,7 +381,7 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 
 	// Register for context switch completion
 	k8s.OnContextSwitch(func(newContext string) {
-		log.Printf("SSE broadcaster: context switched to %q, clearing cached topology", newContext)
+		log.Printf("SSE broadcaster: context switched to %q, invalidating topology builds", newContext)
 		resetCacheView()
 
 		// Broadcast context_changed event to all clients
@@ -432,51 +404,11 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 	})
 
 	k8s.OnNamespaceRescope(func(namespace string) {
-		log.Printf("SSE broadcaster: namespace cache rescoped to %q, clearing cached topology", k8s.SanitizeForLog(namespace))
+		log.Printf("SSE broadcaster: namespace cache rescoped to %q, invalidating topology builds", k8s.SanitizeForLog(namespace))
 		resetCacheView()
 		log.Printf("SSE broadcaster: scheduling topology broadcast")
 		b.requestTopologyBroadcast()
 	})
-}
-
-// resetCachedTopology empties the relationship cache for a new cluster view.
-func (b *SSEBroadcaster) resetCachedTopology() {
-	// Bump before clearing: a build already in flight against the previous
-	// cluster must fail its epoch check no matter where it is, including
-	// between this clear and its own write.
-	b.topoEpoch.Add(1)
-
-	b.cachedTopologyMu.Lock()
-	defer b.cachedTopologyMu.Unlock()
-	b.cachedTopology = nil
-	b.cachedTopologyIndex = nil
-	b.cachedTopologyDirty = false
-	if f := b.cachedTopologyFlight; f != nil {
-		// Its build is for the previous cluster and can't store: let its
-		// waiters, and the next reader, build for this one.
-		close(f.abandoned)
-		b.cachedTopologyFlight = nil
-	}
-}
-
-// initCachedTopology builds the initial topology cache
-func (b *SSEBroadcaster) initCachedTopology() {
-	epoch := b.topoEpoch.Load()
-	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
-	opts := topology.DefaultBuildOptions()
-	opts.ViewMode = topology.ViewModeResources
-	// Include ReplicaSets in the cache so relationship lookups work for them
-	opts.IncludeReplicaSets = true
-	opts.ForRelationshipCache = true
-	opts.IncludeSecrets = true
-
-	if topo, err := builder.Build(opts); err == nil {
-		if b.updateCachedTopology(topo, epoch) {
-			log.Printf("Initialized topology cache with %d nodes and %d edges", len(topo.Nodes), len(topo.Edges))
-		}
-	} else {
-		log.Printf("Warning: Failed to initialize topology cache: %v", err)
-	}
 }
 
 // Stop gracefully shuts down the broadcaster
@@ -635,10 +567,7 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 				return
 			}
 
-			// Broadcast K8s event immediately for important events
-			if change.Kind == "Event" || change.Operation == "delete" ||
-				(change.Kind == "Pod" && change.Operation != "update") ||
-				change.Diff != nil { // Also broadcast updates with meaningful diffs
+			if streamsChangeFrame(change) {
 				// Resolve the GVR for per-kind authorization. The dynamic cache
 				// stamps the exact GVR on the change (disambiguates CRD kind
 				// collisions); the typed cache leaves it empty, so resolve from
@@ -684,6 +613,29 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 	}
 }
 
+// gitopsChangeGroups are the API groups whose adds refresh the GitOps table's
+// rows and totals. An add carries no diff, so without this a new Application or
+// Kustomization would wait for the table's poll.
+var gitopsChangeGroups = map[string]bool{
+	"argoproj.io":                    true,
+	"source.toolkit.fluxcd.io":       true,
+	"kustomize.toolkit.fluxcd.io":    true,
+	"helm.toolkit.fluxcd.io":         true,
+	"notification.toolkit.fluxcd.io": true,
+}
+
+// streamsChangeFrame reports whether a change is sent as a k8s_event frame.
+// Every frame is still gated per client by clientCanSeeChange.
+func streamsChangeFrame(change k8s.ResourceChange) bool {
+	switch {
+	case change.Kind == "Event", change.Operation == "delete", change.Diff != nil:
+		return true
+	case change.Operation == "add":
+		return change.Kind == "Pod" || gitopsChangeGroups[change.Group]
+	}
+	return false
+}
+
 func resourceChangeEventData(change k8s.ResourceChange, group string) map[string]any {
 	eventData := map[string]any{
 		"kind":      change.Kind,
@@ -721,9 +673,6 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 	b.mu.RUnlock()
 
 	if len(clients) == 0 {
-		// No clients — mark the relationship cache as dirty so it gets
-		// rebuilt on next GetCachedTopology() call. Skip the expensive build.
-		b.markCachedTopologyDirty()
 		// Forget the last cycle's estimate so a future session doesn't inherit
 		// a disconnected session's debounce (a small namespace shouldn't keep a
 		// big one's 15s cadence). topologyDebounceFor falls back to the resource-
@@ -732,34 +681,8 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 		return true
 	}
 
-	// Checked before the full-topology build, which is the most expensive one
-	// in the cycle (every namespace, ReplicaSets included): a switch that has
-	// already landed makes it wrong before it costs anything, and the reset
-	// queued its own trigger to replace it.
 	if b.topoEpoch.Load() != epoch {
-		return b.abandonCycleForNewCluster()
-	}
-
-	// During warmup, skip the expensive full-topology cache build. Nobody is
-	// clicking into resource details while the connecting spinner is showing,
-	// so the relationship cache isn't needed yet. Mark dirty for lazy rebuild.
-	if b.isWarmingUp() {
-		b.markCachedTopologyDirty()
-	} else {
-		if fullTopo, err := buildFullTopology(); err == nil {
-			// A rejected write leaves the new cluster with nothing cached, so
-			// leave the cache dirty for the next reader to rebuild — the same
-			// rule the on-demand rebuild path follows.
-			if !b.updateCachedTopology(fullTopo, epoch) {
-				b.markCachedTopologyDirty()
-			}
-		} else {
-			log.Printf("Error building full topology for cache: %v", err)
-		}
-	}
-
-	if b.topoEpoch.Load() != epoch {
-		return b.abandonCycleForNewCluster()
+		return true
 	}
 
 	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
@@ -805,7 +728,7 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 		// many builds long, and every one after the switch is both wrong and
 		// time the new cluster's build spends waiting for this one to finish.
 		if b.topoEpoch.Load() != epoch {
-			return b.abandonCycleForNewCluster()
+			return true
 		}
 
 		opts := topology.DefaultBuildOptions()
@@ -821,7 +744,7 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 			continue
 		}
 		if b.topoEpoch.Load() != epoch {
-			return b.abandonCycleForNewCluster()
+			return true
 		}
 		topo.StripNodeKinds(group.deniedKinds)
 
@@ -1154,190 +1077,6 @@ func (b *SSEBroadcaster) ClientCount() int {
 	return len(b.clients)
 }
 
-// topologyFlight is one on-demand rebuild of the relationship graph.
-type topologyFlight struct {
-	// done is closed by the reader building when its build ends.
-	done chan struct{}
-	// abandoned is closed when the cluster view is reset during the build,
-	// which can then store nothing.
-	abandoned chan struct{}
-}
-
-// GetCachedTopology returns the most recently built full topology, for
-// relationship lookups. A cache that is dirty (changes occurred with no SSE
-// clients) or holds nothing yet is rebuilt on demand by one reader; readers
-// that arrive meanwhile wait for that build, for up to relationshipGraphWait,
-// rather than answer from the graph it replaces or from none.
-func (b *SSEBroadcaster) GetCachedTopology() *topology.Topology {
-	var deadline <-chan time.Time
-	for {
-		b.cachedTopologyMu.RLock()
-		topo := b.cachedTopology
-		settled := !b.cachedTopologyDirty && topo != nil && b.cachedTopologyFlight == nil
-		b.cachedTopologyMu.RUnlock()
-		if settled {
-			return topo
-		}
-
-		b.cachedTopologyMu.Lock()
-		if f := b.cachedTopologyFlight; f != nil {
-			b.cachedTopologyMu.Unlock()
-			if deadline == nil {
-				timer := time.NewTimer(relationshipGraphWait)
-				defer timer.Stop()
-				deadline = timer.C
-			}
-			select {
-			case <-f.done:
-				select {
-				case <-f.abandoned:
-					// Reset as the build ended: it was for the previous cluster.
-					continue
-				default:
-				}
-			case <-f.abandoned:
-				continue
-			case <-deadline:
-			}
-			b.cachedTopologyMu.RLock()
-			defer b.cachedTopologyMu.RUnlock()
-			return b.cachedTopology
-		}
-		if (!b.cachedTopologyDirty && b.cachedTopology != nil) || k8s.GetResourceCache() == nil {
-			topo = b.cachedTopology
-			b.cachedTopologyMu.Unlock()
-			return topo
-		}
-		f := &topologyFlight{done: make(chan struct{}), abandoned: make(chan struct{})}
-		b.cachedTopologyFlight = f
-		b.cachedTopologyDirty = false
-		b.cachedTopologyMu.Unlock()
-		return b.buildCachedTopology(f)
-	}
-}
-
-// buildCachedTopology runs flight f's rebuild and returns what is cached
-// after it.
-func (b *SSEBroadcaster) buildCachedTopology(f *topologyFlight) *topology.Topology {
-	built := false
-	defer func() {
-		b.cachedTopologyMu.Lock()
-		if b.cachedTopologyFlight == f {
-			b.cachedTopologyFlight = nil
-			if !built {
-				// Mark dirty again so the next read retries.
-				b.cachedTopologyDirty = true
-			}
-		}
-		b.cachedTopologyMu.Unlock()
-		close(f.done)
-	}()
-	built = b.rebuildTopology()
-
-	b.cachedTopologyMu.RLock()
-	defer b.cachedTopologyMu.RUnlock()
-	return b.cachedTopology
-}
-
-// GetCachedTopologyWithIndex returns the cached topology together with its
-// inverted edge index, building (and memoizing) the index on first use after a
-// topology refresh. Relationship lookups that pass the index skip the O(edges)
-// scan that edgesForNode/walkTopmostOwner otherwise do per call, so reusing one
-// index across drawer opens turns repeated O(E) work into O(in-degree) per lookup.
-//
-// The returned (topo, index) pair is always consistent: the index is built from
-// the exact topo returned. When the topology is replaced between the two reads,
-// a fresh index is built for the returned topo without polluting the cache.
-func (b *SSEBroadcaster) GetCachedTopologyWithIndex() (*topology.Topology, *topology.RelationshipsIndex) {
-	topo := b.GetCachedTopology() // handles lazy rebuild when dirty
-	if topo == nil {
-		return nil, nil
-	}
-
-	b.cachedTopologyMu.RLock()
-	idx := b.cachedTopologyIndex
-	current := b.cachedTopology
-	b.cachedTopologyMu.RUnlock()
-	if idx != nil && current == topo {
-		return topo, idx
-	}
-
-	// Build outside the lock — IndexByResource is O(edges).
-	built := topology.IndexByResource(topo)
-	b.cachedTopologyMu.Lock()
-	if b.cachedTopology == topo {
-		b.cachedTopologyIndex = built
-	}
-	b.cachedTopologyMu.Unlock()
-	return topo, built
-}
-
-// rebuildCachedTopology rebuilds the full topology for relationship lookups.
-// Returns true if the rebuild succeeded, false otherwise.
-func (b *SSEBroadcaster) rebuildCachedTopology() bool {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return false
-	}
-	epoch := b.topoEpoch.Load()
-	if fullTopo, err := buildFullTopology(); err == nil {
-		// A rejected write leaves nothing cached for the new cluster, so the
-		// caller must re-dirty and let the next read rebuild against it.
-		return b.updateCachedTopology(fullTopo, epoch)
-	} else {
-		log.Printf("Error rebuilding topology cache on demand: %v", err)
-		return false
-	}
-}
-
-// abandonCycleForNewCluster drops a cycle whose cluster the UI has already left.
-// The relationship cache is flagged on the way out: whatever it holds was built
-// for the previous cluster, and the reset that bumped the epoch left it empty
-// and clean, which a reader would otherwise take as "this cluster has no
-// topology". Reports the cycle as run — the reset queued its own trigger, so
-// there is nothing for the worker to re-arm.
-func (b *SSEBroadcaster) abandonCycleForNewCluster() bool {
-	b.markCachedTopologyDirty()
-	return true
-}
-
-// markCachedTopologyDirty flags the relationship cache for rebuild on the next
-// read. Used wherever a cycle declines to store a graph — no clients, warmup, or
-// a build rejected for the previous cluster — so a reader rebuilds rather than
-// being told an empty cache is current.
-func (b *SSEBroadcaster) markCachedTopologyDirty() {
-	b.cachedTopologyMu.Lock()
-	b.cachedTopologyDirty = true
-	b.cachedTopologyMu.Unlock()
-}
-
-// updateCachedTopology stores a full topology for relationship lookups, unless
-// the cluster view was reset while it was being built. Reports whether it
-// stored.
-func (b *SSEBroadcaster) updateCachedTopology(topo *topology.Topology, epoch uint64) bool {
-	b.cachedTopologyMu.Lock()
-	defer b.cachedTopologyMu.Unlock()
-	if b.topoEpoch.Load() != epoch {
-		return false
-	}
-	b.cachedTopology = topo
-	b.cachedTopologyIndex = nil // rebuilt lazily on next relationship lookup
-	b.cachedTopologyDirty = false
-	return true
-}
-
-// buildFullTopology constructs a full topology (all namespaces, resources view)
-// for relationship lookups. Used by both broadcast and lazy rebuild paths.
-func buildFullTopology() (*topology.Topology, error) {
-	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
-	opts := topology.DefaultBuildOptions()
-	opts.ViewMode = topology.ViewModeResources
-	opts.IncludeReplicaSets = true
-	opts.ForRelationshipCache = true
-	opts.IncludeSecrets = true
-	return builder.Build(opts)
-}
-
 // HandleSSE is the HTTP handler for the SSE endpoint
 func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, deniedKinds map[topology.NodeKind]bool, authorize func(group, resource, namespace, verb string) bool) {
 	// Set SSE headers
@@ -1378,6 +1117,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 		"error":           status.Error,
 		"errorType":       status.ErrorType,
 		"progressMessage": status.ProgressMsg,
+		"disconnectedAt":  status.DisconnectedAt,
 	})
 	if err == nil {
 		fmt.Fprintf(w, "event: connection_state\ndata: %s\n\n", connData)

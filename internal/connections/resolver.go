@@ -104,6 +104,14 @@ func NewResolver(store *config.ProfileStore, target k8s.ProfileTarget, launch ma
 	return p
 }
 
+// HasLaunchOverride reports whether this run started with a startup override
+// for kind. The override applies only to the launch target; Resolve reports
+// state "launch" where it does.
+func (p *Resolver) HasLaunchOverride(kind config.Integration) bool {
+	_, ok := p.launch[kind]
+	return ok
+}
+
 func (p *Resolver) Revision(digest string) string {
 	mac := hmac.New(sha256.New, p.key[:])
 	mac.Write([]byte(digest))

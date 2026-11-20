@@ -53,6 +53,9 @@ type kindDiffRegistration struct {
 	// backstopIgnored are paths under backstopRoot that controllers rewrite
 	// on their own, which the backstop does not report.
 	backstopIgnored []string
+	// requestRoots are top-level fields a controller writes as an operation
+	// handshake; the diff function records their effect through status.
+	requestRoots []string
 }
 
 // diffFunctions is the single source of truth for kinds with audited diff
@@ -82,7 +85,7 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"PodDisruptionBudget":            {group: "policy", diff: diffPDB, backstopRoot: "spec"},
 	"Node":                           {group: "", diff: diffNode},
 	"PersistentVolumeClaim":          {group: "", diff: diffPVC},
-	"Application":                    {group: "argoproj.io", diff: diffApplication},
+	"Application":                    {group: "argoproj.io", diff: diffApplication, backstopRoot: "spec", requestRoots: []string{"operation"}},
 	"Kustomization":                  {group: "kustomize.toolkit.fluxcd.io", diff: diffKustomization},
 	"HelmRelease":                    {group: "helm.toolkit.fluxcd.io", diff: diffFluxHelmRelease},
 	"GitRepository":                  {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "GitRepository") }},
@@ -105,6 +108,8 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"ClusterRole":                    {group: "rbac.authorization.k8s.io", diff: diffRBACRole},
 	"RoleBinding":                    {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
 	"ClusterRoleBinding":             {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
+	"Workload":                       {group: "kueue.x-k8s.io", diff: diffKueueWorkload, backstopRoot: "spec"},
+	"ProvisioningRequest":            {group: "autoscaling.x-k8s.io", diff: diffProvisioningRequest, backstopRoot: "spec"},
 }
 
 // ComputeDiff computes the diff between old and new objects based on kind and
@@ -1163,7 +1168,14 @@ func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("removed keys: %v", removedKeys))
 	}
 	if len(modifiedKeys) > 0 {
-		structured, structuredSummary, fallback := diffConfigMapModifiedKeys(oldCM.Data, newCM.Data, modifiedKeys)
+		// A reordered key is named, not structurally diffed: the entry-level
+		// diff would report every moved entry as a change.
+		reordered := reorderedValueKeys(oldCM.Data, newCM.Data, modifiedKeys)
+		structured, structuredSummary, fallback := diffConfigMapModifiedKeys(oldCM.Data, newCM.Data, slices.DeleteFunc(slices.Clone(modifiedKeys), func(key string) bool {
+			return slices.Contains(reordered, key)
+		}))
+		fallback = append(fallback, reordered...)
+		sort.Strings(fallback)
 		changes = append(changes, structured...)
 		summary = append(summary, structuredSummary...)
 		if len(fallback) > 0 {
@@ -1174,9 +1186,10 @@ func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
 			})
 			summary = append(summary, fmt.Sprintf("modified keys: %v", fallback))
 		}
+		appendReorderedKeys(&changes, &summary, "data", reordered)
 	}
 
-	appendSensitiveMapChanges(&changes, &summary, "binaryData", oldCM.BinaryData, newCM.BinaryData)
+	appendSensitiveMapChanges(&changes, &summary, "binaryData", oldCM.BinaryData, newCM.BinaryData, false)
 
 	// Immutable flag flips are user-meaningful (locks the CM until recreated).
 	oldImmut := oldCM.Immutable != nil && *oldCM.Immutable
@@ -1202,8 +1215,8 @@ func diffSecret(oldObj, newObj any) ([]FieldChange, []string) {
 
 	var changes []FieldChange
 	var summary []string
-	appendSensitiveMapChanges(&changes, &summary, "data", oldSecret.Data, newSecret.Data)
-	appendSensitiveMapChanges(&changes, &summary, "stringData", oldSecret.StringData, newSecret.StringData)
+	appendSensitiveMapChanges(&changes, &summary, "data", oldSecret.Data, newSecret.Data, true)
+	appendSensitiveMapChanges(&changes, &summary, "stringData", oldSecret.StringData, newSecret.StringData, true)
 
 	if oldSecret.Type != newSecret.Type {
 		changes = append(changes, FieldChange{Path: "type", OldValue: oldSecret.Type, NewValue: newSecret.Type})
@@ -1229,7 +1242,7 @@ func diffSealedSecret(oldObj, newObj any) ([]FieldChange, []string) {
 	newData, _, _ := unstructured.NestedMap(newSecret.Object, "spec", "encryptedData")
 	var changes []FieldChange
 	var summary []string
-	appendSensitiveMapChanges(&changes, &summary, "spec.encryptedData", oldData, newData)
+	appendSensitiveMapChanges(&changes, &summary, "spec.encryptedData", oldData, newData, false)
 	if len(changes) == 0 {
 		oldGeneration, newGeneration := oldSecret.GetGeneration(), newSecret.GetGeneration()
 		if oldGeneration != newGeneration && oldGeneration > 0 && newGeneration > 0 {
@@ -1246,7 +1259,12 @@ func diffSealedSecret(oldObj, newObj any) ([]FieldChange, []string) {
 	return changes, summary
 }
 
-func appendSensitiveMapChanges[T any](changes *[]FieldChange, summary *[]string, field string, oldData, newData map[string]T) {
+// appendSensitiveMapChanges records key names only, never values. With
+// orderAware, a modified key whose new value holds the same comma-separated
+// entries in another order is also listed under "(reordered keys)". It stays
+// under "(modified keys)" too, so a reader that doesn't know the annotation
+// still sees a change.
+func appendSensitiveMapChanges[T any](changes *[]FieldChange, summary *[]string, field string, oldData, newData map[string]T, orderAware bool) {
 	oldKeys := genericMapKeys(oldData)
 	newKeys := genericMapKeys(newData)
 	added := diffStringSlices(newKeys, oldKeys)
@@ -1275,6 +1293,17 @@ func appendSensitiveMapChanges[T any](changes *[]FieldChange, summary *[]string,
 		})
 		*summary = append(*summary, fmt.Sprintf("%s modified keys: %v", field, modified))
 	}
+	if orderAware {
+		appendReorderedKeys(changes, summary, field, reorderedValueKeys(oldData, newData, modified))
+	}
+}
+
+func appendReorderedKeys(changes *[]FieldChange, summary *[]string, field string, reordered []string) {
+	if len(reordered) == 0 {
+		return
+	}
+	*changes = append(*changes, FieldChange{Path: field + ReorderedKeysPathSuffix, OldValue: reordered, NewValue: reordered})
+	*summary = append(*summary, fmt.Sprintf("%s reordered keys: %v", field, reordered))
 }
 
 const (

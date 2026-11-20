@@ -17,6 +17,7 @@ vi.mock('@xterm/xterm', () => ({
     dispose() {}
     write() {}
     onData() {}
+    attachCustomKeyEventHandler() {}
   },
 }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { proposeDimensions() { return { rows: 24, cols: 80 } } } }))

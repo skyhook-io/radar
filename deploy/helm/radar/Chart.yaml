@@ -39,8 +39,8 @@ annotations:
       url: https://github.com/skyhook-io/radar
     - name: Releases
       url: https://github.com/skyhook-io/radar/releases
-    - name: Discord
-      url: https://radarhq.io/community/chat
+    - name: Slack
+      url: https://radarhq.io/slack
   artifacthub.io/images: |
     - name: radar
       image: ghcr.io/skyhook-io/radar:0.0.0-dev

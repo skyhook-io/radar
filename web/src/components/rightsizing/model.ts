@@ -62,7 +62,9 @@ function needsManualReview(row: RightsizingRow): boolean {
     needsSafetyReview(row) ||
     (isReduction(row) && row.bursty === true) ||
     row.recommendationReason === 'hpa_evidence_unavailable' ||
-    row.recommendationReason === 'oom_evidence_unavailable'
+    row.recommendationReason === 'oom_evidence_unavailable' ||
+    // Mirrors ManualReviewReasons: Radar does not size a pod-level request.
+    row.fit === 'pod_level_request'
   )
 }
 

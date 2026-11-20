@@ -83,7 +83,7 @@ func CollectPods(ctx context.Context, client kubernetes.Interface, namespace str
 				started := false
 				for _, statuses := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses, pod.Status.EphemeralContainerStatuses} {
 					for _, status := range statuses {
-						if status.Name == c && (status.State.Running != nil || status.State.Terminated != nil) {
+						if status.Name == c && (status.State.Running != nil || status.State.Terminated != nil || status.LastTerminationState.Terminated != nil) {
 							started = true
 						}
 					}

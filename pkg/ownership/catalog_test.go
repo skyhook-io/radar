@@ -129,3 +129,56 @@ func TestZeroReadIsUnavailable(t *testing.T) {
 		t.Fatalf("zero read = %v; an unset read must never claim an answer", r.State)
 	}
 }
+
+func TestCatalogGroupsForKindIncludesAmbiguousResources(t *testing.T) {
+	catalog := NewCatalog([]ServedResource{
+		{Group: "z.example", Kind: "Widget", Resource: "widgets", Version: "v1"},
+		{Group: "a.example", Kind: "Widget", Resource: "widgets", Version: "v1"},
+		{Group: "a.example", Kind: "Widget", Resource: "widgets", Version: "v2"},
+		{Group: "ambiguous.example", Kind: "Widget", Resource: "widgets", Version: "v1"},
+		{Group: "ambiguous.example", Kind: "Widget", Resource: "otherwidgets", Version: "v1"},
+	}, true)
+	want := []string{"a.example", "ambiguous.example", "z.example"}
+	if !slices.Equal(catalog.GroupsForKind("Widget"), want) {
+		t.Fatalf("groups=%v want=%v", catalog.GroupsForKind("Widget"), want)
+	}
+	if len(catalog.GroupsForKind("Other")) != 0 {
+		t.Fatal("unserved kind has groups")
+	}
+}
+
+func TestCatalogCoversOnlyGroupsDiscoveryAnswered(t *testing.T) {
+	groups := []string{"", "apps", "argoproj.io", "metrics.k8s.io", "external.metrics.k8s.io"}
+	for _, tc := range []struct {
+		name     string
+		complete bool
+		failed   []string
+		covered  []string
+	}{
+		{name: "complete", complete: true, covered: groups},
+		{name: "metrics failed", failed: []string{"metrics.k8s.io", "external.metrics.k8s.io"}, covered: []string{"", "apps", "argoproj.io"}},
+		{name: "Argo failed", failed: []string{"argoproj.io"}, covered: []string{"", "apps", "metrics.k8s.io", "external.metrics.k8s.io"}},
+		{name: "core failed", failed: []string{""}, covered: []string{"apps", "argoproj.io", "metrics.k8s.io", "external.metrics.k8s.io"}},
+		{name: "built-in group failed", failed: []string{"apps"}, covered: []string{"", "argoproj.io", "metrics.k8s.io", "external.metrics.k8s.io"}},
+		{name: "whole discovery failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCatalog(nil, tc.complete, tc.failed...)
+			for _, group := range groups {
+				want := slices.Contains(tc.covered, group)
+				if got := c.CoversGroup(group); got != want {
+					t.Errorf("CoversGroup(%q) = %v, want %v", group, got, want)
+				}
+			}
+			if c.Complete() != tc.complete {
+				t.Fatalf("Complete = %v, want %v", c.Complete(), tc.complete)
+			}
+		})
+	}
+	failed := []string{"metrics.k8s.io"}
+	c := NewCatalog(nil, false, failed...)
+	failed[0] = "argoproj.io"
+	if c.CoversGroup("metrics.k8s.io") || !c.CoversGroup("argoproj.io") {
+		t.Fatal("a caller's failed-group slice changed the immutable catalog")
+	}
+}
