@@ -30,6 +30,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/perfstats"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -343,6 +344,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	nodes := make([]Node, 0)
 	edges := make([]Edge, 0)
 	warnings := make([]string, 0)
+	drawn := newDrawnNodes()
 
 	// Track IDs for linking
 	deploymentIDs := make(map[string]string)
@@ -366,8 +368,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	workflowIDs := make(map[string]string)
 	cronWorkflowIDs := make(map[string]string)
 	workflowToCronWorkflow := make(map[string]string) // workflowKey -> cronWorkflowID (for shortcut edges)
-	workflowTemplateIDs := make(map[string]string)
-	clusterWorkflowTemplateIDs := make(map[string]string)
 	workflowTemplateNodes := make(map[string]Node)
 
 	// Track ConfigMap/Secret/PVC references from workloads
@@ -1317,7 +1317,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// CAPI ClusterClass nodes + ClusterClass → Cluster edges
-	clusterClassIDs := make(map[string]string) // ns/name -> classID
 	var capiClusterClassGVR schema.GroupVersionResource
 	hasCAPIClusterClasses := false
 	if resourceDiscovery != nil {
@@ -1336,7 +1335,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 			name := cc.GetName()
 			ccID := fmt.Sprintf("clusterclass/%s/%s", ns, name)
-			clusterClassIDs[ns+"/"+name] = ccID
 			nodes = append(nodes, Node{
 				ID:     ccID,
 				Kind:   KindClusterClass,
@@ -1350,33 +1348,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 		}
 
-		// ClusterClass is namespaced: a Cluster names its class's namespace or
-		// uses its own.
-		if len(clusterClassIDs) > 0 {
-			for _, cl := range cachedCAPIClusters {
-				ns := cl.GetNamespace()
-				if !opts.MatchesNamespaceFilter(ns) {
-					continue
-				}
-				clID, ok := capiClusterIDs[ns+"/"+cl.GetName()]
-				if !ok {
-					continue
-				}
-				class, named := configrefs.CAPIClusterClass(cl)
-				if !named {
-					continue
-				}
-				ccID, ok := clusterClassIDs[class.Ref.Namespace+"/"+class.Ref.Name]
-				if ok {
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", ccID, clID),
-						Source: ccID,
-						Target: clID,
-						Type:   EdgeConfigures,
-					})
-				}
-			}
+		clusterSources := make([]declaring, 0, len(cachedCAPIClusters))
+		for _, cl := range cachedCAPIClusters {
+			clusterSources = append(clusterSources, declaring{ref: resourceid.NewRef(resourceid.GroupFromAPIVersion(cl.GetAPIVersion()), "Cluster", cl.GetNamespace(), cl.GetName()), obj: cl})
 		}
+		edges = drawFamilies(edges, drawn, nodes, clusterSources, relations.ClusterClasses)
 	}
 
 	// CAPI KubeadmControlPlane nodes + Cluster → KCP edges
@@ -1719,8 +1695,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 1j. Add Gateway API GatewayClass nodes (CRD - fetched via dynamic cache)
-	gatewayClassIDs := make(map[string]string) // name -> gatewayClassID (cluster-scoped)
-
 	var gatewayClassGVR schema.GroupVersionResource
 	hasGatewayClasses := false
 	if resourceDiscovery != nil {
@@ -1736,7 +1710,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			name := gc.GetName()
 
 			gcID := fmt.Sprintf("gatewayclass//%s", name)
-			gatewayClassIDs[name] = gcID
 			nodes = append(nodes, Node{
 				ID:     gcID,
 				Kind:   KindGatewayClass,
@@ -2741,6 +2714,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 4b. Add Argo Workflow/CronWorkflow nodes
+	var templateUsers []declaring // Workflows and CronWorkflows, for template edges once template nodes are drawn
 	var cronWorkflowGVR schema.GroupVersionResource
 	hasCronWorkflows := false
 	var workflowGVR schema.GroupVersionResource
@@ -2770,7 +2744,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			entrypoint, _, _ := unstructured.NestedString(wt.Object, "spec", "entrypoint")
 			templates, _, _ := unstructured.NestedSlice(wt.Object, "spec", "templates")
 			wtID := fmt.Sprintf("workflowtemplate/%s/%s", ns, name)
-			workflowTemplateIDs[ns+"/"+name] = wtID
 			workflowTemplateNodes[wtID] = Node{
 				ID:     wtID,
 				Kind:   KindWorkflowTemplate,
@@ -2797,7 +2770,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			entrypoint, _, _ := unstructured.NestedString(cwt.Object, "spec", "entrypoint")
 			templates, _, _ := unstructured.NestedSlice(cwt.Object, "spec", "templates")
 			cwtID := fmt.Sprintf("clusterworkflowtemplate//%s", name)
-			clusterWorkflowTemplateIDs[name] = cwtID
 			workflowTemplateNodes[cwtID] = Node{
 				ID:     cwtID,
 				Kind:   KindClusterWorkflowTemplate,
@@ -2842,7 +2814,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"apiVersion":        cwf.GetAPIVersion(),
 				},
 			})
-			edges = addArgoWorkflowTemplateEdges(edges, cwfID, ns, argoWorkflowTemplateRefsFromWorkflowSpec(cwf.Object, "spec", "workflowSpec"), workflowTemplateIDs, clusterWorkflowTemplateIDs)
+			templateUsers = append(templateUsers, declaring{ref: resourceid.NewRef(resourceid.GroupFromAPIVersion(cwf.GetAPIVersion()), "CronWorkflow", ns, cwf.GetName()), obj: cwf})
 		}
 	}
 	if hasWorkflows && dynamicCache != nil {
@@ -2880,7 +2852,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"apiVersion": wf.GetAPIVersion(),
 				},
 			})
-			edges = addArgoWorkflowTemplateEdges(edges, wfID, ns, argoWorkflowTemplateRefsFromWorkflowSpec(wf.Object, "spec"), workflowTemplateIDs, clusterWorkflowTemplateIDs)
+			templateUsers = append(templateUsers, declaring{ref: resourceid.NewRef(resourceid.GroupFromAPIVersion(wf.GetAPIVersion()), "Workflow", ns, name), obj: wf})
 			if owner := configrefs.ArgoWorkflowCronOwnerName(wf); owner != "" {
 				if cwfID, ok := cronWorkflowIDs[ns+"/"+owner]; ok {
 					edges = append(edges, Edge{
@@ -2906,6 +2878,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 		}
 	}
+	edges = drawFamilies(edges, drawn, nodes, templateUsers, relations.ArgoWorkflowTemplates)
 
 	// 5. Add Job nodes
 	var jobs []*batchv1.Job
@@ -3669,6 +3642,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// 7. Add Ingress nodes
 	var ingresses []*networkingv1.Ingress
+	var ingressSources []declaring
 	{
 		ings, ingsErr := b.provider.Ingresses()
 		if ingsErr != nil {
@@ -3710,25 +3684,14 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			refs.secrets[ref.Name] = true
 		}
 		trackWorkloadRefs(ingID, ing.Namespace, refs)
-
-		// Connect to backend Services
-		for _, svcName := range configrefs.IngressBackendServices(ing) {
-			if svcID, ok := serviceIDs[ing.Namespace+"/"+svcName]; ok {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
-					Source: ingID,
-					Target: svcID,
-					Type:   EdgeRoutesTo,
-				})
-			}
-		}
+		ingressSources = append(ingressSources, declaring{ref: resourceid.NewRef("networking.k8s.io", "Ingress", ing.Namespace, ing.Name), obj: ing})
 	}
+	edges = drawFamilies(edges, drawn, nodes, ingressSources, relations.IngressBackends)
 
 	// 7b. Add Gateway API nodes (CRD - fetched via dynamic cache)
-	gatewayIDs := make(map[string]string)                  // ns/name -> gatewayID
-	routeIDs := make(map[string]string)                    // kind/ns/name -> routeID
 	var gatewayRouteResources []*unstructured.Unstructured // all routes for second-pass edge creation
 	var gatewayRouteKinds []string                         // kind for each entry in gatewayRouteResources
+	var gatewaySources []declaring
 
 	var gatewayGVR schema.GroupVersionResource
 	hasGateways := false
@@ -3748,7 +3711,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 			name := gw.GetName()
 			gwID := fmt.Sprintf("gateway/%s/%s", ns, name)
-			gatewayIDs[ns+"/"+name] = gwID
+			gatewaySources = append(gatewaySources, declaring{ref: resourceid.NewRef(gatewayGVR.Group, "Gateway", ns, name), obj: gw})
 
 			listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
 			addresses, _, _ := unstructured.NestedSlice(gw.Object, "status", "addresses")
@@ -3779,36 +3742,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// Create GatewayClass → Gateway edges (match via spec.gatewayClassName on Gateway)
-	if hasGateways && dynamicCache != nil {
-		gateways, gwEdgeErr := dynamicCache.ListNamespaces(gatewayGVR, opts.Namespaces)
-		if gwEdgeErr != nil {
-			log.Printf("WARNING [topology] Failed to list Gateways for GatewayClass edges: %v", gwEdgeErr)
-			warnings = append(warnings, fmt.Sprintf("Failed to list Gateways for GatewayClass edges: %v", gwEdgeErr))
-		}
-		for _, gw := range gateways {
-			ns := gw.GetNamespace()
-			if !opts.MatchesNamespaceFilter(ns) {
-				continue
-			}
-			name := gw.GetName()
-			gwID := gatewayIDs[ns+"/"+name]
-			if gwID == "" {
-				continue
-			}
-			className, _, _ := unstructured.NestedString(gw.Object, "spec", "gatewayClassName")
-			if className != "" {
-				if gcID, ok := gatewayClassIDs[className]; ok {
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", gcID, gwID),
-						Source: gcID,
-						Target: gwID,
-						Type:   EdgeManages,
-					})
-				}
-			}
-		}
-	}
+	edges = drawFamilies(edges, drawn, nodes, gatewaySources, relations.GatewayClasses)
 
 	// Add Gateway API route nodes (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute)
 	gatewayRouteKindList := []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"}
@@ -3835,7 +3769,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			name := route.GetName()
 			kindLower := strings.ToLower(routeKind)
 			routeID := fmt.Sprintf("%s/%s/%s", kindLower, ns, name)
-			routeIDs[routeKind+"/"+ns+"/"+name] = routeID
 
 			hostnames, _, _ := unstructured.NestedStringSlice(route.Object, "spec", "hostnames")
 			rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
@@ -4807,42 +4740,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 15. Create Gateway API edges (Gateway → Route, Route → Service).
-	// Several parentRefs (one per listener) or rules can name the same object.
-	gatewayEdgeSeen := make(map[string]bool)
+	routeSources := make([]declaring, 0, len(gatewayRouteResources))
 	for i, route := range gatewayRouteResources {
-		ns := route.GetNamespace()
-		name := route.GetName()
-		routeKind := gatewayRouteKinds[i]
-		routeID := routeIDs[routeKind+"/"+ns+"/"+name]
-
-		// Gateway → Route edges (read parentRefs)
-		for _, parent := range configrefs.GatewayRouteParents(route) {
-			gwID := gatewayIDs[parent.Ref.Namespace+"/"+parent.Ref.Name]
-			if edgeID := fmt.Sprintf("%s-to-%s", gwID, routeID); gwID != "" && !gatewayEdgeSeen[edgeID] {
-				gatewayEdgeSeen[edgeID] = true
-				edges = append(edges, Edge{
-					ID:     edgeID,
-					Source: gwID,
-					Target: routeID,
-					Type:   EdgeRoutesTo,
-				})
-			}
-		}
-
-		// Route → Service edges (read backendRefs from rules)
-		for _, backend := range configrefs.GatewayRouteBackendServices(route) {
-			svcKey := backend.Ref.Namespace + "/" + backend.Ref.Name
-			if svcID, ok := serviceIDs[svcKey]; ok && !gatewayEdgeSeen[routeID+"-to-"+svcID] {
-				gatewayEdgeSeen[routeID+"-to-"+svcID] = true
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
-					Source: routeID,
-					Target: svcID,
-					Type:   EdgeRoutesTo,
-				})
-			}
-		}
+		routeSources = append(routeSources, declaring{ref: resourceid.NewRef(resourceid.GroupFromAPIVersion(route.GetAPIVersion()), gatewayRouteKinds[i], route.GetNamespace(), route.GetName()), obj: route})
 	}
+	edges = drawFamilies(edges, drawn, nodes, routeSources, relations.GatewayParents, relations.GatewayBackends)
 
 	// 15b. Create cert-manager Certificate → Secret edges (via spec.secretName)
 	secretIDs := make(map[string]bool)
@@ -6786,43 +6688,6 @@ func cronWorkflowScheduleString(cwf *unstructured.Unstructured) string {
 	schedule, _, _ := unstructured.NestedString(cwf.Object, "spec", "schedule")
 	return schedule
 }
-
-type argoWorkflowTemplateRef struct {
-	name         string
-	clusterScope bool
-}
-
-func argoWorkflowTemplateRefsFromWorkflowSpec(obj map[string]any, fields ...string) []argoWorkflowTemplateRef {
-	var refs []argoWorkflowTemplateRef
-	for _, r := range configrefs.ArgoWorkflowTemplateRefs(obj, "", fields...) {
-		if ref := (argoWorkflowTemplateRef{name: r.Ref.Name, clusterScope: r.Ref.Kind == "ClusterWorkflowTemplate"}); !slices.Contains(refs, ref) {
-			refs = append(refs, ref)
-		}
-	}
-	return refs
-}
-
-func addArgoWorkflowTemplateEdges(edges []Edge, sourceID, sourceNamespace string, refs []argoWorkflowTemplateRef, workflowTemplateIDs, clusterWorkflowTemplateIDs map[string]string) []Edge {
-	for _, ref := range refs {
-		targetID := ""
-		if ref.clusterScope {
-			targetID = clusterWorkflowTemplateIDs[ref.name]
-		} else {
-			targetID = workflowTemplateIDs[sourceNamespace+"/"+ref.name]
-		}
-		if targetID == "" {
-			continue
-		}
-		edges = append(edges, Edge{
-			ID:     fmt.Sprintf("%s-to-%s", targetID, sourceID),
-			Source: targetID,
-			Target: sourceID,
-			Type:   EdgeConfigures,
-		})
-	}
-	return edges
-}
-
 func getPVCStatus(pvc *corev1.PersistentVolumeClaim) HealthStatus {
 	return healthLevelToStatus(health.Workload(pvc, time.Now()).Level)
 }

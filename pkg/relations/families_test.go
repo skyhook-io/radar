@@ -381,3 +381,23 @@ func TestAWorkflowTemplateUsedTwiceReportsBothPaths(t *testing.T) {
 		t.Errorf("declared %+v; want one target at %v", got.Declared, want)
 	}
 }
+
+func TestDeclaredTargetsLeaveOutReferencesWithAlternatives(t *testing.T) {
+	// A TraefikService backend may be served from Traefik's current or legacy
+	// group; which one stands depends on what Radar could read. A core
+	// Service backend has no alternative.
+	route := object("traefik.io/v1alpha1", "IngressRoute", "web", map[string]any{"routes": []any{map[string]any{
+		"match":    "Host(`shop.example.com`)",
+		"services": []any{map[string]any{"name": "web", "port": 80}, map[string]any{"name": "web", "port": 80}, map[string]any{"name": "weighted", "kind": "TraefikService"}},
+	}}})
+	got, err := TraefikBackends.DeclaredTargets(refOf(route).GroupKind(), route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []resourceid.Ref{ref("", "Service", "web")}; !slices.Equal(got, want) {
+		t.Errorf("DeclaredTargets = %v, want %v", got, want)
+	}
+	if got, _ := TraefikBackends.DeclaredTargets(resourceid.GroupKind{Kind: "ConfigMap"}, route); got != nil {
+		t.Errorf("a kind the family doesn't read from declares %v", got)
+	}
+}
