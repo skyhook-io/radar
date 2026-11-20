@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultRuntimeAuthRecoveryInitialInterval = 30 * time.Second
+	defaultRuntimeAuthRecoveryInitialInterval = 5 * time.Second
 	defaultRuntimeAuthRecoveryMaxInterval     = 5 * time.Minute
 	// A hung exec plugin leaks a blocked goroutine per probe (client-go
 	// serializes plugin invocations process-wide, so at most one child
@@ -39,7 +39,38 @@ var (
 	// nil selects the production reconnect path; tests replace it to isolate
 	// recovery-loop timing and retry behavior.
 	runtimeAuthReconnect func(string, uint64) error
+
+	// Zero means retry forever. The desktop app sets a limit: someone is at
+	// the screen to click Retry, and each retry re-runs the credential
+	// plugin, which for a browser sign-in opens a new tab.
+	runtimeAuthRecoveryRetryLimit atomic.Int32
+	// Failed automatic retries since the last connect, Retry, or switch.
+	runtimeAuthRecoveryFailures atomic.Int32
+	// Bumped by each reset, so a probe that started before a Retry or
+	// switch doesn't count against the next attempt's budget.
+	runtimeAuthRecoveryResets atomic.Uint64
 )
+
+// SetAutomaticRetryLimit stops automatic reconnects after limit consecutive
+// failures, until the user retries or switches context. Desktop only. It
+// applies only to contexts that use an exec credential plugin: retrying a
+// static token or certificate runs nothing, and keeps picking up a re-login
+// that rewrites the kubeconfig (oc login).
+func SetAutomaticRetryLimit(limit int) {
+	runtimeAuthRecoveryRetryLimit.Store(int32(limit))
+}
+
+func automaticRetriesStopped() bool {
+	limit := runtimeAuthRecoveryRetryLimit.Load()
+	return limit > 0 && runtimeAuthRecoveryFailures.Load() >= limit
+}
+
+// resetAutomaticRetries is called when the user retries or switches context,
+// and on every successful connect.
+func resetAutomaticRetries() {
+	runtimeAuthRecoveryResets.Add(1)
+	runtimeAuthRecoveryFailures.Store(0)
+}
 
 // startRuntimeAuthRecovery keeps a headless deployment (MCP-only, no browser
 // tab) from wedging permanently after an auth failure: nothing else would
@@ -48,6 +79,9 @@ var (
 // surfaces through SSE and the status poll. The worker reads its target from
 // the live connection status, so one worker serves consecutive episodes.
 func startRuntimeAuthRecovery() {
+	if automaticRetriesStopped() {
+		return
+	}
 	if !runtimeAuthRecoveryActive.CompareAndSwap(false, true) {
 		select {
 		case runtimeAuthRecoveryNudge <- struct{}{}:
@@ -101,6 +135,7 @@ func runRuntimeAuthRecovery() {
 		}
 		contextName := status.Context
 		observedGen := currentOperationGen()
+		observedResets := runtimeAuthRecoveryResets.Load()
 		ctx, cancel := context.WithTimeout(context.Background(), connectionTestOperationTimeout())
 		err := getRuntimeAuthProbe()(ctx)
 		cancel()
@@ -120,6 +155,9 @@ func runRuntimeAuthRecovery() {
 			}
 		}
 		if err != nil {
+			if recordAutomaticRetryFailure(observedResets) {
+				return
+			}
 			interval = nextRuntimeAuthRecoveryInterval(interval, err, maxInterval, hungInterval)
 			continue
 		}
@@ -132,6 +170,9 @@ func runRuntimeAuthRecovery() {
 		}
 		if switchErr != nil {
 			log.Printf("[k8s] Automatic reconnect failed for context %q: %v", SanitizeForLog(contextName), switchErr)
+			if recordAutomaticRetryFailure(observedResets) {
+				return
+			}
 			interval = nextRuntimeAuthRecoveryInterval(interval, switchErr, maxInterval, hungInterval)
 			continue
 		}
@@ -139,6 +180,21 @@ func runRuntimeAuthRecovery() {
 		// the debt) while still holding contextOpMu.
 		return
 	}
+}
+
+// recordAutomaticRetryFailure counts a failed automatic retry and reports
+// whether automatic retries have now stopped.
+func recordAutomaticRetryFailure(observedResets uint64) bool {
+	if runtimeAuthRecoveryResets.Load() != observedResets || !UsesExecAuth() {
+		return false
+	}
+	runtimeAuthRecoveryFailures.Add(1)
+	if !automaticRetriesStopped() {
+		return false
+	}
+	log.Printf("[k8s] Stopped automatic reconnects after %d failed attempts; waiting for Retry", runtimeAuthRecoveryFailures.Load())
+	publishAutomaticRetriesStopped()
+	return true
 }
 
 func runtimeAuthRecoveryStillOwed() bool {

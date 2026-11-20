@@ -557,3 +557,46 @@ func TestValidateNamespaceFanout(t *testing.T) {
 		t.Fatalf("list longer than the cap: err = %#v", err)
 	}
 }
+
+func stubBootProbes(t *testing.T, probeErr error, initErr error) (probes, inits *int, order *[]string) {
+	t.Helper()
+	k8s.ResetTestState()
+	t.Cleanup(k8s.ResetTestState)
+	previousProbe, previousInit := clusterConnectionProbe, initAllSubsystems
+	t.Cleanup(func() { clusterConnectionProbe, initAllSubsystems = previousProbe, previousInit })
+	probes, inits, order = new(int), new(int), &[]string{}
+	clusterConnectionProbe = func(context.Context) error {
+		*probes++
+		*order = append(*order, "version")
+		return probeErr
+	}
+	initAllSubsystems = func(context.Context, func(string)) error {
+		*inits++
+		*order = append(*order, "subsystems")
+		return initErr
+	}
+	return probes, inits, order
+}
+
+func TestInitializeClusterSkipsSubsystemsWhenVersionCheckFails(t *testing.T) {
+	_, inits, _ := stubBootProbes(t, errors.New("getting credentials: exec: executable kubelogin failed with exit code 1"), nil)
+
+	InitializeCluster()
+
+	if *inits != 0 {
+		t.Fatalf("subsystem init ran %d times after a failed version check, want 0", *inits)
+	}
+	if status := k8s.GetConnectionStatus(); status.State != k8s.StateDisconnected || status.ErrorType != "auth" {
+		t.Fatalf("status = %+v, want disconnected with auth error", status)
+	}
+}
+
+func TestInitializeClusterStartsSubsystemsAfterVersionCheckPasses(t *testing.T) {
+	_, _, order := stubBootProbes(t, nil, errors.New("stop after init"))
+
+	InitializeCluster()
+
+	if strings.Join(*order, ",") != "version,subsystems" {
+		t.Fatalf("boot order = %v, want version check then subsystem init", *order)
+	}
+}

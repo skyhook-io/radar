@@ -1643,3 +1643,156 @@ func TestRuntimeAuthExecCredentialExpiry(t *testing.T) {
 		t.Fatalf("second connection status = %+v, want disconnected auth", status)
 	}
 }
+
+func TestRuntimeAuthRecoveryFirstRetryIsQuick(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	if initial, _, _ := runtimeAuthRecoveryIntervals(); initial != 5*time.Second {
+		t.Fatalf("first automatic retry after %v, want 5s", initial)
+	}
+}
+
+func waitForRecoveryWorkerExit(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for runtimeAuthRecoveryActive.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("recovery worker did not stop")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestRuntimeAuthRecoveryStopsAfterRetryLimitUntilUserRetries(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	prevExec := SetTestContextUsesExec(true)
+	t.Cleanup(func() { SetTestContextUsesExec(prevExec) })
+	setRuntimeAuthRecoveryIntervalsForTest(time.Millisecond, 2*time.Millisecond)
+	SetAutomaticRetryLimit(3)
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		probes.Add(1)
+		return errors.New("getting credentials: exec: executable kubelogin failed with exit code 1")
+	})
+	disconnected := ConnectionStatus{State: StateDisconnected, Context: "desktop-context", ErrorType: "auth"}
+
+	SetConnectionStatus(disconnected)
+	waitForRecoveryWorker(t)
+	waitForRecoveryWorkerExit(t)
+	time.Sleep(20 * time.Millisecond)
+	if got := probes.Load(); got != 3 {
+		t.Fatalf("automatic retries = %d, want 3 then stop", got)
+	}
+	if status := GetConnectionStatus(); !status.AutoRetryStopped {
+		t.Fatalf("status = %+v, want AutoRetryStopped", status)
+	}
+	if !RuntimeAuthRecoveryOwed() {
+		t.Fatal("recovery debt cleared while still disconnected; the browser would start retrying")
+	}
+
+	// Retry runs the user's reconnect, which fails here, and the handler
+	// publishes the failure. That must restart the automatic cycle.
+	_ = PerformContextSwitch("desktop-context")
+	SetConnectionStatus(disconnected)
+	if GetConnectionStatus().AutoRetryStopped {
+		t.Fatal("status still says retries stopped right after the user retried")
+	}
+	waitForRecoveryWorker(t)
+	waitForRecoveryWorkerExit(t)
+	if got := probes.Load(); got != 6 {
+		t.Fatalf("automatic retries after Retry = %d, want 3 more (6 total)", got)
+	}
+
+	// A successful connect resets the count for the next outage.
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "desktop-context"})
+	SetConnectionStatus(disconnected)
+	waitForRecoveryWorker(t)
+	waitForRecoveryWorkerExit(t)
+	if got := probes.Load(); got != 9 {
+		t.Fatalf("automatic retries after reconnecting = %d, want 3 more (9 total)", got)
+	}
+}
+
+func TestRuntimeAuthRecoveryKeepsRetryingWithoutLimit(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(time.Millisecond, 2*time.Millisecond)
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		probes.Add(1)
+		return errors.New("getting credentials: exec: executable kubelogin failed with exit code 1")
+	})
+
+	SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "server-context", ErrorType: "auth"})
+	deadline := time.Now().Add(2 * time.Second)
+	for probes.Load() < 10 {
+		if time.Now().After(deadline) {
+			t.Fatalf("automatic retries = %d, want server mode to keep going", probes.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !runtimeAuthRecoveryActive.Load() || GetConnectionStatus().AutoRetryStopped {
+		t.Fatal("server mode stopped retrying")
+	}
+}
+
+func TestRuntimeAuthRecoveryProbeFromBeforeRetryDoesNotCount(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	prevExec := SetTestContextUsesExec(true)
+	t.Cleanup(func() { SetTestContextUsesExec(prevExec) })
+	setRuntimeAuthRecoveryIntervalsForTest(time.Millisecond, 2*time.Millisecond)
+	SetAutomaticRetryLimit(1)
+	started, release := make(chan struct{}), make(chan struct{})
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		if probes.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return errors.New("getting credentials: exec: executable kubelogin failed with exit code 1")
+	})
+
+	SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "desktop-context", ErrorType: "auth"})
+	<-started
+	resetAutomaticRetries() // the user clicked Retry while that probe ran
+	close(release)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for probes.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("a probe from before Retry used up the retry budget")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestRuntimeAuthRecoveryRetryLimitSkipsContextsWithoutExecPlugin(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	prevExec := SetTestContextUsesExec(false)
+	t.Cleanup(func() { SetTestContextUsesExec(prevExec) })
+	setRuntimeAuthRecoveryIntervalsForTest(time.Millisecond, 2*time.Millisecond)
+	SetAutomaticRetryLimit(3)
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		probes.Add(1)
+		return nil // the probe succeeds; reconnecting re-reads the kubeconfig and fails
+	})
+	setRuntimeAuthReconnect(func(string, uint64) error {
+		return errors.New("Unauthorized")
+	})
+
+	SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "token-context", ErrorType: "auth-rejected"})
+	deadline := time.Now().Add(2 * time.Second)
+	for probes.Load() < 10 {
+		if time.Now().After(deadline) {
+			t.Fatalf("automatic retries = %d, want a static-token context to keep retrying past the limit", probes.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if GetConnectionStatus().AutoRetryStopped {
+		t.Fatal("a context without an exec plugin was told retries stopped")
+	}
+}
