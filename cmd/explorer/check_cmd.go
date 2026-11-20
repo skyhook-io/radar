@@ -480,7 +480,7 @@ func checkReasonLabel(reason string) string {
 	case images.StatusError:
 		return "Registry read failed"
 	case "docker_hub_limit":
-		return "Docker Hub lookup limit reached"
+		return "Radar's Docker Hub lookup cap reached"
 	case "java_home_declared":
 		return "Image sets JAVA_HOME. Java version unknown"
 	case "no_java_declaration":

@@ -76,7 +76,7 @@ export function Java4ShellPanel({ namespaces = [], context, connected, trivySear
       </div>
       <p role="status" className="sr-only">
         {isFetching
-          ? `${progressText}${data ? ' Showing the previous result while the check runs.' : ''}`
+          ? data ? 'Checking Java4Shell. Showing the previous result while the check runs.' : 'Checking Java4Shell.'
           : data && !error ? 'Java4Shell check finished.' : ''}
       </p>
       {isFetching && (
@@ -106,7 +106,7 @@ const reasonLabels: Record<string, string> = {
   rate_limited: 'Registry rate limit',
   error: 'Registry read failed',
   not_checked: 'Check limit reached',
-  docker_hub_limit: 'Docker Hub lookup limit reached',
+  docker_hub_limit: "Radar's Docker Hub lookup cap reached",
   java_home_declared: 'Image sets JAVA_HOME. Java version unknown',
   no_java_declaration: 'Image declares no Java version',
 }
@@ -227,7 +227,7 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
             </p>
           )}
           {checkLimitReached > 0 && <p className="text-warning-text">Check limit reached for {pluralize(checkLimitReached, 'container')}.</p>}
-          {dockerHubLimit > 0 && <p className="text-warning-text">Docker Hub lookup limit reached for {pluralize(dockerHubLimit, 'container')}.</p>}
+          {dockerHubLimit > 0 && <p className="text-warning-text">{reasonLabels.docker_hub_limit} for {pluralize(dockerHubLimit, 'container')}.</p>}
           {(checkLimitReached > 0 || dockerHubLimit > 0) && (
             <p className="text-theme-text-secondary">{data.workload ? 'Run the check again to retry.' : 'Select fewer namespaces or check a specific workload to retry.'}</p>
           )}

@@ -27,7 +27,7 @@ it('shows Java home and check limit counts before opening details and counts oth
 
   expect(html).toContain('Images for 3 containers set <code>JAVA_HOME</code>. Verify the installed Java version.')
   expect(html).toContain('Check limit reached for 4 containers.')
-  expect(html).toContain('Docker Hub lookup limit reached for 1 container.')
+  expect(html).toContain('Radar&#x27;s Docker Hub lookup cap reached for 1 container.')
   expect(html).toContain('12 with assessment gaps')
   expect(html).toContain('Declared Java 8 outside affected versions · 3 containers')
   expect(html).toContain('Registry authentication required for 2 containers.')
