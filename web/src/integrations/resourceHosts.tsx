@@ -39,6 +39,7 @@ import { KyvernoPolicyCoverage } from '../components/resources/renderers/Kyverno
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
+import { SealedSecretRenderer } from '../components/resources/renderers/SealedSecretRenderer'
 import { K3sHelmChartRenderer } from '../components/resources/renderers/K3sHelmChartRenderer'
 import { UpgradePlanRenderer } from '../components/resources/renderers/UpgradePlanRenderer'
 import {
@@ -50,6 +51,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
   { id: 'gateway-api', renderers: { HTTPRouteRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
+  { id: 'sealed-secrets', renderers: { SealedSecretRenderer } },
   { id: 'k3s-helm', renderers: { K3sHelmChartRenderer } },
   { id: 'system-upgrade', renderers: { UpgradePlanRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },

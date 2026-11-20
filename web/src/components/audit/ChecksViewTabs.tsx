@@ -1,11 +1,13 @@
 import { clsx } from 'clsx'
 import { Link, useLocation, type To } from 'react-router-dom'
 import { useAPIResources } from '../../api/apiResources'
+import { useCapabilities } from '../../api/client'
 import { hasVulnerabilityReports } from '../../api/vulnerabilities'
 
 export function ChecksViewTabs() {
   const { pathname, search } = useLocation()
   const { data: resources } = useAPIResources()
+  const { data: capabilities } = useCapabilities()
   const upgrade = pathname.startsWith('/checks/upgrade')
   const vulnerabilities = pathname.startsWith('/checks/vulnerabilities')
   const current = new URLSearchParams(search)
@@ -26,8 +28,7 @@ export function ChecksViewTabs() {
       <ChecksTab to={{ pathname: '/checks/upgrade', search: upgradeSearch.toString() }} active={upgrade}>
         Upgrade impact
       </ChecksTab>
-      {/* Shown only where a scanner writes reports: the tab reads them, it doesn't scan. */}
-      {(vulnerabilities || hasVulnerabilityReports(resources)) && (
+      {(vulnerabilities || capabilities?.features?.runtimeAdvisoryChecks || hasVulnerabilityReports(resources)) && (
         <ChecksTab to={{ pathname: '/checks/vulnerabilities', search: browsing.toString() }} active={vulnerabilities}>
           Vulnerabilities
         </ChecksTab>
