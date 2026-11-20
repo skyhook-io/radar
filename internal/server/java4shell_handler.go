@@ -242,7 +242,7 @@ func (s *Server) serveJava4Shell(w http.ResponseWriter, r *http.Request, stream 
 		return
 	}
 	if errors.Is(err, images.ErrJava4ShellBusy) {
-		s.writeError(w, http.StatusConflict, "A Java4Shell check is already running. Try again shortly.")
+		s.writeError(w, http.StatusConflict, "A Java4Shell check is already running on this Radar instance. Checks run one at a time and registry reads can take up to five minutes.")
 		return
 	}
 	if !current() {

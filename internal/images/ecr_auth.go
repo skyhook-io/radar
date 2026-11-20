@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"log"
 	"os"
 	"regexp"
 	"strings"
@@ -66,13 +67,23 @@ type ecrRegistryAuth struct {
 
 func newECRKeychain(registries string, request ecrTokenRequest) *ecrKeychain {
 	k := &ecrKeychain{registries: map[string]*ecrRegistryAuth{}, request: request}
+	invalid := 0
 	for _, registry := range strings.Split(registries, ",") {
 		registry = strings.TrimSpace(registry)
-		if parts := ecrRegistryPattern.FindStringSubmatch(registry); parts != nil {
-			k.registries[registry] = &ecrRegistryAuth{
-				account: parts[1], region: parts[2], lock: make(chan struct{}, 1),
-			}
+		if registry == "" {
+			continue
 		}
+		parts := ecrRegistryPattern.FindStringSubmatch(registry)
+		if parts == nil {
+			invalid++
+			continue
+		}
+		k.registries[registry] = &ecrRegistryAuth{
+			account: parts[1], region: parts[2], lock: make(chan struct{}, 1),
+		}
+	}
+	if invalid > 0 {
+		log.Printf("[images] Ignored %d invalid entries in %s. Use exact ECR registry hosts such as 123456789012.dkr.ecr.us-east-1.amazonaws.com.", invalid, ecrRegistriesEnv)
 	}
 	return k
 }
