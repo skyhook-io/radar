@@ -48,7 +48,10 @@ async function switchFixture(page: Page, { lostAcknowledgement, sourceDisconnect
     if (sourceDisconnected && current === 'source-cluster') {
       return route.fulfill({ json: { state: 'disconnected', context: current, errorType: 'config', error: 'The source context could not be loaded.', contextSwitch: operation } })
     }
-    const syncing = operation?.phase === 'switching'
+    if (operation?.phase === 'stopped') {
+      return route.fulfill({ json: { state: 'disconnected', context: current, errorType: 'switch-stopped', contextSwitch: operation } })
+    }
+    const syncing = operation?.phase === 'switching' || operation?.phase === 'stopping'
     return route.fulfill({ json: {
       state: syncing ? 'connecting' : 'connected', context: current, contextSwitch: operation,
       syncStatus: syncing ? {
@@ -79,6 +82,17 @@ async function switchFixture(page: Page, { lostAcknowledgement, sourceDisconnect
     operation = { ...operation!, phase: 'cancelled' }
     return route.fulfill({ status: 204 })
   })
+  await page.route('**/api/contexts/target-cluster?stopSwitch=test-switch', route => {
+    expect(operation?.phase).toBe('switching')
+    operation = { ...operation!, phase: 'stopped', canStop: false }
+    return route.fulfill({ status: 204 })
+  })
+  await page.route('**/api/contexts/source-cluster?track=1', route => {
+    current = 'source-cluster'
+    starts++
+    operation = { ...operation!, id: 'return-switch', target: current, phase: 'succeeded' }
+    return route.fulfill({ status: 202, json: operation })
+  })
   await page.route('**/api/resources/pods?*', async route => {
     const response = await route.fetch()
     const body = await response.json()
@@ -104,7 +118,7 @@ async function switchFixture(page: Page, { lostAcknowledgement, sourceDisconnect
   return {
     get starts() { return starts },
     get cancels() { return cancels },
-    warming() { current = 'target-cluster'; operation = { ...operation!, phase: 'switching', progress: 'Loading workloads…' } },
+    warming() { current = 'target-cluster'; operation = { ...operation!, phase: 'switching', canStop: true, progress: 'Loading workloads…' } },
     succeed(currentContext = 'target-cluster') { current = currentContext; operation = { ...operation!, phase: 'succeeded' } },
     refuse() { operation = { ...operation!, phase: 'failed', errorType: 'network', error: 'The target cluster did not answer.' } },
   }
@@ -135,6 +149,20 @@ test('a slow switch survives reload and completes from server status when SSE is
   await page.evaluate(() => window.dispatchEvent(new Event('test-context-changed')))
   await expect(page).toHaveURL(/resource=/)
   expect(fixture.starts).toBe(1)
+})
+
+test('stopping workload sync leaves the previous connection closed and lets the user choose it again', async ({ page }) => {
+  const fixture = await switchFixture(page)
+  fixture.warming()
+  await page.getByRole('button', { name: 'Stop switch', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Cluster switch stopped' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'target-cluster', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Reconnect cluster' })).toBeHidden()
+  await expect(page.getByText('nginx-abc-111-source-cluster', { exact: true })).toBeHidden()
+  await page.getByRole('button', { name: 'Choose a cluster' }).click()
+  await page.getByRole('button', { name: 'source-cluster', exact: true }).last().click()
+  await expect(page.getByText('nginx-abc-111-source-cluster', { exact: true }).first()).toBeVisible()
+  expect(fixture.starts).toBe(2)
 })
 
 test('a refused preflight returns to the running source without another switch', async ({ page }) => {

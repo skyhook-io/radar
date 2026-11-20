@@ -5161,8 +5161,16 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := r.URL.Query()
-	if query.Has("cancelSwitch") && s.configManagement() != "local" {
+	if (query.Has("cancelSwitch") || query.Has("stopSwitch")) && s.configManagement() != "local" {
 		s.writeError(w, http.StatusForbidden, "Tracked context switches are available on local Radar.")
+		return
+	}
+	if id := query.Get("stopSwitch"); query.Has("stopSwitch") {
+		if !s.contextSwitch.StopSwitch(id, name) {
+			s.writeError(w, http.StatusConflict, "This switch can no longer be stopped.")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if id := query.Get("cancelSwitch"); query.Has("cancelSwitch") {
@@ -5199,12 +5207,7 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
-			State:     k8s.StateDisconnected,
-			Context:   name,
-			Error:     err.Error(),
-			ErrorType: k8s.ClassifyError(err),
-		})
+
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -5282,6 +5285,10 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if op := s.contextSwitch.Snapshot(); op != nil && (op.Phase == "preflight" || op.Phase == "switching" || op.Phase == "stopping") {
+		s.writeError(w, http.StatusConflict, "A cluster switch is already in progress.")
+		return
+	}
 	if err := k8s.RetryCurrentConnection(); err != nil {
 		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
 			s.writeError(w, http.StatusBadRequest, err.Error())
@@ -5292,12 +5299,7 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		errorType := k8s.ClassifyError(err)
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
-			State:     k8s.StateDisconnected,
-			Context:   ctx,
-			Error:     err.Error(),
-			ErrorType: errorType,
-		})
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		if encodeErr := json.NewEncoder(w).Encode(map[string]string{"error": err.Error(), "errorType": errorType}); encodeErr != nil {
@@ -5458,16 +5460,7 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 			s.writeError(w, http.StatusBadRequest, "failed to switch context: "+err.Error())
 			return
 		}
-		statusContext := qualifiedName
-		if discarded {
-			statusContext = k8s.GetContextName()
-		}
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
-			State:     k8s.StateDisconnected,
-			Context:   statusContext,
-			Error:     err.Error(),
-			ErrorType: k8s.ClassifyError(err),
-		})
+
 		s.writeError(w, http.StatusInternalServerError, "failed to switch context: "+err.Error())
 		return
 	}

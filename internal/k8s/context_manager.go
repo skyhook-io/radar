@@ -121,12 +121,13 @@ func init() {
 // operations (capabilities checks, RBAC checks, etc.) and creates a fresh
 // operation context. Called at the start of context switch and retry, and by
 // runtime auth-loss demotion.
-func CancelOngoingOperations() {
+func CancelOngoingOperations() (context.Context, uint64) {
 	operationMu.Lock()
 	defer operationMu.Unlock()
 	operationCancel()
 	operationCtx, operationCancel = context.WithCancel(context.Background())
 	operationGen++
+	return operationCtx, operationGen
 }
 
 // currentOperationGen returns the generation of the most recently started
@@ -426,6 +427,10 @@ var contextOperationsBlocked atomic.Pointer[error]
 // still name the context. Settings are read at startup, so nothing lifts it.
 func BlockClusterAccess(err error) {
 	contextOperationsBlocked.Store(&err)
+	dropClusterClients()
+}
+
+func dropClusterClients() {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	k8sConfig = nil
@@ -433,6 +438,7 @@ func BlockClusterAccess(err error) {
 	discoveryClient = nil
 	dynamicClient = nil
 	activeClients = nil
+	activeClientGeneration = clientGenerationCounter.Add(1)
 }
 
 func contextOperationsBlockedErr() error {
@@ -546,16 +552,28 @@ func RetryCurrentConnection() error {
 	if err := contextOperationsBlockedErr(); err != nil {
 		return fmt.Errorf("%w: %w", ErrContextSwitchPreflight, err)
 	}
-	contextName := GetContextName()
+	var contextName string
+	var inCluster, stopped bool
+	var observedOperationGen uint64
+	if !CaptureClusterReads(func() {
+		contextName = GetContextName()
+		inCluster = IsInCluster()
+		stopped = GetConnectionStatus().ErrorType == switchStoppedErrorType
+		if inCluster && contextName != "" && !stopped {
+			_, observedOperationGen = CancelOngoingOperations()
+		} else {
+			observedOperationGen = currentOperationGen()
+		}
+	}) || stopped {
+		return ErrReconnectSuperseded
+	}
 	if contextName == "" {
 		return errors.New("no context configured")
 	}
-	if !IsInCluster() {
-		return PerformContextSwitch(contextName)
+	if !inCluster {
+		return performContextSwitch(contextName, observedOperationGen, true, &checkedSwitch{ctx: context.Background()})
 	}
 
-	CancelOngoingOperations()
-	observedOperationGen := currentOperationGen()
 	probeCtx, probeCancel, ok := newOperationContextForGeneration(
 		observedOperationGen,
 		connectionTestOperationTimeout(),
@@ -568,10 +586,21 @@ func RetryCurrentConnection() error {
 	if currentOperationGen() != observedOperationGen {
 		return ErrReconnectSuperseded
 	}
+	var err error
 	if probeErr != nil {
-		return fmt.Errorf("cluster connection failed: %w", probeErr)
+		err = fmt.Errorf("cluster connection failed: %w", probeErr)
+	} else {
+		err = getRuntimeAuthReconnect()(contextName, observedOperationGen)
 	}
-	return getRuntimeAuthReconnect()(contextName, observedOperationGen)
+	if err != nil && !errors.Is(err, ErrReconnectSuperseded) {
+		contextOpMu.Lock()
+		defer contextOpMu.Unlock()
+		if currentOperationGen() != observedOperationGen {
+			return ErrReconnectSuperseded
+		}
+		SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: contextName, Error: err.Error(), ErrorType: ClassifyError(err)})
+	}
+	return err
 }
 
 // PerformContextSwitchIfOperationCurrent is the conditional variant used by
@@ -709,26 +738,46 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	}
 
 	progress := reportProgress
-	if checked != nil && checked.tracker != nil {
-		if !checked.tracker.commit(checked.ctx) {
+	var tracker *ContextSwitchTracker
+	if checked != nil {
+		tracker = checked.tracker
+	}
+	if tracker != nil {
+		if !tracker.commit(checked.ctx) {
 			return context.Canceled
 		}
 		progress = func(message string) {
-			checked.tracker.progress(message)
+			tracker.progress(message)
 			if status := GetConnectionStatus(); status.State == StateConnecting && status.Context == newContext {
 				UpdateConnectionProgress(message)
 			}
 			reportProgress(message)
 		}
-		defer func() {
+	}
+	defer func() {
+		if tracker != nil {
 			if p := recover(); p != nil {
 				switchErr = contextSwitchPanic(p)
 			}
-			if switchErr != nil {
-				SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: newContext, Error: switchErr.Error(), ErrorType: ClassifyError(switchErr)})
+			if switchErr != nil && !tracker.setCanStop(checked.ctx, false) {
+				CancelOngoingOperations()
+				dropClusterClients()
+				ResetAllSubsystems()
+				InvalidateCapabilitiesCache()
+				InvalidateResourcePermissionsCache()
+				InvalidateServerVersionCache()
+				InvalidatePlatformCache()
+				SetConnectionStatus(ConnectionStatus{
+					State: StateDisconnected, Context: newContext, ErrorType: switchStoppedErrorType,
+					Error: "Cluster switch stopped. The previous connection was closed. Choose a cluster to connect.",
+				})
+				return
 			}
-		}()
-	}
+		}
+		if switchErr != nil && (checked != nil || !requireOperationCurrent) {
+			SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: GetContextName(), Error: switchErr.Error(), ErrorType: ClassifyError(switchErr)})
+		}
+	}()
 	// Fire before-switch callbacks while the OLD context is still active, so
 	// teardown (e.g. cancelling in-flight AI investigations) can't leak onto the
 	// cluster we're about to connect to. After the preflight above — a failed
@@ -771,7 +820,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		return fmt.Errorf("failed to switch context: %w", err)
 	}
 	logTiming("   [ops] SwitchContext: %v", time.Since(t))
-	if checked != nil && checked.tracker != nil {
+	if tracker != nil {
 		SetConnectionStatus(ConnectionStatus{State: StateConnecting, Context: newContext, ClusterName: GetClusterName(), ProgressMsg: "Loading cluster data…"})
 	}
 	ClearNamespaceScopeOverride()
@@ -795,17 +844,27 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		t = time.Now()
 		log.Println("Testing cluster connectivity...")
 		timeout := connectionTestOperationTimeout()
-		if checked != nil && checked.tracker != nil {
+		if tracker != nil {
 			timeout = ContextSwitchTimeout
 		}
 		connCtx, connCancel := NewOperationContext(timeout)
 		defer connCancel()
+		if tracker != nil {
+			if !tracker.setCanStop(checked.ctx, true) {
+				return context.Canceled
+			}
+			stop := context.AfterFunc(checked.ctx, connCancel)
+			defer stop()
+		}
 		if err := TestClusterConnection(connCtx); err != nil {
 			elapsed := time.Since(switchStart).Truncate(time.Millisecond)
 			log.Printf("[ops] Context switch FAILED at connectivity test: %v (%v since switch start)", err, elapsed)
 			errorlog.Record("context-switch", "error",
 				"stage=TestClusterConnection target=%q elapsed=%v: %v", newContext, elapsed, err)
 			return fmt.Errorf("cluster connection failed: %w", err)
+		}
+		if tracker != nil && !tracker.setCanStop(checked.ctx, false) {
+			return context.Canceled
 		}
 		log.Printf("[ops] Cluster connectivity verified (%v)", time.Since(t))
 	}
@@ -817,7 +876,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	var initCtx context.Context
 	var initCancel context.CancelFunc
 	var discoveryWait time.Duration
-	if checked != nil && checked.tracker != nil {
+	if tracker != nil {
 		// Once the target answers, informer readiness uses the same first-paint
 		// backstop as startup. A cluster replacement still cancels this work.
 		initCtx, initCancel = context.WithCancel(OperationContext())
@@ -830,7 +889,7 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		initCtx, initCancel = NewOperationContext(ContextSwitchTimeout)
 	}
 	defer initCancel()
-	if err := initAllSubsystems(initCtx, progress, discoveryWait); err != nil {
+	if err := initAllSubsystems(initCtx, progress, discoveryWait, tracker); err != nil {
 		elapsed := time.Since(switchStart).Truncate(time.Millisecond)
 		log.Printf("[ops] Context switch FAILED at subsystem init: %v (%v since switch start)", err, elapsed)
 		errorlog.Record("context-switch", "error",
@@ -842,8 +901,11 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	// Step 5: Notify all registered callbacks
 	progress("Building topology...")
 	var switchID string
-	if checked != nil && checked.tracker != nil {
-		switchID = checked.tracker.Snapshot().ID
+	if tracker != nil {
+		if checked.ctx.Err() != nil {
+			return context.Canceled
+		}
+		switchID = tracker.Snapshot().ID
 	}
 	notifyContextSwitchCallbacks(newContext, switchID)
 

@@ -4,17 +4,18 @@ import { getApiBase } from './config'
 export interface ContextSwitchOperation {
   id: string
   target: string
-  phase: 'preflight' | 'switching' | 'succeeded' | 'failed' | 'cancelled'
+  phase: 'preflight' | 'switching' | 'stopping' | 'stopped' | 'succeeded' | 'failed' | 'cancelled'
   startedAt: string
   preflightTimeoutSeconds: number
   syncTimeoutSeconds: number
   progress: string
+  canStop?: boolean
   error?: string
   errorType?: string
 }
 
 export function switchInProgress(op?: ContextSwitchOperation) {
-  return op?.phase === 'preflight' || op?.phase === 'switching'
+  return op?.phase === 'preflight' || op?.phase === 'switching' || op?.phase === 'stopping'
 }
 
 // Only present the terminal result in a tab that was following this operation.

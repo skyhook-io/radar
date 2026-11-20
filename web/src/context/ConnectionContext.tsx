@@ -46,7 +46,7 @@ interface ConnectionContextValue {
 class ConnectionRetryError extends Error {
   errorType?: string
 
-  constructor(message: string, errorType?: string) {
+  constructor(message: string, readonly status: number, errorType?: string) {
     super(message)
     this.name = 'ConnectionRetryError'
     this.errorType = errorType
@@ -86,7 +86,7 @@ export function shouldAutoRetryConnection(errorType?: string): boolean {
   // reconnect loop for those, and each browser retry would invoke the exec
   // credential plugin again. Manual "Retry Connection" stays available for
   // an immediate check. A settings error can't clear until Radar restarts.
-  return errorType !== 'config' && errorType !== 'settings' && errorType !== 'rbac' && !errorType?.startsWith('auth')
+  return errorType !== 'switch-stopped' && errorType !== 'config' && errorType !== 'settings' && errorType !== 'rbac' && !errorType?.startsWith('auth')
 }
 
 export function shouldApplyPolledConnection(
@@ -124,7 +124,7 @@ async function retryConnection(automatic = false): Promise<ConnectionState> {
   })
   if (!response.ok) {
     const error = await readErrorBody(response) as { error?: string; errorType?: string }
-    throw new ConnectionRetryError(error.error || `HTTP ${response.status}`, error.errorType)
+    throw new ConnectionRetryError(error.error || `HTTP ${response.status}`, response.status, error.errorType)
   }
   return response.json()
 }
@@ -336,6 +336,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     },
     onError: (error: Error) => {
       const retryError = error as ConnectionRetryError
+      if (retryError.status === 409) return
       setConnection(prev => {
         if (sseActiveRef.current && prev.state === 'connected') return prev
         return {
@@ -420,6 +421,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         .catch((error: Error) => {
           if (stopped) return
           const retryError = error as ConnectionRetryError
+          if (retryError.status === 409) return
           setConnection(prev => {
             if (sseActiveRef.current && prev.state === 'connected') return prev
             return {

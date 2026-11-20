@@ -273,8 +273,10 @@ func TestTrackedContextSwitchInManagedInstallations(t *testing.T) {
 			if requested.Code != legacy.Code || requested.Body.String() != legacy.Body.String() || tc.server.contextSwitch.Snapshot() != nil {
 				t.Fatalf("tracked request changed managed behavior: %d %s vs %d %s", requested.Code, requested.Body, legacy.Code, legacy.Body)
 			}
-			if cancelled := post("?cancelSwitch=abc"); cancelled.Code != http.StatusForbidden {
-				t.Fatalf("managed cancellation: %d %s", cancelled.Code, cancelled.Body)
+			for _, query := range []string{"?cancelSwitch=abc", "?stopSwitch=abc"} {
+				if response := post(query); response.Code != http.StatusForbidden {
+					t.Fatalf("managed %s: %d %s", query, response.Code, response.Body)
+				}
 			}
 		})
 	}

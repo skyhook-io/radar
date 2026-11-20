@@ -10,8 +10,7 @@ import (
 	"time"
 )
 
-// ContextSwitchStatus is the last user-requested switch. Only preflight can be
-// cancelled: after teardown the previous cluster's sessions cannot be restored.
+// ContextSwitchStatus is the last user-requested switch.
 type ContextSwitchStatus struct {
 	ID                      string    `json:"id"`
 	Target                  string    `json:"target"`
@@ -19,6 +18,7 @@ type ContextSwitchStatus struct {
 	StartedAt               time.Time `json:"startedAt"`
 	PreflightTimeoutSeconds float64   `json:"preflightTimeoutSeconds"`
 	SyncTimeoutSeconds      float64   `json:"syncTimeoutSeconds"`
+	CanStop                 bool      `json:"canStop,omitempty"`
 	Progress                string    `json:"progress"`
 	Error                   string    `json:"error,omitempty"`
 	ErrorType               string    `json:"errorType,omitempty"`
@@ -70,7 +70,28 @@ func (t *ContextSwitchTracker) Cancel(id, target string) bool {
 	return true
 }
 
-// Stop also cancels committed work when its owning server shuts down.
+// StopSwitch abandons the target after teardown. A preflight cancellation
+// that races teardown must never be interpreted as permission to disconnect.
+func (t *ContextSwitchTracker) StopSwitch(id, target string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.status.ID != id || t.status.Target != target {
+		return false
+	}
+	if t.status.Phase == "stopping" || t.status.Phase == "stopped" {
+		return true
+	}
+	if !t.status.CanStop {
+		return false
+	}
+	t.status.CanStop = false
+	t.status.Phase = "stopping"
+	t.status.Progress = "Stopping cluster switch…"
+	t.cancel()
+	return true
+}
+
+// Stop cancels work when its owning server shuts down.
 func (t *ContextSwitchTracker) Stop() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -90,9 +111,23 @@ func (t *ContextSwitchTracker) commit(ctx context.Context) bool {
 	return true
 }
 
+// Serialized integration callbacks cannot be interrupted. A Stop accepted
+// before they start must also prevent their completion notifications.
+func (t *ContextSwitchTracker) setCanStop(ctx context.Context, canStop bool) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if ctx.Err() != nil || t.status.Phase != "switching" {
+		return false
+	}
+	t.status.CanStop = canStop
+	return true
+}
+
 func (t *ContextSwitchTracker) progress(stage string) {
 	t.mu.Lock()
-	t.status.Progress = stage
+	if t.status.Phase == "switching" {
+		t.status.Progress = stage
+	}
 	t.mu.Unlock()
 }
 
@@ -119,6 +154,8 @@ func (t *ContextSwitchTracker) finish(ctx context.Context, op ContextSwitchStatu
 		return
 	}
 	switch {
+	case t.status.Phase == "stopping":
+		t.status.Phase = "stopped"
 	case ctx.Err() != nil || errors.Is(err, ErrReconnectSuperseded):
 		t.status.Phase = "cancelled"
 	case err != nil:

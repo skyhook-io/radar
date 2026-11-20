@@ -1985,7 +1985,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                   {headerConnectionDisplayLabel}
                 </span>
               )}
-              {showHeaderReconnect && (
+              {showHeaderReconnect && connection.errorType !== 'switch-stopped' && (
                 <Tooltip content="Reconnect" delay={100} position="bottom">
                   <button
                     type="button"
@@ -2137,7 +2137,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* Context switching overlay */}
       {isSwitching && !dismissed && (
         <PaneLoader
-          label="Switching context"
+          label={contextSwitch?.phase === 'stopping' ? 'Stopping switch' : 'Switching context'}
           className="flex-1 min-h-0 bg-theme-base"
         >
           {targetContext && (
@@ -2168,6 +2168,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           {progressMessage && <span className="mt-3 block text-sm font-normal text-theme-text-secondary">{progressMessage}</span>}
           {contextSwitch && switchInProgress(contextSwitch) && (
             <ContextSwitchActions
+              key={contextSwitch.id}
               operation={contextSwitch}
               syncing={connection.context === contextSwitch.target && connection.syncStatus?.phase === 'syncing_critical'}
               onDismiss={() => setDismissed(true)}
@@ -2176,7 +2177,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         </PaneLoader>
       )}
 
-      {dismissed && <p className="m-auto text-sm text-theme-text-secondary">The switch is still running. Resources will appear when the cluster is ready.</p>}
+      {dismissed && <p className="m-auto text-sm text-theme-text-secondary">{contextSwitch?.phase === 'stopping' ? 'Stopping the switch…' : 'The switch is still running. Resources will appear when the cluster is ready.'}</p>}
       {contentReady && <NoClusterAccessBanner />}
       {/* Main content - only show when connected and authenticated */}
       {/* inert while a fullscreen detail overlay covers the views — keeps the

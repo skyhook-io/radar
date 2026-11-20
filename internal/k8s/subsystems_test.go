@@ -71,7 +71,7 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- initAllSubsystems(context.Background(), func(string) {}, 100*time.Millisecond)
+		done <- initAllSubsystems(context.Background(), func(string) {}, 100*time.Millisecond, nil)
 	}()
 	select {
 	case <-started:

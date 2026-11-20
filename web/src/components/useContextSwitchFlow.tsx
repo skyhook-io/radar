@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { pluralize } from '@skyhook-io/k8s-ui'
 import { useSwitchContext, fetchSessionCounts, SwitchContextError, type SessionCounts } from '../api/client'
+import { useConnection } from '../context/ConnectionContext'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from './ui/Toast'
 import { Tooltip } from './ui/Tooltip'
@@ -30,6 +31,7 @@ interface PendingSwitch {
 // toast when the switch fails. `openAfter` is opened once the new context is
 // live. Callers render `confirmDialog`.
 export function useContextSwitchFlow() {
+  const { connection } = useConnection()
   const switchContext = useSwitchContext()
   const { isSwitching, startSwitch, endSwitch, setOpenAfterSwitch, setFailedSwitch } = useContextSwitch()
   const { showError } = useToast()
@@ -68,7 +70,7 @@ export function useContextSwitchFlow() {
   const requestSwitch = async (context: ContextInfo, openAfter?: SelectedResource) => {
     if (isSwitching || switchContext.isPending) return
     // Picking the cluster you're still on dismisses a refused switch's screen.
-    if (context.isCurrent) {
+    if (context.isCurrent && connection.errorType !== 'switch-stopped') {
       setFailedSwitch(null)
       return
     }

@@ -21,10 +21,10 @@ import (
 // The progress callback receives human-readable status messages suitable for
 // display in the UI (e.g. via SSE connection status updates).
 func InitAllSubsystems(ctx context.Context, progress func(string)) error {
-	return initAllSubsystems(ctx, progress, 0)
+	return initAllSubsystems(ctx, progress, 0, nil)
 }
 
-func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait time.Duration) error {
+func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait time.Duration, tracker *ContextSwitchTracker) error {
 	subsystemStart := time.Now()
 
 	// 1. Timeline — before caches so events during warmup are captured
@@ -42,6 +42,9 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 
 	// 2. Resource cache (typed informers) — critical, topology depends on this.
 	// Start API resource discovery in parallel since it's independent.
+	if tracker != nil && !tracker.setCanStop(ctx, true) {
+		return context.Canceled
+	}
 	progress("Loading workloads...")
 	t := time.Now()
 
@@ -72,7 +75,7 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 				return
 			}
 			dt := time.Now()
-			err := InitResourceDiscovery()
+			err := initResourceDiscovery(ctx)
 			logTiming("   API resource discovery: %v (parallel)", time.Since(dt))
 			discoveryErrCh <- err
 		}()
@@ -114,6 +117,10 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 	if ctx.Err() != nil {
 		log.Printf("[ops] InitAllSubsystems bailing: context canceled (%v since start)", time.Since(subsystemStart))
 		return ctx.Err()
+	}
+
+	if tracker != nil && !tracker.setCanStop(ctx, false) {
+		return context.Canceled
 	}
 
 	// 3. Dynamic cache (factory init is synchronous; CRD warmup and discovery kick off async)

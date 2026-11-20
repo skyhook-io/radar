@@ -30,11 +30,12 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
   const { data: contexts, isLoading: contextsLoading } = useContexts()
   const { data: clusterInfo } = useClusterInfo()
   const { data: capabilities } = useCapabilities()
-  const switchFlow = useContextSwitchFlow()
   const { failedSwitch, dismissed, setDismissed, targetContext } = useContextSwitch()
   // A settings error (Desktop's namespace list over the limit) blocks every
   // switch until restart, so offering the list would only lead to a refusal.
-  const { connection } = useConnection()
+  const { connection, contextSwitch } = useConnection()
+  const stopped = connection.errorType === 'switch-stopped'
+  const switchFlow = useContextSwitchFlow()
   const settingsBlocked = connection.errorType === 'settings'
 
   // Parse contexts and decide whether to render group headers (multi-account only).
@@ -115,13 +116,13 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
   }
 
   const currentCtx = contexts?.find(c => c.isCurrent)
-  const currentId = currentCtx?.name
+  const currentId = stopped ? connection.context : currentCtx?.name
   // Keep the trigger name parseable and render any collision qualifier as a
   // separate suffix so cloud-provider metadata remains intact.
   // Fall back to clusterInfo.context for the very-early window before
   // /api/contexts has resolved.
   const currentParsed = currentId ? parsedById.get(currentId) : undefined
-  const currentRaw = triggerName || currentParsed?.raw || clusterInfo?.context || currentCtx?.name || 'Unknown'
+  const currentRaw = triggerName || currentParsed?.raw || currentId || clusterInfo?.context || 'Unknown'
   const currentNameQualifier = triggerName
     ? undefined
     : visibleContextQualifier(currentParsed?.nameQualifier, currentCtx?.source, hasMultipleSources)
@@ -129,7 +130,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
 
   if (dismissed && targetContext) {
     return <button type="button" className="text-sm text-accent-text" onClick={() => setDismissed(false)}>
-      Switching to {targetContext.clusterName}…
+      {contextSwitch?.phase === 'stopping' ? 'Stopping switch to' : 'Switching to'} {targetContext.clusterName}…
     </button>
   }
 
@@ -149,7 +150,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         loading={switchFlow.isPending}
         disabled={settingsBlocked || contextsLoading || !capabilities || capabilities.configManagement === 'operator'}
         searchable={items.length > 1}
-        currentSelectable={!!failedSwitch}
+        currentSelectable={!!failedSwitch || stopped}
         showGroupHeaders={hasMultipleAccounts}
         errorSlot={
           switchFlow.errorText ? (
