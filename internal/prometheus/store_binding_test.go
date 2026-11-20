@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,6 +34,10 @@ func bindingTestStore(t *testing.T) (*httptest.Server, func() []string) {
 		mu.Lock()
 		queries = append(queries, q)
 		mu.Unlock()
+		if strings.HasSuffix(r.URL.Path, "/query_range") {
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
 	t.Cleanup(srv.Close)

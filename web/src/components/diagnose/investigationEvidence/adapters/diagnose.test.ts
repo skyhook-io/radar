@@ -432,6 +432,41 @@ describe("diagnose metrics evidence", () => {
     expect(data.partial).toBe(true);
   });
 
+  it("marks a category the store answered only in part", () => {
+    const [cpu, memory, restarts] = vitals().series;
+    const projection = project([
+      tool(
+        "diag",
+        "diagnose",
+        {
+          resource: deployment,
+          pods: 2,
+          metrics: vitals({
+            series: [
+              cpu,
+              {
+                ...memory,
+                incomplete: true,
+                incompleteNote:
+                  "the metrics store answered only in part, so values may be understated: shard eu-2 did not answer",
+              },
+              restarts,
+            ],
+          }),
+        },
+        { summary: JSON.stringify(args) },
+      ),
+    ]);
+    const groups = groupsOf(projection.groups, "metrics");
+    const summaries = groups.map((group) => group.latest.summary);
+    expect(summaries.filter((s) => s?.includes("store answered in part"))).toHaveLength(1);
+    const limitation = projection.limitations.find(
+      (item) => item.source === "Workload metrics",
+    );
+    expect(limitation?.kind).toBe("truncated");
+    expect(limitation?.message).toContain("shard eu-2 did not answer");
+  });
+
   it("keeps a neighbour's vitals broader with the neighbour as subject", () => {
     const worker = {
       ...deployment,

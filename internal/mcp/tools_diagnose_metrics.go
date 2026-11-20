@@ -10,9 +10,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -38,6 +40,9 @@ const (
 	// diagnoseMetricsMaxErrorBytes keeps an error-only field inside the byte
 	// budget; backend errors echo operator-supplied URLs of any length.
 	diagnoseMetricsMaxErrorBytes = 1024
+	// diagnoseMetricsMaxIncompleteBytes bounds each category's incomplete
+	// note; like the queries it sits outside the sample budget.
+	diagnoseMetricsMaxIncompleteBytes = 256
 )
 
 // DiagnoseMetricsEnabled decides whether diagnose collects workload vitals at
@@ -82,6 +87,10 @@ type diagnoseMetrics struct {
 	OmittedPods int                    `json:"omittedPods,omitempty"`
 	Series      []diagnoseMetricSeries `json:"series"`
 	Error       string                 `json:"error,omitempty"`
+	// ClusterScope says how the queries were kept to this cluster in a
+	// metrics store several clusters may share; when it withholds, Error
+	// carries its reason.
+	ClusterScope *prometheus.ClusterScope `json:"clusterScope,omitempty"`
 }
 
 type diagnoseMetricsWindow struct {
@@ -100,8 +109,14 @@ type diagnoseMetricSeries struct {
 	// agreeing samples or two lonely ones, and the window and step cannot
 	// settle it because a range query returns nothing for an evaluation with
 	// no data.
-	ObservedSamples int           `json:"observedSamples,omitempty"`
-	Series          []prom.Series `json:"series"`
+	ObservedSamples int `json:"observedSamples,omitempty"`
+	// Incomplete marks a category the store answered only in part (a
+	// partial response or warnings, such as a shard that did not answer):
+	// the values may be understated. IncompleteNote says what the store
+	// reported.
+	Incomplete     bool          `json:"incomplete,omitempty"`
+	IncompleteNote string        `json:"incompleteNote,omitempty"`
+	Series         []prom.Series `json:"series"`
 }
 
 func diagnoseMetricsSince(sinceSeconds *int64) time.Duration {
@@ -162,6 +177,10 @@ func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, na
 	return diagnoseMetricsForScope(budgetCtx, avail, scope, since, now)
 }
 
+// diagnoseScopeResolverFor builds the vitals' check on the client's current
+// connection; tests replace it to move the connection around the check.
+var diagnoseScopeResolverFor = prometheus.ResolverFor
+
 func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.AvailabilityState, scope prometheus.PodScope, since time.Duration, now time.Time) *diagnoseMetrics {
 	namespace := scope.Namespace
 	start := now.Add(-since)
@@ -189,9 +208,12 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 		out.Error = boundDiagnoseMetricsError(connectionErr.Error())
 		return out
 	}
+	// The queries run on p and the check must describe p's backend, so both
+	// are bound to the connection p was taken from.
 	var p *prom.Client
+	var conn prometheus.ConnectionSnapshot
 	if client != nil {
-		p = client.PromForMCP()
+		p, conn = client.PromForMCPSnapshot()
 	}
 	if p == nil {
 		out.Error = "prometheus unreachable: connection was reset"
@@ -199,6 +221,17 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 	}
 	if scope.Selection.IsEmpty() {
 		out.Error = "metrics omitted: no pods could be attributed to the workload"
+		return out
+	}
+	view, err := prometheus.ResolveChartScope(budgetCtx, prometheus.BoundResolver(client, conn, diagnoseScopeResolverFor(client, k8s.GetResourceCache())),
+		prometheus.PodSetScopeRequest("diagnose_vitals", scope.Selection, diagnoseMetricsCategories, prometheus.ChartScopeSpan(since, prom.CategoryRestarts)))
+	if err != nil {
+		out.Error = fmt.Sprintf("metrics omitted: %s budget exceeded before all queries answered", diagnoseMetricsBudget)
+		return out
+	}
+	out.ClusterScope = prometheus.ClusterScopeOf(view)
+	if view.Withheld {
+		out.Error = boundDiagnoseMetricsError("metrics withheld: " + view.Note)
 		return out
 	}
 
@@ -212,7 +245,7 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 		wg.Add(1)
 		go func(i int, cat prom.MetricCategory) {
 			defer wg.Done()
-			s, err := queryPodSetCategory(budgetCtx, p, scope.Selection, cat, start, now, step)
+			s, err := queryPodSetCategory(budgetCtx, p, scope.Selection, cat, start, now, step, view.Filter)
 			results[i] = categoryResult{series: s, err: err}
 		}(i, cat)
 	}
@@ -255,10 +288,20 @@ func boundDiagnoseMetricsError(msg string) string {
 	// Prometheus errors quote the failing request URL, which names the backend
 	// and can carry its credentials; this string ships in the tool result.
 	msg = prom.RedactURLs(msg)
-	if len(msg) <= diagnoseMetricsMaxErrorBytes {
+	return truncateWithEllipsis(msg, diagnoseMetricsMaxErrorBytes)
+}
+
+// truncateWithEllipsis bounds msg to limit bytes, ending in "…" when cut,
+// and never cuts inside a UTF-8 character.
+func truncateWithEllipsis(msg string, limit int) string {
+	if len(msg) <= limit {
 		return msg
 	}
-	return msg[:diagnoseMetricsMaxErrorBytes-len("…")] + "…"
+	cut := limit - len("…")
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut] + "…"
 }
 
 // diagnoseMetricsPointBudget derives the per-series point cap from what the
@@ -292,20 +335,24 @@ func diagnoseMetricsPointBudget(envelope *diagnoseMetrics) int {
 // queryPodSetCategory runs one category over the pod set, sharing the curated
 // HTTP metrics handler's container-filter fallback for clusters whose cAdvisor
 // lacks the label.
-func queryPodSetCategory(ctx context.Context, p *prom.Client, sel prom.PodSelection, cat prom.MetricCategory, start, end time.Time, step time.Duration) (diagnoseMetricSeries, error) {
+func queryPodSetCategory(ctx context.Context, p *prom.Client, sel prom.PodSelection, cat prom.MetricCategory, start, end time.Time, step time.Duration, filter prom.ClusterFilter) (diagnoseMetricSeries, error) {
 	out := diagnoseMetricSeries{Category: string(cat), Unit: prom.CategoryUnit(cat)}
-	query := prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, true)
+	query := prom.BuildScopedQueryFiltered(sel, cat, prom.AggregateTotal, true, filter)
 	result, err := p.QueryRange(ctx, query, start, end, step)
 	if err != nil {
 		return out, err
 	}
 	result, query, err = prometheus.QueryWithContainerFilterFallback(ctx, p, result, query, cat, start, end, step,
-		func() string { return prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, false) },
+		func() string { return prom.BuildScopedQueryFiltered(sel, cat, prom.AggregateTotal, false, filter) },
 		fmt.Sprintf("diagnose metrics empty for %q", cat))
 	if err != nil {
 		return out, err
 	}
 	out.Query = query
+	if result.Annotations.Partial || len(result.Annotations.Warnings) > 0 {
+		out.Incomplete = true
+		out.IncompleteNote = incompleteNote(result.Annotations)
+	}
 	out.Series = result.Series
 	if out.Series == nil {
 		out.Series = []prom.Series{}
@@ -318,6 +365,16 @@ func queryPodSetCategory(ctx context.Context, p *prom.Client, sel prom.PodSelect
 		out.Series[i].DataPoints = collapseConstantRuns(out.Series[i].DataPoints)
 	}
 	return out, nil
+}
+
+// incompleteNote says why a category's answer is incomplete, bounded and
+// with URLs redacted since store warnings can quote the backend.
+func incompleteNote(a prom.QueryAnnotations) string {
+	msg := "the metrics store answered only in part, so values may be understated"
+	if len(a.Warnings) > 0 {
+		msg += ": " + strings.Join(a.Warnings, "; ")
+	}
+	return truncateWithEllipsis(prom.RedactURLs(msg), diagnoseMetricsMaxIncompleteBytes)
 }
 
 // collapseConstantRuns drops the interior of an evenly spaced run of equal

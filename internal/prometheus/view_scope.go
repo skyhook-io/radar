@@ -65,16 +65,18 @@ const (
 // and AnchorValues are this cluster's live object names for it.
 // AnchorNamespace, when set, restricts the anchor check to that namespace, so
 // another cluster's same-named object in a different namespace cannot vouch
-// for this cluster's; set it for namespaced objects.
-// Foreign, when set, guards a view that sums the metric over a namespace or
-// the cluster; see ForeignCheck.
+// for this cluster's; set it for namespaced objects. AnchorOptionalPort lets
+// an anchor value carry a ":<port>" suffix, as node-exporter's instance label
+// does when it holds the node's name. Foreign, when set, guards a view that
+// sums the metric over a namespace or the cluster; see ForeignCheck.
 type ViewMetric struct {
-	Name            string
-	Subject         string
-	AnchorLabel     string
-	AnchorValues    []string
-	AnchorNamespace string
-	Foreign         ForeignCheck
+	Name               string
+	Subject            string
+	AnchorLabel        string
+	AnchorValues       []string
+	AnchorNamespace    string
+	AnchorOptionalPort bool
+	Foreign            ForeignCheck
 }
 
 // ForeignCheck names the kube-state-metrics series that list the objects a
@@ -388,7 +390,7 @@ func viewScopeKey(generation, epoch uint64, config prom.WorkloadMetricsScope, be
 	}
 	write("view", req.View, strconv.FormatBool(req.Joined), req.Namespace, promSeconds(req.Span))
 	for _, m := range req.Metrics {
-		write(append([]string{"metric", m.Name, m.Subject, m.AnchorLabel, m.AnchorNamespace}, m.AnchorValues...)...)
+		write(append([]string{"metric", m.Name, m.Subject, m.AnchorLabel, m.AnchorNamespace, strconv.FormatBool(m.AnchorOptionalPort)}, m.AnchorValues...)...)
 		if f := m.Foreign; f.Reference != "" {
 			foreign := []string{"foreign", f.Reference, strconv.FormatBool(f.NamespaceExported)}
 			for _, k := range f.Keys {

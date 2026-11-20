@@ -4006,6 +4006,11 @@ export interface PrometheusResourceMetrics {
   // controller ownership. podsTotal is the full set when the cap cut the list.
   pods?: number;
   podsTotal?: number;
+  // How the query was kept to this cluster in a shared metrics store; when it
+  // withholds, result has no series. Older Radar omits it.
+  clusterScope?: ClusterScope;
+  // The store answered only partly: drawn, but samples may be missing.
+  partial?: boolean;
 }
 
 export type PrometheusMetricCategory =
@@ -4516,6 +4521,8 @@ export interface PrometheusHPAMetrics {
   range: string;
   current: PrometheusQueryResult;
   desired: PrometheusQueryResult;
+  clusterScope?: ClusterScope;
+  partial?: boolean;
 }
 
 export function usePrometheusHPAMetrics(
