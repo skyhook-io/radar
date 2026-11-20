@@ -1,6 +1,7 @@
 package cnpg
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -8,6 +9,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/skyhook-io/radar/internal/integration"
+	"github.com/skyhook-io/radar/internal/k8s"
+	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func cnpgObj(apiVersion, kind, ns, name string, spec, status map[string]any) *unstructured.Unstructured {
@@ -110,5 +117,29 @@ func TestIsCNPGInstancePod(t *testing.T) {
 				t.Errorf("isCNPGInstancePod = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+func TestWorkspaceAuditHonorsNamespaceIgnore(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "pg", Annotations: map[string]string{bp.IgnoreChecksAnnotation: "cnpgSingleInstance"}}}
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(ns), map[string]k8score.ResourceScope{k8score.Namespaces: {Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	reader := &Reader{Observations: Observations{
+		Cache:       k8s.GetResourceCache(),
+		FilterAudit: func(r *bp.ScanResults) *bp.ScanResults { return r },
+	}}
+	clusters := []*unstructured.Unstructured{
+		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "pg", "bare", nil, nil),
+		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "other", "bare", nil, nil),
+	}
+	var got []string
+	for _, f := range reader.workspaceAudit(clusters, nil, integration.KindAccess{}) {
+		got = append(got, f.Namespace+"/"+f.Name+":"+f.CheckID)
+	}
+	want := []string{"other/bare:cnpgNoBackupDestination", "other/bare:cnpgSingleInstance", "pg/bare:cnpgNoBackupDestination"}
+	if !slices.Equal(got, want) {
+		t.Errorf("audit = %v, want %v", got, want)
 	}
 }

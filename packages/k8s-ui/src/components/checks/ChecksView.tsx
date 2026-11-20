@@ -110,6 +110,8 @@ export interface ChecksViewProps {
   /** Per-resource opt-out annotation the source Radar honors. Omit when it
    *  doesn't, so the card never suggests an annotation that does nothing. */
   ignoreChecksAnnotation?: string
+  /** The source Radar also honored the annotation on Namespace objects. */
+  namespaceIgnoreChecks?: boolean
 }
 
 // A check rolled up across every cluster it fires on — one row of the fleet
@@ -131,7 +133,7 @@ const CHECKS_FILTER_SCHEMA = defineFilterSchema({
   q: { param: 'q', type: 'text' },
 })
 
-export function ChecksView({ checks, catalog, anyData, evaluated, missingInputs = [], resourceHref, onResourceClick, clusterLabel, clusterLabelById, clusterFilter: clusterFilterProp, onClusterFilterChange, emptyAction, onHideCheck, onHideCategory, ignoreChecksAnnotation }: ChecksViewProps) {
+export function ChecksView({ checks, catalog, anyData, evaluated, missingInputs = [], resourceHref, onResourceClick, clusterLabel, clusterLabelById, clusterFilter: clusterFilterProp, onClusterFilterChange, emptyAction, onHideCheck, onHideCategory, ignoreChecksAnnotation, namespaceIgnoreChecks }: ChecksViewProps) {
   // Severity / category / framework / search live in the URL (shareable,
   // bookmarkable audit links) via the shared filter-state contract. The cluster
   // facet is deliberately NOT here — it's a host-controlled seam (see
@@ -440,6 +442,7 @@ export function ChecksView({ checks, catalog, anyData, evaluated, missingInputs 
               onHideCheck={onHideCheck}
               onHideCategory={onHideCategory}
               ignoreChecksAnnotation={ignoreChecksAnnotation}
+              namespaceIgnoreChecks={namespaceIgnoreChecks}
             />
           ))}
         </ol>
@@ -735,6 +738,7 @@ function FleetCheckRow({
   onHideCheck,
   onHideCategory,
   ignoreChecksAnnotation,
+  namespaceIgnoreChecks,
 }: {
   fc: FleetCheck
   meta?: CheckMeta
@@ -746,6 +750,7 @@ function FleetCheckRow({
   onHideCheck?: (checkID: string, title: string) => void
   onHideCategory?: (category: string) => void
   ignoreChecksAnnotation?: string
+  namespaceIgnoreChecks?: boolean
 }) {
   const clusterCount = fc.clusters.length
   const single = clusterCount <= 1
@@ -779,8 +784,11 @@ function FleetCheckRow({
       <CheckRemediationBlock description={meta?.description} remediation={meta?.remediation} references={meta?.references} />
 
       {ignoreChecksAnnotation && (
-        <CardSection icon={EyeOff} label="Skip for one resource">
-          <CardBody>Add this annotation to a resource listed below. Its findings for this check are then hidden.</CardBody>
+        <CardSection icon={EyeOff} label={namespaceIgnoreChecks ? 'Skip for a resource or namespace' : 'Skip for one resource'}>
+          <CardBody>
+            Add this annotation to a resource listed below. Its findings for this check are then hidden.
+            {namespaceIgnoreChecks && ' Put it on the Namespace to skip the check for the whole namespace.'}
+          </CardBody>
           <CopyableCommand command={`${ignoreChecksAnnotation}: ${fc.checkID}`} />
         </CardSection>
       )}
