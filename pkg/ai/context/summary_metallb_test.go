@@ -122,6 +122,21 @@ func TestMetalLBBGPPeerSummaryOmitsPassword(t *testing.T) {
 	}
 }
 
+func TestMetalLBBGPPeerDetailRedactsPassword(t *testing.T) {
+	peer := metalLBObject("metallb.io/v1beta2", "BGPPeer", map[string]any{"spec": map[string]any{
+		"myASN": int64(64500), "peerASN": int64(64501), "peerAddress": "172.18.0.5", "password": "s3cret-md5",
+	}})
+	for _, level := range []VerbosityLevel{LevelDetail, LevelCompact} {
+		raw, _ := json.Marshal(MinifyUnstructured(peer, level))
+		if strings.Contains(string(raw), "s3cret-md5") {
+			t.Fatalf("level %v leaks the BGP password: %s", level, raw)
+		}
+		if !strings.Contains(string(raw), "172.18.0.5") {
+			t.Fatalf("level %v dropped the peer address: %s", level, raw)
+		}
+	}
+}
+
 func TestMetalLBConfigurationStateSummary(t *testing.T) {
 	for _, tc := range []struct {
 		name                  string
