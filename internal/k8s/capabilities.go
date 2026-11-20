@@ -248,6 +248,8 @@ type FeatureCapabilities struct {
 	PodFileUpload         bool `json:"podFileUpload"`         // POST /api/pods/{namespace}/{name}/files/upload
 	Vulnerabilities       bool `json:"vulnerabilities"`       // GET /api/vulnerabilities
 	RuntimeAdvisoryChecks bool `json:"runtimeAdvisoryChecks"` // GET /api/vulnerabilities/java4shell
+	// GET /api/sealedsecrets/controller
+	SealedSecretsController bool `json:"sealedSecretsController"`
 	// POST /api/cronjobs/{namespace}/{name}/trigger accepts {"jobName": ...};
 	// an older Radar ignores the body and names the Job itself.
 	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`

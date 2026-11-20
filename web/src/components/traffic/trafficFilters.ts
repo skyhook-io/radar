@@ -836,10 +836,10 @@ export function connectionRows<T extends AggregatedFlow>(flows: T[]): T[] {
 }
 
 /**
- * The verdict filter's choices, from the verdicts the flows contain. Caretta,
- * Beyla and Istio report every flow forwarded unless they saw an error, so when
- * forwarded is the only verdict present the filter would match everything and
- * none is offered. Any other verdict, even one without a chip of its own (Hubble
+ * The verdict filter's choices, from the verdicts the flows contain. Caretta
+ * and Istio report every flow forwarded unless they saw an error, and Beyla
+ * reports no verdict unless it saw one, so when forwarded is the only verdict
+ * present the filter would match everything and none is offered. Any other verdict, even one without a chip of its own (Hubble
  * also reports redirected, audit and more), makes Forwarded a real choice.
  */
 export function verdictChoices(seen: Iterable<string>): string[] {
