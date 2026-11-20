@@ -6,6 +6,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -15,6 +16,16 @@ import (
 type declaring struct {
 	ref resourceid.Ref
 	obj runtime.Object
+}
+
+// unstructuredSources are dynamic-cache objects as declaring objects; they
+// carry their own apiVersion and kind.
+func unstructuredSources(objs []*unstructured.Unstructured) []declaring {
+	out := make([]declaring, 0, len(objs))
+	for _, u := range objs {
+		out = append(out, declaring{ref: resourceid.NewRef(resourceid.GroupFromAPIVersion(u.GetAPIVersion()), u.GetKind(), u.GetNamespace(), u.GetName()), obj: u})
+	}
+	return out
 }
 
 // drawnNodes resolves a resource identity to the display node drawn for it.

@@ -61,7 +61,9 @@ func TestIstioHostsJoinOnlyKubernetesServiceNames(t *testing.T) {
 	}
 }
 
-func TestIstioRouteEdgesAreNamedByTheFirstProtocolToReachAService(t *testing.T) {
+// A Service an HTTP and a TCP route both reach gets one edge; edges follow the
+// route order, HTTP before TCP before TLS.
+func TestIstioRoutesDrawOneEdgePerServiceInProtocolOrder(t *testing.T) {
 	vsGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
 	route := func(host string) []any {
 		return []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": host}}}}}
@@ -83,7 +85,7 @@ func TestIstioRouteEdgesAreNamedByTheFirstProtocolToReachAService(t *testing.T) 
 			got = append(got, e.ID)
 		}
 	}
-	want := []string{"virtualservice/rules/route-to-service/rules/web", "virtualservice/rules/route-tcp-to-service/rules/db", "virtualservice/rules/route-tls-to-service/rules/vault"}
+	want := []string{"virtualservice/rules/route-to-service/rules/web", "virtualservice/rules/route-to-service/rules/db", "virtualservice/rules/route-to-service/rules/vault"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("edges = %v, want %v", got, want)
 	}
