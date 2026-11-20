@@ -198,7 +198,7 @@ func TestComputeRightsizingUsesGroupedEvidence(t *testing.T) {
 		}
 	})
 
-	response := computeRightsizing(context.Background(), querier, "Deployment", "argocd", "argocd-server", workload)
+	response := computeRightsizing(context.Background(), querier, "Deployment", "argocd", "argocd-server", workload, ViewScope{})
 	if response.OwnerCoverage != OwnerCoverageKSMHistory || !response.SampleAvailable {
 		t.Fatalf("unexpected response coverage/availability: %+v", response)
 	}
@@ -293,7 +293,7 @@ func TestWorkloadSelectionFallsBackToExactCurrentPods(t *testing.T) {
 		mu.Unlock()
 		return &prom.QueryResult{}, nil
 	})
-	selection, coverage := workloadSelection(context.Background(), querier, "Deployment", "prod", "api", []string{"api-6ccf7b8d9-x1"})
+	selection, coverage, _ := workloadSelection(context.Background(), querier, "Deployment", "prod", "api", []string{"api-6ccf7b8d9-x1"}, ViewScope{})
 	if coverage != OwnerCoverageCurrentPods {
 		t.Fatalf("coverage = %q, want current_pods", coverage)
 	}
@@ -336,14 +336,14 @@ func TestAuxiliaryQueryFailureDoesNotMaskMissingUsageSamples(t *testing.T) {
 		return &prom.QueryResult{}, nil
 	})
 
-	response := computeRightsizing(context.Background(), querier, "Deployment", "prod", "api", workload)
+	response := computeRightsizing(context.Background(), querier, "Deployment", "prod", "api", workload, ViewScope{})
 	if response.Reason != "No workload usage samples are available in the last 7d." {
 		t.Errorf("reason = %q, want missing usage samples", response.Reason)
 	}
 }
 
 func TestOwnerSelectionDeduplicatesKSMTargets(t *testing.T) {
-	query := ownerSelection("Deployment", "prod", "api")
+	query := ownerSelection("Deployment", "prod", "api", ViewScope{})
 	for _, want := range []string{
 		"max by (namespace,pod,owner_name)",
 		"max by (namespace,replicaset)",
