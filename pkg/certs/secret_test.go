@@ -120,3 +120,19 @@ func TestFromTLSSecretDoesNotSkipUnterminatedLeaf(t *testing.T) {
 		t.Fatal("unterminated leaf promoted intermediate")
 	}
 }
+
+// Ingress controllers such as Traefik load tls.crt from a Secret of any type.
+func TestFromSecretTLSCrtReadsAnyType(t *testing.T) {
+	notAfter := time.Now().Add(40 * 24 * time.Hour).Truncate(time.Second)
+	sec := &corev1.Secret{Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"tls.crt": selfSignedPEM(t, "svc.example", nil, notAfter)}}
+	in, ok := FromSecretTLSCrt(sec)
+	if !ok || in.NotAfter == nil || !in.NotAfter.Equal(notAfter) {
+		t.Fatalf("FromSecretTLSCrt = %+v, %v", in, ok)
+	}
+	if _, ok := FromTLSSecret(sec); ok {
+		t.Fatal("FromTLSSecret must still skip a non-TLS type")
+	}
+	if _, ok := FromSecretTLSCrt(&corev1.Secret{Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"password": []byte("x")}}); ok {
+		t.Fatal("no tls.crt must not read as a certificate")
+	}
+}

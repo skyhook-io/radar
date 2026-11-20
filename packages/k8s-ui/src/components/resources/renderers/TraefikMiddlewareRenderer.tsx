@@ -1,11 +1,69 @@
 import { SlidersHorizontal, Layers, ShieldCheck } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
+import { RefLink } from '../../ui/RefLink'
+import { CertaintyGlyph } from '../../facts/certainty'
 import { getMiddlewareType } from '../resource-utils-traefik'
 
 interface TraefikMiddlewareRendererProps {
   data: any
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  /** Host-fetched IngressRoute rules that use this Middleware; undefined keeps the drawer as before. */
+  usedBy?: TraefikMiddlewareUsers | null
+}
+
+export interface TraefikMiddlewareUsers {
+  /** group is the route's API group; absent means the Middleware's own. */
+  routes: { group?: string; namespace: string; name: string }[]
+  /** The answer stopped at its cap: the count is a lower bound. */
+  truncated: boolean
+  /** The caller could list IngressRoutes in some namespaces only. */
+  partial: boolean
+}
+
+function UsedBy({ usedBy, group, onNavigate }: { usedBy: TraefikMiddlewareUsers | null; group: string; onNavigate?: TraefikMiddlewareRendererProps['onNavigate'] }) {
+  if (!usedBy) {
+    return (
+      <Section title="Used by" defaultExpanded={true}>
+        <AlertBanner variant="warning" title="Could not read which routes use this Middleware" className="mb-0" />
+      </Section>
+    )
+  }
+  const seen = new Set<string>()
+  const routes = usedBy.routes.filter((r) => {
+    const key = `${r.namespace}/${r.name}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  const scope = usedBy.partial ? ' in namespaces you can view' : ''
+  let headline: React.ReactNode
+  if (routes.length === 0) {
+    // With partial coverage an empty list proves nothing.
+    headline = usedBy.partial ? `No route found${scope}` : 'No IngressRoute references this Middleware directly'
+  } else {
+    headline = (
+      <span className="inline-flex items-center gap-1">
+        Used by {routes.length} route{routes.length === 1 ? '' : 's'}{scope}
+        {usedBy.truncated && <CertaintyGlyph certainty="lower_bound" title="At least this many; the list stopped at its cap" />}
+      </span>
+    )
+  }
+  return (
+    <Section title="Used by" defaultExpanded={true}>
+      <div className="mb-1 text-sm text-theme-text-primary">{headline}</div>
+      {routes.length > 0 && (
+        <ul className="space-y-0.5 text-sm">
+          {routes.map((r) => (
+            <li key={`${r.namespace}/${r.name}`}>
+              <RefLink refTo={{ kind: 'ingressroutes', group: r.group || group, namespace: r.namespace, name: r.name }} onNavigate={onNavigate}>{r.namespace}/{r.name}</RefLink>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-1 text-xs text-theme-text-tertiary">Routes that reach it through chain Middlewares or a provider-qualified name (name@provider) aren't counted.</div>
+    </Section>
+  )
 }
 
 // Keys whose value is inline credential MATERIAL — redacted in the generic
@@ -73,7 +131,7 @@ function ConfigProperties({ config }: { config: Record<string, any> }) {
   )
 }
 
-export function TraefikMiddlewareRenderer({ data, onNavigate }: TraefikMiddlewareRendererProps) {
+export function TraefikMiddlewareRenderer({ data, onNavigate, usedBy }: TraefikMiddlewareRendererProps) {
   const spec = data.spec || {}
   const type = getMiddlewareType(data)
   const ns = data.metadata?.namespace || ''
@@ -93,6 +151,7 @@ export function TraefikMiddlewareRenderer({ data, onNavigate }: TraefikMiddlewar
 
   return (
     <>
+      {usedBy !== undefined && <UsedBy usedBy={usedBy} group={(data.apiVersion || '').split('/')[0] || 'traefik.io'} onNavigate={onNavigate} />}
       {type === 'unknown' && (
         <AlertBanner
           variant="info"

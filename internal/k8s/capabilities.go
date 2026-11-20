@@ -251,6 +251,8 @@ type FeatureCapabilities struct {
 	RuntimeAdvisoryProgress bool `json:"runtimeAdvisoryProgress"` // GET /api/vulnerabilities/java4shell/stream
 	// GET /api/sealedsecrets/controller
 	SealedSecretsController bool `json:"sealedSecretsController"`
+	// GET /api/traefik/routes
+	TraefikRoutes bool `json:"traefikRoutes"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
