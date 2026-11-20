@@ -276,6 +276,11 @@ func checkImageProgress(out io.Writer, interactive bool) (update func(int, int),
 			}
 			if interactive {
 				fmt.Fprintf(out, "\rProcessed %d of %d image groups", done, total)
+				if done == total {
+					fmt.Fprintln(out)
+					last = time.Time{}
+					return
+				}
 			} else {
 				fmt.Fprintf(out, "Processed %d of %d image groups\n", done, total)
 			}
@@ -393,6 +398,9 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 			} else {
 				fmt.Fprintln(&table, "Check a single workload in Radar to reduce registry lookups.")
 			}
+		}
+		if report.Unassessed[images.StatusRateLimited] > 0 {
+			fmt.Fprintln(&table, "Retry after the registry rate limit resets or configure registry credentials with a higher quota.")
 		}
 		if report.Unassessed["java_home_declared"] > 0 {
 			fmt.Fprintln(&table, "Verify the installed Java version for images that set JAVA_HOME.")

@@ -350,6 +350,9 @@ func (r *RuntimeInventory) lookupConfigs(ctx context.Context, items []*work, rad
 	} else {
 		duration = java4ShellScanBudget
 		limiter = rate.NewLimiter(8, registryFetchSlots)
+		if slices.ContainsFunc(items, func(w *work) bool { return w.advisory && (radarCredentials || w.radarCredentials) }) {
+			runtimeECRKeychain()
+		}
 		progress(0, len(items))
 	}
 	ctx, cancel := context.WithTimeout(ctx, duration)

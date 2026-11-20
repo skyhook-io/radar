@@ -117,11 +117,12 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
   const dockerHubLimit = data.unassessed.docker_hub_limit ?? 0
   const checkLimitReached = data.unassessed.not_checked ?? 0
   const registryAuthRequired = data.unassessed.auth_required ?? 0
+  const registryRateLimit = data.unassessed.rate_limited ?? 0
   const unassessed = Object.values(data.unassessed).reduce((count, n) => count + n, 0)
   const gaps = unassessed - missingDeclaration
   const assessedOutside = data.containers - data.matches - unassessed
   const remainingReasons = Object.entries(data.unassessed).filter(([reason]) =>
-    !['auth_required', 'not_checked', 'docker_hub_limit', 'java_home_declared', 'no_java_declaration'].includes(reason),
+    !['auth_required', 'not_checked', 'docker_hub_limit', 'java_home_declared', 'no_java_declaration', 'rate_limited'].includes(reason),
   )
   const coverage = resourceCoverageNotice(data.coverage, 'Pods') ?? resourceNarrowedNotice(data.coverage)
   const namespaces = data.coverage.read?.namespaces
@@ -229,6 +230,11 @@ function Java4ShellResults({ data, checkedAt, onOpen, checkingAgain }: { data: J
           {dockerHubLimit > 0 && <p className="text-warning-text">Docker Hub lookup limit reached for {pluralize(dockerHubLimit, 'container')}.</p>}
           {(checkLimitReached > 0 || dockerHubLimit > 0) && (
             <p className="text-theme-text-secondary">{data.workload ? 'Run the check again to retry.' : 'Select fewer namespaces or check a specific workload to retry.'}</p>
+          )}
+          {registryRateLimit > 0 && (
+            <p className="text-warning-text">
+              Registry rate limit hit for {pluralize(registryRateLimit, 'container')}. Retry after the limit resets.
+            </p>
           )}
           {javaHomeDeclared > 0 && (
             <p className="text-theme-text-secondary">
