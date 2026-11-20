@@ -77,7 +77,7 @@ func runCheckCommand(args []string, out, errOut io.Writer) int {
 	failOnMatch := fs.Bool("fail-on-match", false, "Exit 2 when a container declares an affected Java version")
 	details := fs.Bool("details", false, "Show all reported rows with image and node details")
 	dockerHubAuth := fs.Bool("docker-hub-auth", false, "Use your local Docker Hub login and its pull quota without Radar's 24-group cap")
-	saveReport := fs.String("save-report", "", "Save all report rows as JSON while printing the result")
+	saveReport := fs.String("save-report", "", "Choose the JSON report path (table scans save to a temporary file by default)")
 	fromReport := fs.String("from-report", "", "Open a saved report without contacting Kubernetes or registries")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -94,6 +94,7 @@ func runCheckCommand(args []string, out, errOut io.Writer) int {
 	}
 
 	var report java4ShellCLIReport
+	savedPath := *fromReport
 	var err error
 	if *fromReport != "" {
 		if *saveReport != "" || *dockerHubAuth || namespace != "" || allNamespaces || *contextName != "" || *kubeconfig != "" {
@@ -103,16 +104,23 @@ func runCheckCommand(args []string, out, errOut io.Writer) int {
 		report, err = readJava4ShellReport(*fromReport)
 	} else {
 		var file *os.File
-		if *saveReport != "" {
+		if *saveReport != "" || output == "table" {
 			file, err = openJava4ShellReport(*saveReport)
 			if err != nil {
-				fmt.Fprintf(errOut, "radar check java4shell: %v\n", err)
-				return 1
+				if *saveReport != "" {
+					fmt.Fprintf(errOut, "radar check java4shell: %v\n", err)
+					return 1
+				}
+				fmt.Fprintf(errOut, "Could not create a temporary report. Printing all rows instead: %v\n", err)
+				*details = true
 			}
+		}
+		if file != nil {
+			savedPath = file.Name()
 			defer func() {
 				if file != nil {
 					_ = file.Close()
-					_ = os.Remove(*saveReport)
+					_ = os.Remove(savedPath)
 				}
 			}()
 		}
@@ -137,10 +145,6 @@ func runCheckCommand(args []string, out, errOut io.Writer) int {
 		}
 	}
 	if err == nil {
-		savedPath := *fromReport
-		if *saveReport != "" {
-			savedPath = *saveReport
-		}
 		err = report.write(out, output, *details, savedPath)
 	}
 	if err != nil {
@@ -385,6 +389,9 @@ func readJava4ShellReport(path string) (java4ShellCLIReport, error) {
 }
 
 func openJava4ShellReport(path string) (*os.File, error) {
+	if path == "" {
+		return os.CreateTemp("", "radar-java4shell-*.json")
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
 		return nil, fmt.Errorf("report %q already exists; choose a new filename", path)
@@ -423,14 +430,28 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 		if report.Matches == 1 {
 			title = "Affected Java version declared in 1 container"
 		}
-		fmt.Fprintln(&table, style.Apply(cliui.Bold+cliui.Amber, title))
-		vbmi, cpuUnknown := 0, 0
+		vbmi, cpuUnknown, priorityRows := 0, 0, 0
+		var firstPriority images.Java4ShellFinding
 		for _, row := range report.Findings {
-			vbmi += row.VBMIPods
+			if row.VBMIPods > 0 {
+				if priorityRows == 0 {
+					firstPriority = row
+				}
+				priorityRows++
+				vbmi += row.VBMIPods
+			}
 			cpuUnknown += row.UnknownCPUPods
 		}
 		if vbmi > 0 {
-			fmt.Fprintf(&table, "Prioritize patching. Nodes report AVX-512 VBMI for %d matching %s.\n", vbmi, java4ShellContainerUnit(vbmi))
+			priority := fmt.Sprintf("PATCH FIRST · %d %s with an affected Java declaration and AVX-512 VBMI", vbmi, java4ShellContainerUnit(vbmi))
+			fmt.Fprintln(&table, style.Apply(cliui.Bold+cliui.Red, priority))
+			if priorityRows == 1 {
+				row := firstPriority
+				fmt.Fprintf(&table, "%s/%s/%s · container %s\n", checkTableValue(row.Workload.Namespace), checkTableValue(row.Workload.Kind), checkTableValue(row.Workload.Name), checkTableValue(row.Container))
+			}
+			fmt.Fprintln(&table, "\n"+style.Bold(title))
+		} else {
+			fmt.Fprintln(&table, style.Apply(cliui.Bold+cliui.Amber, title))
 		}
 		if cpuUnknown > 0 {
 			fmt.Fprintf(&table, "CPU capability unknown for %d matching %s. Check the node CPU flags.\n", cpuUnknown, java4ShellContainerUnit(cpuUnknown))
@@ -622,17 +643,8 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 	}
 	if savedPath != "" {
 		fmt.Fprintf(&table, "\nReport file %s · checked %s\n", strconv.Quote(savedPath), snapshot.CheckedAt.UTC().Format(time.RFC3339))
-	}
-	if !details && (len(report.Findings) > 0 || unassessed > 0) {
-		if savedPath != "" {
-			path := "FILE"
-			if checkTableValue(savedPath) == savedPath {
-				path = shellQuote(savedPath)
-			}
-			fmt.Fprintf(&table, "See every row without a rescan:\n    %s check java4shell --from-report %s --details\n", radarCLIInvocation(), path)
-		} else {
-			fmt.Fprintln(&table, "\nFor future scans, use --save-report java4shell.json to keep all report rows.")
-			fmt.Fprintln(&table, "Use --details to print all rows, including image references and node evidence.")
+		if !details && (len(report.Findings) > 0 || unassessed > 0) {
+			fmt.Fprintf(&table, "See every row without a rescan:\n    %s check java4shell --from-report %s --details\n", radarCLIInvocation(), shellQuote(savedPath))
 		}
 	}
 	_, err := table.WriteTo(out)
@@ -689,12 +701,11 @@ func java4ShellDockerHubRetry(snapshot java4ShellCLIReport, kubeconfig, savePath
 	if failOnMatch {
 		command += " --fail-on-match"
 	}
-	if savePath == "" {
-		savePath = "java4shell.json"
-	} else {
-		savePath += ".retry.json"
+	command += " --docker-hub-auth"
+	if savePath != "" {
+		command += " --save-report " + shellQuote(savePath+".retry.json")
 	}
-	return command + " --docker-hub-auth --save-report " + shellQuote(savePath)
+	return command
 }
 
 func java4ShellContextArg(contextName string) string {

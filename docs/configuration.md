@@ -302,16 +302,16 @@ radar check java4shell -n payments
 kubectl radar check java4shell --context staging -n payments -o json --fail-on-match
 ```
 
-The table leads with the workloads whose images declare affected Java versions, alongside CPU evidence. Confirm the installed JVM and consult its vendor's advisory. The coverage summary counts images without a Java version declaration separately from images Radar could not read. Rows combine replicas with the same workload, container, image and assessment reason.
+A red **PATCH FIRST** heading identifies containers whose images declare affected Java versions on nodes reporting AVX-512 VBMI. The table lists those workloads first, followed by the other version matches and their CPU evidence. Confirm the installed JVM and consult its vendor's advisory. The coverage summary counts images without a Java version declaration separately from images Radar could not read. Rows combine replicas with the same workload, container, image and assessment reason.
 
-Save the full CLI report alongside the table. It records the Kubernetes context and check time and can be opened offline. Choose a new filename for each scan.
+Table-mode scans automatically save the full JSON report to a private file in the system temporary directory. The table prints the path and a command to reopen the report offline. To keep it in a location you choose, pass `--save-report` with a new filename.
 
 ```bash
 radar check java4shell -A --save-report java4shell.json
 radar check java4shell --from-report java4shell.json --details
 ```
 
-Use `--details` to print all finding and assessment-gap rows, including image references and node evidence. The default table previews up to 20 finding rows and ten gap rows. Use `-o json` to send the full report to stdout. Progress goes to stderr. Color is enabled for terminal output and honors `NO_COLOR`.
+Use `--details` to print all finding and assessment-gap rows, including image references and node evidence. The default table previews up to 20 finding rows and ten gap rows. Use `-o json` to send the full report to stdout. In JSON mode a file is written only if you pass `--save-report`. Progress goes to stderr. Color is enabled for terminal output and honors `NO_COLOR`.
 
 Radar caps anonymous Docker Hub lookups at 24 uncached image groups per scan to conserve the shared quota. To check a full cluster without that per-run cap, run `docker login` on the machine running Radar, then add `--docker-hub-auth`. Radar uses that login for Docker Hub first, drawing on the account’s pull quota, and still limits the rate of requests. Docker Hub can reject requests for either its six-hour pull quota or a separate traffic limit. Signing in can increase the pull quota. Slowing down helps with bursts. The report names the registry when it receives an HTTP 429. [Docker Hub pull limits](https://docs.docker.com/docker-hub/usage/pulls/) · [Docker Hub troubleshooting](https://docs.docker.com/docker-hub/troubleshoot/) · [Amazon ECR Public quotas](https://docs.aws.amazon.com/AmazonECR/latest/public/public-service-quotas.html)
 
