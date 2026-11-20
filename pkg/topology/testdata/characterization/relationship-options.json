@@ -2866,6 +2866,16 @@
       }
     },
     {
+      "root": "longhorn.io|Volume|longhorn-system|vol-lh-0",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "Volume", "namespace": "longhorn-system", "name": "vol-lh-0", "group": "longhorn.io"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
       "root": "messaging.knative.dev|InMemoryChannel|shop|default-kne-trigger",
       "relationships": {
         "owner": {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"},
@@ -3144,6 +3154,16 @@
       "managedBy": null,
       "deletePreview": {
         "root": {"kind": "PersistentVolume", "namespace": "", "name": "pv-db-0"},
+        "rootResolved": false,
+        "dependents": []
+      }
+    },
+    {
+      "root": "|PersistentVolume||pv-lh-0",
+      "relationships": null,
+      "managedBy": null,
+      "deletePreview": {
+        "root": {"kind": "PersistentVolume", "namespace": "", "name": "pv-lh-0"},
         "rootResolved": false,
         "dependents": []
       }

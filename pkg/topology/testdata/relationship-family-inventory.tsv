@@ -71,3 +71,4 @@ F69	CronWorkflow → Pod shortcut			Presentation shortcut: owner fields come fro
 F70	JobSet → earlier-run Pod			Earlier-run JobSet links are deliberately discarded by earlierJobRunEdge.	
 F71	Pod grouping			PodGroup nodes have no ResourceRef and never project; ownership returns individual readable children.	
 F72	Traffic view			Traffic-view graph is not read by Related Resources.	
+F73	Longhorn Volume ↔ PV (CSI handle)	longhornStorage	longhornStorage		A PV handle names no namespace, so it links only when exactly one Volume in any namespace has that name, read with Radar's identity; an unreadable Volume list links nothing and is reported as a direct-read gap.

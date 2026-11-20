@@ -2,11 +2,15 @@ package topology
 
 import (
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/longhorn"
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/relations"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
+
+var longhornVolumeKind = resourceid.GroupKind{Group: longhorn.Group, Kind: "Volume"}
 
 // longhornHandle is the Longhorn Volume a PV is backed by, or "".
 func longhornHandle(pv *corev1.PersistentVolume) string {
@@ -16,63 +20,62 @@ func longhornHandle(pv *corev1.PersistentVolume) string {
 	return pv.Spec.CSI.VolumeHandle
 }
 
-// readOnlyWatchedLister is the cache's no-copy list; only names are read here.
-type readOnlyWatchedLister interface {
-	ListWatchedReadOnly(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error)
-}
-
-// longhornVolumesNamed lists the cached Longhorn Volumes with this name;
-// more than one (a leftover second install) means a handle can't tell them apart.
-func longhornVolumesNamed(name string, dp DynamicProvider) []ResourceRef {
-	if name == "" || dp == nil {
-		return nil
+// longhornVolumesNamed are the Longhorn Volumes with this name in every
+// namespace, read with Radar's identity: a PV's CSI handle names no
+// namespace, so it identifies a Volume only when no other Volume shares the
+// name, whether or not the caller may see that other one. ok is false when
+// some Volumes couldn't be read, as while the cache warms up: uniqueness is
+// then unproven. The gap is kept without its namespace, which the caller may
+// not be allowed to know.
+func (n *neighborhood) longhornVolumesNamed(session relations.Session, name string) (refs []resourceid.Ref, ok bool) {
+	read := session.Indexed(longhornVolumeKind, "", nil, ownership.SearchScope{AllNamespaces: true})
+	if len(read.Gaps) > 0 {
+		for _, gap := range read.Gaps {
+			n.cover("direct", relations.Coverage{NotChecked: []ownership.Gap{{Kind: gap.Kind, Reason: gap.Reason}}})
+		}
+		return nil, false
 	}
-	gvr, ok := dp.GetGVRWithGroup("Volume", longhorn.Group)
-	if !ok {
-		return nil
-	}
-	var volumes []*unstructured.Unstructured
-	var err error
-	if ro, ok := dp.(readOnlyWatchedLister); ok {
-		volumes, err = ro.ListWatchedReadOnly(gvr)
-	} else {
-		volumes, err = dp.List(gvr, "")
-	}
-	if err != nil {
-		return nil
-	}
-	var refs []ResourceRef
-	for _, v := range volumes {
-		if v != nil && v.GetName() == name {
-			refs = append(refs, ResourceRef{Kind: "Volume", Group: longhorn.Group, Namespace: v.GetNamespace(), Name: name})
+	for _, o := range read.Objects {
+		if o.Ref.Name == name {
+			refs = append(refs, o.Ref)
 		}
 	}
-	return refs
+	return refs, true
 }
 
-// longhornVolumeRef is the Volume a Longhorn PV is backed by, only when
-// exactly one cached Volume has its handle: a handle alone doesn't prove the
-// Volume exists.
-func longhornVolumeRef(pv *corev1.PersistentVolume, dp DynamicProvider) *ResourceRef {
-	if refs := longhornVolumesNamed(longhornHandle(pv), dp); len(refs) == 1 {
-		return &refs[0]
-	}
-	return nil
-}
-
-// longhornVolumePVs are the PVs backed by the named Longhorn Volume, unless
-// another cached Volume shares its name.
-func longhornVolumePVs(name string, provider ResourceProvider, dp DynamicProvider, readable func(ResourceRef) bool) []ResourceRef {
-	if len(longhornVolumesNamed(name, dp)) > 1 {
-		return nil
-	}
-	pvs, _ := provider.PersistentVolumes()
-	var refs []ResourceRef
-	for _, pv := range pvs {
-		if ref := (ResourceRef{Kind: "PersistentVolume", Name: pv.Name}); longhornHandle(pv) == name && readable(ref) {
-			enrichRef(&ref, dp)
-			refs = append(refs, ref)
+// longhornStorage links a Longhorn Volume and the PV whose CSI handle names
+// it, in both directions, only when exactly one Volume has that name: the
+// live PV is the proof, never the names Longhorn last recorded. Each link is
+// emitted only when the caller may read what it names.
+func (n *neighborhood) longhornStorage(session relations.Session, subject resourceid.Ref, obj runtime.Object, rel *Relationships) {
+	switch subject.GroupKind() {
+	case resourceid.GroupKind{Kind: "PersistentVolume"}:
+		pv, _ := obj.(*corev1.PersistentVolume)
+		handle := longhornHandle(pv)
+		if handle == "" {
+			return
+		}
+		if volumes, ok := n.longhornVolumesNamed(session, handle); ok && len(volumes) == 1 && n.allowed(volumes[0]) {
+			rel.StorageRefs = appendResourceRef(rel.StorageRefs, refOf(volumes[0]))
+		}
+	case longhornVolumeKind:
+		if volumes, ok := n.longhornVolumesNamed(session, subject.Name); !ok || len(volumes) != 1 || volumes[0] != subject {
+			return
+		}
+		provider := relationDirectProvider{session: session, n: n}
+		pvs, err := provider.PersistentVolumes()
+		if err != nil {
+			// The read recorded its gap; a partial PV list can't show all
+			// of the Volume's use.
+			return
+		}
+		for _, pv := range pvs {
+			if longhornHandle(pv) != subject.Name {
+				continue
+			}
+			if ref := resourceid.NewRef("", "PersistentVolume", "", pv.Name); n.allowed(ref) {
+				rel.Consumers = appendResourceRef(rel.Consumers, refOf(ref))
+			}
 		}
 	}
-	return refs
 }
