@@ -397,6 +397,8 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		if err != nil {
 			return unknownViewScope(), err
 		}
+		var unfiltered []string
+		var unfilteredIDs []map[string]string
 		for _, m := range pending {
 			ids := identities[m.Name]
 			switch {
@@ -404,9 +406,17 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 				filters[m.Name] = matchers
 			case len(ids) == 1 && anchored[m.Name] && !conflictsWithLabels(ids[0], clusterLabels):
 				filters[m.Name] = ""
+				unfiltered = append(unfiltered, m.Name)
+				unfilteredIDs = append(unfilteredIDs, ids[0])
 			default:
 				missing = append(missing, m.Name)
 			}
+		}
+		// A joined view reading several metrics unfiltered combines their
+		// series, so they must name one cluster between them, as without
+		// labels; when they don't, none of them can be told to be this one.
+		if req.Joined && !joinedIdentitiesAgree(unfilteredIDs, identityKeys) {
+			missing = append(missing, unfiltered...)
 		}
 	}
 	if len(missing) > 0 {

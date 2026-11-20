@@ -187,6 +187,44 @@ func TestViewScopeTwoIdentitiesWithoutReadback(t *testing.T) {
 	}
 }
 
+// Metrics a joined view reads unfiltered on the strength of their anchors
+// must name one cluster between them, as they must without labels.
+func TestViewScopeJoinedUnfilteredIdentitiesAgree(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		joined bool
+		ids    [2]map[string]string
+		want   ViewScopeState
+	}{
+		{name: "joined, different clusters", joined: true, ids: [2]map[string]string{{"cluster_name": "b"}, {"cluster_name": "c"}}, want: ViewScopeLabelMissing},
+		{name: "joined, same cluster", joined: true, ids: [2]map[string]string{{"cluster_name": "b"}, {"cluster_name": "b"}}, want: ViewScopeUnlabeled},
+		{name: "joined, one without identity labels", joined: true, ids: [2]map[string]string{{"cluster_name": "b"}, nil}, want: ViewScopeUnlabeled},
+		{name: "not joined, different clusters", ids: [2]map[string]string{{"cluster_name": "b"}, {"cluster_name": "c"}}, want: ViewScopeUnlabeled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &fakeViewQuerier{answer: func(query string) (*prom.QueryResult, error) {
+				if isReadback(query) {
+					return rows(viewRow(termMetric.Name, clusterA))
+				}
+				return rows(viewRow(cpuMetric.Name, tc.ids[0]), viewAnchorRow(cpuMetric.Name), viewRow(ownerMetric.Name, tc.ids[1]), viewAnchorRow(ownerMetric.Name))
+			}}
+			scope := decide(t, q, viewRequest(tc.joined, cpuMetric, ownerMetric, termMetric), clusterA, false)
+			if scope.State != tc.want {
+				t.Fatalf("state = %s, want %s (%+v)", scope.State, tc.want, scope)
+			}
+			if tc.want == ViewScopeLabelMissing {
+				if !scope.Withheld || len(scope.Filters) != 0 || !strings.Contains(scope.Note, cpuMetric.Name) || !strings.Contains(scope.Note, ownerMetric.Name) || strings.Contains(scope.Note, termMetric.Name) {
+					t.Errorf("withheld scope = %+v", scope)
+				}
+				return
+			}
+			if scope.Withheld || scope.Filter(cpuMetric.Name) != "" || scope.Filter(ownerMetric.Name) != "" || scope.Filter(termMetric.Name) != `cluster="a"` {
+				t.Errorf("scope = %+v", scope)
+			}
+		})
+	}
+}
+
 func TestViewScopeAbsentOptionalMetric(t *testing.T) {
 	q := &fakeViewQuerier{answer: func(query string) (*prom.QueryResult, error) {
 		if isReadback(query) {
