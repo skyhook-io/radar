@@ -17,6 +17,23 @@ type ApplyState =
 
 type HeaderRow = { key: string; value: string }
 
+/** Wording for a URL-plus-headers connection; metrics and Loki share the form. */
+export interface ConnectionFormCopy { intro: string; urlLabel: string; urlHelp: string; placeholder: string }
+
+const METRICS_COPY: ConnectionFormCopy = {
+  intro: 'Connect a Prometheus-compatible backend, such as Prometheus, VictoriaMetrics, Thanos or Grafana Mimir.',
+  urlLabel: 'Metrics backend URL',
+  urlHelp: 'Use a base URL reachable from Radar, not your browser. Include the backend path prefix, but not /api/v1/query. Available charts depend on the metrics collected.',
+  placeholder: 'http://prometheus-server.monitoring:9090',
+}
+
+export const LOKI_COPY: ConnectionFormCopy = {
+  intro: 'Connect the Loki that stores this cluster\'s pod logs. Radar reads it only with fixed queries for one pod or Job and a time window.',
+  urlLabel: 'Loki URL',
+  urlHelp: 'Use a base URL reachable from Radar, not your browser, such as a gateway or query frontend, without /loki/api/v1. Add X-Scope-OrgID as a header for a multi-tenant Loki.',
+  placeholder: 'http://loki-gateway.loki',
+}
+
 export function PrometheusConnectionForm({
   local,
   value,
@@ -34,6 +51,7 @@ export function PrometheusConnectionForm({
   onDiscard,
   connectionAction,
   feedback,
+  copy = METRICS_COPY,
 }: {
   local: boolean
   value: string
@@ -51,6 +69,7 @@ export function PrometheusConnectionForm({
   onDiscard?: () => void
   connectionAction?: ReactNode
   feedback?: FormFeedback
+  copy?: ConnectionFormCopy
 }) {
   const mounted = useRef(true)
   const urlId = useId()
@@ -122,13 +141,13 @@ export function PrometheusConnectionForm({
     <div>
       <div className="mb-4 space-y-1">
         <p className="text-sm text-theme-text-secondary">
-          Connect a Prometheus-compatible backend, such as Prometheus, VictoriaMetrics, Thanos or Grafana Mimir.
+          {copy.intro}
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-1 mb-1">
-        <label htmlFor={urlId} className="text-sm font-medium text-theme-text-primary">Metrics backend URL</label>
-        <Tooltip content="Use a base URL reachable from Radar, not your browser. Include the backend path prefix, but not /api/v1/query. Available charts depend on the metrics collected.">
-          <button type="button" aria-label="Metrics URL help" className="text-theme-text-tertiary"><Info className="w-3.5 h-3.5" /></button>
+        <label htmlFor={urlId} className="text-sm font-medium text-theme-text-primary">{copy.urlLabel}</label>
+        <Tooltip content={copy.urlHelp}>
+          <button type="button" aria-label={`${copy.urlLabel} help`} className="text-theme-text-tertiary"><Info className="w-3.5 h-3.5" /></button>
         </Tooltip>
       </div>
       <p className="text-xs text-theme-text-tertiary mb-1">
@@ -140,7 +159,7 @@ export function PrometheusConnectionForm({
           value={value}
           disabled={apply.status === 'applying'}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="http://prometheus-server.monitoring:9090"
+          placeholder={copy.placeholder}
           className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
         />
       </div>

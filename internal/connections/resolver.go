@@ -160,9 +160,9 @@ func HeaderKeys(headers map[string]string) []string {
 
 func settingsView(s config.IntegrationSettings) StoredSettingsView {
 	v := StoredSettingsView{URL: prom.SafeAddress(s.URL()), HeaderKeys: []string{}, EnvHeaderKeys: []string{}}
-	if s.Prometheus != nil {
-		v.HeaderKeys = HeaderKeys(s.Prometheus.Headers)
-		v.EnvHeaderKeys = HeaderKeys(s.Prometheus.HeadersFromEnv)
+	if c := s.HeaderConnection(); c != nil {
+		v.HeaderKeys = HeaderKeys(c.Headers)
+		v.EnvHeaderKeys = HeaderKeys(c.HeadersFromEnv)
 		v.HeaderKeys = append(v.HeaderKeys, v.EnvHeaderKeys...)
 		slices.Sort(v.HeaderKeys)
 		v.SecretSet = len(v.HeaderKeys) > 0
@@ -283,13 +283,16 @@ func (p *Resolver) resolve(file config.ClusterProfiles, revision string, err err
 	s.View.HeadersManaged = len(v.EnvHeaderKeys) > 0
 	s.View.SecretSet = v.SecretSet
 	s.View.InsecureTLS = v.InsecureTLS
-	if s.Err == nil && s.Settings.Prometheus != nil {
-		headers, err := prom.ResolveHeaders(s.Settings.Prometheus.Headers, s.Settings.Prometheus.HeadersFromEnv)
+	if c := s.Settings.HeaderConnection(); s.Err == nil && c != nil {
+		headers, err := prom.ResolveHeaders(c.Headers, c.HeadersFromEnv)
+		if err != nil && s.Settings.Loki != nil {
+			err = config.LokiError(err)
+		}
 		if err != nil {
 			s.Err = err
 		} else {
-			s.Settings.Prometheus.Headers = headers
-			s.Settings.Prometheus.HeadersFromEnv = nil
+			c.Headers = headers
+			c.HeadersFromEnv = nil
 		}
 	}
 	if s.Err != nil {
@@ -314,6 +317,10 @@ func settingsWithDefaults(kind config.Integration, s config.IntegrationSettings)
 	case config.IntegrationCost:
 		if s.Kubecost == nil {
 			s.Kubecost = &opencost.Connection{}
+		}
+	case config.IntegrationLoki:
+		if s.Loki == nil {
+			s.Loki = &prom.Connection{}
 		}
 	}
 	return s
