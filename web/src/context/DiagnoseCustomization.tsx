@@ -39,6 +39,9 @@ export type RenderDiagnoseAction = (ctx: {
   /** Coarse health of the resource (from its status badge), so the entry point can
    *  adapt: an urgent "Investigate" on a problem vs. a quiet "ask AI" when fine/unknown. */
   health?: "problem" | "healthy" | "unknown";
+  /** The object's metadata.creationTimestamp, when loaded. An investigation
+   *  that started before it was of an earlier object with the same name. */
+  createdAt?: string;
 }) => ReactNode;
 
 /**

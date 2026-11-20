@@ -1,9 +1,12 @@
 import { useState } from 'react'
 import { Info, CheckCircle, XCircle, AlertCircle, FileCode, AlertTriangle, Layers, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property } from '../../ui/drawer-components'
+import { AlertBanner, Section, PropertyList, Property, isInvertedPolarityCondition } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
+import { getAgentRuntimeStatus } from '../resource-utils-agent-runtimes'
+import { isApiGroup } from '../resource-utils-cnpg'
+import { getInferenceServiceStatus, isInferenceServiceStopRequested } from '../resource-utils-kserve'
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
 import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import type { HealthLevel } from '../resource-utils'
@@ -38,32 +41,12 @@ export function GenericRenderer({ data }: GenericRendererProps) {
       {acknowledgedPause && <CrossplanePauseNotice data={data} />}
       {/* Health Status Banner (if determinable) */}
       {healthStatus && (
-        <div className={clsx(
-          'mb-4 p-3 rounded-lg border flex items-center gap-3',
-          healthStatus.type === 'healthy' && 'bg-green-500/10 border-green-500/30',
-          healthStatus.type === 'degraded' && 'bg-yellow-500/10 border-yellow-500/30',
-          healthStatus.type === 'unhealthy' && 'bg-red-500/10 border-red-500/30',
-          healthStatus.type === 'unknown' && 'bg-slate-500/10 border-slate-500/30'
-        )}>
-          {healthStatus.type === 'healthy' && <CheckCircle className="w-5 h-5 text-green-400 shrink-0" />}
-          {healthStatus.type === 'degraded' && <AlertCircle className="w-5 h-5 text-yellow-400 shrink-0" />}
-          {healthStatus.type === 'unhealthy' && <XCircle className="w-5 h-5 text-red-400 shrink-0" />}
-          {healthStatus.type === 'unknown' && <Info className="w-5 h-5 text-slate-400 shrink-0" />}
-          <div>
-            <div className={clsx(
-              'text-sm font-medium',
-              healthStatus.type === 'healthy' && 'text-green-400',
-              healthStatus.type === 'degraded' && 'text-yellow-400',
-              healthStatus.type === 'unhealthy' && 'text-red-400',
-              healthStatus.type === 'unknown' && 'text-slate-400'
-            )}>
-              {healthStatus.label}
-            </div>
-            {healthStatus.message && (
-              <div className="text-xs text-theme-text-secondary mt-0.5">{healthStatus.message}</div>
-            )}
-          </div>
-        </div>
+        <AlertBanner
+          variant={BANNER_VARIANT[healthStatus.level]}
+          icon={BANNER_ICON[healthStatus.level]}
+          title={healthStatus.label}
+          message={healthStatus.message}
+        />
       )}
 
       {/* Empty state hint */}
@@ -137,31 +120,44 @@ export function GenericRenderer({ data }: GenericRendererProps) {
 // HEALTH STATUS DETECTION
 // ============================================================================
 
-type HealthType = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
-
 interface HealthStatusResult {
-  type: HealthType
+  level: HealthLevel
   label: string
   message?: string
 }
 
-// This renderer's banner has four tones, while the shared derivation speaks the
-// full HealthLevel vocabulary. `alert` folds into unhealthy and `neutral` into
-// unknown — the banner has no distinct treatment for either.
-const BANNER_TYPE: Record<HealthLevel, HealthType> = {
-  healthy: 'healthy',
-  degraded: 'degraded',
-  alert: 'unhealthy',
-  unhealthy: 'unhealthy',
+// The shared banner carries light and dark pairs for each tone. `alert` keeps
+// its own orange step between degraded and unhealthy; `neutral` reads like
+// unknown.
+const BANNER_VARIANT = {
+  healthy: 'success',
+  degraded: 'warning',
+  alert: 'alert',
+  unhealthy: 'error',
   neutral: 'unknown',
   unknown: 'unknown',
+} as const satisfies Record<HealthLevel, string>
+const BANNER_ICON: Record<HealthLevel, typeof Info> = {
+  healthy: CheckCircle,
+  degraded: AlertCircle,
+  alert: AlertCircle,
+  unhealthy: XCircle,
+  neutral: Info,
+  unknown: Info,
 }
 
 function getHealthStatus(resource: any): HealthStatusResult | null {
+  if (resource?.kind === 'InferenceService' && isApiGroup(resource?.apiVersion, 'serving.kserve.io') && isInferenceServiceStopRequested(resource)) {
+    const status = getInferenceServiceStatus(resource)
+    if (status.level === 'neutral') return { level: 'neutral', label: 'Stopped', message: "This model is stopped and isn't serving requests." }
+    return { level: status.level, label: status.text }
+  }
+  const agentRuntime = getAgentRuntimeStatus(resource)
+  if (agentRuntime) return { level: agentRuntime.level, label: agentRuntime.text, message: agentRuntime.message }
   const acknowledgedPause = getCrossplanePauseState(resource) === 'acknowledged'
   const derived = acknowledgedPause ? getCrossplaneIndependentStatus(resource) : getGenericResourceStatus(resource)
   if (!derived || (acknowledgedPause && derived.tone === 'healthy')) return null
-  return { type: BANNER_TYPE[derived.tone], label: derived.text, message: derived.reason }
+  return { level: derived.tone, label: derived.text, message: derived.reason }
 }
 
 // ============================================================================
@@ -328,49 +324,73 @@ function NestedObjectViewer({ name, value, depth = 0 }: NestedObjectViewerProps)
 // CONDITIONS SECTION
 // ============================================================================
 
+// KServe's Stopped reports an intentional state rather than health: True for a
+// model its owner stopped, False otherwise. While it is True, readiness that is
+// False only because of the stop follows it.
+function isKServeStopState(resource: any, cond: any): boolean {
+  if (!isApiGroup(resource?.apiVersion, 'serving.kserve.io')) return false
+  if (cond.type === 'Stopped') return true
+  return cond.status === 'False' && cond.reason === 'Stopped' && isInferenceServiceStopRequested(resource)
+}
+const WARNING_CONDITION_TYPES = new Set(['Degraded', 'Warning', 'ScalingLimited'])
+const POSITIVE_CONDITION_TYPES = new Set(['Ready', 'Available', 'Healthy', 'Initialized', 'Complete'])
+
+export type GenericConditionTone = 'neutral' | 'ok' | 'warning' | 'fail' | 'unclear' | 'unknown'
+
+// One tone per condition, so the icon, the status chip, the sort order and
+// whether the section opens all agree. Unknown-polarity False is 'unclear'
+// (slate icon, red chip): many such conditions are positive, like
+// PredictorReady, and their False is a real failure. An Unknown status is not
+// a failure, so its chip isn't red.
+export function genericConditionTone(resource: any, cond: any): GenericConditionTone {
+  if (getCrossplaneConditionTone(resource, cond) === 'neutral') return 'neutral'
+  if (cond.status !== 'True' && cond.status !== 'False') return 'unknown'
+  if (isKServeStopState(resource, cond)) return 'neutral'
+  if (resource?.kind === 'ApplicationSet' && isApiGroup(resource?.apiVersion, 'argoproj.io')
+    && cond.type === 'RolloutProgressing') return 'neutral'
+  const isTrue = cond.status === 'True'
+  if (WARNING_CONDITION_TYPES.has(cond.type)) return isTrue ? 'warning' : 'ok'
+  if (isInvertedPolarityCondition(cond.type)) return isTrue ? 'fail' : 'ok'
+  if (isTrue) return 'ok'
+  return POSITIVE_CONDITION_TYPES.has(cond.type) ? 'fail' : 'unclear'
+}
+
+const isProblemTone = (tone: GenericConditionTone) => tone === 'fail' || tone === 'warning' || tone === 'unclear'
+
 function GenericConditionsSection({ conditions, resource }: { conditions: any[]; resource: any }) {
   // Sort conditions: problematic first, then alphabetically
   const sortedConditions = [...conditions].sort((a, b) => {
-    const aProblematic = getCrossplaneConditionTone(resource, a) !== 'neutral' && (a.status === 'False' || (a.status === 'True' && ['Degraded', 'Warning'].includes(a.type)))
-    const bProblematic = getCrossplaneConditionTone(resource, b) !== 'neutral' && (b.status === 'False' || (b.status === 'True' && ['Degraded', 'Warning'].includes(b.type)))
+    const aProblematic = isProblemTone(genericConditionTone(resource, a))
+    const bProblematic = isProblemTone(genericConditionTone(resource, b))
     if (aProblematic && !bProblematic) return -1
     if (!aProblematic && bProblematic) return 1
     return (a.type || '').localeCompare(b.type || '')
   })
 
-  // Check for any problems
-  const hasProblems = sortedConditions.some(c =>
-    getCrossplaneConditionTone(resource, c) !== 'neutral' && (c.status === 'False' || (c.status === 'True' && ['Degraded', 'Warning'].includes(c.type)))
-  )
+  const hasProblems = sortedConditions.some(c => isProblemTone(genericConditionTone(resource, c)))
 
   return (
     <Section title={`Conditions (${conditions.length})`} defaultExpanded={hasProblems || conditions.length <= 5}>
       <div className="space-y-2">
         {sortedConditions.map((cond: any, index: number) => {
-          const isNeutral = getCrossplaneConditionTone(resource, cond) === 'neutral'
-          const isTrue = cond.status === 'True'
-          const isFalse = cond.status === 'False'
-          const isWarningType = ['Degraded', 'Warning', 'ScalingLimited'].includes(cond.type)
-          const isPositiveType = ['Ready', 'Available', 'Healthy', 'Initialized', 'Complete'].includes(cond.type)
-
-          // Determine icon color based on condition semantics
-          let iconColor = 'text-yellow-400'
-          if (isNeutral) iconColor = 'text-theme-text-tertiary'
-          else if (isTrue && isPositiveType) iconColor = 'text-green-400'
-          else if (isTrue && isWarningType) iconColor = 'text-yellow-400'
-          else if (isTrue) iconColor = 'text-green-400'
-          else if (isFalse && isPositiveType) iconColor = 'text-red-400'
-          else if (isFalse) iconColor = 'text-slate-400'
+          const tone = genericConditionTone(resource, cond)
+          const iconColor = {
+            neutral: 'text-theme-text-tertiary',
+            ok: 'text-green-400',
+            warning: 'text-yellow-400',
+            fail: 'text-red-400',
+            unclear: 'text-slate-400',
+            unknown: 'text-yellow-400',
+          }[tone]
+          const chipRed = tone === 'fail' || tone === 'unclear'
 
           return (
             <div key={`${cond.type}-${index}`} className="flex items-start gap-2 text-sm">
               <span className={clsx('w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5', iconColor)}>
-                {isNeutral ? <Minus className="w-4 h-4" /> :
-                 isTrue && isPositiveType ? <CheckCircle className="w-4 h-4" /> :
-                 isTrue && isWarningType ? <AlertTriangle className="w-4 h-4" /> :
-                 isTrue ? <CheckCircle className="w-4 h-4" /> :
-                 isFalse && isPositiveType ? <XCircle className="w-4 h-4" /> :
-                 isFalse ? <AlertCircle className="w-4 h-4" /> :
+                {tone === 'neutral' ? <Minus className="w-4 h-4" /> :
+                 tone === 'ok' ? <CheckCircle className="w-4 h-4" /> :
+                 tone === 'warning' ? <AlertTriangle className="w-4 h-4" /> :
+                 tone === 'fail' ? <XCircle className="w-4 h-4" /> :
                  <AlertCircle className="w-4 h-4" />}
               </span>
               <div className="flex-1 min-w-0">
@@ -378,7 +398,7 @@ function GenericConditionsSection({ conditions, resource }: { conditions: any[];
                   <span className="text-theme-text-primary font-medium">{cond.type}</span>
                   <span className={clsx(
                     'badge-sm',
-                    isTrue || isNeutral ? 'bg-theme-elevated text-theme-text-secondary' : 'status-red'
+                    chipRed ? 'status-red' : 'bg-theme-elevated text-theme-text-secondary'
                   )}>
                     {cond.status}
                   </span>

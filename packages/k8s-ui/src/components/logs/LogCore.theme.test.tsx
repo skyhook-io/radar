@@ -278,3 +278,13 @@ it('pauses for browser text selection inside logs but ignores selection outside 
   selection.removeAllRanges()
   outside.remove()
 })
+
+it('names the Pod and container in an export whenever the screen labels containers', async () => {
+  const line = { id: 1, pod: 'web-0', container: 'proxy', level: 'info', levelSource: 'keyword', isJson: false, isLogfmt: false, content: 'proxy ready', timestamp: '' } satisfies ComponentProps<typeof LogCore>['entries'][number]
+  const onDownload = vi.fn()
+  await render({ entries: [line], showPodName: false, showContainerName: true, onDownload })
+  await act(async () => element.querySelector<HTMLButtonElement>('[aria-label="Export logs"]')!.click())
+  const download = [...element.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.trim() === 'Download')!
+  await act(async () => download.click())
+  expect(onDownload).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('[web-0/proxy] proxy ready') }))
+})

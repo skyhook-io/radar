@@ -223,3 +223,17 @@ func TestIsActiveAddress(t *testing.T) {
 		t.Fatal("an inactive forward should not count")
 	}
 }
+
+func TestStartRefusesWhenAutoDisabled(t *testing.T) {
+	SetAutoDisabled(true)
+	t.Cleanup(func() { SetAutoDisabled(false) })
+	client := fake.NewClientset()
+
+	info, err := StartWithClients(OwnerCost, context.Background(), "monitoring", "prometheus", 9090, "ctxA", client, &rest.Config{Host: "https://example.invalid"})
+	if !errors.Is(err, ErrAutoDisabled) || info != nil {
+		t.Fatalf("StartWithClients = %v, %v; want nil, ErrAutoDisabled", info, err)
+	}
+	if actions := client.Actions(); len(actions) != 0 {
+		t.Fatalf("disabled start called the API: %v", actions)
+	}
+}

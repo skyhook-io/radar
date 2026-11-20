@@ -3233,3 +3233,209 @@ func TestFromProblemHazardClearedOnReasonPromotion(t *testing.T) {
 		t.Fatalf("promoted reason kept unrelated guidance: %+v", got)
 	}
 }
+
+// TestSealedSecretProducerLink covers the linking + action-rewrite logic: a
+// workload whose missing Secret is attributed to a failing SealedSecret producer.
+func TestSealedSecretProducerLink(t *testing.T) {
+	const genericAction = `Restore the required configuration in namespace "shop", or update the pod template to reference an existing Secret.`
+	sealedSecret := func(message string) Issue {
+		return Issue{ID: "ss-1", Kind: "SealedSecret", Group: "bitnami.com", Namespace: "shop", Name: "app-secret",
+			Category: issuesapi.CategorySecretSyncFailed, Severity: SeverityWarning, Reason: "Synced", Message: message}
+	}
+	symptom := func(reason, message string) Issue {
+		return Issue{ID: "mr-1", Kind: "Pod", Namespace: "shop", Name: "app-a",
+			Category: issuesapi.CategoryMissingConfigRef, Severity: SeverityCritical, Reason: reason, Message: message, Action: genericAction}
+	}
+	resolver := func(extra map[string]secretProducerResult) *fakeProvider {
+		m := map[string]secretProducerResult{
+			"shop/app-secret": {name: "app-secret", pods: []Ref{{Kind: "Pod", Namespace: "shop", Name: "app-a"}}},
+		}
+		for k, v := range extra {
+			m[k] = v
+		}
+		return &fakeProvider{secretProducer: m}
+	}
+	enrich := func(issues []Issue, p *fakeProvider, grouped bool) []Issue {
+		var g []Issue
+		if grouped {
+			g = issues
+		}
+		return enrichDiagnosticContext(issues, issues, g, p)
+	}
+	const refMsg = `container "app" envFrom references Secret "app-secret" which does not exist`
+
+	t.Run("decrypt failure links and rewrites the action", func(t *testing.T) {
+		ss := sealedSecret("no key could decrypt secret (MONGO_PASSWORD, MONGO_USER)")
+		out := enrich([]Issue{ss, symptom("Missing Secret", refMsg)}, resolver(nil), true)
+		got := findByID(out, "mr-1")
+		if got.IncidentParent == nil || got.IncidentParent.ID != "ss-1" || got.IncidentParent.Confidence != issuesapi.ConfidenceHigh {
+			t.Fatalf("expected a high-confidence link to the SealedSecret, got %+v", got.IncidentParent)
+		}
+		if !strings.Contains(got.Action, `SealedSecret "app-secret"`) || !strings.Contains(got.Action, "re-seal") || !strings.Contains(got.Action, "workaround") {
+			t.Fatalf("action not rewritten with re-seal + workaround guidance: %q", got.Action)
+		}
+		if got.Action == genericAction {
+			t.Fatalf("action still generic")
+		}
+	})
+
+	t.Run("ambiguous producers suppress the link and keep the generic action", func(t *testing.T) {
+		ss := sealedSecret("no key could decrypt secret (MONGO_PASSWORD)")
+		cert := Issue{ID: "cert-1", Kind: "Certificate", Group: "cert-manager.io", Namespace: "shop", Name: "app-cert",
+			Category: issuesapi.CategoryCertificateNotReady, Severity: SeverityCritical, Reason: "Issuing"}
+		p := resolver(map[string]secretProducerResult{
+			"shop/app-cert": {name: "app-secret", pods: []Ref{{Kind: "Pod", Namespace: "shop", Name: "app-a"}}},
+		})
+		out := enrich([]Issue{ss, cert, symptom("Missing Secret", refMsg)}, p, true)
+		got := findByID(out, "mr-1")
+		if got.IncidentParent != nil {
+			t.Fatalf("two distinct producers must not yield a parent, got %+v", *got.IncidentParent)
+		}
+		if got.Action != genericAction {
+			t.Fatalf("ambiguous case must keep the generic action: %q", got.Action)
+		}
+	})
+
+	t.Run("missing key links but is not rewritten", func(t *testing.T) {
+		ss := sealedSecret("no key could decrypt secret (MONGO_PASSWORD)")
+		keyMsg := `container "app" env var "PW" references key "PW" which is absent from Secret "app-secret"`
+		out := enrich([]Issue{ss, symptom("Missing Secret key", keyMsg)}, resolver(nil), true)
+		got := findByID(out, "mr-1")
+		if got.IncidentParent == nil || got.IncidentParent.ID != "ss-1" {
+			t.Fatalf("missing-key symptom should still link to the producer, got %+v", got.IncidentParent)
+		}
+		if got.Action != genericAction {
+			t.Fatalf("a missing KEY (Secret exists) must not be told the Secret isn't produced: %q", got.Action)
+		}
+	})
+
+	t.Run("non-decrypt reconcile failure uses the neutral action", func(t *testing.T) {
+		ss := sealedSecret("the SealedSecret was moved out of the namespace it was sealed for")
+		out := enrich([]Issue{ss, symptom("Missing Secret", refMsg)}, resolver(nil), true)
+		got := findByID(out, "mr-1")
+		if got.IncidentParent == nil {
+			t.Fatalf("should still link a non-decrypt producer failure")
+		}
+		if !strings.Contains(got.Action, "failing to reconcile") || strings.Contains(got.Action, "re-seal") {
+			t.Fatalf("non-decrypt action should be neutral (no re-seal claim): %q", got.Action)
+		}
+	})
+
+	t.Run("flat query assigns no parent and does not rewrite", func(t *testing.T) {
+		ss := sealedSecret("no key could decrypt secret (MONGO_PASSWORD)")
+		out := enrich([]Issue{ss, symptom("Missing Secret", refMsg)}, resolver(nil), false)
+		got := findByID(out, "mr-1")
+		if got.IncidentParent != nil || got.Action != genericAction {
+			t.Fatalf("flat mode must not link or rewrite: parent=%+v action=%q", got.IncidentParent, got.Action)
+		}
+	})
+}
+
+// TestSealedSecretProducerComposition runs the full Compose path: a Bitnami
+// SealedSecret condition is classified as a secret producer, linked to the
+// workload whose Secret it fails to produce, and that workload's action is
+// rewritten — unless the caller can't read the SealedSecret.
+func TestSealedSecretProducerComposition(t *testing.T) {
+	const genericAction = `Restore the required configuration in namespace "shop", or update the pod template to reference an existing Secret.`
+	ssGVR := schema.GroupVersionResource{Group: "bitnami.com", Version: "v1alpha1", Resource: "sealedsecrets"}
+	ss := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "bitnami.com/v1alpha1",
+		"kind":       "SealedSecret",
+		"metadata":   map[string]any{"name": "app-secret", "namespace": "shop"},
+		"status": map[string]any{"conditions": []any{map[string]any{
+			"type": "Synced", "status": "False", "reason": "UnsealError",
+			"message": "no key could decrypt secret (MONGO_PASSWORD, MONGO_USER)",
+		}}},
+	}}
+	newProvider := func() *fakeProvider {
+		return &fakeProvider{
+			dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{ssGVR: {ss}},
+			kinds:      map[schema.GroupVersionResource]string{ssGVR: "SealedSecret"},
+			namespaced: map[schema.GroupVersionResource]bool{ssGVR: true},
+			missingRefs: []k8s.Detection{{
+				Kind: "Pod", Namespace: "shop", Name: "app-a", Severity: "critical",
+				Reason: "Missing Secret", Message: `container "app" envFrom references Secret "app-secret" which does not exist`,
+				Action: genericAction, OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "app", OnsetUnknown: true,
+			}},
+			secretProducer: map[string]secretProducerResult{
+				"shop/app-secret": {name: "app-secret", pods: []Ref{{Kind: "Pod", Namespace: "shop", Name: "app-a"}}},
+			},
+		}
+	}
+
+	find := func(out []Issue, kind string) *Issue {
+		for i := range out {
+			if out[i].Kind == kind {
+				return &out[i]
+			}
+		}
+		return nil
+	}
+
+	out := Compose(newProvider(), Filters{Namespaces: []string{"shop"}, Grouped: true, Limit: NoLimit})
+	if sealed := find(out, "SealedSecret"); sealed == nil || sealed.Category != issuesapi.CategorySecretSyncFailed {
+		t.Fatalf("SealedSecret should classify as secret_sync_failed, got %+v", sealed)
+	}
+	dep := find(out, "Deployment")
+	if dep == nil || dep.IncidentParent == nil || dep.IncidentParent.Ref.Kind != "SealedSecret" {
+		t.Fatalf("workload should be linked to the SealedSecret, got %+v", dep)
+	}
+	if !strings.Contains(dep.Action, "re-seal") || !strings.Contains(dep.Action, `SealedSecret "app-secret"`) {
+		t.Fatalf("workload action not rewritten: %q", dep.Action)
+	}
+
+	// The caller can't read the SealedSecret: no link, no rewrite, no leaked root.
+	denied := Compose(newProvider(), Filters{Namespaces: []string{"shop"}, Grouped: true, Limit: NoLimit,
+		CanReadSubject: func(r Ref) bool { return r.Kind != "SealedSecret" }})
+	if find(denied, "SealedSecret") != nil {
+		t.Fatalf("denied SealedSecret must not appear: %+v", denied)
+	}
+	dep = find(denied, "Deployment")
+	if dep == nil || dep.IncidentParent != nil || dep.Action != genericAction {
+		t.Fatalf("with the producer unreadable the workload keeps the generic action and no parent, got %+v", dep)
+	}
+}
+
+// TestPodsDependingOnSecretProducerSealedSecret proves the resolver uses the
+// SealedSecret's OWN name for the produced Secret (the controller forces it),
+// never spec.template.metadata.name, and finds the pods referencing it.
+func TestPodsDependingOnSecretProducerSealedSecret(t *testing.T) {
+	defer k8s.ResetTestState()
+	defer k8s.ResetTestDynamicState()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-a", Namespace: "shop"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", EnvFrom: []corev1.EnvFromSource{
+			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "app-secret"}}},
+		}}}},
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(pod, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}})); err != nil {
+		t.Fatal(err)
+	}
+
+	ssGVR := schema.GroupVersionResource{Group: "bitnami.com", Version: "v1alpha1", Resource: "sealedsecrets"}
+	ss := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "bitnami.com/v1alpha1",
+		"kind":       "SealedSecret",
+		"metadata":   map[string]any{"name": "app-secret", "namespace": "shop"},
+		// A DIFFERENT template name: the controller ignores it for naming.
+		"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{"name": "a-different-name"}}},
+	}}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{ssGVR: "SealedSecretList"}, ss)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: ssGVR.Group, Version: "v1alpha1", Kind: "SealedSecret", Name: ssGVR.Resource, Verbs: []string{"list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	cache := k8s.GetDynamicResourceCache()
+	if err := cache.EnsureWatching(ssGVR); err != nil || !cache.WaitForSync(ssGVR, 2*time.Second) {
+		t.Fatalf("watch sealedsecrets: %v", err)
+	}
+
+	name, pods := NewCacheProvider().PodsDependingOnSecretProducer("bitnami.com", "SealedSecret", "shop", "app-secret")
+	if name != "app-secret" {
+		t.Fatalf("resolver used the template name instead of the SealedSecret's own name: %q", name)
+	}
+	if len(pods) != 1 || pods[0].Name != "app-a" {
+		t.Fatalf("resolver should find the pod referencing the produced Secret, got %+v", pods)
+	}
+}

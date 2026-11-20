@@ -50,6 +50,7 @@ var sensitiveValueKeys = map[string]bool{
 	"clientsecret": true, "privatekey": true, "apikey": true, "apitoken": true,
 	"accesstoken": true, "sessiontoken": true, "secretaccesskey": true,
 	"secretkey": true, "authtoken": true, "bearertoken": true, "users": true,
+	"akeylessaccesskey": true,
 }
 
 func isSensitiveKey(key string) bool {

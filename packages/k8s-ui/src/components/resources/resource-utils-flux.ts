@@ -3,6 +3,7 @@
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
 import type { FluxCondition } from '../../types/gitops'
+import { getFluxDeployedRelease, getFluxHelmChartVersion } from '../../utils/flux-history'
 
 // ============================================================================
 // FLUXCD STATUS UTILITIES
@@ -178,15 +179,12 @@ export function getFluxHelmReleaseChart(hr: any): string {
   return chart.chart || '-'
 }
 
-export function getFluxHelmReleaseVersion(hr: any): string {
-  const chart = hr.spec?.chart?.spec
-  if (!chart?.version) return '*'
-  return chart.version
+export function getFluxHelmReleaseVersion(hr: unknown): string {
+  return getFluxHelmChartVersion(hr) || '-'
 }
 
-export function getFluxHelmReleaseRevision(hr: any): number {
-  // Helm release revision number is in history[0].version
-  return hr.status?.history?.[0]?.version || 0
+export function getFluxHelmReleaseRevision(hr: unknown): number {
+  return getFluxDeployedRelease(hr)?.version ?? 0
 }
 
 export function getFluxAlertProvider(alert: any): string {

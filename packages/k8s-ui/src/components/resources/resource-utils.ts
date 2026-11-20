@@ -1,5 +1,10 @@
+import { getCRDColumnValue } from './resource-utils-crd'
+import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
+import { getVolumeSnapshotColumnValue } from './resource-utils-volumesnapshot'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
+import { FLUX_OPERATOR_GROUP, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
 // Utility functions for resource display in tables
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
@@ -27,6 +32,7 @@ import { getInferencePoolStatus as _getInferencePoolStatus, getInferenceObjectiv
 import { getVolcanoJobStatus as _getVolcanoJobStatus, getVolcanoQueueStatus as _getVolcanoQueueStatus, getVolcanoPodGroupStatus as _getVolcanoPodGroupStatus, getJobFlowStatus as _getJobFlowStatus, getJobTemplateStatus as _getJobTemplateStatus } from './resource-utils-volcano'
 import { getKaiQueueStatus as _getKaiQueueStatus, getKaiPodGroupStatus as _getKaiPodGroupStatus } from './resource-utils-kai'
 import { getKaitoWorkspaceStatus as _getKaitoWorkspaceStatus, getRAGEngineStatus as _getRAGEngineStatus } from './resource-utils-kaito'
+import { getAgentRuntimeColumnValue, getSandboxClaimStatus as _getSandboxClaimStatus, getSandboxStatus as _getSandboxStatus, getSandboxWarmPoolStatus as _getSandboxWarmPoolStatus, getWorkerPoolStatus as _getWorkerPoolStatus } from './resource-utils-agent-runtimes'
 import { getNIMServiceStatus as _getNIMServiceStatus, getNIMCacheStatus as _getNIMCacheStatus, getNIMPipelineStatus as _getNIMPipelineStatus } from './resource-utils-nim'
 import { getAMDDeviceConfigStatus as _getAMDDeviceConfigStatus } from './resource-utils-amd-gpu'
 import { getPyTorchJobStatus as _getPyTorchJobStatus, getTFJobStatus as _getTFJobStatus, getMPIJobStatus as _getMPIJobStatus, getTrainJobStatus as _getTrainJobStatus } from './resource-utils-kubeflow-training'
@@ -38,6 +44,7 @@ import { getGenericResourceStatus } from './generic-status'
 import { getCrossplaneStatus, getProviderStatus, getProviderConfigStatus, isManagedResource, isComposite } from './resource-utils-crossplane'
 import { getIstioGatewayStatus as _getIstioGatewayStatus, getIstioGatewayServerCount as _getIstioGatewayServerCount, getIstioGatewaySelectorString as _getIstioGatewaySelectorString, getAuthorizationPolicySelectorString as _getAuthorizationPolicySelectorString, getDestinationRuleTlsMode as _getDestinationRuleTlsMode } from './resource-utils-istio'
 import { formatKubernetesLabelSelector, getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
+import { getCertificateSigningRequestStatus as _getCertificateSigningRequestStatus, isCertificateSigningRequest as _isCertificateSigningRequest } from './resource-utils-csr'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -188,12 +195,12 @@ export function podMatchesProblemCategory(problems: PodProblem[], restarts: numb
 // also flags at once: fatal *container* states (CrashLoopBackOff, ImagePull,
 // InvalidImageName, OOMKilled, …) and Unschedulable (the scheduler tried and
 // could not place the pod).
-const PENDING_STUCK_MINUTES = 5
+export const PENDING_STUCK_MINUTES = 5
 const TERMINATING_STUCK_MINUTES = 10
 
 // minutesSince returns minutes elapsed since an ISO timestamp, or 0 when it's
 // missing/invalid — so "unknown age" is treated as not-yet-stuck (benign).
-function minutesSince(timestamp?: string): number {
+export function minutesSince(timestamp?: string): number {
   if (!timestamp) return 0
   const t = new Date(timestamp).getTime()
   if (Number.isNaN(t)) return 0
@@ -205,6 +212,22 @@ function podUnschedulable(pod: any): boolean {
   return conds.some(
     (c: any) => c.type === 'PodScheduled' && c.status === 'False' && c.reason === 'Unschedulable'
   )
+}
+
+// A non-empty spec.schedulingGates means a controller is deliberately holding the
+// pod in Pending (Kueue admission, topology assignment, a custom gate). Mirrors the
+// backend health.PodHasSchedulingGates — keep the two in lockstep (the cross-language
+// golden fixture pins it). The spec field is authoritative and is kept in the summary
+// list payload, so this reads it directly rather than racing the scheduler's
+// PodScheduled=SchedulingGated condition (which lags gate changes in both directions).
+function podSchedulingGated(pod: any): boolean {
+  return (pod?.spec?.schedulingGates || []).length > 0
+}
+
+function schedulingGateNames(pod: any): string[] {
+  return (pod?.spec?.schedulingGates || [])
+    .map((g: any) => g?.name)
+    .filter((n: any): n is string => typeof n === 'string' && n.length > 0)
 }
 
 // A container that has terminated successfully (exit 0) is done, not "not ready".
@@ -219,7 +242,7 @@ function containerSettledOk(cs: any): boolean {
 // isFatalWaitingReason. These escalate immediately regardless of pod age or a
 // Terminating overlay (a bad image / config error is a real failure now, not a
 // benign young-Pending pod).
-const FATAL_WAITING_REASONS = new Set([
+export const FATAL_WAITING_REASONS = new Set([
   'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'InvalidImageName',
   'ImageInspectError', 'CreateContainerConfigError', 'CreateContainerError', 'RunContainerError',
 ])
@@ -427,6 +450,12 @@ export function getPodStatus(pod: any): StatusBadge {
     case 'Succeeded':
       return { text: 'Completed', color: healthColors.neutral, level: 'neutral' }
     case 'Pending':
+      // A scheduling gate deliberately holds the pod in Pending; it's an
+      // intentional state, not an age-based problem, so it reads neutral and never
+      // ages into a warning. Checked before the unschedulable/age branches.
+      if (podSchedulingGated(pod)) {
+        return { text: 'Scheduling gated', color: healthColors.neutral, level: 'neutral' }
+      }
       // Unschedulable = the scheduler tried and failed to place this pod; the
       // backend flags it immediately (severity ramps with duration), so the badge
       // does too. Plain Pending (not yet placed) keeps the young-grace window.
@@ -577,7 +606,22 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
     }
     case 'Succeeded':
       return { phase, text: 'Completed', level: 'neutral' }
-    case 'Pending':
+    case 'Pending': {
+      // A scheduling gate deliberately holds the pod in Pending; surface it as a
+      // calm, explained state (with the gate name) rather than a bare Pending or an
+      // age-based warning. Checked before the unschedulable/age branches.
+      if (podSchedulingGated(pod)) {
+        const gates = schedulingGateNames(pod)
+        return {
+          phase,
+          text: `${phase} — Scheduling gated`,
+          level: 'neutral',
+          hint:
+            gates.length > 0
+              ? `Held by scheduling gate(s): ${gates.join(', ')}. A controller is intentionally blocking scheduling until a condition is met.`
+              : 'A controller is intentionally blocking scheduling until a condition is met.',
+        }
+      }
       // Unschedulable = the scheduler tried and failed; surface it immediately
       // (the backend does, with severity ramping by duration). Plain Pending
       // (not yet placed) keeps the young-grace window.
@@ -598,6 +642,7 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
         }
       }
       return { phase, text: 'Pending', level: 'neutral' }
+    }
     case 'Failed':
       return { phase, text: 'Failed', level: 'unhealthy' }
     default:
@@ -775,7 +820,8 @@ export function getPodRestarts(pod: any): number {
 
 export interface ContainerSquareState {
   name: string
-  status: 'ready' | 'running' | 'waiting' | 'completed' | 'terminated' | 'unknown'
+  /** starting: waiting on a transient reason (PodInitializing, ContainerCreating), not a failure. */
+  status: 'ready' | 'running' | 'starting' | 'waiting' | 'completed' | 'terminated' | 'unknown'
   restarts: number
   reason?: string
   message?: string
@@ -822,6 +868,53 @@ export function getExecContainerNames(pod: any): string[] {
   return [...regular, ...sidecars].filter(Boolean)
 }
 
+/** Init container names in run order, native sidecars included. */
+export function getInitContainerNames(pod: any): string[] {
+  return (pod?.spec?.initContainers || []).map((c: any) => c.name).filter(Boolean)
+}
+
+/** The containers that can have logs: init containers (in run order), then the regular ones. */
+export function getLogContainerNames(pod: any): string[] {
+  return [...(pod?.spec?.initContainers || []), ...(pod?.spec?.containers || [])]
+    .map((c: any) => c.name)
+    .filter(Boolean)
+}
+
+/**
+ * The container to open logs on. While a pod is stuck initializing, its regular
+ * containers wait in PodInitializing and have no logs, so this picks the first
+ * init container that hasn't exited 0, or a native sidecar that hasn't started
+ * while the pod is still initializing. Otherwise it falls back to
+ * getDefaultContainerName.
+ *
+ * Sidecars are only candidates during initialization: kubelet routinely stops
+ * them with a non-zero exit when a pod finishes, and one that fails after
+ * initialization doesn't override the pod's default container. Regular init
+ * containers need no such gate; they have all exited 0 in an initialized pod,
+ * except when a recreated sandbox runs them again while Initialized stays True.
+ * Table rows carry no `started`, so a running sidecar counts as started there.
+ */
+export function getDefaultLogContainerName(pod: any): string | undefined {
+  const phase = pod?.status?.phase
+  const initializing = phase !== 'Succeeded' && phase !== 'Failed' &&
+    !(pod?.status?.conditions || []).some((c: any) => c.type === 'Initialized' && c.status === 'True')
+  const sidecars = new Set(
+    (pod?.spec?.initContainers || []).filter((c: any) => c.restartPolicy === 'Always').map((c: any) => c.name),
+  )
+  const stuck = (pod?.status?.initContainerStatuses || []).find((s: any) =>
+    sidecars.has(s.name)
+      ? initializing && !(s.started ?? Boolean(s.state?.running))
+      : s.state?.terminated?.exitCode !== 0,
+  )
+  return stuck?.name || getDefaultContainerName(pod)
+}
+
+// PodInitializing and ContainerCreating are steps every container passes
+// through, so they read as starting; any other waiting reason is a problem.
+function waitingSquareStatus(reason: string | undefined): ContainerSquareState['status'] {
+  return reason === 'PodInitializing' || reason === 'ContainerCreating' ? 'starting' : 'waiting'
+}
+
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
   const result: ContainerSquareState[] = []
   const initStatuses = pod.status?.initContainerStatuses || []
@@ -836,7 +929,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
     } else if (stateKey === 'running') {
       status = cs.ready ? 'ready' : 'running'
     } else if (stateKey === 'waiting') {
-      status = 'waiting'
+      status = waitingSquareStatus(cs.state?.waiting?.reason)
     } else if (stateKey === 'terminated') {
       status = 'terminated'
     }
@@ -869,7 +962,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
       } else if (stateKey === 'terminated') {
         status = 'terminated'
       } else if (stateKey === 'waiting') {
-        status = 'waiting'
+        status = waitingSquareStatus(cs.state?.waiting?.reason)
       }
       const stateDetail = cs.state?.[stateKey]
       const lastTerm = cs.lastState?.terminated
@@ -1343,6 +1436,15 @@ export function getSecretKeyCount(secret: any): number {
 // JOB / CRONJOB UTILITIES
 // ============================================================================
 
+// Kueue owns spec.suspend for a Job submitted to a LocalQueue: it suspends the
+// Job until admission and again on preemption, so resuming it is not the user's
+// next step. Callers that also read the Workload pass that evidence separately.
+export function isKueueQueuedJob(job: any): boolean {
+  if (job?.apiVersion && job.apiVersion !== 'batch/v1') return false
+  if (job?.kind && job.kind !== 'Job') return false
+  return Boolean(job?.metadata?.labels?.['kueue.x-k8s.io/queue-name'])
+}
+
 export function getJobStatus(job: any): StatusBadge {
   const status = job.status || {}
   const conditions = status.conditions || []
@@ -1361,6 +1463,7 @@ export function getJobStatus(job: any): StatusBadge {
   }
 
   if (job.spec?.suspend) {
+    if (isKueueQueuedJob(job)) return { text: 'Held by Kueue', color: healthColors.neutral, level: 'neutral' }
     return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
 
@@ -1603,8 +1706,22 @@ export function cronToHuman(cron: string): string {
   ) {
     return `Weekdays at ${hour}:${minute.padStart(2, '0')}`
   }
+  // A literal time on every day, or on one day of the week. Literal means a
+  // plain number: a list or range ("1,13", "9-17") is not one time.
+  const literal = (v: string, max: number) => /^\d{1,2}$/.test(v) && Number(v) <= max
+  if (literal(minute, 59) && literal(hour, 23) && dayOfMonth === '*' && month === '*') {
+    const at = `${hour}:${minute.padStart(2, '0')}`
+    if (dayOfWeek === '*') return `Daily at ${at}`
+    const day = CRON_WEEKDAYS[dayOfWeek.toUpperCase()]
+    if (day) return `Weekly on ${day} at ${at}`
+  }
 
   return cron
+}
+
+const CRON_WEEKDAYS: Record<string, string> = {
+  '0': 'Sunday', '1': 'Monday', '2': 'Tuesday', '3': 'Wednesday', '4': 'Thursday', '5': 'Friday', '6': 'Saturday',
+  SUN: 'Sunday', MON: 'Monday', TUE: 'Tuesday', WED: 'Wednesday', THU: 'Thursday', FRI: 'Friday', SAT: 'Saturday',
 }
 
 // ============================================================================
@@ -2464,10 +2581,27 @@ function parseColumnFilterPair(
 
 export function getCellFilterValue(resource: any, column: string, kind: string): string {
   try {
+  const connectorValue = getStrimziConnectorColumnValue(resource, column)
+  if (connectorValue !== undefined) return connectorValue
+  const strimziClusterValue = getStrimziClusterColumnValue(resource, column)
+  if (strimziClusterValue !== undefined) return strimziClusterValue
+  const volumeSnapshotValue = getVolumeSnapshotColumnValue(resource, column)
+  if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
   const otelValue = getOpenTelemetryColumnValue(resource, column)
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
   if (flaggerValue !== undefined) return flaggerValue
+  const agentRuntimeValue = getAgentRuntimeColumnValue(resource, column)
+  if (agentRuntimeValue !== undefined) return agentRuntimeValue
+  const planValue = getUpgradePlanColumnValue(resource, column)
+  if (planValue !== undefined) return planValue
+  if (_isApiGroup(resource?.apiVersion, FLUX_OPERATOR_GROUP)) {
+    if (column === 'status') return getFluxOperatorStatus(resource).text
+    const fluxOperatorValue = getFluxOperatorColumnValue(kind.toLowerCase(), resource, column)
+    if (fluxOperatorValue !== undefined) return fluxOperatorValue
+  }
+  const crdValue = getCRDColumnValue(resource, column)
+  if (crdValue !== undefined) return crdValue
   const kindLower = kind.toLowerCase()
 
   switch (column) {
@@ -2497,6 +2631,7 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'cronjobs') return getCronJobStatus(resource).text
       if (kindLower === 'certificates') return getCertificateStatus(resource).text
       if (kindLower === 'certificaterequests') return getCertificateRequestStatus(resource).text
+      if (kindLower === 'certificatesigningrequests' && _isCertificateSigningRequest(resource)) return _getCertificateSigningRequestStatus(resource).text
       if (kindLower === 'clusterissuers' || kindLower === 'issuers') return getClusterIssuerStatus(resource).text
       if (kindLower === 'persistentvolumeclaims') return getPVCStatus(resource).text
       if (kindLower === 'persistentvolumes') return getPVStatus(resource).text
@@ -2551,6 +2686,10 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'kaiqueues') return _getKaiQueueStatus(resource).text
       if (kindLower === 'kaipodgroups') return _getKaiPodGroupStatus(resource).text
       if (kindLower === 'kaitoworkspaces') return _getKaitoWorkspaceStatus(resource).text
+      if (kindLower === 'substrateworkerpools') return _getWorkerPoolStatus(resource).text
+      if (kindLower === 'agentsandboxes') return _getSandboxStatus(resource).text
+      if (kindLower === 'agentsandboxclaims') return _getSandboxClaimStatus(resource).text
+      if (kindLower === 'agentsandboxwarmpools') return _getSandboxWarmPoolStatus(resource).text
       if (kindLower === 'ragengines') return _getRAGEngineStatus(resource).text
       if (kindLower === 'nimservices') return _getNIMServiceStatus(resource).text
       if (kindLower === 'nimcaches') return _getNIMCacheStatus(resource).text

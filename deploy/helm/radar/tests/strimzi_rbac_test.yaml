@@ -1,0 +1,24 @@
+suite: Strimzi ownership collection RBAC
+templates:
+  - clusterrole.yaml
+tests:
+  - it: grants only PodSet reads in the core Strimzi group
+    asserts:
+      - equal:
+          path: rules[?(@.apiGroups[0] == "core.strimzi.io")]
+          value:
+            apiGroups: ["core.strimzi.io"]
+            resources: ["strimzipodsets"]
+            verbs: ["get", "list", "watch"]
+  - it: omits PodSet reads when Strimzi collection is disabled
+    set:
+      rbac.crdGroups.strimzi: false
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "core.strimzi.io")]
+  - it: creates no collector role when RBAC is disabled
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0

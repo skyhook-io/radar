@@ -494,6 +494,140 @@ func TestRestartLoopDiagnosis_OOMWordingFollowsTheLimit(t *testing.T) {
 	}
 }
 
+func TestRestartLoopDiagnosis_PodLevelMemoryLimit(t *testing.T) {
+	now := time.Now()
+	oomLoop := corev1.ContainerStatus{Name: "app", RestartCount: 4,
+		State:                corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, 10*time.Second, "OOMKilled", 137)}}
+	podLimit := &corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")}}
+	ownLimit := corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")}}
+
+	tests := []struct {
+		name          string
+		pod           func() *corev1.Pod
+		wantCause     []string
+		wantAction    []string
+		wantNotInText []string
+	}{
+		{
+			name: "only the pod sets a memory limit",
+			pod: func() *corev1.Pod {
+				pod := restartLoopPod(now, oomLoop)
+				pod.Spec.Resources = podLimit
+				return pod
+			},
+			wantCause:     []string{"no memory limit of its own", "pod's memory limit"},
+			wantNotInText: []string{"node memory pressure"},
+		},
+		{
+			name: "the enacted pod limit in status counts for a pod that declares pod-level resources",
+			pod: func() *corev1.Pod {
+				pod := restartLoopPod(now, oomLoop)
+				pod.Spec.Resources = &corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("128Mi")}}
+				pod.Status.Resources = podLimit
+				return pod
+			},
+			wantCause:     []string{"no memory limit of its own", "pod's memory limit"},
+			wantNotInText: []string{"node memory pressure"},
+		},
+		{
+			name: "a status memory limit does not count when spec.resources sets only CPU",
+			pod: func() *corev1.Pod {
+				pod := restartLoopPod(now, oomLoop)
+				pod.Spec.Resources = &corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")}}
+				pod.Status.Resources = podLimit
+				return pod
+			},
+			wantCause:     []string{"It has no memory limit, so the kernel killed it under node memory pressure."},
+			wantNotInText: []string{"spec.resources"},
+		},
+		{
+			name: "status resources alone are not a pod-level limit",
+			pod: func() *corev1.Pod {
+				pod := restartLoopPod(now, oomLoop)
+				pod.Status.Resources = podLimit
+				return pod
+			},
+			wantCause:     []string{"It has no memory limit, so the kernel killed it under node memory pressure."},
+			wantNotInText: []string{"spec.resources"},
+		},
+		{
+			name: "a memory limit inherited from the pod in container status is not the container's own",
+			pod: func() *corev1.Pod {
+				status := oomLoop
+				status.Resources = &corev1.ResourceRequirements{Limits: corev1.ResourceList{
+					corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("64Mi")}}
+				pod := restartLoopPod(now, status)
+				pod.Spec.Resources = podLimit
+				pod.Spec.Containers[0].Resources = corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}}
+				return pod
+			},
+			wantCause:     []string{"no memory limit of its own", "pod's memory limit"},
+			wantNotInText: []string{"either limit"},
+		},
+		{
+			name: "container and pod both set a memory limit",
+			pod: func() *corev1.Pod {
+				pod := restartLoopPod(now, oomLoop)
+				pod.Spec.Resources = podLimit
+				pod.Spec.Containers[0].Resources = ownLimit
+				return pod
+			},
+			wantCause:     []string{"its own memory limit", "either limit"},
+			wantAction:    []string{"spec.resources.limits.memory"},
+			wantNotInText: []string{"the node was under memory pressure"},
+		},
+		{
+			name: "a zero pod limit sets no cap",
+			pod: func() *corev1.Pod {
+				pod := restartLoopPod(now, oomLoop)
+				pod.Spec.Resources = &corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("0")}}
+				return pod
+			},
+			wantCause: []string{"It has no memory limit, so the kernel killed it under node memory pressure."},
+		},
+		{
+			name:      "no limit anywhere is unchanged",
+			pod:       func() *corev1.Pod { return restartLoopPod(now, oomLoop) },
+			wantCause: []string{"It has no memory limit, so the kernel killed it under node memory pressure."},
+		},
+		{
+			name: "container-only limit is unchanged",
+			pod: func() *corev1.Pod {
+				pod := restartLoopPod(now, oomLoop)
+				pod.Spec.Containers[0].Resources = ownLimit
+				return pod
+			},
+			wantCause:     []string{"keeps being OOMKilled."},
+			wantNotInText: []string{"pod's memory limit"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			loop, ok := activeRestartLoop(tc.pod(), nil, now)
+			if !ok {
+				t.Fatal("expected an OOM restart loop")
+			}
+			cause, action := loop.diagnosis()
+			for _, want := range tc.wantCause {
+				if !strings.Contains(cause, want) {
+					t.Errorf("cause = %q, want it to contain %q", cause, want)
+				}
+			}
+			for _, want := range tc.wantAction {
+				if !strings.Contains(action, want) {
+					t.Errorf("action = %q, want it to contain %q", action, want)
+				}
+			}
+			for _, unwanted := range tc.wantNotInText {
+				if strings.Contains(cause+" "+action, unwanted) {
+					t.Errorf("diagnosis = %q / %q, must not contain %q", cause, action, unwanted)
+				}
+			}
+		})
+	}
+}
+
 func TestOtherContainerActiveOOM_SidecarLastState(t *testing.T) {
 	now := time.Now()
 	always := corev1.ContainerRestartPolicyAlways

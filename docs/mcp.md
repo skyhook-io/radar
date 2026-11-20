@@ -27,6 +27,16 @@ The node page retains this tab's last UI drain result until dismissal, reload or
 context switch. It is a recorded result, not live node health or a history of
 drains started by other users or MCP clients.
 
+## Node certificate reports
+
+`get_resource` for a Node can include `nodeCertificateReport` with default
+context or `include=issues`. It contains the RKE2/K3s monitor's original report,
+last-report time and reported validity dates. Native warning reports also appear
+in `issues`; stale or incomplete warnings remain visible with current status
+unverified. Fresh parsed urgency can raise a warning to critical.
+No report does not establish certificate health. See [Node certificate reports](nodes.md#certificate-reports)
+for thresholds, recovery and history limits.
+
 ## Why MCP instead of raw kubectl?
 
 Giving an AI agent raw `kubectl` access has problems:
@@ -100,6 +110,59 @@ configurations. Radar's setup dialog, settings and interactive investigation
 handoffs select this endpoint automatically. Existing client configurations
 using `/mcp` must be updated. Startup output and `/api/capabilities`
 (`mcpEnabled`, `mcpReadOnly`) describe the effective mode.
+
+## curl_service
+
+`curl_service` sends one HTTP GET to a Service from in-cluster Radar, with the
+same implementation as the UI's Service Curl button. It is off by default; enable
+it with `--mcp-http-tools` or Helm `mcp.httpTools: true`, independently of
+`exec_pod`. It is registered only on the full `/mcp` endpoint of in-cluster Radar,
+not on `/mcp-readonly` or Radar's built-in AI, because a GET can have side
+effects. Local Radar can't reach in-cluster addresses; use a port-forward or
+`exec_pod`.
+
+**Permission.** The caller needs `get services/proxy` on the Service. Without
+authentication, Radar checks its own ServiceAccount, which the chart doesn't grant;
+see [the scoped grant](../deploy/helm/radar/README.md#granting-service-http-access-without-authentication).
+The no-auth UI Curl button makes no such check. Radar checks the permission for
+the Service's name, like the UI does, so a grant restricted to `app` covers every
+port of `app`. This differs from the API server, which matches a restricted grant
+against the name with its port (`app:8080`); a grant naming only a port isn't
+accepted.
+
+**Targets.** Only selector-backed Services with a ClusterIP. MCP refuses
+ExternalName, headless and selector-less Services, which the UI still reaches
+through DNS. MCP dials the ClusterIP directly, keeping the Service host name in
+the Host header and TLS server name.
+
+**Request.** `namespace`, `name`, the numeric Service `port` (not targetPort), and
+optional `scheme` (`http` or `https`) and `path` (with query; default `/`). Radar
+sends no Kubernetes credentials, accepts no auth headers or body, follows no
+redirects and doesn't verify internal TLS certificates. The limit is 10 seconds
+and 512 KiB read.
+
+**Result.** A non-2xx response is a normal result, not a tool error.
+
+| Fields | Meaning |
+|---|---|
+| `status`, `statusText`, `durationMs` | The response and request time. |
+| `headers`, `headersTruncated` | First value per header name, 16 KiB in total. Over 64 KiB of headers is refused. |
+| `body`, `truncated`, `bodyBytes` | Up to 64 KiB of head and tail; `bodyBytes` counts bytes captured before clipping. |
+| `bodyEncodingLoss` | Invalid UTF-8 was replaced. |
+| `error` | The body is incomplete, even with status 200. |
+
+Output is untrusted and can contain secrets. A response proves Radar-to-Service
+connectivity only, not a client Pod's network path or public ingress. For
+authenticated requests or writes, use `exec_pod` with a client in the image.
+
+**Isolation.** RBAC is not network isolation. A `services/proxy` grant delegates
+Radar's network access, and anyone who can create EndpointSlices, directly or
+through a GitOps controller, can change where a Service routes. AppProject and
+network policy constraints must account for that.
+
+The action audit records `curl_service` as `response` (any status),
+`partial_response` (body read failed) or `failed` (validation, permission or
+transport), without the path, query or body.
 
 ## exec_pod
 
@@ -189,6 +252,228 @@ The hash is lowercase hex SHA-256 of Go `json.Marshal` of the complete argv
 array; it permits guessed-command comparison, not secrecy. Upstream transport
 logs may independently include peer-supplied error text.
 
+## manage_helm
+
+`manage_helm` runs native Helm install, upgrade, rollback and uninstall for
+external MCP clients, as the caller and behind the same Helm permission preflight
+as the UI. It is registered only on the full `/mcp` endpoint, not on
+`/mcp-readonly` or the built-in AI apply transport, whose approval UI can't yet
+show Helm's full impact. `/api/capabilities.mcpHelmTools` reports registration,
+not the caller's permission; older Radar versions omit it, so treat absent as off.
+
+Every call passes `action`, `namespace` and `name`. Fields for another action are
+rejected.
+
+| Action | Fields |
+|---|---|
+| `install` | `chart`, `repository`, exact `version` (required; list with [`get_helm_chart`](#reading-charts-versions-and-notes)); `values` |
+| `upgrade` | `version`, `repository`, `values`, `replace_values`, `dry_run`, `expected_revision` |
+| `rollback` | `revision` (required); `dry_run`, `expected_revision` |
+| `uninstall` | `confirm` (omit to preview) |
+
+A call returns when Helm finishes, which can take minutes and run hooks.
+`state: completed` means the Helm action returned, not that workloads are ready;
+use `get_helm_release` and `wait_for`. After a timeout or disconnect, inspect the
+release before retrying.
+
+### Guards
+
+- Releases owned by a detected Flux HelmRelease are refused; change them in git.
+  Detection is cache-based and best-effort when Flux visibility is restricted.
+- Upgrade, rollback and uninstall are refused while the release is pending or
+  uninstalling. An operator recovers a stranded release with the UI or Helm CLI.
+- `expected_revision` refuses an upgrade or rollback if the latest revision
+  differs. It is not a lock, and neither is the uninstall confirmation: Helm has
+  no revision-conditioned writes, so coordinate with other release writers,
+  including Radar UI users. When two upgrades or rollbacks race for the same
+  revision, Helm's release storage accepts one; the other fails before changing
+  anything, and the error says so.
+- `values` must never contain literal credentials or redacted output;
+  `[REDACTED]` placeholders are refused. Errors are redacted, since Helm errors can
+  echo chart text or values: Helm's own errors also mask the sensitive values
+  stored in the release's revisions and those in the call's `values`.
+- A failure after Helm started may have changed resources; inspect before
+  retrying.
+
+### Sources and setup
+
+Install needs a source configured by Radar's configuration owner, and refuses any
+existing release history, including failed and uninstalled releases. It refreshes
+the index itself, so no warmed cache is needed. Each install or upgrade downloads
+its own copy for checksum verification, so several at once from a large
+repository that throttles parallel downloads can time out; the refusal applies
+nothing and says to retry. MCP can't register sources,
+confirm a release's source or create namespaces.
+
+- **Local:** `helm repo add NAME URL` in the Helm configuration Radar uses.
+- **In-cluster:** `helm.ociSources` for OCI, or an operator-mounted repository
+  config for classic repositories, plus `rbac.helm: true`. UI repository writes
+  are disabled in this mode.
+- **Radar Cloud:** source changes need the owner, and pod-local repository
+  settings are lost when the Pod is replaced. The chart rejects `helm.ociSources`
+  with `cloud.enabled`.
+
+`--disable-helm-write` removes `manage_helm` and disables Helm release writes,
+per-release source updates and values previews. Without authentication it also
+blocks global repository/OCI changes and index refresh. Signed-in global source
+management continues, but adding a repository bound to a release is refused. The
+Cloud installation flow is unaffected. In the chart, set
+`extraArgs: ["--disable-helm-write"]`.
+
+### Upgrade
+
+`values` merge on the server into the overrides of the last deployed revision (the
+latest failed or superseded one if none is deployed). Omitted map keys are kept,
+lists are replaced whole, and nulls or type changes can remove values. A partial
+override can't replace a map or list that contains a hidden credential.
+`replace_values: true` replaces all overrides; with `values: {}` it resets them.
+
+- A same-version upgrade reuses the complete stored chart and needs no source.
+  Helm doesn't store subcharts that were disabled at install, so turning one on
+  this way succeeds without adding it; enabling a subchart needs a confirmed
+  source.
+- A different version, an explicit `repository`, or a stored chart missing
+  subchart bodies needs a confirmed source on the release. `repository` only
+  asserts the saved source; it can't select a new one.
+- Omitting `version` keeps the stored version only when the latest and deployed
+  revisions use the same chart. After a failed version change, name the version or
+  roll back first.
+- A version the source doesn't have fails with a pointer to
+  [`include=versions`](#reading-charts-versions-and-notes) (`get_helm_chart` for
+  an install).
+
+**Preview.** `dry_run: true` uses the same chart selection, merge and
+caller-authorized `lookup` as execution, but writes nothing and runs no hooks. It
+returns `chartVersion`, `currentRevision`, `baselineRevision`, and:
+
+- `valuesDiff`: the redacted diff of stored overrides (16 KiB head/tail), not of
+  effective defaults. A change only to hidden values can be invisible.
+- `added`, `changed`, `removed`: resource identities by API group, kind, namespace
+  and name, so an API-version change shows in `changed`. `changed` compares whole
+  objects, so a `helm.sh/chart` label bump marks every object. Hooks are excluded,
+  and a retention policy can keep a removed resource.
+- `parseErrors`: content that couldn't be parsed, so the comparison is incomplete.
+
+Each resource list holds at most 100 items, with `Count` and `Truncated`
+companions, as in the rollback and uninstall previews. The preview doesn't check
+admission, hooks or readiness, and later lookups or random template output can
+differ. To execute, repeat the inputs with `dry_run: false`
+and `expected_revision` set to `currentRevision`. A completed upgrade returns
+`revision`, `baselineRevision` and `chartVersion`.
+
+### Rollback
+
+Take `revision` from `get_helm_release include=history`. Rollback re-applies that
+revision's stored manifest and values without re-rendering. Unlike upgrade, it
+overwrites any live object the target declares and stamps this release's
+ownership on it without checking the current owner.
+
+**Preview.** `dry_run: true` writes nothing. It returns `targetRevision`,
+`currentRevision`, the target's `chartVersion`, and:
+
+- `added`, `changed`, `removed` and `valuesDiff`: an exact comparison of the two
+  stored revisions, without hooks. `parseErrors` marks it incomplete.
+- `rollbackHooks`: the target's pre-rollback and post-rollback hooks with their
+  effective `deletePolicies` and `lastPhase` (from the hook's last run recorded in
+  that revision). A failing pre-rollback hook stops the
+  rollback. Hook contents aren't listed.
+- Live reads as the caller, for at most 100 affected objects; `liveChecked`
+  counts the reads that succeeded, including ones that found no object:
+  - `takeovers`: live objects not recorded as this release's. `owner` is the other
+    release as `namespace/name`, or empty unless the object records both the
+    release name and namespace. The message tells the agent to get approval for
+    each takeover specifically.
+  - `kept`: the part of `removed` whose live `helm.sh/resource-policy` is exactly
+    `keep`. Helm deletes the rest, except that retention is unknown for removed
+    objects in `liveUnknown`.
+  - `liveUnknown`: objects that couldn't be read (denied, kind not served, past the
+    cap).
+
+Live reads are a snapshot. To execute, repeat with `dry_run: false` and
+`expected_revision` set to `currentRevision`; rollback without `dry_run` executes
+directly. A completed rollback returns `revision`, `targetRevision` and
+`chartVersion`.
+
+### Uninstall
+
+Without `confirm`, uninstall returns a preview with `revision`, a `confirm` token
+and the release status. Pass the token back as `confirm` to execute. It expires
+after five minutes, is bound to the caller, cluster and release state, and is
+single-use: a retried confirm, such as after a client timeout, is refused. If the
+release changed, preview again.
+
+The preview follows Helm's own rules:
+
+- `resources`: the objects Helm deletes.
+- `kept`: objects whose manifest document carries `helm.sh/resource-policy`. Helm
+  reads it per document, so a List item's own annotation doesn't count, and it
+  also leaves a document whose policy has any other value.
+- `deleteHooks`: pre-delete and post-delete hooks with events, effective
+  `deletePolicies` (`before-hook-creation` when none is declared) and `lastPhase`.
+  A failing pre-delete hook stops the uninstall before anything is deleted.
+- `historyOnly: true`: the release is already uninstalled with history kept, so
+  uninstall only purges that history.
+
+History is purged once Helm has requested the deletions, even if a post-delete
+hook then fails, so rollback is impossible afterwards while deletion (finalizers)
+may still be running; the preview's `message` says so, and an error after that
+point says the release and its history are gone.
+
+The preview isn't a data-loss analysis: controller-created objects, StatefulSet
+PVCs and external data aren't listed, and hook contents aren't enumerated.
+
+### Reading charts, versions and notes
+
+- **`include=chart`** reads the stored chart; nothing is fetched. `chartContext`
+  lists up to 100 `valuePaths` (8 KiB); pass one, or any known narrower pointer,
+  as `chart_path` (a JSON pointer) for its `defaultValue` (up to 16 KiB, else
+  `valueError`), child paths and directly addressable `schema` fragment (8 KiB).
+  There is no cursor for a truncated path list. Stored defaults aren't effective
+  values: storage can omit dependency bodies and contain coalesced dependency
+  defaults, so a missing default doesn't prove a setting is unsupported. The
+  schema fragment is documentation, not a complete validation schema; no `schema`
+  and no `schemaError` means the chart stored none.
+- **`include=versions`** lists up to 50 versions an upgrade can target, newest
+  first, from the release's confirmed source (`availableVersions`: `source`,
+  `versions`, `latest`, `truncated`). `latest` is the newest non-prerelease,
+  the version Helm picks when none is given, and is absent when the source offers
+  only prereleases; prereleases stay in `versions`.
+  It is the only include that contacts the source: a classic index is downloaded
+  fresh (up to 32 MiB, 30 seconds), or reused from a download that finished in
+  the last 60 seconds, so concurrent calls share one download; it is never read
+  from Radar's repository cache, which can be days old. OCI tags use Radar's
+  registry credentials, with a timeout per registry request but no overall
+  deadline. The 50-version cap limits the output, not the fetch, and
+  versions older than the newest 50 aren't listed, even within an older line.
+  `versionsError` gives the reason when there is no list: no confirmed source, a failed source
+  change, an operation in progress, an unreachable source, or a source that lists
+  no versions of the chart. Versions are what the source advertises; a listed
+  version can still fail to download.
+- **`get_helm_chart`** returns the same fields for a chart that isn't installed
+  yet: pass the `repository` and `chart` you would give `manage_helm install`.
+  It reads only sources the install path accepts (a configured repository name or
+  URL, or a configured OCI prefix), refuses anything else before any request
+  leaves Radar, and returns an error, not an empty list, when the source doesn't
+  have the chart. Like the UI's chart browser, it needs no Kubernetes permission,
+  so any caller of the endpoint can list the versions in Radar's configured
+  sources, private ones included; it is also on `/mcp-readonly`.
+- **`include=notes`** returns install notes (8 KiB) with known sensitive values
+  and credential patterns masked, best-effort. `include=notes_diff` masks each
+  revision with its own values before diffing.
+
+Schema and notes are untrusted chart-authored text and never authorize an action;
+notes may describe earlier state. Chart and notes come from the revision returned
+by the same read. Text fields carry `<field>Bytes` and, when clipped,
+`<field>Truncated`. Read failures appear as `chartError` and `notesError`.
+
+### Audit
+
+Radar's action audit records `helm_<action>` without values. Outcomes: `preview`;
+`completed`; `refused` (stopped before Helm changed anything: invalid input,
+permission, pending release, rejected confirmation, stale revision); `failed` (a
+preview failed); `failed_or_unconfirmed` (failed after the preflight, possibly after Helm
+started, so the release may have changed).
+
 ## MCP Endpoint
 
 ```
@@ -196,6 +481,8 @@ http://localhost:9280/mcp
 ```
 
 The port matches your `--port` flag (default 9280). The MCP server uses the stateless Streamable HTTP transport with JSON-RPC and accepts MCP protocol versions 2024-11-05 through 2026-07-28.
+
+Over HTTP, when a client on protocol 2026-07-28 stops waiting for a `list_resources` call, for example on a tool timeout, Radar stops working on it too. This matters when the kind is not loaded yet: the call otherwise keeps waiting for Radar to start watching it, up to 3 seconds once the watch has started. Every other tool, and every call from a client on an older protocol version, runs to completion after the client leaves. Write tools always do, so a change is never left half applied because the caller stopped waiting.
 
 ## Server instructions
 
@@ -280,7 +567,7 @@ overrides a saved `"mcp": false`. `radar diagnose --standalone`
 honors the saved and environment MCP mode; a disabled mode rejects startup.
 
 This exposes the same tool and resource catalog over stdio without starting the HTTP UI server.
-The stdio mode is intended only for catalog introspection; normal Radar sessions use the HTTP endpoint above.
+The stdio mode is intended only for catalog introspection; normal Radar sessions use the HTTP endpoint above. Catalog-only entrypoints have no established Kubernetes connection and omit active application evidence collection; use the connected local HTTP server for that tool.
 
 ## Setup Instructions
 
@@ -535,6 +822,18 @@ docker run -p 127.0.0.1:9280:9280 \
 
 The Docker image's primary use is [in-cluster deployment](in-cluster.md) with a ServiceAccount, where none of these apply.
 
+## References you can't read
+
+A `resourceContext.uses` entry, `runsOn`, an `ingressSummary.tlsSecrets` or `serviceAccountSummary` entry, or a
+Related Resources reference, may carry `state`: `"denied"` when the subject's
+own spec names an object the caller may not read (a pod template's ConfigMaps, Secrets, PVCs and ServiceAccount, a
+Pod's Node, an Ingress's TLS Secrets, a ServiceAccount's Secrets, and, in Related Resources only, the ResourceClaims a
+Pod's spec names and a Calico HostEndpoint's Node), or `"access_unverified"` when Radar couldn't check the caller's
+access. The name comes from the subject's spec, which the caller reads; Radar never reads the target for it, so
+neither its existence nor its state is known. Treat it as a declared dependency to verify with someone who has access,
+not as a missing or a healthy one. A ResourceClaim a claim template generates is named only in the Pod's status, so it
+stays hidden from a caller who may not read ResourceClaims.
+
 ## Crossplane pause context
 
 `list_resources` summaries, list/search `summaryContext`, and `get_resource`'s `resourceContext` carry optional `crossplanePause` for CRDs (identities in Radar's built-in registry are excluded, including typed objects converted for generic reads): `requested` for the exact `crossplane.io/paused: "true"` annotation, or `acknowledged` when the stored `Synced=False/ReconcilePaused` condition corroborates it. A request alone does not establish that a controller has stopped. Acknowledgement is a recorded observation, not a fresh external check or a claim about child controllers. No timestamp is inferred. An omitted field does not rule out other pause mechanisms.
@@ -542,6 +841,12 @@ The Docker image's primary use is [in-cluster deployment](in-cluster.md) with a 
 Pause is separate from recorded readiness, operational issues and audit findings. On generic CRD summary rows carrying `crossplanePause`, `ready` preserves the recorded condition status, and an independent Synced error remains in `issue` even if Ready is True. `context=none` omits enrichment but retains the summary row's `crossplanePause`. Detail keeps raw annotations/conditions; Compact keeps the exact pause annotation key. Radar's own Diagnose kickoff carries the same fact without treating pause alone as a problem. The MCP `diagnose` tool's supported kinds are unchanged; use `get_resource` for Crossplane resources. Summary rows for all terminating CRDs also retain `terminating` and `finalizers`, matching typed-resource summaries.
 
 ## `diagnose` evidence limits
+
+Job, JobSet, RayJob and Kueue Workload diagnosis returns cached context,
+related Issues and resource events, with relationships answered as
+`get_resource` answers them. Coverage states that Pods, runtime logs and metrics
+were not collected. An empty Issues list does not establish runtime health;
+follow Pod references for runtime evidence.
 
 For workload `diagnose` responses, `logCoverage.selectedPods` counts pods selected for log requests, not pods whose logs were successfully read. Per-container errors and `logsError` describe failed collection. `logCoverage.totalLines` counts diagnostic-filter output before the aggregate response cap (including fallback tail lines); `shownLines` counts the lines retained after that cap. Neither describes a container's complete log history. `totalPods` and `shownPods` count pods contributing at least one line before and after that cap—not all selected pods or successful empty reads. `eventsTotalGroups`, recent-change coverage/error fields, and log sampling/truncation must remain qualifications even when an agent reports no problem.
 
@@ -563,7 +868,9 @@ The investigation's final JSON also carries the agent's case: `evidence` (up to 
 
 **Opening an investigation.** `POST /api/diagnose/runs` opens a run with a resource (`kind`, `group`, `namespace`, `name`), with the engineer's own description of a problem (`question`, at most 2000 characters, plus optional `namespaces` to start in and a `lookBack` of `15m`, `1h`, `6h` or `24h`), or with both. A backend that accepts a question says so with `questions: true` on each agent in `GET /api/agents`; the UI offers question entry only then. A question run is always a new run, never focused onto a live run for the same resource. Its opening turn uses `investigation.QuestionTaskPrompt` (no resource) or `investigation.TargetQuestionPrompt` (with a resource, whose health frame is context for the question rather than its agenda), under `investigation.QuestionSystemPrompt`; follow-ups, verification and explanations are unchanged, and the verdict and story contract below are the same. The namespaces are where the agent starts, not a boundary, and the look-back is relative to when the question was asked; every read stays live. A run that re-runs or narrows an earlier question passes that question's `askedAt` (RFC 3339, within the last 30 days) so its look-back still covers the same incident; the summary echoes `askedAt` when it differs from `createdAt`. A run with a question and no resource is read-only: an apply turn is refused, because a confirmed fix binds its writes to the run's resource — investigate the resource the fix changes, then apply it there. In the safeguarded profile that makes the run read-only end to end; a full-local agent keeps the mutation posture of its own configuration, as for any run.
 
-**The story contract.** The last fenced `json` block in the reply that carries a verdict field (`summary`, `root_cause`, `healthy`, `inconclusive`, `steps`, `evidence` or `remediation`) is the verdict and a divider, so a patch or spec quoted in a `json` fence inside the story is never mistaken for it: prose after it is the story (`report`), prose before it the agent's evidence ledger (`notes`, kept in Activity and never shown in Findings); a reply with nothing after the block keeps the older shape, where the prose before it is the story. The story may place a Radar result with `[[radar:evidence=N]]` alone on a line — N is the 0-based index into `evidence` — or mention it inline, which places the card under that paragraph when no own-line marker places it and otherwise references the placed card (with an arrow saying where it is); `[[radar:evidence=N|compact]]` places the card with its header and role label, without the agent's note; log cards also retain the last two selected log lines, and metrics cards their chart, folded unless it is the cause or the symptom. Each evidence item may carry a `gap`: the agent's own statement of what that result does not cover, rendered under its note. Only a result that returned data can be cited: a call that errored, was denied, or was truncated leaves its item `unlinked`. An inline mention past the placement cap renders as a chip that reveals the card under Captured results. Findings renders the placed result's card at that position from Radar's own record; the agent never authors a card. A marker inside a code span (which may run across lines within a paragraph), a code block, an indented code line or a blockquote is literal text. The ledger's own form, `[[radar:evidence-ref=ev_…]]`, is not a placement: the parser rewrites one that names a cited item to its index, strips any marker from `summary` and `root_cause`, and the renderer shows an unresolvable one as a citation Radar cannot identify rather than as text. At most 6 results are placed; later placements become references; a marker Radar cannot resolve renders a visible note at the sentence rather than vanishing, naming why: "unknown citation" (no such item), "unverified" (the server could not bind its ref) or "unclear citation" (bound, but it matches no single result), with the full reason on hover. The caps are the shape of the page and nothing else: at most 8 evidence items, 5 ruled-out hypotheses, 6 steps, 3 unresolved items and 3 root-cause refs, with a 180-rune headline cut at a sentence boundary; no other text is ever cut; a steps, unresolved or ruled-out list that ran past its cap reports the valid entries it lost in `omittedEntries`, evidence losses stay in `unlinkedEvidence`, and more than three root-cause refs still invalidate that set. The verdict adds `summary` (the one-sentence takeaway, ≤ 180 runes, clamped at a sentence boundary; `root_cause` is the two-or-three-sentence paragraph under it), `certainty` (`established` | `likely` | `suspected`, rendered as the agent's word, never a Radar mark), `unresolved` (≤ 3 items, listed under *Still open*, followed by any read Radar could not complete and, on a healthy verdict, each adverse Radar card the agent explained with its note; Radar's routine limits — a capped sample, or history that starts only when Radar started watching or after it evicted older events — sit folded beneath it on one muted *Radar's coverage* line and travel at the end of the channel copy; an adverse card the verdict never addressed, or one the agent calls a cause or symptom, keeps a small amber header naming it; every other caveat stays on the claim it bounds — the gap line under the cause card, the precondition on a step — or inside Captured results), typed `steps` (`text`, `kind` of `mitigate` | `verify` | `investigate`, optional `precondition`; when present the server derives `remediation` from them so one list feeds Apply and `recommended_index`, which may only name a `mitigate` step), and on follow-up turns `revises_assessment`, which the server keeps only on a complete verdict (`summary` plus a root cause, healthy or inconclusive). Findings shows the newest assessment turn — initial, verification, or a question whose verdict revised it — and nothing else; Activity keeps every earlier assessment complete. With typed steps present, `inconclusive` is cleared only by a non-empty `root_cause` (a mitigation never establishes a cause). No role can hide, collapse, or recolor a card, and a claim that cannot be pinned to exactly one observation shows beside its source under Captured results ("Notes without a card") instead. A subject may omit `name` to cite a listing for what it does not contain (kind and namespace name the listing; uniqueness still decides placement); a subject that names an entry binds to the listing whether or not it holds the entry, and the story card then shows that row inline, or says the entry is not in the listing, or that the name matches several entries. `observation: "resource"` names anything a call returned about a resource: a single resource, a listing, a ranking or posture card, a Helm release, a permissions check or a neighborhood; the stream-shaped kinds (`logs`, `events`, `changes`, `metrics`, `alerts`, `issue`) keep their own word so one word still picks one observation of a diagnose bundle. A receipt is not a kind of its own but what a call of any kind returned when it found nothing (a metric search, a scan with nothing about the target), so a call whose only observation is a receipt is not held to the word; what the subject names still has to match. `observation` is one of `resource`, `logs`, `events`, `changes`, `metrics` (or `metrics:cpu` / `metrics:memory` / `metrics:restarts` for a diagnose bundle's charts), `alerts` (with `name` as the rule's name, since one rules result holds several rules) or `issue` (`issues` is accepted as an alias); any other word leaves the item unplaced. A placed metrics card shows its chart inline, whatever its role or compact marker: full height as the cause or the symptom, short for any other role. The chart folds behind the card's chevron; it starts open unless the agent placed it compact, and a cause or symptom chart starts open either way, so a role can keep a chart open but never fold it. A folded chart's header carries one line of what it shows: first to last value with any low or peak between them, or the range across several series, and whether samples are missing. A reference that jumps to a folded chart opens it. Only the story's collapsed preview leaves the chart out. Only results Radar projects into cards can be placed (`diagnose`, `get_resource`, non-empty `list_resources`, `list_namespaces`, `list_helm_releases`, `list_packages` and `search`, `get_events`, `get_pod_logs`, `get_workload_logs`, `get_changes`, `get_neighborhood`, `get_topology`, `get_helm_release` with its hooks, revision history and user values, `get_subject_permissions` with its effective rules, `get_prometheus_rules`, `query_prometheus`, `discover_metrics` as a receipt, `issues`, `top_resources` as a ranking with the workload's own row marked, and `get_cluster_audit` or `get_cluster_upgrade_readiness` as a posture card holding only the findings about the investigated resource or its relations, a scan with none becoming a receipt); an empty listing or `get_dashboard` can be cited but renders a "no card" note at the sentence. A placed ranking or posture card shows the rows about the workload inline. Subject matching forgives two agent slips that name no other object: a built-in API group on a core kind (`apps` on a Pod) and a named entry on a listing (a specific ConfigMap cited against the ConfigMaps of a namespace, or a package named by the kind the agent knows it as when the listing holds that name); a vendor group on a core kind (a Knative Service) still names a different object. A metrics chart of the target that covers exactly one of the target's established pods is also that Pod's chart, so a subject naming the Pod places on it: an agent-run `query_prometheus` when every selector names exactly that Pod, and a diagnose bundle's chart (picked by its `metrics:<category>`) when the diagnose call that drew it summed exactly one pod and listed it. A chart over several pods never places a citation of one of them. A question the agent answered with `revises_assessment: false` does not make the assessment "earlier": its reads join Captured results without demoting the headline or the steps. A backend that sends no `summary` and no placement markers renders in the previous shape.
+**The example investigation.** Until someone has an investigation of their own, the investigations panel's empty state and the agent setup step link to a bundled example: a finished run recorded on a test cluster (an Argo CD-managed Deployment whose image was edited outside Git to a tag that does not exist), with its identifying values replaced. It opens at the reserved run id `example` (`/investigations/example`, or `?ai-run=example` in the drawer) and replays from the frontend bundle through the same view as a saved run, so it needs no server, endpoint or agent and renders the same against any Radar a host embeds. It is labelled as a sample and is read-only: no follow-up, Apply, status check, explanation, re-run, copy or continue-in-agent, and its evidence cards do not open resources, because those resources are not in the viewer's cluster. The transcript lives in `web/src/components/diagnose/exampleInvestigation.events.json`; its test rejects the values it was recorded with and checks that every citation still lands on a card.
+
+**The story contract.** The last fenced `json` block in the reply that carries a verdict field (`summary`, `root_cause`, `healthy`, `inconclusive`, `steps`, `evidence` or `remediation`) is the verdict and a divider, so a patch or spec quoted in a `json` fence inside the story is never mistaken for it: prose after it is the story (`report`), prose before it the agent's evidence ledger (`notes`, kept in Activity and never shown in Findings); a reply with nothing after the block keeps the older shape, where the prose before it is the story. A block that fails to parse only because quotes inside a string value were left unescaped (`"the "api" Service"`) is repaired once, escaping quotes inside a value that pair the way quotes do in prose (an opening one with text right after it and no letter, digit or JSON punctuation before it, a closing one with text right before it and no letter or digit after it), so a missing comma between entries, or a quote beside a JSON comma or colon, is refused rather than merged; the repair counts only when the result parses and carries a verdict field, so any other malformed block still yields no verdict. The story may place a Radar result with `[[radar:evidence=N]]` alone on a line — N is the 0-based index into `evidence` — or mention it inline, which places the card under that paragraph when no own-line marker places it and otherwise references the placed card (with an arrow saying where it is); `[[radar:evidence=N|compact]]` places the card with its header and role label, without the agent's note; log cards also retain the last two selected log lines, and metrics cards their chart, folded unless it is the cause or the symptom. Each evidence item may carry a `gap`: the agent's own statement of what that result does not cover, rendered under its note. Only a result that returned data can be cited: a call that errored, was denied, or was truncated leaves its item `unlinked`. An inline mention past the placement cap renders as a chip that reveals the card under Captured results. Findings renders the placed result's card at that position from Radar's own record; the agent never authors a card. A marker inside a code span (which may run across lines within a paragraph), a code block, an indented code line or a blockquote is literal text. The ledger's own form, `[[radar:evidence-ref=ev_…]]`, is not a placement: the parser rewrites one that names a cited item to its index, strips any marker from `summary` and `root_cause`, and the renderer shows an unresolvable one as a citation Radar cannot identify rather than as text. At most 6 results are placed; later placements become references; a marker Radar cannot resolve renders a visible note at the sentence rather than vanishing, naming why: "unknown citation" (no such item), "unverified" (the server could not bind its ref) or "unclear citation" (bound, but it matches no single result), with the full reason on hover. The caps are the shape of the page and nothing else: at most 8 evidence items, 5 ruled-out hypotheses, 6 steps, 3 unresolved items and 3 root-cause refs, with a 180-rune headline cut at a sentence boundary; no other text is ever cut; a steps, unresolved or ruled-out list that ran past its cap reports the valid entries it lost in `omittedEntries`, evidence losses stay in `unlinkedEvidence`, and more than three root-cause refs still invalidate that set. The verdict adds `summary` (the one-sentence takeaway, ≤ 180 runes, clamped at a sentence boundary; `root_cause` is the two-or-three-sentence paragraph under it), `certainty` (`established` | `likely` | `suspected`, rendered as the agent's word, never a Radar mark), `unresolved` (≤ 3 items, listed under *Still open*, followed by any read Radar could not complete and, on a healthy verdict, each adverse Radar card the agent explained with its note; Radar's routine limits — a capped sample, or history that starts only when Radar started watching or after it evicted older events — sit folded beneath it on one muted *Radar's coverage* line and travel at the end of the channel copy; an adverse card the verdict never addressed, or one the agent calls a cause or symptom, keeps a small amber header naming it; every other caveat stays on the claim it bounds — the gap line under the cause card, the precondition on a step — or inside Captured results), typed `steps` (`text`, `kind` of `mitigate` | `verify` | `investigate`, optional `precondition`; when present the server derives `remediation` from them so one list feeds Apply and `recommended_index`, which may only name a `mitigate` step), and on follow-up turns `revises_assessment`, which the server keeps only on a complete verdict (`summary` plus a root cause, healthy or inconclusive). Findings shows the newest assessment turn — initial, verification, or a question whose verdict revised it — and nothing else; Activity keeps every earlier assessment complete. A run's list entry follows the same rule: `preview` is that assessment's one line and `assessedAt` is when it finished, never an answer or an apply, so a resource's Investigate button can show its newest assessment from the last seven days on the cluster in use (local agents only). With typed steps present, `inconclusive` is cleared only by a non-empty `root_cause` (a mitigation never establishes a cause). No role can hide, collapse, or recolor a card, and a claim that cannot be pinned to exactly one observation shows beside its source under Captured results ("Notes without a card") instead. A subject may omit `name` to cite a listing for what it does not contain (kind and namespace name the listing; uniqueness still decides placement); a subject that names an entry binds to the listing whether or not it holds the entry, and the story card then shows that row inline, or says the entry is not in the listing, or that the name matches several entries. `observation: "resource"` names anything a call returned about a resource: a single resource, a listing, a ranking or posture card, a Helm release, a permissions check or a neighborhood; the stream-shaped kinds (`logs`, `events`, `changes`, `metrics`, `alerts`, `issue`) keep their own word so one word still picks one observation of a diagnose bundle. A receipt is not a kind of its own but what a call of any kind returned when it found nothing (a metric search, a scan with nothing about the target), so a call whose only observation is a receipt is not held to the word; what the subject names still has to match. A subject's `stream` is `current` or `previous` (a container's log streams); any other word there does not cost the citation: one of the evidence words below becomes the `observation` when the agent gave none, and anything else is dropped. `observation` is one of `resource`, `logs`, `events`, `changes`, `metrics` (or `metrics:cpu` / `metrics:memory` / `metrics:restarts` for a diagnose bundle's charts), `alerts` (with `name` as the rule's name, since one rules result holds several rules) or `issue` (`issues` is accepted as an alias); any other word leaves the item unplaced. A placed metrics card shows its chart inline, whatever its role or compact marker: full height as the cause or the symptom, short for any other role. The chart folds behind the card's chevron; it starts open unless the agent placed it compact, and a cause or symptom chart starts open either way, so a role can keep a chart open but never fold it. A folded chart's header carries one line of what it shows: first to last value with any low or peak between them, or the range across several series, and whether samples are missing. A reference that jumps to a folded chart opens it. Only the story's collapsed preview leaves the chart out. Only results Radar projects into cards can be placed (`diagnose`, `get_resource`, non-empty `list_resources`, `list_namespaces`, `list_helm_releases`, `list_packages` and `search`, `get_events`, `get_pod_logs`, `get_workload_logs`, `get_changes`, `get_neighborhood`, `get_topology`, `get_helm_release` with its hooks, revision history and user values, `get_subject_permissions` with its effective rules, `get_prometheus_rules`, `query_prometheus`, `discover_metrics` as a receipt, `issues`, `top_resources` as a ranking with the workload's own row marked, and `get_cluster_audit` or `get_cluster_upgrade_readiness` as a posture card holding only the findings about the investigated resource or its relations, a scan with none becoming a receipt); an empty listing or `get_dashboard` can be cited but renders a "no card" note at the sentence. A placed ranking or posture card shows the rows about the workload inline. Subject matching forgives two agent slips that name no other object: a built-in API group on a core kind (`apps` on a Pod) and a named entry on a listing (a specific ConfigMap cited against the ConfigMaps of a namespace, or a package named by the kind the agent knows it as when the listing holds that name); a vendor group on a core kind (a Knative Service) still names a different object. A metrics chart of the target that covers exactly one of the target's established pods is also that Pod's chart, so a subject naming the Pod places on it: an agent-run `query_prometheus` when every selector names exactly that Pod, and a diagnose bundle's chart (picked by its `metrics:<category>`) when the diagnose call that drew it summed exactly one pod and listed it. A chart over several pods never places a citation of one of them. A question the agent answered with `revises_assessment: false` does not make the assessment "earlier": its reads join Captured results without demoting the headline or the steps. A backend that sends no `summary` and no placement markers renders in the previous shape.
 
 Captured Crossplane resource cards keep declared pause as neutral context and retain the raw `Synced=False/ReconcilePaused` value. Corroborated pause alone does not make the card adverse; independent errors remain adverse. A visible explanation scopes the pause to that resource’s reconciler and describes readiness/errors as last reported. This presentation uses the captured resource, not live replacement data or agent-authored claims.
 
@@ -580,8 +887,10 @@ Captured Crossplane resource cards keep declared pause as neutral context and re
 | `oom_evidence_unavailable` | Radar could not verify recent OOM history, so it withheld a memory reduction rather than recommend one blind. |
 | `hpa_evidence_unavailable` | Radar could not verify HPA ownership, so it withheld a suggested request. |
 | `recommended_request_exceeds_limit` | The evidence-based request would exceed the container's current limit; the limit is the thing to review first. |
+| `requests_exceed_pod_limit` | The pod has a pod-level limit (`spec.resources.limits`) and no pod-level request, so its request is the sum of its containers' requests. Applying this increase together with the other containers' requests and the workload's other suggested increases would exceed that limit, which the API server rejects, so the suggestion is withheld and `limitConflict` is set. Each withheld increase may fit on its own; decide how to split the pod limit between containers, or raise it. |
 | `request_within_fit_range` | The configured request is already within 30% of the evidence-based target. Nothing to change. |
 | `insufficient_history` | Fewer than six hours of samples. Not a verdict of correctly sized. |
+| `pod_level_request` | The pod sets a fixed pod-level request for this resource (`spec.resources`, Kubernetes 1.34+), shown as `podLevelRequest`. The scheduler reserves that value instead of the containers' requests, so Radar suggests no per-container request and does not size the pod-level one. The row has `fit: pod_level_request` and `needsManualReview` with that review reason. Only an explicit pod-level request counts: with a pod-level limit alone, Kubernetes defaults the request to the limit only while no container sets one, so container requests still decide the reservation and are sized as usual. |
 
 `reductionLimited: true` marks a different case: a recommendation exists, but it is a conservative step toward the demand-based target rather than the target itself. Those rows — and only those — also carry `demandTarget: {value, basis}`, the end state the step is heading toward, with `basis` naming how it was derived (`7d Max x 1.15` for memory, `7d P95 x 1.15` for CPU, or the minimum request). It is **not** a value to apply: apply `recommendedRequest`, observe a full window, then re-check. A memory target comes from the 7-day max, so a monthly or batch peak outside the window is invisible to it. The engine computes a target before its HPA, OOM and limit checks run, so a withheld row has one internally; it is never emitted there, because it would fill the `null` those checks left on purpose. `observedStatistic` names what `observed` is (`P95` for CPU, `Max` for memory). `bursty` and `p99Usage` qualify CPU rows whose P99 ran far above the P95 the recommendation is built on.
 
@@ -635,7 +944,7 @@ A normal call reuses the latest matching scan, retained for up to 15 minutes. Us
 2. **`requestDelta`** — the replica-weighted absolute request change (`{cpu, memory}`, formatted quantities such as `-2250m`), normalized so a CPU change and a memory change are comparable.
 3. Namespace, kind and name, so repeated scans return a stable order.
 
-Rows needing manual review — an HPA, OOM history, a limit conflict, or a reduction against bursty or throttled usage — contribute **no** impact: that saving cannot be applied unattended, so counting it would rank a workload by waste it cannot give back. Unevidenced rows also contribute no delta. Missing evidence for one resource does not hide a known increase or review signal on another resource in the same container. Classification uses evidenced rows; `need_data` applies when none is evidenced, or when the evidenced rows are in range but other rows cannot be judged. Missing CPU/memory delta fields mean zero net change or no eligible evidence; inspect rows to distinguish these. Ranking by the largest *proportional* change instead would put an unrequested 64Mi sidecar above the workload wasting two cores.
+Rows needing manual review — an HPA, OOM history, a limit conflict, a reduction against bursty or throttled usage, or a pod-level request — contribute **no** impact: that saving cannot be applied unattended, so counting it would rank a workload by waste it cannot give back. Unevidenced rows also contribute no delta. Missing evidence for one resource does not hide a known increase or review signal on another resource in the same container. Classification uses evidenced rows; `need_data` applies when none is evidenced, or when the evidenced rows are in range but other rows cannot be judged. Missing CPU/memory delta fields mean zero net change or no eligible evidence; inspect rows to distinguish these. Ranking by the largest *proportional* change instead would put an unrequested 64Mi sidecar above the workload wasting two cores.
 
 `classificationCounts` reports all five classes (`reduction`, `increase`, `review`, `need_data`, `in_range`), including zero counts, across evaluated workloads before classification/row filtering and limits. It excludes workloads not evaluated, so partial scans are not whole-cluster counts; evaluated workloads can still lack evidence. Counts expose every class even when higher-priority entries fill the returned list. Use the `classification` filter to inspect those classes.
 
@@ -645,11 +954,12 @@ Rows needing manual review — an HPA, OOM history, a limit conflict, or a reduc
 
 `include_all=true` returns balanced and unevidenced rows too. Workload scope always returns all rows. `evaluatedAt` is evaluation time, not source freshness; workload and scan responses use the same field. Row statistics are `sampleCoverage` (fraction), `p99Usage` (CPU P99), and `throttlePercent` (numeric percentage). `liveInventoryUnavailable` on a workload means current pod OOM status is unknown, even if its rows lack `currentPodOOM`. Workload failure reasons use stable codes: `queries_failed`, `no_usage_samples`, `no_owner_samples`, `pod_inventory_unreadable`, and `no_containers`.
 
-By default a scan returns only `oversized`, `under_requested` and `missing_request` rows and reports the rest in `omitted`. Four exceptions:
+By default a scan returns only `oversized`, `under_requested` and `missing_request` rows and reports the rest in `omitted`. Five exceptions:
 
 - **`scope=workload` returns every row.** The caller named one workload; a handful of rows is the whole answer.
 - **A `scaledToZero` workload returns every row.** Unless its evidence is missing (`need_data`), it classifies as `review` — its 7-day history may not describe the next scale-up — and the Rightsizing page lists it among the actions. A DaemonSet with zero desired pods, once its controller has observed its current spec, matches no node right now, so scans skip it, count it in `coverage.daemonSetsWithoutNodes` and name it in `skippedDaemonSets` (first 50, `skippedDaemonSetsTruncated` beyond that); a node pool scaled to zero still has history for it, which `scope=workload` reads as a `scaledToZero` workload. A zero the controller has not yet re-observed (a new DaemonSet, or a changed selector) is scanned instead, as a `scaledToZero` workload. A namespace holding only such DaemonSets is never reported in `namespacesWithoutWorkloads`, and a scope holding nothing else answers `reason: only_daemonsets_without_nodes` rather than `no_workloads`.
 - **A returned container keeps its unevidenced rows.** The missing row explains the partial state beside any valid recommendation on the other resource. On scans such a row's `queryError` names the warning code carrying the real error, and `omitted.queryError` counts only the rows still hidden. Known increase/review signals still contribute to the workload classification.
+- **A `pod_level_request` row is always returned.** The pod's reservation is a pod-level request Radar does not size, so the workload classifies as `review` rather than looking correctly sized.
 - **A row carrying `currentPodOOM`, `windowOomEvidence`, `limitConflict`, significant throttling (≥10%), or an autoscaler is always returned**, whatever its `fit`. `fit` is settled from the request alone, so the classic OOM shape — request fine, **limit** too low — classifies as `balanced`. Filtering on `fit` would drop exactly the row an "is this under-requested?" question is looking for.
 
 `oomEvidenceAvailable` is emitted on **memory rows only**. It never gates a CPU recommendation, and a literal `false` there would read as an evidence gap. `throttleAvailable` is its CPU counterpart: on CPU rows only, and `false` means throttling was not measured — not that the container is unthrottled.
@@ -873,6 +1183,7 @@ a miss needs a complete read.
 | `outside_namespace_pin` | The namespace, one you can see, is outside Radar's `--namespace-scope` pin. A namespace you can't see is `user_namespace_not_visible` whether or not Radar is pinned to it, so guessing names can't find the pin. | Radar's `--namespace-scope` setting |
 | `namespace_required` | A namespaced `get_resource` needs a namespace. | Pass `namespace` |
 | `object_not_found` | The object is absent from a namespace Radar read in full. | — it is an answer |
+| `legacy_group_only` | The object a reference names exists only in an older API group, while the newer group is served and lacks it. A controller that still reads the older group uses it; one that doesn't, such as Traefik 3 for `traefik.containo.us`, ignores it. | Move the object to the newer group if the controller no longer reads the older one |
 | `cluster_connecting` | Radar is still connecting. | Retry shortly |
 | `cluster_disconnected` | Radar has no working cluster connection; the explanation says why. | Radar's connection |
 | `connection_changed` | Radar's cluster connection changed during the read. | Confirm which cluster Radar is on, then retry |
@@ -908,25 +1219,27 @@ For `get_cost` and `get_rightsizing`, see [Cost and rightsizing evidence limits]
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `issues` | "What's broken right now?" — a ranked, curated stream of live operational failures: failing workloads/pods, active native Helm release failures or stuck pending operations (`kind=HelmRelease`, `group=helm.sh`), dangling references, NetworkPolicies that leave a Service's pods with no allowed inbound traffic, pod-startup blockers (unschedulable / admission-rejected / stuck post-bind), False CRD conditions, and TLS certificates live Ingresses and Gateway listeners serve that are expired, not yet valid, or expire within 24 hours (the row's subject is the Secret and it also shows on each Ingress and Gateway, and `kind=Ingress` or `kind=Gateway` matches it; a live Gateway listener (Gateway Programmed for its current generation with an address; listener HTTPS or TLS Terminate, Programmed, not rejected, conflicted or unresolved, with attached routes and exactly one certificate, cross-namespace only with a ReferenceGrant) makes an expired or not-yet-valid certificate critical; Gateways of AWS's Gateway controllers (certificates from ACM) or of a GatewayClass Radar can't read, Gateways naming a GKE certificate map and listeners naming GKE pre-shared or ACM certificates are skipped, and listeners from ListenerSets aren't read; an expired or not-yet-valid certificate is critical when an Ingress using it has a load-balancer address and, for controllers Radar finds by their pods, a ready controller pod, and a warning when no Ingress has an address but the controller has a ready pod; one expiring within 24 hours is always a warning; the message names the certificate's hosts and the action names the owning cert-manager Certificate. A Secret counts for a host (a listener without a hostname serves every name its certificate covers) only when its certificate covers the host and no other currently valid certificate the same controller references does (a wildcard doesn't compete with a certificate naming the host exactly unless it is declared for that host too), and no Secret Radar can't read or one missing for that host could take its place: controllers choose differently between competing certificates, so competing ones are left to audit. Never for Ingresses the AWS Load Balancer Controller serves, whose certificates come from ACM, or for Secrets no live Ingress or Gateway listener uses. Ingress rows need a cluster-wide Ingress inventory. Whether a valid competitor exists is read cluster-wide, so a row's absence can reflect resources the caller can't read). It also reports Traefik IngressRoutes that a running Traefik loads (its pod flags enable the CRD provider and its namespace, class, label and entry point settings admit the route) whose route needs a Service, TraefikService or Middleware that doesn't exist, directly or through a chain or errors Middleware; Traefik doesn't load such a router, so the route serves nothing. Not covered: certificates expiring later and other config posture (`get_cluster_audit`); an empty result doesn't rule out failures outside these detectors. No source filter; each row carries a `source` label sliceable via `filter`. Recovered Helm rollbacks are deploy history, not live issues; use `get_changes` for Helm deployment history and `get_helm_release` for native Helm full revision/history/hook diagnostics. Flux `HelmRelease` rows (`group=helm.toolkit.fluxcd.io`) are GitOps reconcilers and should use `diagnose`. For static posture use `get_cluster_audit`; for raw events use `get_events`. | `namespace` (optional), `severity` (optional: `critical,warning`), `kind` (optional), `filter` (optional CEL), `limit` (optional, default 200, max 1000) |
-| `diagnose` | Collect a bounded, point-in-time evidence bundle for one narrowed workload, GitOps reconciler, or network entry kind in a single call. It supports diagnosis but does not run an agent, provide an authoritative root-cause verdict, or exhaustively read every source. Pod/Deployment/StatefulSet/DaemonSet and Argo Rollout (`kind=Rollout`, `group=argoproj.io`) get minified resource + `resourceContext` + selected, capped current and previous container logs across pods + `crashCause` evidence that pairs active crashloop status with one highest-signal filtered log line (`logLineSelection` states how the line was chosen, in descending confidence: `fatal_pattern`, `traceback_header_only`, `last_matched_line`, `log_tail`) + filtered events + `startupBlockers`; Application/Kustomization/Flux HelmRelease get reconciler status + related parsed issues; Service/Ingress/HTTPRoute/GRPCRoute/Gateway get coverage-honest [reachability evidence](reachability.md): a `summary` (headline + tested/passed/failed/skipped counts over the intended routes), `routes` (per-route outcome + `confidence` - `indirect` = reached only via the API-server proxy, not the live-traffic path), `notTested` (with why + a copyable command), an optional named `brokenRoute` when established, and `path` (hops with static findings). Optional active reachability test (`probe: true`, bounded to a 3s total budget; a timeout returns an honest partial). The returned bundle is frozen from one call, but its sources are not read atomically; preserve its limits, errors, timestamps, and confidence. In `resourceContext`, `issueSummary` uses live-operational `critical`/`warning` and, when the top issue is about another resource (for example the NetworkPolicy isolating a Service), names it in `topSubject`, while `auditSummary` uses the Checks posture-remediation ladder `critical`/`high`/`medium`/`low` (current built-ins are `high`/`medium`) and is mostly latent risk, though some findings (expired certificates, dangling references) can be live failures. | `kind` (required: workload, GitOps reconciler, or network entry kind), `group` (optional API group; set it for CRDs or same-kind collisions, for example `argoproj.io` for `Rollout`; built-in groups are inferred when omitted), `namespace` (required), `name` (required), `probe` (optional: network kinds only - run DNS/TCP/TLS/HTTP probes as applicable; explicitly non-HTTP Service ports stop at TCP), `in_cluster` (optional on the full `/mcp` endpoint only, **MUTATING** - network kinds only: runs the applicable probe layers from inside the cluster by creating up to 5 short-lived, self-deleting probe pods under your RBAC; the only diagnose option with a side effect, requires `create jobs`, `list pods`, and `get pods/log`; forces `probe` on; omitted from and rejected by `/mcp-readonly`) |
-| `get_dashboard` | Cluster/namespace health overview — resource counts, failing pods, unhealthy workloads, warning-event groups (`warningGroups`, up to 20 recency-ordered; `totalWarningGroups`/`warningGroupsTruncated` signal when more exist), Helm status. Inventory-style triage before drilling in. | `namespace` (optional) |
+| `issues` | "What's broken right now?" — a ranked, curated stream of live operational failures: failing workloads/pods, active native Helm release failures or stuck pending operations (`kind=HelmRelease`, `group=helm.sh`), dangling references, NetworkPolicies that leave a Service's pods with no allowed inbound traffic, pod-startup blockers (unschedulable / admission-rejected / stuck post-bind), False CRD conditions, and TLS certificates live Ingresses and Gateway listeners serve that are expired, not yet valid, or expire within 24 hours (the row's subject is the Secret and it also shows on each Ingress and Gateway, and `kind=Ingress` or `kind=Gateway` matches it; a live Gateway listener (Gateway Programmed for its current generation with an address; listener HTTPS or TLS Terminate, Programmed, not rejected, conflicted or unresolved, with attached routes and exactly one certificate, cross-namespace only with a ReferenceGrant) makes an expired or not-yet-valid certificate critical; Gateways of AWS's Gateway controllers (certificates from ACM) or of a GatewayClass Radar can't read, Gateways naming a GKE certificate map and listeners naming GKE pre-shared or ACM certificates are skipped, and listeners from ListenerSets aren't read; an expired or not-yet-valid certificate is critical when an Ingress using it has a load-balancer address and, for controllers Radar finds by their pods, a ready controller pod, and a warning when no Ingress has an address but the controller has a ready pod; one expiring within 24 hours is always a warning; the message names the certificate's hosts and the action names the owning cert-manager Certificate. A Secret counts for a host (a listener without a hostname serves every name its certificate covers) only when its certificate covers the host and no other currently valid certificate the same controller references does (a wildcard doesn't compete with a certificate naming the host exactly unless it is declared for that host too), and no Secret Radar can't read or one missing for that host could take its place: controllers choose differently between competing certificates, so competing ones are left to audit. Never for Ingresses the AWS Load Balancer Controller serves, whose certificates come from ACM, or for Secrets no live Ingress or Gateway listener uses. Ingress rows need a cluster-wide Ingress inventory. Whether a valid competitor exists is read cluster-wide, so a row's absence can reflect resources the caller can't read). It also reports cert-manager Certificates with a failed issuance after renewal became due while their existing certificate is still reported Ready (`certificate_renewal_failed`); retries remain visible until successful issuance clears the failure, and expiry of the recorded certificate makes the finding critical without claiming a live TLS outage. It also reports Traefik IngressRoutes that a running Traefik loads (its pod flags enable the CRD provider and its namespace, class, label and entry point settings admit the route) whose route needs a Service, TraefikService or Middleware that doesn't exist, directly or through a chain or errors Middleware; Traefik doesn't load such a router, so the route serves nothing. Not covered: expiry alone beyond 24 hours and other config posture (`get_cluster_audit`); an empty result doesn't rule out failures outside these detectors. No source filter; each row carries a `source` label sliceable via `filter`. Recovered Helm rollbacks are deploy history, not live issues; use `get_changes` for Helm deployment history and `get_helm_release` for native Helm full revision/history/hook diagnostics. Flux `HelmRelease` rows (`group=helm.toolkit.fluxcd.io`) are GitOps reconcilers and should use `diagnose`. For static posture use `get_cluster_audit`; for raw events use `get_events`. | `namespace` (optional), `severity` (optional: `critical,warning`), `kind` (optional), `filter` (optional CEL), `limit` (optional, default 200, max 1000) |
+| `diagnose` | Collect a bounded, point-in-time evidence bundle for one narrowed workload, OpenTelemetryCollector/Flagger Canary, GitOps reconciler, or network entry kind in a single call. It supports diagnosis but does not run an agent, provide an authoritative root-cause verdict, or exhaustively read every source. Pod/Deployment/StatefulSet/DaemonSet and Argo Rollout (`kind=Rollout`, `group=argoproj.io`) get minified resource + `resourceContext` + selected, capped current and previous container logs across pods + `crashCause` evidence that pairs active crashloop status with one highest-signal filtered log line (`logLineSelection` states how the line was chosen, in descending confidence: `fatal_pattern`, `traceback_header_only`, `last_matched_line`, `log_tail`) + filtered events + `startupBlockers`; OpenTelemetryCollector/Flagger Canary get root reconciliation, current-UID events and bounded owned-workload bundles; Canary separately includes its declared target; Application/Kustomization/Flux HelmRelease get reconciler status + related parsed issues; Service/Ingress/HTTPRoute/GRPCRoute/Gateway get coverage-honest [reachability evidence](reachability.md): a `summary` (headline + tested/passed/failed/skipped counts over the intended routes), `routes` (per-route outcome + `confidence` - `indirect` = reached only via the API-server proxy, not the live-traffic path), `notTested` (with why + a copyable command), an optional named `brokenRoute` when established, and `path` (hops with static findings). Optional active reachability test (`probe: true`, bounded to a 3s total budget; a timeout returns an honest partial). The returned bundle is frozen from one call, but its sources are not read atomically; preserve its limits, errors, timestamps, and confidence. In `resourceContext`, `issueSummary` uses live-operational `critical`/`warning` and, when the top issue is about another resource (for example the NetworkPolicy isolating a Service), names it in `topSubject`, while `auditSummary` uses the Checks posture-remediation ladder `critical`/`high`/`medium`/`low` (current built-ins are `high`/`medium`) and is mostly latent risk, though some findings (expired certificates, dangling references) can be live failures. | `kind` (required: workload, OpenTelemetryCollector/Flagger Canary, GitOps reconciler, or network entry kind), `group` (optional API group; set it for CRDs or same-kind collisions, for example `argoproj.io` for `Rollout`; built-in groups are inferred when omitted), `namespace` (required), `name` (required), `probe` (optional: network kinds only - run DNS/TCP/TLS/HTTP probes as applicable; explicitly non-HTTP Service ports stop at TCP), `in_cluster` (optional on the full `/mcp` endpoint only, **MUTATING** - network kinds only: runs the applicable probe layers from inside the cluster by creating up to 5 short-lived, self-deleting probe pods under your RBAC; the only diagnose option with a side effect, requires `create jobs`, `list pods`, and `get pods/log`; forces `probe` on; omitted from and rejected by `/mcp-readonly`) |
+| `get_dashboard` | Cluster/namespace health overview — resource counts, failing pods, unhealthy workloads, warning-event groups (`warningGroups`, up to 20 recency-ordered; `totalWarningGroups`/`warningGroupsTruncated` signal when more exist), Helm status. `cluster.name` is the kubeconfig context Radar is connected to (`in-cluster` when Radar runs inside the cluster); `cluster.kubeconfigCluster` is the kubeconfig cluster entry that context points at, which several contexts can share. `helmReleases.unreadNamespaces` names namespaces whose Helm release Secrets weren't read (the caller was refused, or the permission check went unanswered); their releases are missing from that count, and `list_helm_releases` may find them from objects the caller can read. Inventory-style triage before drilling in. With authentication and no `namespace`, requires cluster-wide `list pods` permission. Separate namespace grants do not satisfy that check; use an accessible `namespace` instead. | `namespace` (optional) |
 | `top_resources` | Live metrics ranked like `kubectl top | sort`, joined with K8s context (status, restarts, owner, requests/limits). Use for CPU/memory/OOM/load symptoms. | `kind` (optional: `pods` default, `workloads`, `nodes`), `namespace` (optional), `sort` (optional: `cpu` default, `memory`), `limit` (optional, default 20, max 100) |
 | `list_resources` | List resources of a kind with minified summaries + per-row `summaryContext` (managedBy / health / issueCount). Returns `{summary, next?, coverage, items}`: a sentence saying what the rows cover and what Radar did not read, what you can do to complete it when you can, then the same as data ([lists](#lists)). | `kind` (required), `group` (optional), `namespace` (optional), `context` (optional: default / `none`) |
-| `search` | Find resources by content/term match (config keys, env refs, images, label values, CRD fields, webhook configs, status messages). Tokens AND'd; secret values and CA bundles never indexed. Supports `kind:`/`ns:`/`label:`/`image:` modifiers (a Kind, its plural, or a kubectl short name of a built-in such as `netpol`, `ing`, `sa`, `quota`) and CEL `filter`. Searches workloads, Pods, Services, Ingresses, IngressClasses, NetworkPolicies, ConfigMaps, Secrets (names only), PVCs, PVs, StorageClasses, HPAs, PDBs, ResourceQuotas, LimitRanges, ServiceAccounts, Roles, RoleBindings, ClusterRoles, ClusterRoleBindings, Nodes, Namespaces, Events (with `kind:Event`) and watched CRDs; a `kind:` term also searches a large CRD Radar watches only on demand. Endpoints, EndpointSlices and Leases are not searched; use `list_resources`. Trivy Operator reports match by CVE ID with package and installed/fixed versions, SBOM component, failed check ID and scanned image (`image:`); a secret finding's matched text is never indexed or reachable. Free tokens can land on different findings of one report, so use the CEL `report` binding (`report.vulnerabilities.exists(v, …)`) to match a single finding. A report is scan-time evidence: `summaryContext.managedBy` names the workload and `summaryContext.scanned` the scanned object (`missing` means Radar can't find it). By default Trivy Operator deletes an old ReplicaSet's reports after a rollout; with `vulnerabilityScannerScanOnlyCurrentRevisions: false` they stay, and `scanned.replicas: 0` usually marks one (a Deployment scaled to zero also reads 0). Trivy reports are returned only where the caller may list that report kind. Every result carries `coverage` (`status`, `narrowedBy`, `gaps`), and a partial result, an empty narrowed one, or one with hits that Radar's namespace collection or pin limited adds `coverageHint`; see [Search coverage](#search-coverage-and-cel-object-filters). | `query` (required), `filter` (optional CEL), `limit` (optional) |
-| `get_resource` | Inspect one known resource: minified spec, status, and metadata, plus default-on `resourceContext` with relationships and available resource-specific summaries. Operational issues and static audit posture remain distinct; audit findings are mostly latent risk, though some (expired certificates, dangling references) can be live failures. See [integration documentation](integrations.md) for controller-specific context and limits. Optional supplemental data adds events, metrics, recent changes, rollback revisions, detailed issue context, or a Node drain estimate. `include=drain-plan` reuses the read-only REST drain estimator with the caller’s credentials and the removal drawer’s explicit options; it returns up to 100 current pods, full summary counts, `drainPlanTotalPods` and `drainPlanPodsTruncated`. It evaluates Eviction API/PDB eligibility, not controller-specific policy or eviction history. `include=issues` returns up to three `relatedIssues`, with `relatedIssuesTotal` and `relatedIssuesTruncated`; this is independent of `context=none`. `staleEnv` lists env vars that running containers read from a Secret or ConfigMap key and that started before that key's last data write, so they likely still hold the earlier value until restart: on a Secret or ConfigMap it names the consuming Pods, on a Pod or workload its env vars. It is attached with `context=none` too, shows up to 5 rows with `total`, needs `get` on Pods and on the source's kind, and skips volume mounts, which refresh in place. For a Secret write made before Radar started, the row comes from the Secret's managedFields (`evidenceSource: managed_fields_mtime`), names no key, and says the write may not have touched data; ConfigMap rows come only from changes Radar observed. For logs use `get_pod_logs`, `get_workload_logs`, or `diagnose` for supported kinds. | `kind` (required), `name` (required), `namespace` (optional — omit for cluster-scoped kinds), `group` (optional, for ambiguous kinds), `include` (optional, comma-separated: `events,metrics,changes,revisions,issues,drain-plan`; `revisions` lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout), `context` (optional: `basic` default, `none` to omit `resourceContext`; a Pod/template divergence note can still appear in `warnings`, and `staleEnv` still attaches) |
-| `get_topology` | Whole-namespace/cluster topology graph (nodes + edges). Use `summary` format for LLM-friendly text chains. Once you have a suspect root, prefer `get_neighborhood`. | `namespace` (optional), `view` (optional: `traffic` or `resources`), `format` (optional: `graph` or `summary`) |
-| `get_neighborhood` | BFS-expanded topology neighborhood around one known root — cheaper and clearer than `get_topology` for cross-resource failures (routing, selector/endpoint, refs, owner chains). RBAC-filtered. | `kind` (required), `namespace` (optional), `name` (required), `profile` (optional: `auto` default / `all`), `hops` (optional, default 1, max 2) |
-| `get_events` | Recent Kubernetes events, deduplicated and sorted **Warning-groups-first then by recency** — all types by default, so warnings lead and lifecycle events follow as timeline evidence. Filter by resource kind/name to scope; `type=Warning` for warnings only, `type=Normal` for lifecycle only. A namespace the caller cannot read returns an empty list with `accessDenied: true`, so an empty result without the marker means nothing is recorded for that scope. A request with no `namespace` means cluster-wide; when the caller may read only some namespaces the answer covers those alone and says so with `partialScope: true` and `scopeNamespaces`, so a narrowed empty result is never read as a clean cluster. | `namespace` (optional), `limit` (optional, default 20, max 100), `kind` (optional), `name` (optional), `type` (optional: `all` default, `Warning`, `Normal`) |
-| `get_changes` | Recent meaningful changes from the Kubernetes cluster timeline plus native Helm release deployment/operation history (`source: helm`). Use to investigate what changed before an incident, including failed upgrades, rollbacks, and current Helm revisions. If the response includes `sourcesErrored`, treat it as partial data for those sources. A namespace query without `kind` or `name` adds `clusterScopedChanges` (see [below](#cluster-scoped-admission-changes-in-a-namespace-view)). Until Radar has connected to the cluster it returns a `cluster_connecting` error rather than an empty list, as the REST API does. Use `get_helm_release include=history,operations` for the full Helm revision trail. For Deployments, StatefulSets, DaemonSets, CronJobs, Jobs, PodDisruptionBudgets, HPAs, Services, Ingresses, Gateway API objects, Argo Rollouts, admission webhook configurations, ResourceQuotas and LimitRanges, a changed desired-state field without its own row appears in the summary as `other spec changes: <fields>` (webhook configurations: `other changes`), with full paths in `fields`; a block added or removed as a whole is named once, and past 25 such fields one `spec (more fields)` row lists the rest by path. In those `other spec changes` rows, values Radar keeps out of the feed (free-form strings such as annotations, expressions and header values, anything under a container spec, and large structures) read `(value hidden)`, or `(set)` beside `null` when the field was added or removed. Dedicated rows show their own values with key-aware redaction: env values, command arguments, labels and selector values under secret-looking keys read `[REDACTED]`, and exec probe commands are hidden. With a `kind` or `name` filter, recorded custom-resource creates and deletes are lifecycle rows; otherwise untracked custom kinds remain excluded from the default feed and from per-issue “no recent changes” claims. This does not enroll additional kinds in recreate joins. On a generation change, generic custom-resource diffs compare desired state (all top-level fields except `apiVersion`, `kind`, `metadata`, and `status`) and name full paths in `desired state changes:` summaries. An item inserted into or removed from a list is named once rather than shifting every later index, and reordering a list whose items have a `name` reads as `<path> order`. They use the same hidden-value markers, whole-block collapsing and 25-value cap; `desired state (more fields)` lists up to 25 remaining paths and names the omitted-path count when more exist. Qualified sensitive keys also use the configuration-diff redaction policy; bare `key` fields are hidden because their schema is unknown. A generation change with identical desired state falls through to condition/status handling, except on a CustomResourceDefinition, where it reads `schema or conversion changed` because Radar does not keep those fields. A run of 5 or more plain creates in one namespace (rows with no diff or message, each within 60 s of the previous one, such as an install) is listed under `created` instead of one row each: `first` (timestamp of the earliest create), `count`, `apiVersions` (kind → apiVersion) and `objects`, one `+<seconds after first>s Kind/name` line per object, with ` (used by Kind/name, …)` for a consumed ConfigMap. Each line carries everything the row it replaces did. Lone creates, creates of NetworkPolicies, ResourceQuotas, LimitRanges, HPAs, PodDisruptionBudgets, ReferenceGrants, webhook configurations and GitOps Applications, Kustomizations and HelmReleases, and every delete and non-Secret update stay full rows; a `name=` query returns only full rows. `created` objects count toward `limit`. Each query reads at most the newest 1000 matching rows per change type (100 with `name`); when a window holds more, `narrowHint` says relevant changes may be missing. When the window starts before the history Radar holds (Radar started observing later, or deleted older events to stay within its history size or retention limit), the response carries `historyCoverage` with `incomplete`, `reasons` (`observation_started_late`, `events_evicted`) and, for callers who can read every namespace, `complete_since`; an empty answer is then not evidence that nothing changed. With `kind` naming a custom kind, the response carries `coverage`: where Radar collects that kind now, as `list_resources` reports it (see [Resource reads: coverage and errors](#resource-reads-coverage-and-errors)). Asking may start collecting it, as listing it does. `coverage` says nothing about how much history Radar holds: `narrowHint` leads with any part Radar doesn't collect, and says when collection started if that was inside the window ("Radar has watched widgets only since …"), unless `historyCoverage` in the same response already reports a boundary within a minute of it, or that the start can't be established because Radar watches the kind per namespace. `historyCoverage` stays store-wide. Built-in kinds get no `coverage`. When a custom kind shares its name with a built-in kind or with native Helm history (Knative `Service`, Flux `HelmRelease`), the custom one is checked by itself and named by group in `narrowHint`, without a `coverage` field. Custom kinds in more than one API group, an unknown kind, and a cluster-scoped kind with `namespace` get a sentence instead. A caller limited to some namespaces who names a cluster-scoped kind and no namespace also gets that kind's changes, from the API groups of it they may list; without `kind`, their history stays within their namespaces; a `name` query without `kind` that finds nothing says to pass `kind` to check collection. | `namespace` (optional), `kind` (optional), `name` (optional), `since` (optional, e.g. `1h`, `30m`; default `1h`), `limit` (optional, default 20, max 50) |
+| `search` | Find resources by content/term match (config keys, env refs, images, label values, CRD fields, webhook configs, status messages). Tokens AND'd; secret values and CA bundles never indexed. Supports `kind:`/`ns:`/`label:`/`image:` modifiers (a Kind, its plural, or a kubectl short name of a built-in such as `netpol`, `ing`, `sa`, `quota`) and CEL `filter`. Searches workloads, Pods, Services, Ingresses, IngressClasses, NetworkPolicies, ConfigMaps, Secrets (names only), PVCs, PVs, StorageClasses, HPAs, PDBs, ResourceQuotas, LimitRanges, ServiceAccounts, Roles, RoleBindings, ClusterRoles, ClusterRoleBindings, Nodes, Namespaces, Events (with `kind:Event`) and watched CRDs; a `kind:` term also searches a large CRD Radar watches only on demand. Endpoints, EndpointSlices and Leases are not searched; use `list_resources`. An IP address, `ip:port` or `[v6]:port` (a client address from a log) matches that whole address only (`10.0.1.2` never matches `10.0.1.23`): a hit with site `ip:<role>` holds it (`podIP`, `hostNetworkPod`, `clusterIP`, `externalIP`, `loadBalancerIP` from status, `node<AddressType>` such as `nodeInternalIP`; `exitedPodIP` is a finished pod's old IP, which a running pod may have been given since, and ranks below a running holder); other sites, such as a Pod's `status.hostIP` or a ConfigMap URL, only mention it. A query of one IP alone whose untruncated hits include no running holder adds `ipHint`: Pod IPs are reused, a deleted pod's IP no longer resolves, and the address may be outside the cluster. Trivy Operator reports match by CVE ID with package and installed/fixed versions, SBOM component, failed check ID and scanned image (`image:`); a secret finding's matched text is never indexed or reachable. Free tokens can land on different findings of one report, so use the CEL `report` binding (`report.vulnerabilities.exists(v, …)`) to match a single finding. A report is scan-time evidence: `summaryContext.managedBy` names the workload and `summaryContext.scanned` the scanned object (`missing` means Radar can't find it). By default Trivy Operator deletes an old ReplicaSet's reports after a rollout; with `vulnerabilityScannerScanOnlyCurrentRevisions: false` they stay, and `scanned.replicas: 0` usually marks one (a Deployment scaled to zero also reads 0). Trivy reports are returned only where the caller may list that report kind. Every result carries `coverage` (`status`, `narrowedBy`, `gaps`), and a partial result, an empty narrowed one, or one with hits that Radar's namespace collection or pin limited adds `coverageHint`; see [Search coverage](#search-coverage-and-cel-object-filters). | `query` (required), `filter` (optional CEL), `limit` (optional) |
+| `get_resource` | Inspect one known resource: minified spec, status, and metadata, plus default-on `resourceContext` with relationships and available resource-specific summaries. Operational issues and static audit posture remain distinct; audit findings are mostly latent risk, though some (expired certificates, dangling references) can be live failures. See [integration documentation](integrations.md) for controller-specific context and limits. Optional supplemental data adds events, metrics, recent changes, rollback revisions, detailed issue context, or a Node drain estimate. `include=drain-plan` reuses the read-only REST drain estimator with the caller’s credentials and the removal drawer’s explicit options; it returns up to 100 current pods, full summary counts, `drainPlanTotalPods` and `drainPlanPodsTruncated`. It evaluates Eviction API/PDB eligibility, not controller-specific policy or eviction history. `include=issues` returns up to three `relatedIssues`, with `relatedIssuesTotal` and `relatedIssuesTruncated`; this is independent of `context=none`. `staleEnv` lists env vars that running containers read from a Secret or ConfigMap key and that started before that key's last data write, so they likely still hold the earlier value until restart: on a Secret or ConfigMap it names the consuming Pods, on a Pod or workload its env vars. It is attached with `context=none` too, shows up to 5 rows with `total`, needs `get` on Pods and on the source's kind, and skips volume mounts, which refresh in place. For a Secret write made before Radar started, the row comes from the Secret's managedFields (`evidenceSource: managed_fields_mtime`), names no key, and says the write may not have touched data; ConfigMap rows come only from changes Radar observed. When every change Radar saw since the container started only reordered the value's comma-separated entries, and its history covers that whole time, the message says only the order changed; reorders of `mon_host` and `mon_initial_members` in Rook's own `rook-ceph-config` Secret (type `kubernetes.io/rook`, controlled by a CephCluster) are left out, since Ceph treats both as sets. For logs use `get_pod_logs`, `get_workload_logs`, or `diagnose` for supported kinds. | `kind` (required), `name` (required), `namespace` (optional — omit for cluster-scoped kinds), `group` (optional, for ambiguous kinds), `include` (optional, comma-separated: `events,metrics,changes,revisions,issues,drain-plan`; `revisions` lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout), `context` (optional: `basic` default, `none` to omit `resourceContext`; a Pod/template divergence note can still appear in `warnings`, and `staleEnv` still attaches) |
+| `get_topology` | Whole-namespace/cluster topology graph (nodes + edges). Use `summary` format for LLM-friendly text chains. Once you have a suspect root, prefer `get_neighborhood`. A request with no `namespace` from a caller who can access only some namespaces covers those alone and says so with `partialScope: true` and `scopeNamespaces`, in both formats. | `namespace` (optional), `view` (optional: `resources` (default) or `traffic`), `format` (optional: `graph` or `summary`) |
+| `get_neighborhood` | BFS-expanded topology neighborhood around one known root — cheaper and clearer than `get_topology` for cross-resource failures (routing, selector/endpoint, refs, owner chains). RBAC-filtered. See [Neighborhoods](#neighborhoods). | `kind` (required), `group` (optional; for kinds that collide across API groups), `namespace` (optional), `name` (required), `profile` (optional: `auto` default / `all`), `hops` (optional, default 1, max 2), `max_nodes` (optional, default 25, max 200) |
+| `get_events` | Recent Kubernetes events, deduplicated and sorted **Warning-groups-first then by recency** — all types by default, so warnings lead and lifecycle events follow as timeline evidence. Filter by resource kind/name to scope; `type=Warning` for warnings only, `type=Normal` for lifecycle only. A namespace the caller cannot read returns an empty list with `accessDenied: true`, so an empty result without the marker means nothing is recorded for that scope. A request with no `namespace` means cluster-wide; when the caller may read only some namespaces the answer covers those alone and says so with `partialScope: true` and `scopeNamespaces`, so a narrowed empty result is never read as a clean cluster. When Radar can't check which namespaces the caller can access, the call fails with `error_code: user_permission_check_failed` rather than returning an empty list; retrying can succeed. `get_topology` and `get_dashboard` answer the same way. | `namespace` (optional), `limit` (optional, default 20, max 100), `kind` (optional), `name` (optional), `type` (optional: `all` default, `Warning`, `Normal`) |
+| `get_changes` | Recent meaningful changes from the Kubernetes cluster timeline plus native Helm release deployment/operation history (`source: helm`). Use to investigate what changed before an incident, including failed upgrades, rollbacks, and current Helm revisions. If the response includes `sourcesErrored`, treat it as partial data for those sources. A namespace query without `kind` or `name` adds `clusterScopedChanges` (see [below](#cluster-scoped-admission-changes-in-a-namespace-view)). Until Radar has connected to the cluster it returns a `cluster_connecting` error rather than an empty list, as the REST API does. Use `get_helm_release include=history,operations` for the full Helm revision trail. For Deployments, StatefulSets, DaemonSets, CronJobs, Jobs, PodDisruptionBudgets, HPAs, Services, Ingresses, Gateway API objects, Argo Rollouts, Argo CD Applications, admission webhook configurations, ResourceQuotas and LimitRanges, a changed desired-state field without its own row appears in the summary as `other spec changes: <fields>` (webhook configurations: `other changes`), with full paths in `fields`; a block added or removed as a whole is named once, and past 25 such fields one `spec (more fields)` row lists the rest by path. In those `other spec changes` rows, values Radar keeps out of the feed (free-form strings such as annotations, expressions and header values, Helm values, anything under a container spec, and large structures) read `(value hidden)`, or `(set)` beside `null` when the field was added or removed. Dedicated rows show their own values with key-aware redaction: env values, command arguments, labels and selector values under secret-looking keys read `[REDACTED]`, and exec probe commands are hidden. A `kind` or `name` filter also returns Nodes owned by another object, such as Karpenter's NodeClaim; other owned built-ins (Pods, ReplicaSets, Endpoints) stay out. With a `kind` or `name` filter, recorded custom-resource creates and deletes are lifecycle rows; otherwise untracked custom kinds remain excluded from the default feed and from per-issue “no recent changes” claims. This does not enroll additional kinds in recreate joins. Role and RoleBinding changes list in their namespace's feed, ClusterRole and ClusterRoleBinding changes in a cluster-wide one. Their diffs name `rules (changed entries)` (the removed rules as the old value, the added ones as the new), `aggregationRule`, `subjects` and `roleRef` (subjects read `ServiceAccount <namespace>/<name>`, `User <name>` or `Group <name>`); a metadata-only update is not a change, except a ClusterRole label that aggregation reads (an `rbac.authorization.k8s.io/aggregate-to-*` key, or a key some ClusterRole's aggregationRule selects on), which reads `metadata.labels[<key>]`. Every binding create, delete and recreate records the subjects and roleRef it had when the event arrived. A recreate lists what it kept as `subjects (unchanged)` or `roleRef (unchanged)`. A RoleBinding create that grants nothing outside its namespace still reads as a plain create, so install runs stay compact. A binding row's `rank_reason` names the ServiceAccounts it grants to, or no longer grants to, from outside the binding's namespace (any ServiceAccount, for a ClusterRoleBinding), so a grant to another namespace's controller doesn't need a follow-up read. On a generation change, generic custom-resource diffs compare desired state (all top-level fields except `apiVersion`, `kind`, `metadata`, and `status`) and name full paths in `desired state changes:` summaries. An item inserted into or removed from a list is named once rather than shifting every later index, and reordering a list whose items have a `name` reads as `<path> order`; a reorder of a list without names, changing nothing else, reads the same way with the items' positions (`[0 1]` → `[1 0]`). They use the same hidden-value markers, whole-block collapsing and 25-value cap; `desired state (more fields)` lists up to 25 remaining paths and names the omitted-path count when more exist. Qualified sensitive keys also use the configuration-diff redaction policy; bare `key` fields are hidden because their schema is unknown. A generation change with identical desired state falls through to condition/status handling (this also holds for custom kinds with their own rows, such as Argo CD Applications, whose CRD has no status subresource, so every status write bumps generation; their `operation` field, the sync request, is not desired state), except on a CustomResourceDefinition, where it reads `schema or conversion changed` because Radar does not keep those fields. A run of 5 or more plain creates in one namespace (rows with no diff or message, each within 60 s of the previous one, such as an install) is listed under `created` instead of one row each: `first` (timestamp of the earliest create), `count`, `apiVersions` (kind → apiVersion) and `objects`, one `+<seconds after first>s Kind/name` line per object, with ` (used by Kind/name, …)` for a consumed ConfigMap. Each line carries everything the row it replaces did. Lone creates, creates of NetworkPolicies, ResourceQuotas, LimitRanges, HPAs, PodDisruptionBudgets, ReferenceGrants, webhook configurations and GitOps Applications, Kustomizations and HelmReleases, and every delete and non-Secret update stay full rows; a `name=` query returns only full rows. `created` objects count toward `limit`. Each query reads at most the newest 1000 matching rows per change type (100 with `name`); when a window holds more, `narrowHint` says relevant changes may be missing. When the window starts before the history Radar holds (Radar started observing later, or deleted older events to stay within its history size or retention limit), the response carries `historyCoverage` with `incomplete`, `reasons` (`observation_started_late`, `events_evicted`) and, for callers who can read every namespace, `complete_since`; an empty answer is then not evidence that nothing changed. With `kind` naming a custom kind, the response carries `coverage`: where Radar collects that kind now, as `list_resources` reports it (see [Resource reads: coverage and errors](#resource-reads-coverage-and-errors)). Asking may start collecting it, as listing it does. `coverage` says nothing about how much history Radar holds: `narrowHint` leads with any part Radar doesn't collect, and says when collection started if that was inside the window ("Radar has watched widgets only since …"), unless `historyCoverage` in the same response already reports a boundary within a minute of it, or that the start can't be established because Radar watches the kind per namespace. `historyCoverage` stays store-wide. Built-in kinds get no `coverage`. When a custom kind shares its name with a built-in kind or with native Helm history (Knative `Service`, Flux `HelmRelease`), the custom one is checked by itself and named by group in `narrowHint`, without a `coverage` field. Custom kinds in more than one API group, an unknown kind, and a cluster-scoped kind with `namespace` get a sentence instead. A caller limited to some namespaces who names a cluster-scoped kind and no namespace also gets that kind's changes, from the API groups of it they may list; without `kind`, their history stays within their namespaces; a `name` query without `kind` that finds nothing says to pass `kind` to check collection. | `namespace` (optional), `kind` (optional), `name` (optional), `since` (optional, e.g. `1h`, `30m`; default `1h`), `limit` (optional, default 20, max 50) |
 | `get_pod_logs` | Pod logs with secret redaction. Without `grep`, prioritizes errors/warnings and falls back to recent tail lines; with `grep`, returns only regex-matching lines instead of applying the diagnostic filter. Returns `container` when explicitly requested or resolved from a readable single-container Pod. If Pod metadata is unavailable, the log read still proceeds, but an unspecified container remains unknown. | `namespace` (required), `name` (required), `container` (optional; specify for multi-container Pods), `tail_lines` (optional, default 200), `grep` (optional), `previous` (optional), `since` (optional) |
-| `get_workload_logs` | Aggregated logs from all pods of a workload (Deployment, StatefulSet, DaemonSet, Job, Argo Workflow). Without `grep`, auto-filters for diagnostic relevance; with `grep`, returns only matching timestamp-prefixed lines. | `kind` (required), `namespace` (required), `name` (required), `container` (optional), `tail_lines` (optional, default 100 per pod), `grep` (optional) |
+| `get_workload_logs` | Aggregated logs from all pods of a workload (Deployment, StatefulSet, DaemonSet, Argo Rollout, Job, Argo Workflow). Without `grep`, auto-filters for diagnostic relevance; with `grep`, returns only matching timestamp-prefixed lines. | `kind` (optional, default `deployment`), `namespace` (required), `name` (required), `container` (optional), `tail_lines` (optional, default 100 per pod), `grep` (optional) |
 | `get_cluster_audit` | `missingInputs`, when present, names unavailable inputs in the scan; zero findings do not establish that all checks passed. Static config posture — best-practice findings (Security / Reliability / Efficiency) with remediation. Findings are mostly latent risk, but some (expired certificates, dangling references) can be live failures; check them before dismissing. Finding severity and the explicit `summary.critical`/`high`/`medium`/`low` counts are posture remediation priority; current built-in checks emit `high` or `medium`. For "what's broken right now?" use `issues`. | `namespace` (optional), `category` (optional), `severity` (optional: `critical`, `high`, `medium`, or `low`) |
 | `get_cluster_upgrade_readiness` | Upgrade impact analysis for a target Kubernetes minor — the evidenced check catalog (version skew, removed/deprecated API usage across live manifests / Helm sources / API-server metrics, node runtime + cgroup evidence, drain feasibility, webhook readiness, release-specific config checks). The verdict is not a readiness guarantee: `unknown` checks had incomplete evidence, `coverage` states what the caller's RBAC could actually inspect, and `no_access` returns no verdict at all. Tier 1 is one row per check; `check=<id>` expands into findings with evidence + remediation, paged 25 at a time (`offset` + `scan_id` bind pages to one scan snapshot). Results are memoized ~60s per caller; `refresh=true` re-scans after a fix. Fix findings at the source `evidence.source` names — live objects via `patch_resource`/`apply_resource`, Helm findings in the chart, GitOps-managed resources in Git. | `target` (optional, default next minor), `check` (optional), `level` (optional: `blocker`, `warning`, `review`), `offset` (optional), `scan_id` (required when `offset` > 0), `refresh` (optional) |
+| `list_vulnerabilities` | Which images that run now carry known CVEs and which workloads run them, from Trivy Operator's VulnerabilityReports. Listed only when the cluster serves that report kind; a client that connected before Trivy Operator was installed sees it after reconnecting. `view=image` (default) ranks deployed images by severity, one row per digest however many workloads run it, with their workloads and worst findings; `view=cve` ranks CVEs by severity, then fix availability, then how many workloads carry them; `view=workload` lists each workload's containers and what their images carry; `view=fix` lists package upgrades, each with the target version (`to`, the lowest listed release that fixes every one of its CVEs under that ecosystem's ordering and each CVE's release lines, or absent with the scanner's `fixedVersions` when no such release can be chosen), the CVEs it clears and the images and workloads that need it. Image findings and a CVE's affected packages carry the same per-CVE `fixTarget` beside the scanner's `fixedVersion`. `view=summary` returns only the totals and coverage, without rows; the summary ignores every filter but the namespace. Only images a Pod that isn't finished or a CronJob that isn't suspended runs are counted; reports about older revisions, removed workloads, or an image the object no longer runs are left out (`coverage.inactiveReports`), unless the build they scanned still runs. `unscanned` lists running images with no report yet: unknown, not clean; `otherBuildScanned` marks one whose report is of another build of its tag, as after the tag moved. Images are matched by the digest each running container reports, so an older build's scan doesn't stand for a tag pushed again, and a scanned build counts for every workload that runs it. Of several reports about one image the findings merge, each once, and `report` names the newest; a started container whose image has no registry digest is unscanned. A finding Trivy left unrated takes the CVSS v3 rating of its score (`severityFromScore`). A CVE's severity is the worst among the findings that pass the filters, `fixable` means at least one affected image has a fixed version, and `fixableImages` counts the images where every package it's in has one. Reports are read only where the caller may list `vulnerabilityreports`; namespaces withheld are `coverage.gaps` (`user_forbidden`, `user_permission_check_failed`), and every workload named is checked against the caller's own access. Each gap's `kinds` names what wasn't read: the reports, or the Pods, CronJobs, Jobs, ReplicaSets or workloads they're joined with (without ReplicaSets the finding counts hold, but a Deployment is named, and counted in workload totals, by its ReplicaSets). A cluster without the report kind returns `kind_unknown`. Rows, and the `clean`, `cleanWorkloads` and `unscanned` lists, are capped at `limit` (`coverage.rowsOmitted`, `cleanOmitted` and `unscannedOmitted` count the rest), and each row's findings, images and workloads at 5, each beside its total. | `view` (optional: `image`, `cve`, `workload`, `fix`, `summary`), `namespace` (optional), `severity` (optional, comma-separated), `fixable` (optional), `query` (optional), `workload` (optional, `Kind/namespace/name`, an error when it runs nothing Radar can see), `limit` (optional, default 10, max 100) |
 | `get_runtime_versions` | Which running workloads use which runtime version, for runtime CVEs (PHP2Shell and the like). For each image a visible Pod runs, Radar reads the image config for the digest the Pod reports and the node's platform (manifest and config only, never layers) and returns the versions it declares: curated keys Docker official images set and images built `FROM` them inherit (`PHP_VERSION`, `NODE_VERSION`, `PYTHON_VERSION`, `GOLANG_VERSION`, `RUBY_VERSION`, `JAVA_VERSION`, `HTTPD_VERSION`, `NGINX_VERSION`, `TOMCAT_VERSION`, `PG_VERSION`, `REDIS_VERSION`, `MONGO_VERSION`, `MARIADB_VERSION`, `MYSQL_VERSION`, `RUST_VERSION`) plus the OCI `version` and `base.name` labels; no other env value is ever read. A declared version is what the image says, not proof of the binary, and runtimes installed from distro packages declare nothing here (Trivy reports cover those; use `search`). `fixed_in` classifies each version against the first fix on its branch: all but the last component for most runtimes (`8.3.36` covers 8.3.x, `17.6` covers 17.x), the major for Node (`22.23.4` covers 22.x), and a single branch for Rust (`1.82.0` covers every earlier version). Prereleases such as `22.23.4-rc.1` count as below their release; a prerelease of a later Node minor or Rust release is `unparsed`, since it may have been cut before the fix landed. Classifications: `declared_below_fix`, `declared_at_or_above_fix`, `branch_not_listed` (no fix was given for that branch, such as an end-of-life line; not a sign it is unaffected), `unparsed`. An image `status` other than `ok` (`no_declaration`, `auth_required`, `not_found`, `rate_limited`, `blocked`, `error`, `not_checked`) means unknown, not absent. `resolvedFrom: spec` or `tag` means the kubelet reported no registry digest, so the image named in the Pod spec is shown without a fix verdict; `platformAssumed` means the node's platform wasn't readable and linux/amd64 was used, so no fix verdict is emitted. Missing runtime declarations stay visible as `no_declaration`, counted as unknown; unsupported or distro version formats remain `unparsed`. Only Pods the caller may list are read. Each image is looked up with its Pods' own pull secrets one at a time, then anonymously; node registry credentials are not used, so images pulled only with node identity may remain unreadable; Radar's own registry credentials are used only when Radar runs locally with auth off. A result read with a credential is cached for that credential only, an anonymous one for everyone. Credentialed lookups require HTTPS, including token exchanges and redirects. The call returns within a 40-second lookup budget. Registry use is bounded: at most 4 lookups run at once across callers and 200 attempts per call, 429s are not retried and pause that registry for 5 minutes, configs over 1 MiB are refused, and only the registry a Pod names may sit on a private or (outside the cluster) loopback address; link-local addresses, and redirects or token endpoints elsewhere on internal addresses, are refused. Behind an HTTP proxy, HTTPS goes through a CONNECT tunnel to the checked address; requests that can't be pinned that way are refused when Radar runs in-cluster. `fixed_in` needs `runtime`. Unknown runtime names and unsupported fixed-release formats return input errors. Manifest GETs can consume registry pull quotas shared with workloads, including Docker Hub account or egress-IP limits; a cold inventory can spend multiple manifest requests per image. Transient lookup failures are cached for 30 seconds. | `namespace` (optional), `runtime` (optional, e.g. `php`), `fixed_in` (optional, comma-separated, e.g. `8.2.35,8.3.36,8.4.27,8.5.12`), `limit` (optional, default 50, max 200) |
 | `list_packages` | Installed packages (Helm releases, label-managed workloads, CRDs, Argo Applications, Flux HelmReleases + Kustomizations) with source provenance, versions, and health, in one call. Response includes `sourceLegend` for the stable source codes. | `namespace` (optional), `source` (optional: `H`/`helm`, `L`/`labels`, `C`/`crds`, `A`/`argocd`, `F`/`fluxcd`), `chart` (optional substring) |
-| `list_helm_releases` | List Helm releases with status, resource health, storage namespace, Flux ownership, current `lastOperation`, and a capped `operations` trail when Helm history indicates failed upgrades, rollback-after-failure, rollbacks, or stuck pending operations. Use this first for Helm deployment debugging. | `namespace` (optional) |
-| `get_helm_release` | Returns the release with its owned resources, `hooks` with their outcome, `history` (the newest ten stored revisions; `include=history` returns them all) and the user-supplied `values` (redacted). Detailed Helm release info with owned resources, resource health, Flux ownership, current `lastOperation`, `operationInsight` (active/recovered state, likely resource to inspect, suggested compare), hooks, and failed/running hook diagnostics with live Job/Pod/Event/redacted-log evidence when still available. Use `include=history,operations` for the full Helm revision trail; `include=values` for key-aware redacted user values; `include=diff,values_diff,notes_diff,resource_diff` for revision comparison. Manifest `diff` redacts Secret values while preserving key changes; `notes_diff` uses pattern-based redaction. For releases with `storageNamespace`, pass that value as `namespace`. | `namespace` (required: Helm storage namespace), `name` (required), `include` (optional: `values,history,operations,diff,values_diff,notes_diff,resource_diff`), `diff_revision_1` (required when `include` contains a diff token) / `diff_revision_2` (optional, defaults to current) |
+| `list_helm_releases` | List Helm releases with status, resource health, storage namespace, Flux ownership, current `lastOperation`, and a capped `operations` trail when Helm history indicates failed upgrades, rollback-after-failure, rollbacks, or stuck pending operations. Use this first for Helm deployment debugging. When the caller can't read all of Helm's release Secrets, it returns `{summary, releases, observed, storageDenied, objectCoverage}` instead of an array: `observed` rows come from labels and annotations on objects the caller can read, and have no status; `get_helm_release` returns one of them with its objects. See [Without access to Secrets](helm.md#without-access-to-secrets). | `namespace` (optional) |
+| `get_helm_release` | Returns the release with its owned resources, `hooks` with their outcome, `history` (the newest ten stored revisions; `include=history` returns them all) and the user-supplied `values` (redacted). Detailed Helm release info with owned resources, resource health, Flux ownership, current `lastOperation`, `operationInsight` (active/recovered state, likely resource to inspect, suggested compare), hooks, and failed/running hook diagnostics with live Job/Pod/Event/redacted-log evidence when still available. Use `include=history,operations` for the full Helm revision trail; `include=values` for key-aware redacted user values; `include=chart,notes,versions` for [stored chart defaults, install notes and upgrade versions](#reading-charts-versions-and-notes); `include=diff,values_diff,notes_diff,resource_diff` for revision comparison. Manifest `diff` redacts Secret values while preserving key changes; `notes_diff` uses pattern-based redaction. For releases with `storageNamespace`, pass that value as `namespace`. Without access to Helm's Secrets it returns `{summary, observed, unavailable}`: the release as its objects describe it, with no status or history (see [Without access to Secrets](helm.md#without-access-to-secrets)). | `namespace` (required: Helm storage namespace), `name` (required), `include` (optional: `chart,notes,versions,values,history,operations,diff,values_diff,notes_diff,resource_diff`), `chart_path` (optional JSON pointer with `include=chart`), `diff_revision_1` (required when `include` contains a diff token) / `diff_revision_2` (optional, defaults to current) |
+| `get_helm_chart` | [Versions of a chart in a configured source](#reading-charts-versions-and-notes) before it is installed, newest first, with the newest stable as `latest`. | `repository`, `chart` (both required) |
 | `list_namespaces` | List all namespaces with status | (none) |
 | `get_subject_permissions` | Effective RBAC permissions of a ServiceAccount / User / Group. Without `verb`/`resource`, returns the existing bindings, deduplicated flat rules, and (for SAs) Pods using it. With both fields, runs an authoritative SubjectAccessReview for a ServiceAccount and returns a focused allow/deny result; this requires the caller itself to have `create subjectaccessreviews.authorization.k8s.io`. | `kind` (required: `ServiceAccount`, `User`, or `Group`), `namespace` (required for ServiceAccount; omit for User/Group), `name` (required), `verb` + `resource` (optional pair; ServiceAccount only), `group`, `resource_namespace` (defaults to subject namespace; explicitly empty for a cluster-scoped or cluster-wide API request, not aggregation of namespace-local grants), `subresource`, `resource_name` (optional check refinements) |
 | `query_prometheus` | Execute PromQL against the cluster's Prometheus (auto-discovered or `--prometheus-url`; works with PromQL-compatible backends: Thanos, VictoriaMetrics, Mimir). `type=instant` returns current values; `type=range` returns time-series history with automatic step adjustment. Empty results include a bounded list of related active metric names when a metric family can be inferred. Oversized results return a label-cardinality summary + suggested `topk` rewrite instead of raw data. Backend qualifications appear in bounded `warnings` and `infos`, with `annotationsOmitted` for overflow and `partial` when stores did not all answer; common PromQL errors include corrective hints. Every response carries `selectors`, the vector selectors the query reads (metric + label matchers), with `selectorsUnknown: true` when the query could not be tokenized and its scope must be treated as unbounded. | `query` (required), `type` (optional: `instant` default, `range`), `since` (optional, e.g. `30m`, `1h`, `24h`, `7d`; default `1h`), `start` / `end` (optional RFC3339, override `since`), `step` (optional, auto-calculated when omitted), `max_points` (optional, default 300, max 600), `timeout` (optional seconds, default 30, max 180) |
@@ -1031,6 +1344,17 @@ watching, are never warmed; use `list_resources` for them. Alternate built-in gr
 of typed kinds are skipped, so `kind:Event` does not duplicate core Events through
 `events.k8s.io`. Third-party CRDs named Event are searched normally; only built-in
 Events are excluded from broad searches.
+
+Use `kind:Event CertificateExpirationWarning` to find an Event by its reason,
+or `kind:Event <text>` to search its message and the resource it concerns.
+Matches include the field and an excerpt. Alternate Event APIs use the same
+core Event inventory, so these searches also cover reports created through
+`events.k8s.io` without returning duplicates.
+In the app, an empty broad search offers **Search Events**, which keeps the
+query and namespace and adds the Event kind filter. The search syntax help
+also lists `kind:Event`.
+The app checks `features.searchEventContent` before offering Event text search;
+when connected to an older server it shows an update hint and keeps name search.
 
 REST `GET /api/search` accepts `namespaces` (comma-separated) or `namespace`
 (single); the plural parameter takes precedence. These are explicit namespace
@@ -1250,13 +1574,38 @@ Surviving hits remain available. A valid false predicate is an ordinary non-matc
 
 Issue `hazard`, when present, warns what the suggested or most obvious action could destroy or take over. Today GitOps issues set it when a sync would prune every managed resource or take over another Application's resource. Keep it visible alongside any replacement diagnosis or next step. The complete `action` retains the warning for text consumers. Optional `action_primary`, `action_secondary_title`, and `action_secondary` separate progressive guidance; for `SharedResourceWarning`, secondary entries are ordered move steps, starting with checking `FailOnSharedResource=true` before pausing the current tracker. Stop if takeover is not intended and allowed.
 
-For `issues`, `unchecked_sources` lists the issue sources Radar couldn't check for this answer, so their issues may be missing; don't read the response as healthy for them. Sources: `helm` (failed or stuck Helm releases), `resources` (built-in kinds such as Pods, workloads, PVCs, HPAs and Nodes), `custom_resources` (failing conditions on custom resources) and `karpenter` (NodePools, NodeClasses, NodeClaims). Reasons: `read_failed`, `kind_sync_pending` (still loading, for example right after Radar starts; ask again shortly), `kind_sync_failed` (loading stalled), and `collector_access_denied` (Kubernetes refused Radar's own identity, so the caller's permissions can't fix it). An entry may carry `kinds` (only those kinds went unchecked) and `namespaces` (only those namespaces failed; the rest are complete). Treat any other source or reason as unchecked too. Read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
+For `issues`, `unchecked_sources` lists the issue sources Radar couldn't check for this answer, so their issues may be missing; don't read the response as healthy for them. Sources: `helm` (failed or stuck Helm releases), `resources` (built-in kinds such as Pods, workloads, PVCs, HPAs and Nodes), `custom_resources` (failing conditions on custom resources), `karpenter` (NodePools, NodeClasses, NodeClaims) and `kueue` (runs Kueue won't admit or stopped, and queues that admit nothing). Reasons: `read_failed` (the read, or a permission check it depended on, failed; also used when one entry's namespaces failed for different reasons), `kind_sync_pending` (still loading, for example right after Radar starts; ask again shortly), `kind_sync_failed` (loading stalled), `collector_access_denied` (Kubernetes refused Radar's own identity, so the caller's permissions can't fix it), and `caller_access_denied` (a check needs kinds the caller may not read). `get_resource`'s `resourceContext.issueSummary.unchecked` carries the gaps Radar attributes to that resource (count can then be 0): its empty issue list is not established. Its absence is not a completeness guarantee. An entry may carry `kinds` (the input kinds that couldn't be read or checked; findings on resources that depend on them may be missing too) and `namespaces` (the gap is limited to those namespaces, whether their read failed, was refused, or wasn't attempted because the caller can't read there; the rest are complete). Treat any other source or reason as unchecked too. Read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
+
+Admission webhook configurations list declared in-cluster Service backends in
+`dependencies`, even when a readable target is absent. A core Service lists
+readable `MutatingWebhookConfiguration` and `ValidatingWebhookConfiguration`
+consumers from `admissionregistration.k8s.io` in `dependents`. URL targets and
+CRD conversion webhooks are excluded. These references do not establish
+reachability, TLS validity or webhook health.
+
+Incomplete admission webhook inventories mark `dependents` in `omitted` with
+`cache_cold` (loading or not yet observed), `rbac_denied` (access denied) or
+`unavailable` (failed or unsupported reads). Available matches remain listed;
+an empty result with an omission does not establish that no webhook uses the
+Service.
 
 Resource context distinguishes observed dependency references (`dependencies` and
 `dependents`) from autoscalers (`scaledBy`). A Certificate depends on its issuer;
 it does not scale it. These references carry API group and namespace identity,
 are filtered by the caller's reference permissions, and do not establish that
 a controller has successfully reconciled the dependency.
+
+Storage context uses the same caller-scoped Storage family answers as the drawer. A PVC depends on its
+declared PV and StorageClass, including a Pending claim with no volume yet; a PV
+depends on its StorageClass and lists its claim as a dependent; a StorageClass
+lists its PVs and the claims that declare it. For these three kinds the lists
+are deduplicated and capped at 20 readable references, filled round-robin across
+kinds so a StorageClass with hundreds of claims still lists its volumes; a
+capped or partially checked list carries `omitted: budget_exceeded`. When Radar
+is still loading volumes or claims, or doesn't collect claims in every namespace,
+a StorageClass's `dependents` are marked `cache_cold` or `unavailable`: an empty
+list then doesn't mean the class is unused. These are declarations, not proof
+that provisioning, binding or mounting succeeded.
 
 A KEDA ScaledObject summary's `target` includes its API group, for example `Deployment (apps)/web`. Missing or empty target kind and API version default to `Deployment` and `apps/v1`; a `Rollout` target without an API version is reported as `Rollout (apps)/worker`.
 
@@ -1275,10 +1624,16 @@ expose their `healthChecks`; a MachineHealthCheck's Cluster is a dependency.
 
 Resource context's `uses` includes declared PodSpec references from regular,
 init and ephemeral containers, projected volumes, image-pull credentials and
-volume-driver credentials. `referencedBy` on core ConfigMaps, Secrets, PVCs and
+volume-driver credentials. It lists each declaration whether or not Radar holds
+the object it names, so `omitted` marks a `uses.*` field only when Radar couldn't
+read the subject's own spec, never because a declared kind isn't collected or is
+still loading. `referencedBy` on core ConfigMaps, Secrets, PVCs and
 ServiceAccounts includes both workload templates and actual Pods, including
 controlled Pods whose admitted spec may differ from the current template.
-ReplicaSet templates remain separate evidence. References are scoped and
+ReplicaSet templates remain separate evidence, except that a ReplicaSet scaled
+to zero, usually a Deployment's revision kept for rollback, is not counted: an
+object only such revisions name reads as unreferenced. `get_resource` on that
+ReplicaSet still lists its own template's `uses`. References are scoped and
 permission-filtered, with field paths and a bounded visible-only count; they
 describe declarations rather than proving a successful mount or active read.
 Capped results round-robin readable resource kinds, preserving examples of
@@ -1291,7 +1646,9 @@ template-generated PVC names are not inferred. An absent omission does not by
 itself establish cache freshness or complete namespace coverage.
 
 Resource context's `ingressSummary.tlsSecrets` lists named TLS Secrets in the
-Ingress's namespace. A Secret's `referencedBy` includes readable Ingresses with
+Ingress's namespace, including ones the caller may not read, which carry
+`state` (see [References you can't read](#references-you-cant-read)). A
+Secret's `referencedBy` includes readable Ingresses with
 the path `spec.tls[].secretName`. Resource-view topology links only observed,
 visible TLS Secrets. Empty Secret names do not resolve controller defaults.
 
@@ -1319,39 +1676,98 @@ same image, and a workload that declares no ports is not evidence. In the MCP `i
 the warning's `correlated_changes` show recent edits to the Service, such as a
 selector change.
 
+ServiceAccount `serviceAccountSummary.secretRefs` and
+`serviceAccountSummary.imagePullSecrets` list the Secrets the ServiceAccount
+declares in each role, capped at 20 references per field; one the caller may not
+read carries `state`, as above.
+A Secret's `referencedBy` includes declaring ServiceAccounts with `secrets[]`
+and `imagePullSecrets[]` paths. When Radar is still loading the Secret's
+namespace's ServiceAccounts, failed to, or doesn't collect them there,
+`referencedBy` is marked in `omitted` with `cache_cold` or `unavailable`. These declarations do not establish Pod use. Projected bound
+tokens are not Secret references.
+
 ### Write Tools
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
+| `manage_helm` | [Native Helm install, upgrade, rollback and uninstall](#manage_helm), with an advisory preview for upgrade and rollback and a preview-then-confirm uninstall. | `action`, `namespace`, `name`; per action `chart`, `repository`, `version`, `values`, `replace_values`, `dry_run`, `expected_revision`, `revision`, `confirm` |
 | `apply_resource` | Create or update a Kubernetes resource from YAML. Supports multi-document YAML, per-document partial-failure results, server-side dry-run preview, and SSA ownership-conflict reporting. | `yaml` (required), `mode` (optional: `apply` or `create`, default `apply`), `dry_run` (optional, default false), `namespace` (optional, override), `verify` (optional, default true: real mutations return post-mutation state, submitted-vs-live diff, workload rollout/pods, and related issues; dry runs return a preview diff), `force` (optional, default false: take SSA field ownership from other managers) |
 | `patch_resource` | Patch one existing Kubernetes resource with JSON Patch, JSON Merge Patch, or strategic merge patch. Use for precise field/list edits when you know the exact path and do not want to rewrite the full manifest or take broad server-side-apply ownership. Strategic patch is for built-in Kubernetes kinds and name-keyed list edits, such as changing one container. | `kind` (required), `name` (required), `namespace` (required for namespaced resources), `group` (optional), `patch_type` (optional: `json` default, `merge`, or `strategic`), `patch` (required JSON string), `dry_run` (optional), `verify` (optional, default true: real mutations return compact post-patch state and JSON Patch field checks; dry runs return a preview diff) |
-| `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, DaemonSet, or Argo Rollout. Note: `scale` is not supported for DaemonSets. On a Rollout, `rollback` rewrites the pod template and therefore starts a **new** rollout that re-runs every canary step, pause, and analysis — use `manage_rollout` `abort` to revert traffic immediately, or follow the rollback with `promote-full`. | `action` (required: `restart`, `scale`, `rollback`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback — enumerate with `get_resource include=revisions`) |
+| `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, DaemonSet, or Argo Rollout, or pause and resume a Deployment's rollouts. Note: `scale` is not supported for DaemonSets; `pause` and `resume` set `spec.paused` and are Deployment only (a rollback is refused while paused; repeating either changes nothing). Roll back a native Helm release's workload as the release with `manage_helm` rollback where it's available: rolling back the workload alone leaves Helm's record stale, and the next upgrade reapplies the old template. On a Rollout, `rollback` rewrites the pod template and therefore starts a **new** rollout that re-runs every canary step, pause, and analysis — use `manage_rollout` `abort` to revert traffic immediately, or follow the rollback with `promote-full`. | `action` (required: `restart`, `scale`, `rollback`, `pause`, `resume`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback — enumerate with `get_resource include=revisions`) |
 | `manage_rollout` | Drive an Argo Rollout's progressive delivery — the verbs with no Deployment equivalent. `abort` reverts traffic to the last stable version at once without touching spec and stays aborted until retried (the incident-response verb); `retry` clears an abort; `promote` clears the current pause to advance one step; `promote-full` skips all remaining steps, pauses, and analysis (emergency hotfix) — it waits for the controller to observe the current pod template first, so straight after a rollback it may report that the controller has not caught up, which is safe to retry; `skip-step` advances exactly one canary step (canary only). Rollback / restart / scale go through `manage_workload` with `kind=rollout`. | `action` (required: `abort`, `retry`, `promote`, `promote-full`, `skip-step`), `namespace` (required), `name` (required) |
 | `manage_cronjob` | Trigger, suspend, or resume a CronJob | `action` (required: `trigger`, `suspend`, `resume`), `namespace` (required), `name` (required) |
-| `manage_gitops` | Manage ArgoCD and FluxCD resources — sync, refresh, terminate, suspend, resume, rollback (Argo), reconcile (Flux), reconcile-with-source (Flux) | `action` (required), `tool` (required: `argocd` or `fluxcd`), `namespace` (required), `name` (required), `kind` (FluxCD only). For `sync`: `revision`, `prune`, `dry_run`, `force`, `apply_only`, `sync_options`. For `rollback` (Argo only): `history_id` (required), `prune`, `dry_run`. Per-action input validation rejects flags that don't apply to the action (e.g. `force` on `suspend`) so callers fail loudly instead of silently. |
+| `manage_gitops` | Manage Argo CD and Flux resources — sync, refresh, terminate, suspend, resume, rollback (Argo), reconcile (Flux), reconcile-with-source (Flux) | `action` (required), `tool` (required: `argocd` or `fluxcd`), `namespace` (required), `name` (required), `kind` (FluxCD only). For `sync`: `revision` (single-source; omit to deploy the last-compared revision; a different revision is refused while auto-sync is on unless `dry_run`), `prune` (default false), `dry_run`, `force`, `apply_only`, `sync_options` (omit to use the Application's own; a list replaces them). For `rollback` (Argo only): `history_id` (required; the first history entry is 0), `prune`, `dry_run`; refused while the Application has auto-sync enabled; before Argo CD 2.12, rollback across a single-source/multi-source change or of a multi-source entry can deploy the wrong revisions or render nothing; with prune, it can delete resources. This warning applies when the current Application uses `spec.sources` too; Radar does not refuse on controller-version grounds. Per-action input validation rejects flags that don't apply to the action (e.g. `force` on `suspend`) so callers fail loudly instead of silently. |
 | `manage_node` | Cordon, uncordon, or drain a Kubernetes node. A drain waits by default until the evicted pods are deleted, and reports `outcome` as `complete`, `incomplete`, `unconfirmed` or `started`. Incomplete/unconfirmed results return `partial`: check `errors`, observed `pendingPods`, `unconfirmedPods` and `verificationError`. Expected DaemonSet, static and terminal exclusions are listed in `skippedPods` with `expectedSkip: true`; they do not prevent completion. Completion confirms required workload removal, not overall shutdown safety | `action` (required: `cordon`, `uncordon`, `drain`), `name` (required), `delete_empty_dir_data` (optional, default true), `force` (optional), `wait_for_deletion` (optional, default true), `timeout` (optional, seconds; default 2 minutes when waiting, 60 otherwise) |
 
-Optional write tool (off by default):
+Optional write tools (off by default):
 
 | Tool | Description | Parameters |
 | --- | --- | --- |
 | `exec_pod` | [One non-interactive container command](#exec_pod), enabled by `--mcp-exec-tools` | `namespace`, `name`, `command` (required argv array); `kind`, `container`, `timeout_seconds` (optional) |
+| `curl_service` | [One credential-free in-cluster Service GET](#curl_service), enabled by `--mcp-http-tools` | `namespace`, `name`, numeric `port`; optional `scheme`, `path` |
+
+### Naming a new tool parameter
+
+A tool's arguments are what an agent has to get right to call it, so a new parameter follows these conventions:
+
+- **Object identity:** `kind`, `group`, `namespace`, `name`.
+- **Durations:** a deadline is an integer `timeout_seconds`; a lookback window is `since`, a duration string such as `1h`.
+- **`force`** only in the meaning `kubectl --force` has for that operation (replace for `manage_gitops`, evict unmanaged pods for `manage_node`). Taking server-side-apply field ownership is `force_conflicts`.
+- **`include`** is a comma-separated list of optional extras (`get_resource`, `get_helm_release`). A parameter that picks one of several modes gets its own name.
+- **Lists** are JSON arrays, not comma-separated strings.
+- **A closed set of values** is a schema `enum`, which needs a hand-written input schema (see `cost_rightsizing_schema.go`); the argument repair then fixes letter case before validation.
+- **`dry_run`** previews without changing anything and defaults to false, except where a preview is mandatory (`delete_resource`).
+- Names are snake_case (`TestParameterNamingStaysConsistent` enforces it).
+
+Older parameters that predate these conventions keep their names: `timeout` on `manage_node` and `query_prometheus`, `force` on `apply_resource`, `search`'s `include` (one of `summary`, `raw`, `none`, matching the REST search API), the comma-separated `kind` and `severity` of `issues` and `fixed_in` of `get_runtime_versions`, and `get_cost`'s `range` (an enum of windows, not `since`). Most closed sets described only in prose, such as `apply_resource`'s `mode` and `query_prometheus`'s `type`, still match exactly, case included. Renaming an existing parameter is not free even with an alias for the old name: Radar Hub serves one merged tool catalog across clusters that may run different Radar versions, so an agent that sees the new name can send it to a cluster whose older Radar rejects it.
+
+## Related findings in resource context
+
+Resource context can include `relatedFindings`: independently scoped groups of current findings, separate from the parent's health and issue count. Each group's `associatedVia` is its local association anchor and `kinds` identifies the selected resource kinds; each finding keeps its own subject and ID. `checked` counts authorized resource snapshots, not findings; `unknown` counts snapshots the producer could not assess. Neither count implies health. `gaps` describes inventory-read limitations; `truncated` means findings were omitted from output. No prose field is required. An absent or empty list means no groups were supplied; absent findings never establish recovery. Neutral operator facts, resource management and explicit endpoint observations retain their own existing contracts.
+
+## Neighborhoods
+
+`get_neighborhood` (and `GET /api/ai/neighborhood/{kind}/{namespace}/{name}`) walks the relation families out from one root, hop by hop, admitting only objects the caller may read, and also draws what the last hop's objects declare of one another. A related object the caller may not read is left out and noted only as one `omitted` entry. Within `max_nodes`, each hop admits what manages an object first, then what exposes, protects or configures it, then what it manages and its replicas, the root's own descendants before a neighbor's; a cut answer sets `truncated`. A root the caller may read but Radar can't answers with the read's code (and on REST its status) instead of "not found": `kind_sync_pending` while its kind loads (a custom kind nothing has watched yet starts loading on the first request), `radar_kind_not_collected`, `radar_forbidden`, or `cluster_connecting` before discovery has answered; a walk past its deadline is a timeout (504 on REST) with a hint to narrow it.
 
 ## Strimzi connector evidence
 
 See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors) for the Issues/API/MCP coverage, required read access, and operator-snapshot limitations.
 
+`diagnose` accepts `KafkaConnector` and `KafkaConnect` in `kafka.strimzi.io`. For a connector, `operatorSnapshot.state` is `failing`, `recovered` or `unknown`; `reason` explains unknown or failing observations. Recovery requires a current Ready snapshot with the connector and a nonempty task list all `RUNNING`. KafkaConnect reports operator readiness separately; use `issues` to recheck its own condition findings. Diagnosis does not collect Pods, logs or live application evidence. Unavailable cached reads return a coded error; only a miss from a synchronized namespace cache returns `object_not_found`. A context switch during collection discards the result.
+
+The Strimzi producer returns at most five findings and inspects at most 500 namespace inventory entries. Exceeding the inventory budget returns a `list_too_large` gap with no assessed snapshots; it does not return a sample.
+
+Modern worker attribution requires cached `StrimziPodSet` objects (`core.strimzi.io`); the chart’s Strimzi toggle grants Radar collection access. Pod templates remain cached for resource details, with corresponding memory/timeline cost. MCP owner attribution checks exact object access; REST uses its namespace-level Related Resources policy. Direct Strimzi diagnosis and curated Issues follow the namespace-level read policy; the stricter owner check applies to attribution from another resource. To verify recovery of a previously observed connector failure, diagnose that connector directly. A clean parent recheck leaves its earlier related finding unresolved.
+
 ## Available Resources
 
 | URI | Description |
 |-----|-------------|
-| `cluster://health` | Cluster health summary (same data as `get_dashboard`) |
-| `cluster://topology` | Full cluster topology graph |
-| `cluster://events` | Recent warning events (up to 50) |
+| `cluster://health` | Cluster health summary, the same as `get_dashboard` with no namespace. With authentication, requires cluster-wide `list pods` permission. A caller without that permission can use `get_dashboard` with an accessible namespace. |
+| `cluster://topology` | Cluster topology graph, the same as `get_topology` with no namespace. For a caller who can access only some namespaces it covers those, marked with `partialScope: true` and `scopeNamespaces`. |
+| `cluster://events` | Recent Warning events, up to 50 deduplicated groups, as `{"events": [...]}`: the object `get_events` returns for `type=Warning`, `limit=50`, with the same `partialScope`/`scopeNamespaces` marker and `narrowHint` when more groups exist. |
+
+Each resource answers through the tool named beside it, so access rules, markers and refusals match the tool's. When Radar can't check which namespaces the caller can access, a resource returns `{"error": ..., "error_code": "user_permission_check_failed", "next": ...}`; retrying can succeed.
+
+### Resource client compatibility
+
+Clients that read `cluster://events` must read the event groups from the `events`
+field instead of parsing the response as an array. The object also carries scope
+and truncation information; preserve it when presenting the events. Clients using
+the `get_events` tool already receive this object shape.
+To follow a filter or limit hint, call `get_events`; the resource's limit is fixed
+at 50 groups.
+
+`cluster://topology` also takes no filter input. To follow a namespace hint in its
+response, call `get_topology` with that namespace instead.
+
+`cluster://health` requires cluster-wide `list pods` permission when authentication
+is enabled. Separate grants in every namespace do not satisfy this check. Use
+`get_dashboard` with an accessible namespace instead. A failed permission check is a retryable error, not an empty result.
 
 ## Security
 
-- **Safe by design** — most read tools do not change cluster state and are annotated with `readOnlyHint`. On the full `/mcp` endpoint, the exception is `diagnose(in_cluster=true)` on network entry resources, which creates up to five self-deleting probe pods; that full diagnose tool is annotated `readOnlyHint: false` and `destructiveHint: false`, so clients that prompt only on `destructiveHint` will not prompt for it. On `/mcp-readonly`, diagnose omits and rejects `in_cluster` and carries `readOnlyHint`. Write tools (restart, scale, rollback, sync, apply, cordon/drain) are RBAC-enforced and annotated with `destructiveHint` so AI clients can prompt for confirmation. Some are genuinely destructive — `apply_resource force=true` can take field ownership from Helm/Flux, `manage_node drain` evicts pods, and `rollback`/`terminate` overwrite or abort desired state
+- **Safe by design** — most read tools do not change cluster state and are annotated with `readOnlyHint`. On the full `/mcp` endpoint, one exception is `diagnose(in_cluster=true)` on network entry resources, which creates up to five self-deleting probe pods; that full diagnose tool is annotated `readOnlyHint: false` and `destructiveHint: false`, so clients that prompt only on `destructiveHint` will not prompt for it. On `/mcp-readonly`, diagnose omits and rejects `in_cluster` and carries `readOnlyHint`. `collect_application_evidence` also sets both hints to false, so clients must obtain operator approval explicitly; see [local runtime evidence](#explicit-local-runtime-evidence). Write tools (restart, scale, rollback, sync, apply, cordon/drain) are RBAC-enforced and annotated with `destructiveHint` so AI clients can prompt for confirmation. Some are genuinely destructive — `apply_resource force=true` can take field ownership from Helm/Flux, `manage_node drain` evicts pods, and `rollback`/`terminate` overwrite or abort desired state
 - **RBAC-aware** — every call enforces RBAC at the same boundary as the REST API:
   - **Local binary**: the cache uses your kubeconfig identity, so MCP can only see what `kubectl` can see for that user
   - **In-cluster (auth enabled)**: read tools intersect namespaced reads with the calling user's RBAC-allowed namespaces; cluster-scoped reads (Nodes, PVs, ClusterRoles, cluster-scoped CRDs) are gated per-kind via SubjectAccessReview, so cluster-wide pod visibility doesn't implicitly grant Node read; write tools, exec, and logs are fully impersonated so the apiserver enforces the user's RBAC end-to-end
@@ -1382,11 +1798,13 @@ Controller and spec-generator references appear separately in `managedBy` below.
 
 ### `managedBy` — the top controller
 
-List/search `summaryContext.managedBy` is one inspection lead: highest readable controller, then an observed spec
-generator, then eligible GitOps/Helm evidence. For example, a TiDB Pod can lead through its StatefulSet to a summary
+List/search `summaryContext.managedBy` is one inspection lead: highest readable controller, up to the first GitOps
+manager above the object (an Application, not its ApplicationSet), then an observed spec generator, then eligible
+GitOps/Helm evidence. For example, a TiDB Pod can lead through its StatefulSet to a summary
 reference with `kind: TidbCluster`, `group: pingcap.com`, and `source: native`.
 
-Follow the lead with `get_resource` or `diagnose`. Detail `resourceContext.managedBy` lists controller/spec references;
+Follow the lead with `get_resource` or `diagnose`. Detail `resourceContext.managedBy` lists controller/spec references,
+its controller climb stopping at the first GitOps manager above the object (an Application, not its ApplicationSet);
 `resourceContext.manager` retains the GitOps/Helm evidence to inspect before planning edits. A lead is not an edit target,
 and absence does not prove unmanaged.
 
@@ -1404,17 +1822,30 @@ completed Pods are excluded. References are permission-filtered per namespace,
 sorted deterministically and capped at 20. `total` counts only readable Pods;
 `truncated` marks the item cap. This is observed placement in Radar's cache scope,
 not a cluster-wide workload count or a list of potential scheduling candidates.
-When Relationships already collected placement, context reuses that result.
-Unavailable Pod data, including a missing placement provider, records
+The Node's Pods are read once, for both this list and its coverage.
+Unavailable Pod data, including no relationship answer at all, records
 `omitted: [{field: "referencedBy", reason:
 "unavailable"}]`, distinguishing a failed lookup from an observed empty result.
 
 ConfigMap and Secret reverse-reference context uses the same omission when a
 scanned workload or Pod source cannot be read. References from available sources
 remain visible. This projection scans selected built-in workload templates and
-controllerless Pods; absence of an omission does not establish complete consumer
+every Pod, controlled or not; absence of an omission does not establish complete consumer
 coverage or prove that a resource is unused. Storage audit uses its own consumer
 inventory and coverage rules.
+
+### CertificateSigningRequests
+
+`list_resources` reports a request's state the way kubectl and the kubelet's
+client read it: `Pending approval`, `Approved, not issued`, `Issued`, `Denied`
+or `Failed`, with the signer as `type` and, for Denied or Failed, the deciding
+condition's reason and message as `issue`. Approval alone is not issuance, and
+neither waiting state is an Issue. `get_resource` replaces the base64 PEM in
+`spec.request` and `status.certificate` with what it decodes to: the subject,
+SANs and key the requester asked for, and the subject, issuer and validity of
+each returned certificate. Data that cannot be read is `invalid` or `partial`
+with its `problems`, never absent. The requested identity is the requester's
+claim, not proof of what was approved or issued.
 
 ### Pod/template differences in issue context
 
@@ -1580,3 +2011,127 @@ values are omitted from ordinary tool-argument logs.
 
 
 Confirmation tokens are process-local. Use a single Radar replica or session affinity so preview and confirmation reach the same process; a restart invalidates outstanding tokens. `/mcp-apply` is an authenticated subset of writable `/mcp`, intended for built-in agents, not a private network endpoint.
+
+## Explicit local runtime evidence
+
+After operator approval, call `collect_application_evidence` with `application`, `namespace`, `pod` and `confirm_network_access: true`. Include the suggested `pod_uid` to reject replacements. Radar checks the flag; the client obtains approval. Collection uses a temporary localhost-only Kubernetes port-forward and requires Pod-read/port-forward permissions.
+
+Available through connected full local MCP, outside built-in investigations and Apply. Requires one recognized application container with its default plaintext port declared. Host-network Pods, ambiguous targets, custom ports, credentials, TLS and remote/authenticated/hosted/in-cluster use are unsupported. RabbitMQ metrics and NATS monitoring must be enabled.
+
+| Application | Source | Interpretation |
+|---|---|---|
+| RabbitMQ | Port 15692 `/metrics` | Node-local disk/memory alarms, plus available disk, memory used and alarm watermarks when reported. Measurements can lag alarms; missing or invalid optional values stay unknown. Both alarm samples must be valid and unambiguous. A malformed metrics document is unavailable (`invalid_alarm_metric`). Another node’s disk/memory alarm can still block publishers. Payloads over 256 KiB are unavailable. |
+| NATS | Port 8222 `/jsz` | JetStream counters and optional delivery/acknowledgement positions, activity times and waiting pull requests, capped at 20 consumer rows with coverage. Sequence IDs are decimal strings; sequence differences are not lag. A snapshot does not establish stalled progress. |
+| Vault | Port 8200 `/v1/sys/health` | HTTP status, initialization/seal/standby facts, and optional HA connection/removal reports; none establish overall cluster health. |
+
+Vault `haConnectionHealthy` reflects its standby request-forwarding heartbeat; an absent report does not establish connectivity. `removedFromCluster: true` reports removal, including when sealed; `false` does not prove membership. Absent or malformed optional values stay unknown, not false.
+
+`outcome: observed` carries facts; `unavailable` carries a reason without facts. NATS `coverage: partial` means omitted rows cannot be treated as zero. Missing or invalid optional progress fields are omitted, not zero; absent activity timestamps do not mean never active. Pending and `waitingPullRequests` counts are node-reported; a non-leader replica can report zero. Waiting-request zero may also reflect a push consumer. These qualifications travel in result `limitations`, including copied observations. Results describe one endpoint at `observedAt`, not application health. Identity or in-flight context changes discard results, though a replaced Pod may briefly be contacted. Image/identity checks do not attest contents. A manual call without `pod_uid` uses the cluster current at invocation; MCP results do not include its name.
+
+`diagnose` suggests collection only for recognized Vault readiness or RabbitMQ alarm-check failures. Suggestions do not authorize collection. Returned suggestions use `coverageLimited` and `candidatesTruncated` to describe discovery limits; at most three candidates are returned. A missing suggestion is not an all-clear. NATS collection is explicit-only.
+
+## Native operator summaries
+
+Collector, Flagger Canary and Instrumentation rows in `list_resources`, REST AI lists and search summaries include bounded integration-specific facts, without fetching related resources. Full objects remain available through `get_resource`.
+
+- `openTelemetryCollector.reportedPodReadiness` copies the operator's `status.scale.statusReplicas` at its last reconcile: ready/observed Pods for Deployment/StatefulSet, ready/desired-scheduled for DaemonSet. Read failures or a switch to sidecar mode can retain an earlier value. It is not a current runtime readiness check; the observed-Pod denominator can differ from the desired replicas in an ordinary workload summary. `openTelemetryCollector.declaredPipelines` counts configured pipeline names, not functioning pipelines. An absent block means config could not be summarized, not zero pipelines; `count: 0` is a readable config with none declared. Alpha YAML parsing is limited to 64 KiB.
+- Flagger `strategy` describes the current declaration: `Canary`, `Blue/green`, `A/B testing`, or a mirroring variant. Optional `flaggerCanary.reportedWeightPercent`, `reportedFailedChecks` and `reportedIterations` copy recorded status counters; omitted means unreported, while zero remains zero. Weight is only shown for weighted canaries, iterations for iteration-based strategies. Flagger does not attest these counters to the current spec, and reported weight is not measured live traffic. Read the full analysis for configured thresholds and limits.
+- `openTelemetryInstrumentation.recordedUpgradeBlocks` previews language keys in the operator's recorded `status.upgradeBlockedVersions` as `{count,names,namesTruncated}`; it excludes the arbitrary message values. The native summary is absent without a readable non-empty record; that is not proof there are no blocked upgrades. This is a startup upgrade record, not application health or proof the current image remains blocked.
+
+Pipeline previews contain the first five sorted names; blocked-upgrade previews the first ten. Counts include all names before limits. Names are shortened after 160 UTF-8-safe bytes, so a `namesTruncated` flag means entries were omitted **or** a name was shortened. Neither absence of a summary nor absence of a reported issue establishes healthy telemetry delivery.
+
+## Operator runtime context and Collector diagnosis
+
+Collector and Canary detail context can include `children`: up to 25 current
+**direct owner-reference children**, including non-workload resources.
+
+| Field | Meaning |
+|---|---|
+| `items` | Followable resource references; no grandchildren or guessed names. |
+| `complete` | Every direct child in the caller-readable scope is included. False means this was not established (inventory gaps or truncation), not necessarily that children are missing. |
+| `narrowed` | Permissions may exclude children; this does not assert hidden children exist. |
+| `truncated` | Known children were omitted by the response cap, so `complete` is false. |
+
+An absent block is not an empty inventory. A discarded observation is reported
+through `omitted`. Child coverage is separate from runtime health and the apps
+workload inventories checked during diagnosis.
+
+`diagnose(kind=OpenTelemetryCollector, group=opentelemetry.io, namespace=..., name=...)`
+returns root configuration, Issues, current-UID Warning events and up to three
+`ownedWorkloads` bundles for directly controlled Deployments, StatefulSets or
+DaemonSets. Each entry contains `ref` and either ordinary workload `diagnosis` or
+a collection `error`. `ownedWorkloadsTruncated` marks the three-bundle cap;
+apps workload inventory gaps are qualified separately in `warnings`. Follow child references or use
+`list_resources` for apps Deployments, StatefulSets or DaemonSets in the namespace.
+Inspect selected candidates with `get_resource`/`diagnose`; these are leads, not
+exhaustive operator membership. Retry loading inventories; request access only
+when a denied read prevents the needed conclusion.
+`container`, `tail_lines` and `since` apply to each bundle; malformed `since`
+values are input errors.
+
+Cached Pod/Event evidence follows the [namespace read policy](authentication.md#read-granularity-namespace-level).
+Operator roots and child references require exact-kind Get; live logs and metrics
+retain their own authorization.
+
+Sidecar mode runs inside application Pods: diagnose those Pods. Zero replicas,
+no observed children and successful reconciliation do not establish runtime
+health or telemetry delivery. The Collector drawer shows up to three current
+workloads; other direct children remain followable through Related Resources.
+
+### Flagger root diagnosis
+
+`diagnose(kind=Canary, group=flagger.app, ...)` uses the same root event/Issue and owned-workload path. `declaredTarget` is the explicit Flagger target reference, **not** an owned child or the stable primary. It has a workload bundle for supported apps Deployments/DaemonSets, or an explicit collection error/follow-up. The stable primary appears only when currently observed as a direct owned workload; Radar never fabricates `-primary` names. This keeps the parked canary target (often zero replicas) separate from the serving primary.
+
+A recorded `Failed` phase describes Flagger's last rollout result. Current-UID Warning events may explain it, while an empty event sample does not prove no prior failure. Neither the phase nor configured weight establishes live availability or traffic distribution. Provider endpoints, live traffic and telemetry delivery are not probed.
+
+## Kueue pending position
+
+Workload `get_resource` may include `scheduling.observations[].kueue.pendingPosition`:
+Kueue's snapshot ordering, read as the caller, not admission order or a start time.
+Absent, unlisted or capped results do not establish that it is no longer pending.
+See [the integration limits and required access](integrations.md#pending-position-kueues-visibility-api).
+
+## Auto-instrumentation reference context
+
+Pod and supported workload detail reads can include `resourceContext.autoInstrumentation.openTelemetry`. It evaluates declared injection requests for a hypothetical new Pod, even when the subject is an existing Pod. It does not establish observed injection, application health or telemetry delivery.
+
+### Fields and resolution states
+
+| Field | Meaning |
+|---|---|
+| `requestsIfPodCreatedNow` | Per-component requests evaluated against current annotations, Namespace defaults and Instrumentation objects. These may have changed since an existing Pod was created. |
+| `language` | The exact `instrumentation.opentelemetry.io/inject-` annotation suffix: `apache-httpd`, `dotnet`, `go`, `java`, `nginx`, `nodejs`, `php`, `python`, `ruby` or `sdk`. SDK selects environment-variable injection rather than a language auto-instrumentation library. |
+| `source`, `annotationPath` | The effective annotation's source and JSON pointer. Template paths distinguish workload metadata from the Pod template. |
+| `namespaceDefaultsUnknown` | Namespace inheritance could not be read, including when no Pod annotation is present. |
+| `assumesOperatorCRDMode` | Default selection assumes Instrumentation CRs; an operator using inline instrumentation can behave differently. |
+| `ignoredWorkloadMetadataAnnotations` | Injection keys on workload metadata, where the mutator does not read them. Use Pod/template or Namespace annotations instead. |
+
+Each request's `resolution` concerns only that component's reference lookup:
+
+| Resolution | Meaning |
+|---|---|
+| `resolved`, `missing` | A named Instrumentation reference was found or absent. `missing` requires synced inventory and caller access. |
+| `unknown` | The reference or inherited Namespace annotation could not be established; this is not absence. Coordinates from a caller-readable annotation may remain visible without disclosing whether the target exists. |
+| `disabled` | An explicit false annotation. |
+| `invalid_reference` | An invalid name or namespace. |
+| `default_resolved`, `default_missing`, `default_ambiguous` | Default selection found one, no, or multiple Instrumentation CRs in the readable namespace, with `assumesOperatorCRDMode: true`. |
+
+### Selection and unknown results
+
+A named or false Pod annotation wins. Pod=true can inherit a named Namespace annotation; true/default selection uses the operator's CRD-mode rules.
+
+| Available qualifiers | What remains unknown | Next evidence |
+|---|---|---|
+| `namespaceDefaultsUnknown: true`, Pod `true`, no selected ref | A hidden Namespace might supply a named selection | Read this Namespace's annotations with an authorized identity |
+| `instrumentation` coordinates present with `resolution: unknown` | The caller-readable named reference could not be checked | Read that Instrumentation, or check its cache coverage/access |
+| `assumesOperatorCRDMode: true`, `resolution: unknown` | Default-selection inventory could not be checked | List Instrumentations in the Pod's namespace with an authorized identity, or confirm the CRD is installed and its cache is collected/synced |
+
+The CRD-mode flag is absent for unreadable Namespace inheritance: Pod=true could inherit a named reference, so default selection has not been established.
+
+### Limits and inspection
+
+Reference resolution is not admission success or a prediction of the combined webhook outcome. A failing selection for another requested language can prevent all injection. Language feature gates can disable injection even when a reference resolves. Container-targeting rules can also prevent mutation, sometimes without a Warning event. Inspect the actual Pod spec, init-container status, events and operator logs; this context does not infer injector identity. Native Warning events, including observed `InstrumentationRequestRejected`, remain available through existing UID-filtered Pod diagnosis/event paths.
+
+Supported sources are Pods, apps workloads, Jobs/CronJobs and inline Argo Rollout Pod templates. An absent block does not establish that no requests exist: unreadable Namespace defaults or unresolved templates may be outside the evidence. The outer `autoInstrumentation` object is not an exhaustive injector inventory; native provider blocks retain their own selection rules. An unavailable OTel observation records field `autoInstrumentation.openTelemetry` in `omitted`, without declaring other providers unavailable.
+
+REST AI and MCP detail reads share this projection. Basic list summaries do not perform related-object lookups. UI inspection uses existing annotations, YAML and events; this configuration context creates no global Issue, additional Pod warning banner or outage classification.

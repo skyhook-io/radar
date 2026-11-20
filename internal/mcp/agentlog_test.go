@@ -205,7 +205,7 @@ func TestWrapToolCallErrorChangesLevel(t *testing.T) {
 }
 
 func TestLogToolCallRecordsErrorResultsWithoutLeakingContent(t *testing.T) {
-	for _, tool := range []string{"exec_pod", "other_tool"} {
+	for _, tool := range []string{"exec_pod", "manage_helm", "curl_service", "other_tool"} {
 		t.Run(tool, func(t *testing.T) {
 			var logs bytes.Buffer
 			previous := log.Writer()
@@ -217,6 +217,26 @@ func TestLogToolCallRecordsErrorResultsWithoutLeakingContent(t *testing.T) {
 			res, _, err := call(t.Context(), nil, struct{}{})
 			if err != nil || !res.IsError || strings.Contains(logs.String(), "private-output") || !strings.Contains(logs.String(), "ERROR") || !strings.Contains(logs.String(), "level=error") {
 				t.Fatalf("incorrect error log: %s", logs.String())
+			}
+		})
+	}
+}
+
+func TestSensitiveToolArgumentsAndErrorsAreNotLogged(t *testing.T) {
+	for _, name := range []string{"manage_helm", "curl_service", "exec_pod"} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			defer log.SetOutput(log.Writer())
+			log.SetOutput(&buf)
+			wrapped := logToolCall(name, func(context.Context, *mcp.CallToolRequest, map[string]string) (*mcp.CallToolResult, any, error) {
+				return nil, nil, errors.New("server echoed SECRET_SENTINEL")
+			})
+			_, _, _ = wrapped(context.Background(), &mcp.CallToolRequest{}, map[string]string{"values": "SECRET_SENTINEL"})
+			if strings.Contains(buf.String(), "SECRET_SENTINEL") {
+				t.Fatalf("secret logged: %s", buf.String())
+			}
+			if !strings.Contains(buf.String(), "level=error") {
+				t.Fatal("failure was not recorded")
 			}
 		})
 	}

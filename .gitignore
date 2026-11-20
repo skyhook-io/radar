@@ -30,6 +30,7 @@ Thumbs.db
 internal/static/dist/*
 !internal/static/dist/.gitkeep
 /build/bin/
+/build/appimage/
 
 # Wails generated
 web/wailsjs/

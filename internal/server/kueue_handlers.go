@@ -13,9 +13,9 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/jobset"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/schedulinginsight"
 )
 
@@ -120,7 +120,7 @@ func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		if (!isRayJob && !isSupportedJobSet(root)) || (isRayJob && (root.GetAPIVersion() != "ray.io/v1" || root.GetKind() != "RayJob")) {
+		if (!isRayJob && !jobset.Supported(root)) || (isRayJob && (root.GetAPIVersion() != "ray.io/v1" || root.GetKind() != "RayJob")) {
 			s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports JobSet v1alpha2 and RayJob v1")
 			return
 		}
@@ -171,7 +171,7 @@ func admissionRootControls(root *unstructured.Unstructured, child metav1.Object)
 	if root == nil || child == nil || root.GetUID() == "" || root.GetNamespace() != child.GetNamespace() {
 		return false
 	}
-	if !isSupportedJobSet(root) && (root.GetAPIVersion() != "batch/v1" || root.GetKind() != "Job") && (root.GetAPIVersion() != "ray.io/v1" || root.GetKind() != "RayJob") {
+	if !jobset.Supported(root) && (root.GetAPIVersion() != "batch/v1" || root.GetKind() != "Job") && (root.GetAPIVersion() != "ray.io/v1" || root.GetKind() != "RayJob") {
 		return false
 	}
 	owner := metav1.GetControllerOf(child)
@@ -222,7 +222,7 @@ func kueueAdmissionForRoot(ctx context.Context, root *unstructured.Unstructured,
 	return response
 }
 
-const provisioningGroup = "autoscaling.x-k8s.io"
+const provisioningGroup = schedulinginsight.ProvisioningRequestGroup
 const maxProvisioningRequests = 20
 
 type KueueProvisioningResponse struct {
@@ -289,27 +289,7 @@ func (s *Server) handleKueueProvisioning(w http.ResponseWriter, r *http.Request)
 }
 
 func provisioningForWorkload(root *unstructured.Unstructured, items []*unstructured.Unstructured) KueueProvisioningResponse {
-	matches := make([]*unstructured.Unstructured, 0)
-	for _, item := range items {
-		if item == nil || root.GetUID() == "" || item.GroupVersionKind().Group != provisioningGroup || item.GetKind() != "ProvisioningRequest" || item.GetNamespace() != root.GetNamespace() {
-			continue
-		}
-		owner := metav1.GetControllerOf(item)
-		if owner == nil || resourceid.GroupFromAPIVersion(owner.APIVersion) != kueueGroup || owner.Kind != "Workload" || owner.Name != root.GetName() || owner.UID != root.GetUID() {
-			continue
-		}
-		matches = append(matches, item)
-	}
-	sort.Slice(matches, func(i, j int) bool {
-		at, bt := matches[i].GetCreationTimestamp(), matches[j].GetCreationTimestamp()
-		if !at.Equal(&bt) {
-			return at.After(bt.Time)
-		}
-		if matches[i].GetName() != matches[j].GetName() {
-			return matches[i].GetName() < matches[j].GetName()
-		}
-		return matches[i].GetUID() < matches[j].GetUID()
-	})
+	matches := schedulinginsight.KueueProvisioningRequests(root, items)
 	result := KueueProvisioningResponse{UID: string(root.GetUID()), Installed: true, Requests: make([]*unstructured.Unstructured, 0), Total: len(matches), Truncated: len(matches) > maxProvisioningRequests}
 	if result.Truncated {
 		matches = matches[:maxProvisioningRequests]

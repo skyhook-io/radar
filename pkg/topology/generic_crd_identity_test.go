@@ -18,6 +18,7 @@ type genericIdentityDynamic struct {
 	kinds     map[schema.GroupVersionResource]string
 	resources map[schema.GroupVersionResource][]*unstructured.Unstructured
 	listCalls map[schema.GroupVersionResource]int
+	getCalls  int
 }
 
 type dynamicProviderWithoutExactCRD struct {
@@ -34,6 +35,7 @@ func (d *genericIdentityDynamic) ListNamespaces(gvr schema.GroupVersionResource,
 }
 
 func (d *genericIdentityDynamic) Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	d.getCalls++
 	for _, resource := range d.resources[gvr] {
 		if resource.GetNamespace() == namespace && resource.GetName() == name {
 			return resource, nil

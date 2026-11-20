@@ -35,7 +35,7 @@ func TestOpenTelemetrySummariesAreConciseAndGroupAware(t *testing.T) {
 	u.Object["spec"] = map[string]any{"env": []any{map[string]any{"name": "CUSTOM_TOKEN", "value": "private-env"}}}
 	u.Object["status"] = map[string]any{"upgradeBlockedVersions": map[string]any{"java": "private-status"}}
 	s = summarizeUnstructured(u)
-	if s.Status != "Upgrade blocked" {
+	if s.Status != "Upgrade block recorded" {
 		t.Fatalf("bad instrumentation summary: %+v", s)
 	}
 	raw, _ = json.Marshal(s)

@@ -50,9 +50,11 @@ export const DiffViewer = memo(function DiffViewer({ diff, compact = false }: Di
 // paths like "data (modified keys)", never values. Rendered as an old→new
 // pair, a modified key reads as removed and re-added, so key lists of one
 // field are merged into a single row that names what happened to each key.
-const KEY_LIST_PATH = /^(.+) \((added|removed|modified) keys\)$/
+// "reordered keys" lists modified keys whose value only changed the order of
+// its comma-separated entries; those show as "order changed" instead.
+const KEY_LIST_PATH = /^(.+) \((added|removed|modified|reordered) keys\)$/
 
-type KeyChange = 'added' | 'removed' | 'modified'
+type KeyChange = 'added' | 'removed' | 'modified' | 'reordered'
 
 interface KeyListDiffRow {
   kind: 'keys'
@@ -81,7 +83,7 @@ function diffRows(fields: FieldChange[]): DiffRow[] {
     const [, base, change] = match
     let row = byField.get(base)
     if (!row) {
-      row = { kind: 'keys', field: base, keys: { added: [], removed: [], modified: [] } }
+      row = { kind: 'keys', field: base, keys: { added: [], removed: [], modified: [], reordered: [] } }
       byField.set(base, row)
       rows.push(row)
     }
@@ -90,17 +92,23 @@ function diffRows(fields: FieldChange[]): DiffRow[] {
       if (!list.includes(key)) list.push(key)
     }
   }
+  for (const row of rows) {
+    if (row.kind === 'keys' && row.keys.reordered.length > 0) {
+      row.keys.modified = row.keys.modified.filter((key) => !row.keys.reordered.includes(key))
+    }
+  }
   return rows
 }
 
 const KEY_CHANGE_LABEL: Record<KeyChange, string> = {
   modified: 'keys changed',
+  reordered: 'order changed',
   added: 'added',
   removed: 'removed',
 }
 
 function KeyListRow({ row }: { row: KeyListDiffRow }) {
-  const parts = (['modified', 'added', 'removed'] as const).filter((change) => row.keys[change].length > 0)
+  const parts = (['modified', 'reordered', 'added', 'removed'] as const).filter((change) => row.keys[change].length > 0)
   return (
     <div className="rounded bg-theme-surface/50 border border-theme-border px-3 py-2">
       <div className="text-xs font-mono text-theme-text-tertiary mb-1 break-words [overflow-wrap:anywhere]">{row.field}</div>

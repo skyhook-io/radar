@@ -48,8 +48,15 @@ type Summary struct {
 	Source              string `json:"source,omitempty"`
 	TargetRevision      string `json:"targetRevision,omitempty"`
 	LastRevision        string `json:"lastRevision,omitempty"`
-	LastReconcile       string `json:"lastReconcile,omitempty"`
-	PartialReason       string `json:"partialReason,omitempty"`
+	// RollbackRevision is the revision(s) deployed by the latest successful marked
+	// rollback, set only while effective auto-sync is off. Absence does not mean
+	// no rollback happened.
+	RollbackRevision string `json:"rollbackRevision,omitempty"`
+	LastReconcile    string `json:"lastReconcile,omitempty"`
+	LastApplied      string `json:"lastApplied,omitempty"`
+	LastApplyAttempt string `json:"lastApplyAttempt,omitempty"`
+	LastDeployed     string `json:"lastDeployed,omitempty"`
+	PartialReason    string `json:"partialReason,omitempty"`
 	// AutoSyncMode is the human-readable syncPolicy chip label, e.g.
 	// "Manual", "Auto", "Auto · prune", "Auto · self-heal",
 	// "Auto · prune · self-heal", "Suspended" (Flux), or "".
@@ -73,8 +80,8 @@ type Summary struct {
 	// verdicts are not in the CR and per-resource health below, if any, is
 	// Radar's own read — the UI says so.
 	ResourceHealthMode string `json:"resourceHealthMode,omitempty"`
-	// RemoteDestination: the Application or Flux object deploys to another
-	// cluster. Radar derives nothing about its resources from here.
+	// RemoteDestination: the current destination or recorded Argo comparison
+	// is elsewhere. Radar derives nothing from same-named local resources.
 	RemoteDestination bool `json:"remoteDestination,omitempty"`
 	// ResourceHealthFromAPI: per-resource health came from the controller's
 	// API server, so in appTree mode the verdicts shown are still Argo's.
@@ -295,6 +302,12 @@ type HistoryItem struct {
 	RawMessage  string `json:"rawMessage,omitempty"`
 	Source      string `json:"source,omitempty"`
 	InitiatedBy string `json:"initiatedBy,omitempty"`
+	// Rollbackable reports whether an Argo CD history entry has an ID and recorded
+	// source(s), independently of auto-sync, lifecycle, in-flight operations and RBAC.
+	// Nil on rows it does not apply to, such as the current operation and Flux.
+	Rollbackable *bool `json:"rollbackable,omitempty"`
+	// RollbackMultiSourceWarning warns when either the current spec or this entry uses plural sources.
+	RollbackMultiSourceWarning bool `json:"rollbackMultiSourceWarning,omitempty"`
 }
 
 type Capabilities struct {
@@ -478,7 +491,12 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 		s.OperationMessage, s.RawOperationMessage = diagnose.CleanArgoControllerMessageWithRaw(opMessage)
 		s.TargetRevision, _, _ = unstructured.NestedString(root.Object, "status", "sync", "revision")
 		s.LastRevision, _, _ = unstructured.NestedString(root.Object, "status", "operationState", "syncResult", "revision")
-		s.LastReconcile, _, _ = unstructured.NestedString(root.Object, "status", "reconciledAt")
+		if root.GetKind() == "Application" {
+			value, _, _ := unstructured.NestedString(root.Object, "status", "reconciledAt")
+			if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil && !parsed.IsZero() {
+				s.LastReconcile = parsed.UTC().Format(time.RFC3339Nano)
+			}
+		}
 		source, _, _ := unstructured.NestedMap(root.Object, "spec", "source")
 		if len(source) == 0 {
 			sources, _, _ := unstructured.NestedSlice(root.Object, "spec", "sources")
@@ -487,6 +505,9 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 			}
 		}
 		s.Source = joinNonEmpty(gitops.StringValue(source["repoURL"]), gitops.StringValue(source["path"]), gitops.StringValue(source["chart"]))
+		if !gitops.ArgoAutoSyncEnabled(root) {
+			s.RollbackRevision, _ = gitops.ArgoSuccessfulRollback(root)
+		}
 		s.AutoSyncMode = describeArgoAutoSync(root)
 		s.IgnoredDifferences = summarizeArgoIgnoreDifferences(root)
 		return s
@@ -496,9 +517,14 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 	s.Health = status.health
 	s.TargetRevision, _, _ = unstructured.NestedString(root.Object, "status", "lastAttemptedRevision")
 	s.LastRevision, _, _ = unstructured.NestedString(root.Object, "status", "lastAppliedRevision")
-	s.LastReconcile, _, _ = unstructured.NestedString(root.Object, "status", "lastHandledReconcileAt")
-	if s.LastReconcile == "" {
-		s.LastReconcile = newestConditionTime(root)
+	if at, succeeded := gitops.FluxLastApply(root); succeeded {
+		s.LastApplied = at
+	} else {
+		s.LastApplyAttempt = at
+	}
+	if release := gitops.FluxDeployedRelease(root); release != nil && release.ChartVersion != "" {
+		s.LastRevision = release.ChartVersion
+		s.LastDeployed = release.LastDeployed
 	}
 	if sources := gitops.FluxSourceReferences(root); len(sources) > 0 {
 		s.Source = sources[0].Kind + "/" + sources[0].Name
@@ -513,7 +539,8 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 }
 
 // describeArgoAutoSync formats spec.syncPolicy.automated into a chip label.
-// Empty when the field can't be read; "Manual" when automated is absent.
+// Empty when the field can't be read; "Manual" when automated is absent or
+// switched off with `enabled: false`.
 func describeArgoAutoSync(root *unstructured.Unstructured) string {
 	// An ApplicationSet has no sync policy of its own. Its spec.syncPolicy
 	// governs how generated Applications are created and deleted, not how
@@ -523,10 +550,10 @@ func describeArgoAutoSync(root *unstructured.Unstructured) string {
 	if root.GetKind() == "ApplicationSet" {
 		return ""
 	}
-	automated, found, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
-	if !found {
+	if !gitops.ArgoAutoSyncEnabled(root) {
 		return "Manual"
 	}
+	automated, _, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
 	parts := []string{"Auto"}
 	if v, ok := automated["prune"].(bool); ok && v {
 		parts = append(parts, "prune")
@@ -573,10 +600,12 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			operationFailed = true
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(opMessage)
 			parsed := diagnose.ParseArgoOperationError(msg)
+			createNamespaceSet := gitops.ArgoCreateNamespaceEnabled(root)
+			parsed = diagnose.WithCreateNamespaceState(parsed, createNamespaceSet)
 			action := fallback(parsed.Action, "Open Activity for operation details.")
-			if !gitops.IsInClusterDestination(root) {
+			if !gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root) {
 				var remoteAction string
-				if parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed); remoteAction != "" {
+				if parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed, createNamespaceSet); remoteAction != "" {
 					action = remoteAction
 				}
 			}
@@ -618,8 +647,12 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 				suppressedNamespaces[parsed.RemediationTarget] = true
 			}
 			out = append(out, issue)
+		} else if blocked := argoSyncWindowBlockedIssue(phase, root); blocked != nil {
+			out = append(out, *blocked)
 		} else if phase == "Running" {
 			out = append(out, Issue{Severity: SeverityInfo, Scope: ScopeOperation, Reason: "Running", Message: "A sync operation is currently running.", Action: "Wait for completion or terminate if it is stuck."})
+		} else if mismatch := DetectArgoRollbackRevisionMismatch(root); mismatch != nil {
+			out = append(out, *mismatch)
 		} else if argoEmptyRenderGuardActive(root) {
 			// The guard condition below already explains why the app stays
 			// OutOfSync; a drift row would misread it and suggest a sync that
@@ -634,11 +667,6 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			// OutOfSync badge — which the user has been staring at for hours.
 			out = append(out, *stuck)
 		} else if drift := detectManualDriftWithoutAutoSync(root, syncHazard); drift != nil {
-			// Manual drift without auto-sync: app is OutOfSync but auto-sync
-			// is off, so nothing will reconcile until a human clicks Sync.
-			// Common operator confusion: "I see drift, why isn't anything
-			// happening?" Answer: nothing is *supposed* to happen
-			// automatically.
 			out = append(out, *drift)
 		} else if drift := detectAutoDriftSelfHealOff(root, syncHazard); drift != nil {
 			// Auto-sync on but self-heal off: Argo deploys new Git revisions
@@ -679,6 +707,8 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 				if syncHazard != "" && change.Sync != "Synced" {
 					issue.Action = syncHazard
 					issue.Hazard = syncHazard
+				} else if revision, _ := gitops.ArgoSuccessfulRollback(root); revision != "" && change.Sync != "Synced" && !gitops.ArgoAutoSyncEnabled(root) {
+					issue.Action = "Auto-sync is off after a rollback to " + revision + ". Syncing deploys the current revision, which can recreate it and undo the rollback."
 				}
 				out = append(out, issue)
 			} else if change.Health == "Degraded" || change.Health == "Missing" {
@@ -720,7 +750,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		// or a per-resource Issue is. A warning-tier per-resource finding
 		// doesn't count as explained either, but it already names a resource;
 		// stacking an events lead about the same app on top of it is noise.
-		if !degradedResourcesExplained(out) && !hasResourceFinding(out) && gitops.IsInClusterDestination(root) {
+		if !degradedResourcesExplained(out) && !hasResourceFinding(out) && gitops.IsInClusterDestination(root) && !gitops.ArgoAppliesElsewhere(root) {
 			if health, _, _ := unstructured.NestedString(root.Object, "status", "health", "status"); health == "Degraded" {
 				if iss := degradedResourceFromEvents(root, resolver); iss != nil {
 					out = append(out, *iss)
@@ -752,7 +782,11 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			degraded = unexplainedFluxDegraded(resourceTree, out)
 		}
 		if degraded > 0 {
-			out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: fmt.Sprintf("%d managed %s degraded", degraded, pluralizeResourcesAre(degraded)), Action: "Use the graph or Resources tab to inspect affected resources."})
+			message := fmt.Sprintf("%d managed %s degraded", degraded, pluralizeResourcesAre(degraded))
+			if len(resourceTree.Warnings) > 0 {
+				message += " among the resources shown"
+			}
+			out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: message, Action: "Use the graph or Resources tab to inspect affected resources."})
 		}
 	}
 	// Dedup by (scope, reason, message) — Flux carries the same failure
@@ -842,7 +876,7 @@ func degradedResourceFromEvents(root *unstructured.Unstructured, resolver Resolv
 // path's framing.
 func resourceHealthIssue(change Change, resolver Resolver) Issue {
 	if change.Missing {
-		action := "Sync the application to create the resource."
+		action := "Review the desired changes and sync policy before deciding whether to sync."
 		if change.Sync == "Synced" {
 			action = "Refresh the application to check its status."
 		}
@@ -958,6 +992,37 @@ func WorstResourceProblem(problems []ResourceProblem) (ResourceProblem, bool) {
 		}
 	}
 	return best, true
+}
+
+// argoSyncWindowBlockedIssue reports an operation the Argo CD controller is
+// holding for a sync window: it stays Running, with the message "Sync
+// operation blocked by sync window", until a window allows it, so "currently
+// running" would misdescribe it. A termination requested meanwhile waits for
+// the window too, since the controller only acts on the operation then.
+func argoSyncWindowBlockedIssue(phase string, root *unstructured.Unstructured) *Issue {
+	if phase != "Running" && phase != "Terminating" {
+		return nil
+	}
+	message, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "message")
+	if !strings.Contains(message, "blocked by sync window") {
+		return nil
+	}
+	if phase == "Terminating" {
+		return &Issue{
+			Severity: SeverityWarning,
+			Scope:    ScopeOperation,
+			Reason:   "SyncWindowBlocked",
+			Message:  "This operation was terminated while a sync window held it. Argo CD completes the termination when a window allows syncing. It applies nothing more; changes already applied stay.",
+			Action:   "Wait for the window to open, or change the AppProject's sync windows.",
+		}
+	}
+	return &Issue{
+		Severity: SeverityWarning,
+		Scope:    ScopeOperation,
+		Reason:   "SyncWindowBlocked",
+		Message:  "A sync window is holding this sync. Argo CD continues it when the AppProject's sync windows allow syncing.",
+		Action:   "Wait for the window, or terminate the operation to drop it. Termination also waits for a window; changes already applied stay.",
+	}
 }
 
 // dedupeIssues removes Issues that share the same (scope, reason, message,
@@ -1425,6 +1490,7 @@ func buildPlan(root *unstructured.Unstructured, resourceTree *gitopstree.Resourc
 
 func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 	if tool == "argocd" {
+		currentSources, _, _ := unstructured.NestedSlice(root.Object, "spec", "sources")
 		raw, _, _ := unstructured.NestedSlice(root.Object, "status", "history")
 		out := make([]HistoryItem, 0, len(raw)+1)
 		for _, item := range raw {
@@ -1445,10 +1511,6 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 					log.Printf("[gitops/insights] history entry %s/%s has unexpected id type %T (%v); rollback for this entry will be unavailable", root.GetNamespace(), root.GetName(), m["id"], m["id"])
 				}
 			}
-			source := ""
-			if sm, ok := m["source"].(map[string]any); ok {
-				source = joinNonEmpty(gitops.StringValue(sm["repoURL"]), gitops.StringValue(sm["path"]), gitops.StringValue(sm["chart"]))
-			}
 			// initiatedBy carries who triggered the sync. Username is set for
 			// human/api triggers; automated is a *bool*, not a string — Argo
 			// flips it true when the controller's auto-sync fires. We coerce
@@ -1463,7 +1525,10 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 					}
 				}
 			}
-			out = append(out, HistoryItem{ID: id, Revision: gitops.StringValue(m["revision"]), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: source, InitiatedBy: initiatedBy})
+			rollbackable := gitops.ArgoHistoryEntryRollbackable(m)
+			sources, _, _ := unstructured.NestedSlice(m, "sources")
+			revisions, _, _ := unstructured.NestedStringSlice(m, "revisions")
+			out = append(out, HistoryItem{ID: id, Revision: argoRevisionLabel(m), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: argoSourceLabel(m), InitiatedBy: initiatedBy, Rollbackable: &rollbackable, RollbackMultiSourceWarning: len(currentSources) > 0 || len(sources) > 0 || len(revisions) > 0})
 		}
 		if op, ok, _ := unstructured.NestedMap(root.Object, "status", "operationState"); ok {
 			initiatedBy := ""
@@ -1487,12 +1552,13 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 				deployedAt = gitops.StringValue(op["startedAt"])
 			}
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(gitops.StringValue(op["message"]))
+			syncResult, _ := op["syncResult"].(map[string]any)
 			out = append(out, HistoryItem{
 				Phase:       gitops.StringValue(op["phase"]),
 				Message:     msg,
 				RawMessage:  rawMsg,
 				DeployedAt:  deployedAt,
-				Revision:    nestedString(op, "syncResult", "revision"),
+				Revision:    argoRevisionLabel(syncResult),
 				InitiatedBy: initiatedBy,
 			})
 		}
@@ -1530,10 +1596,12 @@ func buildCapabilities(root *unstructured.Unstructured, tool string) Capabilitie
 		if root.GetKind() != "Application" {
 			return Capabilities{UnsupportedReason: "GitOps actions are only available for Argo CD Applications."}
 		}
+		// A multi-source entry records `revisions`, not `revision`, so the
+		// entry's source is what makes it rollbackable.
 		hasHistory := false
 		raw, _, _ := unstructured.NestedSlice(root.Object, "status", "history")
 		for _, item := range raw {
-			if m, ok := item.(map[string]any); ok && gitops.StringValue(m["revision"]) != "" {
+			if m, ok := item.(map[string]any); ok && gitops.ArgoHistoryEntryRollbackable(m) {
 				hasHistory = true
 				break
 			}
@@ -1768,16 +1836,6 @@ func parseWave(value string) (int, bool) {
 	return i, err == nil
 }
 
-func newestConditionTime(root *unstructured.Unstructured) string {
-	newest := ""
-	for _, c := range conditions(root) {
-		if c.lastTransitionTime > newest {
-			newest = c.lastTransitionTime
-		}
-	}
-	return newest
-}
-
 func stringData(data map[string]any, key string) string {
 	if data == nil {
 		return ""
@@ -1833,6 +1891,45 @@ func stripUnknown(value string) string {
 		return ""
 	}
 	return value
+}
+
+// argoRevisionLabel is a history entry's (or sync result's) deployed revision.
+// A multi-source deploy records one revision per source in `revisions` and
+// leaves `revision` empty.
+func argoRevisionLabel(m map[string]any) string {
+	if revision := gitops.StringValue(m["revision"]); revision != "" {
+		return revision
+	}
+	revisions, _ := m["revisions"].([]any)
+	parts := make([]string, 0, len(revisions))
+	for _, revision := range revisions {
+		if s := gitops.StringValue(revision); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// argoSourceLabel describes the source a history entry deployed. A
+// multi-source entry carries `sources` (its `source` is an empty placeholder),
+// labelled by the first source and a count of the rest.
+func argoSourceLabel(m map[string]any) string {
+	describe := func(source any) string {
+		sm, _ := source.(map[string]any)
+		return joinNonEmpty(gitops.StringValue(sm["repoURL"]), gitops.StringValue(sm["path"]), gitops.StringValue(sm["chart"]))
+	}
+	if label := describe(m["source"]); label != "" {
+		return label
+	}
+	sources, _ := m["sources"].([]any)
+	if len(sources) == 0 {
+		return ""
+	}
+	label := describe(sources[0])
+	if len(sources) > 1 {
+		label += fmt.Sprintf(" (+%d more)", len(sources)-1)
+	}
+	return label
 }
 
 func joinNonEmpty(values ...string) string {
@@ -2039,13 +2136,46 @@ func detectPendingDeletion(root *unstructured.Unstructured, resolver Resolver) *
 	}
 }
 
+// DetectArgoRollbackRevisionMismatch shares the completed rollback outcome and
+// recovery guidance between detail insights and cluster Issues.
+func DetectArgoRollbackRevisionMismatch(root *unstructured.Unstructured) *Issue {
+	target, applied := gitops.ArgoRollbackRevisionMismatch(root)
+	if target == "" {
+		return nil
+	}
+	message := "Last rollback deployed different sources or revisions than requested."
+	cause := "Argo CD applied different sources or revisions than the rollback requested."
+	if applied == "" {
+		message = "Couldn't verify the rollback target " + target + ": Argo CD recorded no applied revisions."
+		cause = "A successful operation phase alone does not prove Argo CD applied the rollback target."
+	} else if target != applied {
+		message = "Last rollback deployed different sources or revisions than requested: " + applied + " instead of " + target + "."
+	}
+	action := "Sync the intended revision manually, then check the result."
+	currentSources, _, _ := unstructured.NestedSlice(root.Object, "spec", "sources")
+	sync, _, _ := unstructured.NestedMap(root.Object, "status", "operationState", "operation", "sync")
+	if len(currentSources) > 0 || sync["revisions"] != nil || sync["sources"] != nil {
+		cause = "On Argo CD before 2.12, rolling back across a single-source/multi-source change or to a multi-source entry can deploy the wrong revisions or render nothing; with prune, it can delete resources."
+		action = "Check the Argo CD controller version, then sync the intended revision manually."
+	}
+	return &Issue{
+		Severity: SeverityWarning,
+		Scope:    ScopeOperation,
+		Reason:   "RollbackRevisionMismatch",
+		Message:  message,
+		Cause:    cause,
+		Action:   action,
+	}
+}
+
 // detectStuckDriftLoop emits a critical issue when an Argo Application is
 // in the "applied successfully but still drifted" state — the case where
 // the user stares at the OutOfSync badge for hours wondering why nothing
-// happens. All four conditions must hold:
+// happens. All conditions must hold:
 //
 //   - sync status is OutOfSync (drift exists)
 //   - last operation phase is Succeeded (the apply itself didn't error)
+//   - applied revisions and sources match the current desired comparison
 //   - auto-sync is enabled (so Argo *would* fix it if it could)
 //   - reconciledAt is recent (controller is actively trying)
 //
@@ -2062,7 +2192,7 @@ func detectStuckDriftLoop(root *unstructured.Unstructured) *Issue {
 		return nil
 	}
 	phase, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "phase")
-	if phase != "Succeeded" {
+	if phase != "Succeeded" || !gitops.ArgoAppliedCurrentComparison(root) {
 		return nil
 	}
 	// Self-heal must be ON for this to be a *loop*: the premise is that Argo
@@ -2094,16 +2224,14 @@ func detectStuckDriftLoop(root *unstructured.Unstructured) *Issue {
 		Reason:   "StuckDriftLoop",
 		Message:  "Sync succeeded but the application is still OutOfSync. A controller or admission webhook is likely mutating resources after each apply.",
 		Cause:    "Auto-sync ran successfully and the controller's last reconcile is recent, but live state keeps diverging from Git. Common causes: a mutating admission webhook adds defaults Argo isn't told to ignore; a sibling controller (e.g. Karpenter, Istio, cert-manager) writes back into spec; the Git manifest uses a deprecated API schema that the conversion webhook rewrites.",
-		Action:   "Open Changes to see the per-resource drift. Match the diff against your Git manifest, the resource's controller, and any mutating webhooks.",
+		Action:   "Open Resources to see the per-resource drift. Match the diff against your Git manifest, the resource's controller, and any mutating webhooks.",
 		Stuck:    true,
 	}
 }
 
 // detectManualDriftWithoutAutoSync emits a warning when an Argo Application
-// is OutOfSync but auto-sync is disabled. The user otherwise has no signal
-// that the drift won't resolve on its own — they wait, nothing happens,
-// and they file the bug. This issue puts a clear "Click Sync" prompt at
-// the top of the page so the next-step is obvious.
+// is OutOfSync but auto-sync is disabled. A proven successful rollback
+// records the last rollback without claiming the live state is unchanged.
 //
 // Returns nil when conditions don't match — caller appends only on hit.
 func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured, syncHazard string) *Issue {
@@ -2117,15 +2245,36 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured, syncHazar
 	if describeArgoAutoSync(root) != "Manual" {
 		return nil
 	}
+	if revision, username := gitops.ArgoSuccessfulRollback(root); revision != "" {
+		message := "Last rollback deployed " + revision
+		if username != "" {
+			message += " by " + username
+		}
+		revisionLabel := "revision"
+		if revisions, _, _ := unstructured.NestedStringSlice(root.Object, "status", "operationState", "syncResult", "revisions"); len(revisions) > 1 {
+			revisionLabel = "revisions"
+		}
+		issue := &Issue{
+			Severity: SeverityInfo,
+			Scope:    ScopeOperation,
+			Reason:   "RolledBack",
+			Message:  message + ".",
+			Cause:    "Auto-sync is off. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current " + revisionLabel + " and can undo the rollback.",
+		}
+		if syncHazard != "" {
+			issue.Action = syncHazard
+			issue.Hazard = syncHazard
+		}
+		return issue
+	}
 	issue := &Issue{
 		Severity: SeverityWarning,
 		Scope:    ScopeOperation,
 		Reason:   "ManualDrift",
-		Message:  "Application is OutOfSync and auto-sync is disabled — nothing will reconcile until you click Sync.",
-		Action:   "Open Changes to review the per-resource diff, then click Sync to apply. Enable auto-sync if you want this to fix itself going forward.",
+		Message:  "Application is OutOfSync and auto-sync is disabled.",
+		Action:   "Review the desired changes and sync policy before deciding whether to sync.",
 	}
 	if syncHazard != "" {
-		issue.Message = "Application is OutOfSync and auto-sync is disabled, so nothing reconciles it automatically."
 		issue.Action = syncHazard
 		issue.Hazard = syncHazard
 	}
@@ -2154,15 +2303,15 @@ func argoEmptyRenderGuardActive(root *unstructured.Unstructured) bool {
 	return false
 }
 
-// argoAutoSync reports whether spec.syncPolicy.automated is present and, if so,
-// whether selfHeal is enabled within it. The two booleans distinguish the three
+// argoAutoSync reports whether automated sync is enabled and, if so, whether
+// selfHeal is enabled within it. The two booleans distinguish the three
 // drift-reconciliation postures: manual (!automated), auto-deploy-only
 // (automated && !selfHeal), and auto-heal (automated && selfHeal).
 func argoAutoSync(root *unstructured.Unstructured) (automated, selfHeal bool) {
-	m, found, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
-	if !found {
+	if !gitops.ArgoAutoSyncEnabled(root) {
 		return false, false
 	}
+	m, _, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
 	v, _ := m["selfHeal"].(bool)
 	return true, v
 }
@@ -2190,7 +2339,7 @@ func detectAutoDriftSelfHealOff(root *unstructured.Unstructured, syncHazard stri
 		Scope:    ScopeOperation,
 		Reason:   "SelfHealDisabled",
 		Message:  "Application is OutOfSync and self-heal is disabled — auto-sync deploys new Git revisions but won't correct drift in the live cluster, so it will stay OutOfSync until you sync.",
-		Action:   "Open Changes to review the per-resource diff, then click Sync. Enable self-heal on the sync policy if you want Argo to auto-correct drift going forward.",
+		Action:   "Open Resources to review the per-resource diff, then click Sync. Enable self-heal on the sync policy if you want Argo to auto-correct drift going forward.",
 	}
 	if syncHazard != "" {
 		issue.Message = "Application is OutOfSync and self-heal is disabled — auto-sync deploys new Git revisions but won't correct drift in the live cluster."
@@ -2247,6 +2396,8 @@ func argoApplicationConditions(root *unstructured.Unstructured, syncHazard strin
 		action := guidance.Action
 		if typ == argoSyncErrorConditionType {
 			parsed := diagnose.ParseArgoOperationError(msg)
+			createNamespaceSet := gitops.ArgoCreateNamespaceEnabled(root)
+			parsed = diagnose.WithCreateNamespaceState(parsed, createNamespaceSet)
 			if parsed.Reason != "" {
 				if parsed.Reason == diagnose.ReasonAutoSyncBlockedEmpty && !gitops.ArgoEmptyRenderGuardHolds(root) {
 					continue
@@ -2257,9 +2408,9 @@ func argoApplicationConditions(root *unstructured.Unstructured, syncHazard strin
 				rawMsg = fallback(rawMsg, msg)
 				msg = parsed.Summary
 			}
-			if !gitops.IsInClusterDestination(root) {
+			if !gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root) {
 				var remoteAction string
-				parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed)
+				parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed, createNamespaceSet)
 				if remoteAction != "" {
 					action = remoteAction
 				}

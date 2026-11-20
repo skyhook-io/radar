@@ -49,6 +49,18 @@ var clusterOnlyKinds = map[string]ClusterOnlyKindInfo{
 	"customresourcedefinitions":       {"apiextensions.k8s.io", "customresourcedefinitions"},
 	"customresourcedefinition":        {"apiextensions.k8s.io", "customresourcedefinitions"},
 	"crd":                             {"apiextensions.k8s.io", "customresourcedefinitions"},
+	"validatingadmissionpolicies": {
+		"admissionregistration.k8s.io", "validatingadmissionpolicies",
+	},
+	"validatingadmissionpolicy": {
+		"admissionregistration.k8s.io", "validatingadmissionpolicies",
+	},
+	"validatingadmissionpolicybindings": {
+		"admissionregistration.k8s.io", "validatingadmissionpolicybindings",
+	},
+	"validatingadmissionpolicybinding": {
+		"admissionregistration.k8s.io", "validatingadmissionpolicybindings",
+	},
 }
 
 var clusterOnlyKindsByGroup = map[string]ClusterOnlyKindInfo{

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/auth"
@@ -74,6 +76,24 @@ func invalidateAuditCache() {
 
 const auditCacheTTL = 5 * time.Second
 
+// slowAuditScan is when a scan is worth a log line: scans run inside the
+// request and can approach the server's request timeout on large clusters.
+const slowAuditScan = 20 * time.Second
+
+// runAuditScan is the scan itself; tests replace it.
+var runAuditScan = audit.RunFromCache
+
+// auditScans runs one scan per key at a time. Polls from several screens or
+// browsers asking for the same scope share it instead of each scanning. The
+// key carries both cache identities and the full options, including the
+// caller's secret namespaces and cluster-resource grants, so callers whose
+// access differs never share a result.
+var auditScans singleflight.Group
+
+func (k auditResultKey) flightKey() string {
+	return fmt.Sprintf("%p\x00%p\x00%s", k.cache, k.dynamic, k.options)
+}
+
 // getCachedResults returns cached scan results if fresh, or runs a new scan.
 func getCachedResults(cache *k8s.ResourceCache, namespaces []string, opts *audit.RunOptions) *bp.ScanResults {
 	key := auditKey(cache, namespaces, opts)
@@ -86,15 +106,21 @@ func getCachedResults(cache *k8s.ResourceCache, namespaces []string, opts *audit
 	}
 	auditCache.mu.RUnlock()
 
-	results := audit.RunFromCache(cache, namespaces, opts)
+	results, _, _ := auditScans.Do(key.flightKey(), func() (any, error) {
+		start := time.Now()
+		results := runAuditScan(cache, namespaces, opts)
+		if elapsed := time.Since(start); elapsed > slowAuditScan {
+			log.Printf("[audit] Scan took %v (%d namespaces requested)", elapsed.Truncate(time.Millisecond), len(namespaces))
+		}
 
-	auditCache.mu.Lock()
-	auditCache.results = results
-	auditCache.key = key
-	auditCache.expiresAt = time.Now().Add(auditCacheTTL)
-	auditCache.mu.Unlock()
-
-	return results
+		auditCache.mu.Lock()
+		auditCache.results = results
+		auditCache.key = key
+		auditCache.expiresAt = time.Now().Add(auditCacheTTL)
+		auditCache.mu.Unlock()
+		return results, nil
+	})
+	return results.(*bp.ScanResults)
 }
 
 // applyAuditSettings filters results based on user settings.
@@ -108,7 +134,7 @@ func getAuditConfig() settings.AuditConfig {
 }
 
 // handleAudit returns full audit scan results.
-// GET /api/audit?namespace=X&namespaces=X,Y
+// GET /api/audit?namespace=X&namespaces=X,Y[&raw=true][&include=badges]
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -120,7 +146,12 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	namespaces := s.parseNamespacesForUser(r)
 	if readscope.NoNamespaceAccess(namespaces) {
-		s.writeJSON(w, &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}})
+		empty := &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
+		if r.URL.Query().Get("include") == "badges" {
+			s.writeJSON(w, auditBadgesResponse(empty))
+			return
+		}
+		s.writeJSON(w, empty)
 		return
 	}
 	results := getCachedResults(cache, namespaces, s.auditOptions(r))
@@ -139,6 +170,16 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	results = applyAuditSettings(results, getAuditConfig())
+	// `?include=badges` is for views that only badge resources (topology,
+	// resource lists). They show only findings from badge-worthy checks
+	// (reference integrity, lifecycle), a small fraction of the scan, while the
+	// full response repeats every finding three times for the Checks page. An
+	// unknown include value gets the full response, as it would from a Radar
+	// that predates the parameter.
+	if r.URL.Query().Get("include") == "badges" {
+		s.writeJSON(w, auditBadgesResponse(results))
+		return
+	}
 	// Attach the remediation-queue rollup for standalone + embedded per-cluster
 	// views. Build on a shallow copy: applyAuditSettings returns the shared
 	// cache object verbatim when no settings filter, so mutating it would race
@@ -147,6 +188,26 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	resp := *results
 	resp.GroupedChecks = chk.BuildChecks(bp.EffectiveFindings(results.Findings, ""), results.Checks, "", "")
 	s.writeJSON(w, &resp)
+}
+
+// auditBadges is /api/audit?include=badges: the locally filtered findings of
+// badge-worthy checks, and the catalog entries for those checks.
+type auditBadges struct {
+	Findings []bp.Finding            `json:"findings"`
+	Checks   map[string]bp.CheckMeta `json:"checks"`
+}
+
+func auditBadgesResponse(results *bp.ScanResults) auditBadges {
+	out := auditBadges{Findings: []bp.Finding{}, Checks: map[string]bp.CheckMeta{}}
+	for _, f := range results.Findings {
+		meta, ok := results.Checks[f.CheckID]
+		if !ok || !meta.BadgeWorthy {
+			continue
+		}
+		out.Findings = append(out.Findings, f)
+		out.Checks[f.CheckID] = meta
+	}
+	return out
 }
 
 // queryTrue reports whether a query param parses as a truthy boolean. Tolerant

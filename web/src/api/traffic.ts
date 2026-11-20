@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tansta
 import type { TrafficSourcesResponse, TrafficFlowsResponse, TrafficRecordsResponse } from '../types'
 import { fetchJSON as fetchApiJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
-import { apiUrl, getAuthHeaders, getCredentialsMode } from './config'
+import { apiUrl, automaticRequestHeaders, getAuthHeaders, getCredentialsMode } from './config'
 import { readErrorBody } from './httpErrors'
 
 async function fetchJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -279,12 +279,17 @@ export function useTrafficConnectionStatus() {
 export function useTrafficConnect() {
   const queryClient = useQueryClient()
 
-  return useMutation<TrafficConnectionInfo, Error>({
-    mutationFn: async () => {
+  // `automatic`: the page connected by itself, not for a click.
+  return useMutation<TrafficConnectionInfo, Error, { automatic?: boolean } | void>({
+    mutationFn: async (vars) => {
       const response = await fetch(apiUrl('/traffic/connect'), {
         method: 'POST',
         credentials: getCredentialsMode(),
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        headers: {
+          'Content-Type': 'application/json',
+          ...getAuthHeaders(),
+          ...(vars?.automatic ? automaticRequestHeaders() : {}),
+        },
       })
       if (!response.ok) {
         const error = await readErrorBody(response)

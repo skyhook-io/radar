@@ -16,14 +16,14 @@ import {
   Maximize2,
   Minimize2,
   Settings2,
-  MoreVertical,
-  TerminalSquare,
-  Copy,
-  Check,
   RotateCcw,
   PanelLeftOpen,
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
+import {
+  ContinueInAgentButton,
+  useContinueInAgentCommand,
+} from "./ContinueInAgentButton";
 import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
 import {
   TRANSITION_BACKDROP,
@@ -51,6 +51,12 @@ import {
   statusWord,
 } from "./Home";
 import { AgentSetupNotice } from "./AgentSetupNotice";
+import {
+  EXAMPLE_INVESTIGATION_ID,
+  EXAMPLE_INVESTIGATION_RUN,
+  exampleInvestigationOffered,
+  isExampleInvestigation,
+} from "./exampleInvestigation";
 import { AgentSigninNotice } from "./AgentSigninNotice";
 import {
   useAgentSignin,
@@ -58,10 +64,7 @@ import {
 } from "../../hooks/useAgentSignin";
 import { ConsentCard } from "./parts";
 import type { ConsentSubject } from "./AgentControls";
-import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
 import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
-import { mcpEndpointUrl } from "../../api/config";
-import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { useContexts } from "../../api/client";
 import {
   formatInvestigationTarget,
@@ -97,107 +100,6 @@ function buildConfigLine(cfg: {
   }
   if (cfg.model) parts.push(capWord(cfg.model));
   return "via " + parts.join(" · ");
-}
-
-// InvestigationMenu hands an investigation off to the user's own full agent. The
-// PRIMARY action copies a resume command they can paste wherever they actually
-// work (terminal, tmux, IDE) — destination-agnostic. Running it in Radar's built-in
-// terminal is the secondary "run it here" convenience.
-function InvestigationMenu({ run }: { run: RunSummary }) {
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const { localTerminal, mcpReadOnly } = useCapabilitiesContext();
-  const label = launchAgentLabel(run);
-  const command = buildLaunchCommand(
-    run,
-    mcpEndpointUrl(mcpReadOnly),
-  );
-
-  // The diagnose root is a CSS container, so a position:fixed click-away layer
-  // inside it is panel-bound rather than viewport-bound. Dismiss from the
-  // document instead; the anchored menu itself can stay next to its trigger.
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  // No resumable session yet (or stale run) → nothing to hand off.
-  if (!command) return null;
-  const toggle = () => {
-    setCopied(false);
-    setOpen((v) => !v);
-  };
-  const copy = () => {
-    void navigator.clipboard?.writeText(command);
-    setCopied(true);
-    setTimeout(() => {
-      setCopied(false);
-      setOpen(false);
-    }, 1100);
-  };
-
-  return (
-    <div ref={menuRef} className="relative flex items-center">
-      <Tooltip content="More" position="bottom">
-        <button
-          onClick={toggle}
-          className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-          aria-label="More actions"
-          aria-haspopup="menu"
-          aria-expanded={open}
-        >
-          <MoreVertical className="h-4 w-4" />
-        </button>
-      </Tooltip>
-      {open && (
-        <div className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border border-theme-border bg-theme-surface py-1 shadow-theme-lg">
-          <button
-            onClick={copy}
-            className="flex w-full items-start gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
-          >
-            {copied ? (
-              <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-            ) : (
-              <Copy className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
-            )}
-            <span>
-              {copied ? "Copied ✓" : `Copy command to continue in ${label}`}
-              {!copied && (
-                <span className="block text-[11px] text-theme-text-tertiary">
-                  Paste it wherever you run {label} — resumes this exact
-                  session.
-                </span>
-              )}
-            </span>
-          </button>
-          {localTerminal && (
-            <button
-              onClick={() => {
-                openInTerminal(command, "Radar Investigation");
-                setOpen(false);
-              }}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
-            >
-              <TerminalSquare className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
-              Run in a Radar terminal
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // The panel is an ABSOLUTE slot inside the app's body frame (the column under the
@@ -565,11 +467,26 @@ export function DiagnoseSurface({
   const setupPending =
     d.setupState === "needs-install" || d.setupState === "needs-restart";
 
-  const activeRun = d.runs.find((r) => r.id === d.activeRunId) ?? null;
+  const exampleOpen = isExampleInvestigation(d.activeRunId);
+  const activeRun = exampleOpen
+    ? EXAMPLE_INVESTIGATION_RUN
+    : (d.runs.find((r) => r.id === d.activeRunId) ?? null);
+  const openExample = exampleInvestigationOffered({
+    runs: d.runs,
+    runsLoaded: d.runsLoaded,
+    setupPending,
+    needsConsent: d.needsConsent,
+  })
+    ? () => d.openRun(EXAMPLE_INVESTIGATION_ID)
+    : undefined;
   // Consent replaces the detail pane even if goHome retained an older run id.
   // Header identity and actions must describe what is actually visible.
   const visibleRunDetail =
     d.needsConsent || d.startCapacity ? null : activeRun;
+  // The investigation view knows when its agent session is quiet; the header
+  // offers the hand-off only then.
+  const [handoffAllowed, setHandoffAllowed] = useState(false);
+  const handoffCommand = useContinueInAgentCommand(visibleRunDetail);
   // A focused run shows the agent it actually ran with; Home reflects the current pick.
   const activeAgentLabel = visibleRunDetail?.agent
     ? agentLabelFor(visibleRunDetail.agent)
@@ -642,9 +559,17 @@ export function DiagnoseSurface({
       run={activeRun}
       agentLabel={activeAgentLabel}
       maximized={maximized}
-      onOpenResource={onOpenResource ? openEvidenceResource : undefined}
-      onOpenTimeline={onOpenTimeline ? openEvidenceTimeline : undefined}
+      // The example's resources are on a test cluster, not this one.
+      onOpenResource={
+        onOpenResource && !exampleOpen ? openEvidenceResource : undefined
+      }
+      onOpenTimeline={
+        onOpenTimeline && !exampleOpen ? openEvidenceTimeline : undefined
+      }
       onRevealDestination={revealDestination}
+      example={exampleOpen}
+      onCloseExample={exampleOpen ? d.goHome : undefined}
+      onHandoffAllowedChange={setHandoffAllowed}
     />
   ) : d.activeRunId && !d.runsLoaded ? (
     // Deep-linked to a run before the list has ever loaded: show the load
@@ -699,6 +624,7 @@ export function DiagnoseSurface({
         checkingAgents={d.checkingAgents}
         agentsCheckFailed={d.agentsCheckFailed}
         recheckAgents={d.recheckAgents}
+        onOpenExample={openExample}
       />
     </div>
   ) : (
@@ -730,12 +656,14 @@ export function DiagnoseSurface({
         checkingAgents={d.checkingAgents}
         agentsCheckFailed={d.agentsCheckFailed}
         recheckAgents={d.recheckAgents}
+        onOpenExample={openExample}
       />
     </div>
   ) : (
     <InvestigationHome
       agentLabel={d.agentLabel}
       questions={d.questions}
+      onOpenExample={openExample}
       onBrowseIssues={
         d.questions || (d.runsLoaded && d.runs.length === 0)
           ? onBrowseIssues
@@ -847,6 +775,7 @@ export function DiagnoseSurface({
         <div className="flex shrink-0 items-center gap-1">
           {activeRun &&
             visibleRunDetail &&
+            !exampleOpen &&
             canRerunInvestigation(d.view, activeRun, d.needsConsent) && (
               <Tooltip
                 content="Re-run this investigation from scratch"
@@ -861,7 +790,9 @@ export function DiagnoseSurface({
                 </button>
               </Tooltip>
             )}
-          {visibleRunDetail && headerPresentation.runActionsClass !== null && (
+          {visibleRunDetail &&
+            !exampleOpen &&
+            headerPresentation.runActionsClass !== null && (
             <div
               className={`items-center gap-1 ${headerPresentation.runActionsClass || "flex"}`}
             >
@@ -869,7 +800,12 @@ export function DiagnoseSurface({
                 run: visibleRunDetail,
                 onRunUpdated: d.updateRunSummary,
               })}
-              <InvestigationMenu run={visibleRunDetail} />
+              {handoffAllowed && handoffCommand && (
+                <ContinueInAgentButton
+                  run={visibleRunDetail}
+                  command={handoffCommand}
+                />
+              )}
             </div>
           )}
           {!fullWidthForced && (!maximized || d.canRestoreWorkspace) && (
@@ -946,6 +882,15 @@ export function DiagnoseSurface({
               loadFailed={d.runsLoadFailed}
               onRetry={d.refreshRuns}
               questions={d.questions}
+              // Beside Home on the full page, Home already offers it.
+              onOpenExample={
+                persistentHistory || exampleOpen || !openExample
+                  ? undefined
+                  : () => {
+                      openExample();
+                      dismissHistory();
+                    }
+              }
             />
           </aside>
         )}

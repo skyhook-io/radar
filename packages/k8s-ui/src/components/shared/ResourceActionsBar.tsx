@@ -29,7 +29,10 @@ import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
-import { getDefaultContainerName, getExecContainerNames } from '../resources/resource-utils'
+import { getDefaultContainerName, getDefaultLogContainerName, getExecContainerNames, getInitContainerNames, getLogContainerNames } from '../resources/resource-utils'
+import { argoApplicationSyncOptions, argoComparedRevisionCurrent, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoMultiSource, isArgoOperationInProgress } from '../resources/resource-utils-argo'
+import { SyncOptionsDialog, type ArgoSyncOpts } from '../gitops/SyncOptionsDialog'
+import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
@@ -74,7 +77,7 @@ interface ResourceActionsBarProps {
 
   // Dock actions (injected by platform)
   onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
-  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string }) => void
+  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   onCopyCommand?: (text: string, message: string, event: React.MouseEvent) => void
 
@@ -94,6 +97,12 @@ interface ResourceActionsBarProps {
   // Workload restart
   onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isRestarting?: boolean
+
+  // Deployment rollout pause. A host passes both callbacks only when the caller may patch Deployments.
+  onPauseDeployment?: (params: { kind: string; namespace: string; name: string }) => void
+  onResumeDeployment?: (params: { kind: string; namespace: string; name: string }) => void
+  isPausingDeployment?: boolean
+  isResumingDeployment?: boolean
 
   onLoadImages?: (params: { kind: string; namespace: string; name: string }) => Promise<WorkloadImageInventory>
   onSetImages?: (params: { kind: string; namespace: string; name: string; updates: WorkloadImageUpdate[] }) => Promise<unknown>
@@ -129,14 +138,25 @@ interface ResourceActionsBarProps {
   isFluxResuming?: boolean
 
   // Argo actions
-  onArgoSync?: (params: { namespace: string; name: string }) => void
+  // May return a promise that settles with the request: the options dialog
+  // then stays open, with its choices, when it rejects.
+  onArgoSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void | Promise<unknown>
   isArgoSyncing?: boolean
+  // Set when onArgoSync forwards the options in its params: Sync then opens
+  // the options dialog. Without it Sync syncs at once with the Application's
+  // own options. pinsComparedRevision: the Radar pins an omitted revision
+  // (argoSyncInheritance).
+  argoSyncDialog?: { pinsComparedRevision: boolean }
   onArgoRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void
   isArgoRefreshing?: boolean
   onArgoSuspend?: (params: { namespace: string; name: string }) => void
   isArgoSuspending?: boolean
   onArgoResume?: (params: { namespace: string; name: string }) => void
   isArgoResuming?: boolean
+  // Set when the connected Radar is too old to turn auto-sync back on for an
+  // Application with automated.enabled: false; Enable Auto-Sync renders disabled.
+  argoResumeUpgrade?: RadarUpgradeRequirement | null
+  argoResumeBlockedReason?: string
 
   // Node debug shell
   onOpenNodeTerminal?: (params: { nodeName: string }) => void
@@ -173,6 +193,7 @@ export function ResourceActionsBar({
   renderPortForward,
   onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
   onRestart, isRestarting,
+  onPauseDeployment, onResumeDeployment, isPausingDeployment, isResumingDeployment,
   onLoadImages, onSetImages, isSettingImages, imageOwnership,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
   onRolloutPromoteFull,
@@ -183,10 +204,10 @@ export function ResourceActionsBar({
   onFluxSyncWithSource, isFluxSyncing,
   onFluxSuspend, isFluxSuspending,
   onFluxResume, isFluxResuming,
-  onArgoSync, isArgoSyncing,
+  onArgoSync, isArgoSyncing, argoSyncDialog,
   onArgoRefresh, isArgoRefreshing,
   onArgoSuspend, isArgoSuspending,
-  onArgoResume, isArgoResuming,
+  onArgoResume, isArgoResuming, argoResumeUpgrade, argoResumeBlockedReason,
   onOpenNodeTerminal,
   canNodeWrite,
   onCordonNode, isCordoningNode,
@@ -265,6 +286,8 @@ export function ResourceActionsBar({
 
   const isRunning = kind === 'pods' ? data?.status?.phase === 'Running' : true
   const containers = data?.spec?.containers?.map((c: any) => c.name) || []
+  const logContainers = getLogContainerNames(data)
+  const initContainers = getInitContainerNames(data)
 
   const handleOpenTerminal = () => {
     if (resource.namespace && resource.name && containers.length > 0) {
@@ -278,12 +301,13 @@ export function ResourceActionsBar({
   }
 
   const handleOpenLogs = (containerName?: string) => {
-    if (resource.namespace && resource.name && containers.length > 0) {
+    if (resource.namespace && resource.name && logContainers.length > 0) {
       openLogs?.({
         namespace: resource.namespace,
         podName: resource.name,
-        containers,
-        containerName: containerName || getDefaultContainerName(data),
+        containers: logContainers,
+        containerName: containerName || getDefaultLogContainerName(data),
+        initContainers,
       })
     }
   }
@@ -303,7 +327,7 @@ export function ResourceActionsBar({
 
   const handleLogsMouseEnter = () => {
     if (logsMenuTimeout.current) clearTimeout(logsMenuTimeout.current)
-    if (containers.length > 1) setShowLogsMenu(true)
+    if (logContainers.length > 1) setShowLogsMenu(true)
   }
   const handleLogsMouseLeave = () => {
     logsMenuTimeout.current = setTimeout(() => setShowLogsMenu(false), 150)
@@ -332,16 +356,16 @@ export function ResourceActionsBar({
               onMouseLeave={handleLogsMouseLeave}
             >
               <button
-                onClick={() => handleOpenLogs(containers.length === 1 ? containers[0] : undefined)}
+                onClick={() => handleOpenLogs()}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
               >
                 <FileText className="w-3.5 h-3.5" />
                 Logs
-                {containers.length > 1 && <ChevronDown className="w-3 h-3 ml-0.5" />}
+                {logContainers.length > 1 && <ChevronDown className="w-3 h-3 ml-0.5" />}
               </button>
-              {showLogsMenu && containers.length > 1 && (
+              {showLogsMenu && logContainers.length > 1 && (
                 <div className="absolute top-full left-0 mt-1 min-w-[160px] py-1 bg-theme-surface border border-theme-border rounded-lg shadow-lg z-50">
-                  {containers.map((container: string) => (
+                  {logContainers.map((container: string) => (
                     <button
                       key={container}
                       onClick={() => {
@@ -352,6 +376,7 @@ export function ResourceActionsBar({
                     >
                       <Box className="w-3 h-3 text-theme-text-tertiary shrink-0" />
                       <span className="truncate">{container}</span>
+                      {initContainers.includes(container) && <span className="ml-auto shrink-0 text-theme-text-tertiary">init</span>}
                     </button>
                   ))}
                 </div>
@@ -465,6 +490,17 @@ export function ResourceActionsBar({
               </span>
             </>
           )}
+          {onPauseDeployment && onResumeDeployment && kind === 'deployments' && isApiGroup(data?.apiVersion, 'apps') && !data?.metadata?.deletionTimestamp && (
+            <DeploymentPauseButton
+              paused={data?.spec?.paused === true}
+              busy={isPausingDeployment || isResumingDeployment}
+              onClick={() => {
+                const target = { kind: resource.kind, namespace: resource.namespace, name: resource.name }
+                if (data?.spec?.paused === true) onResumeDeployment(target)
+                else onPauseDeployment(target)
+              }}
+            />
+          )}
           {isRollbackKind && onRollback && (
             <Tooltip content={hasMultipleRevisions ? 'View revision history and rollback' : 'Only one revision exists'} delay={150}>
               <button
@@ -556,12 +592,15 @@ export function ResourceActionsBar({
           data={data}
           onSync={onArgoSync}
           isSyncing={isArgoSyncing}
+          syncDialog={argoSyncDialog}
           onRefresh={onArgoRefresh}
           isRefreshing={isArgoRefreshing}
           onSuspend={onArgoSuspend}
           isSuspending={isArgoSuspending}
           onResume={onArgoResume}
           isResuming={isArgoResuming}
+          resumeUpgrade={argoResumeUpgrade}
+          resumeBlockedReason={argoResumeBlockedReason}
         />
       )}
 
@@ -796,6 +835,28 @@ export function ResourceActionsBar({
 // FLUX ACTIONS
 // ============================================================================
 
+function DeploymentPauseButton({ paused, busy, onClick }: { paused: boolean; busy?: boolean; onClick: () => void }) {
+  const Icon = paused ? Play : Pause
+  return (
+    <>
+      <Tooltip content={paused ? 'Roll out any pod template changes held while paused' : 'Hold pod template changes until the rollout is resumed'} delay={150}>
+        <button
+          onClick={onClick}
+          disabled={busy}
+          aria-busy={busy}
+          className="flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+        >
+          <Icon className={`w-3.5 h-3.5 ${busy ? 'animate-pulse' : ''}`} />
+          {paused ? 'Resume rollout' : 'Pause rollout'}
+        </button>
+      </Tooltip>
+      <span className="sr-only" aria-live="polite">
+        {busy ? (paused ? 'Resuming rollout' : 'Pausing rollout') : ''}
+      </span>
+    </>
+  )
+}
+
 function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSource, isSyncing, onSuspend, isSuspending, onResume, isResuming }: {
   resource: SelectedResource; data: any
   onReconcile?: (params: { kind: string; namespace: string; name: string }) => void; isReconciling?: boolean
@@ -881,31 +942,70 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
 // ARGO ACTIONS
 // ============================================================================
 
-function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming }: {
+function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming, resumeUpgrade, resumeBlockedReason }: {
   resource: SelectedResource; data: any
-  onSync?: (params: { namespace: string; name: string }) => void; isSyncing?: boolean
+  onSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void | Promise<unknown>; isSyncing?: boolean
+  syncDialog?: { pinsComparedRevision: boolean }
   onRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void; isRefreshing?: boolean
   onSuspend?: (params: { namespace: string; name: string }) => void; isSuspending?: boolean
   onResume?: (params: { namespace: string; name: string }) => void; isResuming?: boolean
+  resumeUpgrade?: RadarUpgradeRequirement | null
+  resumeBlockedReason?: string
 }) {
-  const hasAutomatedSync = !!data?.spec?.syncPolicy?.automated
+  const autoSyncEnabled = isArgoAutoSyncEnabled(data)
+  const resumeBlocked = isArgoAutoSyncSwitchedOff(data)
+    ? resumeBlockedReason || (resumeUpgrade ? radarUpgradeNoteText(resumeUpgrade) : undefined)
+    : undefined
+
+  // The drawer can switch Applications under an open dialog; its choices
+  // belong to the one it was opened for, so it closes on any other.
+  const appKey = `${resource.namespace}/${resource.name}`
+  const [syncDialogFor, setSyncDialogFor] = useState<string | null>(null)
+  if (syncDialogFor !== null && syncDialogFor !== appKey) setSyncDialogFor(null)
+  const syncDialogOpen = syncDialogFor === appKey
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const operationRunning = isArgoOperationInProgress(data)
+  const applicationSyncOptions = argoApplicationSyncOptions(data)
+  // A failed request is reported by the host; it only keeps the dialog open.
+  const sync = (opts?: ArgoSyncOpts) => Promise.resolve(onSync?.({ namespace: resource.namespace, name: resource.name, applicationSyncOptions, ...opts }))
 
   return (
     <>
       {onSync && (
-        <Tooltip content="Sync application" delay={150}>
+        <Tooltip content={operationRunning ? 'Wait for the current Argo operation to finish.' : syncDialog ? 'Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision).' : "Syncs with the Application's own sync options, without pruning. For prune, dry run or a revision, use Sync… on its GitOps page."} delay={150}>
           <button
-            onClick={() => onSync({
-              namespace: resource.namespace,
-              name: resource.name,
-            })}
-            disabled={isSyncing}
+            onClick={() => {
+              if (!syncDialog) return void sync().catch(() => {})
+              setSyncError(null)
+              setSyncDialogFor(appKey)
+            }}
+            disabled={isSyncing || operationRunning}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-            {isSyncing ? 'Syncing...' : 'Sync'}
+            {isSyncing ? 'Syncing...' : syncDialog ? 'Sync…' : 'Sync'}
           </button>
         </Tooltip>
+      )}
+      {onSync && syncDialog && (
+        <SyncOptionsDialog
+          key={appKey}
+          open={syncDialogOpen}
+          appLabel={`${resource.namespace}/${resource.name}`}
+          multiSource={isArgoMultiSource(data)}
+          comparedRevision={data?.status?.sync?.revision}
+          pinsComparedRevision={syncDialog.pinsComparedRevision && argoComparedRevisionCurrent(data)}
+          applicationSyncOptions={applicationSyncOptions}
+          pending={isSyncing}
+          autoSyncEnabled={isArgoAutoSyncEnabled(data)}
+          operationInProgress={operationRunning}
+          syncError={syncError}
+          onCancel={() => setSyncDialogFor(null)}
+          onConfirm={(opts) => {
+            setSyncError(null)
+            sync(opts).then(() => setSyncDialogFor(null), (error: unknown) => setSyncError(error instanceof Error ? error.message : 'the request was refused'))
+          }}
+        />
       )}
 
       {onRefresh && (
@@ -925,7 +1025,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
         </Tooltip>
       )}
 
-      {hasAutomatedSync ? (
+      {autoSyncEnabled ? (
         onSuspend && (
           <button
             onClick={() => onSuspend({
@@ -941,17 +1041,19 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
         )
       ) : (
         onResume && (
-          <button
-            onClick={() => onResume({
-              namespace: resource.namespace,
-              name: resource.name,
-            })}
-            disabled={isResuming}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <Play className="w-3.5 h-3.5" />
-            {isResuming ? 'Enabling...' : 'Enable Auto-Sync'}
-          </button>
+          <Tooltip content={resumeBlocked} disabled={!resumeBlocked} delay={150}>
+            <button
+              onClick={() => !resumeBlocked && onResume({
+                namespace: resource.namespace,
+                name: resource.name,
+              })}
+              disabled={isResuming || !!resumeBlocked}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Play className="w-3.5 h-3.5" />
+              {isResuming ? 'Enabling...' : 'Enable Auto-Sync'}
+            </button>
+          </Tooltip>
         )
       )}
     </>

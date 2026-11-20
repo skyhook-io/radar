@@ -3,6 +3,8 @@ import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, Reso
 import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, parseFluxInventory, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
+import { Badge } from '../../ui/Badge'
+import { getFluxHandledRequestToken, getFluxLastApply } from '../../../utils/flux-history'
 
 interface KustomizationRendererProps {
   data: any
@@ -14,6 +16,8 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
   const spec = data.spec || {}
   const conditions = (status.conditions || []) as FluxCondition[]
   const inventoryEntries = status.inventory?.entries || []
+  const lastApply = getFluxLastApply(data)
+  const handledRequest = getFluxHandledRequestToken(status)
 
   // Convert to unified GitOps status
   const gitOpsStatus = fluxConditionsToGitOpsStatus(conditions, spec.suspend === true, {
@@ -74,7 +78,6 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
           {spec.interval && (
             <SyncCountdown
               interval={spec.interval}
-              lastSyncTime={status.lastHandledReconcileAt}
               suspended={gitOpsStatus.suspended}
             />
           )}
@@ -158,26 +161,27 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
       {managedResources.length > 0 && (
         <ManagedResourcesList
           resources={managedResources}
-          title={`Inventory (${managedResources.length} resources)`}
+          title="Inventory"
         />
       )}
 
       {/* Revision info */}
-      {(status.lastAppliedRevision || status.lastAttemptedRevision) && (
-        <Section title="Revision" defaultExpanded={false}>
+      {(status.lastAppliedRevision || status.lastAttemptedRevision || lastApply || handledRequest) && (
+        <Section title="Revision" defaultExpanded={true}>
           <PropertyList>
             {status.lastAppliedRevision && (
               <Property label="Applied" value={status.lastAppliedRevision} />
             )}
             {status.lastAttemptedRevision && status.lastAttemptedRevision !== status.lastAppliedRevision && (
-              <Property label="Attempted" value={status.lastAttemptedRevision} />
+              <Property label="Attempted" value={<><span className="break-words">{status.lastAttemptedRevision}</span>{status.lastAppliedRevision && <> <Badge severity="warning" size="sm">not the last successful apply</Badge></>}</>} />
             )}
-            {status.lastHandledReconcileAt && (
+            {lastApply && (
               <Property
-                label="Last Reconciled"
-                value={<TimeValue timestamp={status.lastHandledReconcileAt} />}
+                label={lastApply.succeeded ? 'Last applied' : 'Last apply attempt'}
+                value={<TimeValue timestamp={lastApply.time} />}
               />
             )}
+            <Property label="Last handled manual request" value={handledRequest} />
           </PropertyList>
         </Section>
       )}

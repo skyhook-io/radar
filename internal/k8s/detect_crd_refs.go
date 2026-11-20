@@ -28,6 +28,7 @@ func DetectMissingCRDRefs(cache *ResourceCache, dynamicCache *DynamicResourceCac
 	var out []Detection
 	out = append(out, detectRolloutMissingServices(cache, dynamicCache, discovery, namespace, now)...)
 	out = append(out, detectKEDAMissingScaleTargets(cache, dynamicCache, discovery, namespace, now)...)
+	out = append(out, detectFlaggerMissingReferences(cache, dynamicCache, discovery, namespace, now)...)
 	return out
 }
 
@@ -77,7 +78,7 @@ func rolloutServiceLookupResult(cache *ResourceCache, namespace, rolloutName, se
 	if err != nil && !apierrors.IsNotFound(err) {
 		log.Printf("[missing-refs] failed to verify Rollout %s/%s service ref %s: %s", logsafe.Sanitize(namespace), logsafe.Sanitize(rolloutName), logsafe.Sanitize(serviceName), logsafe.Sanitize(err.Error()))
 	}
-	return refLookupResult(cache, "services", namespace, err)
+	return refLookupResult(cache, "services", namespace, serviceName, err)
 }
 
 type namedRef struct {
@@ -188,7 +189,7 @@ func scaleTargetExists(cache *ResourceCache, dynamicCache *DynamicResourceCache,
 		if !ok {
 			return false, false
 		}
-		return dynamicScaleTargetExists(dynamicCache, gvr, namespace, "Rollout", ref.name)
+		return dynamicScaleTargetExists(dynamicCache, gvr, namespace, ref.name)
 	default:
 		return false, false
 	}
@@ -205,21 +206,12 @@ func scaleTargetLookupResult(cache *ResourceCache, resource, kind, namespace, na
 	if err != nil && !apierrors.IsNotFound(err) {
 		log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
 	}
-	return refLookupResult(cache, resource, namespace, err)
+	return refLookupResult(cache, resource, namespace, name, err)
 }
 
-func dynamicScaleTargetExists(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, kind, name string) (checked bool, exists bool) {
-	items, err := dynamicCache.ListWatched(gvr)
-	if err != nil {
-		log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
-		return false, false
-	}
-	for _, item := range items {
-		if item.GetNamespace() == namespace && item.GetName() == name {
-			return true, true
-		}
-	}
-	return true, false
+func dynamicScaleTargetExists(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, name string) (checked bool, exists bool) {
+	_, found, readable := dynamicCache.ReadableObject(gvr, namespace, name)
+	return readable, found
 }
 
 func listDynamicForMissingRefs(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, kind string) []*unstructured.Unstructured {

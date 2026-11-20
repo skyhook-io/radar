@@ -1,5 +1,6 @@
 // KubeRay CRD utility functions (ray.io/v1)
 
+import type { WorkloadPodInfo } from '../../types'
 import type { StatusBadge } from './resource-utils'
 import { healthColors, formatAge } from './resource-utils'
 
@@ -193,4 +194,41 @@ export function rayJobIsLocal(resource: any): boolean {
 
 export function rayJobSubmissionMode(resource: any): string {
   return resource.spec?.submissionMode || 'K8sJobMode'
+}
+
+/** The KubeRay RayCluster Radar reads Pods for: `ray.io/v1`, or group `ray.io` before the object loads. */
+export function isKubeRayClusterIdentity(group: string | undefined, apiVersion: string | undefined): boolean {
+  return apiVersion ? apiVersion === 'ray.io/v1' : group === 'ray.io'
+}
+
+/** Why a Pod has no container output to read yet, or undefined when it may. */
+export function podLogsUnavailableReason(pod: WorkloadPodInfo): string | undefined {
+  const statuses = pod.containerStatuses ?? []
+  // A native sidecar's status alone doesn't mean the Pod's own containers have one.
+  if (statuses.some(status => !status.sidecar)) return undefined
+  if (pod.phase === 'Failed' || pod.phase === 'Succeeded') return 'Ended before starting'
+  if (statuses.length) return 'Waiting to start'
+  return pod.nodeName ? 'No status yet' : 'Not scheduled'
+}
+
+// The container a Pod's logs open on. Container lists put init containers
+// first and only reported statuses say which those are, so with no statuses
+// the viewer keeps its own default. A regular init container that isn't done
+// while the Pod is Pending is what it waits on (a worker waiting for the head
+// sits in KubeRay's wait-gcs-ready), though it may not have started yet; in a
+// Failed Pod it is what failed, or what never ran if the Pod was evicted
+// first. Native sidecars never finish, so they are never that container.
+// Without sidecar marks (an older Radar) an unready init container can't be
+// told from a sidecar, so the first application container opens instead.
+export function logsContainer(pod: WorkloadPodInfo, sidecarsMarked: boolean): string | undefined {
+  const statuses = pod.containerStatuses ?? []
+  if (!statuses.length) return undefined
+  const init = new Set(statuses.filter(status => status.init).map(status => status.name))
+  // Init statuses missing while there are more containers than reported
+  // application statuses: which names are init containers isn't known.
+  if (!init.size && pod.containers.length > statuses.length) return undefined
+  const blocking = sidecarsMarked && (pod.phase === 'Pending' || pod.phase === 'Failed')
+    ? pod.containers.find(name => statuses.some(status => status.init && !status.sidecar && status.name === name && !status.ready))
+    : undefined
+  return blocking ?? pod.containers.find(name => !init.has(name))
 }

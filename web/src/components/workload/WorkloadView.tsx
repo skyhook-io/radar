@@ -1,10 +1,11 @@
-import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
+import { RelatedFindingsSection } from './RelatedFindingsSection'
+import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
+import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { workloadPodAwaitsScheduling } from '../capacity/podDemandGate'
-import { clsx } from 'clsx'
-import { Terminal, Stethoscope } from 'lucide-react'
+import { Stethoscope } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
   EditableYamlView,
@@ -24,6 +25,7 @@ import {
   isDiagnoseKind,
   isRolloutKind,
   canSetWorkloadImages,
+  canPauseDeployment,
   isCoreBatchJob,
   type SetImageOwnership,
   SET_IMAGE_WRITES,
@@ -35,8 +37,10 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
+import { SUBSTRATE_GROUP } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import { CronJobSchedulingContext, CronJobSchedulingDetails } from './CronJobSchedulingEvidence'
+import { NodeCertificateContext, NodeCertificateDetails, nodeCertificateContextVisible } from './NodeCertificateEvidence'
 import { useHistoryPaging } from './historyPaging'
 import { findInheritedGitOpsLookupRef, useResolvedGitOpsOwner } from '../../hooks/useResolvedGitOpsOwner'
 import { useGitOpsWriteGuard } from '../../hooks/useGitOpsWriteGuard'
@@ -55,7 +59,6 @@ import {
   fetchWorkloadHistoryPage,
   useChanges,
   useResourceWithRelationships,
-  usePodLogs,
   useTopology,
   useUpdateResource,
   usePreviewResources,
@@ -64,10 +67,13 @@ import {
   useSuspendCronJob,
   useResumeCronJob,
   useRestartWorkload,
+  usePauseDeployment,
+  useResumeDeployment,
   fetchWorkloadImages,
   fetchResourceWithRelationships,
   useSetWorkloadImages,
   useWorkloadRevisions,
+  useRefreshRevisionsOnNewRollout,
   useRollbackWorkload,
   useRolloutAction,
   useRolloutCapabilities,
@@ -101,11 +107,14 @@ import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
-import { useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
-import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
+import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
+import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName, getLogContainerNames, getInitContainerNames } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
+import { MultiPodLogsTab } from '../logs/MultiPodLogsTab'
+import { RayClusterLogsTab } from '../logs/RayClusterLogsTab'
+import { isKubeRayCluster } from '../logs/rayClusterPods'
 import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
@@ -131,8 +140,24 @@ import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
 import { NodeDrainStatus } from './NodeDrainStatus'
+import { SubstrateHealthCharts } from '../resource/SubstrateHealthCharts'
+import { SubstrateVerdictLine } from '../resource/SubstrateVerdictLine'
+import { useAPIResources } from '../../api/apiResources'
+import { recordUsageEvent } from '../../api/usage-data'
+import { issueResourceOpener } from './issueResourceOpener'
+import { isVeleroBackupKind } from '../velero/routes'
 
 type TabType = WorkloadTabType
+
+// The usage-report view a tab counts under. Timeline holds the resource's
+// events (it replaced the Events tab), so it counts as panel:events.
+const PANEL_USAGE_VIEWS: Partial<Record<TabType, string>> = {
+  logs: 'panel:logs',
+  yaml: 'panel:yaml',
+  metrics: 'panel:metrics',
+  timeline: 'panel:events',
+}
+
 const BATCH_EXECUTION_KINDS = new Set([
   'Job',
   'CronJob',
@@ -275,6 +300,7 @@ interface WorkloadViewProps {
   statusNote?: ReactNode
   onRefresh?: () => Promise<unknown>
   hideKindBadge?: boolean
+  truncateName?: boolean
 }
 
 interface ImageTargetOwnershipContext {
@@ -311,6 +337,8 @@ function useActionsBarProps(
 
   const deleteMutation = useDeleteResource()
   const restartWorkloadMutation = useRestartWorkload()
+  const pauseDeploymentMutation = usePauseDeployment()
+  const resumeDeploymentMutation = useResumeDeployment()
   const setWorkloadImagesMutation = useSetWorkloadImages()
   const rollbackMutation = useRollbackWorkload()
   // Only the revision dialog drives this one, and it explains a failed promote in place
@@ -333,6 +361,9 @@ function useActionsBarProps(
   const canSetImages = isRolloutShape
     ? imageUpdatesSupported && isRollout && !rolloutCapabilitiesPending && rolloutCapabilities?.setImage === true
     : !workloadWritesPending && canSetWorkloadImages({ name: kind, group }, workloadWrites, imageUpdatesSupported)
+  const { support: deploymentPauseSupport } = useRadarFeature('deploymentPause')
+  const canPauseDeployments = !workloadWritesPending &&
+    canPauseDeployment({ name: kind, group }, workloadWrites, deploymentPauseSupport === 'supported')
   const loadImages = useCallback(
     (params: { kind: string; namespace: string; name: string }) =>
       queryClient.fetchQuery({
@@ -357,6 +388,8 @@ function useActionsBarProps(
   const argoRefreshMutation = useArgoRefresh()
   const argoSuspendMutation = useArgoSuspend()
   const argoResumeMutation = useArgoResume()
+  const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
+  const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
 
   const {
     data: cascadePreview,
@@ -401,10 +434,14 @@ function useActionsBarProps(
       className?: string
     }) => <PortForwardButton type={type} namespace={ns} name={n} className={className} />,
     renderDiagnose: decorateResourceDiagnose(renderDiagnose),
-    onDelete: (
-      params: Parameters<typeof deleteMutation.mutate>[0],
-      callbacks?: { onSuccess?: () => void },
-    ) => deleteMutation.mutate(params, { onSuccess: result => { if (!result.outcomeUnknown) callbacks?.onSuccess?.() } }),
+    // Deleting a Velero Backup object leaves the backup in storage and Velero
+    // recreates the object; the Velero host offers Delete backup instead.
+    onDelete: isVeleroBackupKind(kind, group)
+      ? undefined
+      : (
+          params: Parameters<typeof deleteMutation.mutate>[0],
+          callbacks?: { onSuccess?: () => void },
+        ) => deleteMutation.mutate(params, { onSuccess: result => { if (!result.outcomeUnknown) callbacks?.onSuccess?.() } }),
     isDeleting: deleteMutation.isPending,
     onDeletePreviewOpenChange: setDeletePreviewOpen,
     cascadeDetail: cascadePreview,
@@ -417,6 +454,16 @@ function useActionsBarProps(
           restartWorkloadMutation.mutate(params)
       : undefined,
     isRestarting: restartWorkloadMutation.isPending,
+    onPauseDeployment: canPauseDeployments
+      ? (params: Parameters<typeof pauseDeploymentMutation.mutate>[0]) =>
+          pauseDeploymentMutation.mutate(params)
+      : undefined,
+    onResumeDeployment: canPauseDeployments
+      ? (params: Parameters<typeof resumeDeploymentMutation.mutate>[0]) =>
+          resumeDeploymentMutation.mutate(params)
+      : undefined,
+    isPausingDeployment: pauseDeploymentMutation.isPending,
+    isResumingDeployment: resumeDeploymentMutation.isPending,
     onLoadImages: canSetImages ? loadImages : undefined,
     onSetImages: canSetImages
       ? (params: Parameters<typeof setWorkloadImagesMutation.mutateAsync>[0]) =>
@@ -461,9 +508,10 @@ function useActionsBarProps(
     onFluxResume: (params: Parameters<typeof fluxResumeMutation.mutate>[0]) =>
       fluxResumeMutation.mutate(params),
     isFluxResuming: fluxResumeMutation.isPending,
-    onArgoSync: (params: Parameters<typeof argoSyncMutation.mutate>[0]) =>
-      argoSyncMutation.mutate(params),
+    onArgoSync: (params: Parameters<typeof argoSyncMutation.mutateAsync>[0]) =>
+      argoSyncMutation.mutateAsync(params),
     isArgoSyncing: argoSyncMutation.isPending,
+    argoSyncDialog: { pinsComparedRevision: argoInheritanceSupport === 'supported' },
     onArgoRefresh: (params: Parameters<typeof argoRefreshMutation.mutate>[0]) =>
       argoRefreshMutation.mutate(params),
     isArgoRefreshing: argoRefreshMutation.isPending,
@@ -473,6 +521,8 @@ function useActionsBarProps(
     onArgoResume: (params: Parameters<typeof argoResumeMutation.mutate>[0]) =>
       argoResumeMutation.mutate(params),
     isArgoResuming: argoResumeMutation.isPending,
+    argoResumeUpgrade,
+    argoResumeBlockedReason,
     canNodeWrite,
     onCordonNode: (params: Parameters<typeof cordonMutation.mutate>[0]) =>
       cordonMutation.mutate(params),
@@ -526,8 +576,14 @@ export function WorkloadView({
           ? 'reachability' // the network tab was renamed Reachability
           : (rawTab as TabType) || 'overview'
 
+
+  // A panel counts when someone switches to it. Counting renders instead would
+  // recount the same open tab: the drawer mounts hidden WorkloadView layers
+  // for expand-on-hover and crossfades.
   const handleTabChange = useCallback(
     (tab: TabType, opts?: { replace?: boolean }) => {
+      const panel = PANEL_USAGE_VIEWS[tab]
+      if (panel && tab !== migratedTab) recordUsageEvent({ type: 'view', name: panel })
       const params = new URLSearchParams(searchParams)
       if (tab === 'overview') {
         params.delete('tab')
@@ -536,7 +592,7 @@ export function WorkloadView({
       }
       setSearchParams(params, { replace: opts?.replace ?? !pushTabHistory, state: location.state })
     },
-    [pushTabHistory, searchParams, setSearchParams, location.state],
+    [migratedTab, pushTabHistory, searchParams, setSearchParams, location.state],
   )
 
   const selectedRunKey = searchParams.get('run') ?? ''
@@ -549,6 +605,13 @@ export function WorkloadView({
     },
     [searchParams, setSearchParams],
   )
+  // A pushed entry, so Back returns to the graph.
+  const handleSelectTopologyMember = useCallback(
+    (memberKey: string) => {
+      setSearchParams(memberOverviewParams(searchParams, memberKey), { state: location.state })
+    },
+    [searchParams, setSearchParams, location.state],
+  )
 
   // Fetch resource with relationships
   const {
@@ -559,6 +622,12 @@ export function WorkloadView({
   } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
+  useRefreshRevisionsOnNewRollout(
+    apiKind.toLowerCase(),
+    namespace,
+    name,
+    resource ? resource.metadata?.annotations?.['deployment.kubernetes.io/revision'] ?? '' : undefined,
+  )
   const resourceGroup = useMemo(
     () => (resource?.apiVersion ? apiVersionToGroup(resource.apiVersion) : undefined),
     [resource?.apiVersion],
@@ -569,6 +638,14 @@ export function WorkloadView({
   // of itself. Fall back to the group derived from the fetched resource, then
   // to undefined (which the gate treats as "group unknown → allow").
   const effectiveGroup = rest.group || resourceGroup || undefined
+  // The fetched resource's own group, once it has loaded: the route's group is
+  // '' whenever a link left ?apiGroup out.
+  const identityGroup = resource?.apiVersion ? resourceGroup : effectiveGroup
+  const isNode = apiKind === 'nodes' && !effectiveGroup
+  const isSubstrateWorkerPool = apiKind === 'workerpools' && effectiveGroup === SUBSTRATE_GROUP
+  // Substrate's node charts are asked of Prometheus only on a cluster that serves it.
+  const { data: apiResources } = useAPIResources()
+  const servesSubstrate = isNode && apiResources?.some(r => r.group === SUBSTRATE_GROUP && r.name === 'workerpools') === true
   const batchKind = pluralToKind(apiKind)
   const batchExecution = supportsBatchExecution(batchKind, apiKind, effectiveGroup, resource?.apiVersion)
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
@@ -621,6 +698,7 @@ export function WorkloadView({
     [podWorkloadOwner, podOwnerAppsQuery.data?.applications],
   )
   const certificateInfo = resourceResponse?.certificateInfo
+  const certificateSigningRequest = resourceResponse?.certificateSigningRequest
   const hpaDiagnosis = resourceResponse?.hpaDiagnosis
   const activeImageTargetOwnership = useMemo(
     () =>
@@ -812,20 +890,30 @@ export function WorkloadView({
   // the renderer banners. The backend canonicalizes a plural kind via discovery,
   // so using the normalized API kind resolves direct links and app navigation alike.
   const isCronJob = apiKind === 'cronjobs' && (!effectiveGroup || effectiveGroup === 'batch')
+  const isCoreNode = apiKind === 'nodes' && !effectiveGroup
   const { support: coverageSupport } = useRadarFeature('resourceIssueCoverage')
-  const useCronJobCoverage = isCronJob && coverageSupport === 'supported'
-  const ordinaryIssues = useResourceIssues(apiKind, rest.group, namespace, name, !useCronJobCoverage)
-  const cronJobIssues = useSubjectIssues(useCronJobCoverage ? { kind: 'CronJob', group: 'batch', namespace, name, uid: resource?.metadata?.uid } : null, useCronJobCoverage && Boolean(resource))
-  const liveIssues = useCronJobCoverage ? cronJobIssues.data?.issues : ordinaryIssues.data
-  const issuesPending = useCronJobCoverage ? cronJobIssues.isPending : ordinaryIssues.isPending
-  const schedulingEvidence = cronJobIssues.data?.scheduling_report?.uid === resource?.metadata?.uid ? cronJobIssues.data?.scheduling_report : undefined
-  const [schedulingTimelineFocus, setSchedulingTimelineFocus] = useState<{ uid: string; id: string }>()
+  const useReportCoverage = (isCronJob || isCoreNode) && coverageSupport === 'supported'
+  const issueObservation = resource ? JSON.stringify([resource.metadata?.uid, resource.metadata?.resourceVersion]) : undefined
+  const ordinaryIssues = useResourceIssues(apiKind, rest.group, namespace, name,
+    rest.active !== false && !useReportCoverage && !isNotFoundError(resourceError), issueObservation)
+  const subjectIssues = useSubjectIssues(useReportCoverage ? { kind: isCoreNode ? 'Node' : 'CronJob', group: isCoreNode ? '' : 'batch', namespace, name, uid: resource?.metadata?.uid } : null, useReportCoverage && Boolean(resource))
+  const liveIssues = useReportCoverage ? subjectIssues.data?.issues : ordinaryIssues.data
+  const issuesPending = useReportCoverage ? subjectIssues.isPending : ordinaryIssues.isPending
+  const schedulingEvidence = isCronJob && subjectIssues.data?.scheduling_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.scheduling_report : undefined
+  const certificateEvidence = isCoreNode && subjectIssues.data?.node_certificate_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.node_certificate_report : undefined
+  const hasCertificateIssue = Boolean(liveIssues?.some(issue => issue.kind === 'Node' && issue.reason === 'NodeCertificateExpiry'))
+  const [reportTimelineFocus, setReportTimelineFocus] = useState<{ uid: string; id: string }>()
   const viewSchedulingReport = useCallback(() => {
-    setSchedulingTimelineFocus(schedulingEvidence?.event_id ? { uid: schedulingEvidence.uid, id: schedulingEvidence.event_id } : undefined)
+    setReportTimelineFocus(schedulingEvidence?.event_id ? { uid: schedulingEvidence.uid, id: schedulingEvidence.event_id } : undefined)
     handleTabChange('timeline')
   }, [schedulingEvidence, handleTabChange])
+  const viewCertificateReport = useCallback(() => {
+    setReportTimelineFocus(certificateEvidence?.event_id ? { uid: certificateEvidence.uid, id: certificateEvidence.event_id } : undefined)
+    handleTabChange('timeline')
+  }, [certificateEvidence, handleTabChange])
   const { data: auditFindings } = useResourceAudit(apiKind, namespace, name, effectiveGroup)
   const hasOperationalIssues = Boolean(liveIssues?.length)
+  const openIssueResource = issueResourceOpener(rest.onNavigateToResource)
   const {
     onCompareTo,
     onCompareAcrossClusters,
@@ -1151,6 +1239,7 @@ export function WorkloadView({
         ownershipContext={ownershipContext}
         onOpenApplication={handleOpenApplication}
         certificateInfo={certificateInfo}
+        certificateSigningRequest={certificateSigningRequest}
         hpaDiagnosis={hpaDiagnosis}
         workloadPods={supportsWorkloadPods ? workloadPodsQuery.data?.pods : undefined}
         onEvaluateCapacity={
@@ -1171,13 +1260,15 @@ export function WorkloadView({
         refetch={refetchResourceAndRuns}
         // Timeline
         allEvents={allEvents}
-        timelineFocusEvent={schedulingTimelineFocus?.uid === resource?.metadata?.uid ? schedulingTimelineFocus : undefined}
+        timelineFocusEvent={reportTimelineFocus?.uid === resource?.metadata?.uid ? reportTimelineFocus : undefined}
         historyTruncated={!historyFallback && historyTruncated}
         onLoadOlderHistory={historyFallback ? undefined : loadOlderHistory}
         loadingOlderHistory={!historyFallback && loadingOlderHistory}
         olderHistoryError={historyFallback ? null : olderHistoryError}
         historyScoped={!historyFallback}
         historyIncomplete={!historyFallback && Boolean(historyQuery.data?.incomplete)}
+        historyCoverage={historyFallback ? undefined : historyQuery.data?.historyCoverage}
+        historyGaps={historyFallback ? undefined : historyQuery.data?.gaps}
         historyError={(historyFallback ? namespaceChanges.error : historyQuery.error) as Error | null}
         onRetryHistory={() => void (historyFallback ? namespaceChanges.refetch() : historyQuery.refetch())}
         relatedTimelineEvents={relatedTimelineEvents}
@@ -1205,13 +1296,16 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            resourceLoading={resourceLoading}
+            resourceError={resourceError}
             group={effectiveGroup}
             selectedRunKey={selectedRunKey}
             onSelectRun={handleSelectedRunChange}
             viewNamespaces={viewNamespaces}
           />
         )}
-        {...resourceDetailSlots({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, rest.extraTabs)}
+        {...resourceDetailSlots({ kind: apiKind, group: identityGroup, namespace, name }, rest.extraTabs)}
+        onSelectTopologyMember={batchExecution && batchKind === 'JobSet' ? handleSelectTopologyMember : undefined}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res, leadContent }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (
@@ -1235,14 +1329,25 @@ export function WorkloadView({
         renderRelatedYaml={(ref) => (
           <RelatedResourceYaml key={`${ref.kind}/${ref.namespace}/${ref.name}`} target={ref} />
         )}
-        renderMetricsTab={({ kind, namespace: ns, name: n }) => (
-          <MetricsTabContent
-            kind={kind}
-            namespace={ns}
-            name={n}
-            resource={resource}
-            expanded={expanded}
+        renderMetricsTab={({ kind, namespace: ns, name: n }) => isSubstrateWorkerPool ? (
+          <SubstrateHealthCharts
+            target={{ kind: 'workerpool', namespace: ns, name: n }}
+            standalone
+            collapsible={!expanded}
+            workerPods={typeof resource?.status?.replicas === 'number' ? resource.status.replicas : undefined}
           />
+        ) : (
+          <>
+            <MetricsTabContent
+              kind={kind}
+              namespace={ns}
+              name={n}
+              resource={resource}
+              expanded={expanded}
+              fill={!(isNode && servesSubstrate)}
+            />
+            {isNode && servesSubstrate && <div className="pt-4"><SubstrateHealthCharts target={{ kind: 'node', name: n }} collapsible={!expanded} /></div>}
+          </>
         )}
         renderCostTab={({ kind, namespace: ns, name: n }) => (
           <div className="space-y-4">
@@ -1272,16 +1377,23 @@ export function WorkloadView({
           />
         )}
         isMetricsAvailable={(kind, res) =>
-          isPrometheusSupported(kind) && !(kind === 'Pod' && res?.status?.phase === 'Pending')
+          isSubstrateWorkerPool || (isPrometheusSupported(kind) && !(kind === 'Pod' && res?.status?.phase === 'Pending'))
         }
         isCostAvailable={(kind) => isOpenCostWorkloadKind(kind)}
         onDuplicate={handleDuplicate}
         onDownload={desktopDownload}
         actionsBarProps={actionsBarProps}
         rendererOverrides={resourceRendererOverrides}
-        renderOverviewIntro={apiKind === 'nodes' && !effectiveGroup && resource?.metadata?.uid
-          ? () => <NodeDrainStatus name={name} nodeUID={resource.metadata.uid} />
-          : undefined}
+        renderOverviewIntro={isSubstrateWorkerPool
+          ? ({ namespace: ns, name: n }) => <SubstrateVerdictLine target={{ kind: 'workerpool', namespace: ns, name: n }} onOpenMetrics={expanded ? () => handleTabChange('metrics') : undefined} />
+          : isNode && resource?.metadata?.uid
+            ? () => (
+              <div className="space-y-3">
+                <NodeDrainStatus name={name} nodeUID={resource.metadata.uid} />
+                {servesSubstrate && <SubstrateVerdictLine target={{ kind: 'node', name }} onOpenMetrics={expanded ? () => handleTabChange('metrics') : undefined} />}
+              </div>
+            )
+            : undefined}
         renderOverviewExtra={({ kind: k, namespace: ns, name: n, group: g, context }) => {
           // Network entry kinds (Service/Ingress/Route/Gateway) ARE the diagnosis
           // target: DiagnoseInlineSection renders in the drawer, no hint. Workload
@@ -1298,7 +1410,12 @@ export function WorkloadView({
           return (
           <>
             {diagnoseInline}
+            <ApplicationEvidenceAction kind={k} namespace={ns} name={n} group={g} uid={resource?.metadata?.uid ?? ''} />
             {diagnoseHint}
+            <RelatedFindingsSection
+              data={resourceResponse?.relatedFindings}
+              onResourceClick={openIssueResource}
+            />
             <AuditOverviewSection
               findings={auditFindings ?? []}
               onViewAll={() => navigateRouter('/checks')}
@@ -1309,26 +1426,21 @@ export function WorkloadView({
         renderOverviewLead={() => (
           <div className="flex flex-col gap-4">
           <CronJobSchedulingContext evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} />
+          <NodeCertificateContext evidence={certificateEvidence} hasIssue={hasCertificateIssue} onViewTimeline={viewCertificateReport} />
           <ResourceIssuesSection
             issues={liveIssues}
-            renderDetailSection={schedulingEvidence?.state === 'reported' ? ({ issue }) => issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason ? <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} /> : null : undefined}
+            renderDetailSection={({ issue }) => {
+              if (schedulingEvidence?.state === 'reported' && issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason) return <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} />
+              if (certificateEvidence && issue.kind === 'Node' && issue.reason === 'NodeCertificateExpiry') return <NodeCertificateDetails evidence={certificateEvidence} onViewTimeline={viewCertificateReport} includeOriginalReport={false} />
+              return resourceIssueDetail({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, { issue, resource })
+            }}
             compact={!expanded}
-            subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
-            onResourceClick={
-              rest.onNavigateToResource
-                ? (ref) =>
-                    rest.onNavigateToResource?.({
-                      kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
-                      namespace: ref.namespace ?? '',
-                      name: ref.name,
-                      group: ref.group ?? '',
-                    })
-                : undefined
-            }
+            subjectResource={{ kind: apiKind, namespace, name, group: identityGroup }}
+            onResourceClick={openIssueResource}
           />
           </div>
         )}
-        hasOverviewLead={hasOperationalIssues || Boolean(schedulingEvidence && schedulingEvidence.state !== 'reported')}
+        hasOverviewLead={hasOperationalIssues || Boolean(schedulingEvidence && schedulingEvidence.state !== 'reported') || nodeCertificateContextVisible(certificateEvidence, hasCertificateIssue)}
         hasOperationalIssues={hasOperationalIssues}
         operationalIssuesPending={issuesPending}
         // A manager answer's chip links only managers the server found; a
@@ -1363,6 +1475,16 @@ export function WorkloadView({
       {comparePicker}
     </>
   )
+}
+
+/** The search params that open `memberKey` in the Overview: the member and
+ *  the tab change in one write, since two writes from the same render would
+ *  each start from the old params and the second would drop the first. */
+export function memberOverviewParams(current: URLSearchParams, memberKey: string): URLSearchParams {
+  const params = new URLSearchParams(current)
+  params.set('run', memberKey)
+  params.delete('tab')
+  return params
 }
 
 export function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {
@@ -1484,6 +1606,8 @@ function LogsTabContent({
   selectedRunKey,
   onSelectRun,
   viewNamespaces,
+  resourceLoading,
+  resourceError,
 }: {
   kind: string
   apiKind: string
@@ -1499,6 +1623,8 @@ function LogsTabContent({
   selectedRunKey: string
   onSelectRun: (runKey: string) => void
   viewNamespaces: string[]
+  resourceLoading: boolean
+  resourceError: Error | null
 }) {
   if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
@@ -1517,6 +1643,22 @@ function LogsTabContent({
 
   const integrationLogs = resourceLogs({ kind, group, namespace, name }, resource)
   if (integrationLogs) return integrationLogs
+
+  if (isKubeRayCluster(kind, group, resource?.apiVersion)) {
+    return (
+      <RayClusterLogsTab
+        namespace={namespace}
+        name={name}
+        uid={resource?.metadata?.uid}
+        suspendRequested={resource?.spec?.suspend === true}
+        rootLoading={resourceLoading}
+        rootError={resourceError}
+        historyPods={pods}
+        selectedPod={selectedPod}
+        onSelectPod={onSelectPod}
+      />
+    )
+  }
 
   // Workload kinds with stable pod selectors use the aggregated workload logs viewer
   if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {
@@ -1581,12 +1723,8 @@ function PodLogsTab({
   initialContainer?: string | null
   onConsumeInitialContainer?: () => void
 }) {
-  const containers = useMemo(() => {
-    const names: string[] = []
-    for (const c of resource?.spec?.initContainers || []) if (c.name) names.push(c.name)
-    for (const c of resource?.spec?.containers || []) if (c.name) names.push(c.name)
-    return names
-  }, [resource])
+  const containers = useMemo(() => getLogContainerNames(resource), [resource])
+  const initContainers = useMemo(() => getInitContainerNames(resource), [resource])
 
   // A terminated pod has nothing to follow — only stream live ones. Wait for
   // the phase to be known so a completed pod isn't briefly streamed while the
@@ -1606,88 +1744,10 @@ function PodLogsTab({
         namespace={namespace}
         podName={name}
         containers={containers}
-        initialContainer={initialContainer || undefined}
+        initialContainer={initialContainer || getDefaultLogContainerName(resource)}
+        initContainers={initContainers}
         autoStream={autoStream}
       />
-    </div>
-  )
-}
-
-function MultiPodLogsTab({
-  pods,
-  namespace,
-  selectedPod,
-  onSelectPod,
-  initialContainer,
-}: {
-  pods: ResourceRef[]
-  namespace: string
-  selectedPod: string | null
-  onSelectPod: (name: string | null) => void
-  initialContainer?: string | null
-}) {
-  useEffect(() => {
-    if (pods.length > 0 && !selectedPod) {
-      onSelectPod(pods[0].name)
-    }
-  }, [pods, selectedPod, onSelectPod])
-
-  const podNamespace = pods.find((p) => p.name === selectedPod)?.namespace || namespace
-
-  // Fetch container list for the selected pod
-  const { data: logsData } = usePodLogs(podNamespace, selectedPod || '', {
-    tailLines: 1,
-  })
-  const containers = logsData?.containers || []
-
-  // A terminated pod (common for Job/CronJob children) has nothing to follow —
-  // only stream live ones. Wait for the pod to load before deciding so we don't
-  // briefly auto-stream a completed pod while its phase is still unknown.
-  const { data: selectedPodResource } = useResource<any>('Pod', podNamespace, selectedPod || '')
-  const phase = selectedPodResource?.status?.phase
-  const autoStream = !!phase && phase !== 'Succeeded' && phase !== 'Failed'
-
-  if (pods.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
-        <Terminal className="w-12 h-12 mb-4 opacity-50" />
-        <p>No pods available</p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="h-full flex flex-col">
-      {pods.length > 1 && (
-        <div className="shrink-0 border-b border-theme-border bg-theme-surface/50 px-4 py-2 flex gap-2 overflow-x-auto">
-          {pods.map((pod) => (
-            <button
-              key={pod.name}
-              onClick={() => onSelectPod(pod.name)}
-              className={clsx(
-                'px-3 py-1.5 text-sm rounded-lg whitespace-nowrap transition-colors',
-                selectedPod === pod.name
-                  ? 'bg-blue-500 text-theme-text-primary'
-                  : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover',
-              )}
-            >
-              {pod.name.length > 40 ? '...' + pod.name.slice(-37) : pod.name}
-            </button>
-          ))}
-        </div>
-      )}
-      {selectedPod && containers.length > 0 && (
-        <div className="flex-1 min-h-0">
-          <LogsViewer
-            key={selectedPod}
-            namespace={podNamespace}
-            podName={selectedPod}
-            containers={containers}
-            initialContainer={initialContainer || undefined}
-            autoStream={autoStream}
-          />
-        </div>
-      )}
     </div>
   )
 }
@@ -2201,14 +2261,18 @@ function MetricsTabContent({
   name,
   resource,
   expanded,
+  fill = true,
 }: {
   kind: string
   namespace: string
   name: string
   resource: any
   expanded: boolean
+  /** False when content follows, so the tab scrolls everything as one. */
+  fill?: boolean
 }) {
   if (expanded) {
+    if (!fill) return <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} fill={false} />
     return (
       <div className="flex flex-col h-full">
         <div className="flex-1 min-h-0">

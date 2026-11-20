@@ -11,15 +11,22 @@ afterEach(() => {
   host?.remove()
 })
 
-function render() {
+function render(eventContentSearch = false) {
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
-  act(() => root!.render(<SearchSyntaxHelp />))
+  act(() => root!.render(<SearchSyntaxHelp eventContentSearch={eventContentSearch} />))
   return host.querySelector('button')!
 }
 
 const cardShown = () => document.body.textContent?.includes('Search syntax') ?? false
+
+it.each([false, true])('describes only Event search supported by the server: %s', (supported) => {
+  const button = render(supported)
+  act(() => button.click())
+  expect(document.body.textContent).toContain(supported ? 'search Event reasons and messages' : 'search Events by name')
+  expect(document.body.textContent).not.toContain(supported ? 'search Events by name' : 'search Event reasons and messages')
+})
 
 it('toggles on a click with no pointer before it (assistive activation)', () => {
   const button = render()

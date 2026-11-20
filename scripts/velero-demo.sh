@@ -787,6 +787,64 @@ EOF
   wait_for_backup_phase live-rejected FailedValidation
   ok "live-rejected reached FailedValidation — Velero refused it, nothing was written here"
 
+  # 3c. A schedule Velero runs, and one it never can.
+  #
+  #     live-schedule fires every two minutes into the healthy location, so the
+  #     running controller submits a run and finishes it: the Velero views read
+  #     a real lastBackup, a real newest successful run, and a next run computed
+  #     the way the controller computes it. Once the stall step below stops the
+  #     controller, the same schedule genuinely goes late, which is the state
+  #     the views exist to catch.
+  #
+  #     The second name is 64 characters, one over the label limit. Velero
+  #     validates it (it checks only the cron) and then fails every submission,
+  #     because it writes the name unshortened into each backup's label.
+  step "Creating a schedule Velero runs, and one whose name it cannot label"
+  local long_name="sched-name-exceeds-the-sixty-three-character-label-limit-by-one1"
+  cat <<EOF | k apply -f - >/dev/null
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: live-schedule
+  namespace: ${NS}
+spec:
+  schedule: "*/2 * * * *"
+  template:
+    includedNamespaces: ["demo-app"]
+    storageLocation: default
+    ttl: 1h0m0s
+---
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: ${long_name}
+  namespace: ${NS}
+spec:
+  schedule: "* * * * *"
+  template:
+    includedNamespaces: ["demo-app"]
+    storageLocation: default
+    ttl: 1h0m0s
+EOF
+  local run="" i
+  for i in $(seq 1 100); do
+    run="$(k -n "${NS}" get backups.velero.io -l velero.io/schedule-name=live-schedule \
+      -o jsonpath='{range .items[?(@.status.phase=="Completed")]}{.metadata.name}{"\n"}{end}' 2>/dev/null | head -1)"
+    [ -n "${run}" ] && break
+    sleep 3
+  done
+  [ -n "${run}" ] || fail "live-schedule produced no Completed run in five minutes"
+  ok "live-schedule submitted and completed ${run}"
+  local long_phase long_last long_runs
+  long_phase="$(k -n "${NS}" get schedules.velero.io "${long_name}" -o jsonpath='{.status.phase}')"
+  long_last="$(k -n "${NS}" get schedules.velero.io "${long_name}" -o jsonpath='{.status.lastBackup}')"
+  long_runs="$(k -n "${NS}" get backups.velero.io -o name | grep -c "${long_name}" || true)"
+  [ "${long_phase}" = "Enabled" ] || fail "the long-named schedule is ${long_phase:-<none>}, expected Enabled — Velero should accept it"
+  if [ -n "${long_last}" ] || [ "${long_runs}" != "0" ]; then
+    fail "the long-named schedule submitted a run (lastBackup=${long_last:-none}, backups=${long_runs}) — Velero's labelling has changed"
+  fi
+  ok "the long-named schedule is Enabled and has never submitted a run"
+
   # 4. A run that genuinely stops moving.
   #
   #    Two Velero mechanisms, no edited clocks. A pre-backup hook execs into the
@@ -983,6 +1041,8 @@ print_live_summary() {
   note "  live-partial     PartiallyFailed, from a pre-backup hook that really failed"
   note "  live-rejected    FailedValidation, refused against the broken location"
   note "  live-stalled     in flight with the controller removed underneath it"
+  note "  live-schedule    real runs every two minutes, late once the controller stopped"
+  note "  sched-name-…one1 Enabled, and never able to submit (64-character name)"
   echo
   note "Absent in both modes (see README): the data-mover objects, which need a"
   note "  snapshot-capable CSI driver as well as a bucket."

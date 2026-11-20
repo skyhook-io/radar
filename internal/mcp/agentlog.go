@@ -39,7 +39,10 @@ type agentLogFields struct {
 //	  est_tokens=539 truncated=false omitted=0 context_tier=none kind=Pod ns=prod
 func emitAgentLog(f agentLogFields) {
 	level := "info"
-	if f.Err != nil {
+	switch {
+	case isTimeout(f.Err):
+		level = "warn"
+	case f.Err != nil:
 		level = "error"
 	}
 	tier := f.ContextTier
@@ -127,7 +130,7 @@ func logToolCall[In any](
 	handler func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error),
 ) func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input In) (*mcp.CallToolResult, any, error) {
-		sensitive := name == "exec_pod"
+		sensitive := name == "exec_pod" || name == "manage_helm" || name == "get_helm_chart" || name == "curl_service"
 		if sensitive {
 			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m", name)
 		} else {
@@ -148,7 +151,9 @@ func logToolCall[In any](
 			toolErr = errors.New("tool returned an error result")
 		}
 
-		if toolErr != nil && sensitive {
+		if isTimeout(toolErr) {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[33mTIMEOUT\033[0m (%s)", name, dur.Round(time.Millisecond))
+		} else if toolErr != nil && sensitive {
 			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s)", name, dur.Round(time.Millisecond))
 		} else if toolErr != nil {
 			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s) %v", name, dur.Round(time.Millisecond), toolErr)

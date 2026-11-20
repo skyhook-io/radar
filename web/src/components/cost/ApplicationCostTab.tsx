@@ -129,6 +129,8 @@ export function ApplicationCostTab({
     state === 'not_found' ||
     state === 'no_cost_source' ||
     state === 'source_unavailable' ||
+    state === 'metrics_port_forward_disabled' ||
+    state === 'kubecost_port_forward_disabled' ||
     state === 'authentication_error' ||
     state === 'configuration_mismatch' ||
     state === 'deployment_configuration_error' ||
@@ -401,6 +403,8 @@ export function getApplicationCostState(
     reason === 'access_denied' ||
     reason === 'not_found' ||
     reason === 'source_unavailable' ||
+    reason === 'metrics_port_forward_disabled' ||
+    reason === 'kubecost_port_forward_disabled' ||
     reason === 'authentication_error' ||
     reason === 'configuration_mismatch' ||
     reason === 'deployment_configuration_error' ||

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { gitOpsOwnerFromRelationships } from '@skyhook-io/k8s-ui'
 import type { Relationships } from '../../types'
-import { collectServingRefs, supportsBatchExecution } from './WorkloadView'
+import { collectServingRefs, memberOverviewParams, supportsBatchExecution } from './WorkloadView'
 import { findInheritedGitOpsLookupRef } from '../../hooks/useResolvedGitOpsOwner'
 
 describe('findInheritedGitOpsLookupRef', () => {
@@ -82,5 +82,14 @@ describe('collectServingRefs', () => {
     const broker = { kind: 'Broker', group: 'eventing.knative.dev', namespace: 'demo', name: 'messages' }
     const other = { ...broker, group: 'other.example' }
     expect(collectServingRefs({ routedFrom: [broker, broker, other] })).toEqual([broker, other])
+  })
+})
+
+describe('memberOverviewParams', () => {
+  it('selects the member and returns to the Overview in one change, keeping other params', () => {
+    const next = memberOverviewParams(new URLSearchParams('apiGroup=jobset.x-k8s.io&tab=topology&run=jobs/ml/old'), 'jobs/ml/train-workers-1')
+    expect(next.get('run')).toBe('jobs/ml/train-workers-1')
+    expect(next.has('tab')).toBe(false)
+    expect(next.get('apiGroup')).toBe('jobset.x-k8s.io')
   })
 })

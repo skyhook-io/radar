@@ -52,19 +52,17 @@ export function gitOpsInsightChangeKey(ref: { kind: string; namespace?: string; 
 }
 
 // parseArgoRollbackID parses an Argo HistoryItem.id into the int64 the
-// rollback API needs. Returns null when:
-//   - id is missing
-//   - id is non-numeric (Flux condition rows reuse the same slot for
-//     condition.type, which we never want to interpret as a rollback id)
-//   - id is non-positive ("0" and negative strings parse fine via
-//     Number() but aren't valid Argo history ids — Argo's id sequence
-//     starts at 1; rolling back to id 0 would unhelpfully target the
-//     first revision).
+// rollback API needs. Argo's controller numbers history from 0, so "0" is
+// the first deploy and a valid target. Returns null when:
+//   - id is missing or empty
+//   - id is not a plain non-negative integer: Flux condition rows reuse the
+//     same slot for condition.type, and Number() would also read "", " ",
+//     "0x1f" or "1e3" as a number and route the rollback to a wrong entry
+//   - id is negative
 export function parseArgoRollbackID(id: string | undefined): number | null {
-  if (!id) return null
+  if (!id || !/^\d+$/.test(id)) return null
   const n = Number(id)
-  if (!Number.isFinite(n) || n <= 0) return null
-  return n
+  return Number.isSafeInteger(n) ? n : null
 }
 
 // describeGitOpsTerminating renders the two tooltip strings the detail
@@ -108,7 +106,7 @@ const ARGO_CD_KINDS = new Set(['applications', 'applicationsets', 'appprojects']
 
 // getGitOpsResourceStatus dispatches sync/health extraction by kind. Argo
 // Applications read from .status (rich operationState + sync state); Argo
-// ApplicationSets read their own generator conditions; Flux kinds read
+// ApplicationSets read their controller health or generator conditions; Flux kinds read
 // .status.conditions + .spec.suspend. Returns null if the resource has
 // no recognizable status (e.g. just-created, status not yet populated).
 export function getGitOpsResourceStatus(kind: string, resource: any): GitOpsStatus | null {
@@ -127,7 +125,8 @@ export function getGitOpsResourceStatus(kind: string, resource: any): GitOpsStat
   // Unknown.
   if (kind === 'applicationsets') {
     return argoApplicationSetConditionsToGitOpsStatus(
-      (resource?.status?.conditions ?? []) as FluxCondition[]
+      (resource?.status?.conditions ?? []) as FluxCondition[],
+      resource?.status?.health
     )
   }
   if (tool === 'argo') return null

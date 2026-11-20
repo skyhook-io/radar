@@ -25,7 +25,8 @@ import {
 import { builtinGroupForKind } from "@skyhook-io/k8s-ui/utils/api-resources";
 import { AlertTriangle } from "lucide-react";
 import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
-import { uncheckedSourceLines } from "./uncheckedSources";
+import { recordUsageEvent } from "../../api/usage-data";
+import { uncheckedSourceLines, uncheckedSubjectWhy } from "./uncheckedSources";
 import { UncheckedSourceHelp } from "./UncheckedSourceHelp";
 
 // A capacity-relevant issue links to its Karpenter diagnosis. Karpenter is
@@ -114,7 +115,7 @@ export type IssueSubjectState =
   | { state: "hidden" }
   | { state: "checking" }
   | { state: "unconfirmed"; why: string }
-  | { state: "found"; issues: Issue[]; withheld: number }
+  | { state: "found"; issues: Issue[]; withheld: number; uncheckedWhy?: string }
   | { state: "none" };
 
 /**
@@ -137,7 +138,8 @@ export function issueSubjectState(
   }
   const data = related.data;
   if (related.isLoading || !data) return { state: "checking" };
-  if (data.issues.length > 0) return { state: "found", issues: data.issues, withheld: data.withheld?.issues ?? 0 };
+  const uncheckedWhy = uncheckedSubjectWhy(data.unchecked_sources);
+  if (data.issues.length > 0) return { state: "found", issues: data.issues, withheld: data.withheld?.issues ?? 0, ...(uncheckedWhy ? { uncheckedWhy } : {}) };
   if (data.coverage === "unknownKind") return { state: "unconfirmed", why: "this cluster has no such kind" };
   if (data.coverage === "notWatched") return { state: "unconfirmed", why: `Radar isn't watching ${subject.kind}` };
   if (data.coverage === "syncing") return { state: "unconfirmed", why: `Radar is still loading ${subject.kind}` };
@@ -145,6 +147,7 @@ export function issueSubjectState(
   if (withheld > 0) {
     return { state: "unconfirmed", why: `your permissions withhold ${withheld} ${withheld === 1 ? "issue" : "issues"} about it` };
   }
+  if (uncheckedWhy) return { state: "unconfirmed", why: uncheckedWhy };
   const visibility = data.visibility;
   if (visibility?.state === "degraded" || visibility?.state === "limited") {
     return {
@@ -235,13 +238,15 @@ export function IssuesPane({
       return next;
     });
 
-  const onResourceClick = (ref: IssueResourceRef) =>
+  const onResourceClick = (ref: IssueResourceRef) => {
+    recordUsageEvent({ type: "ui", name: "issue_action:open" });
     onNavigateToResource({
       kind: ref.kind,
       namespace: ref.namespace ?? "",
       name: ref.name,
       group: ref.group ?? "",
     });
+  };
 
   if (!subject && isLoading) {
     return <PaneLoader label="Loading issues…" className="flex-1" />;
@@ -373,6 +378,8 @@ export function IssuesPane({
               {subjectState.state === "unconfirmed" && ` — can't confirm: ${subjectState.why}`}
               {subjectState.state === "found" && subjectState.withheld > 0 &&
                 ` — your permissions withhold ${subjectState.withheld} more`}
+              {subjectState.state === "found" && subjectState.uncheckedWhy &&
+                ` — some checks are unconfirmed: ${subjectState.uncheckedWhy}`}
             </span>
           )}
           <button type="button" onClick={clearSubject} className="text-accent-text hover:underline">
@@ -424,7 +431,10 @@ export function IssuesPane({
                 {capacityHref && (
                   <button
                     type="button"
-                    onClick={() => navigate(capacityHref)}
+                    onClick={() => {
+                      recordUsageEvent({ type: "ui", name: "issue_action:capacity" });
+                      navigate(capacityHref);
+                    }}
                     className="rounded-md border border-theme-border px-2 py-1 text-xs font-medium text-accent-text transition-colors hover:bg-theme-hover"
                   >
                     View in Capacity →

@@ -191,6 +191,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	emit(p.DetectScheduling(f.Namespaces), SourceScheduling)  // placement/admission/post-bind
 	karpenterIssues, karpenterOwnedSubjects := detectKarpenterIssues(p, f, &unchecked)
 	out = append(out, karpenterIssues...)
+	out = append(out, detectKueueIssues(p, f, &unchecked)...)
 	out = append(out, detectGenericCRDIssues(p, f, karpenterOwnedSubjects, &unchecked)...) // generic CRD .status.conditions
 	out = foldDeletingConditions(out)
 	out = elevateAdmissionWebhookBackendSeverity(out, p)
@@ -230,6 +231,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		groupedForContext = out
 	}
 	out = enrichDiagnosticContextAuthorized(out, flatForContext, groupedForContext, p, f.CanReadClusterScoped)
+	out = enrichAdmissionWebhookCandidates(out, p, podTemplateAccess{f.CanReadClusterScoped, f.CanReadRelated})
 	if !f.SkipPodTemplateContext {
 		out = enrichPodTemplateContext(out, flatForContext, p, podTemplateAccess{f.CanReadClusterScoped, f.CanReadRelated}, f.Grouped, Ref{})
 	}

@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useQuery } from '@tanstack/react-query'
 import { useResourceAudit, useResourceEvents } from './client'
 
+// These tests call the hooks outside React; the connected signal is a context read.
+vi.mock('../context/clusterConnected', () => ({ useClusterConnected: () => true }))
+
 vi.mock('@tanstack/react-query', async (original) => ({
   ...await original<typeof import('@tanstack/react-query')>(),
   useQuery: vi.fn(() => ({})),

@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"log"
+	goruntime "runtime"
 
+	"github.com/skyhook-io/radar/internal/server"
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -210,18 +212,23 @@ func createMenu(desktopApp *DesktopApp, version, goos string) *menu.Menu {
 	// The macOS application menu already carries About, drawn from mac.AboutInfo.
 	if !mac {
 		helpMenu.AddText("About Radar", nil, func(_ *menu.CallbackData) {
+			// Windows shows Radar's own About dialog to match its title bar.
+			if customTitleBar {
+				runtime.WindowExecJS(desktopApp.ctx, openAboutScript(version, goos, goruntime.GOARCH))
+				return
+			}
 			runtime.MessageDialog(desktopApp.ctx, runtime.MessageDialogOptions{
 				Type:    runtime.InfoDialog,
 				Title:   "About Radar",
-				Message: "Radar — Kubernetes Visibility Tool\nBuilt by Skyhook\n\nVersion: " + version + "\n\nhttps://github.com/skyhook-io/radar",
+				Message: aboutText(version),
 			})
 		})
 	}
 	helpMenu.AddText("Documentation", nil, func(_ *menu.CallbackData) {
-		runtime.BrowserOpenURL(desktopApp.ctx, "https://github.com/skyhook-io/radar#readme")
+		server.OpenSystemBrowser("https://radarhq.io/docs")
 	})
 	helpMenu.AddText("GitHub Repository", nil, func(_ *menu.CallbackData) {
-		runtime.BrowserOpenURL(desktopApp.ctx, "https://github.com/skyhook-io/radar")
+		server.OpenSystemBrowser("https://github.com/skyhook-io/radar")
 	})
 
 	return appMenu

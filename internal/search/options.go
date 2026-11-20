@@ -48,6 +48,9 @@ type Options struct {
 	// per-row cost stays flat. Pass nil to opt out (context=none) —
 	// the field is omitempty and consumers must tolerate its absence.
 	SummaryBuilder SummaryBuilderFunc
+	// skip and visit carry Scan's options; see Scan.
+	skip  func(kind, group string) bool
+	visit func(ScannedObject)
 }
 
 // SelectNamespaces acquires missing-name facts only for unrestricted callers,

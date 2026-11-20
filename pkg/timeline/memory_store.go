@@ -437,6 +437,9 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 			return false
 		}
 	}
+	if len(opts.Reasons) > 0 && !slices.Contains(opts.Reasons, event.Reason) {
+		return false
+	}
 
 	if opts.ExcludeDeleted && event.EventType == EventTypeDelete {
 		return false

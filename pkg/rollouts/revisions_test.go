@@ -58,6 +58,17 @@ func TestBuildRevisionsMarksCurrentAndStableSeparately(t *testing.T) {
 	}
 }
 
+func TestBuildRevisionsReadsPerRevisionReadiness(t *testing.T) {
+	ro := rolloutForTest("prod", "web", nil)
+	rs := replicaSetForTest("prod", "web-1", "1", "hash-v1", "web:v1", "rollout-uid")
+	_ = unstructured.SetNestedField(rs.Object, int64(2), "status", "readyReplicas")
+
+	revisions := BuildRevisions([]unstructured.Unstructured{*rs}, ro)
+	if len(revisions) != 1 || revisions[0].ReadyReplicas != 2 {
+		t.Fatalf("revisions = %+v, want one with ReadyReplicas 2", revisions)
+	}
+}
+
 func TestBuildRevisionsIgnoresForeignReplicaSets(t *testing.T) {
 	ro := rolloutForTest("prod", "web", nil)
 	rsList := []unstructured.Unstructured{

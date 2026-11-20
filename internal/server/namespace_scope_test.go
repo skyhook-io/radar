@@ -377,6 +377,8 @@ func restoreHelmNamespaceFallbackState(t *testing.T) {
 		t.Fatalf("creating dummy client: %v", err)
 	}
 	k8s.SetTestClient(dummyClient)
+	// No synced namespace cache to fall back to either.
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 
 	k8s.SetFallbackNamespace("backend-fallback")
 	t.Cleanup(func() { k8s.SetFallbackNamespace("") })
@@ -483,6 +485,10 @@ func TestNamespaceScope_PrunesStalePickThatDataReadsLeaveAlone(t *testing.T) {
 			}
 			if !slices.Equal(scope.Actives, tt.wantActives) {
 				t.Errorf("actives = %v, want %v", scope.Actives, tt.wantActives)
+			}
+			// The UI keys each tab's own pick by this context.
+			if scope.Context != "test-ctx" {
+				t.Errorf("context = %q, want %q", scope.Context, "test-ctx")
 			}
 			if picks := srv.getActiveNamespaceForUser(reqAs("")); !slices.Equal(picks, tt.wantSaved) {
 				t.Errorf("in-memory pick = %v, want %v", picks, tt.wantSaved)

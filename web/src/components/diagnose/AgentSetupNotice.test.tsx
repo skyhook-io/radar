@@ -55,4 +55,21 @@ describe("AgentSetupNotice", () => {
     expect(html).not.toContain("Install one of these");
     expect(html).toContain("Check again");
   });
+
+  it("links to the example in every setup state that offers it", () => {
+    for (const state of ["needs-install", "needs-restart"] as const) {
+      expect(render(state)).not.toContain("See an example investigation");
+      const html = renderToStaticMarkup(
+        <AgentSetupNotice
+          setupState={state}
+          cliOverride={false}
+          checkingAgents={false}
+          agentsCheckFailed={false}
+          recheckAgents={async () => {}}
+          onOpenExample={() => {}}
+        />,
+      );
+      expect(html).toContain("See an example investigation");
+    }
+  });
 });

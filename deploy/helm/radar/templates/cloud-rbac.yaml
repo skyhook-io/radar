@@ -19,67 +19,21 @@ and author their own bindings — e.g., per-namespace RoleBindings, or bindings
 for radar:user:<id> groups to grant individuals extra access. Set
 cloud.defaultRbac.ownerClusterRole=cluster-admin to grant cluster-wide admin.
 
+With rbac.namespaces, each binding is a RoleBinding in every listed namespace
+instead, so a tier's role applies only there.
+
 Each binding also includes its pre-rename cloud:* subject so rolling hub and
 chart upgrades remain compatible. Remove those subjects in v2.
 */}}
 {{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create -}}
-{{- if .Values.cloud.defaultRbac.owner -}}
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" . }}-cloud-owner
-  labels:
-    {{- include "radar.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ .Values.cloud.defaultRbac.ownerClusterRole }}
-subjects:
-  - kind: Group
-    name: radar:owner
-    apiGroup: rbac.authorization.k8s.io
-  - kind: Group
-    name: cloud:owner
-    apiGroup: rbac.authorization.k8s.io
----
+{{- range $tier := list "owner" "member" "viewer" }}
+{{- if index $.Values.cloud.defaultRbac $tier }}
+{{ include "radar.binding" (dict
+  "root" $
+  "name" (printf "%s-cloud-%s" (include "radar.fullname" $) $tier)
+  "roleRef" (index $.Values.cloud.defaultRbac (printf "%sClusterRole" $tier))
+  "groups" (include "radar.tierGroups" $tier | fromJsonArray)
+) }}
 {{- end }}
-{{- if .Values.cloud.defaultRbac.member -}}
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" . }}-cloud-member
-  labels:
-    {{- include "radar.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ .Values.cloud.defaultRbac.memberClusterRole }}
-subjects:
-  - kind: Group
-    name: radar:member
-    apiGroup: rbac.authorization.k8s.io
-  - kind: Group
-    name: cloud:member
-    apiGroup: rbac.authorization.k8s.io
----
-{{- end }}
-{{- if .Values.cloud.defaultRbac.viewer -}}
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" . }}-cloud-viewer
-  labels:
-    {{- include "radar.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ .Values.cloud.defaultRbac.viewerClusterRole }}
-subjects:
-  - kind: Group
-    name: radar:viewer
-    apiGroup: rbac.authorization.k8s.io
-  - kind: Group
-    name: cloud:viewer
-    apiGroup: rbac.authorization.k8s.io
 {{- end }}
 {{- end -}}

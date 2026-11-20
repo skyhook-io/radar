@@ -1,6 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KueueAdmission } from "./JobSetAdmission";
+import { JobRenderer } from '../resources/renderers/JobAdmissionRenderers'
+import { BatchExecutionFullscreen } from './BatchExecutionView'
 const mock = vi.hoisted(() => ({ result: {} as any, calls: [] as any[] }));
 vi.mock("../../api/client", () => ({
   ApiError: class extends Error {
@@ -10,6 +12,10 @@ vi.mock("../../api/client", () => ({
     mock.calls.push(args);
     return mock.result;
   },
+  useResource: () => ({}),
+  useWorkloadPods: () => ({}),
+  useJobSetResources: () => ({}),
+  useWorkloadRuns: () => ({ data: { runs: [{ kind: 'jobs', namespace: 'ml', name: 'train', phase: 'Suspended', active: false }], total: 1 } }),
 }));
 const job = {
   apiVersion: "batch/v1",
@@ -114,6 +120,42 @@ describe("Job admission host", () => {
     ).toContain("denied");
   });
 });
+
+describe.each(['drawer', 'fullscreen'])('suspended Job wording in %s', (surface) => {
+  const renderJob = (resource: any) => renderToStaticMarkup(surface === 'drawer'
+    ? <JobRenderer data={resource} />
+    : <BatchExecutionFullscreen kind="Job" apiKind="jobs" namespace="ml" name="train" resource={resource} />)
+  const expectHeld = (html: string) => {
+    expect(html.match(/Held by Kueue until admitted/g)).toHaveLength(surface === 'drawer' ? 1 : 2)
+    expect(html).not.toContain('>Suspended<')
+    expect(html).not.toContain('Pods will not be created until this Job is resumed.')
+    if (surface === 'drawer') expect(html).toContain('See Kueue admission')
+  }
+  const expectPlain = (html: string) => {
+    expect(html).not.toContain('Held by Kueue')
+    if (surface === 'drawer') {
+      expect(html).toContain('Job Suspended')
+      expect(html).toContain('Pods will not be created until this Job is resumed.')
+    } else expect(html.match(/>Suspended</g)).toHaveLength(2)
+  }
+
+  it.each([{ isLoading: true }, { data: empty }, { error: new Error('denied') }])('uses the queue label even without a successful admission lookup: %j', (result) => {
+    mock.result = result
+    expectHeld(renderJob(hinted))
+  })
+  it('uses controller-owned Workload evidence for an unlabeled Job', () => {
+    mock.result = { data: evidence }
+    expectHeld(renderJob(job))
+  })
+  it.each([{ isLoading: true }, { data: empty }, { error: new Error('denied') }, { data: { ...evidence, uid: 'old' } }, { data: evidence, error: new Error('cache unavailable') }])('keeps ordinary wording without current readable evidence: %j', (result) => {
+    mock.result = result
+    expectPlain(renderJob(job))
+  })
+  it('does not infer Kueue from an arbitrary controller', () => {
+    mock.result = { data: empty }
+    expectPlain(renderJob({ ...job, spec: { ...job.spec, managedBy: 'other.io/controller' } }))
+  })
+})
 
 describe("JobSet admission identity", () => {
   it("rejects evidence and absence for a different root instance", () => {

@@ -1,34 +1,43 @@
 package topology
 
 import (
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 func addCertificateIssuerEdges(nodes []Node, edges []Edge, certificates []unstructured.Unstructured, provider DynamicProvider, opts BuildOptions) ([]Node, []Edge, []string) {
 	var refs []declaredDependency
 	for i := range certificates {
 		cert := &certificates[i]
-		kind, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "kind")
-		group, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "group")
-		name, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "name")
-		if kind == "" {
-			kind = "Issuer"
+		if ref, ok := certificateIssuerDependency(cert); ok {
+			refs = append(refs, ref)
 		}
-		if group == "" {
-			group = "cert-manager.io"
-		}
-		if name == "" || group != "cert-manager.io" || kind != "Issuer" && kind != "ClusterIssuer" {
-			continue
-		}
-		namespace := cert.GetNamespace()
-		if kind == "ClusterIssuer" {
-			namespace = ""
-		}
-		refs = append(refs, declaredDependency{
-			Source: resourceid.NewRef("cert-manager.io", "Certificate", cert.GetNamespace(), cert.GetName()),
-			Target: resourceid.NewRef(group, kind, namespace, name), Label: "issuer",
-		})
 	}
 	return addObservedDependencyEdges(nodes, edges, refs, provider, opts)
+}
+
+// certificateIssuerDependency is the issuer configrefs.CertManagerIssuer
+// reads, as a dependency of obj.
+func certificateIssuerDependency(obj *unstructured.Unstructured) (declaredDependency, bool) {
+	issuer, ok := configrefs.CertManagerIssuer(obj)
+	if !ok {
+		return declaredDependency{}, false
+	}
+	source := resourceid.NewRef(resourceid.GroupFromAPIVersion(obj.GetAPIVersion()), obj.GetKind(), obj.GetNamespace(), obj.GetName())
+	return declaredDependency{Source: source, Target: issuer.Ref, Label: "issuer"}, true
+}
+
+// issuanceIssuerDependency is the issuer dependency of a CertificateRequest,
+// Order or Challenge. Certificates are joined by addCertificateIssuerEdges.
+func issuanceIssuerDependency(obj *unstructured.Unstructured) *declaredDependency {
+	if obj.GetKind() == "Certificate" {
+		return nil
+	}
+	ref, ok := certificateIssuerDependency(obj)
+	if !ok {
+		return nil
+	}
+	return &ref
 }

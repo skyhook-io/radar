@@ -1,10 +1,14 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
 
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	"github.com/go-chi/chi/v5"
@@ -34,7 +38,7 @@ type neighborhoodSubgraph struct {
 }
 
 // handleAINeighborhood returns the BFS-expanded neighborhood of a root
-// resource. See pkg/topology.BuildNeighborhood for the graph semantics.
+// resource. See pkg/topology.WalkNeighborhood for the graph semantics.
 //
 // GET /api/ai/neighborhood/{kind}/{namespace}/{name}
 //
@@ -100,50 +104,6 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build the full topology (memoized) and let BuildNeighborhood do the
-	// BFS slice. Cheaper than reaching into builder internals; topoMemo
-	// dedupes concurrent calls. We also fetch the cached RelationshipsIndex
-	// so the BFS expansion uses O(degree) edge lookups instead of paying
-	// an O(E) adjacency-build per request.
-	//
-	// dp is captured once and threaded into both Builder and BuildNeighborhoodWithIndex
-	// so root-ID construction can resolve CRD plurals correctly (without it,
-	// buildNodeID falls back to the static kindMap which only covers built-in kinds).
-	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-	buildOpts := topology.DefaultBuildOptions()
-	buildOpts.IncludeReplicaSets = true
-	buildOpts.ForRelationshipCache = true
-	// Override the DefaultBuildOptions Secret-elision: without this a request
-	// for kind=secret resolves to an empty subgraph (root missing in topology)
-	// and 404s even for authorized users. The Allow gate below applies the
-	// per-namespace `get secrets` SAR per node, so unauthorized users still
-	// get a 404 via the empty-subgraph path — existence-hiding preserved.
-	//
-	// The Memoizer keys on a hash that includes IncludeSecrets (see
-	// pkg/topology/memo.go memoKey), so this lives in a separate cache slot
-	// from the IncludeSecrets=false topology used elsewhere.
-	buildOpts.IncludeSecrets = true
-	build := func() (*topology.Topology, error) {
-		return topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
-			WithDynamic(dp).
-			Build(buildOpts)
-	}
-	topo, err := s.topoMemo.GetScoped(cache.Generation(), buildOpts, build)
-	if err != nil {
-		log.Printf("[neighborhood] Failed to build topology for %s %s/%s: %v", rawKind, namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	// GetIndexScoped piggybacks on the memo entry just populated by GetScoped
-	// above. The index is computed once per topology refresh and reused across
-	// requests, matching the relationships hot path.
-	idx, err := s.topoMemo.GetIndexScoped(cache.Generation(), buildOpts, build)
-	if err != nil {
-		log.Printf("[neighborhood] Failed to fetch topology index for %s %s/%s: %v", rawKind, namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
 	root := topology.ResourceRef{
 		Kind:      normalizeKind(rawKind),
 		Namespace: namespace,
@@ -161,7 +121,26 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 		return s.canReadNeighborhoodNode(r, n)
 	}
 
-	sub := topology.BuildNeighborhoodWithIndex(topo, root, opts, idx, dp)
+	sub, err := k8s.AnswerNeighborhood(r.Context(), cache, root, opts)
+	switch {
+	case err == nil:
+	case errors.Is(err, context.Canceled):
+		// The client left mid-walk; there is no one to answer.
+		return
+	case errors.Is(err, context.DeadlineExceeded):
+		s.writeError(w, http.StatusGatewayTimeout, "The neighborhood didn't finish within the request deadline; narrow it with hops=1, a smaller max_nodes, or profile=auto.")
+		return
+	case errors.Is(err, ownership.ErrNotConnected):
+		s.writeReadFailure(w, sanitizeForLog(rawKind), readFailuref(readreason.ClusterConnecting, "Radar is still connecting to the cluster or discovering its resource kinds; retry the neighborhood shortly"), nil)
+		return
+	case errors.Is(err, ownership.ErrCachesReplaced):
+		s.writeError(w, http.StatusServiceUnavailable, "Cluster connection changed or is not ready; retry the neighborhood.")
+		return
+	default:
+		log.Printf("[neighborhood] Failed to answer %s %s/%s: %v", sanitizeForLog(rawKind), sanitizeForLog(namespace), sanitizeForLog(name), err)
+		s.writeError(w, http.StatusInternalServerError, "Neighborhood unavailable")
+		return
+	}
 	// A Calico policy is served by two API groups and admitted through either,
 	// but it advertises one. Point it at the group this caller can address, or
 	// following the node lands on a 403.
@@ -177,6 +156,10 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(sub.Nodes) == 0 {
+		if sub.RootUnavailable != "" {
+			s.writeReadFailure(w, sanitizeForLog(rawKind), neighborhoodRootFailure(rawKind, sub.RootUnavailable), nil)
+			return
+		}
 		s.writeError(w, http.StatusNotFound, "resource not found in topology")
 		return
 	}
@@ -200,6 +183,15 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, resp)
+}
+
+// neighborhoodRootFailure is why Radar can't answer for a root the caller may
+// read; its code sets the status, as for a resource read.
+func neighborhoodRootFailure(resource string, code readreason.Code) *resourceReadFailure {
+	if code == readreason.KindUnknown {
+		return readFailuref(code, "Radar's discovery doesn't list %s", resource)
+	}
+	return dynamicPlanFailure(resource, code)
 }
 
 // parseNeighborhoodOptions reads the query string into NeighborhoodOptions
@@ -256,12 +248,13 @@ func parseNeighborhoodOptions(r *http.Request) topology.NeighborhoodOptions {
 //   - Cluster-scoped node: namespace-list gate doesn't apply; dispatch
 //     directly.
 //
-// Secret nodes get an additional per-kind SAR inside the namespace: namespace
-// access (e.g. "user can list pods in team-a") is NOT a sufficient signal for
-// reading Secrets, because the SA the cache runs under may have cluster-wide
-// secrets RBAC (Helm release visibility) while the user does not. This mirrors
-// the same gate handleGetResource applies — without it, the neighborhood graph
-// would leak Secret existence + names to users who can't fetch them directly.
+// Secrets, Roles, RoleBindings, LimitRanges and Trivy reports get an
+// additional per-kind SAR inside the namespace (k8s.RequiresExactNamespaceAccess):
+// namespace access (e.g. "user can list pods in team-a") is NOT a sufficient
+// signal for reading them, because the SA the cache runs under may read them
+// cluster-wide while the user does not. This mirrors the gate handleGetResource
+// applies — without it, the neighborhood would leak their existence + names to
+// users who can't fetch them directly.
 func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool {
 	// Namespace-list gate is protocol-specific (per-user state); apply it
 	// here for namespaced nodes BEFORE consulting the shared helper.
@@ -269,6 +262,9 @@ func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool
 		if ns, ok := n.Data["namespace"].(string); ok && ns != "" {
 			allowed := s.getUserNamespaces(r, []string{ns})
 			if readscope.NoNamespaceAccess(allowed) {
+				return false
+			}
+			if group, resource, resolved := k8s.ExactNamespaceAccessNode(n); !resolved || resource != "" && !s.canRead(r, group, resource, ns, "get") {
 				return false
 			}
 		}

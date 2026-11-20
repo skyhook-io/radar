@@ -2,9 +2,13 @@ package k8score
 
 import (
 	"errors"
+	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -17,6 +21,106 @@ type scriptedDiscovery struct {
 	lists []*metav1.APIResourceList
 	err   error
 	calls atomic.Int32
+}
+
+func TestCatalogGenerationTracksAllMutations(t *testing.T) {
+	client := &scriptedDiscovery{lists: widgetLists()}
+	d, err := NewResourceDiscovery(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := d.Catalog()
+	if previous.Generation == 0 {
+		t.Fatal("initial discovery did not advance its generation")
+	}
+	check := func() {
+		t.Helper()
+		current, changed := d.CatalogIfChanged(previous.Generation)
+		if !changed || current.Generation <= previous.Generation {
+			t.Fatalf("mutation: generation %d, changed %v; previous %d", current.Generation, changed, previous.Generation)
+		}
+		if current.Generation != d.Catalog().Generation {
+			t.Fatal("conditional snapshot has a different generation from Catalog")
+		}
+		if same, changed := d.CatalogIfChanged(current.Generation); changed || same.Resources != nil || same.FailedGroups != nil {
+			t.Fatal("unchanged generation copied a snapshot")
+		}
+		previous = current
+	}
+	r := APIResource{Group: "example.io", Version: "v1", Kind: "Gadget", Name: "gadgets", Namespaced: true}
+	d.AddAPIResource(r)
+	check()
+	r.Kind, r.Namespaced = "Changed", false
+	d.AddAPIResource(r)
+	check()
+	for _, failure := range []error{
+		&discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{{Group: "failed.io", Version: "v1"}: errors.New("unavailable")}},
+		&discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{{Group: "other.io", Version: "v1"}: errors.New("unavailable")}},
+		errors.New("unclassified"), nil,
+	} {
+		client.err = failure
+		if err := d.Refresh(); err != nil {
+			t.Fatal(err)
+		}
+		check()
+	}
+	client.lists, client.err = nil, errors.New("unavailable")
+	if err := d.Refresh(); err == nil {
+		t.Fatal("expected failed refresh")
+	}
+	// A failed refresh keeps the last catalog, so its generation doesn't move.
+	if _, changed := d.CatalogIfChanged(previous.Generation); changed {
+		t.Fatal("a failed refresh advanced the generation of an unchanged catalog")
+	}
+	if !previous.Complete || len(previous.Resources) != 2 {
+		t.Fatal("generation tracking changed the failed-refresh catalog contract")
+	}
+	client.err = nil
+	if err := d.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	check()
+	if len(previous.Resources) != 0 || !previous.Complete {
+		t.Fatal("empty successful refresh did not remove resources")
+	}
+}
+
+func TestCatalogGenerationAndResourcesAreOneSnapshot(t *testing.T) {
+	d, err := NewResourceDiscovery(&scriptedDiscovery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := d.Catalog().Generation
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for i := range 100 {
+			d.AddAPIResource(APIResource{Group: "example.io", Version: "v1", Kind: "Thing", Name: fmt.Sprint("things", i)})
+		}
+	})
+	for range 100 {
+		c := d.Catalog()
+		if c.Generation-initial != uint64(len(c.Resources)) {
+			t.Fatalf("snapshot generation %d contains %d resources (initial %d)", c.Generation, len(c.Resources), initial)
+		}
+		if next, changed := d.CatalogIfChanged(c.Generation); changed && next.Generation-initial != uint64(len(next.Resources)) {
+			t.Fatalf("conditional snapshot generation %d contains %d resources", next.Generation, len(next.Resources))
+		}
+	}
+	wg.Wait()
+	if c := d.Catalog(); c.Generation-initial != 100 || len(c.Resources) != 100 {
+		t.Fatalf("final snapshot = generation %d, resources %d", c.Generation, len(c.Resources))
+	}
+}
+
+func TestCatalogIfChangedOnNilAndUninitializedDiscovery(t *testing.T) {
+	var missing *ResourceDiscovery
+	if c, changed := missing.CatalogIfChanged(0); changed || c.Resources != nil {
+		t.Fatal("nil discovery returned a changed catalog")
+	}
+	d := &ResourceDiscovery{}
+	if c, changed := d.CatalogIfChanged(0); changed || c.Resources != nil {
+		t.Fatal("unchanged zero generation returned a snapshot")
+	}
 }
 
 func (d *scriptedDiscovery) ServerGroupsAndResources() ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
@@ -113,5 +217,79 @@ func TestCatalogIsCompleteOnlyAfterACleanDiscovery(t *testing.T) {
 	_ = d.Refresh()
 	if !d.Catalog().Complete {
 		t.Fatal("a clean refresh must make the catalog complete again")
+	}
+}
+
+func TestCurrentKindResolutionDoesNotInferCertaintyAfterDiscoveryFailure(t *testing.T) {
+	client := &scriptedDiscovery{lists: widgetLists()}
+	d, err := NewResourceDiscovery(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := resourceid.UnqualifiedReference("Widget", "default", "example")
+	if got := resourceid.ResolveCurrent(ref, d); !got.OK() || got.Uncertain {
+		t.Fatalf("clean discovery: %+v", got)
+	}
+	client.lists, client.err = nil, errors.New("discovery unavailable")
+	if err := d.Refresh(); err == nil {
+		t.Fatal("expected discovery failure")
+	}
+	if got := resourceid.ResolveCurrent(ref, d); !got.OK() || !got.Uncertain {
+		t.Fatalf("stale discovery must not establish current uniqueness: %+v", got)
+	}
+	client.lists = widgetLists()
+	client.err = errors.New("discovery interrupted")
+	_ = d.Refresh()
+	if got := resourceid.ResolveCurrent(ref, d); !got.OK() || !got.Uncertain {
+		t.Fatalf("resources with an error must not establish uniqueness: %+v", got)
+	}
+	client.err = nil
+	if err := d.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if got := resourceid.ResolveCurrent(ref, d); !got.OK() || got.Uncertain {
+		t.Fatalf("recovered discovery: %+v", got)
+	}
+}
+
+func TestCatalogSnapshotsTheFailedGroupsOfItsResources(t *testing.T) {
+	failure := &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{
+		{Group: "metrics.k8s.io", Version: "v1beta1"}: errors.New("unavailable"),
+		{Group: "metrics.k8s.io", Version: "v1"}:      errors.New("unavailable"),
+		{Group: "", Version: "v1"}:                    errors.New("unavailable"),
+	}}
+	client := &scriptedDiscovery{lists: widgetLists(), err: failure}
+	d, err := NewResourceDiscovery(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := d.Catalog()
+	if before.Complete || !slices.Equal(before.FailedGroups, []string{"", "metrics.k8s.io"}) {
+		t.Fatalf("partial catalog = %+v", before)
+	}
+	before.FailedGroups[0] = "changed"
+	if !slices.Equal(d.Catalog().FailedGroups, []string{"", "metrics.k8s.io"}) {
+		t.Fatal("a caller's failed-group slice changed discovery")
+	}
+	client.lists = nil
+	if err := d.Refresh(); err == nil {
+		t.Fatal("a refresh returning no resources must fail")
+	}
+	if got := d.Catalog(); got.Complete || !slices.Equal(got.FailedGroups, []string{"", "metrics.k8s.io"}) || len(got.Resources) != 2 {
+		t.Fatalf("a failed refresh changed the catalog: %+v", got)
+	}
+	client.lists, client.err = widgetLists(), errors.New("discovery interrupted")
+	if err := d.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Catalog(); got.Complete || len(got.FailedGroups) != 0 {
+		t.Fatalf("unclassified failure must cover no group: %+v", got)
+	}
+	client.err = nil
+	if err := d.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Catalog(); !got.Complete || len(got.FailedGroups) != 0 {
+		t.Fatalf("recovered discovery = %+v", got)
 	}
 }

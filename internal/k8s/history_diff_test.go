@@ -455,6 +455,60 @@ func TestDiffApplicationCleansFailedOperationMessage(t *testing.T) {
 	}
 }
 
+// The timeline's auto-sync label follows whether Argo actually auto-syncs.
+// Argo CD 3.x switches automation off in place with automated.enabled: false,
+// keeping the block, so its presence alone says nothing.
+func TestDiffApplicationAutoSyncLabelFollowsEnabled(t *testing.T) {
+	tests := []struct {
+		name      string
+		old, new  map[string]any
+		wantLabel string
+	}{
+		{name: "block added", old: nil, new: map[string]any{"prune": true}, wantLabel: "auto-sync enabled"},
+		{name: "block removed", old: map[string]any{"prune": true}, new: nil, wantLabel: "auto-sync disabled"},
+		{name: "switched off in place", old: map[string]any{"prune": true, "selfHeal": true}, new: map[string]any{"enabled": false, "prune": true, "selfHeal": true}, wantLabel: "auto-sync disabled"},
+		{name: "switched back on in place", old: map[string]any{"enabled": false}, new: map[string]any{"enabled": true}, wantLabel: "auto-sync enabled"},
+		{name: "disabled block added", old: nil, new: map[string]any{"enabled": false}},
+		{name: "disabled block removed", old: map[string]any{"enabled": false}, new: nil},
+		{name: "settings change while on", old: map[string]any{"prune": true}, new: map[string]any{"prune": false}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changes, summary := diffApplication(applicationWithAutomated(tt.old), applicationWithAutomated(tt.new))
+			var labels []string
+			for _, s := range summary {
+				if strings.HasPrefix(s, "auto-sync ") {
+					labels = append(labels, s)
+				}
+			}
+			change, hasChange := findChangePath(changes, "spec.syncPolicy.automated")
+			if tt.wantLabel == "" {
+				if len(labels) != 0 || hasChange {
+					t.Fatalf("expected no auto-sync change, got labels=%v change=%+v", labels, change)
+				}
+				return
+			}
+			if len(labels) != 1 || labels[0] != tt.wantLabel {
+				t.Fatalf("labels = %v, want [%q]", labels, tt.wantLabel)
+			}
+			if !hasChange {
+				t.Fatalf("missing spec.syncPolicy.automated change: %+v", changes)
+			}
+			if (tt.old == nil) != (change.OldValue == nil) || (tt.new == nil) != (change.NewValue == nil) {
+				t.Fatalf("change values = %#v → %#v, want an absent block recorded as nil", change.OldValue, change.NewValue)
+			}
+		})
+	}
+}
+
+func applicationWithAutomated(automated map[string]any) *unstructured.Unstructured {
+	syncPolicy := map[string]any{}
+	if automated != nil {
+		syncPolicy["automated"] = automated
+	}
+	return &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"syncPolicy": syncPolicy}}}
+}
+
 func applicationWithOperation(phase, message string) *unstructured.Unstructured {
 	status := map[string]any{}
 	if phase != "" {

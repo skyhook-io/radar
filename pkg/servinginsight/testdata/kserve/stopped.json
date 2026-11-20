@@ -1,0 +1,68 @@
+{
+  "apiVersion": "serving.kserve.io/v1beta1",
+  "kind": "InferenceService",
+  "metadata": {
+    "name": "iris-cycle",
+    "namespace": "ml-serving",
+    "generation": 4,
+    "annotations": {
+      "modelFormat": "sklearn",
+      "serving.kserve.io/deploymentMode": "Standard",
+      "serving.kserve.io/stop": "true"
+    }
+  },
+  "spec": {
+    "predictor": {
+      "deploymentStrategy": {
+        "type": "Recreate"
+      },
+      "maxReplicas": 1,
+      "minReplicas": 1,
+      "model": {
+        "modelFormat": {
+          "name": "sklearn"
+        },
+        "name": "",
+        "resources": {
+          "limits": {
+            "cpu": "500m",
+            "memory": "512Mi"
+          },
+          "requests": {
+            "cpu": "50m",
+            "memory": "192Mi"
+          }
+        },
+        "runtimeVersion": "v0.20.1-missing",
+        "storageUri": "gs://kfserving-examples/models/sklearn/1.0/model"
+      }
+    }
+  },
+  "status": {
+    "clusterServingRuntimeName": "kserve-sklearnserver",
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-11-03T02:13:50Z",
+        "reason": "Stopped",
+        "status": "False",
+        "type": "PredictorReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:13:50Z",
+        "reason": "Stopped",
+        "status": "False",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:13:50Z",
+        "severity": "Info",
+        "status": "True",
+        "type": "Stopped"
+      }
+    ],
+    "deploymentMode": "Standard",
+    "modelStatus": {
+      "transitionStatus": ""
+    }
+  }
+}

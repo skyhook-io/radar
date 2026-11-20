@@ -1,10 +1,11 @@
 import { useState, type ReactNode, type JSX } from 'react'
-import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield } from 'lucide-react'
+import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield, Info } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
-import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
-import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames } from '../resource-utils'
+import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
+import { SUBSTRATE_GROUP, SUBSTRATE_WORKER_POOL_LABEL } from '../resource-utils-agent-runtimes'
+import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames, getInitContainerNames, getLogContainerNames } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
   rbacVerbBadgeClass,
@@ -15,6 +16,8 @@ import { resolvedEnvFromKey } from '../../../utils/env-from'
 import { detectBlastRadius, rulePermissivenessScore } from '../../../utils/rbac-blast-radius'
 import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
 import { NamespaceLimitRangeLink } from './LimitRangeRenderer'
+import { SecondaryNetworksSection } from './SecondaryNetworksSection'
+import type { NetworkAttachmentLookups } from '../../../utils/multus'
 import type {
   PodEnvironmentResponse,
   PodEnvironmentRevealResponse,
@@ -29,6 +32,7 @@ import { MetricsChart } from '../../ui/MetricsChart'
 import { Badge } from '../../ui/Badge'
 import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
 import { ContainerEnvironmentSection } from './ContainerEnvironmentSection'
+import { SecretsStoreMountsSection, type SecretsStoreMountsSectionProps } from './SecretsStoreRenderers'
 import { formatRelativeAgeTime } from '../../../utils/format'
 
 function parseValidDate(dateStr: string): Date | null {
@@ -81,7 +85,7 @@ interface PodRendererProps {
   canPortForward?: boolean
   // Dock actions
   onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
-  onOpenLogsPanel?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string }) => void
+  onOpenLogsPanel?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   // Port forward render prop
   renderPortAction?: (props: { namespace: string; podName: string; port: number; protocol: string; disabled?: boolean }) => ReactNode
   // Metrics data injection
@@ -118,6 +122,14 @@ interface PodRendererProps {
   /** Names of the LimitRanges in this Pod's namespace. Absent while the lookup
    *  is pending or unreadable, which leaves the contextual link unrendered. */
   namespaceLimitRangeNames?: string[] | null
+  /** Lookup results for the NetworkAttachmentDefinitions this Pod names, by
+   *  `networkAttachmentKey`. Absent when the host didn't wire the lookup, which
+   *  leaves the names unlinked. */
+  networkAttachmentLookups?: NetworkAttachmentLookups
+  /** Host-read Secrets Store CSI facts for this Pod's namespace. Undefined
+   *  omits the section; the section also renders nothing for a Pod with no
+   *  Secrets Store CSI volumes. */
+  secretsStore?: Omit<SecretsStoreMountsSectionProps, 'pod' | 'onNavigate'>
 }
 
 // ── Env vars section — extracted to use hooks (useState for reveal) ──────────
@@ -306,6 +318,8 @@ export function PodRenderer({
   policyLoading,
   policyError,
   namespaceLimitRangeNames,
+  networkAttachmentLookups,
+  secretsStore,
 }: PodRendererProps) {
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
@@ -368,11 +382,6 @@ export function PodRenderer({
     }
   }
 
-  const allContainerNames = [
-    ...initContainers.map((c: { name: string }) => c.name),
-    ...containers.map((c: { name: string }) => c.name),
-  ]
-
   const handleOpenLogs = (containerName?: string) => {
     if (onOpenLogsOverride && podName && containerName) {
       onOpenLogsOverride(podName, containerName)
@@ -382,8 +391,9 @@ export function PodRenderer({
       onOpenLogsPanel?.({
         namespace,
         podName,
-        containers: allContainerNames,
+        containers: getLogContainerNames(data),
         containerName,
+        initContainers: getInitContainerNames(data),
       })
     }
   }
@@ -409,6 +419,8 @@ export function PodRenderer({
     )
   }
 
+  const substrateWorkerPool = data.metadata?.labels?.[SUBSTRATE_WORKER_POOL_LABEL]
+
   return (
     <>
       {/* Problems alert - shown at top when there are issues */}
@@ -426,6 +438,19 @@ export function PodRenderer({
             ))}
           </ul>
         </AlertBanner>
+      )}
+
+      {substrateWorkerPool && (
+        <AlertBanner
+          variant="info"
+          icon={Info}
+          title="Agent Substrate worker"
+          message={<>
+            A worker in WorkerPool{' '}
+            <ResourceLink name={substrateWorkerPool} kind="workerpools" group={SUBSTRATE_GROUP} namespace={data.metadata?.namespace || ''} onNavigate={onNavigate} />.
+            {' '}Substrate places actors on this Pod in turn, so its logs, metrics and restarts are shared by every actor it has hosted.
+          </>}
+        />
       )}
 
       {onEvaluateCapacity && (
@@ -511,6 +536,8 @@ export function PodRenderer({
           } />
         </PropertyList>
       </Section>
+
+      <SecondaryNetworksSection pod={data} attachmentLookups={networkAttachmentLookups} onNavigate={onNavigate} />
 
       {/* Init Containers - shown only when present */}
       {initContainers.length > 0 && (
@@ -666,20 +693,7 @@ export function PodRenderer({
 
       <Section title="Containers" icon={HardDrive} defaultExpanded>
         <div className="space-y-3">
-          {/* Pod-level budget (spec.resources) is shared by all containers, so it
-              stays its own row rather than being merged into the container rows. */}
-          {(podResources?.requests || podResources?.limits) && (
-            <div className="rounded-[10px] border border-dashed border-theme-border p-3">
-              <div className="flex items-baseline justify-between gap-2 mb-2">
-                <span className="text-sm font-medium text-theme-text-primary">Pod (aggregate)</span>
-                <span className="text-xs text-theme-text-tertiary">Shared by all containers</span>
-              </div>
-              <div className="text-xs text-theme-text-secondary space-y-1">
-                {podResources.requests && <div>Requests: {formatResources(podResources.requests)}</div>}
-                {podResources.limits && <div>Limits: {formatResources(podResources.limits)}</div>}
-              </div>
-            </div>
-          )}
+          <PodAggregateResources resources={podResources} />
           {containers.map((container: any) => {
             const status = containerStatuses.find((s: any) => s.name === container.name)
             const state = status?.state
@@ -779,8 +793,13 @@ export function PodRenderer({
                         {lastTermination.exitCode !== undefined && lastTermination.exitCode !== 0 && (
                           <span className="text-theme-text-tertiary">(code {lastTermination.exitCode})</span>
                         )}
-                        {lastTermination.reason === 'OOMKilled' && container.resources?.limits?.memory && (
-                          <span className="text-theme-text-tertiary">— limit: {container.resources.limits.memory}</span>
+                        {lastTermination.reason === 'OOMKilled' && (container.resources?.limits?.memory || podResources?.limits?.memory) && (
+                          <span className="text-theme-text-tertiary">
+                            — {[
+                              container.resources?.limits?.memory && `limit: ${container.resources.limits.memory}`,
+                              podResources?.limits?.memory && `pod limit: ${podResources.limits.memory}`,
+                            ].filter(Boolean).join(', ')}
+                          </span>
                         )}
                       </div>
                       {lastTermination.finishedAt && (() => {
@@ -875,6 +894,10 @@ export function PodRenderer({
           resolvedEnvFrom={resolvedEnvFrom}
           upgrade={environmentUpgrade}
         />
+      )}
+
+      {secretsStore && (
+        <SecretsStoreMountsSection pod={data} {...secretsStore} onNavigate={onNavigate} />
       )}
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}

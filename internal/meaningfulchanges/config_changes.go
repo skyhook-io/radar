@@ -13,7 +13,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-const runningPreviousValueNote = "These Pods started before Radar observed this write and read the changed keys as env vars. Env values are set when a container starts, so they likely still hold the earlier value until they restart."
+const (
+	runningPreviousValueNote          = "These Pods started before Radar observed this write and read the changed keys as env vars. Env values are set when a container starts, so they likely still hold the earlier value until they restart."
+	runningPreviousOrderOnlyValueNote = "These Pods started before Radar observed this write and read the changed keys as env vars. For those keys, every change since the Pods started only reordered comma-separated entries, with none added or removed, so they keep the old order until they restart. That matters only if the app treats the new order differently."
+)
 
 func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.RecentChange, podsByNamespace map[string][]*corev1.Pod, viewer Viewer) {
 	cache := k8s.GetResourceCache()
@@ -54,6 +57,7 @@ func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.Recen
 				continue
 			}
 			podNames, keys, workloads, hidden := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+			orderOnly := true
 			for _, fact := range facts {
 				if fact.EvidenceSource != "observed_change" || fact.SourceKind != change.Kind || fact.SourceName != change.Name || fact.ChangedAt.Unix() != changedAt.Unix() {
 					continue
@@ -64,6 +68,7 @@ func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.Recen
 					continue
 				}
 				keys[fact.Key] = true
+				orderOnly = orderOnly && fact.OrderOnly
 				for _, name := range fact.Pods {
 					podNames[name] = true
 					owner, ok := k8s.PodWorkload(cache, byName[name])
@@ -82,7 +87,11 @@ func annotateRunningPreviousValue(ctx context.Context, changes []issuesapi.Recen
 			if len(podNames) == 0 {
 				continue
 			}
-			annotation := &issuesapi.RunningPreviousValue{Pods: len(podNames), Note: runningPreviousValueNote, Withheld: withheldCount(len(hidden))}
+			note := runningPreviousValueNote
+			if orderOnly {
+				note = runningPreviousOrderOnlyValueNote
+			}
+			annotation := &issuesapi.RunningPreviousValue{Pods: len(podNames), Note: note, Withheld: withheldCount(len(hidden))}
 			for key := range keys {
 				annotation.Keys = append(annotation.Keys, key)
 			}
@@ -108,6 +117,9 @@ func collapseSecretUpdates(changes []issuesapi.RecentChange) []issuesapi.RecentC
 	out := make([]issuesapi.RecentChange, 0, len(changes))
 	groups := map[string]int{}
 	newestBySecret := map[string]int{}
+	// Per output row, the keys some merged update really changed. A key one
+	// update reordered and another really changed reads as changed.
+	realKeys := map[int]map[string]bool{}
 	for _, change := range changes {
 		if change.Kind != "Secret" || change.ChangeType != "update" {
 			out = append(out, change)
@@ -116,7 +128,9 @@ func collapseSecretUpdates(changes []issuesapi.RecentChange) []issuesapi.RecentC
 		secret := resourceKey(change.Kind, change.Namespace, change.Name)
 		key := secret
 		if change.RunningPreviousValue != nil {
-			key += "\x00" + strings.Join(change.RunningPreviousValue.Keys, "\x00")
+			// The note is part of the key: readers that missed a real change
+			// and readers that only missed a reorder stay on separate rows.
+			key += "\x00" + strings.Join(change.RunningPreviousValue.Keys, "\x00") + "\x00" + change.RunningPreviousValue.Note
 		}
 		index, found := groups[key]
 		if change.RunningPreviousValue == nil {
@@ -127,10 +141,14 @@ func collapseSecretUpdates(changes []issuesapi.RecentChange) []issuesapi.RecentC
 			if _, seen := newestBySecret[secret]; !seen {
 				newestBySecret[secret] = len(out)
 			}
+			realKeys[len(out)] = realModifiedKeys(change.Fields)
 			out = append(out, change)
 			continue
 		}
 		newest := &out[index]
+		for key := range realModifiedKeys(change.Fields) {
+			realKeys[index][key] = true
+		}
 		if newest.UpdatesInWindow == 0 {
 			newest.UpdatesInWindow = 1
 		}
@@ -154,6 +172,7 @@ func collapseSecretUpdates(changes []issuesapi.RecentChange) []issuesapi.RecentC
 				newest.Fields = append(newest.Fields, field)
 			}
 		}
+		newest.Fields = withoutRealReorderedKeys(newest.Fields, realKeys[index])
 		var summary []string
 		for _, field := range newest.Fields {
 			if !isKeyListPath(field.Path) {
@@ -226,4 +245,55 @@ func mergeChangedKeys(a, b any) any {
 	}
 	sort.Strings(keys)
 	return slices.Compact(keys)
+}
+
+// realModifiedKeys returns "<field>\x00<key>" for each modified key that the
+// same update didn't list as only reordered.
+func realModifiedKeys(fields []issuesapi.ChangeField) map[string]bool {
+	reordered := map[string]bool{}
+	for _, field := range fields {
+		if base, ok := strings.CutSuffix(field.Path, k8s.ReorderedKeysPathSuffix); ok {
+			for _, key := range changedKeyNames(field.NewValue) {
+				reordered[base+"\x00"+key] = true
+			}
+		}
+	}
+	out := map[string]bool{}
+	for _, field := range fields {
+		if base, ok := strings.CutSuffix(field.Path, " (modified keys)"); ok {
+			for _, key := range changedKeyNames(field.NewValue) {
+				if !reordered[base+"\x00"+key] {
+					out[base+"\x00"+key] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+func withoutRealReorderedKeys(fields []issuesapi.ChangeField, real map[string]bool) []issuesapi.ChangeField {
+	out := make([]issuesapi.ChangeField, 0, len(fields))
+	for _, field := range fields {
+		base, ok := strings.CutSuffix(field.Path, k8s.ReorderedKeysPathSuffix)
+		if !ok {
+			out = append(out, field)
+			continue
+		}
+		var keys []string
+		for _, key := range changedKeyNames(field.NewValue) {
+			if !real[base+"\x00"+key] {
+				keys = append(keys, key)
+			}
+		}
+		if len(keys) > 0 {
+			field.OldValue, field.NewValue = keys, keys
+			out = append(out, field)
+		}
+	}
+	return out
+}
+
+func changedKeyNames(value any) []string {
+	keys, _ := mergeChangedKeys(value, nil).([]string)
+	return keys
 }

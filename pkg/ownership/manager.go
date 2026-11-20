@@ -253,17 +253,28 @@ func (v *View) managerEvidence(ref resourceid.Ref) ManagerEvidence {
 	}
 	controlled := slices.ContainsFunc(read.Object.OwnerReferences, isController)
 	for _, c := range read.Object.Claims {
-		cc := CheckedClaim{Claim: c, Weak: c.Copied || controlled && inherited(c.Source)}
+		cc := CheckedClaim{Claim: c}
 		cc.Check = v.checkClaim(c.Manager, e.Recorders, found)
+		cc.Weak = c.Copied || controlled && inherited(c.Source, cc.Check)
 		e.Claims = append(e.Claims, cc)
 	}
 	return e
 }
 
-// inherited reports whether a claim from source is metadata a controller
-// copies onto the objects it creates.
-func inherited(source gitops.ClaimSource) bool {
-	return source == gitops.ClaimArgoInstanceLabel || source == gitops.ClaimHelmRelease
+// inherited reports whether a claim from source, checked as check, is metadata
+// a controller copied onto an object it created. Argo CD instance labels and
+// Helm annotations come from a template or a controller's own metadata. Flux
+// origin labels are copied the same way, but Flux also labels what it applies,
+// which a controller may later adopt; they count as copied only when the
+// manager they name reads as not recording the object.
+func inherited(source gitops.ClaimSource, check ClaimCheck) bool {
+	switch source {
+	case gitops.ClaimArgoInstanceLabel, gitops.ClaimHelmRelease:
+		return true
+	case gitops.ClaimFluxKustomization, gitops.ClaimFluxHelmRelease:
+		return check == ClaimOmitted || check == ClaimMissing
+	}
+	return false
 }
 
 func (v *View) checkClaim(claimed resourceid.Ref, recorders []resourceid.Ref, found RecordingManagersAnswer) ClaimCheck {

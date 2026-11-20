@@ -107,13 +107,17 @@ func TestWorkloadIdentityEdges(t *testing.T) {
 }
 
 func TestSealedSecretLinksToSecretConsumerWithoutSecretVisibility(t *testing.T) {
+	// The controller forces the produced Secret's name to the SealedSecret's own
+	// name; spec.template.metadata.name is overwritten and must NOT be used to
+	// resolve the consumer. The Deployment therefore consumes "generated-secret"
+	// (the SealedSecret's own name), and the divergent template name is ignored.
 	deployment := deployWithRefs("app", "web", "", "generated-secret", "")
 	gvr := schema.GroupVersionResource{Group: "bitnami.com", Version: "v1alpha1", Resource: "sealedsecrets"}
 	sealedSecret := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "bitnami.com/v1alpha1",
 		"kind":       "SealedSecret",
-		"metadata":   map[string]any{"name": "encrypted", "namespace": "app"},
-		"spec":       map[string]any{"template": map[string]any{"metadata": map[string]any{"name": "generated-secret"}}},
+		"metadata":   map[string]any{"name": "generated-secret", "namespace": "app"},
+		"spec":       map[string]any{"template": map[string]any{"metadata": map[string]any{"name": "ignored-template-name"}}},
 	}}
 
 	topo, err := NewBuilder(&mockProvider{deployments: []*appsv1.Deployment{deployment}}).
@@ -123,7 +127,7 @@ func TestSealedSecretLinksToSecretConsumerWithoutSecretVisibility(t *testing.T) 
 		t.Fatalf("Build: %v", err)
 	}
 
-	assertTopologyEdge(t, topo, "sealedsecret/app/encrypted", "deployment/app/web")
+	assertTopologyEdge(t, topo, "sealedsecret/app/generated-secret", "deployment/app/web")
 }
 
 func assertTopologyEdge(t *testing.T, topology *Topology, source, target string) {

@@ -1,0 +1,121 @@
+{
+  "apiVersion": "serving.kserve.io/v1beta1",
+  "kind": "InferenceService",
+  "metadata": {
+    "name": "iris-transformer",
+    "namespace": "ml-serving",
+    "generation": 1,
+    "annotations": {
+      "modelFormat": "sklearn",
+      "serving.kserve.io/deploymentMode": "Standard"
+    }
+  },
+  "spec": {
+    "predictor": {
+      "maxReplicas": 1,
+      "minReplicas": 1,
+      "model": {
+        "modelFormat": {
+          "name": "sklearn"
+        },
+        "name": "",
+        "resources": {
+          "limits": {
+            "cpu": "500m",
+            "memory": "512Mi"
+          },
+          "requests": {
+            "cpu": "50m",
+            "memory": "192Mi"
+          }
+        },
+        "storageUri": "gs://kfserving-examples/models/sklearn/1.0/model"
+      }
+    },
+    "transformer": {
+      "containers": [
+        {
+          "image": "nginxinc/nginx-unprivileged:1.27-alpine",
+          "name": "kserve-container",
+          "ports": [
+            {
+              "containerPort": 8080,
+              "protocol": "TCP"
+            }
+          ],
+          "resources": {
+            "limits": {
+              "cpu": "100m",
+              "memory": "64Mi"
+            },
+            "requests": {
+              "cpu": "10m",
+              "memory": "32Mi"
+            }
+          }
+        }
+      ],
+      "maxReplicas": 1,
+      "minReplicas": 1
+    }
+  },
+  "status": {
+    "address": {
+      "url": "http://iris-transformer-transformer.ml-serving.svc.cluster.local"
+    },
+    "clusterServingRuntimeName": "kserve-sklearnserver",
+    "components": {
+      "predictor": {
+        "url": "http://iris-transformer-predictor-ml-serving.example.com"
+      },
+      "transformer": {}
+    },
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-11-03T02:22:36Z",
+        "status": "True",
+        "type": "IngressReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:23:01Z",
+        "message": "ReplicaSet \"iris-transformer-predictor-6bfdb56fd8\" has successfully progressed.",
+        "reason": "NewReplicaSetAvailable",
+        "status": "True",
+        "type": "PredictorReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:23:01Z",
+        "status": "True",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:22:36Z",
+        "severity": "Info",
+        "status": "False",
+        "type": "Stopped"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:22:36Z",
+        "message": "Deployment does not have minimum availability.",
+        "reason": "MinimumReplicasUnavailable",
+        "severity": "Info",
+        "status": "False",
+        "type": "TransformerReady"
+      }
+    ],
+    "deploymentMode": "Standard",
+    "modelStatus": {
+      "copies": {
+        "failedCopies": 0,
+        "totalCopies": 1
+      },
+      "states": {
+        "activeModelState": "Loaded",
+        "targetModelState": "Loaded"
+      },
+      "transitionStatus": "UpToDate"
+    },
+    "observedGeneration": 1,
+    "url": "http://iris-transformer-ml-serving.example.com"
+  }
+}

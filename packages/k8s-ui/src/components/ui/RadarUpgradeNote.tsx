@@ -81,6 +81,14 @@ function radarUpgradeNeed(requirement: RadarUpgradeRequirement): string {
   return current ? `${need} It runs ${current}.` : need
 }
 
+/**
+ * The inline note's sentence as plain text, for the tooltip of a control the
+ * feature backs: "Argo CD rollbacks need Radar v1.10 or newer on this cluster."
+ */
+export function radarUpgradeNoteText(requirement: RadarUpgradeRequirement): string {
+  return `${requirement.feature} ${radarUpgradeNeed(requirement)}`
+}
+
 /** The upgrade call to action, or nothing when the host offers no way to upgrade. */
 export function RadarUpgradeAction({ requirement }: { requirement: RadarUpgradeRequirement }) {
   const { onRequestUpgrade, upgradeHref } = useContext(RadarUpgradeContext)

@@ -1,0 +1,836 @@
+[
+  {
+    "name": "running",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Running",
+    "issue": false,
+    "recovered": true
+  },
+  {
+    "name": "failed task despite Ready",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "FAILED",
+              "worker_id": "worker:8083",
+              "trace": "private-trace"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Tasks failed",
+    "issue": true,
+    "recovered": false
+  },
+  {
+    "name": "failed connector",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "FAILED",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Connector failed",
+    "issue": true,
+    "recovered": false
+  },
+  {
+    "name": "not ready",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          },
+          {
+            "type": "NotReady",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Not ready",
+    "issue": true,
+    "recovered": false
+  },
+  {
+    "name": "empty tasks",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": []
+        }
+      }
+    },
+    "text": "Runtime unknown",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "missing tasks",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          }
+        }
+      }
+    },
+    "text": "Runtime unknown",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "malformed task",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            null
+          ]
+        }
+      }
+    },
+    "text": "Runtime unknown",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "missing conditions",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Runtime unknown",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "malformed conditions",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          null
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Runtime unknown",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "missing generation",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": null,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Status unknown",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "zero generation",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 0,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Status unknown",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "negative generation",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": -1,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Status unknown",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "stale",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 1,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Status stale",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "future generation",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 3,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Status stale",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "paused annotation",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2,
+        "annotations": {
+          "strimzi.io/pause-reconciliation": "TrUe"
+        }
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Reconciliation paused",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "paused condition",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          },
+          {
+            "type": "ReconciliationPaused",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Reconciliation paused",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "terminating",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2,
+        "deletionTimestamp": "2026-11-03T01:00:00Z"
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RUNNING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Terminating",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "PAUSED",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "PAUSED"
+          },
+          "tasks": []
+        }
+      }
+    },
+    "text": "Paused",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "STOPPED",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "STOPPED"
+          },
+          "tasks": []
+        }
+      }
+    },
+    "text": "Stopped",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "RESTARTING",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "RESTARTING",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Restarting",
+    "issue": false,
+    "recovered": false
+  },
+  {
+    "name": "UNASSIGNED",
+    "resource": {
+      "apiVersion": "kafka.strimzi.io/v1",
+      "kind": "KafkaConnector",
+      "metadata": {
+        "name": "connector",
+        "namespace": "lab",
+        "generation": 2
+      },
+      "spec": {
+        "class": "Example",
+        "tasksMax": 3
+      },
+      "status": {
+        "observedGeneration": 2,
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True"
+          }
+        ],
+        "connectorStatus": {
+          "connector": {
+            "state": "UNASSIGNED",
+            "worker_id": "worker:8083"
+          },
+          "tasks": [
+            {
+              "id": 0,
+              "state": "RUNNING",
+              "worker_id": "worker:8083"
+            }
+          ]
+        }
+      }
+    },
+    "text": "Unassigned",
+    "issue": false,
+    "recovered": false
+  }
+]

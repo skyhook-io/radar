@@ -23,12 +23,24 @@ export function getResourceRequestPresentation(
   if (!row) return { primary: '—', secondary: 'No result returned', signals: [], tone: 'neutral' }
 
   const current = row.currentRequest && row.currentRequestValue !== 0 ? row.currentRequest : 'Unset'
-  const currentOnly = current === 'Unset' ? current : `${current} current`
+  // A pod-level request is what the pod reserves, whether or not usage evidence arrived.
+  const currentOnly = row.podLevelRequest
+    ? `${row.podLevelRequest} for the pod`
+    : current === 'Unset'
+      ? current
+      : `${current} current`
   const signals = resourceSignals(row)
   const reason = row.recommendationReason
 
   if (row.queryError)
     return { primary: currentOnly, secondary: 'Metrics query failed', signals, tone: 'neutral' }
+  if (row.fit === 'pod_level_request')
+    return {
+      primary: currentOnly,
+      secondary: 'Review the pod-level request',
+      signals,
+      tone: 'review',
+    }
   if (row.fit === 'insufficient_history')
     return { primary: currentOnly, secondary: 'Not enough history', signals, tone: 'neutral' }
   if (scaledToZero)
@@ -63,7 +75,10 @@ export function getResourceRequestPresentation(
   if (row.limitConflict)
     return {
       primary: comparison,
-      secondary: 'Raise the limit before changing',
+      secondary:
+        reason === 'requests_exceed_pod_limit'
+          ? 'Review against the pod limit'
+          : 'Raise the limit before changing',
       signals,
       tone: 'review',
     }

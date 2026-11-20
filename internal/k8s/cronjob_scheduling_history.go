@@ -94,18 +94,7 @@ func readCronJobSchedulingHistory(namespace string, cronjobs []*batchv1.CronJob,
 }
 
 func (h *cronJobSchedulingHistory) noteTruncation(rows []timeline.TimelineEvent, limit int) {
-	if len(rows) < limit {
-		return
-	}
-	oldest := rows[0].Timestamp
-	for _, row := range rows {
-		if row.Timestamp.Before(oldest) {
-			oldest = row.Timestamp
-		}
-	}
-	if oldest.After(h.incompleteBefore) {
-		h.incompleteBefore = oldest
-	}
+	h.incompleteBefore = historyQueryBoundary(h.incompleteBefore, rows, limit)
 }
 
 func cronJobHistoryEvent(row timeline.TimelineEvent) *corev1.Event {

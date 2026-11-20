@@ -15,11 +15,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
-	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -46,8 +48,19 @@ type workloadHistoryResponse struct {
 	Truncated     bool  `json:"truncated"`
 	NextBeforeSeq int64 `json:"nextBeforeSeq,omitempty"`
 	// Incomplete reports that the workload has more related resources than
-	// the history follows, so some of their events are missing.
+	// the history follows, or older ownership records have expired, so related
+	// events may be missing even when those events are still retained.
 	Incomplete bool `json:"incomplete,omitempty"`
+	// HistoryCoverage is set when Radar may not hold every change since the
+	// workload existed: it started observing, or began watching a kind the
+	// history depends on, after that, or has deleted rows since.
+	HistoryCoverage *issuesapi.HistoryCoverage `json:"historyCoverage,omitempty"`
+	// Gaps name kinds whose rows the history can't include for this caller:
+	// for a workload Kueue queues, its Workload and ProvisioningRequests when
+	// the caller may not list them in the namespace or Radar doesn't collect
+	// them there. They follow from access and collection, so every page
+	// carries the same gaps.
+	Gaps []resourceapi.Gap `json:"gaps,omitempty"`
 }
 
 // handleWorkloadHistory returns the timeline of one workload: the workload
@@ -55,7 +68,11 @@ type workloadHistoryResponse struct {
 // (ReplicaSets, Pods, Jobs…), K8s Events about any of those, and the
 // resources attached to it now (Services exposing it, ConfigMaps and Secrets
 // it uses, scalers, PDBs, NetworkPolicies, PVCs). Sibling workloads are not
-// included, so the view doesn't depend on how busy the namespace is.
+// included, so the view doesn't depend on how busy the namespace is. A
+// workload Kueue queues reaches its Workload and that Workload's
+// ProvisioningRequests through ownership like any other child; the response
+// says when access or collection keeps them out (Gaps) and since when Radar's
+// history is complete (HistoryCoverage).
 func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -106,7 +123,16 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 		s.writeTimelineQueryError(w, err)
 		return
 	}
-	resp := workloadHistoryResponse{Events: events, Incomplete: incomplete}
+	gaps, collectedSince := s.kueueHistoryReads(r, namespace, live, key.Group == "kueue.x-k8s.io" && key.Kind == "Workload" || hasEarlierIncarnation(r.Context(), store, clusterContext, key, live.UID))
+	resp := workloadHistoryResponse{
+		Events:          events,
+		Incomplete:      incomplete,
+		Gaps:            gaps,
+		HistoryCoverage: workloadHistoryCoverage(r.Context(), store, clusterContext, key, live, collectedSince, s.callerReadsAllNamespaces(r)),
+	}
+	if !timeline.HistoryEvictedThrough().IsZero() {
+		resp.Incomplete = true
+	}
 	if len(events) > limit {
 		resp.Events = events[:limit]
 		resp.Truncated = true
@@ -394,30 +420,16 @@ func resolveWorkloadKind(resource, group string) (kind, resolvedGroup string, ok
 	return "", "", false
 }
 
-// workloadAttachments are the resources attached to the workload right now,
-// from the cached topology the detail view's relationships use. The live
-// object, when there is one, keeps a CRD whose kind collides with another's
-// (a Volcano Job and a batch Job) on its own topology node.
+// workloadAttachments are the resources attached to the captured workload
+// under the drawer's access policy, limited to its own namespace.
 func (s *Server) workloadAttachments(r *http.Request, key resourceid.Ref, obj metav1.Object) []resourceid.Ref {
-	if s.broadcaster == nil {
+	o, ok := obj.(runtime.Object)
+	if !ok {
 		return nil
 	}
-	cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex()
-	if cachedTopo == nil {
-		return nil
-	}
-	if auth.UserFromContext(r.Context()) != nil {
-		cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
-		relIdx = nil
-	}
-	var object any
-	if obj != nil {
-		object = obj
-	}
-	rel := topology.GetRelationshipsWithObject(key.Kind, key.Namespace, key.Name, object, cachedTopo,
-		k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
-		k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
-	return attachedRefs(rel, key.Namespace)
+	o = o.DeepCopyObject()
+	k8s.SetTypeMeta(o)
+	return attachedRefs(s.relationshipsFor(r, o), key.Namespace)
 }
 
 // attachedRefs lists the resources whose own history belongs with a
@@ -436,7 +448,10 @@ func attachedRefs(rel *topology.Relationships, namespace string) []resourceid.Re
 		rel.Services, rel.Ingresses, rel.Routes, rel.ConfigRefs, rel.Scalers, rel.PDBs, rel.NetworkPolicies, rel.StagedPolicies, rel.StorageRefs,
 	} {
 		for _, ref := range list {
-			if ref.Namespace != namespace || ref.Kind == "" || ref.Name == "" {
+			// A reference named only because the workload's spec declares it
+			// carries a State; its target's history is the caller's to read
+			// only if they may read the target.
+			if ref.Namespace != namespace || ref.Kind == "" || ref.Name == "" || ref.State != "" {
 				continue
 			}
 			group := ref.Group

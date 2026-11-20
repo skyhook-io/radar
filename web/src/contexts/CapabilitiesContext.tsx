@@ -44,6 +44,8 @@ const restrictedCapabilities: Capabilities = {
   },
   mcpEnabled: false,
   mcpExecTools: false,
+  mcpHttpTools: false,
+  mcpHelmTools: false,
   deployment: { mode: 'local' },
 }
 
@@ -159,6 +161,9 @@ export function useNamespacedCapabilities(namespace: string | undefined) {
     console.warn('Failed to fetch namespace capabilities, using global:', namespace, error)
   }
 
+  // A failed refetch keeps the last successful namespace answer; with none,
+  // the global value is not an answer for this namespace.
+  const namespaceUnknown = Boolean(namespace && !nsCaps && (isPending || error))
   return useMemo(() => ({
     canExec: nsCaps?.exec ?? globalCaps.exec,
     canViewLogs: nsCaps?.logs ?? globalCaps.logs,
@@ -166,8 +171,7 @@ export function useNamespacedCapabilities(namespace: string | undefined) {
     canHelmWrite: nsCaps?.helmWrite ?? globalCaps.helmWrite,
     workloadWrites: nsCaps?.workloadWrites ?? globalCaps.workloadWrites,
     workloadWritesPending: Boolean(namespace && isPending),
-    // A failed refetch keeps the last successful namespace answer; with none,
-    // the global value is not an answer for this namespace.
-    helmWriteUnknown: Boolean(namespace && !nsCaps && (isPending || error)),
-  }), [globalCaps.exec, globalCaps.logs, globalCaps.portForward, globalCaps.helmWrite, globalCaps.workloadWrites, error, isPending, namespace, nsCaps])
+    helmWriteUnknown: namespaceUnknown,
+    logsUnknown: namespaceUnknown,
+  }), [globalCaps.exec, globalCaps.logs, globalCaps.portForward, globalCaps.helmWrite, globalCaps.workloadWrites, isPending, namespace, nsCaps, namespaceUnknown])
 }

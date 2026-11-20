@@ -68,6 +68,18 @@ func FindDesktopAsset(release *githubReleaseWithAssets, goos, goarch string) *gi
 		arch = "universal"
 	}
 
+	// Linux ships several formats for one platform (.tar.gz, .deb, .rpm,
+	// .AppImage); the updater can only install the tarball.
+	if goos == "linux" {
+		name := fmt.Sprintf("radar-desktop_%s_linux_%s.tar.gz", release.TagName, arch)
+		for i := range release.Assets {
+			if release.Assets[i].Name == name {
+				return &release.Assets[i]
+			}
+		}
+		return nil
+	}
+
 	// Build expected prefix: radar-desktop_ (version will vary)
 	suffix := fmt.Sprintf("_%s_%s.", goos, arch)
 

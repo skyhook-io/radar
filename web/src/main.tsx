@@ -1,9 +1,17 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { RadarApp } from './RadarApp'
+import { setAutomaticRequestMarking } from './api/config'
 import { openExternal } from './utils/navigation'
 import { installWailsClipboardShim } from './utils/wails-clipboard'
+import { installWindowsTitleBar } from './desktop/WindowsTitleBar'
+import { installDesktopZoomShortcuts } from './utils/desktop-zoom'
+import { installStaleAssetPrompt } from './utils/staleAssetPrompt'
 import './index.css'
+
+// Automatic requests can beat the usage status to the server, and a recording
+// Radar must still tell them from clicks. Embedding hosts don't run this entry.
+setAutomaticRequestMarking(true)
 
 // Intercept external link clicks in the Wails desktop app.
 // <a target="_blank"> is swallowed by WKWebView/WebView2 — route through openExternal()
@@ -21,6 +29,11 @@ window.addEventListener('click', (e: MouseEvent) => {
 // Wails desktop clipboard shim — see web/src/utils/wails-clipboard.ts for the
 // full WKWebView background and what each interception exists for.
 installWailsClipboardShim()
+installWindowsTitleBar()
+installDesktopZoomShortcuts()
+// Embedding hosts serve their own assets and own their notices, so the prompt
+// lives here rather than in RadarApp.
+installStaleAssetPrompt()
 
 // Mouse back/forward button navigation (button 3 = back, button 4 = forward).
 // Uses 'mouseup' in capture phase to intercept before the browser's native handler.

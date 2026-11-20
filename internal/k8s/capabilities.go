@@ -22,6 +22,7 @@ import (
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"golang.org/x/sync/singleflight"
 )
 
 // ResourcePermissions indicates which resource types the user can list/watch
@@ -86,6 +87,11 @@ type PermissionCheckResult struct {
 	ScopeNamespaces          map[string][]string // Per-kind namespace-scoped informer fanout; nil/empty means use Scopes[key].Namespace
 	ScopeCandidates          []string            // The candidate namespaces the probe walked — the dynamic CRD cache probes these per-GVR as its namespace fallbacks
 	ScopeCandidatesTruncated bool                // Candidate set is incomplete: namespace enumeration was non-authoritative or MaxScopeCandidates omitted entries
+	// DeniedNamespaces holds, per kind, the candidate namespaces whose list
+	// returned 403. A candidate in neither this nor the kind's grants wasn't
+	// answered: the probe ran out of time, hit a transient error, or had its
+	// credentials rejected.
+	DeniedNamespaces map[string][]string
 }
 
 // CredentialRejectedNamespaces returns, sorted, the namespaces among
@@ -107,28 +113,40 @@ func (r *PermissionCheckResult) CredentialRejectedNamespaces(resource string, na
 
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
-	ConfigManagement string                   `json:"configManagement"`
-	Exec             bool                     `json:"exec"`           // Can create pods/exec (terminal feature)
-	LocalTerminal    bool                     `json:"localTerminal"`  // Local terminal available (not in-cluster, not disabled)
-	Logs             bool                     `json:"logs"`           // Can get pods/log (log viewer)
-	PortForward      bool                     `json:"portForward"`    // Can create pods/portforward
-	Secrets          bool                     `json:"secrets"`        // Can list secrets
-	SecretsUpdate    bool                     `json:"secretsUpdate"`  // Can update secrets (inline editing)
-	HelmWrite        bool                     `json:"helmWrite"`      // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite        bool                     `json:"nodeWrite"`      // Can patch nodes (cordon/uncordon/drain)
-	WorkloadWrites   WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
-	MCPReadOnly      bool                     `json:"mcpReadOnly"`
-	MCPExecTools     bool                     `json:"mcpExecTools"`
-	MCPEnabled       bool                     `json:"mcpEnabled"`              // MCP server is running
-	Deployment       DeploymentInfo           `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
-	Features         FeatureCapabilities      `json:"features"`                // Versioned server features that newer embedded frontends must negotiate
-	AuthEnabled      bool                     `json:"authEnabled,omitempty"`   // Auth is enabled on the server
-	Username         string                   `json:"username,omitempty"`      // Authenticated username (when auth enabled)
-	Resources        *ResourcePermissions     `json:"resources,omitempty"`     // Per-resource-type permissions
-	Visibility       *VisibilitySummary       `json:"visibility,omitempty"`    // Present when resource visibility is limited enough to make diagnostics incomplete
-	Karpenter        IntegrationCapability    `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
-	PolicyReports    *PolicyReportStatus      `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
-	CloudConnect     *CloudConnectCapability  `json:"cloudConnect,omitempty"`
+	ConfigManagement       string                   `json:"configManagement"`
+	Exec                   bool                     `json:"exec"`           // Can create pods/exec (terminal feature)
+	LocalTerminal          bool                     `json:"localTerminal"`  // Local terminal available (not in-cluster, not disabled)
+	LocalShell             string                   `json:"localShell"`     // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
+	Logs                   bool                     `json:"logs"`           // Can get pods/log (log viewer)
+	PortForward            bool                     `json:"portForward"`    // Can create pods/portforward
+	Secrets                bool                     `json:"secrets"`        // Can list secrets
+	SecretsUpdate          bool                     `json:"secretsUpdate"`  // Can update secrets (inline editing)
+	HelmWrite              bool                     `json:"helmWrite"`      // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite              bool                     `json:"nodeWrite"`      // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites         WorkloadWritePermissions `json:"workloadWrites"` // Can patch workload kinds (restart/scale controls)
+	MCPReadOnly            bool                     `json:"mcpReadOnly"`
+	MCPExecTools           bool                     `json:"mcpExecTools"`
+	MCPHelmTools           bool                     `json:"mcpHelmTools"` // Native Helm MCP tool registered; target Kubernetes permissions still required
+	MCPHTTPTools           bool                     `json:"mcpHttpTools"`
+	MCPApplicationEvidence bool                     `json:"mcpApplicationEvidence"`
+	MCPEnabled             bool                     `json:"mcpEnabled"`              // MCP server is running
+	Deployment             DeploymentInfo           `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
+	Features               FeatureCapabilities      `json:"features"`                // Versioned server features that newer embedded frontends must negotiate
+	AuthEnabled            bool                     `json:"authEnabled,omitempty"`   // Auth is enabled on the server
+	Username               string                   `json:"username,omitempty"`      // Authenticated username (when auth enabled)
+	Resources              *ResourcePermissions     `json:"resources,omitempty"`     // Per-resource-type permissions
+	Visibility             *VisibilitySummary       `json:"visibility,omitempty"`    // Present when resource visibility is limited enough to make diagnostics incomplete
+	Karpenter              IntegrationCapability    `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
+	PolicyReports          *PolicyReportStatus      `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
+	CloudConnect           *CloudConnectCapability  `json:"cloudConnect,omitempty"`
+	// ChecksIncomplete: an access check errored, so a false above may be a
+	// failed check rather than a denial. The server re-checks after a short
+	// TTL; the UI should refetch soon.
+	ChecksIncomplete bool `json:"checksIncomplete,omitempty"`
+
+	// HelmWriteUnavailable records a failed or unavailable Helm-write lookup from CheckCapabilities.
+	// It is internal preflight state, not a wire capability.
+	HelmWriteUnavailable bool `json:"-"`
 }
 
 type IntegrationCapability struct {
@@ -162,27 +180,76 @@ type CloudConnectCapability struct {
 // here in the same change, plus an entry in web/src/api/radarFeatures.ts
 // (TestFeatureFlagsHaveFrontendGates enforces the pairing).
 type FeatureCapabilities struct {
-	HelmSourceIdentity    bool `json:"helmSourceIdentity"`
-	ResourceReadCoverage  bool `json:"resourceReadCoverage"`
-	SearchCoverage        bool `json:"searchCoverage"`
-	YAMLReview            bool `json:"yamlReview"`
-	YAMLSchemas           bool `json:"yamlSchemas"`
-	WorkloadImages        bool `json:"workloadImages"`
-	ResourceIssues        bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
-	ResourceIssueCoverage bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
-	PodEnvironment        bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
-	PolicyResource        bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
-	WorkloadHistory       bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
+	HelmSourceIdentity bool `json:"helmSourceIdentity"`
+	// GET /api/helm/inventory and /api/helm/inventory/{namespace}/{name}, and
+	// error_code release_read_denied on a Helm release read.
+	HelmInventory        bool `json:"helmInventory"`
+	ResourceReadCoverage bool `json:"resourceReadCoverage"`
+	SearchCoverage       bool `json:"searchCoverage"`
+	ApplicationEvidence  bool `json:"applicationEvidence"`
+	SearchEventContent   bool `json:"searchEventContent"`
+	YAMLReview           bool `json:"yamlReview"`
+	YAMLSchemas          bool `json:"yamlSchemas"`
+	WorkloadImages       bool `json:"workloadImages"`
+	DeploymentPause      bool `json:"deploymentPause"`
+	// GET /api/prometheus/substrate/workerpools/{namespace}/{name} and /api/prometheus/substrate/nodes/{name}.
+	SubstrateHealthMetrics bool `json:"substrateHealthMetrics"`
+	ResourceIssues         bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
+	ResourceIssueCoverage  bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
+	PodEnvironment         bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
+	PolicyResource         bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
+	WorkloadHistory        bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
 	// The workspace and its read/action surfaces, excluding protection setup.
-	CNPGWorkspace         bool `json:"cnpgWorkspace"`
-	CNPGProtectionSetup   bool `json:"cnpgProtectionSetup"`
-	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
-	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
-	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
-	AgentSigninCheck      bool `json:"agentSigninCheck"`      // GET /api/agents/signin
+	CNPGWorkspace       bool `json:"cnpgWorkspace"`
+	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`
+	// GET /api/velero/workspace and GET /api/velero/schedules/{namespace}/{name}/activity
+	VeleroWorkspace     bool `json:"veleroWorkspace"`
+	VeleroBackupNow     bool `json:"veleroBackupNow"`     // POST /api/velero/schedules/{namespace}/{name}/backup
+	VeleroSchedulePause bool `json:"veleroSchedulePause"` // POST /api/velero/schedules/{namespace}/{name}/{pause|resume}
+	VeleroRunVolumes    bool `json:"veleroRunVolumes"`    // Run volume record and current operations
+	VeleroRunArtifacts  bool `json:"veleroRunArtifacts"`  // POST /api/velero/{backups|restores}/{namespace}/{name}/{contents|log}
+	VeleroRuns          bool `json:"veleroRuns"`          // GET /api/velero/runs/{backups|restores}
+	// POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion
+	VeleroDeleteBackup bool `json:"veleroDeleteBackup"`
+	// DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions
+	ResourceDeletePreconditions bool `json:"resourceDeletePreconditions"`
+	ServiceEndpointSlices       bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
+	TrafficRecords              bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
+	GitOpsWriteEvidence         bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
+	AgentSigninCheck            bool `json:"agentSigninCheck"`      // GET /api/agents/signin
+	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
+	// the history entry (id 0 included), and .../resume also clears
+	// spec.syncPolicy.automated.enabled: false. An older Radar writes an
+	// operation.rollback the API server prunes, and leaves enabled: false set.
+	ArgoRollbackSync bool `json:"argoRollbackSync"`
+	// POST /api/argo/applications/{namespace}/{name}/sync (and
+	// .../validate-resource) with syncOptions omitted uses the Application's
+	// spec.syncPolicy.syncOptions, and an omitted prune does not prune. An
+	// older Radar syncs with no options and prunes. Also signals that enabling
+	// auto-sync on a never-suspended Application starts with prune off.
+	ArgoSyncInheritance bool `json:"argoSyncInheritance"`
+	// Enabling auto-sync on a never-suspended Application starts with selfHeal
+	// off, as in Argo CD. An older Radar turns it on.
+	ArgoEnableSelfHealOff bool `json:"argoEnableSelfHealOff"`
 	// PUT/DELETE /api/resources/{kind}/_/{name} and GET /api/audit/resource/{kind}/_/{name}
 	// read "_" as a cluster-scoped resource.
 	ClusterScopedPlaceholder bool `json:"clusterScopedPlaceholder"`
+	// GET /api/kueue/position/{namespace}/{name}
+	KueuePendingPosition bool `json:"kueuePendingPosition"`
+	// GET /api/workloads/rayclusters/{namespace}/{name}/pods?ownerUID=. Radars
+	// from v1.15.0 serve the route without advertising this flag.
+	RayClusterPods bool `json:"rayClusterPods"`
+	// Workload Pod info marks native sidecars (containerStatuses[].sidecar);
+	// without this, an absent mark doesn't mean "not a sidecar".
+	PodSidecarMarks bool `json:"podSidecarMarks"`
+	// GET /api/kueue/clusterqueues/{name}/workloads and
+	// /api/kueue/localqueues/{namespace}/{name}/workloads
+	KueueQueueWorkloads   bool `json:"kueueQueueWorkloads"`
+	PodFileUpload         bool `json:"podFileUpload"`         // POST /api/pods/{namespace}/{name}/files/upload
+	Vulnerabilities       bool `json:"vulnerabilities"`       // GET /api/vulnerabilities
+	RuntimeAdvisoryChecks bool `json:"runtimeAdvisoryChecks"` // GET /api/vulnerabilities/java4shell
+	// GET /api/sealedsecrets/controller
+	SealedSecretsController bool `json:"sealedSecretsController"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
@@ -269,7 +336,8 @@ var (
 	nsCapCache map[string]*nsCapEntry
 	nsCapMu    sync.RWMutex
 
-	// ForceDisableHelmWrite overrides the helmWrite capability to false (for dev testing)
+	// ForceDisableHelmWrite disables the Helm write preflight and manage_helm registration.
+	// Signed-in global repository/OCI management and Cloud install/upgrade are unaffected.
 	ForceDisableHelmWrite bool
 	// ForceDisableExec turns off exec (--disable-exec): the capability reports false
 	// and the exec, debug and pod-file routes refuse requests.
@@ -303,14 +371,14 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	if GetClient() == nil {
 		// Return all false if client not initialized (fail closed)
 		log.Printf("Warning: K8s client not initialized, returning restricted capabilities")
-		return &Capabilities{Exec: false, Logs: false, PortForward: false, Secrets: false, SecretsUpdate: false, HelmWrite: false}, nil
+		return &Capabilities{HelmWriteUnavailable: true}, nil
 	}
 
 	// Don't start RBAC checks when disconnected — the exec credential plugin
 	// serializes all API calls per-process, so browser-polled capability checks
 	// would block retry/context-switch connectivity tests.
 	if GetConnectionStatus().State == StateDisconnected {
-		return &Capabilities{}, nil
+		return &Capabilities{HelmWriteUnavailable: true}, nil
 	}
 
 	// Use the operation context so RBAC checks are canceled on context switch.
@@ -325,7 +393,7 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	// Check each capability in parallel.
 	// Try cluster-wide first, then namespace-scoped as fallback for namespace-scoped users.
 	// Track API errors to avoid caching transient failures for the full TTL.
-	fallbackNs := GetEffectiveNamespace()
+	fallbackNs := capabilityProbeNamespace()
 	var hadErrors atomic.Bool
 
 	type capCheck struct {
@@ -372,6 +440,9 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 			}
 			if apiErr {
 				hadErrors.Store(true)
+				if c.result == &caps.HelmWrite {
+					caps.HelmWriteUnavailable = true
+				}
 			}
 		}(check)
 	}
@@ -400,7 +471,8 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	// Cache the result. Use a short TTL if API errors caused fail-closed results,
 	// so transient K8s API failures don't hide UI controls for a full minute.
 	ttl := capabilitiesTTL
-	if hadErrors.Load() {
+	caps.ChecksIncomplete = hadErrors.Load()
+	if caps.ChecksIncomplete {
 		ttl = capabilitiesErrorTTL
 		log.Printf("Warning: capability checks had API errors, using short cache TTL (%v)", ttl)
 	}
@@ -548,7 +620,17 @@ var (
 type userCapEntry struct {
 	caps      *Capabilities
 	expiresAt time.Time
+	// lastGood is the newest complete result while later checks fail, taken
+	// at goodAt; it is served during a re-check, never past lastGoodMaxAge.
+	lastGood *Capabilities
+	goodAt   time.Time
 }
+
+// userCapabilitiesFlight runs one check per identity at a time: each costs
+// up to two SubjectAccessReviews per capability.
+var userCapabilitiesFlight singleflight.Group
+
+const lastGoodMaxAge = 2 * time.Minute
 
 type userNSCapEntry struct {
 	caps      NamespaceCapabilities
@@ -561,24 +643,50 @@ func userNamespaceCapabilitiesCacheKey(username string, groups []string, namespa
 
 // CheckCapabilitiesForUser runs SubjectAccessReview as the given user
 // to determine what the user can do (exec, logs, delete, helm, etc.)
-// Results are cached per identity (username + groups) with 60s TTL.
+// Results are cached per identity (username + groups) with 60s TTL, or 5s
+// when a check errored (the result then fails closed and says so).
+// Concurrent callers for one identity share a single check; while the
+// re-check after a failed one runs, callers get the last complete result.
 func CheckCapabilitiesForUser(ctx context.Context, username string, groups []string) (*Capabilities, error) {
 	identityKey := pkgauth.IdentityCacheKey(username, groups)
+	var lastGood *Capabilities
 	if entry, ok := userCapabilitiesCache.Load(identityKey); ok {
 		e := entry.(*userCapEntry)
 		if time.Now().Before(e.expiresAt) {
 			caps := *e.caps
 			return &caps, nil
 		}
+		if e.lastGood != nil && time.Since(e.goodAt) < lastGoodMaxAge {
+			lastGood = e.lastGood
+		}
 	}
 
+	ch := userCapabilitiesFlight.DoChan(identityKey, func() (any, error) {
+		return checkCapabilitiesForUser(identityKey, username, groups), nil
+	})
+	var shared *Capabilities
+	if lastGood != nil {
+		select {
+		case r := <-ch:
+			shared = r.Val.(*Capabilities)
+		default:
+			shared = lastGood
+		}
+	} else {
+		shared = (<-ch).Val.(*Capabilities)
+	}
+	caps := *shared
+	return &caps, nil
+}
+
+func checkCapabilitiesForUser(identityKey, username string, groups []string) *Capabilities {
 	k8sClient := GetClient()
 	if k8sClient == nil {
-		return &Capabilities{}, nil
+		return &Capabilities{}
 	}
 
 	if GetConnectionStatus().State == StateDisconnected {
-		return &Capabilities{}, nil
+		return &Capabilities{}
 	}
 
 	checkCtx, cancel := NewOperationContext(10 * time.Second)
@@ -607,28 +715,35 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
 	}
 
+	var hadErrors atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(len(checks))
 
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, _ := canIAs(checkCtx, k8sClient, username, groups, "", c.group, c.resource, c.verb)
+			allowed, apiErr := canIAs(checkCtx, k8sClient, username, groups, "", c.group, c.resource, c.verb)
 			if allowed {
 				*c.result = true
 				return
 			}
 			// Try namespace-scoped fallback
-			if fallbackNs := GetEffectiveNamespace(); fallbackNs != "" && c.namespaceFallback {
-				allowed, _ = canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
+			if fallbackNs := capabilityProbeNamespace(); fallbackNs != "" && c.namespaceFallback {
+				allowed, nsAPIErr := canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
+					return
 				}
+				apiErr = apiErr || nsAPIErr
+			}
+			if apiErr {
+				hadErrors.Store(true)
 			}
 		}(check)
 	}
 
 	wg.Wait()
+	caps.ChecksIncomplete = hadErrors.Load()
 
 	if ForceDisableHelmWrite {
 		caps.HelmWrite = false
@@ -637,13 +752,25 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 		caps.Exec = false
 	}
 
-	// Cache result
-	userCapabilitiesCache.Store(identityKey, &userCapEntry{
-		caps:      caps,
-		expiresAt: time.Now().Add(userCapabilitiesTTL),
-	})
+	ttl := userCapabilitiesTTL
+	if caps.ChecksIncomplete {
+		ttl = capabilitiesErrorTTL
+		log.Printf("Warning: capability checks for user %s had API errors, using short cache TTL (%v)", SanitizeForLog(username), ttl)
+	}
+	entry := &userCapEntry{caps: caps, expiresAt: time.Now().Add(ttl)}
+	if caps.ChecksIncomplete {
+		if prev, ok := userCapabilitiesCache.Load(identityKey); ok {
+			p := prev.(*userCapEntry)
+			if !p.caps.ChecksIncomplete {
+				entry.lastGood, entry.goodAt = p.caps, p.expiresAt.Add(-userCapabilitiesTTL)
+			} else {
+				entry.lastGood, entry.goodAt = p.lastGood, p.goodAt
+			}
+		}
+	}
+	userCapabilitiesCache.Store(identityKey, entry)
 
-	return caps, nil
+	return caps
 }
 
 // CheckNamespaceCapabilitiesForUser runs namespace-scoped SubjectAccessReview
@@ -1016,7 +1143,7 @@ func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
 // SelfSubjectAccessReview is one indirection too many — it can disagree with
 // reality on clusters using webhook authorizers (e.g. GKE IAM).
 func CheckResourcePermissions(ctx context.Context) (*PermissionCheckResult, bool) {
-	probe := probeResourcePermissions(ctx, false)
+	probe := probeResourcePermissions(ctx, false, GetDynamicClient)
 	return probe.result, publishResourcePermissions(probe)
 }
 
@@ -1034,9 +1161,12 @@ type permissionProbe struct {
 	unpublished bool
 }
 
-// probeResourcePermissions probes without publishing. It serves a fresh cached
-// result unless bypassCache is set.
-func probeResourcePermissions(ctx context.Context, bypassCache bool) permissionProbe {
+// probeResourcePermissions probes through the client dynFor returns, without
+// publishing. It serves a fresh cached result unless bypassCache is set.
+// dynFor is called only after the generation is captured. Request handlers pass
+// GetDynamicClient; only the cache's own startup probe spends the informer
+// client's rate limiter, through GetInformerDynamicClient.
+func probeResourcePermissions(ctx context.Context, bypassCache bool, dynFor func() dynamic.Interface) permissionProbe {
 	resourcePermsMu.RLock()
 	if !bypassCache && cachedPermResult != nil && time.Now().Before(resourcePermsExpiry) {
 		result := clonePermissionCheckResult(cachedPermResult)
@@ -1052,13 +1182,16 @@ func probeResourcePermissions(ctx context.Context, bypassCache bool) permissionP
 	// probe exists, and moving them later would need the same treatment.
 	probeGen := resourcePermsGen
 	resourcePermsMu.RUnlock()
+	// After the generation: a context switch installs the new client before it
+	// bumps the generation, so the reverse order can pair the previous
+	// cluster's client with the new generation.
+	dyn := dynFor()
 
 	// Compute probes WITHOUT holding the write lock — concurrent callers
 	// may race but redundant probes are harmless. Holding the lock during
 	// network calls would block InvalidateResourcePermissionsCache() during
 	// context switch.
 
-	dyn := GetDynamicClient()
 	if GetClient() == nil || dyn == nil {
 		log.Printf("Warning: K8s client not initialized, returning no resource permissions")
 		// Current: nothing superseded this, there is simply nothing to probe.
@@ -1173,7 +1306,8 @@ func mergeScopeCandidates(ctxNs, flagNs string, accessible []string, authoritati
 
 func mergeScopeCandidateLists(ctxNs string, flagNamespaces []string, accessible []string, authoritative bool) (out []string, dropped int) {
 	seen := map[string]bool{}
-	out = make([]string, 0, MaxScopeCandidates)
+	// MaxScopeCandidates is operator-set and can be huge; size by the input.
+	out = make([]string, 0, min(MaxScopeCandidates, 1+len(flagNamespaces)+len(accessible)))
 	atCap := false
 	add := func(ns string) {
 		if ns == "" || seen[ns] {
@@ -1256,10 +1390,11 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 	probes := resourceProbeTargets(perms)
 
 	type probeOutcome struct {
-		scope           k8score.ResourceScope
-		namespaces      []string
-		namespaceErrors map[string]error
-		probeError      error
+		scope            k8score.ResourceScope
+		namespaces       []string
+		namespaceErrors  map[string]error
+		probeError       error
+		deniedNamespaces []string
 	}
 	outcomes := make([]probeOutcome, len(probes))
 
@@ -1362,7 +1497,10 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 					truncatedMu.Unlock()
 					break
 				}
-				nsAllowed, _, nsTransient := probeKindAccess(ctx, dyn, p, ns)
+				nsAllowed, nsForbidden, nsTransient := probeKindAccess(ctx, dyn, p, ns)
+				if !nsAllowed && nsForbidden && nsTransient == nil {
+					outcomes[i].deniedNamespaces = append(outcomes[i].deniedNamespaces, ns)
+				}
 				if apierrors.IsUnauthorized(nsTransient) {
 					if outcomes[i].namespaceErrors == nil {
 						outcomes[i].namespaceErrors = make(map[string]error)
@@ -1406,6 +1544,7 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 	probeErrors := make(map[string]error)
 	namespaceProbeErrors := make(map[string]map[string]error)
 	scopeNamespacesByKind := make(map[string][]string)
+	deniedNamespacesByKind := make(map[string][]string)
 	namespaceScoped := false
 	var (
 		restricted   []string
@@ -1414,6 +1553,9 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 	for i, p := range probes {
 		r := outcomes[i]
 		scopes[p.key] = r.scope
+		if len(r.deniedNamespaces) > 0 {
+			deniedNamespacesByKind[p.key] = r.deniedNamespaces
+		}
 		if len(r.namespaceErrors) > 0 {
 			namespaceProbeErrors[p.key] = r.namespaceErrors
 		}
@@ -1495,6 +1637,7 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 		NamespaceProbeErrors: namespaceProbeErrors,
 		ScopeNamespaces:      scopeNamespacesByKind,
 		ScopeCandidates:      append([]string(nil), scopeNamespaces...),
+		DeniedNamespaces:     deniedNamespacesByKind,
 	}, hadErrors.Load()
 }
 
@@ -1536,6 +1679,10 @@ func clonePermissionCheckResult(result *PermissionCheckResult) *PermissionCheckR
 	for k, v := range result.ScopeNamespaces {
 		scopeNamespacesCopy[k] = append([]string(nil), v...)
 	}
+	deniedCopy := make(map[string][]string, len(result.DeniedNamespaces))
+	for k, v := range result.DeniedNamespaces {
+		deniedCopy[k] = append([]string(nil), v...)
+	}
 	namespaceErrorsCopy := maps.Clone(result.NamespaceProbeErrors)
 	for kind, errors := range namespaceErrorsCopy {
 		namespaceErrorsCopy[kind] = maps.Clone(errors)
@@ -1550,5 +1697,6 @@ func clonePermissionCheckResult(result *PermissionCheckResult) *PermissionCheckR
 		ScopeNamespaces:          scopeNamespacesCopy,
 		ScopeCandidates:          append([]string(nil), result.ScopeCandidates...),
 		ScopeCandidatesTruncated: result.ScopeCandidatesTruncated,
+		DeniedNamespaces:         deniedCopy,
 	}
 }

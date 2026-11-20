@@ -111,9 +111,13 @@ type podRow struct {
 
 type podRowSpec struct {
 	ReadinessGates []corev1.PodReadinessGate `json:"readinessGates,omitempty"`
-	NodeName       string                    `json:"nodeName,omitempty"`
-	Containers     []podRowContainer         `json:"containers,omitempty"`
-	InitContainers []podRowContainer         `json:"initContainers,omitempty"`
+	// SchedulingGates is the authoritative "deliberately held" signal the status
+	// badge reads; keep it so the list classifies a gated pod from the spec rather
+	// than racing the scheduler's PodScheduled=SchedulingGated condition.
+	SchedulingGates []corev1.PodSchedulingGate `json:"schedulingGates,omitempty"`
+	NodeName        string                     `json:"nodeName,omitempty"`
+	Containers      []podRowContainer          `json:"containers,omitempty"`
+	InitContainers  []podRowContainer          `json:"initContainers,omitempty"`
 	// Pod-level budget (PodLevelResources): the CPU/Mem column checks which
 	// requests/limits it sets.
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
@@ -165,11 +169,12 @@ func summarizePodRow(p *corev1.Pod) any {
 	return &podRow{
 		Metadata: summaryRowMeta(&p.ObjectMeta),
 		Spec: podRowSpec{
-			ReadinessGates: p.Spec.ReadinessGates,
-			NodeName:       p.Spec.NodeName,
-			Containers:     summaryContainers(p.Spec.Containers, false, len(p.Spec.ReadinessGates) > 0),
-			InitContainers: summaryContainers(p.Spec.InitContainers, true, false),
-			Resources:      p.Spec.Resources,
+			ReadinessGates:  p.Spec.ReadinessGates,
+			SchedulingGates: p.Spec.SchedulingGates,
+			NodeName:        p.Spec.NodeName,
+			Containers:      summaryContainers(p.Spec.Containers, false, len(p.Spec.ReadinessGates) > 0),
+			InitContainers:  summaryContainers(p.Spec.InitContainers, true, false),
+			Resources:       p.Spec.Resources,
 		},
 		Status: podRowStatus{
 			Phase:                 p.Status.Phase,

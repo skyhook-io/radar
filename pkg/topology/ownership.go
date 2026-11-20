@@ -68,9 +68,9 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 	// The GitOps managers whose member lists name the subject manage it,
 	// whether or not the graph draws the edge. A GitOps manager's edge counts
 	// only where the search couldn't read its list; a list it read says
-	// itself. The graph draws a HelmRelease's edges from its members' labels,
-	// and an Application's or Kustomization's from the same status list, for
-	// the workload and network kinds it draws.
+	// itself. The graph draws a manager's edges from the same status list, for
+	// the workload and network kinds it draws, and a HelmRelease's that
+	// records none from its members' origin labels.
 	cov.Manager = managerAnswer(v.Manager(subject))
 	managers := v.RecordingManagers(subject)
 	if len(managers.Unreadable)+len(managers.Remote)+len(managers.Gaps) > 0 {
@@ -120,8 +120,8 @@ func ApplyOwnership(rel *Relationships, v *ownership.View, fetched ownership.Obs
 			return
 		}
 		// With no list to read, the graph's edges are all there is: by the
-		// members' labels for a HelmRelease, from the same status list for an
-		// Application or Kustomization.
+		// members' origin labels for a HelmRelease that records none, from the
+		// same status list otherwise.
 	}
 	gitops := ownership.IsRecordingManager(subject.GroupKind())
 	listed := map[resourceid.Ref]bool{}
@@ -416,6 +416,22 @@ func (c *ControllerChain) Readable(readable func(ResourceRef) bool) *ControllerC
 	return c
 }
 
+// ToManager is c cut at the first GitOps manager above the resource
+// (ownership.IsRecordingManager), which settles it: past one lies a parent
+// such as an ApplicationSet, shared by apps that are separate. A chain with
+// no GitOps manager above the resource is c.
+func (c *ControllerChain) ToManager() *ControllerChain {
+	if c == nil {
+		return nil
+	}
+	for i := 1; i < len(c.Refs); i++ {
+		if ownership.IsRecordingManager(refIdentity(c.Refs[i]).GroupKind()) {
+			return &ControllerChain{Refs: c.Refs[:i+1]}
+		}
+	}
+	return c
+}
+
 // Top is the highest object the walk read above the resource, nil when the
 // resource has no controller the caller reads.
 func (c *ControllerChain) Top() *ResourceRef {
@@ -435,16 +451,26 @@ func OtherManagingControllers(rel *Relationships, v *ownership.View, subject res
 	if rel == nil {
 		return nil, true
 	}
-	if len(rel.manageSources) == 0 {
-		return nil, false
+	managers, incomplete, _ = SpecGenerators(v, subject, rel.manageSources)
+	return managers, incomplete
+}
+
+// SpecGenerators classifies observed graph sources after excluding owner
+// references, controller shortcuts, GitOps membership and implementation selectors.
+// Unsettled means the controller chain cannot rule out a shortcut; incomplete
+// means a candidate source could not be checked. Neither establishes that all
+// possible spec relations were observed.
+func SpecGenerators(v *ownership.View, subject resourceid.Ref, sources []ResourceRef) (managers []ResourceRef, incomplete, unsettled bool) {
+	if len(sources) == 0 {
+		return nil, false, false
 	}
 	chain := v.ControllerChain(subject)
 	if !settled(chain) {
-		return nil, false
+		return nil, false, true
 	}
 	named := namedOwners(chain.Subject.Read.Object)
 	var out []ResourceRef
-	for _, source := range rel.manageSources {
+	for _, source := range sources {
 		r := refIdentity(source)
 		if ownership.IsRecordingManager(r.GroupKind()) || r.Kind == "HelmRelease" && r.Group == "" {
 			continue
@@ -465,7 +491,7 @@ func OtherManagingControllers(rel *Relationships, v *ownership.View, subject res
 		}
 	}
 	slices.SortFunc(out, func(a, b ResourceRef) int { return strings.Compare(refIdentity(a).String(), refIdentity(b).String()) })
-	return out, incomplete
+	return out, incomplete, false
 }
 
 func managingSource(v *ownership.View, ref resourceid.Ref, named map[resourceid.Ref]bool, chain ownership.ControllerChainAnswer) bool {

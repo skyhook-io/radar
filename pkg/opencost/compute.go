@@ -205,7 +205,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 			Kind:        aggregate,
 			CPUCost:     a.CPUCost,
 			MemoryCost:  a.RAMCost,
-			StorageCost: a.PVCost,
+			StorageCost: knownCost(a.PVCost),
 			NetworkCost: a.NetworkCost,
 			HourlyCost:  a.TotalCost,
 		}
@@ -240,7 +240,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 			totalUsageCost += usageCost
 		}
 		totalHourlyCost += nc.HourlyCost
-		totalStorageCost += nc.StorageCost
+		totalStorageCost += a.PVCost
 		totalNetworkCost += nc.NetworkCost
 		// Per-namespace idle (allocated-not-used) is separate from the
 		// __idle__ row (unassigned node capacity). Both are real waste the
@@ -273,7 +273,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 		namespaces[i].HourlyCost = normalize(namespaces[i].HourlyCost)
 		namespaces[i].CPUCost = normalize(namespaces[i].CPUCost)
 		namespaces[i].MemoryCost = normalize(namespaces[i].MemoryCost)
-		namespaces[i].StorageCost = normalize(namespaces[i].StorageCost)
+		namespaces[i].StorageCost = mapCost(namespaces[i].StorageCost, normalize)
 		namespaces[i].NetworkCost = normalize(namespaces[i].NetworkCost)
 		namespaces[i].CPUUsageCost = normalize(namespaces[i].CPUUsageCost)
 		namespaces[i].MemoryUsageCost = normalize(namespaces[i].MemoryUsageCost)
@@ -289,7 +289,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 		namespaces[i].HourlyCost = roundTo(namespaces[i].HourlyCost, 4)
 		namespaces[i].CPUCost = roundTo(namespaces[i].CPUCost, 4)
 		namespaces[i].MemoryCost = roundTo(namespaces[i].MemoryCost, 4)
-		namespaces[i].StorageCost = roundTo(namespaces[i].StorageCost, 4)
+		namespaces[i].StorageCost = mapCost(namespaces[i].StorageCost, round4)
 		namespaces[i].NetworkCost = roundTo(namespaces[i].NetworkCost, 4)
 		namespaces[i].CPUUsageCost = roundTo(namespaces[i].CPUUsageCost, 4)
 		namespaces[i].MemoryUsageCost = roundTo(namespaces[i].MemoryUsageCost, 4)
@@ -301,7 +301,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 		Currency:          opts.Currency,
 		Window:            opts.Window,
 		TotalHourlyCost:   totalHourlyCost,
-		TotalStorageCost:  totalStorageCost,
+		TotalStorageCost:  knownCost(totalStorageCost),
 		TotalNetworkCost:  totalNetworkCost,
 		TotalIdleCost:     totalIdleCost,
 		ClusterEfficiency: clusterEfficiency,
@@ -342,6 +342,22 @@ func optionalCost(measured bool, value float64) *float64 {
 	return &value
 }
 
+func knownCost(value float64) *float64 {
+	return &value
+}
+
+// mapCost applies f to a measured cost and keeps an unknown one unknown.
+func mapCost(value *float64, f func(float64) float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	return knownCost(f(*value))
+}
+
+func round4(value float64) float64 {
+	return roundTo(value, 4)
+}
+
 // safeRatio returns num/den or 0 when den is non-positive.
 func safeRatio(num, den float64) float64 {
 	if den <= 0 {
@@ -372,7 +388,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	}
 
 	cpuResult, err := client.Query(ctx,
-		`sum by (namespace) (label_replace(avg_over_time(container_cpu_allocation{namespace!=""}[1h]), "namespace", "$1", "exported_namespace", "(.+)") * on(node) group_left() `+nodeCPUHourlyCostExpr+`)`)
+		`sum by (namespace) (label_replace((sum_over_time(container_cpu_allocation{namespace!=""}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") * on(node) group_left() `+nodeCPUHourlyCostExpr+`)`)
 	if err != nil {
 		log.Printf("[opencost] CPU allocation query failed, trying opencost_container_cpu_cost_total: %v", err)
 		cpuResult, err = client.Query(ctx,
@@ -384,7 +400,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	}
 
 	memResult, err := client.Query(ctx,
-		`sum by (namespace) (label_replace(avg_over_time(container_memory_allocation_bytes{namespace!=""}[1h]), "namespace", "$1", "exported_namespace", "(.+)") / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr+`)`)
+		`sum by (namespace) (label_replace((sum_over_time(container_memory_allocation_bytes{namespace!=""}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)") / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr+`)`)
 	if err != nil {
 		log.Printf("[opencost] memory allocation query failed, trying opencost_container_memory_cost_total: %v", err)
 		memResult, err = client.Query(ctx,
@@ -419,21 +435,39 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	storageRes, storageErr := client.Query(ctx,
 		`sum by (namespace) (`+persistentVolumeHourlyCostExpr+` * on(persistentvolume) group_left(namespace) `+persistentVolumeClaimRef+`)`)
 	if storageErr != nil {
-		log.Printf("[opencost] storage cost query failed (storage costs will be 0): %v", storageErr)
+		log.Printf("[opencost] storage cost query failed (storage costs will be unknown): %v", storageErr)
 	}
 	storageMap := lastValuePerLabel(storageRes, storageErr, "namespace")
+	// A priced volume without a size drops out of the storage join, which
+	// would read as a namespace with no storage.
+	unsizedRes, unsizedErr := client.Query(ctx,
+		`count by (namespace) (`+unsizedPersistentVolumeExpr+` * on(persistentvolume) group_left(namespace) `+persistentVolumeClaimRef+`)`)
+	if unsizedErr != nil {
+		log.Printf("[opencost] volume size check failed (storage costs will be unknown): %v", unsizedErr)
+	}
+	unsizedMap := lastValuePerLabel(unsizedRes, unsizedErr, "namespace")
+	storageUnknown := func(namespace string) bool {
+		_, unsized := unsizedMap[namespace]
+		return storageErr != nil || unsizedErr != nil || unsized
+	}
 
 	nsMap := make(map[string]*NamespaceCost)
 	mergeSeriesIntoNamespaceField(cpuResult, nsMap, func(nc *NamespaceCost, v float64) { nc.CPUCost = v })
 	mergeSeriesIntoNamespaceField(memResult, nsMap, func(nc *NamespaceCost, v float64) { nc.MemoryCost = v })
 
 	var totalHourlyCost, totalStorageCost, totalUsageCost, totalAllocCost, computeAllocCost, unusedRequestCost float64
+	storageMeasured := true
 	namespaces := make([]NamespaceCost, 0, len(nsMap))
 	for _, nc := range nsMap {
 		nc.HourlyCost = nc.CPUCost + nc.MemoryCost
-		nc.StorageCost = storageMap[nc.Name]
-		nc.HourlyCost += nc.StorageCost
-		totalStorageCost += nc.StorageCost
+		if storageUnknown(nc.Name) {
+			storageMeasured = false
+		} else {
+			storage := storageMap[nc.Name]
+			nc.StorageCost = &storage
+			nc.HourlyCost += storage
+			totalStorageCost += storage
+		}
 
 		cpuUsage, cpuMeasured := cpuUsageMap[nc.Name]
 		memUsage, memMeasured := memUsageMap[nc.Name]
@@ -499,7 +533,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		namespaces[i].HourlyCost = roundTo(namespaces[i].HourlyCost, 4)
 		namespaces[i].CPUCost = roundTo(namespaces[i].CPUCost, 4)
 		namespaces[i].MemoryCost = roundTo(namespaces[i].MemoryCost, 4)
-		namespaces[i].StorageCost = roundTo(namespaces[i].StorageCost, 4)
+		namespaces[i].StorageCost = mapCost(namespaces[i].StorageCost, round4)
 		namespaces[i].CPUUsageCost = roundTo(namespaces[i].CPUUsageCost, 4)
 		namespaces[i].MemoryUsageCost = roundTo(namespaces[i].MemoryUsageCost, 4)
 		namespaces[i].IdleCost = roundTo(namespaces[i].IdleCost, 4)
@@ -511,7 +545,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		Window:               opts.Window,
 		TotalHourlyCost:      totalHourlyCost,
 		TotalNodeCost:        totalNodeCost,
-		TotalStorageCost:     totalStorageCost,
+		TotalStorageCost:     optionalCost(storageMeasured, totalStorageCost),
 		TotalIdleCost:        totalIdleCost,
 		TotalUnallocatedCost: unallocatedCost,
 		// Summed per namespace like Kubecost's: the aggregate TotalIdleCost lets

@@ -812,6 +812,12 @@ func agentExitError(name, signinCmd, cliErrText, stderr string) error {
 		return false
 	}
 	switch {
+	case name == "cursor-agent" && cursorRunEverythingBlocked(details):
+		msg := "Cursor refused to start because a Cursor policy on this account turns off Run Everything, which Radar needs to run investigations through Cursor."
+		if d := formatExitDetails(details); d != "" {
+			msg += "\n" + strings.TrimPrefix(d, ": ")
+		}
+		return errors.New(msg)
 	case contains("not logged in", "logged out", "not authenticated", "authentication required",
 		"sign in required", "login required", "please log in", "/login"):
 		return fmt.Errorf("%s isn't signed in. Run `%s` in a terminal to sign in, then try again%s", name, signinCmd, formatExitDetails(details))
@@ -824,6 +830,23 @@ func agentExitError(name, signinCmd, cliErrText, stderr string) error {
 	default:
 		return fmt.Errorf("%s stopped unexpectedly%s", name, formatExitDetails(details))
 	}
+}
+
+// cursorRunEverythingMessages are Cursor's own words when a team policy turns
+// off Run Everything (--force). Matched exactly, so no other failure is
+// reported as a policy block.
+var cursorRunEverythingMessages = []string{
+	"Your team administrator has disabled the 'Run Everything' option.",
+	"Please run without '--force' to approve commands individually.",
+}
+
+func cursorRunEverythingBlocked(details string) bool {
+	for _, m := range cursorRunEverythingMessages {
+		if strings.Contains(details, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // stream-json parsing -------------------------------------------------------

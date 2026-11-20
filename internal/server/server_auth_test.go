@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -624,6 +625,12 @@ func TestProxyAuth_DashboardClusterScopedCountsRequireClusterScopedRBAC(t *testi
 	}
 	if body.NodeVersionSkew != nil {
 		t.Fatalf("node version skew leaked without node read RBAC: %+v", body.NodeVersionSkew)
+	}
+	// Zero must not read as an empty cluster: Home shows these as restricted.
+	for _, kind := range []string{"nodes", "namespaces"} {
+		if !slices.Contains(body.ResourceCounts.Restricted, kind) {
+			t.Errorf("restricted = %v, want it to include %q", body.ResourceCounts.Restricted, kind)
+		}
 	}
 }
 

@@ -1,0 +1,96 @@
+{
+  "apiVersion": "serving.kserve.io/v1beta1",
+  "kind": "InferenceService",
+  "metadata": {
+    "name": "iris-cycle",
+    "namespace": "ml-serving",
+    "generation": 4,
+    "annotations": {
+      "modelFormat": "sklearn",
+      "serving.kserve.io/deploymentMode": "Standard"
+    }
+  },
+  "spec": {
+    "predictor": {
+      "deploymentStrategy": {
+        "type": "Recreate"
+      },
+      "maxReplicas": 1,
+      "minReplicas": 1,
+      "model": {
+        "modelFormat": {
+          "name": "sklearn"
+        },
+        "name": "",
+        "resources": {
+          "limits": {
+            "cpu": "500m",
+            "memory": "512Mi"
+          },
+          "requests": {
+            "cpu": "50m",
+            "memory": "192Mi"
+          }
+        },
+        "runtimeVersion": "v0.20.1-missing",
+        "storageUri": "gs://kfserving-examples/models/sklearn/1.0/model"
+      }
+    }
+  },
+  "status": {
+    "address": {
+      "url": "http://iris-cycle-predictor.ml-serving.svc.cluster.local"
+    },
+    "clusterServingRuntimeName": "kserve-sklearnserver",
+    "components": {
+      "predictor": {
+        "url": "http://iris-cycle-predictor-ml-serving.example.com"
+      }
+    },
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-11-03T02:08:20Z",
+        "status": "True",
+        "type": "IngressReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:11:52Z",
+        "message": "Deployment does not have minimum availability.",
+        "reason": "MinimumReplicasUnavailable",
+        "status": "False",
+        "type": "PredictorReady"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:11:52Z",
+        "message": "Deployment does not have minimum availability.",
+        "reason": "MinimumReplicasUnavailable",
+        "status": "False",
+        "type": "Ready"
+      },
+      {
+        "lastTransitionTime": "2026-11-03T02:08:20Z",
+        "severity": "Info",
+        "status": "False",
+        "type": "Stopped"
+      }
+    ],
+    "deploymentMode": "Standard",
+    "modelStatus": {
+      "copies": {
+        "failedCopies": 0
+      },
+      "lastFailureInfo": {
+        "exitCode": 1,
+        "message": "2026-11-03 02:09:57.274 1 storage.initializer INFO [initializer-entrypoint:<module>():17] Initializing, args: (src_uri, dest_path): [('gs://kfserving-examples/models/sklearn/missing-model', '/mnt/models')]\n2026-11-03 02:09:57.274 1 storage.initializer INFO [kserve_storage.py:download():168] Copying contents of gs://kfserving-examples/models/sklearn/missing-model to local\n2026-11-03 02:09:57.737 1 storage.initializer INFO [kserve_storage.py:_download_gcs():712] Downloading single file to: /mnt/models/missing-model\n2026-11-03 02:09:57.766 1 storage.initializer ERROR [storage_errors.py:raise_storage_error():42] GCS error for gs://kfserving-examples/models/sklearn/missing-model: 404 GET https://storage.googleapis.com/download/storage/v1/b/kfserving-examples/o/models%2Fsklearn%2Fmissing-model?alt=media: No such object: kfserving-examples/models/sklearn/missing-model: ('Request failed with status code', 404, 'Expected one of', <HTTPStatus.OK: 200>, <HTTPStatus.PARTIAL_CONTENT: 206>)\n2026-11-03 02:09:57.767 1 storage.initializer ERROR [initializer-entrypoint:<module>():28] Storage initialization failed: GCS resource 'kfserving-examples' not found.\n",
+        "reason": "ModelLoadFailed"
+      },
+      "states": {
+        "activeModelState": "Loaded",
+        "targetModelState": "Pending"
+      },
+      "transitionStatus": "InProgress"
+    },
+    "observedGeneration": 4,
+    "url": "http://iris-cycle-ml-serving.example.com"
+  }
+}

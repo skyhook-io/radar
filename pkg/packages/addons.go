@@ -13,12 +13,10 @@ import "strings"
 //     so (1) can't catch them.
 //
 // The Applications and Add-ons surfaces share this classifier rather than each
-// carrying a private allowlist. The frontend's interim KNOWN_ADDON_CHARTS
-// (radar-hub-web packagesModel.ts) mirrors this list until the hub forwards the
-// classification on the wire; keep the two in sync until then.
+// carrying a private allowlist. Radar Hub reads the resulting category from
+// the applications response rather than keeping its own copy.
 
 // addonChartsExtra lists add-on charts not keyed by a crdGroupToChart entry.
-// Kept in lockstep with radar-hub-web's KNOWN_ADDON_CHARTS extras.
 var addonChartsExtra = []string{
 	// Argo family beyond the argoproj.io→argo-cd catalog entry
 	"argocd", "argo-rollouts", "argo-workflows", "argo-events", "flux2", "capi",
@@ -52,11 +50,38 @@ var addonChartsExtra = []string{
 // the catalog stays a derivative of crdGroupToChart, not a parallel copy.
 var knownAddonCharts = buildAddonCatalog()
 
+// Name-only evidence (a workload name or app.kubernetes.io label that matches a
+// catalog entry) is weak: a user can name their own app "kserve-fraud" or
+// "lws-storage-sample". So is a prefix hit in any field. Only the entries below
+// accept either; every other catalog entry needs an exact chart, add-on manager
+// or image match.
+//
+// nameMatchedIntegrations are the crdGroupToChart names that matched by name
+// before name matching became opt-in. addonChartsExtra entries also accept it.
+var nameMatchedIntegrations = []string{
+	"argo-cd", "cert-manager", "external-secrets", "flagger", "flux", "istio",
+	"karpenter", "kube-prometheus-stack", "kyverno", "secrets-store-csi-driver",
+	"traefik", "velero",
+}
+
+var nameMatchedAddons = buildNameMatchedAddons()
+
 // genericAddonNames are real add-ons, but common enough words that name-only
 // evidence can misclassify a user app literally named "vector" or "vault".
 // Chart/addon-manager/image evidence still classifies them.
 var genericAddonNames = map[string]bool{
 	"alloy": true, "contour": true, "kong": true, "vault": true, "vector": true,
+}
+
+// integrationsNotAddons are crdGroupToChart names that identify an integration
+// but must not classify workloads even by chart, because a chart named like
+// them belongs to the user's own apps.
+var integrationsNotAddons = map[string]bool{
+	// Upstream CRDs with no chart or workload of their own; "gateway-api" is a
+	// common name for a team's own API gateway service and its chart.
+	"gateway-api": true,
+	// Users deploy their model servers with the llm-d-modelservice chart.
+	"llm-d": true,
 }
 
 var addonImageRepos = map[string][]string{
@@ -70,10 +95,26 @@ var addonImageRepos = map[string][]string{
 func buildAddonCatalog() map[string]bool {
 	m := make(map[string]bool, len(crdGroupToChart)+len(addonChartsExtra))
 	for _, chart := range crdGroupToChart {
-		m[chart] = true
+		if !integrationsNotAddons[chart] {
+			m[chart] = true
+		}
 	}
 	for _, chart := range addonChartsExtra {
 		m[chart] = true
+	}
+	return m
+}
+
+func buildNameMatchedAddons() map[string]bool {
+	m := make(map[string]bool, len(nameMatchedIntegrations)+len(addonChartsExtra))
+	for _, name := range nameMatchedIntegrations {
+		m[name] = true
+	}
+	for _, chart := range addonChartsExtra {
+		m[chart] = true
+	}
+	for name := range genericAddonNames {
+		delete(m, name)
 	}
 	return m
 }
@@ -139,8 +180,9 @@ func imageRepo(image string) string {
 }
 
 // ClassifyAddon reports whether a workload belongs to 3rd-party platform
-// machinery, matching its helm.sh/chart base, primary image repo,
-// app.kubernetes.io/{name,part-of}, or workload name against the shared add-on catalog. Returns the evidence
+// machinery, matching its helm.sh/chart base or primary image repo against the
+// shared add-on catalog, and its app.kubernetes.io/{name,part-of} or workload
+// name against the entries in nameMatchedAddons. Returns the evidence
 // ("field=value", with the matched catalog base in parens on a prefix hit) when
 // classified.
 //
@@ -155,7 +197,7 @@ func ClassifyAddon(chart, appName, partOf, name, addonManagerMode, image string)
 	if v := strings.TrimSpace(addonManagerMode); v != "" {
 		return true, "addonmanager.kubernetes.io/mode=" + v
 	}
-	chartBase, _ := splitChart(chart)
+	chartBase, _ := SplitChart(chart)
 	if addon, why := classifyAddonValue("chart", chartBase, true); addon {
 		return addon, why
 	}
@@ -181,7 +223,12 @@ func classifyAddonValue(field, value string, strong bool) (bool, string) {
 		return false, ""
 	}
 	base, ok := matchAddonChart(v)
-	if !ok || (!strong && genericAddonNames[base]) {
+	if !ok || (!strong && !nameMatchedAddons[base]) {
+		return false, ""
+	}
+	// A prefix hit ("kserve-fraud" on "kserve") is as weak as a name match,
+	// so it needs the same opt-in, whichever field it came from.
+	if base != v && !nameMatchedAddons[base] && !genericAddonNames[base] {
 		return false, ""
 	}
 	if base == v {

@@ -80,12 +80,20 @@ func (s *Server) resourceListTarget(r *http.Request, cache *k8s.ResourceCache, k
 // requestListTarget is the part of a list's target that depends only on the
 // request, not on the kind.
 func (s *Server) requestListTarget(r *http.Request, cache *k8s.ResourceCache) listTarget {
-	selection, _ := s.requestNamespaceSelection(r, cache, parseNamespaces(r.URL.Query()))
+	t, _ := s.namespaceListTarget(r, cache, parseNamespaces(r.URL.Query()))
+	return t
+}
+
+// namespaceListTarget is the target of a list of requested (nil: every
+// namespace the caller can see), with the selection's scope-level failure
+// code, if any.
+func (s *Server) namespaceListTarget(r *http.Request, cache *k8s.ResourceCache, requested []string) (listTarget, readreason.Code) {
+	selection, code := s.requestNamespaceSelection(r, cache, requested)
 	t := listTarget{namespaces: selection.Namespaces, named: selection.Named, explicit: selection.Named != nil, narrowedBy: selection.NarrowedBy}
 	for _, gap := range selection.Gaps {
 		t.gaps = append(t.gaps, gapOf(gap.Code, gap.Namespaces))
 	}
-	return t
+	return t, code
 }
 
 // readCache is the typed cache a read would use now. A handler captures it

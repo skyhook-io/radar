@@ -9,8 +9,19 @@ export interface ParsedContextInfo {
   clusterName: string
 }
 
+// A switch Radar refused before leaving the current cluster, because the new
+// one didn't answer. The app shows the connection error screen for it while
+// staying connected to the current cluster underneath.
+export interface FailedSwitch {
+  context: string
+  error: string
+  errorType: string
+}
+
 interface ContextSwitchState {
   isSwitching: boolean
+  failedSwitch: FailedSwitch | null
+  setFailedSwitch: (failed: FailedSwitch | null) => void
   targetContext: ParsedContextInfo | null
   progressMessage: string | null
   startSwitch: (context: ParsedContextInfo) => void
@@ -29,8 +40,10 @@ export function ContextSwitchProvider({ children }: { children: ReactNode }) {
   const [isSwitching, setIsSwitching] = useState(false)
   const [targetContext, setTargetContext] = useState<ParsedContextInfo | null>(null)
   const [progressMessage, setProgressMessage] = useState<string | null>(null)
+  const [failedSwitch, setFailedSwitch] = useState<FailedSwitch | null>(null)
 
   const startSwitch = useCallback((context: ParsedContextInfo) => {
+    setFailedSwitch(null)
     setIsSwitching(true)
     setTargetContext(context)
     setProgressMessage(null)
@@ -57,7 +70,7 @@ export function ContextSwitchProvider({ children }: { children: ReactNode }) {
   }, [])
 
   return (
-    <ContextSwitchContext.Provider value={{ isSwitching, targetContext, progressMessage, startSwitch, updateProgress, endSwitch, setOpenAfterSwitch, takeOpenAfterSwitch }}>
+    <ContextSwitchContext.Provider value={{ isSwitching, failedSwitch, setFailedSwitch, targetContext, progressMessage, startSwitch, updateProgress, endSwitch, setOpenAfterSwitch, takeOpenAfterSwitch }}>
       {children}
     </ContextSwitchContext.Provider>
   )

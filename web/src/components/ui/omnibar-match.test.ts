@@ -4,6 +4,13 @@ import { contentMatchLabel, partialSearchNotices } from './omnibar-match'
 const site = (s: string) => ({ token: 't', site: s, score: 12 })
 
 describe('contentMatchLabel', () => {
+  it('names Event content without claiming Events have a spec', () => {
+    for (const path of ['reason', 'message', 'type', 'involvedObject.name', 'related.name']) {
+      expect(contentMatchLabel([site(`content:${path}`)])).toBe('in event')
+    }
+    expect(contentMatchLabel([site('content:reason'), site('content:message')])).toBe('in event')
+    expect(contentMatchLabel([site('content:reason'), site('name')])).toBe('')
+  })
   it('names a match inside Trivy findings', () => {
     expect(contentMatchLabel([site('content:report.vulnerabilities[3]')])).toBe('in findings')
   })

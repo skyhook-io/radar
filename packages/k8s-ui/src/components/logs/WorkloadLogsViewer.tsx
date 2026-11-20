@@ -11,6 +11,7 @@ import type { LogPalette } from './log-palette'
 import type { WorkloadPodInfo } from '../../types'
 import { useToast } from '../ui/Toast'
 import { toneTextClass } from '../ui/status-tone'
+import { initContainerNames, initializingPodsNotice, containerRole, podContainerKey, viewMixesContainers, viewMixesPods, containerColumnWidth, unshownBlockingInitContainer } from '../../utils/workload-log-sources'
 
 export interface WorkloadRawLog {
   pod: string
@@ -88,6 +89,16 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [notice, setNotice] = useState('')
   const [capturedAt, setCapturedAt] = useState('')
   const [sourceLabels, setSourceLabels] = useState<Record<string, string>>({})
+  // Containers that produced a line since their Pod's status was last read,
+  // keyed by Pod and container. Reset when the source reloads or a Pod is added
+  // again or reports new status.
+  const [outputKeys, setOutputKeys] = useState<ReadonlySet<string>>(() => new Set())
+  // Follows each Pod event as it arrives, ahead of the batched pods state.
+  const podsRef = useRef<WorkloadPodInfo[]>([])
+  const recordOutput = useCallback((pod: string, container: string) => {
+    const key = podContainerKey(pod, container)
+    setOutputKeys(prev => (prev.has(key) ? prev : new Set(prev).add(key)))
+  }, [])
   const fetchController = useRef<AbortController | null>(null)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null)
@@ -140,6 +151,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       setEmptyCommand(result.command || null)
 
       podColorIndexRef.current = new Map(resultPods.map((pod, i) => [pod.name, i]))
+      podsRef.current = resultPods
       setPods(resultPods)
 
       const previousPods = previousSnapshotPods.current
@@ -154,7 +166,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       const indexByPod = new Map<string, number>()
       resultPods.forEach((pod, i) => indexByPod.set(pod.name, i))
 
+      setOutputKeys(new Set(resultLogs.map(log => podContainerKey(log.pod, log.container))))
       set(resultLogs.map(log => ({
+        containerRole: containerRole(resultPods, log.pod, log.container),
         timestamp: log.timestamp,
         content: log.content,
         container: log.container,
@@ -208,7 +222,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
           if (data?.pods) {
             const nextPods = data.pods as WorkloadPodInfo[]
             podColorIndexRef.current = new Map(nextPods.map((pod, i) => [pod.name, i]))
+            podsRef.current = nextPods
             setPods(nextPods)
+            setOutputKeys(new Set())
             setEmptyMessage(data.emptyMessage || null)
             setEmptyCommand(data.command || null)
             setSelectedPods(prev => (
@@ -218,7 +234,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         },
         onLog: (data: any) => {
           if (data?.pod && data.content !== undefined) {
+            recordOutput(data.pod, data.container || '')
             append({
+              containerRole: containerRole(podsRef.current, data.pod, data.container || ''),
               timestamp: data.timestamp || '',
               content: data.content || '',
               container: data.container || '',
@@ -231,6 +249,10 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         onPodAdded: (data: any) => {
           if (data?.pods) {
             const newPods = data.pods as WorkloadPodInfo[]
+            const added = new Set(newPods.map(p => p.name))
+            setOutputKeys(prev => withoutPods(prev, added))
+            const known = new Set(podsRef.current.map(p => p.name))
+            podsRef.current = [...podsRef.current, ...newPods.filter(p => !known.has(p.name))]
             setPods(prev => {
               const existing = new Set(prev.map(p => p.name))
               const toAdd = newPods.filter(p => !existing.has(p.name))
@@ -248,9 +270,24 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             })
           }
         },
+        onPodUpdated: (data: any) => {
+          if (data?.pods) {
+            const updated = new Map((data.pods as WorkloadPodInfo[]).map(p => [p.name, p]))
+            podsRef.current = podsRef.current.map(p => updated.get(p.name) ?? p)
+            // Fresh status supersedes output seen before it: a Pod can re-run
+            // initialization after a sandbox restart.
+            setOutputKeys(prev => withoutPods(prev, new Set(updated.keys())))
+            setPods(prev => {
+              if (!prev.some(p => updated.has(p.name))) return prev
+              return prev.map(p => updated.get(p.name) ?? p)
+            })
+          }
+        },
         onPodRemoved: (data: any) => {
           if (data?.pod) {
             const removedName = data.pod as string
+            podsRef.current = podsRef.current.filter(p => p.name !== removedName)
+            setOutputKeys(prev => withoutPods(prev, new Set([removedName])))
             setPods(prev => prev.filter(p => p.name !== removedName))
             // Don't remove from selectedPods — keep old log entries visible
             // while new pod logs start flowing in
@@ -262,13 +299,16 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         },
         onEnd: (data: any) => {
           setNotice('')
+          // The stream ends when the workload has no Pods left.
+          podsRef.current = []
+          setPods([])
           if (data?.emptyMessage) setEmptyMessage(data.emptyMessage)
           if (data?.command) setEmptyCommand(data.command)
         },
       },
       'Workload log stream connection failed',
     )
-  }, [createStream, startStreaming, selectedContainer, sinceSeconds, append, clear])
+  }, [createStream, startStreaming, selectedContainer, sinceSeconds, append, clear, recordOutput])
 
   const handleStopStreaming = useCallback(() => {
     userStoppedRef.current = true
@@ -307,10 +347,31 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     setSelectedPods(allSelected ? new Set() : new Set(pods.map(p => p.name)))
   }, [selectedPods, pods])
 
+  const shownPods = useMemo(() => pods.filter(pod => selectedPods.has(pod.name)), [pods, selectedPods])
+  const initContainers = useMemo(() => initContainerNames(shownPods), [shownPods])
+
   const filteredEntries = useMemo(
     () => entries.filter(e => !e.pod || selectedPods.has(e.pod)),
     [entries, selectedPods],
   )
+  const showPodName = useMemo(() => viewMixesPods(shownPods, filteredEntries), [shownPods, filteredEntries])
+  const showContainerName = useMemo(
+    () => selectedContainer === '' && viewMixesContainers(shownPods, filteredEntries),
+    [selectedContainer, shownPods, filteredEntries],
+  )
+  const containerWidth = useMemo(
+    () => showContainerName ? containerColumnWidth(shownPods, filteredEntries) : 0,
+    [showContainerName, shownPods, filteredEntries],
+  )
+  // Pods from a stream that is still connecting, or failed, may belong to the
+  // previous stream, so their status isn't current.
+  const initNotice = useMemo(() => (connecting || streamError) ? '' : initializingPodsNotice(shownPods, {
+    selectedContainer,
+    containersWithOutput: outputKeys,
+    podLabel: pod => sourceLabels[pod.name] || pod.stepName || pod.name.split('-').slice(-2).join('-'),
+  }), [connecting, streamError, shownPods, selectedContainer, outputKeys, sourceLabels])
+  const unshownBlocker = useMemo(() => initNotice ? unshownBlockingInitContainer(shownPods, { selectedContainer, containersWithOutput: outputKeys }) : undefined,
+    [initNotice, shownPods, selectedContainer, outputKeys])
 
   const downloadLogs = useCallback(({ content, mime, extension }: LogExportPayload) => {
     const filename = `${name}-logs.${extension}`
@@ -389,6 +450,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         onChange={setSelectedContainer}
         includeAll={allowAllContainers}
         isDark={isDark}
+        initContainers={initContainers}
       />
 
       <LogRangeSelect
@@ -412,19 +474,26 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     <div className="flex h-full min-h-0 flex-col">
     {/* One status line. A notice says what the snapshot could not show, so it
         stays marked; the capture time alone is quiet. */}
-    {(notice || capturedAt) && (
+    {(notice || initNotice || capturedAt) && (
       <div
         role="status"
-        className={`flex shrink-0 flex-wrap items-baseline gap-x-2 border-b border-theme-border px-3 py-1 text-xs ${notice ? 'bg-theme-elevated text-theme-text-secondary' : 'text-theme-text-tertiary'}`}
+        className={`flex shrink-0 flex-wrap items-baseline gap-x-2 border-b border-theme-border px-3 py-1 text-xs ${notice || initNotice ? 'bg-theme-elevated text-theme-text-secondary' : 'text-theme-text-tertiary'}`}
       >
         {capturedAt && <span className="whitespace-nowrap">Snapshot {new Date(capturedAt).toLocaleTimeString()}</span>}
-        {capturedAt && notice && <span aria-hidden>·</span>}
-        {notice && (
-          <span className="inline-flex min-w-0 items-baseline gap-1.5">
-            <AlertTriangle className={`h-3 w-3 shrink-0 self-center ${toneTextClass('degraded')}`} aria-hidden />
-            <span>{notice}</span>
+        {[initNotice, notice].filter(Boolean).map((text, index) => (
+          <span key={text} className="inline-flex min-w-0 items-baseline gap-2">
+            {(capturedAt || index > 0) && <span aria-hidden>·</span>}
+            <span className="inline-flex min-w-0 items-baseline gap-1.5">
+              <AlertTriangle className={`h-3 w-3 shrink-0 self-center ${toneTextClass('degraded')}`} aria-hidden />
+              <span>{text}</span>
+              {text === initNotice && unshownBlocker && (
+                <button type="button" onClick={() => setSelectedContainer(unshownBlocker)} className="whitespace-nowrap text-accent-text hover:underline">
+                  Show its logs
+                </button>
+              )}
+            </span>
           </span>
-        )}
+        ))}
       </div>
     )}
     {(fetchError || streamError) && entries.length > 0 && <div role="alert" className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text-secondary">{fetchError || streamError} · Previously loaded logs remain below.</div>}
@@ -446,7 +515,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       onDownload={downloadLogs}
       onClear={clear}
       toolbarExtra={renderToolbarExtra}
-      showPodName
+      showPodName={showPodName}
+      showContainerName={showContainerName}
+      containerLabelWidth={containerWidth}
       emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
       emptyCommand={emptyCommand}
       errorMessage={entries.length === 0 ? fetchError || streamError : null}
@@ -454,4 +525,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       defaultDark={defaultDark}
     /></div></div>
   )
+}
+
+function withoutPods(keys: ReadonlySet<string>, pods: ReadonlySet<string>): ReadonlySet<string> {
+  const kept = [...keys].filter(key => !pods.has(key.slice(0, key.lastIndexOf('/'))))
+  return kept.length === keys.size ? keys : new Set(kept)
 }

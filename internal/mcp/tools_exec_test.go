@@ -394,6 +394,39 @@ func TestExecPodRefusesOldDeploymentRevision(t *testing.T) {
 	}
 }
 
+// A Deployment template can carry a pod-template-hash label copied from a
+// ReplicaSet. The controller ignores that label when it matches ReplicaSets to
+// the template, so exec must too, or it can never find the current revision.
+func TestExecPodMatchesDeploymentTemplateWithLeakedHash(t *testing.T) {
+	defer k8s.ResetTestState()
+	controller := true
+	template := corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web", "pod-template-hash": "stale"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "web:v1"}}}}
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "dep", Generation: 3}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{}, Template: template}, Status: appsv1.DeploymentStatus{ObservedGeneration: 3}}
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-cur", Namespace: "shop", UID: "cur", Annotations: map[string]string{"deployment.kubernetes.io/revision": "3"}, Labels: map[string]string{"pod-template-hash": "cur"}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "dep", Controller: &controller}}}, Spec: appsv1.ReplicaSetSpec{Template: *template.DeepCopy()}}
+	rs.Spec.Template.Labels["pod-template-hash"] = "cur"
+	pod := runningPod("web-cur-1", true, "app")
+	pod.Labels = map[string]string{"pod-template-hash": "cur"}
+	pod.OwnerReferences = []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-cur", UID: "cur", Controller: &controller}}
+	client := fake.NewClientset(dep, rs, pod)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := resolveExecPod(t.Context(), client, nil, "deploy", "shop", "web")
+	if err != nil || got.Name != "web-cur-1" {
+		t.Fatalf("pod=%v err=%v", got, err)
+	}
+
+	// No ReplicaSet for the template yet: say that, not just "retry".
+	dep.Spec.Template.Spec.Containers[0].Image = "web:v2"
+	if _, err := client.AppsV1().Deployments("shop").Update(t.Context(), dep, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = resolveExecPod(t.Context(), client, nil, "deploy", "shop", "web")
+	if err == nil || !strings.Contains(err.Error(), "no ReplicaSet matches its current pod template") {
+		t.Fatalf("want a missing-ReplicaSet error, got %v", err)
+	}
+}
+
 func TestExecPodAuditIncludesCallerCommandAndOutcome(t *testing.T) {
 	var logs bytes.Buffer
 	previous := log.Writer()

@@ -80,6 +80,25 @@ export function parseContextName(name: string): ParsedContextName {
     }
   }
 
+  // OpenShift `oc login` context: <project>/<server host>:<port>/<user>, where
+  // oc writes the host with dots turned into dashes (api.prod.example.com ->
+  // api-prod-example-com) and keeps an IPv6 host in brackets. The user may
+  // itself contain `:` or `/` (kube:admin, system:admin). The host is the
+  // only part that names the cluster: `oc project` writes a new context per
+  // project for the same server. Not a cloud provider, so provider stays null.
+  // The project and host must not end in `-`; checked after the match rather
+  // than in the pattern, which would need overlapping repeats.
+  const openshift = parseOpenShiftContext(name)
+  if (openshift) {
+    return {
+      provider: null,
+      account: null,
+      region: null,
+      clusterName: openshift,
+      raw: name,
+    }
+  }
+
   // Other/unknown - just use the name as cluster name
   return {
     provider: null,
@@ -88,4 +107,15 @@ export function parseContextName(name: string): ParsedContextName {
     clusterName: name,
     raw: name,
   }
+}
+
+const OPENSHIFT_CONTEXT = /^([a-z0-9][a-z0-9-]*)\/([a-z0-9][a-z0-9-]*|\[[0-9a-fA-F:.]+\]):(\d{1,5})\/(.+)$/
+
+function parseOpenShiftContext(name: string): string | null {
+  const m = name.match(OPENSHIFT_CONTEXT)
+  if (!m) return null
+  const [, project, host, port] = m
+  const portNumber = Number(port)
+  if (project.endsWith('-') || host.endsWith('-') || portNumber < 1 || portNumber > 65535) return null
+  return host
 }

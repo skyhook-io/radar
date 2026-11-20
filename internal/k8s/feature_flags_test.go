@@ -23,6 +23,7 @@ var flagsWithoutUpgradeNote = map[string]bool{
 	"yamlSchemas":              true,
 	"workloadImages":           true,
 	"clusterScopedPlaceholder": true,
+	"podSidecarMarks":          true,
 }
 
 // TestFeatureFlagsHaveFrontendGates fails when FeatureCapabilities and the

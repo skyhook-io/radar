@@ -1,0 +1,89 @@
+{
+ "enums": {
+  "kueue.x-k8s.io/v1beta1": {
+   "admissionScope.admissionMode": [
+    "NoAdmissionFairSharing",
+    "UsageBasedAdmissionFairSharing"
+   ],
+   "flavorFungibility.preference": [
+    "BorrowingOverPreemption",
+    "PreemptionOverBorrowing"
+   ],
+   "flavorFungibility.whenCanBorrow": [
+    "Borrow",
+    "MayStopSearch",
+    "TryNextFlavor"
+   ],
+   "flavorFungibility.whenCanPreempt": [
+    "MayStopSearch",
+    "Preempt",
+    "TryNextFlavor"
+   ],
+   "preemption.borrowWithinCohort.policy": [
+    "LowerPriority",
+    "Never"
+   ],
+   "preemption.reclaimWithinCohort": [
+    "Any",
+    "LowerPriority",
+    "Never"
+   ],
+   "preemption.withinClusterQueue": [
+    "LowerOrNewerEqualPriority",
+    "LowerPriority",
+    "Never"
+   ],
+   "queueingStrategy": [
+    "BestEffortFIFO",
+    "StrictFIFO"
+   ],
+   "stopPolicy": [
+    "Hold",
+    "HoldAndDrain",
+    "None"
+   ]
+  },
+  "kueue.x-k8s.io/v1beta2": {
+   "admissionScope.admissionMode": [
+    "NoAdmissionFairSharing",
+    "UsageBasedAdmissionFairSharing"
+   ],
+   "flavorFungibility.preference": [
+    "BorrowingOverPreemption",
+    "PreemptionOverBorrowing"
+   ],
+   "flavorFungibility.whenCanBorrow": [
+    "MayStopSearch",
+    "TryNextFlavor"
+   ],
+   "flavorFungibility.whenCanPreempt": [
+    "MayStopSearch",
+    "TryNextFlavor"
+   ],
+   "preemption.borrowWithinCohort.policy": [
+    "LowerPriority",
+    "Never"
+   ],
+   "preemption.reclaimWithinCohort": [
+    "Any",
+    "LowerPriority",
+    "Never"
+   ],
+   "preemption.withinClusterQueue": [
+    "LowerOrNewerEqualPriority",
+    "LowerPriority",
+    "Never"
+   ],
+   "queueingStrategy": [
+    "BestEffortFIFO",
+    "StrictFIFO"
+   ],
+   "stopPolicy": [
+    "Hold",
+    "HoldAndDrain",
+    "None"
+   ]
+  }
+ },
+ "source": "Kueue v0.18.0 CRDs served on radar-test-nonprod, 2026-11-03 (enum values; v1beta1 admissionMode from its field description)"
+}

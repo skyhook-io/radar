@@ -8,6 +8,7 @@ import { isTouchIntent } from '@skyhook-io/k8s-ui'
 const OPERATORS: { syntax: string; desc: string }[] = [
   { syntax: 'ns:prod', desc: 'filter by namespace' },
   { syntax: 'kind:Deployment', desc: 'filter by resource kind' },
+  { syntax: 'kind:Event', desc: 'search Events by name' },
   { syntax: 'label:app=api', desc: 'filter by label' },
   { syntax: 'image:nginx', desc: 'match container image' },
   { syntax: 'redis cache', desc: 'multiple terms — all must match' },
@@ -21,7 +22,7 @@ const OPERATORS: { syntax: string; desc: string }[] = [
 // that just opened the search box, so hover ignores a tap's side effects. A
 // click (a tap, or assistive-technology activation) toggles the card, except
 // right after a mouse hover opened it; a tap elsewhere closes it.
-export function SearchSyntaxHelp() {
+export function SearchSyntaxHelp({ eventContentSearch = false }: { eventContentSearch?: boolean }) {
   const [open, setOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
@@ -95,7 +96,7 @@ export function SearchSyntaxHelp() {
             {OPERATORS.map((op) => (
               <div key={op.syntax} className="flex items-baseline gap-2">
                 <code className="shrink-0 rounded bg-theme-elevated border border-theme-border-light px-1.5 py-0.5 text-xs text-theme-text-primary">{op.syntax}</code>
-                <span className="text-xs text-theme-text-secondary">{op.desc}</span>
+                <span className="text-xs text-theme-text-secondary">{op.syntax === 'kind:Event' && eventContentSearch ? 'search Event reasons and messages' : op.desc}</span>
               </div>
             ))}
           </div>

@@ -1,0 +1,32 @@
+suite: Multus collector RBAC
+templates:
+  - clusterrole.yaml
+tests:
+  - it: reads NetworkAttachmentDefinitions by default
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["k8s.cni.cncf.io"]
+            resources: ["network-attachment-definitions"]
+            verbs: ["get", "list", "watch"]
+
+  - it: drops the Multus reads when multus is off
+    set:
+      rbac.crdGroups.multus: false
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "k8s.cni.cncf.io")]
+
+  - it: covers Multus through the wildcard when crdGroups.all is on
+    set:
+      rbac.crdGroups.all: true
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "k8s.cni.cncf.io")]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["*"]
+            resources: ["*"]
+            verbs: ["get", "list", "watch"]

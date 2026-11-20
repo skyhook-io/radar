@@ -6,7 +6,7 @@ import type { SelectedResource } from '../types'
 import { kindToPluralWithGroup } from '../utils/navigation'
 
 export type HostResource = Pick<SelectedResource, 'kind' | 'group' | 'namespace' | 'name'>
-export type DetailSlots = Pick<ComponentProps<typeof WorkloadView>, 'renderSummary' | 'renderHeaderActions' | 'extraTabs'>
+export type DetailSlots = Pick<ComponentProps<typeof WorkloadView>, 'renderSummary' | 'renderHeaderActions' | 'extraTabs' | 'renderStatusBadge'>
 export type HostFeatures = Partial<Record<RadarFeature, RadarFeatureSupport>>
 export type KindListMode = 'table' | 'wait' | 'view'
 export interface HostKind { name: string; kind: string; group: string }
@@ -15,7 +15,7 @@ export interface KindListProps {
   inspected: SelectedResource | null
   onInspect: (resource: SelectedResource) => void
   onClearNamespaces: () => void
-  onCreate: (kind: HostKind) => void
+  onCreate: (kind: HostKind, initialYaml?: string) => void
 }
 type ExclusiveDetailSlot = 'summary' | 'destination' | 'logs'
 export interface ResourceHost {
@@ -27,12 +27,16 @@ export interface ResourceHost {
     title: string
     mode: (support: RadarFeatureSupport, pending: boolean) => KindListMode
     Component: ComponentType<KindListProps>
+    /** Set when the list ignores the namespace filter: the header's picker is disabled with this tooltip while the list shows. */
+    namespaceFilterTooltip?: string
   }[]
   renderers?: RendererOverrides
   resources?: readonly { name: string; group: string }[]
   expandedPath?: (resource: HostResource, context?: string, tab?: 'yaml') => string | null
   detailRedirect?: (resource: HostResource, search: URLSearchParams) => string | null
   detailSlots?: (resource: HostResource) => DetailSlots
+  /** More for one of the resource's issues, inside that issue's "What's wrong" in the drawer. */
+  issueDetail?: (props: { issue: { kind?: string; reason?: string }; resource: any }) => ReactNode
   detailOwnership?: readonly ExclusiveDetailSlot[]
   logs?: (resource: HostResource, data: { apiVersion?: string } | null | undefined) => ReactNode
   drawerNavigation?: {
@@ -84,6 +88,9 @@ export function composeDetailSlots(contributions: readonly { id: string; slots: 
   const summaries = contributions.filter(host => host.slots?.renderSummary)
   if (summaries.length > 1) throw new Error(`Resource host summary ownership conflict: ${summaries.map(host => host.id).join(', ')}`)
   const summary = summaries[0]?.slots?.renderSummary
+  const badges = contributions.filter(host => host.slots?.renderStatusBadge)
+  if (badges.length > 1) throw new Error(`Resource host status badge ownership conflict: ${badges.map(host => host.id).join(', ')}`)
+  const badge = badges[0]?.slots?.renderStatusBadge
   const actions = contributions.filter(host => host.slots?.renderHeaderActions)
   const tabs = [...inheritedTabs, ...contributions.flatMap(host => host.slots?.extraTabs ?? [])]
   const tabIds = new Set(inheritedTabs.map(tab => tab.id))
@@ -93,6 +100,7 @@ export function composeDetailSlots(contributions: readonly { id: string; slots: 
   }
   return {
     ...(summary ? { renderSummary: summary } : {}),
+    ...(badge ? { renderStatusBadge: badge } : {}),
     ...(actions.length ? { renderHeaderActions: (props: Parameters<NonNullable<DetailSlots['renderHeaderActions']>>[0]) => actions.map(host => createElement(Fragment, { key: host.id }, host.slots!.renderHeaderActions!(props))) } : {}),
     ...(tabs.length ? { extraTabs: tabs } : {}),
   }

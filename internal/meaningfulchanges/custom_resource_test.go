@@ -501,3 +501,31 @@ func TestDedupeEventsWithoutIDsKeepsDistinctGroups(t *testing.T) {
 		t.Fatalf("deduped events = %+v, want two distinct groups with versions sharing identity", got)
 	}
 }
+
+// Karpenter sets a Node's owner to its NodeClaim. An explicit kind=Node or
+// name= query still returns the Node's own changes; the default feed does not.
+func TestRecentExplicitQueriesReturnOwnedNodes(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 20}); err != nil {
+		t.Fatal(err)
+	}
+	if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
+		ID: "taint", Timestamp: time.Now().Add(-time.Minute), Source: timeline.SourceInformer,
+		ClusterContext: k8s.ActiveClusterContext(), Kind: "Node", APIVersion: "v1", Name: "ip-10-0-26-87.ec2.internal",
+		EventType: timeline.EventTypeUpdate, Owner: &timeline.OwnerInfo{Kind: "NodeClaim", Name: "default-x7k2p"},
+		Diff: &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.taints", OldValue: []string{}, NewValue: []string{"karpenter.sh/disrupted"}}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []Query{{Kinds: []string{"Node"}}, {Name: "ip-10-0-26-87.ec2.internal"}, {Kinds: []string{"nodes"}, Name: "ip-10-0-26-87.ec2.internal"}} {
+		got, err := Recent(context.Background(), q)
+		if err != nil || len(got.Changes) != 1 || got.Changes[0].ChangeCategory != issuesapi.ChangeCategorySpecConfig {
+			t.Fatalf("query %+v: got %+v, err %v; want the owned Node's taint change", q, got, err)
+		}
+	}
+	got, err := Recent(context.Background(), Query{})
+	if err != nil || len(got.Changes) != 0 {
+		t.Fatalf("default feed: got %+v, err %v; Nodes stay out", got, err)
+	}
+}

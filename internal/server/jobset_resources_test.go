@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/jobset"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -23,7 +24,7 @@ import (
 
 func comparisonJob(name, role string) *batchv1.Job {
 	controller := true
-	return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "training", UID: types.UID(name), Labels: map[string]string{replicatedJobNameLabel: role}, OwnerReferences: []metav1.OwnerReference{{APIVersion: jobSetAPIVersion, Kind: "JobSet", Name: "wide", UID: "root", Controller: &controller}}}}
+	return &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "training", UID: types.UID(name), Labels: map[string]string{replicatedJobNameLabel: role}, OwnerReferences: []metav1.OwnerReference{{APIVersion: jobset.APIVersion, Kind: "JobSet", Name: "wide", UID: "root", Controller: &controller}}}}
 }
 
 func TestJobSetFiltersAndSelectionPrecedeCap(t *testing.T) {

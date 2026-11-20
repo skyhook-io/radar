@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/csr"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -166,6 +167,9 @@ func unstructuredHealth(u *unstructured.Unstructured) string {
 	if u == nil {
 		return ""
 	}
+	if csr.IsObject(u.Object) {
+		return levelToString(csr.StatusOf(u.Object).Level(u.Object, time.Now()))
+	}
 	if u.GroupVersionKind().Group == "opentelemetry.io" {
 		switch u.GetKind() {
 		case "OpenTelemetryCollector":
@@ -173,6 +177,12 @@ func unstructuredHealth(u *unstructured.Unstructured) string {
 		case "Instrumentation":
 			return levelToString(health.OpenTelemetryInstrumentation(u).Level)
 		}
+	}
+	if u.GroupVersionKind().Group == "ate.dev" && u.GetKind() == "WorkerPool" {
+		return levelToString(health.SubstrateWorkerPool(u, time.Now()).Level)
+	}
+	if group := u.GroupVersionKind().Group; (group == "agents.x-k8s.io" && u.GetKind() == "Sandbox") || (group == "extensions.agents.x-k8s.io" && u.GetKind() == "SandboxClaim") {
+		return levelToString(health.AgentSandbox(u).Level)
 	}
 	if u.GroupVersionKind().Group == "flagger.app" && u.GetKind() == "Canary" {
 		return levelToString(health.FlaggerCanary(u).Level)

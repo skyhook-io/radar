@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useMemo, useState, useRef, useImperativeHandle } from 'react'
 import { Omnibar, type OmnibarHandle } from './Omnibar'
-import { useSearch, useNamespaceScope, useContexts, type SearchHit, type SearchResult } from '../../api/client'
+import { useSearch, useNamespaceScope, useContexts, useRadarFeature, type SearchHit, type SearchResult } from '../../api/client'
 import { useAPIResources } from '../../api/apiResources'
 import { loadRecentResources, recordRecentResource } from '../../hooks/useRecentResources'
 import { useCommandItems, type CommandItemCallbacks } from './command-items'
@@ -48,6 +48,7 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
   const { data: nsScope } = useNamespaceScope()
   const { data: apiResources } = useAPIResources()
   const { data: contexts } = useContexts()
+  const { support: eventContentSupport } = useRadarFeature('searchEventContent')
   const contextKey = useMemo(() => contexts?.find((c) => c.isCurrent)?.name ?? '', [contexts])
 
   const modifierOptions = useMemo(() => ({
@@ -70,6 +71,10 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
     hits: searchData?.hits,
     query,
     recheckKind: (kind) => omnibarRef.current?.addModifier({ key: 'kind', value: kind }),
+    searchEvents: eventContentSupport === 'supported' && !isFetching && !isPlaceholderData && !isError
+      ? () => omnibarRef.current?.addModifier({ key: 'kind', value: 'Event' })
+      : undefined,
+    eventSearchNeedsUpgrade: eventContentSupport === 'unsupported' && !isFetching && !isPlaceholderData && !isError,
     pendingExhausted: exhaustedQuery === query,
     openKindList: (kind, group) => {
       const resource = apiResources?.find((r) => r.kind === kind && r.group === group)
@@ -88,6 +93,7 @@ export const RadarOmnibar = forwardRef<OmnibarHandle, RadarOmnibarProps>(functio
       isError={isError}
       isPlaceholderData={isPlaceholderData}
       note={note}
+      eventContentSearch={eventContentSupport === 'supported'}
       modifierOptions={modifierOptions}
       seedNamespaces={nsScope?.actives}
       onInvestigateQuery={onInvestigateQuery}

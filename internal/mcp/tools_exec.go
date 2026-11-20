@@ -491,11 +491,17 @@ func currentExecPods(ctx context.Context, client kubernetes.Interface, dyn dynam
 		if err != nil {
 			return nil, err
 		}
+		// Strip the hash from both sides, as the Deployment controller does: a
+		// Deployment template can carry a pod-template-hash label copied in from
+		// a ReplicaSet, and the controller still treats the matching ReplicaSet
+		// as current.
+		desired := dep.Spec.Template.DeepCopy()
+		delete(desired.Labels, appsv1.DefaultDeploymentUniqueLabelKey)
 		var rs []*appsv1.ReplicaSet
 		for i := range sets.Items {
 			template := sets.Items[i].Spec.Template.DeepCopy()
 			delete(template.Labels, appsv1.DefaultDeploymentUniqueLabelKey)
-			if equality.Semantic.DeepEqual(*template, dep.Spec.Template) {
+			if equality.Semantic.DeepEqual(*template, *desired) {
 				rs = append(rs, &sets.Items[i])
 			}
 		}
@@ -503,6 +509,9 @@ func currentExecPods(ctx context.Context, client kubernetes.Interface, dyn dynam
 		label = appsv1.DefaultDeploymentUniqueLabelKey
 		if hash == "" && dep.Spec.Paused {
 			return nil, fmt.Errorf("deployment %s/%s is paused with no observed desired revision; target a specific pod by name", namespace, name)
+		}
+		if hash == "" {
+			return nil, fmt.Errorf("deployment %s/%s: no ReplicaSet matches its current pod template, so its current pods can't be told apart from old ones (the controller creates that ReplicaSet shortly after a template change); retry, or target a specific pod by name", namespace, name)
 		}
 	case "statefulsets":
 		sts, err := client.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -619,7 +628,7 @@ func currentExecPods(ctx context.Context, client kubernetes.Interface, dyn dynam
 		return pods, nil
 	}
 	if hash == "" {
-		return nil, fmt.Errorf("%s %s/%s has no observed desired revision; retry", kind, namespace, name)
+		return nil, fmt.Errorf("%s %s/%s: the controller has not recorded a current revision yet, so its current pods can't be told apart from old ones; retry, or target a specific pod by name", kind, namespace, name)
 	}
 	var current []*corev1.Pod
 	for _, pod := range pods {

@@ -1,0 +1,73 @@
+inventory	family	forward	reverse	not_projected	notes
+F01	Workload → ReplicaSet	ownership,olderRevisions	ownership		
+F02	RS → Pod	ownership	ownership		
+F03	DS/STS → Pod	ownership	ownership		
+F04	Job → Pod	ownership	ownership		
+F05	CronJob/ScaledJob → Job	ownership	ownership		
+F06	JobSet → Job	ownership	ownership		
+F07	CAPI chain	ownership	ownership		
+F08	Knative Serving chain	ownership	ownership		
+F09	Knative Channel owner	ownership	ownership		
+F10	CronWorkflow → Workflow	ownership,argoWorkflowCronWorkflows	ownership,argoWorkflowCronWorkflows		
+F11	NodePool → NodeClaim	ownership,nodePool	ownership,nodePool		
+F12	Generic CRD owner refs	ownership	ownership		
+F13	MHC → CAPI Cluster	healthChecks	healthChecks		
+F14	Argo CD recorded resources	ownership	ownership		
+F15	Flux inventory	ownership	ownership		
+F16	Flux HelmRelease by origin labels	fluxHelmOrigins	fluxHelmOrigins		
+F17	Argo Workflow → Pod	ownership,argoPodWorkflows	ownership,argoPodWorkflows		
+F18	Reflector mirrors	reflections	reflections		
+F19	Service selects workloads	serviceSelectors	serviceSelectors		
+F20	Rollout's named Services	rolloutServices	rolloutServices		
+F21	ServiceMonitor → Service	monitors	monitors		
+F22	PodMonitor → workloads	monitors	monitors		
+F23	PDB	disruptionBudgets	disruptionBudgets		
+F24	NetworkPolicy	networkPolicies	networkPolicies		
+F25	CiliumNetworkPolicy	networkPolicies	networkPolicies		
+F26	Calico policies	calicoPolicies,calicoStagedPolicies	calicoPolicies,calicoStagedPolicies		
+F27	ConfigMap → consumer workload	configReferences	configReferences		
+F28	Secret → consumer workload / Ingress	configReferences	configReferences		
+F29	ServiceAccount → workload	configReferences	configReferences		
+F30	PVC → workload	configReferences	configReferences		
+F31	Pod → CM/Secret/PVC/SA (not an edge)	configReferences	configReferences		Pod declarations now contribute forward ConfigRefs/StorageRefs and reverse Consumers without podConsumers.
+F32	HPA → target	autoscalers	autoscalers		
+F33	VPA → target	autoscalers	autoscalers		
+F34	ScaledObject → target	autoscalers	autoscalers		
+F35	KEDA authentication	kedaAuthentication	kedaAuthentication		
+F36	Ingress → Service	ingressBackends	ingressBackends		
+F37	Gateway → Route	gatewayParents	gatewayParents		
+F38	Route → Service	gatewayBackends	gatewayBackends		
+F39	GatewayClass → Gateway	gatewayClasses	gatewayClasses		
+F40	Istio Gateway → VirtualService	istioGateways	istioGateways		
+F41	VirtualService → Service	istioServiceHosts	istioServiceHosts		
+F42	DestinationRule → Service	istioServiceHosts	istioServiceHosts		
+F43	Certificate → Secret	certificateSecrets	certificateSecrets		
+F44	Issuance → Issuer	certManagerIssuers	certManagerIssuers		
+F45	Flux sources	fluxSources	fluxSources		
+F46	NodeClass → NodePool	nodeClasses	nodeClasses		
+F47	ClusterClass → Cluster	clusterClasses	clusterClasses		
+F48	WorkflowTemplate → Workflow	argoWorkflowTemplates	argoWorkflowTemplates		
+F49	Traefik IngressRoute → backend	traefikBackends	traefikBackends		
+F50	TraefikService → backend	traefikBackends	traefikBackends		
+F51	Traefik route config	traefikRouteConfig	traefikRouteConfig		
+F52	Traefik Secret/ConfigMap refs	traefikSecrets	traefikSecrets		Held-target difference retained: graph can synthesize absent Secret/ConfigMap nodes; References emits only readable held targets. The family also projects held route TLS Secrets directly, whereas the builder route loop emits the Certificate join.
+F53	Contour HTTPProxy	contourBackends	contourBackends		
+F54	Contour Secret → HTTPProxy	contourSecrets	contourSecrets		Held-target difference retained: graph can synthesize absent Secret/ConfigMap nodes; References emits only readable held targets.
+F55	Certificate → route (secret join)	certificateRoutes	certificateRoutes		Duplicate-producer caveat: the graph keeps the last Certificate per Secret in cache iteration order; the declaration join retains every readable matching Certificate. No duplicate-producer policy is selected by this mapping gate.
+F56	Knative eventing refs	knativeEventDestinations,knativeTriggerBrokers	knativeEventDestinations,knativeTriggerBrokers		
+F57	Crossplane	crossplane,ownership	crossplane,ownership		
+F58	Rollout → AnalysisRun	analysisRuns,ownership	analysisRuns,ownership		Held-target difference retained: status-only AnalysisRun nodes are not synthesized when the target is absent or uncollected.
+F59	NodeClaim → Node	machineNodes	machineNodes		
+F60	CAPI Machine → Node	machineNodes	machineNodes		
+F61	Knative Route → Revision	knativeRouteRevisions	knativeRouteRevisions		
+F62	Knative Channel → backing channel	knativeEventDestinations	knativeEventDestinations		
+F63	KSvc → private Services	knativeServing	knativeServing		
+F64	Knative front door	knativeServing	knativeServing		
+F65	SealedSecret	sealedSecrets,sealedSecretConsumers	sealedSecrets,sealedSecretConsumers		Deliberate composition: consumer links also exist when the readable Secret exists; the logical join never reads it.
+F66	Rollout → Pod shortcut			Presentation shortcut: owner fields come from ownership; the Rollout-to-Pod shortcut is overwritten by ApplyOwnership.	
+F67	Deployment/Rollout → Pod, RS hidden			Display-only when ReplicaSets are hidden; not present in the relationship graph.	
+F68	CronJob/ScaledJob/JobSet → Pod shortcuts			Presentation shortcut: owner fields come from ownership, without skipping Job.	
+F69	CronWorkflow → Pod shortcut			Presentation shortcut: owner fields come from ownership, without skipping Workflow.	
+F70	JobSet → earlier-run Pod			Earlier-run JobSet links are deliberately discarded by earlierJobRunEdge.	
+F71	Pod grouping			PodGroup nodes have no ResourceRef and never project; ownership returns individual readable children.	
+F72	Traffic view			Traffic-view graph is not read by Related Resources.	

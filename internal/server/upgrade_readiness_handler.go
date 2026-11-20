@@ -117,6 +117,6 @@ func (a httpUpgradeAuthorizer) CanGetSubresource(group, resource, subresource st
 	return upgrade.EvidenceAuthorizationDecision{Allowed: allowed, Authoritative: authoritative}
 }
 
-func (a httpUpgradeAuthorizer) FilterNamespacesByCanList(group, resource string, namespaces []string) []string {
-	return a.s.filterNamespacesByCanRead(a.r, group, resource, "list", namespaces)
+func (a httpUpgradeAuthorizer) FilterNamespacesByCanList(group, resource string, namespaces []string) ([]string, bool) {
+	return a.s.filterNamespacesByCanReadDecision(a.r, group, resource, "list", namespaces)
 }

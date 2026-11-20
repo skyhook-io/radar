@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getArgoApplicationStatus, isArgoOperationInProgress } from './resource-utils-argo'
+import { argoComparedRevisionCurrent, argoResumeSettings, getArgoApplicationStatus, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoOperationInProgress } from './resource-utils-argo'
 
 describe('getArgoApplicationStatus', () => {
   // A Suspended Argo app is intentionally paused — neutral (sky), matching the
@@ -21,6 +21,16 @@ describe('getArgoApplicationStatus', () => {
     expect(badge.level).toBe('unhealthy')
   })
 
+  // Radar's annotations plus automation switched off in place still read as
+  // suspended; the same annotations on an app that auto-syncs again do not.
+  it('treats a Radar-suspended app with automated.enabled=false as suspended', () => {
+    const annotations = { 'radarhq.io/suspended-prune': 'true' }
+    const off = { metadata: { annotations }, spec: { syncPolicy: { automated: { enabled: false } } }, status: {} }
+    const on = { metadata: { annotations }, spec: { syncPolicy: { automated: { prune: true } } }, status: {} }
+    expect(getArgoApplicationStatus(off).text).toBe('Suspended')
+    expect(getArgoApplicationStatus(on).text).not.toBe('Suspended')
+  })
+
   it('surfaces an operation being terminated', () => {
     const badge = getArgoApplicationStatus({ status: { operationState: { phase: 'Terminating' } } })
     expect(badge.level).toBe('degraded')
@@ -36,5 +46,88 @@ describe('isArgoOperationInProgress', () => {
     [{ status: { operationState: { phase: 'Succeeded' } } }, false],
   ])('maps %o to %s', (app, expected) => {
     expect(isArgoOperationInProgress(app)).toBe(expected)
+  })
+})
+
+// Mirrors gitops.ArgoAutoSyncEnabled and Argo's SyncPolicy.IsAutomatedSyncEnabled:
+// Argo CD 3.x keeps the automated block (and its prune/selfHeal) when
+// automation is switched off with enabled: false.
+describe('isArgoAutoSyncEnabled', () => {
+  const app = (syncPolicy: unknown) => ({ spec: { syncPolicy } })
+  it.each([
+    ['no sync policy', undefined, false],
+    ['no automated block', {}, false],
+    ['automated: null', { automated: null }, false],
+    ['empty automated block', { automated: {} }, true],
+    ['automated with prune/selfHeal', { automated: { prune: true, selfHeal: true } }, true],
+    ['enabled: true', { automated: { enabled: true } }, true],
+    ['enabled: false', { automated: { enabled: false, prune: true, selfHeal: true } }, false],
+  ])('%s', (_label, syncPolicy, expected) => {
+    expect(isArgoAutoSyncEnabled(app(syncPolicy))).toBe(expected)
+  })
+
+  it('tolerates a missing resource', () => {
+    expect(isArgoAutoSyncEnabled(undefined)).toBe(false)
+  })
+})
+
+describe('isArgoAutoSyncSwitchedOff', () => {
+  const app = (syncPolicy: unknown) => ({ spec: { syncPolicy } })
+  // Only an automated block kept with enabled: false; a Manual app has none.
+  it.each([
+    ['no automated block', {}, false],
+    ['automated: null', { automated: null }, false],
+    ['automated on', { automated: { prune: true } }, false],
+    ['enabled: true', { automated: { enabled: true } }, false],
+    ['enabled: false', { automated: { enabled: false, prune: true } }, true],
+  ])('%s', (_label, syncPolicy, expected) => {
+    expect(isArgoAutoSyncSwitchedOff(app(syncPolicy))).toBe(expected)
+  })
+
+  it('tolerates a missing resource', () => {
+    expect(isArgoAutoSyncSwitchedOff(undefined)).toBe(false)
+  })
+})
+
+describe('argoResumeSettings', () => {
+  const app = (syncPolicy: unknown) => ({ spec: { syncPolicy } })
+  it('keeps a block switched off in place, whatever the Radar', () => {
+    expect(argoResumeSettings(app({ automated: { enabled: false, prune: true } }), undefined)).toEqual({ prune: true, selfHeal: false })
+  })
+  it.each([
+    ['a Radar starting both off', true, true, { prune: false, selfHeal: false }],
+    ['a Radar starting only prune off', true, false, { prune: false, selfHeal: true }],
+    ['a host that passes no self-heal answer', true, undefined, { prune: false, selfHeal: true }],
+    ['an older Radar', false, false, { prune: true, selfHeal: true }],
+    ['an unknown Radar', undefined, undefined, null],
+  ])('without a block, follows %s', (_label, serverStartsPruneOff, serverStartsSelfHealOff, expected) => {
+    expect(argoResumeSettings(app({}), serverStartsPruneOff, serverStartsSelfHealOff)).toEqual(expected)
+  })
+})
+
+// Mirrors the backend's pin rule (pkg/gitops argoSyncOperation), so the sync
+// dialog names the compared revision only when a sync will use it.
+describe('argoComparedRevisionCurrent', () => {
+  const source = { repoURL: 'https://example.com/repo', path: 'app', targetRevision: 'main' }
+  const values = { repoURL: 'https://example.com/values', ref: 'values', targetRevision: 'main' }
+  const single = (sync: any, spec: any = { source }) => ({ spec, status: { sync } })
+
+  it('is current when the comparison was for the same source, whatever its key order', () => {
+    expect(argoComparedRevisionCurrent(single({ revision: 'sha', comparedTo: { source: { targetRevision: 'main', path: 'app', repoURL: 'https://example.com/repo' } } }))).toBe(true)
+  })
+  it('is not current after the source changed, or without a compared revision', () => {
+    expect(argoComparedRevisionCurrent(single({ revision: 'sha', comparedTo: { source: { ...source, targetRevision: 'release' } } }))).toBe(false)
+    expect(argoComparedRevisionCurrent(single({ comparedTo: { source } }))).toBe(false)
+    expect(argoComparedRevisionCurrent(single(undefined))).toBe(false)
+  })
+  it('needs every source compared, one revision each, for a multi-source Application', () => {
+    const spec = { sources: [source, values] }
+    expect(argoComparedRevisionCurrent(single({ revisions: ['a', 'b'], comparedTo: { sources: [source, values] } }, spec))).toBe(true)
+    expect(argoComparedRevisionCurrent(single({ revisions: ['a'], comparedTo: { sources: [source, values] } }, spec))).toBe(false)
+    expect(argoComparedRevisionCurrent(single({ revisions: ['a', 'b'], comparedTo: { sources: [values, source] } }, spec))).toBe(false)
+  })
+  it('is never current for a hydrated Application', () => {
+    const spec = { sourceHydrator: { drySource: source, syncSource: { targetBranch: 'env/prod', path: 'out' } }, source }
+    expect(argoComparedRevisionCurrent(single({ revision: 'sha', comparedTo: { source } }, spec))).toBe(false)
   })
 })

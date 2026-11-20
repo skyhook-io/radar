@@ -2,7 +2,6 @@ package cloudinstall
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/subject"
 )
 
@@ -442,7 +442,7 @@ func verifyController(ctx context.Context, dc dynamic.Interface, ref subject.Ref
 		obj, err := dc.Resource(gvr).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 		if err == nil {
 			if ref.Group == "helm.toolkit.fluxcd.io" && ref.Kind == "HelmRelease" {
-				candidate.ReleaseName, candidate.TargetNamespace, candidate.StorageNamespace = fluxHelmTarget(obj)
+				candidate.ReleaseName, candidate.TargetNamespace, candidate.StorageNamespace = gitops.FluxHelmTarget(obj)
 				if releaseName == "" || candidate.ReleaseName != releaseName || candidate.TargetNamespace != targetNamespace {
 					candidate.Verification = ControllerStale
 					candidate.Error = fmt.Sprintf(
@@ -469,40 +469,6 @@ func verifyController(ctx context.Context, dc dynamic.Interface, ref subject.Ref
 
 	candidate.Verification = ControllerStale
 	return candidate
-}
-
-func fluxHelmTarget(obj metav1.Object) (releaseName, targetNamespace, storageNamespace string) {
-	unstructuredObj, ok := obj.(interface{ UnstructuredContent() map[string]any })
-	if !ok {
-		return "", "", ""
-	}
-	spec, _ := unstructuredObj.UnstructuredContent()["spec"].(map[string]any)
-	targetNamespace, _ = spec["targetNamespace"].(string)
-	if targetNamespace == "" {
-		targetNamespace = obj.GetNamespace()
-	}
-	releaseName, _ = spec["releaseName"].(string)
-	if releaseName == "" {
-		if configuredTarget, _ := spec["targetNamespace"].(string); configuredTarget != "" {
-			releaseName = configuredTarget + "-" + obj.GetName()
-		} else {
-			releaseName = obj.GetName()
-		}
-		releaseName = shortenFluxReleaseName(releaseName)
-	}
-	storageNamespace, _ = spec["storageNamespace"].(string)
-	if storageNamespace == "" {
-		storageNamespace = obj.GetNamespace()
-	}
-	return releaseName, targetNamespace, storageNamespace
-}
-
-func shortenFluxReleaseName(name string) string {
-	if len(name) <= 53 {
-		return name
-	}
-	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
-	return name[:40] + "-" + sum[:12]
 }
 
 func verifyClusterVisibleArgoApplication(ctx context.Context, dc dynamic.Interface, ref subject.Ref, gvrs []schema.GroupVersionResource) ControllerCandidate {

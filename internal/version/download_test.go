@@ -29,3 +29,44 @@ func TestChecksumForMissingAsset(t *testing.T) {
 		t.Error("expected an error for an asset the file doesn't list")
 	}
 }
+
+// releaseWithAssets lists assets the way GitHub returns them: alphabetically.
+func releaseWithAssets(tag string, names ...string) *githubReleaseWithAssets {
+	r := &githubReleaseWithAssets{TagName: tag}
+	for _, n := range names {
+		r.Assets = append(r.Assets, githubAsset{Name: n})
+	}
+	return r
+}
+
+func TestFindDesktopAssetPicksTheLinuxTarball(t *testing.T) {
+	v1201 := []string{
+		"checksums-desktop.txt", "checksums.txt",
+		"radar-desktop_v1.20.1_darwin_universal.zip",
+		"radar-desktop_v1.20.1_linux_amd64.deb",
+		"radar-desktop_v1.20.1_linux_amd64.rpm",
+		"radar-desktop_v1.20.1_linux_amd64.tar.gz",
+		"radar-desktop_v1.20.1_windows_amd64.zip",
+		"radar_v1.20.1_linux_amd64.tar.gz",
+	}
+	withAppImage := append([]string{"radar-desktop_v1.20.1_linux_amd64.AppImage"}, v1201...)
+
+	for name, assets := range map[string][]string{"v1.20.1 as published": v1201, "with an AppImage": withAppImage} {
+		t.Run(name, func(t *testing.T) {
+			got := FindDesktopAsset(releaseWithAssets("v1.20.1", assets...), "linux", "amd64")
+			if got == nil || got.Name != "radar-desktop_v1.20.1_linux_amd64.tar.gz" {
+				t.Fatalf("FindDesktopAsset(linux) = %+v, want the desktop tarball", got)
+			}
+		})
+	}
+
+	if got := FindDesktopAsset(releaseWithAssets("v1.20.1", "radar-desktop_v1.20.0_linux_amd64.tar.gz", "radar-desktop_v1.20.1_linux_amd64.deb"), "linux", "amd64"); got != nil {
+		t.Errorf("a release without this version's desktop tarball has nothing to install, got %q", got.Name)
+	}
+	if got := FindDesktopAsset(releaseWithAssets("v1.20.1", v1201...), "linux", "arm64"); got != nil {
+		t.Errorf("no arm64 desktop build, got %q", got.Name)
+	}
+	if got := FindDesktopAsset(releaseWithAssets("v1.20.1", v1201...), "darwin", "arm64"); got == nil || got.Name != "radar-desktop_v1.20.1_darwin_universal.zip" {
+		t.Errorf("macOS keeps the universal zip, got %+v", got)
+	}
+}

@@ -6,6 +6,7 @@ import {
   CircleAlert,
   Info,
   SearchCheck,
+  XCircle,
 } from "lucide-react";
 import { Collapse, CollapseChevron } from "@skyhook-io/k8s-ui";
 import type { EvidenceCoverageGroup } from "./investigationEvidencePresentation";
@@ -25,9 +26,14 @@ import { investigationEvidenceFullRowFlags } from "./investigationEvidencePartit
 import { EvidenceCard } from "./EvidenceCard";
 
 /**
- * Hypotheses the agent dropped, each pointing at the Radar observation whose
- * result contradicted it. Entries whose item could not be placed on an
- * observation are filtered out by the resolver and never rendered here.
+ * Hypotheses the agent dropped, each with the claim of the Radar observation
+ * whose result contradicted it, so the reason reads without a click. The
+ * agent writes a hypothesis as a statement, which on its own reads like a
+ * finding; the heading, the mark and the screen-reader prefix say it is not
+ * the cause. The exclusion is the agent's reading, so the heading keeps the
+ * Agent tag in panel mode, where no "Agent analysis" label sits above it.
+ * Entries whose item could not be placed on an observation are filtered out
+ * by the resolver and never rendered here.
  */
 export function RuledOutBlock({
   entries,
@@ -47,38 +53,55 @@ export function RuledOutBlock({
         id={headingId}
         className="flex items-center gap-2 text-xs font-semibold text-theme-text-secondary"
       >
-        Also checked
+        Ruled out
         <span className="text-[10px] font-semibold uppercase tracking-wide text-accent-text">
           Agent
         </span>
       </h3>
-      <ul className="mt-1.5 space-y-1.5">
+      <ul className="mt-1.5 space-y-2">
         {entries.map((entry, position) => {
           const observation = entry.item.observation!;
           return (
-            <li
-              key={position}
-              className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs"
-            >
-              <span className="min-w-0 text-theme-text-secondary [overflow-wrap:anywhere]">
-                {entry.hypothesis}
-              </span>
-              <button
-                type="button"
-                onClick={() => onReveal(entry.item)}
-                className="shrink-0 rounded text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-              >
-                See {observation.title}
-                {entry.item.placement === "revision"
-                  ? " (earlier observation)"
-                  : ""}
-              </button>
+            <li key={position} className="flex min-w-0 gap-2 text-xs">
+              <XCircle
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 text-theme-text-tertiary"
+                aria-hidden
+              />
+              <div className="min-w-0">
+                <p className="font-medium text-theme-text-secondary [overflow-wrap:anywhere]">
+                  <span className="sr-only">Ruled out: </span>
+                  {entry.hypothesis}
+                </p>
+                <p className="text-theme-text-tertiary [overflow-wrap:anywhere]">
+                  {entry.item.claim ? <>{entry.item.claim} </> : null}
+                  <button
+                    type="button"
+                    onClick={() => onReveal(entry.item)}
+                    className="rounded text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                  >
+                    See {ruledOutEvidenceLabel(observation)}
+                    {entry.item.placement === "revision"
+                      ? " (earlier observation)"
+                      : ""}
+                  </button>
+                </p>
+              </div>
             </li>
           );
         })}
       </ul>
     </section>
   );
+}
+
+// An issue's title is only its reason ("IPExhaustion"), which says neither
+// that it is an issue nor which resource it is on; two entries can cite the
+// same reason on different resources.
+function ruledOutEvidenceLabel(
+  observation: NonNullable<InvestigationCaseItem["observation"]>,
+): string {
+  if (observation.data.type !== "issue") return observation.title;
+  return `${observation.title} issue on ${observation.data.issue.name}`;
 }
 
 export function AssessmentEvidenceQualification({

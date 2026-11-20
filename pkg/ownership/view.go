@@ -228,10 +228,10 @@ func (v *View) Children(ref resourceid.Ref) ChildrenAnswer {
 	}
 	a.Gaps = found.Gaps
 	for i, g := range found.Gaps {
-		if !v.coversReadable(g, scope) {
+		if !GapCoversReadable(v.access, v.session.Catalog(), g, scope) {
 			a.Gaps = slices.Clone(found.Gaps[:i])
 			for _, later := range found.Gaps[i+1:] {
-				if v.coversReadable(later, scope) {
+				if GapCoversReadable(v.access, v.session.Catalog(), later, scope) {
 					a.Gaps = append(a.Gaps, later)
 				}
 			}
@@ -299,25 +299,48 @@ func (v *View) candidates(found DependentCandidatesRead) (out []Observation, unr
 	return out, unread, undecided
 }
 
-// coversReadable reports whether gap covers something the caller may read
-// within scope, so leaving it unread may have hidden a child. A gap on a
-// namespaced kind without a namespace covers every namespace of the scope,
-// and counts if the caller may read the kind in any of them.
-func (v *View) coversReadable(g Gap, scope SearchScope) bool {
+// GapCoversReadable reports whether a search's gap covers something access
+// may read within scope, so leaving it unread may have hidden an answer; a
+// gap that doesn't is withheld, as it would name what the caller may not
+// read. A gap on a namespaced kind without a namespace covers every
+// namespace of the scope, and counts if the caller may read the kind in any
+// of them. g must come from a search of scope: a gap naming a namespace is
+// not tested against scope. A check that couldn't be made counts as
+// readable, so the gap is kept.
+//
+// Namespace access decides a gap that Radar's setup causes
+// (Gap.FromRadarSetup): the kind's own check would cost a permission review
+// in each namespace where Radar doesn't collect a kind gated per namespace,
+// such as Roles, and one for each cluster-scoped kind Radar doesn't collect.
+// Such a gap names no object, so a caller who may read any namespace is told
+// of one on a cluster-scoped kind.
+func GapCoversReadable(access Access, catalog *Catalog, g Gap, scope SearchScope) bool {
 	if g.Kind.Kind == "" {
 		return true
 	}
+	setup := g.FromRadarSetup()
+	visible, all := access.Namespaces()
+	may := func(namespace string) bool {
+		if setup {
+			return all || slices.Contains(visible, namespace)
+		}
+		return access.CanRead(g.Kind, namespace) != Denied
+	}
 	if g.Namespace != "" {
-		return v.access.CanRead(g.Kind, g.Namespace) != Denied
+		return may(g.Namespace)
 	}
-	k, known := v.session.Catalog().Kind(g.Kind)
-	if !known || !k.Namespaced {
-		return v.access.CanRead(g.Kind, "") != Denied
+	k, known := catalog.Kind(g.Kind)
+	switch {
+	case known && !k.Namespaced && setup:
+		return all || len(visible) > 0
+	case !known || !k.Namespaced:
+		return access.CanRead(g.Kind, "") != Denied
+	case scope.AllNamespaces && setup:
+		return all || len(visible) > 0
+	case scope.AllNamespaces:
+		return access.CanRead(g.Kind, "") != Denied
 	}
-	if scope.AllNamespaces {
-		return v.access.CanRead(g.Kind, "") != Denied
-	}
-	return slices.ContainsFunc(scope.Namespaces, func(ns string) bool { return v.access.CanRead(g.Kind, ns) != Denied })
+	return slices.ContainsFunc(scope.Namespaces, may)
 }
 
 // ControllerChainAnswer is the chain of controller references from an object

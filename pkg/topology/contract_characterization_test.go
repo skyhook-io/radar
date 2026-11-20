@@ -33,7 +33,7 @@ import (
 // The characterization goldens record what the public topology functions
 // return today for one fixture cluster: the graph, then for every fixture
 // object the Related Resources, ManagedBy and delete preview production
-// computes for it, plus selected neighborhoods and a per-user projection.
+// computes for it, plus a per-user projection.
 // They pin behavior, not correctness — several recorded answers are known
 // defects. A change meant to leave public answers untouched keeps them
 // byte-identical; a change that alters them regenerates them with
@@ -308,8 +308,9 @@ func charCluster() *charFixture {
 	addReplicaSet(apiRS)
 	addPod(charPod("shop", "api-6b7-a", "node-a", map[string]string{"app": "api"}, charPodSpec("", ""), charController("apps/v1", "ReplicaSet", apiRS.Name, string(apiRS.UID))))
 
-	// Flux HelmRelease shop/redis: paired origin labels on every kind its label
-	// producer reads; redis-legacy only by the bare instance label; a hook Job.
+	// Flux HelmRelease shop/redis, with no inventory: paired origin labels on
+	// every kind its label producer reads; redis-legacy only by the bare
+	// instance label and a hook Job, neither of them its member.
 	redisLabels := map[string]string{"helm.toolkit.fluxcd.io/name": "redis", "helm.toolkit.fluxcd.io/namespace": "shop"}
 	addDeployment(charDeployment("shop", "redis", 1, redisLabels, charPodSpec("", "")))
 	addDeployment(charDeployment("shop", "redis-legacy", 1, map[string]string{"app.kubernetes.io/instance": "redis"}, charPodSpec("", "")))
@@ -516,7 +517,8 @@ type charCase struct {
 
 func charCases() []charCase {
 	return []charCase{
-		// The SSE broadcaster's relationship cache (internal/server/sse.go buildFullTopology).
+		// The all-namespace relationship graph's options, held fixed for the
+		// parity baseline.
 		{"sse-relationship-cache", charSSEOptions},
 		{"relationship-options", RelationshipBuildOptions},
 		{"resources-default", DefaultBuildOptions},
@@ -566,31 +568,6 @@ type charRootRecord struct {
 	DeletePreview *CascadeDeletePreview `json:"deletePreview"`
 }
 
-type charNeighborhoodRecord struct {
-	Root     string    `json:"root"`
-	Profile  Profile   `json:"profile"`
-	Hops     int       `json:"hops"`
-	MaxNodes int       `json:"maxNodes"`
-	Subgraph *Subgraph `json:"subgraph"`
-}
-
-// charNeighborhoodRoots are roots whose bounded neighborhoods depend on edge
-// order (BFS budget selection), so a reorder that leaves every other answer
-// alone still shows.
-var charNeighborhoodRoots = []ResourceRef{
-	{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"},
-	{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "shop"},
-	{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "flux-system", Name: "shop"},
-	{Kind: "Pod", Namespace: "shop", Name: "web-7d9f8-0"},
-	{Kind: "Node", Name: "node-a"},
-	{Kind: "CronJob", Group: "batch", Namespace: "team", Name: "nightly"},
-	{Kind: "GatewayClass", Group: "gateway.networking.k8s.io", Name: "envoy"},
-}
-
-func charRefKey(ref ResourceRef) string {
-	return resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)
-}
-
 // charRoots records what production computes for every fixture object: the
 // fetched-object Related Resources the drawer and AI context use (production
 // passes the URL's plural kind), ManagedBy from the object's own metadata,
@@ -611,23 +588,6 @@ func charRoots(f *charFixture, topo *Topology, idx *RelationshipsIndex) []charRo
 		})
 	}
 	sort.SliceStable(records, func(i, j int) bool { return records[i].Root < records[j].Root })
-	return records
-}
-
-func charNeighborhoods(topo *Topology, idx *RelationshipsIndex, dp DynamicProvider) []charNeighborhoodRecord {
-	var records []charNeighborhoodRecord
-	for _, root := range charNeighborhoodRoots {
-		for _, opts := range []NeighborhoodOptions{{Profile: ProfileAuto, Hops: 1}, {Profile: ProfileAll, Hops: 2}, {Profile: ProfileAll, Hops: 1, MaxNodes: 2}} {
-			sub := BuildNeighborhoodWithIndex(topo, root, opts, idx, dp)
-			if sub != nil {
-				// List order follows the builder's partly map-ordered edges;
-				// membership (which nodes the budget admitted) is the answer.
-				canonical := charGraph(&Topology{Nodes: sub.Nodes, Edges: sub.Edges})
-				sub.Nodes, sub.Edges = canonical.Nodes, canonical.Edges
-			}
-			records = append(records, charNeighborhoodRecord{Root: charRefKey(root), Profile: opts.Profile, Hops: opts.Hops, MaxNodes: opts.MaxNodes, Subgraph: sub})
-		}
-	}
 	return records
 }
 
@@ -685,10 +645,9 @@ func charRecord(t *testing.T, f *charFixture, opts BuildOptions) []byte {
 func charSnapshotRecord(t *testing.T, f *charFixture, topo *Topology, idx *RelationshipsIndex) []byte {
 	t.Helper()
 	return charJSON(t, struct {
-		Graph         Topology                 `json:"graph"`
-		Roots         []charRootRecord         `json:"roots"`
-		Neighborhoods []charNeighborhoodRecord `json:"neighborhoods"`
-	}{charGraph(topo), charRoots(f, topo, idx), charNeighborhoods(topo, idx, f.dynamic)})
+		Graph Topology         `json:"graph"`
+		Roots []charRootRecord `json:"roots"`
+	}{charGraph(topo), charRoots(f, topo, idx)})
 }
 
 // charProjection is a per-user projection as the REST drawer serves it: a
@@ -924,11 +883,9 @@ var charRoutes = []charRoute{
 	{"sse-relationship-cache", "sealedsecret/team/db-creds", "secret/team/db-creds", ""},
 	{"sse-relationship-cache", "certificate/shop/web-tls", "secret/shop/web-tls", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "deployment/shop/redis", ""},
-	{"sse-relationship-cache", "helmrelease/shop/redis", "deployment/shop/redis-legacy", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "service/shop/redis", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "statefulset/shop/redis-replica", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "daemonset/shop/redis-exporter", ""},
-	{"sse-relationship-cache", "helmrelease/shop/redis", "job/shop/redis-migrate", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "cronjob/shop/redis-backup", ""},
 	{"sse-relationship-cache", "helmrelease/shop/redis", "rollout/shop/redis-proxy", ""},
 	{"sse-relationship-cache", "application/argocd/shop", "deployment/shop/web", ""},

@@ -52,7 +52,7 @@ export function missingResourceMessage(sync?: string, context?: { hazard?: strin
   if (context?.hazard) return 'Not present in the cluster. See the sync warning above before syncing this Application.'
   return context?.rolledBack
     ? 'Declared in Git but not present in the cluster after a rollback. Sync can recreate it and undo the rollback.'
-    : 'Not present in the cluster. Sync the application to create it.'
+    : 'Not present in the cluster. Review the desired changes and sync policy before deciding whether to sync.'
 }
 
 export function isArgoResourceSyncEligible(change: GitOpsChange, declared: boolean, hook?: string): boolean {
@@ -158,6 +158,18 @@ export function entryTone(item: GitOpsHistoryItem): EntryTone {
   // would be a guess (a failed revision can sit at history's head with no
   // successor), and a wrong-color dot is worse than no information.
   return { dot: SEVERITY_DOT.neutral, inferredFrom: 'no phase information' }
+}
+
+// historyRollbackBlockedReason is why a history row's Rollback button is
+// disabled, or undefined when it can roll back. An entry the backend marks
+// not rollbackable is refused by the rollback API whatever else changes, so
+// its reason wins over the app-wide one (auto-sync), which the operator can
+// fix. A Radar that predates `rollbackable` omits it; the API decides there.
+export function historyRollbackBlockedReason(item: GitOpsHistoryItem, appBlockedReason?: string): string | undefined {
+  if (item.rollbackable === false) {
+    return "This entry records no source, so Argo CD can't roll back to it. Sync to its revision instead."
+  }
+  return appBlockedReason
 }
 
 // Compact a source string for inline display. Argo emits the full GitHub URL

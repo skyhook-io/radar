@@ -31,6 +31,8 @@ var (
 	// isDesktop is set to true when running as a desktop app (Wails).
 	// Controls install method detection and enables in-app update flow.
 	isDesktop bool
+	// manualUpdate is set when the desktop app cannot update itself.
+	manualUpdate string
 
 	mu               sync.Mutex
 	updateCache      = map[string]updateCacheEntry{}
@@ -67,7 +69,13 @@ type UpdateInfo struct {
 	ReleaseNotes   string        `json:"releaseNotes,omitempty"`
 	InstallMethod  InstallMethod `json:"installMethod"`
 	UpdateCommand  string        `json:"updateCommand,omitempty"`
-	Error          string        `json:"error,omitempty"`
+	// ManualUpdate is set for a desktop install that cannot update itself, and
+	// says how the user gets the new version instead: "appimage" (download the
+	// new AppImage), "package" (install the new .deb/.rpm with the package
+	// manager) or "download" (Radar can't write to its folder). Empty: the
+	// in-app updater works.
+	ManualUpdate string `json:"manualUpdate,omitempty"`
+	Error        string `json:"error,omitempty"`
 	// Added by WithProductHuntLaunch, not by the lookup.
 	ProductHuntLaunch *launchday.Launch `json:"productHuntLaunch,omitempty"`
 }
@@ -106,6 +114,13 @@ func SetCurrent(v string) {
 // which triggers the in-app update flow instead of showing CLI commands.
 func SetDesktop(v bool) {
 	isDesktop = v
+}
+
+// SetManualUpdate marks this desktop install as unable to update itself, with
+// how the user updates instead (see UpdateInfo.ManualUpdate). Must be called
+// before any version checks.
+func SetManualUpdate(how string) {
+	manualUpdate = how
 }
 
 // IsDesktop returns whether the current instance is running as a desktop app.
@@ -174,6 +189,7 @@ func disabledUpdateInfo() *UpdateInfo {
 		BuildChannel:   BuildChannelName(),
 		InstallMethod:  method,
 		UpdateCommand:  getUpdateCommand(method),
+		ManualUpdate:   manualUpdate,
 		ReleaseURL:     defaultReleasesURL,
 	}
 }
@@ -308,6 +324,7 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 		BuildChannel:   BuildChannelName(),
 		InstallMethod:  method,
 		UpdateCommand:  getUpdateCommand(method),
+		ManualUpdate:   manualUpdate,
 	}
 
 	if !options.manual && (IsDisabled() || Current == "dev") {

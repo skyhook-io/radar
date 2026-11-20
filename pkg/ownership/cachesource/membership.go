@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	apiruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -117,7 +118,11 @@ func (s *session) Members(manager resourceid.Ref) ownership.MembersRead {
 		return ownership.MembersRead{Manager: unavailable(manager, readreason.ReadError)}
 	}
 	var members recordedMembers
-	read := s.readObject(manager, func(u *unstructured.Unstructured) { members = membersOf(gk, u) })
+	read := s.readObject(manager, func(obj apiruntime.Object) {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			members = membersOf(gk, u)
+		}
+	})
 	r := ownership.MembersRead{Manager: read}
 	if read.State != ownership.Present {
 		return r
@@ -141,7 +146,11 @@ func (s *session) Membership(manager resourceid.Ref) ownership.MembersRead {
 		return ownership.MembersRead{Manager: unavailable(manager, readreason.ReadError)}
 	}
 	var state ownership.MembershipState
-	read := s.readObject(manager, func(u *unstructured.Unstructured) { state = s.cachedMemberState(gk, u) })
+	read := s.readObject(manager, func(obj apiruntime.Object) {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			state = s.cachedMemberState(gk, u)
+		}
+	})
 	r := ownership.MembersRead{Manager: read}
 	if read.State == ownership.Present {
 		r.Membership = state
@@ -155,25 +164,11 @@ func builtinKind(group, kind string) (resourceid.Builtin, bool) {
 	return b, ok && b.Group == group
 }
 
-// scopeOf says whether gk is namespaced, and whether Radar can tell: a
-// built-in kind's scope is its own unless discovery is ambiguous about the
-// kind or serves it with the other scope; any other kind's is the catalog's.
-func (s *session) scopeOf(gk resourceid.GroupKind) (namespaced, known bool) {
-	if s.catalog.Ambiguous(gk) {
-		return false, false
-	}
-	k, served := s.catalog.Kind(gk)
-	if b, builtin := builtinKind(gk.Group, gk.Kind); builtin {
-		return b.Namespaced, !served || k.Namespaced == b.Namespaced
-	}
-	return k.Namespaced, served
-}
-
 // align reads an entry as its kind's scope says, or as recorded when Radar
 // can't tell the scope.
 func (s *session) align(e gitops.Member, destination string) resourceid.Ref {
 	ref := resourceid.Ref{Group: e.Group, Kind: e.Kind, Namespace: e.Namespace, Name: e.Name}
-	if namespaced, known := s.scopeOf(ref.GroupKind()); known {
+	if namespaced, known := s.catalog.Scope(ref.GroupKind()); known {
 		ref.Namespace = gitops.MemberNamespace(namespaced, e.Namespace, destination)
 	}
 	return ref
@@ -186,10 +181,10 @@ func (s *session) placements(ref resourceid.Ref) ([]string, readreason.Code) {
 		return nil, readreason.ReadError
 	}
 	gk := ref.GroupKind()
-	namespaced, known := s.scopeOf(gk)
+	namespaced, known := s.catalog.Scope(gk)
 	_, builtin := builtinKind(ref.Group, ref.Kind)
 	switch {
-	case !known && (builtin || s.catalog.Ambiguous(gk) || !s.catalog.Complete()):
+	case !known && (builtin || s.catalog.Ambiguous(gk) || !s.catalog.CoversGroup(gk.Group)):
 		// Radar can't tell the kind's scope.
 		return nil, readreason.ReadError
 	case !known:
@@ -224,7 +219,7 @@ func (s *session) RecordingManagers(ref resourceid.Ref) ownership.RecordingManag
 		kind, served := s.catalog.Kind(gk)
 		if !served {
 			// Not installed, unless discovery missed it.
-			if !s.catalog.Complete() || s.catalog.Ambiguous(gk) {
+			if !s.catalog.CoversGroup(gk.Group) || s.catalog.Ambiguous(gk) {
 				q.gap(gk, "", readreason.ReadError)
 			}
 			continue

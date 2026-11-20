@@ -45,6 +45,17 @@ export const DURATION_DISCLOSURE = 300
  *  should feel immediate. */
 export const DURATION_MENU_IN = 140
 export const DURATION_MENU_OUT = 100
+/** Hover-revealed row actions (HOVER_REVEAL_*). In the range of Radar's other
+ *  hover effects (150–200ms) rather than the menu clock, which reads as a
+ *  flicker on something the pointer merely passes over. The exit is shorter
+ *  so leaving a row feels immediate. The preset class strings spell these
+ *  values out for Tailwind's scanner; a test keeps them in step. */
+export const DURATION_HOVER_REVEAL_IN = 200
+export const DURATION_HOVER_REVEAL_OUT = 120
+/** Hover intent before a row action comes in: a pointer sweeping down a long
+ *  list passes each row in well under this, so actions don't ripple in behind
+ *  it. Entrance only; leaving a row hides its action at once. */
+export const HOVER_INTENT_DELAY = 60
 /** Modal dialogs and command palettes. */
 export const DURATION_DIALOG_IN = 220
 export const DURATION_DIALOG_OUT = 160
@@ -103,6 +114,29 @@ export const TRANSITION_PANEL =
  *  with a transform-origin utility so it grows from the trigger. */
 export const TRANSITION_MENU =
   `transition-[translate,scale,opacity] ${TW_EASE} motion-reduce:transition-none`
+
+/** Hover-revealed row action, the resting half: the row content the action
+ *  replaces (an age, a chip) lifts 3px and fades on the exit clock. Needs a
+ *  `group` ancestor; keyboard reveal keys on :focus-visible inside the group,
+ *  so a row left focused by a mouse click doesn't keep its action up. Timing
+ *  is DURATION_HOVER_REVEAL_IN / _OUT and HOVER_INTENT_DELAY. */
+export const HOVER_REVEAL_REST =
+  `transition-[opacity,translate] duration-200 ${TW_EASE} motion-reduce:transition-none group-hover:opacity-0 group-hover:-translate-y-[3px] group-hover:duration-120 group-hover:delay-60 group-has-[:focus-visible]:opacity-0 group-has-[:focus-visible]:-translate-y-[3px] group-has-[:focus-visible]:duration-120 group-has-[:focus-visible]:delay-60`
+
+/** Hover-revealed row action, the action half: rises 3px into place on the
+ *  entrance clock after the hover-intent delay, drops out on the exit clock.
+ *  Never a hit target itself, so its padding and any backdrop leave clicks to
+ *  the row underneath; put HOVER_REVEAL_HIT on the control inside it. Pair
+ *  with HOVER_REVEAL_REST in one group. */
+export const HOVER_REVEAL_ACTION =
+  `transition-[opacity,translate] duration-120 ${TW_EASE} motion-reduce:transition-none pointer-events-none opacity-0 translate-y-[3px] group-hover:opacity-100 group-hover:translate-y-0 group-hover:duration-200 group-hover:delay-60 group-has-[:focus-visible]:opacity-100 group-has-[:focus-visible]:translate-y-0 group-has-[:focus-visible]:duration-200 group-has-[:focus-visible]:delay-60`
+
+/** Hover-revealed row action, the control inside it: takes clicks only while
+ *  shown. pointer-events transitions as a discrete property on the same
+ *  clock, so it flips partway through the entrance rather than at hover start
+ *  and a click during the intent delay lands on the row. */
+export const HOVER_REVEAL_HIT =
+  `transition-[pointer-events] transition-discrete duration-120 ${TW_EASE} motion-reduce:transition-none pointer-events-none group-hover:pointer-events-auto group-hover:duration-200 group-hover:delay-60 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:duration-200 group-has-[:focus-visible]:delay-60`
 
 export type OverlayKind = 'menu' | 'dialog' | 'sheet' | 'drawer'
 

@@ -547,6 +547,29 @@ it('shows reported running-but-unready nginx readiness as degraded', () => {
   expect(html).toMatch(/>running</)
 })
 
+describe('PodRenderer secondary networks', () => {
+  const render = (annotations?: Record<string, string>) => renderToString(
+    <PodRenderer
+      data={{ ...pod, metadata: { ...pod.metadata, annotations } }}
+      onCopy={() => undefined}
+      copied={null}
+    />,
+  )
+
+  it('leaves a Pod without Multus annotations exactly as it was', () => {
+    const withoutAnnotations = render(undefined)
+    expect(withoutAnnotations).not.toContain('Secondary Networks')
+    expect(render({ 'example.com/other': 'value' })).toBe(withoutAnnotations)
+  })
+
+  it('shows the section for a requested attachment and not for the default network alone', () => {
+    expect(render({ 'k8s.v1.cni.cncf.io/networks': 'macvlan-conf' })).toContain('Secondary Networks')
+    expect(render({
+      'k8s.v1.cni.cncf.io/network-status': JSON.stringify([{ name: 'ovn-kubernetes', interface: 'eth0', default: true }]),
+    })).not.toContain('Secondary Networks')
+  })
+})
+
 describe('finished Pod resource usage',()=>{
  it.each(['Succeeded','Failed'])('explains ended live usage for %s without cluster repair advice',phase=>{
   const html=renderToString(<PodRenderer data={{...pod,status:{phase}}} onCopy={()=>{}} copied={null} metricsUnavailable metricsHistory={{containers:[],metricsUnavailableReason:'not found'}} />)
@@ -596,4 +619,74 @@ describe('finished Pod resource usage',()=>{
   expect(html).not.toContain('Live resource usage has ended')
  })
 
+})
+
+describe('PodRenderer OOMKilled limit hint', () => {
+  const oomPod = (podLimit: string | undefined, containerLimit: string | undefined) => ({
+    metadata: { name: 'api', namespace: 'default' },
+    spec: {
+      ...(podLimit ? { resources: { limits: { memory: podLimit } } } : {}),
+      containers: [{
+        name: 'api',
+        image: 'example/api:latest',
+        ...(containerLimit ? { resources: { limits: { memory: containerLimit } } } : {}),
+      }],
+    },
+    status: {
+      phase: 'Running',
+      containerStatuses: [{
+        name: 'api',
+        ready: false,
+        restartCount: 3,
+        state: { waiting: { reason: 'CrashLoopBackOff' } },
+        lastState: { terminated: { reason: 'OOMKilled', exitCode: 137 } },
+      }],
+    },
+  })
+  const render = (podLimit?: string, containerLimit?: string) => renderToString(
+    <PodRenderer data={oomPod(podLimit, containerLimit)} onCopy={() => undefined} copied={null} />,
+  )
+
+  // The OOM exit row only, not the resource summaries around it.
+  const afterOOM = (html: string, value: string) => {
+    const start = html.indexOf('OOMKilled')
+    return html.slice(start, html.indexOf('</div>', start)).includes(value)
+  }
+
+  it('shows the pod-level memory limit beside the OOM exit when the container sets none', () => {
+    expect(afterOOM(render('48Mi'), '48Mi')).toBe(true)
+  })
+
+  it('shows both limits when the container and the pod each set one', () => {
+    const html = render('256Mi', '96Mi')
+    expect(afterOOM(html, '96Mi')).toBe(true)
+    expect(afterOOM(html, '256Mi')).toBe(true)
+  })
+
+  it('shows only the container limit when the pod sets none', () => {
+    const html = render(undefined, '96Mi')
+    expect(afterOOM(html, '96Mi')).toBe(true)
+    expect(afterOOM(html, 'pod limit')).toBe(false)
+  })
+})
+
+describe('PodRenderer Agent Substrate worker note', () => {
+  it('names the pool and says the Pod is shared by the actors it hosts', () => {
+    const html = renderToString(
+      <PodRenderer
+        data={{ ...pod, metadata: { ...pod.metadata, labels: { 'ate.dev/worker-pool': 'agent-pool' } } }}
+        onCopy={() => undefined}
+        copied={null}
+        onNavigate={() => undefined}
+      />,
+    )
+    expect(html).toContain('Agent Substrate worker')
+    expect(html).toContain('agent-pool')
+    expect(html).toContain('shared by every actor it has hosted')
+  })
+
+  it('stays quiet on other Pods', () => {
+    const html = renderToString(<PodRenderer data={pod} onCopy={() => undefined} copied={null} />)
+    expect(html).not.toContain('Agent Substrate worker')
+  })
 })

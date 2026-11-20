@@ -12,7 +12,7 @@ import (
 // flows. Every edge it produces has to find its own flows again.
 func TestIstioEdgesFindTheirRecords(t *testing.T) {
 	tcp := func(src, dst, dstNs, svc string, v float64) istioRawSeries {
-		return istioRawSeries{"istio_tcp_connections_opened_total", map[string]string{
+		return istioRawSeries{"istio_tcp_received_bytes_total", map[string]string{
 			"source_workload": src, "source_workload_namespace": "shop",
 			"destination_workload": dst, "destination_workload_namespace": dstNs,
 			"destination_service_name": svc, "reporter": "destination",
@@ -39,11 +39,18 @@ func TestIstioEdgesFindTheirRecords(t *testing.T) {
 			Source: ref(a.Source), Destination: ref(a.Destination),
 			Port: a.Port, DirectionUnknown: a.DirectionUnknown,
 		}}}
-		var matched int64
+		var matched, sent, recv int64
+		var records int
 		for _, f := range resp.Flows {
 			if match.Matches(f) {
 				matched += f.Connections
+				sent += f.BytesSent
+				recv += f.BytesRecv
+				records++
 			}
+		}
+		if records == 0 || sent != a.BytesSent || recv != a.BytesRecv {
+			t.Errorf("edge records = %d, bytes sent/recv = %d/%d; want %d/%d", records, sent, recv, a.BytesSent, a.BytesRecv)
 		}
 		if matched != a.Connections {
 			t.Errorf("edge %s/%s -> %s/%s:%d: its records add up to %d connections, the edge shows %d",

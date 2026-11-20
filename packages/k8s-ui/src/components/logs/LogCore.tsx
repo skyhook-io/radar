@@ -64,6 +64,10 @@ interface LogCoreProps {
   onClear?: () => void
   toolbarExtra?: ToolbarExtraRenderer
   showPodName?: boolean
+  /** Name the container on each line, for views that mix several containers. */
+  showContainerName?: boolean
+  /** Width in characters that aligns the container labels of a mixed view. */
+  containerLabelWidth?: number
   emptyMessage?: ReactNode
   sourceUnavailable?: boolean
   emptyCommand?: string | null
@@ -158,6 +162,8 @@ export function LogCore({
   onClear,
   toolbarExtra,
   showPodName = false,
+  showContainerName = false,
+  containerLabelWidth,
   emptyMessage = 'No logs available',
   sourceUnavailable = false,
   emptyCommand,
@@ -376,8 +382,10 @@ export function LogCore({
   const gapNotice = 'Some logs between your saved view and the latest logs are no longer available.'
   const exportEntries = exportScope === 'all' ? retainedExportEntries : displayEntries
   const exportOptions = useMemo(
-    () => ({ format: exportFormat, showTimestamps, showPodName }),
-    [exportFormat, showTimestamps, showPodName],
+    // An exported line names its Pod and container whenever the screen tells
+    // sources apart, since the text format has no separate container column.
+    () => ({ format: exportFormat, showTimestamps, showPodName: showPodName || showContainerName }),
+    [exportFormat, showTimestamps, showPodName, showContainerName],
   )
   // Keyed on presence, not logical open, so the preview doesn't flip to
   // "nothing to export" while the popover is still fading out.
@@ -1168,6 +1176,8 @@ export function LogCore({
                 searchIsRegex={search.isRegex}
                 searchIsCaseSensitive={search.isCaseSensitive}
                 showPodName={showPodName}
+                showContainerName={showContainerName}
+                containerLabelWidth={containerLabelWidth}
                 showTimestamp={showTimestamps}
                 tsFormat={tsFormat}
                 ansiEnabled={ansiEnabled}
@@ -1273,6 +1283,8 @@ interface LogLineProps {
   searchIsRegex: boolean
   searchIsCaseSensitive: boolean
   showPodName: boolean
+  showContainerName?: boolean
+  containerLabelWidth?: number
   showTimestamp: boolean
   tsFormat: TimestampFormat
   ansiEnabled: boolean
@@ -1294,6 +1306,8 @@ function LogLine({
   searchIsRegex,
   searchIsCaseSensitive,
   showPodName,
+  showContainerName = false,
+  containerLabelWidth,
   showTimestamp,
   tsFormat,
   ansiEnabled,
@@ -1373,6 +1387,14 @@ function LogLine({
           [{entry.sourceLabel || entry.pod.split('-').slice(-2).join('-')}]
         </span>
       )}
+      {showContainerName && entry.container && (
+        <ContainerLabel
+          container={entry.container}
+          isInit={entry.containerRole === 'init'}
+          width={containerLabelWidth}
+          palette={palette}
+        />
+      )}
       <span className="flex-1 min-w-0 phone:order-last phone:basis-full">{contentElement}</span>
       <button
         onClick={handleCopy}
@@ -1385,12 +1407,27 @@ function LogLine({
   )
 }
 
+function ContainerLabel({ container, isInit, width, palette }: { container: string; isInit: boolean; width?: number; palette: LogPalette }) {
+  return (
+    <span
+      className={`${palette.textTertiary} select-none pr-2 whitespace-nowrap max-w-[200px] truncate`}
+      style={width ? { minWidth: `min(calc(${width}ch + 0.5rem), 25%)` } : undefined}
+      title={isInit ? `Init container ${container}` : `Container ${container}`}
+    >
+      {container}
+      {isInit && <span className="ml-1 text-[10px] uppercase tracking-wide">init</span>}
+    </span>
+  )
+}
+
 interface LogGroupItemProps {
   group: LogGroup
   searchQuery: string
   searchIsRegex: boolean
   searchIsCaseSensitive: boolean
   showPodName: boolean
+  showContainerName?: boolean
+  containerLabelWidth?: number
   showTimestamp: boolean
   tsFormat: TimestampFormat
   ansiEnabled: boolean

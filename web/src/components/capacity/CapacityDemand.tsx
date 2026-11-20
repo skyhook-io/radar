@@ -49,7 +49,8 @@ export function updateDemandSearchParam(
 // demandGroupVerdict synthesizes the one-line answer for the archetypal case:
 // every evaluated pool ruled the group out. The dominant leading reason across
 // incompatible pools headlines; the predicate tables below stay the receipts.
-// Anything short of all-pools-incompatible keeps the neutral counts line —
+// Anything short of all-pools-incompatible — including a pool Radar could not
+// evaluate — keeps the neutral counts line:
 // declared compatibility is not a scheduling guarantee, and a synthesized
 // verdict must not overclaim past what the evidence supports.
 export function demandGroupVerdict(group: CapacityDemandGroup): {
@@ -58,7 +59,7 @@ export function demandGroupVerdict(group: CapacityDemandGroup): {
   poolCount: number;
 } | null {
   const counts = group.poolEvaluationCounts;
-  if (counts.declaredCompatible > 0 || counts.incompatible === 0) return null;
+  if (counts.declaredCompatible > 0 || counts.incompatible === 0 || counts.unknown > 0) return null;
   const leading = group.poolEvaluations
     .filter((e) => e.result === "incompatible" && e.evidence.length > 0)
     .map((e) => e.evidence[0]);

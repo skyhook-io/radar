@@ -1,23 +1,50 @@
 import { adaptListResources } from "./resource";
 import { nonEmptyString, parseJSON, record, stringArray } from "../parse";
 import { invalidPayload, type ProjectionBuilder } from "../observations";
-import type { InvestigationEvidenceSource } from "../types";
+import type {
+  InvestigationEvidenceRelevance,
+  InvestigationEvidenceSource,
+} from "../types";
 
 // Helm releases, installed packages and search hits are inventories: rows
 // with a kind, a name and a namespace, one line of status, and for a hit
 // the text that matched. They render on the inventory card so a citation
 // can name a row the way it names a resource in a listing.
 
+// A caller who can't read all of Helm's storage gets an object, whose observed
+// rows have no status of their own; the card must not read as though they did.
+function helmReleaseRows(payload: unknown): unknown[] | undefined {
+  if (Array.isArray(payload)) return payload;
+  const value = record(payload);
+  if (!value || !Array.isArray(value.releases) || !Array.isArray(value.observed)) {
+    return undefined;
+  }
+  return [
+    ...value.releases,
+    ...value.observed.map((entry) => {
+      const item = record(entry);
+      return item ? { ...item, status: "status unknown" } : entry;
+    }),
+  ];
+}
+
 export function adaptListHelmReleases(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
   payload: unknown,
+  relevance?: InvestigationEvidenceRelevance,
 ): void {
   // Retained runs may contain the Helm producer's nil-slice encoding.
   if (payload === null) payload = [];
-  if (!Array.isArray(payload)) {
+  const rows = helmReleaseRows(payload);
+  if (!rows) {
     invalidPayload(builder, source);
     return;
+  }
+  // A partial read can miss releases, which its rows can't show.
+  const partial = record(payload)?.summary;
+  if (nonEmptyString(partial)) {
+    builder.limit(source, "Helm releases", partial, "unknown");
   }
   const args = record(parseJSON(source.args ?? ""));
   const namespace = nonEmptyString(args?.namespace)
@@ -26,7 +53,7 @@ export function adaptListHelmReleases(
   adaptListResources(
     builder,
     source,
-    payload.map((entry) => {
+    rows.map((entry) => {
       const item = record(entry);
       if (!item) return entry;
       const chart = [item.chart, item.chartVersion]
@@ -44,7 +71,10 @@ export function adaptListHelmReleases(
           : {}),
       };
     }),
-    { title: namespace ? `Helm releases in ${namespace}` : "Helm releases" },
+    {
+      title: namespace ? `Helm releases in ${namespace}` : "Helm releases",
+      relevance,
+    },
   );
 }
 
