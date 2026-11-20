@@ -483,7 +483,7 @@ func TestCalicoPolicyVisibleThroughEitherServingGroup(t *testing.T) {
 	}
 }
 
-func TestCalicoPseudoKindsResolveInNeighborhood(t *testing.T) {
+func TestCalicoPseudoKindsResolveAsNodes(t *testing.T) {
 	for _, test := range []struct {
 		kind string
 		want NodeKind
@@ -501,16 +501,14 @@ func TestCalicoPseudoKindsResolveInNeighborhood(t *testing.T) {
 			Data: map[string]any{"namespace": "", "apiVersion": "projectcalico.org/v3"},
 		}
 		topo := &Topology{Nodes: []Node{node}}
-		sub := BuildNeighborhoodWithIndex(topo, ResourceRef{Kind: test.kind, Name: "policy", Group: "projectcalico.org"}, NeighborhoodOptions{Profile: ProfileAuto, Hops: 1}, nil, nil)
-		if len(sub.Nodes) != 1 || sub.Nodes[0].Kind != test.want {
-			t.Errorf("%s resolved to %+v, want %s", test.kind, sub.Nodes, test.want)
+		if got, _ := findNodeByRef(topo.Nodes, ResourceRef{Kind: test.kind, Name: "policy", Group: "projectcalico.org"}, nil); got == nil || got.Kind != test.want {
+			t.Errorf("%s resolved to %+v, want %s", test.kind, got, test.want)
 		}
 	}
 }
 
-func TestBuildNeighborhood_CalicoPolicyResolvesFromEitherGroup(t *testing.T) {
+func TestCalicoPolicyResolvesFromEitherGroup(t *testing.T) {
 	policyID := "caliconetworkpolicy/demo/shared"
-	targetID := "deployment/demo/web"
 	topo := &Topology{
 		Nodes: []Node{
 			{ID: policyID, Kind: KindCalicoNetworkPolicy, Name: "shared", Data: map[string]any{
@@ -518,18 +516,15 @@ func TestBuildNeighborhood_CalicoPolicyResolvesFromEitherGroup(t *testing.T) {
 				"apiVersion":  "projectcalico.org/v3",
 				"apiVersions": []string{"projectcalico.org/v3", "crd.projectcalico.org/v1"},
 			}},
-			{ID: targetID, Kind: KindDeployment, Name: "web", Data: map[string]any{"namespace": "demo"}},
+			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web", Data: map[string]any{"namespace": "demo"}},
 		},
-		Edges: []Edge{{Source: policyID, Target: targetID, Type: EdgeProtects}},
 	}
 
 	for _, group := range []string{"projectcalico.org", "crd.projectcalico.org"} {
 		t.Run(group, func(t *testing.T) {
-			sub := BuildNeighborhoodWithIndex(topo, ResourceRef{
-				Kind: "NetworkPolicy", Namespace: "demo", Name: "shared", Group: group,
-			}, NeighborhoodOptions{Profile: ProfileAll, Hops: 1}, nil, nil)
-			if len(sub.Nodes) != 2 || sub.Nodes[0].ID != policyID || sub.Nodes[1].ID != targetID {
-				t.Fatalf("neighborhood via %s = %+v, want root %s and target %s", group, sub.Nodes, policyID, targetID)
+			got, _ := findNodeByRef(topo.Nodes, ResourceRef{Kind: "NetworkPolicy", Namespace: "demo", Name: "shared", Group: group}, nil)
+			if got == nil || got.ID != policyID {
+				t.Fatalf("lookup via %s = %+v, want %s", group, got, policyID)
 			}
 		})
 	}

@@ -148,6 +148,8 @@ export interface VeleroServerConfig {
   validationFrequencySeconds?: number
   /** The schedule controller is removed (--restore-only or --disable-controllers). True or false when the flags were read; absent when they could not be. */
   schedulingDisabled?: boolean
+  /** --schedule-skip-immediately; absent when the server's flags could not be read. */
+  scheduleSkipImmediately?: boolean
   /** The server Deployment's pods (status.replicas): every non-terminating pod, Pending and crash-looping ones included; 0 is a stopped server. Absent when the Deployment was not found. */
   replicas?: number
   readyReplicas?: number
@@ -260,4 +262,31 @@ export interface VeleroScheduleActivityResponse {
   serverStopped?: boolean
   /** As the server's backupsDisabled: true or false when the flags were read, absent when they could not be. */
   backupsDisabled?: boolean
+  /** What resuming does, while the schedule is paused. Absent from a Radar without veleroSchedulePause. */
+  resume?: VeleroResumeChoices
+}
+
+/** pkg/velero ResumeOutcome */
+export type VeleroResumeOutcome = 'nothing' | 'wontRun' | 'waits' | 'skips' | 'held' | 'runsNow' | 'mayRunNow' | 'runsRepeatedly'
+
+/** pkg/velero ResumeOutlook: what resuming a paused schedule does. */
+export interface VeleroResumeOutlook {
+  outcome: VeleroResumeOutcome
+  reason?: string
+  /** A run is due now, or may be, so skipping it would change something. */
+  due: boolean
+  summary: string
+  /** The run Velero waits for, when nothing is due. */
+  nextRun?: string
+  nextRunCertain?: boolean
+  /** The run that holds a due one. */
+  blocker?: VeleroRun
+}
+
+/** internal/velero ResumeChoices */
+export interface VeleroResumeChoices {
+  /** spec.skipImmediately left unset, as `velero schedule unpause` does: the server's flag decides. */
+  default: VeleroResumeOutlook
+  /** With the due run skipped (skipImmediately: true); set only when a run is or may be due. */
+  skipping?: VeleroResumeOutlook
 }

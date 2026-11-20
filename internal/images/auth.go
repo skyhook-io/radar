@@ -278,21 +278,7 @@ func getKeychainFromSecrets(namespace string, secretNames []string) authn.Keycha
 			continue // Skip missing secrets
 		}
 
-		if secret.Type != corev1.SecretTypeDockerConfigJson {
-			continue
-		}
-
-		configData, ok := secret.Data[".dockerconfigjson"]
-		if !ok {
-			continue
-		}
-
-		var config DockerConfigJSON
-		if err := json.Unmarshal(configData, &config); err != nil {
-			continue
-		}
-
-		maps.Copy(auths, config.Auths)
+		maps.Copy(auths, pullSecretAuths(secret))
 	}
 
 	if len(auths) == 0 {
@@ -300,6 +286,17 @@ func getKeychainFromSecrets(namespace string, secretNames []string) authn.Keycha
 	}
 
 	return &pullSecretKeychain{auths: auths}
+}
+
+func pullSecretAuths(secret *corev1.Secret) map[string]DockerConfigEntry {
+	if secret.Type != corev1.SecretTypeDockerConfigJson {
+		return nil
+	}
+	var config DockerConfigJSON
+	if err := json.Unmarshal(secret.Data[corev1.DockerConfigJsonKey], &config); err != nil {
+		return nil
+	}
+	return config.Auths
 }
 
 // GetKeychainFromPullSecrets creates an authn.Keychain from pod ImagePullSecrets

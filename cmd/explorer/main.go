@@ -44,6 +44,9 @@ var (
 
 func main() {
 	// Subcommand dispatch (before flag parsing — subcommands own their flags).
+	if len(os.Args) > 1 && os.Args[1] == "check" {
+		os.Exit(runCheckCommand(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	// `radar diagnose <kind>/<name>` is a thin client for a RUNNING instance.
 	if len(os.Args) > 1 && os.Args[1] == "diagnose" {
 		os.Exit(diagnosecli.Run(os.Args[2:], func(url string) {

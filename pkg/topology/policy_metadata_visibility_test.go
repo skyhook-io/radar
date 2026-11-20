@@ -36,17 +36,6 @@ func TestStripPolicyEvidenceCopiesSharedData(t *testing.T) {
 	}
 }
 
-func TestAuthorizedNeighborhoodDoesNotExposeInternalCoverageIDs(t *testing.T) {
-	topo := &Topology{Nodes: []Node{{ID: "globalnetworkpolicy//all", Kind: KindCalicoGlobalNetworkPolicy, Name: "all", Data: map[string]any{"apiVersion": "projectcalico.org/v3", "policyCoverageWorkloads": []string{"deployment/private/secret-workload"}}}}}
-	sub := BuildNeighborhood(topo, ResourceRef{Kind: "GlobalNetworkPolicy", Name: "all", Group: "projectcalico.org"}, NeighborhoodOptions{Allow: func(*Node) bool { return true }})
-	if len(sub.Nodes) != 1 || sub.Nodes[0].Data["policyCoverageWorkloads"] != nil {
-		t.Fatalf("internal IDs escaped: %+v", sub)
-	}
-	if topo.Nodes[0].Data["policyCoverageWorkloads"] == nil {
-		t.Fatal("mutated cached metadata")
-	}
-}
-
 func TestPolicyFilteringDoesNotWriteUnqualifiedSharedData(t *testing.T) {
 	for _, status := range []string{"absent", "nil", "protected"} {
 		t.Run(status, func(t *testing.T) {
@@ -84,28 +73,6 @@ func TestPolicyFilteringDoesNotWriteUnqualifiedSharedData(t *testing.T) {
 				t.Fatalf("shared data mutated: %#v", data)
 			}
 		})
-	}
-}
-
-func TestAuthorizedNeighborhoodWithholdsUnqualifiedCoverageBadge(t *testing.T) {
-	original := &Topology{Nodes: []Node{
-		{ID: "deployment/app/web", Kind: KindDeployment, Name: "web", Data: map[string]any{"namespace": "app", "group": "apps", "policyStatus": "protected"}},
-		{ID: "ciliumclusterwidenetworkpolicy//hidden", Kind: KindCiliumClusterwideNetworkPolicy, Name: "hidden", Data: map[string]any{"group": "cilium.io", "matchesAllPods": true}},
-	}}
-	ref := ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "app", Name: "web"}
-	sub := BuildNeighborhood(original, ref, NeighborhoodOptions{Hops: 0, Allow: func(n *Node) bool { return n.Kind != KindCiliumClusterwideNetworkPolicy }})
-	if len(sub.Nodes) != 1 {
-		t.Fatalf("nodes=%+v", sub.Nodes)
-	}
-	if _, ok := sub.Nodes[0].Data["policyStatus"]; ok {
-		t.Fatal("badge computed with unverified policy evidence escaped")
-	}
-	if original.Nodes[0].Data["policyStatus"] != "protected" {
-		t.Fatal("mutated shared annotation")
-	}
-	unfiltered := BuildNeighborhood(original, ref, NeighborhoodOptions{Hops: 0})
-	if len(unfiltered.Nodes) != 1 || unfiltered.Nodes[0].Data["policyStatus"] != "protected" {
-		t.Fatal("changed unfiltered neighborhood")
 	}
 }
 

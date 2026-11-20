@@ -11,7 +11,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestBuiltInNeighborhoodAPIGroups(t *testing.T) {
+// A typed node carries its API version, and a group-qualified lookup finds
+// it by its own group only.
+func TestBuiltInNodeAPIGroups(t *testing.T) {
 	// Typed informer objects need not retain TypeMeta. The builder knows
 	// their API version from the typed provider, not from object metadata.
 	meta := metav1.ObjectMeta{Namespace: "default", Name: "example"}
@@ -59,17 +61,17 @@ func TestBuiltInNeighborhoodAPIGroups(t *testing.T) {
 					ref := ResourceRef{Kind: string(tc.kind), Namespace: meta.Namespace, Name: meta.Name}
 					for _, group := range []string{"", tc.group, "wrong.example"} {
 						ref.Group = group
-						sub := BuildNeighborhoodWithIndex(graph, ref, NeighborhoodOptions{}, IndexByResource(graph), nil)
+						node, _ := findNodeByRef(graph.Nodes, ref, nil)
 						if group == "wrong.example" {
-							if len(sub.Nodes) != 0 {
-								t.Fatalf("wrong group resolved: %+v", sub.Nodes)
+							if node != nil {
+								t.Fatalf("wrong group resolved: %+v", node)
 							}
 							continue
 						}
-						if len(sub.Nodes) == 0 || sub.Nodes[0].Kind != tc.kind {
+						if node == nil || node.Kind != tc.kind {
 							t.Fatalf("group %q did not resolve %s", group, tc.kind)
 						}
-						if got := sub.Nodes[0].Data["apiVersion"]; got != tc.apiVersion {
+						if got := node.Data["apiVersion"]; got != tc.apiVersion {
 							t.Errorf("group %q: apiVersion = %v, want %s", group, got, tc.apiVersion)
 						}
 					}
