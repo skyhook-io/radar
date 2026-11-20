@@ -1987,7 +1987,7 @@ MetalLB reports the largest 64-bit count for an IPv6 range with 62 or more host 
 | BGPPeer | `metallb.io/v1beta2`, `v1beta1` | — | Yes | Yes |
 | ConfigurationState | `metallb.io/v1beta1` | — | Yes | Yes |
 
-**Helm:** `rbac.crdGroups.metallb` (default on) grants read on these five resources only; BFD profiles, communities and the ServiceL2Status / ServiceBGPStatus resources are not read. Radar Cloud's default integration-read role grants pools, advertisements and ConfigurationStates, and withholds BGPPeers because `spec.password` can hold the session password inline; see [the default read policy](cloud-rbac-baseline.md).
+**Helm:** `rbac.crdGroups.metallb` (default on) grants read on these resources only. BGPPeers can hold the session password inline, so the chart reads them only when it also reads Secrets (`rbac.secrets`, `rbac.helm`, authentication enabled, or cloud mode), like VictoriaMetrics; otherwise the BGPPeer list is not collected. BFD profiles, communities and the ServiceL2Status / ServiceBGPStatus resources are not read. Radar Cloud's default integration-read role grants pools, advertisements and ConfigurationStates, and withholds BGPPeers because `spec.password` can hold the session password inline; see [the default read policy](cloud-rbac-baseline.md).
 
 Checked against MetalLB v0.16.2 (native mode) on kind: an exhausted pool with a pending Service, a dual-stack pool with auto assign off and service allocation, advertisements by name, by selector and for every pool, a peer with an inline password, and a peer naming a missing password Secret, which made the speaker's ConfigurationState Invalid while the controller's stayed Valid.
 

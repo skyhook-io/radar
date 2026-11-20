@@ -752,7 +752,7 @@ retain their finite grants.
 | `kured` | `kured.io` |
 | `kyverno` | `kyverno.io`, `policies.kyverno.io`, `wgpolicyk8s.io`, `reports.kyverno.io`, `openreports.io` |
 | `mariadb` | `mariadb.mmontes.io` |
-| `metallb` | `metallb.io` (`ipaddresspools`, `l2advertisements`, `bgpadvertisements`, `bgppeers`, `configurationstates` only) |
+| `metallb` | `metallb.io` (`ipaddresspools`, `l2advertisements`, `bgpadvertisements`, `configurationstates` only; `bgppeers` only when Secrets are granted, see below) |
 | `multus` | `k8s.cni.cncf.io` (`network-attachment-definitions`) |
 | `networkPolicyApi` | `policy.networking.k8s.io` |
 | `nginx` | `nginx.org` |
@@ -784,6 +784,10 @@ VMUser/VMAuth, alerting and scrape/probe resources, and the Logs, Traces,
 Distributed and Anomaly families. `crdGroups.all=true` or adding
 `operator.victoriametrics.com` to `additionalCrdGroups` grants them anyway;
 permissions are additive, and these exclusions are not deny rules.
+
+**MetalLB BGPPeers** (`bgppeers` in `metallb.io`) follow the same rule when
+`rbac.crdGroups.metallb` is on: `spec.password` can hold the BGP session
+password inline, so Radar reads BGPPeers only when the chart grants Secrets.
 
 **Disable groups:** `--set rbac.crdGroups.calico=false`
 
