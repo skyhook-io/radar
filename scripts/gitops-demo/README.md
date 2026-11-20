@@ -22,15 +22,20 @@ kubectl config use-context kind-radar-gitops-demo
 ```
 
 The Flux artifact chain (ArtifactGenerator → ExternalArtifact → HelmRelease) needs Flux 2.7+
-and its opt-in `source-watcher` component:
+and its `source-watcher` component:
 
 ```bash
 FLUX_VERSION=v2.7.5 FLUX_SOURCE_WATCHER=1 ./scripts/gitops-demo.sh up   # or v2.8.x
 ```
 
+On Flux 2.8 `install.yaml` already includes source-watcher; on 2.7 it leaves it out, so
 `install_source_watcher` takes `source-watcher.yaml` from that release's `manifests.tar.gz`
-(Flux 2.7's `install.yaml` leaves it out; 2.8's already includes it), applies it into `flux-system`, and turns on helm-controller's `ExternalArtifact` feature gate, which Flux 2.7 and 2.8 leave off. Without it, or on the default
-Flux version, `15-flux-artifacts.yaml` is skipped and the rest of the demo is unchanged. With it, a failed download stops the run rather than finishing without source-watcher.
+and applies it into `flux-system`. On both versions helm-controller and kustomize-controller
+ship with the `ExternalArtifact` feature gate off and refuse an ExternalArtifact source
+("feature gate is disabled"), so the script turns the gate on for both. Without
+`FLUX_SOURCE_WATCHER=1`, or on the default Flux version, `15-flux-artifacts.yaml` is skipped
+and the rest of the demo is unchanged. With it, a failed download stops the run rather than
+finishing without source-watcher.
 
 ## What's in the cluster
 

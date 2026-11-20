@@ -1,7 +1,7 @@
 # Flux 2.7+ artifact chain: GitRepository → ArtifactGenerator →
 # ExternalArtifact → HelmRelease (chartRef). ArtifactGenerator is served by
-# source-watcher, an opt-in Flux component: gitops-demo.sh applies this file
-# only when FLUX_SOURCE_WATCHER=1 installed it (the CRD exists).
+# source-watcher (in Flux 2.8's install.yaml, separate on 2.7): gitops-demo.sh
+# applies this file only with FLUX_SOURCE_WATCHER=1, once the CRD exists.
 #
 # A separate GitRepository keeps the chart directory, which the shared
 # `podinfo` source ignores (it only keeps /kustomize).
