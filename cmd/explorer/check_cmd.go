@@ -430,10 +430,10 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 			cpuUnknown += row.UnknownCPUPods
 		}
 		if vbmi > 0 {
-			fmt.Fprintf(&table, "Prioritize patching the %d matching containers on nodes reporting AVX-512 VBMI.\n", vbmi)
+			fmt.Fprintf(&table, "Prioritize patching. Nodes report AVX-512 VBMI for %d matching %s.\n", vbmi, java4ShellContainerUnit(vbmi))
 		}
 		if cpuUnknown > 0 {
-			fmt.Fprintf(&table, "Check CPU capability for the %d matching containers where it is unknown.\n", cpuUnknown)
+			fmt.Fprintf(&table, "CPU capability unknown for %d matching %s. Check the node CPU flags.\n", cpuUnknown, java4ShellContainerUnit(cpuUnknown))
 		}
 		if vbmi == 0 && cpuUnknown == 0 && report.FindingGroups <= len(report.Findings) {
 			fmt.Fprintln(&table, "Current CPU evidence points away from exposure. The vulnerable path needs AVX-512 VBMI.")
@@ -556,11 +556,7 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 				continue
 			}
 			count := report.Unassessed[reason]
-			unit := "containers"
-			if count == 1 {
-				unit = "container"
-			}
-			fmt.Fprintf(&table, "\n  %s · %d %s\n", style.Bold(checkTableValue(checkReasonLabel(reason))), count, unit)
+			fmt.Fprintf(&table, "\n  %s · %d %s\n", style.Bold(checkTableValue(checkReasonLabel(reason))), count, java4ShellContainerUnit(count))
 			switch reason {
 			case images.StatusAuthRequired:
 				writeJava4ShellAuthHint(&table, report.AuthRequiredRegistries, snapshot.DockerHubLogin)
@@ -644,7 +640,7 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 }
 
 func (snapshot java4ShellCLIReport) writeDockerHubRecovery(out io.Writer, style cliui.Styler, throttled, skipped int) {
-	fmt.Fprintf(out, "\n  %s · %d containers\n", style.Bold("Docker Hub"), throttled+skipped)
+	fmt.Fprintf(out, "\n  %s · %d %s\n", style.Bold("Docker Hub"), throttled+skipped, java4ShellContainerUnit(throttled+skipped))
 	if throttled > 0 {
 		fmt.Fprintf(out, "    %d hit HTTP 429 from Docker Hub (index.docker.io).\n", throttled)
 	}
@@ -710,6 +706,13 @@ func java4ShellContextArg(contextName string) string {
 
 func radarCLIInvocation() string {
 	return shellQuote(os.Args[0])
+}
+
+func java4ShellContainerUnit(count int) string {
+	if count == 1 {
+		return "container"
+	}
+	return "containers"
 }
 
 func java4ShellCPUCount(pods, count int, evidence string) string {
