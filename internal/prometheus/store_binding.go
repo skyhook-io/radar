@@ -68,6 +68,9 @@ func (b boundStore) Query(ctx context.Context, query string) (*prom.QueryResult,
 }
 
 func (b boundStore) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) (*prom.QueryResult, error) {
+	if b.err != nil {
+		return nil, b.err
+	}
 	if b.store == nil {
 		return nil, errConnectionReset
 	}

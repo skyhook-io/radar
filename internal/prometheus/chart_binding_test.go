@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -140,5 +141,57 @@ func TestProductionChartDepsBindTheCheck(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A store that can't be connected is a failed query (502), not a chart
+// withheld for a cluster scope that never ran, and no handle it left behind
+// is queried.
+func TestChartOnAnUnreachableStoreFailsItsQuery(t *testing.T) {
+	for _, tc := range chartBindingCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			initBindingTestCluster(t)
+			store, queries := bindingTestStore(t)
+			client := connectBindingTestClient(t, store.URL)
+			store.Close()
+			checks := replaceChartResolver(t, func() {})
+			ctx := context.Background()
+
+			withheld, err := tc.run(ctx, productionChartDeps(ctx, client))
+			var queryErr errChartQuery
+			if !errors.As(err, &queryErr) {
+				t.Fatalf("err = %v, want a failed query", err)
+			}
+			if withheld {
+				t.Error("chart withheld instead of failing")
+			}
+			if *checks != 0 {
+				t.Errorf("checks = %d, want none without a store", *checks)
+			}
+			if got := queries(); len(got) != 0 {
+				t.Errorf("chart queries reached the store: %q", got)
+			}
+		})
+	}
+}
+
+// A connect that fails while a handle is still around (a refresh error, say)
+// must not let a single-cluster chart query that handle.
+func TestChartWithAFailedConnectQueriesNothing(t *testing.T) {
+	initBindingTestCluster(t)
+	store, queries := bindingTestStore(t)
+	client := connectBindingTestClient(t, store.URL)
+	handle, conn := client.PromSnapshot()
+	replaceChartResolver(t, func() {})
+	d := chartDeps{
+		q:          boundStore{store: handle, conn: conn, err: errors.New("refresh failed")},
+		resolve:    BoundResolver(client, conn, chartResolverFor(client, nil)),
+		connectErr: errors.New("refresh failed"),
+	}
+	if _, err := namespaceChart(context.Background(), d, "shop", prom.CategoryCPU, "1h"); err == nil {
+		t.Fatal("chart answered after a failed connect")
+	}
+	if got := queries(); len(got) != 0 {
+		t.Errorf("chart queried the handle a failed connect left: %q", got)
 	}
 }

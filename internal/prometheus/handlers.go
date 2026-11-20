@@ -168,14 +168,29 @@ type chartDeps struct {
 	q       RangeQuerier
 	resolve ChartScopeResolver
 	cache   *k8s.ResourceCache
+	// connectErr is why the store couldn't be connected; the chart answers
+	// it as a failed query before checking or querying anything.
+	connectErr error
+}
+
+// unconnected is the error a chart answers when its store couldn't be
+// connected: the caller's own end, else the connect failure as a failed query.
+func (d chartDeps) unconnected(ctx context.Context) error {
+	if d.connectErr == nil {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errChartQuery{d.connectErr}
 }
 
 // productionChartDeps runs a chart's queries on one store handle, and its
 // check only on the connection that handle was taken from.
 func productionChartDeps(ctx context.Context, client *Client) chartDeps {
 	cache := k8s.GetResourceCache()
-	store := client.bindStore(ctx)
-	return chartDeps{q: store, resolve: BoundResolver(client, store.conn, chartResolverFor(client, cache)), cache: cache}
+	store, err := client.bindStore(ctx)
+	return chartDeps{q: store, resolve: BoundResolver(client, store.conn, chartResolverFor(client, cache)), cache: cache, connectErr: err}
 }
 
 // chartResolverFor builds the charts' check on the client's current
@@ -348,6 +363,9 @@ func resourceChart(ctx context.Context, d chartDeps, kind, namespace, name strin
 		resp.Pods = &pods
 		resp.PodsTotal = scope.CurrentTotal
 	}
+	if err := d.unconnected(ctx); err != nil {
+		return resp, err
+	}
 	var view ViewScope
 	if req, ok := resourceChartScopeRequest(kind, namespace, name, category, chartRangeDuration(rangeStr), scope, d.cache); ok {
 		var err error
@@ -478,6 +496,9 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 func namespaceChart(ctx context.Context, d chartDeps, namespace string, category prom.MetricCategory, rangeStr string) (NamespaceMetricsResponse, error) {
 	start, end, step := parseTimeRange(rangeStr)
 	resp := NamespaceMetricsResponse{Namespace: namespace, Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}
+	if err := d.unconnected(ctx); err != nil {
+		return resp, err
+	}
 	view, err := ResolveChartScope(ctx, d.resolve, namespaceChartScopeRequest(namespace, category, chartRangeDuration(rangeStr), d.cache))
 	if err != nil {
 		return resp, err
@@ -544,6 +565,9 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 func clusterChart(ctx context.Context, d chartDeps, category prom.MetricCategory, rangeStr string) (ClusterMetricsResponse, error) {
 	start, end, step := parseTimeRange(rangeStr)
 	resp := ClusterMetricsResponse{Category: category, Unit: prom.CategoryUnit(category), Range: rangeStr}
+	if err := d.unconnected(ctx); err != nil {
+		return resp, err
+	}
 	view, err := ResolveChartScope(ctx, d.resolve, clusterChartScopeRequest(category, chartRangeDuration(rangeStr), d.cache))
 	if err != nil {
 		return resp, err
@@ -677,6 +701,9 @@ func handleHPAMetrics(w http.ResponseWriter, r *http.Request) {
 func hpaChart(ctx context.Context, d chartDeps, namespace, name, rangeStr string) (HPAMetricsResponse, error) {
 	start, end, step := parseTimeRange(rangeStr)
 	resp := HPAMetricsResponse{Namespace: namespace, Name: name, Range: rangeStr}
+	if err := d.unconnected(ctx); err != nil {
+		return resp, err
+	}
 	view, err := ResolveChartScope(ctx, d.resolve, hpaChartScopeRequest(namespace, name, chartRangeDuration(rangeStr), d.cache))
 	if err != nil {
 		return resp, err
