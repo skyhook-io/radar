@@ -226,8 +226,10 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 	}
 	out.AuthRequiredRegistries = slices.Sorted(maps.Keys(authRegistries))
 	out.RateLimitedRegistries = slices.Sorted(maps.Keys(throttledRegistries))
-	out.AuthRequiredRegistries = out.AuthRequiredRegistries[:min(len(out.AuthRequiredRegistries), java4ShellRowLimit)]
-	out.RateLimitedRegistries = out.RateLimitedRegistries[:min(len(out.RateLimitedRegistries), java4ShellRowLimit)]
+	if !r.cli {
+		out.AuthRequiredRegistries = out.AuthRequiredRegistries[:min(len(out.AuthRequiredRegistries), java4ShellRowLimit)]
+		out.RateLimitedRegistries = out.RateLimitedRegistries[:min(len(out.RateLimitedRegistries), java4ShellRowLimit)]
+	}
 	groups := map[java4ShellGroup]*Java4ShellFinding{}
 	workloads := map[*corev1.Pod]resourceid.Ref{}
 	resolveWorkload := func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
@@ -326,7 +328,9 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 		)
 	})
 	out.FindingGroups = len(out.Findings)
-	out.Findings = out.Findings[:min(out.FindingGroups, java4ShellRowLimit)]
+	if !r.cli {
+		out.Findings = out.Findings[:min(out.FindingGroups, java4ShellRowLimit)]
+	}
 
 	// A cluster full of images without Java metadata can need many owner
 	// permission checks. Fall back to the visible Pod once the budget expires.
@@ -366,7 +370,9 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 		)
 	})
 	out.UnassessedGroups = len(out.UnassessedRows)
-	out.UnassessedRows = out.UnassessedRows[:min(out.UnassessedGroups, java4ShellRowLimit)]
+	if !r.cli {
+		out.UnassessedRows = out.UnassessedRows[:min(out.UnassessedGroups, java4ShellRowLimit)]
+	}
 	return out, nil
 }
 

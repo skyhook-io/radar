@@ -16,6 +16,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/name"
 	"golang.org/x/term"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -35,12 +36,13 @@ import (
 )
 
 const (
-	java4ShellPodListBudget  = 30 * time.Second
-	java4ShellMetadataBudget = 5 * time.Second
-	java4ShellPodLimit       = 50000
-	java4ShellTableGapLimit  = 10
-	java4ShellHintHostLimit  = 4
-	java4ShellRegistryDocs   = "https://github.com/skyhook-io/radar/blob/main/docs/authentication.md#image-inspection"
+	java4ShellPodListBudget   = 30 * time.Second
+	java4ShellMetadataBudget  = 5 * time.Second
+	java4ShellPodLimit        = 50000
+	java4ShellTableGapLimit   = 10
+	java4ShellTableMatchLimit = 20
+	java4ShellHintHostLimit   = 4
+	java4ShellRegistryDocs    = "https://github.com/skyhook-io/radar/blob/main/docs/authentication.md#image-inspection"
 )
 
 func runCheckCommand(args []string, out, errOut io.Writer) int {
@@ -58,6 +60,7 @@ func runCheckCommand(args []string, out, errOut io.Writer) int {
 	fs.SetOutput(&flagOutput)
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: radar check java4shell [-n NAMESPACE | -A] [-o table|json] [--details] [--fail-on-match]")
+		fmt.Fprintln(fs.Output(), "       radar check java4shell --from-report FILE [--details | -o json]")
 		fmt.Fprintln(fs.Output(), "Check declared Java versions in running images using the current Kubernetes context.")
 		fs.PrintDefaults()
 	}
@@ -72,7 +75,10 @@ func runCheckCommand(args []string, out, errOut io.Writer) int {
 	contextName := fs.String("context", "", "Kubernetes context (defaults to the current context)")
 	kubeconfig := fs.String("kubeconfig", "", "Kubeconfig path (defaults to KUBECONFIG or the standard Kubernetes config)")
 	failOnMatch := fs.Bool("fail-on-match", false, "Exit 2 when a container declares an affected Java version")
-	details := fs.Bool("details", false, "Show image and node details in the table")
+	details := fs.Bool("details", false, "Show all reported rows with image and node details")
+	dockerHubAuth := fs.Bool("docker-hub-auth", false, "Use your local Docker Hub login and its pull quota without Radar's 24-group cap")
+	saveReport := fs.String("save-report", "", "Save all report rows as JSON while printing the result")
+	fromReport := fs.String("from-report", "", "Open a saved report without contacting Kubernetes or registries")
 	if err := fs.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			_, _ = io.Copy(out, &flagOutput)
@@ -87,26 +93,71 @@ func runCheckCommand(args []string, out, errOut io.Writer) int {
 		return 1
 	}
 
-	fmt.Fprintln(errOut, "Loading Kubernetes configuration…")
-	result, err := runJava4ShellCheck(*kubeconfig, *contextName, namespace, allNamespaces, errOut)
+	var report java4ShellCLIReport
+	var err error
+	if *fromReport != "" {
+		if *saveReport != "" || *dockerHubAuth || namespace != "" || allNamespaces || *contextName != "" || *kubeconfig != "" {
+			fmt.Fprintln(errOut, "radar check java4shell: --from-report cannot be combined with scan or save flags")
+			return 1
+		}
+		report, err = readJava4ShellReport(*fromReport)
+	} else {
+		var file *os.File
+		if *saveReport != "" {
+			file, err = openJava4ShellReport(*saveReport)
+			if err != nil {
+				fmt.Fprintf(errOut, "radar check java4shell: %v\n", err)
+				return 1
+			}
+			defer func() {
+				if file != nil {
+					_ = file.Close()
+					_ = os.Remove(*saveReport)
+				}
+			}()
+		}
+		fmt.Fprintln(errOut, "Loading Kubernetes configuration…")
+		result, scannedContext, scanErr := runJava4ShellCheck(*kubeconfig, *contextName, namespace, allNamespaces, *dockerHubAuth, errOut)
+		report = java4ShellCLIReport{
+			CVE: images.Java4ShellCVE, CheckedAt: time.Now().UTC(), Context: scannedContext,
+			DockerHubLogin: *dockerHubAuth, Java4ShellReport: result,
+		}
+		err = scanErr
+		if err == nil && output == "table" && !*dockerHubAuth {
+			report.dockerHubRetry = java4ShellDockerHubRetry(report, *kubeconfig, *saveReport, *details, *failOnMatch)
+		}
+		if err == nil && file != nil {
+			err = errors.Join(report.write(file, "json", false, ""), file.Close())
+			if err == nil {
+				file = nil
+			} else {
+				// The scan finished. Keep its rows available even if the file write failed.
+				err = errors.Join(err, report.write(out, output, true, ""))
+			}
+		}
+	}
 	if err == nil {
-		err = writeJava4ShellCheck(out, output, result, *details)
+		savedPath := *fromReport
+		if *saveReport != "" {
+			savedPath = *saveReport
+		}
+		err = report.write(out, output, *details, savedPath)
 	}
 	if err != nil {
 		fmt.Fprintf(errOut, "radar check java4shell: %v\n", err)
 		return 1
 	}
-	if *failOnMatch && result.Matches > 0 {
+	if *failOnMatch && report.Matches > 0 {
 		return 2
 	}
 	return 0
 }
 
-func runJava4ShellCheck(kubeconfig, contextName, namespace string, allNamespaces bool, progress io.Writer) (images.Java4ShellReport, error) {
+func runJava4ShellCheck(kubeconfig, contextName, namespace string, allNamespaces, dockerHubAuth bool, progress io.Writer) (images.Java4ShellReport, string, error) {
 	if kubeconfig != "" {
 		path, err := k8s.NormalizeKubeconfigPath(kubeconfig)
 		if err != nil {
-			return images.Java4ShellReport{}, err
+			return images.Java4ShellReport{}, "", err
 		}
 		kubeconfig = path
 	}
@@ -114,25 +165,37 @@ func runJava4ShellCheck(kubeconfig, contextName, namespace string, allNamespaces
 		&clientcmd.ConfigOverrides{CurrentContext: contextName})
 	cfg, err := loader.ClientConfig()
 	if err != nil {
-		return images.Java4ShellReport{}, fmt.Errorf("load Kubernetes configuration: %w", err)
+		return images.Java4ShellReport{}, "", fmt.Errorf("load Kubernetes configuration: %w", err)
 	}
 	if namespace == "" && !allNamespaces {
 		namespace, _, err = loader.Namespace()
 		if err != nil {
-			return images.Java4ShellReport{}, fmt.Errorf("read context namespace: %w", err)
+			return images.Java4ShellReport{}, "", fmt.Errorf("read context namespace: %w", err)
 		}
 	}
 	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		return images.Java4ShellReport{}, fmt.Errorf("create Kubernetes client: %w", err)
+		return images.Java4ShellReport{}, "", fmt.Errorf("create Kubernetes client: %w", err)
 	}
 
+	if contextName == "" {
+		if config, err := loader.RawConfig(); err == nil {
+			contextName = config.CurrentContext
+		}
+	}
 	ctx, stop := signalContext()
 	defer stop()
-	return checkJava4Shell(ctx, client, namespace, progress)
+	inventory := images.NewCLIJava4ShellInventory()
+	if dockerHubAuth {
+		if err := inventory.UseDockerHubLogin(ctx); err != nil {
+			return images.Java4ShellReport{}, "", err
+		}
+	}
+	report, err := checkJava4Shell(ctx, client, inventory, namespace, progress)
+	return report, contextName, err
 }
 
-func checkJava4Shell(ctx context.Context, client kubernetes.Interface, namespace string, progress io.Writer) (images.Java4ShellReport, error) {
+func checkJava4Shell(ctx context.Context, client kubernetes.Interface, inventory *images.RuntimeInventory, namespace string, progress io.Writer) (images.Java4ShellReport, error) {
 	scope := resourceapi.Scope{Type: resourceapi.ScopeAllNamespaces}
 	if namespace != "" {
 		scope = resourceapi.Scope{Type: resourceapi.ScopeNamespaces, Namespaces: resourceapi.Names([]string{namespace}, resourceapi.RESTSetLimit)}
@@ -206,7 +269,7 @@ func checkJava4Shell(ctx context.Context, client kubernetes.Interface, namespace
 	updateProgress, finishProgress := checkImageProgress(progress, isFile && term.IsTerminal(int(terminal.Fd())) && os.Getenv("TERM") != "dumb")
 	defer finishProgress()
 	var err error
-	report.Java4ShellResult, err = images.NewCLIJava4ShellInventory().ScanJava4Shell(ctx, pods, func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
+	report.Java4ShellResult, err = inventory.ScanJava4Shell(ctx, pods, func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {
 		if ownerDeadline.IsZero() {
 			ownerDeadline = time.Now().Add(java4ShellMetadataBudget)
 		}
@@ -294,24 +357,60 @@ func checkImageProgress(out io.Writer, interactive bool) (update func(int, int),
 		}
 }
 
-func writeJava4ShellCheck(out io.Writer, output string, report images.Java4ShellReport, details bool) error {
+type java4ShellCLIReport struct {
+	CVE            string    `json:"cve"`
+	CheckedAt      time.Time `json:"checkedAt"`
+	Context        string    `json:"context,omitempty"`
+	DockerHubLogin bool      `json:"dockerHubLogin,omitempty"`
+	images.Java4ShellReport
+
+	dockerHubRetry string
+}
+
+func readJava4ShellReport(path string) (java4ShellCLIReport, error) {
+	var report java4ShellCLIReport
+	file, err := os.Open(path)
+	if err != nil {
+		return report, err
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&report); err != nil {
+		return report, fmt.Errorf("read report %q: %w", path, err)
+	}
+	if report.CVE != images.Java4ShellCVE || report.CheckedAt.IsZero() {
+		return report, fmt.Errorf("%q is not a Java4Shell report", path)
+	}
+	return report, nil
+}
+
+func openJava4ShellReport(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return nil, fmt.Errorf("report %q already exists; choose a new filename", path)
+	}
+	return file, err
+}
+
+func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details bool, savedPath string) error {
 	if output == "json" {
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
-		return enc.Encode(struct {
-			CVE       string    `json:"cve"`
-			CheckedAt time.Time `json:"checkedAt"`
-			images.Java4ShellReport
-		}{CVE: images.Java4ShellCVE, CheckedAt: time.Now().UTC(), Java4ShellReport: report})
+		return enc.Encode(snapshot)
 	}
+	report := snapshot.Java4ShellReport
 
 	var table bytes.Buffer
 	style := cliui.New(out)
 	scope := "all namespaces"
-	if report.Coverage.Scope.Namespaces != nil {
-		scope = "namespace " + report.Coverage.Scope.Namespaces.Names[0]
+	if namespaces := report.Coverage.Scope.Namespaces; namespaces != nil && len(namespaces.Names) > 0 {
+		scope = "namespace " + checkTableValue(strings.Join(namespaces.Names, ", "))
 	}
-	fmt.Fprintf(&table, "\n%s · %s\n\n", style.Bold("Java4Shell ("+images.Java4ShellCVE+")"), scope)
+	fmt.Fprintf(&table, "\n%s", style.Bold("Java4Shell ("+images.Java4ShellCVE+")"))
+	if snapshot.Context != "" {
+		fmt.Fprintf(&table, " · context %s", checkTableValue(snapshot.Context))
+	}
+	fmt.Fprintf(&table, " · %s\n\n", scope)
 	unassessed := 0
 	for _, count := range report.Unassessed {
 		unassessed += count
@@ -319,12 +418,109 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 	noDeclaration := report.Unassessed["no_java_declaration"]
 	gaps := unassessed - noDeclaration
 	outside := report.Containers - report.Matches - unassessed
+	if len(report.Findings) > 0 {
+		title := fmt.Sprintf("Affected Java versions declared in %d containers", report.Matches)
+		if report.Matches == 1 {
+			title = "Affected Java version declared in 1 container"
+		}
+		fmt.Fprintln(&table, style.Apply(cliui.Bold+cliui.Amber, title))
+		vbmi, cpuUnknown := 0, 0
+		for _, row := range report.Findings {
+			vbmi += row.VBMIPods
+			cpuUnknown += row.UnknownCPUPods
+		}
+		if vbmi > 0 {
+			fmt.Fprintf(&table, "Prioritize patching the %d matching containers on nodes reporting AVX-512 VBMI.\n", vbmi)
+		}
+		if cpuUnknown > 0 {
+			fmt.Fprintf(&table, "Check CPU capability for the %d matching containers where it is unknown.\n", cpuUnknown)
+		}
+		if vbmi == 0 && cpuUnknown == 0 && report.FindingGroups <= len(report.Findings) {
+			fmt.Fprintln(&table, "Current CPU evidence points away from exposure. The vulnerable path needs AVX-512 VBMI.")
+		}
+		fmt.Fprintln(&table)
+		w := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+		fmt.Fprint(w, "NAMESPACE\tWORKLOAD\tCONTAINER\t")
+		if details {
+			fmt.Fprint(w, "IMAGE\t")
+		}
+		fmt.Fprint(w, "DECLARED JAVA\tADVISORY FIX\tPODS")
+		if details {
+			fmt.Fprint(w, "\tAVX-512 VBMI\tCPU UNKNOWN\tVBMI ABSENT (INFERRED)\tNON-X86\tMITIGATION FLAG")
+		} else {
+			fmt.Fprint(w, "\tCPU EVIDENCE")
+		}
+		fmt.Fprintln(w)
+		findings := report.Findings
+		if !details {
+			findings = findings[:min(len(findings), java4ShellTableMatchLimit)]
+		}
+		for _, row := range findings {
+			fix := row.FixedIn
+			if fix == "" {
+				fix = "Check vendor"
+			}
+			workload := checkTableValue(row.Workload.Kind + "/" + row.Workload.Name)
+			fmt.Fprintf(w, "%s\t%s\t%s\t", checkTableValue(row.Workload.Namespace), workload, checkTableValue(row.Container))
+			if details {
+				fmt.Fprintf(w, "%s\t", checkTableValue(row.Image))
+			}
+			fmt.Fprintf(w, "%s\t%s\t%d", checkTableValue(row.Version), checkTableValue(fix), row.Pods)
+			inferredNoVBMI := 0
+			for _, count := range row.NoVBMIByInstanceType {
+				inferredNoVBMI += count
+			}
+			nonX86 := row.Pods - row.VBMIPods - row.UnknownCPUPods - inferredNoVBMI
+			if details {
+				fmt.Fprintf(w, "\t%d\t%d\t%d", row.VBMIPods, row.UnknownCPUPods, inferredNoVBMI)
+				if inferredNoVBMI > 0 {
+					fmt.Fprintf(w, " (%s)", checkTableValue(strings.Join(slices.Sorted(maps.Keys(row.NoVBMIByInstanceType)), ", ")))
+				}
+				fmt.Fprintf(w, "\t%d\t%d", nonX86, row.MitigationDeclaredPods)
+			} else {
+				var evidence []string
+				if row.VBMIPods > 0 {
+					evidence = append(evidence, java4ShellCPUCount(row.Pods, row.VBMIPods, "AVX-512 VBMI reported"))
+				}
+				if row.UnknownCPUPods > 0 {
+					evidence = append(evidence, java4ShellCPUCount(row.Pods, row.UnknownCPUPods, "CPU capability unknown"))
+				}
+				if inferredNoVBMI > 0 {
+					source := "instance types"
+					if len(row.NoVBMIByInstanceType) == 1 {
+						for instanceType := range row.NoVBMIByInstanceType {
+							source = instanceType
+						}
+					}
+					evidence = append(evidence, java4ShellCPUCount(row.Pods, inferredNoVBMI, "VBMI absent (inferred from "+checkTableValue(source)+")"))
+				}
+				if nonX86 > 0 {
+					evidence = append(evidence, java4ShellCPUCount(row.Pods, nonX86, "non-x86"))
+				}
+				fmt.Fprintf(w, "\t%s", strings.Join(evidence, " · "))
+			}
+			fmt.Fprintln(w)
+		}
+		_ = w.Flush()
+		if len(findings) < len(report.Findings) {
+			fmt.Fprintf(&table, "Showing %d of %d matching rows. Use --details for all of them.\n", len(findings), len(report.Findings))
+		} else if report.FindingGroups > len(report.Findings) {
+			fmt.Fprintf(&table, "This report contains %d of %d matching rows.\n", len(report.Findings), report.FindingGroups)
+		}
+		fmt.Fprintln(&table, "Confirm the installed Java version and check its vendor's advisory.")
+		if details {
+			fmt.Fprintln(&table, "Node capability and mitigation flag columns count Pods. Flags are read from Pod specs.")
+		}
+	}
+	if report.Matches > 0 {
+		fmt.Fprintln(&table, "\n"+style.Bold("Coverage"))
+	}
 	if report.Containers == 0 {
-		fmt.Fprintln(&table, "No running containers in the requested scope")
+		fmt.Fprintln(&table, "No running containers in the requested scope.")
+		fmt.Fprintln(&table, "Check the Kubernetes context and namespace if you expected running Pods.")
 	} else {
 		switch {
 		case report.Matches > 0:
-			fmt.Fprintf(&table, "Affected Java declarations in %d of %d assessed containers.\n", report.Matches, report.Matches+outside)
 		case noDeclaration == report.Containers:
 			fmt.Fprintln(&table, "None of the running images declared a Java version.")
 		case outside == 0:
@@ -343,71 +539,20 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 	for _, major := range slices.Sorted(maps.Keys(report.UnaffectedByMajor)) {
 		fmt.Fprintf(&table, "Java %d declarations outside affected ranges: %d\n", major, report.UnaffectedByMajor[major])
 	}
-	if len(report.Findings) > 0 {
-		fmt.Fprintln(&table, "\n"+style.Bold("Affected Java declarations"))
-		w := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
-		fmt.Fprint(w, "NAMESPACE\tWORKLOAD\tCONTAINER\t")
-		if details {
-			fmt.Fprint(w, "IMAGE\t")
-		}
-		fmt.Fprint(w, "JAVA\tADVISORY FIX\tPODS")
-		if details {
-			fmt.Fprint(w, "\tAVX-512 VBMI\tCPU UNKNOWN\tVBMI ABSENT (INFERRED)\tMITIGATION FLAG")
-		}
-		fmt.Fprintln(w)
-		for _, row := range report.Findings {
-			fix := row.FixedIn
-			if fix == "" {
-				fix = "Check vendor"
-			}
-			workload := checkTableValue(row.Workload.Kind + "/" + row.Workload.Name)
-			fmt.Fprintf(w, "%s\t%s\t%s\t", row.Workload.Namespace, workload, row.Container)
-			if details {
-				fmt.Fprintf(w, "%s\t", checkTableValue(row.Image))
-			}
-			fmt.Fprintf(w, "%s\t%s\t%d", row.Version, fix, row.Pods)
-			inferredNoVBMI := 0
-			for _, count := range row.NoVBMIByInstanceType {
-				inferredNoVBMI += count
-			}
-			if details {
-				fmt.Fprintf(w, "\t%d\t%d\t%d", row.VBMIPods, row.UnknownCPUPods, inferredNoVBMI)
-				if inferredNoVBMI > 0 {
-					fmt.Fprintf(w, " (%s)", strings.Join(slices.Sorted(maps.Keys(row.NoVBMIByInstanceType)), ", "))
-				}
-				fmt.Fprintf(w, "\t%d", row.MitigationDeclaredPods)
-			} else {
-				if row.VBMIPods > 0 {
-					fmt.Fprintf(w, " · %d with AVX-512 VBMI", row.VBMIPods)
-				}
-				if row.UnknownCPUPods > 0 {
-					fmt.Fprintf(w, " · %d CPU unknown", row.UnknownCPUPods)
-				}
-				if inferredNoVBMI > 0 {
-					source := "instance types"
-					if len(row.NoVBMIByInstanceType) == 1 {
-						for instanceType := range row.NoVBMIByInstanceType {
-							source = instanceType
-						}
-					}
-					fmt.Fprintf(w, " · %d VBMI absent (inferred from %s)", inferredNoVBMI, source)
-				}
-			}
-			fmt.Fprintln(w)
-		}
-		_ = w.Flush()
-		if report.FindingGroups > len(report.Findings) {
-			fmt.Fprintf(&table, "Showing %d of %d matching groups. Narrow the scope with -n to see more.\n", len(report.Findings), report.FindingGroups)
-		}
-		fmt.Fprintln(&table, "Confirm the installed Java version and the fix from its vendor.")
-		if details {
-			fmt.Fprintln(&table, "Node capability and mitigation flag columns count Pods. Flags are read from Pod specs.")
-		}
-	}
 	if gaps > 0 {
 		fmt.Fprintf(&table, "\n%s\n", style.Tone(cliui.Attention, "Could not check · next steps"))
+		hosts := report.RateLimitedRegistries
+		dockerHubOnly := len(hosts) == 1 && hosts[0] == name.DefaultRegistry
+		dockerHubSkips := report.Unassessed["docker_hub_limit"]
+		if dockerHubOnly || dockerHubSkips > 0 {
+			throttled := 0
+			if dockerHubOnly {
+				throttled = report.Unassessed[images.StatusRateLimited]
+			}
+			snapshot.writeDockerHubRecovery(&table, style, throttled, dockerHubSkips)
+		}
 		for _, reason := range slices.Sorted(maps.Keys(report.Unassessed)) {
-			if reason == "no_java_declaration" {
+			if reason == "no_java_declaration" || reason == "docker_hub_limit" || (reason == images.StatusRateLimited && dockerHubOnly) {
 				continue
 			}
 			count := report.Unassessed[reason]
@@ -415,18 +560,26 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 			if count == 1 {
 				unit = "container"
 			}
-			fmt.Fprintf(&table, "\n  %s · %d %s\n", style.Bold(checkReasonLabel(reason)), count, unit)
+			fmt.Fprintf(&table, "\n  %s · %d %s\n", style.Bold(checkTableValue(checkReasonLabel(reason))), count, unit)
 			switch reason {
 			case images.StatusAuthRequired:
-				writeJava4ShellAuthHint(&table, report.AuthRequiredRegistries)
+				writeJava4ShellAuthHint(&table, report.AuthRequiredRegistries, snapshot.DockerHubLogin)
 			case images.StatusRateLimited:
-				hosts := report.RateLimitedRegistries
 				if len(hosts) > 0 {
-					fmt.Fprintf(&table, "    HTTP 429 from %s", checkTableValue(strings.Join(hosts[:min(len(hosts), java4ShellHintHostLimit)], ", ")))
+					displayHosts := slices.Clone(hosts[:min(len(hosts), java4ShellHintHostLimit)])
+					for i, host := range displayHosts {
+						if host == name.DefaultRegistry {
+							displayHosts[i] = "Docker Hub (" + host + ")"
+						}
+					}
+					fmt.Fprintf(&table, "    HTTP 429 from %s", checkTableValue(strings.Join(displayHosts, ", ")))
 					if len(hosts) > java4ShellHintHostLimit {
 						fmt.Fprint(&table, " and others")
 					}
 					fmt.Fprintln(&table, ".")
+				}
+				if slices.Contains(hosts, name.DefaultRegistry) && dockerHubSkips == 0 {
+					snapshot.writeDockerHubRetry(&table)
 				}
 				if slices.Contains(hosts, images.PublicECRRegistry) {
 					fmt.Fprintln(&table, "    Amazon ECR Public allows one anonymous pull per second. Radar spaces these lookups apart.")
@@ -444,15 +597,15 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 					fmt.Fprintf(&table, "    %s, then rerun this namespace.\n", wait)
 				}
 				fmt.Fprintln(&table, "    If throttling continues, verify Java directly in the affected workloads.")
-			case "docker_hub_limit":
-				fmt.Fprintln(&table, "    Radar checks at most 24 uncached Docker Hub image groups per scan.")
-				fmt.Fprintln(&table, "    Rerunning the same scope applies the same cap. Check a smaller scope.")
-				fmt.Fprintln(&table, "    "+java4ShellNarrowerScope(report, reason))
+
 			case images.StatusNotChecked:
 				fmt.Fprintln(&table, "    "+java4ShellNarrowerScope(report, reason))
 			case "java_home_declared":
 				fmt.Fprintln(&table, "    Verify the installed Java version for images that set JAVA_HOME.")
-			case "image_identity_unknown", "version_unknown":
+			case "image_identity_unknown":
+				fmt.Fprintln(&table, "    Radar could not identify the exact running image from Kubernetes Pod status.")
+				fmt.Fprintln(&table, "    Find the workloads below or in the full report. Verify the installed version in containers that use Java.")
+			case "version_unknown":
 				fmt.Fprintln(&table, "    If these workloads use Java, confirm the installed version directly.")
 			case "platform_unknown":
 				fmt.Fprintln(&table, "    Confirm the installed Java version on the Pod's actual platform.")
@@ -466,12 +619,111 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 		}
 	}
 	writeJava4ShellAssessmentRows(&table, style, report, details)
+	if report.Matches > 0 || report.Unassessed["image_identity_unknown"] > 0 ||
+		report.Unassessed["java_home_declared"] > 0 || gaps > 0 && snapshot.DockerHubLogin && slices.Contains(report.RateLimitedRegistries, name.DefaultRegistry) {
+		fmt.Fprintln(&table, "\nTo check installed Java in a workload that uses it:")
+		fmt.Fprintf(&table, "    kubectl%s -n NAMESPACE exec POD -c CONTAINER -- java -version\n", java4ShellContextArg(snapshot.Context))
+	}
+	if savedPath != "" {
+		fmt.Fprintf(&table, "\nReport file %s · checked %s\n", strconv.Quote(savedPath), snapshot.CheckedAt.UTC().Format(time.RFC3339))
+	}
 	if !details && (len(report.Findings) > 0 || unassessed > 0) {
-		fmt.Fprintln(&table, "\nWorkload rows show affected declarations and unassessed containers.")
-		fmt.Fprintln(&table, "Use --details for image references, node evidence and additional rows.")
+		if savedPath != "" {
+			path := "FILE"
+			if checkTableValue(savedPath) == savedPath {
+				path = shellQuote(savedPath)
+			}
+			fmt.Fprintf(&table, "See every row without a rescan:\n    %s check java4shell --from-report %s --details\n", radarCLIInvocation(), path)
+		} else {
+			fmt.Fprintln(&table, "\nFor future scans, use --save-report java4shell.json to keep all report rows.")
+			fmt.Fprintln(&table, "Use --details to print all rows, including image references and node evidence.")
+		}
 	}
 	_, err := table.WriteTo(out)
 	return err
+}
+
+func (snapshot java4ShellCLIReport) writeDockerHubRecovery(out io.Writer, style cliui.Styler, throttled, skipped int) {
+	fmt.Fprintf(out, "\n  %s · %d containers\n", style.Bold("Docker Hub"), throttled+skipped)
+	if throttled > 0 {
+		fmt.Fprintf(out, "    %d hit HTTP 429 from Docker Hub (index.docker.io).\n", throttled)
+	}
+	if skipped > 0 {
+		fmt.Fprintf(out, "    %d skipped by Radar's 24-lookup cap for scans without a Docker Hub login.\n", skipped)
+	}
+	snapshot.writeDockerHubRetry(out)
+	if throttled > 0 {
+		fmt.Fprintln(out, "    Docker Hub uses a six-hour pull quota and a separate traffic limit.")
+		fmt.Fprintln(out, "    Radar could not determine the reset time.")
+		fmt.Fprintln(out, "    https://docs.docker.com/docker-hub/troubleshoot/")
+	}
+	if skipped > 0 {
+		fmt.Fprintln(out, "    Without a Docker login, narrow the check. "+java4ShellNarrowerScope(snapshot.Java4ShellReport, "docker_hub_limit"))
+	}
+}
+
+func (snapshot java4ShellCLIReport) writeDockerHubRetry(out io.Writer) {
+	if snapshot.DockerHubLogin {
+		fmt.Fprintln(out, "    Check your account quota, retry later, or verify Java directly.")
+	} else if snapshot.dockerHubRetry != "" {
+		fmt.Fprintln(out, "    Sign in and rerun:")
+		fmt.Fprintln(out, "      docker login")
+		fmt.Fprintln(out, "      "+snapshot.dockerHubRetry)
+		if os.Getenv("AWS_PROFILE") != "" || os.Getenv(images.ECRRegistriesEnv) != "" {
+			fmt.Fprintln(out, "    Keep the AWS environment settings from your original command.")
+		}
+	} else {
+		fmt.Fprintln(out, "    Run docker login, then rerun the scan with --docker-hub-auth.")
+	}
+}
+
+func java4ShellDockerHubRetry(snapshot java4ShellCLIReport, kubeconfig, savePath string, details, failOnMatch bool) string {
+	command := radarCLIInvocation() + " check java4shell" + java4ShellContextArg(snapshot.Context)
+	if kubeconfig != "" {
+		command += " --kubeconfig " + shellQuote(kubeconfig)
+	}
+	if scope := snapshot.Coverage.Scope.Namespaces; scope != nil && len(scope.Names) == 1 {
+		command += " -n " + shellQuote(scope.Names[0])
+	} else {
+		command += " -A"
+	}
+	if details {
+		command += " --details"
+	}
+	if failOnMatch {
+		command += " --fail-on-match"
+	}
+	if savePath == "" {
+		savePath = "java4shell.json"
+	} else {
+		savePath += ".retry.json"
+	}
+	return command + " --docker-hub-auth --save-report " + shellQuote(savePath)
+}
+
+func java4ShellContextArg(contextName string) string {
+	if contextName == "" {
+		return ""
+	}
+	return " --context " + shellQuote(contextName)
+}
+
+func radarCLIInvocation() string {
+	return shellQuote(os.Args[0])
+}
+
+func java4ShellCPUCount(pods, count int, evidence string) string {
+	if pods == 1 {
+		return evidence
+	}
+	return fmt.Sprintf("%d %s", count, evidence)
+}
+
+func shellQuote(path string) string {
+	if checkTableValue(path) != path {
+		return "'REPLACE_ME'"
+	}
+	return "'" + strings.ReplaceAll(path, "'", "'\\''") + "'"
 }
 
 func java4ShellNarrowerScope(report images.Java4ShellReport, reason string) string {
@@ -486,11 +738,17 @@ func java4ShellNarrowerScope(report images.Java4ShellReport, reason string) stri
 	return "Replace -A with -n NAMESPACE."
 }
 
-func writeJava4ShellAuthHint(out io.Writer, registries []string) {
+func writeJava4ShellAuthHint(out io.Writer, registries []string, dockerHubLogin bool) {
 	var ecrHosts, otherHosts []string
 	for _, host := range registries {
 		if images.IsPrivateECRRegistry(host) {
 			ecrHosts = append(ecrHosts, host)
+		} else if host == name.DefaultRegistry {
+			if dockerHubLogin {
+				fmt.Fprintln(out, "    Run docker login again and verify the account has pull access to the affected Docker Hub repository.")
+			} else {
+				fmt.Fprintln(out, "    For Docker Hub, run docker login and rerun with --docker-hub-auth.")
+			}
 		} else {
 			otherHosts = append(otherHosts, host)
 		}
@@ -545,12 +803,32 @@ func writeJava4ShellAssessmentRows(out *bytes.Buffer, style cliui.Styler, report
 	if len(rows) == 0 {
 		return
 	}
-	shown := len(rows)
-	if !details {
-		shown = min(shown, java4ShellTableGapLimit)
+	totalRows := len(rows)
+	if !details && totalRows > java4ShellTableGapLimit {
+		// Show missing image identities even when a registry failure dominates.
+		digestRows := make([]images.Java4ShellUnassessed, 0, 4)
+		for _, row := range rows {
+			if row.Reason == "image_identity_unknown" {
+				digestRows = append(digestRows, row)
+				if len(digestRows) == cap(digestRows) {
+					break
+				}
+			}
+		}
+		preview := slices.Clone(digestRows)
+		for _, row := range rows {
+			if row.Reason == "image_identity_unknown" && slices.Contains(digestRows, row) {
+				continue
+			}
+			preview = append(preview, row)
+			if len(preview) == java4ShellTableGapLimit {
+				break
+			}
+		}
+		rows = preview
 	}
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	heading := "Workload groups with gaps"
+	heading := "Containers Radar could not check"
 	if details {
 		heading = "Container assessment details"
 	}
@@ -560,20 +838,20 @@ func writeJava4ShellAssessmentRows(out *bytes.Buffer, style cliui.Styler, report
 		fmt.Fprint(w, "IMAGE\t")
 	}
 	fmt.Fprintln(w, "REASON\tPODS")
-	for _, row := range rows[:shown] {
+	for _, row := range rows {
 		workload := checkTableValue(row.Workload.Kind + "/" + row.Workload.Name)
-		fmt.Fprintf(w, "%s\t%s\t%s\t", row.Workload.Namespace, workload, row.Container)
+		fmt.Fprintf(w, "%s\t%s\t%s\t", checkTableValue(row.Workload.Namespace), workload, checkTableValue(row.Container))
 		if details {
 			fmt.Fprintf(w, "%s\t", checkTableValue(row.Image))
 		}
-		fmt.Fprintf(w, "%s\t%d\n", checkReasonLabel(row.Reason), row.Pods)
+		fmt.Fprintf(w, "%s\t%d\n", checkTableValue(checkReasonLabel(row.Reason)), row.Pods)
 	}
 	_ = w.Flush()
-	if details && report.UnassessedGroups > shown {
-		fmt.Fprintf(out, "Showing %d of %d unassessed groups. Narrow the scope with -n to see more.\n", shown, report.UnassessedGroups)
+	if details && report.UnassessedGroups > len(rows) {
+		fmt.Fprintf(out, "This report contains %d of %d rows.\n", len(rows), report.UnassessedGroups)
 	}
-	if !details && (shown < len(rows) || len(rows) == len(report.UnassessedRows) && report.UnassessedGroups > shown) {
-		fmt.Fprintf(out, "Showing the first %d workload groups with gaps.\n", shown)
+	if !details && len(rows) < totalRows {
+		fmt.Fprintf(out, "Showing %d of %d rows. Replicas with the same workload, container, image and reason share a row.\n", len(rows), totalRows)
 	}
 }
 

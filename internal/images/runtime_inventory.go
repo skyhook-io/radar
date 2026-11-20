@@ -180,12 +180,13 @@ type keychainSource func(c credential, ref name.Reference) (kc authn.Keychain, i
 // backoff are shared by every caller, so concurrent requests can't multiply
 // registry traffic.
 type RuntimeInventory struct {
-	lookup         configLookup
-	keychain       keychainSource
-	now            func() time.Time
-	slots          chan struct{}
-	dockerHubSlots chan struct{}
-	fetchTimeout   time.Duration
+	lookup        configLookup
+	keychain      keychainSource
+	now           func() time.Time
+	slots         chan struct{}
+	cli           bool
+	dockerHubAuth authn.Authenticator
+	fetchTimeout  time.Duration
 	// outstanding counts lookups still running, including ones that timed
 	// out: a credential helper can hang without honoring cancellation, and
 	// timed-out lookups must not pile up behind it.
@@ -229,8 +230,47 @@ func DefaultRuntimeInventory(inCluster bool) *RuntimeInventory {
 // NewCLIJava4ShellInventory gives a standalone check its own registry slots.
 func NewCLIJava4ShellInventory() *RuntimeInventory {
 	r := newRuntimeInventory(registryConfigLookup(newGuardedTransport(false)), clusterKeychain, java4ShellCLIFetchSlots)
-	r.dockerHubSlots = make(chan struct{}, registryFetchSlots)
+	r.cli = true
 	return r
+}
+
+// UseDockerHubLogin configures a standalone scan before it starts. Resolve the
+// Docker credential helper once, under a deadline, before lifting the cap.
+func (r *RuntimeInventory) UseDockerHubLogin(ctx context.Context) error {
+	registry, err := name.NewRegistry(name.DefaultRegistry)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, r.fetchTimeout)
+	defer cancel()
+	type login struct {
+		auth authn.Authenticator
+		err  error
+	}
+	done := make(chan login, 1)
+	go func() {
+		auth, err := authn.Resolve(ctx, authn.DefaultKeychain, registry)
+		done <- login{auth: auth, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("read Docker Hub login: %w", ctx.Err())
+	case result := <-done:
+		if result.err != nil {
+			return errors.New("could not read the Docker Hub login; check your Docker credential store or run docker login")
+		}
+		if result.auth == authn.Anonymous {
+			return errors.New("Docker Hub login not found; run docker login, then retry with --docker-hub-auth")
+		}
+		r.dockerHubAuth = result.auth
+		return nil
+	}
+}
+
+type dockerHubLogin struct{ authn.Authenticator }
+
+func (login dockerHubLogin) Resolve(authn.Resource) (authn.Authenticator, error) {
+	return login.Authenticator, nil
 }
 
 func newRuntimeInventory(lookup configLookup, keychain keychainSource, slots int) *RuntimeInventory {
@@ -418,76 +458,79 @@ func (r *RuntimeInventory) lookupConfigs(ctx context.Context, items []*work, rad
 			}
 		}()
 	}
-	advisoryLookups, dockerHubLookups := 0, 0
-	for i, w := range items {
-		if pacePublicECR(w) {
-			continue
-		}
-		onDockerHub := w.advisory && registryBudgetHost(w.ref) == name.DefaultRegistry
-		dockerHubLimit := onDockerHub && dockerHubLookups >= java4ShellDockerHubLookups
-		if dockerHubLimit || (progress == nil && w.advisory && advisoryLookups >= maxLookupsPerCall) {
-			// Public results can still answer after the limit. Avoid resolving
-			// private credentials for groups that cannot make a registry read.
-			cached, hit, _ := r.fromCache(w, []credential{{}})
-			if hit && cached.status == StatusOK {
-				complete(i, cached)
-			} else if dockerHubLimit {
-				complete(i, configResult{status: java4ShellDockerHubLimit})
-			} else {
-				complete(i, configResult{status: StatusNotChecked, err: "per-call image lookup limit reached; narrow by namespace"})
+	dispatch := func(dockerHubOnly bool, hostSlots chan struct{}) {
+		advisoryLookups, dockerHubLookups := 0, 0
+		for i, w := range items {
+			onDockerHub := w.advisory && registryBudgetHost(w.ref) == name.DefaultRegistry
+			if pacePublicECR(w) || (r.cli && onDockerHub != dockerHubOnly) {
+				continue
 			}
-			continue
-		}
-		creds := r.credentials(w, radarCredentials || w.radarCredentials)
-		res, hit, untried := r.fromCache(w, creds)
-		if hit {
-			complete(i, res)
-			continue
-		}
-		if w.advisory {
-			advisoryLookups++
-			if onDockerHub {
-				dockerHubLookups++
-			}
-		}
-		limitDockerHub := onDockerHub && r.dockerHubSlots != nil
-		if !limitDockerHub && !acquire(workers, i) {
-			continue
-		}
-		wg.Add(1)
-		go func(i int, w *work, untried []credential) {
-			defer wg.Done()
-			// At most 24 Docker Hub groups can queue here. Let them wait for
-			// their own cap before occupying a worker other registries need.
-			if limitDockerHub {
-				if !acquire(r.dockerHubSlots, i) {
-					return
+			dockerHubLimit := onDockerHub && r.dockerHubAuth == nil && dockerHubLookups >= java4ShellDockerHubLookups
+			if dockerHubLimit || (progress == nil && w.advisory && advisoryLookups >= maxLookupsPerCall) {
+				// Public results can answer after the limit without new registry reads.
+				cached, hit, _ := r.fromCache(w, []credential{{}})
+				if hit && cached.status == StatusOK {
+					complete(i, cached)
+				} else if dockerHubLimit {
+					complete(i, configResult{status: java4ShellDockerHubLimit})
+				} else {
+					complete(i, configResult{status: StatusNotChecked, err: "per-call image lookup limit reached; narrow by namespace"})
 				}
-				defer func() { <-r.dockerHubSlots }()
-				if !acquire(workers, i) {
-					return
+				continue
+			}
+			creds := r.credentials(w, radarCredentials || w.radarCredentials)
+			res, hit, untried := r.fromCache(w, creds)
+			if hit {
+				complete(i, res)
+				continue
+			}
+			if w.advisory {
+				advisoryLookups++
+				if onDockerHub {
+					dockerHubLookups++
 				}
 			}
-			defer func() { <-workers }()
-			complete(i, r.fetch(ctx, w, untried, budget, limiter))
-		}(i, w, untried)
+			if hostSlots != nil && !acquire(hostSlots, i) {
+				continue
+			}
+			if !acquire(workers, i) {
+				if hostSlots != nil {
+					<-hostSlots
+				}
+				continue
+			}
+			wg.Go(func() {
+				defer func() { <-workers }()
+				if hostSlots != nil {
+					defer func() { <-hostSlots }()
+				}
+				complete(i, r.fetch(ctx, w, untried, budget, limiter))
+			})
+		}
 	}
+	if r.cli {
+		wg.Go(func() { dispatch(true, make(chan struct{}, registryFetchSlots)) })
+	}
+	dispatch(false, nil)
 	wg.Wait()
 
 	return results
 }
 
-// credentials lists what a lookup may try, in the kubelet's order: each pull
-// secret that has an entry for the image's registry, then no credentials,
-// then (local mode only) Radar's own.
+// Advisory checks try public access first, unless this scan has explicit
+// registry credentials to prefer.
 func (r *RuntimeInventory) credentials(w *work, radar bool) []credential {
 	secretSlots := maxAttemptsPerImage - 1
-	if radar {
+	useDockerLogin := r.usesDockerHubLogin(w)
+	if radar && !useDockerLogin {
 		secretSlots--
 	}
 	var out []credential
 	useECR := w.advisory && radar && runtimeECRKeychain().registries[w.ref.Context().RegistryStr()] != nil
-	if w.advisory && !useECR {
+	switch {
+	case useDockerLogin:
+		out = append(out, credential{radar: true, advisory: true})
+	case w.advisory && !useECR:
 		out = append(out, credential{})
 	}
 	secretCount := 0
@@ -504,10 +547,14 @@ func (r *RuntimeInventory) credentials(w *work, radar bool) []credential {
 	if !w.advisory {
 		out = append(out, credential{})
 	}
-	if radar {
+	if radar && !useDockerLogin {
 		out = append(out, credential{radar: true, advisory: w.advisory})
 	}
 	return out
+}
+
+func (r *RuntimeInventory) usesDockerHubLogin(w *work) bool {
+	return r.dockerHubAuth != nil && w.advisory && registryBudgetHost(w.ref) == name.DefaultRegistry
 }
 
 // resultKey: an anonymous success describes a public image and answers every
@@ -619,6 +666,9 @@ func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credentia
 			return configResult{status: StatusNotChecked, err: "per-call lookup limit reached before all available credentials were tried"}
 		}
 		keychain, identity, ok := r.keychain(c, w.ref)
+		if c.radar && r.usesDockerHubLogin(w) {
+			keychain, identity, ok = dockerHubLogin{r.dockerHubAuth}, "", true
+		}
 		if !ok {
 			continue
 		}

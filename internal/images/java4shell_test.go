@@ -387,6 +387,12 @@ func TestJava4ShellBoundsUnassessedRowsAndKeepsTotals(t *testing.T) {
 		row.Reason != javaHomeDeclaredReason || row.Pods != 2 || firstWorkload != "java" || f.calls.Load() != 2 {
 		t.Fatalf("wrong priority, grouping or lookup count: %+v, first owner=%q, calls=%d", row, firstWorkload, f.calls.Load())
 	}
+	cli := fakeInventory(f)
+	cli.cli = true
+	full, err := cli.CheckJava4Shell(context.Background(), targets, nil, nil)
+	if err != nil || len(full.UnassessedRows) != full.UnassessedGroups || len(full.UnassessedRows) != java4ShellRowLimit+5 {
+		t.Fatalf("CLI report omitted rows: %d of %d, err=%v", len(full.UnassessedRows), full.UnassessedGroups, err)
+	}
 }
 
 func TestJava4ShellScopesAndRevalidatesPrivateRegistryAccess(t *testing.T) {

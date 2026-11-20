@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -23,6 +25,10 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
+
+func writeJava4ShellCheck(out io.Writer, output string, report images.Java4ShellReport, details bool) error {
+	return (java4ShellCLIReport{CVE: images.Java4ShellCVE, Java4ShellReport: report}).write(out, output, details, "")
+}
 
 func TestJava4ShellCommandFlags(t *testing.T) {
 	var out, errOut bytes.Buffer
@@ -59,7 +65,7 @@ func TestJava4ShellCLIListsScopedPodsAndResolvesWorkloads(t *testing.T) {
 	}}
 	kube := fake.NewClientset(pod, sibling, finished, rs)
 	var progress bytes.Buffer
-	result, err := checkJava4Shell(context.Background(), kube, "team", &progress)
+	result, err := checkJava4Shell(context.Background(), kube, images.NewCLIJava4ShellInventory(), "team", &progress)
 	if err != nil || result.Containers != 1 || result.Matches != 0 || len(result.UnassessedRows) != 1 {
 		t.Fatalf("unexpected scoped check: %+v, %v", result, err)
 	}
@@ -101,7 +107,7 @@ func TestJava4ShellCLIRefusesUnreadablePodScope(t *testing.T) {
 	kube.PrependReactor("list", "pods", func(kubetesting.Action) (bool, runtime.Object, error) {
 		return true, nil, denied
 	})
-	report, err := checkJava4Shell(context.Background(), kube, "", io.Discard)
+	report, err := checkJava4Shell(context.Background(), kube, images.NewCLIJava4ShellInventory(), "", io.Discard)
 	if !apierrors.IsForbidden(err) || report.Coverage.Status == resourceapi.CoverageComplete || len(kube.Actions()) != 1 {
 		t.Fatalf("denied scope reported as readable: %+v, %v, %v", report, err, kube.Actions())
 	}
@@ -155,7 +161,7 @@ func TestJava4ShellTablePrioritizesActionableGaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"No affected Java declarations among assessed containers (1).", "1 without a Java version in image metadata", "11 could not be checked", "Registry authentication required · 11 containers",
-		"private-09", "Showing the first 10 workload groups with gaps", "docker login REGISTRY", "  example.com\n", java4ShellRegistryDocs}
+		"private-09", "Showing 10 of 11 rows", "docker login REGISTRY", "  example.com\n", java4ShellRegistryDocs}
 	for _, phrase := range want {
 		if !strings.Contains(output.String(), phrase) {
 			t.Errorf("missing %q in %s", phrase, output.String())
@@ -182,7 +188,7 @@ func TestJava4ShellTableShowsECRRegistryHosts(t *testing.T) {
 	const second = "987654321012.dkr.ecr.eu-west-1.amazonaws.com"
 	t.Setenv(images.ECRRegistriesEnv, "")
 	var output bytes.Buffer
-	writeJava4ShellAuthHint(&output, []string{first, second, "ghcr.io"})
+	writeJava4ShellAuthHint(&output, []string{first, second, "ghcr.io"}, false)
 	for _, want := range []string{
 		"export AWS_PROFILE=your-profile",
 		"export RADAR_JAVA4SHELL_ECR_REGISTRIES=" + first + "," + second + "\n",
@@ -194,14 +200,14 @@ func TestJava4ShellTableShowsECRRegistryHosts(t *testing.T) {
 	}
 	t.Setenv(images.ECRRegistriesEnv, first)
 	output.Reset()
-	writeJava4ShellAuthHint(&output, []string{first, second})
+	writeJava4ShellAuthHint(&output, []string{first, second}, false)
 	for _, want := range []string{"For ECR hosts already configured, verify", `export RADAR_JAVA4SHELL_ECR_REGISTRIES="$RADAR_JAVA4SHELL_ECR_REGISTRIES,` + second + `"`} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("missing %q in %s", want, output.String())
 		}
 	}
 	output.Reset()
-	writeJava4ShellAuthHint(&output, []string{first})
+	writeJava4ShellAuthHint(&output, []string{first}, false)
 	if strings.Contains(output.String(), "export RADAR_JAVA4SHELL_ECR_REGISTRIES") {
 		t.Errorf("suggested reconfiguring a host already set: %s", output.String())
 	}
@@ -224,8 +230,8 @@ func TestJava4ShellTableDistinguishesRegistryAndScanLimits(t *testing.T) {
 	for _, want := range []string{
 		"Could not check · next steps",
 		"HTTP 429 from public.ecr.aws.", "one anonymous pull per second", "Wait a few seconds",
-		"use -n kube-system instead of -A", "24 uncached Docker Hub image groups per scan",
-		"Rerunning the same scope applies the same cap", "use -n velero instead of -A",
+		"use -n kube-system instead of -A", "Radar's 24-lookup cap",
+		"docker login, then rerun the scan with --docker-hub-auth", "use -n velero instead of -A",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("missing %q in %s", want, output.String())
@@ -278,7 +284,7 @@ func TestJava4ShellCLIShowsCPUInferenceAlongsideMatch(t *testing.T) {
 		if err := writeJava4ShellCheck(&output, "table", report, details); err != nil {
 			t.Fatal(err)
 		}
-		want := []string{"Affected Java declarations in 3 of 3 assessed containers"}
+		want := []string{"Affected Java versions declared in 3 containers"}
 		if details {
 			want = append(want, "VBMI ABSENT (INFERRED)", "2 (m6a.large)")
 		} else {
@@ -289,5 +295,96 @@ func TestJava4ShellCLIShowsCPUInferenceAlongsideMatch(t *testing.T) {
 				t.Errorf("details %t: missing %q in %s", details, want, output.String())
 			}
 		}
+	}
+}
+
+func TestJava4ShellSavedReportOpensOffline(t *testing.T) {
+	snapshot := java4ShellCLIReport{
+		CVE: images.Java4ShellCVE, CheckedAt: time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),
+		Java4ShellReport: images.Java4ShellReport{Java4ShellResult: images.Java4ShellResult{
+			Containers: 102, Matches: 1,
+			Findings: []images.Java4ShellFinding{{
+				Workload:  resourceid.NewRef("apps", "Deployment", "boutique", "adservice"),
+				Container: "server", Version: "jdk-25.0.4+7", Pods: 1,
+				NoVBMIByInstanceType: map[string]int{"m6a.large": 1},
+			}},
+			Unassessed: map[string]int{images.StatusRateLimited: 97, "image_identity_unknown": 4},
+		}},
+	}
+	for i := range 101 {
+		reason := images.StatusRateLimited
+		if i >= 97 {
+			reason = "image_identity_unknown"
+		}
+		snapshot.UnassessedRows = append(snapshot.UnassessedRows, images.Java4ShellUnassessed{
+			Workload:  resourceid.NewRef("", "Pod", "team", fmt.Sprintf("pod-%03d", i)),
+			Container: "app", Image: "example.com/team/app:1", Reason: reason, Pods: 1,
+		})
+	}
+	path := filepath.Join(t.TempDir(), "full report.json")
+	file, err := openJava4ShellReport(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(snapshot.write(file, "json", false, ""), file.Close()); err != nil {
+		t.Fatal(err)
+	}
+	var rejected bytes.Buffer
+	if code := runCheckCommand([]string{"java4shell", "--save-report", path}, io.Discard, &rejected); code != 1 ||
+		!strings.Contains(rejected.String(), "already exists") || strings.Contains(rejected.String(), "Loading Kubernetes") {
+		t.Fatalf("expected an existing report to block a scan, got exit %d, stderr %s", code, rejected.String())
+	}
+
+	var out, progress bytes.Buffer
+	code := runCheckCommand([]string{"java4shell", "--from-report", path}, &out, &progress)
+	if code != 0 || progress.Len() != 0 {
+		t.Fatalf("offline report: exit %d, stderr %s", code, progress.String())
+	}
+	brief := out.String()
+	finding, coverage := strings.Index(brief, "Deployment/adservice"), strings.Index(brief, "Running containers")
+	if finding < 0 || coverage < finding || !strings.Contains(brief, "pod-100") ||
+		!strings.Contains(brief, "Showing 10 of 101 rows") || !strings.Contains(brief, "without a rescan") {
+		t.Fatalf("brief report lost finding or clear path to the full result: %s", brief)
+	}
+	out.Reset()
+	if code := runCheckCommand([]string{"java4shell", "--from-report", path, "--details"}, &out, &progress); code != 0 ||
+		!strings.Contains(out.String(), "pod-096") || !strings.Contains(out.String(), "pod-100") ||
+		!strings.Contains(out.String(), "2026-11-20T18:00:00Z") {
+		t.Fatalf("detailed report: exit %d, stderr %s", code, progress.String())
+	}
+}
+
+func TestJava4ShellCombinesDockerHubRecovery(t *testing.T) {
+	scope := resourceapi.Scope{
+		Type:       resourceapi.ScopeNamespaces,
+		Namespaces: resourceapi.Names([]string{"payments"}, resourceapi.RESTSetLimit),
+	}
+	snapshot := java4ShellCLIReport{
+		CVE: images.Java4ShellCVE, Context: "prod-eu", CheckedAt: time.Now(),
+		Java4ShellReport: images.Java4ShellReport{
+			Coverage: resourceapi.Coverage{Scope: scope},
+			Java4ShellResult: images.Java4ShellResult{
+				Containers: 5, Unassessed: map[string]int{images.StatusRateLimited: 3, "docker_hub_limit": 2},
+				RateLimitedRegistries: []string{"index.docker.io"},
+			},
+		},
+	}
+	snapshot.dockerHubRetry = java4ShellDockerHubRetry(snapshot, "/tmp/test kubeconfig", "check.json", false, true)
+	var out bytes.Buffer
+	if err := snapshot.write(&out, "table", false, "check.json"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Docker Hub · 5 containers", "3 hit HTTP 429", "2 skipped by Radar", "context prod-eu",
+		"--context 'prod-eu' --kubeconfig '/tmp/test kubeconfig' -n 'payments'",
+		"--fail-on-match --docker-hub-auth --save-report 'check.json.retry.json'",
+		radarCLIInvocation() + " check java4shell --from-report 'check.json' --details",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in %s", want, out.String())
+		}
+	}
+	if strings.Count(out.String(), "docker login\n") != 1 || strings.Contains(out.String(), " -A ") {
+		t.Errorf("unexpected recovery command in %s", out.String())
 	}
 }

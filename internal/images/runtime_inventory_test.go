@@ -3,6 +3,7 @@ package images
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -1105,5 +1106,37 @@ func TestInventory_PartialCredentialBudgetIsNotChecked(t *testing.T) {
 	got := inv.fetch(context.Background(), w, inv.credentials(w, false), budget, nil)
 	if got.status != StatusNotChecked || f.calls.Load() != 1 {
 		t.Fatalf("unfinished credential attempts must be not_checked: %+v calls=%d", got, f.calls.Load())
+	}
+}
+
+func TestJava4ShellCLIDockerHubLoginLiftsAnonymousCap(t *testing.T) {
+	inv := NewCLIJava4ShellInventory()
+	inv.dockerHubAuth = authn.FromConfig(authn.AuthConfig{Username: "test-user", Password: "test-token"})
+	items := make([]*work, 0, java4ShellDockerHubLookups+1)
+	for i := range java4ShellDockerHubLookups + 1 {
+		ref, err := name.ParseReference(fmt.Sprintf("docker.io/test/app-%d:1", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, &work{key: ref.String(), ref: ref, advisory: true})
+	}
+	inv.lookup = func(ctx context.Context, ref name.Reference, _ v1.Platform, keychain authn.Keychain) (*v1.ConfigFile, string, error) {
+		credential, err := authn.Resolve(ctx, keychain, ref.Context())
+		if err != nil {
+			return nil, "", err
+		}
+		cfg, err := credential.Authorization()
+		if err != nil {
+			return nil, "", err
+		}
+		if cfg.Username != "test-user" {
+			return nil, "", errors.New("Docker Hub lookup did not use the configured login first")
+		}
+		return &v1.ConfigFile{}, "test digest", nil
+	}
+	for i, result := range inv.lookupConfigs(context.Background(), items, false, func(_, _ int) {}) {
+		if result.status != StatusOK {
+			t.Fatalf("group %d: status %s, error %s", i, result.status, result.err)
+		}
 	}
 }

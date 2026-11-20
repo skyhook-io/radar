@@ -302,9 +302,18 @@ radar check java4shell -n payments
 kubectl radar check java4shell --context staging -n payments -o json --fail-on-match
 ```
 
-The default table leads with affected declarations and groups the containers Radar could not check by reason and next action. It lists up to ten groups with gaps and counts containers whose image metadata lacks a Java version in the summary. Use `--details` for the available image rows, node capability and mitigation flag counts, and images with no Java version declaration. Reports aggregate versions outside affected ranges by Java major. Workload rows cover affected declarations and unassessed containers. The table uses color in a terminal and honors `NO_COLOR`. JSON uses the same format as the UI download, including the check time, namespace coverage, matches, and unassessed reasons. Progress goes to stderr and updates one line in an interactive terminal. Redirected progress is logged at longer intervals. The finished report goes to stdout.
+The table leads with the workloads whose images declare affected Java versions, alongside CPU evidence. Confirm the installed JVM and consult its vendor's advisory. The coverage summary counts images without a Java version declaration separately from images Radar could not read. Rows combine replicas with the same workload, container, image and assessment reason.
 
-Radar checks up to 24 uncached Docker Hub image groups per scan. If it reaches that cap, rerun in the namespace of a skipped workload, or open the workload in Radar and run the check in its Vulnerabilities section. If a registry returns HTTP 429, the table names the registry. Wait for its quota to reset, then retry one affected namespace. If throttling continues, verify Java directly in the affected workloads. [Amazon ECR Public quotas](https://docs.aws.amazon.com/AmazonECR/latest/public/public-service-quotas.html) · [Docker Hub pull limits](https://docs.docker.com/docker-hub/usage/pulls/)
+Save the full CLI report alongside the table. It records the Kubernetes context and check time and can be opened offline. Choose a new filename for each scan.
+
+```bash
+radar check java4shell -A --save-report java4shell.json
+radar check java4shell --from-report java4shell.json --details
+```
+
+Use `--details` to print all finding and assessment-gap rows, including image references and node evidence. The default table previews up to 20 finding rows and ten gap rows. Use `-o json` to send the full report to stdout. Progress goes to stderr. Color is enabled for terminal output and honors `NO_COLOR`.
+
+Radar caps anonymous Docker Hub lookups at 24 uncached image groups per scan to conserve the shared quota. To check a full cluster without that per-run cap, run `docker login` on the machine running Radar, then add `--docker-hub-auth`. Radar uses that login for Docker Hub first, drawing on the account’s pull quota, and still limits the rate of requests. Docker Hub can reject requests for either its six-hour pull quota or a separate traffic limit. Signing in can increase the pull quota. Slowing down helps with bursts. The report names the registry when it receives an HTTP 429. [Docker Hub pull limits](https://docs.docker.com/docker-hub/usage/pulls/) · [Docker Hub troubleshooting](https://docs.docker.com/docker-hub/troubleshoot/) · [Amazon ECR Public quotas](https://docs.aws.amazon.com/AmazonECR/latest/public/public-service-quotas.html)
 
 The command uses the caller's Kubernetes access and registry credentials, including readable pull secrets referenced by the Pods and [opt-in Amazon ECR access](authentication.md#image-inspection). CPU placement remains unknown where Node facts are unavailable. If a Pod reports a multi-platform image index digest, Radar needs the Node's platform to assess its Java version.
 
