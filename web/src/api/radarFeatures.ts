@@ -86,6 +86,7 @@ export const RADAR_FEATURES = {
   lokiPodHistory: { label: 'Log history from Loki', flag: 'lokiPodHistory', flagShippedWithEndpoint: true },
   vulnerabilities: { label: 'Vulnerability views', flag: 'vulnerabilities', flagShippedWithEndpoint: true },
   runtimeAdvisoryChecks: { label: 'Java4Shell checks', flag: 'runtimeAdvisoryChecks', flagShippedWithEndpoint: true },
+  runtimeAdvisoryProgress: { label: 'Java4Shell scan progress', flag: 'runtimeAdvisoryProgress', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES

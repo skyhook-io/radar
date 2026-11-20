@@ -223,6 +223,7 @@ export interface FeatureCapabilities {
   lokiPodHistory?: boolean
   vulnerabilities?: boolean
   runtimeAdvisoryChecks?: boolean
+  runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
 }
 
