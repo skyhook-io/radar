@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 const volume = { apiVersion: 'longhorn.io/v1beta2', kind: 'Volume', metadata: { name: 'pvc-1', namespace: 'longhorn-system' }, spec: { numberOfReplicas: 3 }, status: { state: 'attached', robustness: 'healthy' } }
@@ -15,6 +15,12 @@ async function render(engines: { data?: any[]; error?: unknown; isLoading?: bool
 }
 
 describe('LonghornVolumeRenderer (host)', () => {
+  // The first dynamic import transforms the renderer's whole k8s-ui graph; pay
+  // that once here so each test's own timeout still catches a real hang.
+  beforeAll(async () => {
+    await render({})
+  }, 30_000)
+
   it('counts healthy replicas from the volume\'s own Engine', async () => {
     const html = await render({ data: [
       { spec: { volumeName: 'other' }, status: { replicaModeMap: { x: 'RW' } } },
