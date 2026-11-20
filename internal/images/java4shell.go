@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -57,14 +58,15 @@ type Java4ShellFinding struct {
 }
 
 type Java4ShellResult struct {
-	Findings          []Java4ShellFinding    `json:"findings"`
-	Containers        int                    `json:"containers"`
-	Matches           int                    `json:"matches"`
-	FindingGroups     int                    `json:"findingGroups"`
-	Unassessed        map[string]int         `json:"unassessed"`
-	UnassessedRows    []Java4ShellUnassessed `json:"unassessedRows"`
-	UnassessedGroups  int                    `json:"unassessedGroups"`
-	UnaffectedByMajor map[int]int            `json:"unaffectedByMajor,omitempty"`
+	Findings               []Java4ShellFinding    `json:"findings"`
+	Containers             int                    `json:"containers"`
+	Matches                int                    `json:"matches"`
+	FindingGroups          int                    `json:"findingGroups"`
+	Unassessed             map[string]int         `json:"unassessed"`
+	UnassessedRows         []Java4ShellUnassessed `json:"unassessedRows"`
+	UnassessedGroups       int                    `json:"unassessedGroups"`
+	UnaffectedByMajor      map[int]int            `json:"unaffectedByMajor,omitempty"`
+	AuthRequiredRegistries []string               `json:"-"`
 }
 
 type Java4ShellReport struct {
@@ -211,6 +213,13 @@ func (r *RuntimeInventory) ScanJava4Shell(ctx context.Context, pods []Java4Shell
 	}
 
 	results := r.lookupConfigs(context.WithValue(ctx, strictRegistryLookupKey{}, true), items, false, progress)
+	authRegistries := map[string]struct{}{}
+	for i, result := range results {
+		if result.status == StatusAuthRequired {
+			authRegistries[registryBudgetHost(items[i].ref)] = struct{}{}
+		}
+	}
+	out.AuthRequiredRegistries = slices.Sorted(maps.Keys(authRegistries))
 	groups := map[java4ShellGroup]*Java4ShellFinding{}
 	workloads := map[*corev1.Pod]resourceid.Ref{}
 	resolveWorkload := func(ctx context.Context, pod *corev1.Pod) resourceid.Ref {

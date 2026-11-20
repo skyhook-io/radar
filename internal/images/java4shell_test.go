@@ -416,6 +416,7 @@ func TestJava4ShellScopesAndRevalidatesPrivateRegistryAccess(t *testing.T) {
 	}
 	got, err := inventory.CheckJava4Shell(context.Background(), pods, workloadFor, accessFor)
 	if err != nil || got.Matches != 1 || got.Unassessed[StatusAuthRequired] != 1 ||
+		strings.Join(got.AuthRequiredRegistries, ",") != "registry.example" ||
 		len(got.Findings) != 1 || got.Findings[0].Workload.Namespace != allowed.Namespace ||
 		len(got.UnassessedRows) != 1 || got.UnassessedRows[0].Workload.Namespace != denied.Namespace ||
 		got.UnassessedRows[0].Reason != StatusAuthRequired || got.UnassessedRows[0].Pods != 1 {

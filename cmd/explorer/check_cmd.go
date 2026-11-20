@@ -406,11 +406,7 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 			}
 		}
 		if report.Unassessed[images.StatusAuthRequired] > 0 {
-			fmt.Fprintln(&table, "Use --details to see the image registry. The CLI can use your local registry credentials.")
-			fmt.Fprintln(&table, "For private Amazon ECR, use an AWS profile with pull access and replace the example registry host:")
-			fmt.Fprintln(&table, "  AWS_PROFILE=your-profile RADAR_JAVA4SHELL_ECR_REGISTRIES=123456789012.dkr.ecr.us-east-1.amazonaws.com radar check java4shell -A")
-			fmt.Fprintln(&table, "For other registries, run docker login REGISTRY, then rerun the same check.")
-			fmt.Fprintln(&table, "Registry setup", java4ShellRegistryDocs)
+			writeJava4ShellAuthHint(&table, report.AuthRequiredRegistries)
 		}
 		if report.Unassessed["docker_hub_limit"]+report.Unassessed[images.StatusNotChecked] > 0 {
 			if report.Coverage.Scope.Namespaces == nil {
@@ -432,6 +428,35 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 	}
 	_, err := table.WriteTo(out)
 	return err
+}
+
+func writeJava4ShellAuthHint(out io.Writer, registries []string) {
+	var ecrHosts, otherHosts []string
+	for _, host := range registries {
+		if images.IsPrivateECRRegistry(host) {
+			ecrHosts = append(ecrHosts, host)
+		} else {
+			otherHosts = append(otherHosts, host)
+		}
+	}
+	const exampleHostLimit = 4
+	if len(ecrHosts) > 0 {
+		fmt.Fprintln(out, "Private Amazon ECR needs a local AWS identity with pull access. Replace your-profile and rerun the same check.")
+		fmt.Fprintln(out, "  export AWS_PROFILE=your-profile")
+		fmt.Fprintf(out, "  export RADAR_JAVA4SHELL_ECR_REGISTRIES=%s\n", strings.Join(ecrHosts[:min(len(ecrHosts), exampleHostLimit)], ","))
+		if len(ecrHosts) > exampleHostLimit {
+			fmt.Fprintln(out, "Add other ECR registry hosts from --details, separated by commas.")
+		}
+		fmt.Fprintln(out, "If the profile uses SSO, run aws sso login --profile your-profile first.")
+	}
+	if len(otherHosts) > 0 {
+		fmt.Fprintln(out, "For these registries, run docker login REGISTRY and rerun the same check.")
+		fmt.Fprintf(out, "  %s\n", strings.Join(otherHosts[:min(len(otherHosts), exampleHostLimit)], ", "))
+	}
+	if len(otherHosts) > exampleHostLimit || len(registries) == 0 {
+		fmt.Fprintln(out, "Use --details to see the image registry.")
+	}
+	fmt.Fprintln(out, "Registry setup", java4ShellRegistryDocs)
 }
 
 func writeJava4ShellAssessmentRows(out *bytes.Buffer, report images.Java4ShellReport, details bool) {

@@ -306,7 +306,7 @@ The default table reports affected declarations, assessed versions outside the a
 
 The command uses the caller's Kubernetes access and registry credentials, including readable pull secrets referenced by the Pods and [opt-in Amazon ECR access](authentication.md#image-inspection). CPU placement remains unknown where Node facts are unavailable. If a Pod reports a multi-platform image index digest, Radar needs the Node's platform to assess its Java version.
 
-For a private Amazon ECR image, use `--details` to find the registry hostname. Choose a local AWS profile with pull access to that repository. If the profile uses AWS IAM Identity Center, run `aws sso login --profile your-profile` first. Replace the example registry host with the one shown in the report.
+For a private Amazon ECR image, the auth hint includes the registry hostname that Radar tried. Choose a local AWS profile with pull access to that repository. If the profile uses AWS IAM Identity Center, run `aws sso login --profile your-profile` first. Replace the example registry host below with the one shown in your report.
 
 ```bash
 AWS_PROFILE=your-profile \

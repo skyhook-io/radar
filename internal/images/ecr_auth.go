@@ -22,6 +22,10 @@ const ecrRegistriesEnv = "RADAR_JAVA4SHELL_ECR_REGISTRIES"
 
 var ecrRegistryPattern = regexp.MustCompile(`^([0-9]{12})\.dkr\.ecr\.([a-z][a-z0-9-]+-[0-9]+)\.amazonaws\.com(?:\.cn)?$`)
 
+func IsPrivateECRRegistry(host string) bool {
+	return ecrRegistryPattern.MatchString(host)
+}
+
 var errECRCredentials = errors.New("Radar could not obtain credentials for this Amazon ECR registry")
 
 var runtimeECRKeychain = sync.OnceValue(func() *ecrKeychain {

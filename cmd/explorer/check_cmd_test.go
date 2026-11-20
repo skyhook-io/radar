@@ -129,10 +129,11 @@ func TestJava4ShellCLIPrintsJavaHomeAsUnassessed(t *testing.T) {
 func TestJava4ShellTablePrioritizesActionableGaps(t *testing.T) {
 	const gapCount = java4ShellTableGapLimit + 1
 	report := images.Java4ShellReport{Java4ShellResult: images.Java4ShellResult{
-		Containers:        gapCount + 2,
-		UnaffectedByMajor: map[int]int{11: 1},
-		Unassessed:        map[string]int{images.StatusAuthRequired: gapCount, "no_java_declaration": 1},
-		UnassessedGroups:  gapCount + 1,
+		Containers:             gapCount + 2,
+		UnaffectedByMajor:      map[int]int{11: 1},
+		Unassessed:             map[string]int{images.StatusAuthRequired: gapCount, "no_java_declaration": 1},
+		UnassessedGroups:       gapCount + 1,
+		AuthRequiredRegistries: []string{"example.com"},
 	}}
 	for i := range gapCount {
 		report.UnassessedRows = append(report.UnassessedRows, images.Java4ShellUnassessed{
@@ -154,15 +155,13 @@ func TestJava4ShellTablePrioritizesActionableGaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"No affected Java declarations among assessed containers (1).", "No Java version declared: 1", "Assessment gaps: 11", "Registry authentication required: 11",
-		"private-09", "Showing the first 10 workload groups with gaps", "Use --details to see the image registry",
-		"AWS_PROFILE=your-profile RADAR_JAVA4SHELL_ECR_REGISTRIES=123456789012.dkr.ecr.us-east-1.amazonaws.com radar check java4shell -A",
-		"docker login REGISTRY", java4ShellRegistryDocs}
+		"private-09", "Showing the first 10 workload groups with gaps", "docker login REGISTRY", "  example.com\n", java4ShellRegistryDocs}
 	for _, phrase := range want {
 		if !strings.Contains(output.String(), phrase) {
 			t.Errorf("missing %q in %s", phrase, output.String())
 		}
 	}
-	for _, hidden := range []string{"private-10", "busybox", "example.com/team/image"} {
+	for _, hidden := range []string{"private-10", "busybox", "example.com/team/image", "AWS_PROFILE"} {
 		if strings.Contains(output.String(), hidden) {
 			t.Errorf("unexpected %q in %s", hidden, output.String())
 		}
@@ -174,6 +173,22 @@ func TestJava4ShellTablePrioritizesActionableGaps(t *testing.T) {
 		}
 		if !strings.Contains(output.String(), "private-10") || !strings.Contains(output.String(), "busybox") {
 			t.Errorf("%s lost detailed rows: %s", format, output.String())
+		}
+	}
+}
+
+func TestJava4ShellTableShowsECRRegistryHosts(t *testing.T) {
+	const first = "123456789012.dkr.ecr.us-east-1.amazonaws.com"
+	const second = "987654321012.dkr.ecr.eu-west-1.amazonaws.com"
+	var output bytes.Buffer
+	writeJava4ShellAuthHint(&output, []string{first, second, "ghcr.io"})
+	for _, want := range []string{
+		"export AWS_PROFILE=your-profile",
+		"export RADAR_JAVA4SHELL_ECR_REGISTRIES=" + first + "," + second + "\n",
+		"aws sso login --profile your-profile", "  ghcr.io\n",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("missing %q in %s", want, output.String())
 		}
 	}
 }
