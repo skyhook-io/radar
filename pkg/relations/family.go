@@ -121,6 +121,28 @@ func (d Declaration) candidates(f *Family, source Source) []resourceid.Ref {
 	return out
 }
 
+// DeclaredTargets are the targets obj, an object of kind gk, declares under
+// f, each once, in declaration order: the refs View.References would read,
+// without reading them. A declaration that still has alternatives once f's
+// target kinds are applied is left out, since which alternative stands
+// depends on what Radar could read, which only a View answers.
+func (f *Family) DeclaredTargets(gk resourceid.GroupKind, obj runtime.Object) ([]resourceid.Ref, error) {
+	i := f.source(gk)
+	if i < 0 {
+		return nil, nil
+	}
+	source := f.Sources[i]
+	var out []resourceid.Ref
+	seen := map[resourceid.Ref]bool{}
+	err := f.Declared(obj, func(d Declaration) {
+		if c := d.candidates(f, source); len(c) == 1 && !seen[c[0]] {
+			seen[c[0]] = true
+			out = append(out, c[0])
+		}
+	})
+	return out, err
+}
+
 // Covers reports whether f says anything about an object of gk: a kind it
 // declares or one that declares.
 func (f *Family) Covers(gk resourceid.GroupKind) bool {

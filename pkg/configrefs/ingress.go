@@ -36,17 +36,20 @@ func IngressBackendServices(ing *networkingv1.Ingress) []string {
 // names each Service: the default backend, a rule path, or both.
 func IngressBackendServiceRefs(ing *networkingv1.Ingress) []PathRef {
 	var refs []PathRef
+	type key struct {
+		ref  resourceid.Ref
+		path string
+	}
+	seen := map[key]bool{}
 	add := func(backend *networkingv1.IngressBackend, path string) {
 		if backend == nil || backend.Service == nil || backend.Service.Name == "" {
 			return
 		}
 		r := PathRef{Ref: resourceid.Ref{Kind: "Service", Namespace: ing.Namespace, Name: backend.Service.Name}, Path: path}
-		for _, seen := range refs {
-			if seen.Ref == r.Ref && seen.Path == r.Path {
-				return
-			}
+		if k := (key{r.Ref, r.Path}); !seen[k] {
+			seen[k] = true
+			refs = append(refs, r)
 		}
-		refs = append(refs, r)
 	}
 	add(ing.Spec.DefaultBackend, "spec.defaultBackend.service.name")
 	for _, rule := range ing.Spec.Rules {
