@@ -1,0 +1,22 @@
+suite: Logging operator collection is explicitly opt-in
+templates:
+  - clusterrole.yaml
+tests:
+  - it: does not expand default collection permissions
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["logging.banzaicloud.io"]
+            resources: ["loggings", "flows", "clusterflows", "outputs", "clusteroutputs", "fluentbitagents"]
+            verbs: ["get", "list", "watch"]
+  - it: grants only native read collection when explicitly enabled
+    set:
+      rbac.crdGroups.logging: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["logging.banzaicloud.io"]
+            resources: ["loggings", "flows", "clusterflows", "outputs", "clusteroutputs", "fluentbitagents"]
+            verbs: ["get", "list", "watch"]
