@@ -66,12 +66,63 @@ const (
 // AnchorNamespace, when set, restricts the anchor check to that namespace, so
 // another cluster's same-named object in a different namespace cannot vouch
 // for this cluster's; set it for namespaced objects.
+// Foreign, when set, guards a view that sums the metric over a namespace or
+// the cluster; see ForeignCheck.
 type ViewMetric struct {
 	Name            string
 	Subject         string
 	AnchorLabel     string
 	AnchorValues    []string
 	AnchorNamespace string
+	Foreign         ForeignCheck
+}
+
+// ForeignCheck names the kube-state-metrics series that list the objects a
+// metric is keyed by under each object's cluster labels. Anchors prove a
+// metric without this cluster's label holds this cluster's objects, not that
+// it holds only them: two clusters leaving the label off one scrape job read
+// as one identity, and a view summing the metric would add both. With this
+// cluster's labels known, such a metric is also checked for objects the
+// reference lists under other clusters' labels and never under this
+// cluster's. Per-object views need no such check, since their subject names
+// this cluster's objects.
+//
+// Keys map each of the metric's key labels to the reference's label for the
+// same thing. NamespaceExported reads the metric's namespace from
+// exported_namespace when that is set, as a scrape that renamed a clashing
+// namespace label leaves it.
+type ForeignCheck struct {
+	Reference         string
+	Keys              []ForeignKey
+	NamespaceExported bool
+}
+
+// ForeignKey maps one of the metric's labels to the reference's.
+type ForeignKey struct {
+	Label     string
+	Reference string
+}
+
+// PodForeignCheck checks a metric keyed by namespace and pod against
+// kube_pod_info.
+func PodForeignCheck(namespaceExported bool) ForeignCheck {
+	return ForeignCheck{
+		Reference:         "kube_pod_info",
+		Keys:              []ForeignKey{{Label: "namespace", Reference: "namespace"}, {Label: "pod", Reference: "pod"}},
+		NamespaceExported: namespaceExported,
+	}
+}
+
+// NodeForeignCheck checks a metric naming the node in label against
+// kube_node_info.
+func NodeForeignCheck(label string) ForeignCheck {
+	return ForeignCheck{Reference: "kube_node_info", Keys: []ForeignKey{{Label: label, Reference: "node"}}}
+}
+
+// PersistentVolumeForeignCheck checks a metric naming the PersistentVolume in
+// label against kube_persistentvolume_info.
+func PersistentVolumeForeignCheck(label string) ForeignCheck {
+	return ForeignCheck{Reference: "kube_persistentvolume_info", Keys: []ForeignKey{{Label: label, Reference: "persistentvolume"}}}
 }
 
 // ViewScopeRequest describes one view's check. Span is what the view's
@@ -161,11 +212,52 @@ func normalizeViewScopeRequest(req ViewScopeRequest) (ViewScopeRequest, error) {
 		if m.AnchorLabel == "" || len(m.AnchorValues) == 0 {
 			m.AnchorNamespace = ""
 		}
+		foreign, err := normalizeForeignCheck(m.Foreign)
+		if err != nil {
+			return req, fmt.Errorf("view scope: metric %q: %w", m.Name, err)
+		}
+		m.Foreign = foreign
 		metrics[i] = m
 	}
 	req.Metrics = metrics
 	req.Span = viewScopeSpanBucket(req.Span)
 	return req, nil
+}
+
+var viewScopeMetricName = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
+
+func validViewLabel(name string) bool {
+	return viewScopeLabelName.MatchString(name) && !strings.HasPrefix(name, "__")
+}
+
+// normalizeForeignCheck validates the check and orders its keys. A target
+// label that is also one of the metric's key labels is refused: renaming
+// onto it would merge series the probe must keep apart.
+func normalizeForeignCheck(f ForeignCheck) (ForeignCheck, error) {
+	if f.Reference == "" {
+		return ForeignCheck{}, nil
+	}
+	if !viewScopeMetricName.MatchString(f.Reference) || len(f.Keys) == 0 {
+		return f, fmt.Errorf("invalid foreign check on %q", f.Reference)
+	}
+	labels, refs := map[string]bool{}, map[string]bool{}
+	for _, k := range f.Keys {
+		if !validViewLabel(k.Label) || !validViewLabel(k.Reference) || labels[k.Label] || refs[k.Reference] || k.Label == "exported_namespace" {
+			return f, fmt.Errorf("invalid or repeated foreign check key %q→%q", k.Label, k.Reference)
+		}
+		labels[k.Label], refs[k.Reference] = true, true
+	}
+	for _, k := range f.Keys {
+		if k.Label != k.Reference && labels[k.Reference] {
+			return f, fmt.Errorf("foreign check key %q→%q renames onto another key label", k.Label, k.Reference)
+		}
+	}
+	if f.NamespaceExported && !labels["namespace"] {
+		return f, errors.New("foreign check reads exported_namespace but has no namespace key")
+	}
+	f.Keys = slices.Clone(f.Keys)
+	slices.SortFunc(f.Keys, func(a, b ForeignKey) int { return strings.Compare(a.Label, b.Label) })
+	return f, nil
 }
 
 // viewScopeSpanBucket rounds the span up, so nearby spans share a decision
@@ -297,6 +389,13 @@ func viewScopeKey(generation, epoch uint64, config prom.WorkloadMetricsScope, be
 	write("view", req.View, strconv.FormatBool(req.Joined), req.Namespace, promSeconds(req.Span))
 	for _, m := range req.Metrics {
 		write(append([]string{"metric", m.Name, m.Subject, m.AnchorLabel, m.AnchorNamespace}, m.AnchorValues...)...)
+		if f := m.Foreign; f.Reference != "" {
+			foreign := []string{"foreign", f.Reference, strconv.FormatBool(f.NamespaceExported)}
+			for _, k := range f.Keys {
+				foreign = append(foreign, k.Label, k.Reference)
+			}
+			write(foreign...)
+		}
 	}
 	when := "live"
 	if !live {
@@ -371,7 +470,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		return unknownViewScope(), err
 	}
 	filters := map[string]string{}
-	var missing []string
+	var missing, unfiltered []string
 	var pending []ViewMetric
 	for _, m := range req.Metrics {
 		rows := readback[m.Name]
@@ -393,11 +492,11 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 	}
 	if len(pending) > 0 {
 		identityKeys := slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(partitionLabels), keys...))))
-		identities, anchored, err := runViewProbes(ctx, q, at, viewIdentityParts(pending, identityKeys, req.Span, true))
+		identities, marks, err := runViewProbes(ctx, q, at, viewIdentityParts(pending, identityKeys, req.Span, true))
 		if err != nil {
 			return unknownViewScope(), err
 		}
-		var unfiltered []string
+		anchored := marks[viewScopeAnchorLabel]
 		var unfilteredIDs []map[string]string
 		for _, m := range pending {
 			ids := identities[m.Name]
@@ -417,6 +516,24 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		// labels; when they don't, none of them can be told to be this one.
 		if req.Joined && !joinedIdentitiesAgree(unfilteredIDs, identityKeys) {
 			missing = append(missing, unfiltered...)
+		}
+	}
+	if len(missing) == 0 && len(unfiltered) > 0 {
+		foreign, uncheckable, err := findForeignObjects(ctx, q, at, foreignChecks(req.Metrics, unfiltered), matchers, req.Span)
+		if err != nil {
+			return unknownViewScope(), err
+		}
+		if len(uncheckable) > 0 {
+			return ViewScope{
+				State: ViewScopeUnknown, Withheld: true, Labels: maps.Clone(clusterLabels),
+				Note: fmt.Sprintf("Radar couldn't check that the %s series hold only this cluster's objects: kube-state-metrics' %s has no series with this cluster's label %s over this time range.", strings.Join(foreignCheckedNames(req.Metrics, unfiltered, uncheckable), ", "), strings.Join(uncheckable, ", "), matchers),
+			}, nil
+		}
+		if len(foreign) > 0 {
+			return ViewScope{
+				State: ViewScopeLabelMissing, Withheld: true, Labels: maps.Clone(clusterLabels),
+				Note: fmt.Sprintf("The %s series have no cluster label and include objects kube-state-metrics lists under another cluster, not under this cluster's label %s, so Radar can't tell which of them are this cluster's. Add the label to that metric's scrape, or set --prometheus-cluster-label (Helm traffic.prometheusClusterLabels) to a label every metric carries.", strings.Join(foreign, ", "), matchers),
+			}, nil
 		}
 	}
 	if len(missing) > 0 {

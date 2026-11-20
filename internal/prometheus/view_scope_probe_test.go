@@ -36,16 +36,10 @@ func (s *evaluatingStore) QueryAtPost(_ context.Context, query string, _ time.Ti
 	return &prom.QueryResult{Series: s.evaluate(query)}, nil
 }
 
+var evaluatedPartAt = regexp.MustCompile(`^` + evaluatedPart.String())
+
 func (s *evaluatingStore) evaluate(query string) []prom.Series {
 	s.t.Helper()
-	parts := evaluatedPart.FindAllStringSubmatch(query, -1)
-	whole := make([]string, len(parts))
-	for i, p := range parts {
-		whole[i] = p[0]
-	}
-	if strings.Join(whole, " or ") != query {
-		s.t.Fatalf("store can't read the probe: %s", query)
-	}
 	var out []prom.Series
 	seen := map[string]bool{}
 	add := func(labels map[string]string) {
@@ -54,55 +48,79 @@ func (s *evaluatingStore) evaluate(query string) []prom.Series {
 			out = append(out, vec(labels, 1))
 		}
 	}
-	for _, p := range parts {
-		matchers := parseViewMatchers(p[5])
-		var matched []map[string]string
-		for _, series := range s.series {
-			if series["__name__"] != p[4] {
-				continue
-			}
-			ok := true
-			for _, m := range matchers {
-				if m.label == "" {
-					s.t.Fatalf("store can't read the selector %q", p[5])
-				}
-				match, known := m.matches(series[m.label])
-				ok = ok && match && known
-			}
-			if ok {
-				matched = append(matched, series)
-			}
+	for rest := query; ; {
+		if p := evaluatedPartAt.FindStringSubmatch(rest); p != nil {
+			s.evaluateCount(p, add)
+			rest = rest[len(p[0]):]
+		} else if n := s.evaluateForeign(rest, add); n > 0 {
+			rest = rest[n:]
+		} else {
+			s.t.Fatalf("store can't read the probe at %q: %s", rest, query)
 		}
-		if p[6] == viewScopeAnchorLabel {
-			if len(matched) > 0 {
-				add(map[string]string{viewScopeAnchorLabel: p[7]})
-			}
+		if rest == "" {
+			return out
+		}
+		if !strings.HasPrefix(rest, " or ") {
+			s.t.Fatalf("store can't read the probe at %q: %s", rest, query)
+		}
+		rest = rest[len(" or "):]
+	}
+}
+
+// selected is the series of metric that every matcher in sel matches.
+func (s *evaluatingStore) selected(metric, sel string) []map[string]string {
+	s.t.Helper()
+	matchers := parseViewMatchers(sel)
+	var matched []map[string]string
+	for _, series := range s.series {
+		if series["__name__"] != metric {
 			continue
 		}
-		keys := strings.Split(p[2]+p[3], ",")
-		var groups []map[string]string
-		groupSeen := map[string]bool{}
-		for _, series := range matched {
-			row := map[string]string{viewScopeMetricLabel: p[7]}
-			for _, k := range keys {
-				if v := series[k]; v != "" {
-					row[k] = v
-				}
+		ok := true
+		for _, m := range matchers {
+			if m.label == "" {
+				s.t.Fatalf("store can't read the selector %q", sel)
 			}
-			if key := viewRowKey(row); !groupSeen[key] {
-				groupSeen[key] = true
-				groups = append(groups, row)
-			}
+			match, known := m.matches(series[m.label])
+			ok = ok && match && known
 		}
-		slices.SortFunc(groups, func(a, b map[string]string) int { return strings.Compare(viewRowKey(a), viewRowKey(b)) })
-		if strings.HasPrefix(p[1], "topk") && len(groups) > 2 {
-			groups = groups[:2]
-		}
-		for _, row := range groups {
-			add(row)
+		if ok {
+			matched = append(matched, series)
 		}
 	}
-	return out
+	return matched
+}
+
+func (s *evaluatingStore) evaluateCount(p []string, add func(map[string]string)) {
+	matched := s.selected(p[4], p[5])
+	if p[6] == viewScopeAnchorLabel {
+		if len(matched) > 0 {
+			add(map[string]string{viewScopeAnchorLabel: p[7]})
+		}
+		return
+	}
+	keys := strings.Split(p[2]+p[3], ",")
+	var groups []map[string]string
+	groupSeen := map[string]bool{}
+	for _, series := range matched {
+		row := map[string]string{viewScopeMetricLabel: p[7]}
+		for _, k := range keys {
+			if v := series[k]; v != "" {
+				row[k] = v
+			}
+		}
+		if key := viewRowKey(row); !groupSeen[key] {
+			groupSeen[key] = true
+			groups = append(groups, row)
+		}
+	}
+	slices.SortFunc(groups, func(a, b map[string]string) int { return strings.Compare(viewRowKey(a), viewRowKey(b)) })
+	if strings.HasPrefix(p[1], "topk") && len(groups) > 2 {
+		groups = groups[:2]
+	}
+	for _, row := range groups {
+		add(row)
+	}
 }
 
 func podNames(n, length int) []string {

@@ -93,14 +93,20 @@ func (m viewMatcher) matches(value string) (match, ok bool) {
 }
 
 // viewProbePart is one check of one metric: an expression around a single
-// selector, tagged with the metric it answers for.
+// selector, tagged with the metric it answers for. A part with expr is that
+// whole expression instead, tagged with what it answers for, and is never
+// split.
 type viewProbePart struct {
 	tag, metric string
 	head, tail  string
 	matchers    []viewMatcher
+	expr        string
 }
 
 func (p viewProbePart) String() string {
+	if p.expr != "" {
+		return viewTagged(p.tag, p.metric, p.expr)
+	}
 	sel := make([]string, len(p.matchers))
 	for i, m := range p.matchers {
 		sel[i] = m.String()
@@ -385,27 +391,36 @@ func escapedAt(s string, i int) bool {
 	return n%2 == 1
 }
 
+// viewScopeMarkLabels tag the parts whose answer is only whether a row came
+// back: the name in the tag is what that row vouches for.
+var viewScopeMarkLabels = []string{viewScopeAnchorLabel, viewScopeReferenceLabel, viewScopeOtherLabel, viewScopeForeignLabel}
+
 // runViewProbes sends the parts' probes and merges their answers: each
-// metric's distinct rows, and the metrics an anchor row came back for.
-func runViewProbes(ctx context.Context, q instantQuerier, at time.Time, parts []viewProbePart) (map[string][]map[string]string, map[string]bool, error) {
+// metric's distinct rows, and per mark label the names a row came back for.
+func runViewProbes(ctx context.Context, q instantQuerier, at time.Time, parts []viewProbePart) (map[string][]map[string]string, map[string]map[string]bool, error) {
 	probes, err := planViewProbes(parts, viewProbeMaxBytes)
 	if err != nil {
 		return nil, nil, err
 	}
 	rows := map[string][]map[string]string{}
-	anchored := map[string]bool{}
+	marks := map[string]map[string]bool{}
 	seen := map[string]bool{}
 	for _, probe := range probes {
 		res, err := q.QueryAtPost(ctx, probe.query, at)
 		if err != nil {
 			return nil, nil, err
 		}
-		got, gotAnchored, err := groupViewScopeRows(probe.metrics, res)
+		got, gotMarks, err := groupViewScopeRows(probe.metrics, res)
 		if err != nil {
 			return nil, nil, err
 		}
-		for name := range gotAnchored {
-			anchored[name] = true
+		for tag, names := range gotMarks {
+			if marks[tag] == nil {
+				marks[tag] = map[string]bool{}
+			}
+			for name := range names {
+				marks[tag][name] = true
+			}
 		}
 		for name, list := range got {
 			for _, row := range list {
@@ -416,7 +431,7 @@ func runViewProbes(ctx context.Context, q instantQuerier, at time.Time, parts []
 			}
 		}
 	}
-	return rows, anchored, nil
+	return rows, marks, nil
 }
 
 func viewRowKey(row map[string]string) string {
@@ -428,18 +443,24 @@ func viewRowKey(row map[string]string) string {
 }
 
 // groupViewScopeRows splits a batched answer by metric: rows tagged with the
-// metric label, and the metrics an anchor row came back for. A row for no
-// requested metric means the store didn't evaluate the query as written.
-func groupViewScopeRows(requested map[string]bool, res *prom.QueryResult) (map[string][]map[string]string, map[string]bool, error) {
+// metric label, and per mark label the names a row came back for. A row for
+// nothing requested means the store didn't evaluate the query as written.
+func groupViewScopeRows(requested map[string]bool, res *prom.QueryResult) (map[string][]map[string]string, map[string]map[string]bool, error) {
 	rows := map[string][]map[string]string{}
-	anchored := map[string]bool{}
+	marks := map[string]map[string]bool{}
 	if res == nil {
-		return rows, anchored, nil
+		return rows, marks, nil
 	}
+series:
 	for _, series := range res.Series {
-		if name := series.Labels[viewScopeAnchorLabel]; name != "" && requested[name] {
-			anchored[name] = true
-			continue
+		for _, tag := range viewScopeMarkLabels {
+			if name := series.Labels[tag]; name != "" && requested[name] {
+				if marks[tag] == nil {
+					marks[tag] = map[string]bool{}
+				}
+				marks[tag][name] = true
+				continue series
+			}
 		}
 		name := series.Labels[viewScopeMetricLabel]
 		if !requested[name] {
@@ -447,5 +468,5 @@ func groupViewScopeRows(requested map[string]bool, res *prom.QueryResult) (map[s
 		}
 		rows[name] = append(rows[name], series.Labels)
 	}
-	return rows, anchored, nil
+	return rows, marks, nil
 }

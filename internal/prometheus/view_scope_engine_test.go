@@ -98,6 +98,16 @@ func engineData(end time.Time) []engineFamily {
 		engineSeries{labels: pod("a", engineDBPod, map[string]string{"container": "app", "reason": "OOMKilled"}), value: 1, start: start, end: end},
 		engineSeries{labels: pod("b", engineDBPod, map[string]string{"container": "app", "reason": "OOMKilled"}), value: 1, start: start, end: end.Add(-2 * time.Hour)},
 	)
+	// OpenCost-style allocations without a cluster label: two clusters'
+	// exporters, each in its own namespace, renaming the Pod's namespace to
+	// exported_namespace, for different Pods. And one cluster's alone.
+	var allocBoth, allocOne []engineSeries
+	for cluster, name := range map[string]string{"a": engineAPIPod, "b": engineWorker} {
+		allocBoth = append(allocBoth, engineSeries{labels: map[string]string{"namespace": "opencost-" + cluster, "exported_namespace": engineNS, "pod": name, "container": "app"}, value: 1, start: start, end: end})
+	}
+	for _, name := range engineAPods {
+		allocOne = append(allocOne, engineSeries{labels: map[string]string{"namespace": "opencost-a", "exported_namespace": engineNS, "pod": name, "container": "app"}, value: 1, start: start, end: end})
+	}
 	var nodes []engineSeries
 	for _, cluster := range []string{"a", "b"} {
 		nodes = append(nodes, engineSeries{labels: map[string]string{"cluster": cluster, "instance": "10.0.1.5:9100", "cpu": "0", "mode": "idle"}, rate: 0.9, start: start, end: end})
@@ -112,6 +122,8 @@ func engineData(end time.Time) []engineFamily {
 		{name: "kube_pod_container_status_restarts_total", counter: true, series: restarts},
 		{name: "container_fs_usage_bytes", series: fs},
 		{name: "kube_pod_container_status_last_terminated_reason", series: terminated},
+		{name: "container_cpu_allocation", series: allocBoth},
+		{name: "container_memory_allocation_bytes", series: allocOne},
 	}
 }
 
@@ -275,6 +287,13 @@ func TestEngineViewScope(t *testing.T) {
 	bothUnlabeled := podMetric("container_fs_usage_bytes", podsSubject, engineAPods...)
 	terminated := podMetric("kube_pod_container_status_last_terminated_reason", podsSubject, engineAPods...)
 	absent := podMetric("radar_engine_absent_total", podsSubject, engineAPods...)
+	// A cluster-wide sum's metrics, guarded against other clusters' objects.
+	allocBoth := ViewMetric{Name: "container_cpu_allocation", AnchorLabel: "pod", AnchorValues: engineAPods, Foreign: PodForeignCheck(true)}
+	allocOne := ViewMetric{Name: "container_memory_allocation_bytes", AnchorLabel: "pod", AnchorValues: engineAPods, Foreign: PodForeignCheck(true)}
+	ownGuarded := ownUnlabeled
+	ownGuarded.Foreign = PodForeignCheck(false)
+	bothGuarded := bothUnlabeled
+	bothGuarded.Foreign = PodForeignCheck(false)
 
 	t.Run("configured label scopes every labeled metric to cluster a", func(t *testing.T) {
 		scope := resolve(t, configuredA, time.Hour, true, cpu, mem, info, owner, nodeCPU)
@@ -314,6 +333,56 @@ func TestEngineViewScope(t *testing.T) {
 		wantFilters(t, scope, map[string]string{ownUnlabeled.Name: "", owner.Name: `cluster="a"`})
 	})
 
+	// Two clusters leaving the label off one scrape job read as one identity
+	// holding our Pods; kube-state-metrics, labeled, shows cluster b's Pod
+	// among them.
+	t.Run("configured label on an unlabeled metric holding another cluster's Pods is label_missing", func(t *testing.T) {
+		scope := resolve(t, configuredA, time.Hour, true, allocBoth, owner)
+		if scope.State != ViewScopeLabelMissing || !scope.Withheld || len(scope.Filters) != 0 {
+			t.Fatalf("scope = %+v", scope)
+		}
+		if !strings.Contains(scope.Note, allocBoth.Name) || !strings.Contains(scope.Note, "another cluster") || strings.Contains(scope.Note, owner.Name) {
+			t.Errorf("note = %q", scope.Note)
+		}
+		if got := scalarAt(t, configuredA, "sum("+allocBoth.Name+")", end); got != 2 {
+			t.Errorf("the withheld sum would add both clusters: %g", got)
+		}
+	})
+
+	t.Run("configured label on one cluster's unlabeled metric passes the foreign check", func(t *testing.T) {
+		for _, m := range []ViewMetric{allocOne, ownGuarded} {
+			scope := resolve(t, configuredA, time.Hour, true, m, owner)
+			if scope.State != ViewScopeUnlabeled || scope.Withheld {
+				t.Fatalf("%s: scope = %+v", m.Name, scope)
+			}
+			wantFilters(t, scope, map[string]string{m.Name: "", owner.Name: `cluster="a"`})
+		}
+	})
+
+	// Pods named alike in both clusters can't be told apart: the documented
+	// limit of the check.
+	t.Run("same-named Pods pass the foreign check", func(t *testing.T) {
+		sameNamed := bothGuarded
+		sameNamed.Subject = podsSubject + "," + labelRegexMatcher("pod", engineAPods)
+		if scope := resolve(t, configuredA, time.Hour, false, sameNamed); scope.State != ViewScopeUnlabeled {
+			t.Fatalf("scope = %+v", scope)
+		}
+		// Cluster b's worker Pod has no namesake here, so the whole
+		// namespace's series are withheld.
+		if scope := resolve(t, configuredA, time.Hour, false, bothGuarded); scope.State != ViewScopeLabelMissing {
+			t.Fatalf("whole namespace: scope = %+v", scope)
+		}
+	})
+
+	t.Run("foreign check against an absent reference is unknown", func(t *testing.T) {
+		m := allocOne
+		m.Foreign = NodeForeignCheck("container")
+		scope, err := configuredA.ResolveViewScope(context.Background(), ViewScopeRequest{View: t.Name(), Metrics: []ViewMetric{m}, Span: time.Hour}, nil)
+		if err != nil || scope.State != ViewScopeUnknown || !scope.Withheld || !strings.Contains(scope.Note, "kube_node_info") {
+			t.Fatalf("scope = %+v, err = %v", scope, err)
+		}
+	})
+
 	// The same checks split into many small probes (by metric, and within a
 	// metric's Pod list and anchors) must parse and decide as the batched
 	// probe does.
@@ -322,7 +391,10 @@ func TestEngineViewScope(t *testing.T) {
 		subject := `namespace="` + engineNS + `",` + labelRegexMatcher("pod", pods)
 		workloadOwn := ViewMetric{Name: ownUnlabeled.Name, Subject: subject, AnchorLabel: "pod", AnchorValues: pods, AnchorNamespace: engineNS}
 		workloadCPU := ViewMetric{Name: cpu.Name, Subject: subject, AnchorLabel: "pod", AnchorValues: pods, AnchorNamespace: engineNS}
-		cases := [][]ViewMetric{{cpu, mem, info, owner, nodeCPU}, {ownUnlabeled, owner}, {foreignUnlabeled, owner}, {bothUnlabeled}, {workloadOwn, workloadCPU}}
+		workloadGuarded := ViewMetric{Name: ownUnlabeled.Name, Subject: subject, AnchorLabel: "pod", AnchorValues: pods, AnchorNamespace: engineNS, Foreign: PodForeignCheck(false)}
+		allocSubject := allocBoth
+		allocSubject.Subject = labelRegexMatcher("pod", append([]string{engineWorker}, pods...))
+		cases := [][]ViewMetric{{cpu, mem, info, owner, nodeCPU}, {ownUnlabeled, owner}, {foreignUnlabeled, owner}, {bothUnlabeled}, {workloadOwn, workloadCPU}, {workloadGuarded}, {allocSubject}, {allocOne, ownGuarded}}
 		for _, labels := range []map[string]string{{"cluster": "a"}, nil} {
 			for _, metrics := range cases {
 				req, err := normalizeViewScopeRequest(ViewScopeRequest{View: t.Name(), Metrics: metrics, Joined: true, Span: time.Hour})
@@ -344,7 +416,7 @@ func TestEngineViewScope(t *testing.T) {
 				if !maps.Equal(whole.Filters, split.Filters) || whole.State != split.State || whole.Note != split.Note {
 					t.Errorf("labels %v, %s: split %+v, batched %+v", labels, metrics[0].Name, split, whole)
 				}
-				if (metrics[0].Subject == subject || len(metrics) == 5) && splitProbes <= wholeProbes {
+				if (metrics[0].Subject == subject || metrics[0].Subject == allocSubject.Subject || len(metrics) == 5) && splitProbes <= wholeProbes {
 					t.Errorf("labels %v, %s: no split (%d probes, batched %d)", labels, metrics[0].Name, splitProbes, wholeProbes)
 				}
 			}
