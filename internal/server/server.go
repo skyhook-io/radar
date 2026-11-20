@@ -5299,8 +5299,9 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
-	release := s.beginUntrackedSwitch(w)
+	release := s.contextSwitch.BeginRetry()
 	if release == nil {
+		s.writeError(w, http.StatusConflict, "Another cluster switch is already in progress.")
 		return
 	}
 	defer release()

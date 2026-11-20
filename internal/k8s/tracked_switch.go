@@ -25,10 +25,12 @@ type ContextSwitchStatus struct {
 }
 
 type ContextSwitchTracker struct {
-	mu        sync.Mutex
-	status    ContextSwitchStatus
-	cancel    context.CancelFunc
-	untracked int
+	mu          sync.Mutex
+	status      ContextSwitchStatus
+	cancel      context.CancelFunc
+	untracked   int
+	retries     int
+	retriesDone chan struct{}
 }
 
 func (t *ContextSwitchTracker) Snapshot() *ContextSwitchStatus {
@@ -41,7 +43,7 @@ func (t *ContextSwitchTracker) Snapshot() *ContextSwitchStatus {
 	return &s
 }
 
-// BeginUntracked reserves a synchronous switch, CAPI connect or Retry. Those
+// BeginUntracked reserves a synchronous switch or CAPI connect. Those
 // operations keep their existing serialization with each other; tracked
 // switches must never overlap them, including during either side's preflight.
 func (t *ContextSwitchTracker) BeginUntracked() (release func()) {
@@ -56,6 +58,29 @@ func (t *ContextSwitchTracker) BeginUntracked() (release func()) {
 		t.untracked--
 		t.mu.Unlock()
 	})
+}
+
+// BeginRetry lets a later picker selection join the current retries' wait
+// before taking its preflight generation. Once selected, it excludes new retries.
+func (t *ContextSwitchTracker) BeginRetry() (release func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cancel != nil {
+		return nil
+	}
+	if t.retries == 0 {
+		t.retriesDone = make(chan struct{})
+	}
+	t.retries++
+	return func() {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		t.retries--
+		if t.retries == 0 {
+			close(t.retriesDone)
+			t.retriesDone = nil
+		}
+	}
 }
 
 func (t *ContextSwitchTracker) Start(target string, onFailure func(error)) (ContextSwitchStatus, bool) {
@@ -74,7 +99,10 @@ func (t *ContextSwitchTracker) Start(target string, onFailure func(error)) (Cont
 		Phase: "preflight", Progress: "Checking target cluster…",
 		PreflightTimeoutSeconds: ContextSwitchTimeout.Seconds(), SyncTimeoutSeconds: FirstPaintBackstop.Seconds(),
 	}
-	go t.run(ctx, t.status, onFailure)
+	if t.retriesDone != nil {
+		t.status.Progress = "Waiting for the current connection retry…"
+	}
+	go t.run(ctx, t.status, onFailure, t.retriesDone)
 	return t.status, true
 }
 
@@ -152,7 +180,7 @@ func (t *ContextSwitchTracker) progress(stage string) {
 	t.mu.Unlock()
 }
 
-func (t *ContextSwitchTracker) run(ctx context.Context, op ContextSwitchStatus, onFailure func(error)) {
+func (t *ContextSwitchTracker) run(ctx context.Context, op ContextSwitchStatus, onFailure func(error), retriesDone <-chan struct{}) {
 	var err error
 	defer func() {
 		if p := recover(); p != nil {
@@ -160,6 +188,20 @@ func (t *ContextSwitchTracker) run(ctx context.Context, op ContextSwitchStatus, 
 		}
 		t.finish(ctx, op, err, onFailure)
 	}()
+	if retriesDone != nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-retriesDone:
+		}
+		t.mu.Lock()
+		if ctx.Err() != nil {
+			t.mu.Unlock()
+			return
+		}
+		t.status.Progress = "Checking target cluster…"
+		t.mu.Unlock()
+	}
 	err = performCheckedContextSwitch(ctx, op.Target, t)
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -307,5 +308,64 @@ func TestTrackedSwitchReportsSupersededPreflight(t *testing.T) {
 	op := awaitSwitchPhase(t, &tracker, "failed")
 	if op.Error == "" || *closed || GetConnectionStatus().Context != "current" {
 		t.Fatalf("superseded preflight = %+v, previous sessions closed = %t", op, *closed)
+	}
+}
+
+func TestTrackedSwitchAdmittedDuringLocalRetry(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	current := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		http.Error(w, "unreachable", http.StatusForbidden)
+	}))
+	defer current.Close()
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	var targetProbes atomic.Int32
+	targetPath, _ := setupCheckedSwitch(t, versionOnlyServer(t, &targetProbes), false)
+	writeServerKubeconfig(t, filepath.Dir(targetPath), "current.yaml", "current", current.URL)
+	var tracker ContextSwitchTracker
+	finish := tracker.BeginRetry()
+	if finish == nil {
+		t.Fatal("initial retry refused")
+	}
+	retried := make(chan error, 1)
+	go func() {
+		err := RetryCurrentConnection()
+		finish()
+		retried <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retry did not reach its connectivity probe")
+	}
+	queued := tracker.BeginRetry()
+	if queued == nil {
+		t.Fatal("second retry was not admitted before the selection")
+	}
+	op, ok := tracker.Start("target", nil)
+	if !ok || op.Phase != "preflight" || op.Progress != "Waiting for the current connection retry…" || tracker.BeginRetry() != nil {
+		t.Fatalf("selection during Retry: %+v, accepted %t", op, ok)
+	}
+	if !tracker.Cancel(op.ID, op.Target) {
+		t.Fatal("could not cancel the waiting selection")
+	}
+	next, ok := tracker.Start("target", nil)
+	if !ok || next.ID == op.ID || targetProbes.Load() != 0 {
+		t.Fatalf("replacement selection: %+v, probes %d", next, targetProbes.Load())
+	}
+	unblock()
+	if err := <-retried; err == nil {
+		t.Fatal("unreachable current cluster unexpectedly recovered")
+	}
+	if snapshot := tracker.Snapshot(); snapshot.ID != next.ID || snapshot.Progress != next.Progress || targetProbes.Load() != 0 {
+		t.Fatalf("selection skipped an admitted retry: %+v", snapshot)
+	}
+	queued()
+	awaitSwitchPhase(t, &tracker, "succeeded")
+	if status := GetConnectionStatus(); status.Context != "target" || status.State != StateConnected || targetProbes.Load() != 1 {
+		t.Fatalf("Retry overwrote the selected target: %+v, target probes %d", status, targetProbes.Load())
 	}
 }
