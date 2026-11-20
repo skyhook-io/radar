@@ -62,6 +62,16 @@ func chartMetrics(kind string, category prom.MetricCategory, subject, anchorLabe
 	return out
 }
 
+// summedPodMetrics guards metrics a chart sums over a namespace or the
+// cluster: their anchors prove this cluster's Pods are among the series, and
+// the foreign check that no other cluster's are.
+func summedPodMetrics(metrics []ViewMetric) []ViewMetric {
+	for i := range metrics {
+		metrics[i].Foreign = PodForeignCheck(false)
+	}
+	return metrics
+}
+
 // clusterChartScopeRequest checks the overview's metrics across the whole
 // store. Its anchors are the live Pods of the namespace the Pod-UID proof
 // anchors on, a stable sample of this cluster's Pods that stays cheap on a
@@ -72,7 +82,7 @@ func clusterChartScopeRequest(category prom.MetricCategory, chartRange time.Dura
 	anchors := NamespacePodAnchors(cache, namespace)
 	return ViewScopeRequest{
 		View:    "cluster_chart",
-		Metrics: chartMetrics("", category, "", "pod", namespace, anchors),
+		Metrics: summedPodMetrics(chartMetrics("", category, "", "pod", namespace, anchors)),
 		Span:    ChartScopeSpan(chartRange, category),
 	}
 }
@@ -80,7 +90,7 @@ func clusterChartScopeRequest(category prom.MetricCategory, chartRange time.Dura
 func namespaceChartScopeRequest(namespace string, category prom.MetricCategory, chartRange time.Duration, cache *k8s.ResourceCache) ViewScopeRequest {
 	return ViewScopeRequest{
 		View:      "namespace_chart",
-		Metrics:   chartMetrics("", category, "namespace="+strconv.Quote(namespace), "pod", namespace, NamespacePodAnchors(cache, namespace)),
+		Metrics:   summedPodMetrics(chartMetrics("", category, "namespace="+strconv.Quote(namespace), "pod", namespace, NamespacePodAnchors(cache, namespace))),
 		Span:      ChartScopeSpan(chartRange, category),
 		Namespace: namespace,
 	}
