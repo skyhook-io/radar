@@ -4,8 +4,8 @@ import "strings"
 
 // ClusterFilter returns the matchers that keep one metric's series to one
 // cluster in a store several clusters share, or "" to leave it unfiltered.
-// A nil filter leaves every metric unfiltered, so the builders produce
-// exactly the queries they did before filters existed.
+// A nil filter leaves every metric unfiltered, and the builders produce
+// their unfiltered queries byte for byte.
 type ClusterFilter func(metric string) string
 
 func (f ClusterFilter) of(metric string) string {

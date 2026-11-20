@@ -943,7 +943,7 @@ func TestHandleDiagnoseMetricsWithheldInASharedStore(t *testing.T) {
 }
 
 // A configured cluster label that every vitals metric reads back is on every
-// selector; a store with no labels gets today's queries unchanged.
+// selector; a store with no labels gets the unfiltered queries unchanged.
 func TestHandleDiagnoseMetricsScopedQueries(t *testing.T) {
 	sel := prom.SelectPods("alpha", []string{"cart-abc123"})
 	for _, tc := range []struct {

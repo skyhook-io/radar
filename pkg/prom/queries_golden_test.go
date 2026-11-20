@@ -8,9 +8,9 @@ import (
 	"testing"
 )
 
-// The golden file holds the exact chart and vitals queries the builders
-// produced before cluster scoping existed. A single-cluster store, whose
-// filters are all empty, must keep receiving them byte for byte.
+// The golden file pins the exact chart and vitals queries the builders
+// produce with no cluster filter. A single-cluster store, whose filters are
+// all empty, must keep receiving them byte for byte.
 
 const goldenNamespace = "pay-ments"
 const goldenPod = "api.x-1"

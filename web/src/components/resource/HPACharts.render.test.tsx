@@ -93,7 +93,7 @@ describe('HPACharts — cluster scope', () => {
     expect(html).not.toContain('Replicas')
   })
 
-  it('draws a scoped answer as before and notes a partial one', () => {
+  it('draws a scoped answer and notes a partial one', () => {
     connected = true
     metricsResult = { data: { current: series([2, 3]), desired: series([3, 3]), clusterScope: { state: 'scoped_verified', note: 'Matched.' } } }
     let html = renderToString(<HPACharts data={hpa} />)

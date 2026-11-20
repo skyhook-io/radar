@@ -2,7 +2,7 @@ import { isClusterScopeWithheld, type ClusterScope } from "@skyhook-io/k8s-ui/ty
 
 /**
  * How the Pod-name-matched charts in one section were kept to this cluster.
- * `caveat` is today's "may include another cluster" wording: an unlabeled
+ * `caveat` keeps the "may include another cluster" wording: an unlabeled
  * store, older Radar (no clusterScope), or a chart that hasn't answered yet.
  */
 export type NameMatchedScope = "scoped" | "asserted" | "withheld" | "caveat";
