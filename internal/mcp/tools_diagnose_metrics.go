@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -287,10 +288,20 @@ func boundDiagnoseMetricsError(msg string) string {
 	// Prometheus errors quote the failing request URL, which names the backend
 	// and can carry its credentials; this string ships in the tool result.
 	msg = prom.RedactURLs(msg)
-	if len(msg) <= diagnoseMetricsMaxErrorBytes {
+	return truncateWithEllipsis(msg, diagnoseMetricsMaxErrorBytes)
+}
+
+// truncateWithEllipsis bounds msg to limit bytes, ending in "…" when cut,
+// and never cuts inside a UTF-8 character.
+func truncateWithEllipsis(msg string, limit int) string {
+	if len(msg) <= limit {
 		return msg
 	}
-	return msg[:diagnoseMetricsMaxErrorBytes-len("…")] + "…"
+	cut := limit - len("…")
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut] + "…"
 }
 
 // diagnoseMetricsPointBudget derives the per-series point cap from what the
@@ -363,11 +374,7 @@ func incompleteNote(a prom.QueryAnnotations) string {
 	if len(a.Warnings) > 0 {
 		msg += ": " + strings.Join(a.Warnings, "; ")
 	}
-	msg = prom.RedactURLs(msg)
-	if len(msg) <= diagnoseMetricsMaxIncompleteBytes {
-		return msg
-	}
-	return msg[:diagnoseMetricsMaxIncompleteBytes-len("…")] + "…"
+	return truncateWithEllipsis(prom.RedactURLs(msg), diagnoseMetricsMaxIncompleteBytes)
 }
 
 // collapseConstantRuns drops the interior of an evenly spaced run of equal

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -578,6 +579,21 @@ func TestIncompleteNoteIsBounded(t *testing.T) {
 	note := incompleteNote(prom.QueryAnnotations{Warnings: []string{strings.Repeat("w", 2000)}})
 	if len(note) > diagnoseMetricsMaxIncompleteBytes {
 		t.Fatalf("note is %d bytes, over %d", len(note), diagnoseMetricsMaxIncompleteBytes)
+	}
+}
+
+// A cut landing inside a multi-byte character steps back to its start, so
+// the note stays valid UTF-8 and never shows a replacement character.
+func TestIncompleteNoteCutsOnACharacterBoundary(t *testing.T) {
+	for offset := range 4 {
+		warning := strings.Repeat("w", diagnoseMetricsMaxIncompleteBytes-80+offset) + strings.Repeat("é", 100)
+		note := incompleteNote(prom.QueryAnnotations{Warnings: []string{warning}})
+		if !utf8.ValidString(note) || !strings.HasSuffix(note, "…") || len(note) > diagnoseMetricsMaxIncompleteBytes {
+			t.Errorf("offset %d: note %q (%d bytes) is invalid UTF-8, unmarked or over the bound", offset, note, len(note))
+		}
+		if bounded := boundDiagnoseMetricsError(strings.Repeat("e", diagnoseMetricsMaxErrorBytes-2+offset) + "éé"); !utf8.ValidString(bounded) || len(bounded) > diagnoseMetricsMaxErrorBytes {
+			t.Errorf("offset %d: error %q is invalid UTF-8 or over the bound", offset, bounded)
+		}
 	}
 }
 
