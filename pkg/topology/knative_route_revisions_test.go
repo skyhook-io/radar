@@ -18,6 +18,9 @@ func TestKnativeRoutesExposeTheRevisionsTheirTrafficResolvesTo(t *testing.T) {
 	route.Object["status"] = map[string]any{"traffic": []any{
 		map[string]any{"revisionName": "web-00002", "percent": int64(90)},
 		map[string]any{"revisionName": "web-00001", "percent": int64(10)},
+		// A tagged target can name a revision traffic already reaches; it is
+		// still one edge.
+		map[string]any{"revisionName": "web-00001", "tag": "canary", "percent": int64(0)},
 		map[string]any{"revisionName": "web-gone", "percent": int64(0)},
 	}}
 	d := &genericIdentityDynamic{
@@ -34,8 +37,13 @@ func TestKnativeRoutesExposeTheRevisionsTheirTrafficResolvesTo(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got []string
+	seen := map[string]bool{}
 	for _, e := range topo.Edges {
 		if e.Source == "knativeroute/app/web" {
+			if seen[e.ID] {
+				t.Errorf("%s drawn twice", e.ID)
+			}
+			seen[e.ID] = true
 			if e.Type != EdgeExposes {
 				t.Errorf("%s is %s, want exposes", e.ID, e.Type)
 			}
