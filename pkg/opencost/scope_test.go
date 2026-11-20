@@ -290,3 +290,31 @@ func TestApplicationTrendWithheldNamespaceSendsNoQuery(t *testing.T) {
 		t.Fatalf("coverage = %+v", resp.Coverage)
 	}
 }
+
+// A namespace whose check failed carries no scope, and must not stop a later
+// namespace withheld for cluster scope from naming the scope that withheld it.
+func TestApplicationTrendShowsTheWithheldNamespacesScope(t *testing.T) {
+	c := annotatedStore(t, false, nil)
+	verified := &ClusterScope{State: "scoped_verified", Note: "verified"}
+	withheld := &ClusterScope{State: "several_clusters", Note: "several"}
+	resp := ComputeApplicationCostTrendFromProm(context.Background(), c, ApplicationTrendOptions{
+		Range: "24h",
+		Workloads: []ApplicationWorkloadRef{
+			{Kind: "Deployment", Namespace: "a-failed", Name: "api"},
+			{Kind: "Deployment", Namespace: "b-verified", Name: "api"},
+			{Kind: "Deployment", Namespace: "c-withheld", Name: "api"},
+		},
+		ScopeFor: func(namespace string) (StoreScope, string) {
+			switch namespace {
+			case "a-failed":
+				return StoreScope{}, ReasonQueryError
+			case "b-verified":
+				return StoreScope{Strict: true, ClusterScope: verified}, ""
+			}
+			return StoreScope{ClusterScope: withheld}, ReasonClusterScope
+		},
+	})
+	if resp.ClusterScope != withheld {
+		t.Fatalf("clusterScope = %+v, want the withheld namespace's", resp.ClusterScope)
+	}
+}

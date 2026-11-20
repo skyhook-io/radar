@@ -60,11 +60,13 @@ func ComputeApplicationCostTrendFromProm(ctx context.Context, client *prom.Clien
 		reason := ""
 		if opts.ScopeFor != nil {
 			scope, reason = opts.ScopeFor(namespace)
-			// A withheld namespace's scope is the one worth showing.
-			if resp.ClusterScope == nil || (reason != "" && !withheld) {
+			// A namespace withheld for cluster scope has the scope worth
+			// showing; any other reason (a failed check) carries none.
+			scopeWithheld := reason == ReasonClusterScope && scope.ClusterScope != nil
+			if resp.ClusterScope == nil || (scopeWithheld && !withheld) {
 				resp.ClusterScope = scope.ClusterScope
 			}
-			withheld = withheld || reason != ""
+			withheld = withheld || scopeWithheld
 		}
 		var result *prom.QueryResult
 		if reason == "" {
