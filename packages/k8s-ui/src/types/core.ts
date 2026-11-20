@@ -222,6 +222,7 @@ export interface FeatureCapabilities {
   loggingPodShipping?: boolean
   vulnerabilities?: boolean
   runtimeAdvisoryChecks?: boolean
+  runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
 }
 
