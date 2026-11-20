@@ -178,6 +178,7 @@ export function CompositeRenderer({ data, onNavigate, composedRefStatuses, compo
                 key={makeRefKey(ref)}
                 ref_={ref}
                 statusEntry={composedRefStatuses?.get(makeRefKey(ref))}
+                ownNamespace={data?.metadata?.namespace}
                 onNavigate={onNavigate}
               />
             ))}
@@ -231,10 +232,12 @@ function ComposedResourcesEmpty({
 function ComposedRefRow({
   ref_,
   statusEntry,
+  ownNamespace,
   onNavigate,
 }: {
   ref_: CrossplaneResourceRef
   statusEntry?: ComposedRefStatus
+  ownNamespace?: string
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }) {
   const group = groupFromApiVersion(ref_.apiVersion)
@@ -254,7 +257,7 @@ function ComposedRefRow({
           onNavigate={onNavigate}
         />
       </span>
-      {ref_.namespace && (
+      {ref_.namespace && ref_.namespace !== ownNamespace && (
         <span className="text-xs text-theme-text-tertiary truncate max-w-[8rem] shrink-0 text-right">{ref_.namespace}</span>
       )}
       <StatusCellInline statusEntry={statusEntry} />

@@ -489,6 +489,32 @@ describe('getCrossplaneResourceRefs', () => {
     expect(refs[0].name).toBe('b-v2')
   })
 
+  it('places namespace-less refs of a namespaced XR in the XR namespace (v2)', () => {
+    const resource = {
+      metadata: { name: 'kivo', namespace: 'kivo' },
+      spec: {
+        crossplane: {
+          resourceRefs: [
+            { apiVersion: 'apps/v1', kind: 'StatefulSet', name: 'kivo-db' },
+            { apiVersion: 'v1', kind: 'Service', name: 'kivo-db', namespace: 'other' },
+          ],
+        },
+      },
+    } as const
+    expect(getCrossplaneResourceRefs(resource)).toEqual([
+      { apiVersion: 'apps/v1', kind: 'StatefulSet', name: 'kivo-db', namespace: 'kivo' },
+      { apiVersion: 'v1', kind: 'Service', name: 'kivo-db', namespace: 'other' },
+    ])
+  })
+
+  it('leaves namespace-less refs of a cluster-scoped XR cluster-scoped', () => {
+    const resource = {
+      metadata: { name: 'xdb' },
+      spec: { resourceRefs: [{ apiVersion: 'rds.aws.upbound.io/v1beta1', kind: 'Instance', name: 'db-x' }] },
+    } as const
+    expect(getCrossplaneResourceRefs(resource)[0].namespace).toBeUndefined()
+  })
+
   it('filters out entries missing kind or name', () => {
     const resource = {
       spec: {

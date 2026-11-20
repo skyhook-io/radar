@@ -32,4 +32,31 @@ describe('CompositeRenderer composed-resource links', () => {
       Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: false })
     }
   })
+  it('navigates a namespaced XR composed ref into the XR namespace, not cluster scope', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    initNavigationMap([
+      { group: 'apps', version: 'v1', kind: 'StatefulSet', name: 'statefulsets', namespaced: true, isCrd: false, verbs: ['get'] },
+    ])
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    const onNavigate = vi.fn()
+    try {
+      await act(async () => root.render(<CompositeRenderer onNavigate={onNavigate} data={{
+        apiVersion: 'platform.example.org/v1alpha1',
+        kind: 'Database',
+        metadata: { name: 'kivo', namespace: 'kivo' },
+        spec: { crossplane: { resourceRefs: [{ apiVersion: 'apps/v1', kind: 'StatefulSet', name: 'kivo-db' }] } },
+      }} />))
+      const link = [...container.querySelectorAll('button')].find(button => button.textContent === 'kivo-db')
+      expect(link).toBeDefined()
+      await act(async () => link!.click())
+      expect(onNavigate).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'statefulsets', namespace: 'kivo', name: 'kivo-db' }))
+      // The row does not repeat the namespace the whole panel already lives in.
+      expect(container.textContent).not.toMatch(/kivo-dbkivo/)
+    } finally {
+      await act(async () => root.unmount())
+      resetNavigationMap()
+      Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: false })
+    }
+  })
 })
