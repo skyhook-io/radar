@@ -249,8 +249,13 @@ func toGitOpsResponse(r gitops.OperationResult) GitOpsOperationResponse {
 // remain visible to operators scraping server logs.
 func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, action, namespace, name string) {
 	msg := err.Error()
+	var admission *gitops.AdmissionDenied
 	var status int
 	switch {
+	case errors.As(err, &admission):
+		// Admission denials keep one status whatever the policy chose: a
+		// ValidatingAdmissionPolicy's default reason is Invalid (422).
+		status = http.StatusForbidden
 	case errors.Is(err, context.DeadlineExceeded):
 		status = http.StatusGatewayTimeout
 	case apierrors.IsNotFound(err):
@@ -282,6 +287,29 @@ func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, acti
 	default:
 		status = http.StatusInternalServerError
 	}
-	log.Printf("[%s] %s %s/%s -> %d: %v", module, action, sanitizeForLog(namespace), sanitizeForLog(name), status, err)
-	s.writeError(w, status, msg)
+	if status == http.StatusInternalServerError {
+		log.Printf("[%s] Failed to %s %s/%s: %v", module, action, sanitizeForLog(namespace), sanitizeForLog(name), err)
+	} else {
+		log.Printf("[%s] %s %s/%s -> %d: %v", module, action, sanitizeForLog(namespace), sanitizeForLog(name), status, err)
+	}
+	fields := map[string]string{}
+	var denied *gitops.PermissionDenied
+	switch {
+	case errors.As(err, &denied):
+		fields = map[string]string{
+			"error_code": "rbac_denied", "summary": denied.Summary(), "verb": denied.Verb,
+			"group": denied.Group, "resource": denied.Resource, "namespace": denied.Namespace, "name": denied.Name, "kind": denied.Kind,
+		}
+	case admission != nil:
+		fields = map[string]string{"error_code": "admission_denied", "summary": admission.Summary()}
+	}
+	var partial *gitops.PartialSyncError
+	if errors.As(err, &partial) {
+		fields["note"] = partial.Note()
+	}
+	if len(fields) == 0 {
+		s.writeError(w, status, msg)
+		return
+	}
+	s.writeErrorFields(w, status, msg, fields)
 }

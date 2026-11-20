@@ -34,7 +34,7 @@ import {
 } from "./components/ui/Toast";
 import { setApiBase, setBasename } from "./api/config";
 import { shouldRetryRadarQuery } from "./api/radarFeatures";
-import { isShownInline } from "./api/httpErrors";
+import { GitOpsActionError, isShownInline } from "./api/httpErrors";
 import { NavCustomizationProvider } from "./context/NavCustomization";
 import { FilterLocationBridge } from "./filter/FilterLocationBridge";
 import type { NavCustomization } from "./context/NavCustomization";
@@ -203,7 +203,13 @@ export function makeDefaultQueryClient(): QueryClient {
     mutationCache: new MutationCache({
       onError: (error, _variables, _context, mutation) => {
         const message = mutation.options.meta?.errorMessage;
-        if (message && !isShownInline(error)) showApiError(message, (error as Error).message);
+        if (message && !isShownInline(error)) {
+          if (error instanceof GitOpsActionError) {
+            showApiError(message, error.notificationDetail, error.rawDetail);
+          } else {
+            showApiError(message, (error as Error).message);
+          }
+        }
       },
       onSuccess: (_data, _variables, _context, mutation) => {
         const message = mutation.options.meta?.successMessage;

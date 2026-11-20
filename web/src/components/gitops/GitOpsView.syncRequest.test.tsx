@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useNavigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { normalizeArgoApplication } from '@skyhook-io/k8s-ui'
 import type { ArgoActionHandlers, GitOpsInsight, GitOpsInsightRef, GitOpsRow, GitOpsRowAction } from '@skyhook-io/k8s-ui'
 import { GitOpsView } from './GitOpsView'
+import { isShownInline } from '../../api/httpErrors'
 
 // The requests the Sync dialog builds, sent by the real useArgoSync and
 // useArgoResourceValidation: only a Radar advertising argoSyncInheritance is
@@ -33,13 +34,15 @@ vi.mock('@skyhook-io/k8s-ui', async (importOriginal) => {
     GitOpsTableView: (props: { rows: GitOpsRow[]; onRowAction: (row: GitOpsRow, action: GitOpsRowAction) => void }) => (
       <button type="button" onClick={() => props.onRowAction(props.rows[0], 'sync')}>Open sync</button>
     ),
-    GitOpsDetailLayout: (props: { argo?: ArgoActionHandlers; renderTabBody: (ctx: { tab: 'changes'; fullscreen: boolean }) => React.ReactNode; children?: React.ReactNode }) => (
-      <div data-resume-settings={JSON.stringify(props.argo?.resumeSettings ?? null)}>
+    GitOpsDetailLayout: (props: { argo?: ArgoActionHandlers; renderTabBody: (ctx: { tab: 'changes'; fullscreen: boolean }) => React.ReactNode; children?: React.ReactNode }) => {
+      const navigate = useNavigate()
+      return <div data-resume-settings={JSON.stringify(props.argo?.resumeSettings ?? null)}>
         <button type="button" onClick={() => props.argo?.onSyncRequested()}>Open sync</button>
+        <button type="button" onClick={() => navigate('/gitops/detail/applications/argocd/other?apiGroup=argoproj.io')}>Open other Application</button>
         {props.renderTabBody({ tab: 'changes', fullscreen: false })}
         {props.children}
       </div>
-    ),
+    },
     GitOpsChangesView: (props: { onSyncResource?: (ref: GitOpsInsightRef) => void }) => (
       <button type="button" onClick={() => props.onSyncResource?.(deployment)}>Open resource sync</button>
     ),
@@ -79,13 +82,21 @@ let client: QueryClient
 let host: HTMLDivElement
 let root: ReturnType<typeof createRoot>
 let requests: Array<{ path: string; body: Record<string, unknown> }>
+let syncDenial: { error: string; error_code: string; summary: string } | undefined
+let pendingSyncResponse: Promise<Response> | undefined
 
 beforeEach(async () => {
   requests = []
+  syncDenial = undefined
+  pendingSyncResponse = undefined
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (init?.method === 'POST') {
       requests.push({ path, body: JSON.parse(String(init.body)) })
+      if (path.endsWith('/sync') && pendingSyncResponse) return pendingSyncResponse
+      if (path.endsWith('/sync') && syncDenial) {
+        return Promise.resolve(Response.json(syncDenial, { status: 403 }))
+      }
       const answer = path.endsWith('/validate-resource') ? { outcome: 'succeeded', message: 'ok' } : { message: 'Sync initiated' }
       return Promise.resolve(new Response(JSON.stringify(answer), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     }
@@ -366,4 +377,56 @@ it.each([
   await advertise(features)
   const settings = document.querySelector('[data-resume-settings]')!.getAttribute('data-resume-settings')!
   expect(JSON.parse(settings)).toEqual(expected)
+})
+
+it.each([
+  '/gitops',
+  '/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io',
+])('keeps the failed sync and its original denial in the dialog from %s', async (path) => {
+  syncDenial = {
+    error: 'admission webhook "change-window" denied the request: frozen',
+    error_code: 'admission_denied',
+    summary: 'Rejected by admission webhook change-window: frozen',
+  }
+  await renderView(path)
+  await click(button('Open sync'))
+  await click(toggle('Prune'))
+  await click(button('Sync now'))
+  expect(toggle('Prune').checked).toBe(true)
+  expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain(syncDenial.summary)
+  expect(isShownInline(client.getMutationCache().getAll().at(-1)?.state.error)).toBe(true)
+  await click(button('Error details'))
+  expect(document.querySelector('[role="dialog"] pre')?.textContent).toBe(syncDenial.error)
+  await click(button('Cancel'))
+  await click(button('Open sync'))
+  expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull()
+})
+
+it('closes a failed sync when the detail page changes Applications', async () => {
+  syncDenial = { error: 'denied', error_code: 'admission_denied', summary: 'Change window is closed' }
+  await click(button('Open sync'))
+  await click(button('Sync now'))
+  expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain(syncDenial.summary)
+  await click(button('Open other Application'))
+  const dialog = document.querySelector('[role="dialog"]')
+  expect(!dialog || dialog.closest('[inert]')).toBeTruthy()
+  await click(button('Open sync'))
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('argocd/other')
+  expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull()
+})
+
+it('keeps global error reporting for a rejection after leaving the originating Application', async () => {
+  let respond!: (response: Response) => void
+  pendingSyncResponse = new Promise(resolve => { respond = resolve })
+  await click(button('Open sync'))
+  await click(button('Sync now'))
+  await click(button('Open other Application'))
+  await act(async () => respond(Response.json({
+    error: 'denied', error_code: 'admission_denied', summary: 'Change window is closed',
+  }, { status: 403 })))
+  await settle()
+  const mutation = client.getMutationCache().getAll().at(-1)
+  expect(mutation?.state.status).toBe('error')
+  expect(mutation?.options.meta?.errorMessage).toBe('Failed to trigger sync')
+  expect(isShownInline(mutation?.state.error)).toBe(false)
 })
