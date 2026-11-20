@@ -251,6 +251,9 @@ type FeatureCapabilities struct {
 	RuntimeAdvisoryProgress bool `json:"runtimeAdvisoryProgress"` // GET /api/vulnerabilities/java4shell/stream
 	// GET /api/sealedsecrets/controller
 	SealedSecretsController bool `json:"sealedSecretsController"`
+	// POST /api/cronjobs/{namespace}/{name}/trigger accepts {"jobName": ...};
+	// an older Radar ignores the body and names the Job itself.
+	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

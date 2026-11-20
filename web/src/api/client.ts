@@ -5375,15 +5375,23 @@ export function useTriggerCronJob() {
     mutationFn: async ({
       namespace,
       name,
+      jobName,
     }: {
       namespace: string;
       name: string;
+      // Only for a Radar advertising cronJobTriggerJobName; an older one
+      // ignores the body and names the Job itself.
+      jobName?: string;
     }) => {
       const response = await apiFetch(
         `${getApiBase()}/cronjobs/${namespace}/${name}/trigger`,
-        {
-          method: "POST",
-        },
+        jobName
+          ? {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ jobName }),
+            }
+          : { method: "POST" },
       );
       if (!response.ok) {
         const error = await readErrorBody(response);

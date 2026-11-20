@@ -390,6 +390,7 @@ function useActionsBarProps(
   const argoResumeMutation = useArgoResume()
   const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
   const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
+  const { support: cronJobJobNameSupport } = useRadarFeature('cronJobTriggerJobName')
 
   const {
     data: cascadePreview,
@@ -487,9 +488,11 @@ function useActionsBarProps(
       ? (params: { namespace: string; name: string }) =>
           rolloutDialogPromote.mutateAsync({ action: 'promote-full', ...params })
       : undefined,
+    // mutateAsync, not mutate: the Job name dialog stays open when this rejects.
     onTriggerCronJob: (params: Parameters<typeof triggerCronJobMutation.mutate>[0]) =>
-      triggerCronJobMutation.mutate(params),
+      triggerCronJobMutation.mutateAsync(params),
     isTriggeringCronJob: triggerCronJobMutation.isPending,
+    cronJobTriggerDialog: cronJobJobNameSupport === 'supported',
     onSuspendCronJob: (params: Parameters<typeof suspendCronJobMutation.mutate>[0]) =>
       suspendCronJobMutation.mutate(params),
     isSuspendingCronJob: suspendCronJobMutation.isPending,

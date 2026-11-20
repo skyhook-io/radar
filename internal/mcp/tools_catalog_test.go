@@ -285,7 +285,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// Every tool description and schema is sent to each MCP client and spends
 		// its context, so the cap makes any growth a deliberate choice.
 		// Opt-in Service curl and exec remain a separate allowance below.
-		maxCatalogBytes         = 75090
+		maxCatalogBytes         = 75180
 		maxToolDescriptionBytes = 3200
 	)
 
