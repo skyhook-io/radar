@@ -293,7 +293,7 @@ func TestWorkloadSelectionFallsBackToExactCurrentPods(t *testing.T) {
 		mu.Unlock()
 		return &prom.QueryResult{}, nil
 	})
-	selection, coverage := workloadSelection(context.Background(), querier, "Deployment", "prod", "api", []string{"api-6ccf7b8d9-x1"}, ViewScope{})
+	selection, coverage, _ := workloadSelection(context.Background(), querier, "Deployment", "prod", "api", []string{"api-6ccf7b8d9-x1"}, ViewScope{})
 	if coverage != OwnerCoverageCurrentPods {
 		t.Fatalf("coverage = %q, want current_pods", coverage)
 	}

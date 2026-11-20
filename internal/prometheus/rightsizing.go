@@ -695,7 +695,18 @@ func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, na
 		}
 	}
 	client = strictRightsizingQuerier{client}
-	selection, coverage := workloadSelection(ctx, client, kind, namespace, name, workload.podNames, scope)
+	selection, coverage, ownerErr := workloadSelection(ctx, client, kind, namespace, name, workload.podNames, scope)
+	if isIncompleteAnswer(ownerErr) {
+		// Ownership answered in part may have left out Pods the workload
+		// ran this week; the current Pods alone would size it from some of
+		// its history as confidently as from all of it.
+		return RightsizingResponse{
+			Kind: kind, Namespace: namespace, Name: name, Window: "7d", Source: "radar",
+			Replicas: workload.replicas, ScaledToZero: workload.scaledToZero, ManagedBy: workload.managedBy,
+			Rows: []RightsizingRow{}, Reason: ReasonRightsizingPartialData, ClusterScope: clusterScope,
+			Warnings: []RightsizingScanWarning{{Code: "owner_metrics_query_failed", Message: boundWarningMessage(ownerErr.Error())}},
+		}
+	}
 	queries := buildRightsizingQueries(namespace, selection)
 	results := runRightsizingQueries(ctx, client, queries)
 	expected := int(rightsizingWindow / rightsizingStep)
@@ -781,22 +792,27 @@ type metricSelection struct {
 	scope      ViewScope
 }
 
-func workloadSelection(ctx context.Context, client rightsizingQuerier, kind, namespace, name string, podNames []string, scope ViewScope) (metricSelection, OwnerCoverage) {
+// workloadSelection selects the workload's Pods by retained ownership, else
+// by its current Pods. The error is the ownership probe's, when it failed.
+func workloadSelection(ctx context.Context, client rightsizingQuerier, kind, namespace, name string, podNames []string, scope ViewScope) (metricSelection, OwnerCoverage, error) {
 	owner := ownerSelection(kind, namespace, name, scope)
+	var probeErr error
 	if owner != "" {
 		probe := fmt.Sprintf(`sum(count_over_time((%s)[7d:5m]))`, owner)
-		if result, err := client.Query(ctx, probe); err == nil && firstValue(result) != nil && *firstValue(result) > 0 {
-			return metricSelection{join: fmt.Sprintf(`* on (namespace,pod) group_left() (%s)`, owner), scope: scope}, OwnerCoverageKSMHistory
+		result, err := client.Query(ctx, probe)
+		if err == nil && firstValue(result) != nil && *firstValue(result) > 0 {
+			return metricSelection{join: fmt.Sprintf(`* on (namespace,pod) group_left() (%s)`, owner), scope: scope}, OwnerCoverageKSMHistory, nil
 		}
+		probeErr = err
 	}
 	if len(podNames) == 0 {
-		return metricSelection{podPattern: "a^", scope: scope}, OwnerCoverageCurrentPods
+		return metricSelection{podPattern: "a^", scope: scope}, OwnerCoverageCurrentPods, probeErr
 	}
 	escaped := make([]string, 0, len(podNames))
 	for _, podName := range podNames {
 		escaped = append(escaped, prom.EscapeRegexMeta(prom.SanitizeLabelValue(podName)))
 	}
-	return metricSelection{podPattern: fmt.Sprintf("^(%s)$", strings.Join(escaped, "|")), scope: scope}, OwnerCoverageCurrentPods
+	return metricSelection{podPattern: fmt.Sprintf("^(%s)$", strings.Join(escaped, "|")), scope: scope}, OwnerCoverageCurrentPods, probeErr
 }
 
 func ownerSelection(kind, namespace, name string, scope ViewScope) string {

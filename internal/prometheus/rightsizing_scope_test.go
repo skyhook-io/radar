@@ -211,6 +211,39 @@ func TestRightsizingPartialAnswersAreUnavailable(t *testing.T) {
 	}
 }
 
+// A partial ownership answer may have dropped Pods the workload ran this
+// week, so it withholds rather than falling back to the current Pods.
+func TestRightsizingPartialOwnershipIsUnavailable(t *testing.T) {
+	for name, annotations := range map[string]prom.QueryAnnotations{
+		"partial": {Partial: true},
+		"warning": {Warnings: []string{"store down"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			full := podLevelQuerier(map[string]float64{"app": 0.1}, map[string]float64{"app": 100 << 20}, 2016)
+			q := &recordingRightsizingQuerier{answer: func(query string) (*prom.QueryResult, error) {
+				res, err := full(query)
+				if strings.HasPrefix(query, "sum(count_over_time") {
+					res.Annotations = annotations
+				}
+				return res, err
+			}}
+			resp := computeRightsizing(context.Background(), q, "Deployment", "payments", "api", goldenWorkload("api-1"), unlabeledRightsizingScope())
+			if resp.SampleAvailable || resp.Reason != ReasonRightsizingPartialData || len(resp.Rows) != 0 {
+				t.Fatalf("partial ownership produced a recommendation: %+v", resp)
+			}
+			if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "owner_metrics_query_failed" {
+				t.Errorf("warnings = %+v", resp.Warnings)
+			}
+			if len(q.queries) != 1 {
+				t.Errorf("usage queries ran after a partial ownership answer: %q", q.queries)
+			}
+			if resp.ClusterScope == nil || resp.ClusterScope.State != ViewScopeUnlabeled {
+				t.Errorf("clusterScope = %+v", resp.ClusterScope)
+			}
+		})
+	}
+}
+
 func TestRightsizingScopeRequestShape(t *testing.T) {
 	at := time.Unix(1700000000, 0)
 	req := rightsizingScopeRequest(`namespace="payments"`, "payments", true, rightsizingAnchors{"payments", []string{"api-2", "api-1"}, "payments", []string{"api-6c"}}, at)
