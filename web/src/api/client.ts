@@ -83,7 +83,7 @@ import type {
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { CONNECTION_HEADER, connectionHeaderValue } from './connectionBinding'
-import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
+import { GitOpsActionError, httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   RadarFeatureUnsupportedError,
   guardRadarFeature,
@@ -7381,7 +7381,7 @@ function createGitOpsMutation<TVariables, TContext = undefined>(
         );
         if (!response.ok) {
           const error = await readErrorBody(response);
-          throw new Error(error.error || `HTTP ${response.status}`);
+          throw new GitOpsActionError(error, response.status);
         }
         return response.json() as Promise<GitOpsOperationResponse>;
       },
@@ -7576,7 +7576,7 @@ export const useArgoSync = createGitOpsMutation<ArgoSyncVars, boolean>({
 export function useArgoResourceValidation() {
   const queryClient = useQueryClient();
   const serverInheritsOptions = useArgoSyncInheritance();
-  return useMutation<ArgoResourceValidationResult, Error, ArgoSyncVars>({
+  return useMutation<ArgoResourceValidationResult, GitOpsActionError, ArgoSyncVars>({
     mutationFn: async (variables) => {
       const response = await apiFetch(
         `${getApiBase()}/argo/applications/${variables.namespace}/${variables.name}/validate-resource`,
@@ -7596,7 +7596,7 @@ export function useArgoResourceValidation() {
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new GitOpsActionError(error, response.status);
       }
       return response.json() as Promise<ArgoResourceValidationResult>;
     },
@@ -7660,7 +7660,7 @@ export function useArgoRefresh() {
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new GitOpsActionError(error, response.status);
       }
       return response.json();
     },
