@@ -107,3 +107,17 @@ it('dismisses a result that replaces an expanded error, whose details control is
   await advance(8000)
   expect(host.querySelector('.backdrop-blur-sm')).toBeNull()
 })
+
+it('ignores an expired timer when a replacement is queued before React commits it', async () => {
+  const click = (label: string) => [...host.querySelectorAll('button')].find(button => button.textContent === label)!.click()
+  await advance(11000)
+  await act(async () => click('Failed check'))
+  await advance(9999)
+  await act(async () => {
+    click('Result')
+    vi.advanceTimersByTime(1)
+  })
+  await advance(1000)
+  expect(toast().textContent).toContain("You're up to date")
+  expect(toast().classList.contains('animate-out')).toBe(false)
+})

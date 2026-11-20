@@ -456,10 +456,11 @@ func updateArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, 
 		}
 		metadata["resourceVersion"] = app.GetResourceVersion()
 		err = mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch)
+		var admission *AdmissionDenied
 		switch {
 		case err == nil:
 			return nil
-		case !apierrors.IsConflict(err):
+		case errors.As(err, &admission) || !apierrors.IsConflict(err):
 			return fmt.Errorf("failed to %s Application %s/%s: %w", verb, namespace, name, err)
 		case attempt == argoOperationAttempts:
 			return fmt.Errorf("the Application %s/%s kept changing before %s could start; try again: %w", namespace, name, verb, ErrOperationInProgress)
@@ -811,7 +812,11 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 		inPlace := false
 		if argoApplicationSetOwned(app) && ArgoAutoSyncEnabled(app) {
 			if keepsEnabled == nil {
-				kept, probeErr := argoKeepsAutomatedEnabled(ctx, dynClient, namespace, name)
+				candidate, _, err := argoSuspendPatch(app, true)
+				if err != nil {
+					return nil, err
+				}
+				kept, probeErr := argoKeepsAutomatedEnabled(ctx, dynClient, namespace, name, candidate)
 				// Surface authorization and admission denials. If the schema
 				// probe is unavailable, removal works with every controller.
 				var admission *AdmissionDenied
@@ -901,9 +906,9 @@ func argoApplicationSetOwned(app *unstructured.Unstructured) bool {
 
 // argoKeepsAutomatedEnabled asks the API server, with a dry run, whether it
 // stores automated.enabled: Argo CD's CRD has it from 3.1; an older schema
-// prunes it. The dry run needs the same permission as the write it precedes.
-func argoKeepsAutomatedEnabled(ctx context.Context, dynClient dynamic.Interface, namespace, name string) (bool, error) {
-	body, err := json.Marshal(map[string]any{"spec": map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"enabled": false}}}})
+// prunes it. Admission must see the proposed suspension annotations too.
+func argoKeepsAutomatedEnabled(ctx context.Context, dynClient dynamic.Interface, namespace, name string, patch map[string]any) (bool, error) {
+	body, err := json.Marshal(patch)
 	if err != nil {
 		return false, err
 	}

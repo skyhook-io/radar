@@ -136,7 +136,7 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 			if marshalErr != nil {
 				return nil, nil, marshalErr
 			}
-			response.IsError = true
+			response.SetError(err)
 			return response, nil, nil
 		}
 		return nil, nil, err

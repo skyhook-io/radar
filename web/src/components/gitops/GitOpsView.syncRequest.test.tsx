@@ -79,13 +79,18 @@ let client: QueryClient
 let host: HTMLDivElement
 let root: ReturnType<typeof createRoot>
 let requests: Array<{ path: string; body: Record<string, unknown> }>
+let syncDenial: { error: string; error_code: string; summary: string } | undefined
 
 beforeEach(async () => {
   requests = []
+  syncDenial = undefined
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (init?.method === 'POST') {
       requests.push({ path, body: JSON.parse(String(init.body)) })
+      if (path.endsWith('/sync') && syncDenial) {
+        return Promise.resolve(Response.json(syncDenial, { status: 403 }))
+      }
       const answer = path.endsWith('/validate-resource') ? { outcome: 'succeeded', message: 'ok' } : { message: 'Sync initiated' }
       return Promise.resolve(new Response(JSON.stringify(answer), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     }
@@ -366,4 +371,27 @@ it.each([
   await advertise(features)
   const settings = document.querySelector('[data-resume-settings]')!.getAttribute('data-resume-settings')!
   expect(JSON.parse(settings)).toEqual(expected)
+})
+
+it.each([
+  '/gitops',
+  '/gitops/detail/applications/argocd/guestbook?apiGroup=argoproj.io',
+])('keeps the failed sync and its original denial in the dialog from %s', async (path) => {
+  syncDenial = {
+    error: 'admission webhook "change-window" denied the request: frozen',
+    error_code: 'admission_denied',
+    summary: 'Rejected by admission webhook change-window: frozen',
+  }
+  await renderView(path)
+  await click(button('Open sync'))
+  await click(toggle('Prune'))
+  await click(button('Sync now'))
+  expect(toggle('Prune').checked).toBe(true)
+  expect(document.querySelector('[role="dialog"] [role="alert"]')?.textContent).toContain(syncDenial.summary)
+  expect(client.getMutationCache().getAll().at(-1)?.options.meta?.errorMessage).toBeUndefined()
+  await click(button('Error details'))
+  expect(document.querySelector('[role="dialog"] pre')?.textContent).toBe(syncDenial.error)
+  await click(button('Cancel'))
+  await click(button('Open sync'))
+  expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull()
 })
