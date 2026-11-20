@@ -448,6 +448,72 @@ func TestInventory_CapsLookupAttemptsPerCall(t *testing.T) {
 	}
 }
 
+type registryTestRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f registryTestRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestJava4ShellPacesPublicECRManifestsAlongsideOtherRegistries(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var items []*work
+	for _, image := range []string{
+		PublicECRRegistry + "/test/first:1", PublicECRRegistry + "/test/second:1", "registry.example.com/test/other:1",
+	} {
+		ref, err := name.ParseReference(image)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, &work{key: ref.Name(), ref: ref, advisory: true})
+	}
+	started := make(chan time.Time, 3)
+	other := make(chan time.Time, 1)
+	transport := registryTestRoundTripper(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Hostname() == PublicECRRegistry {
+			started <- time.Now()
+		} else {
+			other <- time.Now()
+		}
+		return &http.Response{StatusCode: http.StatusOK}, nil
+	})
+	inv := NewCLIJava4ShellInventory()
+	inv.lookup = func(ctx context.Context, ref name.Reference, _ v1.Platform, _ authn.Keychain) (*v1.ConfigFile, string, error) {
+		manifests := []string{"platform"}
+		if strings.HasSuffix(ref.Context().Name(), "/first") {
+			manifests = []string{"index", "platform"}
+		}
+		for _, manifest := range manifests {
+			url := "https://" + ref.Context().RegistryStr() + "/v2/test/manifests/" + manifest
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return nil, "", err
+			}
+			if _, err := publicECRManifestRoundTrip(transport, req); err != nil {
+				return nil, "", err
+			}
+		}
+		return &v1.ConfigFile{}, "test digest", nil
+	}
+	for i, result := range inv.lookupConfigs(ctx, items, false, func(_, _ int) {}) {
+		if result.status != StatusOK {
+			t.Fatalf("group %d: status %s, error %s", i, result.status, result.err)
+		}
+	}
+	if len(started) != 3 || len(other) != 1 {
+		t.Fatal("expected three ECR Public manifest requests and one request to another registry")
+	}
+	index, platform, secondImage := <-started, <-started, <-started
+	for _, elapsed := range []time.Duration{platform.Sub(index), secondImage.Sub(platform)} {
+		if elapsed < publicECRManifestInterval {
+			t.Errorf("ECR Public manifest requests started %s apart, want at least %s", elapsed, publicECRManifestInterval)
+		}
+	}
+	if next := <-other; !next.Before(platform) {
+		t.Error("another registry waited for ECR Public lookups to finish")
+	}
+}
+
 func TestInventory_HungLookupGivesItsSlotBack(t *testing.T) {
 	f := &fakeLookup{configs: map[string]*v1.ConfigFile{}, block: make(chan struct{})}
 	defer close(f.block)

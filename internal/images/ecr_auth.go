@@ -20,6 +20,8 @@ import (
 
 const ecrRegistriesEnv = "RADAR_JAVA4SHELL_ECR_REGISTRIES"
 
+const PublicECRRegistry = "public.ecr.aws"
+
 var ecrRegistryPattern = regexp.MustCompile(`^([0-9]{12})\.dkr\.ecr\.([a-z][a-z0-9-]+-[0-9]+)\.amazonaws\.com(?:\.cn)?$`)
 
 func IsPrivateECRRegistry(host string) bool {

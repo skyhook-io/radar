@@ -210,11 +210,21 @@ func TestJava4ShellTableDistinguishesRegistryAndScanLimits(t *testing.T) {
 	for _, want := range []string{
 		"Could not check · next steps",
 		"HTTP 429 from public.ecr.aws.", "one anonymous pull per second", "Wait a few seconds",
-		"use -n kube-system instead of -A", "24 uncached Docker Hub image groups per scan", "use -n velero instead of -A",
+		"use -n kube-system instead of -A", "24 uncached Docker Hub image groups per scan",
+		"Rerunning the same scope applies the same cap", "use -n velero instead of -A",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("missing %q in %s", want, output.String())
 		}
+	}
+	report.RateLimitedRegistries = []string{"registry.example.com"}
+	output.Reset()
+	if err := writeJava4ShellCheck(&output, "table", report, false); err != nil {
+		t.Fatal(err)
+	}
+	if text := output.String(); !strings.Contains(text, "HTTP 429 from registry.example.com.") ||
+		!strings.Contains(text, "The reset time is unknown") || strings.Contains(text, "Wait a few seconds") {
+		t.Errorf("a registry with an unknown quota should not get a specific wait time: %s", text)
 	}
 }
 

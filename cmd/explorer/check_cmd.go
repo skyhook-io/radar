@@ -425,12 +425,14 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 					}
 					fmt.Fprintln(&table, ".")
 				}
-				if slices.Contains(hosts, "public.ecr.aws") {
-					fmt.Fprintln(&table, "    Amazon ECR Public allows one anonymous pull per second.")
+				if slices.Contains(hosts, images.PublicECRRegistry) {
+					fmt.Fprintln(&table, "    Amazon ECR Public allows one anonymous pull per second. Radar spaces these lookups apart.")
 				}
 				wait := "Wait for the registry quota to reset"
-				if len(hosts) == 1 && hosts[0] == "public.ecr.aws" {
+				if len(hosts) == 1 && hosts[0] == images.PublicECRRegistry {
 					wait = "Wait a few seconds"
+				} else {
+					fmt.Fprintln(&table, "    The reset time is unknown. Check your registry's quota.")
 				}
 				if report.Coverage.Scope.Namespaces == nil {
 					fmt.Fprintf(&table, "    %s, then retry a single affected namespace.\n", wait)
@@ -441,6 +443,7 @@ func writeJava4ShellCheck(out io.Writer, output string, report images.Java4Shell
 				fmt.Fprintln(&table, "    If throttling continues, verify Java directly in the affected workloads.")
 			case "docker_hub_limit":
 				fmt.Fprintln(&table, "    Radar checks at most 24 uncached Docker Hub image groups per scan.")
+				fmt.Fprintln(&table, "    Rerunning the same scope applies the same cap. Check a smaller scope.")
 				fmt.Fprintln(&table, "    "+java4ShellNarrowerScope(report, reason))
 			case images.StatusNotChecked:
 				fmt.Fprintln(&table, "    "+java4ShellNarrowerScope(report, reason))

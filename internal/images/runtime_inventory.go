@@ -392,8 +392,37 @@ func (r *RuntimeInventory) lookupConfigs(ctx context.Context, items []*work, rad
 			return false
 		}
 	}
+	pacePublicECR := func(w *work) bool {
+		return limiter != nil && w.advisory && w.ref.Context().RegistryStr() == PublicECRRegistry
+	}
+	if slices.ContainsFunc(items, pacePublicECR) {
+		// A single queue keeps paced requests from occupying multiple workers.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			publicECRCtx := context.WithValue(ctx, publicECRManifestPacerKey{}, &publicECRManifestPacer{})
+			for i, w := range items {
+				if !pacePublicECR(w) {
+					continue
+				}
+				if ctx.Err() != nil {
+					complete(i, configResult{status: StatusNotChecked, err: "time budget for this call ran out"})
+					continue
+				}
+				creds := r.credentials(w, radarCredentials || w.radarCredentials)
+				res, hit, untried := r.fromCache(w, creds)
+				if !hit {
+					res = r.fetch(publicECRCtx, w, untried, nil, limiter)
+				}
+				complete(i, res)
+			}
+		}()
+	}
 	advisoryLookups, dockerHubLookups := 0, 0
 	for i, w := range items {
+		if pacePublicECR(w) {
+			continue
+		}
 		onDockerHub := w.advisory && registryBudgetHost(w.ref) == name.DefaultRegistry
 		dockerHubLimit := onDockerHub && dockerHubLookups >= java4ShellDockerHubLookups
 		if dockerHubLimit || (progress == nil && w.advisory && advisoryLookups >= maxLookupsPerCall) {
