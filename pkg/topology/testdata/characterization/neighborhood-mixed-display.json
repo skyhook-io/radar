@@ -912,6 +912,34 @@
       }
     },
     {
+      "id": "artifactgenerator/flux-system/bundle/source.extensions.fluxcd.io",
+      "kind": "ArtifactGenerator",
+      "name": "bundle",
+      "status": "unknown",
+      "data": {
+        "apiVersion": "source.extensions.fluxcd.io/v1beta1",
+        "auditKey": "source.extensions.fluxcd.io|ArtifactGenerator|flux-system|bundle",
+        "labels": null,
+        "namespace": "flux-system",
+        "resource": "artifactgenerators",
+        "resourceKind": "ArtifactGenerator"
+      }
+    },
+    {
+      "id": "externalartifact/flux-system/bundle-app/source.toolkit.fluxcd.io",
+      "kind": "ExternalArtifact",
+      "name": "bundle-app",
+      "status": "unknown",
+      "data": {
+        "apiVersion": "source.toolkit.fluxcd.io/v1",
+        "auditKey": "source.toolkit.fluxcd.io|ExternalArtifact|flux-system|bundle-app",
+        "labels": null,
+        "namespace": "flux-system",
+        "resource": "externalartifacts",
+        "resourceKind": "ExternalArtifact"
+      }
+    },
+    {
       "id": "helmrelease/shop/redis",
       "kind": "HelmRelease",
       "name": "redis",
