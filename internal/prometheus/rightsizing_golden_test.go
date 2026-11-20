@@ -13,9 +13,8 @@ import (
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
-// The golden files hold the exact queries rightsizing sent to a store with no
-// cluster labels before cluster scoping existed. A single-cluster store must
-// keep receiving them byte for byte.
+// The golden files pin the exact queries a store with no cluster labels
+// receives. A single-cluster store must keep receiving them byte for byte.
 
 func checkRightsizingGolden(t *testing.T, name string, queries []string) {
 	t.Helper()
