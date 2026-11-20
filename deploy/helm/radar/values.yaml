@@ -696,7 +696,7 @@ traffic:
   prometheusUrl: ""
   # Optional workload/PVC metrics scope override, not a feature enable switch.
   # Leave both unset for automatic matching; set at most one mode.
-  # Does not scope rightsizing, node/HPA or legacy network/storage queries.
+  # Also scopes rightsizing, node/HPA charts and OpenCost costs from the store.
   # prometheusClusterLabels also scopes the Caretta, Beyla and Istio traffic map
   # when prometheusUrl is set.
   prometheusSingleCluster: false
