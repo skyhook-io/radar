@@ -14,9 +14,25 @@ type WorkloadTrendOptions struct {
 	Namespace string
 	Kind      string
 	Name      string
+	// Scope keeps the query to this cluster; the zero value leaves it as it
+	// always was.
+	Scope StoreScope
 }
 
 func ComputeWorkloadCostTrendFromProm(ctx context.Context, client *prom.Client, opts WorkloadTrendOptions) *WorkloadCostTrendResponse {
+	if client == nil {
+		return computeWorkloadCostTrendFromProm(ctx, nil, opts)
+	}
+	q := &costQuerier{client: client}
+	resp := computeWorkloadCostTrendFromProm(ctx, q, opts)
+	if opts.Scope.partial(q) {
+		resp = &WorkloadCostTrendResponse{Namespace: resp.Namespace, Kind: resp.Kind, Name: resp.Name, Range: resp.Range, Reason: ReasonPartialData}
+	}
+	resp.ClusterScope = opts.Scope.ClusterScope
+	return resp
+}
+
+func computeWorkloadCostTrendFromProm(ctx context.Context, client *costQuerier, opts WorkloadTrendOptions) *WorkloadCostTrendResponse {
 	kind, ok := CanonicalWorkloadKind(opts.Kind)
 	resp := &WorkloadCostTrendResponse{
 		Namespace: opts.Namespace,
@@ -37,11 +53,12 @@ func ComputeWorkloadCostTrendFromProm(ctx context.Context, client *prom.Client, 
 	start, end, step, label := resolveTrendRange(opts.Range)
 	resp.Range = label
 
-	query := buildWorkloadTrendQuery(opts.Namespace, kind, opts.Name, false)
+	f := opts.Scope.Filter
+	query := buildWorkloadTrendQuery(f, opts.Namespace, kind, opts.Name, false)
 	result, err := client.QueryRange(ctx, query, start, end, step)
 	if err != nil {
 		log.Print("[opencost] workload trend range query failed; trying opencost_container_* fallback")
-		result, err = client.QueryRange(ctx, buildWorkloadTrendQuery(opts.Namespace, kind, opts.Name, true), start, end, step)
+		result, err = client.QueryRange(ctx, buildWorkloadTrendQuery(f, opts.Namespace, kind, opts.Name, true), start, end, step)
 		if err != nil {
 			log.Print("[opencost] workload trend fallback query failed")
 			resp.Available = false
@@ -68,54 +85,59 @@ func ComputeWorkloadCostTrendFromProm(ctx context.Context, client *prom.Client, 
 	return resp
 }
 
-func buildWorkloadTrendQuery(namespace, kind, name string, fallback bool) string {
+func buildWorkloadTrendQuery(f prom.ClusterFilter, namespace, kind, name string, fallback bool) string {
 	safeNS := prom.SanitizeLabelValue(namespace)
 	safeName := prom.SanitizeLabelValue(name)
-	podCost := workloadPodCostExpr(safeNS, fallback)
+	podCost := workloadPodCostExpr(f, safeNS, fallback)
 
 	if kind == "Deployment" {
 		return fmt.Sprintf(`sum(
   (%s)
   * on(namespace, pod) group_left(replicaset)
     max by (namespace, pod, replicaset) (
-      label_replace(kube_pod_owner{namespace="%s", owner_kind="ReplicaSet", owner_is_controller="true"}, "replicaset", "$1", "owner_name", "(.+)")
+      label_replace(%s, "replicaset", "$1", "owner_name", "(.+)")
     )
   * on(namespace, replicaset) group_left()
     max by (namespace, replicaset) (
-      kube_replicaset_owner{namespace="%s", owner_kind="Deployment", owner_name="%s", owner_is_controller="true"}
+      %s
     )
-)`, podCost, safeNS, safeNS, safeName)
+)`, podCost,
+			sel(f, MetricPodOwner, `namespace="`+safeNS+`", owner_kind="ReplicaSet", owner_is_controller="true"`),
+			sel(f, MetricReplicaSetOwner, `namespace="`+safeNS+`", owner_kind="Deployment", owner_name="`+safeName+`", owner_is_controller="true"`))
 	}
 
 	return fmt.Sprintf(`sum(
   (%s)
   * on(namespace, pod) group_left(owner_kind, owner_name)
     max by (namespace, pod, owner_kind, owner_name) (
-      kube_pod_owner{namespace="%s", owner_kind="%s", owner_name="%s", owner_is_controller="true"}
+      %s
     )
-)`, podCost, safeNS, kind, safeName)
+)`, podCost, sel(f, MetricPodOwner, `namespace="`+safeNS+`", owner_kind="`+kind+`", owner_name="`+safeName+`", owner_is_controller="true"`))
 }
 
-func workloadPodCostExpr(namespace string, fallback bool) string {
+func workloadPodCostExpr(f prom.ClusterFilter, namespace string, fallback bool) string {
+	exported := `exported_namespace="` + namespace + `"`
+	own := `namespace="` + namespace + `", exported_namespace=""`
 	if fallback {
 		return fmt.Sprintf(`sum by (namespace, pod) (
-  (label_replace(rate(opencost_container_cpu_cost_total{exported_namespace="%s"}[1h]), "namespace", "$1", "exported_namespace", "(.+)")
-    or rate(opencost_container_cpu_cost_total{namespace="%s", exported_namespace=""}[1h]))
+  (label_replace(rate(%s[1h]), "namespace", "$1", "exported_namespace", "(.+)")
+    or rate(%s[1h]))
 ) + sum by (namespace, pod) (
-  (label_replace(rate(opencost_container_memory_cost_total{exported_namespace="%s"}[1h]), "namespace", "$1", "exported_namespace", "(.+)")
-    or rate(opencost_container_memory_cost_total{namespace="%s", exported_namespace=""}[1h]))
-)`, namespace, namespace, namespace, namespace)
+  (label_replace(rate(%s[1h]), "namespace", "$1", "exported_namespace", "(.+)")
+    or rate(%s[1h]))
+)`, sel(f, MetricCPUCostTotal, exported), sel(f, MetricCPUCostTotal, own), sel(f, MetricMemoryCostTotal, exported), sel(f, MetricMemoryCostTotal, own))
 	}
 
 	return fmt.Sprintf(`sum by (namespace, pod) (
-  (label_replace((sum_over_time(container_cpu_allocation{exported_namespace="%s"}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)")
-    or (sum_over_time(container_cpu_allocation{namespace="%s", exported_namespace=""}[1h:1m]) / 60))
-  * on(node) group_left() `+nodeCPUHourlyCostExpr+`
+  (label_replace((sum_over_time(%s[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)")
+    or (sum_over_time(%s[1h:1m]) / 60))
+  * on(node) group_left() %s
 ) + sum by (namespace, pod) (
-  (label_replace((sum_over_time(container_memory_allocation_bytes{exported_namespace="%s"}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)")
-    or (sum_over_time(container_memory_allocation_bytes{namespace="%s", exported_namespace=""}[1h:1m]) / 60))
-  / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr+`
-)`, namespace, namespace, namespace, namespace)
+  (label_replace((sum_over_time(%s[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)")
+    or (sum_over_time(%s[1h:1m]) / 60))
+  / 1073741824 * on(node) group_left() %s
+)`, sel(f, MetricCPUAllocation, exported), sel(f, MetricCPUAllocation, own), nodeCPUHourlyCostExpr(f),
+		sel(f, MetricMemoryAllocation, exported), sel(f, MetricMemoryAllocation, own), nodeRAMHourlyCostExpr(f))
 }
 
 func mergeCostSeries(series []prom.Series) []CostDataPoint {

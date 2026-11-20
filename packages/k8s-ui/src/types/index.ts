@@ -1,6 +1,7 @@
 export * from './core'
 export * from './read-coverage'
 export * from './fetch-error'
+export * from './cluster-scope'
 export * from './gitops'
 export * from './gitops-tree'
 export * from './gitops-insights'
