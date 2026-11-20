@@ -29,7 +29,7 @@ func (h *OIDCHandler) validMCPReturn(target string) bool {
 
 func (h *OIDCHandler) setMCPReturnCookie(w http.ResponseWriter, r *http.Request, state string) {
 	target := r.URL.Query().Get("return_to")
-	if !h.validMCPReturn(target) {
+	if h.mcpOAuth == nil || !h.validMCPReturn(target) {
 		http.SetCookie(w, h.clearFlowCookie(oidcMCPReturnCookieName, r))
 		return
 	}
@@ -42,6 +42,9 @@ func (h *OIDCHandler) setMCPReturnCookie(w http.ResponseWriter, r *http.Request,
 
 func (h *OIDCHandler) mcpReturnTarget(r *http.Request, state string) string {
 	fallback := h.basePath + "/"
+	if h.mcpOAuth == nil {
+		return fallback
+	}
 	cookie, err := r.Cookie(oidcMCPReturnCookieName)
 	if err != nil || len(cookie.Value) > 4096 {
 		return fallback

@@ -15,6 +15,7 @@ func TestOIDCLoginResumesMCPAuthorization(t *testing.T) {
 		t.Run(basePath, func(t *testing.T) {
 			idp := newFakeIDP(t, oidc.ES256)
 			h := idp.newHandlerUnderBasePath(t, Config{Secret: "test-secret", OIDCEnablePKCE: true}, basePath)
+			h.SetMCPOAuthServer(&MCPOAuthServer{})
 			target := basePath + "/auth/mcp/authorize?request=pending-request"
 			login := httptest.NewRecorder()
 			h.HandleLogin(login, httptest.NewRequest("GET", "https://radar.example.com/auth/login?return_to="+url.QueryEscape(target), nil))
@@ -38,8 +39,28 @@ func TestOIDCLoginResumesMCPAuthorization(t *testing.T) {
 	}
 }
 
+func TestOIDCLoginIgnoresMCPContinuationWhenOAuthDisabled(t *testing.T) {
+	idp := newFakeIDP(t, oidc.ES256)
+	h := idp.newHandlerUnderBasePath(t, Config{Secret: "test-secret"}, "/radar")
+	login := httptest.NewRecorder()
+	h.HandleLogin(login, httptest.NewRequest("GET", "https://radar.example.com/radar/auth/login?return_to="+url.QueryEscape("/radar/auth/mcp/authorize?request=x"), nil))
+	location, err := url.Parse(login.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback := httptest.NewRequest("GET", "https://radar.example.com/radar/auth/callback?code=test-code&state="+location.Query().Get("state"), nil)
+	for _, cookie := range login.Result().Cookies() {
+		callback.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	h.HandleCallback(response, callback)
+	if response.Code != http.StatusFound || response.Header().Get("Location") != "/radar/" {
+		t.Fatalf("callback status=%d location=%q", response.Code, response.Header().Get("Location"))
+	}
+}
+
 func TestMCPReturnCannotBecomeOpenRedirect(t *testing.T) {
-	h := &OIDCHandler{cfg: Config{Secret: "test-secret"}, basePath: "/radar"}
+	h := &OIDCHandler{cfg: Config{Secret: "test-secret"}, basePath: "/radar", mcpOAuth: &MCPOAuthServer{}}
 	for _, target := range []string{
 		"https://attacker.example/auth/mcp/authorize", "//attacker.example/auth/mcp/authorize",
 		"/radar/auth/mcp/authorize/../logout", "/auth/mcp/authorize", "/radar/api/config",
@@ -57,7 +78,7 @@ func TestMCPReturnCannotBecomeOpenRedirect(t *testing.T) {
 }
 
 func TestMCPReturnBoundToLoginAndSignature(t *testing.T) {
-	h := &OIDCHandler{cfg: Config{Secret: "test-secret"}}
+	h := &OIDCHandler{cfg: Config{Secret: "test-secret"}, mcpOAuth: &MCPOAuthServer{}}
 	w := httptest.NewRecorder()
 	h.setMCPReturnCookie(w, httptest.NewRequest("GET", "/auth/login?return_to="+url.QueryEscape("/auth/mcp/authorize?request=opaque"), nil), "first-login")
 	cookie := w.Result().Cookies()[0]
