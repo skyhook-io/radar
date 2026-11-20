@@ -142,6 +142,7 @@ The families so far:
 | `FluxSources` | Flux Kustomizations, HelmReleases, HelmCharts → the GitRepository, OCIRepository, Bucket, ExternalArtifact, HelmRepository or HelmChart they build from, in any namespace (an inline HelmRelease also declares the HelmChart the controller recorded) | `families.go` |
 | `NodeClasses` | Karpenter NodePools → their provider's NodeClass, or EKS Auto Mode's (`IsTarget`: each provider defines its own kind) | `families.go` |
 | `ClusterClasses` | Cluster API Clusters → the ClusterClass their topology names, in any namespace | `families.go` |
+| `FluxDependsOn` | A Flux Kustomization or HelmRelease → the object of its own kind it waits for through `spec.dependsOn`, in any namespace (an entry without a namespace means the object's own); Depends On on the waiting object, Required By on the one it waits for | `families.go` |
 | `KnativeEventDestinations` | Knative Triggers, event sources and Channels → where they send events (subscriber, sink, backing channel), in any namespace: core Services and any kind in a Knative group, such as JobSink | `families.go` |
 | `KnativeTriggerBrokers` | Knative Triggers → the Broker they subscribe to (`brokerRef` in any namespace, or the older same-namespace `broker`) | `families.go` |
 | `KnativeRouteRevisions` | Knative Routes → the Revisions their status sends traffic to | `families.go` |

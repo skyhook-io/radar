@@ -248,8 +248,8 @@ var FluxSources = &Family{
 	Name:          "fluxSources",
 	Projection:    project("configures", true, "Dependencies,ConfigRefs", "Consumers,Dependents"),
 	Sources: []Source{
-		{Kind: resourceid.GroupKind{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}, Targets: []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("ExternalArtifact")}},
-		{Kind: resourceid.GroupKind{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}},
+		{Kind: fluxKustomization, Targets: []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("ExternalArtifact")}},
+		{Kind: fluxHelmRelease},
 		{Kind: fluxSource("HelmChart"), Targets: []resourceid.GroupKind{fluxSource("HelmRepository"), fluxSource("GitRepository"), fluxSource("Bucket")}},
 	},
 	Targets:        []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("ExternalArtifact"), fluxSource("HelmRepository"), fluxSource("HelmChart")},
@@ -263,6 +263,34 @@ var FluxSources = &Family{
 		return nil
 	},
 }
+
+// FluxDependsOn is the family of the Kustomization or HelmRelease a Flux
+// Kustomization or HelmRelease waits for through spec.dependsOn: an object of
+// its own kind, in any namespace.
+var FluxDependsOn = &Family{
+	ScanRationale: "Indexing a Flux object's dependsOn exceeds the per-update admission bar (BenchmarkRelationIndexUpdate), as its sourceRef does.",
+	Name:          "fluxDependsOn",
+	Projection:    project("uses", false, "Dependencies", "Dependents"),
+	Sources: []Source{
+		{Kind: fluxKustomization, Targets: []resourceid.GroupKind{fluxKustomization}},
+		{Kind: fluxHelmRelease, Targets: []resourceid.GroupKind{fluxHelmRelease}},
+	},
+	Targets:        []resourceid.GroupKind{fluxKustomization, fluxHelmRelease},
+	CrossNamespace: true,
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			for _, r := range gitops.FluxDependsOn(u) {
+				visit(Declaration{Target: r, Path: "spec.dependsOn[]"})
+			}
+		}
+		return nil
+	},
+}
+
+var (
+	fluxKustomization = resourceid.GroupKind{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}
+	fluxHelmRelease   = resourceid.GroupKind{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}
+)
 
 // NodeClasses is the family of the NodeClass a Karpenter NodePool's nodes
 // are launched from, whichever provider defines it: a Karpenter provider's,
