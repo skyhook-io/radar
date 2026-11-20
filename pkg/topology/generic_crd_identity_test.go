@@ -132,7 +132,7 @@ func TestGenericCRDIdentitySeparatesCoreAndCrossGroupJobs(t *testing.T) {
 		{ID: "job/ml/train", Kind: KindJob, Name: "train", Data: map[string]any{"namespace": "ml"}},
 	}
 
-	nodes, edges := (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
+	nodes, edges, _ := (&Builder{dynamic: dynamic}).enrollGenericCRDNodes(nodes, nil, DefaultBuildOptions(), nil)
 
 	for _, id := range []string{"job/ml/train", "job/ml/train/batch.volcano.sh", "job/ml/train/jobs.example.io"} {
 		if nodeByID(nodes, id) == nil {
@@ -170,7 +170,7 @@ func TestGenericCRDOwnerResolutionUsesOwnerAPIGroup(t *testing.T) {
 	}
 	nodes := []Node{{ID: "deployment/demo/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "demo"}}}
 
-	nodes, edges := (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
+	nodes, edges, _ := (&Builder{dynamic: dynamic}).enrollGenericCRDNodes(nodes, nil, DefaultBuildOptions(), nil)
 	childID := "child/demo/leaf/children.example.io"
 	if nodeByID(nodes, childID) == nil {
 		t.Fatalf("missing child node: %+v", nodes)
@@ -202,7 +202,7 @@ func TestGenericCRDSelectsOneStableVersionPerGroupKind(t *testing.T) {
 		}
 		nodes := []Node{{ID: "deployment/ml/trainer", Kind: KindDeployment, Name: "trainer", Data: map[string]any{"namespace": "ml"}}}
 
-		nodes, _ = (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
+		nodes, _, _ = (&Builder{dynamic: dynamic}).enrollGenericCRDNodes(nodes, nil, DefaultBuildOptions(), nil)
 		if nodeByID(nodes, "job/ml/stable/batch.volcano.sh") == nil || nodeByID(nodes, "job/ml/alpha-only/batch.volcano.sh") != nil {
 			t.Fatalf("stable-version selection produced the wrong nodes for order %v: %+v", watched, nodes)
 		}
@@ -232,7 +232,7 @@ func TestGenericCRDReusesSpecializedResourceIdentityAndPseudoOwner(t *testing.T)
 		{ID: nodeClassID, Kind: KindNodeClass, Name: "shared", Data: map[string]any{"apiVersion": "karpenter.k8s.aws/v1", "resourceKind": "EC2NodeClass"}},
 	}
 
-	nodes, edges := (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
+	nodes, edges, _ := (&Builder{dynamic: dynamic}).enrollGenericCRDNodes(nodes, nil, DefaultBuildOptions(), nil)
 	buckets := 0
 	for _, node := range nodes {
 		if KubernetesKindForNode(&node) == "Bucket" && node.Name == "logs" {
@@ -414,7 +414,7 @@ func TestGenericPassSkipsTypedBuiltinsButPreservesDRA(t *testing.T) {
 			nodes := []Node{{ID: "deployment/demo/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "demo"}}}
 			fallbackProvider := &dynamicProviderWithoutExactCRD{DynamicProvider: dynamic}
 
-			nodes, _ = (&Builder{dynamic: fallbackProvider}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
+			nodes, _, _ = (&Builder{dynamic: fallbackProvider}).enrollGenericCRDNodes(nodes, nil, DefaultBuildOptions(), nil)
 			if tt.wantNodes == 1 && dynamic.listCalls[tt.gvr] != 0 {
 				t.Fatalf("generic CRD fallback listed built-in %s %d times", tt.gvr, dynamic.listCalls[tt.gvr])
 			}
@@ -447,7 +447,7 @@ func TestGenericCRDOwnerResolutionUsesIndexedCalicoAlias(t *testing.T) {
 		},
 	}}
 
-	nodes, edges := (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
+	nodes, edges, _ := (&Builder{dynamic: dynamic}).enrollGenericCRDNodes(nodes, nil, DefaultBuildOptions(), nil)
 	childID := "child/demo/leaf/children.example.io"
 	if nodeByID(nodes, childID) == nil {
 		t.Fatalf("generic child missing: %+v", nodes)
@@ -511,11 +511,11 @@ func TestRelationshipsPodShortcutsSkipCrossGroupReplicaSets(t *testing.T) {
 		},
 	}
 
-	a := GetRelationships("Deployment", "ns", "a", topo, nil, nil)
+	a := graphRelationships("Deployment", "ns", "a", topo, nil, nil)
 	if a == nil || len(a.Pods) != 0 {
 		t.Fatalf("Deployment a pods = %+v, want none from the core ReplicaSet owned by b", a)
 	}
-	b := GetRelationships("Deployment", "ns", "b", topo, nil, nil)
+	b := graphRelationships("Deployment", "ns", "b", topo, nil, nil)
 	if b == nil || len(b.Pods) != 1 || b.Pods[0].Name != "p" {
 		t.Fatalf("Deployment b pods = %+v, want pod p", b)
 	}

@@ -42,7 +42,7 @@ func TestKEDAAuthenticationDependenciesObservedAndScoped(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct{ kind, name, auth, namespace string }{{"ScaledObject", "worker", "TriggerAuthentication", "team"}, {"ScaledJob", "jobs", "ClusterTriggerAuthentication", ""}} {
-		rel := GetRelationships(tc.kind, "team", tc.name, topo, nil, p)
+		rel := graphRelationships(tc.kind, "team", tc.name, topo, nil, p)
 		if rel == nil || len(rel.Dependencies) != 1 || rel.Dependencies[0].Kind != tc.auth || rel.Dependencies[0].Namespace != tc.namespace || rel.ScaleTarget != nil {
 			t.Fatalf("authentication misclassified for %s: %+v", tc.kind, rel)
 		}
@@ -50,7 +50,7 @@ func TestKEDAAuthenticationDependenciesObservedAndScoped(t *testing.T) {
 		if tc.namespace == "" {
 			name = "global"
 		}
-		reverse := GetRelationships(tc.auth, tc.namespace, name, topo, nil, p)
+		reverse := graphRelationships(tc.auth, tc.namespace, name, topo, nil, p)
 		if reverse == nil || len(reverse.Dependents) != 1 || reverse.Dependents[0].Kind != tc.kind {
 			t.Fatalf("reverse authentication: %+v", reverse)
 		}

@@ -296,7 +296,7 @@ func TestGetRelationships_BackCompat_PDBManagedByPreserved(t *testing.T) {
 	// switches in this file (storage chain) and server.go's kind resolution.
 	for _, kind := range []string{"PodDisruptionBudget", "poddisruptionbudgets", "pdb", "pdbs"} {
 		t.Run(kind, func(t *testing.T) {
-			rel := GetRelationships(kind, "prod", "api-pdb", topo, provider, nil)
+			rel := graphRelationships(kind, "prod", "api-pdb", topo, provider, nil)
 			if rel == nil || len(rel.ManagedBy) != 1 {
 				t.Fatalf("want 1 ManagedBy ref for PDB via kind=%q, got %+v", kind, rel)
 			}
@@ -355,9 +355,9 @@ func TestGetRelationshipsWithObject_KindCollision_DisambiguatesByObject(t *testi
 	// GetRelationshipsWithObject. If this assertion ever flips, the
 	// fallback path has been made group-aware and the migration note in
 	// the back-compat doc should be revisited.
-	relFallback := GetRelationshipsWithIndex("Service", "prod", "api", topo, provider, dp, nil)
+	relFallback := graphRelationshipsWithIndex("Service", "prod", "api", topo, provider, dp, nil)
 	if relFallback != nil && len(relFallback.ManagedBy) > 0 {
-		t.Errorf("back-compat path unexpectedly produced ManagedBy from CRD annotation: %+v — fallback should still be group-blind; if this now works, update the doc on GetRelationships", relFallback.ManagedBy)
+		t.Errorf("back-compat path unexpectedly produced ManagedBy from CRD annotation: %+v — fallback should still be group-blind; if this now works, update the doc on graphRelationships", relFallback.ManagedBy)
 	}
 }
 
@@ -391,7 +391,7 @@ func TestGetRelationships_CRD_ManagedByPreserved(t *testing.T) {
 		Nodes: []Node{{ID: "certificate/prod/api-tls", Kind: KindCertificate, Name: "api-tls"}},
 	}
 
-	rel := GetRelationshipsWithIndex("Certificate", "prod", "api-tls", topo, nil, dp, nil)
+	rel := graphRelationshipsWithIndex("Certificate", "prod", "api-tls", topo, nil, dp, nil)
 	if rel == nil || len(rel.ManagedBy) != 1 {
 		t.Fatalf("want 1 ManagedBy ref for CRD with Argo tracking-id, got %+v", rel)
 	}

@@ -197,7 +197,7 @@ Each declared, selector and composition family carries its Related Resources `Pr
 The independent 72-family cutover inventory is `pkg/topology/testdata/relationship-family-inventory.tsv`. Each direction names registered or direct producers, or a reason it does not project. Its notes preserve the remaining held-target differences for synthetic AnalysisRun and Secret/ConfigMap nodes; these are not parity claims. `TestRelationshipFamilyInventoryHasBothDirections` rejects an unaccounted family or unknown producer.
 
 Related Resources and REST/MCP resource context now read these families from a captured cache session through
-`internal/k8s.AnswerRelationships` / `AnswerResourceContextRelationships`. `pkg/topology.RelationsAnswer` projects
+`internal/k8s.AnswerRelationships` / `AnswerResourceContextRelationships`. `pkg/topology.RelationsAnswerWithExtras` projects
 only the subject's family answers into the existing drawer fields; the context variant also supplies non-wire
 provenance and coverage to `pkg/resourcecontext`. Ownership is applied through the caller's ownership view; context
 uses the owner-only path. Summary manager enrichment and workload history attachments also use the family sources.

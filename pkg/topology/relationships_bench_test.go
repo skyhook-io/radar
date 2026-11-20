@@ -77,7 +77,7 @@ func buildSyntheticTopology(targetNodes int) *Topology {
 	return topo
 }
 
-// BenchmarkGetRelationships_NoIndex measures the cost of GetRelationships on a
+// BenchmarkGetRelationships_NoIndex measures the cost of graphRelationships on a
 // synthetic ~5k-node topology with no precomputed index. Each call rescans
 // topo.Edges in full, so cost is O(E) per call — what every consumer pays
 // today.
@@ -87,7 +87,7 @@ func BenchmarkGetRelationships_NoIndex(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		nsIdx := i % 50
-		_ = GetRelationships("Deployment", fmt.Sprintf("ns-%d", nsIdx), "app-0", topo, nil, nil)
+		_ = graphRelationships("Deployment", fmt.Sprintf("ns-%d", nsIdx), "app-0", topo, nil, nil)
 	}
 }
 
@@ -103,7 +103,7 @@ func BenchmarkGetRelationships_WithIndex(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		nsIdx := i % 50
-		_ = GetRelationshipsWithIndex("Deployment", fmt.Sprintf("ns-%d", nsIdx), "app-0", topo, nil, nil, idx)
+		_ = graphRelationshipsWithIndex("Deployment", fmt.Sprintf("ns-%d", nsIdx), "app-0", topo, nil, nil, idx)
 	}
 }
 

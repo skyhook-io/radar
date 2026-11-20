@@ -17,14 +17,14 @@ func TestReflectionDetailEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rel := GetRelationships("Secret", "edge", "different", graph, provider, nil)
+	rel := graphRelationships("Secret", "edge", "different", graph, provider, nil)
 	if rel == nil || rel.Reflection == nil || rel.Reflection.Source == nil || rel.Reflection.Source.Name != "source" || rel.Reflection.SourceResourceVersion != "rv-opaque" {
 		t.Fatalf("missing source evidence: %+v", rel)
 	}
 	if len(rel.ConfigRefs) != 1 {
 		t.Fatal("existing API consumer lost source reference")
 	}
-	sourceRel := GetRelationships("Secret", "app", "source", graph, provider, nil)
+	sourceRel := graphRelationships("Secret", "app", "source", graph, provider, nil)
 	if sourceRel.Reflection == nil || len(sourceRel.Reflection.Mirrors) != 1 || sourceRel.Reflection.Mirrors[0].Name != "different" {
 		t.Fatalf("missing mirrors: %+v", sourceRel)
 	}
@@ -38,7 +38,7 @@ func TestReflectionDetailEvidence(t *testing.T) {
 		t.Fatal("secret payload in graph")
 	}
 	graph.StripSecretsExcept(map[SARTuple]bool{{Resource: "secrets", Namespace: "edge"}: true})
-	restricted := GetRelationships("Secret", "edge", "different", graph, provider, nil)
+	restricted := graphRelationships("Secret", "edge", "different", graph, provider, nil)
 	if restricted != nil && restricted.Reflection != nil {
 		t.Fatalf("hidden source evidence leaked: %+v", restricted.Reflection)
 	}
@@ -49,7 +49,7 @@ func TestSameKindConfigurationIsNotNecessarilyReflection(t *testing.T) {
 		{ID: "configmap/ns/a", Kind: KindConfigMap, Name: "a", Data: map[string]any{"namespace": "ns"}},
 		{ID: "configmap/ns/b", Kind: KindConfigMap, Name: "b", Data: map[string]any{"namespace": "ns"}},
 	}, Edges: []Edge{{Source: "configmap/ns/a", Target: "configmap/ns/b", Type: EdgeConfigures, Label: "Configures"}}}
-	rel := GetRelationships("ConfigMap", "ns", "b", graph, &mockProvider{}, nil)
+	rel := graphRelationships("ConfigMap", "ns", "b", graph, &mockProvider{}, nil)
 	if rel == nil || len(rel.ConfigRefs) != 1 || rel.Reflection != nil {
 		t.Fatalf("invented reflection: %+v", rel)
 	}
@@ -88,7 +88,7 @@ func TestReflectionPromotesObservedStubEndpoints(t *testing.T) {
 					t.Fatalf("lost audit identity: %+v", node)
 				}
 			}
-			rel := GetRelationships(kind, "edge", "mirror", graph, provider, nil)
+			rel := graphRelationships(kind, "edge", "mirror", graph, provider, nil)
 			if rel == nil || rel.Reflection == nil || rel.Reflection.SourceResourceVersion != "source-version" {
 				t.Fatalf("lost source evidence: %+v", rel)
 			}
