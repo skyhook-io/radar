@@ -204,6 +204,7 @@ export interface FeatureCapabilities {
   /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
   resourceDeletePreconditions?: boolean
   gitopsWriteEvidence?: boolean
+  gitopsOutsideChanges?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean
