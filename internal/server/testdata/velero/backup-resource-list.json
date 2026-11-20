@@ -1,0 +1,7 @@
+{
+  "apps/v1/Deployment": ["demo-app/web"],
+  "v1/ConfigMap": ["demo-app/kube-root-ca.crt"],
+  "v1/Namespace": ["demo-app", "empty-app"],
+  "v1/PersistentVolume": ["pvc-a12"],
+  "rbac.authorization.k8s.io/v1/ClusterRole": ["reader"]
+}
