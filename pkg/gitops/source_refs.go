@@ -142,3 +142,14 @@ func IsUpstreamFluxSource(group, kind string) bool {
 	}
 	return false
 }
+
+// ArtifactGeneratorPaused reports whether source-watcher has been told to stop
+// reconciling a generator. It has no spec.suspend: the annotation pauses it,
+// and the generator keeps its last Ready condition while paused, so that
+// condition must not be read as a current failure.
+func ArtifactGeneratorPaused(obj *unstructured.Unstructured) bool {
+	if obj == nil || obj.GetKind() != "ArtifactGenerator" || resourceid.GroupFromAPIVersion(obj.GetAPIVersion()) != "source.extensions.fluxcd.io" {
+		return false
+	}
+	return strings.EqualFold(obj.GetAnnotations()["source.extensions.fluxcd.io/reconcile"], "disabled")
+}

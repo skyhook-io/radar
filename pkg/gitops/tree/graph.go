@@ -416,9 +416,7 @@ func enrichFluxSource(node Node, obj *unstructured.Unstructured) Node {
 		node.Sync = ""
 		state := gitops.FluxStatus(obj)
 		node.Health = state.Health
-		// source-watcher pauses a generator with an annotation, not spec.suspend,
-		// and leaves its last Ready condition in place.
-		if strings.EqualFold(obj.GetAnnotations()["source.extensions.fluxcd.io/reconcile"], "disabled") {
+		if gitops.ArtifactGeneratorPaused(obj) {
 			node.Health = "Suspended"
 			node.Data["paused"] = true
 		}

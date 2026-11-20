@@ -220,3 +220,26 @@ func TestFluxDependsOnBecomesRequiredBy(t *testing.T) {
 		t.Fatalf("base dependents = %+v, want overlay", rel)
 	}
 }
+
+// A generator paused by source-watcher's annotation keeps its last Ready
+// condition; topology colours it as an intentional pause, not a failure.
+func TestFluxSourceGraphPausedGeneratorIsNeutral(t *testing.T) {
+	gen := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator",
+		"metadata": map[string]any{"namespace": "team", "name": "gen", "annotations": map[string]any{"source.extensions.fluxcd.io/reconcile": "Disabled"}},
+		"status":   map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "BuildFailed"}}},
+	}}
+	if got := extractGenericStatus(gen); got != StatusNeutral {
+		t.Fatalf("paused generator status = %s, want neutral", got)
+	}
+	gen.SetAnnotations(nil)
+	if got := extractGenericStatus(gen); got != StatusUnhealthy {
+		t.Fatalf("unpaused generator status = %s, want unhealthy", got)
+	}
+	other := gen.DeepCopy()
+	other.SetAPIVersion("example.com/v1")
+	other.SetAnnotations(map[string]string{"source.extensions.fluxcd.io/reconcile": "disabled"})
+	if got := extractGenericStatus(other); got != StatusUnhealthy {
+		t.Fatalf("another group's ArtifactGenerator status = %s, want unhealthy", got)
+	}
+}

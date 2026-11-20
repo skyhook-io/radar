@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -704,10 +705,7 @@ func isTransientCRDCondition(u *unstructured.Unstructured, reason string) bool {
 	if suspend, ok, _ := unstructured.NestedBool(u.Object, "spec", "suspend"); ok && suspend {
 		return true
 	}
-	// source-watcher pauses an ArtifactGenerator with an annotation and keeps
-	// its last Ready condition.
-	if u.GetKind() == "ArtifactGenerator" && strings.HasPrefix(u.GetAPIVersion(), "source.extensions.fluxcd.io/") &&
-		strings.EqualFold(u.GetAnnotations()["source.extensions.fluxcd.io/reconcile"], "disabled") {
+	if gitops.ArtifactGeneratorPaused(u) {
 		return true
 	}
 	// observedGeneration lags generation → controller hasn't caught up yet.
