@@ -189,4 +189,10 @@ describe('Flux artifact chain cards', () => {
     const generator = buildChips(node({ ref: { kind: 'ArtifactGenerator', name: 'gen', namespace: 'flux-system' }, data: { relationship: 'generator', generatedCount: 143 } }))
     expect(generator).toContainEqual({ label: 'artifacts', value: '143' })
   })
+
+  it('mark where the source chain walk was cut', () => {
+    const cut = buildChips(node({ ref: { kind: 'ExternalArtifact', name: 'out4', namespace: 'team' }, data: { relationship: 'source', alias: 'up', chainContinues: true } }))
+    expect(cut).toContainEqual({ value: 'chain continues…' })
+    expect(buildChips(node({ data: { relationship: 'source' } }))).not.toContainEqual({ value: 'chain continues…' })
+  })
 })

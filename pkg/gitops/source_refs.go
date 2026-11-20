@@ -126,8 +126,10 @@ func artifactGeneratorSources(gen *unstructured.Unstructured) []FluxSourceRef {
 }
 
 // MaxFluxSourceLevels bounds a walk up a Flux source chain from what a root
-// references (ExternalArtifact → ArtifactGenerator → its sources).
-const MaxFluxSourceLevels = 3
+// references (ExternalArtifact → ArtifactGenerator → its sources). Each nested
+// generator costs two levels, so this follows four generators fed by one
+// another; a walk that stops here with more to follow says so.
+const MaxFluxSourceLevels = 8
 
 // IsUpstreamFluxSource reports whether a source names further sources, so a
 // walk up the chain continues from it.

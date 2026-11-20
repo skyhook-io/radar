@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -91,8 +93,8 @@ func TestFluxTreeInlineChartChainThroughUpstreamWalk(t *testing.T) {
 	}
 }
 
-// generators chained through artifacts terminate; record what the cap cuts.
-func TestFluxTreeUpstreamWalkStopsAtThreeLevels(t *testing.T) {
+// A generator fed by another generator's artifact is followed to its own sources.
+func TestFluxTreeFollowsNestedGenerators(t *testing.T) {
 	ks := chainObj("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "team", "app", map[string]any{"sourceRef": map[string]any{"kind": "ExternalArtifact", "name": "out2"}})
 	out2 := chainObj("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "team", "out2", map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "gen2"}})
 	gen2 := chainObj("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "team", "gen2", map[string]any{"sources": []any{map[string]any{"alias": "base", "kind": "ExternalArtifact", "name": "out1"}}})
@@ -111,12 +113,62 @@ func TestFluxTreeUpstreamWalkStopsAtThreeLevels(t *testing.T) {
 	var names []string
 	for _, n := range tree.Nodes {
 		names = append(names, n.Ref.Kind+"/"+n.Ref.Name)
+		if n.Data["chainContinues"] != nil {
+			t.Fatalf("complete chain marked as cut at %s", n.ID)
+		}
 	}
 	sort.Strings(names)
-	// Three levels: out2 → gen2 → out1 → gen. gen's own source is past the cap.
-	want := []string{"ArtifactGenerator/gen", "ArtifactGenerator/gen2", "ExternalArtifact/out1", "ExternalArtifact/out2", "Kustomization/app"}
+	want := []string{"ArtifactGenerator/gen", "ArtifactGenerator/gen2", "ExternalArtifact/out1", "ExternalArtifact/out2", "GitRepository/platform", "Kustomization/app"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("nodes = %v, want %v", names, want)
+	}
+	for _, w := range tree.Warnings {
+		if strings.Contains(w, "source chain") {
+			t.Fatalf("complete chain warned: %v", tree.Warnings)
+		}
+	}
+}
+
+// A chain longer than the walk's bound stops there and marks where it is cut.
+func TestFluxTreeMarksChainCutAtBound(t *testing.T) {
+	ksr := chainRef("kustomize.toolkit.fluxcd.io", "Kustomization", "app")
+	objs := map[string]*unstructured.Unstructured{refKey(ksr): chainObj("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "team", "app", map[string]any{"sourceRef": map[string]any{"kind": "ExternalArtifact", "name": "out0"}})}
+	// out0 ← gen0 ← out1 ← gen1 ← … : each generator costs two levels.
+	generators := gitops.MaxFluxSourceLevels/2 + 2
+	for i := 0; i < generators; i++ {
+		out, gen := fmt.Sprintf("out%d", i), fmt.Sprintf("gen%d", i)
+		objs[refKey(chainRef(chainSrc, "ExternalArtifact", out))] = chainObj("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "team", out,
+			map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": gen}})
+		objs[refKey(chainRef(chainExt, "ArtifactGenerator", gen))] = chainObj("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "team", gen,
+			map[string]any{"sources": []any{map[string]any{"alias": "up", "kind": "ExternalArtifact", "name": fmt.Sprintf("out%d", i+1)}}})
+	}
+	getter := &fakeDynamic{objects: objs}
+	tree, _, err := newTestBuilder(t, getter, nil).Build(context.Background(), "Kustomization", "team", "app", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Root, plus one node per level the walk reached (out0 counts as the root's own reference).
+	if len(tree.Nodes) != gitops.MaxFluxSourceLevels+2 {
+		t.Fatalf("nodes = %d, want %d", len(tree.Nodes), gitops.MaxFluxSourceLevels+2)
+	}
+	cut := fmt.Sprintf("out%d", gitops.MaxFluxSourceLevels/2)
+	var marked []string
+	for _, n := range tree.Nodes {
+		if n.Data["chainContinues"] == true {
+			marked = append(marked, n.Ref.Kind+"/"+n.Ref.Name)
+		}
+	}
+	if !slices.Equal(marked, []string{"ExternalArtifact/" + cut}) {
+		t.Fatalf("marked = %v, want only ExternalArtifact/%s", marked, cut)
+	}
+	want := "The source chain continues beyond what this tree shows. Open ExternalArtifact team/" + cut + " to follow it further."
+	if !slices.Contains(tree.Warnings, want) {
+		t.Fatalf("warnings = %v", tree.Warnings)
+	}
+	for _, c := range getter.recordedCalls() {
+		if c.Kind == "ArtifactGenerator" && c.Name == fmt.Sprintf("gen%d", gitops.MaxFluxSourceLevels/2) {
+			t.Fatalf("read past the bound: %+v", c)
+		}
 	}
 }
 
@@ -152,14 +204,14 @@ func TestFluxTreeGeneratorCycleAndSharedSource(t *testing.T) {
 	if len(tree.Nodes) != 6 {
 		t.Fatalf("nodes = %d", len(tree.Nodes))
 	}
-	if got := findNode(t, tree, chainRef(chainSrc, "GitRepository", "platform")).Data["alias"]; got != "repo" {
+	if got := findNode(t, tree, chainRef(chainSrc, "GitRepository", "platform")).Data["alias"]; got != "repo, shared" {
 		t.Fatalf("shared source alias = %v", got)
 	}
 	ksR, genR, artR := chainRef("kustomize.toolkit.fluxcd.io", "Kustomization", "app"), chainRef(chainExt, "ArtifactGenerator", "gen"), chainRef(chainSrc, "ExternalArtifact", "art")
 	gen2R, art2R, repoR := chainRef(chainExt, "ArtifactGenerator", "gen2"), chainRef(chainSrc, "ExternalArtifact", "art2"), chainRef(chainSrc, "GitRepository", "platform")
 	edge := func(a, b ResourceRef) string { return fmt.Sprintf("%s -> %s (%s)", nodeID(a), nodeID(b), EdgeSource) }
 	// The generator lists the artifact the root consumes, so that edge points back.
-	want := []string{edge(ksR, artR), edge(artR, genR), edge(genR, artR), edge(genR, repoR), edge(genR, art2R), edge(art2R, gen2R)}
+	want := []string{edge(ksR, artR), edge(artR, genR), edge(genR, artR), edge(genR, repoR), edge(genR, art2R), edge(art2R, gen2R), edge(gen2R, repoR)}
 	sort.Strings(want)
 	if got := chainEdges(tree); !slices.Equal(got, want) {
 		t.Fatalf("edges = %v, want %v", got, want)

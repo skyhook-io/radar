@@ -310,6 +310,20 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		fluxRelated = append(fluxRelated, next...)
 		frontier = next
 	}
+	// The walk stopped at its bound with sources still naming further
+	// sources: mark where the chain is cut so the tree never looks complete.
+	var chainCut []ResourceRef
+	for _, related := range frontier {
+		key := refKey(related.Ref)
+		if !gitops.IsUpstreamFluxSource(related.Ref.Group, related.Ref.Kind) || seenUpstream[key] || objects[key] == nil {
+			continue
+		}
+		if len(gitops.FluxSourceReferences(objects[key])) == 0 {
+			continue
+		}
+		related.Data["chainContinues"] = true
+		chainCut = append(chainCut, related.Ref)
+	}
 
 	view := ownership.NewView(b.ownership, traversalScope{namespaces: b.allowedNamespaces})
 	view.Seed(ownership.Observe(identity(rootRef), root))
@@ -366,6 +380,8 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			// for HelmRepository, producing inconsistent badges. Computing
 			// from conditions here makes every Flux CR with Ready=True
 			// render Healthy uniformly.
+			// One source can feed several generators under different aliases.
+			priorAlias, _ := nodes[id].Data["alias"].(string)
 			sync, health := "", ""
 			if obj != nil {
 				s := rootStatus(obj, ToolFluxCD)
@@ -383,6 +399,12 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 					node.TopologyStatus = healthToTopology(health)
 				}
 				nodes[id] = mergeData(enrichNodeFromObject(node, obj), res.Data)
+			}
+			if priorAlias != "" {
+				node := nodes[id]
+				next, _ := node.Data["alias"].(string)
+				node.Data["alias"] = mergeAliases(priorAlias, next)
+				nodes[id] = node
 			}
 			node := nodes[id]
 			node.Dependency = !declaredIDs[id]
@@ -441,6 +463,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	}
 	if omittedDependencies || omittedByReadCheck {
 		warnings = append(warnings, "Some managed resources are hidden by RBAC.")
+	}
+	if len(chainCut) > 0 {
+		warnings = append(warnings, fluxChainCutWarning(chainCut))
 	}
 	if w := unknownKindsWarning(unknownKinds); w != "" {
 		warnings = append(append([]string{}, warnings...), w)
@@ -704,4 +729,21 @@ func materialize(nodes map[string]Node, edges map[string]Edge) ([]Node, []Edge) 
 		return edgeList[i].Target < edgeList[j].Target
 	})
 	return nodeList, edgeList
+}
+
+func fluxChainCutWarning(cut []ResourceRef) string {
+	slices.SortFunc(cut, func(a, b ResourceRef) int { return strings.Compare(refKey(a), refKey(b)) })
+	first := cut[0]
+	return fmt.Sprintf("The source chain continues beyond what this tree shows. Open %s %s/%s to follow it further.", first.Kind, first.Namespace, first.Name)
+}
+
+// mergeAliases joins two ", "-separated alias lists, keeping first-seen order.
+func mergeAliases(a, b string) string {
+	out := strings.Split(a, ", ")
+	for _, alias := range strings.Split(b, ", ") {
+		if alias != "" && !slices.Contains(out, alias) {
+			out = append(out, alias)
+		}
+	}
+	return strings.Join(out, ", ")
 }
