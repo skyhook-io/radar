@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false, container: 'job', notice: '' }))
+const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false, container: 'job', notice: '', extra: [] as { pod: string, container: string, timestamp: string, content: string }[] }))
 vi.mock('./client', async (orig) => ({
   ...(await orig<typeof import('./client')>()),
   fetchJSON: async (url: string) => {
@@ -8,7 +8,7 @@ vi.mock('./client', async (orig) => ({
     if (calls.fail) throw new Error('Loki is not connected')
     return {
       pods: [{ name: 'nightly-1-aaaaa', containers: [calls.container], ready: false }],
-      logs: [{ pod: 'nightly-1-aaaaa', container: calls.container, timestamp: '2026-11-13T02:00:00.000000000Z', content: 'done' }],
+      logs: [{ pod: 'nightly-1-aaaaa', container: calls.container, timestamp: '2026-11-13T02:00:00.000000000Z', content: 'done' }, ...calls.extra],
       notice: calls.notice, source: 'loki', truncated: true, limit: 5000,
       window: { start: '2026-11-13T01:59:00Z', end: '2026-11-13T02:11:00Z' },
     }
@@ -85,6 +85,15 @@ describe('withLokiRunFallback', () => {
       expect(got.notice).toContain('all containers (Loki has no container label)')
     } finally {
       calls.container = 'job'
+    }
+  })
+  it('keeps the whole-pod lines of a pod Loki can\'t split beside the chosen container', async () => {
+    calls.extra = [{ pod: 'nightly-1-bbbbb', container: '(all containers)', timestamp: '2026-11-13T02:00:01.000000000Z', content: 'whole' }, { pod: 'nightly-1-aaaaa', container: 'other', timestamp: '2026-11-13T02:00:02.000000000Z', content: 'other' }]
+    try {
+      const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true, undefined, 'job')
+      expect(got.logs.map(l => l.content)).toEqual(['done', 'whole'])
+    } finally {
+      calls.extra = []
     }
   })
   it('says on load that Loki has no container label, and offers no whole-pod container', async () => {

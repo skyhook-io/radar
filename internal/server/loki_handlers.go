@@ -260,7 +260,7 @@ func jobRunWindow(job *batchv1.Job, now time.Time) (loki.Window, bool) {
 // (start/end override it, within 7 days). Gate: the workload logs gate
 // (namespace, get jobs, list pods, get pods/log) plus lokiWithinRadar, all
 // before Loki is contacted. The query selects the Job's pods by a Job stream
-// label when Loki has one in the run's window and it finds lines, else by the
+// label when any of the run's streams carry it (loki.ReadJobRun), else by the
 // Job controller's pod names, which other pods can share (a DaemonSet's
 // "<job>-<random>", a Job "<job>-<index>" for an Indexed Job); only the
 // namespace, Job name, container, window and the --loki-cluster value reach it.
@@ -340,7 +340,7 @@ func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 			// this answer, so the viewer can switch to it (Loki's line limit
 			// or a chosen container may have left it out). Not for a pod whose
 			// streams carry no container label: it can only be read whole.
-			if cs[t.Name] || (lines.SplitsContainers && !cs[noContainerLabel]) {
+			if cs[t.Name] || lines.PodSplits[pod] {
 				p.Containers = append(p.Containers, t.Name)
 				p.ContainerStatuses = append(p.ContainerStatuses, t)
 				delete(cs, t.Name)

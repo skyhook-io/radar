@@ -127,7 +127,8 @@ export async function withLokiRunFallback(kind: string, namespace: string, name:
   const wholePod = run.logs.length > 0 && run.logs.every(l => l.container === ALL_CONTAINERS)
   const logs = wholePod
     ? run.logs.map(l => ({ ...l, container: '' }))
-    : container ? run.logs.filter(l => l.container === container) : run.logs
+    // A pod Loki can't split is read whole, so its lines stay beside the chosen container's.
+    : container ? run.logs.filter(l => l.container === container || l.container === ALL_CONTAINERS) : run.logs
   const fixedRangeReason = "This run is read whole from Loki; the line count and time range don't apply"
   // Loki answered for the chosen container only: its silence says nothing about
   // the run's other containers, so the viewer keeps the run's pods to switch to.

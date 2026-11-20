@@ -93,6 +93,12 @@ const maxIndexDigits = 6
 // given and Loki labels containers) and this cluster go into the selector, so
 // Loki's line limit counts only the lines shown.
 func JobSelector(l StreamLabels, namespace, job string, indexed bool, container string) (selector, notice string, err error) {
+	return jobSelector(l, namespace, job, indexed, container, nil)
+}
+
+// jobSelector is JobSelector that also requires each label in absent to be
+// unset (Loki matches label="" on streams without the label).
+func jobSelector(l StreamLabels, namespace, job string, indexed bool, container string, absent []string) (selector, notice string, err error) {
 	if reason := l.HistoryReason(); reason != "" {
 		return "", "", errors.New(reason)
 	}
@@ -101,6 +107,9 @@ func JobSelector(l StreamLabels, namespace, job string, indexed bool, container 
 		scope = append(scope, l.Container+"="+quoteLogQL(container))
 	}
 	scope = append(scope, clusterMatcher(l)...)
+	for _, name := range absent {
+		scope = append(scope, name+`=""`)
+	}
 	build := func(match string) string {
 		return "{" + strings.Join(append([]string{l.Namespace + "=" + quoteLogQL(namespace), match}, scope...), ", ") + "}"
 	}

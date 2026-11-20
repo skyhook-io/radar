@@ -80,7 +80,10 @@ func TestLokiJobLogsGroupsByPod(t *testing.T) {
 
 func TestLokiJobLogsUsesJobLabel(t *testing.T) {
 	seedJob(t)
-	rec := newLokiRecorderWithLabels(t, `["namespace","pod","container","job_name"]`, twoPods)
+	rec := newLokiRecorder(t, twoPods)
+	rec.mu.Lock()
+	rec.series = twoPodsLabelled
+	rec.mu.Unlock()
 	if resp, _, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs"); resp.StatusCode != 200 {
 		t.Fatalf("%d %s", resp.StatusCode, raw)
 	}
@@ -312,34 +315,27 @@ func TestLokiJobLogsNoContainerLabelKeepsWholePod(t *testing.T) {
 
 const noStreams = `{"status":"success","data":{"resultType":"streams","result":[]}}`
 
+const twoPodsLabelled = `[{"namespace":"team","pod":"nightly-29905990-aaaaa","container":"job","job_name":"nightly-29905990"},
+ {"namespace":"team","pod":"nightly-29905990-bbbbb","container":"job","job_name":"nightly-29905990"}]`
+
 // A Loki fed by several shippers has a Job label on some streams only: a run
-// whose streams lack it is read again by pod name, and the notice says so.
-func TestLokiJobLogsFallsBackToNameMatching(t *testing.T) {
+// whose streams lack it is selected by pod name, leaving out streams whose
+// Job label names another Job, and the notice says so.
+func TestLokiJobLogsNameMatchingLeavesOutOtherJobs(t *testing.T) {
 	seedJob(t)
-	rec := newLokiRecorderWithLabels(t, `["namespace","pod","container","job_name"]`, "")
+	rec := newLokiRecorderWithLabels(t, `["namespace","pod","container","job_name"]`, twoPods)
 	rec.mu.Lock()
-	rec.byQuery = func(query string) string {
-		if strings.Contains(query, "job_name=") {
-			return noStreams
-		}
-		return twoPods
-	}
+	rec.series = `[{"namespace":"team","pod":"nightly-29905990-aaaaa","container":"job"},
+ {"namespace":"team","pod":"nightly-29905990-zzzzz","container":"job","job_name":"other"}]`
 	rec.mu.Unlock()
 	resp, got, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs?container=job")
-	if resp.StatusCode != 200 || len(got.Logs) != 3 || rec.count() != 2 {
+	if resp.StatusCode != 200 || rec.count() != 1 {
 		t.Fatalf("%d %s, %d queries", resp.StatusCode, raw, rec.count())
 	}
-	if q := rec.queries[0].Get("query"); q != `{namespace="team", job_name="nightly-29905990", container="job"}` {
-		t.Fatalf("first query = %s", q)
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod=~"^nightly-29905990-[a-z0-9]{5}$", container="job", job_name=""}` {
+		t.Fatalf("query = %s", q)
 	}
-	second := rec.queries[1]
-	if q := second.Get("query"); q != `{namespace="team", pod=~"^nightly-29905990-[a-z0-9]{5}$", container="job"}` {
-		t.Fatalf("second query = %s", q)
-	}
-	if second.Get("start") != rec.queries[0].Get("start") || second.Get("end") != rec.queries[0].Get("end") || second.Get("limit") != rec.queries[0].Get("limit") {
-		t.Fatalf("the name read changed the bounds: %v vs %v", second, rec.queries[0])
-	}
-	if !strings.Contains(got.Notice, "Selected by pod name: no lines carry Loki's job_name label") {
+	if !strings.Contains(got.Notice, "Selected by pod name, leaving out streams labelled with another Job.") {
 		t.Fatalf("notice = %q", got.Notice)
 	}
 }
@@ -347,45 +343,81 @@ func TestLokiJobLogsFallsBackToNameMatching(t *testing.T) {
 // A run the Job label finds is read once, and the notice names the label.
 func TestLokiJobLogsJobLabelNamedInNotice(t *testing.T) {
 	seedJob(t)
-	rec := newLokiRecorderWithLabels(t, `["namespace","pod","container","job_name"]`, twoPods)
+	rec := newLokiRecorder(t, twoPods)
+	rec.mu.Lock()
+	rec.series = twoPodsLabelled
+	rec.mu.Unlock()
 	if resp, got, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs"); resp.StatusCode != 200 || rec.count() != 1 || got.Notice != "Selected by Loki's job_name label." {
 		t.Fatalf("%d %s, %d queries", resp.StatusCode, raw, rec.count())
 	}
 }
 
-// The Job label is looked up in the run's own window, so a shipper that
-// started adding it after Radar connected is used.
-func TestLokiJobLogsReadsLabelsInTheRunWindow(t *testing.T) {
+// The run's streams are looked up in its own window, by its Job label and by
+// its pods' names, without a container: so a shipper that started adding the
+// Job label after Radar connected is used.
+func TestLokiJobLogsFindsTheRunsStreamsInItsWindow(t *testing.T) {
 	seedJob(t)
 	rec := newLokiRecorder(t, twoPods)
 	rec.mu.Lock()
-	rec.labelNames = `["namespace","pod","container","job_name"]`
+	rec.series = twoPodsLabelled
 	rec.mu.Unlock()
-	resp, got, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs")
-	if resp.StatusCode != 200 || len(rec.labelCalls) != 1 {
-		t.Fatalf("%d %s, %d label reads", resp.StatusCode, raw, len(rec.labelCalls))
+	resp, _, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs?container=job")
+	if resp.StatusCode != 200 || len(rec.seriesCalls) != 1 {
+		t.Fatalf("%d %s, %d series reads", resp.StatusCode, raw, len(rec.seriesCalls))
 	}
-	lc := rec.labelCalls[0]
-	if lc.Get("start") != strconv.FormatInt(jobStart.Add(-time.Minute).UnixNano(), 10) || lc.Get("end") != strconv.FormatInt(jobEnd.Add(time.Minute).UnixNano(), 10) {
-		t.Fatalf("label window = %s..%s", lc.Get("start"), lc.Get("end"))
+	sc := rec.seriesCalls[0]
+	if sc.Get("start") != strconv.FormatInt(jobStart.Add(-time.Minute).UnixNano(), 10) || sc.Get("end") != strconv.FormatInt(jobEnd.Add(time.Minute).UnixNano(), 10) {
+		t.Fatalf("series window = %s..%s", sc.Get("start"), sc.Get("end"))
 	}
-	if q := rec.queries[0].Get("query"); q != `{namespace="team", job_name="nightly-29905990"}` || !strings.Contains(got.Notice, "job_name label") {
-		t.Fatalf("query = %s, notice %q", q, got.Notice)
+	want := []string{
+		`{namespace="team", pod=~"^nightly-29905990-[a-z0-9]{5}$"}`,
+		`{namespace="team", job_name="nightly-29905990"}`,
+		`{namespace="team", batch_kubernetes_io_job_name="nightly-29905990"}`,
+	}
+	if got := sc["match[]"]; strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("match[] = %q", got)
+	}
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", job_name="nightly-29905990", container="job"}` {
+		t.Fatalf("query = %s", q)
 	}
 }
 
-// Container support comes from the run's own streams, not the connection's
-// recent label discovery: a run shipped before Loki labelled containers is
+// A silent container of a Job whose streams carry the Job label reads as
+// empty: never by name, which for an Indexed Job would also match the pods
+// of a Job named "<job>-<index>" and show its output as this run's.
+func TestLokiJobLogsSilentContainerKeepsTheJobLabel(t *testing.T) {
+	indexed := batchv1.IndexedCompletion
+	seedJobWithSpec(t, batchv1.JobSpec{CompletionMode: &indexed})
+	rec := newLokiRecorder(t, "")
+	rec.mu.Lock()
+	rec.series = `[{"namespace":"team","pod":"nightly-29905990-0-aaaaa","container":"work","job_name":"nightly-29905990"},
+ {"namespace":"team","pod":"nightly-29905990-0-ccccc","container":"setup","job_name":"nightly-29905990-0"}]`
+	rec.byQuery = func(query string) string {
+		if strings.Contains(query, "job_name=") {
+			return noStreams
+		}
+		return `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"nightly-29905990-0-ccccc","container":"setup","job_name":"nightly-29905990-0"},"values":[["1763002800000000001","not this run"]]}]}}`
+	}
+	rec.mu.Unlock()
+	resp, got, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs?container=setup")
+	if resp.StatusCode != 200 || len(got.Logs) != 0 || rec.count() != 1 {
+		t.Fatalf("%d %s, %d queries", resp.StatusCode, raw, rec.count())
+	}
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", job_name="nightly-29905990", container="setup"}` {
+		t.Fatalf("query = %s", q)
+	}
+}
+
+// Container support comes from the run's own streams, not from labels other
+// workloads in its window carry: a run shipped without a container label is
 // read whole, with no container choices and no container matcher.
 func TestLokiJobLogsContainerSupportFromTheRun(t *testing.T) {
 	seedJobWithSpec(t, batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "work"}, {Name: "side"}}}}})
 	rec := newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[
  {"stream":{"namespace":"team","pod":"nightly-29905990-aaaaa"},"values":[["1763002800000000001","a"]]}]}}`)
-	rec.mu.Lock()
-	rec.labelNames = `["namespace","pod"]`
-	rec.mu.Unlock()
 	resp, got, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs?container=work")
-	if resp.StatusCode != 200 || len(got.Pods) != 1 || strings.Join(got.Pods[0].Containers, ",") != noContainerLabel {
+	if resp.StatusCode != 200 || len(got.Pods) != 1 || strings.Join(got.Pods[0].Containers, ",") != noContainerLabel || len(got.Logs) != 1 {
 		t.Fatalf("%d %s", resp.StatusCode, raw)
 	}
 	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod=~"^nightly-29905990-[a-z0-9]{5}$"}` {
