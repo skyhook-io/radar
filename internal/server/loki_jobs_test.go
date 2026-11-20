@@ -440,3 +440,24 @@ func TestLokiJobLogsWholePodStreamsOfferNoContainers(t *testing.T) {
 		t.Fatalf("containers = %q / %q", a, b)
 	}
 }
+
+// Shippers name the container label differently; each stream's container
+// comes from the alias it carries, so a chosen container never shows another
+// labelled container's lines as whole-pod output.
+func TestLokiJobLogsMixedContainerLabelAliases(t *testing.T) {
+	seedJobWithSpec(t, batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "work"}, {Name: "sidecar"}}}}})
+	newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"nightly-29905990-aaaaa","container":"work"},"values":[["1763002800000000001","from work"]]},
+ {"stream":{"namespace":"team","pod":"nightly-29905990-aaaaa","kubernetes_container_name":"sidecar"},"values":[["1763002800000000002","from sidecar"]]}]}}`)
+	resp, got, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs?container=work")
+	if resp.StatusCode != 200 || len(got.Logs) != 1 || got.Logs[0].Container != "work" || got.Logs[0].Content != "from work" {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if len(got.Pods) != 1 || strings.Join(got.Pods[0].Containers, ",") != "work,sidecar" {
+		t.Fatalf("containers: %s", raw)
+	}
+	resp, got, raw = lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs")
+	if resp.StatusCode != 200 || len(got.Logs) != 2 || got.Logs[1].Container != "sidecar" {
+		t.Fatalf("whole run: %d %s", resp.StatusCode, raw)
+	}
+}

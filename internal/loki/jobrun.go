@@ -27,9 +27,10 @@ type JobRun struct {
 //   - the run is selected by a Job label when any of its streams carry it, and
 //     by pod name only when none do, never because a container read was empty;
 //   - by pod name, streams whose Job label names another Job are left out;
-//   - a chosen container is matched only when every stream of the run carries
-//     a container label; otherwise the run is read whole and the caller keeps
-//     the chosen container's lines and the whole-pod ones.
+//   - a chosen container is matched in Loki only when every stream of the run
+//     carries the same container label; otherwise the run is read whole and
+//     only the chosen container's lines and whole-pod lines are kept
+//     (Truncated still describes the whole read).
 func ReadJobRun(ctx context.Context, l StreamLabels, namespace, job string, indexed bool, container string, w Window, limit int) (JobRun, error) {
 	if reason := l.HistoryReason(); reason != "" {
 		return JobRun{}, errors.New(reason)
@@ -90,22 +91,15 @@ func ReadJobRun(ctx context.Context, l StreamLabels, namespace, job string, inde
 		}
 	}
 
-	containerLabel := ""
-	for _, c := range containerLabels {
-		for _, s := range run {
-			if s[c] != "" {
-				containerLabel = c
-				break
-			}
-		}
-		if containerLabel != "" {
-			break
-		}
-	}
+	// Shippers name the container label differently, sometimes within one
+	// run: each stream's container comes from the alias it carries, and a
+	// stream is whole-pod only when it carries none.
+	aliases := map[string]bool{}
 	split := map[string]bool{}
 	whole := map[string]bool{}
 	for _, s := range run {
-		if containerLabel != "" && s[containerLabel] != "" {
+		if alias := containerAlias(s); alias != "" {
+			aliases[alias] = true
 			split[s[l.Pod]] = true
 		} else {
 			whole[s[l.Pod]] = true
@@ -133,22 +127,50 @@ func ReadJobRun(ctx context.Context, l StreamLabels, namespace, job string, inde
 		return JobRun{Notice: notice, PodSplits: split}, nil
 	}
 
+	// One matcher covers a chosen container only when every stream names it
+	// by the same alias; otherwise the run is read whole and filtered here.
 	sel := base
 	sel.Job = byLabel
-	if len(whole) == 0 {
-		sel.Container = containerLabel
+	matched := len(whole) == 0 && len(aliases) == 1
+	if matched {
+		for alias := range aliases {
+			sel.Container = alias
+		}
 	}
 	selector, _, err := jobSelector(sel, namespace, job, indexed, container, absent)
 	if err != nil {
 		return JobRun{}, err
 	}
-	mapping := l
-	mapping.Container = containerLabel
-	lines, err := queryRange(ctx, mapping, selector, w, limit)
+	containerOf := func(stream map[string]string) string {
+		if alias := containerAlias(stream); alias != "" {
+			return stream[alias]
+		}
+		return ""
+	}
+	lines, err := queryRange(ctx, l, containerOf, selector, w, limit)
 	if err != nil {
 		return JobRun{}, err
 	}
+	if container != "" && !matched {
+		kept := lines.Items[:0]
+		for _, line := range lines.Items {
+			if line.Container == container || line.Container == "" {
+				kept = append(kept, line)
+			}
+		}
+		lines.Items = kept
+	}
 	return JobRun{Lines: lines, Notice: notice, PodSplits: split}, nil
+}
+
+// containerAlias is the supported container label a stream carries, or "".
+func containerAlias(stream map[string]string) string {
+	for _, c := range containerLabels {
+		if stream[c] != "" {
+			return c
+		}
+	}
+	return ""
 }
 
 // seriesIn is the label sets of the streams matching any of matches in w.
