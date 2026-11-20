@@ -145,7 +145,7 @@ type clusterInfoObservation struct {
 	at   time.Time
 }
 
-// LastClusterInfo returns the last completed read for this cache generation.
+// LastClusterInfo returns the last completed read with a known version for this cache generation.
 // Diagnostics must not start or wait for an API request when the cluster is unreachable.
 func (cache *ResourceCache) LastClusterInfo() (ClusterInfo, time.Time) {
 	if observed := cache.lastClusterInfo.Load(); observed != nil {
@@ -195,7 +195,7 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 		info.CRDDiscoveryStatus = string(dynamicCache.GetDiscoveryStatus())
 	}
 
-	if cache != nil && cache == initialCache {
+	if cache != nil && cache == initialCache && ctx.Err() == nil && info.KubernetesVersion != "" {
 		cache.lastClusterInfo.Store(&clusterInfoObservation{info: *info, at: time.Now()})
 	}
 	return info, nil
