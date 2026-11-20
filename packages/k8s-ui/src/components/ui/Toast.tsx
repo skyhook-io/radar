@@ -19,7 +19,7 @@ interface Toast {
   // or dismissed. Errors default to 10s, everything else to 7s.
   duration?: number
   // Bumped on every show, so a toast replaced by ID restarts its timer.
-  shown?: number
+  shown: number
 }
 
 type ToastOptions = Omit<Toast, 'id' | 'message' | 'dismissing' | 'shown'> & {
@@ -104,12 +104,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
 
-  const animateDismiss = useCallback((id: string) => {
+  const activeShows = useRef(new Map<string, number>())
+
+  const animateDismiss = useCallback((id: string, shown = activeShows.current.get(id)) => {
+    if (shown === undefined || activeShows.current.get(id) !== shown) return
     clearTimeout(timers.current.get(id))
     setToasts(prev => prev.map(t => t.id === id ? { ...t, dismissing: true } : t))
     timers.current.set(id, setTimeout(() => {
+      if (activeShows.current.get(id) !== shown) return
       setToasts(prev => prev.filter(t => t.id !== id))
       timers.current.delete(id)
+      activeShows.current.delete(id)
     }, DURATION_TOAST_EXIT))
   }, [])
 
@@ -118,6 +123,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     const { id = Math.random().toString(36).slice(2), ...toastOptions } = options ?? {}
     const toast: Toast = { id, message, ...toastOptions, shown: ++showSeq.current }
 
+    activeShows.current.set(id, toast.shown)
     clearTimeout(timers.current.get(id))
     timers.current.delete(id)
     setToasts(prev => prev.some(t => t.id === id)
@@ -170,7 +176,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
       {/* Render toasts */}
       {toasts.map(toast => (
-        <ToastItem key={toast.id} toast={toast} onDismiss={() => dismissToast(toast.id)} />
+        <ToastItem key={toast.id} toast={toast} onDismiss={animateDismiss} />
       ))}
     </ToastContext.Provider>
   )
@@ -180,7 +186,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 // raised from inside an open dialog stays visible. Tooltips stay above toasts.
 const TOAST_Z_INDEX = 200
 
-function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
+function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string, shown: number) => void }) {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
@@ -195,12 +201,12 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
   useEffect(() => {
     if (duration <= 0 || hovered || focused || detailsOpen || toast.dismissing) return
     const started = Date.now()
-    const timer = setTimeout(onDismiss, remaining.current)
+    const timer = setTimeout(() => onDismiss(toast.id, toast.shown), remaining.current)
     return () => {
       clearTimeout(timer)
       remaining.current = Math.max(0, remaining.current - (Date.now() - started))
     }
-  }, [hovered, focused, detailsOpen, toast.dismissing, onDismiss, toast.shown, duration])
+  }, [hovered, focused, detailsOpen, toast.dismissing, onDismiss, toast.id, toast.shown, duration])
   // Calculate position - either near button or default to bottom-right
   const style: React.CSSProperties = toast.position
     ? {
@@ -230,6 +236,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       className={clsx(
         'flex items-start gap-3 p-4 rounded-lg shadow-2xl border backdrop-blur-sm',
         'w-[480px] max-w-[calc(100vw-32px)]',
+        toast.rawDetail && 'max-h-[calc(100dvh-32px)] overflow-y-auto',
         toast.dismissing ? 'animate-out' : 'animate-in',
         isError
           ? 'bg-red-950 border-red-800/60'
@@ -288,7 +295,14 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
               {toast.detail}
             </button>
           ) : (
-            <p className={clsx('mt-1 whitespace-pre-line text-xs [overflow-wrap:anywhere]', isError ? 'text-red-300/80' : isSuccess ? 'text-emerald-300/80' : 'text-theme-text-secondary')}>
+            <p
+              tabIndex={toast.rawDetail ? 0 : undefined}
+              className={clsx(
+                'mt-1 whitespace-pre-line text-xs [overflow-wrap:anywhere]',
+                toast.rawDetail && 'max-h-[min(8rem,25dvh)] overflow-y-auto',
+                isError ? 'text-red-300/80' : isSuccess ? 'text-emerald-300/80' : 'text-theme-text-secondary',
+              )}
+            >
               {toast.detail}
             </p>
           )
@@ -322,7 +336,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       {/* Dismiss button */}
       <button
         aria-label="Dismiss notification"
-        onClick={onDismiss}
+        onClick={() => onDismiss(toast.id, toast.shown)}
         className={clsx(
           'p-1 rounded shrink-0 transition-colors',
           isError

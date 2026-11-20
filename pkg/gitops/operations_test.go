@@ -2770,6 +2770,26 @@ func TestSetArgoAutoSyncFailsWhenAdmissionDeniesTheDryRun(t *testing.T) {
 
 // A conflict retry rebuilds the patch from a fresh read but doesn't ask the
 // API server again whether it keeps enabled.
+func TestSetArgoAutoSyncProbesWithSuspensionAnnotations(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	var dryRunPatch map[string]any
+	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		patch := action.(clienttesting.PatchActionImpl)
+		if len(patch.GetPatchOptions().DryRun) > 0 {
+			if err := json.Unmarshal(patch.GetPatch(), &dryRunPatch); err != nil {
+				return true, nil, err
+			}
+		}
+		return false, nil, nil
+	})
+	setAutoSync(t, client, false)
+	actualPatch := captureLastPatch(t, client)
+	delete(nestedMap(actualPatch, "metadata"), "resourceVersion")
+	if !reflect.DeepEqual(dryRunPatch, actualPatch) {
+		t.Fatalf("dry-run patch = %#v, want same proposed changes as write %#v", dryRunPatch, actualPatch)
+	}
+}
+
 func TestSetArgoAutoSyncProbesOnceAcrossConflicts(t *testing.T) {
 	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
 	var probes, conflicts atomic.Int32

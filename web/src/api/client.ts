@@ -7322,10 +7322,10 @@ interface GitOpsMutationConfig<TVariables, TContext = undefined> {
 function createGitOpsMutation<TVariables, TContext = undefined>(
   config: GitOpsMutationConfig<TVariables, TContext>,
 ) {
-  return function useGitOpsMutation() {
+  return function useGitOpsMutation(options?: { reportErrors?: boolean }) {
     const queryClient = useQueryClient();
     const requestContext = config.useRequestContext?.() as TContext;
-    return useMutation<GitOpsOperationResponse, Error, TVariables>({
+    return useMutation<GitOpsOperationResponse, GitOpsActionError, TVariables>({
       mutationFn: async (
         variables: TVariables,
       ): Promise<GitOpsOperationResponse> => {
@@ -7348,7 +7348,7 @@ function createGitOpsMutation<TVariables, TContext = undefined>(
         return response.json() as Promise<GitOpsOperationResponse>;
       },
       meta: {
-        errorMessage: config.errorMessage,
+        errorMessage: options?.reportErrors === false ? undefined : config.errorMessage,
         successMessage: config.successMessage,
       },
       onSuccess: (data, variables) => {

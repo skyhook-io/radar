@@ -43,7 +43,7 @@ func TestArgoValidationPollDeniedIsPermissionDenied(t *testing.T) {
 		if gets == 1 {
 			return false, nil, nil
 		}
-		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "argoproj.io", Resource: "applications"}, "demo", errors.New(`User "alice" cannot get resource "applications"`))
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "argoproj.io", Resource: "applications"}, "demo", errors.New(`User "alice" cannot get resource "applications": denied by webhook read-policy.example`))
 	})
 	_, err := ValidateArgoResource(context.Background(), client, "argocd", "demo", ArgoSyncResource{Kind: "Service", Name: "api"}, ArgoSyncOptions{})
 	var denied *PermissionDenied
@@ -96,8 +96,10 @@ func TestGitOpsForbiddenClassification(t *testing.T) {
 		{"webhook", forbidden(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`), "admission", "Rejected by admission webhook validation.gatekeeper.sh: missing owner"},
 		{"webhook without code", webhookWithoutCode, "admission", "Rejected by admission webhook policy.example.com: owner label required"},
 		{"webhook without explanation", forbidden(`admission webhook "validation.gatekeeper.sh" denied the request without explanation`), "admission", "Rejected by admission webhook validation.gatekeeper.sh."},
-		{"denied by a webhook", forbidden(`User "alice" cannot patch resource "applications": denied by a webhook`), "admission", ""},
-		{"denied by webhook policy", forbidden(`User "alice" cannot patch resource "applications": denied by webhook policy.example`), "admission", ""},
+		{"authorization webhook reason", forbidden(`User "alice" cannot patch resource "applications": denied by webhook policy.example`), "rbac", "Kubernetes denied permission to patch Argo CD Application demo in argocd."},
+		{"authorization reason resembling admission", forbidden(`User "alice" cannot patch resource "applications": admission webhook "policy.example" denied the request: frozen`), "rbac", "Kubernetes denied permission to patch Argo CD Application demo in argocd."},
+		{"unrecognized webhook text", forbidden(`denied by a webhook`), "", ""},
+		{"mismatched verb", forbidden(`User "alice" cannot get resource "applications"`), "", ""},
 		{"rbac", forbidden(`User "alice" cannot patch resource "applications" in API group "argoproj.io" in the namespace "argocd"`), "rbac", "Kubernetes denied permission to patch Argo CD Application demo in argocd."},
 		{"radar impersonation refused", forbidden(`User "system:serviceaccount:radar:radar" cannot impersonate resource "users" in API group "" at the cluster scope`), "", ""},
 		{"unrecognized forbidden", forbidden(`policy rejected this change`), "", ""},
@@ -154,6 +156,23 @@ func TestTerminateReportsPolicyDenialNotFinishedOperation(t *testing.T) {
 	var admission *AdmissionDenied
 	if !errors.As(err, &admission) || errors.Is(err, ErrNoOperationInProgress) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestGitOpsArgoSyncPreservesAdmissionConflict(t *testing.T) {
+	client := newFakeArgo(argoAppForTest("argocd", "demo", func(map[string]any) {}))
+	patches := 0
+	client.PrependReactor("patch", "applications", func(ktesting.Action) (bool, runtime.Object, error) {
+		patches++
+		return true, nil, &apierrors.StatusError{ErrStatus: metav1.Status{
+			Code: 409, Reason: metav1.StatusReasonConflict,
+			Message: `admission webhook "change-window.example" denied the request: sync is frozen`,
+		}}
+	})
+	_, err := SyncArgoApp(t.Context(), client, "argocd", "demo", ArgoSyncOptions{})
+	var admission *AdmissionDenied
+	if !errors.As(err, &admission) || admission.Policy != "change-window.example" || patches != 1 {
+		t.Fatalf("patches=%d, error=%v, want one patch and an admission refusal", patches, err)
 	}
 }
 
