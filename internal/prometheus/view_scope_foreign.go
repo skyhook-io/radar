@@ -2,7 +2,9 @@ package prometheus
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -11,7 +13,9 @@ import (
 // because they hold this cluster's objects. kube-state-metrics, carrying the
 // cluster labels, is the inventory of which objects belong to which cluster:
 // a metric whose series name an object listed under another cluster's labels
-// and never under this cluster's holds another cluster's series.
+// and never under this cluster's holds another cluster's series. Another
+// cluster's labels are this cluster's label keys with another value; a
+// kube-state-metrics series without them names no cluster.
 //
 // It runs in two steps. The first asks each reference whether it holds this
 // cluster's series at all (without them nothing can be checked) and whether
@@ -64,17 +68,53 @@ func (f ForeignCheck) id() string {
 }
 
 // referenceKeySet is the reference's distinct objects over the span, within
-// sel.
+// sel. kube-state-metrics scraped without honor_labels moves the object's
+// namespace to exported_namespace and puts its own in namespace, so the
+// object's namespace is read from exported_namespace when that is set; both
+// of the check's object sets are read this way, or the same Pod would be two
+// objects.
 func referenceKeySet(f ForeignCheck, sel string, span time.Duration) string {
-	return "count by (" + strings.Join(f.referenceKeys(), ",") + ") (count_over_time(" + vectorSelector(f.Reference, sel) + "[" + promSeconds(span) + "]))"
+	keys := f.referenceKeys()
+	inner := "count_over_time(" + vectorSelector(f.Reference, sel) + "[" + promSeconds(span) + "])"
+	if slices.Contains(keys, "namespace") {
+		byLabels := slices.Sorted(slices.Values(append(slices.Clone(keys), "exported_namespace")))
+		inner = "label_replace(count by (" + strings.Join(byLabels, ",") + ") (" + inner + `), "namespace", "$1", "exported_namespace", "(.+)")`
+	}
+	return "count by (" + strings.Join(keys, ",") + ") (" + inner + ")"
 }
 
-// otherClusterObjects is the objects the reference lists over the span but
-// never under all of this cluster's labels. A series is this cluster's only
-// when it matches every label, so the complement is taken on the objects,
-// not with negative matchers.
+// otherClusterSelectors select the series naming another cluster: each one
+// carries every one of this cluster's label keys, and one of them with
+// another value. A series missing one of the keys names no cluster (a scrape
+// job that left the label off, in this cluster as in any other), so it is no
+// evidence of another cluster. ok is false when ours isn't a list of exact
+// label matches.
+func otherClusterSelectors(ours string) (sels []string, ok bool) {
+	matchers := parseViewMatchers(ours)
+	present := make([]string, len(matchers))
+	for i, m := range matchers {
+		if m.label == "" || m.op != "=" {
+			return nil, false
+		}
+		present[i] = m.label + `!=""`
+	}
+	for _, m := range matchers {
+		sels = append(sels, strings.Join(present, ",")+","+m.label+"!="+strconv.Quote(m.value))
+	}
+	return sels, len(sels) > 0
+}
+
+// otherClusterObjects is the objects the reference lists over the span under
+// another cluster's labels but never under all of this cluster's. A series is
+// this cluster's only when it matches every label, so the complement is taken
+// on the objects, not with negative matchers alone.
 func otherClusterObjects(f ForeignCheck, ours string, span time.Duration) string {
-	return referenceKeySet(f, "", span) + " unless on(" + strings.Join(f.referenceKeys(), ",") + ") " + referenceKeySet(f, ours, span)
+	sels, _ := otherClusterSelectors(ours)
+	others := make([]string, len(sels))
+	for i, sel := range sels {
+		others[i] = referenceKeySet(f, sel, span)
+	}
+	return "(" + strings.Join(others, " or ") + ") unless on(" + strings.Join(f.referenceKeys(), ",") + ") " + referenceKeySet(f, ours, span)
 }
 
 // viewReferenceParts ask, once per reference, whether it holds this
@@ -158,6 +198,9 @@ func viewForeignParts(checks []ViewMetric, ours string, span time.Duration) []vi
 func findForeignObjects(ctx context.Context, q instantQuerier, at time.Time, checks []ViewMetric, ours string, span time.Duration) (foreign, uncheckable []string, err error) {
 	if len(checks) == 0 {
 		return nil, nil, nil
+	}
+	if _, ok := otherClusterSelectors(ours); !ok {
+		return nil, nil, fmt.Errorf("foreign-object check needs exact cluster label matches, got %q", ours)
 	}
 	_, marks, err := runViewProbes(ctx, q, at, viewReferenceParts(checks, ours, span))
 	if err != nil {

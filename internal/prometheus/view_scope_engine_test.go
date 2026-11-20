@@ -32,6 +32,12 @@ const (
 	engineDBPod  = "db-0"
 	engineWorker = "worker-5c6d-q7r2m"
 	engineMiB    = 1 << 20
+
+	engineShopNS    = "shop"
+	engineShopAPI   = "shop-api-0"
+	engineShopWeb   = "shop-web-0"
+	engineShopB     = "shop-b-0"
+	engineShopLocal = "shop-local-0"
 )
 
 var (
@@ -108,6 +114,27 @@ func engineData(end time.Time) []engineFamily {
 	for _, name := range engineAPods {
 		allocOne = append(allocOne, engineSeries{labels: map[string]string{"namespace": "opencost-a", "exported_namespace": engineNS, "pod": name, "container": "app"}, value: 1, start: start, end: end})
 	}
+	// Another namespace's Pods, listed by kube-state-metrics the ways a
+	// shared store holds them: plainly, by exported_namespace (scraped
+	// without honor_labels, so namespace is kube-state-metrics' own), and by
+	// a job that left the cluster label off. Its unlabeled CPU metrics hold
+	// both clusters' Pods, or this cluster's alone.
+	shop := func(labels map[string]string) engineSeries {
+		return engineSeries{labels: labels, value: 1, start: start, end: end}
+	}
+	info = append(info,
+		shop(map[string]string{"cluster": "a", "namespace": engineShopNS, "pod": engineShopAPI}),
+		shop(map[string]string{"cluster": "a", "namespace": "monitoring", "exported_namespace": engineShopNS, "pod": engineShopWeb}),
+		shop(map[string]string{"cluster": "b", "namespace": "monitoring", "exported_namespace": engineShopNS, "pod": engineShopB}),
+		shop(map[string]string{"namespace": engineShopNS, "pod": engineShopLocal}),
+	)
+	var shopBoth, shopOne []engineSeries
+	for _, name := range []string{engineShopAPI, engineShopWeb, engineShopB} {
+		shopBoth = append(shopBoth, shop(map[string]string{"namespace": engineShopNS, "pod": name, "container": "app"}))
+	}
+	for _, name := range []string{engineShopAPI, engineShopWeb, engineShopLocal} {
+		shopOne = append(shopOne, shop(map[string]string{"namespace": engineShopNS, "pod": name, "container": "app"}))
+	}
 	var nodes []engineSeries
 	for _, cluster := range []string{"a", "b"} {
 		nodes = append(nodes, engineSeries{labels: map[string]string{"cluster": cluster, "instance": "10.0.1.5:9100", "cpu": "0", "mode": "idle"}, rate: 0.9, start: start, end: end})
@@ -124,6 +151,8 @@ func engineData(end time.Time) []engineFamily {
 		{name: "kube_pod_container_status_last_terminated_reason", series: terminated},
 		{name: "container_cpu_allocation", series: allocBoth},
 		{name: "container_memory_allocation_bytes", series: allocOne},
+		{name: "radar_engine_shop_cpu_both", series: shopBoth},
+		{name: "radar_engine_shop_cpu_one", series: shopOne},
 	}
 }
 
@@ -374,6 +403,29 @@ func TestEngineViewScope(t *testing.T) {
 		}
 	})
 
+	// Cluster b's Pod is listed only by exported_namespace: read by
+	// kube-state-metrics' own namespace it would never meet the metric's.
+	t.Run("a foreign Pod kube-state-metrics lists by exported_namespace is withheld", func(t *testing.T) {
+		m := podMetric("radar_engine_shop_cpu_both", `namespace="`+engineShopNS+`"`, engineShopAPI, engineShopWeb)
+		m.AnchorNamespace, m.Foreign = engineShopNS, PodForeignCheck(false)
+		scope := resolve(t, configuredA, time.Hour, false, m)
+		if scope.State != ViewScopeLabelMissing || !scope.Withheld || !strings.Contains(scope.Note, "another cluster") {
+			t.Fatalf("scope = %+v", scope)
+		}
+	})
+
+	// This cluster's Pods listed by exported_namespace, or by a job without
+	// the cluster label, are no evidence of another cluster.
+	t.Run("Pods listed by exported_namespace or without the label pass the foreign check", func(t *testing.T) {
+		m := podMetric("radar_engine_shop_cpu_one", `namespace="`+engineShopNS+`"`, engineShopAPI, engineShopWeb)
+		m.AnchorNamespace, m.Foreign = engineShopNS, PodForeignCheck(false)
+		scope := resolve(t, configuredA, time.Hour, false, m)
+		if scope.State != ViewScopeUnlabeled || scope.Withheld {
+			t.Fatalf("scope = %+v", scope)
+		}
+		wantFilters(t, scope, map[string]string{m.Name: ""})
+	})
+
 	t.Run("foreign check against an absent reference is unknown", func(t *testing.T) {
 		m := allocOne
 		m.Foreign = NodeForeignCheck("container")
@@ -412,7 +464,9 @@ func TestEngineViewScope(t *testing.T) {
 					return scope, counted.n
 				}
 				whole, wholeProbes := decideAt(prom.MaxWorkloadQueryBytes)
-				split, splitProbes := decideAt(700)
+				// Small enough to split every Pod list, with room for the
+				// foreign check's fixed reference sets.
+				split, splitProbes := decideAt(800)
 				if !maps.Equal(whole.Filters, split.Filters) || whole.State != split.State || whole.Note != split.Note {
 					t.Errorf("labels %v, %s: split %+v, batched %+v", labels, metrics[0].Name, split, whole)
 				}

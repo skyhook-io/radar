@@ -19,38 +19,84 @@ const (
 	evalTagTail = `", "", ""\)`
 )
 
+// evalObjectSet matches one of the reference's object sets as
+// referenceKeySet spells it; with capture, its groups are the keys, the
+// namespace canonicalization's head, the reference, the selector and the
+// canonicalization's tail.
+func evalObjectSet(capture bool) string {
+	g := "(?:"
+	if capture {
+		g = "("
+	}
+	return `count by \(` + g + `[^)]*)\) \(` + g + `label_replace\(count by \([^)]*\) \()?count_over_time\(` + g + `[a-zA-Z_:][a-zA-Z0-9_:]*)\{` + g + `.*?)\}\[\d+s\]\)` + g + `\), "namespace", "\$1", "exported_namespace", "\(\.\+\)"\))?\)`
+}
+
 // The reference set the evaluating store reads back: objects outside this
-// cluster, as otherClusterObjects spells them.
-const evalOther = `count by ` + evalKeys + ` \(count_over_time\(` + evalName + `\{\}\[\d+s\]\)\) unless on` + evalKeys + ` count by ` + evalKeys + ` \(count_over_time\(` + evalName + evalSel + `\)\)`
+// cluster, as otherClusterObjects spells them, captured whole.
+var evalOther = `(\(` + evalObjectSet(false) + `(?: or ` + evalObjectSet(false) + `)*\) unless on\([^)]*\) ` + evalObjectSet(false) + `)`
 
 var (
 	evalReferencePart = regexp.MustCompile(`^label_replace\(count\(count_over_time\(` + evalName + evalSel + `\)\), "radar_reference", "([^"]+)` + evalTagTail)
 	evalOtherPart     = regexp.MustCompile(`^label_replace\(count\(` + evalOther + `\), "radar_other_cluster", "([^"]+)` + evalTagTail)
 	evalForeignPart   = regexp.MustCompile(`^label_replace\(count\(count by ` + evalKeys + ` \(((?:label_replace\()*)count by ` + evalKeys + ` \(count_over_time\(` + evalName + evalSel + `\)\)((?:, "\w+", "\$1", "\w+", "\(\.\*\)"\))*)\) and on` + evalKeys + ` \(` + evalOther + `\)\), "radar_foreign", "([^"]+)` + evalTagTail)
 	evalRename        = regexp.MustCompile(`, "(\w+)", "\$1", "(\w+)", "\(\.\*\)"\)`)
+	evalObjectSetRe   = regexp.MustCompile(evalObjectSet(true))
+	evalOtherShape    = regexp.MustCompile(`^\((.*)\) unless on\(([^)]*)\) (count by .*)$`)
 )
 
-// otherObjects is what otherClusterObjects selects: keys of ref's series
-// outside ours.
-func (s *evaluatingStore) otherObjects(ref, ours string, keys []string) map[string]bool {
-	tuple := func(series map[string]string) string {
-		values := make([]string, len(keys))
-		for i, k := range keys {
-			values[i] = series[k]
-		}
-		return strings.Join(values, "\x00")
-	}
-	mine := map[string]bool{}
-	for _, series := range s.selected(ref, ours) {
-		mine[tuple(series)] = true
-	}
-	out := map[string]bool{}
-	for _, series := range s.selected(ref, "") {
-		if t := tuple(series); !mine[t] {
-			out[t] = true
+// objectTuple is a reference series' object under keys. With the namespace
+// canonicalized, its namespace is exported_namespace when that is set.
+func objectTuple(series map[string]string, keys []string, canonical bool) string {
+	values := make([]string, len(keys))
+	for i, k := range keys {
+		values[i] = series[k]
+		if canonical && k == "namespace" && series["exported_namespace"] != "" {
+			values[i] = series["exported_namespace"]
 		}
 	}
-	return out
+	return strings.Join(values, "\x00")
+}
+
+// otherObjects evaluates an otherClusterObjects expression: the objects of
+// every set before "unless", less those of the set after it.
+func (s *evaluatingStore) otherObjects(expr string) (keys []string, out map[string]bool) {
+	s.t.Helper()
+	shape := evalOtherShape.FindStringSubmatch(expr)
+	if shape == nil {
+		s.t.Fatalf("store can't read the other-cluster objects: %s", expr)
+	}
+	objects := func(set []string) (keys []string, tuples map[string]bool) {
+		if (set[2] == "") != (set[5] == "") {
+			s.t.Fatalf("store can't read the canonicalization: %s", set[0])
+		}
+		keys = strings.Split(set[1], ",")
+		tuples = map[string]bool{}
+		for _, series := range s.selected(set[3], set[4]) {
+			tuples[objectTuple(series, keys, set[2] != "")] = true
+		}
+		return keys, tuples
+	}
+	mineSets := evalObjectSetRe.FindAllStringSubmatch(shape[3], -1)
+	if len(mineSets) != 1 || mineSets[0][0] != shape[3] {
+		s.t.Fatalf("store can't read this cluster's objects: %s", shape[3])
+	}
+	keys, mine := objects(mineSets[0])
+	if shape[2] != strings.Join(keys, ",") {
+		s.t.Fatalf("unless matches on %s, objects keyed by %v", shape[2], keys)
+	}
+	out = map[string]bool{}
+	for _, set := range evalObjectSetRe.FindAllStringSubmatch(shape[1], -1) {
+		setKeys, tuples := objects(set)
+		if !slices.Equal(setKeys, keys) {
+			s.t.Fatalf("object sets keyed apart: %v, %v", setKeys, keys)
+		}
+		for t := range tuples {
+			if !mine[t] {
+				out[t] = true
+			}
+		}
+	}
+	return keys, out
 }
 
 // evaluateForeign evaluates one foreign-check part at the start of rest and
@@ -64,8 +110,8 @@ func (s *evaluatingStore) evaluateForeign(rest string, add func(map[string]strin
 		return len(p[0])
 	}
 	if p := evalOtherPart.FindStringSubmatch(rest); p != nil {
-		if len(s.otherObjects(p[2], p[6], strings.Split(p[1], ","))) > 0 {
-			add(map[string]string{viewScopeOtherLabel: p[7]})
+		if _, other := s.otherObjects(p[1]); len(other) > 0 {
+			add(map[string]string{viewScopeOtherLabel: p[2]})
 		}
 		return len(p[0])
 	}
@@ -81,7 +127,10 @@ func (s *evaluatingStore) evaluateForeign(rest string, add func(map[string]strin
 	if strings.Count(p[2], "label_replace(") != len(renamed) {
 		s.t.Fatalf("store can't read the renames: %s", p[0])
 	}
-	other := s.otherObjects(p[9], p[13], refKeys)
+	otherKeys, other := s.otherObjects(p[8])
+	if !slices.Equal(otherKeys, refKeys) || p[7] != p[1] {
+		s.t.Fatalf("metric and reference keyed apart: %s", p[0])
+	}
 	for _, series := range s.selected(p[4], p[5]) {
 		values := make([]string, len(refKeys))
 		for i, k := range refKeys {
@@ -92,7 +141,7 @@ func (s *evaluatingStore) evaluateForeign(rest string, add func(map[string]strin
 			}
 		}
 		if other[strings.Join(values, "\x00")] {
-			add(map[string]string{viewScopeForeignLabel: p[14]})
+			add(map[string]string{viewScopeForeignLabel: p[9]})
 			break
 		}
 	}
@@ -141,8 +190,14 @@ func TestForeignCheckQueryShape(t *testing.T) {
 	for _, p := range viewReferenceParts(req.Metrics, `cluster="a"`, time.Hour) {
 		got = append(got, p.String())
 	}
-	podOther := `count by (namespace,pod) (count_over_time(kube_pod_info{}[3600s])) unless on(namespace,pod) count by (namespace,pod) (count_over_time(kube_pod_info{cluster="a"}[3600s]))`
-	nodeOther := `count by (node) (count_over_time(kube_node_info{}[3600s])) unless on(node) count by (node) (count_over_time(kube_node_info{cluster="a"}[3600s]))`
+	// Pods are read by their canonical namespace in both sets, and only a
+	// series carrying the cluster label with another value names another
+	// cluster's object.
+	podSet := func(sel string) string {
+		return `count by (namespace,pod) (label_replace(count by (exported_namespace,namespace,pod) (count_over_time(kube_pod_info{` + sel + `}[3600s])), "namespace", "$1", "exported_namespace", "(.+)"))`
+	}
+	podOther := `(` + podSet(`cluster!="",cluster!="a"`) + `) unless on(namespace,pod) ` + podSet(`cluster="a"`)
+	nodeOther := `(count by (node) (count_over_time(kube_node_info{cluster!="",cluster!="a"}[3600s]))) unless on(node) count by (node) (count_over_time(kube_node_info{cluster="a"}[3600s]))`
 	want := []string{
 		`label_replace(count(count_over_time(kube_pod_info{cluster="a"}[3600s])), "radar_reference", "kube_pod_info/namespace,pod", "", "")`,
 		`label_replace(count(` + podOther + `), "radar_other_cluster", "kube_pod_info/namespace,pod", "", "")`,
@@ -299,8 +354,98 @@ func TestForeignCheckMultipleClusterLabels(t *testing.T) {
 			}
 		})
 	}
-	if got := viewReferenceParts([]ViewMetric{foreignCPU}, `cluster="a",region="eu"`, time.Hour)[1].String(); !strings.Contains(got, `unless on(namespace,pod) count by (namespace,pod) (count_over_time(kube_pod_info{cluster="a",region="eu"}[3600s]))`) {
+	got := viewReferenceParts([]ViewMetric{foreignCPU}, `cluster="a",region="eu"`, time.Hour)[1].String()
+	if !strings.Contains(got, `unless on(namespace,pod) count by (namespace,pod) (label_replace(count by (exported_namespace,namespace,pod) (count_over_time(kube_pod_info{cluster="a",region="eu"}[3600s]))`) {
 		t.Fatalf("other-cluster objects must be the complement of all our labels: %s", got)
+	}
+	for _, sel := range []string{`{cluster!="",region!="",cluster!="a"}`, `{cluster!="",region!="",region!="eu"}`} {
+		if !strings.Contains(got, sel) {
+			t.Fatalf("another cluster's series must carry every label, one with another value (%s): %s", sel, got)
+		}
+	}
+}
+
+// kube-state-metrics scraped without honor_labels lists a Pod's namespace in
+// exported_namespace and its own in namespace; the reference reads each
+// object by the Pod's namespace, in both of its sets.
+func TestForeignCheckReferenceExportedNamespace(t *testing.T) {
+	ksmExported := func(cluster map[string]string, namespace, pod string) map[string]string {
+		s := ksmPod(cluster, "monitoring", pod)
+		s["exported_namespace"] = namespace
+		return s
+	}
+	cpu := foreignCPU.Name
+	for _, tc := range []struct {
+		name   string
+		series []map[string]string
+		want   ViewScopeState
+	}{
+		{"another cluster's Pod listed by exported_namespace", []map[string]string{
+			ksmPod(clusterA, "shop", "api-0"), ksmExported(clusterB, "shop", "web-0"),
+			unlabeledSeries(cpu, "shop", "api-0"), unlabeledSeries(cpu, "shop", "web-0"),
+		}, ViewScopeLabelMissing},
+		{"this cluster's Pod listed by exported_namespace", []map[string]string{
+			ksmExported(clusterA, "shop", "api-0"), ksmExported(clusterA, "shop", "web-0"), ksmPod(clusterB, "pay", "web-0"),
+			unlabeledSeries(cpu, "shop", "api-0"), unlabeledSeries(cpu, "shop", "web-0"),
+		}, ViewScopeUnlabeled},
+		// This cluster lists shop/web-0 by exported_namespace and cluster b
+		// lists its namesake plainly: one object in both sets, so like any
+		// same-named Pod it is not another cluster's.
+		{"same-named Pod listed under each spelling", []map[string]string{
+			ksmPod(clusterA, "shop", "api-0"), ksmExported(clusterA, "shop", "web-0"), ksmPod(clusterB, "shop", "web-0"),
+			unlabeledSeries(cpu, "shop", "api-0"), unlabeledSeries(cpu, "shop", "web-0"),
+		}, ViewScopeUnlabeled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &evaluatingStore{t: t, series: tc.series}
+			scope, err := decideViewScope(context.Background(), store, viewRequest(false, foreignCPU), time.Now(), clusterA, true)
+			if err != nil || scope.State != tc.want {
+				t.Fatalf("scope = %+v, err = %v", scope, err)
+			}
+		})
+	}
+}
+
+// Only a series naming another value for one of this cluster's labels, and
+// carrying all of them, is evidence of another cluster; a scrape job that
+// left a label off names no cluster.
+func TestForeignCheckNeedsAnotherClusterValue(t *testing.T) {
+	cpu := foreignCPU.Name
+	twoLabels := map[string]string{"cluster": "a", "region": "eu"}
+	for _, tc := range []struct {
+		name   string
+		labels map[string]string
+		series []map[string]string
+		want   ViewScopeState
+	}{
+		{"one cluster with a kube-state-metrics job missing the label", clusterA, []map[string]string{
+			ksmPod(clusterA, "shop", "api-0"), ksmPod(nil, "shop", "web-0"),
+			unlabeledSeries(cpu, "shop", "api-0"), unlabeledSeries(cpu, "shop", "web-0"),
+		}, ViewScopeUnlabeled},
+		{"empty label value", clusterA, []map[string]string{
+			ksmPod(clusterA, "shop", "api-0"), ksmPod(map[string]string{"cluster": ""}, "shop", "web-0"),
+			unlabeledSeries(cpu, "shop", "api-0"), unlabeledSeries(cpu, "shop", "web-0"),
+		}, ViewScopeUnlabeled},
+		{"one of two labels missing", twoLabels, []map[string]string{
+			ksmPod(twoLabels, "shop", "api-0"), ksmPod(map[string]string{"cluster": "b"}, "shop", "web-0"),
+			unlabeledSeries(cpu, "shop", "api-0"), unlabeledSeries(cpu, "shop", "web-0"),
+		}, ViewScopeUnlabeled},
+		{"one of two labels with another value", twoLabels, []map[string]string{
+			ksmPod(twoLabels, "shop", "api-0"), ksmPod(map[string]string{"cluster": "a", "region": "us"}, "shop", "web-0"),
+			unlabeledSeries(cpu, "shop", "api-0"), unlabeledSeries(cpu, "shop", "web-0"),
+		}, ViewScopeLabelMissing},
+		{"another cluster beside an unlabeled job", clusterA, []map[string]string{
+			ksmPod(clusterA, "shop", "api-0"), ksmPod(nil, "shop", "web-0"), ksmPod(clusterB, "shop", "web-1"),
+			unlabeledSeries(cpu, "shop", "api-0"), unlabeledSeries(cpu, "shop", "web-0"), unlabeledSeries(cpu, "shop", "web-1"),
+		}, ViewScopeLabelMissing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &evaluatingStore{t: t, series: tc.series}
+			scope, err := decideViewScope(context.Background(), store, viewRequest(false, foreignCPU), time.Now(), tc.labels, true)
+			if err != nil || scope.State != tc.want {
+				t.Fatalf("scope = %+v, err = %v", scope, err)
+			}
+		})
 	}
 }
 
