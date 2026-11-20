@@ -31,7 +31,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
   const { data: clusterInfo } = useClusterInfo()
   const { data: capabilities } = useCapabilities()
   const switchFlow = useContextSwitchFlow()
-  const { failedSwitch } = useContextSwitch()
+  const { failedSwitch, dismissed, setDismissed, targetContext } = useContextSwitch()
   // A settings error (Desktop's namespace list over the limit) blocks every
   // switch until restart, so offering the list would only lead to a refusal.
   const { connection } = useConnection()
@@ -126,6 +126,12 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
     ? undefined
     : visibleContextQualifier(currentParsed?.nameQualifier, currentCtx?.source, hasMultipleSources)
   const currentSourceLabel = triggerName ? undefined : hasMultipleSources ? currentCtx?.source || undefined : undefined
+
+  if (dismissed && targetContext) {
+    return <button type="button" className="text-sm text-accent-text" onClick={() => setDismissed(false)}>
+      Switching to {targetContext.clusterName}…
+    </button>
+  }
 
   return (
     <>

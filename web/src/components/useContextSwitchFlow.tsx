@@ -31,7 +31,7 @@ interface PendingSwitch {
 // live. Callers render `confirmDialog`.
 export function useContextSwitchFlow() {
   const switchContext = useSwitchContext()
-  const { startSwitch, endSwitch, setOpenAfterSwitch, setFailedSwitch } = useContextSwitch()
+  const { isSwitching, startSwitch, endSwitch, setOpenAfterSwitch, setFailedSwitch } = useContextSwitch()
   const { showError } = useToast()
   const { tabs } = useDock()
   const [pending, setPending] = useState<PendingSwitch | null>(null)
@@ -48,7 +48,8 @@ export function useContextSwitchFlow() {
     })
     setOpenAfterSwitch(openAfter ? { context: context.name, resource: openAfter } : null)
     try {
-      await switchContext.mutateAsync({ name: context.name })
+      const operation = await switchContext.mutateAsync({ name: context.name })
+      if (operation) endSwitch() // The connection poll now owns progress, including on reload.
     } catch (error) {
       console.error('Failed to switch context:', error)
       setOpenAfterSwitch(null)
@@ -65,7 +66,7 @@ export function useContextSwitchFlow() {
   }
 
   const requestSwitch = async (context: ContextInfo, openAfter?: SelectedResource) => {
-    if (switchContext.isPending) return
+    if (isSwitching || switchContext.isPending) return
     // Picking the cluster you're still on dismisses a refused switch's screen.
     if (context.isCurrent) {
       setFailedSwitch(null)
@@ -157,7 +158,7 @@ export function useContextSwitchFlow() {
 
   return {
     requestSwitch,
-    isPending: switchContext.isPending,
+    isPending: !!isSwitching || switchContext.isPending,
     error: switchContext.isError ? switchContext.error : null,
     // The picker's inline line is for failures that don't get the full screen.
     errorText: switchContext.isError && switchContext.error && !refusedBeforeLeaving(switchContext.error)

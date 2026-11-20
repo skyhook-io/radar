@@ -7,6 +7,8 @@ import { useNavigate, useLocation, useSearchParams, useNavigationType, Navigatio
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
+import { followSwitch, followingSwitch, switchInProgress } from './api/contextSwitch'
+import { ContextSwitchActions } from './components/ContextSwitchActions'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, usePhoneLayout, PHONE_MEDIA_QUERY } from '@skyhook-io/k8s-ui'
@@ -1067,10 +1069,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
-  const { isSwitching, failedSwitch, setFailedSwitch, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
+  const { isSwitching, dismissed, setDismissed, failedSwitch, setFailedSwitch, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch, setOpenAfterSwitch } = useContextSwitch()
 
   // Connection state (for graceful startup)
-  const { connection, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
+  const { connection, contextSwitch, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
 
   // The app's content surface is ready to show: auth resolved, not mid context-
   // switch, and the cluster connection is live. The main content area gates on
@@ -1288,7 +1290,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // forceNamespaceFilter is only set for large clusters that require server-side filtering.
   // Fleet mode uses 'resources' topology on the backend — filtering is client-side
   const sseMode = topologyMode === 'fleet' ? 'resources' : topologyMode
-  const { topology, connected: eventStreamConnected, connecting: eventStreamConnecting, reconnect: reconnectEventStream } = useEventSource(namespaces, sseMode as 'resources' | 'traffic', {
+  const { topology, connected: eventStreamConnected, connecting: eventStreamConnecting, reconnect: reconnectEventStream, applyContextChange } = useEventSource(namespaces, sseMode as 'resources' | 'traffic', {
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
     onContextChanged: (context) => {
@@ -1342,6 +1344,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       }
 
       // Auto-unpause so the new cluster's topology loads immediately
+      setDisplayedTopology(null)
       setTopologyPaused(false)
       pendingTopologyRef.current = null
     },
@@ -1353,6 +1356,27 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     },
     onK8sEvent: handleK8sEvent,
   }, forceNamespaceFilter, showPolicyEffect)
+
+  useLayoutEffect(() => {
+    if (!contextSwitch) return
+    if (switchInProgress(contextSwitch)) {
+      if (followingSwitch() !== contextSwitch.id) followSwitch(contextSwitch.id)
+      return
+    }
+    if (followingSwitch() !== contextSwitch.id) return
+    if (contextSwitch.phase === 'failed' && connection.state === 'connecting') return
+    followSwitch('')
+    endSwitch()
+    if (contextSwitch.phase === 'succeeded') {
+      applyContextChange(contextSwitch.target, contextSwitch.id)
+    } else {
+      setOpenAfterSwitch(null)
+      if (contextSwitch.phase === 'failed' && connection.state === 'connected') {
+        setFailedSwitch({ context: contextSwitch.target, error: contextSwitch.error || 'Cluster switch failed', errorType: contextSwitch.errorType || 'unknown' })
+      }
+    }
+  }, [contextSwitch, connection.state, connection.context, applyContextChange, endSwitch, setOpenAfterSwitch, setFailedSwitch])
+
   // On large clusters (where the server requires namespace filtering), keep
   // SSE's server-side filter in lockstep with the user's namespace pick.
   // Without this, header switches and deep-link loads can leave SSE filtered
@@ -2000,7 +2024,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               params.delete('tab')
               navigate({ pathname: `/resources/${kind}`, search: params.toString() })
             }}
-            onSwitchContext={(name) => switchContext.mutate({ name }, { onSettled: () => setNamespaces([]) })}
+            onSwitchContext={(name) => {
+              if (!isSwitching && !switchContext.isPending) switchContext.mutate({ name }, { onSettled: () => setNamespaces([]) })
+            }}
             onSetNamespaces={(ns) => { setNamespaces(ns); setActiveNamespace.mutate({ namespaces: ns }) }}
             onToggleTheme={toggleTheme}
             onShowDiagnostics={() => setShowDiagnostics(true)}
@@ -2112,7 +2138,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       )}
 
       {/* Context switching overlay */}
-      {isSwitching && (
+      {isSwitching && !dismissed && (
         <PaneLoader
           label="Switching context"
           className="flex-1 min-h-0 bg-theme-base"
@@ -2142,14 +2168,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               )}
             </span>
           )}
-          {progressMessage && (
-            <span className="mt-3 block text-xs font-normal tracking-normal text-theme-text-tertiary animate-pulse">
-              {progressMessage}
-            </span>
+          {progressMessage && <span className="mt-3 block text-sm font-normal text-theme-text-secondary">{progressMessage}</span>}
+          {contextSwitch && switchInProgress(contextSwitch) && (
+            <ContextSwitchActions operation={contextSwitch} onDismiss={() => setDismissed(true)} />
           )}
         </PaneLoader>
       )}
 
+      {dismissed && <p className="m-auto text-sm text-theme-text-secondary">Resources will appear when the cluster is ready.</p>}
       {contentReady && <NoClusterAccessBanner />}
       {/* Main content - only show when connected and authenticated */}
       {/* inert while a fullscreen detail overlay covers the views — keeps the

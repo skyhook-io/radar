@@ -9,6 +9,7 @@ interface UseEventSourceReturn {
   connected: boolean
   connecting: boolean
   reconnect: () => void
+  applyContextChange: (context: string, switchId?: string) => void
 }
 
 interface UseEventSourceOptions {
@@ -66,6 +67,21 @@ export function useEventSource(
   // Use ref to avoid stale closures while not triggering reconnection on callback changes
   const optionsRef = useRef(options)
   optionsRef.current = options
+
+  // A completion can reach the tab through either SSE or the connection poll.
+  // Reconnects omit the switch ID and must always discard the old snapshot.
+  const lastSwitch = useRef('')
+  const applyContextChange = useCallback((context: string, switchId?: string) => {
+    if (switchId && lastSwitch.current === switchId) return
+    if (switchId) lastSwitch.current = switchId
+    if (throttleTimeoutRef.current !== null) window.clearTimeout(throttleTimeoutRef.current)
+    throttleTimeoutRef.current = null
+    pendingTopologyRef.current = null
+    waitingForTopologyAfterSwitch.current = true
+    setTopology(null)
+    setEvents([])
+    optionsRef.current?.onContextChanged?.(context)
+  }, [])
 
   const connect = useCallback(() => {
     setConnecting(true)
@@ -201,15 +217,9 @@ export function useEventSource(
     // Handle context changed event - clear state while new data loads
     es.addEventListener('context_changed', (event) => {
       try {
-        const data = JSON.parse(event.data) as { context: string }
+        const data = JSON.parse(event.data) as { context: string; switchId?: string }
         console.log('Context changed to:', data.context)
-        // Clear topology and events - new data will come via topology event
-        setTopology(null)
-        setEvents([])
-        // Mark that we're waiting for new topology data
-        waitingForTopologyAfterSwitch.current = true
-        // Notify caller to invalidate caches (e.g., helm releases, resources)
-        optionsRef.current?.onContextChanged?.(data.context)
+        applyContextChange(data.context, data.switchId)
       } catch (e) {
         console.error('Failed to parse context_changed event:', e)
       }
@@ -229,7 +239,7 @@ export function useEventSource(
         console.error('Failed to parse connection_state event:', e)
       }
     })
-  }, [sseNamespaceFilter, viewMode, showPolicyEffect])
+  }, [sseNamespaceFilter, viewMode, showPolicyEffect, applyContextChange])
 
   // Reconnect function for manual reconnection
   const reconnect = useCallback(() => {
@@ -264,5 +274,6 @@ export function useEventSource(
     connected,
     connecting,
     reconnect,
+    applyContextChange,
   }
 }
