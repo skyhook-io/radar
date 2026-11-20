@@ -219,6 +219,8 @@ export interface FeatureCapabilities {
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
+  lokiConnection?: boolean
+  lokiPodHistory?: boolean
   vulnerabilities?: boolean
   runtimeAdvisoryChecks?: boolean
   runtimeAdvisoryProgress?: boolean

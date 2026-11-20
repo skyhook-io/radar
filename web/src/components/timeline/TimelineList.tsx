@@ -18,6 +18,7 @@ import type { NavigateToResource } from '../../utils/navigation'
 import { TimelineLoadError, TimelineStaleNote } from './TimelineLoadError'
 import { useStickyError } from './useStickyError'
 import { ViewModeToggle } from './ViewModeToggle'
+import { useLokiTimelineActions } from './LokiLogsAction'
 
 export type { ActivityTypeFilter, ActivityFilterKey }
 
@@ -126,6 +127,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     toMs: selectionWindow?.toMs,
   })
   const loadError = useStickyError(error, fetchedEvents != null)
+  const renderItemActions = useLokiTimelineActions()
   const split = useMemo(
     () => (splitRows && fetchedEvents ? splitRoutineActivity(fetchedEvents, fetchLimit) : undefined),
     [splitRows, fetchedEvents, fetchLimit],
@@ -187,6 +189,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
           onViewChange={onViewChange}
           currentView={currentView}
           onResourceClick={onResourceClick}
+          renderItemActions={renderItemActions}
           initialFilter={initialFilter}
           initialTimeRange={initialTimeRange}
           hideRangeSelector={!!selectionWindow}

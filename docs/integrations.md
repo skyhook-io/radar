@@ -712,6 +712,23 @@ resource, including core Secrets and these excluded kinds. See the
 
 ---
 
+## Loki
+
+Kubernetes keeps a container's logs only while the pod exists. When the cluster ships logs to Loki, Radar reads a pod's past logs from there: the pod logs viewer gets a **Live | History** switch, and History reads the same pod and container over the last 1 hour, 6 hours, 24 hours or 7 days. A pod that is gone (a finished CronJob run, a pod replaced by a rollout) opens on History from **Logs (Loki)** on its Timeline card.
+
+Connect Loki in **Settings → Logs (Loki)**, or with `--loki-url`; see [configuration](configuration.md#loki) for discovery, headers and stream labels.
+
+The viewer reads `GET /api/loki/pods/{namespace}/{name}/logs?container=&since=1h|6h|24h|7d` (or `start`/`end`, at most 7 days; `limit` up to 5,000 lines).
+- **Gate:** namespace access plus `get pods/log`, the same as live logs, checked before Loki is contacted. The pod need not exist any more.
+- **Without authentication** there is no caller to check and Loki never asks Kubernetes, so Radar's own identity must be able to `get pods/log` in the namespace (Radar remembers its own answer per namespace for 30 seconds); `--namespace-scope` applies too.
+- **Matched by pod name:** a pod recreated under the same name (a StatefulSet's `db-0`) returns lines from every pod with that name in the window, and History's banner says so.
+- **A Loki shared by several clusters:** Loki matches by namespace and pod name, which other clusters reuse (a StatefulSet's `-0` pod). Radar adds a cluster matcher only when `--loki-cluster` names this cluster's value (shared installations, see [configuration](configuration.md#loki)); with authentication it refuses History while Loki has a `cluster`, `k8s_cluster_name` or `cluster_name` label and no value is set. Otherwise — locally, without authentication and no value, or with a cluster label Radar doesn't detect — a read returns the same namespace and pod name from every cluster in that Loki, so a user who may read pod logs in a namespace here can read that namespace's pods elsewhere.
+- **Multi-line entries:** a stack trace that Loki keeps as one entry shows as its lines, each with the entry's time.
+- **Fixed queries:** Radar writes the LogQL from the namespace, pod and container (plus the `--loki-cluster` value) only, with values escaped; no other parameter reaches Loki and there is no free-form query, search or live tail.
+- **Limits:** Radar shows the newest lines in the window; when Loki returns the limit, the answer says older lines may be missing. An answer over 8 MiB reads as a 502 asking for a shorter window, and keeps the connection. At most four History reads run at once across Radar, and one per user (without authentication, one for everyone); another gets a 429 asking to try again. The viewer cancels a read it replaces (a new container or window) or closes, which frees that read's place at once.
+- **Errors:** 429 when too many reads are running, 503 when Loki is not connected, has no namespace or pod stream label, or the cluster rule above refuses the read; 502 with Loki's own message (redacted) when it answers an error, such as its per-query line limit.
+- An empty answer means Loki returned nothing for that namespace and pod name in the window, read through the stream labels Settings shows: the pod's logs may not have been shipped, or were shipped under other labels.
+
 ## Trivy Operator
 
 [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) continuously scans your cluster for vulnerabilities, misconfigurations, exposed secrets, and license compliance issues.

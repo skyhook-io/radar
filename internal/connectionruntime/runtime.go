@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/loki"
 	"github.com/skyhook-io/radar/internal/opencost"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/traffic"
@@ -142,6 +143,12 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 				opencost.DisableLocal(err.Error())
 			}
 			opencost.InvalidateCurrency()
+		case config.IntegrationLoki:
+			if s.Err != nil {
+				loki.Retire(s.Err)
+			} else {
+				loki.Configure(s.Settings.Loki.URL, s.Settings.Loki.Headers)
+			}
 		}
 		r.active[kind] = s
 	}

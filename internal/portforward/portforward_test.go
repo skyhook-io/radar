@@ -158,7 +158,7 @@ func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
 	t.Cleanup(func() {
 		reg = saved
 		runPortForward, findPodForService = savedRun, savedFind
-		SetOnForwardLost(nil)
+		SetOnForwardLost(OwnerPrometheus, nil)
 	})
 	reg = &registry{forwards: map[Owner]*metricsForward{}}
 	findPodForService = func(context.Context, kubernetes.Interface, string, string) (string, error) {
@@ -175,7 +175,7 @@ func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
 		}
 	}
 	lost := make(chan string, 2)
-	SetOnForwardLost(func(owner Owner, address string) { lost <- owner + " " + address })
+	SetOnForwardLost(OwnerPrometheus, func(owner Owner, address string) { lost <- owner + " " + address })
 
 	start := func() *ConnectionInfo {
 		t.Helper()
@@ -206,6 +206,77 @@ func TestForwardLostNotifiesOnlyUnexpectedExit(t *testing.T) {
 	}
 	if GetConnectionInfo(OwnerPrometheus).Connected {
 		t.Fatal("lost forward still reported as connected")
+	}
+}
+
+// Every subscriber hears every loss: Prometheus may be reusing a forward
+// another owner started, so a loss is not filtered by owner.
+func TestForwardLostNotifiesEverySubscriber(t *testing.T) {
+	saved := reg
+	savedRun, savedFind := runPortForward, findPodForService
+	t.Cleanup(func() {
+		reg = saved
+		runPortForward, findPodForService = savedRun, savedFind
+		SetOnForwardLost(OwnerPrometheus, nil)
+		SetOnForwardLost(OwnerLoki, nil)
+	})
+	reg = &registry{forwards: map[Owner]*metricsForward{}}
+	findPodForService = func(context.Context, kubernetes.Interface, string, string) (string, error) {
+		return "prometheus-0", nil
+	}
+	var podGone chan struct{}
+	runPortForward = func(_ context.Context, _ kubernetes.Interface, _ *rest.Config, _, _ string, _, _ int, stopCh chan struct{}, readyCh chan struct{}) error {
+		gone := podGone
+		close(readyCh)
+		select {
+		case <-stopCh:
+			return nil
+		case <-gone:
+			return errors.New("lost connection to pod")
+		}
+	}
+	prom, loki := make(chan string, 2), make(chan string, 2)
+	SetOnForwardLost(OwnerPrometheus, func(owner Owner, address string) { prom <- owner + " " + address })
+	SetOnForwardLost(OwnerLoki, func(owner Owner, address string) { loki <- owner + " " + address })
+
+	lose := func() string {
+		t.Helper()
+		podGone = make(chan struct{})
+		info, err := StartWithClients(OwnerPrometheus, context.Background(), "monitoring", "prometheus", 9090, "ctxA", fake.NewSimpleClientset(), &rest.Config{})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		close(podGone)
+		return OwnerPrometheus + " " + info.Address
+	}
+	recv := func(ch chan string, who string) string {
+		t.Helper()
+		select {
+		case got := <-ch:
+			return got
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s subscriber heard nothing", who)
+		}
+		return ""
+	}
+
+	want := lose()
+	if got := recv(prom, "prometheus"); got != want {
+		t.Fatalf("prometheus heard %q, want %q", got, want)
+	}
+	if got := recv(loki, "loki"); got != want {
+		t.Fatalf("loki heard %q, want %q", got, want)
+	}
+
+	SetOnForwardLost(OwnerLoki, nil)
+	want = lose()
+	if got := recv(prom, "prometheus"); got != want {
+		t.Fatalf("prometheus heard %q, want %q", got, want)
+	}
+	select {
+	case got := <-loki:
+		t.Fatalf("unregistered loki subscriber heard %q", got)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
