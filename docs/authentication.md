@@ -94,6 +94,21 @@ from that same repository.
 Without an authenticated user, local image inspection keeps its existing
 credential discovery and network behavior.
 
+The on-demand Java4Shell check starts with the Pods the caller may list and
+their reported running image digests. It tries anonymous reads first. With
+authentication enabled, a private read requires the same `get pods` and
+pull-secret or `pods/exec` grants as per-Pod inspection. `pods/exec` is a
+permission check for credential access. The advisory reads manifests and
+configs over the registry connection. It can use Radar's own registry
+credentials for exec-authorized callers and in standalone loopback mode with
+auth disabled. On an unauthenticated shared listener, it can use the running
+Pod's pull secrets available to Radar's Kubernetes identity.
+
+Credentialed reads are authorized and revalidated for each check. Only
+Pods with matching credential access share a private result within the
+same check. Credentials go over HTTPS, and the advisory pins registry
+connections to checked addresses and refuses loopback and link-local addresses.
+
 ### Prometheus metrics
 
 Charts of a specific resource are gated like the resource itself: you see them only if you can read what they chart. The surfaces that can't be tied to one resource — raw PromQL, metric discovery, alert rules and the cluster-wide aggregate — are gated on listing Pods in **every** namespace, because a PromQL expression can't be namespace-filtered by inspecting it. Kubernetes' built-in `view` ClusterRole meets that bar, so binding `view` also grants read access to everything the Prometheus backend holds, `kube-system` and node-level series included.

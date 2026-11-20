@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Megaphone } from 'lucide-react'
 import type { WhatsNewState } from '../../api/client'
 import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './WhatsNew'
-import { MAX_CARDS, RELEASE_NOTES, type ReleaseNotes } from './releaseNotes'
+import { MAX_CARDS, RELEASE_NOTES, releaseLine, type ReleaseNotes } from './releaseNotes'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -38,6 +38,8 @@ function StatusProbe() {
 }
 
 const SHIPPED = [...RELEASE_NOTES]
+const newestRelease = SHIPPED[0]
+const newestReleaseLine = releaseLine(newestRelease.version)
 
 const card = (id: string, title: string, importance: number) => ({ id, icon: Megaphone, title, description: 'd', importance })
 
@@ -314,12 +316,12 @@ describe('WhatsNew', () => {
     expect(seenPosts).toEqual([])
   })
 
-  it.each(['', '=v1.20', '=1.20', '=v1.20.0'])('previews v1.20 on a Git development build with ?whats-new%s', async suffix => {
+  it.each(['', `=${newestReleaseLine}`, `=${newestReleaseLine.slice(1)}`, `=${newestRelease.version}`])('previews the latest release on a Git development build with ?whats-new%s', async suffix => {
     setCatalog(...SHIPPED)
     serverState = { currentVersion: 'v1.18.0-113-gb49561b78', storage: 'server', seenVersion: 'v1.18.0', priorInstall: true }
     await render(`/resources/pods?whats-new${suffix}`)
-    expect(dialog()?.textContent).toContain("What's new in Radar v1.20")
-    expect(dialog()?.textContent).toContain(SHIPPED[0].highlights[0].title)
+    expect(dialog()?.textContent).toContain(`What's new in Radar ${newestReleaseLine}`)
+    expect(dialog()?.textContent).toContain(newestRelease.highlights[0].title)
     await clickGotIt()
     expect(seenPosts).toEqual([])
   })

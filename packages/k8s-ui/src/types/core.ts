@@ -193,10 +193,14 @@ export interface FeatureCapabilities {
   veleroWorkspace?: boolean
   /** POST /api/velero/schedules/{namespace}/{name}/backup */
   veleroBackupNow?: boolean
+  /** POST /api/velero/schedules/{namespace}/{name}/{pause|resume} */
+  veleroSchedulePause?: boolean
   /** GET /api/velero/runs/{backups|restores} */
   veleroRuns?: boolean
   /** POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion */
   veleroDeleteBackup?: boolean
+  veleroRunArtifacts?: boolean
+  veleroRunVolumes?: boolean
   /** DELETE /api/resources/... honours ?uid=&resourceVersion= preconditions */
   resourceDeletePreconditions?: boolean
   gitopsWriteEvidence?: boolean
@@ -216,6 +220,7 @@ export interface FeatureCapabilities {
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
   vulnerabilities?: boolean
+  runtimeAdvisoryChecks?: boolean
   traefikRoutes?: boolean // GET /api/traefik/routes
 }
 

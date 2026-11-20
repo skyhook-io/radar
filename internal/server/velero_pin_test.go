@@ -82,6 +82,19 @@ func TestVeleroRoutesRefuseNamespacesOutsideThePin(t *testing.T) {
 			t.Errorf("%d backups created outside the pin", n)
 		}
 	})
+
+	t.Run("pause and resume", func(t *testing.T) {
+		srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
+		for _, verb := range []string{"pause", "resume"} {
+			rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/"+verb, `{"resourceVersion":"7"}`, nil)
+			resp := rec.Result()
+			assertOutsidePin(t, resp, rec.Body.String())
+			resp.Body.Close()
+		}
+		if n := len(schedulePatches(dyn)); n != 0 {
+			t.Errorf("%d schedules patched outside the pin", n)
+		}
+	})
 }
 
 func TestVeleroScheduleActivityRefusesPinBeforeDiscovery(t *testing.T) {

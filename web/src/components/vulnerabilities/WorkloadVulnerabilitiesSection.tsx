@@ -8,6 +8,8 @@ import { useAPIResources } from '../../api/apiResources'
 import { useRadarFeature } from '../../api/client'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { hasVulnerabilityReports, isKindUnknown, useVulnerabilities, workloadParam } from '../../api/vulnerabilities'
+import { useConnection } from '../../context/ConnectionContext'
+import { Java4ShellPanel } from '../audit/Java4ShellPanel'
 import { ClearedCount, FixVersion, ImageName, SeverityCounts, gapSentence } from './parts'
 
 interface Props {
@@ -17,28 +19,37 @@ interface Props {
 }
 
 /**
- * A workload's vulnerabilities, for its drawer: per container image, what
- * the current scan found, and the upgrades that clear the most. Absent where the
- * cluster has no scanner reports or the Radar predates the endpoint.
+ * The drawer combines any available scanner reports with the on-demand advisory.
  */
 export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props) {
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const { data: resources } = useAPIResources()
   const { support } = useRadarFeature('vulnerabilities')
+  const { support: advisorySupport } = useRadarFeature('runtimeAdvisoryChecks')
+  const { connection } = useConnection()
   const available = hasVulnerabilityReports(resources) && support !== 'unsupported'
   const workload = { kind, namespace, name }
   const { data, isLoading, error } = useVulnerabilities({ view: 'image', workload }, available && !!namespace && !!name)
   // The upgrades it needs, as By fix works them out, once it has findings.
   const { data: fixData } = useVulnerabilities({ view: 'fix', workload }, available && !!namespace && !!name && (data?.images ?? []).length > 0)
-  if (!available) return null
-  // An older Radar, or a report kind removed since the page loaded, has
-  // nothing to show here; anything else is a failure worth saying.
-  if (error && (isRadarFeatureUnsupported(error) || isKindUnknown(error))) return null
+  const advisory = advisorySupport === 'supported' && !!namespace && !!name && (
+    <Java4ShellPanel
+      context={connection.context}
+      connected={connection.state === 'connected'}
+      workload={{ ...workload, group: 'apps' }}
+    />
+  )
+  if (!available || (error && (isRadarFeatureUnsupported(error) || isKindUnknown(error)))) {
+    return advisory ? <Section title="Vulnerabilities" icon={Shield}>{advisory}</Section> : null
+  }
   if (error) {
     return (
       <Section title="Vulnerabilities" icon={Shield}>
-        <p className="text-xs text-warning-text">Couldn't read vulnerability reports: {error instanceof Error ? error.message : 'request failed'}.</p>
+        <div className="flex flex-col gap-3">
+          <p className="text-xs text-warning-text">Couldn't read vulnerability reports: {error instanceof Error ? error.message : 'request failed'}.</p>
+          {advisory}
+        </div>
       </Section>
     )
   }
@@ -146,6 +157,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
           )}
         </div>
       )}
+      {advisory && <div className="mt-3">{advisory}</div>}
     </Section>
   )
 }
