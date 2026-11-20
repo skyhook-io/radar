@@ -126,7 +126,10 @@ func namespaceCostSubject(cache *k8s.ResourceCache, namespace string) costSubjec
 }
 
 // costViewMetric narrows one metric to the subject the way the cost queries
-// select it and anchors it on the objects it is keyed by.
+// select it and anchors it on the objects it is keyed by. The costs sum
+// every metric they read but ownership over the namespace or the cluster,
+// so those also carry the foreign check against kube-state-metrics'
+// inventory of the same objects.
 func costViewMetric(name string, s costSubject) prometheuspkg.ViewMetric {
 	namespaced := ""
 	if s.namespace != "" {
@@ -135,19 +138,21 @@ func costViewMetric(name string, s costSubject) prometheuspkg.ViewMetric {
 	switch name {
 	case pkgopencost.MetricNodeTotalHourlyCost, pkgopencost.MetricNodeCPUHourlyCost, pkgopencost.MetricNodeRAMHourlyCost,
 		pkgopencost.MetricNodeGPUCount, pkgopencost.MetricNodeGPUHourlyCost:
-		return prometheuspkg.ViewMetric{Name: name, AnchorLabel: "node", AnchorValues: s.nodes}
+		return prometheuspkg.ViewMetric{Name: name, AnchorLabel: "node", AnchorValues: s.nodes, Foreign: prometheuspkg.NodeForeignCheck("node")}
 	case pkgopencost.MetricPVHourlyCost, pkgopencost.MetricPVCapacityBytes, pkgopencost.MetricPVClaimRef:
-		return prometheuspkg.ViewMetric{Name: name, AnchorLabel: "persistentvolume", AnchorValues: s.volumes}
+		return prometheuspkg.ViewMetric{Name: name, AnchorLabel: "persistentvolume", AnchorValues: s.volumes, Foreign: prometheuspkg.PersistentVolumeForeignCheck("persistentvolume")}
 	case pkgopencost.MetricReplicaSetOwner:
 		return prometheuspkg.ViewMetric{Name: name, Subject: namespaced, AnchorLabel: "replicaset", AnchorValues: s.replicaSets, AnchorNamespace: s.anchorNamespace}
-	case pkgopencost.MetricCPUUsage, pkgopencost.MetricMemoryWorkingSet, pkgopencost.MetricPodOwner:
+	case pkgopencost.MetricPodOwner:
 		return prometheuspkg.ViewMetric{Name: name, Subject: namespaced, AnchorLabel: "pod", AnchorValues: s.pods, AnchorNamespace: s.anchorNamespace}
+	case pkgopencost.MetricCPUUsage, pkgopencost.MetricMemoryWorkingSet:
+		return prometheuspkg.ViewMetric{Name: name, Subject: namespaced, AnchorLabel: "pod", AnchorValues: s.pods, AnchorNamespace: s.anchorNamespace, Foreign: prometheuspkg.PodForeignCheck(false)}
 	}
 	// OpenCost's allocations and cost totals carry the Pod's namespace in
 	// namespace or, when the scrape renamed it, exported_namespace. A subject
 	// can't say "either", so they are checked across the whole store; their
-	// anchor check accepts either label.
-	return prometheuspkg.ViewMetric{Name: name, AnchorLabel: "pod", AnchorValues: s.pods, AnchorNamespace: s.anchorNamespace, AnchorNamespaceExported: true}
+	// anchor and foreign checks read either label.
+	return prometheuspkg.ViewMetric{Name: name, AnchorLabel: "pod", AnchorValues: s.pods, AnchorNamespace: s.anchorNamespace, AnchorNamespaceExported: true, Foreign: prometheuspkg.PodForeignCheck(true)}
 }
 
 func costScopeRequest(view string, metrics []string, s costSubject, span time.Duration) prometheuspkg.ViewScopeRequest {

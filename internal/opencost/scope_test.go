@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -346,6 +347,22 @@ func checkCostRequests(t *testing.T, ep costEndpoint, requests []prometheuspkg.V
 			}
 			if wantExported := label == "pod" && !namespaced; m.AnchorNamespaceExported != wantExported {
 				t.Errorf("%s accepts exported_namespace=%v, want %v", m.Name, m.AnchorNamespaceExported, wantExported)
+			}
+			// Everything the costs sum carries the foreign check; ownership,
+			// only joined on, doesn't.
+			var wantForeign prometheuspkg.ForeignCheck
+			switch {
+			case label == "node":
+				wantForeign = prometheuspkg.NodeForeignCheck("node")
+			case label == "persistentvolume":
+				wantForeign = prometheuspkg.PersistentVolumeForeignCheck("persistentvolume")
+			case isUsageMetric(m.Name):
+				wantForeign = prometheuspkg.PodForeignCheck(false)
+			case label == "pod" && !namespaced:
+				wantForeign = prometheuspkg.PodForeignCheck(true)
+			}
+			if !reflect.DeepEqual(m.Foreign, wantForeign) {
+				t.Errorf("%s foreign check %+v, want %+v", m.Name, m.Foreign, wantForeign)
 			}
 		}
 	}
