@@ -1527,7 +1527,6 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
 		ApplicationEvidence:         true,
 		SealedSecretsController:     true,
-		NamespaceCollection:         true,
 		ResourceReadCoverage:        true,
 		SearchCoverage:              true,
 		SearchEventContent:          true,

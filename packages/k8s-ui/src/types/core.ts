@@ -222,7 +222,6 @@ export interface FeatureCapabilities {
   vulnerabilities?: boolean
   runtimeAdvisoryChecks?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
-  namespaceCollection?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

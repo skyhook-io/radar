@@ -250,7 +250,6 @@ type FeatureCapabilities struct {
 	RuntimeAdvisoryChecks bool `json:"runtimeAdvisoryChecks"` // GET /api/vulnerabilities/java4shell
 	// GET /api/sealedsecrets/controller
 	SealedSecretsController bool `json:"sealedSecretsController"`
-	NamespaceCollection     bool `json:"namespaceCollection"` // `collection` on GET /api/cluster/namespace-scope
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

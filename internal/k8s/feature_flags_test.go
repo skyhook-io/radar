@@ -24,7 +24,6 @@ var flagsWithoutUpgradeNote = map[string]bool{
 	"workloadImages":           true,
 	"clusterScopedPlaceholder": true,
 	"podSidecarMarks":          true,
-	"namespaceCollection":      true,
 }
 
 // TestFeatureFlagsHaveFrontendGates fails when FeatureCapabilities and the
