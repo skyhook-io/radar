@@ -224,10 +224,14 @@ export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowL
                     {flow.latencyNs && flow.latencyNs > 0 ? formatLatency(flow.latencyNs) : '—'}
                   </span>
 
-                  {/* Verdict */}
-                  <span className={clsx('text-right badge badge-sm text-[10px] capitalize', VERDICT_BADGE[flow.verdict] ?? SEVERITY_BADGE.neutral)}>
-                    {flow.verdict}
-                  </span>
+                  {/* Verdict: sources that only observe traffic (Beyla) report none */}
+                  {flow.verdict ? (
+                    <span className={clsx('text-right badge badge-sm text-[10px] capitalize', VERDICT_BADGE[flow.verdict] ?? SEVERITY_BADGE.neutral)}>
+                      {flow.verdict}
+                    </span>
+                  ) : (
+                    <span className="text-right text-theme-text-tertiary">—</span>
+                  )}
                 </button>
 
                 {/* Expanded detail */}

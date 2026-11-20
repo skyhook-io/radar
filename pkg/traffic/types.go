@@ -35,7 +35,7 @@ type Flow struct {
 	// The graph draws these without an arrowhead: the traffic is real, only its
 	// direction is not known.
 	DirectionUnknown bool   `json:"directionUnknown,omitempty"`
-	Verdict          string `json:"verdict"` // forwarded, dropped, error
+	Verdict          string `json:"verdict"` // forwarded, dropped, error; empty when the source reports none
 	// PolicyVerdict is the network plugin's own account of which policies
 	// decided this flow, when it reports one (Hubble does). It is the ground
 	// truth a static evaluation can only approximate, and it names policy

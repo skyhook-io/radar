@@ -665,6 +665,8 @@ delegates Radar-to-Service network access; it doesn't control where a Service
 routes. On a shared cluster, constrain who can change EndpointSlices, directly or
 through GitOps controllers, and use network policy.
 
+For a Java4Shell check that reports **Registry authentication required**, see [workload pull secrets and private ECR setup for in-cluster Radar](../../../docs/authentication.md#java4shell-registry-access).
+
 ### Turning exec off
 
 `disableExec: true` turns off pod exec through Radar for everyone on this cluster,
@@ -753,6 +755,7 @@ retain their finite grants.
 | `kyverno` | `kyverno.io`, `policies.kyverno.io`, `wgpolicyk8s.io`, `reports.kyverno.io`, `openreports.io` |
 | `longhorn` | `longhorn.io` (`volumes`, `engines`, `replicas`), read-only volume health; on by default. |
 | `mariadb` | `mariadb.mmontes.io` |
+| `metallb` | `metallb.io` (`ipaddresspools`, `l2advertisements`, `bgpadvertisements`, `configurationstates` only; `bgppeers` only when Secrets are granted, see below) |
 | `multus` | `k8s.cni.cncf.io` (`network-attachment-definitions`) |
 | `networkPolicyApi` | `policy.networking.k8s.io` |
 | `nginx` | `nginx.org` |
@@ -784,6 +787,10 @@ VMUser/VMAuth, alerting and scrape/probe resources, and the Logs, Traces,
 Distributed and Anomaly families. `crdGroups.all=true` or adding
 `operator.victoriametrics.com` to `additionalCrdGroups` grants them anyway;
 permissions are additive, and these exclusions are not deny rules.
+
+**MetalLB BGPPeers** (`bgppeers` in `metallb.io`) follow the same rule when
+`rbac.crdGroups.metallb` is on: `spec.password` can hold the BGP session
+password inline, so Radar reads BGPPeers only when the chart grants Secrets.
 
 **Disable groups:** `--set rbac.crdGroups.calico=false`
 

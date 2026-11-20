@@ -6,7 +6,9 @@ import (
 	"strconv"
 	"strings"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -256,6 +258,18 @@ func PodWorkload(cache *ResourceCache, pod *corev1.Pod) (TopOwnerInfo, bool) {
 // podWorkload also reports whether the owner is known to be the workload: false
 // for a ReplicaSet that couldn't be read, whose real parent is unknown.
 func podWorkload(cache *ResourceCache, pod *corev1.Pod) (ref TopOwnerInfo, ok, settled bool) {
+	return PodWorkloadFromOwners(pod, func(namespace string, owner *metav1.OwnerReference) *appsv1.ReplicaSet {
+		if cache == nil || cache.ReplicaSets() == nil {
+			return nil
+		}
+		rs, _ := cache.ReplicaSets().ReplicaSets(namespace).Get(owner.Name)
+		return rs
+	})
+}
+
+// PodWorkloadFromOwners resolves a workload from observed controller references.
+// The ReplicaSet lookup returns nil when its parent could not be established.
+func PodWorkloadFromOwners(pod *corev1.Pod, replicaSetFor func(string, *metav1.OwnerReference) *appsv1.ReplicaSet) (ref TopOwnerInfo, ok, settled bool) {
 	if pod == nil {
 		return TopOwnerInfo{}, false, true
 	}
@@ -267,11 +281,8 @@ func podWorkload(cache *ResourceCache, pod *corev1.Pod) (ref TopOwnerInfo, ok, s
 	if owner.Kind != "ReplicaSet" {
 		return ref, true, true
 	}
-	if cache == nil || cache.ReplicaSets() == nil {
-		return ref, true, false
-	}
-	rs, err := cache.ReplicaSets().ReplicaSets(pod.Namespace).Get(owner.Name)
-	if err != nil || rs == nil {
+	rs := replicaSetFor(pod.Namespace, owner)
+	if rs == nil {
 		return ref, true, false
 	}
 	if parent := controllerOwnerRef(rs.OwnerReferences); parent != nil {

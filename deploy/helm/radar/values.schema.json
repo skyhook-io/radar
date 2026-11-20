@@ -107,6 +107,7 @@
             "kyverno": { "type": "boolean" },
             "longhorn": { "type": "boolean" },
             "mariadb": { "type": "boolean" },
+            "metallb": { "type": "boolean" },
             "multus": { "type": "boolean" },
             "nginx": { "type": "boolean" },
             "openshift": { "type": "boolean" },

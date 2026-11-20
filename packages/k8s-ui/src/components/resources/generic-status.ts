@@ -3,6 +3,7 @@ import { getArgoApplicationSetStatus } from './resource-utils-argo'
 import { getCRDStatus } from './resource-utils-crd'
 import { getStrimziConnectorStatus, getStrimziClusterStatus, isStrimziKafka, isStrimziKafkaNodePool } from './resource-utils-strimzi'
 import { getVolumeSnapshotStatus, getVolumeSnapshotErrorMessage, isVolumeSnapshot, isVolumeSnapshotContent } from './resource-utils-volumesnapshot'
+import { getMetalLBPoolStatus, getMetalLBConfigurationStateStatus, getMetalLBConfigurationErrors, isMetalLBIPAddressPool, isMetalLBConfigurationState } from './resource-utils-metallb'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from './resource-utils-opentelemetry'
 import { getFlaggerCanaryStatus } from './resource-utils-flagger'
 import { UPGRADE_PLAN_GROUP, getUpgradePlanStatus } from './resource-utils-upgrade-plan'
@@ -114,6 +115,14 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
   if (isVolumeSnapshot(resource) || isVolumeSnapshotContent(resource)) {
     const native = getVolumeSnapshotStatus(resource)
     return { text: native.text, tone: native.level, reason: native.text === 'Error' ? getVolumeSnapshotErrorMessage(resource) : undefined }
+  }
+  if (isMetalLBIPAddressPool(resource)) {
+    const native = getMetalLBPoolStatus(resource)
+    return { text: native.text, tone: native.level }
+  }
+  if (isMetalLBConfigurationState(resource)) {
+    const native = getMetalLBConfigurationStateStatus(resource)
+    return { text: native.text, tone: native.level, reason: native.text === 'Invalid' ? getMetalLBConfigurationErrors(resource).join('; ') || undefined : undefined }
   }
   if (isApiGroup(resource?.apiVersion, 'opentelemetry.io')) {
     const native = resource.kind === 'OpenTelemetryCollector' ? getOpenTelemetryCollectorStatus(resource)
