@@ -13,9 +13,13 @@ const rightsizingScanQueryTimeout = 30 * time.Second
 
 var rightsizingScanHTTPClient = &http.Client{}
 
+// scanQuerier runs a scan's queries on one store handle; conn is the
+// connection it was taken from, which the scan's cluster scope check must
+// have run on.
 type scanQuerier struct {
 	client *prom.Client
 	at     time.Time
+	conn   ConnectionSnapshot
 }
 
 func (c *Client) newScanQuerier(ctx context.Context, at time.Time) (*scanQuerier, error) {
@@ -29,7 +33,7 @@ func (c *Client) newScanQuerier(ctx context.Context, at time.Time) (*scanQuerier
 	}
 	transport := prom.NewHTTPTransport(c.baseURL, c.basePath, rightsizingScanHTTPClient)
 	transport.Headers = copyHeaders(c.headers)
-	return &scanQuerier{client: prom.NewClient(transport), at: at}, nil
+	return &scanQuerier{client: prom.NewClient(transport), at: at, conn: c.snapshotLocked()}, nil
 }
 
 func (q *scanQuerier) Query(ctx context.Context, query string) (*prom.QueryResult, error) {

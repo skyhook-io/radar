@@ -564,7 +564,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"it handles currency, idle attribution, and the Kubecost vs OpenCost source split. " +
 			"Empty results include a bounded list of related active metric names when a metric family can be inferred. " +
 			"High-cardinality queries must be wrapped in topk(5, ...): oversized results return a " +
-			"summary with a suggested rewrite instead of data.",
+			"summary with a suggested rewrite instead of data. " +
+			"No cluster filter is added: in a multi-cluster store, filter by the cluster label.",
 		Annotations: readOnly,
 	}, logToolCall("query_prometheus", handleQueryPrometheus))
 

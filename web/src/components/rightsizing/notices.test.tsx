@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { RightsizingRow, RightsizingScanResponse } from '../../api/client'
-import { FitWhy, ScanNotices, ScanSummary } from './RightsizingScanView'
+import { FitWhy, ScanNotices, ScanSummary, ScanUnavailableState } from './RightsizingScanView'
 
 const scan: RightsizingScanResponse = {
   scanId: 'rs_test', scanStatus: 'finished', deadlineAt: '2026-09-19T10:03:00Z',
@@ -172,5 +172,33 @@ describe('rightsizing scope and coverage summary', () => {
       />,
     )
     expect(html).toContain('All visible namespaces')
+  })
+})
+
+describe('rightsizing scan withheld cluster scope', () => {
+  it('shows the note once instead of the unavailable message', () => {
+    const html = renderToStaticMarkup(
+      <ScanUnavailableState
+        result={{
+          ...scan,
+          state: 'unavailable',
+          reason: 'cluster_scope_withheld',
+          warnings: [{ code: 'cluster_scope_withheld', message: 'This metrics store holds several clusters.' }],
+          clusterScope: { state: 'label_missing', note: "The container_cpu_usage_seconds_total series don't carry this cluster's label." },
+        }}
+        onRun={() => {}}
+      />,
+    )
+    expect(html.match(/role="note"/g)).toHaveLength(1)
+    expect(html).toContain("don&#x27;t carry this cluster&#x27;s label")
+    expect(html).not.toContain('Rightsizing is unavailable')
+  })
+
+  it('keeps the unavailable message for other reasons and older Radar', () => {
+    const html = renderToStaticMarkup(
+      <ScanUnavailableState result={{ ...scan, state: 'unavailable', reason: 'owner_metrics_missing' }} onRun={() => {}} />,
+    )
+    expect(html).toContain('Rightsizing is unavailable')
+    expect(html).not.toContain('role="note"')
   })
 })
