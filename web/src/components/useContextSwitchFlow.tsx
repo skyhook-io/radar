@@ -50,8 +50,7 @@ export function useContextSwitchFlow() {
     })
     setOpenAfterSwitch(openAfter ? { context: context.name, resource: openAfter } : null)
     try {
-      const operation = await switchContext.mutateAsync({ name: context.name })
-      if (operation) endSwitch() // The connection poll now owns progress, including on reload.
+      await switchContext.mutateAsync({ name: context.name })
     } catch (error) {
       console.error('Failed to switch context:', error)
       setOpenAfterSwitch(null)

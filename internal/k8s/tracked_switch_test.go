@@ -263,3 +263,49 @@ func assertNoSwitchFailureLogged(t *testing.T, op ContextSwitchStatus) {
 		}
 	}
 }
+
+func TestTrackedSwitchWaitsForAllUntrackedAdmissions(t *testing.T) {
+	var hits atomic.Int32
+	setupCheckedSwitch(t, versionOnlyServer(t, &hits), true)
+	var tracker ContextSwitchTracker
+	first, second := tracker.BeginUntracked(), tracker.BeginUntracked()
+	if first == nil || second == nil {
+		t.Fatal("synchronous requests must retain their existing serialization")
+	}
+	first()
+	first()
+	if _, ok := tracker.Start("target", nil); ok {
+		t.Fatal("tracked switch admitted over a synchronous request")
+	}
+	second()
+	if _, ok := tracker.Start("target", nil); !ok {
+		t.Fatal("tracked switch refused after all synchronous operations returned")
+	}
+	awaitSwitchPhase(t, &tracker, "succeeded")
+}
+
+func TestTrackedSwitchReportsSupersededPreflight(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"gitVersion":"v1.31.0"}`))
+	}))
+	defer api.Close()
+	_, closed := setupCheckedSwitch(t, api.URL, true)
+	var tracker ContextSwitchTracker
+	tracker.Start("target", nil)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("preflight did not start")
+	}
+	CancelOngoingOperations()
+	close(release)
+	op := awaitSwitchPhase(t, &tracker, "failed")
+	if op.Error == "" || *closed || GetConnectionStatus().Context != "current" {
+		t.Fatalf("superseded preflight = %+v, previous sessions closed = %t", op, *closed)
+	}
+}

@@ -3,16 +3,20 @@ import type { ContextSwitchOperation } from '../src/api/contextSwitch'
 
 interface SwitchFixtureOptions {
   lostAcknowledgement?: 'connection' | 'body'
+  holdStatusAfterAck?: boolean
   sourceDisconnected?: boolean
   synchronous?: boolean
   omnibar?: boolean
 }
 
-async function switchFixture(page: Page, { lostAcknowledgement, sourceDisconnected, synchronous, omnibar }: SwitchFixtureOptions = {}) {
+async function switchFixture(page: Page, { lostAcknowledgement, holdStatusAfterAck, sourceDisconnected, synchronous, omnibar }: SwitchFixtureOptions = {}) {
   let current = 'source-cluster'
   let operation: ContextSwitchOperation | undefined
   let starts = 0
   let cancels = 0
+  let releaseStatus: (() => void) | undefined
+  let statusRequested = false
+  const nextStatus = holdStatusAfterAck ? new Promise<void>(resolve => { releaseStatus = resolve }) : undefined
   await page.addInitScript((initialStatusFromSSE: boolean) => {
     class TestEventSource extends EventTarget {
       static OPEN = 1
@@ -36,15 +40,19 @@ async function switchFixture(page: Page, { lostAcknowledgement, sourceDisconnect
       }
     }
     Object.defineProperty(window, 'EventSource', { value: TestEventSource })
-  }, lostAcknowledgement === 'body')
+  }, !!holdStatusAfterAck || lostAcknowledgement === 'body')
   if (omnibar) {
     await page.route('**/api/cluster/namespace-scope', async route => {
       const original = await (await route.fetch()).json()
       await route.fulfill({ json: { ...original, context: current, actives: ['default'] } })
     })
   }
-  await page.route('**/api/connection?contexts=0', route => {
-    if (lostAcknowledgement === 'body' && !operation) return route.fulfill({ status: 503 })
+  await page.route('**/api/connection?contexts=0', async route => {
+    if ((holdStatusAfterAck || lostAcknowledgement === 'body') && !operation) return route.fulfill({ status: 503 })
+    if (nextStatus && operation) {
+      statusRequested = true
+      await nextStatus
+    }
     if (sourceDisconnected && current === 'source-cluster') {
       return route.fulfill({ json: { state: 'disconnected', context: current, errorType: 'config', error: 'The source context could not be loaded.', contextSwitch: operation } })
     }
@@ -108,6 +116,15 @@ async function switchFixture(page: Page, { lostAcknowledgement, sourceDisconnect
     await page.getByRole('button', { name: /source-cluster/ }).first().click()
     await page.getByRole('button', { name: 'target-cluster', exact: true }).click()
   }
+  if (holdStatusAfterAck) {
+    try {
+      await expect.poll(() => statusRequested).toBe(true)
+      await expect(page.getByText('Switching context', { exact: true })).toBeVisible()
+      await expect(page.getByText('nginx-abc-111-source-cluster', { exact: true })).toBeHidden()
+    } finally {
+      releaseStatus?.()
+    }
+  }
   if (synchronous) {
     await expect.poll(() => starts).toBe(1)
     await page.evaluate(() => window.dispatchEvent(new Event('test-legacy-complete')))
@@ -120,6 +137,7 @@ async function switchFixture(page: Page, { lostAcknowledgement, sourceDisconnect
     get cancels() { return cancels },
     warming() { current = 'target-cluster'; operation = { ...operation!, phase: 'switching', canStop: true, progress: 'Loading workloads…' } },
     succeed(currentContext = 'target-cluster') { current = currentContext; operation = { ...operation!, phase: 'succeeded' } },
+    rejectConfig() { operation = { ...operation!, phase: 'failed', error: 'The kubeconfig changed while Radar was checking it. Try again.' } },
     refuse() { operation = { ...operation!, phase: 'failed', errorType: 'network', error: 'The target cluster did not answer.' } },
   }
 }
@@ -232,4 +250,19 @@ test('cancelling an omnibar switch keeps the source namespace filter', async ({ 
   await expect(page.getByText('nginx-abc-111-source-cluster', { exact: true }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: 'Switch active namespaces' })).toContainText('default')
   expect(fixture.starts).toBe(1)
+})
+
+test('an accepted switch keeps progress visible until the first status read completes', async ({ page }) => {
+  const fixture = await switchFixture(page, { holdStatusAfterAck: true })
+  fixture.succeed()
+  await expect(page.getByText('nginx-abc-111-target-cluster', { exact: true }).first()).toBeVisible()
+  expect(fixture.starts).toBe(1)
+})
+
+test('a kubeconfig refusal reports its reason and keeps the source Pods available', async ({ page }) => {
+  const fixture = await switchFixture(page)
+  fixture.rejectConfig()
+  await expect(page.getByText('The kubeconfig changed while Radar was checking it. Try again.', { exact: true })).toBeVisible()
+  await expect(page.getByText('nginx-abc-111-source-cluster', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Cannot Connect to Cluster' })).toBeHidden()
 })

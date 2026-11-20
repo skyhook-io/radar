@@ -25,9 +25,10 @@ type ContextSwitchStatus struct {
 }
 
 type ContextSwitchTracker struct {
-	mu     sync.Mutex
-	status ContextSwitchStatus
-	cancel context.CancelFunc
+	mu        sync.Mutex
+	status    ContextSwitchStatus
+	cancel    context.CancelFunc
+	untracked int
 }
 
 func (t *ContextSwitchTracker) Snapshot() *ContextSwitchStatus {
@@ -40,9 +41,29 @@ func (t *ContextSwitchTracker) Snapshot() *ContextSwitchStatus {
 	return &s
 }
 
+// BeginUntracked reserves a synchronous switch, CAPI connect or Retry. Those
+// operations keep their existing serialization with each other; tracked
+// switches must never overlap them, including during either side's preflight.
+func (t *ContextSwitchTracker) BeginUntracked() (release func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cancel != nil {
+		return nil
+	}
+	t.untracked++
+	return sync.OnceFunc(func() {
+		t.mu.Lock()
+		t.untracked--
+		t.mu.Unlock()
+	})
+}
+
 func (t *ContextSwitchTracker) Start(target string, onFailure func(error)) (ContextSwitchStatus, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.untracked != 0 {
+		return t.status, false
+	}
 	if t.cancel != nil {
 		return t.status, t.status.Target == target
 	}
@@ -156,8 +177,11 @@ func (t *ContextSwitchTracker) finish(ctx context.Context, op ContextSwitchStatu
 	switch {
 	case t.status.Phase == "stopping":
 		t.status.Phase = "stopped"
-	case ctx.Err() != nil || errors.Is(err, ErrReconnectSuperseded):
+	case ctx.Err() != nil:
 		t.status.Phase = "cancelled"
+	case errors.Is(err, ErrReconnectSuperseded):
+		t.status.Phase = "failed"
+		t.status.Error = "Another cluster operation interrupted the switch. Select the cluster to try again."
 	case err != nil:
 		t.status.Phase = "failed"
 		t.status.Error = err.Error()

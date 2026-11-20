@@ -9,6 +9,7 @@ import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { followSwitch, followingSwitch, switchInProgress } from './api/contextSwitch'
 import { ContextSwitchActions } from './components/ContextSwitchActions'
+import { useToast } from './components/ui/Toast'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, usePhoneLayout, PHONE_MEDIA_QUERY } from '@skyhook-io/k8s-ui'
@@ -923,6 +924,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { toggleTheme } = useTheme()
 
   const commandSwitch = useContextSwitchFlow()
+  const { showError } = useToast()
 
   // Refs for dropdown components to trigger them via shortcuts
   const namespaceSwitcherRef = useRef<NamespaceSwitcherHandle>(null)
@@ -1361,6 +1363,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (!contextSwitch) return
     if (switchInProgress(contextSwitch)) {
       if (followingSwitch() !== contextSwitch.id) followSwitch(contextSwitch.id)
+      // The accepted POST can arrive before the first connection poll. Keep
+      // local progress until an observed operation takes over the overlay.
+      endSwitch()
       return
     }
     if (followingSwitch() !== contextSwitch.id) return
@@ -1372,10 +1377,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     } else {
       setOpenAfterSwitch(null)
       if (contextSwitch.phase === 'failed' && (connection.state === 'connected' || connection.context !== contextSwitch.target)) {
-        setFailedSwitch({ context: contextSwitch.target, error: contextSwitch.error || 'Cluster switch failed', errorType: contextSwitch.errorType || 'unknown' })
+        const reason = contextSwitch.error || 'Cluster switch failed'
+        if (contextSwitch.errorType) {
+          setFailedSwitch({ context: contextSwitch.target, error: reason, errorType: contextSwitch.errorType })
+        } else {
+          showError('Failed to switch context', reason)
+        }
       }
     }
-  }, [contextSwitch, connection.state, connection.context, applyContextChange, endSwitch, setOpenAfterSwitch, setFailedSwitch])
+  }, [contextSwitch, connection.state, connection.context, applyContextChange, endSwitch, setOpenAfterSwitch, setFailedSwitch, showError])
 
   // On large clusters (where the server requires namespace filtering), keep
   // SSE's server-side filter in lockstep with the user's namespace pick.

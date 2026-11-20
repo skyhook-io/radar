@@ -5136,6 +5136,14 @@ func (s *Server) handleListContexts(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, contexts)
 }
 
+func (s *Server) beginUntrackedSwitch(w http.ResponseWriter) func() {
+	release := s.contextSwitch.BeginUntracked()
+	if release == nil {
+		s.writeError(w, http.StatusConflict, "Another cluster switch is already in progress.")
+	}
+	return release
+}
+
 func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConfigEditable(w, r) {
 		return
@@ -5193,6 +5201,11 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	release := s.beginUntrackedSwitch(w)
+	if release == nil {
+		return
+	}
+	defer release()
 	if err := k8s.PerformCheckedContextSwitch(r.Context(), name); err != nil {
 		// A preflight rejection fails before any teardown — the current cluster is
 		// still connected, so don't poison the global connection status.
@@ -5218,15 +5231,22 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	// the context-operation lock; publishing again here would race a queued
 	// operation's teardown.
 
-	// Return the new cluster info
-	info, err := k8s.GetClusterInfo(r.Context())
-	if err != nil {
-		// Context switched successfully but couldn't get info - still return success
-		s.writeJSON(w, map[string]string{"status": "ok", "context": name})
-		return
+	// The optional info read can outlive the switch, especially if an exec
+	// plugin blocks. Release admission first and discard any mixed-cluster read.
+	var operation context.Context
+	k8s.CaptureClusterReads(func() {
+		if k8s.GetContextName() == name {
+			operation = k8s.OperationContext()
+		}
+	})
+	release()
+	if operation != nil && operation.Err() == nil {
+		if info, err := k8s.GetClusterInfo(r.Context()); err == nil && info.Context == name && operation.Err() == nil {
+			s.writeJSON(w, info)
+			return
+		}
 	}
-
-	s.writeJSON(w, info)
+	s.writeJSON(w, map[string]string{"status": "ok", "context": name})
 }
 
 // Connection status handlers (for graceful startup)
@@ -5279,14 +5299,13 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
-	ctx := k8s.GetContextName()
-	if ctx == "" {
-		s.writeError(w, http.StatusBadRequest, "no context configured")
+	release := s.beginUntrackedSwitch(w)
+	if release == nil {
 		return
 	}
-
-	if op := s.contextSwitch.Snapshot(); op != nil && (op.Phase == "preflight" || op.Phase == "switching" || op.Phase == "stopping") {
-		s.writeError(w, http.StatusConflict, "A cluster switch is already in progress.")
+	defer release()
+	if k8s.GetContextName() == "" {
+		s.writeError(w, http.StatusBadRequest, "no context configured")
 		return
 	}
 	if err := k8s.RetryCurrentConnection(); err != nil {
@@ -5370,6 +5389,11 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	if !s.requireConfigEditable(w, r) {
 		return
 	}
+	release := s.beginUntrackedSwitch(w)
+	if release == nil {
+		return
+	}
+	defer release()
 	if !s.requireConnected(w) {
 		return
 	}

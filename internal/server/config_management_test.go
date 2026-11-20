@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
@@ -279,5 +281,64 @@ func TestTrackedContextSwitchInManagedInstallations(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSwitchEntryPointsRejectActiveTrackedSwitch(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "false")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "current"}))
+	entered, release := make(chan struct{}), make(chan struct{})
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer target.Close()
+	defer close(release)
+	path := filepath.Join(t.TempDir(), "target.yaml")
+	data := `apiVersion: v1
+kind: Config
+clusters:
+- name: target
+  cluster:
+    server: ` + target.URL + `
+contexts:
+- name: target
+  context:
+    cluster: target
+current-context: target
+`
+	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.SetTestRegistryEntry("target", path, "target"))
+	s := &Server{listenAddress: DefaultListenAddress}
+	router := chi.NewRouter()
+	router.Post("/contexts/{name}", s.handleSwitchContext)
+	router.Post("/capi/clusters/{ns}/{name}/connect", s.handleCAPIClusterConnect)
+	router.Post("/connection/retry", s.handleConnectionRetry)
+	post := func(path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, nil))
+		return response
+	}
+	if response := post("/contexts/target?track=1"); response.Code != http.StatusAccepted {
+		t.Fatalf("start: %d %s", response.Code, response.Body)
+	}
+	op := s.contextSwitch.Snapshot()
+	defer s.contextSwitch.Cancel(op.ID, op.Target)
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("preflight did not start: %+v", s.contextSwitch.Snapshot())
+	}
+	for _, path := range []string{"/contexts/other", "/capi/clusters/ns/workload/connect", "/connection/retry"} {
+		if response := post(path); response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "already in progress") {
+			t.Errorf("%s: %d %s", path, response.Code, response.Body)
+		}
 	}
 }
