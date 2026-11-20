@@ -310,7 +310,7 @@ func TestJava4ShellReportSeparatesPatchFromOtherActions(t *testing.T) {
 		got := out.String()
 		last := -1
 		for _, part := range []string{"PATCH FIRST · 1 container", "team/Deployment/now · container jvm",
-			"Declared 21.0.8 → advisory fix 21.0.13.1", "1 VBMI reported · 1 CPU unknown · 1 non-x86", "Mitigation flag declared on 1 of 3 pods",
+			"Declared 21.0.8 → advisory fix 21.0.13.1", "1 AVX-512 VBMI reported · 1 CPU unknown · 1 non-x86", "Pods declaring a mitigation flag: 1 of 3",
 			"Check node CPU · 1 container", "Deployment/investigate", "Lower priority on current nodes · 2 containers", "Coverage"} {
 			i := strings.Index(got, part)
 			if i <= last {

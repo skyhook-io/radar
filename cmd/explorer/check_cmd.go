@@ -453,7 +453,7 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 			}
 			fmt.Fprintln(&table, style.Tone(tone, fmt.Sprintf("No affected Java version declared in %d assessed %s.", outside, java4ShellContainerUnit(outside))))
 		}
-		var assessed, unchecked []string
+		var assessed []string
 		if report.Matches > 0 {
 			assessed = append(assessed, fmt.Sprintf("%d in affected version ranges", report.Matches))
 		}
@@ -472,18 +472,15 @@ func (snapshot java4ShellCLIReport) write(out io.Writer, output string, details 
 			}
 			assessed = append(assessed, label)
 		}
-		if noDeclaration > 0 {
-			unchecked = append(unchecked, fmt.Sprintf("%d without a Java version in image metadata", noDeclaration))
-		}
-		if gaps > 0 {
-			unchecked = append(unchecked, fmt.Sprintf("%d could not be checked", gaps))
-		}
 		fmt.Fprintf(&table, "\n%s · %d running %s\n", style.Bold("Coverage"), report.Containers, java4ShellContainerUnit(report.Containers))
 		if len(assessed) > 0 {
 			fmt.Fprintln(&table, "  "+strings.Join(assessed, " · "))
 		}
-		if len(unchecked) > 0 {
-			fmt.Fprintln(&table, "  "+strings.Join(unchecked, " · "))
+		if noDeclaration > 0 {
+			fmt.Fprintf(&table, "  %d without a Java version in image metadata. Verify the JVM where expected.\n", noDeclaration)
+		}
+		if gaps > 0 {
+			fmt.Fprintf(&table, "  %d could not be checked\n", gaps)
 		}
 	}
 	if gaps > 0 {
@@ -597,7 +594,6 @@ func writeJava4ShellFindings(out io.Writer, style cliui.Styler, report images.Ja
 	if reported > 0 {
 		fmt.Fprintln(out, style.Apply(cliui.Bold+cliui.Red, fmt.Sprintf("PATCH FIRST · %d %s", reported, java4ShellContainerUnit(reported))))
 		writeJava4ShellFindingRows(out, style, patch, namespace, details)
-		fmt.Fprintln(out, "  Node evidence: AVX-512 VBMI reported on matching placements.")
 		fmt.Fprintln(out, "  Confirm the installed JVM, then deploy the fixed build from its vendor.")
 	}
 	if unknown > 0 {
@@ -644,7 +640,7 @@ func writeJava4ShellFindingRows(out io.Writer, style cliui.Styler, rows []images
 		fmt.Fprintln(out)
 		var evidence []string
 		if row.VBMIPods > 0 {
-			evidence = append(evidence, java4ShellCPUCount(row.Pods, row.VBMIPods, "VBMI reported"))
+			evidence = append(evidence, java4ShellCPUCount(row.Pods, row.VBMIPods, "AVX-512 VBMI reported"))
 		}
 		if row.UnknownCPUPods > 0 {
 			evidence = append(evidence, java4ShellCPUCount(row.Pods, row.UnknownCPUPods, "CPU unknown"))
@@ -658,11 +654,11 @@ func writeJava4ShellFindingRows(out io.Writer, style cliui.Styler, rows []images
 		if nonX86 > 0 {
 			evidence = append(evidence, java4ShellCPUCount(row.Pods, nonX86, "non-x86"))
 		}
-		if details || row.Pods > 1 || row.VBMIPods+row.UnknownCPUPods == 0 {
+		if details || row.Pods > 1 || row.UnknownCPUPods == 0 {
 			fmt.Fprintf(out, "    CPU: %s\n", strings.Join(evidence, " · "))
 		}
 		if row.MitigationDeclaredPods > 0 || details {
-			fmt.Fprintf(out, "    Mitigation flag declared on %d of %d pods\n", row.MitigationDeclaredPods, row.Pods)
+			fmt.Fprintf(out, "    Pods declaring a mitigation flag: %d of %d\n", row.MitigationDeclaredPods, row.Pods)
 		}
 		if details {
 			fmt.Fprintf(out, "    Image: %s\n", checkTableValue(row.Image))
