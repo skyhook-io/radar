@@ -132,11 +132,12 @@ func (b *syncBudget) listBlocking(dc *k8s.DynamicResourceCache, gvr schema.Group
 	if b == nil {
 		return dc.ListBlocking(gvr, namespace, dynamicSyncWait)
 	}
+	list := dc.ListBlockingContext
+	if b.readOnly {
+		list = dc.ListBlockingReadOnlyContext
+	}
 	if dc.IsNamespaceSynced(gvr, namespace) {
-		if b.readOnly {
-			return dc.ListReadOnly(gvr, namespace)
-		}
-		return dc.ListBlocking(gvr, namespace, 0)
+		return list(context.Background(), gvr, namespace, 0)
 	}
 	if b.ctx.Err() != nil {
 		return nil, integration.ErrDynamicNotSynced
@@ -148,7 +149,7 @@ func (b *syncBudget) listBlocking(dc *k8s.DynamicResourceCache, gvr schema.Group
 	}
 	done := make(chan result, 1)
 	go func() {
-		items, err := dc.ListBlocking(gvr, namespace, wait)
+		items, err := list(context.Background(), gvr, namespace, wait)
 		done <- result{items, err}
 	}()
 	timer := time.NewTimer(wait)

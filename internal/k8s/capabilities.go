@@ -248,7 +248,9 @@ type FeatureCapabilities struct {
 	PodFileUpload         bool `json:"podFileUpload"`         // POST /api/pods/{namespace}/{name}/files/upload
 	Vulnerabilities       bool `json:"vulnerabilities"`       // GET /api/vulnerabilities
 	RuntimeAdvisoryChecks bool `json:"runtimeAdvisoryChecks"` // GET /api/vulnerabilities/java4shell
-	LokiConnection        bool `json:"lokiConnection"`        // GET /api/loki/status
+	// GET /api/sealedsecrets/controller
+	SealedSecretsController bool `json:"sealedSecretsController"`
+	LokiConnection          bool `json:"lokiConnection"` // GET /api/loki/status
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
