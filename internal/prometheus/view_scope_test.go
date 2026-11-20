@@ -21,7 +21,7 @@ type fakeViewQuerier struct {
 	answer  func(query string) (*prom.QueryResult, error)
 }
 
-func (f *fakeViewQuerier) QueryAt(_ context.Context, query string, _ time.Time) (*prom.QueryResult, error) {
+func (f *fakeViewQuerier) QueryAtPost(_ context.Context, query string, _ time.Time) (*prom.QueryResult, error) {
 	f.mu.Lock()
 	f.queries = append(f.queries, query)
 	f.mu.Unlock()
@@ -274,7 +274,7 @@ func TestViewScopeQueryShape(t *testing.T) {
 	}
 	identity := viewIdentityQuery(req.Metrics[:1], []string{"cluster"}, req.Span, true)
 	wantIdentity := `label_replace(topk(2, count by (cluster) (count_over_time(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-.*"}[3600s]))), "radar_metric", "container_cpu_usage_seconds_total", "", "")` +
-		` or label_replace(count(count_over_time(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-.*",pod=~"api-0|api-1"}[3600s])), "radar_anchor", "container_cpu_usage_seconds_total", "", "")`
+		` or label_replace(count(count_over_time(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-0|api-1"}[3600s])), "radar_anchor", "container_cpu_usage_seconds_total", "", "")`
 	if identity != wantIdentity {
 		t.Fatalf("identity query\n got: %s\nwant: %s", identity, wantIdentity)
 	}

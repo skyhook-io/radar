@@ -129,14 +129,16 @@ type viewScopeEntry struct {
 	expires time.Time
 }
 
+// instantQuerier runs the scope probes: instant queries at a fixed time, sent
+// in a POST body because a probe can outgrow a proxy's URL limit.
 type instantQuerier interface {
-	QueryAt(ctx context.Context, query string, at time.Time) (*prom.QueryResult, error)
+	QueryAtPost(ctx context.Context, query string, at time.Time) (*prom.QueryResult, error)
 }
 
 type strictInstantQuerier struct{ inner instantQuerier }
 
-func (s strictInstantQuerier) QueryAt(ctx context.Context, query string, at time.Time) (*prom.QueryResult, error) {
-	return requireComplete(s.inner.QueryAt(ctx, query, at))
+func (s strictInstantQuerier) QueryAtPost(ctx context.Context, query string, at time.Time) (*prom.QueryResult, error) {
+	return requireComplete(s.inner.QueryAtPost(ctx, query, at))
 }
 
 var viewScopeLabelName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
@@ -364,11 +366,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 		return unknownViewScope(), err
 	}
 	keys := slices.Sorted(maps.Keys(clusterLabels))
-	res, err := q.QueryAt(ctx, viewReadbackQuery(req.Metrics, keys, matchers, req.Span), at)
-	if err != nil {
-		return unknownViewScope(), err
-	}
-	readback, _, err := groupViewScopeRows(req.Metrics, res)
+	readback, _, err := runViewProbes(ctx, q, at, viewReadbackParts(req.Metrics, keys, matchers, req.Span))
 	if err != nil {
 		return unknownViewScope(), err
 	}
@@ -395,11 +393,7 @@ func decideLabeledViewScope(ctx context.Context, q instantQuerier, req ViewScope
 	}
 	if len(pending) > 0 {
 		identityKeys := slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(partitionLabels), keys...))))
-		res, err := q.QueryAt(ctx, viewIdentityQuery(pending, identityKeys, req.Span, true), at)
-		if err != nil {
-			return unknownViewScope(), err
-		}
-		identities, anchored, err := groupViewScopeRows(pending, res)
+		identities, anchored, err := runViewProbes(ctx, q, at, viewIdentityParts(pending, identityKeys, req.Span, true))
 		if err != nil {
 			return unknownViewScope(), err
 		}
@@ -447,36 +441,44 @@ func conflictsWithLabels(identity, clusterLabels map[string]string) bool {
 }
 
 func decideUnlabeledViewScope(ctx context.Context, q instantQuerier, req ViewScopeRequest, at time.Time) (ViewScope, error) {
-	res, err := q.QueryAt(ctx, viewIdentityQuery(req.Metrics, partitionLabels, req.Span, false), at)
-	if err != nil {
-		return unknownViewScope(), err
-	}
-	identities, _, err := groupViewScopeRows(req.Metrics, res)
+	identities, _, err := runViewProbes(ctx, q, at, viewIdentityParts(req.Metrics, partitionLabels, req.Span, false))
 	if err != nil {
 		return unknownViewScope(), err
 	}
 	several := ViewScope{State: ViewScopeSeveralClusters, Withheld: true, Note: viewScopeSeveralNote}
 	filters := map[string]string{}
-	joined := ""
+	var single []map[string]string
 	for _, m := range req.Metrics {
 		ids := identities[m.Name]
 		if len(ids) > 1 {
 			return several, nil
 		}
 		filters[m.Name] = ""
-		if len(ids) == 0 || !req.Joined {
-			continue
+		if len(ids) == 1 {
+			single = append(single, ids[0])
 		}
-		key := identityKey(ids[0], partitionLabels)
-		if key == identityKey(nil, partitionLabels) {
+	}
+	if req.Joined && !joinedIdentitiesAgree(single, partitionLabels) {
+		return several, nil
+	}
+	return ViewScope{State: ViewScopeUnlabeled, Filters: filters, Note: viewScopeUnlabeledNote}, nil
+}
+
+// joinedIdentitiesAgree reports whether metrics a joined view combines name
+// one cluster: equal identities, where one with none of the keys fits any.
+func joinedIdentitiesAgree(ids []map[string]string, keys []string) bool {
+	empty, joined := identityKey(nil, keys), ""
+	for _, id := range ids {
+		key := identityKey(id, keys)
+		if key == empty {
 			continue
 		}
 		if joined != "" && joined != key {
-			return several, nil
+			return false
 		}
 		joined = key
 	}
-	return ViewScope{State: ViewScopeUnlabeled, Filters: filters, Note: viewScopeUnlabeledNote}, nil
+	return true
 }
 
 func identityKey(identity map[string]string, keys []string) string {
@@ -485,70 +487,6 @@ func identityKey(identity map[string]string, keys []string) string {
 		values[i] = strconv.Quote(identity[k])
 	}
 	return strings.Join(values, ",")
-}
-
-// viewReadbackQuery counts each metric's filtered series by the filter's own
-// labels, so a store that ignores a matcher shows itself in the values it
-// returns. Range functions drop metric names, hence the label_replace.
-func viewReadbackQuery(metrics []ViewMetric, keys []string, matchers string, span time.Duration) string {
-	parts := make([]string, len(metrics))
-	for i, m := range metrics {
-		parts[i] = viewTagged(viewScopeMetricLabel, m.Name, "count by ("+strings.Join(keys, ",")+") (count_over_time("+vectorSelector(m.Name, withScope(m.Subject, matchers))+"["+promSeconds(span)+"]))")
-	}
-	return strings.Join(parts, " or ")
-}
-
-// viewIdentityQuery reads up to two cluster identities per metric and, with
-// anchors, whether the metric holds any of this cluster's live objects.
-func viewIdentityQuery(metrics []ViewMetric, keys []string, span time.Duration, anchors bool) string {
-	var parts []string
-	window := "[" + promSeconds(span) + "]"
-	for _, m := range metrics {
-		parts = append(parts, viewTagged(viewScopeMetricLabel, m.Name, "topk(2, count by ("+strings.Join(keys, ",")+") (count_over_time("+vectorSelector(m.Name, m.Subject)+window+")))"))
-		if anchors && m.AnchorLabel != "" && len(m.AnchorValues) > 0 {
-			names := make([]string, len(m.AnchorValues))
-			for i, v := range m.AnchorValues {
-				names[i] = regexp.QuoteMeta(v)
-			}
-			anchor := m.AnchorLabel + "=~" + strconv.Quote(strings.Join(names, "|"))
-			if m.AnchorNamespace != "" {
-				anchor = "namespace=" + strconv.Quote(m.AnchorNamespace) + "," + anchor
-			}
-			parts = append(parts, viewTagged(viewScopeAnchorLabel, m.Name, "count(count_over_time("+vectorSelector(m.Name, withScope(m.Subject, anchor))+window+"))"))
-		}
-	}
-	return strings.Join(parts, " or ")
-}
-
-func viewTagged(label, metric, expr string) string {
-	return "label_replace(" + expr + ", " + strconv.Quote(label) + ", " + strconv.Quote(metric) + ", \"\", \"\")"
-}
-
-// groupViewScopeRows splits a batched answer by metric: rows tagged with the
-// metric label, and the metrics an anchor row came back for. A row for no
-// requested metric means the store didn't evaluate the query as written.
-func groupViewScopeRows(metrics []ViewMetric, res *prom.QueryResult) (map[string][]map[string]string, map[string]bool, error) {
-	requested := map[string]bool{}
-	for _, m := range metrics {
-		requested[m.Name] = true
-	}
-	rows := map[string][]map[string]string{}
-	anchored := map[string]bool{}
-	if res == nil {
-		return rows, anchored, nil
-	}
-	for _, series := range res.Series {
-		if name := series.Labels[viewScopeAnchorLabel]; name != "" && requested[name] {
-			anchored[name] = true
-			continue
-		}
-		name := series.Labels[viewScopeMetricLabel]
-		if !requested[name] {
-			return nil, nil, fmt.Errorf("unexpected series in cluster scope answer: %v", series.Labels)
-		}
-		rows[name] = append(rows[name], series.Labels)
-	}
-	return rows, anchored, nil
 }
 
 // BoundViewAnchors sorts and deduplicates object names and keeps the first

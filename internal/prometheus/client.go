@@ -986,6 +986,19 @@ func (c *Client) QueryAt(ctx context.Context, query string, at time.Time) (*prom
 	return p.QueryAt(ctx, query, at)
 }
 
+// QueryAtPost is QueryAt with the query sent in a POST body rather than the
+// URL.
+func (c *Client) QueryAtPost(ctx context.Context, query string, at time.Time) (*prom.QueryResult, error) {
+	if _, _, err := c.EnsureConnected(ctx); err != nil {
+		return nil, err
+	}
+	p := c.getPromClient()
+	if p == nil {
+		return nil, errors.New("prometheus connection was reset")
+	}
+	return p.QueryAtPost(ctx, query, at)
+}
+
 // QueryPost is Query with the query sent in a POST body rather than the URL.
 func (c *Client) QueryPost(ctx context.Context, query string) (*prom.QueryResult, error) {
 	if _, _, err := c.EnsureConnected(ctx); err != nil {

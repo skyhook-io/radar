@@ -236,6 +236,16 @@ func wantFilters(t *testing.T, scope ViewScope, want map[string]string) {
 	}
 }
 
+type countingQuerier struct {
+	inner instantQuerier
+	n     int
+}
+
+func (c *countingQuerier) QueryAtPost(ctx context.Context, query string, at time.Time) (*prom.QueryResult, error) {
+	c.n++
+	return c.inner.QueryAtPost(ctx, query, at)
+}
+
 func scalarAt(t *testing.T, c *Client, query string, at time.Time) float64 {
 	t.Helper()
 	res, err := requireComplete(c.QueryAt(context.Background(), query, at))
@@ -302,6 +312,43 @@ func TestEngineViewScope(t *testing.T) {
 			t.Fatalf("scope = %+v", scope)
 		}
 		wantFilters(t, scope, map[string]string{ownUnlabeled.Name: "", owner.Name: `cluster="a"`})
+	})
+
+	// The same checks split into many small probes (by metric, and within a
+	// metric's Pod list and anchors) must parse and decide as the batched
+	// probe does.
+	t.Run("split probes decide as the batched probe does", func(t *testing.T) {
+		pods := append([]string{engineAPIPod, engineDBPod}, podNames(60, 40)...)
+		subject := `namespace="` + engineNS + `",` + labelRegexMatcher("pod", pods)
+		workloadOwn := ViewMetric{Name: ownUnlabeled.Name, Subject: subject, AnchorLabel: "pod", AnchorValues: pods, AnchorNamespace: engineNS}
+		workloadCPU := ViewMetric{Name: cpu.Name, Subject: subject, AnchorLabel: "pod", AnchorValues: pods, AnchorNamespace: engineNS}
+		cases := [][]ViewMetric{{cpu, mem, info, owner, nodeCPU}, {ownUnlabeled, owner}, {foreignUnlabeled, owner}, {bothUnlabeled}, {workloadOwn, workloadCPU}}
+		for _, labels := range []map[string]string{{"cluster": "a"}, nil} {
+			for _, metrics := range cases {
+				req, err := normalizeViewScopeRequest(ViewScopeRequest{View: t.Name(), Metrics: metrics, Joined: true, Span: time.Hour})
+				if err != nil {
+					t.Fatal(err)
+				}
+				at := time.Now()
+				decideAt := func(limit int) (ViewScope, int) {
+					withProbeLimit(t, limit)
+					counted := &countingQuerier{inner: unconfigured}
+					scope, err := decideViewScope(context.Background(), counted, req, at, labels, true)
+					if err != nil || scope.State == ViewScopeUnknown {
+						t.Fatalf("limit %d, labels %v: scope = %+v, err = %v", limit, labels, scope, err)
+					}
+					return scope, counted.n
+				}
+				whole, wholeProbes := decideAt(prom.MaxWorkloadQueryBytes)
+				split, splitProbes := decideAt(700)
+				if !maps.Equal(whole.Filters, split.Filters) || whole.State != split.State || whole.Note != split.Note {
+					t.Errorf("labels %v, %s: split %+v, batched %+v", labels, metrics[0].Name, split, whole)
+				}
+				if (metrics[0].Subject == subject || len(metrics) == 5) && splitProbes <= wholeProbes {
+					t.Errorf("labels %v, %s: no split (%d probes, batched %d)", labels, metrics[0].Name, splitProbes, wholeProbes)
+				}
+			}
+		}
 	})
 
 	var proven map[string]string

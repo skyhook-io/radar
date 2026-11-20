@@ -511,6 +511,28 @@ func TestQueryAtAnchorsInstantEvidence(t *testing.T) {
 	}
 }
 
+func TestQueryAtPostSendsTheQueryInTheBody(t *testing.T) {
+	tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.RawQuery != "" {
+			t.Errorf("method %s with URL query %q, want POST with an empty URL query", r.Method, r.URL.RawQuery)
+		}
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if r.PostForm.Get("time") != "1700000000" || r.PostForm.Get("query") != "up" {
+			t.Errorf("form = %v", r.PostForm)
+		}
+		_, _ = w.Write([]byte(`{"status":"success","warnings":["store missing"],"data":{"resultType":"vector","result":[]}}`))
+	})
+	result, err := NewClient(tr).QueryAtPost(context.Background(), "up", time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.Annotations.Warnings, []string{"store missing"}) {
+		t.Fatalf("annotations = %+v", result.Annotations)
+	}
+}
+
 func TestQueryAnnotations(t *testing.T) {
 	for _, mode := range []string{"instant", "at", "range"} {
 		t.Run(mode, func(t *testing.T) {
