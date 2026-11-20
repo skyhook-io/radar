@@ -581,6 +581,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// AI investigation event stream via SSE — long-lived; lives outside the
 		// 60s timeout group. The run keeps going server-side after disconnect.
 		r.Get("/diagnose/runs/{id}/stream", s.handleDiagnoseRunStream)
+		r.Get("/vulnerabilities/java4shell/stream", s.handleJava4ShellStream)
 
 		// Node drain — outside the 60s timeout group: it may wait minutes for PDB backoff
 		// and, by default, for the evicted pods to finish terminating.
@@ -1569,6 +1570,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		PodFileUpload:               true,
 		Vulnerabilities:             true,
 		RuntimeAdvisoryChecks:       true,
+		RuntimeAdvisoryProgress:     true,
 		LoggingPodShipping:          true,
 		LoggingPipeline:             true,
 	}

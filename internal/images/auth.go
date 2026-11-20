@@ -201,7 +201,6 @@ func GetAuthenticatedKeychain(imageRef string, namespace string, secretNames []s
 	// 2. Add registry-specific keychains
 	switch registryType {
 	case RegistryGoogle:
-		log.Printf("Adding Google keychain for registry: %s", imageRef)
 		keychains = append(keychains, google.Keychain)
 		// AWS, Azure, GitHub, Quay, GitLab all use docker config.json credentials
 		// which are handled by the default keychain
