@@ -248,6 +248,7 @@ func TestOperatorConfigReadPrivacy(t *testing.T) {
 }
 
 func TestTrackedContextSwitchRefusesManagedInstallations(t *testing.T) {
+	t.Cleanup(k8s.SetTestLocalMode())
 	for _, s := range []*Server{
 		{authConfig: auth.Config{Mode: "proxy"}},
 		{cloudConnectCfg: CloudConnectConfig{CloudTunnelConfigured: true}},

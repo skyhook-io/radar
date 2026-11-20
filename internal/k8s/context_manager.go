@@ -721,6 +721,9 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 			reportProgress(message)
 		}
 		defer func() {
+			if p := recover(); p != nil {
+				switchErr = contextSwitchPanic(p)
+			}
 			if switchErr != nil {
 				SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: newContext, Error: switchErr.Error(), ErrorType: ClassifyError(switchErr)})
 			}

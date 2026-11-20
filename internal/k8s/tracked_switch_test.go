@@ -36,7 +36,7 @@ func TestTrackedSwitchCancellationPreservesCurrentCluster(t *testing.T) {
 	_, stopped := setupCheckedSwitch(t, api.URL, true)
 	var tracker ContextSwitchTracker
 	op, ok := tracker.Start("target", nil)
-	if !ok || op.Phase != "preflight" {
+	if !ok || op.Phase != "preflight" || op.PreflightTimeoutSeconds != ContextSwitchTimeout.Seconds() || op.SyncTimeoutSeconds != FirstPaintBackstop.Seconds() {
 		t.Fatalf("start: %+v", op)
 	}
 	select {
@@ -103,15 +103,22 @@ func TestTrackedSwitchFinishesAfterPreflightBudget(t *testing.T) {
 }
 
 func TestTrackedSwitchInitFailureReportsTargetDisconnected(t *testing.T) {
-	var hits atomic.Int32
-	_, stopped := setupCheckedSwitch(t, versionOnlyServer(t, &hits), true)
-	RegisterTimelineFuncs(nil, func() error { return errors.New("timeline unavailable") })
-	t.Cleanup(func() { RegisterTimelineFuncs(nil, nil) })
-	var tracker ContextSwitchTracker
-	tracker.Start("target", nil)
-	op := awaitSwitchPhase(t, &tracker, "failed")
-	status := GetConnectionStatus()
-	if !*stopped || status.State != StateDisconnected || status.Context != "target" || op.Error == "" || op.Error != status.Error || op.ErrorType != "" {
-		t.Fatalf("post-teardown failure: operation %+v, connection %+v", op, status)
+	for name, init := range map[string]func() error{
+		"error": func() error { return errors.New("timeline unavailable") },
+		"panic": func() error { panic("callback failed") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var hits atomic.Int32
+			_, stopped := setupCheckedSwitch(t, versionOnlyServer(t, &hits), true)
+			RegisterTimelineFuncs(nil, init)
+			t.Cleanup(func() { RegisterTimelineFuncs(nil, nil) })
+			var tracker ContextSwitchTracker
+			tracker.Start("target", nil)
+			op := awaitSwitchPhase(t, &tracker, "failed")
+			status := GetConnectionStatus()
+			if !*stopped || status.State != StateDisconnected || status.Context != "target" || op.Error == "" || op.Error != status.Error || op.ErrorType != "" {
+				t.Fatalf("post-teardown failure: operation %+v, connection %+v", op, status)
+			}
+		})
 	}
 }

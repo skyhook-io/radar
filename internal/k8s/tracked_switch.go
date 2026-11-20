@@ -13,13 +13,15 @@ import (
 // ContextSwitchStatus is the last user-requested switch. Only preflight can be
 // cancelled: after teardown the previous cluster's sessions cannot be restored.
 type ContextSwitchStatus struct {
-	ID        string    `json:"id"`
-	Target    string    `json:"target"`
-	Phase     string    `json:"phase"`
-	StartedAt time.Time `json:"startedAt"`
-	Progress  string    `json:"progress"`
-	Error     string    `json:"error,omitempty"`
-	ErrorType string    `json:"errorType,omitempty"`
+	ID                      string    `json:"id"`
+	Target                  string    `json:"target"`
+	Phase                   string    `json:"phase"`
+	StartedAt               time.Time `json:"startedAt"`
+	PreflightTimeoutSeconds float64   `json:"preflightTimeoutSeconds"`
+	SyncTimeoutSeconds      float64   `json:"syncTimeoutSeconds"`
+	Progress                string    `json:"progress"`
+	Error                   string    `json:"error,omitempty"`
+	ErrorType               string    `json:"errorType,omitempty"`
 }
 
 type ContextSwitchTracker struct {
@@ -46,7 +48,11 @@ func (t *ContextSwitchTracker) Start(target string, onFailure func(error)) (Cont
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancel = cancel
-	t.status = ContextSwitchStatus{ID: rand.Text(), Target: target, StartedAt: time.Now().UTC(), Phase: "preflight", Progress: "Checking target cluster…"}
+	t.status = ContextSwitchStatus{
+		ID: rand.Text(), Target: target, StartedAt: time.Now().UTC(),
+		Phase: "preflight", Progress: "Checking target cluster…",
+		PreflightTimeoutSeconds: ContextSwitchTimeout.Seconds(), SyncTimeoutSeconds: FirstPaintBackstop.Seconds(),
+	}
 	go t.run(ctx, t.status, onFailure)
 	return t.status, true
 }
@@ -94,12 +100,16 @@ func (t *ContextSwitchTracker) run(ctx context.Context, op ContextSwitchStatus, 
 	var err error
 	defer func() {
 		if p := recover(); p != nil {
-			log.Printf("[ops] Context switch panicked: %v\n%s", p, debug.Stack())
-			err = errors.New("Radar could not finish the cluster switch. See the local Radar logs.")
+			err = contextSwitchPanic(p)
 		}
 		t.finish(ctx, op, err, onFailure)
 	}()
 	err = performCheckedContextSwitch(ctx, op.Target, t)
+}
+
+func contextSwitchPanic(p any) error {
+	log.Printf("[ops] Context switch panicked: %v\n%s", p, debug.Stack())
+	return errors.New("Radar could not finish the cluster switch. See the local Radar logs.")
 }
 
 func (t *ContextSwitchTracker) finish(ctx context.Context, op ContextSwitchStatus, err error, onFailure func(error)) {
