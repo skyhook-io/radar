@@ -273,6 +273,43 @@ func TestDiagnosticsKeepsKubeconfigDuringSwitch(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsWhileKubeconfigWriterIsBusy(t *testing.T) {
+	previous := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: k8s.GetContextName()})
+	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+	restore, err := k8s.SetTestResourceDiscovery(fake.NewSimpleClientset().Discovery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	timeline.RecordDrop("Pod", "default", "private-pod", "no_diff", "update", k8s.ActiveClusterContext())
+	t.Cleanup(timeline.ResetMetricsForContextSwitch)
+
+	s := &Server{broadcaster: &SSEBroadcaster{}, diagConfig: &DiagConfig{Port: 9280}}
+	rec := httptest.NewRecorder()
+	finished := make(chan struct{})
+	unlock := k8s.HoldTestClientWriteLock()
+	go func() {
+		defer close(finished)
+		s.handleDiagnostics(rec, httptest.NewRequest(http.MethodGet, "/api/diagnostics", nil))
+	}()
+	select {
+	case <-finished:
+		unlock()
+	case <-time.After(2 * time.Second):
+		unlock()
+		<-finished
+		t.Fatal("diagnostics waited for the kubeconfig writer")
+	}
+	var snap DiagnosticsSnapshot
+	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+		t.Fatal(err)
+	}
+	if snap.Kubeconfig != nil || snap.APIDiscovery != nil || snap.EventPipeline == nil || len(snap.EventPipeline.RecentDrops) != 0 || snap.Runtime == nil {
+		t.Fatalf("incomplete diagnostics while kubeconfig is busy: %+v", snap)
+	}
+}
+
 func TestDiagnosticsDuringTrafficSourceDetection(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	var expired atomic.Bool

@@ -264,6 +264,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var dropContext string
 	collectSafe("kubeconfig", &errs, func() {
 		summary, name, ok := k8s.TryKubeconfigSummary()
 		if !ok {
@@ -282,6 +283,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 			ExecPluginsMissing:         summary.ExecPluginsMissing,
 		}
 		if stable && status.Context == name && (name != "" || summary.Mode == "in-cluster") {
+			dropContext = k8s.TimelineClusterContext(name)
 			snap.Kubeconfig.CurrentContextUsesExec = &summary.CurrentContextUsesExec
 		}
 	})
@@ -395,9 +397,12 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 			Received: snapshot.Counters.Received,
 			Dropped:  snapshot.Counters.Dropped,
 			Recorded: snapshot.Counters.Recorded,
-			// Compose cluster-scope + per-user RBAC on the drop records (see handleDebugEvents).
-			RecentDrops: s.filterDropsByRBAC(r, timeline.DropsForCluster(snapshot.RecentDrops, k8s.ActiveClusterContext())),
-			Uptime:      snapshot.Uptime,
+			Uptime:   snapshot.Uptime,
+		}
+		if dropContext != "" {
+			snap.EventPipeline.RecentDrops = s.filterDropsByRBAC(r, timeline.DropsForCluster(snapshot.RecentDrops, dropContext))
+		} else if len(snapshot.RecentDrops) > 0 {
+			clusterErrors = append(clusterErrors, "Recent drop details are unavailable until the cluster identity can be read.")
 		}
 	})
 
@@ -522,7 +527,11 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	// API Discovery — read-only stats, no refresh
 	collectClusterSection("apiDiscovery", func() {
-		discovery := k8s.GetResourceDiscovery()
+		discovery, ok := k8s.ResourceDiscoveryIfIdle()
+		if !ok {
+			clusterErrors = append(clusterErrors, "API discovery details are temporarily busy.")
+			return
+		}
 		if discovery == nil {
 			return
 		}

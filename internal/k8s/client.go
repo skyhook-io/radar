@@ -800,9 +800,9 @@ func GetConfigSnapshot() (*rest.Config, string) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	if k8sConfig == nil {
-		return nil, activeClusterContextLocked()
+		return nil, TimelineClusterContext(contextName)
 	}
-	return rest.CopyConfig(k8sConfig), activeClusterContextLocked()
+	return rest.CopyConfig(k8sConfig), TimelineClusterContext(contextName)
 }
 
 // GetClusterClientSnapshot reads the active client, config, context name and
@@ -898,7 +898,7 @@ func getDynamicCacheClients() (request, informer dynamic.Interface) {
 func GetDynamicClientSnapshot() (dynamic.Interface, string) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
-	return dynamicClient, activeClusterContextLocked()
+	return dynamicClient, TimelineClusterContext(contextName)
 }
 
 // GetKubeconfigPath returns the path to the kubeconfig file used
@@ -1212,7 +1212,7 @@ func ClusterSafetyBinding(ctx context.Context) string {
 // with the cluster UID identity when one can be established.
 func ClusterSafetySnapshot(ctx context.Context) (display, binding string) {
 	clientMu.RLock()
-	display = activeClusterContextLocked()
+	display = TimelineClusterContext(contextName)
 	binding = contextBinding
 	mode := kubeconfigMode
 	clientMu.RUnlock()
@@ -1236,10 +1236,11 @@ func ClusterSafetySnapshot(ctx context.Context) (display, binding string) {
 func ActiveClusterContext() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
-	return activeClusterContextLocked()
+	return TimelineClusterContext(contextName)
 }
 
-func activeClusterContextLocked() string {
+// TimelineClusterContext maps a captured kubeconfig context to the identity stamped on timeline records.
+func TimelineClusterContext(contextName string) string {
 	if contextName != "" {
 		return contextName
 	}
