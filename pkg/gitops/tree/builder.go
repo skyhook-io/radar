@@ -307,10 +307,19 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			continue
 		}
 		obj := objects[refKey(res.Ref)]
+		sync, health, source := res.Sync, res.Health, res.HealthSource
+		// A Flux inventory entry carries no health. When it is itself a Flux
+		// Kustomization or HelmRelease, its own conditions and spec.suspend
+		// are the verdict, as on its own page; Radar's topology estimate
+		// would read a suspended release as Healthy.
+		if childTool, _ := classifyGitOpsKind(obj); tool == ToolFluxCD && childTool == string(ToolFluxCD) {
+			s := rootStatus(obj, ToolFluxCD)
+			sync, health, source = s.Sync, s.Health, HealthSourceController
+		}
 		if live, ok := findTopoNode(topoByRef, res.Ref); ok {
-			nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), obj), res.Data)
+			nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, sync, health, source), obj), res.Data)
 		} else {
-			nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), obj), res.Data)
+			nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, sync, health, source), obj), res.Data)
 		}
 		if tool == ToolArgoCD && missing[refKey(res.Ref)] {
 			node := nodes[id]
