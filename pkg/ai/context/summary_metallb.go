@@ -34,20 +34,24 @@ func saturatingAdd(a, b int64) int64 {
 // metalLBPoolCountersOf reads the address counters the MetalLB controller
 // writes to an IPAddressPool's status (v0.15 and later). Without a status the
 // counters are unknown: an older MetalLB, a pool outside MetalLB's namespace,
-// or one the controller has not reconciled.
+// or one the controller has not reconciled. The same goes for a status that
+// lacks any of the four counters.
 func metalLBPoolCountersOf(obj *unstructured.Unstructured) (metalLBPoolCounters, bool) {
 	status, found, _ := unstructured.NestedMap(obj.Object, "status")
 	if !found || status == nil {
 		return metalLBPoolCounters{}, false
 	}
-	read := func(key string) int64 {
-		v, _, _ := unstructured.NestedInt64(status, key)
-		return v
+	// The controller writes all four counters together, so a status missing
+	// any of them has not been reported, rather than reporting zero.
+	var vals [4]int64
+	for i, key := range [...]string{"assignedIPv4", "availableIPv4", "assignedIPv6", "availableIPv6"} {
+		v, found, err := unstructured.NestedInt64(status, key)
+		if !found || err != nil {
+			return metalLBPoolCounters{}, false
+		}
+		vals[i] = v
 	}
-	return metalLBPoolCounters{
-		assigned4: read("assignedIPv4"), available4: read("availableIPv4"),
-		assigned6: read("assignedIPv6"), available6: read("availableIPv6"),
-	}, true
+	return metalLBPoolCounters{assigned4: vals[0], available4: vals[1], assigned6: vals[2], available6: vals[3]}, true
 }
 
 // metalLBPoolState reads an IPAddressPool's address availability. Counters
@@ -203,6 +207,10 @@ func summarizeMetalLBConfigurationState(obj *unstructured.Unstructured) *Resourc
 	s.Status = result
 	if result == "" {
 		s.Status = "Not reported"
+	}
+	if obj.GetDeletionTimestamp() != nil {
+		s.Status = "Terminating"
+		return s
 	}
 	if result == "Invalid" {
 		s.Issue = "MetalLBConfigurationInvalid"

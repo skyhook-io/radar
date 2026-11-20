@@ -36,12 +36,16 @@ export interface MetalLBPoolCounters {
 
 /**
  * The address counters the controller writes to a pool's status (MetalLB
- * 0.15 and later). Missing means unknown: an older MetalLB, a pool outside
- * MetalLB's namespace, or one not reconciled yet.
+ * 0.15 and later). Missing, or lacking any of the four, means unknown: an
+ * older MetalLB, a pool outside MetalLB's namespace, or one not reconciled yet.
  */
 export function getMetalLBPoolCounters(data: any): MetalLBPoolCounters | undefined {
   const status = data?.status
   if (!status || typeof status !== 'object') return undefined
+  // The controller writes all four counters together, so a status missing
+  // any of them has not been reported, rather than reporting zero.
+  const keys = ['assignedIPv4', 'availableIPv4', 'assignedIPv6', 'availableIPv6']
+  if (!keys.every((k) => typeof status[k] === 'number' && Number.isFinite(status[k]))) return undefined
   return {
     assigned4: count(status.assignedIPv4),
     available4: count(status.availableIPv4),

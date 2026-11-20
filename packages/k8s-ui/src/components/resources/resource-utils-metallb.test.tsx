@@ -66,6 +66,12 @@ describe('MetalLB IPAddressPool status', () => {
     expect(getGenericResourceStatus(pool(status))?.text).toBe(text)
   })
 
+  it('reads an empty or partial status as not reported rather than as zero', () => {
+    expect(getMetalLBPoolStatus(pool({})).text).toBe('Not reported')
+    expect(getMetalLBPoolStatus(pool({ assignedIPv4: 2, availableIPv4: 8 })).text).toBe('Not reported')
+    expect(getMetalLBPoolStatus(pool(counters(0, 0))).text).toBe('No addresses')
+  })
+
   it('reads a terminating pool as terminating', () => {
     expect(getMetalLBPoolStatus({ ...pool(counters(10, 0)), metadata: { name: 'p', deletionTimestamp: '2026-11-20T10:00:00Z' } }).text).toBe('Terminating')
   })

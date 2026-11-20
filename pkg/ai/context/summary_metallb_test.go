@@ -34,6 +34,8 @@ func TestMetalLBPoolSummaryStatus(t *testing.T) {
 		wantCapacity string
 	}{
 		{"no status", nil, "Not reported", ""},
+		{"empty status", map[string]any{}, "Not reported", ""},
+		{"partial status", map[string]any{"assignedIPv4": int64(2), "availableIPv4": int64(8)}, "Not reported", ""},
 		{"addresses free", poolStatus(2, 8, 0, 0), "Available", "IPv4 2 assigned, 8 available"},
 		{"all assigned", poolStatus(10, 0, 0, 0), "Exhausted", "IPv4 10 assigned, 0 available"},
 		{"not loaded by the controller", poolStatus(0, 0, 0, 0), "No addresses", ""},
@@ -158,6 +160,17 @@ func TestMetalLBConfigurationStateSummary(t *testing.T) {
 				t.Fatalf("got %+v", s)
 			}
 		})
+	}
+}
+
+func TestMetalLBConfigurationStateSummaryTerminating(t *testing.T) {
+	u := metalLBObject("metallb.io/v1beta1", "ConfigurationState", map[string]any{
+		"status": map[string]any{"result": "Invalid", "errorSummary": "secret ref not found"},
+	})
+	now := metav1.Now()
+	u.SetDeletionTimestamp(&now)
+	if s := summarizeUnstructured(u); s.Status != "Terminating" || s.Issue != "" || !s.Terminating {
+		t.Fatalf("got %+v", s)
 	}
 }
 
