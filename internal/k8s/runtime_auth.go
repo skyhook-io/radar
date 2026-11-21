@@ -468,6 +468,8 @@ func transitionConnectedToRuntimeAuthFailure(classification string) bool {
 		ErrorType:   classification,
 	}
 	status.DisconnectedAt = outageStart(connectionStatus, status, time.Now())
+	// Demotion is this connection's point of no return: retire its ID here.
+	servingConnectionID = ""
 	connectionStatus = status
 	connectionStatusMu.Unlock()
 

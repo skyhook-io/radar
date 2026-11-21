@@ -2,9 +2,11 @@ package k8s
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"errors"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +37,58 @@ type ConnectionStatus struct {
 	// so the UI can say how long the cluster has been down. Set by
 	// SetConnectionStatus; callers leave it empty.
 	DisconnectedAt string `json:"disconnectedAt,omitempty"`
+
+	// ConnectionID names the admitted connection Radar is serving: one
+	// admission of one cluster, unique for this process and across restarts.
+	// Empty while nothing is serving. Set by the publisher; callers leave it empty.
+	ConnectionID string `json:"connectionId,omitempty"`
+}
+
+var (
+	bootNonce = rand.Text()[:10]
+
+	// Guarded by connectionStatusMu.
+	servingConnectionID  string
+	connectionAdmissions uint64
+	admissionsClosed     bool
+)
+
+// ServingConnectionID returns the admitted connection Radar is serving, or ""
+// while nothing is serving (a switch, rescope or rebuild is between its point
+// of no return and its admission).
+func ServingConnectionID() string {
+	connectionStatusMu.RLock()
+	defer connectionStatusMu.RUnlock()
+	return servingConnectionID
+}
+
+// RetireServingConnection is the point of no return: called before any
+// destructive teardown, it clears the serving ID so no request can be admitted
+// against a half-retired connection. A connected status becomes connecting.
+func RetireServingConnection() {
+	connectionStatusMu.Lock()
+	if servingConnectionID == "" {
+		connectionStatusMu.Unlock()
+		return
+	}
+	servingConnectionID = ""
+	status := connectionStatus
+	if status.State == StateConnected {
+		status.State = StateConnecting
+	}
+	status.ConnectionID = ""
+	connectionStatus = status
+	connectionStatusMu.Unlock()
+	notifyConnectionChange(status)
+}
+
+// CloseConnectionAdmissions retires the serving connection for good: after it,
+// no publication can admit a new one. Shutdown calls it before tearing down.
+func CloseConnectionAdmissions() {
+	connectionStatusMu.Lock()
+	admissionsClosed = true
+	connectionStatusMu.Unlock()
+	RetireServingConnection()
 }
 
 // outageStart carries DisconnectedAt from one status to the next: it starts
@@ -85,6 +139,15 @@ func SetConnectionStatusIfCurrent(operation context.Context, status ConnectionSt
 		return false
 	}
 	status.DisconnectedAt = outageStart(connectionStatus, status, time.Now())
+	if status.State == StateConnected && servingConnectionID == "" {
+		if admissionsClosed {
+			connectionStatusMu.Unlock()
+			return false
+		}
+		connectionAdmissions++
+		servingConnectionID = bootNonce + "-" + strconv.FormatUint(connectionAdmissions, 10)
+	}
+	status.ConnectionID = servingConnectionID
 	if connectionStatus == status {
 		connectionStatusMu.Unlock()
 		return true
