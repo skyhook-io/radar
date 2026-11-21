@@ -53,7 +53,7 @@ A server without connection IDs (older or in-cluster Radar) reports none; the br
 
 ## Scenario checklist
 
-Run these on major changes to connection, switching or binding code. **Live** scenarios use `scripts/connection-lifecycle-check.sh` against the radar-test EKS clusters (see the script's header for setup). Unit coverage is named where it exists.
+Run these on major changes to connection, switching or binding code. **Live** scenarios use `scripts/connection-lifecycle-check.sh` against the radar-test EKS clusters (see the script's header for setup); **browser** scenarios use `scripts/connection-lifecycle-ui-check.mjs` against a Radar started on the same fixtures. Unit coverage is named where it exists.
 
 | ID | Scenario | Expected | Live | Unit |
 |----|----------|----------|------|------|
@@ -72,8 +72,8 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 | L8 | ID from a previous Radar process | 409 | ✓ | browser: `connectionBinding.test.ts` (boot ordering) |
 | L9 | Same context name repointed to another cluster, then Retry | New ID; old ID 409; new ID writes to the new cluster | ✓ | |
 | L10 | Stop during warm-up | Nothing serving; writes 503 | ✓ | |
-| U1 | Browser: a tab with SSE and status frozen restarts from a stale drawer after another tab switched | Refused, message says nothing changed, no write on either cluster; the tab re-reads status and resets to the new cluster; the switching tab's restart writes the new cluster only | browser (headless Chrome) | |
-| U2 | Browser: same, status poll live | The stale tab resets on its own before the user can act | browser | |
+| U1 | Browser: a tab with SSE and status frozen restarts from a stale drawer after another tab switched | Refused, message says nothing changed, no write on either cluster; the tab re-reads status and resets to the new cluster; the switching tab's restart writes the new cluster only | `connection-lifecycle-ui-check.mjs` | |
+| U2 | Browser: same, status poll live (remove the status block in the script) | The stale tab resets on its own before the user can act | manual variant | |
 | I1 | In-cluster Radar | No identity published, nothing labelled, a named connection ignored | | `TestInClusterRadarBindsNoConnections` |
 | B5 | Publication older than one already seen (SSE after poll) | Not displayed | | `connectionBinding.test.ts` |
 | B6 | Late status from another API base (Hub remount) | Recorded under its own base; doesn't reset the mounted views | | `connectionBinding.test.ts` |
@@ -91,3 +91,11 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 | S2 | Shutdown | No admission after shutdown begins | | `TestConnectionAdmissionsClosedAtShutdown` |
 
 Known scenarios outside this slice (from the switch trace): O7 (a lost `context_changed` with no later status — now covered by B1 for bound views), F10 (stalls outside the switch's budget), and the write families listed above.
+
+## Next iteration
+
+Server-side binding (admission, retirement, capture, labels, refusals) held up through every live and review pass. The browser side is where review kept finding gaps: a tab-wide connection ID has to stay in step with what each view shows, through ordering, adoption, resets, warm-up and Hub's shared query client. The stricter and simpler-to-prove model:
+
+- Each covered query result carries the connection label of the response that produced it (kept outside the data object, since React Query's structural sharing replaces result objects).
+- An action sends the label of the data it acts on. The server refuses it unless that connection is serving. Then no tab-wide ordering or reset rule is load-bearing for write safety; they only affect what is displayed.
+- Covered query keys include the API base, so Radar Hub's shared query client can't hand one cluster's result to another.
