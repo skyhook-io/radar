@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MutationCache, QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
-import { useRestartWorkload } from './client'
+import { useBulkRestartWorkloads, useRestartWorkload } from './client'
 import { getApiBase } from './config'
 import { observeConnectionStatus, resetConnectionBindingForTest } from './connectionBinding'
 
@@ -103,5 +103,33 @@ it('refuses a restart from a view mounted before the tab moved to another connec
   })
   expect(fetchMock).not.toHaveBeenCalled()
   expect(error).toMatchObject({ status: 409, message: expect.stringContaining('Nothing was changed') })
+  act(() => root.unmount())
+})
+
+// Bulk actions are confirmed inside the resource table, which remounts on a
+// new connection; the page around it may not, and must still be able to act.
+it('sends a bulk restart for the current connection from a page that outlived a reset', async () => {
+  const BOOT = '2026-11-21T03:00:00.000000000Z'
+  observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, getApiBase())
+  const seen: (string | null)[] = []
+  vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    seen.push(new Headers(init?.headers).get('X-Radar-Connection'))
+    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json', 'X-Radar-Connection': 'n-2' } })
+  }))
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+  let hook: ReturnType<typeof useBulkRestartWorkloads> | undefined
+  function Probe() {
+    hook = useBulkRestartWorkloads()
+    return null
+  }
+  const root = createRoot(document.createElement('div'))
+  await act(async () => {
+    root.render(<QueryClientProvider client={client}><Probe /></QueryClientProvider>)
+  })
+  observeConnectionStatus({ context: 'a', connectionId: 'n-2', seq: 2, bootAt: BOOT }, getApiBase())
+  await act(async () => {
+    await hook!.mutateAsync({ items: [{ kind: 'deployments', namespace: 'default', name: 'web' }] })
+  })
+  expect(seen).toEqual(['n-2'])
   act(() => root.unmount())
 })

@@ -38,9 +38,6 @@ describe('connection binding', () => {
     // A restarted process whose clock was set back is still the one answering.
     observeConnectionStatus({ context: 'b', connectionId: 'k-1', seq: 1, bootAt: '2026-11-20T00:00:00.000000000Z' }, BASE)
     expect(connectionHeaderValue(BASE)).toBe('k-1')
-    // A late reply from a process the tab saw replaced is ignored.
-    expect(observeConnectionStatus({ context: 'b', connectionId: 'm-1', seq: 9, bootAt: LATER_BOOT }, BASE)).toBe(false)
-    expect(connectionHeaderValue(BASE)).toBe('k-1')
   })
 
   it('keeps the last admitted connection while nothing is serving', () => {

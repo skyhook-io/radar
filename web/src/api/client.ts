@@ -5118,7 +5118,7 @@ export function useBulkRestartWorkloads() {
       queryClient.invalidateQueries({ queryKey: ["resources"] });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
-  }));
+  }), false);
 }
 
 export function useBulkScaleWorkloads() {
@@ -5190,7 +5190,7 @@ export function useBulkScaleWorkloads() {
       queryClient.invalidateQueries({ queryKey: ["resources"] });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
-  }));
+  }), false);
 }
 
 // Apply (create or update) a resource from YAML
@@ -5566,12 +5566,14 @@ type Unconfirmed<M extends AnyMutation> = Omit<Parameters<M["mutate"]>[0], "targ
 
 // A write belongs to the view that offers it: a component mounted before the
 // tab moved to another connection (a drawer closing after a reset, a dialog
-// it opened, a page that outlived the reset) is refused locally, never sent.
-function useBindToConfirmation<M extends AnyMutation>(m: M) {
+// it portaled, a page that outlived the reset) is refused locally, never sent.
+// Bulk actions skip the check: their selection and confirmation live in the
+// resource table, which remounts when the tab adopts another connection.
+function useBindToConfirmation<M extends AnyMutation>(m: M, guardView = true) {
   const base = getApiBase();
   const [mountedGeneration] = useState(() => connectionGeneration(base));
   const target = (): ConfirmedTarget =>
-    connectionGeneration(base) === mountedGeneration ? confirmTarget() : { base, stale: true };
+    !guardView || connectionGeneration(base) === mountedGeneration ? confirmTarget() : { base, stale: true };
   return {
     ...m,
     mutate: (v: Unconfirmed<M>, o?: Parameters<M["mutate"]>[1]) => m.mutate({ ...v, target: target() }, o),

@@ -4,7 +4,7 @@ import { automaticRequestHeaders, getApiBase } from '../api/config'
 import { readErrorBody } from '../api/httpErrors'
 import { apiFetch, type SyncStatusSnapshot, type NodeDrainActivity } from '../api/client'
 import { followSwitch, switchInProgress, type ContextSwitchOperation } from '../api/contextSwitch'
-import { observeConnectionStatus, setConnectionMismatchHandler, type ConnectionIdentity } from '../api/connectionBinding'
+import { connectionHeaderValue, observeConnectionStatus, setConnectionMismatchHandler, type ConnectionIdentity } from '../api/connectionBinding'
 import { showApiNotice } from '../components/ui/Toast'
 import { ClusterConnectedContext } from './clusterConnected'
 
@@ -42,6 +42,10 @@ interface PolledConnectionStatus extends ConnectionStatusResponse {
   sseGenerationAtStart: number
   // Older than a publication the tab already saw (connectionBinding.ts).
   superseded: boolean
+  // This poll made the tab adopt a new connection; it is displayed even if an
+  // older SSE frame arrived meanwhile, so the shown cluster and the one
+  // requests name agree.
+  adopted: boolean
 }
 
 interface ConnectionContextValue {
@@ -127,8 +131,10 @@ async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<Poll
     throw new Error('Failed to fetch connection status')
   }
   const status = await response.json() as ConnectionStatusResponse
+  const before = connectionHeaderValue(base)
   const superseded = !observeConnectionStatus(status, base)
-  return { ...status, sseGenerationAtStart, superseded }
+  const adopted = !superseded && !!status.connectionId && connectionHeaderValue(base) !== before
+  return { ...status, sseGenerationAtStart, superseded, adopted }
 }
 
 // superseded: older than a publication the tab already saw; not for display.
@@ -290,7 +296,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const keep = new Set(['connection-status', 'auth-me', 'contexts'])
       queryClient.removeQueries({ predicate: (q) => !keep.has(String(q.queryKey[0])) })
     }
-    if (!shouldApplyPolledConnection(
+    if (!data.adopted && !shouldApplyPolledConnection(
       current.state,
       data.state,
       data.sseGenerationAtStart,

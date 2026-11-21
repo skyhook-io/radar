@@ -153,8 +153,11 @@ run() {
   L4) # read labels and status during a switch
     start 20s || return
     local idA=$(connid) seq1=$(field "d.get('seq',0)")
-    local stamp=$(curl -s -m 10 -D - -o /dev/null "$API/resources/namespaces" | awk -F': ' 'tolower($1)=="x-radar-connection"{print $2}' | tr -d '\r')
-    expect "L4 read labelled with the serving connection" "$([[ $stamp == $idA ]] && print matches || print "stamp=$stamp id=$idA")" "matches"
+    local hdr=$L/last-headers.txt
+    local rcode=$(curl -s -m 10 -D $hdr -o $L/last-body.json -w '%{http_code}' "$API/resources/namespaces")
+    local stamp=$(awk -F': ' 'tolower($1)=="x-radar-connection"{print $2}' $hdr | tr -d '\r')
+    local hasDefault=$(j "any(i.get('metadata',{}).get('name')=='default' for i in d.get('items',[]))" < $L/last-body.json 2>/dev/null)
+    expect "L4 read labelled with the serving connection" "$([[ $rcode == 200 && -n $idA && $stamp == $idA && $hasDefault == True ]] && print matches || print "code=$rcode stamp=$stamp id=$idA default=$hasDefault")" "matches"
     switch_tracked radar-test-prod
     wait_state connecting radar-test-prod
     local mid=$(field "repr(d.get('connectionId',''))+' '+d.get('state')")
