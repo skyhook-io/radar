@@ -10,9 +10,10 @@ collector, require Prometheus Operator, or replace a general-purpose dashboardin
 tool. Resource charts work without HTTP instrumentation; request charts appear
 when a supported Beyla or Istio source has usable observations.
 
-Radar Hub offers a Datadog preview for CPU and memory history. An organization
-owner connects Datadog in Hub and maps the clusters that should use it. The
-connected Radar agent checks workload access for each chart read.
+Radar Hub offers a Datadog beta for CPU and memory history, with CPU throttling
+when Datadog reports both sets of quota periods for the same containers. An
+organization owner connects Datadog in Hub and maps the clusters that should use
+it. The connected Radar agent checks workload access for each chart read.
 
 <p align="center">
   <img src="screenshots/workload-metrics-overview.png" alt="Radar workload metrics showing HTTP requests, 5xx errors and latency above CPU, memory and throttling charts" width="1100" />

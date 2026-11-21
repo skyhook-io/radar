@@ -1,14 +1,20 @@
 import { useQuery } from '@tanstack/react-query'
-import { AreaChart, type TimeSeries } from '@skyhook-io/k8s-ui/components/charts'
+import { AreaChart, MetricsSummary, type TimeSeries } from '@skyhook-io/k8s-ui/components/charts'
 import { fetchJSON, type PrometheusTimeRange } from '../../api/client'
 import { getApiBase } from '../../api/config'
-import { MetricsSummary, TIME_RANGES, WORKLOAD_CATEGORIES } from './PrometheusCharts'
+import { TIME_RANGES, WORKLOAD_CATEGORIES } from './PrometheusCharts'
 import { RestartEventLane } from './RestartChart'
 
 type Metric = 'cpu' | 'memory'
-type Panels = Record<Metric, { unit: string; series: TimeSeries[] }>
+type Panel = { unit: string; series: TimeSeries[] }
+type Panels = Record<Metric, Panel> & { throttling?: Panel }
 type Workload = { kind: string; namespace: string; name: string }
 type WorkloadCharts = { configured: false } | { configured: true; charts: Panels }
+
+const datadogCategories = [
+  ...WORKLOAD_CATEGORIES.filter((category) => category.key === 'cpu' || category.key === 'memory'),
+  { key: 'throttling', label: 'CPU throttled periods', color: 'text-warning-text', chartColor: 'var(--warning-text)', fillColor: 'color-mix(in srgb, var(--warning-text) 14%, transparent)' },
+] as const
 
 export function useDatadogWorkloadCharts({ kind, namespace, name }: Workload, range: PrometheusTimeRange, embedded: boolean) {
   const enabled = embedded && !!namespace && ['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)
@@ -66,17 +72,21 @@ export function DatadogWorkloadCharts({
       {!error && !loading && charts && (
         <>
           <div className="grid gap-3 lg:grid-cols-2">
-            {WORKLOAD_CATEGORIES.filter((category) => category.key === 'cpu' || category.key === 'memory').map((category) => {
-              const { unit, series } = charts[category.key as Metric]
+            {datadogCategories.map((category) => {
+              const panel = charts[category.key as keyof Panels]
+              if (!panel) return null
+              const { unit, series } = panel
+              const throttling = category.key === 'throttling'
               return (
-                <section key={category.key} className="min-w-0 rounded-lg border border-theme-border bg-theme-surface p-3">
+                <section key={category.key} className={`min-w-0 rounded-lg border border-theme-border bg-theme-surface p-3${throttling ? ' lg:col-span-2' : ''}`}>
                   <header className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <h3 className="text-xs font-medium uppercase tracking-wide text-theme-text-secondary">{category.label}</h3>
-                    {series.length > 0 && <MetricsSummary series={series} unit={unit} category={category} />}
+                    {series.length > 0 && <MetricsSummary series={series} unit={unit} currentColorClass={category.color} />}
                   </header>
                   {series.length > 0
                     ? <AreaChart series={series} unit={unit} color={category.chartColor} fillColor={category.fillColor} layout="dashboard" />
                     : <p className="py-6 text-center text-xs text-theme-text-secondary">No Datadog samples in this time range.</p>}
+                  {throttling && <p className="mt-2 text-xs text-theme-text-tertiary">Share of CPU quota periods throttled across reporting containers.</p>}
                 </section>
               )
             })}
