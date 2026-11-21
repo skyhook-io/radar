@@ -127,6 +127,7 @@ type ResourceChange = k8score.ResourceChange
 // status, pod workload lookup, timeline integration).
 type ResourceCache struct {
 	*k8score.ResourceCache
+	lastClusterInfo  atomic.Pointer[clusterInfoObservation]
 	permissionResult *PermissionCheckResult
 	secretsEnabled   bool // Whether secrets informer is running (requires RBAC)
 	// argoDrift tracks how long each manual-sync ArgoCD Application has been

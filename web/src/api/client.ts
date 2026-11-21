@@ -8477,6 +8477,7 @@ export interface DiagnosticsSnapshot {
     clusterName?: string;
     error?: string;
     errorType?: string;
+    progressMessage?: string;
   };
   kubeconfig?: {
     mode: "" | "in-cluster" | "single" | "multi-env" | "multi-dir" | "multi-source";
@@ -8486,11 +8487,12 @@ export interface DiagnosticsSnapshot {
     enrichedFromShell: boolean;
     kubeconfigEnvIgnored: boolean;
     kubeconfigEnvIgnoredReason: string;
-    currentContextUsesExec: boolean;
+    currentContextUsesExec?: boolean;
     execPluginsPresent?: string[];
     execPluginsMissing?: string[];
   };
   cluster?: {
+    observedAt?: string;
     platform: string;
     kubernetesVersion: string;
     nodeCount: number;
@@ -8528,7 +8530,7 @@ export interface DiagnosticsSnapshot {
   };
   informers?: {
     typedCount: number;
-    dynamicCount: number;
+    dynamicCount?: number;
     watchedCRDs: string[];
     syncStatus?: DiagCacheSyncStatus;
   };
@@ -8600,7 +8602,30 @@ export interface DiagnosticsSnapshot {
 export function useDiagnostics(enabled: boolean) {
   return useQuery<DiagnosticsSnapshot>({
     queryKey: ["diagnostics"],
-    queryFn: enabled ? () => fetchJSON("/diagnostics") : skipToken,
+    queryFn: enabled
+      ? async ({ signal }) => {
+          const request = new AbortController();
+          const cancel = () => request.abort();
+          signal.addEventListener("abort", cancel, { once: true });
+          if (signal.aborted) cancel();
+          const timeout = setTimeout(cancel, 15000);
+          try {
+            return await fetchJSON<DiagnosticsSnapshot>("/diagnostics", request.signal);
+          } catch (error) {
+            if (request.signal.aborted && !signal.aborted) {
+              throw new Error("Radar did not return diagnostics within 15 seconds.", { cause: error });
+            }
+            if (signal.aborted) throw error;
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`Could not load diagnostics. ${message}`, { cause: error });
+          } finally {
+            clearTimeout(timeout);
+            signal.removeEventListener("abort", cancel);
+          }
+        }
+      : skipToken,
+    retry: false,
+    networkMode: "always",
     staleTime: 0,
     gcTime: 0,
   });

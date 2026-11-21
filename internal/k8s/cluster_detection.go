@@ -140,8 +140,23 @@ func (i *ClusterInfo) KubeconfigCluster() string {
 	return i.Cluster
 }
 
+type clusterInfoObservation struct {
+	info ClusterInfo
+	at   time.Time
+}
+
+// LastClusterInfo returns the last completed read with a known version for this cache generation.
+// Diagnostics must not start or wait for an API request when the cluster is unreachable.
+func (cache *ResourceCache) LastClusterInfo() (ClusterInfo, time.Time) {
+	if observed := cache.lastClusterInfo.Load(); observed != nil {
+		return observed.info, observed.at
+	}
+	return ClusterInfo{}, time.Time{}
+}
+
 // GetClusterInfo returns detected cluster information
 func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
+	initialCache := GetResourceCache()
 	platform, _ := GetClusterPlatform(ctx)
 
 	info := &ClusterInfo{
@@ -180,6 +195,13 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 		info.CRDDiscoveryStatus = string(dynamicCache.GetDiscoveryStatus())
 	}
 
+	// The version is cached and the counts come from informers, so a read
+	// during an outage succeeds on stale data: it must not move the
+	// observation (and its time) forward.
+	if cache != nil && cache == initialCache && ctx.Err() == nil && info.KubernetesVersion != "" &&
+		GetConnectionStatus().State != StateDisconnected {
+		cache.lastClusterInfo.Store(&clusterInfoObservation{info: *info, at: time.Now()})
+	}
 	return info, nil
 }
 
