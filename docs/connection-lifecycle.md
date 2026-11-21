@@ -6,7 +6,13 @@ How Radar names the cluster connection it serves, and how a write is bound to th
 
 A write from a Radar tab runs against the connection the tab is on, or is refused before any Kubernetes work. In particular, a tab still showing cluster A after another tab switched Radar to B can't restart or scale B's same-named workload.
 
-Covered today: Deployment, StatefulSet, DaemonSet and Rollout **restart** and **scale** (single and bulk). Other write families (apply, delete, Helm, exec, port-forward, integration actions, MCP) still resolve the current connection when they run.
+Covered today (the routes wrapped with `bindWrite` in `internal/server/server.go`):
+- Workloads: **restart** and **scale** (single and bulk), Deployment **pause** and **resume**, **set image**, **rollback** (including Argo Rollouts), and the Argo Rollouts actions (abort, retry, promote, promote-full, skip-step).
+- CronJobs: **trigger**, **suspend**, **resume**.
+- Resources: **apply**, **update** (YAML edit) and **delete**.
+- Nodes: **cordon**, **uncordon** and **drain**. A drain keeps running on the connection it was admitted to, even if Radar switches meanwhile.
+
+Not yet covered: Helm, exec, port-forward and node debug, GitOps and other integration actions, and MCP. They still resolve the current connection when they run.
 
 **Only when Radar serves from a kubeconfig.** An in-cluster Radar can't change clusters (no kubeconfig contexts; CAPI connect is refused in-cluster), and during a rolling update two of its pods, each with its own IDs, answer the same browser. It publishes no ID and ignores one a request names; its writes still run on one captured set of clients.
 
@@ -53,6 +59,7 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 | L2 | Stale tab after the switch completed | 409 `context_changed`, no write | ✓ | `TestBoundWriteRefusesStaleConnection` |
 | L2b | Current tab after the switch | 200, write on the new cluster only | ✓ | |
 | L3 | A→B→A: the first A's ID after returning to A | 409, no write; IDs never repeat | ✓ | `TestBoundWriteRefusesStaleConnection`, `TestConnectionIdentityAdmitAndRetire` |
+| R1 | Each bound write route, through the router, with a stale ID | 409, no write on either cluster | | `TestBoundWriteRoutesRefuseStaleConnection` |
 | — | Switch lands between admission and execution of a write | Write runs on the admitted cluster; the new one gets nothing | | `TestBoundRestartStaysOnAdmittedConnectionAcrossSwitch` (+ control `TestUnboundRestartFollowsTheSwitch`) |
 | L4 | Status names the serving connection | `connectionId` set | ✓ | `TestConnectionIdentityAdmitAndRetire` |
 | L5 | Status mid-switch | No serving ID, state `connecting` | ✓ | `TestConnectionIdentityAdmitAndRetire` |

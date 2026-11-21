@@ -586,7 +586,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 		// Node drain — outside the 60s timeout group: it may wait minutes for PDB backoff
 		// and, by default, for the evicted pods to finish terminating.
-		r.Post("/nodes/{name}/drain", s.handleDrainNode)
+		r.Post("/nodes/{name}/drain", s.bindWrite(s.handleDrainNode))
 
 		// Cloud Connect prepare/start — outside the 60s timeout group. prepare
 		// downloads and renders the chart and runs the exact-manifest
@@ -715,10 +715,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Head("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
 			r.Post("/resources/preview", s.handlePreviewResources)
 			r.Post("/resources/schemas", s.handleResourceSchemas)
-			r.Post("/resources/apply", s.handleApplyResource)
-			r.Put("/resources/{kind}/{namespace}/{name}", s.handleUpdateResource)
+			r.Post("/resources/apply", s.bindWrite(s.handleApplyResource))
+			r.Put("/resources/{kind}/{namespace}/{name}", s.bindWrite(s.handleUpdateResource))
 			r.Get("/resources/{kind}/{namespace}/{name}/cascade-preview", s.handleCascadeDeletePreview)
-			r.Delete("/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
+			r.Delete("/resources/{kind}/{namespace}/{name}", s.bindWrite(s.handleDeleteResource))
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
 			r.Get("/sealedsecrets/controller", s.handleSealedSecretsController)
 			r.Get("/certificates", s.handleCertificates)
@@ -801,8 +801,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// Node operations (cordon/uncordon) and the read-only drain plan.
 			// The drain itself lives outside this timeout group, see above.
-			r.Post("/nodes/{name}/cordon", s.handleCordonNode)
-			r.Post("/nodes/{name}/uncordon", s.handleUncordonNode)
+			r.Post("/nodes/{name}/cordon", s.bindWrite(s.handleCordonNode))
+			r.Post("/nodes/{name}/uncordon", s.bindWrite(s.handleUncordonNode))
 			r.Post("/nodes/{name}/drain-plan", s.handleDrainPlan)
 
 			// Pod file browser
@@ -832,19 +832,20 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/sessions", s.handleGetSessions)
 
 			// CronJob operations
-			r.Post("/cronjobs/{namespace}/{name}/trigger", s.handleTriggerCronJob)
-			r.Post("/cronjobs/{namespace}/{name}/suspend", s.handleSuspendCronJob)
-			r.Post("/cronjobs/{namespace}/{name}/resume", s.handleResumeCronJob)
+			r.Post("/cronjobs/{namespace}/{name}/trigger", s.bindWrite(s.handleTriggerCronJob))
+			r.Post("/cronjobs/{namespace}/{name}/suspend", s.bindWrite(s.handleSuspendCronJob))
+			r.Post("/cronjobs/{namespace}/{name}/resume", s.bindWrite(s.handleResumeCronJob))
 
-			// Workload restart, scale, rollback
+			// Workload restart, scale, rollback. Writes are bound to the connection
+			// the caller names (bindWrite in connection_binding.go).
 			r.Post("/workloads/{kind}/{namespace}/{name}/restart", s.bindWrite(s.handleRestartWorkload))
-			r.Post("/workloads/{kind}/{namespace}/{name}/pause", s.handlePauseDeployment)
-			r.Post("/workloads/{kind}/{namespace}/{name}/resume", s.handleResumeDeployment)
+			r.Post("/workloads/{kind}/{namespace}/{name}/pause", s.bindWrite(s.handlePauseDeployment))
+			r.Post("/workloads/{kind}/{namespace}/{name}/resume", s.bindWrite(s.handleResumeDeployment))
 			r.Post("/workloads/{kind}/{namespace}/{name}/scale", s.bindWrite(s.handleScaleWorkload))
 			r.Get("/workloads/{kind}/{namespace}/{name}/images", s.handleGetWorkloadImages)
-			r.Post("/workloads/{kind}/{namespace}/{name}/images", s.handleSetWorkloadImages)
+			r.Post("/workloads/{kind}/{namespace}/{name}/images", s.bindWrite(s.handleSetWorkloadImages))
 			r.Get("/workloads/{kind}/{namespace}/{name}/revisions", s.handleWorkloadRevisions)
-			r.Post("/workloads/{kind}/{namespace}/{name}/rollback", s.handleRollbackWorkload)
+			r.Post("/workloads/{kind}/{namespace}/{name}/rollback", s.bindWrite(s.handleRollbackWorkload))
 
 			// Workload logs (non-streaming)
 			r.Get("/workloads/{kind}/{namespace}/{name}/logs", s.handleWorkloadLogs)
@@ -897,7 +898,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// revision history are served by the /workloads routes above.
 			r.Get("/rollouts/{namespace}/{name}/capabilities", s.handleRolloutCapabilities)
 			r.Get("/rollouts/{namespace}/{name}/analysisruns", s.handleRolloutAnalysisRuns)
-			r.Post("/rollouts/{namespace}/{name}/{action}", s.handleRolloutOperation)
+			r.Post("/rollouts/{namespace}/{name}/{action}", s.bindWrite(s.handleRolloutOperation))
 
 			// ArgoCD routes
 			r.Get("/argo/destinations", s.handleArgoDestinations)

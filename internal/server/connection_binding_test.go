@@ -215,3 +215,47 @@ func TestUnboundRestartFollowsTheSwitch(t *testing.T) {
 		t.Fatalf("control: writesA=%d writesB=%d, want the unbound restart on B", writes(a), writes(b))
 	}
 }
+
+// Every bound write route refuses a tab still naming a connection Radar no
+// longer serves, before any Kubernetes work, through the real router.
+func TestBoundWriteRoutesRefuseStaleConnection(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	a, b := fakeCluster(t), fakeCluster(t)
+	idA := install(t, "cluster-a", a)
+	install(t, "cluster-b", b)
+	s := &Server{}
+	router := chi.NewRouter()
+	s.setupAppRoutes(router)
+
+	for _, route := range []struct{ method, path string }{
+		{http.MethodPost, "/api/workloads/deployments/default/web/restart"},
+		{http.MethodPost, "/api/workloads/deployments/default/web/scale"},
+		{http.MethodPost, "/api/workloads/deployments/default/web/pause"},
+		{http.MethodPost, "/api/workloads/deployments/default/web/resume"},
+		{http.MethodPost, "/api/workloads/deployments/default/web/images"},
+		{http.MethodPost, "/api/workloads/deployments/default/web/rollback"},
+		{http.MethodPost, "/api/cronjobs/default/nightly/trigger"},
+		{http.MethodPost, "/api/cronjobs/default/nightly/suspend"},
+		{http.MethodPost, "/api/cronjobs/default/nightly/resume"},
+		{http.MethodPost, "/api/rollouts/default/web/promote"},
+		{http.MethodPost, "/api/resources/apply"},
+		{http.MethodPut, "/api/resources/deployments/default/web"},
+		{http.MethodDelete, "/api/resources/deployments/default/web"},
+		{http.MethodPost, "/api/nodes/node-1/cordon"},
+		{http.MethodPost, "/api/nodes/node-1/uncordon"},
+		{http.MethodPost, "/api/nodes/node-1/drain"},
+	} {
+		req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(connectionHeader, idA)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), errCodeContextChanged) {
+			t.Errorf("%s %s: %d %s, want 409 %s", route.method, route.path, rec.Code, rec.Body, errCodeContextChanged)
+		}
+	}
+	if writes(a)+writes(b) != 0 {
+		t.Fatalf("refused writes reached a cluster: A=%d B=%d", writes(a), writes(b))
+	}
+}
