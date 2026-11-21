@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -268,5 +269,31 @@ func TestProbeReadsClientAfterGeneration(t *testing.T) {
 	})
 	if publishResourcePermissions(probe) || GetCachedPermissionResult() != nil {
 		t.Fatalf("the previous cluster's result was published under the new generation: %+v", GetCachedPermissionResult())
+	}
+}
+
+func TestCancelPermissionProbeWithBlockedCredentialPlugin(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	done := make(chan error, 1)
+	go func() {
+		_, err := probeCachePermissions(ctx, func(context.Context, bool) permissionProbe {
+			close(entered)
+			<-release
+			return permissionProbe{result: &PermissionCheckResult{Perms: &ResourcePermissions{}}}
+		})
+		done <- err
+	}()
+	<-entered
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("probe cancellation = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cache initialization waited for the credential plugin to exit")
 	}
 }

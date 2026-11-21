@@ -17,9 +17,10 @@ import (
 var nkpLookupTimeout = 2 * time.Second
 
 var (
-	nkpAPIMu      sync.Mutex
-	nkpAPIChecked bool
-	nkpAPIAnswer  bool
+	nkpAPIMu         sync.Mutex
+	nkpAPIChecked    bool
+	nkpAPIAnswer     bool
+	nkpAPIGeneration uint64
 )
 
 var (
@@ -270,20 +271,27 @@ func isNKP(ctx context.Context) bool {
 			}
 		}
 	}
+	nkpAPIMu.Lock()
+	if nkpAPIChecked {
+		answer := nkpAPIAnswer
+		nkpAPIMu.Unlock()
+		return answer
+	}
+	generation := nkpAPIGeneration
+	nkpAPIMu.Unlock()
 	client := GetClient()
 	if client == nil {
 		return false
-	}
-
-	nkpAPIMu.Lock()
-	defer nkpAPIMu.Unlock()
-	if nkpAPIChecked {
-		return nkpAPIAnswer
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, nkpLookupTimeout)
 	defer cancel()
 	_, err := client.CoreV1().Namespaces().Get(lookupCtx, k8score.NKPNamespace, metav1.GetOptions{})
 	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsForbidden(err) {
+		return false
+	}
+	nkpAPIMu.Lock()
+	defer nkpAPIMu.Unlock()
+	if nkpAPIGeneration != generation {
 		return false
 	}
 	nkpAPIChecked, nkpAPIAnswer = true, err == nil
@@ -295,6 +303,7 @@ func isNKP(ctx context.Context) bool {
 func InvalidatePlatformCache() {
 	nkpAPIMu.Lock()
 	defer nkpAPIMu.Unlock()
+	nkpAPIGeneration++
 	nkpAPIChecked, nkpAPIAnswer = false, false
 }
 

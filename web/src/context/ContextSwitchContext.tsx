@@ -1,4 +1,7 @@
 import { createContext, useContext, useState, useCallback, useRef, ReactNode } from 'react'
+import { parseContextName } from '../utils/context-name'
+import { useConnection } from './ConnectionContext'
+import { switchInProgress } from '../api/contextSwitch'
 import type { SelectedResource } from '../types'
 
 export interface ParsedContextInfo {
@@ -20,6 +23,8 @@ export interface FailedSwitch {
 
 interface ContextSwitchState {
   isSwitching: boolean
+  dismissed: boolean
+  setDismissed: (value: boolean) => void
   failedSwitch: FailedSwitch | null
   setFailedSwitch: (failed: FailedSwitch | null) => void
   targetContext: ParsedContextInfo | null
@@ -37,6 +42,9 @@ interface ContextSwitchState {
 const ContextSwitchContext = createContext<ContextSwitchState | null>(null)
 
 export function ContextSwitchProvider({ children }: { children: ReactNode }) {
+  const { contextSwitch } = useConnection()
+  const tracking = switchInProgress(contextSwitch) ? contextSwitch : undefined
+  const [dismissedId, setDismissedId] = useState<string>()
   const [isSwitching, setIsSwitching] = useState(false)
   const [targetContext, setTargetContext] = useState<ParsedContextInfo | null>(null)
   const [progressMessage, setProgressMessage] = useState<string | null>(null)
@@ -70,7 +78,13 @@ export function ContextSwitchProvider({ children }: { children: ReactNode }) {
   }, [])
 
   return (
-    <ContextSwitchContext.Provider value={{ isSwitching, failedSwitch, setFailedSwitch, targetContext, progressMessage, startSwitch, updateProgress, endSwitch, setOpenAfterSwitch, takeOpenAfterSwitch }}>
+    <ContextSwitchContext.Provider value={{
+      isSwitching: isSwitching || !!tracking,
+      dismissed: !!tracking && dismissedId === tracking.id,
+      setDismissed: value => setDismissedId(value ? tracking?.id : undefined),
+      failedSwitch, setFailedSwitch,
+      targetContext: tracking ? parseContextName(tracking.target) : targetContext,
+      progressMessage: tracking?.progress || progressMessage, startSwitch, updateProgress, endSwitch, setOpenAfterSwitch, takeOpenAfterSwitch }}>
       {children}
     </ContextSwitchContext.Provider>
   )
