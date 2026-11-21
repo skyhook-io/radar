@@ -48,7 +48,7 @@ export function DatadogWorkloadCharts({
     <div className={fill ? "h-full overflow-auto p-4" : "p-4"}>
       <div className="flex items-center justify-between gap-3 pb-3">
         <div>
-          <h2 className="text-sm font-medium text-theme-text-primary">Datadog <span className="text-theme-text-tertiary">· Preview</span></h2>
+          <h2 className="text-sm font-medium text-theme-text-primary">Datadog <span className="text-theme-text-tertiary">· Beta</span></h2>
           <p className="text-xs text-theme-text-secondary">Container usage in the selected range, from workload creation</p>
         </div>
         <select aria-label="Metrics time range" value={range} onChange={(e) => onRangeChange(e.target.value as PrometheusTimeRange)}
