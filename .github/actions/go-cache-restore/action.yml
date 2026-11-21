@@ -17,8 +17,10 @@ runs:
       uses: actions/cache/restore@v6
       with:
         path: ~/.cache/go-build
-        key: gobuild-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
-        restore-keys: gobuild-${{ runner.os }}-${{ github.job }}-
+        # "-sha-" ends the job name, so one job's prefix (backend) can't match
+        # another job's keys (backend-server).
+        key: gobuild-${{ runner.os }}-${{ github.job }}-sha-${{ github.sha }}
+        restore-keys: gobuild-${{ runner.os }}-${{ github.job }}-sha-
 
     # Go re-stamps a cache entry when it uses one more than an hour old, so
     # after backdating every entry, the ones still backdated when the job ends

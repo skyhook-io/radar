@@ -18,4 +18,4 @@ runs:
       uses: actions/cache/save@v6
       with:
         path: ~/.cache/go-build
-        key: gobuild-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+        key: gobuild-${{ runner.os }}-${{ github.job }}-sha-${{ github.sha }}
