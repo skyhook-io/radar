@@ -67,8 +67,12 @@ jobs:
           build-args: |
             VERSION=dev-${{ steps.sha.outputs.value }}
           tags: ${{ env.DOCKER_REPO }}:dev-${{ steps.sha.outputs.value }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Layers are cached in the registry, not in the Actions cache: mode=max
+          # keeps every stage's layers, which filled most of the repo's 10 GB
+          # Actions cache and squeezed CI's Go and npm caches. The tag lives on
+          # the public image package, so it costs no Packages storage.
+          cache-from: type=registry,ref=${{ env.DOCKER_REPO }}:buildcache-dev
+          cache-to: type=registry,ref=${{ env.DOCKER_REPO }}:buildcache-dev,mode=max,ignore-error=true
 
       - name: Move :dev if this commit is still main's tip
         # Re-checked AFTER the build (not before): a newer commit landing during
