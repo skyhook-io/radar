@@ -16,7 +16,9 @@ Covered today (the routes wrapped with `bindWrite` in `internal/server/server.go
 
 - CloudNativePG: Cluster, ScheduledBackup and Pooler **actions**. The CNPG service captures its clients and caches in one step; it also checks there that the connection is still the bound one (`k8s.StillBound`), so the whole capture belongs to it.
 
-Not yet covered: Helm, exec, port-forward and debug containers, other integration actions, CAPI connect, and MCP. They still resolve the current connection when they run.
+- Pods and nodes: **exec** (the terminal WebSocket names the connection in its URL, `?connection=`, since a browser can't set headers on a WebSocket), **file upload**, pod **debug containers**, node **debug pods** (create and clean up), and **port-forward** start. Sessions already end when Radar switches.
+
+Not yet covered: Helm, other integration actions, CAPI connect, and MCP. They still resolve the current connection when they run.
 
 **Only when Radar serves from a kubeconfig.** An in-cluster Radar can't change clusters (no kubeconfig contexts; CAPI connect is refused in-cluster), and during a rolling update two of its pods, each with its own IDs, answer the same browser. It publishes no ID and ignores one a request names; its writes still run on one captured set of clients.
 
@@ -37,7 +39,7 @@ Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `
 - The request header `X-Radar-Connection` names the connection the caller is on. A different ID gets **409 `context_changed`**. No serving connection, or a context operation holding the lock, gets **503 `cluster_unavailable`** (retryable). No header: admitted against the current connection (API and MCP callers, older UIs). Both refusals say nothing was changed.
 
 **Browser** (`web/src/api/connectionBinding.ts`):
-- The tab keeps the latest connection ID it heard (status poll, SSE frame, Retry result) and `apiFetch` sends it on every request. A status with no ID (mid-switch) keeps the last one; the server refuses writes then anyway.
+- The tab keeps the latest connection ID it heard (status poll, SSE frame, Retry result) and `apiFetch` sends it on every request. Writes that can't use `apiFetch` send it themselves: the file upload's XHR sets the header, and the terminal adds `?connection=` to its WebSocket URL (`withConnectionParam`). A status with no ID (mid-switch) keeps the last one; the server refuses writes then anyway.
 - Views reset when the tab learns the context changed, as before this slice: from `context_changed`, or from a status poll (every 30s while connected, also in background tabs and on focus) that shows a different context.
 - After a refusal, the toast says nothing was changed; the tab catches up on its next status poll or when it regains focus.
 - A server without connection IDs (older or in-cluster Radar) publishes none, and the browser sends no header.

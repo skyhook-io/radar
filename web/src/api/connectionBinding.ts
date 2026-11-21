@@ -24,6 +24,13 @@ export function connectionHeaderValue(base = getApiBase()): string | undefined {
   return ids.get(base)
 }
 
+/** A WebSocket URL naming this tab's connection (a browser can't set headers on one). */
+export function withConnectionParam(url: string, base = getApiBase()): string {
+  const id = ids.get(base)
+  if (!id) return url
+  return `${url}${url.includes('?') ? '&' : '?'}connection=${encodeURIComponent(id)}`
+}
+
 /** Test hook: forget everything. */
 export function resetConnectionBindingForTest(): void {
   ids.clear()

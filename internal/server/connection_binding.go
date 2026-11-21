@@ -6,8 +6,12 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
-// connectionHeader carries the connection a browser tab is showing.
-const connectionHeader = "X-Radar-Connection"
+// connectionHeader carries the connection a browser tab is on; connectionParam
+// carries it on a WebSocket URL.
+const (
+	connectionHeader = "X-Radar-Connection"
+	connectionParam  = "connection"
+)
 
 const (
 	errCodeContextChanged     = "context_changed"
@@ -31,7 +35,12 @@ func (s *Server) bindWrite(next http.HandlerFunc) http.HandlerFunc {
 				"Nothing was changed: Radar has no usable cluster connection right now. Try again once it is connected.")
 			return
 		}
-		if want := r.Header.Get(connectionHeader); connectionIdentityPublished() && want != "" && want != bound.ID {
+		want := r.Header.Get(connectionHeader)
+		if want == "" {
+			// A browser can't set headers on a WebSocket; it names the connection in the URL.
+			want = r.URL.Query().Get(connectionParam)
+		}
+		if connectionIdentityPublished() && want != "" && want != bound.ID {
 			s.writeErrorCode(w, http.StatusConflict, errCodeContextChanged,
 				"Nothing was changed: the cluster changed since this view loaded. Check the current cluster and try again.")
 			return

@@ -567,7 +567,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// Streaming endpoints (SSE/WebSocket) - no timeout
 		r.Get("/events/stream", s.handleSSE)
 		r.Get("/pods/{namespace}/{name}/logs/stream", s.handlePodLogsStream)
-		r.Get("/pods/{namespace}/{name}/exec", s.handlePodExec)
+		r.Get("/pods/{namespace}/{name}/exec", s.bindWrite(s.handlePodExec))
 		r.Get("/local-terminal", s.handleLocalTerminal)
 		r.Get("/pods/{namespace}/{name}/files/download", s.handlePodFileDownload)
 		// Desktop-only: streams a pod file to disk server-side. Sits outside the
@@ -576,7 +576,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		r.Post("/pods/{namespace}/{name}/files/save", s.handlePodFileSave)
 		// Outside the 60s timeout group because a large upload over a slow
 		// cluster link takes longer.
-		r.Post("/pods/{namespace}/{name}/files/upload", s.handlePodFileUpload)
+		r.Post("/pods/{namespace}/{name}/files/upload", s.bindWrite(s.handlePodFileUpload))
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
 		r.Get("/cnpg/clusters/{namespace}/{name}/logs/stream", s.handleCNPGClusterLogsStream)
 		// AI investigation event stream via SSE — long-lived; lives outside the
@@ -793,11 +793,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/services/{namespace}/{name}/endpointslices", s.handleServiceEndpointSlices)
 
 			// Pod debug (ephemeral container)
-			r.Post("/pods/{namespace}/{name}/debug", s.handleCreateDebugContainer)
+			r.Post("/pods/{namespace}/{name}/debug", s.bindWrite(s.handleCreateDebugContainer))
 
 			// Node debug (privileged debug pod)
-			r.Post("/nodes/{name}/debug", s.handleNodeDebug)
-			r.Delete("/nodes/{name}/debug", s.handleNodeDebugCleanup)
+			r.Post("/nodes/{name}/debug", s.bindWrite(s.handleNodeDebug))
+			r.Delete("/nodes/{name}/debug", s.bindWrite(s.handleNodeDebugCleanup))
 
 			// Node operations (cordon/uncordon) and the read-only drain plan.
 			// The drain itself lives outside this timeout group, see above.
@@ -820,7 +820,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// Port forwarding
 			r.Get("/portforwards", s.handleListPortForwards)
-			r.Post("/portforwards", s.handleStartPortForward)
+			r.Post("/portforwards", s.bindWrite(s.handleStartPortForward))
 			r.Delete("/portforwards/{id}", s.handleStopPortForward)
 			r.Get("/portforwards/available/{type}/{namespace}/{name}", s.handleGetAvailablePorts)
 

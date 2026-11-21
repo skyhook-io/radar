@@ -262,6 +262,11 @@ func TestBoundWriteRoutesRefuseStaleConnection(t *testing.T) {
 		{http.MethodPost, "/api/cnpg/clusters/db/main/actions/restart"},
 		{http.MethodPost, "/api/cnpg/scheduledbackups/db/nightly/actions/backup-now"},
 		{http.MethodPost, "/api/cnpg/poolers/db/rw/actions/pause"},
+		{http.MethodPost, "/api/pods/default/web-1/files/upload"},
+		{http.MethodPost, "/api/pods/default/web-1/debug"},
+		{http.MethodPost, "/api/nodes/node-1/debug"},
+		{http.MethodDelete, "/api/nodes/node-1/debug"},
+		{http.MethodPost, "/api/portforwards"},
 	} {
 		req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
 		req.Header.Set("Content-Type", "application/json")
@@ -276,3 +281,20 @@ func TestBoundWriteRoutesRefuseStaleConnection(t *testing.T) {
 		t.Fatalf("refused writes reached a cluster: A=%d B=%d", writes(a), writes(b))
 	}
 }
+
+// A WebSocket can't carry the header, so exec names the connection in its URL.
+func TestBoundExecRefusesStaleConnectionFromQuery(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	idA := install(t, "cluster-a", fakeCluster(t))
+	install(t, "cluster-b", fakeCluster(t))
+	s := &Server{}
+	router := chi.NewRouter()
+	s.setupAppRoutes(router)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/pods/default/web-1/exec?container=app&connection="+idA, nil))
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), errCodeContextChanged) {
+		t.Fatalf("exec with a stale connection: %d %s", rec.Code, rec.Body)
+	}
+}
+
