@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: 'settings-connections.spec.ts',
+  testMatch: ['settings-connections.spec.ts', 'context-switch.spec.ts'],
   timeout: 30000,
   fullyParallel: true,
   workers: 2,

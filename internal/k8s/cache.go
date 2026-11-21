@@ -388,6 +388,11 @@ var tombstones = timeline.NewTombstoneCache(15*time.Minute, 4000)
 func InitResourceCache(ctx context.Context) error {
 	var initErr error
 	once, gen := claimCacheInit()
+	// A cancelled startup that first runs after a switch must not spend the
+	// replacement generation's Once.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	once.Do(func() {
 		client, informerClient := getCacheClients()
 		if client == nil {
@@ -400,13 +405,7 @@ func InitResourceCache(ctx context.Context) error {
 		// per-kind namespace scoping (some kinds may be cluster-wide while
 		// others are namespace-scoped to the same fallback namespace).
 		rbacStart := time.Now()
-		rbacCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		// A superseded result is still wired from rather than discarded: this
-		// runs under contextOpMu, so the operation that superseded the probe is
-		// already tearing this cache down, and the ctx.Err() check below drops
-		// out of the boot path that does not hold that lock.
-		probe, probeErr := bootstrapResourcePermissions(rbacCtx, freshResourcePermissions)
-		cancel()
+		probe, probeErr := probeCachePermissions(ctx, freshResourcePermissions)
 		logTiming("    Resource access probes: %v", time.Since(rbacStart))
 
 		if probeErr != nil {
@@ -510,13 +509,24 @@ func InitResourceCache(ctx context.Context) error {
 		}
 		// OnInformersStarted runs synchronously inside NewResourceCache, so
 		// wrapped.ResourceCache is visible-before-publication under cacheMu.
+		var stopOnCancel func() bool
 		cfg.OnInformersStarted = func(syncing *k8score.ResourceCache) {
+			stopOnCancel = context.AfterFunc(ctx, syncing.Stop)
 			wrapped.ResourceCache = syncing
 			publishSyncingCache(wrapped, gen)
 		}
 		cfg.DebugSyncDelays = parseDebugSyncDelays(os.Getenv("RADAR_DEBUG_SYNC_DELAY"))
 
 		core, err := k8score.NewResourceCache(cfg)
+		if stopOnCancel != nil {
+			stopOnCancel()
+		}
+		if ctx.Err() != nil {
+			if core != nil {
+				core.Stop()
+			}
+			err = ctx.Err()
+		}
 		if err != nil {
 			clearSyncingCacheForGen(gen)
 			initErr = err
@@ -2430,6 +2440,31 @@ func bootstrapResourcePermissions(ctx context.Context, probe func(context.Contex
 		return permissionProbe{}, fmt.Errorf("resource access probe rejected credentials: %w", rejected)
 	}
 	return first, nil
+}
+
+// Credential plugins can block past request cancellation. Only the caller
+// publishes a probe or builds informers, so a late worker cannot install them.
+func probeCachePermissions(ctx context.Context, probe func(context.Context, bool) permissionProbe) (permissionProbe, error) {
+	if err := ctx.Err(); err != nil {
+		return permissionProbe{}, err
+	}
+	rbacCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	type result struct {
+		probe permissionProbe
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		chosen, err := bootstrapResourcePermissions(rbacCtx, probe)
+		done <- result{chosen, err}
+	}()
+	select {
+	case r := <-done:
+		return r.probe, r.err
+	case <-ctx.Done():
+		return permissionProbe{}, ctx.Err()
+	}
 }
 
 // freshResourcePermissions is the startup probe. It publishes nothing: startup

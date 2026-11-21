@@ -44,6 +44,7 @@ describe('shouldAutoRetryConnection', () => {
     expect(shouldAutoRetryConnection('config')).toBe(false)
     expect(shouldAutoRetryConnection('rbac')).toBe(false)
     expect(shouldAutoRetryConnection('settings')).toBe(false)
+    expect(shouldAutoRetryConnection('switch-stopped')).toBe(false)
   })
 })
 

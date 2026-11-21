@@ -651,6 +651,53 @@ func TestRetryCurrentConnectionInClusterProbeFailureKeepsCaches(t *testing.T) {
 	}
 }
 
+func TestRetryCurrentConnectionInterruptsInClusterRecovery(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	previousMode := ForceInCluster
+	ForceInCluster = true
+	t.Cleanup(func() { ForceInCluster = previousMode })
+	previousContext := SetTestContextName("in-cluster")
+	t.Cleanup(func() { SetTestContextName(previousContext) })
+	entered, release := make(chan struct{}), make(chan struct{})
+	recovery := make(chan error, 1)
+	go func() {
+		recovery <- reinitializeCurrentContextIfOperationCurrent("in-cluster", currentOperationGen(), func(ctx context.Context, _ func(string)) error {
+			close(entered)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-release:
+				return errors.New("test released the recovery")
+			}
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("recovery never started")
+	}
+	setRuntimeAuthProbe(func(context.Context) error { return nil })
+	setRuntimeAuthReconnect(func(string, uint64) error { return nil })
+	retry := make(chan error, 1)
+	go func() { retry <- RetryCurrentConnection() }()
+	var err error
+	select {
+	case err = <-retry:
+		close(release)
+	case <-time.After(3 * time.Second):
+		close(release)
+		<-recovery
+		<-retry
+		t.Fatal("manual retry waited for recovery to release the operation lock")
+	}
+	recoveryErr := <-recovery
+	if err != nil || !errors.Is(recoveryErr, ErrReconnectSuperseded) {
+		t.Fatalf("manual retry = %v, interrupted recovery = %v", err, recoveryErr)
+	}
+}
+
 func TestRetryCurrentConnectionInClusterDoesNotOutliveNewerOperation(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)
@@ -734,7 +781,7 @@ func TestInClusterRuntimeReconnectPublishesConnectedAfterReinit(t *testing.T) {
 	contextSwitchMu.Lock()
 	previousCallbacks := contextSwitchCallbacks
 	callbackContext := ""
-	contextSwitchCallbacks = []ContextSwitchCallback{func(name string) { callbackContext = name }}
+	contextSwitchCallbacks = []func(string, string){func(name, _ string) { callbackContext = name }}
 	contextSwitchMu.Unlock()
 	t.Cleanup(func() {
 		contextSwitchMu.Lock()
@@ -802,7 +849,7 @@ func TestInClusterRuntimeReconnectDoesNotPublishAfterSupersededInit(t *testing.T
 	contextSwitchMu.Lock()
 	previousCallbacks := contextSwitchCallbacks
 	callbackCalled := false
-	contextSwitchCallbacks = []ContextSwitchCallback{func(string) { callbackCalled = true }}
+	contextSwitchCallbacks = []func(string, string){func(string, string) { callbackCalled = true }}
 	contextSwitchMu.Unlock()
 	t.Cleanup(func() {
 		contextSwitchMu.Lock()
