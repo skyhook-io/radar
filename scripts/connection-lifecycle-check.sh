@@ -18,6 +18,7 @@ L=$WORKDIR
 OWNER_LABEL=radar.skyhook.io/connection-lifecycle-check
 
 setup() {
+  umask 077 # the combined kubeconfig carries credentials
   mkdir -p $L/home $L/bin
   [[ -e $L/home/.aws ]] || ln -s ~/.aws $L/home/.aws
   print '#!/bin/sh\necho "error: SSO session expired; run aws sso login" >&2\nexit 1' > $L/bin/fail-plugin
@@ -134,12 +135,12 @@ expect() { # expect <scenario> <observed> <wanted-for-after>
 
 run() {
   case $1 in
-  L1) # F12: a write sent mid-switch by a tab still showing the old cluster
+  L1) # a write sent mid-switch by a tab still showing the old cluster
     start 20s || return
     local idA=$(connid)
     switch_tracked radar-test-prod
     wait_state connecting radar-test-prod || record "L1 | never saw connecting·prod |"
-    expect "L1 F12 mid-switch write, stale tab header" "$(restart_probe "$idA")" "503 nonprod=no prod=no"
+    expect "L1 mid-switch write, stale tab header" "$(restart_probe "$idA")" "503 nonprod=no prod=no"
     expect "L1b mid-switch write, no header (API caller)" "$(restart_probe "")" "503 nonprod=no prod=no"
     wait_switch >/dev/null
     expect "L2 stale tab after the switch completed" "$(restart_probe "$idA")" "409 nonprod=no prod=no"
@@ -157,10 +158,10 @@ run() {
     switch_tracked radar-test-prod
     wait_state connecting radar-test-prod
     local mid=$(field "repr(d.get('connectionId',''))+' '+d.get('state')")
-    expect "L5 F3 status mid-switch: no serving ID, connecting" "$mid" "'' connecting"
+    expect "L5 status mid-switch: no serving ID, connecting" "$mid" "'' connecting"
     wait_switch >/dev/null
     ;;
-  L6) # O1: targets that fail before leaving keep the old connection serving
+  L6) # targets that fail before leaving keep the old connection serving
     start 0s || return
     local idA=$(connid)
     for target in radar-test-unreachable radar-test-badauth radar-test-stuck; do
@@ -172,10 +173,10 @@ run() {
     done
     expect "L6b old connection still writable" "$(restart_probe "$idA")" "200 nonprod=WROTE prod=no"
     ;;
-  L7) # F1: slow first sync (pods held 40s) on a tracked switch
+  L7) # slow first sync (pods held 40s) on a tracked switch
     start 40s || return
     switch_tracked radar-test-prod
-    expect "L7 F1 tracked switch, pods held 40s" "$(wait_switch)" "succeeded"
+    expect "L7 tracked switch, pods held 40s" "$(wait_switch)" "succeeded"
     ;;
   L8) # Radar restarts: an ID from the previous process is refused
     start 0s || return

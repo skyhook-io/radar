@@ -21,8 +21,7 @@ var ErrNoServingConnection = errors.New("no cluster connection is serving")
 type BoundConnection struct {
 	ID      string
 	Context string
-	// Config is the installed config object. Installs replace the pointer
-	// rather than mutating it, so it stays the admitted connection's.
+	// Config is a copy of the admitted connection's config, safe to modify.
 	Config    *rest.Config
 	Client    *kubernetes.Clientset
 	Dynamic   dynamic.Interface
@@ -38,9 +37,13 @@ func CaptureBoundConnection() (BoundConnection, error) {
 	if !CaptureClusterReads(func() {
 		b.ID = ServingConnectionID()
 		clientMu.RLock()
-		b.Config, b.Client, b.Dynamic = k8sConfig, k8sClient, dynamicClient
-		b.Context = activeClusterContextLocked()
+		if k8sConfig != nil {
+			b.Config = rest.CopyConfig(k8sConfig)
+		}
+		b.Client, b.Dynamic = k8sClient, dynamicClient
 		clientMu.RUnlock()
+		// Clients and context change only under the operation lock held here.
+		b.Context = ActiveClusterContext()
 		b.Discovery = GetResourceDiscovery()
 	}) || b.ID == "" || b.Dynamic == nil || b.Config == nil {
 		return BoundConnection{}, ErrNoServingConnection

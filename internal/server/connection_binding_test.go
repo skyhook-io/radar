@@ -139,7 +139,7 @@ func TestBoundWriteRefusedWhileNothingServes(t *testing.T) {
 		rec := httptest.NewRecorder()
 		called := false
 		s.bindWrite(func(http.ResponseWriter, *http.Request) { called = true })(rec, restartRequest(header))
-		if rec.Code != http.StatusServiceUnavailable || called || !strings.Contains(rec.Body.String(), errCodeClusterChanging) {
+		if rec.Code != http.StatusServiceUnavailable || called || !strings.Contains(rec.Body.String(), errCodeClusterUnavailable) {
 			t.Fatalf("header %q: code=%d called=%v body=%s", header, rec.Code, called, rec.Body)
 		}
 	}

@@ -1,8 +1,6 @@
 package server
 
 import (
-	"encoding/json"
-	"log"
 	"net/http"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -12,8 +10,8 @@ import (
 const connectionHeader = "X-Radar-Connection"
 
 const (
-	errCodeContextChanged  = "context_changed"
-	errCodeClusterChanging = "cluster_changing"
+	errCodeContextChanged     = "context_changed"
+	errCodeClusterUnavailable = "cluster_unavailable"
 )
 
 // bindWrite admits a write against the connection the caller is showing.
@@ -27,12 +25,14 @@ func (s *Server) bindWrite(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bound, err := k8s.CaptureBoundConnection()
 		if err != nil {
-			writeBindingError(w, http.StatusServiceUnavailable, errCodeClusterChanging,
-				"Nothing was changed: Radar is switching clusters. Try again when it finishes.")
+			// Nothing serving: a switch, rescope or rebuild in progress, a lost
+			// connection, or shutdown. The caller can retry once one is serving.
+			s.writeErrorCode(w, http.StatusServiceUnavailable, errCodeClusterUnavailable,
+				"Nothing was changed: Radar has no usable cluster connection right now. Try again once it is connected.")
 			return
 		}
 		if want := r.Header.Get(connectionHeader); connectionIdentityPublished() && want != "" && want != bound.ID {
-			writeBindingError(w, http.StatusConflict, errCodeContextChanged,
+			s.writeErrorCode(w, http.StatusConflict, errCodeContextChanged,
 				"Nothing was changed: the cluster changed since this view loaded. Check the current cluster and try again.")
 			return
 		}
@@ -64,13 +64,4 @@ func connectionIdentityFields(status k8s.ConnectionStatus, into map[string]any) 
 		into["connectionId"] = status.ConnectionID
 	}
 	return into
-}
-
-func writeBindingError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	// Both code fields: the action helpers read `code`, generic errors `error_code`.
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": message, "code": code, "error_code": code}); err != nil {
-		log.Printf("Failed to encode error response: %v", err)
-	}
 }

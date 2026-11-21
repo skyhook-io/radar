@@ -24,7 +24,7 @@ Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `
 
 **Server** (`internal/server/connection_binding.go`):
 - A bound write captures the serving connection's ID, clients and discovery in one step, under the lock every client install and teardown takes. The handler runs on that capture, so a switch that lands mid-request can't redirect it.
-- The request header `X-Radar-Connection` names the connection the caller is on. A different ID gets **409 `context_changed`**. No serving connection, or a context operation holding the lock, gets **503 `cluster_changing`** (retryable). No header: admitted against the current connection (API and MCP callers, older UIs). Both refusals say nothing was changed.
+- The request header `X-Radar-Connection` names the connection the caller is on. A different ID gets **409 `context_changed`**. No serving connection, or a context operation holding the lock, gets **503 `cluster_unavailable`** (retryable). No header: admitted against the current connection (API and MCP callers, older UIs). Both refusals say nothing was changed.
 
 **Browser** (`web/src/api/connectionBinding.ts`):
 - The tab keeps the latest connection ID it heard (status poll, SSE frame, Retry result) and `apiFetch` sends it on every request. A status with no ID (mid-switch) keeps the last one; the server refuses writes then anyway.
@@ -48,16 +48,16 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 
 | ID | Scenario | Expected | Live | Unit |
 |----|----------|----------|------|------|
-| L1 | F12: restart sent mid-switch by a tab still showing the old cluster | 503 `cluster_changing`, no write on either cluster | ✓ | `TestBoundWriteRefusedWhileNothingServes` |
+| L1 | Restart sent mid-switch by a tab still showing the old cluster | 503 `cluster_unavailable`, no write on either cluster | ✓ | `TestBoundWriteRefusedWhileNothingServes` |
 | L1b | Same, with no connection header (API caller) | 503, no write | ✓ | same |
 | L2 | Stale tab after the switch completed | 409 `context_changed`, no write | ✓ | `TestBoundWriteRefusesStaleConnection` |
 | L2b | Current tab after the switch | 200, write on the new cluster only | ✓ | |
 | L3 | A→B→A: the first A's ID after returning to A | 409, no write; IDs never repeat | ✓ | `TestBoundWriteRefusesStaleConnection`, `TestConnectionIdentityAdmitAndRetire` |
 | — | Switch lands between admission and execution of a write | Write runs on the admitted cluster; the new one gets nothing | | `TestBoundRestartStaysOnAdmittedConnectionAcrossSwitch` (+ control `TestUnboundRestartFollowsTheSwitch`) |
 | L4 | Status names the serving connection | `connectionId` set | ✓ | `TestConnectionIdentityAdmitAndRetire` |
-| L5 | F3: status mid-switch | No serving ID, state `connecting` | ✓ | `TestConnectionIdentityAdmitAndRetire` |
-| L6 | O1: unreachable target, failing exec plugin, stuck exec plugin | Refused before leaving; serving ID unchanged; old cluster still writable | ✓ | |
-| L7 | F1: tracked switch with the first Pod list held 40s | Succeeds | ✓ | |
+| L5 | Status mid-switch | No serving ID, state `connecting` | ✓ | `TestConnectionIdentityAdmitAndRetire` |
+| L6 | Unreachable target, failing exec plugin, stuck exec plugin | Refused before leaving; serving ID unchanged; old cluster still writable | ✓ | |
+| L7 | Tracked switch with the first Pod list held 40s | Succeeds | ✓ | |
 | L8 | ID from a previous Radar process | 409 | ✓ | |
 | L9 | Same context name repointed to another cluster, then Retry | New ID; old ID 409; new ID writes to the new cluster | ✓ | |
 | L10 | Stop during warm-up | Nothing serving; writes 503 | ✓ | |
@@ -69,7 +69,7 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 | S1 | Rescope (`--namespace-scope`) rebuild or rollback | New ID after the rebuild; Disconnected if the rollback fails | | `PerformNamespaceRescope` (manual) |
 | S2 | Shutdown | No admission after shutdown begins | | `TestConnectionAdmissionsClosedAtShutdown` |
 
-Known scenarios outside this slice (from the switch trace): O7 (a lost `context_changed` with no later status), F10 (stalls outside the switch's budget), and the write families listed above.
+Known scenarios outside this slice: a lost `context_changed` with no later status, stalls outside a switch's time budget, and the write families listed above.
 
 ## Follow-ups
 
