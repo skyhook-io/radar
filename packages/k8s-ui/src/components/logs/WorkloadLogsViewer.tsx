@@ -37,9 +37,26 @@ export interface WorkloadLogsResult {
   emptyReason?: string
   emptyMessage?: string
   command?: string
+  /**
+   * Set when the answer covers a span the line count and time range can't
+   * change, such as a finished run read whole from a log store: the range
+   * control is disabled, with this as the reason.
+   */
+  fixedRangeReason?: string
+  /**
+   * The answer has no lines for the chosen container and says nothing about
+   * the pods: keep the pod and container list already shown.
+   */
+  keepPreviousSources?: boolean
 }
 
 export interface WorkloadLogsViewerProps {
+  /**
+   * When the stream ends because the run's pods are gone, read a snapshot
+   * through `fetchAll`, e.g. a host that can serve a finished run from a log
+   * store. Off by default: the stream's own message stays.
+   */
+  readSnapshotWhenPodsGone?: boolean
   /** Disable streaming and the source filters while no log source exists. Off by default: streams can wait for Pods to appear. */
   disableSourceControlsWithoutSource?: boolean
   /** Workload name — used for the download filename */
@@ -77,7 +94,7 @@ export interface WorkloadLogsViewerProps {
   emptySourceState?: ReactNode
 }
 
-export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods, initialContainer, allowAllContainers = true, emptySourceState, disableSourceControlsWithoutSource = false }: WorkloadLogsViewerProps) {
+export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods, initialContainer, allowAllContainers = true, emptySourceState, disableSourceControlsWithoutSource = false, readSnapshotWhenPodsGone = false }: WorkloadLogsViewerProps) {
   const initialSelection = (names: string[]) => {
     const wanted = names.filter((n) => initialPods?.includes(n))
     return new Set(wanted.length > 0 ? wanted : names)
@@ -87,6 +104,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [selectedPods, setSelectedPods] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
   const [notice, setNotice] = useState('')
+  const [fixedRangeReason, setFixedRangeReason] = useState('')
   const [capturedAt, setCapturedAt] = useState('')
   const [sourceLabels, setSourceLabels] = useState<Record<string, string>>({})
   // Containers that produced a line since their Pod's status was last read,
@@ -132,6 +150,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   }, [podColorIndex])
 
   const previousSnapshotPods = useRef<string[] | null>(null)
+  // Every pod the current stream listed, even ones it later removed.
+  const streamPodNamesRef = useRef<string[]>([])
 
   const loadLogs = useCallback(async () => {
     fetchController.current?.abort()
@@ -143,6 +163,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       const result = await fetchAll({ container: selectedContainer || undefined, tailLines, sinceSeconds, signal: controller.signal })
       if (controller.signal.aborted) return
       setNotice(result.notice || '')
+      setFixedRangeReason(result.fixedRangeReason || '')
       setCapturedAt(result.capturedAt || '')
       setSourceLabels(result.sourceLabels ?? {})
       const resultPods = result.pods ?? []
@@ -150,18 +171,20 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       setEmptyMessage(result.emptyMessage || null)
       setEmptyCommand(result.command || null)
 
-      podColorIndexRef.current = new Map(resultPods.map((pod, i) => [pod.name, i]))
-      podsRef.current = resultPods
-      setPods(resultPods)
+      if (!result.keepPreviousSources) {
+        podColorIndexRef.current = new Map(resultPods.map((pod, i) => [pod.name, i]))
+        podsRef.current = resultPods
+        setPods(resultPods)
 
-      const previousPods = previousSnapshotPods.current
-      const nextPods = resultPods.map(p => p.name)
-      previousSnapshotPods.current = nextPods
-      setSelectedPods(selected => previousPods === null
-        ? initialSelection(nextPods)
-        : previousPods.every(pod => selected.has(pod))
-        ? new Set(nextPods)
-        : new Set(nextPods.filter(pod => selected.has(pod))))
+        const previousPods = previousSnapshotPods.current
+        const nextPods = resultPods.map(p => p.name)
+        previousSnapshotPods.current = nextPods
+        setSelectedPods(selected => previousPods === null
+          ? initialSelection(nextPods)
+          : previousPods.every(pod => selected.has(pod))
+          ? new Set(nextPods)
+          : new Set(nextPods.filter(pod => selected.has(pod))))
+      }
 
       const indexByPod = new Map<string, number>()
       resultPods.forEach((pod, i) => indexByPod.set(pod.name, i))
@@ -184,6 +207,28 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       if (!controller.signal.aborted) setIsLoading(false)
     }
   }, [fetchAll, selectedContainer, tailLines, sinceSeconds, set])
+  // The stream's end handler reads these without restarting the stream.
+  const loadLogsRef = useRef(loadLogs)
+  const readSnapshotWhenPodsGoneRef = useRef(readSnapshotWhenPodsGone)
+  const streamShowedLinesRef = useRef(false)
+  // Set while the run's pods are gone and the host serves it as a snapshot: a
+  // container change then reads the snapshot again, since a new stream would
+  // only report no pods and wipe the run's pods and containers.
+  const readingSnapshotRef = useRef(false)
+  // A stream that ended with its pods gone and nothing shown, before the host
+  // could read the snapshot: read it once the host can.
+  const [endedPodsGone, setEndedPodsGone] = useState(false)
+  useEffect(() => {
+    if (endedPodsGone && readSnapshotWhenPodsGone) {
+      setEndedPodsGone(false)
+      readingSnapshotRef.current = true
+      void loadLogs()
+    }
+  }, [endedPodsGone, readSnapshotWhenPodsGone, loadLogs])
+  useEffect(() => {
+    loadLogsRef.current = loadLogs
+    readSnapshotWhenPodsGoneRef.current = readSnapshotWhenPodsGone
+  }, [loadLogs, readSnapshotWhenPodsGone])
 
   // When auto-streaming the stream supplies the initial tail, so the static
   // snapshot fetch is skipped to avoid a redundant request and a flash of
@@ -191,7 +236,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   // won't auto-start, so fall back to the snapshot — otherwise a container
   // switch would keep showing the previous selection's lines.
   useEffect(() => {
-    if (!willAutoStream || userStoppedRef.current) loadLogs()
+    if (!willAutoStream || userStoppedRef.current || readingSnapshotRef.current) loadLogs()
   }, [loadLogs, willAutoStream])
   useEffect(() => { stopStreaming() }, [selectedContainer, stopStreaming])
   useEffect(() => () => { fetchController.current?.abort() }, [])
@@ -212,15 +257,21 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     fetchController.current?.abort()
     setIsLoading(false)
     setNotice('')
+    setFixedRangeReason('')
     setCapturedAt('')
     setFetchError(null)
     clear()
+    streamShowedLinesRef.current = false
+    readingSnapshotRef.current = false
+    streamPodNamesRef.current = []
+    setEndedPodsGone(false)
     startStreaming(
       () => createStream({ container: selectedContainer || undefined, tailLines: 50, sinceSeconds }),
       {
         onConnected: (data: any) => {
           if (data?.pods) {
             const nextPods = data.pods as WorkloadPodInfo[]
+            streamPodNamesRef.current = nextPods.map(p => p.name)
             podColorIndexRef.current = new Map(nextPods.map((pod, i) => [pod.name, i]))
             podsRef.current = nextPods
             setPods(nextPods)
@@ -234,6 +285,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         },
         onLog: (data: any) => {
           if (data?.pod && data.content !== undefined) {
+            streamShowedLinesRef.current = true
             recordOutput(data.pod, data.container || '')
             append({
               containerRole: containerRole(podsRef.current, data.pod, data.container || ''),
@@ -250,6 +302,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
           if (data?.pods) {
             const newPods = data.pods as WorkloadPodInfo[]
             const added = new Set(newPods.map(p => p.name))
+            streamPodNamesRef.current = [...new Set([...streamPodNamesRef.current, ...added])]
             setOutputKeys(prev => withoutPods(prev, added))
             const known = new Set(podsRef.current.map(p => p.name))
             podsRef.current = [...podsRef.current, ...newPods.filter(p => !known.has(p.name))]
@@ -298,6 +351,18 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
           setNotice(typeof notice === 'string' ? notice : '')
         },
         onEnd: (data: any) => {
+          // Only a stream that showed nothing: a snapshot would replace lines
+          // the user just watched, possibly with fewer.
+          if (data?.emptyReason === 'pods-gone' && !streamShowedLinesRef.current) {
+            if (readSnapshotWhenPodsGoneRef.current) {
+              // The snapshot follows the selection made on the stream's pods.
+              if (streamPodNamesRef.current.length > 0) previousSnapshotPods.current = streamPodNamesRef.current
+              readingSnapshotRef.current = true
+              void loadLogsRef.current()
+              return
+            }
+            setEndedPodsGone(true)
+          }
           setNotice('')
           // The stream ends when the workload has no Pods left.
           podsRef.current = []
@@ -320,6 +385,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     if (userStoppedRef.current) return
     if (autoStartedForRef.current === selectedContainer) return
     autoStartedForRef.current = selectedContainer
+    if (readingSnapshotRef.current) return
     handleStartStreaming()
     // Reset the arm latch on teardown so a re-run re-streams — without this,
     // React Strict Mode's mount→unmount→mount closes the stream but the latch
@@ -330,8 +396,10 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const allContainers = useMemo(() => {
     const s = new Set<string>()
     pods.forEach(pod => pod.containers.forEach(c => s.add(c)))
+    // The picker must offer what it shows, or it would display another option.
+    if (selectedContainer) s.add(selectedContainer)
     return Array.from(s)
-  }, [pods])
+  }, [pods, selectedContainer])
 
   const togglePod = useCallback((podName: string) => {
     setSelectedPods(prev => {
@@ -459,8 +527,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         lineOptions={[50, 100, 500, 1000]}
         tooltip="How many logs to load per pod — by line count or time range"
         isDark={isDark}
-        disabled={isStreaming || sourceUnavailable}
-        disabledReason={sourceUnavailable ? 'No log source is available yet' : undefined}
+        disabled={isStreaming || sourceUnavailable || !!fixedRangeReason}
+        disabledReason={sourceUnavailable ? 'No log source is available yet' : fixedRangeReason || undefined}
       />
       </fieldset>
     </>

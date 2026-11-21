@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,7 @@ const (
 	OwnerPrometheus Owner = "prometheus"
 	OwnerTraffic    Owner = "traffic"
 	OwnerCost       Owner = "cost"
+	OwnerLoki       Owner = "loki"
 	// EstablishTimeout lets compound discovery flows budget for each managed tunnel attempt.
 	EstablishTimeout = 10 * time.Second
 )
@@ -129,23 +131,48 @@ func forwardFor(owner Owner) *metricsForward {
 	return f
 }
 
-// onForwardLost is notified when a published forward ends without being
-// stopped. See SetOnForwardLost.
-var onForwardLost atomic.Pointer[func(owner Owner, address string)]
+// forwardLost holds the subscribers notified when a published forward ends
+// without being stopped. See SetOnForwardLost.
+var forwardLost struct {
+	mu   sync.Mutex
+	subs map[Owner]func(owner Owner, address string)
+}
 
-// SetOnForwardLost registers fn to run when any owner's published forward
-// ends on its own — the pod it pointed at went away or the stream broke —
-// rather than through Stop or a replacing Start. address is the local address
-// the forward served, so a subscriber can tell whether the loss is a
-// connection it uses (it may be reusing another owner's forward). fn runs on
-// the forward's goroutine after the registry lock is released. Pass nil to
-// unregister.
-func SetOnForwardLost(fn func(owner Owner, address string)) {
+// SetOnForwardLost registers fn, under subscriber, to run when any owner's
+// published forward ends on its own — the pod it pointed at went away or the
+// stream broke — rather than through Stop or a replacing Start. address is the
+// local address the forward served, so a subscriber can tell whether the loss
+// is a connection it uses (it may be reusing another owner's forward), which
+// is why every subscriber hears every loss. fn runs on the forward's goroutine
+// after the registry lock is released. Pass nil to unregister.
+func SetOnForwardLost(subscriber Owner, fn func(owner Owner, address string)) {
+	forwardLost.mu.Lock()
+	defer forwardLost.mu.Unlock()
 	if fn == nil {
-		onForwardLost.Store(nil)
+		delete(forwardLost.subs, subscriber)
 		return
 	}
-	onForwardLost.Store(&fn)
+	if forwardLost.subs == nil {
+		forwardLost.subs = map[Owner]func(Owner, string){}
+	}
+	forwardLost.subs[subscriber] = fn
+}
+
+func notifyForwardLost(owner Owner, address string) {
+	forwardLost.mu.Lock()
+	names := make([]Owner, 0, len(forwardLost.subs))
+	for name := range forwardLost.subs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	fns := make([]func(Owner, string), 0, len(names))
+	for _, name := range names {
+		fns = append(fns, forwardLost.subs[name])
+	}
+	forwardLost.mu.Unlock()
+	for _, fn := range fns {
+		fn(owner, address)
+	}
 }
 
 // SetK8sClients sets the K8s client and config for port-forwarding.
@@ -242,9 +269,7 @@ func StartWithClients(owner Owner, ctx context.Context, namespace, serviceName s
 		reg.mu.Unlock()
 		if lost != "" {
 			log.Printf("[portforward] Lost: %s -> %s/%s (owner=%s): %v", lost, namespace, serviceName, owner, err)
-			if hook := onForwardLost.Load(); hook != nil {
-				(*hook)(owner, lost)
-			}
+			notifyForwardLost(owner, lost)
 		}
 	}()
 

@@ -10,6 +10,7 @@ const fakeSource: TimelineSource = {
   useEvents: () => eventsResult,
 }
 vi.mock('../../context/TimelineSource', () => ({ useTimelineSource: () => fakeSource }))
+vi.mock('./LokiLogsAction', () => ({ useLokiTimelineActions: () => undefined }))
 
 import { TimelineRetentionNoteProvider } from '../../context/TimelineCustomization'
 import { TimelineList } from './TimelineList'
