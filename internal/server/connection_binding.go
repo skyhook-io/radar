@@ -30,18 +30,20 @@ const (
 // admitted against the current connection (API and MCP callers, older UIs).
 func (s *Server) bindWrite(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Refusals are labelled too, so the caller knows to catch up.
 		bound, err := k8s.CaptureBoundConnection()
 		if err != nil {
+			w.Header().Set(connectionHeader, noConnection)
 			writeBindingError(w, http.StatusServiceUnavailable, errCodeClusterChanging,
-				"Radar is switching clusters. Try again when it finishes.")
-			return
-		}
-		if want := r.Header.Get(connectionHeader); want != "" && want != bound.ID {
-			writeBindingError(w, http.StatusConflict, errCodeContextChanged,
-				"The cluster changed since this view loaded. Reload the view and try again.")
+				"Nothing was changed: Radar is switching clusters. Try again when it finishes.")
 			return
 		}
 		w.Header().Set(connectionHeader, bound.ID)
+		if want := r.Header.Get(connectionHeader); want != "" && want != bound.ID {
+			writeBindingError(w, http.StatusConflict, errCodeContextChanged,
+				"Nothing was changed: the cluster changed since this view loaded. Check the current cluster and try again.")
+			return
+		}
 		next(w, r.WithContext(k8s.WithBoundConnection(r.Context(), bound)))
 	}
 }

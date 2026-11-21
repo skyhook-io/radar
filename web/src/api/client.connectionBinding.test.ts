@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { ApiError, apiFetch, fetchJSON } from './client'
 import { getApiBase } from './config'
-import { observeConnectionStatus, resetConnectionBindingForTest } from './connectionBinding'
+import { observeConnectionStatus, resetConnectionBindingForTest, setConnectionMismatchHandler } from './connectionBinding'
 
 const BOOT = '2026-11-21T03:00:00.000000000Z'
 
@@ -50,8 +50,26 @@ it('keeps a mid-switch refusal\'s own code instead of calling it a cluster chang
   vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"switching","code":"cluster_changing"}', {
     status: 503, headers: { 'Content-Type': 'application/json', 'X-Radar-Connection': 'none' },
   })))
+  const refresh = vi.fn()
+  setConnectionMismatchHandler(refresh)
   const response = await apiFetch(`${getApiBase()}/workloads/deployments/default/web/restart`, { method: 'POST' })
   expect(response.status).toBe(503)
+  await Promise.resolve()
+  expect(refresh).toHaveBeenCalledTimes(1) // and the tab re-reads its status
+})
+
+it('re-reads the status when the server refuses a write for another connection', async () => {
+  observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, getApiBase())
+  const refresh = vi.fn()
+  setConnectionMismatchHandler(refresh)
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"changed","code":"context_changed"}', {
+    status: 409, headers: { 'Content-Type': 'application/json', 'X-Radar-Connection': 'n-2' },
+  })))
+  const response = await apiFetch(`${getApiBase()}/workloads/deployments/default/web/restart`, { method: 'POST' })
+  expect(response.status).toBe(409)
+  expect(await response.json()).toMatchObject({ code: 'context_changed' })
+  await Promise.resolve()
+  expect(refresh).toHaveBeenCalledTimes(1)
 })
 
 it('drops a result whose connection the tab left while it was in flight', async () => {

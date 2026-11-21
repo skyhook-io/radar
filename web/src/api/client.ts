@@ -176,10 +176,14 @@ export function apiFetch(
     // A response another connection produced never reaches the views: it is
     // answered as the server answers a stale write, and the tab re-reads its
     // connection status to catch up.
-    if (!responseMatchesConnection(connection, response.headers.get(CONNECTION_HEADER), response.ok)) {
+    const stamp = response.headers.get(CONNECTION_HEADER);
+    if (!responseMatchesConnection(connection, stamp, response.ok)) {
       reportConnectionMismatch();
       return connectionChangedResponse();
     }
+    // Nothing is serving the connection this tab shows: the error passes
+    // through with its own code, and the tab re-reads its status to catch up.
+    if (stamp === "none" && connection && connection !== "unknown") reportConnectionMismatch();
     const authPrefix = `${getBasename()}/auth`;
     if (
       response.status === 401 &&
@@ -237,7 +241,7 @@ export function apiFetch(
 }
 
 function connectionChangedResponse(): Response {
-  const message = "The cluster changed since this view loaded. Reload the view and try again.";
+  const message = "The cluster changed while this was loading. The view is catching up.";
   return new Response(JSON.stringify({ error: message, code: CONTEXT_CHANGED, error_code: CONTEXT_CHANGED }), {
     status: 409,
     headers: { "Content-Type": "application/json" },
@@ -448,7 +452,7 @@ export async function fetchJSON<T>(
   // moved to another connection while it was in flight.
   if (!stampStillCurrent(response.headers.get(CONNECTION_HEADER))) {
     reportConnectionMismatch();
-    throw new ApiError("The cluster changed since this view loaded. Reload the view and try again.", 409, { code: CONTEXT_CHANGED, error_code: CONTEXT_CHANGED });
+    throw new ApiError("The cluster changed while this was loading. The view is catching up.", 409, { code: CONTEXT_CHANGED, error_code: CONTEXT_CHANGED });
   }
   return result;
 }

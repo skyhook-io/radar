@@ -123,6 +123,9 @@ func TestBoundWriteRefusesStaleConnection(t *testing.T) {
 	if rec.Code != http.StatusConflict || called || !strings.Contains(rec.Body.String(), errCodeContextChanged) {
 		t.Fatalf("stale connection: code=%d called=%v body=%s", rec.Code, called, rec.Body)
 	}
+	if got, want := rec.Header().Get(connectionHeader), k8s.ServingConnectionID(); got != want {
+		t.Fatalf("refusal labelled %q, want the serving connection %q", got, want)
+	}
 	// A tab that knows the server binds but has no ID yet sends "unknown".
 	rec = httptest.NewRecorder()
 	s.bindWrite(func(http.ResponseWriter, *http.Request) { called = true })(rec, restartRequest("unknown"))
@@ -147,6 +150,9 @@ func TestBoundWriteRefusedWhileNothingServes(t *testing.T) {
 		s.bindWrite(func(http.ResponseWriter, *http.Request) { called = true })(rec, restartRequest(header))
 		if rec.Code != http.StatusServiceUnavailable || called || !strings.Contains(rec.Body.String(), errCodeClusterChanging) {
 			t.Fatalf("header %q: code=%d called=%v body=%s", header, rec.Code, called, rec.Body)
+		}
+		if got := rec.Header().Get(connectionHeader); got != noConnection {
+			t.Fatalf("refusal labelled %q, want %q", got, noConnection)
 		}
 	}
 	// A switch or rescope holding the operation lock refuses capture too.
