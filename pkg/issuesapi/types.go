@@ -83,6 +83,8 @@ const (
 	CategoryPVCResizeFailed          Category = "pvc_resize_failed"
 	CategoryVolumeMountFailed        Category = "volume_mount_failed"
 	CategoryVolumeAccessModeConflict Category = "volume_access_mode_conflict"
+	CategoryVolumeFaulted            Category = "volume_faulted"
+	CategoryVolumeDegraded           Category = "volume_degraded"
 	CategoryBackupFailed             Category = "backup_failed"
 	CategoryBackupTargetUnavailable  Category = "backup_target_unavailable"
 	CategoryBackupStalled            Category = "backup_stalled"
@@ -168,6 +170,8 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryPVCResizeFailed:          GroupStorage,
 	CategoryVolumeMountFailed:        GroupStorage,
 	CategoryVolumeAccessModeConflict: GroupStorage,
+	CategoryVolumeFaulted:            GroupStorage,
+	CategoryVolumeDegraded:           GroupStorage,
 	CategoryBackupFailed:             GroupStorage,
 	CategoryBackupTargetUnavailable:  GroupStorage,
 	CategoryBackupStalled:            GroupStorage,

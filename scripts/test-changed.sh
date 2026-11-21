@@ -52,7 +52,11 @@ while IFS= read -r f; do
 done <<< "$changed"
 dedup() { tr ' ' '\n' <<< "$1" | sed '/^$/d' | sort -u | tr '\n' ' '; }
 pkg_pkgs=$(dedup "$pkg_pkgs"); root_pkgs=$(dedup "$root_pkgs")
-run_flag=(); [ -n "${GO_TEST_RUN:-}" ] && run_flag=(-run "$GO_TEST_RUN")
+# Test binaries are linked without DWARF: internal/server's links in about a
+# third of the time. Nothing debugs through this script; dlv test builds its
+# own binary.
+run_flag=(-ldflags=-w)
+[ -n "${GO_TEST_RUN:-}" ] && run_flag+=(-run "$GO_TEST_RUN")
 [ -n "${GO_TEST_FRESH:-}" ] && run_flag+=(-count=1)
 
 # Node 25 exposes a localStorage global that breaks jsdom's.

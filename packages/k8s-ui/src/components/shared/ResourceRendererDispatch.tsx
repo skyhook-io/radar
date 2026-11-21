@@ -108,6 +108,9 @@ import {
   getPeerAuthenticationStatus,
   getAuthorizationPolicyStatus,
 } from '../resources/resource-utils-istio'
+import { LonghornVolumeRenderer } from '../resources/renderers/LonghornVolumeRenderer'
+import { getLonghornVolumeStatus, LONGHORN_GROUP } from '../resources/resource-utils-longhorn'
+import { isCoreNode } from '../resources/resource-utils'
 import { getCNPGClusterStatus, getCNPGBackupStatus, getCNPGScheduledBackupStatus, getCNPGPoolerStatus, getCNPGObjectStoreStatus, getCNPGDeclarativeStatus, isApiGroup, CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import { getExternalSecretStatus, getClusterExternalSecretStatus, getSecretStoreStatus, getClusterSecretStoreStatus } from '../resources/resource-utils-eso'
 import {
@@ -368,6 +371,7 @@ export interface RendererOverrides {
   NodeRenderer?: React.ComponentType<{
     data: any; relationships?: Relationships
   }>
+  LonghornVolumeRenderer?: React.ComponentType<{ data: any }>
   KarpenterNodePoolRenderer?: React.ComponentType<{
     data: any
     onNavigate?: (ref: ResourceRef) => void
@@ -523,7 +527,7 @@ const KNOWN_KINDS = new Set([
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'jobsets',
   'rayclusters', 'rayservices', 'rayjobs', 'workloads', 'localqueues', 'clusterqueues', 'admissionchecks', 'provisioningrequests',
-  'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
+  'hpas', 'horizontalpodautoscalers', 'nodes', 'volumes', 'persistentvolumeclaims',
   'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
   'orders', 'challenges', 'certificatesigningrequests',
@@ -804,6 +808,7 @@ export function ResourceRendererDispatch({
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
     || kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
     || kind === 'certificatesigningrequests'
+    || kind === 'nodes' || kind === 'volumes'
     || isFluxOperatorKind
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
@@ -858,6 +863,8 @@ export function ResourceRendererDispatch({
     || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings')
       && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io'))
     || (kind === 'certificatesigningrequests' && isCertificateSigningRequest(data))
+    || (kind === 'nodes' && isCoreNode(data))
+    || (kind === 'volumes' && isApiGroup(data?.apiVersion, LONGHORN_GROUP))
     || isFluxOperatorResource
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
@@ -891,6 +898,7 @@ export function ResourceRendererDispatch({
   const ClusterQueueComp = rendererOverrides?.ClusterQueueRenderer ?? ClusterQueueRenderer
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
   const KarpenterNodePoolComp = rendererOverrides?.KarpenterNodePoolRenderer ?? KarpenterNodePoolRenderer
+  const LonghornVolumeComp = rendererOverrides?.LonghornVolumeRenderer ?? LonghornVolumeRenderer
   const WorkloadComp = rendererOverrides?.WorkloadRenderer ?? WorkloadRenderer
   const NodeComp = rendererOverrides?.NodeRenderer ?? NodeRenderer
   const ServiceComp = rendererOverrides?.ServiceRenderer ?? ServiceRenderer
@@ -977,7 +985,8 @@ export function ResourceRendererDispatch({
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} hpaDiagnosis={hpaDiagnosis} />}
-        {kind === 'nodes' && <NodeComp data={data} relationships={relationships} />}
+        {kind === 'nodes' && groupGatedMatched && <NodeComp data={data} relationships={relationships} />}
+        {kind === 'volumes' && groupGatedMatched && <LonghornVolumeComp data={data} />}
         {kind === 'persistentvolumeclaims' && <PVCComp data={data} onNavigate={onNavigate} />}
         {kind === 'rollouts' && isArgoRolloutResource(data) && <RolloutComp data={data} onNavigate={onNavigate} />}
         {kind === 'analysisruns' && <AnalysisRunRenderer data={data} onNavigate={onNavigate} />}
@@ -1212,7 +1221,7 @@ export function ResourceRendererDispatch({
             <ExternalLinksSection data={data} />
 
             {/* Prometheus Metrics Charts — skip for Pending pods, and when parent has dedicated Metrics tab */}
-            {showMetrics && renderMetrics && !(kind === 'pods' && data?.status?.phase === 'Pending') && (
+            {showMetrics && renderMetrics && !(kind === 'pods' && data?.status?.phase === 'Pending') && !(kind === 'nodes' && !isCoreNode(data)) && (
               renderMetrics({ kind: data?.kind || resource.kind, namespace: resource.namespace, name: resource.name })
             )}
 
@@ -1356,7 +1365,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'trainjobs' && data?.apiVersion?.startsWith('trainer.kubeflow.org/')) return getTrainJobStatus(data)
   if (k === 'cronjobs') return getCronJobStatus(data)
   if (k === 'hpas' || k === 'horizontalpodautoscalers') return getHPAStatus(data)
-  if (k === 'nodes') return getNodeStatus(data)
+  if (k === 'nodes' && isCoreNode(data)) return getNodeStatus(data)
+  if (k === 'volumes' && isApiGroup(data?.apiVersion, LONGHORN_GROUP)) return getLonghornVolumeStatus(data)
   if (k === 'persistentvolumeclaims') return getPVCStatus(data)
   if (k === 'analysisruns') return getAnalysisRunStatus(data)
   // Same collision guard as the render branch above — Katib's unrelated

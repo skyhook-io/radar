@@ -66,7 +66,7 @@ var catalogOrder = []Category{
 	CategoryGatewayNotReady, CategoryGatewayRouteInvalid, CategoryDNSFailure, CategoryNetworkPolicyDenied,
 	// Storage
 	CategoryPVCPending, CategoryPVCLost, CategoryPVFailed, CategoryPVCResizeFailed,
-	CategoryVolumeMountFailed, CategoryVolumeAccessModeConflict,
+	CategoryVolumeMountFailed, CategoryVolumeAccessModeConflict, CategoryVolumeFaulted, CategoryVolumeDegraded,
 	CategoryBackupFailed, CategoryBackupTargetUnavailable, CategoryBackupStalled,
 	// Scaling
 	CategoryRolloutStalled, CategoryHPALimitedOrFailed,
@@ -131,6 +131,8 @@ var categoryDescription = map[Category]string{
 	CategoryPVFailed:                 "A PersistentVolume is in Failed state — its reclaim or backing storage failed.",
 	CategoryPVCResizeFailed:          "A volume expansion didn't complete — the requested resize failed or is stuck.",
 	CategoryVolumeMountFailed:        "A pod can't mount a volume — attach/mount failed (wrong node, missing CSI driver, or permissions).",
+	CategoryVolumeFaulted:            "A replicated storage volume has no usable replica (Longhorn robustness faulted): its data can't be served until a replica is salvaged or the volume is restored from a backup.",
+	CategoryVolumeDegraded:           "A replicated storage volume has fewer healthy replicas than requested (Longhorn robustness degraded). Routine while replicas rebuild after a node drain or restart; worth a look if it lasts, since a replica may not be placeable.",
 	CategoryVolumeAccessModeConflict: "A volume's access mode conflicts with how it's mounted (e.g. a multi-replica Deployment mounting a ReadWriteOncePod volume, which only one pod can use).",
 	CategoryBackupFailed:             "A backup or restore run failed, partially failed, or was rejected in validation, or a database's continuous archiving has stopped — the recovery point you'd expect to have may not exist.",
 	CategoryBackupTargetUnavailable:  "The backup destination itself is unhealthy — an object-store location or backup repository the backup tool can't reach or validate.",
