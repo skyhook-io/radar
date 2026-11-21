@@ -83,7 +83,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
-// Server is the Explorer HTTP server (temporary edit: measuring CI build-cache pruning)
+// Server is the Explorer HTTP server
 type Server struct {
 	router                  *chi.Mux
 	broadcaster             *SSEBroadcaster
