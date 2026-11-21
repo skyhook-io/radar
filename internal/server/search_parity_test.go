@@ -76,7 +76,7 @@ func TestSearchCoverageMatchesAcrossRESTAndMCP(t *testing.T) {
 	t.Cleanup(k8s.ResetTestDynamicState)
 	dc := k8s.GetDynamicResourceCache()
 	dc.Stop()
-	core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{DynamicClient: dyn, Discovery: k8s.GetResourceDiscovery().ResourceDiscovery, NamespaceFallbacks: []string{"a"}, ProbeRetryBackoff: []time.Duration{2 * time.Second}})
+	core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{DynamicClient: dyn, Discovery: k8s.GetResourceDiscovery().ResourceDiscovery, NamespaceFallbacks: []string{"a"}, ProbeRetryBackoff: []time.Duration{time.Second}})
 	if err != nil {
 		t.Fatal(err)
 	}

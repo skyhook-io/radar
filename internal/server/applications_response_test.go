@@ -266,7 +266,7 @@ func enrichmentBlockedFixture(t *testing.T) (entered <-chan struct{}, release fu
 func TestApplicationsBuildOutOfTimeInEnrichmentIsNotPublished(t *testing.T) {
 	entered, release := enrichmentBlockedFixture(t)
 	prev := applicationsBuildBudget
-	applicationsBuildBudget = 2 * time.Second
+	applicationsBuildBudget = 500 * time.Millisecond
 	t.Cleanup(func() { applicationsBuildBudget = prev })
 	status := listApplicationsStatus()
 	select {

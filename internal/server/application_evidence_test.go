@@ -237,9 +237,17 @@ func TestApplicationEvidenceChecksCandidatesConcurrently(t *testing.T) {
 }
 
 func TestApplicationEvidencePermissionTimeoutCanBeRetried(t *testing.T) {
+	previous, previousRetry := applicationEvidencePermissionBudget, applicationEvidenceRetryPermissionBudget
+	applicationEvidencePermissionBudget /= 10
+	applicationEvidenceRetryPermissionBudget /= 10
+	t.Cleanup(func() {
+		applicationEvidencePermissionBudget, applicationEvidenceRetryPermissionBudget = previous, previousRetry
+	})
+	permissionDelay := applicationEvidencePermissionBudget * 11 / 10
+
 	permissions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
-		case <-time.After(2200 * time.Millisecond):
+		case <-time.After(permissionDelay):
 		case <-r.Context().Done():
 			return
 		}
