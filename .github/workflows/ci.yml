@@ -16,6 +16,8 @@ concurrency:
 # earlier run; PRs keep the cache. Go applies -count only to go test.
 env:
   GOFLAGS: ${{ github.event_name == 'push' && '-count=1' || '' }}
+# go test runs below pass -ldflags=-w: test binaries without DWARF link in
+# about a third of the time; nothing debugs them here.
 
 jobs:
   # Decides which jobs a PR needs from every file it changes, not only those in
@@ -132,12 +134,12 @@ jobs:
         run: go vet ./...
 
       - name: Run tests
-        run: go test ./...
+        run: go test -ldflags=-w ./...
 
       - name: Evaluate workload PromQL in Prometheus
         env:
           RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
-        run: go test ./prom -run '^TestWorkload(History)?PromQL$' -count=1
+        run: go test -ldflags=-w ./prom -run '^TestWorkload(History)?PromQL$' -count=1
 
       - name: Build
         run: go build ./...
@@ -175,20 +177,6 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Check gofmt
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "gofmt -w needed on:"
-            echo "$unformatted"
-            exit 1
-          fi
-
-      # go test runs only a subset of vet's checks; composites and copylocks
-      # are not in it.
-      - name: Vet
-        run: go vet ./...
-
       # internal/server runs in its own job; it is the slowest package by far.
       # The assignment fails the step if go list does; an argument would not.
       # The PostgreSQL tests (internal/timeline, internal/k8s) run here too,
@@ -202,15 +190,50 @@ jobs:
           RADAR_REQUIRE_POSTGRES_TESTS: "1"
         run: |
           pkgs=$(go list ./...)
-          go test $(grep -vx 'github.com/skyhook-io/radar/internal/server' <<<"$pkgs")
+          go test -ldflags=-w $(grep -vx 'github.com/skyhook-io/radar/internal/server' <<<"$pkgs")
 
       - name: Evaluate PVC and CNPG PromQL in Prometheus
         env:
           RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
-        run: go test ./internal/prometheus -run '^(TestPVCScopePromQL|TestCNPGDiskGrowthPromQL)$' -count=1
+        run: go test -ldflags=-w ./internal/prometheus -run '^(TestPVCScopePromQL|TestCNPGDiskGrowthPromQL)$' -count=1
 
       - name: Build
         run: go build -o explorer ./cmd/explorer
+
+  # gofmt and vet in their own job, so they run alongside the tests instead of
+  # before them in the slowest job.
+  backend-vet:
+    name: Backend (vet)
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+          cache-dependency-path: |
+            go.sum
+            pkg/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Check gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt -w needed on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      # go test runs only a subset of vet's checks; composites and copylocks
+      # are not in it.
+      - name: Vet
+        run: go vet ./...
 
   backend-server:
     name: Backend (internal/server)
@@ -232,7 +255,7 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        run: go test ./internal/server
+        run: go test -ldflags=-w ./internal/server
 
   # TestNoEffortNotesReferencedFromSource scans the whole repo (.ts, .md, .sh,
   # .yaml, ...), not only Go code. When Backend is skipped, run it alone.
@@ -253,7 +276,7 @@ jobs:
             pkg/go.sum
 
       - name: Check for effort-note paths
-        run: go test ./internal/server -run '^TestNoEffortNotesReferencedFromSource$'
+        run: go test -ldflags=-w ./internal/server -run '^TestNoEffortNotesReferencedFromSource$'
 
   frontend:
     name: Frontend
