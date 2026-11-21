@@ -68,19 +68,21 @@ export function setConnectionMismatchHandler(fn: (() => void) | undefined): void
 
 /**
  * Feed every connection status the tab receives (poll, SSE frame, initial
- * snapshot, retry result). Older publications are ignored: within one server
- * process by sequence number, across restarts by the process start time.
+ * snapshot, retry result). Returns false for a publication older than one
+ * already seen (within one server process by sequence number, across restarts
+ * by the process start time): the caller must not display it either.
  */
-export function observeConnectionStatus(status: ConnectionIdentity, base = getApiBase()): void {
-  if (status.seq === undefined || !status.bootAt) return // a server that doesn't bind connections
+export function observeConnectionStatus(status: ConnectionIdentity, base = getApiBase()): boolean {
+  if (status.seq === undefined || !status.bootAt) return true // a server that doesn't bind connections
   const s = stateFor(base)
-  if (s.bootAt && status.bootAt < s.bootAt) return
-  if (status.bootAt === s.bootAt && status.seq <= s.seq) return
+  if (s.bootAt && status.bootAt < s.bootAt) return false
+  if (status.bootAt === s.bootAt && status.seq < s.seq) return false
+  if (status.bootAt === s.bootAt && status.seq === s.seq) return true
   s.bootAt = status.bootAt
   s.seq = status.seq
   s.supported = true
   const next = status.connectionId
-  if (!next || next === s.id) return
+  if (!next || next === s.id) return true
   // Data accepted before the first adoption counts as showing that connection.
   const hadConnection = s.id !== undefined || (s.unboundStamp !== undefined && s.unboundStamp !== next)
   const replaced = hadConnection && !s.viewsAwaitingConnection
@@ -93,7 +95,9 @@ export function observeConnectionStatus(status: ConnectionIdentity, base = getAp
   }
   // A completed switch's ID lets the reset dedupe against the switch's own.
   const switchId = status.contextSwitch?.phase === 'succeeded' ? status.contextSwitch.id : undefined
-  if (replaced) onReplaced?.(status.context ?? '', switchId)
+  // Only the mounted API base's views are reset; another base's late reply isn't theirs.
+  if (replaced && base === getApiBase()) onReplaced?.(status.context ?? '', switchId)
+  return true
 }
 
 /** Changes each time a new connection replaces the one this tab showed; key views on it. */
@@ -122,13 +126,15 @@ export function connectionHeaderValue(base = getApiBase()): string | undefined {
 /**
  * Whether a response stamped `stamp` may reach the views of a tab that sent
  * `sent`. Unlabelled responses always may. "none" (no connection served it)
- * drops data but lets errors through, so a refusal keeps its own code. A tab
+ * drops data for a tab that shows a connection but lets errors through, so a
+ * refusal keeps its own code. A tab
  * with no connection yet accepts any connection's data and remembers it, so
  * adopting a different first connection still resets the views.
  */
 export function responseMatchesConnection(sent: string | undefined, stamp: string | null, ok = true, base = getApiBase()): boolean {
   if (stamp === null) return true
-  if (stamp === NO_CONNECTION) return !ok
+  // Before its first connection (startup warm-up) a tab takes what is served.
+  if (stamp === NO_CONNECTION) return !ok || !sent || sent === 'unknown'
   if (!sent || sent === 'unknown') {
     const s = stateFor(base)
     if (s.id === undefined) {

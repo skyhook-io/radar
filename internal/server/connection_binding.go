@@ -30,16 +30,21 @@ const (
 // admitted against the current connection (API and MCP callers, older UIs).
 func (s *Server) bindWrite(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		label := connectionIdentityPublished()
 		// Refusals are labelled too, so the caller knows to catch up.
 		bound, err := k8s.CaptureBoundConnection()
 		if err != nil {
-			w.Header().Set(connectionHeader, noConnection)
+			if label {
+				w.Header().Set(connectionHeader, noConnection)
+			}
 			writeBindingError(w, http.StatusServiceUnavailable, errCodeClusterChanging,
 				"Nothing was changed: Radar is switching clusters. Try again when it finishes.")
 			return
 		}
-		w.Header().Set(connectionHeader, bound.ID)
-		if want := r.Header.Get(connectionHeader); want != "" && want != bound.ID {
+		if label {
+			w.Header().Set(connectionHeader, bound.ID)
+		}
+		if want := r.Header.Get(connectionHeader); label && want != "" && want != bound.ID {
 			writeBindingError(w, http.StatusConflict, errCodeContextChanged,
 				"Nothing was changed: the cluster changed since this view loaded. Check the current cluster and try again.")
 			return
@@ -55,8 +60,31 @@ func (s *Server) bindWrite(next http.HandlerFunc) http.HandlerFunc {
 // and the response says so.
 func (s *Server) stampRead(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !connectionIdentityPublished() {
+			next(w, r)
+			return
+		}
 		next(&connectionStampWriter{ResponseWriter: w, admitted: k8s.ServingConnectionID()}, r)
 	}
+}
+
+// connectionIdentityPublished reports whether browsers see connection IDs.
+// Only a Radar serving from a kubeconfig can change clusters; an in-cluster
+// Radar serves one cluster for its whole life, and during a rolling update two
+// of its pods (each with its own IDs) answer the same browser, so it publishes
+// none and its browsers bind nothing.
+func connectionIdentityPublished() bool {
+	return !k8s.IsInCluster()
+}
+
+// connectionIdentityFields is the identity part of a published status.
+func connectionIdentityFields(status k8s.ConnectionStatus, into map[string]any) map[string]any {
+	if connectionIdentityPublished() {
+		into["connectionId"] = status.ConnectionID
+		into["seq"] = status.ConnectionSeq
+		into["bootAt"] = status.BootAt
+	}
+	return into
 }
 
 type connectionStampWriter struct {

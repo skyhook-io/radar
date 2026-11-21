@@ -8,6 +8,8 @@ A write from a Radar tab runs only against the connection that tab is showing, o
 
 Covered today: Deployment, StatefulSet, DaemonSet and Rollout **restart** and **scale**, and the **resource list and detail reads** (`/api/resources/{kind}`, `/api/resources/{kind}/{ns}/{name}`). Other write families (apply, delete, Helm, exec, port-forward, integration actions, MCP) still resolve the current connection when they run.
 
+**Only when Radar serves from a kubeconfig.** An in-cluster Radar can't change clusters (no kubeconfig contexts; CAPI connect is refused in-cluster), and during a rolling update two of its pods, each with its own IDs, answer the same browser. It publishes no identity and labels nothing, so its browsers bind nothing; its writes still run on one captured set of clients.
+
 ## Connection identity
 
 - **Admission.** When Radar starts serving a cluster (startup, a switch, Retry, auth recovery, a namespace rescope) it admits a connection with an ID `<bootNonce>-<n>`. IDs never repeat within a process, and the boot nonce keeps them distinct across restarts.
@@ -22,16 +24,25 @@ Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `
 
 **Server** (`internal/server/connection_binding.go`):
 - A bound write captures the serving connection's ID, clients and discovery in one step, under the lock every client install and teardown takes. The handler runs on that capture, so a switch that lands mid-request can't redirect it.
-- The request header `X-Radar-Connection` names the connection the caller is showing. A different ID (or `unknown`) gets **409 `context_changed`**. No serving connection, or a context operation holding the lock, gets **503 `cluster_changing`** (retryable). No header: admitted against the current connection (API and MCP callers, older UIs).
+- The request header `X-Radar-Connection` names the connection the caller is showing. A different ID (or `unknown`) gets **409 `context_changed`**. No serving connection, or a context operation holding the lock, gets **503 `cluster_changing`** (retryable). No header: admitted against the current connection (API and MCP callers, older UIs). Refusals are labelled (the serving ID, or `none`) so the caller knows to catch up; their messages say nothing was changed.
 - Bound reads are labelled with `X-Radar-Connection: <id>`, or `none` when nothing was serving or the serving connection changed while the response was built.
 
 **Browser** (`web/src/api/connectionBinding.ts`):
 - Every status the tab receives (poll, SSE, retry result) feeds the tab's connection, in publication order.
-- `apiFetch` sends the tab's connection ID (or `unknown` once the server is known to bind but the tab has none yet). A response labelled with another connection is answered as `context_changed` and the tab re-reads its status.
+- Publications older than one the tab already saw are ignored for display too (poll and SSE), not only for identity.
+- `apiFetch` sends the tab's connection ID (or `unknown` once the server is known to bind but the tab has none yet). A response labelled with another connection is answered as `context_changed` and the tab re-reads its status. A `none` label drops data for a tab that shows a connection, lets errors through with their own code, and also prompts a status re-read.
 - `fetchJSON` drops a labelled result if the tab moved to another connection while it was in flight.
+- Restart and scale run at once (never paused offline) and are never retried automatically, so the connection they name is the one the user confirmed on.
+- Only the mounted API base's views are reset; status identity is recorded under the base the request went to (Radar Hub shares one query client across clusters).
 - The tab adopts a new connection together with resetting its views: after a switch's `context_changed` the next ID is adopted quietly; otherwise adopting it resets the views. Resource views are keyed on the connection, so dialogs opened on the previous connection close.
 
-A server without connection IDs (older Radar, e.g. behind Radar Hub) reports none; the browser then sends no header and drops nothing.
+A server without connection IDs (older or in-cluster Radar) reports none; the browser then sends no header and drops nothing.
+
+### Tradeoffs taken
+
+- **Admission at Connected, not at warm-up start.** A tab that shows the old cluster doesn't display the new cluster's progressively warming data until the switch completes (those reads are labelled `none` and dropped). Admitting earlier would make every switch reset the views twice. A tab with no connection yet (startup) shows warm-up data as before.
+- **Data from before a tab's first status** is kept if the first connection adopted is the one that served it; a different one resets the views. A switch completing in the first seconds of a tab's life, with `context_changed` lost, is the narrow case left.
+- **A write arriving during shutdown** still runs on the connection the tab shows; admissions are closed first so nothing new is admitted.
 
 ## Scenario checklist
 
@@ -54,6 +65,12 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 | L8 | ID from a previous Radar process | 409 | ✓ | browser: `connectionBinding.test.ts` (boot ordering) |
 | L9 | Same context name repointed to another cluster, then Retry | New ID; old ID 409; new ID writes to the new cluster | ✓ | |
 | L10 | Stop during warm-up | Nothing serving; writes 503 | ✓ | |
+| U1 | Browser: a tab with SSE and status frozen restarts from a stale drawer after another tab switched | Refused, message says nothing changed, no write on either cluster; the tab re-reads status and resets to the new cluster; the switching tab's restart writes the new cluster only | browser (headless Chrome) | |
+| U2 | Browser: same, status poll live | The stale tab resets on its own before the user can act | browser | |
+| I1 | In-cluster Radar | No identity published, nothing labelled, a named connection ignored | | `TestInClusterRadarBindsNoConnections` |
+| B5 | Publication older than one already seen (SSE after poll) | Not displayed | | `connectionBinding.test.ts` |
+| B6 | Late status from another API base (Hub remount) | Recorded under its own base; doesn't reset the mounted views | | `connectionBinding.test.ts` |
+| B7 | Restart while the browser reports offline | Sent at once, naming the confirmed connection, never retried | | `client.boundMutation.test.tsx` |
 | B1 | Tab that missed `context_changed` learns the new connection from a status | Views reset once | | `connectionBinding.test.ts` |
 | B2 | Tab that saw `context_changed` then the new ID | No second reset | | `connectionBinding.test.ts` |
 | B3 | Response from another connection | Dropped as `context_changed`; status re-read | | `client.connectionBinding.test.ts` |

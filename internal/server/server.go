@@ -5261,14 +5261,13 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		"error":           status.Error,
 		"errorType":       status.ErrorType,
 		"progressMessage": status.ProgressMsg,
-		"connectionId":    status.ConnectionID,
-		"seq":             status.ConnectionSeq,
-		"bootAt":          status.BootAt,
 		"disconnectedAt":  status.DisconnectedAt,
 		// Lets the browser stand down its auto-retry for the whole auth-loss
 		// episode, even when the live errorType flips to non-auth values.
 		"authRecoveryOwed": k8s.RuntimeAuthRecoveryOwed(),
 	}
+	connectionIdentityFields(status, response)
+
 	if op := s.contextSwitch.Snapshot(); op != nil {
 		if op.Phase == "switching" && op.Target == status.Context && status.State == k8s.StateConnecting && status.ProgressMsg != "" {
 			op.Progress = status.ProgressMsg

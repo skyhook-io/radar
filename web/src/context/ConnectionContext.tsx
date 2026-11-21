@@ -40,6 +40,8 @@ interface ConnectionStatusResponse extends ConnectionState {
 
 interface PolledConnectionStatus extends ConnectionStatusResponse {
   sseGenerationAtStart: number
+  // Older than a publication the tab already saw (connectionBinding.ts).
+  superseded: boolean
 }
 
 interface ConnectionContextValue {
@@ -125,8 +127,8 @@ async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<Poll
     throw new Error('Failed to fetch connection status')
   }
   const status = await response.json() as ConnectionStatusResponse
-  observeConnectionStatus(status, base)
-  return { ...status, sseGenerationAtStart }
+  const superseded = !observeConnectionStatus(status, base)
+  return { ...status, sseGenerationAtStart, superseded }
 }
 
 async function retryConnection(automatic = false): Promise<ConnectionState> {
@@ -263,7 +265,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, [queryClient])
 
   useEffect(() => {
-    if (!data) return
+    if (!data || data.superseded) return
     if (data.authRecoveryOwed !== undefined) {
       serverOwnsRecoveryRef.current = data.authRecoveryOwed
     }
@@ -528,7 +530,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     // in-flight polls detect they raced this frame.
     sseActiveRef.current = true
     sseGenerationRef.current += 1
-    observeConnectionStatus(status)
+    if (!observeConnectionStatus(status)) return
     setConnection(prev => {
       // Don't transition back to 'connecting' from 'connected'. This happens when the
       // pod restarts and the SSE reconnects while the new pod's K8s cache is still

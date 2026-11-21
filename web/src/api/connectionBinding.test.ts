@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { getApiBase } from './config'
 import {
   connectionHeaderValue,
   markViewsAwaitingConnection,
@@ -9,7 +10,7 @@ import {
   stampStillCurrent,
 } from './connectionBinding'
 
-const BASE = 'http://radar.test/api'
+const BASE = getApiBase()
 const BOOT = '2026-11-21T03:00:00.000000000Z'
 const LATER_BOOT = '2026-11-21T04:00:00.000000000Z'
 
@@ -90,9 +91,29 @@ describe('connection binding', () => {
     expect(reset).toHaveBeenCalledTimes(1)
   })
 
-  it('drops data nothing served but lets that error through with its own code', () => {
-    expect(responseMatchesConnection(undefined, 'none', true, BASE)).toBe(false)
+  it('drops data nothing served from a tab showing a connection, but lets errors through', () => {
+    expect(responseMatchesConnection('n-1', 'none', true, BASE)).toBe(false)
     expect(responseMatchesConnection('n-1', 'none', false, BASE)).toBe(true)
+    // Startup warm-up: a tab with no connection yet shows what is served.
+    expect(responseMatchesConnection(undefined, 'none', true, BASE)).toBe(true)
+    expect(responseMatchesConnection('unknown', 'none', true, BASE)).toBe(true)
+  })
+
+  it('tells the caller not to display a publication older than one already seen', () => {
+    expect(observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 5, bootAt: BOOT }, BASE)).toBe(true)
+    expect(observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 5, bootAt: BOOT }, BASE)).toBe(true)
+    expect(observeConnectionStatus({ context: 'a', seq: 4, bootAt: BOOT }, BASE)).toBe(false)
+    expect(observeConnectionStatus({ context: 'a' }, BASE)).toBe(true) // a server that doesn't bind
+  })
+
+  it('resets only the mounted API base\'s views', () => {
+    const reset = vi.fn()
+    setConnectionReplacedHandler(reset)
+    const other = 'http://hub.test/c/9/api'
+    observeConnectionStatus({ context: 'x', connectionId: 'h-1', seq: 1, bootAt: BOOT }, other)
+    observeConnectionStatus({ context: 'y', connectionId: 'h-2', seq: 2, bootAt: BOOT }, other)
+    expect(reset).not.toHaveBeenCalled()
+    expect(connectionHeaderValue(other)).toBe('h-2')
   })
 
   it('commits a labelled result only while the tab still shows that connection', () => {

@@ -15,6 +15,7 @@
 set -u
 WORKDIR=${WORKDIR:-${TMPDIR:-/tmp}/radar-connection-lifecycle}
 L=$WORKDIR
+OWNER_LABEL=radar.skyhook.io/connection-lifecycle-check
 
 setup() {
   mkdir -p $L/home $L/bin
@@ -40,14 +41,19 @@ setup() {
   K config set-context radar-test-repoint --cluster="$NP" --user="$NU" >/dev/null
   chmod 600 $L/kubeconfig.yaml
   for c in radar-test-nonprod radar-test-prod; do
-    kubectl --context $c -n default get deploy radar-live-probe >/dev/null 2>&1 ||
-      kubectl --context $c -n default create deployment radar-live-probe --image=registry.k8s.io/pause:3.9 --replicas=0
+    if kubectl --context $c -n default get deploy radar-live-probe >/dev/null 2>&1; then
+      [[ "$(kubectl --context $c -n default get deploy radar-live-probe -o jsonpath="{.metadata.labels.${OWNER_LABEL//./\\.}}")" == true ]] ||
+        { print -u2 "default/radar-live-probe on $c exists and isn't ours; not touching it"; return 1; }
+    else
+      kubectl --context $c -n default create deployment radar-live-probe --image=registry.k8s.io/pause:3.9 --replicas=0 &&
+        kubectl --context $c -n default label deployment radar-live-probe $OWNER_LABEL=true
+    fi
   done
 }
 
 cleanup() {
   for c in radar-test-nonprod radar-test-prod; do
-    kubectl --context $c -n default delete deployment radar-live-probe --ignore-not-found
+    kubectl --context $c -n default delete deployment -l $OWNER_LABEL=true --field-selector metadata.name=radar-live-probe
   done
   [[ -L $L/home/.aws ]] && rm -- $L/home/.aws
   rm -f -- $L/kubeconfig.yaml
@@ -63,6 +69,9 @@ record() { print -r -- "$*" | tee -a $OUT; }
 start() { # start <podsDelay> [context]
   stop
   local ctx=${2:-radar-test-nonprod}
+  if lsof -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
+    record "!! port $PORT is in use by another process"; FAILED=1; return 1
+  fi
   kubectl --kubeconfig $L/kubeconfig.yaml config use-context $ctx >/dev/null
   HOME=$L/home RADAR_DEBUG_SYNC_DELAY=pods=$1 $BIN --kubeconfig $L/kubeconfig.yaml --port $PORT --no-browser >> $LOG 2>&1 &
   PID=$!

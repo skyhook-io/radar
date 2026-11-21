@@ -5041,7 +5041,9 @@ export function useBulkRestartWorkloads() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    networkMode: "always", // runs at once: the header names the connection the user confirmed on
+    // Runs once, at once: the header names the connection the user confirmed on.
+    networkMode: "always",
+    retry: false,
     mutationFn: async ({
       items,
     }: {
@@ -5108,7 +5110,9 @@ export function useBulkScaleWorkloads() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    networkMode: "always", // runs at once: the header names the connection the user confirmed on
+    // Runs once, at once: the header names the connection the user confirmed on.
+    networkMode: "always",
+    retry: false,
     mutationFn: async ({
       items,
       replicas,
@@ -5525,7 +5529,9 @@ export function useRestartWorkload() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    networkMode: "always", // runs at once: the header names the connection the user confirmed on
+    // Runs once, at once: the header names the connection the user confirmed on.
+    networkMode: "always",
+    retry: false,
     mutationFn: async ({
       kind,
       namespace,
@@ -5705,7 +5711,9 @@ export function useScaleWorkload() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    networkMode: "always", // runs at once: the header names the connection the user confirmed on
+    // Runs once, at once: the header names the connection the user confirmed on.
+    networkMode: "always",
+    retry: false,
     mutationFn: async ({
       kind,
       namespace,

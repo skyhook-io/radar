@@ -82,6 +82,7 @@ func writes(c *dynamicfake.FakeDynamicClient) int {
 // restart the user sent while looking at A runs on A, and B sees nothing.
 func TestBoundRestartStaysOnAdmittedConnectionAcrossSwitch(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
 	a, b := fakeCluster(t), fakeCluster(t)
 	idA := install(t, "cluster-a", a)
 	s := &Server{}
@@ -111,6 +112,7 @@ func TestBoundRestartStaysOnAdmittedConnectionAcrossSwitch(t *testing.T) {
 // Kubernetes work, including A→B→A where the context name matches again.
 func TestBoundWriteRefusesStaleConnection(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
 	a, b, a2 := fakeCluster(t), fakeCluster(t), fakeCluster(t)
 	idA := install(t, "cluster-a", a)
 	install(t, "cluster-b", b)
@@ -141,6 +143,7 @@ func TestBoundWriteRefusesStaleConnection(t *testing.T) {
 // writes are refused as retryable, whether or not they name a connection.
 func TestBoundWriteRefusedWhileNothingServes(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
 	idA := install(t, "cluster-a", fakeCluster(t))
 	k8s.RetireServingConnection()
 	s := &Server{}
@@ -170,6 +173,7 @@ func TestBoundWriteRefusedWhileNothingServes(t *testing.T) {
 // against the current connection, and still run on that one capture.
 func TestBoundWriteAdmitsUnnamedCallerOnCurrentConnection(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
 	a, b := fakeCluster(t), fakeCluster(t)
 	install(t, "cluster-a", a)
 	s := &Server{}
@@ -187,6 +191,7 @@ func TestBoundWriteAdmitsUnnamedCallerOnCurrentConnection(t *testing.T) {
 // serving connection changed while the handler built it.
 func TestStampReadLabelsTheServingConnection(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
 	idA := install(t, "cluster-a", fakeCluster(t))
 	s := &Server{}
 
@@ -206,10 +211,40 @@ func TestStampReadLabelsTheServingConnection(t *testing.T) {
 	}
 }
 
+// An in-cluster Radar serves one cluster for its whole life, and during a
+// rolling update two pods answer one browser: it publishes no identity,
+// labels nothing, and ignores a connection a request names.
+func TestInClusterRadarBindsNoConnections(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	previous := k8s.ForceInCluster
+	k8s.ForceInCluster = true
+	t.Cleanup(func() { k8s.ForceInCluster = previous })
+	a := fakeCluster(t)
+	install(t, "in-cluster", a)
+	s := &Server{}
+
+	rec := httptest.NewRecorder()
+	s.bindWrite(s.handleRestartWorkload)(rec, restartRequest("another-pods-id"))
+	if rec.Code != http.StatusOK || writes(a) == 0 || rec.Header().Get(connectionHeader) != "" {
+		t.Fatalf("write: code=%d writes=%d label=%q", rec.Code, writes(a), rec.Header().Get(connectionHeader))
+	}
+	rec = httptest.NewRecorder()
+	s.stampRead(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("{}")) })(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if got := rec.Header().Get(connectionHeader); got != "" {
+		t.Fatalf("read labelled %q in-cluster", got)
+	}
+	fields := connectionIdentityFields(k8s.GetConnectionStatus(), map[string]any{})
+	if len(fields) != 0 {
+		t.Fatalf("in-cluster status publishes identity: %v", fields)
+	}
+}
+
 // Control for TestBoundRestartStaysOnAdmittedConnectionAcrossSwitch: the same
 // sequence without the binding lands on B, so the bound test can fail.
 func TestUnboundRestartFollowsTheSwitch(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
 	a, b := fakeCluster(t), fakeCluster(t)
 	install(t, "cluster-a", a)
 	s := &Server{}
