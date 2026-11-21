@@ -26,7 +26,9 @@ Covered today (the routes wrapped with `bindWrite` in `internal/server/server.go
 
 Code that only has a context (MCP tools, reachability) gets its clients from `k8s.ClientFromContext` / `DynamicClientFromContext`, which return the bound connection's clients when the request was admitted with one.
 
-Not yet covered: MCP write tools (they get clients from the context, so binding them needs only an admission step at the MCP entry), and integration writes that look like reads (Velero's download requests behind run messages, contents and logs). An interrupted Helm action is not recovered (the plan's "outcome recovery" for Helm). They still resolve the current connection when they run.
+Diagnose (the in-product agent) is fenced by its runs instead: every cluster switch marks all runs stale (`RunManager.OnContextSwitch`), and a stale run takes no further turns, so an investigation of one cluster can't continue, or apply a fix, on another.
+
+Not covered: external MCP callers name no connection, so each tool call uses the connection serving when it starts, as before. Integration writes that look like reads (Velero's download requests behind run messages, contents and logs) aren't bound. An interrupted Helm action is not recovered (the plan's "outcome recovery" for Helm). They still resolve the current connection when they run.
 
 **Only when Radar serves from a kubeconfig.** An in-cluster Radar can't change clusters (no kubeconfig contexts; CAPI connect is refused in-cluster), and during a rolling update two of its pods, each with its own IDs, answer the same browser. It publishes no ID and ignores one a request names; its writes still run on one captured set of clients.
 
