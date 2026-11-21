@@ -20,7 +20,13 @@ Covered today (the routes wrapped with `bindWrite` in `internal/server/server.go
 
 - Helm: **install**, **upgrade** (including from a source and by editing values), **rollback**, **uninstall**, streaming variants included. Helm builds its clients from the serving connection when the action starts and keeps them for the whole action, so the window between the binding check and that build is the only gap.
 
-Not yet covered: other integration actions (Kyverno, Kueue and the rest that write), CAPI connect, and MCP. An interrupted Helm action is not recovered (the plan's "outcome recovery" for Helm). They still resolve the current connection when they run.
+- CAPI **connect**: a tab that still shows the previous management cluster can't read a same-named CAPI Cluster's kubeconfig from the new one and switch Radar to it.
+
+- Reachability: the in-cluster trace test, which creates probe Jobs. CloudNativePG **restore validation** notes.
+
+Code that only has a context (MCP tools, reachability) gets its clients from `k8s.ClientFromContext` / `DynamicClientFromContext`, which return the bound connection's clients when the request was admitted with one.
+
+Not yet covered: MCP write tools (they get clients from the context, so binding them needs only an admission step at the MCP entry), and integration writes that look like reads (Velero's download requests behind run messages, contents and logs). An interrupted Helm action is not recovered (the plan's "outcome recovery" for Helm). They still resolve the current connection when they run.
 
 **Only when Radar serves from a kubeconfig.** An in-cluster Radar can't change clusters (no kubeconfig contexts; CAPI connect is refused in-cluster), and during a rolling update two of its pods, each with its own IDs, answer the same browser. It publishes no ID and ignores one a request names; its writes still run on one captured set of clients.
 

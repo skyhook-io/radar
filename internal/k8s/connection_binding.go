@@ -29,7 +29,8 @@ type BoundConnection struct {
 }
 
 // CaptureBoundConnection takes the serving connection's ID, clients and
-// discovery in one step. Client installs and the point of no return both run
+// discovery in one step. A missing client stays nil for the handler to report,
+// as it would without binding. Client installs and the point of no return both run
 // under contextOpMu, which CaptureClusterReads holds shared, so the pieces
 // always belong to the same admitted connection.
 func CaptureBoundConnection() (BoundConnection, error) {
@@ -45,7 +46,7 @@ func CaptureBoundConnection() (BoundConnection, error) {
 		// Clients and context change only under the operation lock held here.
 		b.Context = ActiveClusterContext()
 		b.Discovery = GetResourceDiscovery()
-	}) || b.ID == "" || b.Dynamic == nil || b.Config == nil {
+	}) || b.ID == "" {
 		return BoundConnection{}, ErrNoServingConnection
 	}
 	return b, nil

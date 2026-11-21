@@ -49,6 +49,18 @@ func (s *Server) bindWrite(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// execWrite is bindWrite for routes that --disable-exec turns off: that
+// refusal names the setting, so it comes before the connection check.
+func (s *Server) execWrite(next http.HandlerFunc) http.HandlerFunc {
+	bound := s.bindWrite(next)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.requireExecEnabled(w) {
+			return
+		}
+		bound(w, r)
+	}
+}
+
 // connectionIdentityPublished reports whether browsers see connection IDs.
 // Only a Radar serving from a kubeconfig can change clusters; an in-cluster
 // Radar serves one cluster for its whole life, and during a rolling update two

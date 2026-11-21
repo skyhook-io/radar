@@ -277,6 +277,9 @@ func TestBoundWriteRoutesRefuseStaleConnection(t *testing.T) {
 		{http.MethodPost, "/api/helm/releases/default/web/source/upgrade-stream"},
 		{http.MethodPut, "/api/helm/releases/default/web/values"},
 		{http.MethodDelete, "/api/helm/releases/default/web"},
+		{http.MethodPost, "/api/capi/clusters/default/workload-1/connect"},
+		{http.MethodPost, "/api/trace/services/default/web/in-cluster"},
+		{http.MethodPost, "/api/cnpg/clusters/db/main/restore-validation"},
 	} {
 		req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
 		req.Header.Set("Content-Type", "application/json")
@@ -305,5 +308,27 @@ func TestBoundExecRefusesStaleConnectionFromQuery(t *testing.T) {
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/pods/default/web-1/exec?container=app&connection="+idA, nil))
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), errCodeContextChanged) {
 		t.Fatalf("exec with a stale connection: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// Code that only has a context (MCP tools, reachability probes) gets the bound
+// connection's clients too.
+func TestContextClientsUseTheBoundConnection(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	t.Cleanup(k8s.SetTestLocalMode())
+	a := fakeCluster(t)
+	install(t, "cluster-a", a)
+	bound, err := k8s.CaptureBoundConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := k8s.WithBoundConnection(context.Background(), bound)
+	b := fakeCluster(t)
+	install(t, "cluster-b", b)
+	if got := k8s.DynamicClientFromContext(ctx); got != a {
+		t.Fatalf("dynamic client from a bound context = %p, want cluster A's %p", got, a)
+	}
+	if got := k8s.DynamicClientFromContext(context.Background()); got != b {
+		t.Fatalf("dynamic client from an unbound context = %p, want the serving cluster B's %p", got, b)
 	}
 }

@@ -567,7 +567,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// Streaming endpoints (SSE/WebSocket) - no timeout
 		r.Get("/events/stream", s.handleSSE)
 		r.Get("/pods/{namespace}/{name}/logs/stream", s.handlePodLogsStream)
-		r.Get("/pods/{namespace}/{name}/exec", s.bindWrite(s.handlePodExec))
+		r.Get("/pods/{namespace}/{name}/exec", s.execWrite(s.handlePodExec))
 		r.Get("/local-terminal", s.handleLocalTerminal)
 		r.Get("/pods/{namespace}/{name}/files/download", s.handlePodFileDownload)
 		// Desktop-only: streams a pod file to disk server-side. Sits outside the
@@ -664,7 +664,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/clusters/{namespace}/{name}/runtime", s.handleCNPGClusterRuntime)
 			r.Get("/cnpg/clusters/{namespace}/{name}/storage", s.handleCNPGClusterStorage)
 			r.Get("/cnpg/clusters/{namespace}/{name}/recovery", s.handleCNPGClusterRecovery)
-			r.Post("/cnpg/clusters/{namespace}/{name}/restore-validation", s.handleCNPGRestoreValidation)
+			r.Post("/cnpg/clusters/{namespace}/{name}/restore-validation", s.bindWrite(s.handleCNPGRestoreValidation))
 			r.Get("/cnpg/restore/capability", s.handleCNPGRestoreCapability)
 			r.Get("/cnpg/clusters/{namespace}/{name}/report", s.handleCNPGClusterReport)
 			r.Get("/cnpg/clusters/{namespace}/{name}/history", s.handleCNPGClusterHistory)
@@ -752,7 +752,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Whole-subject in-cluster test: runs every route's live probe and folds
 			// them in server-side (canonical merge), returning the finalized trace so
 			// the frontend never reimplements a divergent merge.
-			r.Post("/trace/{kind}/{namespace}/{name}/in-cluster", s.handleTraceInCluster)
+			r.Post("/trace/{kind}/{namespace}/{name}/in-cluster", s.bindWrite(s.handleTraceInCluster))
 
 			// Packages — merged "what's installed" view across Helm
 			// releases, workload labels, CRD registrations, and GitOps
@@ -793,10 +793,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/services/{namespace}/{name}/endpointslices", s.handleServiceEndpointSlices)
 
 			// Pod debug (ephemeral container)
-			r.Post("/pods/{namespace}/{name}/debug", s.bindWrite(s.handleCreateDebugContainer))
+			r.Post("/pods/{namespace}/{name}/debug", s.execWrite(s.handleCreateDebugContainer))
 
 			// Node debug (privileged debug pod)
-			r.Post("/nodes/{name}/debug", s.bindWrite(s.handleNodeDebug))
+			r.Post("/nodes/{name}/debug", s.execWrite(s.handleNodeDebug))
 			r.Delete("/nodes/{name}/debug", s.bindWrite(s.handleNodeDebugCleanup))
 
 			// Node operations (cordon/uncordon) and the read-only drain plan.
@@ -951,7 +951,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// CAPI routes
 			r.Get("/capi/clusters/{ns}/{name}/kubeconfig", s.handleCAPIClusterKubeconfig)
-			r.Post("/capi/clusters/{ns}/{name}/connect", s.handleCAPIClusterConnect)
+			r.Post("/capi/clusters/{ns}/{name}/connect", s.bindWrite(s.handleCAPIClusterConnect))
 
 			// Connection status routes (for graceful startup)
 			r.Get("/connection", s.handleConnectionStatus)
@@ -5789,7 +5789,7 @@ func (s *Server) getDynamicClientForRequest(r *http.Request) dynamic.Interface {
 
 func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.Interface, string) {
 	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
-		return s.boundDynamicClient(r, bound), bound.Context
+		return k8s.DynamicClientFromContext(r.Context()), bound.Context
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		client, contextName, err := k8s.UserDynamicClientSnapshot(user)
@@ -5802,22 +5802,6 @@ func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.In
 	return k8s.GetDynamicClientSnapshot()
 }
 
-// boundDynamicClient is the request's dynamic client on its bound connection:
-// the shared one, or the caller's built from the bound config (never from a
-// newer connection's). Nil when building the caller's client fails.
-func (s *Server) boundDynamicClient(r *http.Request, bound k8s.BoundConnection) dynamic.Interface {
-	user := auth.UserFromContext(r.Context())
-	if user == nil {
-		return bound.Dynamic
-	}
-	client, err := dynamic.NewForConfig(k8s.UserRESTConfig(bound.Config, user))
-	if err != nil {
-		log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
-		return nil
-	}
-	return client
-}
-
 // getConfigForRequest returns an impersonated REST config when auth is enabled,
 // or the shared config when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount config). Callers must handle nil.
@@ -5828,7 +5812,7 @@ func (s *Server) getConfigForRequest(r *http.Request) *rest.Config {
 
 func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, string) {
 	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
-		if user := auth.UserFromContext(r.Context()); user != nil {
+		if user := auth.UserFromContext(r.Context()); user != nil && bound.Config != nil {
 			return k8s.UserRESTConfig(bound.Config, user), bound.Context
 		}
 		return bound.Config, bound.Context
@@ -5848,19 +5832,8 @@ func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, str
 // or the shared client when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount client). Callers must handle nil.
 func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
-	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
-		if user := auth.UserFromContext(r.Context()); user != nil {
-			client, err := kubernetes.NewForConfig(k8s.UserRESTConfig(bound.Config, user))
-			if err != nil {
-				log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
-				return nil
-			}
-			return client
-		}
-		if bound.Client != nil {
-			return bound.Client
-		}
-		return nil
+	if _, ok := k8s.BoundConnectionFrom(r.Context()); ok {
+		return k8s.ClientFromContext(r.Context())
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		client, err := k8s.UserClient(user)
