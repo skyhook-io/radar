@@ -33,6 +33,8 @@ interface BaseState {
   bootAt: string
   supported: boolean
   viewsAwaitingConnection: boolean
+  // Processes this tab has seen replaced; a late reply from one is ignored.
+  retiredBoots: Set<string>
   // A connection that served data this tab accepted before it had adopted
   // any connection (its first status hadn't arrived yet).
   unboundStamp?: string
@@ -50,7 +52,7 @@ let mismatchScheduled = false
 function stateFor(base: string): BaseState {
   let s = states.get(base)
   if (!s) {
-    s = { seq: 0, bootAt: '', supported: false, viewsAwaitingConnection: false, generation: 0 }
+    s = { seq: 0, bootAt: '', supported: false, viewsAwaitingConnection: false, retiredBoots: new Set(), generation: 0 }
     states.set(base, s)
   }
   return s
@@ -77,7 +79,9 @@ export function setConnectionMismatchHandler(fn: (() => void) | undefined): void
 export function observeConnectionStatus(status: ConnectionIdentity, base = getApiBase()): boolean {
   if (status.seq === undefined || !status.bootAt) return true // a server that doesn't bind connections
   const s = stateFor(base)
+  if (s.retiredBoots.has(status.bootAt)) return false
   if (status.bootAt === s.bootAt && status.seq < s.seq) return false
+  if (s.bootAt && status.bootAt !== s.bootAt) s.retiredBoots.add(s.bootAt)
   if (status.bootAt === s.bootAt && status.seq === s.seq) return true
   s.bootAt = status.bootAt
   s.seq = status.seq
@@ -100,6 +104,11 @@ export function observeConnectionStatus(status: ConnectionIdentity, base = getAp
   // Only the mounted API base's views are reset; another base's late reply isn't theirs.
   if (replaced && base === getApiBase()) onReplaced?.(status.context ?? '', switchId)
   return true
+}
+
+/** How many times a new connection has replaced the one this tab showed. */
+export function connectionGeneration(base = getApiBase()): number {
+  return states.get(base)?.generation ?? 0
 }
 
 /** Changes each time a new connection replaces the one this tab showed; key views on it. */

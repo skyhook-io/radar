@@ -78,3 +78,30 @@ it('sends a confirmed restart for the connection the user confirmed on, whatever
   expect(seen).toEqual(['n-1'])
   act(() => root.unmount())
 })
+
+// A view mounted before the tab moved to another connection (a closing drawer,
+// a dialog it portaled, a page that outlived the reset) can't write.
+it('refuses a restart from a view mounted before the tab moved to another connection, without sending it', async () => {
+  const BOOT = '2026-11-21T03:00:00.000000000Z'
+  observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, getApiBase())
+  const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+  vi.stubGlobal('fetch', fetchMock)
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+  let hook: ReturnType<typeof useRestartWorkload> | undefined
+  function Probe() {
+    hook = useRestartWorkload()
+    return null
+  }
+  const root = createRoot(document.createElement('div'))
+  await act(async () => {
+    root.render(<QueryClientProvider client={client}><Probe /></QueryClientProvider>)
+  })
+  observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 2, bootAt: BOOT }, getApiBase())
+  let error: unknown
+  await act(async () => {
+    await hook!.mutateAsync({ kind: 'deployments', namespace: 'default', name: 'web' }).catch((e) => { error = e })
+  })
+  expect(fetchMock).not.toHaveBeenCalled()
+  expect(error).toMatchObject({ status: 409, message: expect.stringContaining('Nothing was changed') })
+  act(() => root.unmount())
+})

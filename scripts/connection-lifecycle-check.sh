@@ -189,18 +189,26 @@ run() {
     expect "L8 ID from a previous Radar process" "$(restart_probe "$idOld")" "409 nonprod=no prod=no"
     ;;
   L9) # same context name repointed to another cluster, then Retry
-    start 0s radar-test-repoint || return
-    local idOld=$(connid)
-    local PC=$(kubectl --kubeconfig $L/kubeconfig.yaml config view -o jsonpath='{.contexts[?(@.name=="radar-test-prod")].context.cluster}')
-    local NC=$(kubectl --kubeconfig $L/kubeconfig.yaml config view -o jsonpath='{.contexts[?(@.name=="radar-test-nonprod")].context.cluster}')
-    local PU=$(kubectl --kubeconfig $L/kubeconfig.yaml config view -o jsonpath='{.contexts[?(@.name=="radar-test-prod")].context.user}')
-    local NU=$(kubectl --kubeconfig $L/kubeconfig.yaml config view -o jsonpath='{.contexts[?(@.name=="radar-test-nonprod")].context.user}')
-    kubectl --kubeconfig $L/kubeconfig.yaml config set-context radar-test-repoint --cluster="$PC" --user="$PU" >/dev/null
-    local code=$(post /connection/retry)
-    expect "L9 Retry after the context was repointed" "retry=$code id=$([[ "$(connid)" != $idOld ]] && print new || print same)" "retry=200 id=new"
-    expect "L9b old ID after repointing" "$(restart_probe "$idOld")" "409 nonprod=no prod=no"
-    expect "L9c current ID after repointing writes to the new cluster" "$(restart_probe "$(connid)")" "200 nonprod=no prod=WROTE"
-    kubectl --kubeconfig $L/kubeconfig.yaml config set-context radar-test-repoint --cluster="$NC" --user="$NU" >/dev/null
+    local KC=(kubectl --kubeconfig $L/kubeconfig.yaml)
+    local PC=$($KC config view -o jsonpath='{.contexts[?(@.name=="radar-test-prod")].context.cluster}')
+    local NC=$($KC config view -o jsonpath='{.contexts[?(@.name=="radar-test-nonprod")].context.cluster}')
+    local PU=$($KC config view -o jsonpath='{.contexts[?(@.name=="radar-test-prod")].context.user}')
+    local NU=$($KC config view -o jsonpath='{.contexts[?(@.name=="radar-test-nonprod")].context.user}')
+    {
+      # Start from nonprod whatever an interrupted run left behind.
+      $KC config set-context radar-test-repoint --cluster="$NC" --user="$NU" >/dev/null ||
+        { record "!! L9: could not point the fixture at nonprod"; FAILED=1; return 1; }
+      start 0s radar-test-repoint || return
+      local idOld=$(connid)
+      $KC config set-context radar-test-repoint --cluster="$PC" --user="$PU" >/dev/null ||
+        { record "!! L9: could not repoint the fixture"; FAILED=1; return 1; }
+      local code=$(post /connection/retry)
+      expect "L9 Retry after the context was repointed" "retry=$code id=$([[ "$(connid)" != $idOld ]] && print new || print same)" "retry=200 id=new"
+      expect "L9b old ID after repointing" "$(restart_probe "$idOld")" "409 nonprod=no prod=no"
+      expect "L9c current ID after repointing writes to the new cluster" "$(restart_probe "$(connid)")" "200 nonprod=no prod=WROTE"
+    } always {
+      $KC config set-context radar-test-repoint --cluster="$NC" --user="$NU" >/dev/null
+    }
     ;;
   L10) # Stop mid-warm-up: nothing serves, writes are refused as retryable
     start 40s || return

@@ -32,9 +32,6 @@ export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {
   return (
     <BaseResourceDetailDrawer {...props}>
       {({ resource, expanded, active, initialTab, onClose, onExpand, onExpandIntent, onCancelExpandIntent, onBack, onNavigateToResource, onCollapseToDrawer }) => (
-        // A closing drawer acts on nothing: its resource may belong to a
-        // connection the tab just left (a reset closes it with an animation).
-        <fieldset disabled={props.isOpen === false} className="contents">
         <div className="flex h-full min-h-0 flex-col">
         {!expanded && <ResourceDrawerNavigation resource={resource} />}
         <div className="min-h-0 flex-1">
@@ -56,7 +53,6 @@ export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {
         />
         </div>
         </div>
-        </fieldset>
       )}
     </BaseResourceDetailDrawer>
   )

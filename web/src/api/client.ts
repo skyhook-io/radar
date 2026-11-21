@@ -6,7 +6,7 @@ import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import type { ReadGap, ReadGapSet } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { WorkloadHistoryCoverage } from '@skyhook-io/k8s-ui/utils/workload-history-notes'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
-import { useEffect, useRef, useCallback, useMemo } from 'react'
+import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
 import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
 import { useClusterConnected } from '../context/clusterConnected'
 import type { KueueAdmissionResponse, KueuePositionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
@@ -80,6 +80,7 @@ import type {
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { CONNECTION_HEADER, CONTEXT_CHANGED, connectionHeaderValue, reportConnectionMismatch, isConnectionChangeCode,
+  connectionGeneration,
   responseMatchesConnection,
   stampStillCurrent } from './connectionBinding'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
@@ -449,7 +450,8 @@ export async function fetchJSON<T>(
   init?: RequestInit | AbortSignal,
 ): Promise<T> {
   const requestInit = init instanceof AbortSignal ? { signal: init } : init;
-  const response = await apiFetch(`${getApiBase()}${path}`, requestInit);
+  const base = getApiBase();
+  const response = await apiFetch(`${base}${path}`, requestInit);
   if (!response.ok) {
     const { body, unknownRoute } = await readErrorResponse(response);
     throw new ApiError(
@@ -462,7 +464,7 @@ export async function fetchJSON<T>(
   const result = await response.json();
   // Commit-time check: a connection-labelled result is dropped if the tab
   // moved to another connection while it was in flight.
-  if (!stampStillCurrent(response.headers.get(CONNECTION_HEADER))) {
+  if (!stampStillCurrent(response.headers.get(CONNECTION_HEADER), base)) {
     reportConnectionMismatch();
     throw new ApiError("The cluster changed while this was loading. The view is catching up.", 409, { code: CONTEXT_CHANGED, error_code: CONTEXT_CHANGED });
   }
@@ -5063,6 +5065,7 @@ export function useBulkRestartWorkloads() {
       items: BulkWorkloadItem[];
       target?: ConfirmedTarget;
     }): Promise<BulkWorkloadMutationResult> => {
+      refuseStaleView(target);
       if (items.length === 0) {
         return { requested: 0, succeeded: 0, failedMessages: [] };
       }
@@ -5134,6 +5137,7 @@ export function useBulkScaleWorkloads() {
       replicas: number;
       target?: ConfirmedTarget;
     }): Promise<BulkWorkloadMutationResult> => {
+      refuseStaleView(target);
       if (items.length === 0) {
         return { requested: 0, succeeded: 0, failedMessages: [] };
       }
@@ -5540,6 +5544,8 @@ export function useResumeCronJob() {
 interface ConfirmedTarget {
   base: string;
   connection?: string;
+  // The view was mounted for a connection the tab has since left.
+  stale?: boolean;
 }
 
 function confirmTarget(): ConfirmedTarget {
@@ -5558,12 +5564,27 @@ function confirmedRequest(target: ConfirmedTarget, body?: unknown): RequestInit 
 type AnyMutation = { mutate: (v: any, o?: any) => void; mutateAsync: (v: any, o?: any) => Promise<any> };
 type Unconfirmed<M extends AnyMutation> = Omit<Parameters<M["mutate"]>[0], "target">;
 
+// A write belongs to the view that offers it: a component mounted before the
+// tab moved to another connection (a drawer closing after a reset, a dialog
+// it opened, a page that outlived the reset) is refused locally, never sent.
 function useBindToConfirmation<M extends AnyMutation>(m: M) {
+  const base = getApiBase();
+  const [mountedGeneration] = useState(() => connectionGeneration(base));
+  const target = (): ConfirmedTarget =>
+    connectionGeneration(base) === mountedGeneration ? confirmTarget() : { base, stale: true };
   return {
     ...m,
-    mutate: (v: Unconfirmed<M>, o?: Parameters<M["mutate"]>[1]) => m.mutate({ ...v, target: confirmTarget() }, o),
-    mutateAsync: (v: Unconfirmed<M>, o?: Parameters<M["mutateAsync"]>[1]) => m.mutateAsync({ ...v, target: confirmTarget() }, o),
+    mutate: (v: Unconfirmed<M>, o?: Parameters<M["mutate"]>[1]) => m.mutate({ ...v, target: target() }, o),
+    mutateAsync: (v: Unconfirmed<M>, o?: Parameters<M["mutateAsync"]>[1]) => m.mutateAsync({ ...v, target: target() }, o),
   };
+}
+
+const STALE_VIEW_MESSAGE = "Nothing was changed: the cluster changed since this view loaded. Check the current cluster and try again.";
+
+function refuseStaleView(target: ConfirmedTarget): void {
+  if (target.stale) {
+    throw new ApiError(STALE_VIEW_MESSAGE, 409, { code: CONTEXT_CHANGED, error_code: CONTEXT_CHANGED, error: STALE_VIEW_MESSAGE });
+  }
 }
 
 // Restart a workload (Deployment, StatefulSet, DaemonSet, Rollout)
@@ -5585,6 +5606,7 @@ export function useRestartWorkload() {
       name: string;
       target?: ConfirmedTarget;
     }) => {
+      refuseStaleView(target);
       const response = await apiFetch(
         `${target.base}/workloads/${kind}/${namespace}/${name}/restart`,
         confirmedRequest(target),
@@ -5769,6 +5791,7 @@ export function useScaleWorkload() {
       replicas: number;
       target?: ConfirmedTarget;
     }) => {
+      refuseStaleView(target);
       const response = await apiFetch(
         `${target.base}/workloads/${kind}/${namespace}/${name}/scale`,
         confirmedRequest(target, { replicas }),

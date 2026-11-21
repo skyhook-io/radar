@@ -32,7 +32,9 @@ Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `
 - Publications older than one the tab already saw are ignored for display too (poll and SSE), not only for identity.
 - `apiFetch` sends the tab's connection ID (or `unknown` once the server is known to bind but the tab has none yet). A response labelled with another connection is answered as `context_changed` and the tab re-reads its status. A `none` label drops data for a tab that shows a connection, lets errors through with their own code, and also prompts a status re-read.
 - `fetchJSON` drops a labelled result if the tab moved to another connection while it was in flight.
-- Restart and scale capture the API base and connection when the user confirms (`mutate()`), run at once (never paused offline) and are never retried automatically, so nothing between the click and the request retargets them. A closing resource drawer disables its controls, since a reset closes it with an animation while its resource may belong to the connection the tab just left.
+- Restart and scale capture the API base and connection when the user confirms (`mutate()`), run at once (never paused offline) and are never retried automatically, so nothing between the click and the request retargets them.
+- A write belongs to the view that offers it: a component mounted before the tab moved to another connection (a drawer closing after a reset, a dialog it portaled, a page that outlived the reset) is refused locally with "Nothing was changed" and never sent. Such a page refuses until it is reopened.
+- A late reply from a Radar process the tab has seen replaced is ignored.
 - A Retry result older than a publication the tab already saw is not displayed; the tab re-reads its status instead.
 - Only the mounted API base's views are reset; status identity is recorded under the base the request went to (Radar Hub shares one query client across clusters).
 - The tab adopts a new connection together with resetting its views: after a switch's `context_changed` the next ID is adopted quietly; otherwise adopting it resets the views. Resource views are keyed on the connection, so dialogs opened on the previous connection close.
@@ -44,7 +46,8 @@ A server without connection IDs (older or in-cluster Radar) reports none; the br
 - **Admission at Connected, not at warm-up start.** A tab that shows the old cluster doesn't display the new cluster's progressively warming data until the switch completes (those reads are labelled `none` and dropped). Admitting earlier would make every switch reset the views twice. A tab with no connection yet (startup) shows warm-up data as before.
 - **Data from before a tab's first status** is kept if the first connection adopted is the one that served it; a different one resets the views. A switch completing in the first seconds of a tab's life, with `context_changed` lost, is the narrow case left.
 - **A write arriving during shutdown** still runs on the connection the tab shows; admissions are closed first so nothing new is admitted.
-- **Writes name the tab's connection, not the data's.** The tab adopts a connection together with resetting its views, so the two agree except in the moments between adoption and the reset's render. The stricter design (next iteration) labels each query result with the connection that served it and has an action send the label of the data it acts on; that needs the label carried through React Query's structural sharing, which replaces result objects.
+- **Writes name the tab's connection, refused from views older than it.** A view mounted under an earlier connection can't write, so a write is sent only from a view mounted since the tab adopted its current connection. The stricter design (next iteration) labels each query result with the connection that served it and has an action send the label of the data it acts on; that needs the label carried through React Query's structural sharing, which replaces result objects.
+- **A tab that adopts its first connection mid-read** keeps warm-up data labelled `none`; rejecting it would fail startup's in-flight reads with nothing to refetch them.
 
 ## Scenario checklist
 
@@ -73,6 +76,10 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 | B5 | Publication older than one already seen (SSE after poll) | Not displayed | | `connectionBinding.test.ts` |
 | B6 | Late status from another API base (Hub remount) | Recorded under its own base; doesn't reset the mounted views | | `connectionBinding.test.ts` |
 | B7 | Restart while the browser reports offline | Sent at once, naming the confirmed connection, never retried | | `client.boundMutation.test.tsx` |
+| B8 | A host's onMutate holds the restart while the tab moves to another connection | Sent once, naming the confirmed connection | | `client.boundMutation.test.tsx` |
+| B9 | Restart from a view mounted before the tab moved to another connection | Refused locally, not sent, "Nothing was changed" | | `client.boundMutation.test.tsx` |
+| B10 | Late status from a replaced Radar process; a restarted process with an earlier clock | Ignored; followed | | `connectionBinding.test.ts` |
+| B11 | Server refuses a stale write (409 labelled with the new connection) | The server's "Nothing was changed" message reaches the user; the tab re-reads status | U1 | `client.connectionBinding.test.ts` |
 | B1 | Tab that missed `context_changed` learns the new connection from a status | Views reset once | | `connectionBinding.test.ts` |
 | B2 | Tab that saw `context_changed` then the new ID | No second reset | | `connectionBinding.test.ts` |
 | B3 | Response from another connection | Dropped as `context_changed`; status re-read | | `client.connectionBinding.test.ts` |

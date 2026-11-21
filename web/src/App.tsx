@@ -1077,6 +1077,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Connection state (for graceful startup)
   const { connection, contextSwitch, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
+  const contextSwitchRef = useRef(contextSwitch)
+  contextSwitchRef.current = contextSwitch
 
   // The app's content surface is ready to show: auth resolved, not mid context-
   // switch, and the cluster connection is live. The main content area gates on
@@ -1363,7 +1365,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // A tab that missed a switch's context_changed resets when it learns of the
   // new connection by any other path (poll, SSE status, retry result).
   useEffect(() => {
-    setConnectionReplacedHandler((context, switchId) => applyContextChange(context, switchId))
+    // A replacement this tab is following a switch to is that switch's reset
+    // (SSE can deliver the new connection before the terminal poll does).
+    setConnectionReplacedHandler((context, switchId) =>
+      applyContextChange(context, switchId ?? (followingSwitch() && contextSwitchRef.current?.target === context ? followingSwitch() : undefined)))
     return () => setConnectionReplacedHandler(undefined)
   }, [applyContextChange])
 
