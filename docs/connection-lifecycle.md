@@ -16,7 +16,7 @@ Covered today: Deployment, StatefulSet, DaemonSet and Rollout **restart** and **
 - **Retirement.** The point of no return of any destructive path (switch, rescope, rebuild, auth demotion, shutdown) clears the serving ID before tearing anything down. Between retirement and the next admission nothing is serving.
 - **Not health.** A disconnect without teardown (a failed liveness check, a Helm transport error) keeps the ID: it says which connection was admitted, not whether it is healthy.
 - **Shutdown** closes admissions, so a late startup publication can't admit a connection after shutdown began.
-- **Publication.** Every status publication carries `connectionId`, a sequence number `seq`, and the process start time `bootAt`, on `/api/connection`, SSE `connection_state` frames and the SSE initial snapshot. Browsers order publications by `seq` within one process and by `bootAt` across processes.
+- **Publication.** Every status publication carries `connectionId`, a sequence number `seq`, and the process start time `bootAt`, on `/api/connection`, SSE `connection_state` frames and the SSE initial snapshot. Browsers order publications by `seq` within one process; a different `bootAt` means the process restarted, and the browser follows the process now answering (only one local process serves a tab, so wall clocks are never compared).
 
 Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `internal/k8s/connection_binding.go` (capture).
 

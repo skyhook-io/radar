@@ -41,8 +41,8 @@ type ConnectionStatus struct {
 	// ConnectionID names the admitted connection Radar is serving: one
 	// admission of one cluster, unique for this process and across restarts.
 	// Empty while nothing is serving. ConnectionSeq orders publications within
-	// one process (BootAt orders processes), so a browser can drop a stale
-	// poll or frame. All three are set by the publisher; callers leave them empty.
+	// one process (BootAt identifies the process; it is not compared across
+	// processes), so a browser can drop a stale poll or frame. All three are set by the publisher; callers leave them empty.
 	ConnectionID  string `json:"connectionId,omitempty"`
 	ConnectionSeq uint64 `json:"seq,omitempty"`
 	BootAt        string `json:"bootAt,omitempty"`

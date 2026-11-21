@@ -104,12 +104,19 @@ wait_state() { # wait_state <state> <context>
   done
   return 1
 }
-restarted() { kubectl --context $1 -n default get deploy radar-live-probe -o jsonpath='{.spec.template.metadata.annotations.kubectl\.kubernetes\.io/restartedAt}'; }
+restarted() { kubectl --kubeconfig $L/kubeconfig.yaml --context $1 -n default get deploy radar-live-probe -o jsonpath='{.spec.template.metadata.annotations.kubectl\.kubernetes\.io/restartedAt}' 2>/dev/null || print READ-FAILED; }
+owned() {
+  local c
+  for c in radar-test-nonprod radar-test-prod; do
+    [[ "$(kubectl --kubeconfig $L/kubeconfig.yaml --context $c -n default get deploy radar-live-probe -o jsonpath="{.metadata.labels.${OWNER_LABEL//./\\.}}" 2>/dev/null)" == true ]] || return 1
+  done
+}
 restart_probe() { # restart_probe <connectionHeader> → "code nonprodChanged prodChanged"
   local a1=$(restarted radar-test-nonprod) b1=$(restarted radar-test-prod)
   local code=$(post /workloads/deployments/default/radar-live-probe/restart "$1")
   sleep 1
   local a2=$(restarted radar-test-nonprod) b2=$(restarted radar-test-prod)
+  [[ "$a1$b1$a2$b2" == *READ-FAILED* ]] && { print "$code observation-failed"; return; }
   print "$code nonprod=$([[ $a1 != $a2 ]] && print WROTE || print no) prod=$([[ $b1 != $b2 ]] && print WROTE || print no)"
 }
 expect() { # expect <scenario> <observed> <wanted-for-after>
@@ -220,6 +227,7 @@ run)
   : > $OUT
   record "== $BUILD $(ts)"
   FAILED=0
+  owned || { print -u2 "radar-live-probe isn't ours on both clusters (run setup); not writing to it"; exit 2; }
   scenarios=("$@")
   (( $#scenarios )) || scenarios=(L1 L4 L6 L7 L8 L9 L10)
   for one in "${scenarios[@]}"; do run $one; done

@@ -77,6 +77,15 @@ func connectionIdentityPublished() bool {
 	return !k8s.IsInCluster()
 }
 
+// publishedStatus is a status as browsers may see it: without identity where
+// none is published.
+func publishedStatus(status k8s.ConnectionStatus) k8s.ConnectionStatus {
+	if !connectionIdentityPublished() {
+		status.ConnectionID, status.ConnectionSeq, status.BootAt = "", 0, ""
+	}
+	return status
+}
+
 // connectionIdentityFields is the identity part of a published status.
 func connectionIdentityFields(status k8s.ConnectionStatus, into map[string]any) map[string]any {
 	if connectionIdentityPublished() {

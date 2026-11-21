@@ -5040,14 +5040,16 @@ function bulkWorkloadFailureMessage(
 export function useBulkRestartWorkloads() {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    // Runs once, at once: the header names the connection the user confirmed on.
+  return bindToConfirmation(useMutation({
+    // Runs once, at once, on the base and connection captured when the user confirmed.
     networkMode: "always",
     retry: false,
     mutationFn: async ({
       items,
+      target = confirmTarget(),
     }: {
       items: BulkWorkloadItem[];
+      target?: ConfirmedTarget;
     }): Promise<BulkWorkloadMutationResult> => {
       if (items.length === 0) {
         return { requested: 0, succeeded: 0, failedMessages: [] };
@@ -5055,10 +5057,8 @@ export function useBulkRestartWorkloads() {
       const results = await Promise.allSettled(
         items.map(async ({ kind, namespace, name }) => {
           const response = await apiFetch(
-            `${getApiBase()}/workloads/${kind}/${namespace}/${name}/restart`,
-            {
-              method: "POST",
-            },
+            `${target.base}/workloads/${kind}/${namespace}/${name}/restart`,
+            confirmedRequest(target),
           );
           if (!response.ok) {
             const error = await readErrorBody(response);
@@ -5103,22 +5103,24 @@ export function useBulkRestartWorkloads() {
       queryClient.invalidateQueries({ queryKey: ["resources"] });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
-  });
+  }));
 }
 
 export function useBulkScaleWorkloads() {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    // Runs once, at once: the header names the connection the user confirmed on.
+  return bindToConfirmation(useMutation({
+    // Runs once, at once, on the base and connection captured when the user confirmed.
     networkMode: "always",
     retry: false,
     mutationFn: async ({
       items,
       replicas,
+      target = confirmTarget(),
     }: {
       items: BulkWorkloadItem[];
       replicas: number;
+      target?: ConfirmedTarget;
     }): Promise<BulkWorkloadMutationResult> => {
       if (items.length === 0) {
         return { requested: 0, succeeded: 0, failedMessages: [] };
@@ -5126,12 +5128,8 @@ export function useBulkScaleWorkloads() {
       const results = await Promise.allSettled(
         items.map(async ({ kind, namespace, name }) => {
           const response = await apiFetch(
-            `${getApiBase()}/workloads/${kind}/${namespace}/${name}/scale`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ replicas }),
-            },
+            `${target.base}/workloads/${kind}/${namespace}/${name}/scale`,
+            confirmedRequest(target, { replicas }),
           );
           if (!response.ok) {
             const error = await readErrorBody(response);
@@ -5176,7 +5174,7 @@ export function useBulkScaleWorkloads() {
       queryClient.invalidateQueries({ queryKey: ["resources"] });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
-  });
+  }));
 }
 
 // Apply (create or update) a resource from YAML
@@ -5524,28 +5522,60 @@ export function useResumeCronJob() {
 // Workload operations
 // ============================================================================
 
+// Where a bound write goes: the API base and the connection the tab showed
+// when the user confirmed. Captured in mutate(), so no later moment (a host's
+// onMutate, a retry, a resumed offline mutation) can retarget the write.
+interface ConfirmedTarget {
+  base: string;
+  connection?: string;
+}
+
+function confirmTarget(): ConfirmedTarget {
+  const base = getApiBase();
+  return { base, connection: connectionHeaderValue(base) };
+}
+
+function confirmedRequest(target: ConfirmedTarget, body?: unknown): RequestInit {
+  const headers: Record<string, string> = {};
+  if (target.connection) headers[CONNECTION_HEADER] = target.connection;
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  return { method: "POST", headers, body: body === undefined ? undefined : JSON.stringify(body) };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyMutation = { mutate: (v: any, o?: any) => void; mutateAsync: (v: any, o?: any) => Promise<any> };
+type Unconfirmed<M extends AnyMutation> = Omit<Parameters<M["mutate"]>[0], "target">;
+
+function bindToConfirmation<M extends AnyMutation>(m: M) {
+  return {
+    ...m,
+    mutate: (v: Unconfirmed<M>, o?: Parameters<M["mutate"]>[1]) => m.mutate({ ...v, target: confirmTarget() }, o),
+    mutateAsync: (v: Unconfirmed<M>, o?: Parameters<M["mutateAsync"]>[1]) => m.mutateAsync({ ...v, target: confirmTarget() }, o),
+  };
+}
+
 // Restart a workload (Deployment, StatefulSet, DaemonSet, Rollout)
 export function useRestartWorkload() {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    // Runs once, at once: the header names the connection the user confirmed on.
+  return bindToConfirmation(useMutation({
+    // Runs once, at once, on the base and connection captured when the user confirmed.
     networkMode: "always",
     retry: false,
     mutationFn: async ({
       kind,
       namespace,
       name,
+      target = confirmTarget(),
     }: {
       kind: string;
       namespace: string;
       name: string;
+      target?: ConfirmedTarget;
     }) => {
       const response = await apiFetch(
-        `${getApiBase()}/workloads/${kind}/${namespace}/${name}/restart`,
-        {
-          method: "POST",
-        },
+        `${target.base}/workloads/${kind}/${namespace}/${name}/restart`,
+        confirmedRequest(target),
       );
       if (!response.ok) {
         throw new Error(restartErrorMessage(await readErrorBody(response), response.status));
@@ -5562,7 +5592,7 @@ export function useRestartWorkload() {
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
-  });
+  }));
 }
 
 function useSetDeploymentPaused(
@@ -5710,8 +5740,8 @@ export function useSetWorkloadImages() {
 export function useScaleWorkload() {
   const queryClient = useQueryClient();
 
-  return useMutation({
-    // Runs once, at once: the header names the connection the user confirmed on.
+  return bindToConfirmation(useMutation({
+    // Runs once, at once, on the base and connection captured when the user confirmed.
     networkMode: "always",
     retry: false,
     mutationFn: async ({
@@ -5719,19 +5749,17 @@ export function useScaleWorkload() {
       namespace,
       name,
       replicas,
+      target = confirmTarget(),
     }: {
       kind: string;
       namespace: string;
       name: string;
       replicas: number;
+      target?: ConfirmedTarget;
     }) => {
       const response = await apiFetch(
-        `${getApiBase()}/workloads/${kind}/${namespace}/${name}/scale`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ replicas }),
-        },
+        `${target.base}/workloads/${kind}/${namespace}/${name}/scale`,
+        confirmedRequest(target, { replicas }),
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
@@ -5757,7 +5785,7 @@ export function useScaleWorkload() {
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
-  });
+  }));
 }
 
 // ============================================================================

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query'
+import { MutationCache, QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query'
 import { afterEach, expect, it, vi } from 'vitest'
 import { useRestartWorkload } from './client'
 import { getApiBase } from './config'
@@ -39,6 +39,42 @@ it('sends a workload restart at once, naming the connection, even while the brow
     mutate!({ kind: 'deployments', namespace: 'default', name: 'web' })
     await new Promise((r) => setTimeout(r, 20))
   })
+  expect(seen).toEqual(['n-1'])
+  act(() => root.unmount())
+})
+
+// A host's global onMutate runs before the request; if the tab moves to
+// another connection meanwhile, the restart still names the one confirmed on.
+it('sends a confirmed restart for the connection the user confirmed on, whatever happens before it runs', async () => {
+  const BOOT = '2026-11-21T03:00:00.000000000Z'
+  observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, getApiBase())
+  const seen: (string | null)[] = []
+  vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    seen.push(new Headers(init?.headers).get('X-Radar-Connection'))
+    return new Response('{"error":"changed","code":"context_changed"}', { status: 409, headers: { 'Content-Type': 'application/json', 'X-Radar-Connection': 'n-2' } })
+  }))
+  let release: () => void = () => {}
+  const held = new Promise<void>((r) => { release = r })
+  const client = new QueryClient({
+    defaultOptions: { mutations: { retry: 3, retryDelay: 0 } },
+    mutationCache: new MutationCache({ onMutate: () => held }),
+  })
+  let mutate: ReturnType<typeof useRestartWorkload>['mutate'] | undefined
+  function Probe() {
+    mutate = useRestartWorkload().mutate
+    return null
+  }
+  const root = createRoot(document.createElement('div'))
+  await act(async () => {
+    root.render(<QueryClientProvider client={client}><Probe /></QueryClientProvider>)
+  })
+  await act(async () => {
+    mutate!({ kind: 'deployments', namespace: 'default', name: 'web' })
+    observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 2, bootAt: BOOT }, getApiBase())
+    release()
+    await new Promise((r) => setTimeout(r, 30))
+  })
+  // Sent once (never retried), naming the connection confirmed on.
   expect(seen).toEqual(['n-1'])
   act(() => root.unmount())
 })

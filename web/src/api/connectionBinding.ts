@@ -24,7 +24,7 @@ export interface ConnectionIdentity {
   seq?: number
   bootAt?: string
   context?: string
-  contextSwitch?: { id?: string; phase?: string } | null
+  contextSwitch?: { id?: string; phase?: string; connectionId?: string } | null
 }
 
 interface BaseState {
@@ -69,13 +69,14 @@ export function setConnectionMismatchHandler(fn: (() => void) | undefined): void
 /**
  * Feed every connection status the tab receives (poll, SSE frame, initial
  * snapshot, retry result). Returns false for a publication older than one
- * already seen (within one server process by sequence number, across restarts
- * by the process start time): the caller must not display it either.
+ * already seen from the same server process (by sequence number): the caller
+ * must not display it either. A publication from another process (different
+ * bootAt) is from the one now answering: only one local Radar process serves
+ * a tab, and a stopped one sends nothing, so its clock isn't compared.
  */
 export function observeConnectionStatus(status: ConnectionIdentity, base = getApiBase()): boolean {
   if (status.seq === undefined || !status.bootAt) return true // a server that doesn't bind connections
   const s = stateFor(base)
-  if (s.bootAt && status.bootAt < s.bootAt) return false
   if (status.bootAt === s.bootAt && status.seq < s.seq) return false
   if (status.bootAt === s.bootAt && status.seq === s.seq) return true
   s.bootAt = status.bootAt
@@ -93,8 +94,9 @@ export function observeConnectionStatus(status: ConnectionIdentity, base = getAp
     s.generation += 1
     listeners.forEach((l) => l())
   }
-  // A completed switch's ID lets the reset dedupe against the switch's own.
-  const switchId = status.contextSwitch?.phase === 'succeeded' ? status.contextSwitch.id : undefined
+  // The reset dedupes against a switch's own only when that switch admitted this connection.
+  const op = status.contextSwitch
+  const switchId = op?.phase === 'succeeded' && op.connectionId === next ? op.id : undefined
   // Only the mounted API base's views are reset; another base's late reply isn't theirs.
   if (replaced && base === getApiBase()) onReplaced?.(status.context ?? '', switchId)
   return true

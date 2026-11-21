@@ -5339,7 +5339,7 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 	// RetryCurrentConnection published the connected status under the
 	// context-operation lock; a second publish here would race a queued
 	// operation's teardown.
-	s.writeJSON(w, k8s.GetConnectionStatus())
+	s.writeJSON(w, publishedStatus(k8s.GetConnectionStatus()))
 }
 
 // CAPI handlers

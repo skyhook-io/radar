@@ -238,6 +238,10 @@ func TestInClusterRadarBindsNoConnections(t *testing.T) {
 	if len(fields) != 0 {
 		t.Fatalf("in-cluster status publishes identity: %v", fields)
 	}
+	// Retry answers with the status struct itself.
+	if st := publishedStatus(k8s.GetConnectionStatus()); st.ConnectionID != "" || st.ConnectionSeq != 0 || st.BootAt != "" {
+		t.Fatalf("in-cluster retry status publishes identity: %+v", st)
+	}
 }
 
 // Control for TestBoundRestartStaysOnAdmittedConnectionAcrossSwitch: the same

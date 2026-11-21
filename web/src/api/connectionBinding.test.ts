@@ -29,14 +29,15 @@ describe('connection binding', () => {
     expect(connectionHeaderValue(BASE)).toBe('n-1')
   })
 
-  it('ignores older publications from the same process and from older processes', () => {
+  it('ignores older publications from the same process and follows a restarted one', () => {
     observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 5, bootAt: BOOT }, BASE)
     observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 4, bootAt: BOOT }, BASE)
     expect(connectionHeaderValue(BASE)).toBe('n-2')
     observeConnectionStatus({ context: 'b', connectionId: 'm-1', seq: 1, bootAt: LATER_BOOT }, BASE)
     expect(connectionHeaderValue(BASE)).toBe('m-1')
-    observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 9, bootAt: BOOT }, BASE)
-    expect(connectionHeaderValue(BASE)).toBe('m-1')
+    // A restarted process whose clock was set back is still the one answering.
+    observeConnectionStatus({ context: 'b', connectionId: 'k-1', seq: 1, bootAt: '2026-11-20T00:00:00.000000000Z' }, BASE)
+    expect(connectionHeaderValue(BASE)).toBe('k-1')
   })
 
   it('keeps the last admitted connection while nothing is serving', () => {
@@ -71,8 +72,11 @@ describe('connection binding', () => {
     const reset = vi.fn()
     setConnectionReplacedHandler(reset)
     observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, BASE)
-    observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 2, bootAt: BOOT, contextSwitch: { id: 'sw-1', phase: 'succeeded' } }, BASE)
+    observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 2, bootAt: BOOT, contextSwitch: { id: 'sw-1', phase: 'succeeded', connectionId: 'n-2' } }, BASE)
     expect(reset).toHaveBeenLastCalledWith('b', 'sw-1')
+    // A later connection (Retry after a repoint) isn't that switch's: it resets on its own.
+    observeConnectionStatus({ context: 'b', connectionId: 'n-3', seq: 3, bootAt: BOOT, contextSwitch: { id: 'sw-1', phase: 'succeeded', connectionId: 'n-2' } }, BASE)
+    expect(reset).toHaveBeenLastCalledWith('b', undefined)
   })
 
   it('resets when the first connection differs from one whose data the tab already accepted', () => {
