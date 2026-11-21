@@ -616,15 +616,23 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	if current {
-		// Cluster info — requires connection, but errors are captured
+		// Cluster info — the last completed read for this cache, whatever the
+		// connection state now: during an outage it is the evidence a report
+		// needs, and observedAt says how old it is.
 		collectClusterSection("cluster", func() {
-			if status.State != k8s.StateConnected || cache == nil {
-				clusterErrors = append(clusterErrors, "Cluster details are unavailable while the connection changes or its cache is offline.")
+			if cache == nil {
+				clusterErrors = append(clusterErrors, "Cluster details are unavailable while the cache is offline.")
 				return
 			}
 			info, observed := cache.LastClusterInfo()
 			if observed.IsZero() {
 				clusterErrors = append(clusterErrors, "Cluster details have not been collected for the current connection.")
+				return
+			}
+			// A status published late by a check that started before a switch
+			// can name the previous context while this cache serves the new one.
+			if info.Context != status.Context {
+				clusterErrors = append(clusterErrors, "Cluster details are unavailable until the connection status settles.")
 				return
 			}
 			snap.Cluster = &DiagCluster{

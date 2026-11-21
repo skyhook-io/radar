@@ -195,7 +195,11 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 		info.CRDDiscoveryStatus = string(dynamicCache.GetDiscoveryStatus())
 	}
 
-	if cache != nil && cache == initialCache && ctx.Err() == nil && info.KubernetesVersion != "" {
+	// The version is cached and the counts come from informers, so a read
+	// during an outage succeeds on stale data: it must not move the
+	// observation (and its time) forward.
+	if cache != nil && cache == initialCache && ctx.Err() == nil && info.KubernetesVersion != "" &&
+		GetConnectionStatus().State != StateDisconnected {
 		cache.lastClusterInfo.Store(&clusterInfoObservation{info: *info, at: time.Now()})
 	}
 	return info, nil

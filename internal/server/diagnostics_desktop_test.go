@@ -251,13 +251,78 @@ func TestDiagnosticsConnectionUpdatesDuringCollection(t *testing.T) {
 			if (snap.Cache == nil) != switched || (snap.EventPipeline == nil) != switched || (snap.Informers == nil) != switched {
 				t.Errorf("cache=%t events=%t informers=%t, switched=%v", snap.Cache != nil, snap.EventPipeline != nil, snap.Informers != nil, switched)
 			}
-			if snap.Cluster != nil || snap.Traffic != nil || len(snap.Errors) == 0 {
-				t.Errorf("offline cluster=%+v traffic=%+v errors=%v", snap.Cluster, snap.Traffic, snap.Errors)
+			// The same cache keeps its last cluster observation through progress
+			// and outages; a switch drops it with an explanation.
+			if switched {
+				if snap.Cluster != nil || len(snap.Errors) == 0 {
+					t.Errorf("after a switch: cluster=%+v errors=%v", snap.Cluster, snap.Errors)
+				}
+			} else if snap.Cluster == nil || snap.Cluster.ObservedAt == "" || snap.Cluster.KubernetesVersion != "v1.35.3" {
+				t.Errorf("same cache, %s: cluster=%+v errors=%v", tc.next.State, snap.Cluster, snap.Errors)
+			}
+			if snap.Traffic != nil {
+				t.Errorf("traffic reported while not connected: %+v", snap.Traffic)
 			}
 			if snap.Config == nil || snap.Config.Port != 9280 || (snap.Config.OpenCostCurrency == "") != switched {
 				t.Errorf("configuration = %+v, switched = %v", snap.Config, switched)
 			}
 		})
+	}
+}
+
+// A status published late (a reachability check that began before a switch)
+// can name the previous context while the current cache serves the new one:
+// the cache's observation must not be reported under that context.
+func TestDiagnosticsOmitsClusterObservedForAnotherContext(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/version" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"gitVersion":"v1.35.3"}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(api.Close)
+	previousClient := k8s.SetTestClient(kubernetes.NewForConfigOrDie(&rest.Config{Host: api.URL}))
+	previousStatus := k8s.GetConnectionStatus()
+	previousName := k8s.SetTestContextName("new")
+	k8s.InvalidateServerVersionCache()
+	t.Cleanup(func() {
+		k8s.SetTestClient(previousClient)
+		k8s.SetTestContextName(previousName)
+		k8s.ResetResourceCache()
+		k8s.InvalidateServerVersionCache()
+		k8s.SetConnectionStatus(previousStatus)
+	})
+	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "new"})
+	if info, err := k8s.GetClusterInfo(context.Background()); err != nil || info.KubernetesVersion == "" {
+		t.Fatalf("could not seed cluster observation: %+v, %v", info, err)
+	}
+	_, seededAt := k8s.GetResourceCache().LastClusterInfo()
+
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: "old", Error: "cluster unreachable"})
+	body := diagnosticsBody(t)
+	var errs []string
+	_ = json.Unmarshal(body["errors"], &errs)
+	if body["cluster"] != nil || !strings.Contains(strings.Join(errs, " "), "connection status settles") {
+		t.Fatalf("cluster = %s, errors = %v", body["cluster"], errs)
+	}
+
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateDisconnected, Context: "new", Error: "cluster unreachable"})
+	// A cluster-info read during the outage succeeds on the cached version and
+	// informer data; it must not make the observation look fresh.
+	time.Sleep(10 * time.Millisecond)
+	if _, err := k8s.GetClusterInfo(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, at := k8s.GetResourceCache().LastClusterInfo(); !at.Equal(seededAt) {
+		t.Fatalf("a read during the outage moved the observation from %v to %v", seededAt, at)
+	}
+	if body := diagnosticsBody(t); body["cluster"] == nil {
+		t.Fatal("the matching context's observation was omitted during an outage")
 	}
 }
 
