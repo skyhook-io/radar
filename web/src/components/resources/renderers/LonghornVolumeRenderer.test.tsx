@@ -1,12 +1,14 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-const volume = { apiVersion: 'longhorn.io/v1beta2', kind: 'Volume', metadata: { name: 'pvc-1', namespace: 'longhorn-system' }, spec: { numberOfReplicas: 3 }, status: { state: 'attached', robustness: 'healthy' } }
+const volume = { apiVersion: 'longhorn.io/v1beta2', kind: 'Volume', metadata: { name: 'pvc-1', namespace: 'longhorn-system' }, spec: { numberOfReplicas: 3 }, status: { state: 'attached', robustness: 'healthy', kubernetesStatus: { namespace: 'shop', pvcName: 'data-db-0', lastPVCRefAt: '' } } }
 
-async function render(engines: { data?: any[]; error?: unknown; isLoading?: boolean; coverage?: { status: string } }) {
+async function render(engines: { data?: any[]; error?: unknown; isLoading?: boolean; coverage?: { status: string } }, namespaces?: { name: string }[], authEnabled?: boolean) {
   vi.resetModules()
   vi.doMock('../../../api/client', () => ({
     useResources: () => ({ data: engines.data, coverage: engines.coverage, error: engines.error ?? null, isError: !!engines.error, isLoading: !!engines.isLoading }),
+    useNamespaces: () => ({ data: namespaces }),
+    useAuthMe: () => ({ data: authEnabled === undefined ? undefined : { authEnabled } }),
   }))
   const { LonghornVolumeRenderer } = await import('./LonghornVolumeRenderer')
   const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume} />)
@@ -58,6 +60,21 @@ describe('LonghornVolumeRenderer (host)', () => {
   it('says the Engine is not running once the lookup finds none for this volume', async () => {
     const html = await render({ data: [{ spec: { volumeName: 'other' }, status: { replicaModeMap: { x: 'RW' } } }], coverage: { status: 'complete' } })
     expect(html).toContain('? of 3 (Engine not running)')
+  })
+
+  it('shows Longhorn\'s recorded PVC only when the caller\'s namespace list includes it', async () => {
+    expect(await render({ data: [] }, [{ name: 'shop' }])).toContain('shop/data-db-0')
+    expect(await render({ data: [] }, [{ name: 'other' }])).not.toContain('data-db-0')
+    expect(await render({ data: [] })).not.toContain('data-db-0')
+  })
+
+  it('keeps the history of a deleted namespace when auth is off, and decides from the list while the auth status loads', async () => {
+    expect(await render({ data: [] }, [{ name: 'other' }], false)).toContain('shop/data-db-0')
+    expect(await render({ data: [] }, undefined, false)).toContain('shop/data-db-0')
+    expect(await render({ data: [] }, [{ name: 'other' }], undefined)).not.toContain('data-db-0')
+    expect(await render({ data: [] }, [{ name: 'shop' }], undefined)).toContain('shop/data-db-0')
+    expect(await render({ data: [] }, [{ name: 'other' }], true)).not.toContain('data-db-0')
+    expect(await render({ data: [] }, undefined, true)).not.toContain('data-db-0')
   })
 
   it('does not call the Engine stopped when the read was partial or its coverage unknown', async () => {

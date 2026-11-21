@@ -1,4 +1,4 @@
-import { HardDrive, HeartPulse, Archive } from 'lucide-react'
+import { HardDrive, HeartPulse, Archive, History } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import { formatBytes } from '../../../utils/format'
 import { formatDuration } from '../resource-utils'
@@ -13,6 +13,8 @@ interface Props {
   engineUnknown?: boolean
   /** The host finished reading Engines, so a missing engine means this volume has none. */
   engineLookedUp?: boolean
+  /** Whether the caller can read a namespace; Longhorn's recorded names show only for those. Omitted: none show. */
+  canReadNamespace?: (namespace: string) => boolean
 }
 
 function bytes(value: unknown): string | undefined {
@@ -25,9 +27,35 @@ function since(timestamp?: string): string | undefined {
   return Number.isFinite(at) && Date.now() >= at ? formatDuration(Date.now() - at) : undefined
 }
 
-// Names in status.kubernetesStatus are what Longhorn last saw, not proof of
-// current use, so this drawer shows none of them.
-export function LonghornVolumeRenderer({ data, engine, engineUnknown, engineLookedUp }: Props) {
+function lastSeen(timestamp?: string): string {
+  // Longhorn clears the time while the reference holds, as of its last update.
+  if (!timestamp) return 'no end recorded'
+  const ago = since(timestamp)
+  return ago ? `last seen ${ago} ago` : `last seen ${timestamp}`
+}
+
+// Names in status.kubernetesStatus are what Longhorn last recorded, not proof
+// of current use (that is the PV under related resources), so they read as
+// history and never link.
+function LastSeenSection({ status, canReadNamespace }: { status: any; canReadNamespace?: (namespace: string) => boolean }) {
+  const k = status?.kubernetesStatus
+  const ns: string = k?.namespace || ''
+  if (!ns || !canReadNamespace?.(ns)) return null
+  const pods: any[] = (k.workloadsStatus ?? []).filter((w: any) => w?.podName)
+  if (!k.pvcName && pods.length === 0) return null
+  return (
+    <Section title="Last seen by Longhorn" icon={History} defaultExpanded>
+      <PropertyList>
+        {k.pvcName && <Property label="PVC" value={`${ns}/${k.pvcName} · ${lastSeen(k.lastPVCRefAt)}`} />}
+        {pods.map((w) => (
+          <Property key={w.podName} label="Pod" value={`${w.podName}${w.workloadType && w.workloadName ? ` (${w.workloadType} ${w.workloadName})` : ''} · ${lastSeen(k.lastPodRefAt)}`} />
+        ))}
+      </PropertyList>
+    </Section>
+  )
+}
+
+export function LonghornVolumeRenderer({ data, engine, engineUnknown, engineLookedUp, canReadNamespace }: Props) {
   const spec = data?.spec ?? {}
   const status = data?.status ?? {}
   const health = longhornVolumeHealth(data)
@@ -85,6 +113,8 @@ export function LonghornVolumeRenderer({ data, engine, engineUnknown, engineLook
           <Property label="Last backup" value={<TimeValue timestamp={status.lastBackupAt || undefined} />} />
         </PropertyList>
       </Section>
+
+      <LastSeenSection status={status} canReadNamespace={canReadNamespace} />
 
       <ConditionsSection conditions={status.conditions} getConditionTone={longhornVolumeConditionTone} />
     </>
