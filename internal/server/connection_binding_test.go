@@ -251,6 +251,7 @@ func TestBoundWriteRoutesRefuseStaleConnection(t *testing.T) {
 		{http.MethodPost, "/api/argo/applications/argocd/app/terminate"},
 		{http.MethodPost, "/api/argo/applications/argocd/app/suspend"},
 		{http.MethodPost, "/api/argo/applications/argocd/app/resume"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/validate-resource"},
 		{http.MethodPost, "/api/flux/kustomizations/flux-system/app/reconcile"},
 		{http.MethodPost, "/api/flux/kustomizations/flux-system/app/sync-with-source"},
 		{http.MethodPost, "/api/flux/kustomizations/flux-system/app/suspend"},

@@ -904,7 +904,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// ArgoCD routes
 			r.Get("/argo/destinations", s.handleArgoDestinations)
 			r.Post("/argo/applications/{namespace}/{name}/sync", s.bindWrite(s.handleArgoSync))
-			r.Post("/argo/applications/{namespace}/{name}/validate-resource", s.handleArgoValidateResource)
+			r.Post("/argo/applications/{namespace}/{name}/validate-resource", s.bindWrite(s.handleArgoValidateResource))
 			r.Post("/argo/applications/{namespace}/{name}/refresh", s.bindWrite(s.handleArgoRefresh))
 			r.Post("/argo/applications/{namespace}/{name}/rollback", s.bindWrite(s.handleArgoRollback))
 			r.Post("/argo/applications/{namespace}/{name}/terminate", s.bindWrite(s.handleArgoTerminate))
