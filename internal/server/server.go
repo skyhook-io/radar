@@ -865,6 +865,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			helmHandlers.ConfigWriteAllowed = s.requireHelmSourceConfigWrite
 			helmHandlers.ObjectScope = s.helmObjectScope
 			helmHandlers.ResolveStorageNamespaces = s.resolveHelmStorageScope
+			helmHandlers.BindWrite = s.bindWrite
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes

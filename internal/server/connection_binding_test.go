@@ -267,6 +267,16 @@ func TestBoundWriteRoutesRefuseStaleConnection(t *testing.T) {
 		{http.MethodPost, "/api/nodes/node-1/debug"},
 		{http.MethodDelete, "/api/nodes/node-1/debug"},
 		{http.MethodPost, "/api/portforwards"},
+		{http.MethodPost, "/api/helm/releases"},
+		{http.MethodPost, "/api/helm/releases/install-stream"},
+		{http.MethodPost, "/api/helm/releases/default/web/rollback"},
+		{http.MethodPost, "/api/helm/releases/default/web/rollback-stream"},
+		{http.MethodPost, "/api/helm/releases/default/web/upgrade"},
+		{http.MethodPost, "/api/helm/releases/default/web/upgrade-stream"},
+		{http.MethodPost, "/api/helm/releases/default/web/source/upgrade"},
+		{http.MethodPost, "/api/helm/releases/default/web/source/upgrade-stream"},
+		{http.MethodPut, "/api/helm/releases/default/web/values"},
+		{http.MethodDelete, "/api/helm/releases/default/web"},
 	} {
 		req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
 		req.Header.Set("Content-Type", "application/json")
@@ -297,4 +307,3 @@ func TestBoundExecRefusesStaleConnectionFromQuery(t *testing.T) {
 		t.Fatalf("exec with a stale connection: %d %s", rec.Code, rec.Body)
 	}
 }
-

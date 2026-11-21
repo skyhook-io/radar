@@ -18,7 +18,9 @@ Covered today (the routes wrapped with `bindWrite` in `internal/server/server.go
 
 - Pods and nodes: **exec** (the terminal WebSocket names the connection in its URL, `?connection=`, since a browser can't set headers on a WebSocket), **file upload**, pod **debug containers**, node **debug pods** (create and clean up), and **port-forward** start. Sessions already end when Radar switches.
 
-Not yet covered: Helm, other integration actions, CAPI connect, and MCP. They still resolve the current connection when they run.
+- Helm: **install**, **upgrade** (including from a source and by editing values), **rollback**, **uninstall**, streaming variants included. Helm builds its clients from the serving connection when the action starts and keeps them for the whole action, so the window between the binding check and that build is the only gap.
+
+Not yet covered: other integration actions (Kyverno, Kueue and the rest that write), CAPI connect, and MCP. An interrupted Helm action is not recovered (the plan's "outcome recovery" for Helm). They still resolve the current connection when they run.
 
 **Only when Radar serves from a kubeconfig.** An in-cluster Radar can't change clusters (no kubeconfig contexts; CAPI connect is refused in-cluster), and during a rolling update two of its pods, each with its own IDs, answer the same browser. It publishes no ID and ignores one a request names; its writes still run on one captured set of clients.
 

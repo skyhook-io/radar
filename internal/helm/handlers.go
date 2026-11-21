@@ -114,6 +114,17 @@ type Handlers struct {
 	// a namespace missing from the result as denied, so it needs to know. Nil
 	// falls back to resolveNamespaces with every check answered.
 	ResolveStorageNamespaces func(r *http.Request) (namespaces []string, ok bool, checked bool, skipped []string)
+	// BindWrite wraps the routes that change the cluster, so they run only on
+	// the connection the caller names. Injected by the server; nil leaves
+	// them unwrapped.
+	BindWrite func(http.HandlerFunc) http.HandlerFunc
+}
+
+func (h *Handlers) bind(next http.HandlerFunc) http.HandlerFunc {
+	if h.BindWrite == nil {
+		return next
+	}
+	return h.BindWrite(next)
 }
 
 // ReleaseReadDeniedCode tags a 403 that is Kubernetes refusing the caller's own
@@ -151,8 +162,8 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Get("/releases", h.handleListReleases)
 		r.Get("/inventory", h.handleInventory)
 		r.Get("/inventory/{namespace}/{name}", h.handleObservedRelease)
-		r.Post("/releases", h.handleInstall)
-		r.Post("/releases/install-stream", h.handleInstallStream)
+		r.Post("/releases", h.bind(h.handleInstall))
+		r.Post("/releases/install-stream", h.bind(h.handleInstallStream))
 		r.Get("/releases/{namespace}/{name}", h.handleGetRelease)
 		r.Get("/releases/{namespace}/{name}/manifest", h.handleGetManifest)
 		r.Get("/releases/{namespace}/{name}/values/diff", h.handleGetValuesDiff)
@@ -167,17 +178,17 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Get("/releases/{namespace}/{name}/source/versions", h.handleSourceVersions)
 		r.Get("/upgrade-check", h.handleBatchUpgradeCheck)
 		// Actions (write operations)
-		r.Post("/releases/{namespace}/{name}/rollback", h.handleRollback)
-		r.Post("/releases/{namespace}/{name}/rollback-stream", h.handleRollbackStream)
-		r.Post("/releases/{namespace}/{name}/upgrade", h.handleUpgrade)
-		r.Post("/releases/{namespace}/{name}/upgrade-stream", h.handleUpgradeStream)
-		r.Post("/releases/{namespace}/{name}/source/upgrade", h.handleUpgrade)
-		r.Post("/releases/{namespace}/{name}/source/upgrade-stream", h.handleUpgradeStream)
+		r.Post("/releases/{namespace}/{name}/rollback", h.bind(h.handleRollback))
+		r.Post("/releases/{namespace}/{name}/rollback-stream", h.bind(h.handleRollbackStream))
+		r.Post("/releases/{namespace}/{name}/upgrade", h.bind(h.handleUpgrade))
+		r.Post("/releases/{namespace}/{name}/upgrade-stream", h.bind(h.handleUpgradeStream))
+		r.Post("/releases/{namespace}/{name}/source/upgrade", h.bind(h.handleUpgrade))
+		r.Post("/releases/{namespace}/{name}/source/upgrade-stream", h.bind(h.handleUpgradeStream))
 		r.Post("/releases/{namespace}/{name}/source/preview", h.handlePreviewValues)
 		r.Post("/releases/{namespace}/{name}/values/preview", h.handlePreviewValues)
-		r.Put("/releases/{namespace}/{name}/values", h.handleApplyValues)
+		r.Put("/releases/{namespace}/{name}/values", h.bind(h.handleApplyValues))
 		r.Put("/releases/{namespace}/{name}/source", h.handleSetSource)
-		r.Delete("/releases/{namespace}/{name}", h.handleUninstall)
+		r.Delete("/releases/{namespace}/{name}", h.bind(h.handleUninstall))
 
 		// Chart browser (local repositories)
 		r.Get("/repositories", h.handleListRepositories)
