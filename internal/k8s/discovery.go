@@ -54,7 +54,11 @@ func currentResourceDiscoveryLocked() *ResourceDiscovery {
 	if resourceDiscovery == nil {
 		return nil
 	}
-	if resourceDiscoveryClient != GetDiscoveryClient() {
+	return resourceDiscoveryForClientLocked(GetDiscoveryClient())
+}
+
+func resourceDiscoveryForClientLocked(client *discovery.DiscoveryClient) *ResourceDiscovery {
+	if resourceDiscoveryClient != client {
 		return nil
 	}
 	return resourceDiscovery
@@ -141,6 +145,23 @@ func GetResourceDiscovery() *ResourceDiscovery {
 	discoveryMu.Lock()
 	defer discoveryMu.Unlock()
 	return currentResourceDiscoveryLocked()
+}
+
+// ResourceDiscoveryIfIdle is the diagnostics read. Kubeconfig file I/O can
+// hold clientMu while discovery initialization or publication holds discoveryMu.
+func ResourceDiscoveryIfIdle() (*ResourceDiscovery, bool) {
+	if !discoveryMu.TryLock() {
+		return nil, false
+	}
+	defer discoveryMu.Unlock()
+	if resourceDiscovery == nil {
+		return nil, true
+	}
+	if !clientMu.TryRLock() {
+		return nil, false
+	}
+	defer clientMu.RUnlock()
+	return resourceDiscoveryForClientLocked(discoveryClient), true
 }
 
 // ResetResourceDiscovery clears the resource discovery instance so it can be

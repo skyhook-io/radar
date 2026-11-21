@@ -190,9 +190,6 @@ func (b *Builder) detectLargeClusterAndOptimize(opts *BuildOptions) (bool, []str
 		return false, nil, estimatedNodes
 	}
 
-	// Large cluster detected - apply optimizations
-	log.Printf("INFO [topology] Large cluster detected (%d estimated nodes >= %d threshold), applying optimizations", estimatedNodes, LargeClusterThreshold)
-
 	// 1. More aggressive pod grouping (threshold 2 instead of 5)
 	opts.MaxIndividualPods = 2
 

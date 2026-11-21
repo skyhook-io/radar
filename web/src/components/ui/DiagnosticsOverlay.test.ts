@@ -117,9 +117,10 @@ describe('formatForGitHub kubeconfig section', () => {
 
     expect(md).toContain('Mode: `multi-source` | Files: 3 | Directory Files: 2 | Contexts (after source resolution): 7')
     expect(md).toContain('KUBECONFIG Captured From Shell: Yes | Ignored: Yes — directories-only configuration')
+    expect(md).toContain('Current Context Uses Exec: No')
   })
 
-  it('omits directory counts for environment path lists', () => {
+  it('omits directory counts and unobserved current-context auth', () => {
     const md = formatForGitHub({
       ...baseSnapshot,
       kubeconfig: {
@@ -130,11 +131,11 @@ describe('formatForGitHub kubeconfig section', () => {
         enrichedFromShell: false,
         kubeconfigEnvIgnored: false,
         kubeconfigEnvIgnoredReason: '',
-        currentContextUsesExec: true,
       },
     }, undefined, false)
 
     expect(md).toContain('Mode: `multi-env` | Files: 2 | Contexts (after source resolution): 4')
     expect(md).not.toContain('Directory Files:')
+    expect(md).not.toContain('Current Context Uses Exec:')
   })
 })

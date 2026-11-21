@@ -154,6 +154,10 @@ describe('curated sets are reachable', () => {
     expect(hasCuratedColumns('services', 'serving.knative.dev')).toBe(true)
     // ...and that an unrelated vendor still gets nothing.
     expect(hasCuratedColumns('policies', 'someone-else.io')).toBe(false)
+    // Longhorn's printer columns (State, Robustness, Scheduled, Size, Node) already
+    // say what a curated set would; neither its Volume nor its Node takes the core set.
+    expect(hasCuratedColumns('volumes', 'longhorn.io')).toBe(false)
+    expect(hasCuratedColumns('nodes', 'longhorn.io')).toBe(false)
   })
 })
 
