@@ -15,7 +15,12 @@ concurrency:
 # Pushes to main rerun every Go test instead of reusing results cached from an
 # earlier run; PRs keep the cache. Go applies -count only to go test.
 env:
-  GOFLAGS: ${{ github.event_name == 'push' && '-count=1' || '' }}
+  # TEMPORARY (measuring this PR): its branch also runs tests fresh and saves
+  # build caches, as main does. Remove before merging.
+  GOFLAGS: ${{ (github.event_name == 'push' || github.head_ref == 'ci/fresh-go-build-cache') && '-count=1' || '' }}
+  # Go jobs save their build cache only from main, pruned to what the run used
+  # (.github/actions/go-cache-save); PRs restore the newest one.
+  GO_CACHE_SAVE: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'ci/fresh-go-build-cache' }}
 # go test runs below pass -ldflags=-w: test binaries without DWARF link in
 # about a third of the time; nothing debugs them here.
 
@@ -123,9 +128,10 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.26'
-          # Its own build cache: sharing the root module's key let this job,
-          # which finishes first, save a cache holding only pkg's packages.
-          cache-dependency-path: pkg/go.sum
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
 
       - name: Download dependencies
         run: go mod download
@@ -143,6 +149,10 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
 
   backend:
     name: Backend
@@ -170,9 +180,10 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.26'
-          cache-dependency-path: |
-            go.sum
-            pkg/go.sum
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
 
       - name: Download dependencies
         run: go mod download
@@ -202,6 +213,10 @@ jobs:
 
   # gofmt and vet in their own job, so they run alongside the tests instead of
   # before them in the slowest job.
+
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
   backend-vet:
     name: Backend (vet)
     needs: changes
@@ -214,9 +229,10 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.26'
-          cache-dependency-path: |
-            go.sum
-            pkg/go.sum
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
 
       - name: Download dependencies
         run: go mod download
@@ -235,6 +251,10 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
+
   backend-server:
     name: Backend (internal/server)
     needs: changes
@@ -247,9 +267,10 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.26'
-          cache-dependency-path: |
-            go.sum
-            pkg/go.sum
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
 
       - name: Download dependencies
         run: go mod download
@@ -259,6 +280,10 @@ jobs:
 
   # TestNoEffortNotesReferencedFromSource scans the whole repo (.ts, .md, .sh,
   # .yaml, ...), not only Go code. When Backend is skipped, run it alone.
+
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
   repo-hygiene:
     name: Repo hygiene
     needs: changes
@@ -271,12 +296,17 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: '1.26'
-          cache-dependency-path: |
-            go.sum
-            pkg/go.sum
+          cache: false
+
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
 
       - name: Check for effort-note paths
         run: go test -ldflags=-w ./internal/server -run '^TestNoEffortNotesReferencedFromSource$'
+
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
 
   frontend:
     name: Frontend
@@ -330,9 +360,9 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: '1.26'
-          cache-dependency-path: |
-            go.sum
-            pkg/go.sum
+          cache: false
+      - name: Restore Go caches
+        uses: ./.github/actions/go-cache-restore
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -353,6 +383,10 @@ jobs:
       - run: go build -o /dev/null ./cmd/testserver
       - run: npm run test:e2e:settings
         working-directory: web
+
+      - name: Save Go build cache
+        if: env.GO_CACHE_SAVE == 'true'
+        uses: ./.github/actions/go-cache-save
 
   k8s-ui:
     name: k8s-ui (shared UI)

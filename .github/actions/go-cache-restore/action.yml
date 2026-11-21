@@ -1,0 +1,36 @@
+name: Restore Go caches
+description: >
+  Restores the module cache (keyed by go.sum) and this job's build cache (the
+  newest one main saved for this job), then backdates the build cache so that
+  go-cache-save can keep only what this run used.
+runs:
+  using: composite
+  steps:
+    - name: Restore module cache
+      uses: actions/cache@v6
+      with:
+        path: ~/go/pkg/mod
+        key: gomod-${{ runner.os }}-${{ hashFiles('go.sum', 'pkg/go.sum') }}
+        restore-keys: gomod-${{ runner.os }}-
+
+    - name: Restore build cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.cache/go-build
+        key: gobuild-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+        restore-keys: gobuild-${{ runner.os }}-${{ github.job }}-
+
+    # Go re-stamps a cache entry when it uses one more than an hour old, so
+    # after backdating every entry, the ones still backdated when the job ends
+    # are the ones it didn't use. trim.txt records the last trim: writing now
+    # keeps Go's own trim, which drops entries unused for five days, from
+    # deleting the backdated entries mid-job.
+    - name: Backdate the build cache
+      shell: bash
+      run: |
+        cache=$(go env GOCACHE)
+        mkdir -p "$cache"
+        find "$cache" -type f -exec touch -t 200001010000 {} +
+        date +%s > "$cache/trim.txt"
+        touch "$RUNNER_TEMP/go-cache-start"
+        echo "restored build cache: $(du -sh "$cache" | cut -f1)"
