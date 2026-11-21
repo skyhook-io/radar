@@ -88,11 +88,16 @@ post() { # post <path> [connectionHeader] → prints "code"
   [[ -n "${2:-}" ]] && h=(-H "X-Radar-Connection: $2")
   curl -s -m 60 -o $L/last-body.json -w '%{http_code}' -X POST -H 'Sec-Fetch-Site: same-origin' "${h[@]}" "$API$1"
 }
-switch_tracked() { post "/contexts/$1?track=1" >/dev/null; }
-wait_switch() { # wait until the tracked switch ends; prints its phase
+switch_tracked() { # starts a tracked switch; SWITCH_ID names it (empty if refused)
+  SWITCH_ID=""
+  local code=$(post "/contexts/$1?track=1")
+  [[ $code == 202 ]] && SWITCH_ID=$(j "d['id']" < $L/last-body.json)
+}
+wait_switch() { # wait until the switch SWITCH_ID ends; prints its phase
+  [[ -n "$SWITCH_ID" ]] || { print not-started; return; }
   for i in {1..240}; do
-    local p=$(status | j "(d.get('contextSwitch') or {}).get('phase','')")
-    [[ "$p" != preflight && "$p" != switching && "$p" != stopping && -n "$p" ]] && { print $p; return; }
+    local p=$(status | j "(lambda o: o.get('phase','') if o.get('id')=='$SWITCH_ID' else 'other')(d.get('contextSwitch') or {})")
+    [[ "$p" != preflight && "$p" != switching && "$p" != stopping && "$p" != other && -n "$p" ]] && { print $p; return; }
     sleep 1
   done
   print timeout
@@ -200,8 +205,8 @@ run() {
   L10) # Stop mid-warm-up: nothing serves, writes are refused as retryable
     start 40s || return
     local idA=$(connid)
-    local op=$(curl -s -m 10 -X POST -H 'Sec-Fetch-Site: same-origin' "$API/contexts/radar-test-prod?track=1")
-    local opid=$(print -r -- $op | j "d['id']")
+    switch_tracked radar-test-prod
+    local opid=$SWITCH_ID
     wait_state connecting radar-test-prod
     for i in {1..20}; do [[ "$(status | j "(d.get('contextSwitch') or {}).get('canStop',False)")" == True ]] && break; sleep 0.5; done
     local code=$(post "/contexts/radar-test-prod?stopSwitch=$opid")

@@ -79,7 +79,8 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
-import { CONNECTION_HEADER, CONTEXT_CHANGED, connectionHeaderValue, reportConnectionMismatch, responseMatchesConnection,
+import { CONNECTION_HEADER, CONTEXT_CHANGED, connectionHeaderValue, reportConnectionMismatch, isConnectionChangeCode,
+  responseMatchesConnection,
   stampStillCurrent } from './connectionBinding'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
@@ -157,6 +158,15 @@ function markOidcLoginRedirect(now: number): void {
 // and handles 401 responses globally. Merges caller-provided headers with
 // auth headers from the config module so library consumers (Radar Hub) can
 // inject Authorization bearer tokens without each call site knowing.
+async function errorCode(response: Response): Promise<unknown> {
+  try {
+    const body = await response.clone().json();
+    return body?.code ?? body?.error_code;
+  } catch {
+    return undefined;
+  }
+}
+
 export function apiFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -179,6 +189,8 @@ export function apiFetch(
     const stamp = response.headers.get(CONNECTION_HEADER);
     if (!responseMatchesConnection(connection, stamp, response.ok)) {
       reportConnectionMismatch();
+      // A refused write keeps the server's own answer (it says nothing changed).
+      if (!response.ok && isConnectionChangeCode(await errorCode(response))) return response;
       return connectionChangedResponse();
     }
     // Nothing is serving the connection this tab shows: the error passes
@@ -5040,7 +5052,7 @@ function bulkWorkloadFailureMessage(
 export function useBulkRestartWorkloads() {
   const queryClient = useQueryClient();
 
-  return bindToConfirmation(useMutation({
+  return useBindToConfirmation(useMutation({
     // Runs once, at once, on the base and connection captured when the user confirmed.
     networkMode: "always",
     retry: false,
@@ -5109,7 +5121,7 @@ export function useBulkRestartWorkloads() {
 export function useBulkScaleWorkloads() {
   const queryClient = useQueryClient();
 
-  return bindToConfirmation(useMutation({
+  return useBindToConfirmation(useMutation({
     // Runs once, at once, on the base and connection captured when the user confirmed.
     networkMode: "always",
     retry: false,
@@ -5546,7 +5558,7 @@ function confirmedRequest(target: ConfirmedTarget, body?: unknown): RequestInit 
 type AnyMutation = { mutate: (v: any, o?: any) => void; mutateAsync: (v: any, o?: any) => Promise<any> };
 type Unconfirmed<M extends AnyMutation> = Omit<Parameters<M["mutate"]>[0], "target">;
 
-function bindToConfirmation<M extends AnyMutation>(m: M) {
+function useBindToConfirmation<M extends AnyMutation>(m: M) {
   return {
     ...m,
     mutate: (v: Unconfirmed<M>, o?: Parameters<M["mutate"]>[1]) => m.mutate({ ...v, target: confirmTarget() }, o),
@@ -5558,7 +5570,7 @@ function bindToConfirmation<M extends AnyMutation>(m: M) {
 export function useRestartWorkload() {
   const queryClient = useQueryClient();
 
-  return bindToConfirmation(useMutation({
+  return useBindToConfirmation(useMutation({
     // Runs once, at once, on the base and connection captured when the user confirmed.
     networkMode: "always",
     retry: false,
@@ -5740,7 +5752,7 @@ export function useSetWorkloadImages() {
 export function useScaleWorkload() {
   const queryClient = useQueryClient();
 
-  return bindToConfirmation(useMutation({
+  return useBindToConfirmation(useMutation({
     // Runs once, at once, on the base and connection captured when the user confirmed.
     networkMode: "always",
     retry: false,

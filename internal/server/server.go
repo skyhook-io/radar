@@ -712,7 +712,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/resource-counts", s.handleResourceCounts)
 			r.Get("/resources/{kind}", s.stampRead(s.handleListResources))
 			r.Get("/resources/{kind}/{namespace}/{name}", s.stampRead(s.handleGetResource))
-			r.Head("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
+			r.Head("/resources/{kind}/{namespace}/{name}", s.stampRead(s.handleGetResource))
 			r.Post("/resources/preview", s.handlePreviewResources)
 			r.Post("/resources/schemas", s.handleResourceSchemas)
 			r.Post("/resources/apply", s.handleApplyResource)

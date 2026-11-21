@@ -62,12 +62,13 @@ it('re-reads the status when the server refuses a write for another connection',
   observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, getApiBase())
   const refresh = vi.fn()
   setConnectionMismatchHandler(refresh)
-  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"changed","code":"context_changed"}', {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"Nothing was changed: the cluster changed","code":"context_changed"}', {
     status: 409, headers: { 'Content-Type': 'application/json', 'X-Radar-Connection': 'n-2' },
   })))
   const response = await apiFetch(`${getApiBase()}/workloads/deployments/default/web/restart`, { method: 'POST' })
   expect(response.status).toBe(409)
-  expect(await response.json()).toMatchObject({ code: 'context_changed' })
+  // The server's own refusal reaches the user: it says nothing was changed.
+  expect(await response.json()).toMatchObject({ code: 'context_changed', error: 'Nothing was changed: the cluster changed' })
   await Promise.resolve()
   expect(refresh).toHaveBeenCalledTimes(1)
 })

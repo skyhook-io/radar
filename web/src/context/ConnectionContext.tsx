@@ -131,7 +131,8 @@ async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<Poll
   return { ...status, sseGenerationAtStart, superseded }
 }
 
-async function retryConnection(automatic = false): Promise<ConnectionState> {
+// superseded: older than a publication the tab already saw; not for display.
+async function retryConnection(automatic = false): Promise<ConnectionState & { superseded: boolean }> {
   const base = getApiBase()
   const response = await apiFetch(`${base}/connection/retry`, {
     method: 'POST',
@@ -142,8 +143,7 @@ async function retryConnection(automatic = false): Promise<ConnectionState> {
     throw new ConnectionRetryError(error.error || `HTTP ${response.status}`, response.status, error.errorType, error.error_code)
   }
   const result = await response.json() as ConnectionState
-  observeConnectionStatus(result, base)
-  return result
+  return { ...result, superseded: !observeConnectionStatus(result, base) }
 }
 
 export function ConnectionProvider({ children }: { children: ReactNode }) {
@@ -349,7 +349,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       setConnection(prev => prev === previousConnection ? pendingConnection : prev)
       return { previousConnection, pendingConnection }
     },
-    onSuccess: (result) => {
+    onSuccess: ({ superseded, ...result }) => {
+      if (superseded) {
+        void queryClient.invalidateQueries({ queryKey: ['connection-status'] })
+        return
+      }
       const previousContext = connectionRef.current.context
       setConnection(result)
       if (result.state === 'connected') {
@@ -435,10 +439,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       setIsAutoRetrying(true)
       let recovered = false
       retryConnection(true)
-        .then((result) => {
+        .then(({ superseded, ...result }) => {
           if (stopped) return
           recovered = true
           autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
+          if (superseded) {
+            void queryClient.invalidateQueries({ queryKey: ['connection-status'] })
+            return
+          }
           sseActiveRef.current = false
           const previousContext = connectionRef.current.context
           setConnection(result)

@@ -32,7 +32,8 @@ Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `
 - Publications older than one the tab already saw are ignored for display too (poll and SSE), not only for identity.
 - `apiFetch` sends the tab's connection ID (or `unknown` once the server is known to bind but the tab has none yet). A response labelled with another connection is answered as `context_changed` and the tab re-reads its status. A `none` label drops data for a tab that shows a connection, lets errors through with their own code, and also prompts a status re-read.
 - `fetchJSON` drops a labelled result if the tab moved to another connection while it was in flight.
-- Restart and scale run at once (never paused offline) and are never retried automatically, so the connection they name is the one the user confirmed on.
+- Restart and scale capture the API base and connection when the user confirms (`mutate()`), run at once (never paused offline) and are never retried automatically, so nothing between the click and the request retargets them. A closing resource drawer disables its controls, since a reset closes it with an animation while its resource may belong to the connection the tab just left.
+- A Retry result older than a publication the tab already saw is not displayed; the tab re-reads its status instead.
 - Only the mounted API base's views are reset; status identity is recorded under the base the request went to (Radar Hub shares one query client across clusters).
 - The tab adopts a new connection together with resetting its views: after a switch's `context_changed` the next ID is adopted quietly; otherwise adopting it resets the views. Resource views are keyed on the connection, so dialogs opened on the previous connection close.
 
@@ -43,6 +44,7 @@ A server without connection IDs (older or in-cluster Radar) reports none; the br
 - **Admission at Connected, not at warm-up start.** A tab that shows the old cluster doesn't display the new cluster's progressively warming data until the switch completes (those reads are labelled `none` and dropped). Admitting earlier would make every switch reset the views twice. A tab with no connection yet (startup) shows warm-up data as before.
 - **Data from before a tab's first status** is kept if the first connection adopted is the one that served it; a different one resets the views. A switch completing in the first seconds of a tab's life, with `context_changed` lost, is the narrow case left.
 - **A write arriving during shutdown** still runs on the connection the tab shows; admissions are closed first so nothing new is admitted.
+- **Writes name the tab's connection, not the data's.** The tab adopts a connection together with resetting its views, so the two agree except in the moments between adoption and the reset's render. The stricter design (next iteration) labels each query result with the connection that served it and has an action send the label of the data it acts on; that needs the label carried through React Query's structural sharing, which replaces result objects.
 
 ## Scenario checklist
 
