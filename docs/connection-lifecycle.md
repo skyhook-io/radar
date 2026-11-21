@@ -70,3 +70,7 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 | S2 | Shutdown | No admission after shutdown begins | | `TestConnectionAdmissionsClosedAtShutdown` |
 
 Known scenarios outside this slice (from the switch trace): O7 (a lost `context_changed` with no later status), F10 (stalls outside the switch's budget), and the write families listed above.
+
+## Follow-ups
+
+- **Diagnostics.** The diagnostics report keeps its sections on one cluster by checking that the cache and context didn't change during collection. Once connections have their own caches, it should capture one connection the way a bound write does, report its ID and the tracked switch, and drop those checks.
