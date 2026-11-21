@@ -79,6 +79,7 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
+import { CONNECTION_HEADER, CONTEXT_CHANGED, connectionHeaderValue, reportConnectionMismatch, responseMatchesConnection } from './connectionBinding'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   RadarFeatureUnsupportedError,
@@ -163,11 +164,21 @@ export function apiFetch(
   for (const [k, v] of Object.entries(getAuthHeaders())) {
     if (!headers.has(k)) headers.set(k, v);
   }
+  // Name the connection this tab is showing (see connectionBinding.ts).
+  const connection = headers.get(CONNECTION_HEADER) ?? connectionHeaderValue();
+  if (connection && !headers.has(CONNECTION_HEADER)) headers.set(CONNECTION_HEADER, connection);
   return fetch(input, {
     credentials: getCredentialsMode(),
     ...init,
     headers,
   }).then(async (response) => {
+    // A response another connection produced never reaches the views: it is
+    // answered as the server answers a stale write, and the tab re-reads its
+    // connection status to catch up.
+    if (!responseMatchesConnection(connection, response.headers.get(CONNECTION_HEADER))) {
+      reportConnectionMismatch();
+      return connectionChangedResponse();
+    }
     const authPrefix = `${getBasename()}/auth`;
     if (
       response.status === 401 &&
@@ -221,6 +232,14 @@ export function apiFetch(
       }
     }
     return response;
+  });
+}
+
+function connectionChangedResponse(): Response {
+  const message = "The cluster changed since this view loaded. Reload the view and try again.";
+  return new Response(JSON.stringify({ error: message, code: CONTEXT_CHANGED, error_code: CONTEXT_CHANGED }), {
+    status: 409,
+    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -413,6 +432,7 @@ export async function fetchJSON<T>(
   init?: RequestInit | AbortSignal,
 ): Promise<T> {
   const requestInit = init instanceof AbortSignal ? { signal: init } : init;
+  const sent = connectionHeaderValue();
   const response = await apiFetch(`${getApiBase()}${path}`, requestInit);
   if (!response.ok) {
     const { body, unknownRoute } = await readErrorResponse(response);
@@ -423,7 +443,14 @@ export async function fetchJSON<T>(
       { unknownRoute },
     );
   }
-  return response.json();
+  const result = await response.json();
+  // Commit-time check: a connection-labelled result is dropped if the tab
+  // moved to another connection while it was in flight.
+  if (response.headers.has(CONNECTION_HEADER) && sent && sent !== "unknown" && connectionHeaderValue() !== sent) {
+    reportConnectionMismatch();
+    throw new ApiError("The cluster changed since this view loaded. Reload the view and try again.", 409, { code: CONTEXT_CHANGED, error_code: CONTEXT_CHANGED });
+  }
+  return result;
 }
 
 // ============================================================================

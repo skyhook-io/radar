@@ -769,3 +769,32 @@ func InitTestReplayClients(client dynamic.Interface, catalog discovery.Discovery
 	discoveryMu.Unlock()
 	return InitDynamicResourceCache(nil)
 }
+
+// InstallTestServingConnection installs a named connection's config, dynamic
+// client and discovery and admits it, the way a switch ends: whatever was
+// serving is retired first. It returns the new connection's ID.
+func InstallTestServingConnection(name string, cfg *rest.Config, dyn dynamic.Interface, disc discovery.DiscoveryInterface) (string, error) {
+	RetireServingConnection()
+	clientMu.Lock()
+	k8sConfig, dynamicClient, contextName = cfg, dyn, name
+	clientMu.Unlock()
+	if _, err := SetTestResourceDiscovery(disc); err != nil {
+		return "", err
+	}
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: name})
+	return ServingConnectionID(), nil
+}
+
+// ResetTestConnectionIdentity clears the serving connection and publication
+// state InstallTestServingConnection and status publications leave behind.
+func ResetTestConnectionIdentity() {
+	connectionStatusMu.Lock()
+	servingConnectionID = ""
+	admissionsClosed = false
+	connectionStatus = ConnectionStatus{}
+	connectionStatusMu.Unlock()
+	clientMu.Lock()
+	k8sConfig, dynamicClient, contextName = nil, nil, ""
+	clientMu.Unlock()
+	ResetResourceDiscovery()
+}

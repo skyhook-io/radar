@@ -4,6 +4,7 @@ import { automaticRequestHeaders, getApiBase } from '../api/config'
 import { readErrorBody } from '../api/httpErrors'
 import { apiFetch, type SyncStatusSnapshot, type NodeDrainActivity } from '../api/client'
 import { followSwitch, switchInProgress, type ContextSwitchOperation } from '../api/contextSwitch'
+import { observeConnectionStatus, setConnectionMismatchHandler, type ConnectionIdentity } from '../api/connectionBinding'
 import { showApiNotice } from '../components/ui/Toast'
 import { ClusterConnectedContext } from './clusterConnected'
 
@@ -19,6 +20,11 @@ export interface ConnectionState {
   // When this context stopped working (RFC 3339). Set by the server while
   // disconnected; older servers never send it.
   disconnectedAt?: string
+  // The admitted connection and the publication order (see connectionBinding.ts).
+  // Older servers never send them.
+  connectionId?: ConnectionIdentity['connectionId']
+  seq?: ConnectionIdentity['seq']
+  bootAt?: ConnectionIdentity['bootAt']
   // Per-kind readiness while the initial informer sync runs ('connecting'
   // with informers started). Drives the progressive app shell — absent once
   // connected or before informers exist.
@@ -242,8 +248,17 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   // structural sharing keeps `data`'s identity stable across byte-identical
   // polls, so without it a result dropped by the retry-in-flight guard below
   // would never be re-applied — a stuck error screen when SSE is down.
+  // A response from another connection re-reads the status so the tab catches up.
+  useEffect(() => {
+    setConnectionMismatchHandler(() => { void queryClient.invalidateQueries({ queryKey: ['connection-status'] }) })
+    return () => setConnectionMismatchHandler(undefined)
+  }, [queryClient])
+
   useEffect(() => {
     if (!data) return
+    // Connection identity is ordered on its own and fed from every source,
+    // before the state guards below decide whether this poll is applied.
+    observeConnectionStatus(data)
     if (data.authRecoveryOwed !== undefined) {
       serverOwnsRecoveryRef.current = data.authRecoveryOwed
     }
@@ -329,6 +344,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     },
     onSuccess: (result) => {
       const previousContext = connectionRef.current.context
+      observeConnectionStatus(result)
       setConnection(result)
       if (result.state === 'connected') {
         // Keep the first-connect bookkeeping and the double-refresh window
@@ -419,6 +435,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
           sseActiveRef.current = false
           const previousContext = connectionRef.current.context
+          observeConnectionStatus(result)
           setConnection(result)
           if (result.state === 'connected') {
             hasConnectedRef.current = true
@@ -508,6 +525,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     // in-flight polls detect they raced this frame.
     sseActiveRef.current = true
     sseGenerationRef.current += 1
+    observeConnectionStatus(status)
     setConnection(prev => {
       // Don't transition back to 'connecting' from 'connected'. This happens when the
       // pod restarts and the SSE reconnects while the new pod's K8s cache is still

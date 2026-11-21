@@ -341,6 +341,9 @@ func (b *SSEBroadcaster) registerConnectionStateCallback() {
 				"error":           status.Error,
 				"errorType":       status.ErrorType,
 				"progressMessage": status.ProgressMsg,
+				"connectionId":    status.ConnectionID,
+				"seq":             status.ConnectionSeq,
+				"bootAt":          status.BootAt,
 				"disconnectedAt":  status.DisconnectedAt,
 			},
 		})
@@ -1116,6 +1119,9 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 		"error":           status.Error,
 		"errorType":       status.ErrorType,
 		"progressMessage": status.ProgressMsg,
+		"connectionId":    status.ConnectionID,
+		"seq":             status.ConnectionSeq,
+		"bootAt":          status.BootAt,
 		"disconnectedAt":  status.DisconnectedAt,
 	})
 	if err == nil {

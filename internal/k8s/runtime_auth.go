@@ -468,7 +468,11 @@ func transitionConnectedToRuntimeAuthFailure(classification string) bool {
 		ErrorType:   classification,
 	}
 	status.DisconnectedAt = outageStart(connectionStatus, status, time.Now())
-	connectionStatus = status
+	// Demotion is this connection's point of no return: retire its ID in the
+	// same publication rather than in a second one from the teardown.
+	servingConnectionID = ""
+	stampLocked(&status)
+	status = publishLocked(status)
 	connectionStatusMu.Unlock()
 
 	runtimeAuthRecoveryOwed.Store(true)

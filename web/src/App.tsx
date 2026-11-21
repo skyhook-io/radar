@@ -8,6 +8,7 @@ import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { followSwitch, followingSwitch, switchInProgress } from './api/contextSwitch'
+import { setConnectionReplacedHandler } from './api/connectionBinding'
 import { ContextSwitchActions } from './components/ContextSwitchActions'
 import { useToast } from './components/ui/Toast'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
@@ -1358,6 +1359,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     },
     onK8sEvent: handleK8sEvent,
   }, forceNamespaceFilter, showPolicyEffect)
+
+  // A tab that missed a switch's context_changed resets when it learns of the
+  // new connection by any other path (poll, SSE status, retry result).
+  useEffect(() => {
+    setConnectionReplacedHandler((context) => applyContextChange(context))
+    return () => setConnectionReplacedHandler(undefined)
+  }, [applyContextChange])
 
   useLayoutEffect(() => {
     if (!contextSwitch) return

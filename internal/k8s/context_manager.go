@@ -1045,8 +1045,11 @@ func PerformNamespaceRescope(namespace string) error {
 			log.Printf("[ops] Namespace rescope rollback to %q FAILED: %v", safePreviousNamespace, rollbackErr)
 			errorlog.Record("namespace-rescope", "error",
 				"stage=Rollback namespace=%q elapsed=%v: %v", safePreviousNamespace, time.Since(rescopeStart).Truncate(time.Millisecond), rollbackErr)
+			SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: GetContextName(), ClusterName: GetClusterName(), Error: rollbackErr.Error(), ErrorType: ClassifyError(rollbackErr)})
 			return fmt.Errorf("subsystem init failed: %w; rollback to previous namespace %q failed: %v", err, previousNamespace, rollbackErr)
 		}
+		// The rollback rebuilt the caches: a new admission with a fresh ID.
+		SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: GetContextName(), ClusterName: GetClusterName()})
 		notifyNamespaceRescopeCallbacks(previousNamespace)
 		return fmt.Errorf("subsystem init failed: %w; restored previous namespace %q", err, previousNamespace)
 	}
@@ -1060,6 +1063,8 @@ func PerformNamespaceRescope(namespace string) error {
 
 	reportProgress("Building topology...")
 	log.Printf("[ops] Namespace rescope to %q COMPLETE (%v total)", safeNamespace, time.Since(rescopeStart))
+	// The rebuild retired the previous connection; admit the rescoped one.
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: GetContextName(), ClusterName: GetClusterName()})
 	notifyNamespaceRescopeCallbacks(namespace)
 
 	return nil

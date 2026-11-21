@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Topology, K8sEvent, ViewMode } from '../types'
 import type { ConnectionState } from '../context/ConnectionContext'
 import { getApiBase, getCredentialsMode } from '../api/config'
+import { markViewsAwaitingConnection } from '../api/connectionBinding'
 
 interface UseEventSourceReturn {
   topology: Topology | null
@@ -228,6 +229,8 @@ export function useEventSource(
       try {
         const data = JSON.parse(event.data) as { context: string; switchId?: string }
         console.log('Context changed to:', data.context)
+        // The views reset here; the connection admitted next is adopted without another reset.
+        markViewsAwaitingConnection()
         applyContextChange(data.context, data.switchId)
       } catch (e) {
         console.error('Failed to parse context_changed event:', e)
