@@ -43,6 +43,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -1686,8 +1687,10 @@ func k3sAddon(u *unstructured.Unstructured) string {
 }
 
 // k3sHelmChartKeys maps "targetNamespace/name" to the HelmChart (and its
-// same-named HelmChartConfig) that installs that release.
-func k3sHelmChartKeys(configsKnown bool, charts, configs []*unstructured.Unstructured) map[string]k3sOwner {
+// same-named HelmChartConfig) that installs that release. configsKnown says
+// whether configs holds every HelmChartConfig in a namespace, so a missing one
+// can be reported as absent rather than unknown.
+func k3sHelmChartKeys(configsKnown func(namespace string) bool, charts, configs []*unstructured.Unstructured) map[string]k3sOwner {
 	if len(charts) == 0 {
 		return nil
 	}
@@ -1703,12 +1706,12 @@ func k3sHelmChartKeys(configsKnown bool, charts, configs []*unstructured.Unstruc
 		}
 		target := k3sTarget(c)
 		key := target.namespace + "/" + target.name
-		owner := k3sOwner{chart: c.GetNamespace() + "/" + c.GetName(), addon: k3sAddon(c), configKnown: configsKnown}
+		owner := k3sOwner{chart: c.GetNamespace() + "/" + c.GetName(), addon: k3sAddon(c), configKnown: configsKnown(c.GetNamespace())}
 		if configured[owner.chart] {
 			owner.config = owner.chart
 		}
 		// Two HelmCharts installing one release can't be told apart: credit
-		// neither, as for two Flux HelmReleases.
+		// neither (unlike Flux, where the last HelmRelease seen is kept).
 		if prev, ok := out[key]; ok && prev.chart != owner.chart {
 			ambiguous[key] = true
 		}
@@ -1730,20 +1733,36 @@ func k3sHelmChartMap(ctx context.Context) map[string]k3sOwner {
 	if discovery == nil || dc == nil {
 		return nil
 	}
-	list := func(kind string) ([]*unstructured.Unstructured, error) {
+	list := func(kind string) ([]*unstructured.Unstructured, schema.GroupVersionResource, error) {
 		gvr, ok := discovery.GetGVRWithGroup(kind, k3sHelmGroup)
 		if !ok {
-			return nil, k8s.ErrUnknownDynamicKind
+			return nil, gvr, k8s.ErrUnknownDynamicKind
 		}
-		return dc.ListReadOnlyContext(ctx, gvr, "")
+		items, err := dc.ListReadOnlyContext(ctx, gvr, "")
+		return items, gvr, err
 	}
-	charts, err := list(k3sHelmChartKind)
+	charts, _, err := list(k3sHelmChartKind)
 	if err != nil || len(charts) == 0 {
 		return nil
 	}
-	configs, err := list(k3sHelmChartConfigKind)
-	return k3sHelmChartKeys(err == nil, charts, configs)
+	// The read doesn't wait for the watch to sync: absence is claimed only
+	// where the HelmChartConfig informer had synced for that namespace before
+	// the read, so a sync landing between the two can't bless an empty read.
+	synced := map[string]bool{}
+	if configGVR, ok := discovery.GetGVRWithGroup(k3sHelmChartConfigKind, k3sHelmGroup); ok {
+		for _, c := range charts {
+			if ns := c.GetNamespace(); !synced[ns] {
+				synced[ns] = dc.IsNamespaceSynced(configGVR, ns)
+			}
+		}
+	}
+	configs, _, err := list(k3sHelmChartConfigKind)
+	known := func(namespace string) bool { return err == nil && synced[namespace] }
+	return k3sHelmChartKeys(known, charts, configs)
 }
+
+// k3sConfigsUnknown is for reads that may not see every HelmChartConfig.
+func k3sConfigsUnknown(string) bool { return false }
 
 type helmReleaseStorageSnapshot struct {
 	deployed          map[string]*release.Release

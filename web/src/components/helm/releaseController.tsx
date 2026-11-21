@@ -63,7 +63,7 @@ export function controllerManagedText(c: HelmReleaseController): string {
 export function ReleaseControllerBadge({ controller }: { controller: HelmReleaseController }) {
   const flux = controller.tool === 'flux'
   const tip = flux
-    ? `Installed by Flux helm-controller via HelmRelease ${refOf(controller)}. Changes here will be reverted at the next reconcile — manage via the GitOps tab.`
+    ? `Installed by Flux helm-controller via HelmRelease ${refOf(controller)}. Manage its source in GitOps.`
     : controllerManagedText(controller)
   return (
     <Tooltip content={tip}>

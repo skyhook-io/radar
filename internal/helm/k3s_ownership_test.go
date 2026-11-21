@@ -21,7 +21,7 @@ func k3sObj(kind, ns, name string, spec map[string]any) *unstructured.Unstructur
 }
 
 func TestK3sHelmChartKeys(t *testing.T) {
-	got := k3sHelmChartKeys(true,
+	got := k3sHelmChartKeys(k3sConfigsKnownEverywhere,
 		[]*unstructured.Unstructured{
 			k3sObj("HelmChart", "kube-system", "traefik", map[string]any{"chart": "traefik"}),
 			k3sObj("HelmChart", "kube-system", "app", map[string]any{"chartContent": "H4sI", "targetNamespace": "apps"}),
@@ -44,7 +44,7 @@ func TestK3sHelmChartKeysSkipsChartsHelmControllerIgnores(t *testing.T) {
 		u.SetAnnotations(annotations)
 		return u
 	}
-	got := k3sHelmChartKeys(true, []*unstructured.Unstructured{
+	got := k3sHelmChartKeys(k3sConfigsKnownEverywhere, []*unstructured.Unstructured{
 		annotated("unmanaged", map[string]string{"helmcharts.helm.cattle.io/unmanaged": "true"}),
 		annotated("other", map[string]string{"helmcharts.cattle.io/managed-by": "custom-controller"}),
 		k3sObj("HelmChart", "kube-system", "empty", map[string]any{"targetNamespace": "apps"}),
@@ -68,7 +68,7 @@ func TestK3sHelmChartKeysRecordsTheK3sAddon(t *testing.T) {
 	})
 	other := k3sObj("HelmChart", "kube-system", "app", map[string]any{"chart": "app"})
 	other.SetAnnotations(map[string]string{"objectset.rio.cattle.io/owner-gvk": "example.com/v1, Kind=Thing", "objectset.rio.cattle.io/owner-name": "x"})
-	got := k3sHelmChartKeys(true, []*unstructured.Unstructured{packaged, other}, nil)
+	got := k3sHelmChartKeys(k3sConfigsKnownEverywhere, []*unstructured.Unstructured{packaged, other}, nil)
 	if got["kube-system/traefik"].addon != "traefik" || got["kube-system/app"].addon != "" {
 		t.Fatalf("keys = %+v", got)
 	}
@@ -124,7 +124,7 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 // Two HelmCharts that install the same release can't be told apart, so the
 // release is credited to neither, as for two Flux HelmReleases.
 func TestK3sHelmChartKeysCreditNeitherOfTwoCharts(t *testing.T) {
-	got := k3sHelmChartKeys(true, []*unstructured.Unstructured{
+	got := k3sHelmChartKeys(k3sConfigsKnownEverywhere, []*unstructured.Unstructured{
 		k3sObj("HelmChart", "kube-system", "app", map[string]any{"chart": "app", "targetNamespace": "apps"}),
 		k3sObj("HelmChart", "team", "app", map[string]any{"chart": "app", "targetNamespace": "apps"}),
 	}, nil)
@@ -217,8 +217,10 @@ func TestValuesRefExistsIsTriState(t *testing.T) {
 	if e := exists(k3sOwner{chart: "kube-system/a"}); e != nil {
 		t.Errorf("unknown: %v", *e)
 	}
-	unknown := k3sHelmChartKeys(false, []*unstructured.Unstructured{k3sObj("HelmChart", "kube-system", "a", map[string]any{"chart": "a"})}, nil)
+	unknown := k3sHelmChartKeys(k3sConfigsUnknown, []*unstructured.Unstructured{k3sObj("HelmChart", "kube-system", "a", map[string]any{"chart": "a"})}, nil)
 	if o, ok := unknown["kube-system/a"]; !ok || o.configKnown {
 		t.Error("configs not read: existence unknown")
 	}
 }
+
+func k3sConfigsKnownEverywhere(string) bool { return true }

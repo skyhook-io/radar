@@ -216,7 +216,7 @@ func (s *stampScan) add(o search.ScannedObject) {
 // whatever order they arrived, with the same rule as the list stamp.
 func (s *stampScan) finishK3s() {
 	// A caller may be unable to read a config that exists: no absence claim.
-	s.k3s = k3sHelmChartKeys(false, s.k3sCharts, s.k3sConfigs)
+	s.k3s = k3sHelmChartKeys(k3sConfigsUnknown, s.k3sCharts, s.k3sConfigs)
 }
 
 // scanObservedReleases reads the stamps the caller can see. HelmReleases are
