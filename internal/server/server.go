@@ -673,11 +673,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/fleet-metrics", s.handleCNPGFleetMetrics)
 			r.Get("/cnpg/poolers/{namespace}/{name}/runtime", s.handleCNPGPoolerRuntime)
 			r.Get("/cnpg/clusters/{namespace}/{name}/capabilities", s.handleCNPGClusterCapabilities)
-			r.Post("/cnpg/clusters/{namespace}/{name}/actions/{action}", s.handleCNPGClusterAction)
+			r.Post("/cnpg/clusters/{namespace}/{name}/actions/{action}", s.bindWrite(s.handleCNPGClusterAction))
 			r.Post("/cnpg/clusters/{namespace}/{name}/protection/preview", s.handleCNPGArchivingPreview)
 			r.Get("/cnpg/clusters/{namespace}/{name}/schedule-preview", s.handleCNPGDraftSchedulePreview)
 			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/capabilities", s.handleCNPGScheduleCapabilities)
-			r.Post("/cnpg/scheduledbackups/{namespace}/{name}/actions/{action}", s.handleCNPGScheduleAction)
+			r.Post("/cnpg/scheduledbackups/{namespace}/{name}/actions/{action}", s.bindWrite(s.handleCNPGScheduleAction))
 			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/schedule-preview", s.handleCNPGSchedulePreview)
 			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/method-preview", s.handleCNPGScheduleMethodPreview)
 			r.Get("/cnpg/clusters/{namespace}/{name}/sessions", s.handleCNPGClusterSessions)
@@ -686,7 +686,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/clusters/{namespace}/{name}/instances/{pod}/destroy-plan", s.handleCNPGDestroyPlan)
 			r.Get("/cnpg/poolers/{namespace}/{name}/capabilities", s.handleCNPGPoolerCapabilities)
 			r.Get("/cnpg/poolers/{namespace}/{name}/pgbouncer-state", s.handleCNPGPgBouncerState)
-			r.Post("/cnpg/poolers/{namespace}/{name}/actions/{action}", s.handleCNPGPoolerAction)
+			r.Post("/cnpg/poolers/{namespace}/{name}/actions/{action}", s.bindWrite(s.handleCNPGPoolerAction))
 			r.Get("/velero/workspace", s.handleVeleroWorkspace)
 			r.Get("/velero/schedules/{namespace}/{name}/activity", s.handleVeleroScheduleActivity)
 			r.Get("/velero/backupstoragelocations/{namespace}/{name}/backups", s.handleVeleroStoredBackups)
@@ -699,12 +699,12 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/velero/{kind}/{namespace}/{name}/volumes", s.handleVeleroRunVolumes)
 			r.Get("/velero/{kind}/{namespace}/{name}/volume-operations", s.handleVeleroVolumeOperations)
 			// POST: creates a Backup from the schedule's template, as the caller.
-			r.Post("/velero/schedules/{namespace}/{name}/backup", s.handleVeleroBackupNow)
+			r.Post("/velero/schedules/{namespace}/{name}/backup", s.bindWrite(s.handleVeleroBackupNow))
 			// POST: sets spec.paused as the caller, as `velero schedule pause|unpause` does.
-			r.Post("/velero/schedules/{namespace}/{name}/pause", s.handleVeleroSchedulePause(true))
-			r.Post("/velero/schedules/{namespace}/{name}/resume", s.handleVeleroSchedulePause(false))
+			r.Post("/velero/schedules/{namespace}/{name}/pause", s.bindWrite(s.handleVeleroSchedulePause(true)))
+			r.Post("/velero/schedules/{namespace}/{name}/resume", s.bindWrite(s.handleVeleroSchedulePause(false)))
 			// POST: creates a DeleteBackupRequest, the way Velero deletes a backup.
-			r.Post("/velero/backups/{namespace}/{name}/delete", s.handleVeleroDeleteBackup)
+			r.Post("/velero/backups/{namespace}/{name}/delete", s.bindWrite(s.handleVeleroDeleteBackup))
 			r.Get("/velero/backups/{namespace}/{name}/deletion", s.handleVeleroBackupDeletion)
 
 			r.Get("/namespaces", s.handleNamespaces)
@@ -889,10 +889,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			opencost.RegisterRoutes(r, s.resolvedOpenCostCurrency, s.openCostRouteScope())
 
 			// FluxCD routes
-			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)
-			r.Post("/flux/{kind}/{namespace}/{name}/sync-with-source", s.handleFluxSyncWithSource)
-			r.Post("/flux/{kind}/{namespace}/{name}/suspend", s.handleFluxSuspend)
-			r.Post("/flux/{kind}/{namespace}/{name}/resume", s.handleFluxResume)
+			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.bindWrite(s.handleFluxReconcile))
+			r.Post("/flux/{kind}/{namespace}/{name}/sync-with-source", s.bindWrite(s.handleFluxSyncWithSource))
+			r.Post("/flux/{kind}/{namespace}/{name}/suspend", s.bindWrite(s.handleFluxSuspend))
+			r.Post("/flux/{kind}/{namespace}/{name}/resume", s.bindWrite(s.handleFluxResume))
 
 			// Argo Rollouts progressive-delivery control plane. Rollback and
 			// revision history are served by the /workloads routes above.
@@ -902,13 +902,13 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// ArgoCD routes
 			r.Get("/argo/destinations", s.handleArgoDestinations)
-			r.Post("/argo/applications/{namespace}/{name}/sync", s.handleArgoSync)
+			r.Post("/argo/applications/{namespace}/{name}/sync", s.bindWrite(s.handleArgoSync))
 			r.Post("/argo/applications/{namespace}/{name}/validate-resource", s.handleArgoValidateResource)
-			r.Post("/argo/applications/{namespace}/{name}/refresh", s.handleArgoRefresh)
-			r.Post("/argo/applications/{namespace}/{name}/rollback", s.handleArgoRollback)
-			r.Post("/argo/applications/{namespace}/{name}/terminate", s.handleArgoTerminate)
-			r.Post("/argo/applications/{namespace}/{name}/suspend", s.handleArgoSuspend)
-			r.Post("/argo/applications/{namespace}/{name}/resume", s.handleArgoResume)
+			r.Post("/argo/applications/{namespace}/{name}/refresh", s.bindWrite(s.handleArgoRefresh))
+			r.Post("/argo/applications/{namespace}/{name}/rollback", s.bindWrite(s.handleArgoRollback))
+			r.Post("/argo/applications/{namespace}/{name}/terminate", s.bindWrite(s.handleArgoTerminate))
+			r.Post("/argo/applications/{namespace}/{name}/suspend", s.bindWrite(s.handleArgoSuspend))
+			r.Post("/argo/applications/{namespace}/{name}/resume", s.bindWrite(s.handleArgoResume))
 			r.Get("/argo/applications/{namespace}/{name}/resource-diff", s.handleArgoResourceDiff)
 			r.Get("/argo/applications/{namespace}/{name}/revision-metadata", s.handleArgoRevisionMetadata)
 

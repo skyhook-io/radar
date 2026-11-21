@@ -245,6 +245,23 @@ func TestBoundWriteRoutesRefuseStaleConnection(t *testing.T) {
 		{http.MethodPost, "/api/nodes/node-1/cordon"},
 		{http.MethodPost, "/api/nodes/node-1/uncordon"},
 		{http.MethodPost, "/api/nodes/node-1/drain"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/sync"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/refresh"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/rollback"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/terminate"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/suspend"},
+		{http.MethodPost, "/api/argo/applications/argocd/app/resume"},
+		{http.MethodPost, "/api/flux/kustomizations/flux-system/app/reconcile"},
+		{http.MethodPost, "/api/flux/kustomizations/flux-system/app/sync-with-source"},
+		{http.MethodPost, "/api/flux/kustomizations/flux-system/app/suspend"},
+		{http.MethodPost, "/api/flux/kustomizations/flux-system/app/resume"},
+		{http.MethodPost, "/api/velero/schedules/velero/daily/backup"},
+		{http.MethodPost, "/api/velero/schedules/velero/daily/pause"},
+		{http.MethodPost, "/api/velero/schedules/velero/daily/resume"},
+		{http.MethodPost, "/api/velero/backups/velero/daily-1/delete"},
+		{http.MethodPost, "/api/cnpg/clusters/db/main/actions/restart"},
+		{http.MethodPost, "/api/cnpg/scheduledbackups/db/nightly/actions/backup-now"},
+		{http.MethodPost, "/api/cnpg/poolers/db/rw/actions/pause"},
 	} {
 		req := httptest.NewRequest(route.method, route.path, strings.NewReader("{}"))
 		req.Header.Set("Content-Type", "application/json")

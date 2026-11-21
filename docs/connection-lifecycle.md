@@ -11,8 +11,12 @@ Covered today (the routes wrapped with `bindWrite` in `internal/server/server.go
 - CronJobs: **trigger**, **suspend**, **resume**.
 - Resources: **apply**, **update** (YAML edit) and **delete**.
 - Nodes: **cordon**, **uncordon** and **drain**. A drain keeps running on the connection it was admitted to, even if Radar switches meanwhile.
+- GitOps: Argo CD **sync**, **refresh**, **rollback**, **terminate**, **suspend**, **resume**; Flux **reconcile**, **sync with source**, **suspend**, **resume**.
+- Velero: **back up now**, schedule **pause** and **resume**, **delete backup**. Their checks of the Velero server's state read the shared cache, which a switch completing mid-request could replace; the write itself stays on the admitted connection.
 
-Not yet covered: Helm, exec, port-forward and node debug, GitOps and other integration actions, and MCP. They still resolve the current connection when they run.
+- CloudNativePG: Cluster, ScheduledBackup and Pooler **actions**. The CNPG service captures its clients and caches in one step; it also checks there that the connection is still the bound one (`k8s.StillBound`), so the whole capture belongs to it.
+
+Not yet covered: Helm, exec, port-forward and debug containers, other integration actions, CAPI connect, and MCP. They still resolve the current connection when they run.
 
 **Only when Radar serves from a kubeconfig.** An in-cluster Radar can't change clusters (no kubeconfig contexts; CAPI connect is refused in-cluster), and during a rolling update two of its pods, each with its own IDs, answer the same browser. It publishes no ID and ignores one a request names; its writes still run on one captured set of clients.
 

@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -92,4 +93,19 @@ func clearTestConnectionIdentity() {
 	admissionsClosed = false
 	connectionStatus = ConnectionStatus{}
 	connectionStatusMu.Unlock()
+}
+
+func TestStillBoundFollowsTheServingConnection(t *testing.T) {
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	ctx := WithBoundConnection(context.Background(), BoundConnection{ID: ServingConnectionID()})
+	if !StillBound(context.Background()) || !StillBound(ctx) {
+		t.Fatal("an unbound request, or one bound to the serving connection, is still bound")
+	}
+	RetireServingConnection()
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
+	if StillBound(ctx) {
+		t.Fatal("a request bound to a retired connection reported still bound")
+	}
 }

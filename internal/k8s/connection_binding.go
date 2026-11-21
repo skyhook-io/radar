@@ -73,3 +73,13 @@ func discoveryFor(ctx context.Context) *ResourceDiscovery {
 	}
 	return GetResourceDiscovery()
 }
+
+// StillBound reports whether a request is still on the connection it was
+// admitted to: true when it carries no binding, or when that connection is
+// still serving. Composite services that capture several globals call it
+// inside their CaptureClusterReads callback, so the whole capture belongs to
+// the bound connection.
+func StillBound(ctx context.Context) bool {
+	b, ok := BoundConnectionFrom(ctx)
+	return !ok || ServingConnectionID() == b.ID
+}
