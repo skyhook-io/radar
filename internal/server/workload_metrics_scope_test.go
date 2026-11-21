@@ -88,3 +88,17 @@ func TestWorkloadMetricsScopeChecksExactOwnerAndPodList(t *testing.T) {
 		})
 	}
 }
+
+func TestMetricsClusterIdentityIsTunnelOnly(t *testing.T) {
+	s := &Server{}
+	handler := http.HandlerFunc(s.handleMetricsClusterIdentity)
+	for _, h := range []http.Handler{handler, cloud.AuthenticatedTunnelHandler(handler)} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/agent/metrics-cluster-identity", nil)
+		req.Header.Set("X-Forwarded-User", "owner")
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("unexpected identity disclosure: %d", w.Code)
+		}
+	}
+}
