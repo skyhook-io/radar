@@ -30,7 +30,6 @@ import type { Capabilities, ResourceQueryResult, WorkloadWritePermissions } from
 import type { SelectedResource } from '../../types'
 import { apiVersionToGroup, kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
-import { useConnectionGeneration } from '../../api/connectionBinding'
 import { getSkeletonYaml } from '../../utils/skeleton-yaml'
 
 interface ResourcesViewProps {
@@ -82,7 +81,6 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const location = useLocation()
   const navigate = useNavigate()
   const { connection } = useConnection()
-  const connectionGeneration = useConnectionGeneration()
 
   const { data: capabilities, isPending: capabilitiesPending } = useCapabilities()
   const hostFeatures = useResourceHostFeatures()
@@ -377,7 +375,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   return (
     <>
     <BaseResourcesView
-      key={`${connection.context || 'default'}:${connectionGeneration}`}
+      key={connection.context || 'default'}
       namespaces={namespaces}
       selectedResource={selectedResource}
       onResourceClick={onResourceClick}

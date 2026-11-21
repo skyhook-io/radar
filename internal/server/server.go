@@ -509,7 +509,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		AllowedHeaders: []string{"Accept", "Content-Type", requestOriginHeader, connectionHeader},
 		// Without an expose entry, cross-origin JS reads these as "" and the
 		// timeline client silently falls back to full-ring refetches.
-		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq", "X-Radar-Timeline-Min-Seq", connectionHeader},
+		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq", "X-Radar-Timeline-Min-Seq"},
 		AllowCredentials: true,
 	}))
 
@@ -710,9 +710,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/namespaces", s.handleNamespaces)
 			r.Get("/api-resources", s.handleAPIResources)
 			r.Get("/resource-counts", s.handleResourceCounts)
-			r.Get("/resources/{kind}", s.stampRead(s.handleListResources))
-			r.Get("/resources/{kind}/{namespace}/{name}", s.stampRead(s.handleGetResource))
-			r.Head("/resources/{kind}/{namespace}/{name}", s.stampRead(s.handleGetResource))
+			r.Get("/resources/{kind}", s.handleListResources)
+			r.Get("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
+			r.Head("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
 			r.Post("/resources/preview", s.handlePreviewResources)
 			r.Post("/resources/schemas", s.handleResourceSchemas)
 			r.Post("/resources/apply", s.handleApplyResource)

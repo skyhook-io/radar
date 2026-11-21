@@ -8,7 +8,6 @@ import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { followSwitch, followingSwitch, switchInProgress } from './api/contextSwitch'
-import { setConnectionReplacedHandler } from './api/connectionBinding'
 import { ContextSwitchActions } from './components/ContextSwitchActions'
 import { useToast } from './components/ui/Toast'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
@@ -1077,8 +1076,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Connection state (for graceful startup)
   const { connection, contextSwitch, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
-  const contextSwitchRef = useRef(contextSwitch)
-  contextSwitchRef.current = contextSwitch
 
   // The app's content surface is ready to show: auth resolved, not mid context-
   // switch, and the cluster connection is live. The main content area gates on
@@ -1361,16 +1358,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     },
     onK8sEvent: handleK8sEvent,
   }, forceNamespaceFilter, showPolicyEffect)
-
-  // A tab that missed a switch's context_changed resets when it learns of the
-  // new connection by any other path (poll, SSE status, retry result).
-  useEffect(() => {
-    // A replacement this tab is following a switch to is that switch's reset
-    // (SSE can deliver the new connection before the terminal poll does).
-    setConnectionReplacedHandler((context, switchId) =>
-      applyContextChange(context, switchId ?? (followingSwitch() && contextSwitchRef.current?.target === context ? followingSwitch() : undefined)))
-    return () => setConnectionReplacedHandler(undefined)
-  }, [applyContextChange])
 
   useLayoutEffect(() => {
     if (!contextSwitch) return

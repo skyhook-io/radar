@@ -58,7 +58,6 @@ function make401(authMode: string): Response {
   return {
     status: 401,
     ok: false,
-    headers: new Headers(),
     clone() {
       return make401(authMode)
     },

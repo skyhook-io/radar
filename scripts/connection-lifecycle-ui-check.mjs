@@ -56,9 +56,9 @@ const after = { nonprod: ann('radar-test-nonprod'), prod: ann('radar-test-prod')
 log('toast in tab2:', toast)
 log('writes from the stale tab:', `nonprod=${after.nonprod !== before.nonprod ? 'WROTE' : 'no'} prod=${after.prod !== before.prod ? 'WROTE' : 'no'}`)
 
-// The mismatch should make tab2 re-read its status and reset to prod.
+// tab2 catches up on its next status poll (30s while connected) and resets to prod.
 let reset = false
-for (let i = 0; i < 40 && !reset; i++) {
+for (let i = 0; i < 80 && !reset; i++) {
   reset = !(await restartBtn.isVisible().catch(() => false))
   if (!reset) await p2.waitForTimeout(500)
 }
@@ -71,6 +71,8 @@ await p2.screenshot({ path: `${shots}/ui-3-tab2-after-reset.png` })
 // tab1 followed the switch live; its restart from the prod view must work.
 await p1.screenshot({ path: `${shots}/ui-3b-tab1-after-switch.png` })
 log('tab1 url after switch:', p1.url())
+// The switch drops the namespace pick; reopen the fixture's namespace.
+await p1.goto(base + '/resources/deployments?namespace=default')
 await p1.getByText('radar-live-probe').first().click()
 const r1 = p1.getByRole('button', { name: /^Restart/ }).first()
 await r1.waitFor({ timeout: 30000 })

@@ -7,7 +7,7 @@ import (
 
 func publishedStatus() ConnectionStatus { return GetConnectionStatus() }
 
-func TestConnectionIdentityAdmitRetireAndOrder(t *testing.T) {
+func TestConnectionIdentityAdmitAndRetire(t *testing.T) {
 	t.Cleanup(SnapshotTestConnection())
 	clearTestConnectionIdentity()
 
@@ -15,7 +15,6 @@ func TestConnectionIdentityAdmitRetireAndOrder(t *testing.T) {
 	if ServingConnectionID() != "" {
 		t.Fatal("connecting must not admit a connection")
 	}
-	seqBefore := publishedStatus().ConnectionSeq
 
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
 	first := ServingConnectionID()
@@ -23,8 +22,8 @@ func TestConnectionIdentityAdmitRetireAndOrder(t *testing.T) {
 		t.Fatalf("connected admitted %q, want an ID from this boot", first)
 	}
 	got := publishedStatus()
-	if got.ConnectionID != first || got.ConnectionSeq <= seqBefore || got.BootAt == "" {
-		t.Fatalf("published %+v, want the admitted ID, a newer seq and the boot time", got)
+	if got.ConnectionID != first {
+		t.Fatalf("published %+v, want the admitted ID", got)
 	}
 
 	// Republishing the same connection (a status refresh with no teardown) keeps it.
@@ -42,10 +41,9 @@ func TestConnectionIdentityAdmitRetireAndOrder(t *testing.T) {
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
 
 	// The point of no return clears the ID and stops claiming connected.
-	seqBefore = publishedStatus().ConnectionSeq
 	RetireServingConnection()
 	got = publishedStatus()
-	if ServingConnectionID() != "" || got.ConnectionID != "" || got.State != StateConnecting || got.ConnectionSeq <= seqBefore {
+	if ServingConnectionID() != "" || got.ConnectionID != "" || got.State != StateConnecting {
 		t.Fatalf("after retiring: id=%q published=%+v", ServingConnectionID(), got)
 	}
 
@@ -57,13 +55,6 @@ func TestConnectionIdentityAdmitRetireAndOrder(t *testing.T) {
 	third := ServingConnectionID()
 	if second == first || third == first || third == second {
 		t.Fatalf("IDs must never repeat: %q %q %q", first, second, third)
-	}
-
-	// Progress updates are ordered publications too.
-	seqBefore = publishedStatus().ConnectionSeq
-	UpdateConnectionProgress("Loading workloads...")
-	if publishedStatus().ConnectionSeq <= seqBefore {
-		t.Fatal("a progress update must advance the publication sequence")
 	}
 }
 

@@ -103,9 +103,6 @@ func TestBoundRestartStaysOnAdmittedConnectionAcrossSwitch(t *testing.T) {
 	if writes(a) == 0 {
 		t.Fatal("the restart never reached cluster A")
 	}
-	if got := rec.Header().Get(connectionHeader); got != idA {
-		t.Fatalf("response names connection %q, want %q", got, idA)
-	}
 }
 
 // A tab still showing A after the server moved to B is refused before any
@@ -124,15 +121,6 @@ func TestBoundWriteRefusesStaleConnection(t *testing.T) {
 	s.bindWrite(func(http.ResponseWriter, *http.Request) { called = true })(rec, restartRequest(idA))
 	if rec.Code != http.StatusConflict || called || !strings.Contains(rec.Body.String(), errCodeContextChanged) {
 		t.Fatalf("stale connection: code=%d called=%v body=%s", rec.Code, called, rec.Body)
-	}
-	if got, want := rec.Header().Get(connectionHeader), k8s.ServingConnectionID(); got != want {
-		t.Fatalf("refusal labelled %q, want the serving connection %q", got, want)
-	}
-	// A tab that knows the server binds but has no ID yet sends "unknown".
-	rec = httptest.NewRecorder()
-	s.bindWrite(func(http.ResponseWriter, *http.Request) { called = true })(rec, restartRequest("unknown"))
-	if rec.Code != http.StatusConflict || called {
-		t.Fatalf("unknown connection: code=%d called=%v", rec.Code, called)
 	}
 	if writes(a)+writes(b)+writes(a2) != 0 {
 		t.Fatal("a refused write reached a cluster")
@@ -153,9 +141,6 @@ func TestBoundWriteRefusedWhileNothingServes(t *testing.T) {
 		s.bindWrite(func(http.ResponseWriter, *http.Request) { called = true })(rec, restartRequest(header))
 		if rec.Code != http.StatusServiceUnavailable || called || !strings.Contains(rec.Body.String(), errCodeClusterChanging) {
 			t.Fatalf("header %q: code=%d called=%v body=%s", header, rec.Code, called, rec.Body)
-		}
-		if got := rec.Header().Get(connectionHeader); got != noConnection {
-			t.Fatalf("refusal labelled %q, want %q", got, noConnection)
 		}
 	}
 	// A switch or rescope holding the operation lock refuses capture too.
@@ -187,33 +172,9 @@ func TestBoundWriteAdmitsUnnamedCallerOnCurrentConnection(t *testing.T) {
 	}
 }
 
-// A read is labelled with the connection that served it, or "none" when the
-// serving connection changed while the handler built it.
-func TestStampReadLabelsTheServingConnection(t *testing.T) {
-	t.Cleanup(k8s.SnapshotTestConnection())
-	t.Cleanup(k8s.SetTestLocalMode())
-	idA := install(t, "cluster-a", fakeCluster(t))
-	s := &Server{}
-
-	rec := httptest.NewRecorder()
-	s.stampRead(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("{}")) })(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	if got := rec.Header().Get(connectionHeader); got != idA {
-		t.Fatalf("stamp %q, want %q", got, idA)
-	}
-
-	rec = httptest.NewRecorder()
-	s.stampRead(func(w http.ResponseWriter, _ *http.Request) {
-		install(t, "cluster-b", fakeCluster(t))
-		_, _ = w.Write([]byte("{}"))
-	})(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	if got := rec.Header().Get(connectionHeader); got != noConnection {
-		t.Fatalf("stamp across a switch %q, want %q", got, noConnection)
-	}
-}
-
 // An in-cluster Radar serves one cluster for its whole life, and during a
-// rolling update two pods answer one browser: it publishes no identity,
-// labels nothing, and ignores a connection a request names.
+// rolling update two pods answer one browser: it publishes no identity and
+// ignores a connection a request names.
 func TestInClusterRadarBindsNoConnections(t *testing.T) {
 	t.Cleanup(k8s.SnapshotTestConnection())
 	t.Cleanup(k8s.SetTestLocalMode())
@@ -226,20 +187,15 @@ func TestInClusterRadarBindsNoConnections(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	s.bindWrite(s.handleRestartWorkload)(rec, restartRequest("another-pods-id"))
-	if rec.Code != http.StatusOK || writes(a) == 0 || rec.Header().Get(connectionHeader) != "" {
-		t.Fatalf("write: code=%d writes=%d label=%q", rec.Code, writes(a), rec.Header().Get(connectionHeader))
-	}
-	rec = httptest.NewRecorder()
-	s.stampRead(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("{}")) })(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	if got := rec.Header().Get(connectionHeader); got != "" {
-		t.Fatalf("read labelled %q in-cluster", got)
+	if rec.Code != http.StatusOK || writes(a) == 0 {
+		t.Fatalf("write: code=%d writes=%d", rec.Code, writes(a))
 	}
 	fields := connectionIdentityFields(k8s.GetConnectionStatus(), map[string]any{})
 	if len(fields) != 0 {
 		t.Fatalf("in-cluster status publishes identity: %v", fields)
 	}
 	// Retry answers with the status struct itself.
-	if st := publishedStatus(k8s.GetConnectionStatus()); st.ConnectionID != "" || st.ConnectionSeq != 0 || st.BootAt != "" {
+	if st := publishedStatus(k8s.GetConnectionStatus()); st.ConnectionID != "" {
 		t.Fatalf("in-cluster retry status publishes identity: %+v", st)
 	}
 }

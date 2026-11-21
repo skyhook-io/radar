@@ -22,9 +22,6 @@ type ContextSwitchStatus struct {
 	Progress                string    `json:"progress"`
 	Error                   string    `json:"error,omitempty"`
 	ErrorType               string    `json:"errorType,omitempty"`
-	// The connection a succeeded switch admitted, so a browser that learns of
-	// that connection can tell its reset belongs to this switch.
-	ConnectionID string `json:"connectionId,omitempty"`
 }
 
 type ContextSwitchTracker struct {
@@ -255,7 +252,6 @@ func (t *ContextSwitchTracker) finish(ctx context.Context, op ContextSwitchStatu
 		}
 	default:
 		t.status.Phase = "succeeded"
-		t.status.ConnectionID = ServingConnectionID()
 	}
 	t.status.Progress = ""
 	t.cancel()

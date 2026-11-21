@@ -6,7 +6,7 @@ import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
 import type { ReadGap, ReadGapSet } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { WorkloadHistoryCoverage } from '@skyhook-io/k8s-ui/utils/workload-history-notes'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
-import { useEffect, useRef, useCallback, useMemo, useState } from 'react'
+import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { argoSyncOptionsForRequest } from '@skyhook-io/k8s-ui'
 import { useClusterConnected } from '../context/clusterConnected'
 import type { KueueAdmissionResponse, KueuePositionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
@@ -79,10 +79,7 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
-import { CONNECTION_HEADER, CONTEXT_CHANGED, connectionHeaderValue, reportConnectionMismatch, isConnectionChangeCode,
-  connectionGeneration,
-  responseMatchesConnection,
-  stampStillCurrent } from './connectionBinding'
+import { CONNECTION_HEADER, connectionHeaderValue } from './connectionBinding'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   RadarFeatureUnsupportedError,
@@ -159,15 +156,6 @@ function markOidcLoginRedirect(now: number): void {
 // and handles 401 responses globally. Merges caller-provided headers with
 // auth headers from the config module so library consumers (Radar Hub) can
 // inject Authorization bearer tokens without each call site knowing.
-async function errorCode(response: Response): Promise<unknown> {
-  try {
-    const body = await response.clone().json();
-    return body?.code ?? body?.error_code;
-  } catch {
-    return undefined;
-  }
-}
-
 export function apiFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -176,27 +164,15 @@ export function apiFetch(
   for (const [k, v] of Object.entries(getAuthHeaders())) {
     if (!headers.has(k)) headers.set(k, v);
   }
-  // Name the connection this tab is showing (see connectionBinding.ts).
-  const connection = headers.get(CONNECTION_HEADER) ?? connectionHeaderValue();
+  // Name the connection this tab is on, so the server can refuse a write
+  // meant for a cluster it no longer serves (see connectionBinding.ts).
+  const connection = connectionHeaderValue();
   if (connection && !headers.has(CONNECTION_HEADER)) headers.set(CONNECTION_HEADER, connection);
   return fetch(input, {
     credentials: getCredentialsMode(),
     ...init,
     headers,
   }).then(async (response) => {
-    // A response another connection produced never reaches the views: it is
-    // answered as the server answers a stale write, and the tab re-reads its
-    // connection status to catch up.
-    const stamp = response.headers.get(CONNECTION_HEADER);
-    if (!responseMatchesConnection(connection, stamp, response.ok)) {
-      reportConnectionMismatch();
-      // A refused write keeps the server's own answer (it says nothing changed).
-      if (!response.ok && isConnectionChangeCode(await errorCode(response))) return response;
-      return connectionChangedResponse();
-    }
-    // Nothing is serving the connection this tab shows: the error passes
-    // through with its own code, and the tab re-reads its status to catch up.
-    if (stamp === "none" && connection && connection !== "unknown") reportConnectionMismatch();
     const authPrefix = `${getBasename()}/auth`;
     if (
       response.status === 401 &&
@@ -250,14 +226,6 @@ export function apiFetch(
       }
     }
     return response;
-  });
-}
-
-function connectionChangedResponse(): Response {
-  const message = "The cluster changed while this was loading. The view is catching up.";
-  return new Response(JSON.stringify({ error: message, code: CONTEXT_CHANGED, error_code: CONTEXT_CHANGED }), {
-    status: 409,
-    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -450,8 +418,7 @@ export async function fetchJSON<T>(
   init?: RequestInit | AbortSignal,
 ): Promise<T> {
   const requestInit = init instanceof AbortSignal ? { signal: init } : init;
-  const base = getApiBase();
-  const response = await apiFetch(`${base}${path}`, requestInit);
+  const response = await apiFetch(`${getApiBase()}${path}`, requestInit);
   if (!response.ok) {
     const { body, unknownRoute } = await readErrorResponse(response);
     throw new ApiError(
@@ -461,14 +428,7 @@ export async function fetchJSON<T>(
       { unknownRoute },
     );
   }
-  const result = await response.json();
-  // Commit-time check: a connection-labelled result is dropped if the tab
-  // moved to another connection while it was in flight.
-  if (!stampStillCurrent(response.headers.get(CONNECTION_HEADER), base)) {
-    reportConnectionMismatch();
-    throw new ApiError("The cluster changed while this was loading. The view is catching up.", 409, { code: CONTEXT_CHANGED, error_code: CONTEXT_CHANGED });
-  }
-  return result;
+  return response.json();
 }
 
 // ============================================================================
@@ -5054,26 +5014,22 @@ function bulkWorkloadFailureMessage(
 export function useBulkRestartWorkloads() {
   const queryClient = useQueryClient();
 
-  return useBindToConfirmation(useMutation({
-    // Runs once, at once, on the base and connection captured when the user confirmed.
-    networkMode: "always",
-    retry: false,
+  return useMutation({
     mutationFn: async ({
       items,
-      target = confirmTarget(),
     }: {
       items: BulkWorkloadItem[];
-      target?: ConfirmedTarget;
     }): Promise<BulkWorkloadMutationResult> => {
-      refuseStaleView(target);
       if (items.length === 0) {
         return { requested: 0, succeeded: 0, failedMessages: [] };
       }
       const results = await Promise.allSettled(
         items.map(async ({ kind, namespace, name }) => {
           const response = await apiFetch(
-            `${target.base}/workloads/${kind}/${namespace}/${name}/restart`,
-            confirmedRequest(target),
+            `${getApiBase()}/workloads/${kind}/${namespace}/${name}/restart`,
+            {
+              method: "POST",
+            },
           );
           if (!response.ok) {
             const error = await readErrorBody(response);
@@ -5118,34 +5074,32 @@ export function useBulkRestartWorkloads() {
       queryClient.invalidateQueries({ queryKey: ["resources"] });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
-  }), false);
+  });
 }
 
 export function useBulkScaleWorkloads() {
   const queryClient = useQueryClient();
 
-  return useBindToConfirmation(useMutation({
-    // Runs once, at once, on the base and connection captured when the user confirmed.
-    networkMode: "always",
-    retry: false,
+  return useMutation({
     mutationFn: async ({
       items,
       replicas,
-      target = confirmTarget(),
     }: {
       items: BulkWorkloadItem[];
       replicas: number;
-      target?: ConfirmedTarget;
     }): Promise<BulkWorkloadMutationResult> => {
-      refuseStaleView(target);
       if (items.length === 0) {
         return { requested: 0, succeeded: 0, failedMessages: [] };
       }
       const results = await Promise.allSettled(
         items.map(async ({ kind, namespace, name }) => {
           const response = await apiFetch(
-            `${target.base}/workloads/${kind}/${namespace}/${name}/scale`,
-            confirmedRequest(target, { replicas }),
+            `${getApiBase()}/workloads/${kind}/${namespace}/${name}/scale`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ replicas }),
+            },
           );
           if (!response.ok) {
             const error = await readErrorBody(response);
@@ -5190,7 +5144,7 @@ export function useBulkScaleWorkloads() {
       queryClient.invalidateQueries({ queryKey: ["resources"] });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
-  }), false);
+  });
 }
 
 // Apply (create or update) a resource from YAML
@@ -5538,80 +5492,25 @@ export function useResumeCronJob() {
 // Workload operations
 // ============================================================================
 
-// Where a bound write goes: the API base and the connection the tab showed
-// when the user confirmed. Captured in mutate(), so no later moment (a host's
-// onMutate, a retry, a resumed offline mutation) can retarget the write.
-interface ConfirmedTarget {
-  base: string;
-  connection?: string;
-  // The view was mounted for a connection the tab has since left.
-  stale?: boolean;
-}
-
-function confirmTarget(): ConfirmedTarget {
-  const base = getApiBase();
-  return { base, connection: connectionHeaderValue(base) };
-}
-
-function confirmedRequest(target: ConfirmedTarget, body?: unknown): RequestInit {
-  const headers: Record<string, string> = {};
-  if (target.connection) headers[CONNECTION_HEADER] = target.connection;
-  if (body !== undefined) headers["Content-Type"] = "application/json";
-  return { method: "POST", headers, body: body === undefined ? undefined : JSON.stringify(body) };
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyMutation = { mutate: (v: any, o?: any) => void; mutateAsync: (v: any, o?: any) => Promise<any> };
-type Unconfirmed<M extends AnyMutation> = Omit<Parameters<M["mutate"]>[0], "target">;
-
-// A write belongs to the view that offers it: a component mounted before the
-// tab moved to another connection (a drawer closing after a reset, a dialog
-// it portaled, a page that outlived the reset) is refused locally, never sent.
-// Bulk actions skip the check: their selection and confirmation live in the
-// resource table, which remounts when the tab adopts another connection.
-function useBindToConfirmation<M extends AnyMutation>(m: M, guardView = true) {
-  const base = getApiBase();
-  const [mountedGeneration] = useState(() => connectionGeneration(base));
-  const target = (): ConfirmedTarget =>
-    !guardView || connectionGeneration(base) === mountedGeneration ? confirmTarget() : { base, stale: true };
-  return {
-    ...m,
-    mutate: (v: Unconfirmed<M>, o?: Parameters<M["mutate"]>[1]) => m.mutate({ ...v, target: target() }, o),
-    mutateAsync: (v: Unconfirmed<M>, o?: Parameters<M["mutateAsync"]>[1]) => m.mutateAsync({ ...v, target: target() }, o),
-  };
-}
-
-const STALE_VIEW_MESSAGE = "Nothing was changed: the cluster changed since this view loaded. Check the current cluster and try again.";
-
-function refuseStaleView(target: ConfirmedTarget): void {
-  if (target.stale) {
-    throw new ApiError(STALE_VIEW_MESSAGE, 409, { code: CONTEXT_CHANGED, error_code: CONTEXT_CHANGED, error: STALE_VIEW_MESSAGE });
-  }
-}
-
 // Restart a workload (Deployment, StatefulSet, DaemonSet, Rollout)
 export function useRestartWorkload() {
   const queryClient = useQueryClient();
 
-  return useBindToConfirmation(useMutation({
-    // Runs once, at once, on the base and connection captured when the user confirmed.
-    networkMode: "always",
-    retry: false,
+  return useMutation({
     mutationFn: async ({
       kind,
       namespace,
       name,
-      target = confirmTarget(),
     }: {
       kind: string;
       namespace: string;
       name: string;
-      target?: ConfirmedTarget;
     }) => {
-      refuseStaleView(target);
       const response = await apiFetch(
-        `${target.base}/workloads/${kind}/${namespace}/${name}/restart`,
-        confirmedRequest(target),
+        `${getApiBase()}/workloads/${kind}/${namespace}/${name}/restart`,
+        {
+          method: "POST",
+        },
       );
       if (!response.ok) {
         throw new Error(restartErrorMessage(await readErrorBody(response), response.status));
@@ -5628,7 +5527,7 @@ export function useRestartWorkload() {
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
-  }));
+  });
 }
 
 function useSetDeploymentPaused(
@@ -5776,27 +5675,25 @@ export function useSetWorkloadImages() {
 export function useScaleWorkload() {
   const queryClient = useQueryClient();
 
-  return useBindToConfirmation(useMutation({
-    // Runs once, at once, on the base and connection captured when the user confirmed.
-    networkMode: "always",
-    retry: false,
+  return useMutation({
     mutationFn: async ({
       kind,
       namespace,
       name,
       replicas,
-      target = confirmTarget(),
     }: {
       kind: string;
       namespace: string;
       name: string;
       replicas: number;
-      target?: ConfirmedTarget;
     }) => {
-      refuseStaleView(target);
       const response = await apiFetch(
-        `${target.base}/workloads/${kind}/${namespace}/${name}/scale`,
-        confirmedRequest(target, { replicas }),
+        `${getApiBase()}/workloads/${kind}/${namespace}/${name}/scale`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ replicas }),
+        },
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
@@ -5822,7 +5719,7 @@ export function useScaleWorkload() {
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
     },
-  }));
+  });
 }
 
 // ============================================================================

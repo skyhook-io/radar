@@ -40,42 +40,18 @@ type ConnectionStatus struct {
 
 	// ConnectionID names the admitted connection Radar is serving: one
 	// admission of one cluster, unique for this process and across restarts.
-	// Empty while nothing is serving. ConnectionSeq orders publications within
-	// one process (BootAt identifies the process; it is not compared across
-	// processes), so a browser can drop a stale poll or frame. All three are set by the publisher; callers leave them empty.
-	ConnectionID  string `json:"connectionId,omitempty"`
-	ConnectionSeq uint64 `json:"seq,omitempty"`
-	BootAt        string `json:"bootAt,omitempty"`
+	// Empty while nothing is serving. Set by the publisher; callers leave it empty.
+	ConnectionID string `json:"connectionId,omitempty"`
 }
 
 var (
 	bootNonce = rand.Text()[:10]
-	// Fixed width so browsers can order boots by comparing strings.
-	bootAt = time.Now().UTC().Format("2006-01-02T15:04:05.000000000Z")
 
 	// Guarded by connectionStatusMu.
 	servingConnectionID  string
 	connectionAdmissions uint64
-	connectionSeq        uint64
 	admissionsClosed     bool
 )
-
-// stampLocked fills the publisher-owned fields for a status about to be
-// compared with or replace the published one. connectionStatusMu must be held.
-func stampLocked(status *ConnectionStatus) {
-	status.ConnectionID = servingConnectionID
-	status.BootAt = bootAt
-	status.ConnectionSeq = connectionStatus.ConnectionSeq
-}
-
-// publishLocked replaces the published status with the next sequence number.
-// connectionStatusMu must be held; the caller notifies after unlocking.
-func publishLocked(status ConnectionStatus) ConnectionStatus {
-	connectionSeq++
-	status.ConnectionSeq = connectionSeq
-	connectionStatus = status
-	return status
-}
 
 // ServingConnectionID returns the admitted connection Radar is serving, or ""
 // while nothing is serving (a switch, rescope or rebuild is between its point
@@ -100,8 +76,8 @@ func RetireServingConnection() {
 	if status.State == StateConnected {
 		status.State = StateConnecting
 	}
-	stampLocked(&status)
-	status = publishLocked(status)
+	status.ConnectionID = ""
+	connectionStatus = status
 	connectionStatusMu.Unlock()
 	notifyConnectionChange(status)
 }
@@ -171,12 +147,12 @@ func SetConnectionStatusIfCurrent(operation context.Context, status ConnectionSt
 		connectionAdmissions++
 		servingConnectionID = bootNonce + "-" + strconv.FormatUint(connectionAdmissions, 10)
 	}
-	stampLocked(&status)
+	status.ConnectionID = servingConnectionID
 	if connectionStatus == status {
 		connectionStatusMu.Unlock()
 		return true
 	}
-	status = publishLocked(status)
+	connectionStatus = status
 
 	// Publish-side recovery ownership: every route into an auth-shaped
 	// disconnect (bootstrap with expired credentials, failed retry, failed
@@ -475,11 +451,7 @@ func UpdateConnectionProgress(msg string) {
 	connectionStatusMu.Lock()
 	status := connectionStatus
 	status.ProgressMsg = msg
-	if status == connectionStatus {
-		connectionStatusMu.Unlock()
-		return
-	}
-	status = publishLocked(status)
+	connectionStatus = status
 	connectionStatusMu.Unlock()
 
 	notifyConnectionChange(status)
