@@ -1,0 +1,21 @@
+name: Save Go build cache
+description: >
+  Saves this job's build cache, pruned to the entries this run used, under a
+  key for this commit. Pair with go-cache-restore; call it as the job's last
+  step.
+runs:
+  using: composite
+  steps:
+    - name: Prune entries this run didn't use
+      shell: bash
+      run: |
+        cache=$(go env GOCACHE)
+        before=$(du -sh "$cache" | cut -f1)
+        find "$cache" -type f ! -newer "$RUNNER_TEMP/go-cache-start" -delete
+        echo "build cache: $before before pruning, $(du -sh "$cache" | cut -f1) after"
+
+    - name: Save build cache
+      uses: actions/cache/save@v6
+      with:
+        path: ~/.cache/go-build
+        key: gobuild-${{ runner.os }}-${{ github.job }}-sha-${{ github.sha }}
