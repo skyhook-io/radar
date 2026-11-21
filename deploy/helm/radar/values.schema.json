@@ -105,6 +105,7 @@
             "kubeshark": { "type": "boolean" },
             "kured": { "type": "boolean" },
             "kyverno": { "type": "boolean" },
+            "longhorn": { "type": "boolean" },
             "mariadb": { "type": "boolean" },
             "metallb": { "type": "boolean" },
             "multus": { "type": "boolean" },

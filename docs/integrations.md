@@ -9,6 +9,39 @@ to a stale view refreshes it without requiring the detail view to be reopened.
 
 Cluster-scoped drawers retain refresh-on-reopen/focus instead of automatic polling: their Issues request scans the whole cluster.
 
+## Longhorn
+
+[Longhorn](https://longhorn.io/) provides replicated block storage. Radar reads its `Volume`, `Engine` and `Replica` objects (`longhorn.io/v1beta2`), read-only. Fields are those of the v1beta2 types in Longhorn 1.10 to 1.13; one a version doesn't write reads as unknown.
+
+### What Radar Shows
+
+**Volume drawer:**
+- Size, actual size, data locality, access mode, frontend and data engine.
+- **Healthy replicas** out of the requested number. The healthy count comes only from the Volume's Engine (`status.replicaModeMap`, mode `RW`); when Radar can't read the Engine it reads `?`, never the requested count, and the drawer says the Engine read failed.
+- State, robustness, node, `lastDegradedAt`, `lastAutoSalvagedAt` (Longhorn 1.11+) and `lastBackupAt`, plus the Volume's conditions (`OfflineRebuilding`, `Scheduled`, …).
+- **Degraded** is amber: how long it has lasted (from `lastDegradedAt`), and "Rebuilding" with each replica's progress only when the Engine's `status.rebuildStatus` reports one (the replica is named from `status.currentReplicaAddressMap`, otherwise shown by address). When the Volume's `Scheduled` condition is False, it says Longhorn can't place a new replica. **Faulted** (no usable replica) is the red banner. With Longhorn's `auto-salvage` setting on (the default), a faulted Volume is often salvaged within seconds; `lastAutoSalvagedAt` then shows when.
+- Conditions whose normal value is False (`Restore`, `TooManySnapshots`, `WaitForBackingImage`, `BackingImageIncompatible`, `OfflineRebuilding`) read as fine when False.
+- While a volume migrates it has two Engines; Radar reads the active one (`spec.active`), and unknown when it can't tell. A detached volume's Engine isn't running, so its healthy count reads `?` with that reason.
+- Radar's cache keeps an Engine without the status maps it never reads (`snapshots`, `backupStatus`, `restoreStatus`, `purgeStatus`, `cloneStatus`, `replicaTransitionTimeMap`), which grow with every snapshot and backup; an Engine's YAML in Radar omits them.
+- No PVC, pod or workload names: `status.kubernetesStatus` records what Longhorn last saw, not current use.
+
+**Status badge (drawer header):** Healthy, Degraded (amber), Faulted (red), Detached (neutral), Unknown. The Volumes table keeps the CRD's printer columns (State, Robustness, Scheduled, Size, Node), so robustness reads there as Longhorn writes it.
+
+**Kind collisions:** Longhorn serves `nodes` and `volumes` plurals. Only the core `Node` gets the Node drawer, status, Debug Shell, cordon, uncordon and drain; a Longhorn `Node` renders generically. A `volumes` plural from any other group renders generically too.
+
+### Issues
+
+| Condition | Severity | Category |
+|---|---|---|
+| Volume `status.robustness: faulted` | critical | Volume faulted |
+| Volume `status.robustness: degraded` (onset `lastDegradedAt`) | warning | Volume degraded |
+
+A detached volume is not an issue. Like other namespaced Issues, they are visible to callers with access to the Longhorn namespace (usually `longhorn-system`).
+
+### Access
+
+The chart grants `get`/`list`/`watch` on `volumes`, `engines` and `replicas` behind `rbac.crdGroups.longhorn` (default on). For Radar Cloud callers the read baseline grants them: they hold no credentials (`spec.fromBackup` is a backup URL, not a secret). Namespace-scoped callers usually can't read them, since they live in the Longhorn namespace.
+
 ## OpenTelemetry Operator
 
 Radar provides native resource details for `opentelemetry.io` **OpenTelemetryCollector**

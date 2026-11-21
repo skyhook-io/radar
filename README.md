@@ -501,6 +501,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **[RabbitMQ](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | Node-reported disk and memory alarms - **local collection** |
 | **[NATS](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | JetStream consumer backlog, acknowledgment-pending and redelivery counters - **local collection** |
 | **Velero** | Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation |
+| **Longhorn** | [Volume](docs/integrations.md#longhorn): replica health from its Engine, rebuild progress, faulted and degraded Issues |
 | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore |
 | **CSI Volume Snapshots** | [VolumeSnapshot, VolumeSnapshotContent and VolumeSnapshotClass](docs/integrations.md#csi-volume-snapshots): readiness, errors, restore size, source, binding and deletion policy |
 | **Secrets Store CSI Driver** | [SecretProviderClass and Pod mounts](docs/integrations.md#secrets-store-csi-driver): mount state, object versions and synced Secrets in the Pod drawer |

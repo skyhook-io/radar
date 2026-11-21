@@ -1,0 +1,12 @@
+{
+  "_note": "Volume health cases. source=controller: a state seen on a running Longhorn 1.12.1; source=synthetic: shaped from the v1beta2 types (1.10-1.13), not captured.",
+  "cases": [
+    {"name": "attached-healthy", "source": "controller", "status": {"state": "attached", "robustness": "healthy"}, "want": "healthy"},
+    {"name": "detached-unknown", "source": "controller", "status": {"state": "detached", "robustness": "unknown"}, "want": "detached"},
+    {"name": "attached-degraded", "source": "synthetic", "status": {"state": "attached", "robustness": "degraded", "lastDegradedAt": "2026-11-15T10:00:00Z"}, "want": "degraded"},
+    {"name": "attached-faulted", "source": "synthetic", "status": {"state": "attached", "robustness": "faulted"}, "want": "faulted"},
+    {"name": "detached-faulted", "source": "synthetic", "status": {"state": "detached", "robustness": "faulted"}, "want": "faulted"},
+    {"name": "attaching-unknown", "source": "synthetic", "status": {"state": "attaching", "robustness": "unknown"}, "want": "unknown"},
+    {"name": "no-status", "source": "synthetic", "want": "unknown"}
+  ]
+}
