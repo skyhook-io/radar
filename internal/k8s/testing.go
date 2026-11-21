@@ -785,16 +785,28 @@ func InstallTestServingConnection(name string, cfg *rest.Config, dyn dynamic.Int
 	return ServingConnectionID(), nil
 }
 
-// ResetTestConnectionIdentity clears the serving connection and publication
-// state InstallTestServingConnection and status publications leave behind.
-func ResetTestConnectionIdentity() {
+// SnapshotTestConnection records the connection status, serving connection,
+// clients and discovery, and returns a func that restores them, so a test
+// that installs or retires connections leaves the package as it found it.
+func SnapshotTestConnection() func() {
 	connectionStatusMu.Lock()
-	servingConnectionID = ""
-	admissionsClosed = false
-	connectionStatus = ConnectionStatus{}
+	status, id, closed := connectionStatus, servingConnectionID, admissionsClosed
 	connectionStatusMu.Unlock()
-	clientMu.Lock()
-	k8sConfig, dynamicClient, contextName = nil, nil, ""
-	clientMu.Unlock()
-	ResetResourceDiscovery()
+	clientMu.RLock()
+	cfg, dyn, name := k8sConfig, dynamicClient, contextName
+	clientMu.RUnlock()
+	discoveryMu.Lock()
+	disc := resourceDiscovery
+	discoveryMu.Unlock()
+	return func() {
+		connectionStatusMu.Lock()
+		connectionStatus, servingConnectionID, admissionsClosed = status, id, closed
+		connectionStatusMu.Unlock()
+		clientMu.Lock()
+		k8sConfig, dynamicClient, contextName = cfg, dyn, name
+		clientMu.Unlock()
+		discoveryMu.Lock()
+		resourceDiscovery = disc
+		discoveryMu.Unlock()
+	}
 }

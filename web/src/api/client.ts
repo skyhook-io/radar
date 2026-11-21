@@ -79,7 +79,8 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
-import { CONNECTION_HEADER, CONTEXT_CHANGED, connectionHeaderValue, reportConnectionMismatch, responseMatchesConnection } from './connectionBinding'
+import { CONNECTION_HEADER, CONTEXT_CHANGED, connectionHeaderValue, reportConnectionMismatch, responseMatchesConnection,
+  stampStillCurrent } from './connectionBinding'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   RadarFeatureUnsupportedError,
@@ -175,7 +176,7 @@ export function apiFetch(
     // A response another connection produced never reaches the views: it is
     // answered as the server answers a stale write, and the tab re-reads its
     // connection status to catch up.
-    if (!responseMatchesConnection(connection, response.headers.get(CONNECTION_HEADER))) {
+    if (!responseMatchesConnection(connection, response.headers.get(CONNECTION_HEADER), response.ok)) {
       reportConnectionMismatch();
       return connectionChangedResponse();
     }
@@ -432,7 +433,6 @@ export async function fetchJSON<T>(
   init?: RequestInit | AbortSignal,
 ): Promise<T> {
   const requestInit = init instanceof AbortSignal ? { signal: init } : init;
-  const sent = connectionHeaderValue();
   const response = await apiFetch(`${getApiBase()}${path}`, requestInit);
   if (!response.ok) {
     const { body, unknownRoute } = await readErrorResponse(response);
@@ -446,7 +446,7 @@ export async function fetchJSON<T>(
   const result = await response.json();
   // Commit-time check: a connection-labelled result is dropped if the tab
   // moved to another connection while it was in flight.
-  if (response.headers.has(CONNECTION_HEADER) && sent && sent !== "unknown" && connectionHeaderValue() !== sent) {
+  if (!stampStillCurrent(response.headers.get(CONNECTION_HEADER))) {
     reportConnectionMismatch();
     throw new ApiError("The cluster changed since this view loaded. Reload the view and try again.", 409, { code: CONTEXT_CHANGED, error_code: CONTEXT_CHANGED });
   }
@@ -5037,6 +5037,7 @@ export function useBulkRestartWorkloads() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    networkMode: "always", // runs at once: the header names the connection the user confirmed on
     mutationFn: async ({
       items,
     }: {
@@ -5103,6 +5104,7 @@ export function useBulkScaleWorkloads() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    networkMode: "always", // runs at once: the header names the connection the user confirmed on
     mutationFn: async ({
       items,
       replicas,
@@ -5519,6 +5521,7 @@ export function useRestartWorkload() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    networkMode: "always", // runs at once: the header names the connection the user confirmed on
     mutationFn: async ({
       kind,
       namespace,
@@ -5698,6 +5701,7 @@ export function useScaleWorkload() {
   const queryClient = useQueryClient();
 
   return useMutation({
+    networkMode: "always", // runs at once: the header names the connection the user confirmed on
     mutationFn: async ({
       kind,
       namespace,

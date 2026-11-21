@@ -9,8 +9,9 @@
 # kubeconfig (aws exec auth) and creates a zero-replica Deployment
 # "radar-live-probe" in their default namespaces. Radar runs on port 9361 with
 # HOME pointed at $WORKDIR/home (your ~/.radar is untouched; ~/.aws is linked
-# so the aws plugin works). Results go to $WORKDIR/results-<label>.txt; with
-# label "after" each line is checked against the expectation in the checklist.
+# so the aws plugin works). Results go to $WORKDIR/results-<label>.txt. Each
+# line is checked against the expectation in the checklist (the script exits 1
+# on any FAIL), except with label "before", which records today's behaviour.
 set -u
 WORKDIR=${WORKDIR:-${TMPDIR:-/tmp}/radar-connection-lifecycle}
 L=$WORKDIR
@@ -69,7 +70,7 @@ start() { # start <podsDelay> [context]
     [[ "$(field "d.get('state')" 2>/dev/null)" == connected ]] && return 0
     sleep 1
   done
-  record "!! start: never connected"; return 1
+  record "!! start: never connected"; FAILED=1; return 1
 }
 stop() { [[ -n "$PID" ]] && kill $PID 2>/dev/null && wait $PID 2>/dev/null; PID=""; for i in {1..20}; do lsof -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1 || return 0; sleep 0.5; done; }
 
@@ -104,7 +105,9 @@ restart_probe() { # restart_probe <connectionHeader> → "code nonprodChanged pr
 }
 expect() { # expect <scenario> <observed> <wanted-for-after>
   local verdict=""
-  [[ $BUILD == after ]] && { [[ "$2" == ${~3} ]] && verdict=PASS || verdict="FAIL (want $3)"; }
+  if [[ $BUILD != before ]]; then
+    if [[ "$2" == ${~3} ]]; then verdict=PASS; else verdict="FAIL (want $3)"; FAILED=1; fi
+  fi
   record "$1 | $2 | $verdict"
 }
 
@@ -190,6 +193,7 @@ run() {
     expect "L10 Stop during warm-up" "stop=$code phase=$phase id=$(connid)" "stop=204 phase=stopped id="
     expect "L10b write after Stop" "$(restart_probe "$idA")" "503 nonprod=no prod=no"
     ;;
+  *) record "!! unknown scenario $1"; FAILED=1 ;;
   esac
 }
 
@@ -206,9 +210,13 @@ run)
   PID=""
   : > $OUT
   record "== $BUILD $(ts)"
-  for one in ${@:-L1 L4 L6 L7 L8 L9 L10}; do run $one; done
+  FAILED=0
+  scenarios=("$@")
+  (( $#scenarios )) || scenarios=(L1 L4 L6 L7 L8 L9 L10)
+  for one in "${scenarios[@]}"; do run $one; done
   stop
   record "== done $(ts)"
+  exit $FAILED
   ;;
 *) print -u2 "usage: $0 setup | run <radar-binary> <label> [scenarios] | cleanup"; exit 2 ;;
 esac

@@ -6,6 +6,7 @@ import {
   resetConnectionBindingForTest,
   responseMatchesConnection,
   setConnectionReplacedHandler,
+  stampStillCurrent,
 } from './connectionBinding'
 
 const BASE = 'http://radar.test/api'
@@ -52,7 +53,7 @@ describe('connection binding', () => {
     // A tab that missed the switch's context_changed learns B from a status.
     observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 3, bootAt: BOOT }, BASE)
     expect(reset).toHaveBeenCalledTimes(1)
-    expect(reset).toHaveBeenLastCalledWith('b', 'n-2')
+    expect(reset).toHaveBeenLastCalledWith('b', undefined)
 
     // A tab that saw context_changed already reset; adopting the next ID is quiet.
     markViewsAwaitingConnection(BASE)
@@ -65,6 +66,44 @@ describe('connection binding', () => {
     expect(reset).toHaveBeenCalledTimes(1)
   })
 
+  it('passes a completed switch\'s ID so the reset dedupes against the switch\'s own', () => {
+    const reset = vi.fn()
+    setConnectionReplacedHandler(reset)
+    observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, BASE)
+    observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 2, bootAt: BOOT, contextSwitch: { id: 'sw-1', phase: 'succeeded' } }, BASE)
+    expect(reset).toHaveBeenLastCalledWith('b', 'sw-1')
+  })
+
+  it('resets when the first connection differs from one whose data the tab already accepted', () => {
+    const reset = vi.fn()
+    setConnectionReplacedHandler(reset)
+    // Before any status arrived, a read served by A was accepted.
+    expect(responseMatchesConnection(undefined, 'n-1', true, BASE)).toBe(true)
+    observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 3, bootAt: BOOT }, BASE)
+    expect(reset).toHaveBeenCalledTimes(1)
+
+    // Data from the connection then adopted is no replacement.
+    resetConnectionBindingForTest()
+    setConnectionReplacedHandler(reset)
+    responseMatchesConnection(undefined, 'n-1', true, BASE)
+    observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, BASE)
+    expect(reset).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops data nothing served but lets that error through with its own code', () => {
+    expect(responseMatchesConnection(undefined, 'none', true, BASE)).toBe(false)
+    expect(responseMatchesConnection('n-1', 'none', false, BASE)).toBe(true)
+  })
+
+  it('commits a labelled result only while the tab still shows that connection', () => {
+    expect(stampStillCurrent('n-1', BASE)).toBe(true) // no connection yet
+    observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, BASE)
+    expect(stampStillCurrent('n-1', BASE)).toBe(true)
+    observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 2, bootAt: BOOT }, BASE)
+    expect(stampStillCurrent('n-1', BASE)).toBe(false)
+    expect(stampStillCurrent(null, BASE)).toBe(true)
+  })
+
   it('keeps API bases apart', () => {
     observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, BASE)
     observeConnectionStatus({ context: 'x', connectionId: 'h-7', seq: 1, bootAt: BOOT }, 'http://hub.test/c/2/api')
@@ -73,12 +112,10 @@ describe('connection binding', () => {
   })
 
   it('accepts only responses from the connection the request named', () => {
-    expect(responseMatchesConnection('n-1', 'n-1')).toBe(true)
-    expect(responseMatchesConnection('n-1', 'n-2')).toBe(false)
-    expect(responseMatchesConnection('n-1', 'none')).toBe(false)
-    // Unlabelled responses (status, settings) and tabs without a connection are never dropped.
-    expect(responseMatchesConnection('n-1', null)).toBe(true)
-    expect(responseMatchesConnection('unknown', 'n-2')).toBe(true)
-    expect(responseMatchesConnection(undefined, 'n-2')).toBe(true)
+    expect(responseMatchesConnection('n-1', 'n-1', true, BASE)).toBe(true)
+    expect(responseMatchesConnection('n-1', 'n-2', true, BASE)).toBe(false)
+    expect(responseMatchesConnection('n-1', 'n-2', false, BASE)).toBe(false)
+    // Unlabelled responses (status, settings) are never dropped.
+    expect(responseMatchesConnection('n-1', null, true, BASE)).toBe(true)
   })
 })

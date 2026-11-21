@@ -8,8 +8,8 @@ import (
 func publishedStatus() ConnectionStatus { return GetConnectionStatus() }
 
 func TestConnectionIdentityAdmitRetireAndOrder(t *testing.T) {
-	t.Cleanup(ResetTestConnectionIdentity)
-	ResetTestConnectionIdentity()
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
 
 	SetConnectionStatus(ConnectionStatus{State: StateConnecting, Context: "a"})
 	if ServingConnectionID() != "" {
@@ -68,8 +68,8 @@ func TestConnectionIdentityAdmitRetireAndOrder(t *testing.T) {
 }
 
 func TestConnectionAdmissionsClosedAtShutdown(t *testing.T) {
-	t.Cleanup(ResetTestConnectionIdentity)
-	ResetTestConnectionIdentity()
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
 	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: "a"})
 	CloseConnectionAdmissions()
 	if ServingConnectionID() != "" {
@@ -83,8 +83,8 @@ func TestConnectionAdmissionsClosedAtShutdown(t *testing.T) {
 }
 
 func TestCaptureBoundConnectionRefusesWithoutServingConnection(t *testing.T) {
-	t.Cleanup(ResetTestConnectionIdentity)
-	ResetTestConnectionIdentity()
+	t.Cleanup(SnapshotTestConnection())
+	clearTestConnectionIdentity()
 	if _, err := CaptureBoundConnection(); err != ErrNoServingConnection {
 		t.Fatalf("no serving connection: err=%v", err)
 	}
@@ -93,4 +93,12 @@ func TestCaptureBoundConnectionRefusesWithoutServingConnection(t *testing.T) {
 	if _, err := CaptureBoundConnection(); err != ErrNoServingConnection {
 		t.Fatalf("no clients: err=%v", err)
 	}
+}
+
+func clearTestConnectionIdentity() {
+	connectionStatusMu.Lock()
+	servingConnectionID = ""
+	admissionsClosed = false
+	connectionStatus = ConnectionStatus{}
+	connectionStatusMu.Unlock()
 }

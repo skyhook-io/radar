@@ -44,3 +44,22 @@ it('sends no header to a server that does not bind connections', async () => {
   await apiFetch(`${getApiBase()}/resources/pods`)
   expect(seen).toEqual([null])
 })
+
+it('keeps a mid-switch refusal\'s own code instead of calling it a cluster change', async () => {
+  observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, getApiBase())
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":"switching","code":"cluster_changing"}', {
+    status: 503, headers: { 'Content-Type': 'application/json', 'X-Radar-Connection': 'none' },
+  })))
+  const response = await apiFetch(`${getApiBase()}/workloads/deployments/default/web/restart`, { method: 'POST' })
+  expect(response.status).toBe(503)
+})
+
+it('drops a result whose connection the tab left while it was in flight', async () => {
+  observeConnectionStatus({ context: 'a', connectionId: 'n-1', seq: 1, bootAt: BOOT }, getApiBase())
+  vi.stubGlobal('fetch', vi.fn(async () => {
+    const r = new Response('{"items":[]}', { status: 200, headers: { 'Content-Type': 'application/json', 'X-Radar-Connection': 'n-1' } })
+    observeConnectionStatus({ context: 'b', connectionId: 'n-2', seq: 2, bootAt: BOOT }, getApiBase())
+    return r
+  }))
+  await expect(fetchJSON('/resources/pods')).rejects.toMatchObject({ status: 409 })
+})

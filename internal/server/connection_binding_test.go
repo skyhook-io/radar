@@ -81,7 +81,7 @@ func writes(c *dynamicfake.FakeDynamicClient) int {
 // A switch that lands after a write was admitted must not redirect it: the
 // restart the user sent while looking at A runs on A, and B sees nothing.
 func TestBoundRestartStaysOnAdmittedConnectionAcrossSwitch(t *testing.T) {
-	t.Cleanup(k8s.ResetTestConnectionIdentity)
+	t.Cleanup(k8s.SnapshotTestConnection())
 	a, b := fakeCluster(t), fakeCluster(t)
 	idA := install(t, "cluster-a", a)
 	s := &Server{}
@@ -110,7 +110,7 @@ func TestBoundRestartStaysOnAdmittedConnectionAcrossSwitch(t *testing.T) {
 // A tab still showing A after the server moved to B is refused before any
 // Kubernetes work, including A→B→A where the context name matches again.
 func TestBoundWriteRefusesStaleConnection(t *testing.T) {
-	t.Cleanup(k8s.ResetTestConnectionIdentity)
+	t.Cleanup(k8s.SnapshotTestConnection())
 	a, b, a2 := fakeCluster(t), fakeCluster(t), fakeCluster(t)
 	idA := install(t, "cluster-a", a)
 	install(t, "cluster-b", b)
@@ -137,7 +137,7 @@ func TestBoundWriteRefusesStaleConnection(t *testing.T) {
 // Between the point of no return and the next admission nothing is serving:
 // writes are refused as retryable, whether or not they name a connection.
 func TestBoundWriteRefusedWhileNothingServes(t *testing.T) {
-	t.Cleanup(k8s.ResetTestConnectionIdentity)
+	t.Cleanup(k8s.SnapshotTestConnection())
 	idA := install(t, "cluster-a", fakeCluster(t))
 	k8s.RetireServingConnection()
 	s := &Server{}
@@ -163,7 +163,7 @@ func TestBoundWriteRefusedWhileNothingServes(t *testing.T) {
 // Callers that name no connection (MCP, curl, an older UI) are admitted
 // against the current connection, and still run on that one capture.
 func TestBoundWriteAdmitsUnnamedCallerOnCurrentConnection(t *testing.T) {
-	t.Cleanup(k8s.ResetTestConnectionIdentity)
+	t.Cleanup(k8s.SnapshotTestConnection())
 	a, b := fakeCluster(t), fakeCluster(t)
 	install(t, "cluster-a", a)
 	s := &Server{}
@@ -180,7 +180,7 @@ func TestBoundWriteAdmitsUnnamedCallerOnCurrentConnection(t *testing.T) {
 // A read is labelled with the connection that served it, or "none" when the
 // serving connection changed while the handler built it.
 func TestStampReadLabelsTheServingConnection(t *testing.T) {
-	t.Cleanup(k8s.ResetTestConnectionIdentity)
+	t.Cleanup(k8s.SnapshotTestConnection())
 	idA := install(t, "cluster-a", fakeCluster(t))
 	s := &Server{}
 
@@ -203,7 +203,7 @@ func TestStampReadLabelsTheServingConnection(t *testing.T) {
 // Control for TestBoundRestartStaysOnAdmittedConnectionAcrossSwitch: the same
 // sequence without the binding lands on B, so the bound test can fail.
 func TestUnboundRestartFollowsTheSwitch(t *testing.T) {
-	t.Cleanup(k8s.ResetTestConnectionIdentity)
+	t.Cleanup(k8s.SnapshotTestConnection())
 	a, b := fakeCluster(t), fakeCluster(t)
 	install(t, "cluster-a", a)
 	s := &Server{}

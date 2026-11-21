@@ -116,16 +116,22 @@ async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<Poll
   // ?contexts=0: context enumeration re-reads kubeconfig files under the
   // client write lock on the server — too costly for a perpetual poll, and
   // nothing here consumes the list (ContextSwitcher has its own query).
-  const response = await apiFetch(`${getApiBase()}/connection?contexts=0`)
+  // Identity is recorded here, under the base this request went to: the
+  // status query's cache entry is shared across API bases (Radar Hub reuses
+  // one query client for many clusters), so cached data has no base of its own.
+  const base = getApiBase()
+  const response = await apiFetch(`${base}/connection?contexts=0`)
   if (!response.ok) {
     throw new Error('Failed to fetch connection status')
   }
   const status = await response.json() as ConnectionStatusResponse
+  observeConnectionStatus(status, base)
   return { ...status, sseGenerationAtStart }
 }
 
 async function retryConnection(automatic = false): Promise<ConnectionState> {
-  const response = await apiFetch(`${getApiBase()}/connection/retry`, {
+  const base = getApiBase()
+  const response = await apiFetch(`${base}/connection/retry`, {
     method: 'POST',
     headers: automatic ? automaticRequestHeaders() : undefined,
   })
@@ -133,7 +139,9 @@ async function retryConnection(automatic = false): Promise<ConnectionState> {
     const error = await readErrorBody(response) as { error?: string; errorType?: string; error_code?: string }
     throw new ConnectionRetryError(error.error || `HTTP ${response.status}`, response.status, error.errorType, error.error_code)
   }
-  return response.json()
+  const result = await response.json() as ConnectionState
+  observeConnectionStatus(result, base)
+  return result
 }
 
 export function ConnectionProvider({ children }: { children: ReactNode }) {
@@ -256,9 +264,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!data) return
-    // Connection identity is ordered on its own and fed from every source,
-    // before the state guards below decide whether this poll is applied.
-    observeConnectionStatus(data)
     if (data.authRecoveryOwed !== undefined) {
       serverOwnsRecoveryRef.current = data.authRecoveryOwed
     }
@@ -344,7 +349,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     },
     onSuccess: (result) => {
       const previousContext = connectionRef.current.context
-      observeConnectionStatus(result)
       setConnection(result)
       if (result.state === 'connected') {
         // Keep the first-connect bookkeeping and the double-refresh window
@@ -435,7 +439,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           autoRetryDelayRef.current = AUTO_RETRY_INITIAL_DELAY_MS
           sseActiveRef.current = false
           const previousContext = connectionRef.current.context
-          observeConnectionStatus(result)
           setConnection(result)
           if (result.state === 'connected') {
             hasConnectedRef.current = true

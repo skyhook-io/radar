@@ -24,6 +24,7 @@ export interface ConnectionIdentity {
   seq?: number
   bootAt?: string
   context?: string
+  contextSwitch?: { id?: string; phase?: string } | null
 }
 
 interface BaseState {
@@ -32,6 +33,9 @@ interface BaseState {
   bootAt: string
   supported: boolean
   viewsAwaitingConnection: boolean
+  // A connection that served data this tab accepted before it had adopted
+  // any connection (its first status hadn't arrived yet).
+  unboundStamp?: string
   // Bumped each time a new connection replaces one the tab had: views keyed
   // on it remount, which drops dialogs opened on the previous connection.
   generation: number
@@ -39,7 +43,7 @@ interface BaseState {
 
 const states = new Map<string, BaseState>()
 const listeners = new Set<() => void>()
-let onReplaced: ((context: string, connectionId: string) => void) | undefined
+let onReplaced: ((context: string, switchId?: string) => void) | undefined
 let onMismatch: (() => void) | undefined
 let mismatchScheduled = false
 
@@ -53,7 +57,7 @@ function stateFor(base: string): BaseState {
 }
 
 /** App registers the reset to run when the tab learns of a new connection it hadn't reset for. */
-export function setConnectionReplacedHandler(fn: ((context: string, connectionId: string) => void) | undefined): void {
+export function setConnectionReplacedHandler(fn: ((context: string, switchId?: string) => void) | undefined): void {
   onReplaced = fn
 }
 
@@ -77,15 +81,19 @@ export function observeConnectionStatus(status: ConnectionIdentity, base = getAp
   s.supported = true
   const next = status.connectionId
   if (!next || next === s.id) return
-  const hadConnection = s.id !== undefined
+  // Data accepted before the first adoption counts as showing that connection.
+  const hadConnection = s.id !== undefined || (s.unboundStamp !== undefined && s.unboundStamp !== next)
   const replaced = hadConnection && !s.viewsAwaitingConnection
   s.id = next
+  s.unboundStamp = undefined
   s.viewsAwaitingConnection = false
   if (hadConnection) {
     s.generation += 1
     listeners.forEach((l) => l())
   }
-  if (replaced) onReplaced?.(status.context ?? '', next)
+  // A completed switch's ID lets the reset dedupe against the switch's own.
+  const switchId = status.contextSwitch?.phase === 'succeeded' ? status.contextSwitch.id : undefined
+  if (replaced) onReplaced?.(status.context ?? '', switchId)
 }
 
 /** Changes each time a new connection replaces the one this tab showed; key views on it. */
@@ -111,10 +119,32 @@ export function connectionHeaderValue(base = getApiBase()): string | undefined {
   return s.id ?? 'unknown'
 }
 
-/** Whether a response stamped `stamp` belongs to the connection `sent` named. */
-export function responseMatchesConnection(sent: string | undefined, stamp: string | null): boolean {
-  if (!sent || sent === 'unknown' || stamp === null) return true
-  return stamp !== NO_CONNECTION && stamp === sent
+/**
+ * Whether a response stamped `stamp` may reach the views of a tab that sent
+ * `sent`. Unlabelled responses always may. "none" (no connection served it)
+ * drops data but lets errors through, so a refusal keeps its own code. A tab
+ * with no connection yet accepts any connection's data and remembers it, so
+ * adopting a different first connection still resets the views.
+ */
+export function responseMatchesConnection(sent: string | undefined, stamp: string | null, ok = true, base = getApiBase()): boolean {
+  if (stamp === null) return true
+  if (stamp === NO_CONNECTION) return !ok
+  if (!sent || sent === 'unknown') {
+    const s = stateFor(base)
+    if (s.id === undefined) {
+      s.unboundStamp = stamp
+      return true
+    }
+    return stamp === s.id
+  }
+  return stamp === sent
+}
+
+/** Whether a labelled result may still be committed: the tab hasn't moved to another connection since. */
+export function stampStillCurrent(stamp: string | null, base = getApiBase()): boolean {
+  if (stamp === null || stamp === NO_CONNECTION) return true
+  const id = states.get(base)?.id
+  return id === undefined || id === stamp
 }
 
 /** A response came from another connection: refresh the status once, so the tab can catch up. */

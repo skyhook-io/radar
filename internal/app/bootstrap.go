@@ -843,8 +843,9 @@ func mcpPortFilePath() string {
 func Shutdown(srv *server.Server) {
 	log.Println("Shutting down...")
 	RemoveMCPPortFile()
-	srv.Stop()
+	// Closed first, so nothing stopped below can admit a connection.
 	k8s.CloseConnectionAdmissions()
+	srv.Stop()
 	k8s.ResetAllSubsystems()
 }
 

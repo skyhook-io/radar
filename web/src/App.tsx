@@ -1363,7 +1363,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // A tab that missed a switch's context_changed resets when it learns of the
   // new connection by any other path (poll, SSE status, retry result).
   useEffect(() => {
-    setConnectionReplacedHandler((context) => applyContextChange(context))
+    setConnectionReplacedHandler((context, switchId) => applyContextChange(context, switchId))
     return () => setConnectionReplacedHandler(undefined)
   }, [applyContextChange])
 
