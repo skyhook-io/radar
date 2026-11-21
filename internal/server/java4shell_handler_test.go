@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,6 +85,24 @@ func TestJava4ShellWorksWithoutTrivyAndChecksPodAccess(t *testing.T) {
 	denied := env.authGet(t, "/api/vulnerabilities/java4shell?namespace=other", "alice", "")
 	if body := readBody(t, denied); denied.StatusCode != 403 {
 		t.Fatalf("denied scope: %d %s", denied.StatusCode, body)
+	}
+	stream := env.authGet(t, "/api/vulnerabilities/java4shell/stream?namespaces=legacy,other", "alice", "")
+	if stream.StatusCode != http.StatusOK || stream.Header.Get("Content-Type") != "application/x-ndjson" {
+		t.Fatalf("stream: %d %s", stream.StatusCode, readBody(t, stream))
+	}
+	dec := json.NewDecoder(strings.NewReader(readBody(t, stream)))
+	var update, terminal java4ShellStreamMessage
+	if err := dec.Decode(&update); err != nil || update.Type != "progress" || update.Progress == nil || update.Progress.Total != 0 {
+		t.Fatalf("first progress: %+v, %v", update, err)
+	}
+	if err := dec.Decode(&terminal); err != nil || terminal.Type != "result" || terminal.Report == nil ||
+		terminal.Report.Containers != 1 || terminal.Report.Unassessed["image_identity_unknown"] != 1 ||
+		terminal.Report.Coverage.Status != resourceapi.CoveragePartial || dec.Decode(&update) != io.EOF {
+		t.Fatalf("terminal result: %+v, %v", terminal, err)
+	}
+	deniedStream := env.authGet(t, "/api/vulnerabilities/java4shell/stream?namespace=other", "alice", "")
+	if body := readBody(t, deniedStream); deniedStream.StatusCode != http.StatusForbidden {
+		t.Fatalf("stream must enforce scope before emitting progress: %d %s", deniedStream.StatusCode, body)
 	}
 }
 
@@ -193,20 +213,21 @@ func TestJava4ShellOnSharedListenerRejectsCrossSite(t *testing.T) {
 	s := &Server{listenAddress: "0.0.0.0"}
 	router := chi.NewRouter()
 	s.setupAppRoutes(router)
-	path := "http://127.0.0.1/api/vulnerabilities/java4shell?namespace=default"
-
-	req := httptest.NewRequest(http.MethodGet, path, nil)
-	req.Header.Set("Sec-Fetch-Site", "cross-site")
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != 403 {
-		t.Fatalf("cross-site read: %d %s", w.Code, w.Body.String())
-	}
-	req = httptest.NewRequest(http.MethodGet, path, nil)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != 200 {
-		t.Fatalf("direct read: %d %s", w.Code, w.Body.String())
+	for _, suffix := range []string{"", "/stream"} {
+		path := "http://127.0.0.1/api/vulnerabilities/java4shell" + suffix + "?namespace=default"
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Sec-Fetch-Site", "cross-site")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 403 {
+			t.Fatalf("cross-site read %s: %d %s", suffix, w.Code, w.Body.String())
+		}
+		req = httptest.NewRequest(http.MethodGet, path, nil)
+		w = httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatalf("direct read %s: %d %s", suffix, w.Code, w.Body.String())
+		}
 	}
 }
 

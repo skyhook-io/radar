@@ -26,6 +26,7 @@ import type {
   CapacityOverviewResponse,
   CapacityPoolDetailResponse,
   CapacityPoolListResponse,
+  NamespaceCollection,
   SetWorkloadImagesResult,
   WorkloadImageInventory,
   WorkloadImageUpdate,
@@ -7797,6 +7798,8 @@ export interface NamespaceScope {
    * its short fallback list. Absent from older servers.
    */
   listFailed?: boolean;
+  /** Where Radar collects the kinds it keeps in only some namespaces; absent when none, or from an older Radar. */
+  collection?: NamespaceCollection;
 }
 
 /**

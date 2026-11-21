@@ -49,7 +49,7 @@ describe('application resource hosts', () => {
   it('retains every existing renderer override at a stable module reference', () => {
     expect(Object.keys(resourceRendererOverrides).sort()).toEqual([
       'CustomResourceDefinitionRenderer', 'RayJobRenderer', 'JobRenderer', 'JobSetRenderer', 'RayServiceRenderer', 'RayClusterRenderer',
-      'KueueWorkloadRenderer', 'LocalQueueRenderer', 'ClusterQueueRenderer', 'CAPIClusterRenderer', 'PodRenderer', 'KarpenterNodePoolRenderer',
+      'KueueWorkloadRenderer', 'LocalQueueRenderer', 'ClusterQueueRenderer', 'CAPIClusterRenderer', 'PodRenderer', 'KarpenterNodePoolRenderer', 'LonghornVolumeRenderer',
       'NodeRenderer', 'ServiceRenderer', 'WorkloadRenderer', 'CompositeRenderer', 'ServiceAccountRenderer',
       'RoleRenderer', 'RoleBindingRenderer', 'NamespaceRenderer', 'HPARenderer', 'PVCRenderer', 'HTTPRouteRenderer',
       'RolloutRenderer', 'KyvernoPolicyCoverage', 'KyvernoPolicyQueued', 'CNPGObjectStoreRenderer',

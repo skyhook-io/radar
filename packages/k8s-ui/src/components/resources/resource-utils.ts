@@ -2,6 +2,7 @@ import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getVolumeSnapshotColumnValue } from './resource-utils-volumesnapshot'
+import { getMetalLBColumnValue } from './resource-utils-metallb'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import { getK3sHelmChartColumnValue } from './resource-utils-k3s'
 import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
@@ -364,6 +365,13 @@ function readinessGateOOMRecovery(pod: any): string | null {
     return cs.name
   }
   return null
+}
+
+// Longhorn (and any other operator) can serve a `nodes` plural of its own; only
+// the core Node gets the Node drawer, status and node actions. Data without an
+// apiVersion is a core Node from a typed read.
+export function isCoreNode(data: any): boolean {
+  return !data?.apiVersion || data.apiVersion === 'v1'
 }
 
 export function getPodStatus(pod: any): StatusBadge {
@@ -2588,6 +2596,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (strimziClusterValue !== undefined) return strimziClusterValue
   const volumeSnapshotValue = getVolumeSnapshotColumnValue(resource, column)
   if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
+  const metalLBValue = getMetalLBColumnValue(resource, column)
+  if (metalLBValue !== undefined) return metalLBValue
   const otelValue = getOpenTelemetryColumnValue(resource, column)
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)

@@ -1,3 +1,4 @@
+import { isCoreNode } from '../resources/resource-utils'
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
 import { resourceRefKey } from '../../utils/resource-refs'
 import { useEffect, useState, useRef, useId } from 'react'
@@ -395,7 +396,7 @@ export function ResourceActionsBar({
       )}
 
       {/* Node actions */}
-      {kind === 'nodes' && (
+      {kind === 'nodes' && isCoreNode(data) && (
         <>
           {canExec && onOpenNodeTerminal && (
             <button
@@ -723,7 +724,7 @@ export function ResourceActionsBar({
         </div>
       )}
 
-      {onDelete && !((kind === 'node' || kind === 'nodes') && data?.metadata?.deletionTimestamp) && (
+      {onDelete && !((kind === 'node' || kind === 'nodes') && isCoreNode(data) && data?.metadata?.deletionTimestamp) && (
         <Tooltip content={isDeleting ? 'Deleting resource' : 'Delete resource'}>
           <button
             aria-label={isDeleting ? 'Deleting resource' : 'Delete resource'}

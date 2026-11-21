@@ -71,8 +71,8 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 	// radar/templates/clusterrole.yaml). When any of those triggers fires
 	// the cache holds every secret in the cluster, so per-user RBAC must
 	// gate the read. Roles, RoleBindings, LimitRanges and Trivy Operator reports (an
-	// ExposedSecretReport quotes the leaked credential) get the same exact
-	// gate. Other namespaced kinds use namespace visibility.
+	// ExposedSecretReport quotes the leaked credential) and MetalLB BGPPeers
+	// (an inline session password) get the same exact gate. Other namespaced kinds use namespace visibility.
 	exactGroup := group
 	if kind == "secrets" || kind == "secret" {
 		exactGroup = ""
@@ -120,7 +120,7 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 //  2. cluster-scoped (Node/CRD/…) → per-kind get SAR (ClassifyKindScope)
 //  3. namespaced                   → namespace access via getUserNamespaces,
 //     namespace_not_found for a caller who can see every namespace, then
-//     per-namespace get SAR for Secrets, Roles, RoleBindings, LimitRanges and Trivy reports
+//     per-namespace get SAR for Secrets, Roles, RoleBindings, LimitRanges, Trivy reports and MetalLB BGPPeers
 func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, group string) *resourceReadFailure {
 	return s.preflightResourceGetFrom(r, readCache(), kind, namespace, name, group)
 }
@@ -165,7 +165,7 @@ func (s *Server) preflightResourceGetFrom(r *http.Request, cache *k8s.ResourceCa
 				return permissionFailure(checked, fmt.Sprintf("no access to %s in namespace %q", gvr.Resource, namespace))
 			}
 		}
-		if gvr, ok := k8s.TrivyReportGVR(kind, group); ok && k8s.RequiresExactNamespaceAccess(gvr) {
+		if gvr, ok := k8s.ExactAccessCRDGVR(kind, group); ok && k8s.RequiresExactNamespaceAccess(gvr) {
 			if allowed, checked := s.canReadDecision(r, gvr.Group, gvr.Resource, namespace, "get"); !allowed {
 				return permissionFailure(checked, fmt.Sprintf("no access to %s in namespace %q", kind, namespace))
 			}

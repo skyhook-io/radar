@@ -1,12 +1,20 @@
 package cnpg
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
+	metadatafake "k8s.io/client-go/metadata/fake"
 
+	integration "github.com/skyhook-io/radar/internal/integration"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -87,5 +95,121 @@ func TestCNPGHAJobSchedulerEvidence(t *testing.T) {
 		if got := cnpgHAJobOf(job, pods...); got.Phase != "active" {
 			t.Fatalf("Job with a running Pod: %+v", got)
 		}
+	}
+}
+
+func TestCNPGHAPrimaryBudgetProtection(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		instances  int
+		mutate     func(*k8s.CNPGPDBTestFixture)
+		protection string
+		reason     string
+	}{
+		{"healthy HA", 2, nil, "expected", ""},
+		{"single instance", 1, nil, "singleInstance", ""},
+		{"primary node cordoned", 2, func(f *k8s.CNPGPDBTestFixture) { f.Nodes["node-1"].Spec.Unschedulable = true }, "blocking", "the primary's node is cordoned, draining or not ready"},
+		{"standby left on a cordoned node", 2, func(f *k8s.CNPGPDBTestFixture) { f.Nodes["node-2"].Spec.Unschedulable = true }, "blocking", "on a cordoned or draining node doesn't count"},
+		{"a Node missing from the cache leaves it unknown", 2, func(f *k8s.CNPGPDBTestFixture) { delete(f.Nodes, "node-2") }, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(k8s.ResetTestState)
+			t.Cleanup(k8s.ResetTestDynamicState)
+			f := k8s.NewCNPGPDBTestFixture(tc.instances)
+			if tc.mutate != nil {
+				tc.mutate(f)
+			}
+			if err := f.Install(""); err != nil {
+				t.Fatal(err)
+			}
+			resp := CNPGClusterHAResponse{Pods: integration.ReadSource{State: cnpgHAStateOK}, PDBs: activityReader().hAPDBs(context.Background(), k8s.GetResourceCache(), f.Cluster)}
+			cnpgHAPrimaryProtection(&resp, k8s.GetResourceCache(), f.Cluster, f.Pods)
+			got := resp
+			var primary *CNPGHAPDB
+			for i := range got.PDBs.Items {
+				if got.PDBs.Items[i].Role == "primary" {
+					primary = &got.PDBs.Items[i]
+				}
+			}
+			if primary == nil {
+				t.Fatalf("primary budget missing: %+v", got.PDBs)
+			}
+			if primary.Protection != tc.protection || !strings.Contains(primary.ProtectionReason, tc.reason) || (tc.reason == "") != (primary.ProtectionReason == "") {
+				t.Fatalf("protection = %q (%q), want %q (%q)", primary.Protection, primary.ProtectionReason, tc.protection, tc.reason)
+			}
+		})
+	}
+}
+
+// Through ClusterHA: the reading needs the same list nodes Issues checks,
+// not only the get nodes the zones need.
+func TestCNPGClusterHAPrimaryProtectionNeedsListNodes(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		denyList, denyGet bool
+	}{{"list allowed", false, false}, {"list denied", true, false}, {"list allowed, get denied", false, true}} {
+		denyList, denyGet := tc.denyList, tc.denyGet
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(k8s.ResetTestState)
+			t.Cleanup(k8s.ResetTestDynamicState)
+			f := k8s.NewCNPGPDBTestFixture(2)
+			if err := f.Install(""); err != nil {
+				t.Fatal(err)
+			}
+			reader := &Reader{
+				Access: Access{CanRead: func(_ context.Context, _, resource, _, verb string) bool {
+					return !(resource == "nodes" && ((denyList && verb == "list") || (denyGet && verb == "get")))
+				}},
+				Observations: Observations{
+					OperatorScope: func(context.Context) []string { return nil },
+					TypedScope: func(context.Context, *k8s.ResourceCache, []string, string, string) (integration.KindAccess, []string) {
+						return integration.KindAccess{State: integration.KindCoverageUncached}, nil
+					},
+				},
+			}
+			clients := HAClients{Typed: fake.NewClientset(), Dynamic: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), Metadata: metadatafake.NewSimpleMetadataClient(metadatafake.NewTestScheme())}
+			got := reader.ClusterHA(context.Background(), clients, k8s.GetResourceCache(), f.Cluster, time.Now())
+			if (got.Nodes.State == cnpgHAStateOK) == denyGet {
+				t.Fatalf("zones follow get nodes: %+v", got.Nodes)
+			}
+			want := "expected"
+			if denyList {
+				want = ""
+			}
+			for _, p := range got.PDBs.Items {
+				if p.Role == "primary" && p.Protection == want {
+					return
+				}
+			}
+			t.Fatalf("primary protection want %q: %+v", want, got.PDBs.Items)
+		})
+	}
+}
+
+// "Expected" rests on the operator switching over, so a leader Lease the
+// caller read as expired makes it not idle; an unread Lease changes nothing.
+func TestCNPGHAOperatorNotLeadingIsNotIdle(t *testing.T) {
+	yes, no := true, false
+	for _, tc := range []struct {
+		name  string
+		lease CNPGHALease
+		want  string
+	}{
+		{"leader lease expired", CNPGHALease{ReadSource: integration.ReadSource{State: cnpgHAStateOK}, Expired: &yes}, "blocking"},
+		{"leader lease renewed", CNPGHALease{ReadSource: integration.ReadSource{State: cnpgHAStateOK}, Expired: &no}, "expected"},
+		{"lease not readable", CNPGHALease{ReadSource: integration.ReadSource{State: "denied"}}, "expected"},
+		{"lease without a renew time", CNPGHALease{ReadSource: integration.ReadSource{State: cnpgHAStateOK}}, "expected"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := CNPGClusterHAResponse{OperatorLease: tc.lease}
+			resp.PDBs.Items = []CNPGHAPDB{{Role: "primary", Protection: "expected"}, {Role: "primary", Protection: "singleInstance"}}
+			cnpgHAOperatorNotLeading(&resp)
+			if got := resp.PDBs.Items[0]; got.Protection != tc.want || (tc.want == "blocking") != strings.Contains(got.ProtectionReason, "leader Lease has expired") {
+				t.Fatalf("protection = %q (%q), want %q", got.Protection, got.ProtectionReason, tc.want)
+			}
+			if resp.PDBs.Items[1].Protection != "singleInstance" {
+				t.Fatalf("single instance changed: %+v", resp.PDBs.Items[1])
+			}
+		})
 	}
 }

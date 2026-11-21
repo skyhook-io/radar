@@ -12,6 +12,7 @@ import {
   cnpgQuorumFact,
   cnpgZoneSpread,
   type CNPGClusterHA,
+  type CNPGHAPDB,
   type CNPGHAQuorum,
 } from './ha'
 import { cnpgLagTone, type CNPGFleetRow } from './workspace'
@@ -135,6 +136,47 @@ describe('cnpgPDBFact', () => {
     expect(cnpgPDBFact({ state: 'ok', enabled: false, items: [] }).tone).toBe('neutral')
     expect(cnpgPDBFact({ state: 'ok', enabled: true, items: [] }).tone).toBe('degraded')
     expect(cnpgPDBFact({ state: 'denied', enabled: true, items: [] }).tone).toBe('unknown')
+  })
+
+  const primary = (extra: Partial<CNPGHAPDB> = {}): CNPGHAPDB => ({
+    name: 'pg-primary', role: 'primary', minAvailable: '1', expectedPods: 1, currentHealthy: 1, desiredHealthy: 1, disruptionsAllowed: 0, observed: true, ...extra,
+  })
+  const fact = (p: CNPGHAPDB) => cnpgPDBFact({ state: 'ok', enabled: true, items: [p] })
+
+  it('keeps the plain budget line when Radar did not classify the primary budget', () => {
+    expect(fact(primary())).toEqual({ text: 'primary: 0 disruptions allowed (1/1 healthy)', tone: 'neutral', source: 'PodDisruptionBudget status' })
+  })
+  it('explains the expected primary budget without promising a switchover', () => {
+    const f = fact(primary({ protection: 'expected' }))
+    expect(f.tone).toBe('neutral')
+    expect(f.text).toBe(
+      "primary: 0 disruptions allowed (1/1 healthy) — expected. CloudNativePG holds the primary in place; when its node is cordoned or drained, the operator first tries to switch over to a ready standby on a schedulable node. Radar can't see replication state, so it can't confirm that a switchover will succeed.",
+    )
+  })
+  it('names the single-instance drain wait and the downtime of a maintenance window', () => {
+    const f = fact(primary({ protection: 'singleInstance' }))
+    expect(f.tone).toBe('neutral')
+    expect(f.text).toBe(
+      "primary: 0 disruptions allowed (1/1 healthy) — a drain of this instance's node waits: there is no standby. For planned maintenance use spec.nodeMaintenanceWindow with reusePVC: true and expect downtime until the node returns.",
+    )
+    expect(f.text).not.toContain('enablePDB')
+  })
+  it('says why an HA primary budget is not in its idle state', () => {
+    const f = fact(primary({ protection: 'blocking', protectionReason: "a standby shares the primary's node" }))
+    expect(f.tone).toBe('degraded')
+    expect(f.text).toBe("primary: 0 disruptions allowed (1/1 healthy) — not the normal idle state (a standby shares the primary's node); a drain of the primary's node may stall.")
+  })
+  it('summarises a blocking primary budget as a drain risk, not a missing budget', () => {
+    const summary = cnpgHASummary(ha({ pdbs: { state: 'ok', enabled: true, items: [primary({ protection: 'blocking', protectionReason: 'x' })] }, operatorLease: { state: 'ok' } }), [] as never)
+    expect(summary.text).toContain("a drain of the primary's node may stall")
+    expect(summary.text).not.toContain('disruption budgets missing')
+    expect(summary.attention).toBe(true)
+  })
+  it('says a single instance waits on a drain in words, without asking for attention', () => {
+    const summary = cnpgHASummary(ha({ pdbs: { state: 'ok', enabled: true, items: [primary({ protection: 'singleInstance' })] }, operatorLease: { state: 'ok' } }), [] as never)
+    expect(summary.text).toContain('single instance: a drain of its node waits')
+    expect(summary.text).not.toContain('disruption budgets missing')
+    expect(summary.attention).toBe(false)
   })
 })
 
