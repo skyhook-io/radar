@@ -75,6 +75,7 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 | L2 | Stale tab after the switch completed | 409 `context_changed`, no write | ✓ | `TestBoundWriteRefusesStaleConnection` |
 | L2b | Current tab after the switch | 200, write on the new cluster only | ✓ | |
 | L3 | A→B→A: the first A's ID after returning to A | 409, no write; IDs never repeat | ✓ | `TestBoundWriteRefusesStaleConnection`, `TestConnectionIdentityAdmitAndRetire` |
+| L11 | Stale tab deletes a ConfigMap that exists, same-named, on both clusters | 409; kept on both | ✓ | `TestBoundWriteRoutesRefuseStaleConnection` |
 | R1 | Each bound write route, through the router, with a stale ID | 409, no write on either cluster | | `TestBoundWriteRoutesRefuseStaleConnection` |
 | — | Switch lands between admission and execution of a write | Write runs on the admitted cluster; the new one gets nothing | | `TestBoundRestartStaysOnAdmittedConnectionAcrossSwitch` (+ control `TestUnboundRestartFollowsTheSwitch`) |
 | L4 | Status names the serving connection | `connectionId` set | ✓ | `TestConnectionIdentityAdmitAndRetire` |

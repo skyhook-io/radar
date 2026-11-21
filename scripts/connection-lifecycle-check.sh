@@ -49,12 +49,17 @@ setup() {
       kubectl --context $c -n default create deployment radar-live-probe --image=registry.k8s.io/pause:3.9 --replicas=0 &&
         kubectl --context $c -n default label deployment radar-live-probe $OWNER_LABEL=true
     fi
+    if ! kubectl --context $c -n default get configmap radar-live-probe >/dev/null 2>&1; then
+      kubectl --context $c -n default create configmap radar-live-probe --from-literal=probe=true &&
+        kubectl --context $c -n default label configmap radar-live-probe $OWNER_LABEL=true
+    fi
   done
 }
 
 cleanup() {
   for c in radar-test-nonprod radar-test-prod; do
     kubectl --context $c -n default delete deployment -l $OWNER_LABEL=true --field-selector metadata.name=radar-live-probe
+    kubectl --context $c -n default delete configmap -l $OWNER_LABEL=true --field-selector metadata.name=radar-live-probe
   done
   [[ -L $L/home/.aws ]] && rm -- $L/home/.aws
   rm -f -- $L/kubeconfig.yaml
@@ -218,6 +223,15 @@ run() {
     expect "L10 Stop during warm-up" "stop=$code phase=$phase id=$(connid)" "stop=204 phase=stopped id="
     expect "L10b write after Stop" "$(restart_probe "$idA")" "503 nonprod=no prod=no"
     ;;
+  L11) # other bound writes: a stale tab's delete is refused like its restart
+    start 0s || return
+    local idA=$(connid)
+    switch_tracked radar-test-prod; wait_switch >/dev/null
+    local code=$(curl -s -m 30 -o $L/last-body.json -w '%{http_code}' -X DELETE -H 'Sec-Fetch-Site: same-origin' -H "X-Radar-Connection: $idA" "$API/resources/configmaps/default/radar-live-probe")
+    local np=$(kubectl --kubeconfig $L/kubeconfig.yaml --context radar-test-nonprod -n default get configmap radar-live-probe -o name 2>/dev/null)
+    local pr=$(kubectl --kubeconfig $L/kubeconfig.yaml --context radar-test-prod -n default get configmap radar-live-probe -o name 2>/dev/null)
+    expect "L11 stale tab deletes a same-named ConfigMap" "$code nonprod=$([[ -n $np ]] && print kept || print DELETED) prod=$([[ -n $pr ]] && print kept || print DELETED)" "409 nonprod=kept prod=kept"
+    ;;
   *) record "!! unknown scenario $1"; FAILED=1 ;;
   esac
 }
@@ -238,7 +252,7 @@ run)
   FAILED=0
   owned || { print -u2 "radar-live-probe isn't ours on both clusters (run setup); not writing to it"; exit 2; }
   scenarios=("$@")
-  (( $#scenarios )) || scenarios=(L1 L4 L6 L7 L8 L9 L10)
+  (( $#scenarios )) || scenarios=(L1 L4 L6 L7 L8 L9 L10 L11)
   for one in "${scenarios[@]}"; do run $one; done
   stop
   record "== done $(ts)"
