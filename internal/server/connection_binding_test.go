@@ -278,6 +278,7 @@ func TestBoundWriteRoutesRefuseStaleConnection(t *testing.T) {
 		{http.MethodPost, "/api/helm/releases/default/web/source/upgrade-stream"},
 		{http.MethodPut, "/api/helm/releases/default/web/values"},
 		{http.MethodDelete, "/api/helm/releases/default/web"},
+		{http.MethodPut, "/api/helm/releases/default/web/source"},
 		{http.MethodPost, "/api/capi/clusters/default/workload-1/connect"},
 		{http.MethodPost, "/api/trace/services/default/web/in-cluster"},
 		{http.MethodPost, "/api/cnpg/clusters/db/main/restore-validation"},

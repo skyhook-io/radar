@@ -118,6 +118,9 @@ type Handlers struct {
 	// the connection the caller names. Injected by the server; nil leaves
 	// them unwrapped.
 	BindWrite func(http.HandlerFunc) http.HandlerFunc
+	// AdmitWrite is BindWrite's check for a handler that learns from the body
+	// whether it writes to the cluster; it answers the refusal itself.
+	AdmitWrite func(http.ResponseWriter, *http.Request) bool
 }
 
 func (h *Handlers) bind(next http.HandlerFunc) http.HandlerFunc {
@@ -187,7 +190,7 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Post("/releases/{namespace}/{name}/source/preview", h.handlePreviewValues)
 		r.Post("/releases/{namespace}/{name}/values/preview", h.handlePreviewValues)
 		r.Put("/releases/{namespace}/{name}/values", h.bind(h.handleApplyValues))
-		r.Put("/releases/{namespace}/{name}/source", h.handleSetSource)
+		r.Put("/releases/{namespace}/{name}/source", h.bind(h.handleSetSource))
 		r.Delete("/releases/{namespace}/{name}", h.bind(h.handleUninstall))
 
 		// Chart browser (local repositories)
@@ -1131,6 +1134,10 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 	// Before the repository is fetched: see requireHelmWrite. Without a release
 	// this only changes pod-local repository config.
 	if !requireHelmWrite(w, r, req.Namespace) {
+		return
+	}
+	// Associating a release writes its storage Secret on the cluster.
+	if req.Namespace != "" && h.AdmitWrite != nil && !h.AdmitWrite(w, r) {
 		return
 	}
 	client := GetClient()

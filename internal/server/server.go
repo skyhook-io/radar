@@ -866,6 +866,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			helmHandlers.ObjectScope = s.helmObjectScope
 			helmHandlers.ResolveStorageNamespaces = s.resolveHelmStorageScope
 			helmHandlers.BindWrite = s.bindWrite
+			helmHandlers.AdmitWrite = func(w http.ResponseWriter, r *http.Request) bool {
+				_, ok := s.admitWrite(w, r)
+				return ok
+			}
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -5424,6 +5428,13 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	client, managementBinding := s.getClientSafetySnapshotForRequest(r)
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	// The snapshot reads the current clients: any switch since admission
+	// changed the connection, so a snapshot that isn't the admitted one fails here.
+	if !k8s.StillBound(r.Context()) {
+		s.writeErrorCode(w, http.StatusConflict, errCodeContextChanged,
+			"Nothing was changed: the cluster changed while connecting. Check the current cluster and try again.")
 		return
 	}
 
