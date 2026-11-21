@@ -866,9 +866,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			helmHandlers.ObjectScope = s.helmObjectScope
 			helmHandlers.ResolveStorageNamespaces = s.resolveHelmStorageScope
 			helmHandlers.BindWrite = s.bindWrite
-			helmHandlers.AdmitWrite = func(w http.ResponseWriter, r *http.Request) bool {
-				_, ok := s.admitWrite(w, r)
-				return ok
+			helmHandlers.AdmitWrite = func(w http.ResponseWriter, r *http.Request) (func() bool, bool) {
+				bound, ok := s.admitWrite(w, r)
+				return func() bool { return k8s.ServingConnectionID() == bound.ID }, ok
 			}
 			helmHandlers.RegisterRoutes(r)
 

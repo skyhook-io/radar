@@ -119,8 +119,23 @@ type Handlers struct {
 	// them unwrapped.
 	BindWrite func(http.HandlerFunc) http.HandlerFunc
 	// AdmitWrite is BindWrite's check for a handler that learns from the body
-	// whether it writes to the cluster; it answers the refusal itself.
-	AdmitWrite func(http.ResponseWriter, *http.Request) bool
+	// whether it writes to the cluster; it answers the refusal itself. The
+	// returned func reports whether the admitted connection is still serving.
+	AdmitWrite func(http.ResponseWriter, *http.Request) (stillAdmitted func() bool, ok bool)
+}
+
+// stillAdmitted is checked right before a bound write calls Helm: Helm builds
+// its clients from the serving connection when the action starts, so a switch
+// since admission is refused here instead of landing on the new cluster.
+func stillAdmitted(w http.ResponseWriter, r *http.Request) bool {
+	if k8s.StillBound(r.Context()) {
+		return true
+	}
+	writeErrorPayload(w, http.StatusConflict, map[string]string{
+		"error":      "Nothing was changed: the cluster changed while this request was being prepared. Check the current cluster and try again.",
+		"error_code": "context_changed",
+	})
+	return false
 }
 
 func (h *Handlers) bind(next http.HandlerFunc) http.HandlerFunc {
@@ -251,6 +266,9 @@ func (h *Handlers) handleSetSource(w http.ResponseWriter, r *http.Request) {
 	}
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	selected := ChartSourceCandidate{Type: req.Type, Reference: req.Reference, URL: req.URL}
+	if !stillAdmitted(w, r) {
+		return
+	}
 	var err error
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		err = client.SetSourceAsUser(namespace, name, selected, user)
@@ -720,6 +738,9 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, namespace, name)
 	var rollbackErr error
 	if user := auth.UserFromContext(r.Context()); user != nil {
@@ -781,6 +802,9 @@ func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) 
 	progressCh := make(chan InstallProgress, 10)
 	defer close(progressCh)
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, namespace, name)
 	user := auth.UserFromContext(r.Context())
 	resultCh := make(chan error, 1)
@@ -850,6 +874,9 @@ func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, namespace, name)
 	var uninstallErr error
 	if user := auth.UserFromContext(r.Context()); user != nil {
@@ -897,6 +924,9 @@ func (h *Handlers) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validSourceUpgradeRoute(w, r, req) {
+		return
+	}
+	if !stillAdmitted(w, r) {
 		return
 	}
 	auth.AuditLog(r, namespace, name)
@@ -959,6 +989,9 @@ func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
 	progressCh := make(chan InstallProgress, 10)
 	// An upgrade may finish after the client disconnects; the receiver must not close the producer's channel.
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, namespace, name)
 	resultCh := make(chan error, 1)
 	go func() {
@@ -1078,6 +1111,9 @@ func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, namespace, name)
 	var applyErr error
 	if user := auth.UserFromContext(r.Context()); user != nil {
@@ -1137,8 +1173,13 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Associating a release writes its storage Secret on the cluster.
-	if req.Namespace != "" && h.AdmitWrite != nil && !h.AdmitWrite(w, r) {
-		return
+	associationAdmitted := func() bool { return true }
+	if req.Namespace != "" && h.AdmitWrite != nil {
+		still, ok := h.AdmitWrite(w, r)
+		if !ok {
+			return
+		}
+		associationAdmitted = still
 	}
 	client := GetClient()
 	if client == nil {
@@ -1156,6 +1197,15 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Namespace != "" {
+		// The repository download can take a while: link the release only if
+		// the cluster it was admitted against is still the one serving.
+		if !associationAdmitted() {
+			writeErrorPayload(w, http.StatusConflict, map[string]string{
+				"error":      "The repository was added, but the cluster changed before it could be linked to the release; nothing was changed on the cluster. Check the current cluster and try again.",
+				"error_code": "context_changed",
+			})
+			return
+		}
 		selected := ChartSourceCandidate{Type: "repository", Reference: name, URL: canonicalURL}
 		if user := auth.UserFromContext(r.Context()); user != nil {
 			err = client.SetSourceAsUser(req.Namespace, req.ReleaseName, selected, user)
@@ -1380,6 +1430,9 @@ func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, req.Namespace, req.ReleaseName)
 	var release *HelmRelease
 	var installErr error
@@ -1450,6 +1503,9 @@ func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
 	defer close(progressCh)
 
 	// Start install in goroutine
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, req.Namespace, req.ReleaseName)
 	user := auth.UserFromContext(r.Context())
 	resultCh := make(chan installResult, 1)
