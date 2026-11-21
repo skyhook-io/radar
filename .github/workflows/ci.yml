@@ -15,12 +15,10 @@ concurrency:
 # Pushes to main rerun every Go test instead of reusing results cached from an
 # earlier run; PRs keep the cache. Go applies -count only to go test.
 env:
-  # TEMPORARY (measuring this PR): its branch also runs tests fresh and saves
-  # build caches, as main does. Remove before merging.
-  GOFLAGS: ${{ (github.event_name == 'push' || github.head_ref == 'ci/fresh-go-build-cache') && '-count=1' || '' }}
+  GOFLAGS: ${{ github.event_name == 'push' && '-count=1' || '' }}
   # Go jobs save their build cache only from main, pruned to what the run used
   # (.github/actions/go-cache-save); PRs restore the newest one.
-  GO_CACHE_SAVE: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.head_ref == 'ci/fresh-go-build-cache' }}
+  GO_CACHE_SAVE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 # go test runs below pass -ldflags=-w: test binaries without DWARF link in
 # about a third of the time; nothing debugs them here.
 
