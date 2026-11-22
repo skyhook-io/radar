@@ -738,3 +738,45 @@ func TestResourceIssuesReportAKueueQueueCheckTheCallerCannotMake(t *testing.T) {
 		t.Fatalf("a caller who can list ClusterQueues gets the row: %s", w.Body.String())
 	}
 }
+
+// The custom resources Radar reads only with the caller's own access to the
+// kind open their issues only with it too, as their drawers do: a MetalLB
+// BGPPeer, a Trivy report, a kagent RemoteMCPServer. Lookalike kinds in other
+// groups keep namespace access.
+func TestIssueSubjectAccessFollowsExactKindCRDs(t *testing.T) {
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), []k8s.APIResource{
+		{Group: "metallb.io", Version: "v1beta2", Kind: "BGPPeer", Name: "bgppeers", Namespaced: true, IsCRD: true, Verbs: []string{"list"}},
+		{Group: "crd.projectcalico.org", Version: "v1", Kind: "BGPPeer", Name: "bgppeers", Namespaced: true, IsCRD: true, Verbs: []string{"list"}},
+		{Group: "aquasecurity.github.io", Version: "v1alpha1", Kind: "VulnerabilityReport", Name: "vulnerabilityreports", Namespaced: true, IsCRD: true, Verbs: []string{"list"}},
+		{Group: "api.kagent.dev", Version: "v1alpha3", Kind: "RemoteMCPServer", Name: "remotemcpservers", Namespaced: true, IsCRD: true, Verbs: []string{"list"}},
+		{Group: "api.kagent.dev", Version: "v1alpha3", Kind: "Agent", Name: "agents", Namespaced: true, IsCRD: true, Verbs: []string{"list"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	exact := []struct{ group, kind, resource string }{
+		{"metallb.io", "BGPPeer", "bgppeers"},
+		{"aquasecurity.github.io", "VulnerabilityReport", "vulnerabilityreports"},
+		{"api.kagent.dev", "RemoteMCPServer", "remotemcpservers"},
+	}
+	for _, granted := range []bool{false, true} {
+		s := newAuthServer(auth.Config{Mode: "proxy"})
+		perms := &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}}
+		for _, e := range exact {
+			perms.SetCanI("get", e.group, e.resource, "team-a", granted)
+		}
+		s.permCache.Set("pg-user", nil, perms)
+		access := s.issueSubjectAccess(requestWithUser(http.MethodGet, "/", &auth.User{Username: "pg-user"}))
+		for _, e := range exact {
+			if got := access(issues.Ref{Group: e.group, Kind: e.kind, Namespace: "team-a", Name: "x"}); got != granted {
+				t.Errorf("%s %s with get=%v: access %v", e.group, e.kind, granted, got)
+			}
+		}
+		for _, ref := range []issues.Ref{{Group: "crd.projectcalico.org", Kind: "BGPPeer"}, {Group: "api.kagent.dev", Kind: "Agent"}} {
+			ref.Namespace, ref.Name = "team-a", "x"
+			if !access(ref) {
+				t.Errorf("%s %s needs only namespace access", ref.Group, ref.Kind)
+			}
+		}
+	}
+}

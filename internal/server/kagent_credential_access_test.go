@@ -14,6 +14,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -131,6 +132,11 @@ func TestProxyAuth_KagentCredentialKindsFollowKindRBAC(t *testing.T) {
 				}
 				if !tt.granted && !slices.Contains(counts.Forbidden, kind.countsKey) {
 					t.Errorf("counts forbidden = %v, want %s", counts.Forbidden, kind.countsKey)
+				}
+
+				access := env.srv.issueSubjectAccess(requestWithUser(http.MethodGet, "/", &auth.User{Username: "viewer"}))
+				if got := access(issues.Ref{Group: "api.kagent.dev", Kind: kind.kind, Namespace: "agents", Name: kind.name}); got != tt.granted {
+					t.Errorf("issue subject access = %v, want %v", got, tt.granted)
 				}
 			})
 		}
