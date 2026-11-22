@@ -273,6 +273,9 @@ func TestGenericCRDExclusionsAreQualifiedWhereKindsCollide(t *testing.T) {
 		{name: "trivy report stays excluded", gvr: schema.GroupVersionResource{Group: "aquasecurity.github.io"}, kind: "VulnerabilityReport", excluded: true},
 		{name: "foreign report survives", gvr: schema.GroupVersionResource{Group: "security.example.io"}, kind: "VulnerabilityReport", excluded: false},
 		{name: "foreign rollout survives", gvr: schema.GroupVersionResource{Group: "rollouts.example.io"}, kind: "Rollout", excluded: false},
+		{name: "kagent RemoteMCPServer stays excluded", gvr: schema.GroupVersionResource{Group: "api.kagent.dev"}, kind: "RemoteMCPServer", excluded: true},
+		{name: "kagent ModelConfig stays excluded", gvr: schema.GroupVersionResource{Group: "api.kagent.dev"}, kind: "ModelConfig", excluded: true},
+		{name: "kagent Agent is drawn generically", gvr: schema.GroupVersionResource{Group: "api.kagent.dev"}, kind: "Agent", excluded: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

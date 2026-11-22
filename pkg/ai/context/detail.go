@@ -46,6 +46,7 @@ func minifyDetailUnstructured(obj map[string]any) map[string]any {
 // Middleware basicAuth user) before they go to an LLM.
 func redactUnstructuredSecrets(obj map[string]any) {
 	redactUpgradePlanEnvs(obj)
+	redactKagentLiterals(obj)
 	if spec, ok := obj["spec"]; ok {
 		RedactInlineSecrets(spec)
 	}

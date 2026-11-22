@@ -7497,6 +7497,10 @@ var genericCRDExclusions = map[string]map[string]bool{
 	"monitoring.coreos.com":         {"servicemonitor": true, "podmonitor": true},
 	"bitnami.com":                   {"sealedsecret": true},
 	"policy.networking.k8s.io":      {"clusternetworkpolicy": true},
+	// Read paths authorize these per kind (their spec can hold request
+	// headers inline); a topology frame is authorized per namespace, so they
+	// are never drawn.
+	"api.kagent.dev": {"remotemcpserver": true, "modelconfig": true},
 	"aquasecurity.github.io": {
 		"vulnerabilityreport": true, "configauditreport": true,
 		"exposedsecretreport": true, "sbomreport": true,

@@ -31,6 +31,11 @@ func TestRequiresExactNamespaceAccess(t *testing.T) {
 		{"metallb.io", "v1beta2", "bgppeers", true},
 		{"metallb.io", "v1beta1", "ipaddresspools", false},
 		{"crd.projectcalico.org", "v1", "bgppeers", false},
+		{"api.kagent.dev", "v1alpha3", "remotemcpservers", true},
+		{"api.kagent.dev", "v1alpha3", "modelconfigs", true},
+		{"api.kagent.dev", "v1alpha3", "agents", false},
+		{"api.kagent.dev", "v1alpha3", "harnesses", false},
+		{"kagent.dev", "v1alpha2", "modelconfigs", false},
 		{"", "", "", false},
 	} {
 		gvr := schema.GroupVersionResource{Group: tc.group, Version: tc.version, Resource: tc.resource}
@@ -77,6 +82,10 @@ func TestExactNamespaceAccessNodeFailsClosedWithoutResource(t *testing.T) {
 		{"metallb.io/v1beta2", "BGPPeer", "", "", "", false},
 		{"metallb.io/v1beta2", "BGPPeer", "bgppeers", "metallb.io", "bgppeers", true},
 		{"crd.projectcalico.org/v1", "BGPPeer", "", "", "", true},
+		{"api.kagent.dev/v1alpha3", "RemoteMCPServer", "", "", "", false},
+		{"api.kagent.dev/v1alpha3", "ModelConfig", "", "", "", false},
+		{"api.kagent.dev/v1alpha3", "ModelConfig", "modelconfigs", "api.kagent.dev", "modelconfigs", true},
+		{"api.kagent.dev/v1alpha3", "Agent", "", "", "", true},
 		{"v1", "ConfigMap", "", "", "", true},
 		{"example.com/v1", "Role", "", "", "", true},
 		{"rbac.authorization.k8s.io/v1", "ClusterRole", "", "", "", true},
