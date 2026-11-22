@@ -764,18 +764,22 @@ func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	progressCh := make(chan InstallProgress, 10)
-	defer close(progressCh)
-
 	auth.AuditLog(r, namespace, name)
 	user := auth.UserFromContext(r.Context())
+	streamRollback(w, r, flusher, func(progressCh chan<- InstallProgress) error {
+		if user != nil {
+			return client.RollbackWithProgressAsUser(namespace, name, revision, user, progressCh)
+		}
+		return client.RollbackWithProgress(namespace, name, revision, progressCh)
+	})
+}
+
+func streamRollback(w http.ResponseWriter, r *http.Request, flusher http.Flusher, rollback func(chan<- InstallProgress) error) {
+	progressCh := make(chan InstallProgress, 10)
+	// The action can outlive a disconnected client; the receiver must not close the producer's channel.
 	resultCh := make(chan error, 1)
 	go func() {
-		if user != nil {
-			resultCh <- client.RollbackWithProgressAsUser(namespace, name, revision, user, progressCh)
-			return
-		}
-		resultCh <- client.RollbackWithProgress(namespace, name, revision, progressCh)
+		resultCh <- rollback(progressCh)
 	}()
 
 	for {
@@ -1429,7 +1433,7 @@ func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
 
 	// Create progress channel
 	progressCh := make(chan InstallProgress, 10)
-	defer close(progressCh)
+	// The action can outlive a disconnected client; the receiver must not close the producer's channel.
 
 	// Start install in goroutine
 	auth.AuditLog(r, req.Namespace, req.ReleaseName)
