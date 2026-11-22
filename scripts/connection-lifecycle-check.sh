@@ -120,6 +120,7 @@ owned() {
   local c
   for c in radar-test-nonprod radar-test-prod; do
     [[ "$(kubectl --kubeconfig $L/kubeconfig.yaml --context $c -n default get deploy radar-live-probe -o jsonpath="{.metadata.labels.${OWNER_LABEL//./\\.}}" 2>/dev/null)" == true ]] || return 1
+    [[ "$(kubectl --kubeconfig $L/kubeconfig.yaml --context $c -n default get configmap radar-live-probe -o jsonpath="{.metadata.labels.${OWNER_LABEL//./\\.}}" 2>/dev/null)" == true ]] || return 1
   done
 }
 restart_probe() { # restart_probe <connectionHeader> → "code nonprodChanged prodChanged"
@@ -227,7 +228,11 @@ run() {
     start 0s || return
     local idA=$(connid)
     switch_tracked radar-test-prod; wait_switch >/dev/null
-    local code=$(curl -s -m 30 -o $L/last-body.json -w '%{http_code}' -X DELETE -H 'Sec-Fetch-Site: same-origin' -H "X-Radar-Connection: $idA" "$API/resources/configmaps/default/radar-live-probe")
+    # If binding regressed, the delete would land on prod: the UID precondition
+    # keeps it to this script's own ConfigMap there.
+    local uid=$(kubectl --kubeconfig $L/kubeconfig.yaml --context radar-test-prod -n default get configmap radar-live-probe -o jsonpath='{.metadata.uid}' 2>/dev/null)
+    [[ -n $uid ]] || { expect "L11 fixture" "missing" "present"; return; }
+    local code=$(curl -s -m 30 -o $L/last-body.json -w '%{http_code}' -X DELETE -H 'Sec-Fetch-Site: same-origin' -H "X-Radar-Connection: $idA" "$API/resources/configmaps/default/radar-live-probe?uid=$uid")
     local np=$(kubectl --kubeconfig $L/kubeconfig.yaml --context radar-test-nonprod -n default get configmap radar-live-probe -o name 2>/dev/null)
     local pr=$(kubectl --kubeconfig $L/kubeconfig.yaml --context radar-test-prod -n default get configmap radar-live-probe -o name 2>/dev/null)
     expect "L11 stale tab deletes a same-named ConfigMap" "$code nonprod=$([[ -n $np ]] && print kept || print DELETED) prod=$([[ -n $pr ]] && print kept || print DELETED)" "409 nonprod=kept prod=kept"
