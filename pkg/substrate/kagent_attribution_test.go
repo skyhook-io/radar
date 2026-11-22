@@ -68,7 +68,7 @@ func TestKagentTemplateNames(t *testing.T) {
 // kagent sandbox beside it, an unrelated actor, and a session on a template
 // kagent did not make.
 func TestKagentAttributionLiveNames(t *testing.T) {
-	ix := NewKagentIndex([]KagentAgent{helper, spike, broken}, everyNamespace)
+	ix := NewKagentIndex([]KagentAgent{helper, spike, broken}, everyNamespace, nil)
 	chat := session(kagentSession, "k8s-helper-aa5e9426eb2e", StateSuspended)
 	got := ix.Actor(chat)
 	if got == nil || got.SessionID != "01a1faa2-b3e3-7dd3-ae2d-3114122d4291" || got.Kind != KagentAgentSession ||
@@ -108,7 +108,7 @@ func TestKagentAttributionLiveNames(t *testing.T) {
 func TestKagentBlockedEditKeepsNewSessionsOnTheLatestSuccessful(t *testing.T) {
 	edited := helper
 	edited.DesiredRevision = brokenRevision
-	ix := NewKagentIndex([]KagentAgent{edited}, everyNamespace)
+	ix := NewKagentIndex([]KagentAgent{edited}, everyNamespace, nil)
 	fresh := session(kagentOther, "k8s-helper-aa5e9426eb2e", StateRunning)
 	got := ix.Actor(fresh)
 	if got.Kind != KagentAgentSession || !got.NewSessions || got.Desired || got.Revision != helperRevision {
@@ -129,7 +129,7 @@ func TestKagentBlockedEditKeepsNewSessionsOnTheLatestSuccessful(t *testing.T) {
 // A session on an earlier revision is named for the Agent but not counted:
 // a deleted Agent of the same name reads the same way.
 func TestKagentEarlierRevisionIsAHintNeverACount(t *testing.T) {
-	ix := NewKagentIndex([]KagentAgent{helper}, everyNamespace)
+	ix := NewKagentIndex([]KagentAgent{helper}, everyNamespace, nil)
 	old := session(kagentOther, "k8s-helper-0123456789ab", StateSuspended)
 	got := ix.Actor(old)
 	if got.Kind != KagentUnattributed || got.Reason != KagentEarlierRevision || got.Agent != nil || !slices.Equal(got.Candidates, []AgentRef{helper.Ref()}) {
@@ -139,7 +139,7 @@ func TestKagentEarlierRevisionIsAHintNeverACount(t *testing.T) {
 	byTemplate := GroupByTemplate(actors)
 	prefixes := KagentTemplatesByPrefix([]Ref{old.Template, actors[1].Template})
 	sum := ix.AgentSessions(helper, func(t Ref) []Actor { return byTemplate[t] }, prefixes[KagentPrefixKey("kagent", "k8s-helper")], false, now, ResumeContext{})
-	if sum.Sessions.Total != 1 || sum.EarlierRevisions != 1 || sum.EarlierShared || sum.Complete {
+	if sum.Sessions.Total != 1 || sum.HintedEarlierRevisions != 1 || sum.HintShared || sum.Complete {
 		t.Errorf("summary = %+v", sum)
 	}
 }
@@ -150,7 +150,7 @@ func TestKagentRecreatedAgentLeavesOldSessionsUnattributed(t *testing.T) {
 	recreated := helper
 	recreated.UID = "9f0e1d2c-3b4a-5968-7f8e-9d0c1b2a3f4e"
 	recreated.DesiredRevision, recreated.LatestSuccessfulRevision = spikeRevision, spikeRevision
-	ix := NewKagentIndex([]KagentAgent{recreated}, everyNamespace)
+	ix := NewKagentIndex([]KagentAgent{recreated}, everyNamespace, nil)
 	got := ix.Actor(session(kagentSession, "k8s-helper-aa5e9426eb2e", StateSuspended))
 	if got.Kind != KagentUnattributed || got.Reason != KagentEarlierRevision {
 		t.Errorf("a session of the deleted Agent = %+v", got)
@@ -168,7 +168,7 @@ func TestKagentLongNamesSharingAPrefix(t *testing.T) {
 	if prefix != KagentTemplatePrefix(two.Name) {
 		t.Fatalf("fixture: prefixes %q and %q differ", prefix, KagentTemplatePrefix(two.Name))
 	}
-	ix := NewKagentIndex([]KagentAgent{one, two}, everyNamespace)
+	ix := NewKagentIndex([]KagentAgent{one, two}, everyNamespace, nil)
 	if got := ix.Actor(session(kagentSession, prefix+"-aa5e9426eb2e", StateRunning)); got.Agent == nil || *got.Agent != one.Ref() {
 		t.Errorf("one's session = %+v", got)
 	}
@@ -182,7 +182,7 @@ func TestKagentLongNamesSharingAPrefix(t *testing.T) {
 
 	same := two
 	same.DesiredRevision, same.LatestSuccessfulRevision = helperRevision, helperRevision
-	ix = NewKagentIndex([]KagentAgent{one, same}, everyNamespace)
+	ix = NewKagentIndex([]KagentAgent{one, same}, everyNamespace, nil)
 	clash := session(kagentSession, prefix+"-aa5e9426eb2e", StateRunning)
 	got := ix.Actor(clash)
 	if got.Kind != KagentUnattributed || got.Reason != KagentAmbiguous || got.Agent != nil || !slices.Equal(got.Candidates, []AgentRef{one.Ref(), same.Ref()}) {
@@ -191,7 +191,7 @@ func TestKagentLongNamesSharingAPrefix(t *testing.T) {
 	byTemplate := GroupByTemplate([]Actor{clash, earlier})
 	prefixes := KagentTemplatesByPrefix([]Ref{clash.Template, earlier.Template})[KagentPrefixKey("kagent", prefix)]
 	sum := ix.AgentSessions(one, func(t Ref) []Actor { return byTemplate[t] }, prefixes, true, now, ResumeContext{})
-	if sum.Sessions.Total != 0 || len(sum.Revisions) != 1 || !sum.Revisions[0].Ambiguous || sum.Revisions[0].Sessions != 0 || sum.EarlierRevisions != 1 || !sum.EarlierShared {
+	if sum.Sessions.Total != 0 || len(sum.Revisions) != 1 || !sum.Revisions[0].Ambiguous || sum.Revisions[0].Sessions != 0 || sum.HintedEarlierRevisions != 1 || !sum.HintShared {
 		t.Errorf("summary = %+v", sum)
 	}
 }
@@ -199,14 +199,14 @@ func TestKagentLongNamesSharingAPrefix(t *testing.T) {
 // Without the Agents of a namespace, Radar says it could not read them; a
 // sandbox's template needs no Agent.
 func TestKagentAgentNotReadable(t *testing.T) {
-	ix := NewKagentIndex(nil, func(ns string) bool { return ns != "kagent" })
+	ix := NewKagentIndex(nil, func(ns string) bool { return ns != "kagent" }, nil)
 	if got := ix.Actor(session(kagentSession, "k8s-helper-aa5e9426eb2e", StateRunning)); got.Kind != KagentUnattributed || got.Reason != KagentAgentNotReadable {
 		t.Errorf("a session in an unreadable namespace = %+v", got)
 	}
 	if got := ix.Actor(session(kagentSandboxed, sandboxTemplate, StateRunning)); got.Kind != KagentSandbox {
 		t.Errorf("a sandbox = %+v", got)
 	}
-	if got := NewKagentIndex(nil, nil).Actor(session(kagentSession, "k8s-helper-aa5e9426eb2e", StateRunning)); got.Reason != KagentAgentNotReadable {
+	if got := NewKagentIndex(nil, nil, nil).Actor(session(kagentSession, "k8s-helper-aa5e9426eb2e", StateRunning)); got.Reason != KagentAgentNotReadable {
 		t.Errorf("no Agents read at all = %+v", got)
 	}
 }
@@ -214,7 +214,7 @@ func TestKagentAgentNotReadable(t *testing.T) {
 // The steps name the Agent once the session or template is attributed, and a
 // failed golden snapshot of an Agent's template is never "recreate it".
 func TestKagentStepsNameTheAgent(t *testing.T) {
-	ix := NewKagentIndex([]KagentAgent{helper}, everyNamespace)
+	ix := NewKagentIndex([]KagentAgent{helper}, everyNamespace, nil)
 	k := ix.Actor(session(kagentSession, "k8s-helper-aa5e9426eb2e", StateCrashed))
 	if got := KagentStepForAgent(kagentActorStep, k); !strings.HasPrefix(got, "This actor is a session of kagent Agent kagent/k8s-helper.") {
 		t.Errorf("actor step = %q", got)
@@ -230,7 +230,7 @@ func TestKagentStepsNameTheAgent(t *testing.T) {
 	templates := []Template{tpl, oom, other}
 	actors := []Actor{kagentCrashed(kagentSession, "k8s-helper-aa5e9426eb2e", "exit 1")}
 	rows := NeedsAttention(Inputs{Templates: templates, TemplatesRead: true, Actors: actors, ActorsRead: true, Now: now})
-	KagentAttention(rows, templates, NewKagentIndex([]KagentAgent{helper, spike}, everyNamespace))
+	KagentAttention(rows, templates, NewKagentIndex([]KagentAgent{helper, spike}, everyNamespace, nil))
 	for _, r := range rows {
 		switch {
 		case r.Rule == RuleGoldenFailed && r.Subject.Name == tpl.Name:
@@ -251,5 +251,73 @@ func TestKagentStepsNameTheAgent(t *testing.T) {
 				t.Errorf("crash group = %q", g.NextStep)
 			}
 		}
+	}
+}
+
+// The live shape after a kagent Helm change: every Agent got a new revision,
+// and k8s-helper's only session still runs on the template of the revision
+// it started on, created after the Agent. That is exactly k8s-helper's.
+func TestKagentEarlierRevisionCreatedAfterTheAgentIsTheAgents(t *testing.T) {
+	agentCreated := ago(48 * time.Hour)
+	moved := helper
+	moved.Created = agentCreated
+	moved.DesiredRevision, moved.LatestSuccessfulRevision = spikeRevision, spikeRevision
+	old := Template{Atespace: "kagent", Name: "k8s-helper-aa5e9426eb2e", CreateTime: agentCreated.Add(3 * time.Second)}
+	chat := session(kagentSession, old.Name, StateSuspended)
+	ix := NewKagentIndex([]KagentAgent{moved}, everyNamespace, []Template{old})
+	got := ix.Actor(chat)
+	if got.Kind != KagentAgentSession || got.Agent == nil || *got.Agent != moved.Ref() || !got.EarlierRevision || got.NewSessions || got.Desired || got.Revision != "aa5e9426eb2e" {
+		t.Fatalf("the session on the earlier revision = %+v", got)
+	}
+	byTemplate := GroupByTemplate([]Actor{chat})
+	sum := ix.AgentSessions(moved, func(t Ref) []Actor { return byTemplate[t] }, KagentTemplatesByPrefix([]Ref{old.Ref()})[KagentPrefixKey("kagent", "k8s-helper")], true, now, ResumeContext{})
+	if sum.Sessions.Total != 1 || sum.OnEarlierRevisions != 1 || sum.HintedEarlierRevisions != 0 || len(sum.Revisions) != 1 || sum.Revisions[0].Sessions != 0 {
+		t.Errorf("summary = %+v", sum)
+	}
+	if tpl := ix.KagentTemplate(old.Ref()); tpl == nil || !tpl.EarlierRevision || tpl.Agent == nil {
+		t.Errorf("the earlier template = %+v", tpl)
+	}
+
+	// The same instant counts: a template can't be created before its Agent.
+	same := old
+	same.CreateTime = agentCreated
+	if got := NewKagentIndex([]KagentAgent{moved}, everyNamespace, []Template{same}).Actor(chat); got.Kind != KagentAgentSession {
+		t.Errorf("a template created with the Agent = %+v", got)
+	}
+}
+
+// What Radar can't prove stays a hint: a template older than the Agent (a
+// deleted Agent of the same name made it), a time missing on either side, a
+// name kagent cut, and two Agents the template postdates.
+func TestKagentEarlierRevisionUnprovenStaysAHint(t *testing.T) {
+	agentCreated := ago(time.Hour)
+	recreated := helper
+	recreated.Created = agentCreated
+	recreated.DesiredRevision, recreated.LatestSuccessfulRevision = spikeRevision, spikeRevision
+	chat := session(kagentSession, "k8s-helper-aa5e9426eb2e", StateSuspended)
+	hint := func(name string, agents []KagentAgent, templates []Template, a Actor) {
+		t.Helper()
+		got := NewKagentIndex(agents, everyNamespace, templates).Actor(a)
+		if got.Kind != KagentUnattributed || got.Reason != KagentEarlierRevision || got.Agent != nil {
+			t.Errorf("%s = %+v", name, got)
+		}
+	}
+	older := Template{Atespace: "kagent", Name: chat.Template.Name, CreateTime: agentCreated.Add(-time.Second)}
+	hint("a template from before the Agent was recreated", []KagentAgent{recreated}, []Template{older}, chat)
+	hint("a template not read", []KagentAgent{recreated}, nil, chat)
+	hint("a template with no createTime", []KagentAgent{recreated}, []Template{{Atespace: "kagent", Name: chat.Template.Name}}, chat)
+	noTime := recreated
+	noTime.Created = time.Time{}
+	hint("an Agent with no creation time", []KagentAgent{noTime}, []Template{{Atespace: "kagent", Name: chat.Template.Name, CreateTime: agentCreated.Add(time.Minute)}}, chat)
+
+	long := KagentAgent{Namespace: "kagent", Name: strings.Repeat("r", 50) + "-one", Created: agentCreated, DesiredRevision: spikeRevision, LatestSuccessfulRevision: spikeRevision}
+	cut := session(kagentOther, KagentTemplatePrefix(long.Name)+"-aa5e9426eb2e", StateSuspended)
+	hint("a cut name another Agent could have shared", []KagentAgent{long}, []Template{{Atespace: "kagent", Name: cut.Template.Name, CreateTime: agentCreated.Add(time.Minute)}}, cut)
+
+	other := long
+	other.Name = strings.Repeat("r", 50) + "-two"
+	got := NewKagentIndex([]KagentAgent{long, other}, everyNamespace, []Template{{Atespace: "kagent", Name: cut.Template.Name, CreateTime: agentCreated.Add(time.Minute)}}).Actor(cut)
+	if got.Kind != KagentUnattributed || got.Reason != KagentAmbiguous || len(got.Candidates) != 2 {
+		t.Errorf("an earlier template two Agents predate = %+v", got)
 	}
 }

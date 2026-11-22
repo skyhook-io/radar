@@ -282,7 +282,7 @@ func TestSubstrateKagentAgentSessions(t *testing.T) {
 	if code := sessions(nil, "k8s-helper", &resp); code != http.StatusOK {
 		t.Fatalf("sessions = %d", code)
 	}
-	if resp.Sessions.Total != 2 || resp.Sessions.ByState[model.StateCrashed] != 1 || !resp.Complete || resp.EarlierRevisions != 1 ||
+	if resp.Sessions.Total != 2 || resp.Sessions.ByState[model.StateCrashed] != 1 || !resp.Complete || resp.HintedEarlierRevisions != 1 || resp.OnEarlierRevisions != 0 ||
 		resp.NeedAttention != 1 || len(resp.Attention) != 1 || resp.Attention[0].Name != crashedSession || resp.Attention[0].Kagent == nil ||
 		len(resp.Revisions) != 1 || resp.Revisions[0].Template.Name != helperTemplate || !resp.Revisions[0].NewSessions || !resp.Revisions[0].Desired {
 		t.Errorf("sessions = %+v", resp.KagentAgentSessions)
@@ -333,5 +333,35 @@ func TestSubstrateKagentNotServed(t *testing.T) {
 	}
 	if code := call(t, s, s.handleSubstrateKagentAgentSessions, substrateCall{path: "/s", params: map[string]string{"namespace": "kagent", "name": "k8s-helper"}}, nil).Code; code != http.StatusNotFound {
 		t.Errorf("sessions without kagent = %d", code)
+	}
+}
+
+// With creation times on both sides, a session on an earlier revision whose
+// template Substrate created after the Agent counts as the Agent's: the
+// shape a kagent Helm change leaves, every Agent on a new revision.
+func TestSubstrateKagentEarlierRevisionWithCreationTimes(t *testing.T) {
+	s := substrateTestServer(t, substrateapi.Kube{KagentServed: true})
+	f := kagentFake()
+	created := time.Now().Add(-48 * time.Hour)
+	f.templates = append(f.templates, &ateapi.ActorTemplate{Metadata: &ateapi.ResourceMetadata{Atespace: "kagent", Name: "k8s-helper-0123456789ab", CreateTime: timestamppb.New(created.Add(time.Minute))}})
+	connectFake(t, s, f, fullToken)
+	prevServed, prevAgents := substrateKagentServed, substrateKagentAgents
+	t.Cleanup(func() { substrateKagentServed, substrateKagentAgents = prevServed, prevAgents })
+	substrateKagentServed = func() bool { return true }
+	agent := kagentHelper
+	agent.Created = created
+	substrateKagentAgents = func(*Server, *http.Request, []string) substrateKagentRead {
+		return substrateKagentRead{Served: true, Agents: []model.KagentAgent{agent}, Access: integration.AccessFromScope(nil, false)}
+	}
+	var actors substrateActorsResponse
+	call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors?agent=kagent/k8s-helper"}, &actors)
+	r := rowNamed(actors.Rows, earlierSession)
+	if actors.Total == nil || *actors.Total != 3 || r == nil || r.Kagent.Kind != model.KagentAgentSession || !r.Kagent.EarlierRevision || r.Kagent.Revision != "0123456789ab" {
+		t.Fatalf("the Agent's sessions = total %v, earlier %+v", actors.Total, r)
+	}
+	var resp substrateKagentSessionsResponse
+	call(t, s, s.handleSubstrateKagentAgentSessions, substrateCall{path: "/s", params: map[string]string{"namespace": "kagent", "name": "k8s-helper"}}, &resp)
+	if resp.Sessions.Total != 3 || resp.OnEarlierRevisions != 1 || resp.HintedEarlierRevisions != 0 {
+		t.Errorf("sessions = %+v", resp.KagentAgentSessions)
 	}
 }

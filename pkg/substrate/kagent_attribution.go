@@ -28,6 +28,8 @@ type KagentAgent struct {
 	UID                      string `json:"uid,omitempty"`
 	DesiredRevision          string `json:"desiredRevision,omitempty"`
 	LatestSuccessfulRevision string `json:"latestSuccessfulRevision,omitempty"`
+	// Created is the Agent's metadata.creationTimestamp; zero when unknown.
+	Created time.Time `json:"created,omitzero"`
 }
 
 func (a KagentAgent) Ref() AgentRef { return AgentRef{Namespace: a.Namespace, Name: a.Name} }
@@ -110,7 +112,8 @@ func KagentRevisionTemplate(agentName, revision string) string {
 // What Radar can say about a kagent session's actor (KagentAttribution.Kind).
 const (
 	// KagentAgentSession: its template is exactly the template of a current
-	// revision of one Agent the caller can read.
+	// revision of one Agent the caller can read, or provably of an earlier
+	// one (KagentAttribution.EarlierRevision).
 	KagentAgentSession = "agentSession"
 	// KagentSandbox: its template is a kagent sandbox's.
 	KagentSandbox = "sandbox"
@@ -121,11 +124,12 @@ const (
 // Why a kagent session's actor is not attributed (KagentAttribution.Reason).
 const (
 	// KagentEarlierRevision: the template is named for an Agent the caller
-	// can read, but for neither of its current revisions. Sessions keep the
-	// revision they started on, so an earlier session of that Agent reads
-	// this way; so does a session of a deleted Agent of the same name, whose
-	// revisions differ because they digest its UID. Candidates name the
-	// Agents as a hint, never as a match.
+	// can read, but for neither of its current revisions, and Radar can't
+	// prove it is that Agent's: the template predates the Agent, a time is
+	// missing, or the name was cut so another Agent could share it. A deleted
+	// Agent of the same name leaves templates like this, whose revisions
+	// differ because they digest its UID. Candidates name the Agents as a
+	// hint, never as a match.
 	KagentEarlierRevision = "earlierRevision"
 	// KagentAgentNotReadable: the caller can't read Agents in the template's
 	// namespace, or Radar has not read them there.
@@ -149,8 +153,14 @@ type KagentAttribution struct {
 	Kind  string    `json:"kind"`
 	Agent *AgentRef `json:"agent,omitempty"`
 	// Revision is the full digest of the Agent revision the template is for
-	// (agentSession only).
+	// (agentSession only); for an earlier revision, only the 12 hex digits
+	// its template's name carries, since the Agent no longer names the digest.
 	Revision string `json:"revision,omitempty"`
+	// EarlierRevision: the template is the Agent's but for neither current
+	// revision. Sessions keep the revision they started on, and any change to
+	// kagent's configuration gives every Agent a new one, so this is where
+	// most sessions run.
+	EarlierRevision bool `json:"earlierRevision,omitempty"`
 	// NewSessions: Revision is the Agent's latestSuccessfulRevision, the one
 	// kagent starts new sessions on.
 	NewSessions bool `json:"newSessions,omitempty"`
@@ -188,15 +198,23 @@ type KagentIndex struct {
 	agents   map[string]KagentAgent
 	readable func(namespace string) bool
 	memo     map[Ref]KagentAttribution
+	// created is each template's Substrate createTime, where known.
+	created map[Ref]time.Time
 }
 
 // NewKagentIndex indexes agents. readable reports whether every Agent in a
 // namespace was read for this caller; only there can Radar say none
-// produces a template.
-func NewKagentIndex(agents []KagentAgent, readable func(namespace string) bool) *KagentIndex {
+// produces a template. templates are the templates read, whose creation
+// times prove an earlier revision's template is an Agent's.
+func NewKagentIndex(agents []KagentAgent, readable func(namespace string) bool, templates []Template) *KagentIndex {
 	ix := &KagentIndex{
 		byTemplate: map[Ref][]kagentMatch{}, byPrefix: map[string][]AgentRef{}, agents: make(map[string]KagentAgent, len(agents)),
-		readable: readable, memo: map[Ref]KagentAttribution{},
+		readable: readable, memo: map[Ref]KagentAttribution{}, created: map[Ref]time.Time{},
+	}
+	for _, t := range templates {
+		if !t.CreateTime.IsZero() {
+			ix.created[t.Ref()] = t.CreateTime
+		}
 	}
 	for _, a := range agents {
 		ix.agents[a.Ref().Key()] = a
@@ -278,9 +296,42 @@ func (ix *KagentIndex) template(t Ref) KagentAttribution {
 		return KagentAttribution{Kind: KagentUnattributed, Reason: KagentTemplateUnknown}
 	}
 	if named := ix.byPrefix[t.Atespace+"/"+parsed.Prefix]; len(named) > 0 {
-		return KagentAttribution{Kind: KagentUnattributed, Reason: KagentEarlierRevision, Candidates: slices.Clone(named)}
+		return ix.earlier(t, parsed, named)
 	}
 	return KagentAttribution{Kind: KagentUnattributed, Reason: KagentNoAgent}
+}
+
+// earlier attributes a template named for readable Agents but for none of
+// their current revisions. It is exactly an Agent's when Substrate created it
+// at or after that Agent was created and no other Agent could have named it:
+// a deleted Agent's templates were created before its deletion, so before any
+// Agent that took its name later. That holds only for a name kagent did not
+// cut: two long names can share their first 50 characters, and a deleted
+// Agent with another long name would leave the same prefix.
+func (ix *KagentIndex) earlier(t Ref, parsed KagentTemplateName, named []AgentRef) KagentAttribution {
+	hint := KagentAttribution{Kind: KagentUnattributed, Reason: KagentEarlierRevision, Candidates: slices.Clone(named)}
+	created, ok := ix.created[t]
+	if !ok {
+		return hint
+	}
+	var after []KagentAgent
+	for _, ref := range named {
+		if a := ix.agents[ref.Key()]; !a.Created.IsZero() && !created.Before(a.Created) {
+			after = append(after, a)
+		}
+	}
+	switch {
+	case len(after) > 1:
+		refs := make([]AgentRef, 0, len(after))
+		for _, a := range after {
+			refs = append(refs, a.Ref())
+		}
+		return KagentAttribution{Kind: KagentUnattributed, Reason: KagentAmbiguous, Candidates: refs}
+	case len(after) == 1 && len(named) == 1 && KagentTemplatePrefix(after[0].Name) == after[0].Name:
+		agent := after[0].Ref()
+		return KagentAttribution{Kind: KagentAgentSession, Agent: &agent, Revision: parsed.Revision, EarlierRevision: true}
+	}
+	return hint
 }
 
 // Actor attributes a kagent session's actor; nil for any other actor. kagent
@@ -367,23 +418,27 @@ type KagentAgentRevision struct {
 type KagentAgentSessions struct {
 	Agent     KagentAgent           `json:"agent"`
 	Revisions []KagentAgentRevision `json:"revisions"`
-	// Sessions counts the attributed session actors by state.
+	// Sessions counts the attributed session actors by state, on current and
+	// earlier revisions alike.
 	Sessions StateCounts `json:"sessions"`
-	// Complete: every actor in the Agent's atespace was read, so Sessions and
-	// EarlierRevisions are exact; otherwise they are lower bounds.
+	// OnEarlierRevisions is how many of Sessions run on an earlier revision's
+	// template; the rest are on the Revisions.
+	OnEarlierRevisions int `json:"onEarlierRevisions"`
+	// Complete: every actor in the Agent's atespace was read, so the counts
+	// are exact; otherwise they are lower bounds.
 	Complete bool `json:"complete"`
 	// NeedAttention counts the attributed sessions crashed or stuck in a
 	// transition past StuckAfter; Attention holds the first few of them,
 	// crashed first, then stuck, newest change first.
 	NeedAttention int        `json:"needAttention"`
 	Attention     []ActorRow `json:"attention"`
-	// EarlierRevisions counts session actors on templates named for this
-	// Agent but for neither current revision: a hint, not part of Sessions
-	// (KagentEarlierRevision).
-	EarlierRevisions int `json:"earlierRevisions"`
-	// EarlierShared: some of those templates' names also fit another readable
+	// HintedEarlierRevisions counts session actors on templates named for this
+	// Agent, for no current revision, that Radar can't prove are its: a hint,
+	// not part of Sessions (KagentEarlierRevision).
+	HintedEarlierRevisions int `json:"hintedEarlierRevisions"`
+	// HintShared: some of those templates' names also fit another readable
 	// Agent, which the same actors are hinted to as well.
-	EarlierShared bool `json:"earlierShared,omitempty"`
+	HintShared bool `json:"hintShared,omitempty"`
 }
 
 // KagentAttentionSample is how many sessions needing attention
@@ -434,15 +489,26 @@ func (ix *KagentIndex) AgentSessions(agent KagentAgent, actorsOn func(Ref) []Act
 			continue
 		}
 		attr := ix.Template(t)
-		if attr.Reason != KagentEarlierRevision || !slices.Contains(attr.Candidates, agent.Ref()) {
+		mine := attr.Kind == KagentAgentSession && attr.EarlierRevision && attr.Agent != nil && *attr.Agent == agent.Ref()
+		hinted := attr.Reason == KagentEarlierRevision && slices.Contains(attr.Candidates, agent.Ref())
+		if !mine && !hinted {
 			continue
 		}
-		if len(attr.Candidates) > 1 {
-			out.EarlierShared = true
+		if hinted && len(attr.Candidates) > 1 {
+			out.HintShared = true
 		}
 		for _, a := range actorsOn(t) {
-			if a.Kagent != nil && a.Atespace == t.Atespace {
-				out.EarlierRevisions++
+			if a.Kagent == nil || a.Atespace != t.Atespace {
+				continue
+			}
+			if hinted {
+				out.HintedEarlierRevisions++
+				continue
+			}
+			out.OnEarlierRevisions++
+			out.Sessions.Add(a.State)
+			if a.State == StateCrashed || IsStuck(a, now) {
+				attention = append(attention, a)
 			}
 		}
 	}

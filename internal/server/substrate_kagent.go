@@ -33,9 +33,10 @@ type substrateKagentRead struct {
 }
 
 // index matches actors against the Agents read; namespaces whose Agents
-// were not all read stay unknown (agentNotReadable).
-func (k substrateKagentRead) index() *model.KagentIndex {
-	return model.NewKagentIndex(k.Agents, k.Access.Covers)
+// were not all read stay unknown (agentNotReadable). templates are the
+// templates read, whose creation times prove an earlier revision's.
+func (k substrateKagentRead) index(templates []model.Template) *model.KagentIndex {
+	return model.NewKagentIndex(k.Agents, k.Access.Covers, templates)
 }
 
 // coverage is the Agents' coverage for a response; nil when kagent is not
@@ -74,7 +75,8 @@ var substrateKagentAgents = func(s *Server, r *http.Request, namespaces []string
 func kagentAgentOf(u *unstructured.Unstructured) model.KagentAgent {
 	desired, _, _ := unstructured.NestedString(u.Object, "status", "desiredRevision")
 	latest, _, _ := unstructured.NestedString(u.Object, "status", "latestSuccessfulRevision")
-	return model.KagentAgent{Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()), DesiredRevision: desired, LatestSuccessfulRevision: latest}
+	return model.KagentAgent{Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()), DesiredRevision: desired, LatestSuccessfulRevision: latest,
+		Created: u.GetCreationTimestamp().UTC()}
 }
 
 // substrateKagent reads the Agents the caller may read in every namespace,
@@ -146,7 +148,7 @@ func (s *Server) handleSubstrateKagentAgentSessions(w http.ResponseWriter, r *ht
 		s.writeErrorCode(w, http.StatusServiceUnavailable, substrateapi.CodeIncomplete, "Radar has not read kagent's Agents in namespace "+ref.Namespace+" ("+agents.Access.State+")")
 		return
 	}
-	ix := agents.index()
+	ix := agents.index(snap.Templates)
 	agent, found := ix.Agent(ref)
 	if !found {
 		s.writeErrorCode(w, http.StatusNotFound, substrateapi.CodeNotFound, "no kagent Agent "+ref.Key())
