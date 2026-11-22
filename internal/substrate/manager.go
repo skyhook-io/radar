@@ -436,6 +436,7 @@ func (m *Manager) read(ctx context.Context, k Kube, s Settings, gen uint64) (*Sn
 	}
 	if snap != nil {
 		snap.ReadAt = m.Now()
+		model.MarkKagentSessions(snap.Actors, k.KagentServed)
 	}
 	if tierErr != nil {
 		// The next read dials again: a fresh token, a new port-forward.
@@ -473,6 +474,7 @@ func (m *Manager) AtespaceActors(ctx context.Context, atespace string) ([]model.
 			return kindResult[model.Actor]{tierErr: &TierError{Code: code, Message: msg}}, nil
 		}
 		r := readAtespaceActors(readCtx, c, atespace)
+		model.MarkKagentSessions(r.items, k.KagentServed)
 		if !m.current(gen) || !m.stillCaptured(k) {
 			return kindResult[model.Actor]{tierErr: errRetired}, nil
 		}

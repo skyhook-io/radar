@@ -279,6 +279,9 @@ export function memoryRebuildStep(crashed: number): string {
     : 'Recreate the template with a higher memory limit, move the crashed actors to it, then revert them. The move may keep only their snapshots’ volumes.'
 }
 
+/** The recovery step for a kagent session's actor, which kagent recovers itself (pkg/substrate kagentActorStep). */
+export const KAGENT_RECOVER_STEP = 'This actor is a kagent session. Recover it with Recover on the session’s chat in kagent, not with kubectl ate: kagent treats a session whose actor was moved to another template as lost.'
+
 /** `kubectl ate revert actor`, which returns a crashed actor to suspended at its newest stored snapshot. */
 export function revertCommand(ref: SubstrateRef): string {
   return `kubectl ate revert actor ${ref.name} -a ${ref.atespace}`

@@ -295,7 +295,8 @@ export function SubstrateTemplatePage({ template, onOpenSubject }: { template: S
     .find((a) => a.rule === 'crashedActors')
     ?.groups?.find((g) => g.subject?.kind === 'ActorTemplate' && g.subject.atespace === t.atespace && g.subject.name === t.name)
   // Its golden actor and its actors were both killed over its memory limit: one plan fixes both, so the page offers one step.
-  const oneMemoryPlan = t.golden.state === 'failed' && t.golden.cause === 'memoryLimit' && !!crashes && crashes.count > 0 && crashes.cause === 'memoryLimit'
+  // kagent recovers its own sessions, so their group keeps kagent's step.
+  const oneMemoryPlan = t.golden.state === 'failed' && t.golden.cause === 'memoryLimit' && !!crashes && crashes.count > 0 && crashes.cause === 'memoryLimit' && !crashes.kagent
   const crashStep = oneMemoryPlan ? memoryRebuildStep(crashes.count) : crashes?.nextStep
   return (
     <div className="flex min-h-0 flex-1 flex-col">

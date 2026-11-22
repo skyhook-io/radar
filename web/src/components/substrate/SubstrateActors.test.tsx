@@ -256,6 +256,14 @@ describe('Actor overview', () => {
     expect(p.indexOf('A revert returns it to suspended')).toBeGreaterThan(p.indexOf('Details'))
   })
 
+  it('sends a kagent session to kagent for recovery, with no kubectl ate command', () => {
+    const d = actorDetail()
+    const detail = { ...d, actor: { ...d.actor, kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291' } }, attention: [] }
+    const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={detail} onOpenSubject={() => {}} /></MemoryRouter>)))
+    expect(html).toContain('This actor is a kagent session. Recover it with Recover on the session’s chat in kagent')
+    expect(html).not.toContain('kubectl ate revert')
+  })
+
   it('says how the revert target resumes only where At a glance doesn’t already say it', () => {
     const d = actorDetail()
     const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={d} onOpenSubject={() => {}} /></MemoryRouter>)))

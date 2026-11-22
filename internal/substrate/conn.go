@@ -67,6 +67,9 @@ type Kube struct {
 	// Operation is the context operation the capture belongs to; it is
 	// cancelled when that operation ends. Nil in tests that build a Kube.
 	Operation context.Context
+	// KagentServed: the cluster serves kagent's API, so actors kagent names
+	// are marked as its sessions (model.MarkKagentSessions).
+	KagentServed bool
 }
 
 // conn is one gRPC client for one (context, settings).

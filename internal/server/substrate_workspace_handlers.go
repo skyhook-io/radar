@@ -85,13 +85,24 @@ func currentSubstrateKube() (substrateapi.Kube, error) {
 		}
 		return substrateapi.Kube{
 			Client: client, Config: cfg, Context: target.Context, Fingerprint: "in-cluster " + cfg.Host,
-			Generation: generation, Operation: operation,
+			Generation: generation, Operation: operation, KagentServed: kagentServed(),
 		}, nil
 	}
 	return substrateapi.Kube{
 		Client: client, Config: cfg, Context: target.Context, Binding: target.Binding, Fingerprint: target.Fingerprint,
-		Generation: generation, Operation: operation,
+		Generation: generation, Operation: operation, KagentServed: kagentServed(),
 	}, nil
+}
+
+// kagentServed reports whether the cluster serves kagent's API, whose
+// sessions run as Substrate actors that kagent recovers itself.
+func kagentServed() bool {
+	d := k8s.GetResourceDiscovery()
+	if d == nil {
+		return false
+	}
+	_, ok := d.GetResourceWithGroup("Agent", "api.kagent.dev")
+	return ok
 }
 
 func (s *Server) resetSubstrate() {
@@ -1542,7 +1553,9 @@ func memoryKillOf(actor model.Actor, lines []substrateLogLine) *substrateMemoryK
 			!slices.ContainsFunc(lines[i+1:], func(later substrateLogLine) bool {
 				return later.Kind == model.LogKindLifecycle && substrateExecutionStarts[later.Message] && !later.Time.After(actor.Crash.Time)
 			})
-		if kill.Current {
+		if kill.Current && actor.Kagent != nil {
+			kill.NextStep = model.KagentMemoryStep()
+		} else if kill.Current {
 			kill.NextStep, kill.Command, kill.ThenCommand = model.CrashedMemoryActorStep(actor), model.CrashedMemoryCommand(actor), model.RevertCommand(actor)
 		}
 		return kill
