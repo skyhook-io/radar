@@ -33,12 +33,12 @@ func getWorkloadManager() *k8score.WorkloadManager {
 	return k8score.NewWorkloadManager(GetDynamicClient(), disc)
 }
 
-func getWorkloadManagerWithClient(client dynamic.Interface) *k8score.WorkloadManager {
+func getWorkloadManagerWithClient(ctx context.Context, client dynamic.Interface) *k8score.WorkloadManager {
 	if client == nil {
 		return getWorkloadManager()
 	}
 	var disc *k8score.ResourceDiscovery
-	if d := GetResourceDiscovery(); d != nil {
+	if d := discoveryFor(ctx); d != nil {
 		disc = d.ResourceDiscovery
 	} else {
 		log.Printf("[k8s] Warning: resource discovery not initialized; workload operations will fail until cluster is ready")
@@ -54,11 +54,11 @@ func UpdateResource(ctx context.Context, opts UpdateResourceOptions) (*unstructu
 // UpdateResourceWithClient updates a Kubernetes resource using the provided client.
 // If client is nil, uses the shared dynamic client.
 func UpdateResourceWithClient(ctx context.Context, opts UpdateResourceOptions, client dynamic.Interface) (*unstructured.Unstructured, error) {
-	return getWorkloadManagerWithClient(client).UpdateResource(ctx, opts)
+	return getWorkloadManagerWithClient(ctx, client).UpdateResource(ctx, opts)
 }
 
 func PreviewUpdateResourceWithClient(ctx context.Context, opts UpdateResourceOptions, client dynamic.Interface) (*PreviewUpdateResourceResult, error) {
-	return getWorkloadManagerWithClient(client).PreviewUpdateResource(ctx, opts)
+	return getWorkloadManagerWithClient(ctx, client).PreviewUpdateResource(ctx, opts)
 }
 
 // DeleteResource deletes a Kubernetes resource.
@@ -69,7 +69,7 @@ func DeleteResource(ctx context.Context, opts DeleteResourceOptions) error {
 // DeleteResourceWithClient deletes a Kubernetes resource using the provided client.
 // If client is nil, uses the shared dynamic client.
 func DeleteResourceWithClient(ctx context.Context, opts DeleteResourceOptions, client dynamic.Interface) (*k8score.DeleteResourceResult, error) {
-	return getWorkloadManagerWithClient(client).DeleteResourceWithResult(ctx, opts)
+	return getWorkloadManagerWithClient(ctx, client).DeleteResourceWithResult(ctx, opts)
 }
 
 // ApplyResource creates or updates a Kubernetes resource from YAML.
@@ -79,7 +79,7 @@ func ApplyResource(ctx context.Context, opts ApplyResourceOptions) (*ApplyResour
 
 // ApplyResourceWithClient creates or updates a Kubernetes resource using the provided client.
 func ApplyResourceWithClient(ctx context.Context, opts ApplyResourceOptions, client dynamic.Interface) (*ApplyResourceResult, error) {
-	return getWorkloadManagerWithClient(client).ApplyResource(ctx, opts)
+	return getWorkloadManagerWithClient(ctx, client).ApplyResource(ctx, opts)
 }
 
 var yamlDocumentSeparator = regexp.MustCompile(`(?m)^---(?:[ \t]+#.*|[ \t]*)\r?$`)
@@ -105,7 +105,7 @@ func TriggerCronJob(ctx context.Context, namespace, name string) (*unstructured.
 // TriggerCronJobWithClient creates a Job from a CronJob using the provided
 // client. An empty jobName lets the API server generate one.
 func TriggerCronJobWithClient(ctx context.Context, namespace, name, jobName string, client dynamic.Interface) (*unstructured.Unstructured, error) {
-	return getWorkloadManagerWithClient(client).TriggerCronJobNamed(ctx, namespace, name, jobName)
+	return getWorkloadManagerWithClient(ctx, client).TriggerCronJobNamed(ctx, namespace, name, jobName)
 }
 
 // SetCronJobSuspend sets the suspend field on a CronJob.
@@ -115,7 +115,7 @@ func SetCronJobSuspend(ctx context.Context, namespace, name string, suspend bool
 
 // SetCronJobSuspendWithClient sets the suspend field on a CronJob using the provided client.
 func SetCronJobSuspendWithClient(ctx context.Context, namespace, name string, suspend bool, client dynamic.Interface) error {
-	return getWorkloadManagerWithClient(client).SetCronJobSuspend(ctx, namespace, name, suspend)
+	return getWorkloadManagerWithClient(ctx, client).SetCronJobSuspend(ctx, namespace, name, suspend)
 }
 
 // RestartWorkload performs a rolling restart on a Deployment, StatefulSet, or DaemonSet.
@@ -125,20 +125,20 @@ func RestartWorkload(ctx context.Context, kind, namespace, name string) error {
 
 // RestartWorkloadWithClient performs a rolling restart using the provided client.
 func RestartWorkloadWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) error {
-	return getWorkloadManagerWithClient(client).RestartWorkload(ctx, kind, namespace, name)
+	return getWorkloadManagerWithClient(ctx, client).RestartWorkload(ctx, kind, namespace, name)
 }
 
 // SetDeploymentPausedWithClient sets spec.paused on a Deployment using the provided client.
 func SetDeploymentPausedWithClient(ctx context.Context, namespace, name string, paused bool, client dynamic.Interface) error {
-	return getWorkloadManagerWithClient(client).SetDeploymentPaused(ctx, namespace, name, paused)
+	return getWorkloadManagerWithClient(ctx, client).SetDeploymentPaused(ctx, namespace, name, paused)
 }
 
 func GetWorkloadImagesWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) (*WorkloadImageInventory, error) {
-	return getWorkloadManagerWithClient(client).GetWorkloadImages(ctx, kind, namespace, name)
+	return getWorkloadManagerWithClient(ctx, client).GetWorkloadImages(ctx, kind, namespace, name)
 }
 
 func SetWorkloadImagesWithClient(ctx context.Context, kind, namespace, name string, updates []WorkloadImageUpdate, client dynamic.Interface) (*SetWorkloadImagesResult, error) {
-	return getWorkloadManagerWithClient(client).SetWorkloadImages(ctx, kind, namespace, name, updates)
+	return getWorkloadManagerWithClient(ctx, client).SetWorkloadImages(ctx, kind, namespace, name, updates)
 }
 
 // ScaleWorkload scales a Deployment or StatefulSet to the specified replica count.
@@ -148,7 +148,7 @@ func ScaleWorkload(ctx context.Context, kind, namespace, name string, replicas i
 
 // ScaleWorkloadWithClient scales a workload using the provided client.
 func ScaleWorkloadWithClient(ctx context.Context, kind, namespace, name string, replicas int32, client dynamic.Interface) error {
-	return getWorkloadManagerWithClient(client).ScaleWorkload(ctx, kind, namespace, name, replicas)
+	return getWorkloadManagerWithClient(ctx, client).ScaleWorkload(ctx, kind, namespace, name, replicas)
 }
 
 // ListWorkloadRevisions returns the revision history for a Deployment, StatefulSet, or DaemonSet.
@@ -159,7 +159,7 @@ func ListWorkloadRevisions(ctx context.Context, kind, namespace, name string) ([
 // ListWorkloadRevisionsWithClient returns revision history using the provided client.
 // Use this when auth is enabled to ensure K8s RBAC applies to the requesting user.
 func ListWorkloadRevisionsWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) ([]WorkloadRevision, error) {
-	return getWorkloadManagerWithClient(client).ListWorkloadRevisions(ctx, kind, namespace, name)
+	return getWorkloadManagerWithClient(ctx, client).ListWorkloadRevisions(ctx, kind, namespace, name)
 }
 
 // RollbackWorkload rolls back a Deployment, StatefulSet, or DaemonSet to a specific revision.
@@ -169,5 +169,5 @@ func RollbackWorkload(ctx context.Context, kind, namespace, name string, revisio
 
 // RollbackWorkloadWithClient rolls back a workload using the provided client.
 func RollbackWorkloadWithClient(ctx context.Context, kind, namespace, name string, revision int64, client dynamic.Interface) error {
-	return getWorkloadManagerWithClient(client).RollbackWorkload(ctx, kind, namespace, name, revision)
+	return getWorkloadManagerWithClient(ctx, client).RollbackWorkload(ctx, kind, namespace, name, revision)
 }

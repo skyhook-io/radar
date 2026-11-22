@@ -83,6 +83,8 @@ const (
 	CategoryPVCResizeFailed          Category = "pvc_resize_failed"
 	CategoryVolumeMountFailed        Category = "volume_mount_failed"
 	CategoryVolumeAccessModeConflict Category = "volume_access_mode_conflict"
+	CategoryVolumeFaulted            Category = "volume_faulted"
+	CategoryVolumeDegraded           Category = "volume_degraded"
 	CategoryBackupFailed             Category = "backup_failed"
 	CategoryBackupTargetUnavailable  Category = "backup_target_unavailable"
 	CategoryBackupStalled            Category = "backup_stalled"
@@ -168,6 +170,8 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryPVCResizeFailed:          GroupStorage,
 	CategoryVolumeMountFailed:        GroupStorage,
 	CategoryVolumeAccessModeConflict: GroupStorage,
+	CategoryVolumeFaulted:            GroupStorage,
+	CategoryVolumeDegraded:           GroupStorage,
 	CategoryBackupFailed:             GroupStorage,
 	CategoryBackupTargetUnavailable:  GroupStorage,
 	CategoryBackupStalled:            GroupStorage,
@@ -484,6 +488,9 @@ type EvidenceRead struct {
 	Resource  string
 	Namespace string
 	Verb      string
+	// Exact asks for the exact (group, resource, namespace, verb) check even
+	// where namespace access usually stands for a namespaced read.
+	Exact bool
 }
 
 // DegradedFinding is a finding as told to a caller who can't make its
@@ -493,6 +500,9 @@ type DegradedFinding struct {
 	Message string
 	Cause   string
 	Action  string
+	// KeepSubjectOnset preserves timing derived from the finding's own
+	// readable subject, independent of the withheld supporting evidence.
+	KeepSubjectOnset bool `json:"-"`
 }
 
 // ConditionalCleanup is a step that is right only when Condition holds. It is
@@ -525,13 +535,18 @@ type FinalizerRemoval struct {
 
 type Issue struct {
 	// Degraded replaces the message, cause and action for a caller who can't
-	// make RequiredReads, and the onset is withheld with it. Without it such a
-	// caller doesn't get the finding.
+	// make RequiredReads. Evidence-derived onset is withheld too, unless the
+	// degraded form preserves independently readable subject timing. Without
+	// a degraded form such a caller doesn't get the finding.
 	Degraded *DegradedFinding `json:"-"`
 
 	// RequiredReads describe the inventories behind a cross-resource finding.
 	// They are retained internally so cached and grouped projections can authorize it.
 	RequiredReads []EvidenceRead `json:"-"`
+	// ExpectedWhenVerified marks a finding the evidence shows is expected: a
+	// caller who can make every RequiredRead doesn't get it, and one who
+	// can't gets Degraded.
+	ExpectedWhenVerified bool `json:"-"`
 	// AffectedRefs are the resources a finding about another subject affects,
 	// all of them rather than the capped links a diagnostic fact shows.
 	// Related-issue lookup matches them; they are never serialized.
