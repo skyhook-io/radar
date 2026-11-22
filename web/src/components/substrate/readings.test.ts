@@ -18,6 +18,7 @@ import {
   servingEvidence,
   splitReading,
   tierReading,
+  shortSessionId,
 } from './readings'
 import { substrateAttentionCount, substrateScreenCounts } from './attention'
 import { decodeActorParam, encodeActorParam, parseSubstrateRoute, substrateActorPath, substrateActorsPath } from './routes'
@@ -450,5 +451,14 @@ describe('a template’s one memory-limit plan', () => {
     }
     expect(memoryRebuildStep(1)).toContain('the crashed actor to it, then revert it.')
     expect(memoryRebuildStep(4)).toContain('the crashed actors to it, then revert them.')
+  })
+})
+
+describe('shortSessionId', () => {
+  it('keeps the random tail, since UUIDv7 sessions started together share their leading digits', () => {
+    const a = shortSessionId('01a20561-c838-7e78-8774-cc8f79f013a8')
+    const b = shortSessionId('01a20561-16ba-7b0d-b4fd-5d664161cb1b')
+    expect(a).toBe('…79f013a8')
+    expect(a).not.toBe(b)
   })
 })

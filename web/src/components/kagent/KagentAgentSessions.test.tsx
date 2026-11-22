@@ -62,7 +62,7 @@ describe('KagentAgentSessions', () => {
     expect(html).toContain('Sessions')
     expect(html).toContain('3 sessions · 3 on the current revision, 0 on earlier ones')
     expect(html).toContain('1 needs attention')
-    expect(html).toContain('session 7c9e6679')
+    expect(html).toContain('session …c1f90ae7')
     expect(html).toContain('List its sessions')
     // The drawer's Agent section already says where new sessions start and that conversations aren't visible.
     expect(html).not.toContain('New sessions start on')

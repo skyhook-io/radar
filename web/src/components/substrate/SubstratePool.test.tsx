@@ -260,9 +260,9 @@ describe('kagent sessions on a worker', () => {
       { atespace: 'kagent', name: 'session-9b2d6c1e-4f3a-4e8b-9c7d-1a2b3c4d5e6f', state: 'running', template: { atespace: 'kagent', name: 'sandbox-3f2c1b0a9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b' },
         kagent: { sessionId: '9b2d6c1e-4f3a-4e8b-9c7d-1a2b3c4d5e6f', kind: 'sandbox' } },
     ] })]))
-    expect(html).toContain('session 01a1faa2')
+    expect(html).toContain('session …122d4291')
     expect(html).toContain('Agent k8s-helper')
-    expect(html).toContain('session 9b2d6c1e')
+    expect(html).toContain('session …3c4d5e6f')
     expect(html).toContain('kagent sandbox')
   })
 })

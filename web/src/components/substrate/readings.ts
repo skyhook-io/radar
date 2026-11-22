@@ -316,8 +316,14 @@ export function agentFilterValue(a: KagentAgentRef): string {
 }
 
 /** A kagent session's id as a table shows it: the UUID's first group. */
+/**
+ * A kagent session id short enough for a row. kagent's ids are UUIDv7, whose
+ * leading digits are a timestamp shared by sessions started together, so the
+ * short form is the random tail.
+ */
 export function shortSessionId(id: string): string {
-  return id.split('-')[0]
+  const hex = id.replace(/-/g, '')
+  return hex.length > 8 ? `…${hex.slice(-8)}` : id
 }
 
 function agentList(agents: KagentAgentRef[] | undefined): string {

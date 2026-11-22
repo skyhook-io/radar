@@ -809,7 +809,7 @@ describe('kagent sessions in the Actors list', () => {
     expect(html).toContain('kagent sandbox')
     expect(html).toContain('earlier revision')
     // A session's actor reads as its short id, not session-<uuid> over four lines.
-    expect(html).toContain('session 01a1faa2')
+    expect(html).toContain('session …122d4291')
     expect(html).not.toContain('session-01a1faa2-b3e3')
     // A hint names the Agent only in the hover, never in the cell.
     state.actors = actors({ kagentAgents: { state: 'full' }, rows: [
@@ -857,7 +857,7 @@ describe('kagent session on the actor page', () => {
 
   it('names the session and its Agent, says the chat isn’t visible, and names the Agent in the recovery step', () => {
     const html = page({ sessionId: session, kind: 'agentSession', agent: helper, newSessions: true, desired: true })
-    expect(html).toContain('session 01a1faa2')
+    expect(html).toContain('session …122d4291')
     expect(html).toContain('kagent/k8s-helper')
     expect(html).toContain('Conversation outcome: not visible to Radar')
     expect(html).toContain('This actor is a session of kagent Agent kagent/k8s-helper. Recover it through kagent (its RevertSession API')
@@ -874,7 +874,7 @@ describe('kagent session on the actor page', () => {
     expect(page({ sessionId: session, kind: 'unattributed', reason: 'earlierRevision', candidates: [helper] })).toContain('named for kagent/k8s-helper, but for neither of its current revisions')
     // Without attribution (an older Radar), the session still shows, with kagent's step.
     const older = page(undefined)
-    expect(older).toContain('session 01a1faa2')
+    expect(older).toContain('session …122d4291')
     expect(older).toContain('This actor is a kagent session.')
   })
 })
