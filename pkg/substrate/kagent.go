@@ -6,8 +6,8 @@ import "regexp"
 // session's actor session-<session UUID> and runs its lifecycle itself: it
 // checks the actor's UID and template before every operation, and treats an
 // actor moved to another template as lost, so the session can only be
-// deleted. Recovery goes through kagent (Recover on the session's chat, its
-// RevertSession call), never through kubectl ate.
+// deleted. Recovery goes through kagent (its RevertSession call, or deleting
+// the chat), never through kubectl ate.
 //
 // It is set only on a cluster that serves kagent's API, from the name alone:
 // the name says kagent's naming, not which Agent the session belongs to.
@@ -39,15 +39,19 @@ func MarkKagentSessions(actors []Actor, kagentServed bool) {
 	}
 }
 
-// The steps for kagent sessions, which kagent recovers itself.
+// The steps for kagent sessions, which kagent recovers itself. kagent's
+// recovery is its SessionService/RevertSession call, valid once Substrate
+// marks the actor crashed; kagent 1.0.1 has no button or CLI command for it
+// (later versions add Recover on the chat). Deleting the chat in kagent
+// ("Stop active turns and delete") always works.
 const (
-	kagentCrashedStep = "These actors are kagent sessions. Recover each with Recover on its chat in kagent; kagent treats a session whose actor was moved to another template as lost."
+	kagentCrashedStep = "These actors are kagent sessions. Recover each through kagent (its RevertSession API, or Recover on the chat where offered) or delete the chat there, never with kubectl ate."
 	// kagentAside follows a generic step when only some actors are kagent's.
-	kagentAside       = " Recover the kagent sessions among them with Recover on their chats in kagent instead."
-	kagentActorStep   = "This actor is a kagent session. Recover it with Recover on the session's chat in kagent, not with kubectl ate: kagent treats a session whose actor was moved to another template as lost."
-	kagentMemoryStep  = "This actor is a kagent session, killed for exceeding its memory limit. Recover it with Recover on the session's chat in kagent; it keeps the template it started with, so it may be killed again. kagent gives every agent the memory in its Helm value config.runtimeDefaults.memory; raise it for new sessions. Don't move it to another template with kubectl ate: kagent then treats the session as lost."
-	kagentLostStep    = "This actor is a kagent session: recover it with Recover on the session's chat in kagent. Substrate marks it crashed when it reconciles the worker anyway."
-	kagentLostAllStep = "These actors are kagent sessions: recover each with Recover on its chat in kagent. Substrate marks them crashed when it reconciles the worker anyway."
+	kagentAside       = " Recover the kagent sessions among them through kagent instead (RevertSession, or delete the chat)."
+	kagentActorStep   = "This actor is a kagent session. Recover it through kagent (its RevertSession API, or Recover on the chat where offered) or delete the chat there. Moved to another template with kubectl ate, it can't be recovered."
+	kagentMemoryStep  = "This actor is a kagent session, killed for exceeding its memory limit. Recover it through kagent (RevertSession, or Recover on the chat where offered) or delete the chat; it keeps its template, so it may be killed again. kagent sets every agent's memory in its Helm value config.runtimeDefaults.memory: raise it for new sessions. Never move it to another template with kubectl ate: kagent then can't recover it."
+	kagentLostStep    = "This actor is a kagent session. Once Substrate reconciles the worker and marks it crashed, recover it through kagent (RevertSession, or Recover on the chat where offered), or delete the chat there."
+	kagentLostAllStep = "These actors are kagent sessions. Once Substrate reconciles the worker and marks them crashed, recover each through kagent (RevertSession, or Recover on the chat where offered), or delete the chat there."
 )
 
 // KagentMemoryStep is the memory-limit step for a kagent session's actor.

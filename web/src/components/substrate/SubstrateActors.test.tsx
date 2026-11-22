@@ -260,7 +260,7 @@ describe('Actor overview', () => {
     const d = actorDetail()
     const detail = { ...d, actor: { ...d.actor, kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291' } }, attention: [] }
     const html = plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={detail} onOpenSubject={() => {}} /></MemoryRouter>)))
-    expect(html).toContain('This actor is a kagent session. Recover it with Recover on the session’s chat in kagent')
+    expect(html).toContain('This actor is a kagent session. Recover it through kagent (its RevertSession API')
     expect(html).not.toContain('kubectl ate revert')
   })
 

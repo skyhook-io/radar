@@ -49,7 +49,7 @@ func kagentCrashed(name, template, message string) Actor {
 
 func noKubectlAte(t *testing.T, where, step, command, then string) {
 	t.Helper()
-	if command != "" || then != "" || !strings.Contains(step, "Recover") || !strings.Contains(step, "kagent") {
+	if command != "" || then != "" || !strings.Contains(step, "RevertSession") || !strings.Contains(step, "delete the chat") {
 		t.Errorf("%s: step %q command %q then %q", where, step, command, then)
 	}
 }
