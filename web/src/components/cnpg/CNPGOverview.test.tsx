@@ -201,6 +201,8 @@ describe('CNPGOverview posture summary', () => {
   it('shows counts as lower bounds when Clusters were partly read', () => {
     const html = render(response([withSpec('a', { instances: 1 }), withSpec('b', { instances: 1 })], { state: 'partial', allowedNamespaces: ['pg'] } as CNPGKindCoverage))
     expect(count(html, 'Single instance')).toBe('≥2')
+    expect(count(html, 'With a destination')).toBe('–')
+    expect(html).toContain('aria-label="No WAL archiving: –"')
   })
 
   it('ignores an unknown protect value', () => {

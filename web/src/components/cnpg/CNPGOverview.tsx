@@ -207,7 +207,7 @@ function PostureSummary({ posture, lowerBound, active, onToggle }: {
   active: CNPGPostureFilter | null
   onToggle: (filter: CNPGPostureFilter) => void
 }) {
-  const n = (v: number) => `${lowerBound ? '≥' : ''}${v}`
+  const n = (v: number) => lowerBound ? v === 0 ? '–' : `≥${v}` : String(v)
   // Posture is stated without a mark, as on every CNPG surface: no tone on the counts.
   const items: { id: CNPGPostureFilter; value: number }[] = [
     { id: 'none', value: posture.noDestination },
