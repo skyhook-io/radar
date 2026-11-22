@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,7 +24,7 @@ type DynamicResourceCache struct {
 }
 
 var (
-	dynamicResourceCache *DynamicResourceCache
+	dynamicResourceCache atomic.Pointer[DynamicResourceCache]
 	dynamicCacheOnce     = new(sync.Once)
 	dynamicCacheMu       sync.Mutex
 	// dynamicSyncStallAfter overrides k8score's stall threshold in tests;
@@ -130,7 +131,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			return
 		}
 
-		dynamicResourceCache = &DynamicResourceCache{DynamicResourceCache: core}
+		dynamicResourceCache.Store(&DynamicResourceCache{DynamicResourceCache: core})
 	})
 	return initErr
 }
@@ -146,7 +147,7 @@ func extractUnstructured(obj any) interface{ GetName() string } {
 
 // GetDynamicResourceCache returns the singleton dynamic cache instance.
 func GetDynamicResourceCache() *DynamicResourceCache {
-	return dynamicResourceCache
+	return dynamicResourceCache.Load()
 }
 
 // ResetDynamicResourceCache stops and clears the dynamic resource cache.
@@ -154,9 +155,8 @@ func ResetDynamicResourceCache() {
 	dynamicCacheMu.Lock()
 	defer dynamicCacheMu.Unlock()
 
-	if dynamicResourceCache != nil {
-		dynamicResourceCache.Stop()
-		dynamicResourceCache = nil
+	if dc := dynamicResourceCache.Swap(nil); dc != nil {
+		dc.Stop()
 	}
 	dynamicCacheOnce = new(sync.Once)
 }
@@ -164,8 +164,8 @@ func ResetDynamicResourceCache() {
 // OnCRDDiscoveryComplete registers a callback to be called when CRD discovery completes.
 // This is a package-level function for backward compatibility.
 func OnCRDDiscoveryComplete(callback func()) {
-	if dynamicResourceCache != nil && dynamicResourceCache.DynamicResourceCache != nil {
-		dynamicResourceCache.DynamicResourceCache.OnCRDDiscoveryComplete(callback)
+	if dc := GetDynamicResourceCache(); dc != nil && dc.DynamicResourceCache != nil {
+		dc.OnCRDDiscoveryComplete(callback)
 	}
 }
 

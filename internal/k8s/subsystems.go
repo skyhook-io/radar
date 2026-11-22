@@ -55,47 +55,34 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 	promReinitFn := prometheusReinitFunc
 	contextSwitchMu.RUnlock()
 
-	// Start API discovery in parallel with the resource cache sync.
-	// Discovery calls ServerGroupsAndResources() which is independent of informer sync.
-	// Skipped if context is already canceled (e.g., version check failed) to avoid
-	// exec plugin calls through broken credentials.
-	//
-	// Discovery result is communicated via a buffered channel to avoid a data race
-	// on the early-return path (where the main goroutine exits without Wait()).
-	discoveryErrCh := make(chan error, 1)
-	discoveryStarted := false
+	// Discovery can outlive a failed or cancelled switch if an exec plugin stalls.
+	discoveryDone := make(chan struct{})
 	if ctx.Err() == nil {
-		discoveryStarted = true
 		go func() {
-			// Re-check inside goroutine — context may have been canceled
-			// between the outer check and this goroutine actually running.
-			if ctx.Err() != nil {
-				logTiming("   [ops] Skipping API discovery: context canceled")
-				discoveryErrCh <- nil
-				return
-			}
+			defer close(discoveryDone)
 			dt := time.Now()
-			err := initResourceDiscovery(ctx)
+			if err := initResourceDiscovery(ctx); err != nil {
+				log.Printf("Warning: resource discovery init failed: %v", err)
+			}
 			logTiming("   API resource discovery: %v (parallel)", time.Since(dt))
-			discoveryErrCh <- err
 		}()
 	} else {
-		logTiming("   [ops] Skipping API discovery goroutine: context already canceled")
+		close(discoveryDone)
 	}
 
 	// Resource cache init (RBAC checks + informer sync) — the dominant cost
 	if err := InitResourceCache(ctx); err != nil {
-		// Don't block on discovery — the goroutine may be stuck in an API call
-		// through a broken exec plugin for 30+ seconds. It will finish on its
-		// own and send to the buffered channel (which will be GC'd).
 		return fmt.Errorf("resource cache init failed: %w", err)
 	}
 	logTiming("   Resource cache init: %v", time.Since(t))
-	if cache := GetResourceCache(); cache != nil {
+	cache := GetResourceCache()
+	if cache != nil {
 		log.Printf("Resource cache initialized with %d resources", cache.GetResourceCount())
 	}
 
-	if discoveryStarted {
+	lifecycleCtx := OperationContext()
+	discoveryPending := false
+	if ctx.Err() == nil {
 		progress("Waiting for Kubernetes API discovery…")
 		waitCtx := ctx
 		if discoveryWait > 0 {
@@ -104,12 +91,13 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 			defer cancel()
 		}
 		select {
-		case discoveryErr := <-discoveryErrCh:
-			if discoveryErr != nil {
-				log.Printf("Warning: resource discovery init failed: %v", discoveryErr)
-			}
+		case <-discoveryDone:
 		case <-waitCtx.Done():
-			return fmt.Errorf("waiting for Kubernetes API discovery: %w", waitCtx.Err())
+			if ctx.Err() != nil {
+				return fmt.Errorf("waiting for Kubernetes API discovery: %w", ctx.Err())
+			}
+			log.Printf("Kubernetes API discovery still pending after %v; serving typed resources", discoveryWait)
+			discoveryPending = true
 		}
 	}
 
@@ -123,58 +111,29 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 		return context.Canceled
 	}
 
-	// 3. Dynamic cache (factory init is synchronous; CRD warmup and discovery kick off async)
-	progress("Loading custom resources...")
-	t = time.Now()
-	if cache := GetResourceCache(); cache != nil {
-		changeCh := cache.ChangesRaw()
-		if err := InitDynamicResourceCache(changeCh); err != nil {
-			log.Printf("Warning: dynamic resource cache init failed: %v", err)
-		}
-
-		// CRD warmup and full discovery run in background.
-		// Do NOT use InitAllSubsystems' ctx: callers cancel it as soon as
-		// critical sync returns (InitializeCluster defer cancel /
-		// ContextSwitchTimeout). Deferred typed LISTs can still take minutes
-		// on large clusters — that cancel would abort CRD work entirely.
-		// OperationContext survives until CancelOngoingOperations (context
-		// switch / retry / auth-loss), which is the right lifetime.
-		if dc := GetDynamicResourceCache(); dc != nil {
+	if cache != nil {
+		if discoveryPending {
+			cache.apiDiscoveryPending.Store(true)
 			go func() {
-				crdStart := time.Now()
-				lifecycleCtx := OperationContext()
-				deferredDone := cache.DeferredDone()
-				stillCurrent := func() bool {
-					return GetDynamicResourceCache() == dc && GetResourceCache() == cache
+				defer cache.apiDiscoveryPending.Store(false)
+				select {
+				case <-discoveryDone:
+				case <-lifecycleCtx.Done():
+					return
 				}
-				runCRDWarmupSequence(lifecycleCtx, nil, stillCurrent, dc.StartWatchReconciler)
-				runCRDWarmupSequence(lifecycleCtx, deferredDone, stillCurrent,
-					func() {
-						wt := time.Now()
-						RegisterSupportedCRDFallbacks()
-						WarmupCommonCRDs()
-						logTiming("   CRD warmup: %v (background)", time.Since(wt))
-					},
-					func() {
-						dt := time.Now()
-						dc.DiscoverAllCRDs()
-						logTiming("   CRD full discovery: %v (background)", time.Since(dt))
-					},
-					func() {
-						// Conditional Kyverno warmup runs after discovery so the
-						// IsKyvernoInstalled() signal sees every CRD that landed
-						// during WarmupCommonCRDs or DiscoverAllCRDs (admin may
-						// have installed Kyverno after Radar started).
-						pt := time.Now()
-						WarmupKyvernoPolicyReports()
-						logTiming("   Kyverno PolicyReport warmup: %v (background)", time.Since(pt))
-					},
-				)
-				logTiming("   CRD total (warmup+discovery): %v (background)", time.Since(crdStart))
+				// Teardown and replacement hold contextOpMu. Only install the
+				// late cache while its original connection still owns the clients.
+				contextOpMu.RLock()
+				defer contextOpMu.RUnlock()
+				if lifecycleCtx.Err() == nil && GetResourceCache() == cache {
+					startDynamicResourceCache(lifecycleCtx, cache)
+				}
 			}()
+		} else {
+			progress("Loading custom resources...")
+			startDynamicResourceCache(lifecycleCtx, cache)
 		}
 	}
-	logTiming("   Dynamic cache factory init: %v", time.Since(t))
 
 	// Bail if context was canceled during dynamic cache init
 	if ctx.Err() != nil {
@@ -236,6 +195,50 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 	logTiming(" InitAllSubsystems total: %v", time.Since(subsystemStart))
 
 	return nil
+}
+
+// The operation context outlives the switch's init context, which is cancelled
+// on success while the deferred typed informers may still be syncing.
+func startDynamicResourceCache(lifecycleCtx context.Context, cache *ResourceCache) {
+	t := time.Now()
+	if err := InitDynamicResourceCache(cache.ChangesRaw()); err != nil {
+		log.Printf("Warning: dynamic resource cache init failed: %v", err)
+	}
+
+	if dc := GetDynamicResourceCache(); dc != nil {
+		go func() {
+			crdStart := time.Now()
+			deferredDone := cache.DeferredDone()
+			stillCurrent := func() bool {
+				return GetDynamicResourceCache() == dc && GetResourceCache() == cache
+			}
+			runCRDWarmupSequence(lifecycleCtx, nil, stillCurrent, dc.StartWatchReconciler)
+			runCRDWarmupSequence(lifecycleCtx, deferredDone, stillCurrent,
+				func() {
+					wt := time.Now()
+					RegisterSupportedCRDFallbacks()
+					WarmupCommonCRDs()
+					logTiming("   CRD warmup: %v (background)", time.Since(wt))
+				},
+				func() {
+					dt := time.Now()
+					dc.DiscoverAllCRDs()
+					logTiming("   CRD full discovery: %v (background)", time.Since(dt))
+				},
+				func() {
+					// Conditional Kyverno warmup runs after discovery so the
+					// IsKyvernoInstalled() signal sees every CRD that landed
+					// during WarmupCommonCRDs or DiscoverAllCRDs (admin may
+					// have installed Kyverno after Radar started).
+					pt := time.Now()
+					WarmupKyvernoPolicyReports()
+					logTiming("   Kyverno PolicyReport warmup: %v (background)", time.Since(pt))
+				},
+			)
+			logTiming("   CRD total (warmup+discovery): %v (background)", time.Since(crdStart))
+		}()
+	}
+	logTiming("   Dynamic cache factory init: %v", time.Since(t))
 }
 
 // runCRDWarmupSequence runs the background CRD warmup/discovery steps in
