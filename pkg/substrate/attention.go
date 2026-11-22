@@ -83,6 +83,9 @@ type Tally struct {
 	NextStep    string `json:"nextStep,omitempty"`
 	Command     string `json:"command,omitempty"`
 	ThenCommand string `json:"thenCommand,omitempty"`
+	// Kagent: every actor in the group is a kagent session, which kagent
+	// recovers; NextStep then names kagent and no command is offered.
+	Kagent bool `json:"kagent,omitempty"`
 }
 
 // Attention is one needs-attention row.
@@ -357,6 +360,10 @@ func crashedActors(in Inputs) []Attention {
 	messages := map[string]int{}
 	// mixed holds the templates with a crash that is not a memory-limit kill.
 	mixed := map[string]bool{}
+	// kagentCrashed counts each template's crashed kagent sessions, which
+	// kagent recovers itself.
+	kagentCrashed := map[string]int{}
+	kagentTotal := 0
 	for _, a := range in.Actors {
 		if a.State != StateCrashed {
 			continue
@@ -376,6 +383,10 @@ func crashedActors(in Inputs) []Attention {
 		}
 		if !IsMemoryLimitCrash(a) {
 			mixed[key] = true
+		}
+		if isKagent(a) {
+			kagentCrashed[key]++
+			kagentTotal++
 		}
 		if msg == "" {
 			msg = "No crash message"
@@ -400,9 +411,20 @@ func crashedActors(in Inputs) []Attention {
 		} else {
 			groups[i].Cause, groups[i].NextStep, groups[i].Command, groups[i].ThenCommand = CauseMemoryLimit, CrashedMemoryNextStep, retemplateCommand, revertCommand
 		}
+		// kagent names one template per agent revision, so a template's
+		// actors are all kagent sessions or none.
+		if kagentCrashed[key] == groups[i].Count {
+			groups[i].Kagent = true
+			groups[i].NextStep, groups[i].Command, groups[i].ThenCommand = kagentCrashedStep, "", ""
+		}
 	}
 	nextStep, command, then := crashedNextStep, revertCommand, ""
-	if allMemory {
+	switch {
+	case kagentTotal == len(crashed):
+		nextStep, command = kagentCrashedStep, ""
+	case kagentTotal > 0:
+		nextStep += kagentAside
+	case allMemory:
 		nextStep, command, then = CrashedMemoryNextStep, retemplateCommand, revertCommand
 	}
 	// Which template most crashes share is Groups' to say, beside the title.
@@ -941,6 +963,19 @@ func workerRows(in Inputs) []Attention {
 				} else if slices.ContainsFunc(lost, func(a Actor) bool { return a.State == StateDeleting || a.State == StateReverting }) {
 					row.NextStep = "Revert each that isn't already deleting or reverting to its newest stored generation now; Substrate marks them crashed when it reconciles the worker anyway."
 				}
+				// kagent recovers its own sessions; of the actors left to
+				// recover, name kagent for its sessions.
+				recoverable := slices.DeleteFunc(slices.Clone(lost), func(a Actor) bool { return a.State == StateDeleting || a.State == StateReverting })
+				if kagent := len(slices.DeleteFunc(slices.Clone(recoverable), func(a Actor) bool { return !isKagent(a) })); row.Command != "" && kagent > 0 {
+					switch {
+					case kagent == len(recoverable) && len(lost) == 1:
+						row.NextStep, row.Command = kagentLostStep, ""
+					case kagent == len(recoverable):
+						row.NextStep, row.Command = kagentLostAllStep, ""
+					default:
+						row.NextStep += kagentAside
+					}
+				}
 				row.Subject = workerActors(w, ImpactRestarted)
 				row.Related = append([]Subject{subject}, related...)
 				row.Count, row.Sample = len(lost), sample(lost)
@@ -1335,7 +1370,12 @@ func ActorAttention(rows []Attention, a Actor, templates []Template, now time.Ti
 		switch r.Rule {
 		case RuleCrashedActors:
 			r.NextStep, r.Command, r.ThenCommand = crashedActorNextStep, revertCommand, ""
-			if IsMemoryLimitCrash(a) {
+			switch {
+			case isKagent(a) && IsMemoryLimitCrash(a):
+				r.NextStep, r.Command = kagentMemoryStep, ""
+			case isKagent(a):
+				r.NextStep, r.Command = kagentActorStep, ""
+			case IsMemoryLimitCrash(a):
 				r.NextStep, r.Command, r.ThenCommand = CrashedMemoryActorStep(a), retemplateCommand, revertCommand
 			}
 		case RuleStuckTransition:

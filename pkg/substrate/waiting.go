@@ -194,6 +194,10 @@ func WorkerImpactOf(a Actor, w Worker, pods WorkerPods) *WorkerImpact {
 			step, command = "Nothing to recover: the delete in progress removes it.", ""
 		case StateReverting:
 			step, command = "Nothing to do: the revert in progress returns it to its newest stored generation.", ""
+		default:
+			if isKagent(a) {
+				step, command = kagentLostStep, ""
+			}
 		}
 		return &WorkerImpact{Kind: ImpactRestarted,
 			NextStep: step,

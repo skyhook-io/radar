@@ -1725,6 +1725,14 @@ func TestSubstrateMemoryKillIsTiedToTheCurrentCrash(t *testing.T) {
 			t.Errorf("%s: %+v", tc.name, got)
 		}
 	}
+
+	// kagent recovers its own sessions and loses one moved to another
+	// template, so a kagent session's kill offers no kubectl ate step.
+	session := crashed
+	session.Name, session.Kagent = "session-01a1faa2-b3e3-7dd3-ae2d-3114122d4291", &model.KagentSession{SessionID: "01a1faa2-b3e3-7dd3-ae2d-3114122d4291"}
+	if got := memoryKillOf(session, []substrateLogLine{kill(crashAt.Add(-5 * time.Second))}); got == nil || !got.Current || got.NextStep != model.KagentMemoryStep() || got.Command != "" || got.ThenCommand != "" {
+		t.Errorf("a kagent session's kill: %+v", got)
+	}
 }
 
 // The worker's own records about the actor (by its UID, with no labels)

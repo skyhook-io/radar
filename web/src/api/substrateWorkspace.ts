@@ -205,6 +205,12 @@ export interface SubstrateActor {
   createTime?: string
   /** Substrate's last change; the current state has held at least since then. */
   updateTime?: string
+  /**
+   * Set when kagent runs this actor's session (a cluster serving kagent's API, an actor named
+   * session-<uuid>). kagent recovers it from the session's chat; moving it to another template
+   * with kubectl ate makes kagent treat the session as lost.
+   */
+  kagent?: { sessionId: string }
 }
 
 export type SubstrateResumesWith = 'memory' | 'filesystem' | 'volumes' | 'cold' | 'unknown'
@@ -460,6 +466,8 @@ export interface SubstrateTally {
   nextStep?: string
   command?: string
   thenCommand?: string
+  /** Every actor in the group is a kagent session, which kagent recovers: nextStep names kagent and no command is offered. */
+  kagent?: boolean
 }
 
 export type SubstrateAttentionRule =

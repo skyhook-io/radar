@@ -13,7 +13,7 @@ import {
   type SubstrateWorkerRow,
 } from '../../api/substrateWorkspace'
 import { type OpenSubject, SubjectLink } from './SubstrateAttentionList'
-import { ACTOR_STATE_LABEL, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, logsCommand, memoryKillText, attentionBannerVariant, bytesText, cpuText, durableText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, stateExtra, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
+import { ACTOR_STATE_LABEL, KAGENT_RECOVER_STEP, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, logsCommand, memoryKillText, attentionBannerVariant, bytesText, cpuText, durableText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, stateExtra, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
 import { ActorStateBadge, CommandChip, Term, Unread, When } from './shared'
 import { RefreshFailedNotice } from '../workspace/layout'
 
@@ -57,9 +57,11 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
     ? { text: kill.nextStep, command: kill.command, thenCommand: kill.thenCommand }
     : crashedRow
       ? { text: crashedRow.nextStep, command: crashedRow.command, thenCommand: crashedRow.thenCommand }
-      : recovery
-        ? { text: 'Fix the cause in Substrate’s message, then revert the actor.', command: revertCommand(actor) }
-        : undefined
+      : recovery && actor.kagent
+        ? { text: KAGENT_RECOVER_STEP, command: undefined }
+        : recovery
+          ? { text: 'Fix the cause in Substrate’s message, then revert the actor.', command: revertCommand(actor) }
+          : undefined
   const substrateMessage = message ? (
     <>
       Substrate’s message: <span className="font-medium text-theme-text-primary">{message}</span>
