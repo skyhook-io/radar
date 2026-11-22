@@ -1,11 +1,12 @@
 # Connection lifecycle
 
-How Radar names the cluster connection it serves, and how a write is bound to the connection the browser tab is on. This is the first slice of the connection lifecycle model; later slices move every entry point onto one owner and give each connection its own caches.
+How Radar names the cluster connection it serves, and how a write is bound to the connection the browser tab is on.
 
 ## The guarantee
 
-A write from a Radar tab runs against the connection the tab is on, or is refused before any Kubernetes work. In particular, a tab still showing cluster A after another tab switched Radar to B can't restart or scale B's same-named workload.
+A bound write from a Radar tab runs against the connection the tab is on, or is refused before any Kubernetes work. In particular, a tab still showing cluster A after another tab switched Radar to B can't restart or scale B's same-named workload.
 
+<<<<<<< HEAD
 Covered today (the routes wrapped with `bindWrite` in `internal/server/server.go`):
 - Workloads: **restart** and **scale** (single and bulk), Deployment **pause** and **resume**, **set image**, **rollback** (including Argo Rollouts), and the Argo Rollouts actions (abort, retry, promote, promote-full, skip-step).
 - CronJobs: **trigger**, **suspend**, **resume**.
@@ -29,15 +30,17 @@ Code that only has a context (MCP tools, reachability) gets its clients from `k8
 Diagnose (the in-product agent) is fenced by its runs instead: every cluster switch marks all runs stale (`RunManager.OnContextSwitch`), and a stale run takes no further turns, so an investigation of one cluster can't continue, or apply a fix, on another.
 
 Not covered: external MCP callers name no connection, so each tool call uses the connection serving when it starts, as before. Integration writes that look like reads (Velero's download requests behind run messages, contents and logs) aren't bound. An interrupted Helm action is not recovered (the plan's "outcome recovery" for Helm). They still resolve the current connection when they run.
+=======
+Bound writes: Deployment, StatefulSet, DaemonSet and Rollout **restart** and **scale** (single and bulk). Other writes (apply, delete, Helm, exec, port-forward, integration actions, MCP) use the connection serving when they run.
+>>>>>>> origin/feature/connection-lifecycle
 
 **Only when Radar serves from a kubeconfig.** An in-cluster Radar can't change clusters (no kubeconfig contexts; CAPI connect is refused in-cluster), and during a rolling update two of its pods, each with its own IDs, answer the same browser. It publishes no ID and ignores one a request names; its writes still run on one captured set of clients.
 
 ## Connection identity
 
 - **Admission.** When Radar starts serving a cluster (startup, a switch, Retry, auth recovery, a namespace rescope) it admits a connection with an ID `<bootNonce>-<n>`. IDs never repeat within a process, and the boot nonce keeps them distinct across restarts.
-- **Retirement.** The point of no return of any destructive path (switch, rescope, rebuild, auth demotion, shutdown) clears the serving ID before tearing anything down. Between retirement and the next admission nothing is serving.
+- **Retirement.** The point of no return of any destructive path (switch, rescope, rebuild, auth demotion, shutdown) clears the serving ID before tearing anything down. Between retirement and the next admission nothing is serving. Shutdown also closes admissions.
 - **Not health.** A disconnect without teardown (a failed liveness check, a Helm transport error) keeps the ID: it says which connection was admitted, not whether it is healthy.
-- **Shutdown** closes admissions, so a late startup publication can't admit a connection after shutdown began.
 - **Publication.** The ID is published as `connectionId` on `/api/connection`, the Retry result, SSE `connection_state` frames and the SSE initial snapshot.
 
 Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `internal/k8s/connection_binding.go` (capture).
@@ -49,14 +52,19 @@ Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `
 - The request header `X-Radar-Connection` names the connection the caller is on. A different ID gets **409 `context_changed`**. No serving connection, or a context operation holding the lock, gets **503 `cluster_unavailable`** (retryable). No header: admitted against the current connection (API and MCP callers, older UIs). Both refusals say nothing was changed.
 
 **Browser** (`web/src/api/connectionBinding.ts`):
+<<<<<<< HEAD
 - The tab keeps the latest connection ID it heard (status poll, SSE frame, Retry result) and `apiFetch` sends it on every request. Writes that can't use `apiFetch` send it themselves: the file upload's XHR sets the header, and the terminal adds `?connection=` to its WebSocket URL (`withConnectionParam`). A status with no ID (mid-switch) keeps the last one; the server refuses writes then anyway.
 - Views reset when the tab learns the context changed, as before this slice: from `context_changed`, or from a status poll (every 30s while connected, also in background tabs and on focus) that shows a different context.
+=======
+- The tab keeps the latest connection ID it heard (status poll, SSE frame, Retry result) and `apiFetch` sends it on every request. A status with no ID (mid-switch) keeps the last one; the server refuses writes then anyway.
+- Views reset whenever the tab finds itself connected to a different context, however it learns that: a `context_changed` refusal, an SSE frame, a Retry result, or the status poll (every 30s while connected, in background tabs too, and on focus).
+>>>>>>> origin/feature/connection-lifecycle
 - After a refusal, the toast says nothing was changed; the tab catches up on its next status poll or when it regains focus.
 - A server without connection IDs (older or in-cluster Radar) publishes none, and the browser sends no header.
 
-### Tradeoffs taken
+### Accepted gaps
 
-The browser doesn't try to keep the ID in lockstep with what each view displays. That leaves short windows where a view still shows A while the tab already sends B's ID, for example a drawer's 300ms exit animation after a reset, or a status reply that arrives out of order. A write sent from such a view in that window runs on B. These windows are well under a second and need a click inside them; closing them took ordering rules, view generations and response labelling that proved hard to get right, so they are accepted. A tab that has been stale for longer (background, SSE dropped) still sends A's ID and is refused.
+The browser doesn't try to keep the ID in lockstep with what each view displays. That leaves short windows where a view still shows A while the tab already sends B's ID, for example a drawer's 300ms exit animation after a reset, or a status reply that arrives out of order. A write sent from such a view in that window runs on B. These windows are well under a second and need a click inside them, so Radar accepts them rather than ordering responses and tagging each view with the connection it shows. A tab that has been stale for longer (background, SSE dropped) still sends A's ID and is refused.
 
 Also accepted:
 - **A write arriving during shutdown** still runs on the connection the tab is on; admissions are closed first so nothing new is admitted.
@@ -94,8 +102,5 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 | S1 | Rescope (`--namespace-scope`) rebuild or rollback | New ID after the rebuild; Disconnected if the rollback fails | | `PerformNamespaceRescope` (manual) |
 | S2 | Shutdown | No admission after shutdown begins | | `TestConnectionAdmissionsClosedAtShutdown` |
 
-Known scenarios outside this slice: a lost `context_changed` with no later status, stalls outside a switch's time budget, and the write families listed above.
+Not covered: a lost `context_changed` with no later status, stalls beyond a switch's time budget, and the unbound writes listed above.
 
-## Follow-ups
-
-- **Diagnostics.** The diagnostics report keeps its sections on one cluster by checking that the cache and context didn't change during collection. Once connections have their own caches, it should capture one connection the way a bound write does, report its ID and the tracked switch, and drop those checks.
