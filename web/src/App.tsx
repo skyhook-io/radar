@@ -7,9 +7,8 @@ import { useNavigate, useLocation, useSearchParams, useNavigationType, Navigatio
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
-import { followSwitch, followingSwitch, switchInProgress } from './api/contextSwitch'
+import { switchInProgress } from './api/contextSwitch'
 import { ContextSwitchActions } from './components/ContextSwitchActions'
-import { useToast } from './components/ui/Toast'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, usePhoneLayout, PHONE_MEDIA_QUERY } from '@skyhook-io/k8s-ui'
@@ -37,7 +36,7 @@ import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalT
 import { TerminalPreferences } from './components/dock/TerminalPreferences'
 import { DURATION_DOCK, overlayExitMs } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
-import { useContextSwitchFlow } from './components/useContextSwitchFlow'
+import { useContextSwitchFlow, useContextSwitchOutcome } from './components/useContextSwitchFlow'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
 import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
@@ -924,7 +923,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { toggleTheme } = useTheme()
 
   const commandSwitch = useContextSwitchFlow()
-  const { showError } = useToast()
 
   // Refs for dropdown components to trigger them via shortcuts
   const namespaceSwitcherRef = useRef<NamespaceSwitcherHandle>(null)
@@ -1072,7 +1070,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
-  const { isSwitching, dismissed, setDismissed, failedSwitch, setFailedSwitch, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch, setOpenAfterSwitch } = useContextSwitch()
+  const { isSwitching, dismissed, setDismissed, failedSwitch, setFailedSwitch, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
 
   // Connection state (for graceful startup)
   const { connection, contextSwitch, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
@@ -1359,33 +1357,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     onK8sEvent: handleK8sEvent,
   }, forceNamespaceFilter, showPolicyEffect)
 
-  useLayoutEffect(() => {
-    if (!contextSwitch) return
-    if (switchInProgress(contextSwitch)) {
-      if (followingSwitch() !== contextSwitch.id) followSwitch(contextSwitch.id)
-      // The accepted POST can arrive before the first connection poll. Keep
-      // local progress until an observed operation takes over the overlay.
-      endSwitch()
-      return
-    }
-    if (followingSwitch() !== contextSwitch.id) return
-    if (contextSwitch.phase === 'failed' && connection.state === 'connecting') return
-    followSwitch('')
-    endSwitch()
-    if (contextSwitch.phase === 'succeeded' && connection.context === contextSwitch.target) {
-      applyContextChange(contextSwitch.target, contextSwitch.id)
-    } else {
-      setOpenAfterSwitch(null)
-      if (contextSwitch.phase === 'failed' && (connection.state === 'connected' || connection.context !== contextSwitch.target)) {
-        const reason = contextSwitch.error || 'Cluster switch failed'
-        if (contextSwitch.errorType) {
-          setFailedSwitch({ context: contextSwitch.target, error: reason, errorType: contextSwitch.errorType })
-        } else {
-          showError('Failed to switch context', reason)
-        }
-      }
-    }
-  }, [contextSwitch, connection.state, connection.context, applyContextChange, endSwitch, setOpenAfterSwitch, setFailedSwitch, showError])
+  useContextSwitchOutcome(applyContextChange)
 
   // On large clusters (where the server requires namespace filtering), keep
   // SSE's server-side filter in lockstep with the user's namespace pick.

@@ -3,10 +3,16 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useSwitchContext } from '../api/client'
+import { useContextSwitchOutcome } from '../components/useContextSwitchFlow'
+import { ToastProvider } from '../components/ui/Toast'
+import { parseContextName } from '../utils/context-name'
+import { ContextSwitchProvider, useContextSwitch } from './ContextSwitchContext'
 import { ConnectionProvider, useConnection } from './ConnectionContext'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
+let client: QueryClient
 let root: Root
 let container: HTMLDivElement
 let retries: number
@@ -58,7 +64,7 @@ beforeEach(async () => {
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   await act(async () => {
     root.render(
       <QueryClientProvider client={client}>
@@ -173,4 +179,54 @@ describe('ConnectionProvider auto-retry across contexts and background windows',
     await advance(10_500)
     expect(retries).toBe(before + 1)
   })
+})
+
+it.each(['failed', 'succeeded'] as const)('ends the switch overlay when a poll sees %s before acknowledgement recovery', async phase => {
+  const operation = {
+    id: `switch-${phase}`, target: 'staging', phase,
+    startedAt: '2026-10-30T14:02:00Z', syncTimeoutSeconds: 30, progress: '',
+    ...(phase === 'failed' && { error: 'Credentials expired', errorType: 'auth' }),
+  }
+  let loseAcknowledgement!: () => void
+  vi.mocked(fetch).mockImplementation(async (_input, init) => {
+    if (init?.method === 'POST') {
+      return new Promise<Response>((_, reject) => { loseAcknowledgement = () => reject(new TypeError('Failed to fetch')) })
+    }
+    return jsonResponse(200, { state: 'connected', context: phase === 'succeeded' ? operation.target : 'prod', contextSwitch: operation })
+  })
+
+  const applyContextChange = vi.fn()
+  function SwitchProbe() {
+    const { startSwitch, isSwitching, failedSwitch } = useContextSwitch()
+    const mutation = useSwitchContext()
+    useContextSwitchOutcome(applyContextChange)
+    return <button onClick={() => {
+      startSwitch(parseContextName(operation.target))
+      mutation.mutate({ name: operation.target })
+    }}>{isSwitching ? 'Switching' : failedSwitch?.error ?? 'Idle'}</button>
+  }
+
+  act(() => root.render(
+    <QueryClientProvider client={client}>
+      <ConnectionProvider>
+        <ToastProvider>
+          <ContextSwitchProvider>
+            <Probe />
+            <SwitchProbe />
+          </ContextSwitchProvider>
+        </ToastProvider>
+      </ConnectionProvider>
+    </QueryClientProvider>,
+  ))
+  await act(async () => container.querySelector('button')!.click())
+  await act(async () => { await client.refetchQueries({ queryKey: ['connection-status'] }) })
+  await advance(10)
+  expect(latest()?.contextSwitch).toEqual(operation)
+  expect(container.textContent).toBe('Switching')
+  expect(applyContextChange).not.toHaveBeenCalled()
+
+  await act(async () => loseAcknowledgement())
+  await advance(10)
+  expect(container.textContent).toBe(phase === 'failed' ? 'Credentials expired' : 'Idle')
+  if (phase === 'succeeded') expect(applyContextChange).toHaveBeenCalledExactlyOnceWith(operation.target, operation.id)
 })
