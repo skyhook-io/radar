@@ -1,9 +1,8 @@
 import { useEffect } from "react";
 import { initNavigationMap } from "@skyhook-io/k8s-ui/utils/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { APIResource } from "../types";
 import { fetchJSON, isStillLoadingError } from "./client";
-import { shouldRetryRadarQuery } from "./radarFeatures";
 
 const definitionPollDeadlines = new WeakMap<object, number>();
 
@@ -35,10 +34,18 @@ export const GITOPS_KINDS: APIResource[] = [
 
 // Fetch all API resources from the cluster
 export function useAPIResources() {
+  // Keep retrying while Radar says discovery is still running; every other
+  // error follows the host's QueryClient retry policy.
+  const hostRetry = useQueryClient().getDefaultOptions().queries?.retry;
   const result = useQuery<APIResource[]>({
     queryKey: ["api-resources"],
     queryFn: ({ signal }) => fetchJSON("/api-resources", signal),
-    retry: (count, error) => isStillLoadingError(error) || shouldRetryRadarQuery(count, error),
+    retry: (count, error) => {
+      if (isStillLoadingError(error)) return true;
+      if (typeof hostRetry === "function") return hostRetry(count, error);
+      if (typeof hostRetry === "number") return count < hostRetry;
+      return hostRetry ?? count < 3;
+    },
     staleTime: 5 * 60 * 1000, // 5 minutes - resources don't change often
     refetchInterval: (query) => {
       const state = query.state.data?.find(resource =>
