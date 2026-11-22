@@ -90,7 +90,7 @@ const BANNER_VARIANT = { unhealthy: 'error', alert: 'alert', degraded: 'warning'
 function bannerTitle(reading: KagentReading): string {
   switch (reading.state) {
     case 'blocked': return 'Latest change blocked'
-    case 'failed': return 'Preparation failed'
+    case 'failed': return 'Failed'
     case 'preparing': return reading.tone === 'alert' ? 'Still preparing' : 'Preparing'
     case 'stale': return 'Status not yet updated for the latest change'
     case 'notReported': return 'kagent hasn’t reported status yet'
@@ -100,10 +100,12 @@ function bannerTitle(reading: KagentReading): string {
 }
 
 function StatusBanners({ reading }: { reading: KagentReading }) {
-  const main = reading.state !== 'ready'
-  const message = reading.state === 'stale' ? reading.message : reading.summary
+  const title = bannerTitle(reading)
+  let message = reading.state === 'stale' ? reading.message : reading.summary
+  // The summary leads with the same words as the title ("Latest change blocked: …").
+  if (message?.startsWith(`${title}: `)) message = message.slice(title.length + 2)
   return <>
-    {main && <AlertBanner variant={BANNER_VARIANT[reading.tone]} title={bannerTitle(reading)} message={message === bannerTitle(reading) ? undefined : message} />}
+    {reading.state !== 'ready' && <AlertBanner variant={BANNER_VARIANT[reading.tone]} title={title} message={message === title ? undefined : message} />}
     {reading.egress && <AlertBanner
       variant="alert"
       title="Egress not applied"
