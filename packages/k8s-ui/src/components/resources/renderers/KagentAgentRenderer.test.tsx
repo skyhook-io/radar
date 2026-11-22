@@ -73,4 +73,25 @@ describe('KagentAgentRenderer', () => {
     />)
     expect(html).toContain('(Model, models.example.com)')
   })
+
+  it('shows each MCP server’s own status, since kagent drops a failed server’s tools and still reads Ready', () => {
+    const server = (name: string, conditions: any[], tools: string[] = []) => ({ state: 'read' as const, object: { apiVersion: 'api.kagent.dev/v1alpha3', kind: 'RemoteMCPServer', metadata: { name, namespace: 'agents', generation: 1 }, status: { observedGeneration: 1, conditions, discoveredTools: tools.map(t => ({ name: t, description: t })) } } })
+    const html = render(<KagentAgentRenderer
+      data={agent({ template: { inline: { tools: [
+        { mcp: { server: { kind: 'RemoteMCPServer', name: 'down' } } },
+        { mcp: { server: { kind: 'RemoteMCPServer', name: 'github' }, tools: ['list_issues', 'no_such_tool'] } },
+        { mcp: { server: { kind: 'RemoteMCPServer', name: 'secret' } } },
+      ] } } }, [cond('Ready', 'True', 'Ready')])}
+      related={{ mcpServers: {
+        'agents/down': server('down', [cond('Accepted', 'False', 'DiscoveryFailed', 'no such host')]),
+        'agents/github': server('github', [cond('Accepted', 'True', 'DiscoverySucceeded')], ['list_issues']),
+        'agents/secret': { state: 'denied' },
+      } }}
+    />)
+    expect(html).toContain('MCP server agents/down failed tool discovery')
+    expect(html).toContain('even though it reads Ready')
+    expect(html).toContain('Discovery failed')
+    expect(html).toContain('Not offered by the server, so the agent runs without: no_such_tool')
+    expect(html).toContain('You can’t read this RemoteMCPServer')
+  })
 })

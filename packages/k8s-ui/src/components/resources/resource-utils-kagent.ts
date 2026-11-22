@@ -244,7 +244,8 @@ export function readKagentModelConfig(config: any): KagentReading {
 export function readKagentModelProviderConfig(config: any): KagentReading {
   if (config?.metadata?.deletionTimestamp) return DELETING
   const ready = findCondition(config, 'Ready')
-  if (!ready.found) return { state: 'notReported', tone: 'unknown', text: 'Not reported', summary: "kagent doesn't report readiness for this ModelProviderConfig" }
+  // No kagent 1.0 controller reconciles the kind, so an empty status is not a problem.
+  if (!ready.found) return { state: 'notReported', tone: 'neutral', text: 'No status', summary: "kagent doesn't report status for this kind" }
   let current: KagentReading
   if (ready.status === 'True') current = { state: 'ready', tone: 'healthy', text: 'Ready', summary: 'Ready for model discovery', ...fromCondition('Ready', ready) }
   else if (ready.status === 'False') current = configProblem('notReady', ready.reason || 'Not ready', 'Not ready', 'Ready', ready)
@@ -331,6 +332,16 @@ export function kagentReference(ref: any, defaultKind: string, ownerNamespace: s
     namespace: str(ref?.namespace) || ownerNamespace,
     name,
   }
+}
+
+/** A reference's key for a host's map of reads: namespace/name. */
+export function kagentRefKey(ref: KagentRef): string {
+  return `${ref.namespace}/${ref.name}`
+}
+
+/** Whether a tool binding's server reference names a kagent RemoteMCPServer, the only kind Radar reads for it. */
+export function isKagentServerRef(ref: KagentRef | undefined): boolean {
+  return !!ref && ref.group === KAGENT_GROUP && ref.kind === 'RemoteMCPServer'
 }
 
 export interface KagentToolBinding {

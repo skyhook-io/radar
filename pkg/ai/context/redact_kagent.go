@@ -30,7 +30,8 @@ var kagentURLFields = map[string][][]string{
 //   - URLs: user info, query and fragment of the URL fields above and of
 //     skill and plugin artifact sources, and user info (or a credential query)
 //     of any URL in other text, condition messages included;
-//   - a Harness's workload command and args after a credential-named flag;
+//   - a Harness's (or SandboxTemplate's) workload command and args after a
+//     credential-named flag;
 //   - a ModelConfig's status.secretHash, an unsalted SHA-256 of its Secrets'
 //     bytes (go/core/internal/controller/modelconfig.go:110), which confirms
 //     a guessed key.
@@ -73,7 +74,9 @@ func redactKagentLiterals(obj map[string]any) {
 					azure["azureAdToken"] = kagent.Redacted
 				}
 			}
-		case kagent.KindHarness:
+		case kagent.KindHarness, kagent.KindSandboxTemplate:
+			// SandboxTemplate's v1alpha3 workload has no command or args;
+			// they are blanked if a later version adds them.
 			redactListValues(spec, "env")
 			if workload, ok := spec["workload"].(map[string]any); ok {
 				for _, field := range []string{"command", "args"} {
@@ -82,8 +85,6 @@ func redactKagentLiterals(obj map[string]any) {
 					}
 				}
 			}
-		case kagent.KindSandboxTemplate:
-			redactListValues(spec, "env")
 		case kagent.KindAgentTemplate:
 			stripArtifactURLs(spec)
 		case kagent.KindAgent:

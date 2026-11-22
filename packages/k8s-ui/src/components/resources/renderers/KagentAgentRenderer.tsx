@@ -12,10 +12,15 @@ import {
   getKagentAgentTemplateRef,
   getKagentHarnessDeclarations,
   getKagentTemplateDeclarations,
+  getKagentDiscoveredTools,
+  isKagentServerRef,
+  kagentRefKey,
   readKagentAgent,
+  readKagentRemoteMCPServer,
   shortRevision,
   type KagentReading,
   type KagentRef,
+  type KagentToolBinding,
 } from '../resource-utils-kagent'
 
 type Navigate = (ref: ResourceRef) => void
@@ -33,6 +38,12 @@ export interface KagentAgentRelated {
   template?: KagentRelatedRead
   /** The Harness spec.harnessRef names. */
   harness?: KagentRelatedRead
+  /**
+   * The RemoteMCPServers the template binds tools from, keyed by
+   * kagentRefKey. kagent drops the tools of a server whose discovery failed
+   * and still reports the Agent Ready, so their own status is the only sign.
+   */
+  mcpServers?: Record<string, KagentRelatedRead>
 }
 
 export interface KagentAgentRendererProps {
@@ -48,7 +59,9 @@ export interface KagentAgentRendererProps {
   sessions?: ReactNode
 }
 
-const LIST_CAP = 8
+/** How many of an Agent's references a host should read, and the drawer list. */
+export const KAGENT_AGENT_LIST_CAP = 8
+const LIST_CAP = KAGENT_AGENT_LIST_CAP
 const WARNINGS_CAP = 10
 
 const SPEC_NOTE = 'Declared by the current spec. A dependency kagent can’t resolve is named in the status above; these rows don’t check that each object exists.'
@@ -119,6 +132,39 @@ function ModelRow({ label, model, from, onNavigate }: { label: string; model: Ka
   return <Property label={label} value={<RefValue ref={model} expectedKind="ModelConfig" onNavigate={onNavigate} />} />
 }
 
+/** A referenced RemoteMCPServer's own status, or why it wasn't read. */
+function ServerStatus({ binding, read }: { binding: KagentToolBinding; read: KagentRelatedRead | undefined }) {
+  if (!binding.server || !isKagentServerRef(binding.server)) return null
+  if (read?.state !== 'read') {
+    const note = readNote(read, 'RemoteMCPServer')
+    return note ? <Unread> · {note}</Unread> : null
+  }
+  const r = readKagentRemoteMCPServer(read.object)
+  return <span> <Badge severity={healthToSeverity(r.tone)} size="sm">{r.text}</Badge></span>
+}
+
+/** Selected tools the server's discovery doesn't list: kagent drops them without a word. */
+function MissingTools({ binding, read }: { binding: KagentToolBinding; read: KagentRelatedRead | undefined }) {
+  if (read?.state !== 'read' || binding.tools.length === 0 || readKagentRemoteMCPServer(read.object).state !== 'ready') return null
+  const offered = new Set(getKagentDiscoveredTools(read.object))
+  const missing = binding.tools.filter(t => !offered.has(t))
+  if (missing.length === 0) return null
+  return <div className="text-xs text-theme-text-secondary">Not offered by the server, so the agent runs without: {missing.slice(0, 3).join(', ')}{missing.length > 3 ? ` +${missing.length - 3} more` : ''}</div>
+}
+
+/** The MCP servers whose discovery failed: the agent runs without their tools, though kagent reports it Ready. */
+function failedServers(bindings: KagentToolBinding[], reads: Record<string, KagentRelatedRead> | undefined): string[] {
+  const out: string[] = []
+  for (const b of bindings) {
+    if (!b.server || !isKagentServerRef(b.server)) continue
+    const read = reads?.[kagentRefKey(b.server)]
+    if (read?.state !== 'read') continue
+    const state = readKagentRemoteMCPServer(read.object).state
+    if (state === 'failed' || state === 'notReady') out.push(`${b.server.namespace}/${b.server.name}`)
+  }
+  return [...new Set(out)]
+}
+
 export function KagentAgentRenderer({ data, onNavigate, related, sessions }: KagentAgentRendererProps) {
   const reading = readKagentAgent(data)
   const namespace: string = data?.metadata?.namespace ?? ''
@@ -136,8 +182,15 @@ export function KagentAgentRenderer({ data, onNavigate, related, sessions }: Kag
   const mcp = template?.tools.filter(t => t.server) ?? []
   const subAgents = template?.tools.filter(t => t.subAgent) ?? []
 
+  const failed = failedServers(mcp, related?.mcpServers)
+
   return <>
     <StatusBanners reading={reading} />
+    {failed.length > 0 && <AlertBanner
+      variant="alert"
+      title={failed.length === 1 ? `MCP server ${failed[0]} failed tool discovery` : `${failed.length} MCP servers failed tool discovery`}
+      message={`kagent drops the tools it can't discover, so this agent runs without them${reading.state === 'ready' ? ' even though it reads Ready' : ''}.${failed.length > 1 ? ` ${failed.slice(0, 3).join(', ')}${failed.length > 3 ? ` +${failed.length - 3} more` : ''}.` : ''}`}
+    />}
     <Section title="Agent" icon={Bot} defaultExpanded>
       <PropertyList>
         <Property label="Status" value={<Badge severity={healthToSeverity(reading.tone)}>{reading.text}</Badge>} />
@@ -187,7 +240,9 @@ export function KagentAgentRenderer({ data, onNavigate, related, sessions }: Kag
       <PropertyList>
         {mcp.length > 0 && <Property label="MCP servers" value={<Bounded items={mcp} render={binding => <span>
           <RefValue ref={binding.server!} expectedKind="RemoteMCPServer" onNavigate={onNavigate} />
+          <ServerStatus binding={binding} read={isKagentServerRef(binding.server) ? related?.mcpServers?.[kagentRefKey(binding.server!)] : undefined} />
           <span className="text-theme-text-tertiary"> · {binding.tools.length === 0 ? 'every tool' : binding.tools.length <= 3 ? binding.tools.join(', ') : `${binding.tools.slice(0, 3).join(', ')} +${binding.tools.length - 3} more`}{binding.requireApproval ? ' · approval required' : ''}</span>
+          <MissingTools binding={binding} read={isKagentServerRef(binding.server) ? related?.mcpServers?.[kagentRefKey(binding.server!)] : undefined} />
         </span>} />} />}
         {subAgents.length > 0 && <Property label="Subagents" value={<Bounded items={subAgents} render={binding => <span>
           {binding.subAgent!.name}

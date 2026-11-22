@@ -1,6 +1,7 @@
 package kagent
 
 import (
+	"regexp"
 	"strconv"
 	"time"
 
@@ -103,11 +104,21 @@ func ReadModelConfig(u *unstructured.Unstructured, now time.Time) Reading {
 	return current
 }
 
+// secretKeyMissing is kagent's message for a Secret without the key a
+// ModelConfig names (go/core/internal/translator/modelconfig.go:99).
+var secretKeyMissing = regexp.MustCompile(`\bsecret\s+"?([^"\s]+)"?\s+does not contain key\s+"([^"]+)"`)
+
 func modelConfigStep(u *unstructured.Unstructured, refs condition) string {
-	if refs.reason == "APIKeySecretNotFound" {
-		if secret, _, _ := unstructured.NestedString(u.Object, "spec", "apiKeySecret"); secret != "" {
-			return "Create Secret " + u.GetNamespace() + "/" + secret + " or point apiKeySecret at an existing one."
+	ns := u.GetNamespace()
+	if m := secretKeyMissing.FindStringSubmatch(refs.message); m != nil {
+		return "Add key " + m[2] + " to Secret " + ns + "/" + m[1] + ", or point the ModelConfig at a key it has."
+	}
+	if m := missingSecret.FindStringSubmatch(refs.message); m != nil {
+		field := "the reference"
+		if refs.reason == "APIKeySecretNotFound" {
+			field = "apiKeySecret"
 		}
+		return "Create Secret " + ns + "/" + m[1] + " or point " + field + " at an existing one."
 	}
 	return "Create the Secret or ConfigMap kagent names, or change the reference."
 }
@@ -123,15 +134,15 @@ func configProblem(state State, text, lead, condType string, c condition, step s
 }
 
 // ReadModelProviderConfig reads a ModelProviderConfig's Ready condition. The
-// type declares it, but kagent 1.0's controllers don't write it, so most read
-// as not reported; that is never an Issue.
+// type declares it, but no kagent 1.0 controller reconciles the kind, so its
+// status stays empty; that reads as no status, neither a problem nor an Issue.
 func ReadModelProviderConfig(u *unstructured.Unstructured, _ time.Time) Reading {
 	if u.GetDeletionTimestamp() != nil {
 		return deleting()
 	}
 	ready := findCondition(u, "Ready")
 	if !ready.found {
-		return Reading{State: StateNotReported, Tone: ToneUnknown, Text: "Not reported", Summary: "kagent doesn't report readiness for this ModelProviderConfig"}
+		return Reading{State: StateNotReported, Tone: ToneNeutral, Text: "No status", Summary: "kagent doesn't report status for this kind"}
 	}
 	var current Reading
 	switch ready.status {
@@ -170,9 +181,11 @@ func ReadRemoteMCPServer(u *unstructured.Unstructured, now time.Time) Reading {
 	case accepted.status == "True":
 		current = Reading{State: StateReady, Tone: ToneHealthy, Text: "Ready", Summary: "Discovered " + toolCount(DiscoveredTools(u)), Condition: "Accepted", Reason: accepted.reason, Message: accepted.message, Since: accepted.since, SinceKnown: accepted.sinceKnown}
 	case accepted.status == "False" && (accepted.reason == "DiscoveryFailed" || accepted.reason == "InvalidDiscovery"):
-		step := "Check the server's URL and credentials, and that kagent's controller can reach it."
+		// An Agent that uses it still reads Ready: kagent drops the tools it
+		// can't discover, so this Issue is where the failure shows.
+		step := "Agents that use it run without its tools; check its URL and credentials, and that kagent's controller can reach it."
 		if accepted.reason == "InvalidDiscovery" {
-			step = "Check the tool list the server returns; kagent rejected it and publishes no tools."
+			step = "Agents that use it run without its tools; check the tool list it returns, which kagent rejected."
 		}
 		current = configProblem(StateFailed, "Discovery failed", "Tool discovery failed", "Accepted", accepted, step)
 	case accepted.status == "False":

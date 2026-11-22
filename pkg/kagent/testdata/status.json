@@ -2126,9 +2126,9 @@
       "findings": [],
       "reads": true,
       "state": "notReported",
-      "summary": "kagent doesn't report readiness for this ModelProviderConfig",
-      "text": "Not reported",
-      "tone": "unknown"
+      "summary": "kagent doesn't report status for this kind",
+      "text": "No status",
+      "tone": "neutral"
     }
   },
   {
@@ -2359,7 +2359,7 @@
     "want": {
       "findings": [
         {
-          "message": "Tool discovery failed: failed to connect: 401 Unauthorized. Check the server's URL and credentials, and that kagent's controller can reach it.",
+          "message": "Tool discovery failed: failed to connect: 401 Unauthorized. Agents that use it run without its tools; check its URL and credentials, and that kagent's controller can reach it.",
           "reason": "DiscoveryFailed",
           "severity": "warning"
         }
@@ -2410,7 +2410,7 @@
     "want": {
       "findings": [
         {
-          "message": "Tool discovery failed: duplicate tool name \"search\". Check the tool list the server returns; kagent rejected it and publishes no tools.",
+          "message": "Tool discovery failed: duplicate tool name \"search\". Agents that use it run without its tools; check the tool list it returns, which kagent rejected.",
           "reason": "InvalidDiscovery",
           "severity": "warning"
         }
@@ -2676,7 +2676,7 @@
     "want": {
       "findings": [
         {
-          "message": "Tool discovery failed: Get \"https://[REDACTED]@mcp.example.com/mcp?[REDACTED]\": 401 Unauthorized. Check the server's URL and credentials, and that kagent's controller can reach it.",
+          "message": "Tool discovery failed: Get \"https://[REDACTED]@mcp.example.com/mcp?[REDACTED]\": 401 Unauthorized. Agents that use it run without its tools; check its URL and credentials, and that kagent's controller can reach it.",
           "reason": "DiscoveryFailed",
           "severity": "warning"
         }
@@ -2686,6 +2686,277 @@
       "summary": "Tool discovery failed: Get \"https://[REDACTED]@mcp.example.com/mcp?[REDACTED]\": 401 Unauthorized",
       "text": "Discovery failed",
       "tone": "alert"
+    }
+  },
+  {
+    "name": "live: Ready agent edited to reference a missing RemoteMCPServer",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "spike-edit-agent",
+        "namespace": "kagent"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "resolve RemoteMCPServer \"spike-no-such-mcp\": not found",
+            "observedGeneration": 2,
+            "reason": "ReferenceResolutionFailed",
+            "status": "False",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "latestSuccessfulRevision": "7ce96403aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Latest change blocked: resolve RemoteMCPServer \"spike-no-such-mcp\": not found; new sessions still start on revision 7ce96403aaaa. Create RemoteMCPServer spike-no-such-mcp or point the agent at an existing one.",
+          "reason": "ReferenceResolutionFailed",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "blocked",
+      "summary": "Latest change blocked: resolve RemoteMCPServer \"spike-no-such-mcp\": not found; new sessions still start on revision 7ce96403aaaa",
+      "text": "Blocked",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "live: ModelConfig with a missing Secret",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "ModelConfig",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "gpt-4o",
+        "namespace": "agents"
+      },
+      "spec": {
+        "apiKeySecret": "spike-no-such-secret",
+        "apiKeySecretKey": "key",
+        "model": "gpt-4o",
+        "provider": "OpenAI"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "ModelConfig configuration accepted",
+            "observedGeneration": 1,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "secret spike-no-such-secret not found",
+            "observedGeneration": 1,
+            "reason": "APIKeySecretNotFound",
+            "status": "False",
+            "type": "ResolvedRefs"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "References not resolved: secret spike-no-such-secret not found. Create Secret agents/spike-no-such-secret or point apiKeySecret at an existing one.",
+          "reason": "APIKeySecretNotFound",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "blocked",
+      "summary": "References not resolved: secret spike-no-such-secret not found",
+      "text": "Blocked",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "live: ModelConfig whose Secret lacks the key",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "ModelConfig",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "gpt-4o",
+        "namespace": "agents"
+      },
+      "spec": {
+        "apiKeySecret": "spike-stub-key",
+        "apiKeySecretKey": "NO_SUCH_KEY",
+        "model": "gpt-4o",
+        "provider": "OpenAI"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "ModelConfig configuration accepted",
+            "observedGeneration": 1,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "secret spike-stub-key does not contain key \"NO_SUCH_KEY\"",
+            "observedGeneration": 1,
+            "reason": "APIKeySecretKeyNotFound",
+            "status": "False",
+            "type": "ResolvedRefs"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "References not resolved: secret spike-stub-key does not contain key \"NO_SUCH_KEY\". Add key NO_SUCH_KEY to Secret agents/spike-stub-key, or point the ModelConfig at a key it has.",
+          "reason": "APIKeySecretKeyNotFound",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "blocked",
+      "summary": "References not resolved: secret spike-stub-key does not contain key \"NO_SUCH_KEY\"",
+      "text": "Blocked",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "live: unreachable RemoteMCPServer",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "RemoteMCPServer",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "github",
+        "namespace": "agents"
+      },
+      "spec": {
+        "description": "GitHub",
+        "headersFrom": [
+          {
+            "name": "Authorization",
+            "value": "Bearer ghp_literal"
+          }
+        ],
+        "url": "https://api.githubcopilot.com/mcp/"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Failed to connect to MCP server: failed to connect MCP client: calling \"initialize\": sending \"initialize\": rejected by transport: Post \"http://no-such-mcp.example:9999/mcp\": dial tcp: lookup no-such-mcp.example on 172.20.0.10:53: no such host",
+            "observedGeneration": 1,
+            "reason": "DiscoveryFailed",
+            "status": "False",
+            "type": "Accepted"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Tool discovery failed: Failed to connect to MCP server: failed to connect MCP client: calling \"initialize\": sending \"initialize\": rejected by transport: Post \"http://no-such-mcp.example:9999/mcp\": dial tcp: lookup no-such-mcp.example on 172.20.0.10:53: no such host. Agents that use it run without its tools; check its URL and credentials, and that kagent's controller can reach it.",
+          "reason": "DiscoveryFailed",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Tool discovery failed: Failed to connect to MCP server: failed to connect MCP client: calling \"initialize\": sending \"initialize\": rejected by transport: Post \"http://no-such-mcp.example:9999/mcp\": dial tcp: lookup no-such-mcp.example on 172.20.0.10:53: no such host",
+      "text": "Discovery failed",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "live: ModelProviderConfig with null status",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "ModelProviderConfig",
+      "metadata": {
+        "creationTimestamp": "2026-11-01T00:00:00Z",
+        "generation": 1,
+        "name": "openai",
+        "namespace": "agents"
+      },
+      "spec": {
+        "type": "OpenAI"
+      },
+      "status": null
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "notReported",
+      "summary": "kagent doesn't report status for this kind",
+      "text": "No status",
+      "tone": "neutral"
     }
   }
 ]
