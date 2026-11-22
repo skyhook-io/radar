@@ -46,14 +46,16 @@ func TestFluxChainKustomizationPending(t *testing.T) {
 	}
 }
 
-func TestFluxChainObjectsFallBackToTree(t *testing.T) {
+// The tree is filtered for the caller, so its count would understate what
+// Flux applied; without an inventory the count stays unknown.
+func TestFluxChainObjectsIgnoreTreeWithoutInventory(t *testing.T) {
 	root := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
 		"metadata": map[string]any{"namespace": "team", "name": "app"},
 		"status":   map[string]any{"lastAppliedRevision": "main@sha1:aaa"},
 	}}
-	if s := Build(root, &gitopstree.ResourceTree{Summary: gitopstree.Summary{Declared: 4}}, nil).Summary; s.Objects != 4 {
-		t.Fatalf("objects = %d, want 4", s.Objects)
+	if s := Build(root, &gitopstree.ResourceTree{Summary: gitopstree.Summary{Declared: 4}}, nil).Summary; s.Objects != 0 {
+		t.Fatalf("objects = %d, want 0", s.Objects)
 	}
 }
 

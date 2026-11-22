@@ -18,8 +18,6 @@ func applyFluxChain(s *Summary, root *unstructured.Unstructured, tree *gitopstre
 	raw, _, _ := unstructured.NestedFieldNoCopy(root.Object, "status", "inventory", "entries")
 	if entries, ok := raw.([]any); ok {
 		s.Objects = len(entries)
-	} else if tree != nil {
-		s.Objects = tree.Summary.Declared
 	}
 
 	var primary *gitops.FluxSourceRef
