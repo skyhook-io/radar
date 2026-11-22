@@ -88,9 +88,11 @@ export function ArtifactGeneratorRenderer({ data, onNavigate }: Props) {
                 {s.alias && <span className="font-mono text-theme-text-tertiary">@{s.alias}</span>}
                 <span className="text-theme-text-tertiary">{s.kind}</span>
                 {SOURCE_PLURALS[s.kind] ? (
-                  <ResourceLink name={s.name} kind={SOURCE_PLURALS[s.kind]} group="source.toolkit.fluxcd.io" namespace={s.namespace || namespace} onNavigate={onNavigate} />
+                  <span className="min-w-0 break-all">
+                    <ResourceLink name={s.name} kind={SOURCE_PLURALS[s.kind]} group="source.toolkit.fluxcd.io" namespace={s.namespace || namespace} onNavigate={onNavigate} />
+                  </span>
                 ) : (
-                  <span className="text-theme-text-primary">{s.name}</span>
+                  <span className="min-w-0 break-all text-theme-text-primary">{s.name}</span>
                 )}
               </div>
             ))}
@@ -118,7 +120,7 @@ export function ArtifactGeneratorRenderer({ data, onNavigate }: Props) {
               <div key={i}>
                 <div className="font-medium text-theme-text-primary">{a.name}</div>
                 {(a.copy || []).map((c: any, j: number) => (
-                  <div key={j} className="font-mono text-theme-text-secondary">{c.from} → {c.to}</div>
+                  <div key={j} className="break-all font-mono text-theme-text-secondary">{c.from} → {c.to}</div>
                 ))}
               </div>
             ))}
