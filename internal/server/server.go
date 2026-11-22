@@ -2330,8 +2330,16 @@ func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObser
 	return observation
 }
 
+func (s *Server) writeIfDiscoveryPending(w http.ResponseWriter) bool {
+	if !k8s.GetResourceCache().CustomResourcesPending() {
+		return false
+	}
+	s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Kubernetes API discovery is still running")
+	return true
+}
+
 func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnected(w) || s.writeIfDiscoveryPending(w) {
 		return
 	}
 	discovery := k8s.GetResourceDiscovery()

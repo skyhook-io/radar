@@ -475,6 +475,9 @@ func resourceIssuesCoverage(kind, group, namespace string) string {
 	disc := k8s.GetResourceDiscovery()
 	dyn := k8s.GetDynamicResourceCache()
 	if disc == nil || dyn == nil {
+		if k8s.GetResourceCache().CustomResourcesPending() {
+			return resourceIssuesCoverageSyncing
+		}
 		return resourceIssuesCoverageNotWatched
 	}
 	gvr, ok := disc.GetGVRWithGroup(kind, group)

@@ -194,7 +194,7 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	dynamicCache := GetDynamicResourceCache()
 	if dynamicCache != nil {
 		info.CRDDiscoveryStatus = string(dynamicCache.GetDiscoveryStatus())
-	} else if cache != nil && cache.apiDiscoveryPending.Load() {
+	} else if cache.CustomResourcesPending() {
 		info.CRDDiscoveryStatus = string(k8score.CRDDiscoveryInProgress)
 	}
 

@@ -114,6 +114,10 @@ func InitTestPromotedSyncingCache(client kubernetes.Interface, syncTimeout, defe
 	return nil
 }
 
+func (c *ResourceCache) SetTestAPIDiscoveryPending(pending bool) {
+	c.apiDiscoveryPending.Store(pending)
+}
+
 // InitTestResourceCache creates a resource cache from a fake or test client,
 // bypassing RBAC checks and the normal Initialize/InitResourceCache flow.
 // All resource types are enabled. Call ResetTestState to clean up.

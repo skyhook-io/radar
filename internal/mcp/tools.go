@@ -2697,10 +2697,11 @@ type mcpMetrics struct {
 }
 
 type mcpClusterInfo struct {
-	Name              string `json:"name"`                        // kubeconfig context, or "in-cluster"
-	KubeconfigCluster string `json:"kubeconfigCluster,omitempty"` // cluster entry the context points at; several contexts can share one
-	Platform          string `json:"platform"`
-	Version           string `json:"version"`
+	Name               string `json:"name"`                        // kubeconfig context, or "in-cluster"
+	KubeconfigCluster  string `json:"kubeconfigCluster,omitempty"` // cluster entry the context points at; several contexts can share one
+	Platform           string `json:"platform"`
+	Version            string `json:"version"`
+	CRDDiscoveryStatus string `json:"crdDiscoveryStatus,omitempty"`
 }
 
 type mcpNodeSummary = health.NodeFleetCounts
@@ -2875,10 +2876,11 @@ func mcpHelmDashboardPriority(r helm.HelmRelease) int {
 
 func mcpClusterInfoFromInfo(info *k8s.ClusterInfo) mcpClusterInfo {
 	return mcpClusterInfo{
-		Name:              info.DisplayName(),
-		KubeconfigCluster: info.KubeconfigCluster(),
-		Platform:          info.Platform,
-		Version:           info.KubernetesVersion,
+		Name:               info.DisplayName(),
+		KubeconfigCluster:  info.KubeconfigCluster(),
+		Platform:           info.Platform,
+		Version:            info.KubernetesVersion,
+		CRDDiscoveryStatus: info.CRDDiscoveryStatus,
 	}
 }
 

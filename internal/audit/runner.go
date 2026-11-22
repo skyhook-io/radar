@@ -104,6 +104,9 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	input.PDPlacement = collectPDPlacement(cache, namespaces, scope)
 
 	results := bp.RunChecks(input)
+	if cache.CustomResourcesPending() {
+		results.MissingInputs = append(results.MissingInputs, "custom resources")
+	}
 	if !hasCompleteSecretInput(cache, namespaces, scope) && !slices.Contains(results.MissingInputs, "secrets") {
 		results.MissingInputs = append(results.MissingInputs, "secrets")
 	}

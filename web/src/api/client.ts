@@ -715,7 +715,7 @@ export interface DashboardResponse {
     maxVersion: string;
   } | null;
   deferredLoading?: boolean; // True while deferred informers (secrets, events, etc.) are still syncing
-  partialData?: string[]; // Critical kinds promoted at first paint that haven't yet finished syncing (live-filtered)
+  partialData?: string[]; // Resources still loading after the initial wait
   accessRestricted?: boolean; // True when user has no namespace access (RBAC)
 }
 
