@@ -157,6 +157,8 @@ The families so far:
 | `PodPlacement` | Pods → the Node they run on (a finished Pod runs nowhere); a Node's Pods are read from every Pod | `status_families.go` |
 | `Reflections` | Reflector mirrors (Secrets, ConfigMaps) → the source their `reflects` annotation names, in any namespace; a source's mirrors come from the family's index | `status_families.go` |
 | `Storage` | PersistentVolumeClaims → their PersistentVolume and StorageClass; PersistentVolumes → their claim and StorageClass | `status_families.go` |
+| `VolumeSnapshots` | CSI VolumeSnapshots → their observed bound VolumeSnapshotContent (`status.boundVolumeSnapshotContentName`), VolumeSnapshotClass, and source PersistentVolumeClaim; controller-bound VolumeSnapshotContents (`spec.volumeSnapshotRef.uid` set) → their VolumeSnapshot and VolumeSnapshotClass | `volumesnapshots.go` |
+| `RestoredVolumeSnapshots` | PersistentVolumeClaims → the CSI VolumeSnapshot named by `spec.dataSource` or `spec.dataSourceRef` (including cross-namespace `dataSourceRef`) | `volumesnapshots.go` |
 | `MachineNodes` | Karpenter NodeClaims and Cluster API Machines → the Node their status records | `status_families.go` |
 | `AnalysisRuns` | Argo Rollouts → the AnalysisRuns their status points at | `status_families.go` |
 | `FluxHelmOrigins` | Origin labels on Deployment, Service, StatefulSet, DaemonSet, Job, CronJob and Rollout → Flux HelmRelease; the dark projection uses these only for local releases with no readable inventory | `management_families.go` |

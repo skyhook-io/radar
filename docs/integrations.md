@@ -1318,7 +1318,9 @@ Collection is on by default in the Helm chart (`rbac.crdGroups.volumeSnapshots`)
 
 Checked against snapshot-controller v8.6.0 and the csi-hostpath driver on kind: ready dynamic snapshots with Delete and Retain classes, a missing class, a missing PVC, an unbound PVC, and pre-provisioned contents with a valid and an unknown snapshot handle.
 
-Not covered: topology and Related Resources edges, VolumeGroupSnapshots, PVCs restored from a snapshot (`dataSource`), and snapshot creation, deletion or restore actions.
+Related Resources links each VolumeSnapshot to its observed bound VolumeSnapshotContent (`status.boundVolumeSnapshotContentName`), its VolumeSnapshotClass, and its source PersistentVolumeClaim, each controller-bound VolumeSnapshotContent (`spec.volumeSnapshotRef.uid` set) to its VolumeSnapshot and class, and each PersistentVolumeClaim restored via `spec.dataSource` or `spec.dataSourceRef` to its source VolumeSnapshot. Unbound requested content names are not treated as bindings; cluster-scoped reads follow the caller's RBAC and report withheld targets cleanly.
+
+Not covered: display topology graph nodes, VolumeGroupSnapshots, and snapshot creation, deletion or restore actions.
 
 ---
 

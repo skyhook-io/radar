@@ -73,3 +73,5 @@ F71	Pod grouping			PodGroup nodes have no ResourceRef and never project; ownersh
 F72	Traffic view			Traffic-view graph is not read by Related Resources.	
 F73	Longhorn Volume ↔ PV (CSI handle)	longhornStorage	longhornStorage		A PV handle names no namespace, so it links only when exactly one Volume in any namespace has that name, read with Radar's identity; an unreadable Volume list links nothing and is reported as a direct-read gap.
 F74	Flux dependsOn	fluxDependsOn	fluxDependsOn		
+F75	CSI VolumeSnapshot ↔ Content / Class / source PVC	volumeSnapshots	volumeSnapshots		Observed bindings only: VolumeSnapshot uses status.boundVolumeSnapshotContentName (not spec.source.volumeSnapshotContentName) and VolumeSnapshotContent requires a populated spec.volumeSnapshotRef.uid.
+F76	PVC restored from CSI VolumeSnapshot	restoredVolumeSnapshots	restoredVolumeSnapshots		Reads spec.dataSource and spec.dataSourceRef (including cross-namespace dataSourceRef), deduplicating when both name the same snapshot.
