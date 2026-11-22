@@ -224,7 +224,7 @@ function PostureSummary({ posture, lowerBound, active, onToggle }: {
             key={id}
             type="button"
             aria-pressed={on}
-            aria-label={`${POSTURE_LABELS[id]}: ${n(value)}`}
+            aria-label={`${POSTURE_LABELS[id]}: ${lowerBound && value === 0 ? 'unknown' : n(value)}`}
             disabled={value === 0 && !on}
             onClick={() => onToggle(id)}
             className={clsx(
