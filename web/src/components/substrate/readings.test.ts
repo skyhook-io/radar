@@ -312,6 +312,21 @@ describe('pool slots as utilization', () => {
     // No free slot on any active worker blocks work: the warning of its Needs attention row (poolFull).
     expect(poolReading({ capacity: 'full' })).toMatchObject({ label: 'No free actor slots', severity: 'warning' })
   })
+
+  it('reads free slots that fit no actor as blocking as a full pool, naming what they lack', async () => {
+    const { poolReading } = await import('./readings')
+    expect(poolReading({ capacity: 'noRoom', lacking: 'cpu' })).toMatchObject({ label: 'No CPU left for an actor', severity: 'warning' })
+    expect(poolReading({ capacity: 'noRoom', lacking: 'memory' }).label).toBe('No memory left for an actor')
+    expect(poolReading({ capacity: 'noRoom', lacking: 'cpuAndMemory' }).label).toBe('No CPU or memory left for an actor')
+    expect(poolReading({ capacity: 'noRoom', lacking: 'cpu' }).meaning).toContain('new and resuming actors wait for a worker')
+  })
+
+  it('reads a verdict from a newer Radar as unknown, never as free', async () => {
+    const { poolReading } = await import('./readings')
+    const r = poolReading({ capacity: 'overbooked' })
+    expect(r).toMatchObject({ label: 'Unknown', severity: 'neutral' })
+    expect(r.meaning).toContain('overbooked')
+  })
 })
 
 describe('the timing that ties a memory-limit kill to the crash', () => {

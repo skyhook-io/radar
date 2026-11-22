@@ -37,7 +37,10 @@ const (
 	RuleWorkerRestarting  = "workerRestarting"
 	RulePoolShort         = "poolShort"
 	RulePoolFull          = "poolFull"
-	RuleUploadOverdue     = "uploadOverdue"
+	// RulePoolNoRoom: a pool's free slots lack the CPU or memory an actor of
+	// any template that can run on it books.
+	RulePoolNoRoom    = "poolNoRoom"
+	RuleUploadOverdue = "uploadOverdue"
 	// RuleNodeUploadsOverdue is atelet's own count of uploads past their
 	// deadline, read from Prometheus.
 	RuleNodeUploadsOverdue = "nodeUploadsOverdue"
@@ -247,8 +250,8 @@ type NodeService struct {
 var ruleRank = map[string]int{
 	RuleCrashedActors: 0, RuleNoMatchingPool: 1, RuleMissingTemplate: 2,
 	RuleWorkerUnavailable: 3, RuleWorkerDraining: 4, RuleWorkerRestarting: 5,
-	RulePoolShort: 6, RulePoolFull: 7,
-	RuleStuckTransition: 8, RuleGoldenFailed: 9, RuleNodeUploadsOverdue: 10, RuleUploadOverdue: 11,
+	RulePoolShort: 6, RulePoolFull: 7, RulePoolNoRoom: 8,
+	RuleStuckTransition: 9, RuleGoldenFailed: 10, RuleNodeUploadsOverdue: 11, RuleUploadOverdue: 12,
 }
 
 // NeedsAttention applies every rule whose inputs were read (Checks lists
@@ -1036,16 +1039,17 @@ func poolConverging(p Pool, now time.Time) (bool, string) {
 	return false, ""
 }
 
-// Rule 7: pools short of workers or with no free actor slots, from the
-// inventory and, when Prometheus was read, Substrate's own pool verdicts. One
-// row per pool: a verdict confirms an inventory row or stands alone.
+// Rule 7: pools short of workers, with no free actor slots, or whose free
+// slots lack the CPU or memory for an actor, from the inventory and, when
+// Prometheus was read, Substrate's own pool verdicts. One row per pool: a
+// verdict confirms an inventory row or stands alone.
 func poolRows(in Inputs) []Attention {
 	var out []Attention
 	var svc map[string]PoolService
 	if serviceRead(in) {
 		svc = in.Service.Pools
 	}
-	for _, r := range JoinPools(in.Pools, in.Workers, in.WorkersRead, in.WorkersComplete, in.Actors, in.ActorsRead) {
+	for _, r := range JoinPools(in) {
 		subject := Subject{Kind: "WorkerPool", Namespace: r.Namespace, Name: r.Name}
 		name := r.Namespace + " / " + r.Name
 		ps, hasSvc := svc[r.Ref().Key()]
@@ -1090,6 +1094,8 @@ func poolRows(in Inputs) []Attention {
 				NextStep: "Add workers to the pool, or let templates select another pool.",
 				Subject:  subject, Count: r.Placement.Workers.Active,
 			}
+		case CapacityNoRoom:
+			row = noRoomRow(in, r, name, subject)
 		}
 		if hasSvc {
 			row = withPoolVerdict(row, ps, name, subject, r.Ref())
@@ -1099,6 +1105,82 @@ func poolRows(in Inputs) []Attention {
 		}
 	}
 	return out
+}
+
+// lackingWords names what a pool's free slots lack, as a reading says it.
+var lackingWords = map[string]string{LackingCPU: "CPU", LackingMemory: "memory", LackingCPUAndMemory: "CPU or memory"}
+
+// noRoomRow is a pool whose active workers have free slots but not the CPU or
+// memory an actor of any template that can run on it books. Like a full pool,
+// it places nothing new and loses nothing: a warning.
+func noRoomRow(in Inputs, r PoolRow, name string, subject Subject) *Attention {
+	what := lackingWords[r.Lacking]
+	templates, asks := "the template that can run on it", "the template asks"
+	if r.room.templates > 1 {
+		templates, asks = fmt.Sprintf("any of the %d templates that can run on it", r.room.templates), "the least any of them asks"
+	}
+	reading := fmt.Sprintf("None of its active workers with a free actor slot has the %s left for an actor of %s, so new and resuming actors wait for a worker.", what, templates)
+	if r.Lacking != LackingMemory && r.room.ask.CPUMillicores > r.room.unbooked.CPUMillicores {
+		reading += fmt.Sprintf(" The most CPU unbooked on such a worker is %s; %s %s.", cpuText(r.room.unbooked.CPUMillicores), asks, cpuText(r.room.ask.CPUMillicores))
+	}
+	if r.Lacking != LackingCPU && r.room.ask.MemoryBytes > r.room.unbooked.MemoryBytes {
+		reading += fmt.Sprintf(" The most memory unbooked on such a worker is %s; %s %s.", bytesText(r.room.unbooked.MemoryBytes), asks, bytesText(r.room.ask.MemoryBytes))
+	}
+	if in.ActorsRead && r.Lacking != LackingCPU && kagentRunsOn(in, subject) {
+		reading += " kagent sessions run on these templates: kagent sets every agent's memory in its Helm value config.runtimeDefaults.memory."
+	}
+	limits := map[string]string{LackingCPU: "lower CPU limits", LackingMemory: "lower memory limits", LackingCPUAndMemory: "lower CPU and memory limits"}[r.Lacking]
+	return &Attention{
+		ID: RulePoolNoRoom + ":" + r.Ref().Key(), Rule: RulePoolNoRoom, Severity: SeverityWarning,
+		Title:    fmt.Sprintf("%s has no %s left for another actor", name, what),
+		Reading:  reading,
+		NextStep: fmt.Sprintf("Add workers to the pool, or give its templates %s (templates can't be edited: recreate them).", limits),
+		Subject:  subject, Count: r.Placement.Workers.Active,
+	}
+}
+
+// kagentRunsOn reports a kagent session whose template can run on the pool.
+func kagentRunsOn(in Inputs, pool Subject) bool {
+	var labels map[string]string
+	for _, p := range KnownPools(in.Pools, in.Workers) {
+		if p.Ref.Namespace == pool.Namespace && p.Ref.Name == pool.Name {
+			labels = p.Labels
+		}
+	}
+	runs := map[Ref]bool{}
+	for _, t := range in.Templates {
+		runs[t.Ref()] = SelectorMatches(t.WorkerSelector, labels)
+	}
+	for _, a := range in.Actors {
+		if isKagent(a) && runs[a.Template] {
+			return true
+		}
+	}
+	return false
+}
+
+// cpuText is millicores in words: "1 CPU", "1.5 CPU", "930m CPU".
+func cpuText(m int64) string {
+	switch {
+	case m%1000 == 0:
+		return fmt.Sprintf("%d CPU", m/1000)
+	case m > 1000 && m%100 == 0:
+		return fmt.Sprintf("%.1f CPU", float64(m)/1000)
+	}
+	return fmt.Sprintf("%dm CPU", m)
+}
+
+// bytesText is a memory amount in binary units: "1Gi", "1.5Gi", "512Mi".
+func bytesText(b int64) string {
+	switch {
+	case b >= 1<<30 && b%(1<<30) == 0:
+		return fmt.Sprintf("%dGi", b>>30)
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1fGi", float64(b)/(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%dMi", b>>20)
+	}
+	return fmt.Sprintf("%d bytes", b)
 }
 
 // withPoolVerdict folds Substrate's pool verdict into the inventory row, or
@@ -1298,7 +1380,7 @@ type Check struct {
 // means they are healthy.
 var NotAssessed = []string{
 	"API operation errors (resume, suspend and tag calls)",
-	"Resumes that fail before placement, such as no worker fitting the actor",
+	"Resumes that fail before placement for the actor's own reasons, such as its selector, snapshot or runtime fitting no worker",
 	"Request routing and egress",
 	"Worker log collection",
 }
@@ -1323,6 +1405,7 @@ func Checks(in Inputs) []Check {
 	templates := req{ok: in.TemplatesRead, why: "templates were not read"}
 	templatesAll := req{ok: in.TemplatesComplete, why: "the template list is incomplete"}
 	workers := req{ok: in.WorkersRead, why: "workers were not read"}
+	workersAll := req{ok: in.WorkersComplete, why: "the worker list is incomplete"}
 	poolsAll := req{ok: in.PoolsComplete, why: "the WorkerPool list is incomplete"}
 	pools := req{ok: in.PoolsUsable || in.WorkersRead, why: "neither WorkerPools nor workers were read"}
 	svcWhy := "Prometheus was not queried"
@@ -1343,6 +1426,7 @@ func Checks(in Inputs) []Check {
 		need(RuleWorkerRestarting, "Worker registrations not yet reconciled", workers),
 		need(RulePoolShort, "Pools short of workers", pools),
 		need(RulePoolFull, "Pools with no free actor slots", pools),
+		need(RulePoolNoRoom, "Pools whose free slots lack the CPU or memory for an actor", workers, workersAll, templatesAll),
 		need("poolService", "Substrate's pool capacity verdicts (Prometheus)", svc),
 		need(RuleNodeUploadsOverdue, "Overdue snapshot uploads per node (Prometheus)", svc, nodes),
 	}

@@ -473,6 +473,40 @@ func TestSubstrateNotInstalled(t *testing.T) {
 	}
 }
 
+// A pool whose free slots lack the CPU an actor books reads noRoom on every
+// surface that counts it: the row, the summary, the free-slot breakdown and
+// Needs attention.
+func TestSubstrateWorkspacePoolNoRoom(t *testing.T) {
+	s := substrateTestServer(t, substrateapi.Kube{})
+	fake := defaultFake()
+	fake.templates = []*ateapi.ActorTemplate{{
+		Metadata: &ateapi.ResourceMetadata{Atespace: "research", Name: "lang"}, WorkerSelector: &ateapi.Selector{MatchLabels: map[string]string{"class": "gvisor"}},
+		Resources: &ateapi.ResourceRequirements{Limits: &ateapi.Resources{CpuMillicores: 1000, MemoryBytes: 1 << 30}},
+	}}
+	fake.workers[0].Status.Capacity = &ateapi.WorkerResources{CpuMillicores: 1930, MemoryBytes: 7 << 30, Actors: 1000}
+	fake.workers[0].Status.Allocated = &ateapi.WorkerResources{CpuMillicores: 1000, MemoryBytes: 1 << 30, Actors: 1}
+	connectFake(t, s, fake, fullToken)
+	settledStatus(t, s)
+
+	var ws substrateWorkspaceResponse
+	call(t, s, s.handleSubstrateWorkspace, substrateCall{path: "/api/substrate/workspace"}, &ws)
+	if ws.Coverage.Templates.State != substrateapi.CoverageFull || ws.Coverage.Workers.State != substrateapi.CoverageFull {
+		t.Fatalf("coverage = %+v", ws.Coverage)
+	}
+	if len(ws.Pools) != 1 || ws.Pools[0].Capacity != model.CapacityNoRoom || ws.Pools[0].Lacking != model.LackingCPU {
+		t.Fatalf("pools = %+v", ws.Pools)
+	}
+	if ws.Summary.Pools == nil || ws.Summary.Pools.NoRoom != 1 || ws.Summary.Pools.Full != 0 {
+		t.Errorf("summary pools = %+v", ws.Summary.Pools)
+	}
+	if len(ws.Summary.FreeSlots) != 1 || ws.Summary.FreeSlots[0].Free != 999 || ws.Summary.FreeSlots[0].Lacking != model.LackingCPU {
+		t.Errorf("free slots = %+v", ws.Summary.FreeSlots)
+	}
+	if !slices.ContainsFunc(ws.NeedsAttention, func(a model.Attention) bool { return a.ID == "poolNoRoom:agents/agent-pool" }) {
+		t.Errorf("needs attention = %+v", ws.NeedsAttention)
+	}
+}
+
 func TestSubstrateConnected(t *testing.T) {
 	s := substrateTestServer(t, substrateapi.Kube{})
 	connectFake(t, s, defaultFake(), fullToken)

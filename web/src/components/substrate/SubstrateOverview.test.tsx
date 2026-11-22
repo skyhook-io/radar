@@ -301,6 +301,27 @@ describe('Agent Substrate status line beside the inventory', () => {
     expect(serviceFacts({ service: base.service, summary: base.summary, needsAttention: [upload] }).find((f) => f.label === 'Uploads')!.tone).toBe('alert')
   })
 
+  it('never reads free slots as free capacity when no worker has the CPU or memory for an actor', async () => {
+    const { overviewFacts } = await import('./SubstrateOverview')
+    const slotLine = (data: ReturnType<typeof workspace>) => {
+      const f = overviewFacts(data).find((f) => words(renderToStaticMarkup(<>{f.label}</>)) === 'Actor slots')!
+      return { value: text(String(f.value)), tone: f.tone }
+    }
+    const base = workspace()
+    const pool = { namespace: 'kagent', name: 'agent-pool' }
+    // The live case: one worker, 1,000 slots, 1 used, and not the CPU for a second actor.
+    const live = { ...base, summary: { ...base.summary, pools: { total: 1, short: 0, full: 0, noRoom: 1 }, slots: { used: 1, total: 1000 }, freeSlots: [{ pool, free: 999, lacking: 'cpu' as const }] } }
+    expect(slotLine(live)).toEqual({ value: '1 of 1,000 used (999 free, but agent-pool’s workers have no CPU left for an actor)', tone: 'degraded' })
+    const poolsFact = overviewFacts(live).find((f) => words(renderToStaticMarkup(<>{f.label}</>)) === 'Worker pools')!
+    expect(poolsFact.value).toBe('1, 1 with no room for an actor')
+    expect(poolsFact.tone).not.toBe('healthy')
+    // Mixed: the free count is the room that is left; the rest is named, not added in.
+    const mixed = { ...base, summary: { ...base.summary, freeSlots: [{ pool: { namespace: 'batch', name: 'batch-pool' }, free: 21, lacking: 'memory' as const }, { pool: { namespace: 'agent-ns', name: 'agent-pool' }, free: 3 }] } }
+    expect(slotLine(mixed)).toEqual({ value: '212 of 236 used (3 free on agent-pool; 21 more where batch-pool’s workers have no memory left for an actor)', tone: 'healthy' })
+    // An older Radar sends no lacking: the line reads as it always did.
+    expect(slotLine(base)).toEqual({ value: '212 of 236 used (24 free, 21 of them on batch-pool)', tone: 'healthy' })
+  })
+
   it('folds an unmeasured Prometheus into one unknown fact', async () => {
     const { serviceFacts } = await import('./SubstrateOverview')
     const facts = serviceFacts({ service: { read: true, poolsUnknown: 3, nodesOverdue: 0, nodesUnknown: 2 }, summary: { pools: { total: 3, short: 0, full: 0 } }, needsAttention: [] })

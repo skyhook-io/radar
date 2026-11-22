@@ -276,7 +276,7 @@ func TestNeedsAttentionPools(t *testing.T) {
 	if r := find(t, partial, "poolShort:ns/empty"); !strings.HasPrefix(r.Reading, "0 of 2 desired workers are ready.") {
 		t.Errorf("a partial worker list leaves the count to Kubernetes: %q", r.Reading)
 	}
-	for _, r := range JoinPools(pools, workers, true, false, nil, false) {
+	for _, r := range JoinPools(Inputs{Pools: pools, Workers: workers, WorkersRead: true}) {
 		want := map[string]string{"short": CapacityFree, "empty": CapacityShort, "full": "", "free": CapacityFree}[r.Name]
 		if r.Capacity != want || r.Placement.Complete {
 			t.Errorf("%s: capacity %q complete %v, want %q", r.Name, r.Capacity, r.Placement.Complete, want)

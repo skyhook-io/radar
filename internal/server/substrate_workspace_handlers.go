@@ -810,6 +810,9 @@ type substrateSummary struct {
 		Total int `json:"total"`
 		Short int `json:"short"`
 		Full  int `json:"full"`
+		// NoRoom counts pools whose free slots lack the CPU or memory for an
+		// actor (capacity noRoom).
+		NoRoom int `json:"noRoom"`
 	} `json:"pools,omitempty"`
 	Workers *model.WorkerCounts `json:"workers,omitempty"`
 	Slots   *model.Usage        `json:"slots,omitempty"`
@@ -833,6 +836,10 @@ type substrateSummary struct {
 type substratePoolFree struct {
 	Pool model.PoolRef `json:"pool"`
 	Free int64         `json:"free"`
+	// Lacking is the pool's PoolRow.Lacking: its free slots lack the CPU or
+	// memory for an actor of any template that can run on it. Absent when
+	// some slot may take one, or that was not judged.
+	Lacking string `json:"lacking,omitempty"`
 }
 
 // Per-atespace read states of one kind.
@@ -902,7 +909,7 @@ func (s *Server) handleSubstrateWorkspace(w http.ResponseWriter, r *http.Request
 	now := time.Now()
 	in := s.substrateInputs(r, snap, pools, poolsCov, poolsClusterWide, now)
 	in.NodeReady = s.substrateNodeReady(r)
-	rows := model.JoinPools(pools, in.Workers, in.WorkersRead, in.WorkersComplete, in.Actors, in.ActorsRead)
+	rows := model.JoinPools(in)
 	in.Service = s.substrateService(r, rows, in)
 	for i := range rows {
 		if ps, ok := in.Service.Pools[rows[i].Ref().Key()]; ok {
@@ -915,9 +922,10 @@ func (s *Server) handleSubstrateWorkspace(w http.ResponseWriter, r *http.Request
 	}
 	if in.PoolsUsable || in.WorkersRead {
 		resp.Summary.Pools = &struct {
-			Total int `json:"total"`
-			Short int `json:"short"`
-			Full  int `json:"full"`
+			Total  int `json:"total"`
+			Short  int `json:"short"`
+			Full   int `json:"full"`
+			NoRoom int `json:"noRoom"`
 		}{Total: len(rows)}
 		for _, p := range rows {
 			switch p.Capacity {
@@ -925,6 +933,8 @@ func (s *Server) handleSubstrateWorkspace(w http.ResponseWriter, r *http.Request
 				resp.Summary.Pools.Short++
 			case model.CapacityFull:
 				resp.Summary.Pools.Full++
+			case model.CapacityNoRoom:
+				resp.Summary.Pools.NoRoom++
 			}
 		}
 	}
@@ -939,7 +949,7 @@ func (s *Server) handleSubstrateWorkspace(w http.ResponseWriter, r *http.Request
 		resp.Summary.FreeSlots = []substratePoolFree{}
 		for _, row := range rows {
 			if row.Placement != nil && row.Placement.Slots.Total > row.Placement.Slots.Used {
-				resp.Summary.FreeSlots = append(resp.Summary.FreeSlots, substratePoolFree{Pool: row.Ref(), Free: row.Placement.Slots.Total - row.Placement.Slots.Used})
+				resp.Summary.FreeSlots = append(resp.Summary.FreeSlots, substratePoolFree{Pool: row.Ref(), Free: row.Placement.Slots.Total - row.Placement.Slots.Used, Lacking: row.Lacking})
 			}
 		}
 		slices.SortStableFunc(resp.Summary.FreeSlots, func(a, b substratePoolFree) int { return int(b.Free - a.Free) })
@@ -1409,7 +1419,7 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 
 	in := s.substrateInputs(r, snap, pools, poolsCov, poolsClusterWide, now)
 	in.NodeReady = s.substrateNodeReady(r)
-	poolRows := model.JoinPools(pools, in.Workers, in.WorkersRead, in.WorkersComplete, in.Actors, in.ActorsRead)
+	poolRows := model.JoinPools(in)
 	uids := templateUIDs(snap)
 	if t, found, _, _, _ := s.substrateTemplate(r, snap, actor.Template); found {
 		row := model.TemplateRows([]model.Template{t}, in.Actors, in.ActorsRead, model.KnownPools(pools, in.Workers), in.PoolsUsable || in.WorkersRead, in.PoolsComplete, poolRows)[0]
@@ -2027,7 +2037,7 @@ type substrateTemplatesResponse struct {
 func (s *Server) substrateTemplateRows(r *http.Request, snap *substrateapi.Snapshot, templates []model.Template) ([]model.TemplateRow, integration.KindCoverage) {
 	pools, poolsCov, poolsClusterWide := s.substratePools(r)
 	in := s.substrateInputs(r, snap, pools, poolsCov, poolsClusterWide, time.Now())
-	poolRows := model.JoinPools(pools, in.Workers, in.WorkersRead, in.WorkersComplete, in.Actors, in.ActorsRead)
+	poolRows := model.JoinPools(in)
 	return model.TemplateRows(templates, in.Actors, in.ActorsRead, model.KnownPools(pools, in.Workers), in.PoolsUsable || in.WorkersRead, in.PoolsComplete, poolRows), poolsCov
 }
 
@@ -2148,7 +2158,7 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 	pools, poolsCov, poolsClusterWide := s.substratePools(r)
 	in := s.substrateInputs(r, snap, pools, poolsCov, poolsClusterWide, time.Now())
 	var row *model.PoolRow
-	for _, p := range model.JoinPools(pools, in.Workers, in.WorkersRead, in.WorkersComplete, in.Actors, in.ActorsRead) {
+	for _, p := range model.JoinPools(in) {
 		if p.Ref() == ref {
 			row = &p
 		}
@@ -2163,7 +2173,8 @@ func (s *Server) handleSubstratePool(w http.ResponseWriter, r *http.Request) {
 			found := []model.Pool{poolOf(got, time.Now())}
 			s.withPoolPods(r, found)
 			pools = append(pools, found...)
-			for _, p := range model.JoinPools(pools, in.Workers, in.WorkersRead, in.WorkersComplete, in.Actors, in.ActorsRead) {
+			in.Pools = pools
+			for _, p := range model.JoinPools(in) {
 				if p.Ref() == ref {
 					row = &p
 				}

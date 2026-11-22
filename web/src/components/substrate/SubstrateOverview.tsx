@@ -6,7 +6,7 @@ import { refToSelectedResource } from '../../utils/navigation'
 import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { INCOMPLETE_COVERAGE_STATES, coverageEmpty, coverageLabel } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
-import { attentionArea, coverageInPart, countText, poolReading, poolReadyPods, worstAttentionTone, type AttentionArea } from './readings'
+import { attentionArea, coverageInPart, countText, lackingText, poolReading, poolReadyPods, worstAttentionTone, type AttentionArea } from './readings'
 import { SUBSTRATE_GROUP, substrateActorsPath } from './routes'
 import { SubstrateAttentionList, type OpenSubject } from './SubstrateAttentionList'
 import { SubstrateConnectNotice, SubstrateConnectionLink, SubstrateTierBanner, showsConnectNotice } from './SubstrateConnect'
@@ -112,6 +112,34 @@ function areaTone(data: SubstrateWorkspace, area: AttentionArea, base: StatusTon
   return worst ? worseTone(base, worst) : base
 }
 
+/**
+ * The actor-slot fact. Free slots on a pool whose workers lack the CPU or
+ * memory for an actor of its templates are not room: the line says so rather
+ * than reading them as free capacity.
+ */
+function slotsFact(slots: NonNullable<SubstrateWorkspace['summary']['slots']>, freeSlots: SubstrateWorkspace['summary']['freeSlots']): Omit<Fact, 'label'> {
+  const used = `${countText(slots.used)} of ${countText(slots.total)} used`
+  const title = 'Over active workers, the only ones Substrate places actors on.'
+  const free = slots.total - slots.used
+  if (free <= 0) return { value: used, tone: 'degraded', title }
+  const roomy = (freeSlots ?? []).filter((f) => !f.lacking)
+  const blocked = (freeSlots ?? []).filter((f) => f.lacking)
+  const blockedFree = blocked.reduce((n, f) => n + f.free, 0)
+  const lacking = new Set(blocked.map((f) => f.lacking))
+  const what = lacking.size === 1 ? lackingText([...lacking][0]) : 'CPU or memory'
+  const unfit = `${blocked.length === 1 ? `${blocked[0].pool.name}’s workers have` : 'their workers have'} no ${what} left for an actor`
+  const fitTitle = `${title} Slots count actors only: placement also books each actor’s CPU and memory.`
+  if (blockedFree > 0 && blockedFree >= free) {
+    return { value: `${used} (${countText(free)} free, but ${unfit})`, tone: 'degraded', title: fitTitle }
+  }
+  const top = roomy[0]
+  const where = top && roomy.length > 1 ? `, ${top.free} of them on ${top.pool.name}` : top ? ` on ${top.pool.name}` : ''
+  if (blockedFree > 0) {
+    return { value: `${used} (${countText(free - blockedFree)} free${where}; ${countText(blockedFree)} more where ${unfit})`, tone: 'healthy', title: fitTitle }
+  }
+  return { value: `${used} (${countText(free)} free${where})`, tone: 'healthy', title }
+}
+
 /** The status line: pools, workers, slots, actors, templates. A value Radar did not read says so, never 0. */
 export function overviewFacts(data: SubstrateWorkspace): Fact[] {
   const { summary } = data
@@ -122,7 +150,8 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
 
   const pools = summary.pools
   if (pools) {
-    const poolNotes = [pools.short > 0 && `${pools.short} short of workers`, pools.full > 0 && `${pools.full} full`].filter(Boolean)
+    const noRoom = pools.noRoom ?? 0
+    const poolNotes = [pools.short > 0 && `${pools.short} short of workers`, pools.full > 0 && `${pools.full} full`, noRoom > 0 && `${noRoom} with no room for an actor`].filter(Boolean)
     facts.push({
       label: <Term term="pool">Worker pools</Term>,
       value: [countText(pools.total), ...poolNotes].join(', '),
@@ -159,16 +188,7 @@ export function overviewFacts(data: SubstrateWorkspace): Fact[] {
   }
 
   if (summary.slots) {
-    const free = summary.slots.total - summary.slots.used
-    const top = summary.freeSlots?.[0]
-    const where = top && free > 0 && summary.freeSlots!.length > 1 ? `, ${top.free} of them on ${top.pool.name}` : top && free > 0 ? ` on ${top.pool.name}` : ''
-    facts.push({
-      label: <Term term="slot">Actor slots</Term>,
-      value: `${countText(summary.slots.used)} of ${countText(summary.slots.total)} used${free > 0 ? ` (${countText(free)} free${where})` : ''}`,
-      tone: free <= 0 ? 'degraded' : 'healthy',
-      lowerBound: coverageInPart(cov?.workers),
-      title: 'Over active workers, the only ones Substrate places actors on.',
-    })
+    facts.push({ ...slotsFact(summary.slots, summary.freeSlots), label: <Term term="slot">Actor slots</Term>, lowerBound: coverageInPart(cov?.workers) })
   } else {
     facts.push({ label: <Term term="slot">Actor slots</Term>, value: <Unread title={NOT_CONNECTED_TITLE}>{connected ? 'unknown' : 'Not connected'}</Unread>, tone: 'unknown' })
   }

@@ -13,6 +13,7 @@ import type {
   SubstrateTemplateRow,
   SubstratePoolRow,
   SubstrateK8sPool,
+  SubstrateLacking,
   SubstrateWorkerImpact,
   SubstrateWorkerRow,
 } from '../../api/substrateWorkspace'
@@ -348,6 +349,7 @@ const RULE_AREA: Record<SubstrateAttention['rule'], AttentionArea> = {
   workerRestarting: 'workers',
   poolShort: 'pools',
   poolFull: 'pools',
+  poolNoRoom: 'pools',
   nodeUploadsOverdue: 'nodes',
 }
 
@@ -627,7 +629,7 @@ export interface PoolReading {
  * One reading of a pool, the same in its list and on its page: Substrate's
  * capacity verdict with the count behind it, and Kubernetes' phase as context.
  */
-export function poolReading(p: Pick<SubstratePoolRow, 'capacity' | 'placement' | 'kubernetes'>): PoolReading {
+export function poolReading(p: Pick<SubstratePoolRow, 'capacity' | 'lacking' | 'placement' | 'kubernetes'>): PoolReading {
   const kubernetes = p.kubernetes?.healthReason || undefined
   const desired = p.kubernetes?.desired
   switch (p.capacity) {
@@ -645,10 +647,34 @@ export function poolReading(p: Pick<SubstratePoolRow, 'capacity' | 'placement' |
     // Slots are utilization, not health: only a pool that can place nothing new blocks work, and only that gets emphasis.
     case 'full':
       return { label: 'No free actor slots', severity: 'warning', meaning: 'No active worker has a free actor slot, so Substrate places no more actors in this pool. New actors whose selectors match only this pool cannot start.', kubernetes }
+    // As blocking as a full pool: the warning of its Needs attention row (poolNoRoom).
+    case 'noRoom': {
+      const what = lackingText(p.lacking)
+      return {
+        label: `No ${what} left for an actor`,
+        severity: 'warning',
+        meaning: `Active workers have free actor slots, but none has the ${what} left for an actor of any template that can run on this pool, so new and resuming actors wait for a worker.`,
+        kubernetes,
+      }
+    }
     case 'free':
       return { label: 'Free actor slots', severity: 'neutral', meaning: 'At least one active worker has a free actor slot. Whether an actor fits depends on its size and its snapshot’s restore constraints.', kubernetes }
+    case undefined:
+      return { label: 'Unknown', severity: 'neutral', meaning: 'Neither Kubernetes nor Substrate was read well enough to say.', kubernetes }
   }
-  return { label: 'Unknown', severity: 'neutral', meaning: 'Neither Kubernetes nor Substrate was read well enough to say.', kubernetes }
+  // A verdict from a newer Radar than this page knows.
+  return { label: 'Unknown', severity: 'neutral', meaning: `Radar reports a capacity reading this page doesn’t know (${p.capacity}).`, kubernetes }
+}
+
+/** What a pool's free slots lack, in words: "CPU", "memory", "CPU or memory". */
+export function lackingText(lacking: SubstrateLacking | undefined): string {
+  switch (lacking) {
+    case 'cpu':
+      return 'CPU'
+    case 'memory':
+      return 'memory'
+  }
+  return 'CPU or memory'
 }
 
 /**
