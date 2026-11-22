@@ -221,6 +221,7 @@ export interface FeatureCapabilities {
   podFileUpload?: boolean
   vulnerabilities?: boolean
   runtimeAdvisoryChecks?: boolean
+  runtimeAdvisoryProgress?: boolean
   sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
   traefikRoutes?: boolean // GET /api/traefik/routes
 }

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ContextInfo } from '../types'
 
 const mocks = vi.hoisted(() => ({
+  connection: { errorType: undefined as string | undefined },
   mutateAsync: vi.fn(),
   setFailedSwitch: vi.fn(),
   startSwitch: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock('../api/client', () => ({
   fetchSessionCounts: async () => ({ portForwards: 0 }),
   SwitchContextError: class extends Error {},
 }))
+vi.mock('../context/ConnectionContext', () => ({ useConnection: () => ({ connection: mocks.connection }) }))
 vi.mock('../context/ContextSwitchContext', () => ({
   useContextSwitch: () => ({
     startSwitch: mocks.startSwitch,
@@ -39,6 +41,7 @@ function Probe() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.connection.errorType = undefined
   root = createRoot(document.createElement('div'))
   act(() => root.render(<Probe />))
 })
@@ -52,6 +55,12 @@ describe('useContextSwitchFlow', () => {
     expect(mocks.setFailedSwitch).toHaveBeenCalledWith(null)
     expect(mocks.startSwitch).not.toHaveBeenCalled()
     expect(mocks.mutateAsync).not.toHaveBeenCalled()
+  })
+
+  it('selecting the stopped target starts a fresh tracked switch', async () => {
+    mocks.connection.errorType = 'switch-stopped'
+    await act(() => flow().requestSwitch(ctx('current', true)))
+    expect(mocks.mutateAsync).toHaveBeenCalledWith({ name: 'current' })
   })
 
   it('picking another cluster still switches', async () => {

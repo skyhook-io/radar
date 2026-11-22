@@ -56,7 +56,11 @@ func (s *Server) cnpgReader(r *http.Request) *cnpgReadAdapter {
 	var identity, clusterContext, target string
 	var connected, forced bool
 	adapter := &cnpgReadAdapter{Reader: &cnpgsvc.Reader{}}
+	stillBound := true
 	adapter.captured = k8s.CaptureClusterReads(func() {
+		if stillBound = k8s.StillBound(r.Context()); !stillBound {
+			return
+		}
 		operation = k8s.OperationContext()
 		cache, discovery, dynamicCache = k8s.GetResourceCache(), k8s.GetResourceDiscovery(), k8s.GetDynamicResourceCache()
 		connected = k8s.IsConnected()
@@ -69,7 +73,7 @@ func (s *Server) cnpgReader(r *http.Request) *cnpgReadAdapter {
 			adapter.Clients.Typed = client
 		}
 		adapter.Clients.ClusterDone = operation.Done()
-	})
+	}) && stillBound
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		adapter.dynamic, adapter.Clients.Typed = nil, nil
 		if adapter.config != nil {

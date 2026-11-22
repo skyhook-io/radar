@@ -585,6 +585,7 @@ func TestResourceDynamicPendingEmptyDoesNotBecomeAbsence(t *testing.T) {
 	previousWait := resourceListDynamicSyncWait
 	resourceListDynamicSyncWait = 200 * time.Millisecond
 	t.Cleanup(func() { resourceListDynamicSyncWait = previousWait })
+	t.Cleanup(k8s.SetTestDynamicObjectReadSyncWait(500 * time.Millisecond))
 
 	addPackageNamespaces(t, "alpha", "beta")
 	release := make(chan struct{})
@@ -1095,6 +1096,7 @@ func TestDynamicCountsRetainStalledAndUnreadCoverage(t *testing.T) {
 }
 
 func TestDynamicRESTReadRejectsReplacedServingStores(t *testing.T) {
+	t.Cleanup(k8s.SetTestDynamicObjectReadSyncWait(500 * time.Millisecond))
 	useTestResourceCache(t, fake.NewClientset(testNamespaces("alpha")...))
 	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
 	widget := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.com/v1", "kind": "Widget", "metadata": map[string]any{"namespace": "alpha", "name": "present"}}}

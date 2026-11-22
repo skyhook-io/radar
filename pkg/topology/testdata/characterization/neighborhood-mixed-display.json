@@ -765,6 +765,34 @@
       }
     },
     {
+      "id": "rel||PersistentVolume||pv-lh-0",
+      "kind": "PersistentVolume",
+      "name": "pv-lh-0",
+      "status": "unknown",
+      "data": {
+        "apiVersion": "v1",
+        "auditKey": "|PersistentVolume||pv-lh-0",
+        "labels": null,
+        "namespace": "",
+        "resource": "persistentvolumes",
+        "resourceKind": "PersistentVolume"
+      }
+    },
+    {
+      "id": "volume/longhorn-system/vol-lh-0/longhorn.io",
+      "kind": "Volume",
+      "name": "vol-lh-0",
+      "status": "unknown",
+      "data": {
+        "apiVersion": "longhorn.io/v1beta2",
+        "auditKey": "longhorn.io|Volume|longhorn-system|vol-lh-0",
+        "labels": null,
+        "namespace": "longhorn-system",
+        "resource": "volumes",
+        "resourceKind": "Volume"
+      }
+    },
+    {
       "id": "daemonset/infra/agent",
       "kind": "DaemonSet",
       "name": "agent",

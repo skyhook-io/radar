@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -197,12 +198,45 @@ func mayCarryCredentials(req *http.Request) bool {
 }
 
 func (g *guardedTransport) send(rt *http.Transport, req *http.Request) (*http.Response, error) {
-	resp, err := rt.RoundTrip(req)
+	resp, err := publicECRManifestRoundTrip(rt, req)
 	if err != nil || resp.Body == nil || g.uncapped {
 		return resp, err
 	}
 	resp.Body = &cappedBody{ReadCloser: resp.Body, left: maxRegistryResponseBytes}
 	return resp, nil
+}
+
+const publicECRManifestInterval = time.Second
+
+type publicECRManifestPacerKey struct{}
+
+type publicECRManifestPacer struct {
+	mu   sync.Mutex
+	next time.Time
+}
+
+// An image index and its selected platform manifest can trigger the ECR
+// Public pull limit within a single lookup.
+func publicECRManifestRoundTrip(rt http.RoundTripper, req *http.Request) (*http.Response, error) {
+	ctx := req.Context()
+	pacer, _ := ctx.Value(publicECRManifestPacerKey{}).(*publicECRManifestPacer)
+	if pacer == nil || req.URL.Hostname() != PublicECRRegistry || !strings.Contains(req.URL.Path, "/manifests/") {
+		return rt.RoundTrip(req)
+	}
+	pacer.mu.Lock()
+	defer pacer.mu.Unlock()
+	if delay := time.Until(pacer.next); delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	resp, err := rt.RoundTrip(req)
+	pacer.next = time.Now().Add(publicECRManifestInterval)
+	return resp, err
 }
 
 // dialContext connects to the first allowed address of addr, directly or
