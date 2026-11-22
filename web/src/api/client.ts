@@ -1,4 +1,4 @@
-import { followSwitch, switchInProgress, type ContextSwitchOperation } from './contextSwitch'
+import { followSwitch, switchFinished, switchInProgress, type ContextSwitchOperation } from './contextSwitch'
 import { createListRefetchInterval, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
 import type { CascadeDetail } from '@skyhook-io/k8s-ui/components/ui/ForceDeleteConfirmDialog'
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
@@ -7733,6 +7733,9 @@ export function useSwitchContext() {
     },
     onSuccess: async (operation) => {
       if (operation) {
+        // A late acknowledgement of a switch this tab already showed the outcome
+        // of carries an older snapshot; seeding it would reopen the overlay.
+        if (switchFinished(operation.id)) return;
         followSwitch(operation.id);
         await queryClient.cancelQueries({ queryKey: ["connection-status"] });
         if (switchInProgress(operation)) {
