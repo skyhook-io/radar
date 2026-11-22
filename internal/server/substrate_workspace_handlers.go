@@ -85,17 +85,30 @@ func currentSubstrateKube() (substrateapi.Kube, error) {
 		}
 		return substrateapi.Kube{
 			Client: client, Config: cfg, Context: target.Context, Fingerprint: "in-cluster " + cfg.Host,
-			Generation: generation, Operation: operation, KagentServed: kagentServed(),
+			Generation: generation, Operation: operation, KagentServed: substrateKagentServed(),
 		}, nil
 	}
 	return substrateapi.Kube{
 		Client: client, Config: cfg, Context: target.Context, Binding: target.Binding, Fingerprint: target.Fingerprint,
-		Generation: generation, Operation: operation, KagentServed: kagentServed(),
+		Generation: generation, Operation: operation, KagentServed: substrateKagentServed(),
 	}, nil
 }
 
-// kagentServed reports whether the cluster serves kagent's API, whose
-// sessions run as Substrate actors that kagent recovers itself.
+// substrateKagentServed reports whether the cluster serves kagent's API,
+// whose sessions run as Substrate actors that kagent recovers itself.
+var substrateKagentServed = kagentServed
+
+// freshSubstrateActor converts an actor read directly from Substrate (an
+// actor page, its logs, an exact-name search), marked as a kagent session as
+// the shared read marks it.
+func freshSubstrateActor(raw *ateapi.Actor) model.Actor {
+	a := substrateapi.ActorOf(raw)
+	if substrateKagentServed() {
+		a.Kagent = model.KagentSessionOf(a.Name)
+	}
+	return a
+}
+
 func kagentServed() bool {
 	d := k8s.GetResourceDiscovery()
 	if d == nil {
@@ -1252,7 +1265,7 @@ func (s *Server) substrateExactActor(r *http.Request, ref model.Ref) *model.Acto
 	if tierErr != nil || code != "" || actor == nil {
 		return nil
 	}
-	a := substrateapi.ActorOf(actor)
+	a := freshSubstrateActor(actor)
 	return &a
 }
 
@@ -1368,7 +1381,7 @@ func (s *Server) handleSubstrateActor(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actor := substrateapi.ActorOf(raw)
+	actor := freshSubstrateActor(raw)
 	now := time.Now()
 	pools, poolsCov, poolsClusterWide := s.substratePools(r)
 	resp := substrateActorDetail{APITier: tier, Actor: actor, Attention: []model.Attention{}, Coverage: substrateDetailCoverage{
@@ -1642,7 +1655,7 @@ func (s *Server) handleSubstrateActorLogs(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	actor := substrateapi.ActorOf(raw)
+	actor := freshSubstrateActor(raw)
 	filter.UID = actor.UID
 	resp := substrateLogsResponse{Actor: target, State: actor.State, Source: filter.Source, Origin: substrateLogOriginNone,
 		Lines: []substrateLogLine{}, Searched: []substrateSearchedPod{}}

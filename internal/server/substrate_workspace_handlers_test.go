@@ -1873,3 +1873,29 @@ func TestSubstrateConnectionFailuresSayWhere(t *testing.T) {
 		}
 	})
 }
+
+// A kagent session's actor page is read fresh from Substrate, not from the
+// snapshot, and is marked like it: its crash step names kagent, never a
+// kubectl ate command.
+func TestSubstrateKagentSessionActorPage(t *testing.T) {
+	prev := substrateKagentServed
+	substrateKagentServed = func() bool { return true }
+	t.Cleanup(func() { substrateKagentServed = prev })
+	s := substrateTestServer(t, substrateapi.Kube{KagentServed: true})
+	f := defaultFake()
+	const session = "session-01a1faa2-b3e3-7dd3-ae2d-3114122d4291"
+	crashed := fakeActor("research", session, "lang", ateapi.ActorState_ACTOR_STATE_CRASHED, time.Now().Add(-4*time.Minute))
+	crashed.Status.Crash = &ateapi.ActorCrash{Message: "exit 1", CrashTime: timestamppb.New(time.Now().Add(-4 * time.Minute))}
+	f.actors = append(f.actors, crashed)
+	connectFake(t, s, f, fullToken)
+
+	var detail substrateActorDetail
+	call(t, s, s.handleSubstrateActor, substrateCall{path: "/api/substrate/actors/research/" + session, params: map[string]string{"atespace": "research", "name": session}}, &detail)
+	if detail.Actor.Kagent == nil || detail.Actor.Kagent.SessionID != "01a1faa2-b3e3-7dd3-ae2d-3114122d4291" {
+		t.Fatalf("actor = %+v", detail.Actor)
+	}
+	i := slices.IndexFunc(detail.Attention, func(a model.Attention) bool { return a.Rule == model.RuleCrashedActors })
+	if i < 0 || detail.Attention[i].Command != "" || !strings.Contains(detail.Attention[i].NextStep, "kagent") {
+		t.Errorf("crash step = %+v", detail.Attention)
+	}
+}
