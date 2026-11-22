@@ -6,33 +6,14 @@ How Radar names the cluster connection it serves, and how a write is bound to th
 
 A bound write from a Radar tab runs against the connection the tab is on, or is refused before any Kubernetes work. In particular, a tab still showing cluster A after another tab switched Radar to B can't restart or scale B's same-named workload.
 
-<<<<<<< HEAD
-Covered today (the routes wrapped with `bindWrite` in `internal/server/server.go`):
-- Workloads: **restart** and **scale** (single and bulk), Deployment **pause** and **resume**, **set image**, **rollback** (including Argo Rollouts), and the Argo Rollouts actions (abort, retry, promote, promote-full, skip-step).
-- CronJobs: **trigger**, **suspend**, **resume**.
-- Resources: **apply**, **update** (YAML edit) and **delete**.
-- Nodes: **cordon**, **uncordon** and **drain**. A drain keeps running on the connection it was admitted to, even if Radar switches meanwhile.
-- GitOps: Argo CD **sync**, **refresh**, **rollback**, **terminate**, **suspend**, **resume**; Flux **reconcile**, **sync with source**, **suspend**, **resume**.
-- Velero: **back up now**, schedule **pause** and **resume**, **delete backup**. Their checks of the Velero server's state read the shared cache, which a switch completing mid-request could replace; the write itself stays on the admitted connection.
+Bound writes are the routes wrapped with `bindWrite` in `internal/server/server.go`; `TestBoundWriteRoutesRefuseStaleConnection` walks every one. They are the workload, CronJob, resource (apply, update, delete), node, GitOps, Velero, CloudNativePG, Helm and CAPI connect actions, plus exec, file upload, debug containers and debug pods, port-forward start and the reachability probe test. Beyond the header check:
+- **Drain** keeps running on the connection it was admitted to, even if Radar switches meanwhile. Exec and port-forward sessions end when Radar switches.
+- **Code that only has a context** (MCP tools, reachability) gets its clients from `k8s.ClientFromContext` / `DynamicClientFromContext`, which return the bound connection's clients when the request was admitted with one.
+- **CloudNativePG** captures its clients and caches in one step and checks there that the connection is still the bound one (`k8s.StillBound`).
+- **Velero** checks the Velero server's state in the shared cache, which a switch completing mid-request could replace; the write itself stays on the admitted connection.
+- **Diagnose** (the in-product agent) is fenced by its runs: every switch marks all runs stale (`RunManager.OnContextSwitch`), and a stale run takes no further turns, so an investigation of one cluster can't continue, or apply a fix, on another.
 
-- CloudNativePG: Cluster, ScheduledBackup and Pooler **actions**. The CNPG service captures its clients and caches in one step; it also checks there that the connection is still the bound one (`k8s.StillBound`), so the whole capture belongs to it.
-
-- Pods and nodes: **exec** (the terminal WebSocket names the connection in its URL, `?connection=`, since a browser can't set headers on a WebSocket), **file upload**, pod **debug containers**, node **debug pods** (create and clean up), and **port-forward** start. Sessions already end when Radar switches.
-
-- Helm: **install**, **upgrade** (including from a source and by editing values), **rollback**, **uninstall**, streaming variants included. Helm builds its clients from the serving connection when the action starts and keeps them for the whole action, so the window between the binding check and that build is the only gap.
-
-- CAPI **connect**: a tab that still shows the previous management cluster can't read a same-named CAPI Cluster's kubeconfig from the new one and switch Radar to it.
-
-- Reachability: the in-cluster trace test, which creates probe Jobs. CloudNativePG **restore validation** notes.
-
-Code that only has a context (MCP tools, reachability) gets its clients from `k8s.ClientFromContext` / `DynamicClientFromContext`, which return the bound connection's clients when the request was admitted with one.
-
-Diagnose (the in-product agent) is fenced by its runs instead: every cluster switch marks all runs stale (`RunManager.OnContextSwitch`), and a stale run takes no further turns, so an investigation of one cluster can't continue, or apply a fix, on another.
-
-Not covered: external MCP callers name no connection, so each tool call uses the connection serving when it starts, as before. Integration writes that look like reads (Velero's download requests behind run messages, contents and logs) aren't bound. An interrupted Helm action is not recovered (the plan's "outcome recovery" for Helm). They still resolve the current connection when they run.
-=======
-Bound writes: Deployment, StatefulSet, DaemonSet and Rollout **restart** and **scale** (single and bulk). Other writes (apply, delete, Helm, exec, port-forward, integration actions, MCP) use the connection serving when they run.
->>>>>>> origin/feature/connection-lifecycle
+Not bound: external MCP callers name no connection, so each tool call uses the connection serving when it starts. Velero's download requests (run messages, contents, logs) aren't bound. An interrupted Helm action is not recovered.
 
 **Only when Radar serves from a kubeconfig.** An in-cluster Radar can't change clusters (no kubeconfig contexts; CAPI connect is refused in-cluster), and during a rolling update two of its pods, each with its own IDs, answer the same browser. It publishes no ID and ignores one a request names; its writes still run on one captured set of clients.
 
@@ -52,13 +33,8 @@ Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `
 - The request header `X-Radar-Connection` names the connection the caller is on. A different ID gets **409 `context_changed`**. No serving connection, or a context operation holding the lock, gets **503 `cluster_unavailable`** (retryable). No header: admitted against the current connection (API and MCP callers, older UIs). Both refusals say nothing was changed.
 
 **Browser** (`web/src/api/connectionBinding.ts`):
-<<<<<<< HEAD
 - The tab keeps the latest connection ID it heard (status poll, SSE frame, Retry result) and `apiFetch` sends it on every request. Writes that can't use `apiFetch` send it themselves: the file upload's XHR sets the header, and the terminal adds `?connection=` to its WebSocket URL (`withConnectionParam`). A status with no ID (mid-switch) keeps the last one; the server refuses writes then anyway.
-- Views reset when the tab learns the context changed, as before this slice: from `context_changed`, or from a status poll (every 30s while connected, also in background tabs and on focus) that shows a different context.
-=======
-- The tab keeps the latest connection ID it heard (status poll, SSE frame, Retry result) and `apiFetch` sends it on every request. A status with no ID (mid-switch) keeps the last one; the server refuses writes then anyway.
 - Views reset whenever the tab finds itself connected to a different context, however it learns that: a `context_changed` refusal, an SSE frame, a Retry result, or the status poll (every 30s while connected, in background tabs too, and on focus).
->>>>>>> origin/feature/connection-lifecycle
 - After a refusal, the toast says nothing was changed; the tab catches up on its next status poll or when it regains focus.
 - A server without connection IDs (older or in-cluster Radar) publishes none, and the browser sends no header.
 
