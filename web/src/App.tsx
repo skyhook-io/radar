@@ -69,6 +69,7 @@ import { useProductHuntRailEntry } from './components/product-hunt/useProductHun
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
+import { useResetViewsOnContextChange } from './hooks/useResetViewsOnContextChange'
 import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useAuthMe, useAuditBadges, useClusterInfo, useCapabilities } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
@@ -1290,10 +1291,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // forceNamespaceFilter is only set for large clusters that require server-side filtering.
   // Fleet mode uses 'resources' topology on the backend — filtering is client-side
   const sseMode = topologyMode === 'fleet' ? 'resources' : topologyMode
+  // The context this tab's views were last reset for.
+  const shownContextRef = useRef<string | null>(null)
   const { topology, connected: eventStreamConnected, connecting: eventStreamConnecting, reconnect: reconnectEventStream, applyContextChange } = useEventSource(namespaces, sseMode as 'resources' | 'traffic', {
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
     onContextChanged: (context) => {
+      shownContextRef.current = context
       resetNavigationMap()
 
       // Reconnects also emit context_changed. Preserve only this context's drain record.
@@ -1358,6 +1362,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }, forceNamespaceFilter, showPolicyEffect)
 
   useContextSwitchOutcome(applyContextChange)
+  useResetViewsOnContextChange(connection.state, connection.context, shownContextRef, applyContextChange)
 
   // On large clusters (where the server requires namespace filtering), keep
   // SSE's server-side filter in lockstep with the user's namespace pick.

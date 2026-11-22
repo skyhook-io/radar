@@ -506,7 +506,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{"http://localhost:*", "http://127.0.0.1:*"},
 		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders: []string{"Accept", "Content-Type", requestOriginHeader},
+		AllowedHeaders: []string{"Accept", "Content-Type", requestOriginHeader, connectionHeader},
 		// Without an expose entry, cross-origin JS reads these as "" and the
 		// timeline client silently falls back to full-ring refetches.
 		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq", "X-Radar-Timeline-Min-Seq"},
@@ -837,10 +837,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/cronjobs/{namespace}/{name}/resume", s.handleResumeCronJob)
 
 			// Workload restart, scale, rollback
-			r.Post("/workloads/{kind}/{namespace}/{name}/restart", s.handleRestartWorkload)
+			r.Post("/workloads/{kind}/{namespace}/{name}/restart", s.bindWrite(s.handleRestartWorkload))
 			r.Post("/workloads/{kind}/{namespace}/{name}/pause", s.handlePauseDeployment)
 			r.Post("/workloads/{kind}/{namespace}/{name}/resume", s.handleResumeDeployment)
-			r.Post("/workloads/{kind}/{namespace}/{name}/scale", s.handleScaleWorkload)
+			r.Post("/workloads/{kind}/{namespace}/{name}/scale", s.bindWrite(s.handleScaleWorkload))
 			r.Get("/workloads/{kind}/{namespace}/{name}/images", s.handleGetWorkloadImages)
 			r.Post("/workloads/{kind}/{namespace}/{name}/images", s.handleSetWorkloadImages)
 			r.Get("/workloads/{kind}/{namespace}/{name}/revisions", s.handleWorkloadRevisions)
@@ -5266,6 +5266,8 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		// episode, even when the live errorType flips to non-auth values.
 		"authRecoveryOwed": k8s.RuntimeAuthRecoveryOwed(),
 	}
+	connectionIdentityFields(status, response)
+
 	if op := s.contextSwitch.Snapshot(); op != nil {
 		if op.Phase == "switching" && op.Target == status.Context && status.State == k8s.StateConnecting && status.ProgressMsg != "" {
 			op.Progress = status.ProgressMsg
@@ -5337,7 +5339,7 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 	// RetryCurrentConnection published the connected status under the
 	// context-operation lock; a second publish here would race a queued
 	// operation's teardown.
-	s.writeJSON(w, k8s.GetConnectionStatus())
+	s.writeJSON(w, publishedStatus(k8s.GetConnectionStatus()))
 }
 
 // CAPI handlers
@@ -5784,6 +5786,9 @@ func (s *Server) getDynamicClientForRequest(r *http.Request) dynamic.Interface {
 }
 
 func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.Interface, string) {
+	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
+		return s.boundDynamicClient(r, bound), bound.Context
+	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		client, contextName, err := k8s.UserDynamicClientSnapshot(user)
 		if err != nil {
@@ -5795,6 +5800,22 @@ func (s *Server) getDynamicClientSnapshotForRequest(r *http.Request) (dynamic.In
 	return k8s.GetDynamicClientSnapshot()
 }
 
+// boundDynamicClient is the request's dynamic client on its bound connection:
+// the shared one, or the caller's built from the bound config (never from a
+// newer connection's). Nil when building the caller's client fails.
+func (s *Server) boundDynamicClient(r *http.Request, bound k8s.BoundConnection) dynamic.Interface {
+	user := auth.UserFromContext(r.Context())
+	if user == nil {
+		return bound.Dynamic
+	}
+	client, err := dynamic.NewForConfig(k8s.UserRESTConfig(bound.Config, user))
+	if err != nil {
+		log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
+		return nil
+	}
+	return client
+}
+
 // getConfigForRequest returns an impersonated REST config when auth is enabled,
 // or the shared config when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount config). Callers must handle nil.
@@ -5804,6 +5825,12 @@ func (s *Server) getConfigForRequest(r *http.Request) *rest.Config {
 }
 
 func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, string) {
+	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
+		if user := auth.UserFromContext(r.Context()); user != nil {
+			return k8s.UserRESTConfig(bound.Config, user), bound.Context
+		}
+		return bound.Config, bound.Context
+	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		cfg, contextName, err := k8s.UserConfigSnapshot(user)
 		if err != nil {
@@ -5819,6 +5846,20 @@ func (s *Server) getConfigSnapshotForRequest(r *http.Request) (*rest.Config, str
 // or the shared client when auth is disabled. Returns nil if impersonation fails
 // (never falls back to the ServiceAccount client). Callers must handle nil.
 func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
+	if bound, ok := k8s.BoundConnectionFrom(r.Context()); ok {
+		if user := auth.UserFromContext(r.Context()); user != nil {
+			client, err := kubernetes.NewForConfig(k8s.UserRESTConfig(bound.Config, user))
+			if err != nil {
+				log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
+				return nil
+			}
+			return client
+		}
+		if bound.Client != nil {
+			return bound.Client
+		}
+		return nil
+	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		client, err := k8s.UserClient(user)
 		if err != nil {
