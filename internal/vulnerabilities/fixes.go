@@ -31,7 +31,7 @@ type fixAgg struct {
 // When a version can't be ordered (unknown ecosystem, unparseable version),
 // the row carries the scanner's fixed versions instead of a target.
 func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
-	m := newMatcher(f)
+	m := j.match(f)
 	byKey := map[string]*fixAgg{}
 	// Images built on one base share package states: each is worked out once.
 	type upgrade struct {
@@ -40,6 +40,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 	}
 	upgrades := map[string]upgrade{}
 	imageWorkloads := map[string][]WorkloadRef{}
+	imageExposed := map[string]bool{}
 	for _, agg := range j.sortedImages() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -51,6 +52,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		}
 		imageWorkloads[r.imageID] = workloads
 		distinct := withoutContainers(workloads)
+		imageExposed[r.imageID] = slices.ContainsFunc(distinct, j.exposed)
 		shown := m.listed(distinct, j.lim.workloadsPerAffected)
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		packages := map[string]*imagePackage{}
@@ -102,7 +104,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 			}
 			if !a.images[r.imageID] {
 				if !j.charge(len(shown)) {
-					return nil, ErrExportTooLarge
+					return nil, j.stopped()
 				}
 				a.images[r.imageID] = true
 				a.row.Affected = append(a.row.Affected, FixImage{
@@ -124,6 +126,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 	}
 
 	workloadsBySet := map[string]int{}
+	exposedBySet := map[string]exposedSet{}
 	rows := make([]Fix, 0, len(byKey))
 	for _, a := range byKey {
 		if err := ctx.Err(); err != nil {
@@ -148,17 +151,26 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		row.CVEsTotal = len(ids)
 		row.CVEs = ids[:min(len(ids), j.lim.cvesPerFix)]
 		row.Images = len(a.images)
-		row.Workloads = distinctWorkloads(slices.Sorted(maps.Keys(a.images)), imageWorkloads, workloadsBySet)
+		imageIDs := slices.Sorted(maps.Keys(a.images))
+		row.Workloads = distinctWorkloads(imageIDs, imageWorkloads, workloadsBySet)
+		var ok bool
+		if row.Exposed, row.ExposedTotal, ok = j.exposedAcross(imageIDs, imageWorkloads, exposedBySet); !ok {
+			return nil, j.stopped()
+		}
 		slices.SortStableFunc(row.Affected, func(x, y FixImage) int {
-			return cmp.Or(cmp.Compare(y.WorkloadsTotal, x.WorkloadsTotal), cmp.Compare(x.Image, y.Image))
+			return cmp.Or(compareBool(imageExposed[y.ImageID], imageExposed[x.ImageID]), cmp.Compare(y.WorkloadsTotal, x.WorkloadsTotal), cmp.Compare(x.Image, y.Image))
 		})
 		row.Affected = row.Affected[:min(len(row.Affected), j.lim.affectedPerCVE)]
 		rows = append(rows, row)
 	}
+	// Most exposed workloads first (none last), then most severe, then most
+	// workloads.
 	slices.SortFunc(rows, func(x, y Fix) int {
 		return cmp.Or(
-			compareCounts(y.Counts, x.Counts),
+			cmp.Compare(y.ExposedTotal, x.ExposedTotal),
+			cmp.Compare(severityRank(y.Severity), severityRank(x.Severity)),
 			cmp.Compare(y.Workloads, x.Workloads),
+			compareCounts(y.Counts, x.Counts),
 			compareBool(x.To == "", y.To == ""),
 			cmp.Compare(x.Package, y.Package),
 			cmp.Compare(x.To, y.To),

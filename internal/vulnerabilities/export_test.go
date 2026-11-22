@@ -496,6 +496,19 @@ func TestExportCapHoldsForLargeFields(t *testing.T) {
 	if _, err := WriteCSV(context.Background(), mustExport(t, wide, wideTargets, ViewImage, Filter{}), Filter{}, "prod"); !errors.Is(err, ErrExportTooLarge) {
 		t.Fatalf("wide workload list: %v", err)
 	}
+	// The exposed_workloads cell goes through the same budget check: the
+	// other cells fit, the exposed list alone wouldn't.
+	resp := mustExport(t, wide[:1], wideTargets[:1], ViewFix, Filter{})
+	resp.Fixes[0].Exposed = nil
+	for i := range 2000 {
+		resp.Fixes[0].Exposed = append(resp.Fixes[0].Exposed, ExposedWorkload{
+			WorkloadRef: WorkloadRef{Kind: "Deployment", Namespace: "shop", Name: fmt.Sprintf("web-%04d", i)},
+			Routes:      []Route{{Via: "LoadBalancer", Namespace: "shop", Name: fmt.Sprintf("web-%04d", i)}},
+		})
+	}
+	if _, err := WriteCSV(context.Background(), resp, Filter{}, "prod"); !errors.Is(err, ErrExportTooLarge) {
+		t.Fatalf("wide exposed list: %v", err)
+	}
 }
 
 // An export whose rows would keep too many workload references stops while

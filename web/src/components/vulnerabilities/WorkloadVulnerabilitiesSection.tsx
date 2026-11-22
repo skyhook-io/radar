@@ -31,9 +31,10 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
   const upgrades = fixData?.fixes ?? []
   const isThis = (w: { kind: string; namespace: string; name: string }) => w.kind === kind && w.namespace === namespace && w.name === name
   // The link keeps the page's namespace view, as every page link does: the
-  // picker follows the URL, so a narrower one would change it.
+  // picker follows the URL, so a narrower one would change it. It opens By
+  // image, the view these cards show, unless it names another.
   const open = (more: Record<string, string> = {}) => {
-    const search = new URLSearchParams({ workload: workloadParam({ kind, namespace, name }), ...more })
+    const search = new URLSearchParams({ workload: workloadParam({ kind, namespace, name }), by: 'image', ...more })
     const viewNamespaces = params.get('namespaces')
     if (viewNamespaces) search.set('namespaces', viewNamespaces)
     navigate({ pathname: '/checks/vulnerabilities', search: search.toString() })

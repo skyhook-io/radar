@@ -30,6 +30,33 @@ export interface VulnerabilityWorkloadRef {
   container?: string
 }
 
+/** A route from outside the cluster to a workload. via: LoadBalancer, NodePort, Ingress or a Gateway API route kind. */
+export interface VulnerabilityRoute {
+  via: string
+  namespace: string
+  name: string
+}
+
+/** A workload with a route from outside the cluster; never a container. */
+export interface ExposedWorkload {
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  /** At most three in a list read; routesTotal counts them all. */
+  routes: VulnerabilityRoute[]
+  routesTotal?: number
+}
+
+/**
+ * The row's workloads with a route from outside the cluster, capped in a list
+ * read; exposedTotal is the full count.
+ */
+export interface VulnerabilityExposure {
+  exposed?: ExposedWorkload[]
+  exposedTotal?: number
+}
+
 export interface VulnerabilityFinding {
   id: string
   severity: VulnerabilitySeverity
@@ -46,7 +73,7 @@ export interface VulnerabilityFinding {
   link?: string
 }
 
-export interface VulnerableImage {
+export interface VulnerableImage extends VulnerabilityExposure {
   id: string
   image: string
   digest?: string
@@ -72,7 +99,7 @@ export interface VulnerabilityCVEImage {
   workloadsTotal: number
 }
 
-export interface VulnerabilityCVE {
+export interface VulnerabilityCVE extends VulnerabilityExposure {
   id: string
   severity: VulnerabilitySeverity
   score?: number
@@ -87,7 +114,7 @@ export interface VulnerabilityCVE {
   affected: VulnerabilityCVEImage[]
 }
 
-export interface VulnerabilityFix {
+export interface VulnerabilityFix extends VulnerabilityExposure {
   package: string
   packageType?: string
   /** The lowest listed release that fixes every listed CVE; absent when none can be chosen from the scanner's versions. */
@@ -123,6 +150,8 @@ export interface VulnerabilityWorkload {
   counts: VulnerabilityCounts
   fixable: VulnerabilityCounts
   containers: VulnerabilityWorkloadContainer[]
+  routes?: VulnerabilityRoute[]
+  routesTotal?: number
 }
 
 export interface VulnerabilitySummary {
@@ -154,7 +183,12 @@ export interface VulnerabilitiesResponse {
   /** Workloads whose every container is scanned and clean. */
   cleanWorkloads?: VulnerabilityWorkloadRef[]
   /** otherBuildScanned: Trivy's report is of another build of this tag, as after the tag moved. */
-  unscanned?: { image: string; otherBuildScanned?: boolean; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
+  unscanned?: ({ image: string; otherBuildScanned?: boolean; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number } & VulnerabilityExposure)[]
+  /**
+   * Present when this Radar checks exposure; absent from an older Radar, where
+   * exposure is unknown, never none. gaps: route kinds Radar couldn't read.
+   */
+  exposure?: { gaps?: VulnerabilityGap[] }
   coverage: {
     complete: boolean
     gaps: VulnerabilityGap[]
@@ -171,6 +205,8 @@ export interface VulnerabilitiesParams {
   namespaces?: string[]
   severities?: VulnerabilitySeverity[]
   fixableOnly?: boolean
+  /** Only rows affecting a workload with a route from outside the cluster. */
+  exposed?: boolean
   query?: string
   workload?: { kind: string; group?: string; namespace: string; name: string }
 }
@@ -340,6 +376,7 @@ export function vulnerabilitiesPath(p: VulnerabilitiesParams): string {
   if (p.namespaces && p.namespaces.length > 0) params.set('namespaces', p.namespaces.join(','))
   if (p.severities && p.severities.length > 0) params.set('severity', p.severities.join(','))
   if (p.fixableOnly) params.set('fixable', '1')
+  if (p.exposed) params.set('exposed', '1')
   if (p.query?.trim()) params.set('q', p.query.trim())
   if (p.workload) {
     params.set('workloadKind', p.workload.kind)

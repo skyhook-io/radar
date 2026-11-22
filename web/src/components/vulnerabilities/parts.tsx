@@ -1,11 +1,14 @@
 import { clsx } from 'clsx'
+import { Globe } from 'lucide-react'
 import { WithTooltip } from '../ui/Tooltip'
 import { CertaintyGlyph, gapReasonText, VULN_SEVERITY_BADGE, VULN_SEVERITY_BAR, VULN_SEVERITY_TEXT, type Certainty } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import type {
+  ExposedWorkload,
   VulnerabilitiesResponse,
   VulnerabilityCounts,
   VulnerabilityGap,
+  VulnerabilityRoute,
   VulnerabilitySeverity,
   VulnerabilityWorkloadRef,
 } from '../../api/vulnerabilities'
@@ -138,11 +141,148 @@ export function ecosystemLabel(packageType?: string): string | undefined {
   return ECOSYSTEMS[packageType.toLowerCase()] ?? packageType
 }
 
-/** "checkout, worker +4" for a list of workloads, each named once. */
-export function workloadSummary(workloads: VulnerabilityWorkloadRef[], shown = 2): string {
-  const names = [...new Set(workloads.map((w) => w.name))]
-  const head = names.slice(0, shown).join(', ')
-  return names.length > shown ? `${head} +${names.length - shown}` : head
+type WorkloadKey = { kind: string; namespace: string; name: string }
+
+/** A row's exposed workloads by kind/namespace/name, so any container of one matches. */
+export type ExposureLookup = Map<string, ExposedWorkload>
+
+const exposureKey = (w: WorkloadKey) => `${w.kind}/${w.namespace}/${w.name}`
+
+export function exposureLookup(exposed: ExposedWorkload[] | undefined): ExposureLookup {
+  return new Map((exposed ?? []).filter((w) => w.routes.length > 0).map((w) => [exposureKey(w), w]))
+}
+
+export function routesFor(exposure: ExposureLookup | undefined, w: WorkloadKey): ExposedWorkload | undefined {
+  return exposure?.get(exposureKey(w))
+}
+
+export function routeText(r: VulnerabilityRoute): string {
+  return `${r.via} ${r.namespace}/${r.name}`
+}
+
+/** "A, B, C and 197 more": the routes listed, and how many the list leaves out. */
+export function routeListText(routes: VulnerabilityRoute[], total = routes.length): string {
+  const more = total - routes.length
+  return `${routes.map(routeText).join(', ')}${more > 0 ? ` and ${more} more` : ''}`
+}
+
+export function routesTip(routes: VulnerabilityRoute[], total = routes.length): string {
+  return `${total === 1 ? 'Route' : 'Routes'} from outside the cluster: ${routeListText(routes, total)}`
+}
+
+/** The mark on a workload with a route from outside the cluster; absence gets none. */
+export function ExposedMark({ exposed, tip }: { exposed?: ExposedWorkload; tip?: string }) {
+  const text = tip ?? (exposed ? routesTip(exposed.routes, exposed.routesTotal) : undefined)
+  return (
+    <WithTooltip tip={text}>
+      <Globe className="h-3 w-3 shrink-0 self-center text-theme-text-secondary" role="img" aria-label={text} />
+    </WithTooltip>
+  )
+}
+
+/**
+ * Up to `shown` distinct workload names for a collapsed row, exposed ones
+ * first, and how many more names there are.
+ */
+export function summaryNames(workloads: VulnerabilityWorkloadRef[], exposure?: ExposureLookup, shown = 2): { names: { name: string; exposed?: ExposedWorkload }[]; rest: number } {
+  const byName = new Map<string, ExposedWorkload | undefined>()
+  for (const w of workloads) {
+    const exposed = routesFor(exposure, w)
+    if (!byName.has(w.name) || (exposed && !byName.get(w.name))) byName.set(w.name, exposed)
+  }
+  const all = [...byName].map(([name, exposed]) => ({ name, exposed }))
+  const ordered = [...all.filter((n) => n.exposed), ...all.filter((n) => !n.exposed)]
+  return { names: ordered.slice(0, shown), rest: Math.max(0, ordered.length - shown) }
+}
+
+/** "checkout, worker +4" for a list of workloads, each named once, exposed ones first with the mark. */
+export function WorkloadSummary({ workloads, exposure, suffix }: { workloads: VulnerabilityWorkloadRef[]; exposure?: ExposureLookup; suffix?: string }) {
+  const { names, rest } = summaryNames(workloads, exposure)
+  return (
+    <span className="flex min-w-0 items-baseline text-theme-text-secondary">
+      <span className="truncate">
+        {names.map((n, i) => (
+          <span key={n.name}>
+            {i > 0 && ', '}
+            {n.exposed && <span className="mr-1 inline-flex align-[-1px]"><ExposedMark exposed={n.exposed} /></span>}
+            {n.name}
+          </span>
+        ))}
+        {rest > 0 && ` +${rest}`}
+        {suffix}
+      </span>
+    </span>
+  )
+}
+
+/**
+ * The tooltip for a count of workloads that lists no names: how many have a
+ * route from outside the cluster, and the first few with their routes.
+ */
+export function exposedCountTip(exposed: ExposedWorkload[], exposedTotal: number, workloads?: number, listed = 3): string {
+  const shown = exposed.slice(0, listed).map((w) => `${w.name} (${routeListText(w.routes, w.routesTotal)})`)
+  const more = exposedTotal - shown.length
+  // By image the row counts containers, which can't be set against workloads.
+  const lead = workloads === undefined
+    ? `${exposedTotal} ${exposedTotal === 1 ? 'workload running it has' : 'workloads running it have'}`
+    : `${exposedTotal} of ${workloads} ${workloads === 1 ? 'workload' : 'workloads'} ${exposedTotal === 1 ? 'has' : 'have'}`
+  return `${lead} a route from outside the cluster: ${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}`
+}
+
+/** "3 exposed" with the globe, for a row that counts its exposed workloads; nothing when there are none. */
+export function ExposedCount({ exposed, total, workloads }: { exposed?: ExposedWorkload[]; total?: number; workloads?: number }) {
+  if (!total) return null
+  const tip = exposedCountTip(exposed ?? [], total, workloads)
+  return (
+    <WithTooltip tip={tip}>
+      <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-theme-text-secondary" aria-label={tip}>
+        <Globe className="h-3 w-3 shrink-0" aria-hidden />
+        {total} exposed
+      </span>
+    </WithTooltip>
+  )
+}
+
+/** Whether an exposure gap covers this namespace, so its routes are unknown. */
+export function exposureUnknownIn(gaps: VulnerabilityGap[] | undefined, namespace: string): boolean {
+  return (gaps ?? []).some((g) => {
+    const ns = g.namespaces
+    if (!ns) return true
+    if (ns.extent !== undefined) return true
+    // Past the name cap the set only counts: any namespace may be in it.
+    return (ns.names ?? []).includes(namespace) || (ns.names ?? []).length < ns.count
+  })
+}
+
+const pluralKind = (kind: string) => (/(s|x|ch|sh)$/.test(kind) ? `${kind}es` : `${kind}s`)
+
+function listWords(words: string[]): string {
+  return words.length <= 1 ? words.join('') : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`
+}
+
+/** The sentence for route kinds Radar couldn't read, or null when none. */
+export function exposureGapSentence(gaps: VulnerabilityGap[] | undefined): string | null {
+  if (!gaps || gaps.length === 0) return null
+  const describe = (list: VulnerabilityGap[]) => listWords([...new Set(list.map((g) => {
+    const kinds = g.kinds?.names?.length ? listWords(g.kinds.names.map((k) => pluralKind(k.kind))) : 'routes'
+    const ns = g.namespaces
+    let where = ''
+    if (ns?.extent === 'unknown') where = ' in some namespaces'
+    else if (ns && ns.extent === undefined) where = ` in ${ns.count} ${ns.count === 1 ? 'namespace' : 'namespaces'}`
+    return `${kinds}${where}`
+  }))])
+  // user_forbidden: route kinds the caller can't read for these workloads' namespaces.
+  const hidden = gaps.filter((g) => g.code === 'user_forbidden')
+  const unread = gaps.filter((g) => g.code !== 'user_forbidden')
+  const sentences: string[] = []
+  if (unread.length) sentences.push(`Radar couldn't read ${describe(unread)}, so some workloads may have a route from outside the cluster without the mark.`)
+  if (hidden.length) {
+    const kinds = listWords([...new Set(hidden.flatMap((g) => (g.kinds?.names ?? []).map((k) => pluralKind(k.kind))))])
+    const namespaces = new Set(hidden.flatMap((g) => g.namespaces?.names ?? []))
+    const where = namespaces.size ? `workloads in ${namespaces.size} ${namespaces.size === 1 ? 'namespace' : 'namespaces'}` : 'these workloads'
+    sentences.push(`Your access doesn't cover all ${kinds || 'routes'} that could reach ${where}, so those without a route you can see read Unknown.`)
+  }
+  return sentences.join(' ')
 }
 
 export function distinctNamespaces(workloads: VulnerabilityWorkloadRef[]): number {

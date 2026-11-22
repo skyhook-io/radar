@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/internal/search"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
@@ -56,8 +57,15 @@ type Request struct {
 	// CanListPods is the caller's list access to Pods in a namespace, which
 	// the inventory of what runs is read with; nil allows all.
 	CanListPods func(namespace string) bool
-	View        View
-	Filter      Filter
+	// RouteNamespaces is where the caller may read Gateways and Gateway API
+	// routes (nil: every namespace), when RouteCeiling is set: the caller's
+	// whole namespace ceiling, not the view's narrower scope, since a route
+	// and its Gateway often sit in another namespace than the workload.
+	// Without RouteCeiling they are read in Namespaces.
+	RouteNamespaces []string
+	RouteCeiling    bool
+	View            View
+	Filter          Filter
 	// Export lists everything: no row or per-row list caps, and gaps name
 	// every namespace. MaxFindings still applies. The Response then carries
 	// what WriteCSV needs.
@@ -220,7 +228,19 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	rsRead := cache.AssessKindRead("replicasets", readable)
 	rsReadable, rsGaps, rsOK := narrowToTyped(replicaSetKind, rsRead, readable, nil)
 
-	live, ready := liveTargets(cache, readable, req.CanRead, req.CanListPods)
+	routeScope := readable
+	if req.RouteCeiling {
+		routeScope = req.RouteNamespaces
+	}
+	routes, exposureGaps := readExposure(ctx, cache, dynamic, discovery, readable)
+	exposure, err := indexExposure(ctx, routes, routeVisibility(routeScope, req.CanRead), unknownRouteKinds(routeScope, req.CanRead, routes.gatewayKinds))
+	if err != nil {
+		return Response{}, err
+	}
+	live, ready, err := liveTargets(ctx, cache, readable, req.CanRead, req.CanListPods, exposure)
+	if err != nil {
+		return Response{}, err
+	}
 	if !ready {
 		return Response{}, ErrNotReady
 	}
@@ -330,6 +350,9 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		slices.Sort(namespaces)
 		gaps = appendGap(gaps, resourceapi.Kinds(live.deniedKinds, 64), readreason.UserForbidden, namespaces)
 	}
+	// Route kinds the caller can't read leave their workloads' exposure
+	// unknown, named by kind and workload namespace only.
+	exposureGaps = append(exposureGaps, exposure.gaps()...)
 	resp, err := build(ctx, items, targets, req.View, req.Filter, req.Export)
 	if err != nil {
 		return Response{}, err
@@ -342,11 +365,62 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		for i := range gaps {
 			gaps[i].Namespaces = gaps[i].Namespaces.Capped(gapNameLimit)
 		}
+		for i := range exposureGaps {
+			exposureGaps[i].Namespaces = exposureGaps[i].Namespaces.Capped(gapNameLimit)
+		}
 	}
+	for i := range exposureGaps {
+		if action, ok := readreason.ActionFor(exposureGaps[i].Code); ok {
+			exposureGaps[i].Action = action
+		}
+	}
+	resp.Exposure = &Exposure{Gaps: exposureGaps}
 	resp.Coverage.Gaps = append([]resourceapi.Gap{}, gaps...)
 	c := resp.Coverage
 	resp.Coverage.Complete = len(gaps) == 0 && !c.Truncated && c.RowsOmitted == 0 && c.CleanOmitted == 0 && c.UnscannedOmitted == 0
 	return resp, nil
+}
+
+// routeVisibility is what of a route kind the caller may see in a namespace:
+// Gateways and Gateway API routes only within routeScope (nil: all), and
+// every kind only where canRead allows. Nil when nothing is hidden.
+func routeVisibility(routeScope []string, canRead func(group, kind, namespace string) bool) func(group, kind, namespace string) bool {
+	if routeScope == nil && canRead == nil {
+		return nil
+	}
+	return func(group, kind, namespace string) bool {
+		if group == configrefs.GatewayAPIGroup && routeScope != nil && !slices.Contains(routeScope, namespace) {
+			return false
+		}
+		return canRead == nil || canRead(group, kind, namespace)
+	}
+}
+
+// unknownRouteKinds is, for a workload namespace, the route kinds the
+// caller's access doesn't cover, whatever exists there: Services and
+// Ingresses in that namespace, which is where they sit, and Gateways and
+// Gateway API routes anywhere, since they can reach in from any namespace.
+// Nil when the caller may read everything.
+func unknownRouteKinds(routeScope []string, canRead func(group, kind, namespace string) bool, gatewayKinds []string) func(namespace string) []resourceapi.KindRef {
+	if routeScope == nil && canRead == nil {
+		return nil
+	}
+	var gatewayAPI []resourceapi.KindRef
+	for _, kind := range gatewayKinds {
+		if routeScope != nil || !canRead(configrefs.GatewayAPIGroup, kind, "") {
+			gatewayAPI = append(gatewayAPI, resourceapi.KindRef{Kind: kind, Group: configrefs.GatewayAPIGroup})
+		}
+	}
+	return func(namespace string) []resourceapi.KindRef {
+		out := slices.Clone(gatewayAPI)
+		if canRead != nil && !canRead("", "Service", namespace) {
+			out = append(out, resourceapi.KindRef{Kind: "Service"})
+		}
+		if canRead != nil && !canRead("networking.k8s.io", "Ingress", namespace) {
+			out = append(out, resourceapi.KindRef{Kind: "Ingress", Group: "networking.k8s.io"})
+		}
+		return out
+	}
 }
 
 // clusterWide is whether the caller may list the reports in every namespace,
