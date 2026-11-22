@@ -294,15 +294,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
     // A background tab can miss both the SSE event and the whole operation
     // between polls. Apply the same cache and URL transition as the initiating tab.
-    if (current.state === 'connected' && current.context && current.context !== data.context && data.state === 'connected') {
-      if (data.contextSwitch?.phase === 'succeeded' && data.contextSwitch.target === data.context) {
-        followSwitch(data.contextSwitch.id)
-      } else {
-        // An untracked switch (CAPI connect, Retry, a synchronous switch):
-        // the poll already gave this tab the new connection's ID, so what it
-        // shows must come from that connection too.
-        refreshQueriesAfterReconnect(queryClient, current.context, data.context)
-      }
+    if (current.state === 'connected' && current.context && current.context !== data.context &&
+        data.state === 'connected' && data.contextSwitch?.phase === 'succeeded' && data.contextSwitch.target === data.context) {
+      followSwitch(data.contextSwitch.id)
     }
     const becameConnected = current.state !== 'connected' && data.state === 'connected'
     setConnection({
