@@ -201,7 +201,6 @@ func GetAuthenticatedKeychain(imageRef string, namespace string, secretNames []s
 	// 2. Add registry-specific keychains
 	switch registryType {
 	case RegistryGoogle:
-		log.Printf("Adding Google keychain for registry: %s", imageRef)
 		keychains = append(keychains, google.Keychain)
 		// AWS, Azure, GitHub, Quay, GitLab all use docker config.json credentials
 		// which are handled by the default keychain
@@ -278,21 +277,7 @@ func getKeychainFromSecrets(namespace string, secretNames []string) authn.Keycha
 			continue // Skip missing secrets
 		}
 
-		if secret.Type != corev1.SecretTypeDockerConfigJson {
-			continue
-		}
-
-		configData, ok := secret.Data[".dockerconfigjson"]
-		if !ok {
-			continue
-		}
-
-		var config DockerConfigJSON
-		if err := json.Unmarshal(configData, &config); err != nil {
-			continue
-		}
-
-		maps.Copy(auths, config.Auths)
+		maps.Copy(auths, pullSecretAuths(secret))
 	}
 
 	if len(auths) == 0 {
@@ -300,6 +285,17 @@ func getKeychainFromSecrets(namespace string, secretNames []string) authn.Keycha
 	}
 
 	return &pullSecretKeychain{auths: auths}
+}
+
+func pullSecretAuths(secret *corev1.Secret) map[string]DockerConfigEntry {
+	if secret.Type != corev1.SecretTypeDockerConfigJson {
+		return nil
+	}
+	var config DockerConfigJSON
+	if err := json.Unmarshal(secret.Data[corev1.DockerConfigJsonKey], &config); err != nil {
+		return nil
+	}
+	return config.Auths
 }
 
 // GetKeychainFromPullSecrets creates an authn.Keychain from pod ImagePullSecrets

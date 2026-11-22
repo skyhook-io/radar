@@ -30,7 +30,7 @@ var (
 	// values (a hung-plugin retry classifies "timeout", Helm handlers mark the
 	// cluster unreachable), and inferring exit from that string would kill the
 	// only reconnect path headless deployments have. Set on any auth-shaped
-	// disconnect, cleared only by a successful connect.
+	// disconnect, cleared by a successful connect or an explicit switch stop.
 	runtimeAuthRecoveryOwed atomic.Bool
 	// Wakes a sleeping worker so a new auth-loss episode isn't stuck waiting
 	// out the previous episode's backoff — worst case the 30min hung-plugin
@@ -82,14 +82,25 @@ func runRuntimeAuthRecovery() {
 		if !runtimeAuthRecoveryOwed.Load() {
 			return
 		}
-		status := GetConnectionStatus()
+		var status ConnectionStatus
+		var observedGen uint64
+		if !CaptureClusterReads(func() {
+			status = GetConnectionStatus()
+			observedGen = currentOperationGen()
+		}) {
+			interval = initialInterval
+			continue
+		}
+		if status.ErrorType == switchStoppedErrorType {
+			return
+		}
 		if status.State == StateConnected {
 			// The publish-side hook clears the debt on connect; this is a
 			// guard against direct status writes that bypass it.
 			runtimeAuthRecoveryOwed.Store(false)
 			return
 		}
-		if status.State == StateConnecting || activeContextOperations.Load() != 0 {
+		if status.State == StateConnecting {
 			// A connect attempt owns the moment (user-driven switch or retry);
 			// its failure republishes a disconnected status and the debt
 			// persists, so check again soon. Don't re-sleep the accumulated
@@ -100,7 +111,6 @@ func runRuntimeAuthRecovery() {
 			continue
 		}
 		contextName := status.Context
-		observedGen := currentOperationGen()
 		ctx, cancel := context.WithTimeout(context.Background(), connectionTestOperationTimeout())
 		err := getRuntimeAuthProbe()(ctx)
 		cancel()

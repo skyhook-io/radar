@@ -5,6 +5,8 @@ import { StrimziConnectorRenderer } from '../resources/renderers/StrimziConnecto
 import { StrimziKafkaRenderer, StrimziKafkaNodePoolRenderer } from '../resources/renderers/StrimziKafkaRenderer'
 import { getVolumeSnapshotStatus, isVolumeSnapshot, isVolumeSnapshotContent, isVolumeSnapshotClass } from '../resources/resource-utils-volumesnapshot'
 import { VolumeSnapshotRenderer, VolumeSnapshotContentRenderer, VolumeSnapshotClassRenderer } from '../resources/renderers/VolumeSnapshotRenderers'
+import { getMetalLBPoolStatus, getMetalLBConfigurationStateStatus, isMetalLBIPAddressPool, isMetalLBL2Advertisement, isMetalLBBGPAdvertisement, isMetalLBBGPPeer, isMetalLBConfigurationState } from '../resources/resource-utils-metallb'
+import { MetalLBIPAddressPoolRenderer, MetalLBL2AdvertisementRenderer, MetalLBBGPAdvertisementRenderer, MetalLBBGPPeerRenderer, MetalLBConfigurationStateRenderer } from '../resources/renderers/MetalLBRenderers'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
 import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
@@ -106,6 +108,9 @@ import {
   getPeerAuthenticationStatus,
   getAuthorizationPolicyStatus,
 } from '../resources/resource-utils-istio'
+import { LonghornVolumeRenderer } from '../resources/renderers/LonghornVolumeRenderer'
+import { getLonghornVolumeStatus, LONGHORN_GROUP } from '../resources/resource-utils-longhorn'
+import { isCoreNode } from '../resources/resource-utils'
 import { getCNPGClusterStatus, getCNPGBackupStatus, getCNPGScheduledBackupStatus, getCNPGPoolerStatus, getCNPGObjectStoreStatus, getCNPGDeclarativeStatus, isApiGroup, CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import { getExternalSecretStatus, getClusterExternalSecretStatus, getSecretStoreStatus, getClusterSecretStoreStatus } from '../resources/resource-utils-eso'
 import {
@@ -366,6 +371,7 @@ export interface RendererOverrides {
   NodeRenderer?: React.ComponentType<{
     data: any; relationships?: Relationships
   }>
+  LonghornVolumeRenderer?: React.ComponentType<{ data: any }>
   KarpenterNodePoolRenderer?: React.ComponentType<{
     data: any
     onNavigate?: (ref: ResourceRef) => void
@@ -452,6 +458,11 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  // SealedSecret controller and sealing keys: host fetches /sealedsecrets/controller.
+  SealedSecretRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   // RoleBinding inline rules preview: host fetches the referenced Role/
   // ClusterRole's rules so the binding view can show what's granted without
   // a navigation step.
@@ -507,6 +518,7 @@ const KNOWN_KINDS = new Set([
   'customresourcedefinitions',
   'kafkaconnectors', 'kafkas', 'kafkanodepools',
   'volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses',
+  'ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates',
   'opentelemetrycollectors', 'instrumentations',
   'canaries', 'metrictemplates',
   'plans',
@@ -515,7 +527,7 @@ const KNOWN_KINDS = new Set([
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'jobsets',
   'rayclusters', 'rayservices', 'rayjobs', 'workloads', 'localqueues', 'clusterqueues', 'admissionchecks', 'provisioningrequests',
-  'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
+  'hpas', 'horizontalpodautoscalers', 'nodes', 'volumes', 'persistentvolumeclaims',
   'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
   'orders', 'challenges', 'certificatesigningrequests',
@@ -781,6 +793,7 @@ export function ResourceRendererDispatch({
     kind === 'customresourcedefinitions' ||
     kind === 'kafkaconnectors' || kind === 'kafkas' || kind === 'kafkanodepools' ||
     ['volumesnapshots', 'volumesnapshotcontents', 'volumesnapshotclasses'].includes(kind) ||
+    ['ipaddresspools', 'l2advertisements', 'bgpadvertisements', 'bgppeers', 'configurationstates'].includes(kind) ||
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
     kind === 'plans' ||
@@ -795,6 +808,7 @@ export function ResourceRendererDispatch({
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
     || kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
     || kind === 'certificatesigningrequests'
+    || kind === 'nodes' || kind === 'volumes'
     || isFluxOperatorKind
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
@@ -805,6 +819,11 @@ export function ResourceRendererDispatch({
     (kind === 'volumesnapshots' && isVolumeSnapshot(data)) ||
     (kind === 'volumesnapshotcontents' && isVolumeSnapshotContent(data)) ||
     (kind === 'volumesnapshotclasses' && isVolumeSnapshotClass(data)) ||
+    (kind === 'ipaddresspools' && isMetalLBIPAddressPool(data)) ||
+    (kind === 'l2advertisements' && isMetalLBL2Advertisement(data)) ||
+    (kind === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data)) ||
+    (kind === 'bgppeers' && isMetalLBBGPPeer(data)) ||
+    (kind === 'configurationstates' && isMetalLBConfigurationState(data)) ||
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
     (kind === 'plans' && isApiGroup(data?.apiVersion, UPGRADE_PLAN_GROUP)) ||
@@ -844,6 +863,8 @@ export function ResourceRendererDispatch({
     || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings')
       && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io'))
     || (kind === 'certificatesigningrequests' && isCertificateSigningRequest(data))
+    || (kind === 'nodes' && isCoreNode(data))
+    || (kind === 'volumes' && isApiGroup(data?.apiVersion, LONGHORN_GROUP))
     || isFluxOperatorResource
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
@@ -877,6 +898,7 @@ export function ResourceRendererDispatch({
   const ClusterQueueComp = rendererOverrides?.ClusterQueueRenderer ?? ClusterQueueRenderer
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
   const KarpenterNodePoolComp = rendererOverrides?.KarpenterNodePoolRenderer ?? KarpenterNodePoolRenderer
+  const LonghornVolumeComp = rendererOverrides?.LonghornVolumeRenderer ?? LonghornVolumeRenderer
   const WorkloadComp = rendererOverrides?.WorkloadRenderer ?? WorkloadRenderer
   const NodeComp = rendererOverrides?.NodeRenderer ?? NodeRenderer
   const ServiceComp = rendererOverrides?.ServiceRenderer ?? ServiceRenderer
@@ -901,6 +923,7 @@ export function ResourceRendererDispatch({
   const kyvernoQueued = KyvernoQueuedComp ? <KyvernoQueuedComp data={data} /> : undefined
   const ServiceAccountComp = rendererOverrides?.ServiceAccountRenderer ?? ServiceAccountRenderer
   const RoleComp = rendererOverrides?.RoleRenderer ?? RoleRenderer
+  const SealedSecretComp = rendererOverrides?.SealedSecretRenderer ?? SealedSecretRenderer
   const RoleBindingComp = rendererOverrides?.RoleBindingRenderer ?? RoleBindingRenderer
   const NamespaceComp = rendererOverrides?.NamespaceRenderer ?? NamespaceRenderer
   const CAPIClusterComp = rendererOverrides?.CAPIClusterRenderer ?? CAPIClusterRenderer
@@ -962,7 +985,8 @@ export function ResourceRendererDispatch({
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} hpaDiagnosis={hpaDiagnosis} />}
-        {kind === 'nodes' && <NodeComp data={data} relationships={relationships} />}
+        {kind === 'nodes' && groupGatedMatched && <NodeComp data={data} relationships={relationships} />}
+        {kind === 'volumes' && groupGatedMatched && <LonghornVolumeComp data={data} />}
         {kind === 'persistentvolumeclaims' && <PVCComp data={data} onNavigate={onNavigate} />}
         {kind === 'rollouts' && isArgoRolloutResource(data) && <RolloutComp data={data} onNavigate={onNavigate} />}
         {kind === 'analysisruns' && <AnalysisRunRenderer data={data} onNavigate={onNavigate} />}
@@ -985,7 +1009,7 @@ export function ResourceRendererDispatch({
         {kind === 'tcproutes' && <SimpleRouteRenderer data={data} kind="TCPRoute" onNavigate={onNavigate} />}
         {kind === 'tlsroutes' && <SimpleRouteRenderer data={data} kind="TLSRoute" onNavigate={onNavigate} />}
         {kind === 'udproutes' && <SimpleRouteRenderer data={data} kind="UDPRoute" onNavigate={onNavigate} />}
-        {kind === 'sealedsecrets' && <SealedSecretRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'sealedsecrets' && <SealedSecretComp data={data} onNavigate={onNavigate} />}
         {(kind === 'workflowtemplates' || kind === 'clusterworkflowtemplates') && <WorkflowTemplateRenderer data={data} />}
         {isCoreNetworkPolicy && <NetworkPolicyRenderer data={data} />}
         {isCalicoStagedKubernetesPolicy && <NetworkPolicyRenderer data={data} staged />}
@@ -1173,6 +1197,11 @@ export function ResourceRendererDispatch({
         {kind === 'volumesnapshots' && isVolumeSnapshot(data) && <VolumeSnapshotRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'volumesnapshotcontents' && isVolumeSnapshotContent(data) && <VolumeSnapshotContentRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'volumesnapshotclasses' && isVolumeSnapshotClass(data) && <VolumeSnapshotClassRenderer data={data} />}
+        {kind === 'ipaddresspools' && isMetalLBIPAddressPool(data) && <MetalLBIPAddressPoolRenderer data={data} />}
+        {kind === 'l2advertisements' && isMetalLBL2Advertisement(data) && <MetalLBL2AdvertisementRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data) && <MetalLBBGPAdvertisementRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'bgppeers' && isMetalLBBGPPeer(data) && <MetalLBBGPPeerRenderer data={data} />}
+        {kind === 'configurationstates' && isMetalLBConfigurationState(data) && <MetalLBConfigurationStateRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'instrumentations' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <OpenTelemetryInstrumentationRenderer data={data} />}
         {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
@@ -1192,7 +1221,7 @@ export function ResourceRendererDispatch({
             <ExternalLinksSection data={data} />
 
             {/* Prometheus Metrics Charts — skip for Pending pods, and when parent has dedicated Metrics tab */}
-            {showMetrics && renderMetrics && !(kind === 'pods' && data?.status?.phase === 'Pending') && (
+            {showMetrics && renderMetrics && !(kind === 'pods' && data?.status?.phase === 'Pending') && !(kind === 'nodes' && !isCoreNode(data)) && (
               renderMetrics({ kind: data?.kind || resource.kind, namespace: resource.namespace, name: resource.name })
             )}
 
@@ -1245,6 +1274,10 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if ((k === 'volumesnapshots' && isVolumeSnapshot(data)) || (k === 'volumesnapshotcontents' && isVolumeSnapshotContent(data))) return getVolumeSnapshotStatus(data)
   // A class is configuration with no status of its own.
   if (k === 'volumesnapshotclasses' && isVolumeSnapshotClass(data)) return null
+  if (k === 'ipaddresspools' && isMetalLBIPAddressPool(data)) return getMetalLBPoolStatus(data)
+  if (k === 'configurationstates' && isMetalLBConfigurationState(data)) return getMetalLBConfigurationStateStatus(data)
+  // Advertisements and peers are configuration; MetalLB writes no status on them.
+  if ((k === 'l2advertisements' && isMetalLBL2Advertisement(data)) || (k === 'bgpadvertisements' && isMetalLBBGPAdvertisement(data)) || (k === 'bgppeers' && isMetalLBBGPPeer(data))) return null
 
   if (isApiGroup(data.apiVersion, 'opentelemetry.io')) {
     if (k === 'opentelemetrycollectors') return getOpenTelemetryCollectorStatus(data)
@@ -1332,7 +1365,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'trainjobs' && data?.apiVersion?.startsWith('trainer.kubeflow.org/')) return getTrainJobStatus(data)
   if (k === 'cronjobs') return getCronJobStatus(data)
   if (k === 'hpas' || k === 'horizontalpodautoscalers') return getHPAStatus(data)
-  if (k === 'nodes') return getNodeStatus(data)
+  if (k === 'nodes' && isCoreNode(data)) return getNodeStatus(data)
+  if (k === 'volumes' && isApiGroup(data?.apiVersion, LONGHORN_GROUP)) return getLonghornVolumeStatus(data)
   if (k === 'persistentvolumeclaims') return getPVCStatus(data)
   if (k === 'analysisruns') return getAnalysisRunStatus(data)
   // Same collision guard as the render branch above — Katib's unrelated

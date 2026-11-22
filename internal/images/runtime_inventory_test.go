@@ -3,6 +3,7 @@ package images
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -119,7 +120,7 @@ func fakeInventory(f *fakeLookup) *RuntimeInventory {
 			}
 		}
 		return credKeychain{c.id()}, c.identity, true
-	})
+	}, registryFetchSlots)
 }
 
 // refKey is how the fake keys a reference: the form lookup receives.
@@ -358,7 +359,7 @@ func TestInventory_FailuresAreCachedThenRetried(t *testing.T) {
 func TestInventory_RateLimitStopsQueuedLookups(t *testing.T) {
 	f := &fakeLookup{errs: map[string]error{}}
 	var pods []*corev1.Pod
-	for _, img := range []string{"php:8.1", "php:8.2", "php:8.3", "php:8.4"} {
+	for _, img := range []string{"registry-1.docker.io/library/php:8.1", "php:8.2", "registry.hub.docker.com/library/php:8.3", "index.docker.io/library/php:8.4"} {
 		f.errs[refKey(t, img)+"|anonymous"] = &transport.Error{StatusCode: http.StatusTooManyRequests}
 		pods = append(pods, runningPod("shop", "p-"+img, "x86-node", img, map[string][2]string{"c": {img, ""}}))
 	}
@@ -367,6 +368,69 @@ func TestInventory_RateLimitStopsQueuedLookups(t *testing.T) {
 	got := inv.Inventory(context.Background(), podSourceWithoutSecrets(pods...), InventoryOptions{})
 	if got.Totals.RateLimited != 4 || f.calls.Load() != 1 {
 		t.Fatalf("one 429 must stop every lookup queued for that registry: totals %+v, calls %v", got.Totals, f.seenCopy())
+	}
+}
+
+func TestJava4ShellCLIRegistryConcurrency(t *testing.T) {
+	const groups = 9
+	dockerHubHosts := []string{"docker.io", "index.docker.io", "registry-1.docker.io", "registry.hub.docker.com"}
+	for _, tc := range []struct {
+		name         string
+		dockerGroups int
+		concurrent   int
+	}{
+		{"other registries", 0, 8},
+		{"docker hub aliases", groups, 4},
+		{"mixed registries", 5, 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			started := make(chan struct{}, groups)
+			release := make(chan struct{})
+			inv := NewCLIJava4ShellInventory()
+			inv.lookup = func(ctx context.Context, _ name.Reference, _ v1.Platform, _ authn.Keychain) (*v1.ConfigFile, string, error) {
+				started <- struct{}{}
+				select {
+				case <-release:
+					return &v1.ConfigFile{}, "test digest", nil
+				case <-ctx.Done():
+					return nil, "", ctx.Err()
+				}
+			}
+			items := make([]*work, 0, groups)
+			for i := range groups {
+				registry := "registry.example.com"
+				if i < tc.dockerGroups {
+					registry = dockerHubHosts[i%len(dockerHubHosts)]
+				}
+				ref, err := name.ParseReference(fmt.Sprintf("%s/test/app-%d:1", registry, i))
+				if err != nil {
+					t.Fatal(err)
+				}
+				items = append(items, &work{key: ref.String(), ref: ref, advisory: true})
+			}
+			done := make(chan []configResult, 1)
+			go func() { done <- inv.lookupConfigs(ctx, items, false, func(_, _ int) {}) }()
+			for i := range tc.concurrent {
+				select {
+				case <-started:
+				case <-ctx.Done():
+					t.Fatalf("only %d of %d lookups started", i, tc.concurrent)
+				}
+			}
+			select {
+			case <-started:
+				t.Errorf("more than %d concurrent lookups started", tc.concurrent)
+			case <-time.After(250 * time.Millisecond):
+			}
+			close(release)
+			for i, result := range <-done {
+				if result.status != StatusOK {
+					t.Errorf("group %d: status %s, error %s", i, result.status, result.err)
+				}
+			}
+		})
 	}
 }
 
@@ -382,6 +446,72 @@ func TestInventory_CapsLookupAttemptsPerCall(t *testing.T) {
 	got := fakeInventory(f).Inventory(context.Background(), podSource(pods...), InventoryOptions{Limit: maxInventoryLimit})
 	if int(f.calls.Load()) != maxLookupsPerCall || got.Totals.NotChecked == 0 {
 		t.Fatalf("calls %d, totals %+v", f.calls.Load(), got.Totals)
+	}
+}
+
+type registryTestRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f registryTestRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestJava4ShellPacesPublicECRManifestsAlongsideOtherRegistries(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var items []*work
+	for _, image := range []string{
+		PublicECRRegistry + "/test/first:1", PublicECRRegistry + "/test/second:1", "registry.example.com/test/other:1",
+	} {
+		ref, err := name.ParseReference(image)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, &work{key: ref.Name(), ref: ref, advisory: true})
+	}
+	started := make(chan time.Time, 3)
+	other := make(chan time.Time, 1)
+	transport := registryTestRoundTripper(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Hostname() == PublicECRRegistry {
+			started <- time.Now()
+		} else {
+			other <- time.Now()
+		}
+		return &http.Response{StatusCode: http.StatusOK}, nil
+	})
+	inv := NewCLIJava4ShellInventory()
+	inv.lookup = func(ctx context.Context, ref name.Reference, _ v1.Platform, _ authn.Keychain) (*v1.ConfigFile, string, error) {
+		manifests := []string{"platform"}
+		if strings.HasSuffix(ref.Context().Name(), "/first") {
+			manifests = []string{"index", "platform"}
+		}
+		for _, manifest := range manifests {
+			url := "https://" + ref.Context().RegistryStr() + "/v2/test/manifests/" + manifest
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return nil, "", err
+			}
+			if _, err := publicECRManifestRoundTrip(transport, req); err != nil {
+				return nil, "", err
+			}
+		}
+		return &v1.ConfigFile{}, "test digest", nil
+	}
+	for i, result := range inv.lookupConfigs(ctx, items, false, func(_, _ int) {}) {
+		if result.status != StatusOK {
+			t.Fatalf("group %d: status %s, error %s", i, result.status, result.err)
+		}
+	}
+	if len(started) != 3 || len(other) != 1 {
+		t.Fatal("expected three ECR Public manifest requests and one request to another registry")
+	}
+	index, platform, secondImage := <-started, <-started, <-started
+	for _, elapsed := range []time.Duration{platform.Sub(index), secondImage.Sub(platform)} {
+		if elapsed < publicECRManifestInterval {
+			t.Errorf("ECR Public manifest requests started %s apart, want at least %s", elapsed, publicECRManifestInterval)
+		}
+	}
+	if next := <-other; !next.Before(platform) {
+		t.Error("another registry waited for ECR Public lookups to finish")
 	}
 }
 
@@ -973,8 +1103,40 @@ func TestInventory_PartialCredentialBudgetIsNotChecked(t *testing.T) {
 	w := collectWork(src)[0]
 	budget := new(atomic.Int32)
 	budget.Store(1)
-	got := inv.fetch(context.Background(), w, inv.credentials(w, false), budget)
+	got := inv.fetch(context.Background(), w, inv.credentials(w, false), budget, nil)
 	if got.status != StatusNotChecked || f.calls.Load() != 1 {
 		t.Fatalf("unfinished credential attempts must be not_checked: %+v calls=%d", got, f.calls.Load())
+	}
+}
+
+func TestJava4ShellCLIDockerHubLoginLiftsAnonymousCap(t *testing.T) {
+	inv := NewCLIJava4ShellInventory()
+	inv.dockerHubAuth = authn.FromConfig(authn.AuthConfig{Username: "test-user", Password: "test-token"})
+	items := make([]*work, 0, java4ShellDockerHubLookups+1)
+	for i := range java4ShellDockerHubLookups + 1 {
+		ref, err := name.ParseReference(fmt.Sprintf("docker.io/test/app-%d:1", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, &work{key: ref.String(), ref: ref, advisory: true})
+	}
+	inv.lookup = func(ctx context.Context, ref name.Reference, _ v1.Platform, keychain authn.Keychain) (*v1.ConfigFile, string, error) {
+		credential, err := authn.Resolve(ctx, keychain, ref.Context())
+		if err != nil {
+			return nil, "", err
+		}
+		cfg, err := credential.Authorization()
+		if err != nil {
+			return nil, "", err
+		}
+		if cfg.Username != "test-user" {
+			return nil, "", errors.New("Docker Hub lookup did not use the configured login first")
+		}
+		return &v1.ConfigFile{}, "test digest", nil
+	}
+	for i, result := range inv.lookupConfigs(context.Background(), items, false, func(_, _ int) {}) {
+		if result.status != StatusOK {
+			t.Fatalf("group %d: status %s, error %s", i, result.status, result.err)
+		}
 	}
 }
