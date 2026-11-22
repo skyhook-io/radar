@@ -328,6 +328,11 @@ export interface SubstrateK8sPool {
   createTime?: string
 }
 
+export type SubstratePoolCapacity = 'short' | 'full' | 'noRoom' | 'free'
+
+/** What a pool's free slots lack for an actor. */
+export type SubstrateLacking = 'cpu' | 'memory' | 'cpuAndMemory'
+
 export interface SubstratePoolRow {
   namespace: string
   name: string
@@ -338,8 +343,16 @@ export interface SubstratePoolRow {
   /** Actors assigned to its workers; absent when actors were not read. */
   actors?: number
   sandboxClasses?: string[]
-  /** Absent when neither side was read well enough to say. */
-  capacity?: 'short' | 'full' | 'free'
+  /**
+   * Absent when neither side was read well enough to say. noRoom: free slots,
+   * but no active worker has the CPU or memory for an actor of any template
+   * that can run on the pool (judged only on complete worker and template
+   * lists). free: a slot is free; whether an actor fits is judged only then.
+   * A newer Radar may send a verdict this UI does not know.
+   */
+  capacity?: SubstratePoolCapacity | (string & {})
+  /** With capacity noRoom: what the free slots lack. */
+  lacking?: SubstrateLacking
   /** Substrate's own measurements from Prometheus; absent when not read for this pool. */
   service?: SubstratePoolService
 }
@@ -482,6 +495,8 @@ export type SubstrateAttentionRule =
   | 'workerRestarting'
   | 'poolShort'
   | 'poolFull'
+  /** Pools whose free slots lack the CPU or memory an actor of any template that can run on them books. */
+  | 'poolNoRoom'
   | 'uploadOverdue'
   /** Nodes whose atelet counts snapshot uploads past their deadline (Prometheus). */
   | 'nodeUploadsOverdue'
@@ -650,12 +665,12 @@ export interface SubstrateWorkspace {
   coverage: Partial<SubstrateSnapshotCoverage> & { pools: SubstratePoolsCoverage }
   /** Each part is absent when what it counts was not read. */
   summary: {
-    /** Absent unless WorkerPools or workers were read; a partial pool list counts what was read. */
-    pools?: { total: number; short: number; full: number }
+    /** Absent unless WorkerPools or workers were read; a partial pool list counts what was read. noRoom is absent from an older Radar. */
+    pools?: { total: number; short: number; full: number; noRoom?: number }
     workers?: SubstrateWorkerCounts
     slots?: SubstrateUsage
-    /** Free actor slots per pool, largest first; [] when workers were read and none is free. */
-    freeSlots?: { pool: SubstratePoolRef; free: number }[]
+    /** Free actor slots per pool, largest first; [] when workers were read and none is free. lacking: the pool's free slots fit no actor of its templates. */
+    freeSlots?: { pool: SubstratePoolRef; free: number; lacking?: SubstrateLacking }[]
     actors?: { total: number; crashed: number }
     /** noMatchingPool counts templates whose selector matches no pool; absent unless the pool list is complete. */
     templates?: { total: number; goldenFailed: number; noMatchingPool?: number }

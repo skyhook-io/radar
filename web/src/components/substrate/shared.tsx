@@ -41,7 +41,7 @@ export const SUBSTRATE_TERMS = {
   pool: 'A WorkerPool: the Kubernetes object that runs worker Pods of one sandbox class.',
   template: 'An ActorTemplate: the image, resources and snapshot settings every new actor of it starts from.',
   golden: 'The prepared starting snapshot a template builds for new actors. Without it, they boot cold.',
-  slot: 'Room for one actor on a worker. A worker’s actor limit is its number of slots.',
+  slot: 'A place for one actor on a worker; a worker’s actor limit is its number of slots. A free slot takes an actor only when the worker also has the CPU and memory the actor’s template asks.',
   snapshot: 'A saved copy of an actor’s state, taken when it suspends. The actor resumes from the newest one that is stored or still on its node.',
 } as const
 

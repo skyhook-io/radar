@@ -207,6 +207,107 @@ func HasFreeSlot(w Worker) bool {
 	return used < w.Capacity.Actors
 }
 
+// HasRoomFor reports whether worker w may take one more actor of template t,
+// as far as Radar can tell: a free actor slot (HasFreeSlot), and unbooked CPU
+// and memory (capacity less allocated) at least the template's limits. A limit
+// the template leaves at 0 does not constrain. Substrate's placement also
+// books the per-actor memory overhead of the worker's runtime, which Radar
+// does not read, and checks the actor's own selector, its snapshot and the
+// runtime. So true means the actor may fit; false is certain, since each of
+// those only narrows where it fits.
+func HasRoomFor(w Worker, t Template) bool {
+	cpu, memory := lacks(w, t)
+	return HasFreeSlot(w) && !cpu && !memory
+}
+
+// lacks reports which of t's limits exceed w's unbooked CPU and memory. A
+// capacity Substrate does not report is zero of every dimension.
+func lacks(w Worker, t Template) (cpu, memory bool) {
+	var capacity, allocated Resources
+	if w.Capacity != nil {
+		capacity = *w.Capacity
+	}
+	if w.Allocated != nil {
+		allocated = *w.Allocated
+	}
+	cpu = t.CPUMillicores > 0 && t.CPUMillicores > capacity.CPUMillicores-allocated.CPUMillicores
+	memory = t.MemoryBytes > 0 && t.MemoryBytes > capacity.MemoryBytes-allocated.MemoryBytes
+	return cpu, memory
+}
+
+// What a pool's workers lack for an actor of any template that can run on it
+// (PoolRow.Lacking).
+const (
+	LackingCPU          = "cpu"
+	LackingMemory       = "memory"
+	LackingCPUAndMemory = "cpuAndMemory"
+)
+
+// room is a pool's judgment of whether an actor of its templates fits: what
+// its free slots lack, and the figures that prove it per dimension.
+type room struct {
+	// lacking is empty when some active worker may take an actor of some
+	// template, or nothing was judged.
+	lacking string
+	// templates is how many templates can run on the pool.
+	templates int
+	// unbooked is the most of each dimension any active worker with a free
+	// slot has unbooked; ask the least of it any template asks. ask is 0 for
+	// a dimension some template leaves unlimited.
+	unbooked, ask Resources
+}
+
+// roomOf judges whether any active worker with a free slot may take an actor
+// of any of the templates. With no such template, nothing is judged.
+func roomOf(workers []Worker, templates []Template) room {
+	r := room{templates: len(templates)}
+	if len(templates) == 0 {
+		return r
+	}
+	r.ask.CPUMillicores, r.ask.MemoryBytes = -1, -1
+	for _, t := range templates {
+		r.ask.CPUMillicores = leastAsk(r.ask.CPUMillicores, t.CPUMillicores)
+		r.ask.MemoryBytes = leastAsk(r.ask.MemoryBytes, t.MemoryBytes)
+	}
+	var cpu, memory, judged bool
+	for _, w := range workers {
+		if w.State != WorkerActive || !HasFreeSlot(w) {
+			continue
+		}
+		judged = true
+		alloc := Resources{}
+		if w.Allocated != nil {
+			alloc = *w.Allocated
+		}
+		r.unbooked.CPUMillicores = max(r.unbooked.CPUMillicores, w.Capacity.CPUMillicores-alloc.CPUMillicores)
+		r.unbooked.MemoryBytes = max(r.unbooked.MemoryBytes, w.Capacity.MemoryBytes-alloc.MemoryBytes)
+		for _, t := range templates {
+			if HasRoomFor(w, t) {
+				return room{templates: len(templates)}
+			}
+			c, m := lacks(w, t)
+			cpu, memory = cpu || c, memory || m
+		}
+	}
+	switch {
+	case !judged:
+	case cpu && memory:
+		r.lacking = LackingCPUAndMemory
+	case cpu:
+		r.lacking = LackingCPU
+	case memory:
+		r.lacking = LackingMemory
+	}
+	return r
+}
+
+func leastAsk(least, ask int64) int64 {
+	if least < 0 || ask < least {
+		return ask
+	}
+	return least
+}
+
 // WorkerCounts counts workers by state.
 type WorkerCounts struct {
 	Total       int `json:"total"`
@@ -285,8 +386,14 @@ const (
 	CapacityShort = "short"
 	// CapacityFull: no active worker has a free actor slot.
 	CapacityFull = "full"
-	// CapacityFree: some active worker has a free actor slot; a given actor
-	// may still not fit.
+	// CapacityNoRoom: active workers have free actor slots, but none has the
+	// unbooked CPU or memory for an actor of any template that can run on
+	// the pool. Judged only on a complete worker list and a complete
+	// template list; PoolRow.Lacking names the dimension.
+	CapacityNoRoom = "noRoom"
+	// CapacityFree: some active worker has a free actor slot. With a complete
+	// worker and template list, some worker may also take an actor of some
+	// template (HasRoomFor); otherwise whether an actor fits is not judged.
 	CapacityFree = "free"
 )
 
@@ -302,22 +409,32 @@ type PoolRow struct {
 	// Actors assigned to the pool's workers; absent when actors were not read.
 	Actors         *int     `json:"actors,omitempty"`
 	SandboxClasses []string `json:"sandboxClasses,omitempty"`
-	// Capacity is short, full or free; absent when neither side was read
-	// well enough to say.
+	// Capacity is short, full, noRoom or free; absent when neither side was
+	// read well enough to say.
 	Capacity string `json:"capacity,omitempty"`
+	// Lacking is what the free slots lack with capacity noRoom: cpu, memory
+	// or cpuAndMemory. Absent otherwise.
+	Lacking string `json:"lacking,omitempty"`
 	// Service is Substrate's own verdict and facts for the pool, from
 	// Prometheus; absent when Prometheus was not read for it.
 	Service *PoolService `json:"service,omitempty"`
+
+	room room
 }
 
 func (r PoolRow) Ref() PoolRef { return PoolRef{Namespace: r.Namespace, Name: r.Name} }
 
-// JoinPools joins WorkerPools with Substrate's workers by namespace and name.
-// workersRead and actorsRead say whether those lists were read well enough to
-// count; a nil slice with read=true means Substrate has none. workersComplete
-// says the worker list holds every worker, without which a pool's placement
-// proves a free slot but never a shortfall or that no slot is free.
-func JoinPools(pools []Pool, workers []Worker, workersRead, workersComplete bool, actors []Actor, actorsRead bool) []PoolRow {
+// JoinPools joins the WorkerPools (in.Pools) with Substrate's workers by
+// namespace and name. WorkersRead and ActorsRead say whether those lists were
+// read well enough to count; a nil slice read means Substrate has none.
+// WorkersComplete says the worker list holds every worker, without which a
+// pool's placement proves a free slot but never a shortfall, that no slot is
+// free, or that no actor fits. A pool with free slots is noRoom only when the
+// templates were read in full (TemplatesComplete) and some of them can run on
+// it: an unread template might fit.
+func JoinPools(in Inputs) []PoolRow {
+	pools, workers, actors := in.Pools, in.Workers, in.Actors
+	workersRead, workersComplete, actorsRead := in.WorkersRead, in.WorkersComplete, in.ActorsRead
 	rows := map[string]*PoolRow{}
 	row := func(ref PoolRef) *PoolRow {
 		r := rows[ref.Key()]
@@ -361,10 +478,32 @@ func JoinPools(pools []Pool, workers []Worker, workersRead, workersComplete bool
 			addClass(classes, w.PoolRef().Key(), c)
 		}
 	}
+	byPool := map[string][]Worker{}
+	if workersRead {
+		for _, w := range workers {
+			byPool[w.PoolRef().Key()] = append(byPool[w.PoolRef().Key()], w)
+		}
+	}
+	labels := map[string]map[string]string{}
+	for _, p := range KnownPools(pools, workers) {
+		labels[p.Ref.Key()] = p.Labels
+	}
 	out := make([]PoolRow, 0, len(rows))
 	for key, r := range rows {
 		r.SandboxClasses = slices.Sorted(maps.Keys(classes[key]))
 		r.Capacity = poolCapacity(*r)
+		if r.Capacity == CapacityFree && r.Placement != nil && r.Placement.Complete && in.TemplatesComplete {
+			var runs []Template
+			for _, t := range in.Templates {
+				if SelectorMatches(t.WorkerSelector, labels[key]) {
+					runs = append(runs, t)
+				}
+			}
+			r.room = roomOf(byPool[key], runs)
+			if r.room.lacking != "" {
+				r.Capacity, r.Lacking = CapacityNoRoom, r.room.lacking
+			}
+		}
 		out = append(out, *r)
 	}
 	slices.SortFunc(out, func(a, b PoolRow) int { return strings.Compare(a.Ref().Key(), b.Ref().Key()) })

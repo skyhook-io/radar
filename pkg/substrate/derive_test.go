@@ -188,7 +188,7 @@ func TestJoinPools(t *testing.T) {
 	}
 
 	withAPI := map[string]PoolRow{}
-	for _, r := range JoinPools(pools, workers, true, true, actors, true) {
+	for _, r := range JoinPools(Inputs{Pools: pools, Workers: workers, WorkersRead: true, WorkersComplete: true, Actors: actors, ActorsRead: true}) {
 		withAPI[r.Name] = r
 	}
 	want := map[string]string{"short": CapacityShort, "full": CapacityFull, "free": CapacityFree, "k8s-short": CapacityShort, "only-in-substrate": CapacityFree}
@@ -208,7 +208,7 @@ func TestJoinPools(t *testing.T) {
 		t.Errorf("classes = %v", withAPI["full"].SandboxClasses)
 	}
 
-	for _, r := range JoinPools(pools, nil, false, false, nil, false) {
+	for _, r := range JoinPools(Inputs{Pools: pools}) {
 		if r.Placement != nil || r.Actors != nil {
 			t.Errorf("%s: unread workers or actors must be absent, not zero", r.Name)
 		}
@@ -229,7 +229,7 @@ func TestTemplateRows(t *testing.T) {
 		{Atespace: "a", Name: "y", Template: Ref{"a", "ok"}, State: StateCrashed},
 	}
 	pools := []Pool{{Namespace: "ns", Name: "p", Labels: map[string]string{"class": "gvisor"}, SandboxClasses: []string{"gvisor"}}}
-	rows := TemplateRows(templates, actors, true, KnownPools(pools, nil), true, true, JoinPools(pools, nil, false, false, nil, false))
+	rows := TemplateRows(templates, actors, true, KnownPools(pools, nil), true, true, JoinPools(Inputs{Pools: pools}))
 	byName := map[string]TemplateRow{}
 	for _, r := range rows {
 		byName[r.Name] = r
