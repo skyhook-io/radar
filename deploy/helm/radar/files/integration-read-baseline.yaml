@@ -3,6 +3,13 @@
 # All grant rows mean get/list/watch on full objects, not redacted projections.
 # Existing grants are preserved; withhold does not revoke rights from other roles.
 entries:
+  - group: "longhorn.io"
+    resources: ["volumes","engines","replicas"]
+    scope: Namespaced
+    collection: "longhorn"
+    decision: grant
+    reason: "Volume, engine and replica state: sizes, nodes, replica modes, rebuild progress and backup times. No credentials (spec.fromBackup is a backup URL, not a secret). They live in the Longhorn namespace, so a namespace-scoped caller usually can't read them."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
   - group: ""
     resources: ["podtemplates"]
     scope: Namespaced

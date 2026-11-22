@@ -9,6 +9,7 @@ interface UseEventSourceReturn {
   connected: boolean
   connecting: boolean
   reconnect: () => void
+  applyContextChange: (context: string, switchId?: string) => void
 }
 
 interface UseEventSourceOptions {
@@ -67,6 +68,22 @@ export function useEventSource(
   const optionsRef = useRef(options)
   optionsRef.current = options
 
+  // A completion can reach the tab through either SSE or the connection poll.
+  // Reconnects omit the switch ID and must always discard the old snapshot.
+  const lastSwitch = useRef('')
+  const applyContextChange = useCallback((context: string, switchId?: string) => {
+    if (switchId && lastSwitch.current === switchId) return false
+    if (switchId) lastSwitch.current = switchId
+    if (throttleTimeoutRef.current !== null) window.clearTimeout(throttleTimeoutRef.current)
+    throttleTimeoutRef.current = null
+    pendingTopologyRef.current = null
+    waitingForTopologyAfterSwitch.current = true
+    setTopology(null)
+    setEvents([])
+    optionsRef.current?.onContextChanged?.(context)
+    return true
+  }, [])
+
   const connect = useCallback(() => {
     setConnecting(true)
     // Clean up existing connection
@@ -99,7 +116,14 @@ export function useEventSource(
     const es = new EventSource(url, { withCredentials: getCredentialsMode() === 'include' })
     eventSourceRef.current = es
 
+    const listen = (type: string, handle: (event: MessageEvent) => void) => {
+      es.addEventListener(type, (event: MessageEvent) => {
+        if (eventSourceRef.current === es) handle(event)
+      })
+    }
+
     es.onopen = () => {
+      if (eventSourceRef.current !== es) return
       console.log('SSE connected')
       setConnected(true)
       setConnecting(false)
@@ -108,6 +132,7 @@ export function useEventSource(
     }
 
     es.onerror = (error) => {
+      if (eventSourceRef.current !== es) return
       console.error('SSE error:', error)
       setConnected(false)
       setConnecting(false)
@@ -124,7 +149,7 @@ export function useEventSource(
     }
 
     // Handle topology updates with dynamic throttling based on cluster size
-    es.addEventListener('topology', (event) => {
+    listen('topology', (event) => {
       try {
         const data = JSON.parse(event.data) as Topology
         const now = Date.now()
@@ -172,7 +197,7 @@ export function useEventSource(
     })
 
     // Handle K8s events
-    es.addEventListener('k8s_event', (event) => {
+    listen('k8s_event', (event) => {
       try {
         const data = JSON.parse(event.data) as K8sEvent
         data.timestamp = Date.now()
@@ -184,12 +209,12 @@ export function useEventSource(
     })
 
     // Handle heartbeat (just log, keeps connection alive)
-    es.addEventListener('heartbeat', () => {
+    listen('heartbeat', () => {
       // Connection is alive
     })
 
     // Handle context switch progress events
-    es.addEventListener('context_switch_progress', (event) => {
+    listen('context_switch_progress', (event) => {
       try {
         const data = JSON.parse(event.data) as { message: string }
         optionsRef.current?.onContextSwitchProgress?.(data.message)
@@ -199,29 +224,23 @@ export function useEventSource(
     })
 
     // Handle context changed event - clear state while new data loads
-    es.addEventListener('context_changed', (event) => {
+    listen('context_changed', (event) => {
       try {
-        const data = JSON.parse(event.data) as { context: string }
+        const data = JSON.parse(event.data) as { context: string; switchId?: string }
         console.log('Context changed to:', data.context)
-        // Clear topology and events - new data will come via topology event
-        setTopology(null)
-        setEvents([])
-        // Mark that we're waiting for new topology data
-        waitingForTopologyAfterSwitch.current = true
-        // Notify caller to invalidate caches (e.g., helm releases, resources)
-        optionsRef.current?.onContextChanged?.(data.context)
+        applyContextChange(data.context, data.switchId)
       } catch (e) {
         console.error('Failed to parse context_changed event:', e)
       }
     })
 
     // Handle deferred informer sync completion — refetch dashboard data
-    es.addEventListener('deferred_ready', () => {
+    listen('deferred_ready', () => {
       optionsRef.current?.onDeferredReady?.()
     })
 
     // Handle connection state events (for graceful startup)
-    es.addEventListener('connection_state', (event) => {
+    listen('connection_state', (event) => {
       try {
         const data = JSON.parse(event.data) as ConnectionState
         optionsRef.current?.onConnectionStateChange?.(data)
@@ -229,7 +248,13 @@ export function useEventSource(
         console.error('Failed to parse connection_state event:', e)
       }
     })
-  }, [sseNamespaceFilter, viewMode, showPolicyEffect])
+  }, [sseNamespaceFilter, viewMode, showPolicyEffect, applyContextChange])
+
+  // A poll can beat context_changed on the stream. Only a fresh subscription
+  // has a known boundary in that case: queued frames carry no cluster ID.
+  const applyPolledContextChange = useCallback((context: string, switchId?: string) => {
+    if (applyContextChange(context, switchId)) connect()
+  }, [applyContextChange, connect])
 
   // Reconnect function for manual reconnection
   const reconnect = useCallback(() => {
@@ -243,6 +268,7 @@ export function useEventSource(
     return () => {
       if (eventSourceRef.current) {
         eventSourceRef.current.close()
+        eventSourceRef.current = null
       }
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current)
@@ -264,5 +290,6 @@ export function useEventSource(
     connected,
     connecting,
     reconnect,
+    applyContextChange: applyPolledContextChange,
   }
 }

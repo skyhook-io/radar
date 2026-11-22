@@ -2,6 +2,9 @@ package k8s
 
 import (
 	"context"
+	"errors"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"sync"
 	"testing"
 	"time"
@@ -276,5 +279,33 @@ func TestCacheUsableAfterReset(t *testing.T) {
 	pods2, _ := cache2.Pods().List(labels.Everything())
 	if len(pods2) != 1 || pods2[0].Name != "new-pod" {
 		t.Fatalf("expected new-pod after re-init, got %v", pods2)
+	}
+}
+
+func TestCancelInitialInformerSyncRetiresSyncingCache(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	t.Setenv("RADAR_DEBUG_SYNC_DELAY", "pods=1h")
+	previous := SetTestClient(kubernetes.NewForConfigOrDie(&rest.Config{Host: "http://127.0.0.1:1"}))
+	t.Cleanup(func() { SetTestClient(previous) })
+	t.Cleanup(SetTestPermissionResult(&PermissionCheckResult{Perms: &ResourcePermissions{Pods: true}, Scopes: map[string]k8score.ResourceScope{"pods": {Enabled: true}}}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- InitResourceCache(ctx) }()
+	for deadline := time.Now().Add(3 * time.Second); GetSyncingResourceCache() == nil; {
+		if time.Now().After(deadline) {
+			t.Fatal("cache never started syncing")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) || GetResourceCache() != nil || GetSyncingResourceCache() != nil {
+			t.Fatalf("cancelled sync: %v, ready %v, syncing %v", err, GetResourceCache() != nil, GetSyncingResourceCache() != nil)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial informer sync ignored cancellation")
 	}
 }

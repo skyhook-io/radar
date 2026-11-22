@@ -228,6 +228,7 @@ rbac:
     kueue: true             # kueue.x-k8s.io + autoscaling.x-k8s.io (queues, workloads, ProvisioningRequests) + get localqueues/pendingworkloads in visibility.kueue.x-k8s.io (pending position)
     kured: true             # kured.io
     kyverno: true           # kyverno.io, policies.kyverno.io (modern CEL policy family), wgpolicyk8s.io, reports.kyverno.io, openreports.io
+    longhorn: true          # longhorn.io volumes, engines and replicas (read-only)
     lws: true               # leaderworkerset.x-k8s.io
     mariadb: true           # mariadb.mmontes.io
     metallb: true           # metallb.io (IPAddressPools, L2/BGPAdvertisements, ConfigurationStates; BGPPeers only when Secrets are granted, as they can hold an inline password)

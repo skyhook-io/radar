@@ -16,6 +16,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/longhorn"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -145,6 +146,11 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 				out = append(out, detectVeleroReadingIssues(p, gvr, items, time.Now())...)
 			}
 			continue
+		}
+		// A Longhorn Volume carries no failing condition for faulted or
+		// degraded: its robustness says it, so the Volume is read here.
+		if gvr.Group == longhorn.Group && kind == "Volume" {
+			out = append(out, detectLonghornVolumeIssues(gvr, kind, items)...)
 		}
 		// Every MetalLB speaker reports the same rejection, so it is read per list.
 		if gvr.Group == MetalLBGroup && kind == "ConfigurationState" {

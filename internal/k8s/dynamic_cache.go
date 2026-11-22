@@ -369,6 +369,9 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	// The issue adapter reads all six: a failed Backup is only visible if its
 	// informer is running, and BackupRepository/BSL are the backup targets whose
 	// health explains why the runs fail.
+	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "volumes", Kind: "Volume", Namespaced: true},
+	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "engines", Kind: "Engine", Namespaced: true},
+	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "replicas", Kind: "Replica", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "backups", Kind: "Backup", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "restores", Kind: "Restore", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "schedules", Kind: "Schedule", Namespaced: true},

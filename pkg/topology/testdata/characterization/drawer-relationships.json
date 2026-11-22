@@ -3511,6 +3511,59 @@
     }
   },
   {
+    "root": "longhorn.io|Volume|longhorn-system|vol-lh-0",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        },
+        "managers": {
+          "unreadable": 1
+        },
+        "manager": {
+          "state": "unknown",
+          "direct": {
+            "object": {"kind": "Volume", "namespace": "longhorn-system", "name": "vol-lh-0", "group": "longhorn.io"}
+          }
+        }
+      },
+      "consumers": [
+        {"kind": "PersistentVolume", "namespace": "", "name": "pv-lh-0"}
+      ]
+    }
+  },
+  {
     "root": "messaging.knative.dev|InMemoryChannel|shop|default-kne-trigger",
     "relationships": {
       "owner": {"kind": "Broker", "namespace": "shop", "name": "default", "group": "eventing.knative.dev"},
@@ -4686,6 +4739,114 @@
       ],
       "consumers": [
         {"kind": "PersistentVolumeClaim", "namespace": "team", "name": "data-db-0"}
+      ]
+    }
+  },
+  {
+    "root": "|PersistentVolume||pv-lh-0",
+    "relationships": {
+      "ownership": {
+        "children": {
+          "complete": false,
+          "notChecked": [
+            {
+              "kind": "Endpoints",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiextensions.k8s.io",
+              "kind": "CustomResourceDefinition",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apiregistration.k8s.io",
+              "kind": "APIService",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "apps",
+              "kind": "ControllerRevision",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "coordination.k8s.io",
+              "kind": "Lease",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "discovery.k8s.io",
+              "kind": "EndpointSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "node.k8s.io",
+              "kind": "RuntimeClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "DeviceClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaim",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceClaimTemplate",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "resource.k8s.io",
+              "kind": "ResourceSlice",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "scheduling.k8s.io",
+              "kind": "PriorityClass",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "storage.k8s.io",
+              "kind": "VolumeAttachment",
+              "reason": "radar_kind_not_collected"
+            }
+          ]
+        },
+        "managers": {
+          "unreadable": 1
+        },
+        "manager": {
+          "state": "unknown",
+          "direct": {
+            "object": {"kind": "PersistentVolume", "namespace": "", "name": "pv-lh-0"}
+          }
+        }
+      },
+      "storageRefs": [
+        {"kind": "Volume", "namespace": "longhorn-system", "name": "vol-lh-0", "group": "longhorn.io"}
       ]
     }
   },
