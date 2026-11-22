@@ -1067,7 +1067,7 @@ namespace whose informer has synced is read even while another is loading. A
 namespace you name that Radar doesn't collect, or was refused in, is a gap too;
 on an unscoped request those namespaces narrow it (`namespace_collection`) instead.
 
-Secrets, Roles, RoleBindings, LimitRanges, Trivy Operator reports and MetalLB BGPPeers need your exact permission
+Secrets, Roles, RoleBindings, LimitRanges, Trivy Operator reports, MetalLB BGPPeers and kagent RemoteMCPServers and ModelConfigs need your exact permission
 on that kind, not just namespace visibility: namespaces you can see but can't
 list them in are a `user_forbidden` gap (or `user_permission_check_failed`
 when the check didn't complete), and a get needs `get` in the namespace. A
@@ -1489,7 +1489,7 @@ Readiness is judged per namespace: a namespace whose watch is still loading repo
 hits from namespaces that are ready.
 
 Ordinary namespaced kinds, including dynamic CRDs, use the same namespace visibility
-policy as resource lists. Secrets, Roles, RoleBindings, LimitRanges, Trivy reports and MetalLB BGPPeers
+policy as resource lists. Secrets, Roles, RoleBindings, LimitRanges, Trivy reports, MetalLB BGPPeers and kagent RemoteMCPServers and ModelConfigs
 use exact caller list gates. These gates try one cluster-wide check, then bounded parallel namespace
 checks only after a denial. Cluster-scoped kinds use an exact cluster-scoped check.
 

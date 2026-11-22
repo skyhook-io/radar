@@ -522,6 +522,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **KAI Scheduler** | Queue, PodGroup — basic |
 | **Model serving** | KAITO (Workspace, RAGEngine), NVIDIA NIM (NIMService/NIMCache/NIMPipeline), AMD GPU Operator (DeviceConfig) — basic |
 | **Agent runtimes** | [Agent Sandbox and Agent Substrate](docs/integrations.md#agent-runtimes-agent-sandbox-and-agent-substrate): sandbox and WorkerPool status read the way their controllers mean it, Issues for stuck sandboxes and broken pools, and with Prometheus a WorkerPool capacity verdict and a Node snapshot-upload verdict with charts |
+| **kagent** | [Agent, SandboxTemplate, ModelConfig, ModelProviderConfig, RemoteMCPServer](docs/integrations.md#kagent): status read the way kagent's controllers mean it (preparing, blocked by a missing reference, egress not applied), Issues, an Agent drawer with its revisions and declared dependencies; MCP servers and ModelConfigs readable only with the caller's own access |
 | **Cost (OpenCost / Kubecost)** | Namespace/workload/node cost via compatible Prometheus metrics or the Kubecost 3 Aggregator (no CRDs) |
 | **CRDs** | Any Custom Resource Definition in your cluster (auto-discovered) |
 
