@@ -81,6 +81,33 @@ it("loads custom kinds in the mounted catalog after repeated discovery-pending r
   }
 });
 
+it("keeps the host's retry budget for real errors after discovery-pending responses", async () => {
+  vi.useFakeTimers();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: 1, retryDelay: 10 } } });
+  const rootElement = document.createElement("div");
+  const root = createRoot(rootElement);
+  const fetch = vi.fn()
+    .mockImplementationOnce(() => Promise.resolve(Response.json({ error_code: "kind_sync_pending" }, { status: 503 })))
+    .mockImplementationOnce(() => Promise.resolve(Response.json({ error: "bad gateway" }, { status: 502 })))
+    .mockImplementation(() => Promise.resolve(Response.json([{
+      group: "plants.example.io", version: "v1", kind: "Cactus", name: "cacti",
+      namespaced: true, isCrd: true, verbs: ["list"],
+    }])));
+  vi.stubGlobal("fetch", fetch);
+  function Probe() {
+    return useAPIResources().data?.map(resource => resource.kind).join(",") ?? "Loading";
+  }
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><Probe /></QueryClientProvider>));
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(rootElement.textContent).toBe("Cactus");
+  } finally {
+    await act(async () => root.unmount());
+    client.clear();
+  }
+});
+
 it("refreshes definitions until their inventory syncs, without relying on topology", async () => {
   vi.useFakeTimers();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

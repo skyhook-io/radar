@@ -116,7 +116,13 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 			cache.apiDiscoveryPending.Store(true)
 			go func() {
 				defer cache.apiDiscoveryPending.Store(false)
-				<-discoveryDone
+				// A credential plugin can stall discovery for a long time; a
+				// retired cache must not stay reachable from here meanwhile.
+				select {
+				case <-discoveryDone:
+				case <-cache.Done():
+					return
+				}
 				// Teardown and replacement hold contextOpMu. Only install the
 				// late cache while this typed cache still serves. An operation
 				// can be cancelled without replacing it (a rescope whose

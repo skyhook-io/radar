@@ -134,6 +134,13 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 				if err := InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
 					t.Fatal(err)
 				}
+				// Retiring the cache releases the waiter while discovery is still stalled.
+				for deadline := time.Now().Add(3 * time.Second); cache.apiDiscoveryPending.Load(); {
+					if time.Now().After(deadline) {
+						t.Fatal("a stalled discovery kept the retired cache's waiter alive")
+					}
+					time.Sleep(time.Millisecond)
+				}
 			case "operation cancelled":
 				// A rescope whose connectivity check fails cancels the operation
 				// but leaves this cache serving.

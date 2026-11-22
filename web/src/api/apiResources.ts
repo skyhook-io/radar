@@ -32,19 +32,30 @@ export const GITOPS_KINDS: APIResource[] = [
 ]
 
 
+// Pending answers in the catalog's current fetch; there is one catalog query.
+let pendingRetries = 0;
+
 // Fetch all API resources from the cluster
 export function useAPIResources() {
   // Keep retrying while Radar says discovery is still running; every other
   // error follows the host's QueryClient retry policy.
-  const hostRetry = useQueryClient().getDefaultOptions().queries?.retry;
+  const queryClient = useQueryClient();
+  const hostRetry = queryClient.getQueryDefaults(["api-resources"]).retry ?? queryClient.getDefaultOptions().queries?.retry;
   const result = useQuery<APIResource[]>({
     queryKey: ["api-resources"],
     queryFn: ({ signal }) => fetchJSON("/api-resources", signal),
     retry: (count, error) => {
-      if (isStillLoadingError(error)) return true;
-      if (typeof hostRetry === "function") return hostRetry(count, error);
-      if (typeof hostRetry === "number") return count < hostRetry;
-      return hostRetry ?? count < 3;
+      // TanStack counts every failure in a fetch; pending answers aren't
+      // failures, so they must not use up the host's budget for real ones.
+      if (count === 0) pendingRetries = 0;
+      if (isStillLoadingError(error)) {
+        pendingRetries++;
+        return true;
+      }
+      const failures = count - pendingRetries;
+      if (typeof hostRetry === "function") return hostRetry(failures, error);
+      if (typeof hostRetry === "number") return failures < hostRetry;
+      return hostRetry ?? failures < 3;
     },
     staleTime: 5 * 60 * 1000, // 5 minutes - resources don't change often
     refetchInterval: (query) => {
