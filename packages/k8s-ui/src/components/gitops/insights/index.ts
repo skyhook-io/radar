@@ -5,4 +5,4 @@ export {
   GitOpsStatusStrip,
 } from './GitOpsInsightViews'
 export { ArgoResourceDiff } from './ArgoResourceDiff'
-export { GitOpsOutsideChangesView, outsideOutcomeText } from './GitOpsOutsideChangesView'
+export { GitOpsOutsideChangesView, outsideOutcomeText, outsideChangeNeedsAttention, outsideChangesCounts, type OutsideChangesCounts } from './GitOpsOutsideChangesView'

@@ -5,7 +5,7 @@ import { PaneLoader } from '../ui/PaneLoader'
 import { AlertBanner } from '../ui/drawer-components'
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
-import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
+import { GitOpsIssuesBand, GitOpsStatusStrip, type OutsideChangesCounts } from './insights'
 import { GitOpsHealthSourceNotice } from './GitOpsHealthSourceNotice'
 import { Tooltip } from '../ui/Tooltip'
 import { Badge } from '../ui/Badge'
@@ -196,7 +196,7 @@ export interface GitOpsDetailLayoutProps {
   // Changes made outside Flux. Absent hides the tab and the header count
   // (Argo, older Radars, hosts that don't fetch it); count is the number of
   // objects with a hand edit, undefined while it loads.
-  outsideChanges?: { count?: number }
+  outsideChanges?: OutsideChangesCounts
 
   // Tab state
   activeTab: GitOpsDetailTab
@@ -385,9 +385,9 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     {identity.toolLabel} · {identity.kindLabel}
                   </span>
                 )}
-                {(outsideChanges?.count ?? 0) > 0 && (
+                {(outsideChanges?.attention ?? 0) > 0 && (
                   <button type="button" onClick={() => onTabChange('outside')} className="shrink-0">
-                    <Badge severity="warning" size="sm">{outsideChanges?.count} {outsideChanges?.count === 1 ? 'object' : 'objects'} changed outside Flux</Badge>
+                    <Badge severity="warning" size="sm">{outsideChanges?.lowerBound && '≥'}{outsideChanges?.attention} {outsideChanges?.attention === 1 ? 'object' : 'objects'} changed outside Flux</Badge>
                   </button>
                 )}
                 {isFleetContext && destinationCluster && (
@@ -599,7 +599,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                 <ViewButton
                   active={activeTab === 'outside'}
                   icon={Hand}
-                  label={typeof outsideChanges.count === 'number' ? `Outside Flux (${outsideChanges.count})` : 'Outside Flux'}
+                  label={typeof outsideChanges.count === 'number' ? `Outside Flux (${outsideChanges.lowerBound ? '≥' : ''}${outsideChanges.count})` : 'Outside Flux'}
                   onClick={() => onTabChange('outside')}
                 />
               )}
