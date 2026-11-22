@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false, empty: false, container: 'job', notice: '', truncated: true, extra: [] as { pod: string, container: string, timestamp: string, content: string }[] }))
+const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false, empty: false, start: '2026-11-13T01:59:00Z', container: 'job', notice: '', truncated: true, extra: [] as { pod: string, container: string, timestamp: string, content: string }[] }))
 vi.mock('./client', async (orig) => ({
   ...(await orig<typeof import('./client')>()),
   fetchJSON: async (url: string) => {
@@ -10,7 +10,7 @@ vi.mock('./client', async (orig) => ({
       pods: [{ name: 'nightly-1-aaaaa', containers: [calls.container], ready: false }],
       logs: calls.empty ? [] : [{ pod: 'nightly-1-aaaaa', container: calls.container, timestamp: '2026-11-13T02:00:00.000000000Z', content: 'done' }, ...calls.extra],
       notice: calls.notice, source: 'loki', truncated: calls.truncated, limit: 5000,
-      window: { start: '2026-11-13T01:59:00Z', end: '2026-11-13T02:11:00Z' },
+      window: { start: calls.start, end: '2026-11-13T02:11:00Z' },
     }
   },
 }))
@@ -70,6 +70,16 @@ describe('withLokiRunFallback', () => {
       expect(got.notice).toMatch(/^Loki has no lines for this run \(.+–.+\)\.$/)
     } finally {
       calls.empty = false
+    }
+  })
+  it('says only the newest 7 days of a longer run are shown', async () => {
+    calls.start = '2026-11-06T02:11:00Z'
+    try {
+      const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true)
+      expect(got.notice).toContain("the run's newest 7 days (the line count and time range don't apply)")
+      expect(got.notice).not.toContain('the whole run')
+    } finally {
+      calls.start = '2026-11-13T01:59:00Z'
     }
   })
   it('keeps to the chosen container, asking Loki for it', async () => {

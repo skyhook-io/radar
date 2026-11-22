@@ -130,8 +130,10 @@ export async function withLokiRunFallback(kind: string, namespace: string, name:
     // A pod Loki can't split is read whole, so its lines stay beside the chosen container's.
     : container ? run.logs.filter(l => l.container === container || l.container === ALL_CONTAINERS) : run.logs
   const fixedRangeReason = "This run is read whole from Loki; the line count and time range don't apply"
+  // Radar caps a run's read to its newest 7 days.
+  const capped = Date.parse(run.window.end) - Date.parse(run.window.start) >= 7 * 24 * 3600 * 1000
   const summary = [
-    `From Loki, ${timeOf(run.window.start)}–${timeOf(run.window.end)}, the whole run (the line count and time range don't apply)`,
+    `From Loki, ${timeOf(run.window.start)}–${timeOf(run.window.end)}, ${capped ? "the run's newest 7 days" : 'the whole run'} (the line count and time range don't apply)`,
     wholePod && 'all containers (Loki has no container label)',
     run.truncated && `the newest ${run.limit.toLocaleString()} lines (the limit; older lines may be missing)`,
   ].filter(Boolean).join(', ')

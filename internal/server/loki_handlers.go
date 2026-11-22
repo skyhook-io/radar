@@ -231,10 +231,10 @@ type lokiJobLogsResponse struct {
 const jobRunSlack = time.Minute
 
 // jobRunWindow is the run's own time: its start to its completion, last
-// failure or now, plus slack, capped to the newest MaxWindow.
-func jobRunWindow(job *batchv1.Job, now time.Time) (loki.Window, bool) {
+// failure or now, plus slack, capped to the newest MaxWindow (capped says so).
+func jobRunWindow(job *batchv1.Job, now time.Time) (w loki.Window, capped, ok bool) {
 	if job.Status.StartTime == nil {
-		return loki.Window{}, false
+		return loki.Window{}, false, false
 	}
 	end := now
 	if job.Status.CompletionTime != nil {
@@ -246,11 +246,12 @@ func jobRunWindow(job *batchv1.Job, now time.Time) (loki.Window, bool) {
 			}
 		}
 	}
-	w := loki.Window{Start: job.Status.StartTime.Add(-jobRunSlack), End: end.Add(jobRunSlack)}
+	w = loki.Window{Start: job.Status.StartTime.Add(-jobRunSlack), End: end.Add(jobRunSlack)}
 	if w.End.Sub(w.Start) > loki.MaxWindow {
 		w.Start = w.End.Add(-loki.MaxWindow)
+		capped = true
 	}
-	return w, true
+	return w, capped, true
 }
 
 // handleLokiJobLogs reads one Job run's logs from Loki when its pods are gone.
@@ -284,14 +285,13 @@ func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	var window loki.Window
+	capped, ok := false, false
 	if q.Get("start") != "" || q.Get("end") != "" {
 		if window, err = loki.ParseWindow(q, time.Now()); err != nil {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-	} else if w2, ok := jobRunWindow(job, time.Now()); ok {
-		window = w2
-	} else {
+	} else if window, capped, ok = jobRunWindow(job, time.Now()); !ok {
 		s.writeError(w, http.StatusConflict, "job "+namespace+"/"+name+" has not started")
 		return
 	}
@@ -314,6 +314,9 @@ func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeLokiError(w, err)
 		return
+	}
+	if capped {
+		lines.Notice = strings.TrimSpace(lines.Notice + " Only the run's newest 7 days are read.")
 	}
 	resp := lokiJobLogsResponse{Pods: []lokiJobPod{}, Logs: []lokiJobLine{}, Notice: lines.Notice, Source: "loki", Truncated: lines.Truncated, Limit: limit, Window: lokiWindow{window.Start, window.End}}
 	containers := map[string]map[string]bool{}

@@ -461,3 +461,25 @@ func TestLokiJobLogsMixedContainerLabelAliases(t *testing.T) {
 		t.Fatalf("whole run: %d %s", resp.StatusCode, raw)
 	}
 }
+
+// A run longer than a read's 7 days reads only its newest 7 days, and says so.
+func TestLokiJobLogsLongRunSaysOnlyTheNewestDaysAreRead(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	start, end := metav1.NewTime(jobEnd.Add(-9*24*time.Hour)), metav1.NewTime(jobEnd)
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "nightly-29905990"},
+		Status:     batchv1.JobStatus{StartTime: &start, CompletionTime: &end},
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(job, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team"}})); err != nil {
+		t.Fatal(err)
+	}
+	newLokiRecorder(t, twoPods)
+	resp, got, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs")
+	if resp.StatusCode != 200 || got.Window.End.Sub(got.Window.Start) != 7*24*time.Hour || !strings.HasSuffix(got.Notice, "Only the run's newest 7 days are read.") {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if _, short, _ := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs?start=2026-11-10T00:00:00Z&end=2026-11-11T00:00:00Z"); strings.Contains(short.Notice, "newest 7 days") {
+		t.Fatalf("an explicit window is not capped: %q", short.Notice)
+	}
+}
