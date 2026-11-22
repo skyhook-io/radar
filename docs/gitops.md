@@ -192,6 +192,47 @@ How each operation is written:
 | **Sync with source** (Kustomization / HelmRelease) | Requests the reconciles `flux reconcile --with-source` makes, upstream first: the source, then the resource. For a HelmRelease the source is its chart (the generated HelmChart of an inline `spec.chart`, named from the current spec, or the HelmChart / OCIRepository named by `spec.chartRef`), and a HelmChart's own source is reconciled before it, so a new chart version in the repository is picked up. A suspended or Terminating object anywhere in that chain fails the request with 409 before anything is written. Unlike the CLI, Radar does not wait for each step to finish. An ExternalArtifact comes from another controller, so only the resource is reconciled. Objects are patched at the API version the cluster serves |
 | **Suspend / Resume** | Toggles `spec.suspend` |
 
+## Action permissions
+
+`GET /api/gitops/capabilities/{kind}/{namespace}/{name}` reviews named API operations at their served API versions as the caller. Every action needs `patch`; actions with lifecycle preflights also need `get`.
+In user-token mode, people are checked with a `SelfSubjectAccessReview` using
+only their own token, preserving the identity the API server authenticates.
+A missing token, unavailable client, or failed review makes that permission
+check unknown, not denied. Impersonation and system identities use `SubjectAccessReview`.
+Refresh only needs `patch`, and its capability check does not read the target.
+Flux checks read the target as the caller to resolve any source reference. Flux
+Sync with source also needs `get` and `patch` on every source it reconciles,
+including each namespace: a HelmRelease using a HelmChart needs both the chart
+and its upstream repository. ExternalArtifact is not read or patched. Capability action keys map selective sync to
+`sync`, hard refresh to `refresh`, resource validation to `validate`, and the Flux
+source chain to `sync-with-source`.
+
+Each action has one of four answer forms:
+
+- `{allowed:true}`: the required, known API operations passed permission checks.
+- `{allowed:false, denied:[…]}`: operations checked and denied, as
+  `{verb, group, resource, namespace, name, kind, source}` tuples. A denied read
+  can prevent discovering later Flux source hops, so this is not guaranteed to
+  list every missing grant. `source:true` marks a Flux source the action also reconciles.
+- `{reason}`: unknown because a check failed or expired; permit an attempt.
+- `{unsupported:true, reason}`: the action cannot run on this object regardless of role.
+
+Each distinct operation is reviewed once per request. A Flux target the caller can't read denies every action on that
+read and still reports a missing `patch`. Sync with source on an object with no source Radar can reconcile
+(for example, a Kustomization without `sourceRef`)
+reports `unsupported` with a reason, and the action itself answers 400.
+Disabled controls explain the denied permission. Controls stay enabled while the first check loads or fails. Failed refetches
+preserve each action's last confirmed permissions or unsupported result for up to two minutes; after
+that, the action becomes unknown and permits an attempt. Only a recent confirmed
+denial or unsupported result disables an action. After a failed first check or
+expiry, the detail page and open row action menu show “Couldn't check your permissions. You can still try.”
+without disabling the unknown actions; initial loading and closed rows show no notice. Compact
+denied actions expose their reason on touch and through an accessible description
+before focus. Lifecycle restrictions still apply; Refresh and
+Terminate remain available during deletion when permitted.
+A connected Radar without the `gitopsActionCapabilities` feature flag retains
+its existing action controls.
+
 ### Action errors
 
 GitOps actions run with Radar's configured Kubernetes identity for the request.

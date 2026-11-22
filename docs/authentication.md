@@ -15,6 +15,12 @@ User → [Auth Layer] → Radar Backend → K8s API (as user, via impersonation)
 3. **Writes** use K8s impersonation — Radar makes the K8s API call as the authenticated user, so K8s RBAC decides whether it's allowed
 4. **UI adapts** — capability checks run per-user, so buttons (exec, restart, scale, Helm) only appear if the user has permission
 
+In impersonation mode, permission reviews include `system:authenticated` for
+an authenticated username, alongside the user's explicit groups. This also
+applies to per-user capability flags (exec, logs, port-forward, workload writes,
+Helm) and the `get services/proxy` check before a direct Service curl, so grants
+to that built-in group are recognized consistently.
+
 Radar doesn't have its own role/permission system. It delegates everything to K8s RBAC, which means permissions are managed with standard K8s tooling (`kubectl`, Terraform, GitOps, etc.).
 
 ### Read granularity: namespace-level
@@ -420,6 +426,13 @@ Set `auth.kubernetesCredentials: user-token` (flag `--auth-k8s-credentials=user-
 - **With the user's token** (`X-Forwarded-Kubernetes-Token`): Radar asks the API server who the token belongs to (SelfSubjectReview) and makes every live call — writes, logs, exec, Helm — with that token alone, so the API server applies your own RBAC and audit logs show the real user. The forwarded username must match the token's username, or the request is refused.
 - **Without a token, as a person** (for example cross-cluster views): Radar serves its cache, filtered by that person's permissions, and refuses every live call with a 403 (`reason: user_token_required`).
 - **Without a token, as `radar:system:*` (group `radar:system`) or `radar:ai:<org>` (group `radar:ai:reader`)**: Radar reads with its ServiceAccount, after a SubjectAccessReview of every request against that identity's bindings (`cloud.systemRbac`, `cloud.aiRbac`).
+
+GitOps action capabilities and Service curl authorization use a
+`SelfSubjectAccessReview` through the person's token client in this mode; the API
+server supplies the identity and groups. Without a token, GitOps permission
+reviews stay unknown and Service curl is refused. For system identities without
+a token, GitOps checks read access with a `SubjectAccessReview` using their
+username and normalized groups. Their write access is unavailable in this mode.
 
 **Requirements:**
 

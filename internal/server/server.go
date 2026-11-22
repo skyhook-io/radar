@@ -638,6 +638,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/cloud/install/dismiss", s.handleCloudInstallDismiss)
 			r.Get("/cloud/connect/self", s.handleCloudConnectSelf)
 			r.Get("/topology", s.handleTopology)
+			r.Get("/gitops/capabilities/{kind}/{namespace}/{name}", s.handleGitOpsCapabilities)
 			r.Get("/gitops/tree/{kind}/{namespace}/{name}", s.handleGitOpsTree)
 			r.Get("/gitops/destination/{kind}/{namespace}/{name}", s.handleGitOpsDestination)
 			r.Get("/gitops/insights/{kind}/{namespace}/{name}", s.handleGitOpsInsights)
@@ -1576,6 +1577,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		ServiceEndpointSlices:       true,
 		TrafficRecords:              true,
 		GitOpsWriteEvidence:         true,
+		GitOpsActionCapabilities:    true,
 		ArgoRollbackSync:            true,
 		ArgoSyncInheritance:         true,
 		ArgoEnableSelfHealOff:       true,

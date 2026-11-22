@@ -147,7 +147,7 @@ func TestServiceAuthorizationUsesCallerAndTarget(t *testing.T) {
 					t.Error(err)
 				}
 				a := review.Spec.ResourceAttributes
-				if review.Spec.User != "alice" || !slices.Contains(review.Spec.Groups, "team-a") || a == nil || a.Namespace != "team-a" || a.Name != "app" || a.Verb != "get" || a.Resource != "services" || a.Subresource != "proxy" {
+				if review.Spec.User != "alice" || !slices.Equal(review.Spec.Groups, []string{"team-a", "system:authenticated"}) || a == nil || a.Namespace != "team-a" || a.Name != "app" || a.Verb != "get" || a.Resource != "services" || a.Subresource != "proxy" {
 					t.Errorf("wrong authorization: %+v", review.Spec)
 				}
 				w.Header().Set("Content-Type", "application/json")
