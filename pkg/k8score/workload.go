@@ -292,6 +292,26 @@ func stripServerManagedFields(obj *unstructured.Unstructured) {
 	}
 }
 
+// workloadGVR resolves a kind a workload action reads or writes (Deployment,
+// ReplicaSet, ControllerRevision, Job, ...). Discovery answers when it knows the
+// kind; while it is still loading, which on a slow cluster can outlast a switch
+// whose typed caches already serve, or after a refresh that failed, a built-in
+// kind resolves from the built-in table instead of failing the action.
+func (m *WorkloadManager) workloadGVR(kind string) (schema.GroupVersionResource, bool, error) {
+	if m.discovery != nil {
+		if gvr, ok := m.discovery.GetGVR(kind); ok {
+			return gvr, true, nil
+		}
+	}
+	if b, ok := resourceid.BuiltinForName(kind); ok && b.Version != "" {
+		return schema.GroupVersionResource{Group: b.Group, Version: b.Version, Resource: b.Resource}, true, nil
+	}
+	if m.discovery == nil {
+		return schema.GroupVersionResource{}, false, fmt.Errorf("resource discovery not initialized")
+	}
+	return schema.GroupVersionResource{}, false, nil
+}
+
 // ApplyResource creates or updates a Kubernetes resource from YAML.
 // In "apply" mode (default), uses server-side apply (idempotent create-or-update).
 // In "create" mode, uses strict create (fails if resource exists).
@@ -720,11 +740,10 @@ func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name st
 	if m.dynClient == nil {
 		return nil, fmt.Errorf("dynamic client not initialized")
 	}
-	if m.discovery == nil {
-		return nil, fmt.Errorf("resource discovery not initialized")
+	cronJobGVR, ok, err := m.workloadGVR("cronjobs")
+	if err != nil {
+		return nil, err
 	}
-
-	cronJobGVR, ok := m.discovery.GetGVR("cronjobs")
 	if !ok {
 		return nil, fmt.Errorf("cronjobs resource not found")
 	}
@@ -778,7 +797,10 @@ func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name st
 		}
 	}
 
-	jobGVR, ok := m.discovery.GetGVR("jobs")
+	jobGVR, ok, err := m.workloadGVR("jobs")
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, fmt.Errorf("jobs resource not found")
 	}
@@ -796,17 +818,16 @@ func (m *WorkloadManager) SetCronJobSuspend(ctx context.Context, namespace, name
 	if m.dynClient == nil {
 		return fmt.Errorf("dynamic client not initialized")
 	}
-	if m.discovery == nil {
-		return fmt.Errorf("resource discovery not initialized")
+	cronJobGVR, ok, err := m.workloadGVR("cronjobs")
+	if err != nil {
+		return err
 	}
-
-	cronJobGVR, ok := m.discovery.GetGVR("cronjobs")
 	if !ok {
 		return fmt.Errorf("cronjobs resource not found")
 	}
 
 	patch := fmt.Sprintf(`{"spec":{"suspend":%t}}`, suspend)
-	_, err := m.dynClient.Resource(cronJobGVR).Namespace(namespace).Patch(
+	_, err = m.dynClient.Resource(cronJobGVR).Namespace(namespace).Patch(
 		ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{},
 	)
 	if err != nil {
@@ -829,11 +850,10 @@ func (m *WorkloadManager) RestartWorkload(ctx context.Context, kind, namespace, 
 		return err
 	}
 
-	if m.discovery == nil {
-		return fmt.Errorf("resource discovery not initialized")
+	gvr, ok, err := m.workloadGVR(kind)
+	if err != nil {
+		return err
 	}
-
-	gvr, ok := m.discovery.GetGVR(kind)
 	if !ok {
 		return fmt.Errorf("unknown resource kind: %s", kind)
 	}
@@ -851,7 +871,7 @@ func (m *WorkloadManager) RestartWorkload(ctx context.Context, kind, namespace, 
 	restartTime := time.Now().Format(time.RFC3339)
 	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`, restartTime)
 
-	_, err := m.dynClient.Resource(gvr).Namespace(namespace).Patch(
+	_, err = m.dynClient.Resource(gvr).Namespace(namespace).Patch(
 		ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{},
 	)
 	if err != nil {
@@ -868,11 +888,10 @@ func (m *WorkloadManager) SetDeploymentPaused(ctx context.Context, namespace, na
 	if m.dynClient == nil {
 		return fmt.Errorf("dynamic client not initialized")
 	}
-	if m.discovery == nil {
-		return fmt.Errorf("resource discovery not initialized")
+	deploymentGVR, ok, err := m.workloadGVR("deployments")
+	if err != nil {
+		return err
 	}
-
-	deploymentGVR, ok := m.discovery.GetGVR("deployments")
 	if !ok {
 		return fmt.Errorf("deployments resource not found")
 	}
@@ -900,10 +919,10 @@ func (m *WorkloadManager) ScaleWorkload(ctx context.Context, kind, namespace, na
 		// Fixed, not discovered: the CRD may not be in discovery's cache yet.
 		gvr = rollouts.GVR
 	case "deployments", "statefulsets":
-		if m.discovery == nil {
-			return fmt.Errorf("resource discovery not initialized")
+		found, ok, err := m.workloadGVR(normalizedKind)
+		if err != nil {
+			return err
 		}
-		found, ok := m.discovery.GetGVR(normalizedKind)
 		if !ok {
 			return fmt.Errorf("unknown resource kind: %s", kind)
 		}
@@ -966,11 +985,10 @@ func (m *WorkloadManager) ListWorkloadRevisions(ctx context.Context, kind, names
 		return m.listRolloutRevisions(ctx, namespace, name)
 	}
 
-	if m.discovery == nil {
-		return nil, fmt.Errorf("resource discovery not initialized")
+	workloadGVR, ok, err := m.workloadGVR(normalizedKind)
+	if err != nil {
+		return nil, err
 	}
-
-	workloadGVR, ok := m.discovery.GetGVR(normalizedKind)
 	if !ok {
 		return nil, fmt.Errorf("unknown resource kind: %s", kind)
 	}
@@ -1020,7 +1038,10 @@ func (m *WorkloadManager) listRolloutRevisions(ctx context.Context, namespace, n
 }
 
 func (m *WorkloadManager) listDeploymentRevisions(ctx context.Context, namespace, name, workloadUID string) ([]WorkloadRevision, error) {
-	rsGVR, ok := m.discovery.GetGVR("replicasets")
+	rsGVR, ok, err := m.workloadGVR("replicasets")
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, fmt.Errorf("replicasets resource not found")
 	}
@@ -1164,7 +1185,10 @@ func CurrentControllerRevisionPodHashes(revisions []unstructured.Unstructured) m
 }
 
 func (m *WorkloadManager) listControllerRevisions(ctx context.Context, namespace, name, workloadUID string) ([]WorkloadRevision, error) {
-	crGVR, ok := m.discovery.GetGVR("controllerrevisions")
+	crGVR, ok, err := m.workloadGVR("controllerrevisions")
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, fmt.Errorf("controllerrevisions resource not found")
 	}
@@ -1323,11 +1347,10 @@ func (m *WorkloadManager) RollbackWorkload(ctx context.Context, kind, namespace,
 		return err
 	}
 
-	if m.discovery == nil {
-		return fmt.Errorf("resource discovery not initialized")
+	workloadGVR, ok, err := m.workloadGVR(normalizedKind)
+	if err != nil {
+		return err
 	}
-
-	workloadGVR, ok := m.discovery.GetGVR(normalizedKind)
 	if !ok {
 		return fmt.Errorf("unknown resource kind: %s", kind)
 	}
@@ -1389,7 +1412,10 @@ func (m *WorkloadManager) rollbackDeployment(ctx context.Context, deployment *un
 		return fmt.Errorf("Deployment %s/%s: %w", namespace, name, ErrWorkloadPaused)
 	}
 
-	rsGVR, ok := m.discovery.GetGVR("replicasets")
+	rsGVR, ok, err := m.workloadGVR("replicasets")
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return fmt.Errorf("replicasets resource not found")
 	}
@@ -1455,7 +1481,10 @@ func (m *WorkloadManager) rollbackDeployment(ctx context.Context, deployment *un
 		return fmt.Errorf("failed to build rollback patch: %w", err)
 	}
 
-	deployGVR, ok := m.discovery.GetGVR("deployments")
+	deployGVR, ok, err := m.workloadGVR("deployments")
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return fmt.Errorf("deployments resource not found")
 	}
@@ -1471,7 +1500,10 @@ func (m *WorkloadManager) rollbackDeployment(ctx context.Context, deployment *un
 // replaced rather than merged.
 func (m *WorkloadManager) rollbackControllerRevision(ctx context.Context, normalizedKind string, workload *unstructured.Unstructured, revision int64) error {
 	namespace, name := workload.GetNamespace(), workload.GetName()
-	crGVR, ok := m.discovery.GetGVR("controllerrevisions")
+	crGVR, ok, err := m.workloadGVR("controllerrevisions")
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return fmt.Errorf("controllerrevisions resource not found")
 	}
@@ -1519,7 +1551,10 @@ func (m *WorkloadManager) rollbackControllerRevision(ctx context.Context, normal
 		return fmt.Errorf("failed to build rollback patch: %w", err)
 	}
 
-	gvr, ok := m.discovery.GetGVR(normalizedKind)
+	gvr, ok, err := m.workloadGVR(normalizedKind)
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return fmt.Errorf("unknown resource kind: %s", normalizedKind)
 	}

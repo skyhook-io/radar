@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,7 +24,7 @@ type DynamicResourceCache struct {
 }
 
 var (
-	dynamicResourceCache *DynamicResourceCache
+	dynamicResourceCache atomic.Pointer[DynamicResourceCache]
 	dynamicCacheOnce     = new(sync.Once)
 	dynamicCacheMu       sync.Mutex
 	// dynamicSyncStallAfter and dynamicObjectReadSyncWait override k8score's
@@ -132,7 +133,12 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			return
 		}
 
-		dynamicResourceCache = &DynamicResourceCache{DynamicResourceCache: core}
+		crdCompleteMu.Lock()
+		for _, callback := range crdCompleteCallbacks {
+			core.OnCRDDiscoveryComplete(callback)
+		}
+		dynamicResourceCache.Store(&DynamicResourceCache{DynamicResourceCache: core})
+		crdCompleteMu.Unlock()
 	})
 	return initErr
 }
@@ -148,7 +154,7 @@ func extractUnstructured(obj any) interface{ GetName() string } {
 
 // GetDynamicResourceCache returns the singleton dynamic cache instance.
 func GetDynamicResourceCache() *DynamicResourceCache {
-	return dynamicResourceCache
+	return dynamicResourceCache.Load()
 }
 
 // ResetDynamicResourceCache stops and clears the dynamic resource cache.
@@ -156,18 +162,26 @@ func ResetDynamicResourceCache() {
 	dynamicCacheMu.Lock()
 	defer dynamicCacheMu.Unlock()
 
-	if dynamicResourceCache != nil {
-		dynamicResourceCache.Stop()
-		dynamicResourceCache = nil
+	if dc := dynamicResourceCache.Swap(nil); dc != nil {
+		dc.Stop()
 	}
 	dynamicCacheOnce = new(sync.Once)
 }
 
-// OnCRDDiscoveryComplete registers a callback to be called when CRD discovery completes.
-// This is a package-level function for backward compatibility.
+var (
+	crdCompleteMu        sync.Mutex
+	crdCompleteCallbacks []func()
+)
+
+// OnCRDDiscoveryComplete registers a callback for when CRD discovery completes,
+// on the current dynamic cache and on every one created later (after a switch,
+// or when API discovery finishes late).
 func OnCRDDiscoveryComplete(callback func()) {
-	if dynamicResourceCache != nil && dynamicResourceCache.DynamicResourceCache != nil {
-		dynamicResourceCache.DynamicResourceCache.OnCRDDiscoveryComplete(callback)
+	crdCompleteMu.Lock()
+	defer crdCompleteMu.Unlock()
+	crdCompleteCallbacks = append(crdCompleteCallbacks, callback)
+	if dc := GetDynamicResourceCache(); dc != nil && dc.DynamicResourceCache != nil {
+		dc.OnCRDDiscoveryComplete(callback)
 	}
 }
 

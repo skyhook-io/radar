@@ -53,7 +53,7 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 
 In the local cluster picker, Radar checks the target before closing sessions on a connected cluster. You can cancel during that check. Once the switch starts replacing caches, dismissing the progress display or refreshing the tab lets the switch continue. The picker reports its progress. Selecting a cluster during a local reconnect stops that retry. If the retry already closed its connection, cancelling the new selection leaves the picker available.
 
-The local picker and local kubeconfig retries (manual or automatic) give the critical informers their own first-paint budget. Once those informers are ready, pending API discovery gets a fresh wait of the same duration. A discovery timeout names this stage in the error.
+When you switch clusters in the local picker or retry a kubeconfig connection, Radar first waits for the core resource cache to be ready. If Kubernetes API discovery is still running, Radar waits up to another five minutes by default (set by `--first-paint-backstop`). Once that wait expires, the cluster shows as connected and you can browse built-in resources such as Pods and Deployments. Radar continues discovering custom resources in the background and loads them if you are still on that connection.
 
 The defaults (5 s connectivity check, or 11 s with exec credentials, 5 m
 first-paint backstop, 5 s namespace LIST, and 20 scope candidates) are tuned for healthy clusters reached

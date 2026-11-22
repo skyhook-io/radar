@@ -2333,8 +2333,16 @@ func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObser
 	return observation
 }
 
+func (s *Server) writeIfDiscoveryPending(w http.ResponseWriter) bool {
+	if !k8s.GetResourceCache().CustomResourcesPending() {
+		return false
+	}
+	s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Kubernetes API discovery is still running")
+	return true
+}
+
 func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnected(w) || s.writeIfDiscoveryPending(w) {
 		return
 	}
 	discovery := k8s.GetResourceDiscovery()
@@ -2346,6 +2354,13 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 	resources, err := discovery.GetAPIResources()
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Every cluster serves built-in kinds, so an empty catalog after a failed
+	// refresh means discovery hasn't answered yet, not that nothing exists.
+	if len(resources) == 0 && discovery.LastRefreshFailed() {
+		discovery.RetryFailedRefresh()
+		s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), "Kubernetes API discovery hasn't answered yet")
 		return
 	}
 
