@@ -38,6 +38,7 @@ import { HTTPRouteRenderer } from '../components/resources/renderers/HTTPRouteRe
 import { RolloutRenderer } from '../components/resources/renderers/RolloutRenderer'
 import { KyvernoPolicyCoverage } from '../components/resources/renderers/KyvernoPolicyCoverage'
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
+import { LonghornVolumeRenderer } from '../components/resources/renderers/LonghornVolumeRenderer'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
 import { SealedSecretRenderer } from '../components/resources/renderers/SealedSecretRenderer'
@@ -69,6 +70,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'rollouts', renderers: { RolloutRenderer } },
   { id: 'kyverno', renderers: { KyvernoPolicyCoverage, KyvernoPolicyQueued } },
   veleroResourceHost,
+  { id: 'longhorn', renderers: { LonghornVolumeRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
   { id: 'logging', renderers: { LoggingFlowHostRenderer } },

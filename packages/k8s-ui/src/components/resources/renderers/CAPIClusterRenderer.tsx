@@ -10,9 +10,13 @@ interface Props {
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
   apiBase?: string
   canConnect?: boolean
+  /** Sends a request to Radar's API (path after /api). Hosts pass their own so
+   * requests carry their auth and connection headers; defaults to a plain fetch. */
+  request?: (path: string, init?: RequestInit) => Promise<Response>
 }
 
-export function CAPIClusterRenderer({ data, onNavigate, apiBase = '', canConnect = true }: Props) {
+export function CAPIClusterRenderer({ data, onNavigate, apiBase = '', canConnect = true, request }: Props) {
+  const send = request ?? ((path: string, init?: RequestInit) => fetch(`${apiBase}/api${path}`, init))
   const status = data.status || {}
   const spec = data.spec || {}
   const conditions = status.v1beta2?.conditions || status.conditions || []
@@ -51,7 +55,7 @@ export function CAPIClusterRenderer({ data, onNavigate, apiBase = '', canConnect
     setConnectState('loading')
     setConnectError('')
     try {
-      const res = await fetch(`${apiBase}/api/capi/clusters/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/connect`, { method: 'POST' })
+      const res = await send(`/capi/clusters/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/connect`, { method: 'POST' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }))
         throw new Error(body.error || `HTTP ${res.status}`)
@@ -71,7 +75,7 @@ export function CAPIClusterRenderer({ data, onNavigate, apiBase = '', canConnect
     setDownloadState('loading')
     setDownloadError('')
     try {
-      const res = await fetch(`${apiBase}/api/capi/clusters/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/kubeconfig`)
+      const res = await send(`/capi/clusters/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/kubeconfig`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }))
         throw new Error(body.error || `HTTP ${res.status}`)

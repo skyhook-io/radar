@@ -1,6 +1,7 @@
 import type { FileNode } from '../../types'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { formatBytes } from '../../utils/format'
+import { CONNECTION_HEADER, connectionHeaderValue } from '../../api/connectionBinding'
 
 export const POD_FILE_PERSISTENCE_NOTE =
   "Changes apply to the running container immediately. Files in the container's own filesystem are lost when it's recreated; files on volumes may persist. For lasting changes, update the source (image, ConfigMap, manifest)."
@@ -235,6 +236,8 @@ export function uploadPodFile(req: UploadRequest): Promise<UploadResult> {
     xhr.open('POST', url)
     xhr.withCredentials = getCredentialsMode() === 'include'
     for (const [k, v] of Object.entries(getAuthHeaders())) xhr.setRequestHeader(k, v)
+    const connection = connectionHeaderValue()
+    if (connection) xhr.setRequestHeader(CONNECTION_HEADER, connection)
     xhr.setRequestHeader('Content-Type', 'application/octet-stream')
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) req.onProgress?.(e.loaded, e.total)

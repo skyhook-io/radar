@@ -113,6 +113,16 @@ func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecon
 		return summarizeVolumeSnapshotContent(obj)
 	case group == volumeSnapshotGroup && kind == "VolumeSnapshotClass":
 		return summarizeVolumeSnapshotClass(obj)
+	case group == metalLBGroup && kind == "IPAddressPool":
+		return summarizeMetalLBIPAddressPool(obj)
+	case group == metalLBGroup && kind == "L2Advertisement":
+		return summarizeMetalLBAdvertisement(obj, "L2")
+	case group == metalLBGroup && kind == "BGPAdvertisement":
+		return summarizeMetalLBAdvertisement(obj, "BGP")
+	case group == metalLBGroup && kind == "BGPPeer":
+		return summarizeMetalLBBGPPeer(obj)
+	case group == metalLBGroup && kind == "ConfigurationState":
+		return summarizeMetalLBConfigurationState(obj)
 	}
 
 	// Generic fallback
