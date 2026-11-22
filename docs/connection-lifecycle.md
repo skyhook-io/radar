@@ -82,7 +82,7 @@ Also accepted:
 
 ## Scenario checklist
 
-Run these on major changes to connection, switching or binding code. **Live** scenarios use `scripts/connection-lifecycle-check.sh` against the radar-test EKS clusters (see the script's header for setup); **browser** scenarios use `scripts/connection-lifecycle-ui-check.mjs` against a Radar started on the same fixtures. Unit coverage is named where it exists.
+Run these on major changes to connection, switching or binding code. **Live** scenarios use `scripts/connection-lifecycle-check.sh` against any two clusters you can write to, named by `CONTEXT_A` and `CONTEXT_B` (the radar-test EKS clusters by default; see the script's header for setup); **browser** scenarios use `scripts/connection-lifecycle-ui-check.mjs` against a Radar started on the same fixtures. Unit coverage is named where it exists.
 
 | ID | Scenario | Expected | Live | Unit |
 |----|----------|----------|------|------|
