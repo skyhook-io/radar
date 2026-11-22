@@ -1,44 +1,69 @@
 # Connection lifecycle
 
-How Radar names the cluster connection it serves, and how a write is bound to the connection the browser tab is on. This is the first slice of the connection lifecycle model; later slices move every entry point onto one owner and give each connection its own caches.
+How Radar names the cluster connection it serves, and how a write is bound to the connection the browser tab is on.
 
 ## The guarantee
 
-A write from a Radar tab runs against the connection the tab is on, or is refused before any Kubernetes work. In particular, a tab still showing cluster A after another tab switched Radar to B can't restart or scale B's same-named workload.
+A bound write from a Radar tab runs against the connection the tab is on, or is refused before any Kubernetes work. In particular, a tab still showing cluster A after another tab switched Radar to B can't restart or scale B's same-named workload.
 
-Covered today (the routes wrapped with `bindWrite` in `internal/server/server.go`):
-- Workloads: **restart** and **scale** (single and bulk), Deployment **pause** and **resume**, **set image**, **rollback** (including Argo Rollouts), and the Argo Rollouts actions (abort, retry, promote, promote-full, skip-step).
-- CronJobs: **trigger**, **suspend**, **resume**.
-- Resources: **apply**, **update** (YAML edit) and **delete**.
-- Nodes: **cordon**, **uncordon** and **drain**. A drain keeps running on the connection it was admitted to, even if Radar switches meanwhile.
-- GitOps: Argo CD **sync**, **refresh**, **rollback**, **terminate**, **suspend**, **resume**; Flux **reconcile**, **sync with source**, **suspend**, **resume**.
-- Velero: **back up now**, schedule **pause** and **resume**, **delete backup**. Their checks of the Velero server's state read the shared cache, which a switch completing mid-request could replace; the write itself stays on the admitted connection.
+Bound writes are the routes wrapped with `bindWrite` in `internal/server/server.go`; `TestBoundWriteRoutesRefuseStaleConnection` walks every one. They are the workload, CronJob, resource (apply, update, delete), node, GitOps, Velero, CloudNativePG, Helm and CAPI connect actions, plus exec, file upload, debug containers and debug pods, port-forward start and the reachability probe test. Beyond the header check:
+- **Drain** keeps running on the connection it was admitted to, even if Radar switches meanwhile. Exec and port-forward sessions end when Radar switches.
+- **Code that only has a context** (MCP tools, reachability) gets its clients from `k8s.ClientFromContext` / `DynamicClientFromContext`, which return the bound connection's clients when the request was admitted with one.
+- **CloudNativePG** captures its clients and caches in one step and checks there that the connection is still the bound one (`k8s.StillBound`).
+- **Helm** install, upgrade (including source upgrades and values edits), rollback, uninstall and source association, streaming variants included, use the REST config captured at admission. The permission preflight checks that the admitted connection is still serving, because it reads shared capabilities; after that, Helm stays on the admitted cluster even if Radar switches while a repository downloads.
+- **CAPI connect** takes its client snapshot, then checks that the admitted connection is still serving: a switch before the check is refused, and one after it can't change the snapshot.
+- **Velero** checks the Velero server's state in the shared cache, which a switch completing mid-request could replace; the write itself stays on the admitted connection.
+- **Diagnose** (the in-product agent) is fenced by its runs: every switch marks all runs stale (`RunManager.OnContextSwitch`), and a stale run takes no further turns, so an investigation of one cluster can't continue, or apply a fix, on another.
 
-- CloudNativePG: Cluster, ScheduledBackup and Pooler **actions**. The CNPG service captures its clients and caches in one step; it also checks there that the connection is still the bound one (`k8s.StillBound`), so the whole capture belongs to it.
-
-- Pods and nodes: **exec** (the terminal WebSocket names the connection in its URL, `?connection=`, since a browser can't set headers on a WebSocket), **file upload**, pod **debug containers**, node **debug pods** (create and clean up), and **port-forward** start. Sessions already end when Radar switches.
-
-- Helm **install**, **upgrade** (including source upgrades and values edits), **rollback**, **uninstall**, and **source association** all use the REST config captured at admission, including streaming actions. The permission preflight checks that the admitted connection is still serving because it reads shared capabilities. Once that check passes, Helm targets the admitted cluster even if Radar switches while a repository downloads.
-
-- CAPI **connect**: a tab that still shows the previous management cluster can't read a same-named CAPI Cluster's kubeconfig from the new one and switch Radar to it. It takes its client snapshot and then checks the admitted connection is still serving, so a switch before the check is refused and one after it can't change the snapshot.
-
-- Reachability: the in-cluster trace test, which creates probe Jobs. CloudNativePG **restore validation** notes.
-
-Code that only has a context (MCP tools, reachability) gets its clients from `k8s.ClientFromContext` / `DynamicClientFromContext`, which return the bound connection's clients when the request was admitted with one.
-
-Diagnose (the in-product agent) is fenced by its runs instead: every cluster switch marks all runs stale (`RunManager.OnContextSwitch`), and a stale run takes no further turns, so an investigation of one cluster can't continue, or apply a fix, on another.
-
-Not covered: external MCP callers name no connection, so each tool call uses the connection serving when it starts, as before. Integration writes that look like reads (Velero's download requests behind run messages, contents and logs) aren't bound. An interrupted Helm action is not recovered (the plan's "outcome recovery" for Helm). They still resolve the current connection when they run.
+Not bound: external MCP callers name no connection, so each tool call uses the connection serving when it starts. Velero's download requests (run messages, contents, logs) aren't bound. An interrupted Helm action is not recovered.
 
 **Only when Radar serves from a kubeconfig.** An in-cluster Radar can't change clusters (no kubeconfig contexts; CAPI connect is refused in-cluster), and during a rolling update two of its pods, each with its own IDs, answer the same browser. It publishes no ID and ignores one a request names; its writes still run on one captured set of clients.
 
 ## Connection identity
 
 - **Admission.** When Radar starts serving a cluster (startup, a switch, Retry, auth recovery, a namespace rescope) it admits a connection with an ID `<bootNonce>-<n>`. IDs never repeat within a process, and the boot nonce keeps them distinct across restarts.
-- **Retirement.** The point of no return of any destructive path (switch, rescope, rebuild, auth demotion, shutdown) clears the serving ID before tearing anything down. Between retirement and the next admission nothing is serving.
+- **Retirement.** The point of no return of any destructive path (switch, rescope, rebuild, auth demotion, shutdown) clears the serving ID before tearing anything down. Between retirement and the next admission nothing is serving. Shutdown also closes admissions.
 - **Not health.** A disconnect without teardown (a failed liveness check, a Helm transport error) keeps the ID: it says which connection was admitted, not whether it is healthy.
-- **Shutdown** closes admissions, so a late startup publication can't admit a connection after shutdown began.
 - **Publication.** The ID is published as `connectionId` on `/api/connection`, the Retry result, SSE `connection_state` frames and the SSE initial snapshot.
+
+
+A first load, then a switch from A to B (`performContextSwitch` in `internal/k8s/context_manager.go`). IDs are a 10-character boot nonce and a counter that every admission in the process increments; the IDs below are examples. A first load runs the same build as a switch's steps 5–7.
+
+```mermaid
+sequenceDiagram
+  participant Tab
+  participant Radar
+  participant A as Cluster A
+  participant B as Cluster B
+  Note over Radar: start · nothing serving · writes get 503
+  Radar->>A: install clients, build caches (as steps 5–7)
+  Radar->>Radar: admit K7QXM2RDTA-1
+  Radar-->>Tab: connected A · K7QXM2RDTA-1
+  Tab->>Radar: writes send X-Radar-Connection: K7QXM2RDTA-1
+  Tab->>Radar: switch to B
+  Radar->>B: 1. preflight: prepare B's clients, probe the API
+  alt B fails preflight
+    Radar-->>Tab: failed · nothing torn down · still K7QXM2RDTA-1
+  else B passes
+    Note over Radar: 2. before-switch callbacks: Diagnose runs marked stale,<br/>Argo CD connection reset · in-flight operations cancelled
+    Note over Radar: 3. sessions stopped: port-forwards, exec terminals
+    Radar->>Radar: 4. retire K7QXM2RDTA-1 · writes get 503
+    Radar->>A: 4. tear down: cost source, Prometheus, traffic, Helm,<br/>metrics history, PolicyReport index, DynamicResourceCache,<br/>ResourceDiscovery, ResourceCache, timeline
+    Note over Radar: 5. install B's clients · restore the namespace scope ·<br/>drop capability, permission, server-version and platform caches
+    Radar->>B: 6. build: timeline, ResourceCache + ResourceDiscovery,<br/>DynamicResourceCache, then metrics history, Helm,<br/>traffic, Prometheus in the background
+    alt build fails
+      Radar-->>Tab: disconnected · no ID · "Back to A"
+    else build succeeds
+      Note over Radar: 7. after-switch callbacks: per-user namespace picks and<br/>RBAC index, MCP permission cache, integration settings,<br/>SSE topology view
+      Radar->>Radar: 8. admit K7QXM2RDTA-2
+      Radar-->>Tab: connected B · K7QXM2RDTA-2 (SSE context_changed and status)
+      Tab->>Tab: adopt K7QXM2RDTA-2, reset views
+      Note over Tab,Radar: a tab still sending K7QXM2RDTA-1 gets 409 context_changed
+    end
+  end
+```
+
+Switching back to A admits `K7QXM2RDTA-3`, never `-1` again. After a restart the nonce changes (say `P4WNB7ZHQE-1`), so an ID from the previous process also gets 409. All of the state above is process-wide: each step resets a shared singleton rather than dropping one connection's object.
 
 Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `internal/k8s/connection_binding.go` (capture).
 
@@ -50,13 +75,13 @@ Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `
 
 **Browser** (`web/src/api/connectionBinding.ts`):
 - The tab keeps the latest connection ID it heard (status poll, SSE frame, Retry result) and `apiFetch` sends it on every request. Writes that can't use `apiFetch` send it themselves: the file upload's XHR sets the header, and the terminal adds `?connection=` to its WebSocket URL (`withConnectionParam`). A status with no ID (mid-switch) keeps the last one; the server refuses writes then anyway.
-- Views reset when the tab learns the context changed, as before this slice: from `context_changed`, or from a status poll (every 30s while connected, also in background tabs and on focus) that shows a different context.
+- Views reset whenever the tab finds itself connected to a different context, however it learns that: a `context_changed` refusal, an SSE frame, a Retry result, or the status poll (every 30s while connected, in background tabs too, and on focus).
 - After a refusal, the toast says nothing was changed; the tab catches up on its next status poll or when it regains focus.
 - A server without connection IDs (older or in-cluster Radar) publishes none, and the browser sends no header.
 
-### Tradeoffs taken
+### Accepted gaps
 
-The browser doesn't try to keep the ID in lockstep with what each view displays. That leaves short windows where a view still shows A while the tab already sends B's ID, for example a drawer's 300ms exit animation after a reset, or a status reply that arrives out of order. A write sent from such a view in that window runs on B. These windows are well under a second and need a click inside them; closing them took ordering rules, view generations and response labelling that proved hard to get right, so they are accepted. A tab that has been stale for longer (background, SSE dropped) still sends A's ID and is refused.
+The browser doesn't try to keep the ID in lockstep with what each view displays. That leaves short windows where a view still shows A while the tab already sends B's ID, for example a drawer's 300ms exit animation after a reset, or a status reply that arrives out of order. A write sent from such a view in that window runs on B. These windows are well under a second and need a click inside them, so Radar accepts them rather than ordering responses and tagging each view with the connection it shows. A tab that has been stale for longer (background, SSE dropped) still sends A's ID and is refused.
 
 Also accepted:
 - **A write arriving during shutdown** still runs on the connection the tab is on; admissions are closed first so nothing new is admitted.
@@ -66,7 +91,7 @@ Also accepted:
 
 ## Scenario checklist
 
-Run these on major changes to connection, switching or binding code. **Live** scenarios use `scripts/connection-lifecycle-check.sh` against the radar-test EKS clusters (see the script's header for setup); **browser** scenarios use `scripts/connection-lifecycle-ui-check.mjs` against a Radar started on the same fixtures. Unit coverage is named where it exists.
+Run these on major changes to connection, switching or binding code. **Live** scenarios use `scripts/connection-lifecycle-check.sh` against any two clusters you can write to, named by `CONTEXT_A` and `CONTEXT_B` (the radar-test EKS clusters by default; see the script's header for setup); **browser** scenarios use `scripts/connection-lifecycle-ui-check.mjs` against a Radar started on the same fixtures. Unit coverage is named where it exists.
 
 | ID | Scenario | Expected | Live | Unit |
 |----|----------|----------|------|------|
@@ -93,8 +118,5 @@ Run these on major changes to connection, switching or binding code. **Live** sc
 | S1 | Rescope (`--namespace-scope`) rebuild or rollback | New ID after the rebuild; Disconnected if the rollback fails | | `PerformNamespaceRescope` (manual) |
 | S2 | Shutdown | No admission after shutdown begins | | `TestConnectionAdmissionsClosedAtShutdown` |
 
-Known scenarios outside this slice: a lost `context_changed` with no later status, stalls outside a switch's time budget, and the write families listed above.
+Not covered: a lost `context_changed` with no later status, stalls beyond a switch's time budget, and the unbound writes listed above.
 
-## Follow-ups
-
-- **Diagnostics.** The diagnostics report keeps its sections on one cluster by checking that the cache and context didn't change during collection. Once connections have their own caches, it should capture one connection the way a bound write does, report its ID and the tracked switch, and drop those checks.

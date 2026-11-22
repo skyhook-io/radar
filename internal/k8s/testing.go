@@ -312,6 +312,16 @@ func SetTestDynamicSyncStallAfter(d time.Duration) func() {
 	return func() { dynamicSyncStallAfter = previous }
 }
 
+// SetTestDynamicObjectReadSyncWait sets how long a read of one object waits
+// for an unsynced dynamic informer, for dynamic caches initialized after the
+// call. The production wait, 2 seconds, is what a test of a read that never
+// loads would otherwise sit through. Returns a restore func.
+func SetTestDynamicObjectReadSyncWait(d time.Duration) func() {
+	previous := dynamicObjectReadSyncWait
+	dynamicObjectReadSyncWait = d
+	return func() { dynamicObjectReadSyncWait = previous }
+}
+
 // ResetTestDynamicState tears down the dynamic cache + discovery singletons
 // and clears the dynamic client. Pairs with InitTestDynamicResourceCache.
 func ResetTestDynamicState() {
