@@ -42,6 +42,11 @@ describe('OutsideEditChip', () => {
     expect(html).toContain('b.timed · kubectl patch, 1d ago')
   })
 
+  it('leaves out edits the policy leaves alone', () => {
+    expect(render([change({ outcome: 'ignored' }), change({ outcome: 'opted-out' }), change({ outcome: 'suspended' })])).toBe('')
+    expect(render([change({ outcome: 'ignored', paths: ['a.ignored'] }), change({ paths: ['b.edited'] })])).toContain('b.edited')
+  })
+
   it('renders nothing without changes', () => {
     expect(render([])).toBe('')
   })

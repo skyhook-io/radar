@@ -1,12 +1,13 @@
 import type { GitOpsOutsideChange } from '../../types/gitops-outside'
 import { formatRelativeAgeTime } from '../../utils/format'
 import { Badge } from '../ui/Badge'
+import { outsideChangeNeedsAttention } from '../gitops/insights/GitOpsOutsideChangesView'
 import { Tooltip } from '../ui/Tooltip'
 
 // OutsideEditChip marks a Flux-managed resource whose fields a person's tool
 // wrote. It names the newest edit; the tooltip lists every edited field.
 export function OutsideEditChip({ changes }: { changes: GitOpsOutsideChange[] }) {
-  const edits = changes.filter((c) => !c.harmless && c.paths.length > 0)
+  const edits = changes.filter((c) => outsideChangeNeedsAttention(c) && c.paths.length > 0)
   if (edits.length === 0) return null
   // An entry without a time sorts last.
   const at = (c: GitOpsOutsideChange) => Date.parse(c.time ?? '') || -Infinity
