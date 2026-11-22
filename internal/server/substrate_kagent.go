@@ -12,7 +12,6 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	substrateapi "github.com/skyhook-io/radar/internal/substrate"
-	"github.com/skyhook-io/radar/internal/substrate/ateapi"
 	model "github.com/skyhook-io/radar/pkg/substrate"
 )
 
@@ -49,10 +48,6 @@ func (k substrateKagentRead) coverage() *integration.KindCoverage {
 	return &c
 }
 
-// substrateKagentServed reports whether the cluster serves kagent's Agents;
-// tests replace it.
-var substrateKagentServed = kagentServed
-
 // substrateKagentAgents reads kagent's Agents in namespaces as the caller
 // (nil: every namespace the caller may read), through the workspace coverage
 // machinery: a namespace the caller may not list, or Radar does not hold, is
@@ -86,16 +81,6 @@ func kagentAgentOf(u *unstructured.Unstructured) model.KagentAgent {
 // for the lists that attribute actors and templates.
 func (s *Server) substrateKagent(r *http.Request) substrateKagentRead {
 	return substrateKagentAgents(s, r, s.parseNamespacesForUser(r))
-}
-
-// freshSubstrateActor converts an actor read directly from Substrate, marked
-// as a kagent session as the shared read marks it.
-func freshSubstrateActor(raw *ateapi.Actor) model.Actor {
-	a := substrateapi.ActorOf(raw)
-	if substrateKagentServed() {
-		a.Kagent = model.KagentSessionOf(a.Name)
-	}
-	return a
 }
 
 // kagentRow attributes one row's actor; nil for an actor that is not a
