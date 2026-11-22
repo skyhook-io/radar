@@ -30,6 +30,7 @@ interface Props {
   restartLane?: ReactNode;
   nameMatchedCharts?: Partial<Record<'cpu' | 'memory', ReactNode>>;
   controls?: ReactNode;
+  workloadTotals?: ReactNode;
 }
 
 export function WorkloadMetricsSection(props: Props) {
@@ -67,9 +68,10 @@ export function WorkloadMetricsSection(props: Props) {
       {data?.state === 'partial' && data.reason && <p role="status" className={`text-xs ${SEVERITY_TEXT.warning}`}>{data.reason}</p>}
       {isPlaceholderData && <p role="status" className="text-xs text-theme-text-secondary">Loading selected request source… Resources show previous samples.</p>}
       <WorkloadRequests data={data} isLoading={isLoading || isPlaceholderData} error={error} setSource={setSource} />
+      {props.workloadTotals}
       <section aria-label="Workload resource pressure">
         {(data?.panels.cpu || data?.panels.memory || data?.panels.throttling) && <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h3 className="text-sm font-semibold text-theme-text-primary">Resources</h3>
+          <h3 className="text-sm font-semibold text-theme-text-primary">{props.workloadTotals ? 'Prometheus resources' : 'Resources'}</h3>
           {sameResourceScope && <HistoryNotice scope={data?.history.cpu} omitReason={data?.panels.cpu?.reason} />}
         </div>}
         {props.restartLane}

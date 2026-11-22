@@ -1,5 +1,5 @@
 import { clsx } from "clsx";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Loader2, Wifi, WifiOff } from "lucide-react";
 import { Disclosure } from "@skyhook-io/k8s-ui/components/ui/Disclosure";
@@ -49,6 +49,7 @@ export interface PrometheusChartsGridProps {
   resource?: any;
   /** Fill and scroll its container (default). False lets the parent scroll it with content below. */
   fill?: boolean;
+  workloadTotals?: ReactNode;
 }
 
 const SUPPORTED_KINDS = new Set([
@@ -68,6 +69,7 @@ export function PrometheusChartsGrid({
   name,
   resource,
   fill = true,
+  workloadTotals,
 }: PrometheusChartsGridProps) {
   useAutoPromConnect();
   const { data: status, isLoading: statusLoading } = usePrometheusStatus();
@@ -99,6 +101,33 @@ export function PrometheusChartsGrid({
   );
 
   if (!isSupported) return null;
+
+  const rangeControl = <select
+          aria-label="Metrics time range"
+          value={timeRange}
+          onChange={(e) => {
+            const next = new URLSearchParams(searchParams);
+            next.set("metricsRange", e.target.value);
+            setSearchParams(next, { replace: true });
+          }}
+          className="ml-auto rounded-md border border-theme-border bg-theme-elevated px-2 py-1 text-xs text-theme-text-secondary shadow-theme-sm focus:outline-none focus:ring-1 focus:ring-accent/50"
+        >
+          {TIME_RANGES.map((tr) => (
+            <option key={tr.value} value={tr.value}>
+              {tr.label}
+            </option>
+          ))}
+        </select>;
+
+  if (workloadTotals && !isConnected) {
+    return (
+      <div className={clsx("space-y-4 p-4", fill && "h-full overflow-auto")}>
+        <div className="flex">{rangeControl}</div>
+        {workloadTotals}
+        <RestartEventLane kind={kind} namespace={namespace} name={name} range={timeRange} />
+      </div>
+    );
+  }
 
   if (statusLoading) {
     return (
@@ -178,30 +207,13 @@ export function PrometheusChartsGrid({
     <MetricsPanel key={def.key} category={def} kind={kind} namespace={namespace} name={name} timeRange={timeRange} referenceLines={refLines} />
   );
 
-  const rangeControl = <select
-          aria-label="Metrics time range"
-          value={timeRange}
-          onChange={(e) => {
-            const next = new URLSearchParams(searchParams);
-            next.set("metricsRange", e.target.value);
-            setSearchParams(next, { replace: true });
-          }}
-          className="ml-auto rounded-md border border-theme-border bg-theme-elevated px-2 py-1 text-xs text-theme-text-secondary shadow-theme-sm focus:outline-none focus:ring-1 focus:ring-accent/50"
-        >
-          {TIME_RANGES.map((tr) => (
-            <option key={tr.value} value={tr.value}>
-              {tr.label}
-            </option>
-          ))}
-        </select>;
-
   return (
     <div className={clsx("flex flex-col min-w-0 w-full", fill && "h-full overflow-auto")}>
       {!isWorkload && <div className="flex shrink-0 items-center justify-between gap-3 px-4 pt-3">{rangeControl}</div>}
 
       {isWorkload && (
         <WorkloadMetricsSection key={`${kind}/${namespace}/${name}`} kind={kind} namespace={namespace} name={name} range={timeRange}
-          controls={rangeControl}
+          controls={rangeControl} workloadTotals={workloadTotals}
           cpuReferenceLines={cpuRefLines} memoryReferenceLines={memRefLines}
           nameMatchedCharts={{ cpu: cpu && renderPanel({ def: cpu }), memory: mem && renderPanel({ def: mem }) }}
           restartLane={showRestartLane && <div className="mb-3"><RestartEventLane kind={kind} namespace={namespace} name={name} range={timeRange} /></div>} />

@@ -14,7 +14,7 @@ Radar Hub offers a Datadog beta for CPU and memory history, with CPU throttling
 when Datadog reports both sets of quota periods for the same containers. An
 organization owner can open Integrations from an empty Metrics tab when a running Datadog Agent is visible under the user’s Pod permissions. The owner connects Datadog once and discovers matching clusters by the
 Kubernetes UID. The connected Radar agent checks workload access and cluster
-identity for each chart read.
+identity for each chart read. When both sources are connected, Datadog workload totals appear alongside Prometheus traffic, resource, network and storage charts. Request and limit lines stay on the current-Pod charts where their units and scope match.
 
 <p align="center">
   <img src="screenshots/workload-metrics-overview.png" alt="Radar workload metrics showing HTTP requests, 5xx errors and latency above CPU, memory and throttling charts" width="1100" />

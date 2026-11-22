@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { getApiBase } from '../../api/config'
 import { renderToString } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { NavCustomizationProvider } from '../../context/NavCustomization'
@@ -96,5 +98,52 @@ describe('Expanded metrics recovery and scope', () => {
     workload.panels.cpu = { state: 'available', unit: 'cores', series: [{ labels: { pod: 'web-0' }, dataPoints: [{ timestamp: 160, value: 0.1 }] }] }
     render()
     expect(charts.some((chart) => chart.referenceLines?.some((line) => (line as { label: string }).label === 'Template request 100m'))).toBe(true)
+  })
+})
+
+describe('Mapped workload Metrics tab', () => {
+  async function renderMapped(denied = false) {
+    const { MetricsTabContent } = await import('../workload/WorkloadView')
+    const client = new QueryClient({ defaultOptions: { queries: { retryOnMount: false } } })
+    client.setQueryData(['datadog-metrics-status', getApiBase()], { configured: true })
+    const queryKey = ['datadog-workload-metrics', getApiBase(), 'Deployment/demo/web', '3h']
+    const panel = { unit: 'cores', series: [] }
+    client.setQueryData(queryKey, { configured: true, charts: { cpu: panel, memory: { ...panel, unit: 'bytes' } } })
+    if (denied) client.getQueryCache().find({ queryKey })!.setState({ status: 'error', error: new Error('Datadog read denied') })
+    const html = renderToString(
+      <QueryClientProvider client={client}><MemoryRouter initialEntries={['/?tab=metrics&metricsRange=3h']}>
+        <NavCustomizationProvider value={{ embedded: true }}>
+          <MetricsTabContent kind="Deployment" namespace="demo" name="web" resource={resource} expanded />
+        </NavCustomizationProvider>
+      </MemoryRouter></QueryClientProvider>,
+    )
+    client.clear()
+    return html
+  }
+
+  it.each([false, true])('retains Prometheus traffic, network and template lines with a Datadog mapping (read denied=%s)', async (denied) => {
+    connected = true
+    const series = [{ labels: {}, dataPoints: [{ timestamp: 160, value: 1 }] }]
+    workload.panels.requests = { state: 'available', unit: 'requests/s', series }
+    workload.panels.errors = { state: 'available', unit: 'percent', series }
+    workload.panels.p50 = workload.panels.p95 = { state: 'available', unit: 'seconds', series }
+    workload.history.cpu = { mode: 'current-pods' }
+    workload.panels.cpu = { state: 'available', unit: 'cores', series }
+    const html = await renderMapped(denied)
+    for (const label of ['Datadog workload totals', 'Requests / sec', 'HTTP 5xx', 'Latency · p50 / p95', 'Network and storage']) expect(html).toContain(label)
+    expect(html).toContain(denied ? 'Datadog read denied' : 'No Datadog samples')
+    expect(html.match(/aria-label="Metrics time range"/g)).toHaveLength(1)
+    expect(ranges.every((range) => range === '3h')).toBe(true)
+    expect(charts.flatMap((chart) => chart.referenceLines ?? [])).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'Template request 100m' }), expect.objectContaining({ label: 'Template limit 200m' }),
+    ]))
+  })
+
+  it('renders Datadog independently when Prometheus is disconnected', async () => {
+    const html = await renderMapped()
+    expect(html).toContain('Datadog workload totals')
+    expect(html).toContain('No Datadog samples')
+    expect(html).not.toContain('Network and storage')
+    expect(ranges).toHaveLength(0)
   })
 })

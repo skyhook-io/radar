@@ -2266,7 +2266,7 @@ function DiagnoseInlineSection({ kind, namespace, name, group, onOpenReachabilit
 // Drawer mode: single chart + category tabs (compact for ~500px width).
 // Full-screen mode: multi-chart grid so CPU + Memory + Network can be
 // compared side-by-side without tab switching.
-function MetricsTabContent({
+export function MetricsTabContent({
   kind,
   namespace,
   name,
@@ -2282,19 +2282,17 @@ function MetricsTabContent({
   /** False when content follows, so the tab scrolls everything as one. */
   fill?: boolean
 }) {
-  const [params, setParams] = useSearchParams()
+  const [params] = useSearchParams()
   const range = TIME_RANGES.find((option) => option.value === params.get('metricsRange'))?.value ?? '1h'
   const workload = { kind, namespace, name }
   const { embedded = false } = useNavCustomization()
   const { charts, checking, configured, setup } = useDatadogWorkloadCharts(workload, range, embedded)
   if (configured) {
-    return <DatadogWorkloadCharts workload={workload} charts={charts.data?.configured ? charts.data.charts : undefined}
-      range={range} fill={fill} loading={charts.isLoading} error={charts.error} onRetry={() => void charts.refetch()}
-      onRangeChange={(value) => setParams((current) => {
-        const next = new URLSearchParams(current)
-        next.set('metricsRange', value)
-        return next
-      }, { replace: true })} />
+    const workloadTotals = (
+      <DatadogWorkloadCharts charts={charts.data?.configured ? charts.data.charts : undefined}
+        loading={charts.isLoading} error={charts.error} onRetry={() => void charts.refetch()} />
+    )
+    return <PrometheusChartsGrid {...workload} resource={resource} workloadTotals={workloadTotals} fill={fill} />
   }
   if (checking) return <p role="status" className="p-4 text-sm text-theme-text-secondary">Loading workload metrics…</p>
 
