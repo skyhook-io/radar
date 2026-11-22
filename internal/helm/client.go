@@ -2465,30 +2465,6 @@ func compareVersions(v1, v2 string) int {
 	return 0
 }
 
-// Rollback rolls back a release to a previous revision
-func (c *Client) Rollback(namespace, name string, revision int) error {
-	return c.RollbackWithProgress(namespace, name, revision, nil)
-}
-
-// RollbackWithProgress rolls back a release with progress reporting via a channel.
-// If progressCh is nil, progress messages are silently discarded.
-func (c *Client) RollbackWithProgress(namespace, name string, revision int, progressCh chan<- InstallProgress) error {
-	actionConfig, err := c.getActionConfig(namespace)
-	if err != nil {
-		return err
-	}
-	return c.rollbackWithProgressUsing(actionConfig, name, revision, progressCh)
-}
-
-// RollbackWithProgressAsUser is RollbackWithProgress with K8s impersonation.
-func (c *Client) RollbackWithProgressAsUser(namespace, name string, revision int, user *pkgauth.User, progressCh chan<- InstallProgress) error {
-	actionConfig, err := c.getActionConfigForUser(namespace, user)
-	if err != nil {
-		return err
-	}
-	return c.rollbackWithProgressUsing(actionConfig, name, revision, progressCh)
-}
-
 func (c *Client) rollbackWithProgressUsing(actionConfig *action.Configuration, name string, revision int, progressCh chan<- InstallProgress) error {
 	sendProgress := progressSender(progressCh)
 	sendProgress("preparing", fmt.Sprintf("Preparing rollback of %s to revision %d...", name, revision), "")
