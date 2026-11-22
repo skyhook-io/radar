@@ -44,3 +44,14 @@ func ExactAccessCRDGVR(kind, group string) (schema.GroupVersionResource, bool) {
 	}
 	return MetalLBBGPPeerGVR(kind, group)
 }
+
+// ExactAccessCRDResource reports the custom resource an issue or reference of
+// kind in group names when read paths authorize it per kind, so every Issues
+// surface (REST, MCP) gates its rows as the drawer gates the object.
+func ExactAccessCRDResource(kind, group string) (schema.GroupVersionResource, bool) {
+	if group == "" {
+		return schema.GroupVersionResource{}, false
+	}
+	gvr, ok := ExactAccessCRDGVR(kind, group)
+	return gvr, ok && RequiresExactNamespaceAccess(gvr)
+}

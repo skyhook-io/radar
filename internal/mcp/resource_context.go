@@ -196,6 +196,9 @@ func issueRelatedResourceAccess(ctx context.Context) func(issues.Ref) bool {
 			if strings.EqualFold(ref.Kind, "Secret") {
 				return canReadInNamespace(ctx, ref.Group, "secrets", ref.Namespace, "get")
 			}
+			if gvr, ok := k8s.ExactAccessCRDResource(ref.Kind, ref.Group); ok {
+				return canReadInNamespace(ctx, gvr.Group, gvr.Resource, ref.Namespace, "get")
+			}
 			return true
 		}
 		clusterScoped, _, _ := k8s.ClassifyKindScope(ref.Kind, ref.Group)
@@ -209,9 +212,10 @@ func computeMCPAuditSummary(ctx context.Context, cache *k8s.ResourceCache, group
 }
 
 // issueSubjectAccess mirrors the REST drawer gate for an issue's own
-// namespaced resource: namespace access, plus a get for Secrets and
-// LimitRanges. It runs once per composed row, so the caller's namespaces are
-// resolved once.
+// namespaced resource: namespace access, plus a get for Secrets, LimitRanges
+// and the custom resources read paths authorize per kind
+// (k8s.ExactAccessCRDResource). It runs once per composed row, so the
+// caller's namespaces are resolved once.
 func issueSubjectAccess(ctx context.Context) func(issues.Ref) bool {
 	inNamespace := callerNamespaces(ctx)
 	return func(ref issues.Ref) bool {
@@ -223,6 +227,9 @@ func issueSubjectAccess(ctx context.Context) func(issues.Ref) bool {
 			return canReadInNamespace(ctx, "", "secrets", ref.Namespace, "get")
 		case ref.Group == "" && strings.EqualFold(ref.Kind, "LimitRange"):
 			return canReadInNamespace(ctx, "", "limitranges", ref.Namespace, "get")
+		}
+		if gvr, ok := k8s.ExactAccessCRDResource(ref.Kind, ref.Group); ok {
+			return canReadInNamespace(ctx, gvr.Group, gvr.Resource, ref.Namespace, "get")
 		}
 		return true
 	}

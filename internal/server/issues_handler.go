@@ -554,7 +554,7 @@ func (s *Server) issueSubjectAccess(r *http.Request) func(issues.Ref) bool {
 		// Custom resources the drawer opens only with the caller's own access
 		// to the kind (a kagent RemoteMCPServer, a MetalLB BGPPeer) open their
 		// issues only with it too.
-		if gvr, ok := k8s.ExactAccessCRDGVR(ref.Kind, ref.Group); ok && k8s.RequiresExactNamespaceAccess(gvr) {
+		if gvr, ok := k8s.ExactAccessCRDResource(ref.Kind, ref.Group); ok {
 			return s.canRead(r, gvr.Group, gvr.Resource, ref.Namespace, "get")
 		}
 		return true
