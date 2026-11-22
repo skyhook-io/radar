@@ -990,20 +990,14 @@ func (s *BeylaSource) replyLossFraction(ctx context.Context, w rateWindow, sel s
 }
 
 // nodeLabelsMissing reports whether Prometheus answered that no flow series
-// carries a node label while more than one agent reports flows; a single agent
-// sees each flow once. A failed probe reports false: it drives a warning.
+// carries a node label on a cluster that may have more than one node: with one
+// node no flow crosses nodes. An unknown node count keeps the warning. A failed
+// probe reports false: it drives a warning.
 func (s *BeylaSource) nodeLabelsMissing(ctx context.Context, sel string) bool {
 	metric := s.flowMetricName()
 	result, err := s.query(ctx, fmt.Sprintf(`count(%s{%s, k8s_src_node_name!=""} or %s{%s, k8s_dst_node_name!=""})`,
 		metric, sel, metric, sel))
-	if err != nil || result == nil || len(result.Series) != 0 {
-		return false
-	}
-	agents, err := s.query(ctx, fmt.Sprintf(`count(count by (instance) (%s{%s}))`, metric, sel))
-	if err != nil || agents == nil || len(agents.Series) == 0 || len(agents.Series[0].DataPoints) == 0 {
-		return false
-	}
-	return agents.Series[0].DataPoints[0].Value > 1
+	return err == nil && result != nil && len(result.Series) == 0 && countClusterNodes(ctx, s.k8sClient) != 1
 }
 
 func (s *BeylaSource) queryReceivedBytes(ctx context.Context, opts FlowOptions, sel string) (map[flowKey]int64, error) {
