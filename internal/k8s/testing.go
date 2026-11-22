@@ -785,3 +785,44 @@ func InitTestReplayClients(client dynamic.Interface, catalog discovery.Discovery
 	discoveryMu.Unlock()
 	return InitDynamicResourceCache(nil)
 }
+
+// InstallTestServingConnection installs a named connection's config, dynamic
+// client and discovery and admits it, the way a switch ends: whatever was
+// serving is retired first. It returns the new connection's ID.
+func InstallTestServingConnection(name string, cfg *rest.Config, dyn dynamic.Interface, disc discovery.DiscoveryInterface) (string, error) {
+	RetireServingConnection()
+	clientMu.Lock()
+	k8sConfig, dynamicClient, contextName = cfg, dyn, name
+	clientMu.Unlock()
+	if _, err := SetTestResourceDiscovery(disc); err != nil {
+		return "", err
+	}
+	SetConnectionStatus(ConnectionStatus{State: StateConnected, Context: name})
+	return ServingConnectionID(), nil
+}
+
+// SnapshotTestConnection records the connection status, serving connection,
+// clients and discovery, and returns a func that restores them, so a test
+// that installs or retires connections leaves the package as it found it.
+func SnapshotTestConnection() func() {
+	connectionStatusMu.Lock()
+	status, id, closed := connectionStatus, servingConnectionID, admissionsClosed
+	connectionStatusMu.Unlock()
+	clientMu.RLock()
+	cfg, dyn, name := k8sConfig, dynamicClient, contextName
+	clientMu.RUnlock()
+	discoveryMu.Lock()
+	disc := resourceDiscovery
+	discoveryMu.Unlock()
+	return func() {
+		connectionStatusMu.Lock()
+		connectionStatus, servingConnectionID, admissionsClosed = status, id, closed
+		connectionStatusMu.Unlock()
+		clientMu.Lock()
+		k8sConfig, dynamicClient, contextName = cfg, dyn, name
+		clientMu.Unlock()
+		discoveryMu.Lock()
+		resourceDiscovery = disc
+		discoveryMu.Unlock()
+	}
+}
