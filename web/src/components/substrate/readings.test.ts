@@ -23,6 +23,7 @@ import {
 import { substrateAttentionCount, substrateScreenCounts } from './attention'
 import { decodeActorParam, encodeActorParam, parseSubstrateRoute, substrateActorPath, substrateActorsPath } from './routes'
 import { segmentStates } from './SubstrateActors'
+import { kagentTemplateText } from './readings'
 import { counts, notConnectedWorkspace, poolShortRow, sharedTier, workspace } from './substrate.fixtures'
 
 describe('actor states', () => {
@@ -460,5 +461,14 @@ describe('shortSessionId', () => {
     const b = shortSessionId('01a20561-16ba-7b0d-b4fd-5d664161cb1b')
     expect(a).toBe('…79f013a8')
     expect(a).not.toBe(b)
+  })
+})
+
+describe('kagent templates', () => {
+  const agent = { namespace: 'kagent', name: 'k8s-helper' }
+  it('calls an earlier revision’s template earlier, never current', () => {
+    const t = kagentTemplateText({ kind: 'agentSession', agent, earlierRevision: true, revision: 'aa5e9426eb2e' })
+    expect(t).toBe('kagent Agent kagent/k8s-helper’s template for an earlier revision (aa5e9426eb2e), before the one new sessions start on')
+    expect(kagentTemplateText({ kind: 'agentSession', agent, newSessions: true })).toContain('the revision new sessions start on')
   })
 })

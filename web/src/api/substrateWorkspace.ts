@@ -808,6 +808,12 @@ export interface SubstrateActors {
   offset: number
   /** The caller's read of kagent's Agents the rows' kagent and the agent/kagent filters were judged against; absent without kagent. */
   kagentAgents?: SubstratePoolsCoverage
+  /**
+   * With an agent or kagent filter other than sandbox: the atespaces holding kagent sessions whose Agents
+   * weren't read (kagentAgents says why). There an Agent's counts are lower bounds and an unattributed
+   * session may belong to an Agent.
+   */
+  kagentUnread?: string[]
 }
 
 export interface SubstrateEgress {

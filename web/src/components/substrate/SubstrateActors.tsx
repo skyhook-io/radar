@@ -26,6 +26,7 @@ import {
   agentFilterValue,
   agentText,
   kagentCellText,
+  kagentUnreadText,
   kagentUnattributedText,
   shortSessionId,
   IN_PROGRESS_STATES,
@@ -97,7 +98,8 @@ function AgentCell({ row, onAgent }: { row: SubstrateActorRow; onAgent?: (agent:
   const session = `kagent session ${shortSessionId(k.sessionId)}`
   if (k.kind === 'agentSession' && k.agent) {
     const agent = k.agent
-    const label = <span className="break-all font-mono text-[12px]">{agent.name}</span>
+    // Wraps after a hyphen, never mid-word, as the template column does.
+    const label = <Name name={agent.name} className="text-[12px]" />
     const hover = `${session} of Agent ${agentText(agent)}${k.earlierRevision ? `, on an earlier revision (${k.revision}) than the one new sessions start on` : ''}.${onAgent ? ' Click to list its sessions.' : ''}`
     return (
       <Tooltip content={hover} wrapperClassName="min-w-0 w-full">
@@ -454,6 +456,8 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
     ...(impact ? [{ label: IMPACT_FILTER_LABEL[impact], onClear: () => update({ impact: '' }) }] : []),
     ...(node ? [{ label: `Node: ${node}`, onClear: () => update({ node: '', nodeHas: '' }) }] : []),
     ...(agent ? [{ label: `kagent Agent: ${agent}`, onClear: () => update({ agent: '' }) }] : []),
+    // Also a way out of a link's filter on a Radar that can't apply it, where the menu is hidden.
+    ...(kagentKind ? [{ label: `kagent: ${KAGENT_FILTER_LABEL[kagentKind]}`, onClear: () => update({ kagent: '' }) }] : []),
     ...(linkedState && segment === 'inProgress' && linkedState !== 'inProgress' ? [{ label: `State: ${ACTOR_STATE_LABEL[linkedState as SubstrateActorState]}`, onClear: () => setSegment('inProgress') }] : []),
   ]
 
@@ -516,7 +520,13 @@ export function SubstrateActorsScreen({ workspace, status, onOpenActor, openActo
           <FilterChips chips={chips} />
         </div>}
         {kagentRequested && kagentFeature.support === 'unsupported' && (
-          <Notice>Listing actors by kagent Agent needs a newer Radar in this cluster. Clear the kagent filters to list the actors.</Notice>
+          <Notice>
+            Listing actors by kagent Agent needs a newer Radar in this cluster.{' '}
+            <button type="button" onClick={() => update({ agent: '', kagent: '' })} className="text-accent-text hover:underline">Clear kagent filters</button>
+          </Notice>
+        )}
+        {kagentUnreadText(query.data?.kagentUnread, query.data?.kagentAgents) && (
+          <p className="text-xs text-theme-text-secondary">{kagentUnreadText(query.data?.kagentUnread, query.data?.kagentAgents)}</p>
         )}
         {notConnected && tier ? (
           <>
@@ -578,6 +588,8 @@ export function ActorsTable({
   const from = (data?.offset ?? page * ACTORS_PAGE_SIZE) + 1
   const to = (data?.offset ?? 0) + rows.length
   const cov = data?.coverage
+  // A kagent filter judged where the Agents weren't read: an Agent's count is a lower bound.
+  const agentsUnread = !!data?.kagentUnread?.length
   const empty = loading
     ? 'Loading actors…'
     : !data
@@ -586,7 +598,9 @@ export function ActorsTable({
         ? `No actors: ${coverageReason(cov, 'actors')}.`
         : coverageInPart(cov)
           ? `No actors match in what Radar could read (${coverageReason(cov, 'actors')}).`
-          : 'No actors match.'
+          : agentsUnread
+            ? `No actors match where Radar could read kagent’s Agents; it couldn’t read them in ${data!.kagentUnread!.join(', ')}.`
+            : 'No actors match.'
   const pages = total !== undefined ? Math.ceil(total / ACTORS_PAGE_SIZE) : undefined
   return (
     <div aria-busy={placeholder || undefined} className={placeholder ? 'opacity-60' : undefined}>
@@ -605,7 +619,7 @@ export function ActorsTable({
               <span>
                 {placeholder
                   ? `Loading page ${page + 1}… showing the page before until it arrives`
-                  : <>{from.toLocaleString('en-US')}–{to.toLocaleString('en-US')} of {coverageInPart(cov) ? 'at least ' : ''}{total.toLocaleString('en-US')} · {SORT_LABEL[sort]}</>}
+                  : <>{from.toLocaleString('en-US')}–{to.toLocaleString('en-US')} of {coverageInPart(cov) || agentsUnread ? 'at least ' : ''}{total.toLocaleString('en-US')} · {SORT_LABEL[sort]}</>}
               </span>
               {pages !== undefined && pages > 1 && (
                 <span className="flex items-center gap-1.5">

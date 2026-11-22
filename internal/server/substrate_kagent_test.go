@@ -365,3 +365,40 @@ func TestSubstrateKagentEarlierRevisionWithCreationTimes(t *testing.T) {
 		t.Errorf("sessions = %+v", resp.KagentAgentSessions)
 	}
 }
+
+// With every actor read but the Agents denied or still syncing, an Agent's
+// sessions read zero only as a lower bound: the list names the atespaces
+// whose Agents it couldn't read, and the coverage says why.
+func TestSubstrateKagentFiltersSayWhereAgentsWereNotRead(t *testing.T) {
+	s, _ := kagentServer(t, map[string][]string{"": {"kagent"}})
+	for _, state := range []string{integration.KindCoverageDenied, integration.KindCoverageSyncing} {
+		substrateKagentAgents = func(*Server, *http.Request, []string) substrateKagentRead {
+			return substrateKagentRead{Served: true, Access: integration.KindAccess{State: state}}
+		}
+		for _, q := range []string{"agent=kagent/k8s-helper", "kagent=agentSession", "kagent=unattributed"} {
+			var out substrateActorsResponse
+			call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors?" + q}, &out)
+			if out.Coverage.State != substrateapi.CoverageFull || out.KagentAgents == nil || out.KagentAgents.State != state || !slices.Equal(out.KagentUnread, []string{"kagent"}) {
+				t.Errorf("%s with Agents %s = actors %s, agents %+v, unread %v", q, state, out.Coverage.State, out.KagentAgents, out.KagentUnread)
+			}
+		}
+		var sandboxes substrateActorsResponse
+		call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors?kagent=sandbox"}, &sandboxes)
+		if sandboxes.KagentUnread != nil || sandboxes.Total == nil || *sandboxes.Total != 1 {
+			t.Errorf("sandboxes need no Agent: %v %v", sandboxes.Total, sandboxes.KagentUnread)
+		}
+	}
+	substrateKagentAgents = func(*Server, *http.Request, []string) substrateKagentRead {
+		return substrateKagentRead{Served: true, Agents: []model.KagentAgent{kagentHelper}, Access: integration.AccessFromScope(nil, false)}
+	}
+	var full substrateActorsResponse
+	call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors?agent=kagent/k8s-helper"}, &full)
+	if full.KagentUnread != nil || *full.Total != 2 {
+		t.Errorf("with the Agents read = %v %v", full.Total, full.KagentUnread)
+	}
+	var other substrateActorsResponse
+	call(t, s, s.handleSubstrateActors, substrateCall{path: "/api/substrate/actors?agent=research/lit"}, &other)
+	if other.KagentUnread != nil {
+		t.Errorf("an Agent in a namespace with no kagent sessions = %v", other.KagentUnread)
+	}
+}

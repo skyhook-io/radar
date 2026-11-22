@@ -16,6 +16,7 @@ import type {
   SubstrateTemplateRow,
   SubstratePoolRow,
   SubstrateK8sPool,
+  SubstratePoolsCoverage,
   SubstrateLacking,
   SubstrateWorkerImpact,
   SubstrateWorkerRow,
@@ -362,7 +363,9 @@ export function kagentGoldenStep(agent: KagentAgentRef, memory: boolean): string
 /** What a template is to kagent, in a few words; undefined for a template kagent doesn't own. */
 export function kagentTemplateText(k?: KagentAttribution): string | undefined {
   if (k?.kind === 'agentSession' && k.agent) {
-    const which = k.newSessions ? 'the revision new sessions start on' : k.desired ? 'its desired revision, not yet the one new sessions start on' : 'a current revision'
+    const which = k.earlierRevision
+      ? `an earlier revision${k.revision ? ` (${k.revision})` : ''}, before the one new sessions start on`
+      : k.newSessions ? 'the revision new sessions start on' : k.desired ? 'its desired revision, not yet the one new sessions start on' : 'a current revision'
     return `kagent Agent ${agentText(k.agent)}’s template for ${which}`
   }
   return k?.kind === 'sandbox' ? 'A kagent sandbox’s template' : undefined
@@ -377,6 +380,26 @@ export function compactActorLabel(a: { name: string; kagent?: KagentActor }): { 
   const k = a.kagent
   const agent = k.kind === 'agentSession' && k.agent ? `Agent ${k.agent.name}` : k.kind === 'sandbox' ? 'kagent sandbox' : undefined
   return { name: `session ${shortSessionId(k.sessionId)}`, agent }
+}
+
+/**
+ * Why Radar couldn't read the kagent Agents in a namespace, from the Agents' coverage: a few words for
+ * "Radar couldn't read kagent Agents in <ns> (…)".
+ */
+export function kagentUnreadWhy(cov: SubstratePoolsCoverage | undefined, namespace: string): string {
+  if (!cov) return 'not read'
+  if (cov.state === 'denied' || cov.deniedNamespaces?.includes(namespace)) return 'you can’t list them'
+  if (cov.state === 'syncing') return 'still syncing'
+  if (cov.state === 'uncached' || cov.uncachedNamespaces?.includes(namespace)) return 'Radar doesn’t collect them there'
+  if (cov.state === 'error') return 'the read failed'
+  return 'not read'
+}
+
+/** What a kagent-filtered list can't say where the Agents weren't read, in a sentence; undefined when they all were. */
+export function kagentUnreadText(unread: string[] | undefined, cov: SubstratePoolsCoverage | undefined): string | undefined {
+  if (!unread?.length) return undefined
+  const where = unread.map((ns) => `${ns} (${kagentUnreadWhy(cov, ns)})`).join(', ')
+  return `Radar couldn’t read kagent Agents in ${where}, so a session there could be any Agent’s: counts of an Agent’s sessions are lower bounds, and a session not tied to an Agent may belong to one.`
 }
 
 /** A short label for a table cell: the Agent, a sandbox, or why neither. */

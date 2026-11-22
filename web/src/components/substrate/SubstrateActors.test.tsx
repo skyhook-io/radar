@@ -804,7 +804,7 @@ describe('kagent sessions in the Actors list', () => {
     const html = plain(raw)
     expect(html).toContain('kagent Agent')
     // The Agent's namespace is the atespace under the actor's name, so the cell names the Agent alone.
-    expect(raw).toMatch(/>k8s-helper<\/span>/)
+    expect(raw).toMatch(/>helper<\/span>/)
     expect(html).not.toContain('kagent/k8s-helper')
     expect(html).toContain('kagent sandbox')
     expect(html).toContain('earlier revision')
@@ -815,12 +815,12 @@ describe('kagent sessions in the Actors list', () => {
     state.actors = actors({ kagentAgents: { state: 'full' }, rows: [
       actorRow({ atespace: 'kagent', name: 'session-2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', template: { atespace: 'kagent', name: 'k8s-helper-0123456789ab' }, kagent: { sessionId: '2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', kind: 'unattributed', reason: 'earlierRevision', candidates: [helper] } }),
     ] })
-    expect(screen()).not.toMatch(/>k8s-helper<\/span>/)
+    expect(screen()).not.toMatch(/>helper<\/span>/)
 
     // Proven earlier revisions name the Agent, with a note.
     state.actors = actors({ kagentAgents: { state: 'full' }, rows: [helperSession({ earlierRevision: true, newSessions: false, desired: false, revision: '0123456789ab' })] })
     const earlier = screen()
-    expect(earlier).toMatch(/>k8s-helper<\/span>/)
+    expect(earlier).toMatch(/>helper<\/span>/)
     expect(plain(earlier)).toContain('earlier revision')
   })
 
@@ -876,5 +876,38 @@ describe('kagent session on the actor page', () => {
     const older = page(undefined)
     expect(older).toContain('session …122d4291')
     expect(older).toContain('This actor is a kagent session.')
+  })
+})
+
+describe('kagent filters where the Agents weren’t read', () => {
+  it('says the count is a lower bound and why, rather than that nothing matches', () => {
+    state.kagentSupport = 'supported'
+    for (const [agents, why] of [[{ state: 'denied' as const }, 'you can’t list them'], [{ state: 'syncing' as const }, 'still syncing']] as const) {
+      state.actors = actors({ coverage: { state: 'full', count: 4 }, total: 0, counts: undefined, rows: [], kagentAgents: agents, kagentUnread: ['kagent'] })
+      const html = plain(screen('/substrate/actors?agent=kagent%2Fk8s-helper'))
+      expect(html).toContain(`Radar couldn’t read kagent Agents in kagent (${why}), so a session there could be any Agent’s`)
+      expect(html).toContain('No actors match where Radar could read kagent’s Agents; it couldn’t read them in kagent.')
+      expect(html).not.toContain('No actors match.')
+    }
+  })
+
+  it('reads a non-empty total as at least', () => {
+    state.actors = actors({ coverage: { state: 'full', count: 4 }, total: 1, rows: [helperSession()], kagentAgents: { state: 'partial', allowedNamespaces: ['research'] }, kagentUnread: ['kagent'] })
+    expect(plain(screen('/substrate/actors?kagent=agentSession'))).toContain('of at least 1')
+  })
+
+  it('keeps a way to clear a link’s kagent filter on a Radar that can’t apply it', () => {
+    state.kagentSupport = 'unsupported'
+    const html = plain(screen('/substrate/actors?kagent=unattributed'))
+    expect(html).toContain('kagent: Not tied to an Agent')
+    expect(html).toContain('Clear kagent filters')
+    state.kagentSupport = 'supported'
+  })
+
+  it('wraps a long Agent name after its hyphens, never mid-word', () => {
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [helperSession({ agent: { namespace: 'kagent', name: 'spike-edit-agent' } })] })
+    const raw = screen()
+    expect(raw).toMatch(/>spike-<\/span>/)
+    expect(raw).toMatch(/>edit-<\/span>/)
   })
 })

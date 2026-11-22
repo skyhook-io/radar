@@ -1073,6 +1073,12 @@ type substrateActorsResponse struct {
 	// kagent attributions and the agent and kagent filters were judged
 	// against; absent when the cluster doesn't serve kagent's API.
 	KagentAgents *integration.KindCoverage `json:"kagentAgents,omitempty"`
+	// KagentUnread, with an agent or kagent filter other than sandbox, are
+	// the atespaces holding kagent sessions whose Agents were not read for
+	// the caller (kagentAgents says why). There, a session could be any
+	// Agent's: Total and Counts for an Agent's sessions are lower bounds, and
+	// an unattributed session may belong to an Agent. Absent when none.
+	KagentUnread []string `json:"kagentUnread,omitempty"`
 }
 
 func splitRef(value string) (string, string) {
@@ -1174,6 +1180,7 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	counts := model.NewStateCounts()
+	unread := map[string]bool{}
 	var matched []model.Actor
 	for _, a := range actors {
 		if atespace != "" && a.Atespace != atespace {
@@ -1199,6 +1206,13 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 		}
 		if agentFilter != nil || kagentFilter != "" {
 			k := kagentRow(kagentIx, a)
+			// Where the Agents were not read, a session could be any Agent's:
+			// an Agent's count is a lower bound there, and an unattributed one
+			// may belong to an Agent. A sandbox needs no Agent.
+			if k != nil && k.Reason == model.KagentAgentNotReadable && kagentFilter != model.KagentSandbox &&
+				(agentFilter == nil || a.Template.Atespace == agentFilter.Namespace) {
+				unread[a.Template.Atespace] = true
+			}
 			if k == nil || kagentFilter != "" && k.Kind != kagentFilter || agentFilter != nil && (k.Agent == nil || *k.Agent != *agentFilter) {
 				continue
 			}
@@ -1214,6 +1228,9 @@ func (s *Server) handleSubstrateActors(w http.ResponseWriter, r *http.Request) {
 	sortActors(matched, sortBy, now, workers)
 	total := len(matched)
 	resp.Total, resp.Counts = &total, &counts
+	if len(unread) > 0 {
+		resp.KagentUnread = slices.Sorted(maps.Keys(unread))
+	}
 	rc := model.NewResumeContext(templateUIDs(snap), snap.Workers, snap.Coverage.Workers.State == substrateapi.CoverageFull)
 	pods := substrateWorkerPods(s.podListableWorkers(r, snap.Workers))
 	for _, a := range matched[min(offset, total):min(offset+limit, total)] {
