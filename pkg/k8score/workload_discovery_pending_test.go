@@ -9,9 +9,15 @@ import (
 // Actions on built-in workloads must not wait for it.
 func TestBuiltinWorkloadActionsWithoutDiscovery(t *testing.T) {
 	for name, act := range map[string]func(*WorkloadManager) error{
-		"restart": func(m *WorkloadManager) error { return m.RestartWorkload(context.Background(), "deployments", "prod", "web") },
-		"scale":   func(m *WorkloadManager) error { return m.ScaleWorkload(context.Background(), "deployments", "prod", "web", 3) },
-		"pause":   func(m *WorkloadManager) error { return m.SetDeploymentPaused(context.Background(), "prod", "web", true) },
+		"restart": func(m *WorkloadManager) error {
+			return m.RestartWorkload(context.Background(), "deployments", "prod", "web")
+		},
+		"scale": func(m *WorkloadManager) error {
+			return m.ScaleWorkload(context.Background(), "deployments", "prod", "web", 3)
+		},
+		"pause": func(m *WorkloadManager) error {
+			return m.SetDeploymentPaused(context.Background(), "prod", "web", true)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			client := newAppsClient(deploymentObject(podTemplateV1(), nil, nil))
