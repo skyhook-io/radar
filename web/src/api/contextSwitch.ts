@@ -36,9 +36,14 @@ export function followingSwitch() {
 const finished = new Map<string, string>()
 
 export function followSwitch(id: string) {
-  if (id && finished.get(getApiBase()) === id) return
+  if (switchFinished(id)) return
   tab.set('radar:context-switch:' + getApiBase(), id)
   listeners.forEach(listener => listener())
+}
+
+/** Whether this tab already presented the result of this operation. */
+export function switchFinished(id: string) {
+  return Boolean(id) && finished.get(getApiBase()) === id
 }
 
 export function finishSwitch(id: string) {
