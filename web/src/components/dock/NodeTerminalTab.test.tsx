@@ -7,7 +7,8 @@ const captured = vi.hoisted(() => ({ props: null as NodeTerminalTabProps | null 
 vi.mock('@skyhook-io/k8s-ui', () => ({
   NodeTerminalTab: (props: NodeTerminalTabProps) => { captured.props = props; return null },
 }))
-vi.mock('../../api/config', () => ({
+vi.mock('../../api/config', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../api/config')>(),
   apiUrl: (path: string) => `/api${path}`,
   getWsUrl: (path: string) => path,
   getAuthHeaders: () => ({ Authorization: 'Bearer test' }),
@@ -29,6 +30,7 @@ it('passes the created UID to exact-pod cleanup query parameters with keepalive'
   const parsed = new URL(url, 'http://localhost')
   expect(parsed.pathname).toBe('/api/nodes/node%2Fa/debug')
   expect(Object.fromEntries(parsed.searchParams)).toEqual({ namespace: 'default', podName: 'debug-a', uid: 'uid/a+b' })
-  expect(options).toMatchObject({ method: 'DELETE', keepalive: true, credentials: 'include', headers: { Authorization: 'Bearer test' } })
+  expect(options).toMatchObject({ method: 'DELETE', keepalive: true, credentials: 'include' })
+  expect(new Headers(options.headers).get('Authorization')).toBe('Bearer test')
   expect(options).not.toHaveProperty('body')
 })

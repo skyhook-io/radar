@@ -301,6 +301,9 @@ func runCRDWarmupSequence(ctx context.Context, deferredDone <-chan struct{}, sti
 // Each reset is wrapped in a panic recover so a failure in one subsystem
 // does not prevent remaining subsystems from being torn down.
 func ResetAllSubsystems() {
+	// The point of no return: nothing can be admitted against the connection
+	// whose resources are about to go.
+	RetireServingConnection()
 	// Step 4 subsystems (reverse): prometheus, traffic, helm, metrics history
 	contextSwitchMu.RLock()
 	costResetFn := costResetFunc

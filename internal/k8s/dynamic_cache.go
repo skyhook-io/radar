@@ -27,9 +27,10 @@ var (
 	dynamicResourceCache atomic.Pointer[DynamicResourceCache]
 	dynamicCacheOnce     = new(sync.Once)
 	dynamicCacheMu       sync.Mutex
-	// dynamicSyncStallAfter overrides k8score's stall threshold in tests;
-	// zero keeps the default.
-	dynamicSyncStallAfter time.Duration
+	// dynamicSyncStallAfter and dynamicObjectReadSyncWait override k8score's
+	// thresholds in tests; zero keeps the defaults.
+	dynamicSyncStallAfter     time.Duration
+	dynamicObjectReadSyncWait time.Duration
 )
 
 // InitDynamicResourceCache initializes the dynamic resource cache.
@@ -94,6 +95,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			NamespaceScoped:             nsScoped,
 			Namespace:                   nsTarget,
 			SyncStallAfter:              dynamicSyncStallAfter,
+			ObjectReadSyncWait:          dynamicObjectReadSyncWait,
 			DebugEvents:                 DebugEvents,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)

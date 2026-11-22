@@ -94,7 +94,7 @@ func TestConcurrentTopologyRequestsCoalesceIntoOneFollowUpBuild(t *testing.T) {
 		return true
 	}
 
-	go b.topologyWorker()
+	go b.topologyWorker(topologyRetryDelay)
 	t.Cleanup(b.Stop)
 
 	b.requestTopologyBroadcast()
@@ -122,6 +122,10 @@ func TestConcurrentTopologyRequestsCoalesceIntoOneFollowUpBuild(t *testing.T) {
 // request that coalesced into it. Dropping it because the cluster view happens
 // to be torn down strands the graph until something else triggers a build.
 func TestTriggerConsumedWhileClusterViewIsDownIsRetried(t *testing.T) {
+	previous := topologyRetryDelay
+	topologyRetryDelay = 100 * time.Millisecond
+	t.Cleanup(func() { topologyRetryDelay = previous })
+
 	b := NewSSEBroadcaster()
 
 	var attempts atomic.Int64
@@ -136,10 +140,10 @@ func TestTriggerConsumedWhileClusterViewIsDownIsRetried(t *testing.T) {
 	t.Cleanup(func() { b.Unsubscribe(ch) })
 	waitFor(t, 2*time.Second, func() bool { return b.ClientCount() > 0 })
 
-	go b.topologyWorker()
+	go b.topologyWorker(topologyRetryDelay)
 
 	b.requestTopologyBroadcast()
-	waitFor(t, topologyRetryDelay*3, func() bool { return attempts.Load() >= 2 })
+	waitFor(t, topologyRetryDelay*20, func() bool { return attempts.Load() >= 2 })
 }
 
 func waitFor(t *testing.T, limit time.Duration, done func() bool) {
@@ -237,10 +241,10 @@ func TestTopologyWorkerStopsWithBroadcaster(t *testing.T) {
 	b := NewSSEBroadcaster()
 
 	stopped := make(chan struct{})
-	go func() {
-		b.topologyWorker()
+	go func(retryDelay time.Duration) {
+		b.topologyWorker(retryDelay)
 		close(stopped)
-	}()
+	}(topologyRetryDelay)
 
 	b.Stop()
 
