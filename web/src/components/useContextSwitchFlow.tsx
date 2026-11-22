@@ -2,7 +2,7 @@ import { useLayoutEffect, useState, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { pluralize } from '@skyhook-io/k8s-ui'
 import { useSwitchContext, fetchSessionCounts, SwitchContextError, type SessionCounts } from '../api/client'
-import { followSwitch, followingSwitch, switchInProgress, useTrackedContextSwitch } from '../api/contextSwitch'
+import { finishSwitch, followSwitch, followingSwitch, switchInProgress, useTrackedContextSwitch } from '../api/contextSwitch'
 import { useConnection } from '../context/ConnectionContext'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from './ui/Toast'
@@ -191,7 +191,7 @@ export function useContextSwitchOutcome(applyContextChange: (context: string, id
     }
     if (followingSwitch() !== contextSwitch.id) return
     if (contextSwitch.phase === 'failed' && connection.state === 'connecting') return
-    followSwitch('')
+    finishSwitch(contextSwitch.id)
     endSwitch()
     if (contextSwitch.phase === 'succeeded' && connection.context === contextSwitch.target) {
       applyContextChange(contextSwitch.target, contextSwitch.id)

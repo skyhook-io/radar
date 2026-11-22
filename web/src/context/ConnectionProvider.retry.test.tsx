@@ -230,3 +230,60 @@ it.each(['failed', 'succeeded'] as const)('ends the switch overlay when a poll s
   expect(container.textContent).toBe(phase === 'failed' ? 'Credentials expired' : 'Idle')
   if (phase === 'succeeded') expect(applyContextChange).toHaveBeenCalledExactlyOnceWith(operation.target, operation.id)
 })
+
+it('does not replay a dismissed switch failure when a lost acknowledgement recovers late', async () => {
+  const failed = {
+    id: 'switch-dismissed', target: 'staging', phase: 'failed' as const,
+    startedAt: '2026-10-30T14:02:00Z', syncTimeoutSeconds: 30, progress: '',
+    error: 'Credentials expired', errorType: 'auth',
+  }
+  let phase: 'preflight' | 'failed' = 'preflight'
+  let loseAcknowledgement!: () => void
+  vi.mocked(fetch).mockImplementation(async (_input, init) => {
+    if (init?.method === 'POST') {
+      return new Promise<Response>((_, reject) => { loseAcknowledgement = () => reject(new TypeError('Failed to fetch')) })
+    }
+    const contextSwitch = phase === 'failed' ? failed : { ...failed, phase, error: undefined, errorType: undefined }
+    return jsonResponse(200, { state: 'connected', context: 'prod', contextSwitch })
+  })
+
+  function SwitchProbe() {
+    const { startSwitch, failedSwitch, setFailedSwitch } = useContextSwitch()
+    const mutation = useSwitchContext()
+    useContextSwitchOutcome(vi.fn())
+    return (
+      <>
+        <button id="start" onClick={() => { startSwitch(parseContextName(failed.target)); mutation.mutate({ name: failed.target }) }} />
+        <button id="dismiss" onClick={() => setFailedSwitch(null)} />
+        <span id="failure">{failedSwitch?.error ?? 'none'}</span>
+      </>
+    )
+  }
+
+  act(() => root.render(
+    <QueryClientProvider client={client}>
+      <ConnectionProvider>
+        <ToastProvider>
+          <ContextSwitchProvider>
+            <Probe />
+            <SwitchProbe />
+          </ContextSwitchProvider>
+        </ToastProvider>
+      </ConnectionProvider>
+    </QueryClientProvider>,
+  ))
+  await act(async () => (container.querySelector('#start') as HTMLButtonElement).click())
+  await act(async () => { await client.refetchQueries({ queryKey: ['connection-status'] }) })
+  await advance(10)
+  phase = 'failed'
+  await act(async () => { await client.refetchQueries({ queryKey: ['connection-status'] }) })
+  await advance(10)
+  expect(container.querySelector('#failure')!.textContent).toBe('Credentials expired')
+
+  await act(async () => (container.querySelector('#dismiss') as HTMLButtonElement).click())
+  expect(container.querySelector('#failure')!.textContent).toBe('none')
+  await act(async () => loseAcknowledgement())
+  await act(async () => { await client.refetchQueries({ queryKey: ['connection-status'] }) })
+  await advance(10)
+  expect(container.querySelector('#failure')!.textContent).toBe('none')
+})

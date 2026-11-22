@@ -31,9 +31,19 @@ function subscribe(listener: () => void) {
 export function followingSwitch() {
   return tab.get('radar:context-switch:' + getApiBase())
 }
+// The last operation this tab presented a result for. A late acknowledgement
+// of it (its POST outlived the poll that showed the outcome) must not replay it.
+const finished = new Map<string, string>()
+
 export function followSwitch(id: string) {
+  if (id && finished.get(getApiBase()) === id) return
   tab.set('radar:context-switch:' + getApiBase(), id)
   listeners.forEach(listener => listener())
+}
+
+export function finishSwitch(id: string) {
+  finished.set(getApiBase(), id)
+  followSwitch('')
 }
 
 export function useTrackedContextSwitch(operation?: ContextSwitchOperation) {
