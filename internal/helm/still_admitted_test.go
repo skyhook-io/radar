@@ -3,6 +3,8 @@ package helm
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -76,5 +78,44 @@ func TestBoundHelmActionConfigStaysOnAdmittedConnectionAcrossSwitch(t *testing.T
 		if cfg.Host != "https://a" || cfg.Impersonate.UserName != username || !slices.Equal(cfg.Impersonate.Groups, groups) {
 			t.Errorf("host %q, impersonated user %q, groups %v; want https://a, %q, %v", cfg.Host, cfg.Impersonate.UserName, cfg.Impersonate.Groups, username, groups)
 		}
+	}
+}
+
+// With a single kubeconfig file, unbound Helm reads the file on every action,
+// so an edit that points the context at another server retargets it. A bound
+// write keeps the config Radar admitted.
+func TestBoundHelmActionConfigIgnoresAnEditedKubeconfig(t *testing.T) {
+	t.Cleanup(k8s.SnapshotTestConnection())
+	path := filepath.Join(t.TempDir(), "config")
+	edited := "apiVersion: v1\nkind: Config\ncurrent-context: a\n" +
+		"clusters: [{name: a, cluster: {server: \"https://b\"}}]\n" +
+		"users: [{name: a, user: {token: t}}]\n" +
+		"contexts: [{name: a, context: {cluster: a, user: a}}]\n"
+	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k8s.InstallTestServingConnection("a", &rest.Config{Host: "https://a"}, nil, fake.NewSimpleClientset().Discovery()); err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := k8s.CaptureBoundConnection()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{kubeconfig: path}
+
+	unbound, err := client.actionConfigForWrite(t.Context(), "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := unbound.RESTClientGetter.ToRESTConfig(); err != nil || cfg.Host != "https://b" {
+		t.Fatalf("unbound Helm should follow the file (the case this guards): host %v, err %v", cfg, err)
+	}
+
+	bound, err := client.actionConfigForWrite(k8s.WithBoundConnection(t.Context(), admitted), "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err := bound.RESTClientGetter.ToRESTConfig(); err != nil || cfg.Host != "https://a" {
+		t.Fatalf("bound write: host %v, err %v; want https://a", cfg, err)
 	}
 }
