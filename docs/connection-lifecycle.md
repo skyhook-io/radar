@@ -24,6 +24,45 @@ Not bound: external MCP callers name no connection, so each tool call uses the c
 - **Not health.** A disconnect without teardown (a failed liveness check, a Helm transport error) keeps the ID: it says which connection was admitted, not whether it is healthy.
 - **Publication.** The ID is published as `connectionId` on `/api/connection`, the Retry result, SSE `connection_state` frames and the SSE initial snapshot.
 
+
+A first load, then a switch from A to B (`performContextSwitch` in `internal/k8s/context_manager.go`). IDs are a 10-character boot nonce and a counter that every admission in the process increments; the IDs below are examples. A first load runs the same build as a switch's steps 5–7.
+
+```mermaid
+sequenceDiagram
+  participant Tab
+  participant Radar
+  participant A as Cluster A
+  participant B as Cluster B
+  Note over Radar: start · nothing serving · writes get 503
+  Radar->>A: install clients, build caches (as steps 5–7)
+  Radar->>Radar: admit K7QXM2RDTA-1
+  Radar-->>Tab: connected A · K7QXM2RDTA-1
+  Tab->>Radar: writes send X-Radar-Connection: K7QXM2RDTA-1
+  Tab->>Radar: switch to B
+  Radar->>B: 1. preflight: prepare B's clients, probe the API
+  alt B fails preflight
+    Radar-->>Tab: failed · nothing torn down · still K7QXM2RDTA-1
+  else B passes
+    Note over Radar: 2. before-switch callbacks: Diagnose runs marked stale,<br/>Argo CD connection reset · in-flight operations cancelled
+    Note over Radar: 3. sessions stopped: port-forwards, exec terminals
+    Radar->>Radar: 4. retire K7QXM2RDTA-1 · writes get 503
+    Radar->>A: 4. tear down: cost source, Prometheus, traffic, Helm,<br/>metrics history, PolicyReport index, DynamicResourceCache,<br/>ResourceDiscovery, ResourceCache, timeline
+    Note over Radar: 5. install B's clients · restore the namespace scope ·<br/>drop capability, permission, server-version and platform caches
+    Radar->>B: 6. build: timeline, ResourceCache + ResourceDiscovery,<br/>DynamicResourceCache; then metrics history, Helm,<br/>traffic, Prometheus in the background
+    alt build fails
+      Radar-->>Tab: disconnected · no ID · "Back to A"
+    else build succeeds
+      Note over Radar: 7. after-switch callbacks: per-user namespace picks and<br/>RBAC index, MCP permission cache, integration settings,<br/>SSE topology view
+      Radar->>Radar: 8. admit K7QXM2RDTA-2
+      Radar-->>Tab: connected B · K7QXM2RDTA-2 (SSE context_changed and status)
+      Tab->>Tab: adopt K7QXM2RDTA-2, reset views
+      Note over Tab,Radar: a tab still sending K7QXM2RDTA-1 gets 409 context_changed
+    end
+  end
+```
+
+Switching back to A admits `K7QXM2RDTA-3`, never `-1` again. After a restart the nonce changes (say `P4WNB7ZHQE-1`), so an ID from the previous process also gets 409. All of the state above is process-wide: each step resets a shared singleton rather than dropping one connection's object.
+
 Code: `internal/k8s/connection_state.go` (admission, retirement, publication), `internal/k8s/connection_binding.go` (capture).
 
 ## Binding
