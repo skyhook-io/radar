@@ -1,11 +1,12 @@
 import { useMemo } from 'react'
 import { TraefikMiddlewareRenderer as BaseTraefikMiddlewareRenderer, type TraefikMiddlewareUsers } from '@skyhook-io/k8s-ui/components/resources/renderers/TraefikMiddlewareRenderer'
 import type { ResourceRef, TraefikRoutesResponse } from '@skyhook-io/k8s-ui'
+import { isRadarFeatureUnsupported } from '../../../api/radarFeatures'
 import { useTraefikMiddlewareUsers } from '../../../api/traefik'
 
 // undefined on an older Radar or while loading; null when the request failed.
-export function middlewareUsers(query: { data?: TraefikRoutesResponse; isError: boolean; support: string }): TraefikMiddlewareUsers | null | undefined {
-  if (query.support === 'unsupported') return undefined
+export function middlewareUsers(query: { data?: TraefikRoutesResponse; isError: boolean; error?: unknown; support: string }): TraefikMiddlewareUsers | null | undefined {
+  if (query.support === 'unsupported' || isRadarFeatureUnsupported(query.error, 'traefikRoutes')) return undefined
   if (query.isError) return null
   if (!query.data) return undefined
   return {
@@ -17,7 +18,7 @@ export function middlewareUsers(query: { data?: TraefikRoutesResponse; isError: 
 
 /** Host wrapper: adds which IngressRoutes use the Middleware. */
 export function TraefikMiddlewareRenderer({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
-  const { data: users, isError, support } = useTraefikMiddlewareUsers(data?.metadata?.namespace ?? '', data?.metadata?.name ?? '')
-  const usedBy = useMemo(() => middlewareUsers({ data: users, isError, support }), [users, isError, support])
+  const { data: users, isError, error, support } = useTraefikMiddlewareUsers(data?.metadata?.namespace ?? '', data?.metadata?.name ?? '')
+  const usedBy = useMemo(() => middlewareUsers({ data: users, isError, error, support }), [users, isError, error, support])
   return <BaseTraefikMiddlewareRenderer data={data} onNavigate={onNavigate} usedBy={usedBy} />
 }
