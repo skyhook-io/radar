@@ -290,8 +290,8 @@ function KagentFact({ detail, onOpenSubject }: { detail: SubstrateActorDetail; o
       {k?.kind === 'agentSession' && k.agent ? (
         <div>
           Agent <SubjectLink subject={{ kind: 'Agent', namespace: k.agent.namespace, name: k.agent.name }} label={`${k.agent.namespace}/${k.agent.name}`} onOpen={onOpenSubject} withKind={false} />
-          {!k.newSessions && k.desired && <span className="text-xs text-theme-text-secondary"> · on its desired revision</span>}
-          {!k.newSessions && !k.desired && <span className="text-xs text-theme-text-secondary"> · on a current revision</span>}
+          {k.earlierRevision && <span className="text-xs text-theme-text-secondary"> · on an earlier revision ({k.revision}) than the one new sessions start on</span>}
+          {!k.earlierRevision && !k.newSessions && k.desired && <span className="text-xs text-theme-text-secondary"> · on its desired revision</span>}
         </div>
       ) : k?.kind === 'sandbox' ? (
         <div className="text-xs text-theme-text-secondary">A kagent sandbox, from a SandboxTemplate: a standalone environment, not an Agent’s chat.</div>

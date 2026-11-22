@@ -800,21 +800,34 @@ describe('kagent sessions in the Actors list', () => {
       actorRow({ atespace: 'kagent', name: 'session-2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', kagent: { sessionId: '2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', kind: 'unattributed', reason: 'earlierRevision', candidates: [helper] } }),
       actorRow({ name: 'lit-0201' }),
     ] })
-    const html = plain(screen())
+    const raw = screen()
+    const html = plain(raw)
     expect(html).toContain('kagent Agent')
-    expect(html).toContain('kagent/k8s-helper')
+    // The Agent's namespace is the atespace under the actor's name, so the cell names the Agent alone.
+    expect(raw).toMatch(/>k8s-helper<\/span>/)
+    expect(html).not.toContain('kagent/k8s-helper')
     expect(html).toContain('kagent sandbox')
     expect(html).toContain('earlier revision')
+    // A session's actor reads as its short id, not session-<uuid> over four lines.
+    expect(html).toContain('session 01a1faa2')
+    expect(html).not.toContain('session-01a1faa2-b3e3')
     // A hint names the Agent only in the hover, never in the cell.
     state.actors = actors({ kagentAgents: { state: 'full' }, rows: [
       actorRow({ atespace: 'kagent', name: 'session-2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', template: { atespace: 'kagent', name: 'k8s-helper-0123456789ab' }, kagent: { sessionId: '2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', kind: 'unattributed', reason: 'earlierRevision', candidates: [helper] } }),
     ] })
-    expect(plain(screen())).not.toContain('kagent/k8s-helper')
+    expect(screen()).not.toMatch(/>k8s-helper<\/span>/)
+
+    // Proven earlier revisions name the Agent, with a note.
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [helperSession({ earlierRevision: true, newSessions: false, desired: false, revision: '0123456789ab' })] })
+    const earlier = screen()
+    expect(earlier).toMatch(/>k8s-helper<\/span>/)
+    expect(plain(earlier)).toContain('earlier revision')
   })
 
   it('sends the agent and kagent filters only to a Radar that serves them', () => {
     state.actors = actors({ kagentAgents: { state: 'full' }, rows: [helperSession()] })
     state.kagentSupport = 'supported'
+    expect(plain(screen())).toContain('Any kagent link')
     screen('/substrate/actors?agent=kagent%2Fk8s-helper&kagent=unattributed')
     expect(state.lastQuery).toMatchObject({ agent: 'kagent/k8s-helper', kagent: 'unattributed' })
     expect(state.queryEnabled).toBe(true)
@@ -848,6 +861,12 @@ describe('kagent session on the actor page', () => {
     expect(html).toContain('kagent/k8s-helper')
     expect(html).toContain('Conversation outcome: not visible to Radar')
     expect(html).toContain('This actor is a session of kagent Agent kagent/k8s-helper. Recover it through kagent (its RevertSession API')
+  })
+
+  it('says a session on a proven earlier revision is the Agent’s, on an older revision', () => {
+    const html = page({ sessionId: session, kind: 'agentSession', agent: helper, earlierRevision: true, revision: 'aa5e9426eb2e' })
+    expect(html).toContain('kagent/k8s-helper')
+    expect(html).toContain('on an earlier revision (aa5e9426eb2e) than the one new sessions start on')
   })
 
   it('says in words why a session is tied to no Agent', () => {

@@ -169,7 +169,7 @@ export interface KagentAgentRef {
 
 /** Why a kagent session's actor is tied to no Agent; see pkg/substrate KagentAttribution. */
 export type KagentUnattributedReason =
-  /** Its template is named for an Agent the caller reads, but for neither current revision: an earlier session of it, or a deleted Agent's of the same name. */
+  /** Its template is named for an Agent the caller reads, for neither current revision, and Radar can't prove it is that Agent's: the template predates the Agent, a time is missing, or the name was cut. */
   | 'earlierRevision'
   /** The caller can't read Agents in the template's namespace, or Radar hasn't read them there. */
   | 'agentNotReadable'
@@ -195,6 +195,11 @@ export interface KagentAttribution {
   /** The revision is the Agent's desiredRevision. */
   desired?: boolean
   reason?: KagentUnattributedReason
+  /**
+   * agentSession on a template the Agent made for an earlier revision, proven by Substrate creating the
+   * template at or after the Agent was created; revision is then the 12 hex its name carries.
+   */
+  earlierRevision?: boolean
   /** earlierRevision: the Agents the template is named for; ambiguous: the Agents it matches. A hint only. */
   candidates?: KagentAgentRef[]
 }
@@ -1120,19 +1125,21 @@ export interface KagentAgentRevision {
 /** GET /api/substrate/kagent/agents/{namespace}/{name}/sessions. */
 export interface KagentAgentSessions {
   apiTier: SubstrateAPITier
-  agent: { namespace: string; name: string; uid?: string; desiredRevision?: string; latestSuccessfulRevision?: string }
+  agent: { namespace: string; name: string; uid?: string; desiredRevision?: string; latestSuccessfulRevision?: string; created?: string }
   revisions: KagentAgentRevision[]
-  /** The attributed session actors by state. */
+  /** The attributed session actors by state, on current and earlier revisions. */
   sessions: SubstrateStateCounts
+  /** How many of sessions run on an earlier revision's template; the rest are on revisions. */
+  onEarlierRevisions: number
   /** Every actor in the Agent's atespace was read: sessions and earlierRevisions are exact; otherwise lower bounds. */
   complete: boolean
   /** Sessions crashed or stuck in a transition past 5 minutes; attention holds the first few, crashed first. */
   needAttention: number
   attention: SubstrateActorRow[]
-  /** Sessions on templates named for this Agent but for neither current revision: a hint, not part of sessions. */
-  earlierRevisions: number
+  /** Sessions on templates named for this Agent, for no current revision, that Radar can't prove are its: a hint, not part of sessions. */
+  hintedEarlierRevisions: number
   /** Some of those templates' names also fit another Agent. */
-  earlierShared?: boolean
+  hintShared?: boolean
   sources: ('snapshot' | 'atespace')[]
   coverage: { actors: SubstrateCoverage; kagentAgents: SubstratePoolsCoverage }
 }

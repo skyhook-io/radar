@@ -11,7 +11,7 @@ import { useSubstrateHealth } from '../../api/substrateHealth'
 import { SubstrateVerdictLine } from '../resource/SubstrateVerdictLine'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { RefreshFailedNotice } from '../workspace/layout'
-import { ACTOR_STATE_LABEL, definitiveFailure, placementTone, poolPodsText, poolReadFailure, poolReading, bytesText, coverageInPart, coverageReason, coverageUnread, cpuText, tierReading } from './readings'
+import { ACTOR_STATE_LABEL, compactActorLabel, definitiveFailure, placementTone, poolPodsText, poolReadFailure, poolReading, bytesText, coverageInPart, coverageReason, coverageUnread, cpuText, tierReading } from './readings'
 import { ACTOR_DRAWER_PARAM, SUBSTRATE_PATH, encodeActorParam, substrateActorPath, substrateActorsPath, substrateTemplatePath } from './routes'
 import { IMPACT_LABEL, Name, Term, Unread, When, WorkerStateChip } from './shared'
 import { RESERVED_MEANING, lostText } from './SubstrateWorkers'
@@ -65,15 +65,18 @@ function ActorCell({ actor, onOpen }: { actor: WorkerActor; onOpen: (ref: Substr
   // A lost sandbox is told apart by more than hue: a "lost" marker, so a 4px bar isn't the only cue.
   const lost = actor.workerImpact?.kind === 'restarted'
   const state = actor.workerImpact ? `${ACTOR_STATE_LABEL[actor.state]} · ${IMPACT_LABEL[actor.workerImpact.kind]}` : ACTOR_STATE_LABEL[actor.state]
+  const label = compactActorLabel(actor)
+  const agent = actor.kagent?.kind === 'agentSession' && actor.kagent.agent ? ` · kagent Agent ${actor.kagent.agent.name}` : ''
   return (
-    <Tooltip content={`${actor.atespace} / ${actor.name} · ${state} · template ${actor.template.name}${actor.workerImpact ? `. ${actor.workerImpact.reading}` : ''}`}>
+    <Tooltip content={`${actor.atespace} / ${actor.name}${agent} · ${state} · template ${actor.template.name}${actor.workerImpact ? `. ${actor.workerImpact.reading}` : ''}`}>
       <button
         type="button"
         onClick={() => onOpen(actor)}
         className="flex w-full min-w-0 items-center gap-1.5 rounded-md border border-theme-border bg-theme-base px-1.5 py-1 text-left font-mono text-[11px] text-theme-text-primary hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         <span aria-hidden className={clsx('h-3 w-1 shrink-0 rounded-sm', toneFillClass(tone))} />
-        <span className={clsx('min-w-0 truncate', lost && toneTextClass('unhealthy'))}>{actor.name}</span>
+        <span className={clsx('min-w-0 truncate', lost && toneTextClass('unhealthy'))}>{label.name}</span>
+        {label.agent && <span className="min-w-0 truncate font-sans text-theme-text-tertiary">{label.agent}</span>}
         {lost && <LostMarker />}
         <span className="sr-only">, {state}</span>
       </button>

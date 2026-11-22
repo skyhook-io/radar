@@ -77,18 +77,19 @@ const SCOPING_PARAMS = ['atespace', 'template', 'pool', 'q', 'worker', 'impact',
 
 /** The kagent filter's choices: which kagent sessions to list. */
 const KAGENT_FILTER_LABEL: Record<KagentAttribution['kind'], string> = {
-  agentSession: 'Sessions of an Agent',
+  agentSession: 'Agent sessions',
   sandbox: 'kagent sandboxes',
-  unattributed: 'kagent sessions not tied to an Agent',
+  unattributed: 'Not tied to an Agent',
 }
 const KAGENT_OPTIONS: SelectMenuOption[] = [
-  { value: '', label: 'Any actor' },
+  { value: '', label: 'Any kagent link' },
   ...(Object.keys(KAGENT_FILTER_LABEL) as KagentAttribution['kind'][]).map((k) => ({ value: k, label: KAGENT_FILTER_LABEL[k] })),
 ]
 
 /**
  * A row's kagent Agent: a button that lists that Agent's sessions, or what the session is instead.
- * Only exact attributions name an Agent; a hint stays in the hover.
+ * Only exact attributions name an Agent; a hint stays in the hover. The Agent's namespace is the
+ * actor's atespace, shown under its name, so the cell names the Agent alone.
  */
 function AgentCell({ row, onAgent }: { row: SubstrateActorRow; onAgent?: (agent: KagentAgentRef) => void }) {
   const k: KagentActor | undefined = row.kagent
@@ -96,13 +97,17 @@ function AgentCell({ row, onAgent }: { row: SubstrateActorRow; onAgent?: (agent:
   const session = `kagent session ${shortSessionId(k.sessionId)}`
   if (k.kind === 'agentSession' && k.agent) {
     const agent = k.agent
-    const label = <span className="font-mono text-[12px]">{agentText(agent)}</span>
+    const label = <span className="break-all font-mono text-[12px]">{agent.name}</span>
+    const hover = `${session} of Agent ${agentText(agent)}${k.earlierRevision ? `, on an earlier revision (${k.revision}) than the one new sessions start on` : ''}.${onAgent ? ' Click to list its sessions.' : ''}`
     return (
-      <Line title={`${session} of Agent ${agentText(agent)}${onAgent ? '. Click to list its sessions.' : ''}`}>
-        {onAgent ? (
-          <button type="button" onClick={(e) => { e.stopPropagation(); onAgent(agent) }} className="text-left text-accent-text hover:underline">{label}</button>
-        ) : label}
-      </Line>
+      <Tooltip content={hover} wrapperClassName="min-w-0 w-full">
+        <span className="block min-w-0">
+          {onAgent ? (
+            <button type="button" onClick={(e) => { e.stopPropagation(); onAgent(agent) }} className="text-left text-accent-text hover:underline">{label}</button>
+          ) : label}
+          {k.earlierRevision && <span className="block text-xs leading-4 text-theme-text-tertiary">earlier revision</span>}
+        </span>
+      </Tooltip>
     )
   }
   return (
@@ -147,6 +152,21 @@ function SnapshotCell({ row }: { row: SubstrateActorRow }) {
       </span>
     </Tooltip>
   )
+}
+
+/**
+ * An actor's name in a row. A kagent session's is session-<UUID>, which would wrap over several lines:
+ * it reads "session <first group>", the whole name on hover. Search still matches the whole name.
+ */
+function ActorName({ row }: { row: SubstrateActorRow }) {
+  if (row.kagent) {
+    return (
+      <Tooltip content={row.name}>
+        <span className="whitespace-nowrap font-mono text-[12.5px]">session {shortSessionId(row.kagent.sessionId)}</span>
+      </Tooltip>
+    )
+  }
+  return <Name name={row.name} className="text-[12.5px]" />
 }
 
 /** The worker-impact filter a link can carry, as its chip reads. */
@@ -232,12 +252,12 @@ function actorColumns(wide: boolean, agent?: { onAgent?: (agent: KagentAgentRef)
       cell: (r) => (
         wide ? (
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-1">
-            <Name name={r.name} className="text-[12.5px]" />
+            <ActorName row={r} />
             <span className="text-[11.5px] text-theme-text-tertiary"><WholeNames text={r.atespace} /></span>
           </span>
         ) : (
           <>
-            <Name name={r.name} className="text-[12.5px]" />
+            <ActorName row={r} />
             <Sub><WholeNames text={`${r.atespace} · ${r.template.name}`} /></Sub>
           </>
         )

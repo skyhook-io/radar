@@ -1,45 +1,19 @@
-import { RadarUpgradeNote, SectionHeading } from '@skyhook-io/k8s-ui'
+import type { ReactNode } from 'react'
+import { MessagesSquare } from 'lucide-react'
+import { RadarUpgradeNote, Section } from '@skyhook-io/k8s-ui'
 import { ApiError } from '../../api/client'
-import { substrateErrorCode, useKagentAgentSessions, type KagentAgentRef, type KagentAgentSessions as Sessions, type SubstrateRef } from '../../api/substrateWorkspace'
+import { substrateErrorCode, useKagentAgentSessions, type KagentAgentRef, type SubstrateRef } from '../../api/substrateWorkspace'
 import { useConnection } from '../../context/ConnectionContext'
 import { Notice } from '../workspace/layout'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
-import { KAGENT_OUTCOME, agentFilterValue, agentText, shortSessionId, tierReading } from '../substrate/readings'
+import { agentFilterValue, agentText, shortSessionId, tierReading } from '../substrate/readings'
 import { stateCellReading } from '../substrate/SubstrateActors'
 import { substrateActorPath, substrateActorsPath } from '../substrate/routes'
 import { ActorStateBadge, When } from '../substrate/shared'
 import { SubstrateStateBar } from '../substrate/SubstrateStateBar'
 
-const SHORT = 12
-
 function count(n: number, lowerBound: boolean): string {
   return `${lowerBound ? 'at least ' : ''}${n.toLocaleString('en-US')}`
-}
-
-/** What the Agent's current revisions say about where its new sessions run. */
-function RevisionsText({ data }: { data: Sessions }) {
-  const newest = data.revisions.find((r) => r.newSessions)
-  const desired = data.revisions.find((r) => r.desired && !r.newSessions)
-  if (!newest && !desired) {
-    return <p className="text-xs text-theme-text-secondary">It has no revision yet, so kagent starts no sessions for it. Its Ready condition says why.</p>
-  }
-  return (
-    <div className="space-y-1 text-xs text-theme-text-secondary">
-      {newest && (
-        <p>
-          New sessions start on revision <span className="font-mono">{newest.revision.slice(0, SHORT)}</span>, template <span className="font-mono">{newest.template.name}</span>.
-        </p>
-      )}
-      {desired && (
-        <p>
-          Its desired revision <span className="font-mono">{desired.revision.slice(0, SHORT)}</span> isn’t prepared yet{newest ? ', so new sessions still start on the one above' : ''}. Its Ready condition says why.
-        </p>
-      )}
-      {data.revisions.some((r) => r.ambiguous) && (
-        <p>Another Agent’s revision makes a template with the same name, so Radar counts the sessions on it for neither Agent.</p>
-      )}
-    </div>
-  )
 }
 
 export interface KagentAgentSessionsProps {
@@ -51,9 +25,10 @@ export interface KagentAgentSessionsProps {
 }
 
 /**
- * One kagent Agent's chat sessions as Substrate runs them: how many, by state, the few that need
- * attention, where new sessions start, and what Radar can't see (the conversations themselves). Counts
- * only exact matches: sessions on a revision the Agent no longer names are a hint beside them.
+ * One kagent Agent's chat sessions as Substrate runs them, inside the Agent's drawer: how many, on the
+ * current and earlier revisions, by state, and the few that need attention. Counts only exact matches;
+ * sessions Radar can't prove are this Agent's are a hint beside them. Where new sessions start and what
+ * Radar can't see of a conversation are the drawer's Agent section's to say.
  */
 export function KagentAgentSessions({ agent, onOpenActor, onOpenSessions }: KagentAgentSessionsProps) {
   const navigate = useWorkspaceNavigate()
@@ -61,28 +36,28 @@ export function KagentAgentSessions({ agent, onOpenActor, onOpenSessions }: Kage
   const query = useKagentAgentSessions(agent)
   const openActor = onOpenActor ?? ((ref: SubstrateRef) => navigate(substrateActorPath(ref, connection.context || undefined)))
   const openSessions = onOpenSessions ?? ((a: KagentAgentRef) => navigate(substrateActorsPath({ agent: agentFilterValue(a) })))
-  const heading = <SectionHeading>Sessions in Agent Substrate</SectionHeading>
+  const frame = (body: ReactNode) => <Section title="Sessions" icon={MessagesSquare} defaultExpanded><div className="space-y-2">{body}</div></Section>
 
   const upgrade = query.kagentUpgrade ?? query.upgrade
-  if (upgrade) {
-    return <section>{heading}<RadarUpgradeNote requirement={upgrade} /></section>
-  }
+  if (upgrade) return frame(<RadarUpgradeNote requirement={upgrade} />)
   const data = query.data
   if (!data) {
-    if (query.isLoading || !query.error) {
-      return <section>{heading}<p className="text-sm text-theme-text-tertiary">Reading this Agent’s sessions from Substrate…</p></section>
-    }
-    return <section>{heading}<Notice>{sessionsFailure(query.error, agent)}</Notice></section>
+    if (query.isLoading || !query.error) return frame(<p className="text-sm text-theme-text-tertiary">Reading this Agent’s sessions from Substrate…</p>)
+    return frame(<Notice>{sessionsFailure(query.error, agent)}</Notice>)
   }
 
   const lower = !data.complete
   const total = data.sessions.total
-  return (
-    <section className="space-y-2">
-      {heading}
+  const earlier = data.onEarlierRevisions
+  const current = total - earlier
+  return frame(
+    <>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <p className="text-sm text-theme-text-primary">
           <span className="font-medium">{count(total, lower)}</span> {total === 1 && !lower ? 'session' : 'sessions'}
+          {total > 0 && (
+            <span className="text-theme-text-secondary"> · {count(current, lower)} on the current revision, {count(earlier, lower)} on earlier ones</span>
+          )}
           {data.needAttention > 0 && <span className="text-theme-text-secondary"> · {count(data.needAttention, lower)} {data.needAttention === 1 ? 'needs' : 'need'} attention</span>}
         </p>
         {total > 0 && (
@@ -109,14 +84,15 @@ export function KagentAgentSessions({ agent, onOpenActor, onOpenSessions }: Kage
           ))}
         </ul>
       )}
-      <RevisionsText data={data} />
-      {data.earlierRevisions > 0 && (
+      {data.revisions.some((r) => r.ambiguous) && (
+        <p className="text-xs text-theme-text-secondary">Another Agent’s revision makes a template with the same name, so Radar counts the sessions on it for neither Agent.</p>
+      )}
+      {data.hintedEarlierRevisions > 0 && (
         <p className="text-xs text-theme-text-secondary">
-          {count(data.earlierRevisions, lower)} more {data.earlierRevisions === 1 ? 'session runs' : 'sessions run'} on templates named for {agentText(agent)} but for an earlier revision. Radar doesn’t count {data.earlierRevisions === 1 ? 'it' : 'them'}: a deleted Agent with the same name leaves the same names{data.earlierShared ? ', and another Agent’s name fits some of them too' : ''}.
+          {count(data.hintedEarlierRevisions, lower)} more {data.hintedEarlierRevisions === 1 ? 'session runs' : 'sessions run'} on templates named for {agentText(agent)} that Radar can’t prove are its: a deleted Agent with the same name leaves the same names{data.hintShared ? ', and another Agent’s name fits some of them too' : ''}. Radar doesn’t count {data.hintedEarlierRevisions === 1 ? 'it' : 'them'}.
         </p>
       )}
-      <p className="text-xs text-theme-text-tertiary">{KAGENT_OUTCOME}</p>
-    </section>
+    </>,
   )
 }
 

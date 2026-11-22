@@ -251,3 +251,18 @@ describe('Workers by pool', () => {
     expect(html).toContain('resuming, suspending or reverting')
   })
 })
+
+describe('kagent sessions on a worker', () => {
+  it('shows a session by its short id with its Agent, the whole name on hover', () => {
+    const html = render(pool([worker(0, { actors: [
+      { atespace: 'kagent', name: 'session-01a1faa2-b3e3-7dd3-ae2d-3114122d4291', state: 'running', template: { atespace: 'kagent', name: 'k8s-helper-aa5e9426eb2e' },
+        kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291', kind: 'agentSession', agent: { namespace: 'kagent', name: 'k8s-helper' }, newSessions: true } },
+      { atespace: 'kagent', name: 'session-9b2d6c1e-4f3a-4e8b-9c7d-1a2b3c4d5e6f', state: 'running', template: { atespace: 'kagent', name: 'sandbox-3f2c1b0a9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b' },
+        kagent: { sessionId: '9b2d6c1e-4f3a-4e8b-9c7d-1a2b3c4d5e6f', kind: 'sandbox' } },
+    ] })]))
+    expect(html).toContain('session 01a1faa2')
+    expect(html).toContain('Agent k8s-helper')
+    expect(html).toContain('session 9b2d6c1e')
+    expect(html).toContain('kagent sandbox')
+  })
+})

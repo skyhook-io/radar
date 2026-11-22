@@ -33,7 +33,8 @@ function sessions(overrides: Partial<Sessions> = {}): Sessions {
     needAttention: 1,
     attention: [actorRow({ atespace: 'kagent', name: 'session-7c9e6679-7425-40de-944b-e07fc1f90ae7', state: 'crashed', reason: 'exit 1', updateTime: minutesAgo(3),
       kagent: { sessionId: '7c9e6679-7425-40de-944b-e07fc1f90ae7', kind: 'agentSession', agent, newSessions: true, desired: true } })],
-    earlierRevisions: 0,
+    onEarlierRevisions: 0,
+    hintedEarlierRevisions: 0,
     sources: ['snapshot'],
     coverage: { actors: { state: 'full' }, kagentAgents: { state: 'full' } },
     ...overrides,
@@ -54,16 +55,25 @@ function reset() {
 }
 
 describe('KagentAgentSessions', () => {
-  it('counts the Agent’s sessions, lists the ones needing attention and says where new ones start', () => {
+  it('leads with every session, broken down by revision, and lists the ones needing attention', () => {
     reset()
     state.data = sessions()
     const html = render()
-    expect(html).toContain('3 sessions')
+    expect(html).toContain('Sessions')
+    expect(html).toContain('3 sessions · 3 on the current revision, 0 on earlier ones')
     expect(html).toContain('1 needs attention')
     expect(html).toContain('session 7c9e6679')
-    expect(html).toContain('New sessions start on revision aa5e9426eb2e, template k8s-helper-aa5e9426eb2e')
-    expect(html).toContain('Conversation outcome: not visible to Radar')
     expect(html).toContain('List its sessions')
+    // The drawer's Agent section already says where new sessions start and that conversations aren't visible.
+    expect(html).not.toContain('New sessions start on')
+    expect(html).not.toContain('Conversation outcome')
+  })
+
+  it('counts sessions on earlier revisions in the total, not as zero', () => {
+    reset()
+    state.data = sessions({ sessions: counts({ suspended: 1 }), onEarlierRevisions: 1, needAttention: 0, attention: [],
+      revisions: [{ revision, template: { atespace: 'kagent', name: 'k8s-helper-aa5e9426eb2e' }, newSessions: true, desired: true, sessions: 0 }] })
+    expect(render()).toContain('1 session · 0 on the current revision, 1 on earlier ones')
   })
 
   it('reads counts as lower bounds when Substrate’s actors were not all read', () => {
@@ -74,18 +84,16 @@ describe('KagentAgentSessions', () => {
     expect(html).toContain('Lower bounds')
   })
 
-  it('says a blocked edit leaves new sessions on the latest successful revision, and keeps earlier revisions out of the count', () => {
+  it('keeps unproven earlier revisions out of the count, and says when another Agent shares a template', () => {
     reset()
     state.data = sessions({
-      revisions: [
-        { revision, template: { atespace: 'kagent', name: 'k8s-helper-aa5e9426eb2e' }, newSessions: true, sessions: 3 },
-        { revision: '0b7f3c9e5d21a64f8e09b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2', template: { atespace: 'kagent', name: 'k8s-helper-0b7f3c9e5d21' }, desired: true, sessions: 0 },
-      ],
-      earlierRevisions: 2,
+      revisions: [{ revision, template: { atespace: 'kagent', name: 'k8s-helper-aa5e9426eb2e' }, newSessions: true, desired: true, ambiguous: true, sessions: 0 }],
+      hintedEarlierRevisions: 2,
     })
     const html = render()
-    expect(html).toContain('Its desired revision 0b7f3c9e5d21 isn’t prepared yet, so new sessions still start on the one above')
-    expect(html).toContain('2 more sessions run on templates named for kagent/k8s-helper but for an earlier revision. Radar doesn’t count them')
+    expect(html).toContain('2 more sessions run on templates named for kagent/k8s-helper that Radar can’t prove are its')
+    expect(html).toContain('Radar doesn’t count them')
+    expect(html).toContain('Another Agent’s revision makes a template with the same name')
     expect(html).toContain('3 sessions')
   })
 

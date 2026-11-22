@@ -362,6 +362,17 @@ export function kagentTemplateText(k?: KagentAttribution): string | undefined {
   return k?.kind === 'sandbox' ? 'A kagent sandbox’s template' : undefined
 }
 
+/**
+ * An actor as a compact list shows it: a kagent session by its short id, with its Agent's name (or that
+ * it is a sandbox) beside it; anything else by its name.
+ */
+export function compactActorLabel(a: { name: string; kagent?: KagentActor }): { name: string; agent?: string } {
+  if (!a.kagent) return { name: a.name }
+  const k = a.kagent
+  const agent = k.kind === 'agentSession' && k.agent ? `Agent ${k.agent.name}` : k.kind === 'sandbox' ? 'kagent sandbox' : undefined
+  return { name: `session ${shortSessionId(k.sessionId)}`, agent }
+}
+
 /** A short label for a table cell: the Agent, a sandbox, or why neither. */
 export function kagentCellText(k: KagentAttribution): string {
   if (k.kind === 'agentSession' && k.agent) return agentText(k.agent)
