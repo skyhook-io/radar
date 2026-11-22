@@ -301,13 +301,27 @@ func (ix *KagentIndex) template(t Ref) KagentAttribution {
 	return KagentAttribution{Kind: KagentUnattributed, Reason: KagentNoAgent}
 }
 
+// kagentCreationMargin is how much later than an Agent's creationTimestamp
+// Substrate must have created a template for it to be that Agent's. The
+// timestamp is truncated to the second, so an Agent deleted and recreated
+// within one second can carry a time earlier than its predecessor's last
+// template; and the two times come from different clocks (Substrate's API
+// server, the Kubernetes API server). One second for the precision, one for
+// skew.
+const kagentCreationMargin = 2 * time.Second
+
 // earlier attributes a template named for readable Agents but for none of
 // their current revisions. It is exactly an Agent's when Substrate created it
-// at or after that Agent was created and no other Agent could have named it:
-// a deleted Agent's templates were created before its deletion, so before any
-// Agent that took its name later. That holds only for a name kagent did not
-// cut: two long names can share their first 50 characters, and a deleted
-// Agent with another long name would leave the same prefix.
+// at least kagentCreationMargin after that Agent was created and no other
+// Agent could have named it: a deleted Agent's templates were created before
+// its deletion, so before any Agent that took its name later.
+//
+// The prefix must also be shorter than kagent's 50-character cut. At 50, a
+// deleted Agent whose name only began with this one's (A's name plus "-old")
+// was cut to the same prefix, whether or not this Agent's own name was cut.
+// One case remains: a deleted Agent whose name continued this one's with
+// hyphens alone up to the 50th character, which the cut trims away. Radar
+// does not try to exclude it.
 func (ix *KagentIndex) earlier(t Ref, parsed KagentTemplateName, named []AgentRef) KagentAttribution {
 	hint := KagentAttribution{Kind: KagentUnattributed, Reason: KagentEarlierRevision, Candidates: slices.Clone(named)}
 	created, ok := ix.created[t]
@@ -316,7 +330,7 @@ func (ix *KagentIndex) earlier(t Ref, parsed KagentTemplateName, named []AgentRe
 	}
 	var after []KagentAgent
 	for _, ref := range named {
-		if a := ix.agents[ref.Key()]; !a.Created.IsZero() && !created.Before(a.Created) {
+		if a := ix.agents[ref.Key()]; !a.Created.IsZero() && !created.Before(a.Created.Add(kagentCreationMargin)) {
 			after = append(after, a)
 		}
 	}
@@ -327,7 +341,7 @@ func (ix *KagentIndex) earlier(t Ref, parsed KagentTemplateName, named []AgentRe
 			refs = append(refs, a.Ref())
 		}
 		return KagentAttribution{Kind: KagentUnattributed, Reason: KagentAmbiguous, Candidates: refs}
-	case len(after) == 1 && len(named) == 1 && KagentTemplatePrefix(after[0].Name) == after[0].Name:
+	case len(after) == 1 && len(named) == 1 && len(parsed.Prefix) < kagentPrefixMax:
 		agent := after[0].Ref()
 		return KagentAttribution{Kind: KagentAgentSession, Agent: &agent, Revision: parsed.Revision, EarlierRevision: true}
 	}

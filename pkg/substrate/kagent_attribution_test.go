@@ -278,11 +278,40 @@ func TestKagentEarlierRevisionCreatedAfterTheAgentIsTheAgents(t *testing.T) {
 		t.Errorf("the earlier template = %+v", tpl)
 	}
 
-	// The same instant counts: a template can't be created before its Agent.
-	same := old
-	same.CreateTime = agentCreated
-	if got := NewKagentIndex([]KagentAgent{moved}, everyNamespace, []Template{same}).Actor(chat); got.Kind != KagentAgentSession {
-		t.Errorf("a template created with the Agent = %+v", got)
+	// Within kagentCreationMargin of the Agent's second-precision creation
+	// time, a recreated Agent's predecessor could have made it: a hint. From
+	// the margin on, it is the Agent's.
+	for _, tc := range []struct {
+		after time.Duration
+		want  string
+	}{{0, KagentUnattributed}, {time.Second, KagentUnattributed}, {2*time.Second - time.Millisecond, KagentUnattributed}, {2 * time.Second, KagentAgentSession}} {
+		tpl := old
+		tpl.CreateTime = agentCreated.Add(tc.after)
+		if got := NewKagentIndex([]KagentAgent{moved}, everyNamespace, []Template{tpl}).Actor(chat); got.Kind != tc.want {
+			t.Errorf("a template %v after the Agent = %+v, want %s", tc.after, got, tc.want)
+		}
+	}
+}
+
+// An Agent whose normalized name is exactly 50 characters isn't cut, but a
+// deleted Agent named it plus "-old" was cut to the same prefix: a hint. One
+// character shorter, no longer name can share the prefix but by hyphens.
+func TestKagentEarlierRevisionAtTheCutStaysAHint(t *testing.T) {
+	agentCreated := ago(48 * time.Hour)
+	for _, tc := range []struct {
+		length int
+		want   string
+	}{{kagentPrefixMax, KagentUnattributed}, {kagentPrefixMax - 1, KagentAgentSession}} {
+		a := KagentAgent{Namespace: "kagent", Name: strings.Repeat("a", tc.length), Created: agentCreated, DesiredRevision: spikeRevision, LatestSuccessfulRevision: spikeRevision}
+		if KagentTemplatePrefix(a.Name) != a.Name {
+			t.Fatalf("fixture: %d characters is cut", tc.length)
+		}
+		chat := session(kagentSession, a.Name+"-aa5e9426eb2e", StateSuspended)
+		tpl := Template{Atespace: "kagent", Name: chat.Template.Name, CreateTime: agentCreated.Add(time.Hour)}
+		got := NewKagentIndex([]KagentAgent{a}, everyNamespace, []Template{tpl}).Actor(chat)
+		if got.Kind != tc.want || tc.want == KagentUnattributed && got.Reason != KagentEarlierRevision {
+			t.Errorf("a %d-character name = %+v, want %s", tc.length, got, tc.want)
+		}
 	}
 }
 
