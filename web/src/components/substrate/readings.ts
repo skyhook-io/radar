@@ -1,5 +1,8 @@
 import { formatDuration, toneFillClass, type BadgeSeverity, type StatusTone } from '@skyhook-io/k8s-ui'
 import type {
+  KagentActor,
+  KagentAgentRef,
+  KagentAttribution,
   SubstrateAPITier,
   SubstrateActorState,
   SubstrateAttention,
@@ -286,9 +289,93 @@ export const KAGENT_RECOVER_STEP = 'This actor is a kagent session. Recover it t
 /** The step for a standalone kagent sandbox's actor, which has no chat to recover (pkg/substrate kagentSandboxStep). */
 export const KAGENT_SANDBOX_STEP = 'This actor runs a kagent sandbox. kagent manages it: delete the sandbox through kagent (its SandboxService) and create a new one; don’t move or revert it with kubectl ate.'
 
-/** kagent's step for an actor it runs: a sandbox's, else a session's. */
-export function kagentRecoverStep(kagent: { sandbox?: boolean }): string {
-  return kagent.sandbox ? KAGENT_SANDBOX_STEP : KAGENT_RECOVER_STEP
+/**
+ * kagent's step for an actor it runs: a sandbox's, else a session's, naming the Agent when the session
+ * is attributed to one (pkg/substrate KagentStepForAgent).
+ */
+export function kagentRecoverStep(k?: { sandbox?: boolean } & Partial<KagentActor>): string {
+  if (k?.sandbox || k?.kind === 'sandbox') return KAGENT_SANDBOX_STEP
+  return k?.kind === 'agentSession' && k.agent
+    ? KAGENT_RECOVER_STEP.replace('This actor is a kagent session', `This actor is a session of kagent Agent ${agentText(k.agent)}`)
+    : KAGENT_RECOVER_STEP
+}
+
+/** What Radar can't see of a kagent session: its chat. */
+export const KAGENT_OUTCOME = 'Conversation outcome: not visible to Radar. kagent keeps chats in its own database, and a suspended actor can follow a failed model call.'
+
+/** The API group of kagent's Agents. */
+export const KAGENT_GROUP = 'api.kagent.dev'
+
+export function agentText(a: KagentAgentRef): string {
+  return `${a.namespace}/${a.name}`
+}
+
+/** The /actors `agent` parameter for an Agent. */
+export function agentFilterValue(a: KagentAgentRef): string {
+  return agentText(a)
+}
+
+/** A kagent session's id as a table shows it: the UUID's first group. */
+export function shortSessionId(id: string): string {
+  return id.split('-')[0]
+}
+
+function agentList(agents: KagentAgentRef[] | undefined): string {
+  const names = (agents ?? []).map(agentText)
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+}
+
+/**
+ * Why a kagent session is tied to no Agent, in a sentence; atespace is the actor's, which kagent makes
+ * its Agent's namespace.
+ */
+export function kagentUnattributedText(k: KagentAttribution, atespace: string): string {
+  switch (k.reason) {
+    case 'earlierRevision':
+      return `Not tied to an Agent: its template is named for ${agentList(k.candidates) || 'an Agent'}, but for neither of its current revisions. It may be an earlier session of it, or of a deleted Agent with the same name.`
+    case 'agentNotReadable':
+      return `Not tied to an Agent: Radar can’t read kagent Agents in namespace ${atespace} for you.`
+    case 'noAgent':
+      return `Not tied to an Agent: no kagent Agent in namespace ${atespace} has a revision with this template.`
+    case 'ambiguous':
+      return `Not tied to an Agent: ${agentList(k.candidates)} each make a template with this name.`
+    case 'templateUnknown':
+      return 'Not tied to an Agent: kagent did not name its template.'
+    default:
+      return 'Not tied to an Agent.'
+  }
+}
+
+/** The failed golden snapshot step for a kagent Agent's template, which kagent owns and rebuilds (pkg/substrate KagentGoldenStep). */
+export function kagentGoldenStep(agent: KagentAgentRef, memory: boolean): string {
+  return memory
+    ? `Raise config.runtimeDefaults.memory in kagent’s Helm values; Agent ${agentText(agent)} then gets a new revision and template. Don’t recreate this one.`
+    : `Fix the cause on Agent ${agentText(agent)}: kagent owns this template and rebuilds it itself. The Agent’s Ready condition says when it retries.`
+}
+
+/** What a template is to kagent, in a few words; undefined for a template kagent doesn't own. */
+export function kagentTemplateText(k?: KagentAttribution): string | undefined {
+  if (k?.kind === 'agentSession' && k.agent) {
+    const which = k.newSessions ? 'the revision new sessions start on' : k.desired ? 'its desired revision, not yet the one new sessions start on' : 'a current revision'
+    return `kagent Agent ${agentText(k.agent)}’s template for ${which}`
+  }
+  return k?.kind === 'sandbox' ? 'A kagent sandbox’s template' : undefined
+}
+
+/** A short label for a table cell: the Agent, a sandbox, or why neither. */
+export function kagentCellText(k: KagentAttribution): string {
+  if (k.kind === 'agentSession' && k.agent) return agentText(k.agent)
+  if (k.kind === 'sandbox') return 'kagent sandbox'
+  switch (k.reason) {
+    case 'earlierRevision':
+      return 'earlier revision'
+    case 'agentNotReadable':
+      return 'Agent not readable'
+    case 'ambiguous':
+      return 'ambiguous'
+    default:
+      return 'no Agent'
+  }
 }
 
 /** `kubectl ate revert actor`, which returns a crashed actor to suspended at its newest stored snapshot. */
@@ -385,6 +472,7 @@ export function subjectLabel(s: SubstrateSubject, count?: number): string {
     case 'WorkerPool':
     case 'Pod':
     case 'Worker':
+    case 'Agent':
       return `${s.namespace ?? ''} / ${s.name ?? ''}`
     default:
       return s.name ?? ''
@@ -399,6 +487,7 @@ export const SUBJECT_KIND_LABEL: Record<SubstrateSubject['kind'], string> = {
   Node: 'Node',
   Pod: 'Pod',
   Actors: 'Actors',
+  Agent: 'Agent',
 }
 
 /** Coverage that is not a full read: counts over it are lower bounds, and its empty list proves nothing. */

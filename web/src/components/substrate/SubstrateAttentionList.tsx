@@ -45,7 +45,7 @@ function AffectedActors({ row, onOpen }: { row: SubstrateAttention; onOpen?: Ope
   )
 }
 
-const NAMESPACED = new Set<SubstrateSubject['kind']>(['WorkerPool', 'Pod', 'Worker'])
+const NAMESPACED = new Set<SubstrateSubject['kind']>(['WorkerPool', 'Pod', 'Worker', 'Agent'])
 
 /**
  * A link to what a row names. `short` drops the namespace from a pool, worker

@@ -12,16 +12,20 @@ const state = vi.hoisted(() => ({
   actorsError: null as unknown,
   lastQuery: undefined as SubstrateActorsQuery | undefined,
   logs: undefined as SubstrateActorLogs | undefined,
+  kagentSupport: 'supported' as 'supported' | 'unsupported' | 'unknown',
+  queryEnabled: true,
 }))
 
 vi.mock('../../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/client')>()),
   usePrometheusStatus: () => ({ data: { connected: false } }),
+  useRadarFeature: () => ({ support: state.kagentSupport, upgrade: null, gatedKey: [], guard: <T,>(r: () => Promise<T>) => r() }),
 }))
 vi.mock('../../api/substrateWorkspace', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/substrateWorkspace')>()),
-  useSubstrateActors: (q: SubstrateActorsQuery) => {
+  useSubstrateActors: (q: SubstrateActorsQuery, enabled = true) => {
     state.lastQuery = q
+    state.queryEnabled = enabled
     return { data: state.actors, error: state.actorsError, isLoading: false }
   },
   useSubstrateTemplates: () => ({ data: undefined }),
@@ -777,5 +781,81 @@ describe('Needs attention rows', () => {
     expect(html).toContain('Actors on it:')
     expect(html).toContain('>one<')
     expect(html).toContain('4 more →')
+  })
+})
+
+const helper = { namespace: 'kagent', name: 'k8s-helper' }
+const helperSession = (overrides: Partial<NonNullable<ReturnType<typeof actorRow>['kagent']>> = {}) =>
+  actorRow({ atespace: 'kagent', name: 'session-01a1faa2-b3e3-7dd3-ae2d-3114122d4291', template: { atespace: 'kagent', name: 'k8s-helper-aa5e9426eb2e' }, state: 'suspended', reason: undefined,
+    kagent: { sessionId: '01a1faa2-b3e3-7dd3-ae2d-3114122d4291', kind: 'agentSession', agent: helper, newSessions: true, desired: true, ...overrides } })
+
+describe('kagent sessions in the Actors list', () => {
+  it('shows the Agent column only where kagent is served, naming exact Agents and why the others are none', () => {
+    state.kagentSupport = 'supported'
+    state.actors = actors()
+    expect(plain(screen())).not.toContain('kagent Agent')
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [
+      helperSession(),
+      actorRow({ atespace: 'kagent', name: 'session-9b2d6c1e-4f3a-4e8b-9c7d-1a2b3c4d5e6f', kagent: { sessionId: '9b2d6c1e-4f3a-4e8b-9c7d-1a2b3c4d5e6f', kind: 'sandbox' } }),
+      actorRow({ atespace: 'kagent', name: 'session-2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', kagent: { sessionId: '2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', kind: 'unattributed', reason: 'earlierRevision', candidates: [helper] } }),
+      actorRow({ name: 'lit-0201' }),
+    ] })
+    const html = plain(screen())
+    expect(html).toContain('kagent Agent')
+    expect(html).toContain('kagent/k8s-helper')
+    expect(html).toContain('kagent sandbox')
+    expect(html).toContain('earlier revision')
+    // A hint names the Agent only in the hover, never in the cell.
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [
+      actorRow({ atespace: 'kagent', name: 'session-2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', template: { atespace: 'kagent', name: 'k8s-helper-0123456789ab' }, kagent: { sessionId: '2c4e6a8b-0d1f-4a3b-8c5d-7e9f0a1b2c3d', kind: 'unattributed', reason: 'earlierRevision', candidates: [helper] } }),
+    ] })
+    expect(plain(screen())).not.toContain('kagent/k8s-helper')
+  })
+
+  it('sends the agent and kagent filters only to a Radar that serves them', () => {
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [helperSession()] })
+    state.kagentSupport = 'supported'
+    screen('/substrate/actors?agent=kagent%2Fk8s-helper&kagent=unattributed')
+    expect(state.lastQuery).toMatchObject({ agent: 'kagent/k8s-helper', kagent: 'unattributed' })
+    expect(state.queryEnabled).toBe(true)
+
+    // An older Radar would ignore them and list every actor under the filter's name: nothing is asked.
+    state.kagentSupport = 'unsupported'
+    const html = plain(screen('/substrate/actors?agent=kagent%2Fk8s-helper'))
+    expect(state.lastQuery?.agent).toBeUndefined()
+    expect(state.queryEnabled).toBe(false)
+    expect(html).toContain('needs a newer Radar')
+    state.kagentSupport = 'supported'
+  })
+
+  it('names the Agent in the filter chip', () => {
+    state.actors = actors({ kagentAgents: { state: 'full' }, rows: [helperSession()] })
+    expect(plain(screen('/substrate/actors?agent=kagent%2Fk8s-helper'))).toContain('kagent Agent: kagent/k8s-helper')
+  })
+})
+
+describe('kagent session on the actor page', () => {
+  const session = '01a1faa2-b3e3-7dd3-ae2d-3114122d4291'
+  const page = (kagent?: NonNullable<ReturnType<typeof actorRow>['kagent']>) => {
+    const d = actorDetail()
+    const detail = { ...d, actor: { ...d.actor, atespace: 'kagent', name: `session-${session}`, kagent: { sessionId: session } }, row: { ...d.row, kagent }, attention: [] }
+    return plain(text(renderToStaticMarkup(<MemoryRouter><SubstrateActorOverview detail={detail} onOpenSubject={() => {}} /></MemoryRouter>)))
+  }
+
+  it('names the session and its Agent, says the chat isn’t visible, and names the Agent in the recovery step', () => {
+    const html = page({ sessionId: session, kind: 'agentSession', agent: helper, newSessions: true, desired: true })
+    expect(html).toContain('session 01a1faa2')
+    expect(html).toContain('kagent/k8s-helper')
+    expect(html).toContain('Conversation outcome: not visible to Radar')
+    expect(html).toContain('This actor is a session of kagent Agent kagent/k8s-helper. Recover it with Recover')
+  })
+
+  it('says in words why a session is tied to no Agent', () => {
+    expect(page({ sessionId: session, kind: 'unattributed', reason: 'agentNotReadable' })).toContain('Radar can’t read kagent Agents in namespace kagent for you')
+    expect(page({ sessionId: session, kind: 'unattributed', reason: 'earlierRevision', candidates: [helper] })).toContain('named for kagent/k8s-helper, but for neither of its current revisions')
+    // Without attribution (an older Radar), the session still shows, with kagent's step.
+    const older = page(undefined)
+    expect(older).toContain('session 01a1faa2')
+    expect(older).toContain('This actor is a kagent session.')
   })
 })

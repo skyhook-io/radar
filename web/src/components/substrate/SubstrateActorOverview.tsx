@@ -13,7 +13,7 @@ import {
   type SubstrateWorkerRow,
 } from '../../api/substrateWorkspace'
 import { type OpenSubject, SubjectLink } from './SubstrateAttentionList'
-import { ACTOR_STATE_LABEL, kagentRecoverStep, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, logsCommand, memoryKillText, attentionBannerVariant, bytesText, cpuText, durableText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, stateExtra, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
+import { ACTOR_STATE_LABEL, KAGENT_OUTCOME, kagentRecoverStep, kagentUnattributedText, shortSessionId, DISCARD_WHY, definitiveFailure, killLineLabel, killTie, logsCommand, memoryKillText, attentionBannerVariant, bytesText, cpuText, durableText, fidelityLabel, refText, resumeConditionSentence, resumeSentence, revertCommand, stateExtra, localTime, relativeTime, servingEvidence, splitReading, withoutRepeats, workerImpactTone } from './readings'
 import { ActorStateBadge, CommandChip, Term, Unread, When } from './shared'
 import { RefreshFailedNotice } from '../workspace/layout'
 
@@ -58,7 +58,7 @@ function CrashBanner({ detail, onOpenSubject }: { detail: SubstrateActorDetail; 
     : crashedRow
       ? { text: crashedRow.nextStep, command: crashedRow.command, thenCommand: crashedRow.thenCommand }
       : recovery && actor.kagent
-        ? { text: kagentRecoverStep(actor.kagent), command: undefined }
+        ? { text: kagentRecoverStep({ ...actor.kagent, ...detail.row.kagent }), command: undefined }
         : recovery
           ? { text: 'Fix the cause in Substrate’s message, then revert the actor.', command: revertCommand(actor) }
           : undefined
@@ -275,6 +275,34 @@ export function egressText(e: SubstrateEgress): { text: ReactNode; tone: 'neutra
   }
 }
 
+/**
+ * A kagent session: its id, the Agent it belongs to when Radar can say exactly (or why not), and what
+ * Radar can't see of it. A Radar without attribution sends no row.kagent; the session id still shows.
+ */
+function KagentFact({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject?: OpenSubject }) {
+  const session = detail.actor.kagent!
+  const k = detail.row.kagent
+  return (
+    <FactRow label="kagent">
+      <Tooltip content={`kagent session ${session.sessionId}`}>
+        <span>session <span className="font-mono">{shortSessionId(session.sessionId)}</span></span>
+      </Tooltip>
+      {k?.kind === 'agentSession' && k.agent ? (
+        <div>
+          Agent <SubjectLink subject={{ kind: 'Agent', namespace: k.agent.namespace, name: k.agent.name }} label={`${k.agent.namespace}/${k.agent.name}`} onOpen={onOpenSubject} withKind={false} />
+          {!k.newSessions && k.desired && <span className="text-xs text-theme-text-secondary"> · on its desired revision</span>}
+          {!k.newSessions && !k.desired && <span className="text-xs text-theme-text-secondary"> · on a current revision</span>}
+        </div>
+      ) : k?.kind === 'sandbox' ? (
+        <div className="text-xs text-theme-text-secondary">A kagent sandbox, from a SandboxTemplate: a standalone environment, not an Agent’s chat.</div>
+      ) : k ? (
+        <div className="text-xs text-theme-text-secondary">{kagentUnattributedText(k, detail.actor.atespace)}</div>
+      ) : null}
+      {k?.kind !== 'sandbox' && <div className="text-xs text-theme-text-tertiary">{KAGENT_OUTCOME}</div>}
+    </FactRow>
+  )
+}
+
 function AtAGlance({ detail, onOpenSubject }: { detail: SubstrateActorDetail; onOpenSubject?: OpenSubject }) {
   const { actor, row, template, worker } = detail
   const as = actor.assignment
@@ -297,6 +325,7 @@ function AtAGlance({ detail, onOpenSubject }: { detail: SubstrateActorDetail; on
               <div className="text-xs text-theme-text-secondary">{stateExtra(actor.state, row.reason)}</div>
             )}
           </FactRow>
+          {actor.kagent && <KagentFact detail={detail} onOpenSubject={onOpenSubject} />}
           <FactRow label={<Term term="template">Template</Term>}>
             <SubjectLink subject={{ kind: 'ActorTemplate', atespace: actor.template.atespace, name: actor.template.name }} onOpen={onOpenSubject} withKind={false} />
             {template && (template.cpuMillicores || template.memoryBytes) ? (
