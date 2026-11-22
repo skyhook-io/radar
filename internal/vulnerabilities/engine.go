@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -281,8 +282,25 @@ type unscannedAgg struct {
 	otherBuild map[WorkloadRef]bool
 }
 
+// limits bound the lists a response carries. The list endpoint and MCP read
+// with listLimits; an export reads with exportLimits, which lists everything.
+type limits struct {
+	rows, findingsPerImage, affectedPerCVE, cvesPerFix, workloadsPerRow, workloadsPerAffected int
+}
+
+var (
+	listLimits   = limits{MaxRows, MaxFindingsPerImage, MaxAffectedPerCVE, MaxCVEsPerFix, MaxWorkloadsPerRow, MaxWorkloadsPerAffected}
+	exportLimits = limits{math.MaxInt, math.MaxInt, math.MaxInt, math.MaxInt, math.MaxInt, math.MaxInt}
+)
+
 // rollup is the joined state the three pivots read.
 type rollup struct {
+	lim limits
+	// refsLeft is how many more workload references an export's rows may
+	// keep (see charge); budgeted is false for a list read, which caps its
+	// lists instead.
+	refsLeft        int
+	budgeted        bool
 	images          map[string]*imageAgg
 	targetImage     map[targetKey]string
 	targets         []target
@@ -304,13 +322,13 @@ type rollup struct {
 // join matches reports to targets and reads the chosen reports' findings
 // within MaxFindings. Images run by a workload first() names are read
 // first, so a narrowed view isn't starved by images it doesn't show.
-func join(ctx context.Context, items []*unstructured.Unstructured, targets []target, first func(WorkloadRef) bool) (*rollup, error) {
+func join(ctx context.Context, items []*unstructured.Unstructured, targets []target, first func(WorkloadRef) bool, lim limits) (*rollup, error) {
 	byOwner := map[ownerKey][]*target{}
 	for i := range targets {
 		o := targets[i].key.owner()
 		byOwner[o] = append(byOwner[o], &targets[i])
 	}
-	j := &rollup{images: map[string]*imageAgg{}, targetImage: map[targetKey]string{}, targets: targets, unscanned: map[string]*unscannedAgg{}, otherBuild: map[targetKey]bool{}}
+	j := &rollup{lim: lim, images: map[string]*imageAgg{}, targetImage: map[targetKey]string{}, targets: targets, unscanned: map[string]*unscannedAgg{}, otherBuild: map[targetKey]bool{}}
 	reports := make([]report, 0, len(items))
 	for _, u := range items {
 		if r, ok := reportHeader(u); ok {
@@ -480,20 +498,27 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 }
 
 // build is the response for the readable reports and the containers that
-// run, grouped by view and narrowed by f.
-func build(ctx context.Context, items []*unstructured.Unstructured, targets []target, view View, f Filter) (Response, error) {
+// run, grouped by view and narrowed by f. An export lists everything and
+// carries what its CSV needs beyond the wire shape (see exportExtras).
+func build(ctx context.Context, items []*unstructured.Unstructured, targets []target, view View, f Filter, export bool) (Response, error) {
 	var first func(WorkloadRef) bool
 	if f.Workload != nil {
 		first = newMatcher(f).wanted
 	}
-	j, err := join(ctx, items, targets, first)
+	lim := listLimits
+	if export {
+		lim = exportLimits
+	}
+	j, err := join(ctx, items, targets, first, lim)
 	if err != nil {
 		return Response{}, err
 	}
+	j.refsLeft, j.budgeted = maxExportRefs, export
 	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary()}
+	extras := &exportExtras{}
 	resp.WorkloadRuns = f.Workload != nil && slices.ContainsFunc(targets, func(t target) bool { return newMatcher(f).wanted(t.workload) })
 	if view != ViewSummary {
-		resp.Unscanned, resp.Coverage.UnscannedOmitted = capRows(j.unscannedRows(f))
+		resp.Unscanned, resp.Coverage.UnscannedOmitted = capRows(j.unscannedRows(f), lim.rows)
 	}
 	switch view {
 	case ViewSummary:
@@ -503,33 +528,48 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 		if err != nil {
 			return Response{}, err
 		}
-		resp.CVEs, resp.Coverage.RowsOmitted = capRows(cves)
+		resp.CVEs, resp.Coverage.RowsOmitted = capRows(cves, lim.rows)
 	case ViewFix:
 		fixes, err := j.fixes(ctx, f)
 		if err != nil {
 			return Response{}, err
 		}
-		resp.Fixes, resp.Coverage.RowsOmitted = capRows(fixes)
+		resp.Fixes, resp.Coverage.RowsOmitted = capRows(fixes, lim.rows)
 	case ViewWorkload:
-		rows, clean := j.workloads(f)
-		resp.Workloads, resp.Coverage.RowsOmitted = capRows(rows)
-		resp.CleanWorkloads, resp.Coverage.CleanOmitted = capRows(clean)
+		rows, clean, unscanned := j.workloads(f)
+		refs := make([]WorkloadRef, len(clean))
+		for i, w := range clean {
+			refs[i] = WorkloadRef{Kind: w.Kind, Group: w.Group, Namespace: w.Namespace, Name: w.Name}
+		}
+		resp.Workloads, resp.Coverage.RowsOmitted = capRows(rows, lim.rows)
+		resp.CleanWorkloads, resp.Coverage.CleanOmitted = capRows(refs, lim.rows)
+		if export {
+			extras.cleanWorkloads, extras.unscannedWorkloads = clean, unscanned
+		}
 	default:
 		resp.View = ViewImage
 		rows, clean := j.imageRows(f)
-		resp.Images, resp.Coverage.RowsOmitted = capRows(rows)
-		resp.Clean, resp.Coverage.CleanOmitted = capRows(clean)
+		resp.Images, resp.Coverage.RowsOmitted = capRows(rows, lim.rows)
+		resp.Clean, resp.Coverage.CleanOmitted = capRows(clean, lim.rows)
+	}
+	if export {
+		extras.images = j.imageMetas()
+		extras.unread = j.unreadRows(f)
+		resp.export = extras
+	}
+	if j.budgeted && j.refsLeft < 0 {
+		return Response{}, ErrExportTooLarge
 	}
 	resp.Coverage.InactiveReports = j.inactiveReports
 	resp.Coverage.Truncated = j.truncated
 	return resp, nil
 }
 
-func capRows[T any](rows []T) ([]T, int) {
-	if len(rows) <= MaxRows {
+func capRows[T any](rows []T, n int) ([]T, int) {
+	if len(rows) <= n {
 		return rows, 0
 	}
-	return rows[:MaxRows], len(rows) - MaxRows
+	return rows[:n], len(rows) - n
 }
 
 func (j *rollup) summary() Summary {
@@ -668,9 +708,12 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		if !r.unread && len(r.findings) == 0 && (m.query == "" || !rowMatched || m.narrowsFindings()) {
 			if rowMatched {
+				if !j.charge(len(workloads)) {
+					return rows, clean
+				}
 				clean = append(clean, CleanImage{
 					ID: r.imageID, Image: cmp.Or(r.image, r.digest), ScannedAt: r.scannedAt, Report: r.ref,
-					Workloads: m.listed(workloads, MaxWorkloadsPerRow), WorkloadsTotal: len(workloads),
+					Workloads: m.listed(workloads, j.lim.workloadsPerRow), WorkloadsTotal: len(workloads),
 				})
 			}
 			continue
@@ -690,12 +733,15 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 		row := Image{
 			ID: r.imageID, Image: cmp.Or(r.image, r.digest), Digest: r.digest, OS: r.os, ScannedAt: r.scannedAt,
 			Counts: counts, Fixable: fixable, Matching: len(matching), FindingsUnread: r.unread,
-			Workloads: m.listed(workloads, MaxWorkloadsPerRow), WorkloadsTotal: len(workloads),
+			Workloads: m.listed(workloads, j.lim.workloadsPerRow), WorkloadsTotal: len(workloads),
 			FindingsTotal: len(r.findings), Report: r.ref,
 		}
-		row.Findings = matching[:min(len(matching), MaxFindingsPerImage)]
+		row.Findings = matching[:min(len(matching), j.lim.findingsPerImage)]
 		if row.Findings == nil {
 			row.Findings = []Finding{}
+		}
+		if !j.charge(len(row.Workloads)) {
+			return rows, clean
 		}
 		rows = append(rows, row)
 	}
@@ -712,25 +758,27 @@ type cveAgg struct {
 	// images holds each affected image, true while every package the CVE
 	// is in there has a fixed version.
 	images map[string]bool
+	// at is where each kept image sits in row.Affected, so an export that
+	// keeps every image doesn't search the list for each finding.
+	at map[string]int
 }
 
-// keepAffected keeps the MaxAffectedPerCVE most widely run images, so a CVE
-// in thousands of images holds a bounded list that still shows where it
-// runs most.
-func (c *cveAgg) keepAffected(a CVEImage) {
+// keepAffected keeps the n most widely run images (MaxAffectedPerCVE for a
+// list read), so a CVE in thousands of images holds a bounded list that
+// still shows where it runs most.
+func (c *cveAgg) keepAffected(a CVEImage, n int) {
 	// An image's findings arrive together, so a second package of the same
 	// image joins its entry.
 	if n := len(c.row.Affected); n > 0 && c.row.Affected[n-1].ImageID == a.ImageID {
 		c.row.Affected[n-1].Packages = append(c.row.Affected[n-1].Packages, a.Packages...)
 		return
 	}
-	for i := range c.row.Affected {
-		if c.row.Affected[i].ImageID == a.ImageID {
-			c.row.Affected[i].Packages = append(c.row.Affected[i].Packages, a.Packages...)
-			return
-		}
+	if i, ok := c.at[a.ImageID]; ok {
+		c.row.Affected[i].Packages = append(c.row.Affected[i].Packages, a.Packages...)
+		return
 	}
-	if len(c.row.Affected) < MaxAffectedPerCVE {
+	if len(c.row.Affected) < n {
+		c.at[a.ImageID] = len(c.row.Affected)
 		c.row.Affected = append(c.row.Affected, a)
 		return
 	}
@@ -741,6 +789,8 @@ func (c *cveAgg) keepAffected(a CVEImage) {
 		}
 	}
 	if a.WorkloadsTotal > c.row.Affected[least].WorkloadsTotal {
+		delete(c.at, c.row.Affected[least].ImageID)
+		c.at[a.ImageID] = least
 		c.row.Affected[least] = a
 	}
 }
@@ -797,7 +847,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		}
 		imageWorkloads[r.imageID] = workloads
 		distinct := withoutContainers(workloads)
-		listed := m.listed(distinct, MaxWorkloadsPerAffected)
+		listed := m.listed(distinct, j.lim.workloadsPerAffected)
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		// Whether an upgrade clears each CVE here: every package it's in has
 		// a fixed version, whichever findings the filters keep.
@@ -812,7 +862,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			}
 			c := byID[fd.ID]
 			if c == nil {
-				c = &cveAgg{row: CVE{ID: fd.ID, Severity: fd.Severity}, packages: map[string]bool{}, images: map[string]bool{}}
+				c = &cveAgg{row: CVE{ID: fd.ID, Severity: fd.Severity}, packages: map[string]bool{}, images: map[string]bool{}, at: map[string]int{}}
 				byID[fd.ID] = c
 			}
 			if severityRank(fd.Severity) > severityRank(c.row.Severity) {
@@ -826,11 +876,14 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			c.row.Fixable = c.row.Fixable || fd.FixedVersion != ""
 			c.packages[fd.Package] = true
 			c.images[r.imageID] = fixedHere[fd.ID]
+			if _, kept := c.at[r.imageID]; !kept && !j.charge(len(listed)) {
+				return nil, ErrExportTooLarge
+			}
 			c.keepAffected(CVEImage{
 				ImageID: r.imageID, Image: cmp.Or(r.image, r.digest),
 				Packages:  []AffectedPackage{{Package: fd.Package, InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion, FixTarget: fd.FixTarget}},
 				Workloads: listed, WorkloadsTotal: len(distinct),
-			})
+			}, j.lim.affectedPerCVE)
 		}
 	}
 	workloadsBySet := map[string]int{}
@@ -851,7 +904,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		slices.SortStableFunc(c.row.Affected, func(a, b CVEImage) int {
 			return cmp.Or(cmp.Compare(b.WorkloadsTotal, a.WorkloadsTotal), cmp.Compare(a.Image, b.Image))
 		})
-		c.row.Affected = c.row.Affected[:min(len(c.row.Affected), MaxAffectedPerCVE)]
+		c.row.Affected = c.row.Affected[:min(len(c.row.Affected), j.lim.affectedPerCVE)]
 		rows = append(rows, c.row)
 	}
 	slices.SortFunc(rows, func(a, b CVE) int {
@@ -868,8 +921,12 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 
 // workloads lists the running workloads. Workloads whose every container is
 // scanned and clean are listed apart, unless a search names them; a workload
-// with an unscanned or unread container is never clean.
-func (j *rollup) workloads(f Filter) (rows []Workload, clean []WorkloadRef) {
+// with an unscanned or unread container is never clean. unscanned are the
+// workloads the filters left out whose findings are partly unknown: a
+// severity or fix filter's when they run an image no report covers, and any
+// filter's or search's when an image's findings went unread. An export
+// still lists them.
+func (j *rollup) workloads(f Filter) (rows, clean, unscanned []Workload) {
 	m := newMatcher(f)
 	type wAgg struct {
 		row    Workload
@@ -920,7 +977,7 @@ func (j *rollup) workloads(f Filter) (rows []Workload, clean []WorkloadRef) {
 		}
 	}
 	rows = []Workload{}
-	clean = []WorkloadRef{}
+	clean = []Workload{}
 	for _, ref := range order {
 		a := byRef[ref]
 		if !m.workloadKept([]WorkloadRef{ref}) {
@@ -935,9 +992,12 @@ func (j *rollup) workloads(f Filter) (rows []Workload, clean []WorkloadRef) {
 			}
 		}
 		rowMatched := m.rowMatches(strings.Join(images, " "), []WorkloadRef{ref})
+		slices.SortFunc(a.row.Containers, func(x, y WorkloadContainer) int {
+			return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.Image, y.Image))
+		})
 		if allClean && (m.query == "" || !rowMatched || m.narrowsFindings()) {
 			if rowMatched {
-				clean = append(clean, ref)
+				clean = append(clean, a.row)
 			}
 			continue
 		}
@@ -958,20 +1018,26 @@ func (j *rollup) workloads(f Filter) (rows []Workload, clean []WorkloadRef) {
 			}
 		}
 		if !kept {
+			// Findings no report holds (an unscanned image) might match the
+			// filter; ones past the findings budget might match the search too.
+			unscannedHere := rowMatched && slices.ContainsFunc(a.row.Containers, func(c WorkloadContainer) bool { return !c.Scanned })
+			unread := slices.ContainsFunc(a.row.Containers, func(c WorkloadContainer) bool { return c.FindingsUnread })
+			if unscannedHere || unread {
+				unscanned = append(unscanned, a.row)
+			}
 			continue
 		}
-		slices.SortFunc(a.row.Containers, func(x, y WorkloadContainer) int {
-			return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.Image, y.Image))
-		})
 		rows = append(rows, a.row)
 	}
 	slices.SortStableFunc(rows, func(a, b Workload) int {
 		return cmp.Or(compareCounts(b.Counts, a.Counts), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 	})
-	slices.SortFunc(clean, func(a, b WorkloadRef) int {
+	byName := func(a, b Workload) int {
 		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
-	})
-	return rows, clean
+	}
+	slices.SortFunc(clean, byName)
+	slices.SortFunc(unscanned, byName)
+	return rows, clean, unscanned
 }
 
 func totalCount(c Counts) int { return c.Critical + c.High + c.Medium + c.Low + c.Unknown }
@@ -990,7 +1056,10 @@ func (j *rollup) unscannedRows(f Filter) []Unscanned {
 			continue
 		}
 		otherBuild := slices.ContainsFunc(slices.Collect(maps.Keys(u.otherBuild)), func(w WorkloadRef) bool { return m.f.Workload == nil || m.wanted(w) })
-		rows = append(rows, Unscanned{Image: u.ref, OtherBuildScanned: otherBuild, Workloads: m.listed(workloads, MaxWorkloadsPerRow), WorkloadsTotal: len(workloads)})
+		if !j.charge(len(workloads)) {
+			return rows
+		}
+		rows = append(rows, Unscanned{Image: u.ref, OtherBuildScanned: otherBuild, Workloads: m.listed(workloads, j.lim.workloadsPerRow), WorkloadsTotal: len(workloads)})
 	}
 	slices.SortFunc(rows, func(a, b Unscanned) int { return cmp.Compare(a.Image, b.Image) })
 	return rows

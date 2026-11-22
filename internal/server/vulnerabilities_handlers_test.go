@@ -2,8 +2,15 @@ package server
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,5 +143,146 @@ func TestVulnerabilitiesFollowReportRBAC(t *testing.T) {
 
 	if status, _ := getVulnerabilities(t, env, "/api/vulnerabilities?view=nope", "alice"); status != http.StatusBadRequest {
 		t.Fatalf("bad view: %d", status)
+	}
+}
+
+// The export reads through the same gate as the list: what bob can't read is
+// a row saying so, never a shorter file that looks complete.
+func TestVulnerabilitiesExport(t *testing.T) {
+	setupVulnerabilityReports(t)
+	env := newAuthTestServer(t)
+	g, res := vulnerabilityReportGVR.Group, vulnerabilityReportGVR.Resource
+	bob := &auth.UserPermissions{AllowedNamespaces: []string{"legacy", "other"}}
+	bob.SetCanI("list", g, res, "", false)
+	bob.SetCanI("list", g, res, "legacy", true)
+	bob.SetCanI("list", g, res, "other", false)
+	env.srv.permCache.Set("bob", nil, bob)
+
+	resp := env.authGet(t, "/api/vulnerabilities/export?view=cve", "bob", "")
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "text/csv; charset=utf-8" {
+		t.Fatalf("%d %v", resp.StatusCode, resp.Header)
+	}
+	// Sent gzipped, the gzip trailer is what catches a cut transfer;
+	// otherwise the length.
+	if !resp.Uncompressed && resp.Header.Get("Content-Length") != strconv.Itoa(len(body)) {
+		t.Fatalf("length: %v", resp.Header)
+	}
+	records, err := csv.NewReader(strings.NewReader(body)).ReadAll()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, body)
+	}
+	if !slices.Equal(records[0], vulnerabilities.ExportColumns[vulnerabilities.ViewCVE]) || len(records) != 3 {
+		t.Fatalf("records: %q", records)
+	}
+	col := func(row []string, name string) string { return row[slices.Index(records[0], name)] }
+	if col(records[1], "cve") != "CVE-2026-0001" || col(records[1], "running_in") != "Pod legacy/web" {
+		t.Fatalf("row: %q", records[1])
+	}
+	if col(records[2], "status") != vulnerabilities.StatusNoAccess || col(records[2], "running_in") != "other" {
+		t.Fatalf("gap row: %q", records[2])
+	}
+
+	// With no namespace to read, the file is the one row saying so.
+	carol := &auth.UserPermissions{AllowedNamespaces: []string{}}
+	env.srv.permCache.Set("carol", nil, carol)
+	resp = env.authGet(t, "/api/vulnerabilities/export?view=workload", "carol", "")
+	body = readBody(t, resp)
+	if resp.StatusCode != http.StatusOK || body != "cluster,scanned,status,kind,namespace,workload,critical,high,medium,low,unrated,with_a_fix,containers\r\n"+k8s.GetClusterName()+",,no access,,*,,,,,,,,\r\n" {
+		t.Fatalf("carol: %d %q", resp.StatusCode, body)
+	}
+
+	// One export at a time on a Radar.
+	vulnerabilityExportSlot <- struct{}{}
+	resp = env.authGet(t, "/api/vulnerabilities/export?view=cve", "bob", "")
+	busy := readBody(t, resp)
+	<-vulnerabilityExportSlot
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(busy, "Another CSV export is running") {
+		t.Fatalf("second export: %d %s", resp.StatusCode, busy)
+	}
+	if resp := env.authGet(t, "/api/vulnerabilities/export?view=cve", "bob", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("after the first finished: %d", resp.StatusCode)
+	}
+
+	for _, path := range []string{"/api/vulnerabilities/export", "/api/vulnerabilities/export?view=summary", "/api/vulnerabilities/export?view=nope"} {
+		if resp := env.authGet(t, path, "bob", ""); resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s: %d", path, resp.StatusCode)
+		}
+	}
+}
+
+// stalledWriter is a client that stops reading: a write blocks until the
+// handler's write deadline passes.
+type stalledWriter struct {
+	header   http.Header
+	deadline time.Time
+}
+
+func (w *stalledWriter) Header() http.Header { return w.header }
+func (w *stalledWriter) WriteHeader(int)     {}
+func (w *stalledWriter) SetWriteDeadline(t time.Time) error {
+	w.deadline = t
+	return nil
+}
+func (w *stalledWriter) Write([]byte) (int, error) {
+	if w.deadline.IsZero() {
+		return 0, errors.New("no write deadline was set")
+	}
+	time.Sleep(time.Until(w.deadline))
+	return 0, os.ErrDeadlineExceeded
+}
+
+// A download whose client stops reading gives up the slot at its deadline,
+// and the next export runs.
+func TestVulnerabilitiesExportStalledReader(t *testing.T) {
+	setupVulnerabilityReports(t)
+	env := newAuthTestServer(t)
+	g, res := vulnerabilityReportGVR.Group, vulnerabilityReportGVR.Resource
+	alice := &auth.UserPermissions{AllowedNamespaces: []string{"legacy", "other"}}
+	alice.SetCanI("list", g, res, "", true)
+	env.srv.permCache.Set("alice", nil, alice)
+	saved := vulnerabilityExportDeadline
+	vulnerabilityExportDeadline = 200 * time.Millisecond
+	t.Cleanup(func() { vulnerabilityExportDeadline = saved })
+
+	req := httptest.NewRequest("GET", "/api/vulnerabilities/export?view=cve", nil)
+	req.Header.Set("X-Forwarded-User", "alice")
+	stalled := &stalledWriter{header: http.Header{}}
+	done := make(chan struct{})
+	go func() { env.ts.Config.Handler.ServeHTTP(stalled, req); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stalled download kept running past its deadline")
+	}
+	if stalled.deadline.IsZero() || len(vulnerabilityExportSlot) != 0 {
+		t.Fatalf("deadline %v, slots held %d", stalled.deadline, len(vulnerabilityExportSlot))
+	}
+	if resp := env.authGet(t, "/api/vulnerabilities/export?view=cve", "alice", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the next export: %d %s", resp.StatusCode, readBody(t, resp))
+	}
+}
+
+// An export that can't be prepared in time says so and frees the slot.
+func TestVulnerabilitiesExportPrepareTimeout(t *testing.T) {
+	setupVulnerabilityReports(t)
+	env := newAuthTestServer(t)
+	g, res := vulnerabilityReportGVR.Group, vulnerabilityReportGVR.Resource
+	alice := &auth.UserPermissions{AllowedNamespaces: []string{"legacy", "other"}}
+	alice.SetCanI("list", g, res, "", true)
+	env.srv.permCache.Set("alice", nil, alice)
+	saved := vulnerabilityExportPrepareTimeout
+	vulnerabilityExportPrepareTimeout = time.Nanosecond
+	resp := env.authGet(t, "/api/vulnerabilities/export?view=cve", "alice", "")
+	body := readBody(t, resp)
+	vulnerabilityExportPrepareTimeout = saved
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"error_code":"export_timed_out"`) || !strings.Contains(body, "took too long") {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	if len(vulnerabilityExportSlot) != 0 {
+		t.Fatal("the slot is still held")
+	}
+	if resp := env.authGet(t, "/api/vulnerabilities/export?view=cve", "alice", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("the next export: %d %s", resp.StatusCode, readBody(t, resp))
 	}
 }
