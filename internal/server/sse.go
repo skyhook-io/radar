@@ -197,7 +197,7 @@ func (b *SSEBroadcaster) Start() {
 	b.registerCRDDiscoveryCallback()
 
 	go b.run()
-	go b.topologyWorker()
+	go b.topologyWorker(topologyRetryDelay)
 	go b.watchResourceChanges()
 	go b.watchDeferredSync()
 	go b.heartbeat()
@@ -218,12 +218,12 @@ func (b *SSEBroadcaster) requestTopologyBroadcast() {
 // both queue their own trigger, so this only covers the window where neither
 // fires — but the token it consumed stood for every request that coalesced into
 // it, so dropping it silently strands the graph until the next cluster change.
-const topologyRetryDelay = 2 * time.Second
+var topologyRetryDelay = 2 * time.Second
 
 // topologyWorker owns every broadcast build, so concurrent triggers (debounce
 // fire, context switch, CRD discovery) coalesce into a single build instead of
 // racing several multi-second ones.
-func (b *SSEBroadcaster) topologyWorker() {
+func (b *SSEBroadcaster) topologyWorker(retryDelay time.Duration) {
 	for {
 		select {
 		case <-b.stopCh:
@@ -235,7 +235,7 @@ func (b *SSEBroadcaster) topologyWorker() {
 			select {
 			case <-b.stopCh:
 				return
-			case <-time.After(topologyRetryDelay):
+			case <-time.After(retryDelay):
 				b.requestTopologyBroadcast()
 			}
 		}
