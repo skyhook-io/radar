@@ -186,10 +186,14 @@ func appPruningFixture() (typed []runtime.Object, dynamic []*unstructured.Unstru
 			"volumeSnapshotClassName": "csi-snapclass",
 			"volumeSnapshotRef":       map[string]any{"namespace": "prod", "name": "daily", "uid": "uid-1"},
 		}),
-		withStatus(object("snapshot.storage.k8s.io/v1", "VolumeSnapshot", "daily", map[string]any{
-			"volumeSnapshotClassName": "csi-snapclass",
-			"source":                  map[string]any{"persistentVolumeClaimName": "api-data"},
-		}), map[string]any{"boundVolumeSnapshotContentName": "snapcontent-1"}),
+		withStatus(func() *unstructured.Unstructured {
+			u := object("snapshot.storage.k8s.io/v1", "VolumeSnapshot", "daily", map[string]any{
+				"volumeSnapshotClassName": "csi-snapclass",
+				"source":                  map[string]any{"persistentVolumeClaimName": "api-data"},
+			})
+			u.SetUID("uid-1")
+			return u
+		}(), map[string]any{"boundVolumeSnapshotContentName": "snapcontent-1"}),
 	}
 	for _, kind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"} {
 		dynamic = append(dynamic, object("gateway.networking.k8s.io/v1", kind, strings.ToLower(kind), map[string]any{"parentRefs": []any{map[string]any{"name": "gateway"}}, "rules": []any{map[string]any{"backendRefs": toAPI}}}))

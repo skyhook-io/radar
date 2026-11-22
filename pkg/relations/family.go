@@ -4,7 +4,9 @@ import (
 	"cmp"
 	"slices"
 
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -101,6 +103,10 @@ func (f *Family) source(gk resourceid.GroupKind) int {
 type Declaration struct {
 	Target resourceid.Ref
 	Path   string
+	// TargetUID, when set, binds the declaration to a specific target
+	// incarnation (metadata.uid). An object at Target with another UID is
+	// treated as absent rather than a match.
+	TargetUID types.UID
 	// Or are the same reference in older API groups the controller may also
 	// resolve it from, in the order it tries them after Target. The
 	// declaration names the first that exists, but one that exists only in
@@ -203,19 +209,26 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 			return a
 		}
 	}
-	byTarget := map[resourceid.Ref]int{}
+	type declarationKey struct {
+		target resourceid.Ref
+		uid    types.UID
+	}
+	byTarget := map[declarationKey]int{}
 	var candidates [][]resourceid.Ref
+	var targetUIDs []types.UID
 	err := f.Declared(obj, func(d Declaration) {
 		c := d.candidates(f, source)
 		if len(c) == 0 {
 			return
 		}
-		i, seen := byTarget[c[0]]
+		key := declarationKey{target: c[0], uid: d.TargetUID}
+		i, seen := byTarget[key]
 		if !seen {
 			i = len(a.Declared)
-			byTarget[c[0]] = i
+			byTarget[key] = i
 			a.Declared = append(a.Declared, Declared{Ref: c[0]})
 			candidates = append(candidates, c)
+			targetUIDs = append(targetUIDs, d.TargetUID)
 		}
 		if !slices.Contains(a.Declared[i].Paths, d.Path) {
 			a.Declared[i].Paths = append(a.Declared[i].Paths, d.Path)
@@ -225,7 +238,7 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 		a.Coverage.addGap(ownership.Gap{Kind: subject.GroupKind(), Namespace: subject.Namespace, Reason: readreason.ReadError})
 	}
 	for j := range a.Declared {
-		v.readTarget(&a.Declared[j], candidates[j], &a.Coverage)
+		v.readTarget(&a.Declared[j], candidates[j], targetUIDs[j], &a.Coverage)
 	}
 	slices.SortFunc(a.Declared, func(x, y Declared) int {
 		return cmp.Or(cmp.Compare(x.Ref.Group, y.Ref.Group), cmp.Compare(x.Ref.Kind, y.Ref.Kind), cmp.Compare(x.Ref.Name, y.Ref.Name))
@@ -240,7 +253,7 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 // d names the candidate the search stopped at, or, absent when none
 // exists, the first candidate the cluster serves. One found only after
 // served candidates that lack it is unread, with the legacyGroupOnly gap.
-func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage) {
+func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, targetUID types.UID, c *Coverage) {
 	served := v.served(candidates)
 	d.Ref, d.State = served[0], TargetAbsent
 	for i, r := range served {
@@ -257,6 +270,9 @@ func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage)
 		}
 		switch read := v.session.Object(r); read.State {
 		case ownership.Present:
+			if targetUID != "" && read.Object.UID != targetUID {
+				continue
+			}
 			d.Ref, d.State = r, TargetPresent
 			if i > 0 {
 				d.State, d.Gap = TargetUnread, legacyGroupOnly(r)
@@ -351,8 +367,16 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 	if !f.target(subject.GroupKind()) {
 		return a
 	}
-	if _, held := v.heldSubject(subject, fetched, &a.Coverage); !held {
+	heldObj, held := v.heldSubject(subject, fetched, &a.Coverage)
+	if !held {
 		return a
+	}
+	var subjectUID types.UID
+	var hasSubjectObj bool
+	if heldObj != nil {
+		if m, err := apimeta.Accessor(heldObj); err == nil {
+			subjectUID, hasSubjectObj = m.GetUID(), true
+		}
 	}
 	// A namespaced target's sources are in its namespace; a cluster-scoped
 	// one's, or a CrossNamespace family's, can be anywhere.
@@ -368,6 +392,9 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 			var paths []string
 			err := f.Declared(o.Object, func(d Declaration) {
 				if slices.Contains(paths, d.Path) || d.Target != subject && !slices.Contains(d.Or, subject) {
+					return
+				}
+				if hasSubjectObj && d.TargetUID != "" && d.TargetUID != subjectUID {
 					return
 				}
 				if len(d.Or) == 0 || v.resolvesTo(d.candidates(f, source), subject, own) {

@@ -36,6 +36,15 @@ func TestVolumeSnapshotRelationshipsProjectBothDirectionsAndWithholdDeniedTarget
 			},
 		},
 	})
+	staleVSC := projectionCR(snapGroup, "VolumeSnapshotContent", "", "snapcontent-stale", map[string]any{
+		"spec": map[string]any{
+			"volumeSnapshotRef": map[string]any{
+				"namespace": "shop",
+				"name":      "daily",
+				"uid":       "uid-old",
+			},
+		},
+	})
 	vs := projectionCR(snapGroup, "VolumeSnapshot", "shop", "daily", map[string]any{
 		"spec": map[string]any{
 			"volumeSnapshotClassName": "csi-snapclass",
@@ -45,12 +54,16 @@ func TestVolumeSnapshotRelationshipsProjectBothDirectionsAndWithholdDeniedTarget
 			"boundVolumeSnapshotContentName": "snapcontent-1",
 		},
 	})
+	vs.SetUID("uid-1")
 
-	session := newProjectionSession(t, class, sourcePVC, restoredPVC, vsc, vs)
+	session := newProjectionSession(t, class, sourcePVC, restoredPVC, vsc, staleVSC, vs)
 
 	vsRel := projectionAnswer(t, session, vs, ownership.Unrestricted(), ownership.Unrestricted())
 	if !slices.Contains(vsRel.Dependencies, refOf(projectionRef(vsc))) || !slices.Contains(vsRel.Dependencies, refOf(projectionRef(class))) {
 		t.Fatalf("VolumeSnapshot Dependencies = %+v; want bound content and class", vsRel.Dependencies)
+	}
+	if slices.Contains(vsRel.Dependencies, refOf(projectionRef(staleVSC))) {
+		t.Fatalf("retained VolumeSnapshotContent for an old UID leaked into replacement snapshot Dependencies: %+v", vsRel.Dependencies)
 	}
 	if slices.Contains(vsRel.Dependents, refOf(projectionRef(vsc))) {
 		t.Fatalf("VolumeSnapshotContent should not duplicate into VolumeSnapshot Dependents: %+v", vsRel.Dependents)
@@ -68,6 +81,11 @@ func TestVolumeSnapshotRelationshipsProjectBothDirectionsAndWithholdDeniedTarget
 	}
 	if !slices.Contains(vscRel.Dependencies, refOf(projectionRef(class))) {
 		t.Fatalf("VolumeSnapshotContent Dependencies = %+v; want class", vscRel.Dependencies)
+	}
+
+	staleRel := projectionAnswer(t, session, staleVSC, ownership.Unrestricted(), ownership.Unrestricted())
+	if slices.Contains(staleRel.Dependents, refOf(projectionRef(vs))) {
+		t.Fatalf("retained VolumeSnapshotContent should not link to replacement snapshot with another UID: %+v", staleRel.Dependents)
 	}
 
 	sourceRel := projectionAnswer(t, session, sourcePVC, ownership.Unrestricted(), ownership.Unrestricted())

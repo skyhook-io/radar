@@ -53,6 +53,7 @@ func TestVolumeSnapshotsLinkObservedBindingsClassesAndSourcePVC(t *testing.T) {
 		},
 		map[string]any{"boundVolumeSnapshotContentName": "snapcontent-1"},
 	)
+	vs.SetUID("uid-123")
 
 	v := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{class, pvc, vsc, vs}}}, ownership.Unrestricted())
 
@@ -65,18 +66,61 @@ func TestVolumeSnapshotsLinkObservedBindingsClassesAndSourcePVC(t *testing.T) {
 	}
 
 	vscRefs := v.References(VolumeSnapshots, refOf(vsc), vsc)
-	if len(vscRefs.Declared) != 2 || vscRefs.Declared[0].Ref != refOf(vs) || vscRefs.Declared[1].Ref != refOf(class) {
+	if len(vscRefs.Declared) != 2 ||
+		vscRefs.Declared[0].Ref != refOf(vs) || vscRefs.Declared[0].State != TargetPresent ||
+		vscRefs.Declared[1].Ref != refOf(class) || vscRefs.Declared[1].State != TargetPresent {
 		t.Fatalf("VolumeSnapshotContent references = %+v", vscRefs.Declared)
 	}
 
 	if r := referrerRefs(v.Referrers(VolumeSnapshots, refOf(vsc), nil)); len(r) != 1 || r[0] != refOf(vs) {
 		t.Errorf("VolumeSnapshotContent referrers = %v; want [%v]", r, refOf(vs))
 	}
+	if r := referrerRefs(v.Referrers(VolumeSnapshots, refOf(vs), nil)); len(r) != 1 || r[0] != refOf(vsc) {
+		t.Errorf("VolumeSnapshot referrers = %v; want [%v]", r, refOf(vsc))
+	}
 	if r := referrerRefs(v.Referrers(VolumeSnapshots, refOf(pvc), nil)); len(r) != 1 || r[0] != refOf(vs) {
 		t.Errorf("source PVC referrers = %v; want [%v]", r, refOf(vs))
 	}
 	if r := referrerRefs(v.Referrers(VolumeSnapshots, refOf(class), nil)); len(r) != 2 {
 		t.Errorf("VolumeSnapshotClass referrers = %v; want both snapshot and content", r)
+	}
+}
+
+func TestVolumeSnapshotsIgnoreStaleRetainedContentForReplacementSnapshot(t *testing.T) {
+	retainedVSC := vscObject("snapcontent-old", map[string]any{
+		"volumeSnapshotRef": map[string]any{
+			"namespace": "shop",
+			"name":      "daily",
+			"uid":       "uid-old",
+		},
+	})
+	currentVSC := vscObject("snapcontent-new", map[string]any{
+		"volumeSnapshotRef": map[string]any{
+			"namespace": "shop",
+			"name":      "daily",
+			"uid":       "uid-new",
+		},
+	})
+	replacementVS := vsObject("shop", "daily",
+		map[string]any{},
+		map[string]any{"boundVolumeSnapshotContentName": "snapcontent-new"},
+	)
+	replacementVS.SetUID("uid-new")
+
+	v := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{retainedVSC, currentVSC, replacementVS}}}, ownership.Unrestricted())
+
+	staleRefs := v.References(VolumeSnapshots, refOf(retainedVSC), retainedVSC)
+	if len(staleRefs.Declared) != 1 || staleRefs.Declared[0].Ref != refOf(replacementVS) || staleRefs.Declared[0].State != TargetAbsent {
+		t.Fatalf("retained content referencing old UID should treat replacement snapshot as absent: %+v", staleRefs.Declared)
+	}
+
+	currentRefs := v.References(VolumeSnapshots, refOf(currentVSC), currentVSC)
+	if len(currentRefs.Declared) != 1 || currentRefs.Declared[0].Ref != refOf(replacementVS) || currentRefs.Declared[0].State != TargetPresent {
+		t.Fatalf("bound content referencing current UID should resolve present: %+v", currentRefs.Declared)
+	}
+
+	if r := referrerRefs(v.Referrers(VolumeSnapshots, refOf(replacementVS), nil)); !slices.Equal(r, []resourceid.Ref{refOf(currentVSC)}) {
+		t.Fatalf("replacement snapshot referrers = %v; want only [%v]", r, refOf(currentVSC))
 	}
 }
 

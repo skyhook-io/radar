@@ -49,7 +49,11 @@ func (c cluster) Borrow(ref resourceid.Ref) (runtime.Object, ownership.ObjectRea
 	}
 	for _, obj := range c.objects {
 		if refOf(obj) == ref {
-			return obj, ownership.ObjectRead{State: ownership.Present}
+			read := ownership.ObjectRead{State: ownership.Present}
+			if m, err := apimeta.Accessor(obj); err == nil {
+				read.Object = ownership.Observe(ref, m)
+			}
+			return obj, read
 		}
 	}
 	return nil, ownership.ObjectRead{State: ownership.Absent}

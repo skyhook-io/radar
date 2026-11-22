@@ -4,6 +4,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -66,8 +67,9 @@ var VolumeSnapshots = &Family{
 			refUID, _, _ := unstructured.NestedString(u.Object, "spec", "volumeSnapshotRef", "uid")
 			if refName != "" && refNS != "" && refUID != "" {
 				visit(Declaration{
-					Target: resourceid.NewRef(volumeSnapshotGroup, "VolumeSnapshot", refNS, refName),
-					Path:   "spec.volumeSnapshotRef",
+					Target:    resourceid.NewRef(volumeSnapshotGroup, "VolumeSnapshot", refNS, refName),
+					Path:      "spec.volumeSnapshotRef",
+					TargetUID: types.UID(refUID),
 				})
 			}
 			if class, _, _ := unstructured.NestedString(u.Object, "spec", "volumeSnapshotClassName"); class != "" {
