@@ -83,4 +83,12 @@ describe('Logging operator drawers', () => {
     const html = text(renderToString(<LoggingRenderer data={{ apiVersion: 'logging.banzaicloud.io/v1beta1', kind: 'Logging', metadata: { name: 'root' }, spec: { controlNamespace: 'logging-system', fluentd: {} } }} />))
     expect(html).toContain('logging-system')
   })
+  it('never says the aggregator is not configured, since it may come from another resource', () => {
+    const logging = (spec: any) => text(renderToString(<LoggingRenderer data={{ apiVersion: 'logging.banzaicloud.io/v1beta1', kind: 'Logging', metadata: { name: 'root' }, spec }} />))
+    expect(logging({ fluentd: {} })).toContain('Fluentd, configured in this Logging')
+    expect(logging({ syslogNG: {} })).toContain('syslog-ng, configured in this Logging')
+    const unset = logging({})
+    expect(unset).toContain('Not set in this Logging (may come from a FluentdConfig or SyslogNGConfig)')
+    expect(unset).not.toContain('Not configured')
+  })
 })

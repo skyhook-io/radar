@@ -29,7 +29,7 @@ export function LoggingRenderer({ data }: Props) {
       <PropertyList>
         <Property label="Control namespace" value={data.spec?.controlNamespace || 'Not set'} />
         <Property label="Logging ref" value={data.spec?.loggingRef || 'Default'} />
-        <Property label="Fluentd aggregator" value={data.spec?.fluentd ? 'Configured' : 'Not configured'} />
+        <Property label="Aggregator" value={data.spec?.fluentd ? 'Fluentd, configured in this Logging' : data.spec?.syslogNG ? 'syslog-ng, configured in this Logging' : 'Not set in this Logging (may come from a FluentdConfig or SyslogNGConfig)'} />
         <Property label="Fluent Bit collector" value={data.spec?.fluentbit ? 'Configured in this Logging' : 'Not in this Logging (see FluentbitAgents)'} />
         {Object.keys(checks).length > 0 && <Property label="Configuration checks" value={failedChecks > 0 ? `${failedChecks} of ${Object.keys(checks).length} failed` : `${Object.keys(checks).length} passed`} />}
       </PropertyList>
