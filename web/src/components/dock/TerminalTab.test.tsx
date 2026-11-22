@@ -15,3 +15,14 @@ it.each([undefined, '/bin/custom+command'])('forwards the executable and context
   expect(url.pathname).toBe('/api/pods/app/worker/exec'); expect(url.searchParams.get('container')).toBe('app')
   expect(url.searchParams.get('shell')).toBe(shell ?? null)
 })
+
+it('reconnects on the connection the tab was opened on, not the latest', async () => {
+  const { observeConnectionStatus, resetConnectionBindingForTest } = await import('../../api/connectionBinding')
+  resetConnectionBindingForTest()
+  observeConnectionStatus({ connectionId: 'n-1' })
+  renderToString(<TerminalTab namespace="app" podName="worker" containerName="app" containers={['app']} />)
+  observeConnectionStatus({ connectionId: 'n-2' }) // switched since the tab opened
+  const { wsUrl } = await captured.props!.createSession('app')
+  expect(new URL(wsUrl).searchParams.get('connection')).toBe('n-1')
+  resetConnectionBindingForTest()
+})

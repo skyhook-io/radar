@@ -1,7 +1,7 @@
 import { NodeTerminalTab as SharedNodeTerminalTab, type NodeTerminalTabProps as SharedNodeTerminalTabProps } from '@skyhook-io/k8s-ui'
 import { apiUrl, getWsUrl } from '../../api/config'
 import { apiFetch } from '../../api/client'
-import { withConnectionParam } from '../../api/connectionBinding'
+import { connectionHeaders, useOpenedConnection, withConnectionParam } from '../../api/connectionBinding'
 import { readErrorBody } from '../../api/httpErrors'
 
 interface NodeTerminalTabProps {
@@ -10,10 +10,11 @@ interface NodeTerminalTabProps {
 }
 
 export function NodeTerminalTab({ nodeName, isActive }: NodeTerminalTabProps) {
+  const connection = useOpenedConnection()
   const createNodeDebugPod = async (name: string) => {
     const response = await apiFetch(apiUrl(`/nodes/${encodeURIComponent(name)}/debug`), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...connectionHeaders(connection) },
       body: JSON.stringify({}),
     })
     if (!response.ok) {
@@ -37,7 +38,7 @@ export function NodeTerminalTab({ nodeName, isActive }: NodeTerminalTabProps) {
   }
 
   const createSession = async (namespace: string, podName: string, containerName: string) => ({
-    wsUrl: withConnectionParam(getWsUrl(`/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/exec?container=${encodeURIComponent(containerName)}`)),
+    wsUrl: withConnectionParam(getWsUrl(`/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/exec?container=${encodeURIComponent(containerName)}`), connection),
   })
 
   return (
