@@ -418,6 +418,11 @@ type DynamicCacheConfig struct {
 	// seconds.
 	SyncStallAfter time.Duration
 
+	// ObjectReadSyncWait is how long a read of one object waits for an
+	// informer that hasn't finished its first list before answering from what
+	// has loaded. Zero means 2 seconds.
+	ObjectReadSyncWait time.Duration
+
 	// DebugEvents enables verbose debug logging.
 	DebugEvents bool
 }
