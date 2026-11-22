@@ -45,7 +45,7 @@ const (
 	// kagentAside follows a generic step when only some actors are kagent's.
 	kagentAside       = " Recover the kagent sessions among them with Recover on their chats in kagent instead."
 	kagentActorStep   = "This actor is a kagent session. Recover it with Recover on the session's chat in kagent, not with kubectl ate: kagent treats a session whose actor was moved to another template as lost."
-	kagentMemoryStep  = "This actor is a kagent session, killed for exceeding its memory limit. Recover it with Recover on the session's chat in kagent; it keeps the template it started with, so it may be killed again, and new sessions need more memory set on the agent in kagent. Don't move it to another template with kubectl ate: kagent then treats the session as lost."
+	kagentMemoryStep  = "This actor is a kagent session, killed for exceeding its memory limit. Recover it with Recover on the session's chat in kagent; it keeps the template it started with, so it may be killed again. kagent gives every agent the memory in its Helm value config.runtimeDefaults.memory; raise it for new sessions. Don't move it to another template with kubectl ate: kagent then treats the session as lost."
 	kagentLostStep    = "This actor is a kagent session: recover it with Recover on the session's chat in kagent. Substrate marks it crashed when it reconciles the worker anyway."
 	kagentLostAllStep = "These actors are kagent sessions: recover each with Recover on its chat in kagent. Substrate marks them crashed when it reconciles the worker anyway."
 )
