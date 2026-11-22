@@ -243,7 +243,9 @@ func TestApplicationEvidencePermissionTimeoutCanBeRetried(t *testing.T) {
 	t.Cleanup(func() {
 		applicationEvidencePermissionBudget, applicationEvidenceRetryPermissionBudget = previous, previousRetry
 	})
-	permissionDelay := applicationEvidencePermissionBudget * 11 / 10
+	// Outlasts the first budget and fits in the retry budget, with room on both
+	// sides for a late timer.
+	permissionDelay := applicationEvidencePermissionBudget * 3 / 2
 
 	permissions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
