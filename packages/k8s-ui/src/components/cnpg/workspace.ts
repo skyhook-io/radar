@@ -241,7 +241,7 @@ export interface CNPGFleetPosture {
 
 /**
  * One Cluster's posture, by the same rule as checkCNPGClusterPosture in pkg/audit
- * (settings that turn a Check off live on the server and don't apply here):
+ * (audit settings, disabled Checks and ignored namespaces alike, live on the server and don't apply here):
  * WAL is judged only with a destination and a known archiver, an unset
  * spec.instances is CNPG's default of 1, and an in-tree destinationPath counts
  * even beside the barman-cloud plugin.

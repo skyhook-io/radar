@@ -184,6 +184,12 @@ describe('CNPGOverview posture summary', () => {
     expect(count(html, 'No WAL archiving')).toBe('0')
   })
 
+  it('states posture counts without a tone, like posture everywhere', () => {
+    const html = render(response([withSpec('a', { instances: 1 })]))
+    expect(html).toMatch(/No backup destination<\/span><span class="font-mono">1</)
+    expect(html).toMatch(/Single instance<\/span><span class="font-mono">1</)
+  })
+
   it('narrows the table to one posture value, with a chip to clear it', () => {
     const html = render(response([withSpec('bare', { instances: 3 }), withSpec('intree', { instances: 3, backup: { barmanObjectStore: { destinationPath: 's3://b' } } })]), 'protect=none')
     expect(html).toContain('bare')

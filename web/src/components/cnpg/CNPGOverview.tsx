@@ -16,7 +16,6 @@ import {
   type CNPGFleetRow,
   type CNPGPostureFilter,
   type CNPGProblemCategory,
-  type StatusTone,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
@@ -209,15 +208,16 @@ function PostureSummary({ posture, lowerBound, active, onToggle }: {
   onToggle: (filter: CNPGPostureFilter) => void
 }) {
   const n = (v: number) => `${lowerBound ? '≥' : ''}${v}`
-  const items: { id: CNPGPostureFilter; value: number; tone: StatusTone }[] = [
-    { id: 'none', value: posture.noDestination, tone: 'alert' },
-    { id: 'nowal', value: posture.noWalArchiving, tone: 'alert' },
-    { id: 'single', value: posture.singleInstance, tone: 'degraded' },
-    { id: 'intree', value: posture.inTree, tone: 'degraded' },
+  // Posture is stated without a mark, as on every CNPG surface: no tone on the counts.
+  const items: { id: CNPGPostureFilter; value: number }[] = [
+    { id: 'none', value: posture.noDestination },
+    { id: 'nowal', value: posture.noWalArchiving },
+    { id: 'single', value: posture.singleInstance },
+    { id: 'intree', value: posture.inTree },
   ]
   return (
     <div role="group" className="flex flex-wrap items-center gap-2 text-xs" aria-label="Backup and availability configuration">
-      {items.map(({ id, value, tone }) => {
+      {items.map(({ id, value }) => {
         const on = active === id
         return (
           <button
@@ -231,7 +231,7 @@ function PostureSummary({ posture, lowerBound, active, onToggle }: {
               'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 transition-colors',
               on ? 'border-accent bg-accent-muted text-accent-text' : 'border-theme-border text-theme-text-secondary enabled:hover:bg-theme-hover disabled:opacity-60',
             )}
-          ><span>{POSTURE_LABELS[id]}</span><span className={clsx('font-mono', value > 0 && !on && toneTextClass(tone))}>{n(value)}</span></button>
+          ><span>{POSTURE_LABELS[id]}</span><span className="font-mono">{n(value)}</span></button>
         )
       })}
       <span className="inline-flex items-center gap-1.5 px-1 text-theme-text-tertiary"><span>With a destination</span><span className="font-mono">{n(posture.withDestination)}</span></span>
