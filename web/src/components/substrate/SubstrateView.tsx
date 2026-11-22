@@ -15,6 +15,7 @@ import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
 import { useAgentSandboxSidebarWorkspace } from '../agentsandbox/useAgentSandboxSidebarWorkspace'
+import { useKagentSidebarWorkspace } from '../kagent/useKagentSidebarWorkspace'
 import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import {
@@ -88,7 +89,8 @@ export function SubstrateView({ namespaces, selectedResource, onOpenResource, on
   const cnpgSidebar = useCNPGSidebarWorkspace({ apiResources, namespaces })
   const veleroSidebar = useVeleroSidebarWorkspace({ apiResources })
   const sandboxSidebar = useAgentSandboxSidebarWorkspace({ apiResources, namespaces })
-  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar, sandboxSidebar)
+  const kagentSidebar = useKagentSidebarWorkspace({ apiResources })
+  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar, sandboxSidebar, kagentSidebar)
   const selectedKind = route.pool ? SUBSTRATE_WORKERPOOL_KIND : null
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
   // On a local Radar, the file and name the context has there, and a saved
