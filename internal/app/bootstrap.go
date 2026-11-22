@@ -844,6 +844,7 @@ func Shutdown(srv *server.Server) {
 	log.Println("Shutting down...")
 	RemoveMCPPortFile()
 	srv.Stop()
+	k8s.CancelOngoingOperations()
 	k8s.ResetAllSubsystems()
 }
 

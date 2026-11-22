@@ -121,18 +121,11 @@ func TestDiagnosticsClusterUsesOnlyCurrentCacheObservations(t *testing.T) {
 	k8s.InvalidatePlatformCache()
 	t.Cleanup(func() {
 		k8s.SetTestClient(previousClient)
-		k8s.ResetResourceCache()
 		k8s.InvalidateServerVersionCache()
 		k8s.InvalidatePlatformCache()
 		k8s.SetConnectionStatus(previousStatus)
 	})
-	initCache := func() {
-		t.Helper()
-		if err := k8s.InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	initCache()
+	useTestResourceCache(t, fake.NewSimpleClientset())
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 
 	if body := diagnosticsBody(t); body["cluster"] != nil || requests.Load() != 0 {
@@ -176,7 +169,9 @@ func TestDiagnosticsClusterUsesOnlyCurrentCacheObservations(t *testing.T) {
 	}
 	reads = requests.Load()
 	k8s.ResetResourceCache()
-	initCache()
+	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
+		t.Fatal(err)
+	}
 	if body := diagnosticsBody(t); body["cluster"] != nil || requests.Load() != reads {
 		t.Fatalf("replacement cache reused cluster data or contacted API: %s, reads %d", body["cluster"], requests.Load()-reads)
 	}
@@ -290,13 +285,10 @@ func TestDiagnosticsOmitsClusterObservedForAnotherContext(t *testing.T) {
 	t.Cleanup(func() {
 		k8s.SetTestClient(previousClient)
 		k8s.SetTestContextName(previousName)
-		k8s.ResetResourceCache()
 		k8s.InvalidateServerVersionCache()
 		k8s.SetConnectionStatus(previousStatus)
 	})
-	if err := k8s.InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
-		t.Fatal(err)
-	}
+	useTestResourceCache(t, fake.NewSimpleClientset())
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "new"})
 	if info, err := k8s.GetClusterInfo(context.Background()); err != nil || info.KubernetesVersion == "" {
 		t.Fatalf("could not seed cluster observation: %+v, %v", info, err)

@@ -2,6 +2,7 @@
 import { act, createRef, useImperativeHandle } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { connectedSwitchContext, type ContextSwitchOperation } from '../api/contextSwitch'
 import { useEventSource } from './useEventSource'
 
 class TestStream extends EventTarget {
@@ -82,4 +83,17 @@ test('an ordered stream completion keeps its target topology when the matching p
   expect(changed).toHaveBeenCalledOnce()
   expect(complete).toHaveBeenCalledOnce()
   expect(hook.current!.topology?.nodes[0].id).toBe('target')
+})
+
+test('a failed switch only resets the view when the server admitted a restored context', () => {
+  const failed: ContextSwitchOperation = {
+    id: 'op', target: 'target', phase: 'failed', error: 'target failed',
+    progress: '', startedAt: '', syncTimeoutSeconds: 300,
+  }
+  expect(connectedSwitchContext(failed)).toBeUndefined()
+  const restored = connectedSwitchContext({ ...failed, restoredContext: 'source' })
+  expect(restored).toBe('source')
+  act(() => hook.current!.applyContextChange(restored!, failed.id))
+  act(() => TestStream.opened[1].send('context_changed', { context: 'source', switchId: failed.id }))
+  expect(changed.mock.calls).toEqual([['source']])
 })

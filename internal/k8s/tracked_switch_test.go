@@ -1,10 +1,13 @@
 package k8s
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -134,6 +137,107 @@ func TestTrackedSwitchInitFailureReportsTargetDisconnected(t *testing.T) {
 	}
 }
 
+func TestContextSwitchRestoresPreviousConnection(t *testing.T) {
+	for _, mode := range []string{"tracked", "synchronous", "CAPI", "restore fails"} {
+		t.Run(mode, func(t *testing.T) {
+			var currentHits, targetHits atomic.Int32
+			targetPath, stopped := setupCheckedSwitch(t, versionOnlyServer(t, &targetHits), true)
+			writeServerKubeconfig(t, filepath.Dir(targetPath), "current.yaml", "current", versionOnlyServer(t, &currentHits))
+			if err := SwitchContext("current"); err != nil {
+				t.Fatal(err)
+			}
+			_, originalGeneration := GetClientWithGeneration()
+			originalOperation := OperationContext()
+			targetErr := errors.New("target timeline unavailable")
+			var builds, completed, messages []string
+			RegisterTimelineFuncs(nil, func() error {
+				name := GetContextName()
+				builds = append(builds, name)
+				if name == "target" {
+					return targetErr
+				}
+				if mode == "restore fails" {
+					return errors.New("current timeline unavailable")
+				}
+				return nil
+			})
+			t.Cleanup(func() { RegisterTimelineFuncs(nil, nil) })
+			OnContextSwitchProgress(func(message string) { messages = append(messages, message) })
+			OnContextSwitchComplete(func(name, id string) { completed = append(completed, name+"/"+id) })
+
+			var id string
+			switch mode {
+			case "tracked", "restore fails":
+				var tracker ContextSwitchTracker
+				tracker.Start("target", nil)
+				op := awaitSwitchPhase(t, &tracker, "failed")
+				id = op.ID
+				if mode == "restore fails" {
+					status := GetConnectionStatus()
+					if op.RestoredContext != "" || status.State != StateDisconnected || status.Error != op.Error ||
+						!strings.Contains(op.Error, targetErr.Error()) || !strings.Contains(op.Error, "current timeline unavailable") ||
+						!strings.Contains(op.Error, `switch to "target"`) || !strings.Contains(op.Error, `reconnect to "current"`) ||
+						len(completed) != 0 || !slices.Equal(builds, []string{"target", "current"}) {
+						t.Fatalf("dual failure: switch %+v, status %+v, completed %v, builds %v", op, status, completed, builds)
+					}
+					return
+				}
+				if op.Target != "target" || op.RestoredContext != "current" || !strings.Contains(op.Error, targetErr.Error()) {
+					t.Fatalf("switch: %+v", op)
+				}
+			case "synchronous":
+				if err := PerformCheckedContextSwitch(context.Background(), "target"); !errors.Is(err, targetErr) {
+					t.Fatalf("switch error = %v", err)
+				}
+			case "CAPI":
+				if err := PerformContextSwitch("target"); !errors.Is(err, targetErr) {
+					t.Fatalf("switch error = %v", err)
+				}
+			}
+
+			status := GetConnectionStatus()
+			_, generation := GetClientWithGeneration()
+			if status.State != StateConnected || status.Context != "current" || GetContextName() != "current" ||
+				GetResourceCache() == nil || generation == originalGeneration || originalOperation.Err() == nil || OperationContext().Err() != nil {
+				t.Fatalf("restore did not admit fresh clients and caches: %+v, generation %d", status, generation)
+			}
+			if !*stopped || !slices.Equal(builds, []string{"target", "current"}) || !slices.Equal(completed, []string{"current/" + id}) ||
+				!slices.Contains(messages, "Couldn't connect to target. Reconnecting to current…") || currentHits.Load() != 1 {
+				t.Fatalf("builds %v, completed %v, messages %v, restore probes %d", builds, completed, messages, currentHits.Load())
+			}
+		})
+	}
+}
+
+func TestContextSwitchAbandonsRestoreOnSupersessionOrShutdown(t *testing.T) {
+	for _, action := range []string{"supersede", "shutdown"} {
+		t.Run(action, func(t *testing.T) {
+			var targetHits, restoreHits atomic.Int32
+			target, _ := setupCheckedSwitch(t, versionOnlyServer(t, &targetHits), true)
+			writeServerKubeconfig(t, filepath.Dir(target), "current.yaml", "current", versionOnlyServer(t, &restoreHits))
+			var tracker ContextSwitchTracker
+			RegisterTimelineFuncs(nil, func() error {
+				if action == "shutdown" {
+					tracker.Stop()
+				} else {
+					CancelOngoingOperations()
+				}
+				return errors.New("timeline unavailable")
+			})
+			t.Cleanup(func() { RegisterTimelineFuncs(nil, nil) })
+			tracker.Start("target", nil)
+			phase := "failed"
+			if action == "shutdown" {
+				phase = "cancelled"
+			}
+			op := awaitSwitchPhase(t, &tracker, phase)
+			if op.RestoredContext != "" || restoreHits.Load() != 0 {
+				t.Fatalf("interrupted switch %+v, restore probes %d", op, restoreHits.Load())
+			}
+		})
+	}
+}
+
 func TestRetryCannotReplaceACommittedSwitch(t *testing.T) {
 	var hits atomic.Int32
 	setupCheckedSwitch(t, versionOnlyServer(t, &hits), true)
@@ -183,7 +287,9 @@ func TestStopCommittedSwitchWhileWaitingForDiscovery(t *testing.T) {
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
 	defer unblock()
-	_, sessionsClosed := setupCheckedSwitch(t, api.URL, true)
+	targetPath, sessionsClosed := setupCheckedSwitch(t, api.URL, true)
+	var restoreProbes atomic.Int32
+	writeServerKubeconfig(t, filepath.Dir(targetPath), "current.yaml", "current", versionOnlyServer(t, &restoreProbes))
 	var completed atomic.Int32
 	var tracker ContextSwitchTracker
 	OnContextSwitchComplete(func(name, id string) {
@@ -209,6 +315,9 @@ func TestStopCommittedSwitchWhileWaitingForDiscovery(t *testing.T) {
 	}
 	awaitSwitchPhase(t, &tracker, "stopped")
 	assertNoSwitchFailureLogged(t, op)
+	if restoreProbes.Load() != 0 {
+		t.Fatal("Stop probed the previous cluster for a restore")
+	}
 	status := GetConnectionStatus()
 	if !*sessionsClosed || status.State != StateDisconnected || status.Context != "target" || status.ErrorType != switchStoppedErrorType || RuntimeAuthRecoveryOwed() || completed.Load() != 0 {
 		t.Fatalf("stopped switch: %+v, callbacks %d", status, completed.Load())

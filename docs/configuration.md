@@ -606,7 +606,9 @@ In shared OSS installations (in-cluster or authentication-enabled), context swit
 
 Switching contexts in the UI never rewrites your kubeconfig — `kubectl` keeps pointing wherever it pointed before.
 
-While you're connected, Radar first checks that the new cluster answers and accepts your credentials. If it doesn't, Radar shows why and how to fix it, and your current cluster stays connected: **Back to** returns to it at once. If a switch fails after Radar has already left the previous cluster, the same button switches back to it.
+While you're connected, Radar first checks that the new cluster answers and accepts your credentials. If it doesn't, Radar shows why and how to fix it, and your current cluster stays connected: **Back to** returns to it at once.
+
+If the target fails to load after Radar has closed the previous connection, Radar shows the failure and tries once to reconnect to the previously connected context. A successful reconnect reloads that cluster's data. Terminals and port-forwards stay closed. If the reconnect also fails, Radar stays disconnected and reports both errors.
 
 In local Radar, **Cancel switch** keeps the current cluster while Radar checks the target. Once Radar begins closing the old cluster's sessions, it shows progress as the new cluster's resources load. **Stop switch** stops loading the target and lets you choose a cluster to reconnect. Sessions on the previous cluster have already closed. **Hide progress** lets the switch continue. Select the switching indicator to reopen progress, or refresh the tab to follow the same switch. The connectivity timeout and initial workload sync limit apply to different stages.
 

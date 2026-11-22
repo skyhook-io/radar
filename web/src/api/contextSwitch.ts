@@ -4,6 +4,7 @@ import { getApiBase } from './config'
 export interface ContextSwitchOperation {
   id: string
   target: string
+  restoredContext?: string
   phase: 'preflight' | 'switching' | 'stopping' | 'stopped' | 'succeeded' | 'failed' | 'cancelled'
   startedAt: string
   preflightTimeoutSeconds?: number
@@ -12,6 +13,11 @@ export interface ContextSwitchOperation {
   canStop?: boolean
   error?: string
   errorType?: string
+}
+
+export function connectedSwitchContext(op: ContextSwitchOperation) {
+  if (op.phase === 'succeeded') return op.target
+  if (op.phase === 'failed') return op.restoredContext
 }
 
 export function switchInProgress(op?: ContextSwitchOperation) {

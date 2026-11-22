@@ -7,7 +7,7 @@ import { useNavigate, useLocation, useSearchParams, useNavigationType, Navigatio
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
-import { followSwitch, followingSwitch, switchInProgress } from './api/contextSwitch'
+import { connectedSwitchContext, followSwitch, followingSwitch, switchInProgress } from './api/contextSwitch'
 import { ContextSwitchActions } from './components/ContextSwitchActions'
 import { useToast } from './components/ui/Toast'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
@@ -1372,17 +1372,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (contextSwitch.phase === 'failed' && connection.state === 'connecting') return
     followSwitch('')
     endSwitch()
-    if (contextSwitch.phase === 'succeeded' && connection.context === contextSwitch.target) {
-      applyContextChange(contextSwitch.target, contextSwitch.id)
-    } else {
-      setOpenAfterSwitch(null)
-      if (contextSwitch.phase === 'failed' && (connection.state === 'connected' || connection.context !== contextSwitch.target)) {
-        const reason = contextSwitch.error || 'Cluster switch failed'
-        if (contextSwitch.errorType) {
-          setFailedSwitch({ context: contextSwitch.target, error: reason, errorType: contextSwitch.errorType })
-        } else {
-          showError('Failed to switch context', reason)
-        }
+    const admitted = connectedSwitchContext(contextSwitch)
+    if (admitted && connection.context === admitted) {
+      applyContextChange(admitted, contextSwitch.id)
+      if (contextSwitch.phase === 'succeeded') return
+    }
+    setOpenAfterSwitch(null)
+    if (contextSwitch.phase === 'failed' && (connection.state === 'connected' || connection.context !== contextSwitch.target)) {
+      const reason = contextSwitch.error || 'Cluster switch failed'
+      if (contextSwitch.errorType) {
+        setFailedSwitch({ context: contextSwitch.target, error: reason, errorType: contextSwitch.errorType })
+      } else {
+        showError('Failed to switch context', reason)
       }
     }
   }, [contextSwitch, connection.state, connection.context, applyContextChange, endSwitch, setOpenAfterSwitch, setFailedSwitch, showError])

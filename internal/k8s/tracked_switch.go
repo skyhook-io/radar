@@ -14,6 +14,7 @@ import (
 type ContextSwitchStatus struct {
 	ID                      string    `json:"id"`
 	Target                  string    `json:"target"`
+	RestoredContext         string    `json:"restoredContext,omitempty"`
 	Phase                   string    `json:"phase"`
 	StartedAt               time.Time `json:"startedAt"`
 	PreflightTimeoutSeconds float64   `json:"preflightTimeoutSeconds,omitempty"`

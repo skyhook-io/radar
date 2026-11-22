@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tansta
 import { automaticRequestHeaders, getApiBase } from '../api/config'
 import { readErrorBody } from '../api/httpErrors'
 import { apiFetch, type SyncStatusSnapshot, type NodeDrainActivity } from '../api/client'
-import { followSwitch, switchInProgress, type ContextSwitchOperation } from '../api/contextSwitch'
+import { connectedSwitchContext, followSwitch, switchInProgress, type ContextSwitchOperation } from '../api/contextSwitch'
 import { showApiNotice } from '../components/ui/Toast'
 import { ClusterConnectedContext } from './clusterConnected'
 
@@ -286,7 +286,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     // A background tab can miss both the SSE event and the whole operation
     // between polls. Apply the same cache and URL transition as the initiating tab.
     if (current.state === 'connected' && current.context && current.context !== data.context &&
-        data.state === 'connected' && data.contextSwitch?.phase === 'succeeded' && data.contextSwitch.target === data.context) {
+        data.state === 'connected' && data.contextSwitch && connectedSwitchContext(data.contextSwitch) === data.context) {
       followSwitch(data.contextSwitch.id)
     }
     const becameConnected = current.state !== 'connected' && data.state === 'connected'
