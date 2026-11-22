@@ -50,6 +50,37 @@ it.each(["unwatched", "syncing", "denied", "deferred", "unsupported", "synced", 
   },
 );
 
+it("loads custom kinds in the mounted catalog after repeated discovery-pending responses", async () => {
+  vi.useFakeTimers();
+  const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 10 } } });
+  const rootElement = document.createElement("div");
+  const root = createRoot(rootElement);
+  const fetch = vi.fn()
+    .mockImplementationOnce(() => Promise.resolve(Response.json({ error_code: "kind_sync_pending" }, { status: 503 })))
+    .mockImplementationOnce(() => Promise.resolve(Response.json({ error_code: "kind_sync_pending" }, { status: 503 })))
+    .mockImplementation(() => Promise.resolve(Response.json([{
+      group: "plants.example.io", version: "v1", kind: "Cactus", name: "cacti",
+      namespaced: true, isCrd: true, verbs: ["list"],
+    }])));
+  vi.stubGlobal("fetch", fetch);
+  function Probe() {
+    return useAPIResources().data?.map(resource => resource.kind).join(",") ?? "Loading";
+  }
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><Probe /></QueryClientProvider>));
+    await act(async () => { await vi.advanceTimersByTimeAsync(11); });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(rootElement.textContent).toBe("Loading");
+    await act(async () => { await vi.advanceTimersByTimeAsync(11); });
+    expect(rootElement.textContent).toBe("Cactus");
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(fetch).toHaveBeenCalledTimes(3);
+  } finally {
+    await act(async () => root.unmount());
+    client.clear();
+  }
+});
+
 it("refreshes definitions until their inventory syncs, without relying on topology", async () => {
   vi.useFakeTimers();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

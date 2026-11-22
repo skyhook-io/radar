@@ -207,8 +207,11 @@ type dynamicReadinessProvider interface {
 // and discovery only begin once the deferred typed informers finish, and until
 // then no custom resource kind is watched.
 func (p *CacheProvider) crdDiscoveryPending() bool {
-	if p == nil || p.dynamic == nil {
+	if p == nil {
 		return false
+	}
+	if p.dynamic == nil {
+		return p.cache.CustomResourcesPending()
 	}
 	return p.dynamic.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete
 }

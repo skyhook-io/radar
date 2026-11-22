@@ -638,6 +638,11 @@ func GetResourceCache() *ResourceCache {
 	return resourceCache.Load()
 }
 
+// CustomResourcesPending reports the typed-only window after the API discovery wait expires.
+func (c *ResourceCache) CustomResourcesPending() bool {
+	return c != nil && c.apiDiscoveryPending.Load() && GetDynamicResourceCache() == nil
+}
+
 // KindReadiness re-exports the k8score readiness vocabulary for handler use.
 type KindReadiness = k8score.KindReadiness
 

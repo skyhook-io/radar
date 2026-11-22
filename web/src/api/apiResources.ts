@@ -2,8 +2,8 @@ import { useEffect } from "react";
 import { initNavigationMap } from "@skyhook-io/k8s-ui/utils/navigation";
 import { useQuery } from "@tanstack/react-query";
 import type { APIResource } from "../types";
-import { apiUrl, getAuthHeaders, getCredentialsMode } from "./config";
-import { readErrorBody } from "./httpErrors";
+import { fetchJSON, isStillLoadingError } from "./client";
+import { shouldRetryRadarQuery } from "./radarFeatures";
 
 const definitionPollDeadlines = new WeakMap<object, number>();
 
@@ -18,19 +18,6 @@ export {
   getKindPlural,
 } from "@skyhook-io/k8s-ui";
 export type { ResourceCategory } from "@skyhook-io/k8s-ui";
-
-async function fetchJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(apiUrl(path), {
-    signal,
-    credentials: getCredentialsMode(),
-    headers: getAuthHeaders(),
-  });
-  if (!response.ok) {
-    const error = await readErrorBody(response);
-    throw new Error(error.error || `HTTP ${response.status}`);
-  }
-  return response.json();
-}
 
 // Known GitOps navigation identities, not installation or CRD-existence evidence.
 export const GITOPS_KINDS: APIResource[] = [
@@ -51,6 +38,7 @@ export function useAPIResources() {
   const result = useQuery<APIResource[]>({
     queryKey: ["api-resources"],
     queryFn: ({ signal }) => fetchJSON("/api-resources", signal),
+    retry: (count, error) => isStillLoadingError(error) || shouldRetryRadarQuery(count, error),
     staleTime: 5 * 60 * 1000, // 5 minutes - resources don't change often
     refetchInterval: (query) => {
       const state = query.state.data?.find(resource =>
