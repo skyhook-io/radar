@@ -146,7 +146,10 @@ export async function withLokiRunFallback(kind: string, namespace: string, name:
       : `Loki has no lines from container ${container} for this run`
     return { pods: [], logs: [], keepPreviousSources: true, emptyMessage, notice, fixedRangeReason }
   }
-  if (logs.length === 0) return data
+  if (logs.length === 0) {
+    const empty = `Loki has no lines for this run (${timeOf(run.window.start)}–${timeOf(run.window.end)}).`
+    return { ...data, notice: run.notice ? `${empty} ${run.notice}` : empty }
+  }
   const pods = wholePod ? run.pods.map(p => ({ ...p, containers: [], containerStatuses: undefined })) : run.pods
   return { pods, logs, notice, fixedRangeReason }
 }

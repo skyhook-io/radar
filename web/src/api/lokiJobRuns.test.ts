@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false, container: 'job', notice: '', truncated: true, extra: [] as { pod: string, container: string, timestamp: string, content: string }[] }))
+const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false, empty: false, container: 'job', notice: '', truncated: true, extra: [] as { pod: string, container: string, timestamp: string, content: string }[] }))
 vi.mock('./client', async (orig) => ({
   ...(await orig<typeof import('./client')>()),
   fetchJSON: async (url: string) => {
@@ -8,7 +8,7 @@ vi.mock('./client', async (orig) => ({
     if (calls.fail) throw new Error('Loki is not connected')
     return {
       pods: [{ name: 'nightly-1-aaaaa', containers: [calls.container], ready: false }],
-      logs: [{ pod: 'nightly-1-aaaaa', container: calls.container, timestamp: '2026-11-13T02:00:00.000000000Z', content: 'done' }, ...calls.extra],
+      logs: calls.empty ? [] : [{ pod: 'nightly-1-aaaaa', container: calls.container, timestamp: '2026-11-13T02:00:00.000000000Z', content: 'done' }, ...calls.extra],
       notice: calls.notice, source: 'loki', truncated: calls.truncated, limit: 5000,
       window: { start: '2026-11-13T01:59:00Z', end: '2026-11-13T02:11:00Z' },
     }
@@ -60,6 +60,16 @@ describe('withLokiRunFallback', () => {
       expect(got.notice).toBe("Couldn't read this run from Loki: Loki is not connected")
     } finally {
       calls.fail = false
+    }
+  })
+  it('keeps Kubernetes\' message when Loki has nothing for the run, and says Loki was asked', async () => {
+    calls.empty = true
+    try {
+      const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true)
+      expect(got.emptyMessage).toBe(gone.emptyMessage)
+      expect(got.notice).toMatch(/^Loki has no lines for this run \(.+–.+\)\.$/)
+    } finally {
+      calls.empty = false
     }
   })
   it('keeps to the chosen container, asking Loki for it', async () => {
