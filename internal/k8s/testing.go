@@ -282,6 +282,9 @@ func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIRe
 	resourceDiscoveryClient = GetDiscoveryClient()
 	discoveryMu.Unlock()
 
+	// A cache left by an earlier test (a context switch builds one) has spent
+	// the init Once and still holds that test's discovery.
+	ResetDynamicResourceCache()
 	return InitDynamicResourceCache(nil)
 }
 
