@@ -29,7 +29,7 @@ const METRICS_COPY: ConnectionFormCopy = {
 }
 
 export const LOKI_COPY: ConnectionFormCopy = {
-  intro: 'Connect the Loki that stores this cluster\'s pod logs. Radar reads only its label names, to check the connection and learn how it labels streams.',
+  intro: 'Connect the Loki that stores this cluster\'s pod logs. Radar reads it only with fixed queries for one pod and a time window.',
   urlLabel: 'Loki URL',
   helpLabel: 'Loki URL help',
   urlHelp: 'Use a base URL reachable from Radar, not your browser, such as a gateway or query frontend, without /loki/api/v1. Add X-Scope-OrgID as a header for a multi-tenant Loki.',
