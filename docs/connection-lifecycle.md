@@ -10,6 +10,8 @@ Bound writes are the routes wrapped with `bindWrite` in `internal/server/server.
 - **Drain** keeps running on the connection it was admitted to, even if Radar switches meanwhile. Exec and port-forward sessions end when Radar switches.
 - **Code that only has a context** (MCP tools, reachability) gets its clients from `k8s.ClientFromContext` / `DynamicClientFromContext`, which return the bound connection's clients when the request was admitted with one.
 - **CloudNativePG** captures its clients and caches in one step and checks there that the connection is still the bound one (`k8s.StillBound`).
+- **Helm** install, upgrade (including source upgrades and values edits), rollback, uninstall and source association, streaming variants included, use the REST config captured at admission. The permission preflight checks that the admitted connection is still serving, because it reads shared capabilities; after that, Helm stays on the admitted cluster even if Radar switches while a repository downloads.
+- **CAPI connect** takes its client snapshot, then checks that the admitted connection is still serving: a switch before the check is refused, and one after it can't change the snapshot.
 - **Velero** checks the Velero server's state in the shared cache, which a switch completing mid-request could replace; the write itself stays on the admitted connection.
 - **Diagnose** (the in-product agent) is fenced by its runs: every switch marks all runs stale (`RunManager.OnContextSwitch`), and a stale run takes no further turns, so an investigation of one cluster can't continue, or apply a fix, on another.
 
@@ -85,7 +87,6 @@ Also accepted:
 - **A write arriving during shutdown** still runs on the connection the tab is on; admissions are closed first so nothing new is admitted.
 - **Reads aren't bound.** A stale tab can display data from the new cluster before it resets; it can't write with it, since it still sends the old ID.
 - **A context repointed to another cluster in the kubeconfig, then Retry,** keeps the same context name, so views refetch rather than reset; writes name the new connection from then on.
-- **Writes that build clients after admission.** Helm builds its action clients, and CAPI connect reads the management cluster, from the serving connection rather than the captured one. Both re-check that the admitted connection is still serving right before that point (`stillAdmitted` in the helm handlers, `k8s.StillBound` in CAPI connect; repository association re-checks after its download), so only the moment between that check and the client build remains.
 - **A host QueryClient that retries mutations** (Radar's own doesn't) could resend a refused restart after the tab adopted the new ID.
 
 ## Scenario checklist
