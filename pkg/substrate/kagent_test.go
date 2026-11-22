@@ -16,7 +16,7 @@ const (
 func TestKagentSessionOf(t *testing.T) {
 	for name, want := range map[string]string{
 		kagentSession: "01a1faa2-b3e3-7dd3-ae2d-3114122d4291",
-		"session-01A1FAA2-B3E3-7DD3-AE2D-3114122D4291":     "",
+		"session-01A1FAA2-B3E3-7DD3-AE2D-3114122D4291": "",
 		"session-01a1faa2":                                 "",
 		"k8s-helper-aa5e9426eb2e":                          "",
 		"sandbox-0123456789abcdef0123456789abcdef01234567": "",

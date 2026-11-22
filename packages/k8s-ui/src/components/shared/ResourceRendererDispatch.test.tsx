@@ -1299,10 +1299,12 @@ describe('MetalLB exact group', () => {
   })
   it('leaves Calico BGPPeers and lookalike groups generic', () => {
     const calicoPeer = {apiVersion: 'crd.projectcalico.org/v1', kind: 'BGPPeer', metadata: {name: 'router'}, spec: {peerIP: '10.0.0.1', asNumber: 64512}}
-    expect(renderKind('bgppeers', calicoPeer)).not.toContain('My ASN')
-    expect(renderKind('bgppeers', {...calicoPeer, apiVersion: 'projectcalico.org/v3'})).not.toContain('My ASN')
+    // A marker only the curated MetalLB peer shows: the generic renderer also prints fields like myASN as "My ASN".
+    expect(renderKind('bgppeers', peer)).toContain('179 (default)')
+    expect(renderKind('bgppeers', calicoPeer)).not.toContain('179 (default)')
+    expect(renderKind('bgppeers', {...calicoPeer, apiVersion: 'projectcalico.org/v3'})).not.toContain('179 (default)')
     for (const apiVersion of ['fake.metallb.io/v1beta1', 'metallb.io.example.com/v1']) {
-      for (const [kind, data, marker] of [['ipaddresspools', pool, 'Auto assign'], ['l2advertisements', l2, 'IP address pools'], ['bgpadvertisements', bgpAdv, 'Aggregation length'], ['bgppeers', peer, 'My ASN'], ['configurationstates', state, 'Other failures leave the result Valid']] as const) {
+      for (const [kind, data, marker] of [['ipaddresspools', pool, 'Auto assign'], ['l2advertisements', l2, 'IP address pools'], ['bgpadvertisements', bgpAdv, 'Aggregation length'], ['bgppeers', peer, '179 (default)'], ['configurationstates', state, 'Other failures leave the result Valid']] as const) {
         expect(renderKind(kind, {...data, apiVersion})).not.toContain(marker)
       }
       expect(getResourceStatus('ipaddresspools', {...pool, apiVersion})?.text).not.toBe('Exhausted')
