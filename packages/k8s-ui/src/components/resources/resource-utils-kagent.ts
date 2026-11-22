@@ -179,10 +179,10 @@ function readAgentReady(agent: any, ready: Condition & { since?: number }, now: 
   return notReady(ready)
 }
 
+// Mirrors pkg/kagent agentFailed: a prior prepared revision keeps new sessions starting.
 function agentFailed(condition: string, c: Condition, rev: KagentAgentRevisions): KagentReading {
-  let summary = c.message ? `Failed: ${c.message}` : 'Failed'
-  if (rev.latestSuccessful) summary += agentSessions(rev, '')
-  return { state: 'failed', tone: 'unhealthy', text: 'Failed', summary, ...fromCondition(condition, c) }
+  const summary = `${c.message ? `Failed: ${c.message}` : 'Failed'}${agentSessions(rev, '')}`
+  return { state: 'failed', tone: rev.latestSuccessful ? 'alert' : 'unhealthy', text: 'Failed', summary, ...fromCondition(condition, c) }
 }
 
 export function readKagentAgent(agent: any, now = Date.now()): KagentReading {

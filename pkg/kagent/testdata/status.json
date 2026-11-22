@@ -907,14 +907,14 @@
       "findings": [
         {
           "action": "Change the agent, its template or its Harness to a configuration the Harness supports.",
-          "message": "Failed: no default image configured.",
+          "message": "Failed: no default image configured; no session can start.",
           "reason": "UnsupportedConfiguration",
           "severity": "critical"
         }
       ],
       "reads": true,
       "state": "failed",
-      "summary": "Failed: no default image configured",
+      "summary": "Failed: no default image configured; no session can start",
       "text": "Failed",
       "tone": "unhealthy"
     }
@@ -995,14 +995,14 @@
           "action": "Fix the agent's configuration; kagent won't retry a revision Substrate rejected.",
           "message": "Failed: Substrate rejected the compiled ActorTemplate (InvalidArgument); verify the Agent configuration against Substrate's validation requirements; new sessions still start on revision a1b2c3d4e5f6.",
           "reason": "ActorTemplateRejected",
-          "severity": "critical"
+          "severity": "warning"
         }
       ],
       "reads": true,
       "state": "failed",
       "summary": "Failed: Substrate rejected the compiled ActorTemplate (InvalidArgument); verify the Agent configuration against Substrate's validation requirements; new sessions still start on revision a1b2c3d4e5f6",
       "text": "Failed",
-      "tone": "unhealthy"
+      "tone": "alert"
     }
   },
   {
@@ -1078,14 +1078,14 @@
       "findings": [
         {
           "action": "kagent retries on its own; its controller logs name the cause.",
-          "message": "Failed: Runtime preparation failed (Unavailable); check controller logs for details.",
+          "message": "Failed: Runtime preparation failed (Unavailable); check controller logs for details; no session can start.",
           "reason": "RuntimePreparationFailed",
           "severity": "critical"
         }
       ],
       "reads": true,
       "state": "failed",
-      "summary": "Failed: Runtime preparation failed (Unavailable); check controller logs for details",
+      "summary": "Failed: Runtime preparation failed (Unavailable); check controller logs for details; no session can start",
       "text": "Failed",
       "tone": "unhealthy"
     }
@@ -1163,14 +1163,14 @@
       "findings": [
         {
           "action": "Check Substrate for another ActorTemplate with this revision's name; kagent won't replace it.",
-          "message": "Failed: existing immutable ActorTemplate differs from the compiled revision.",
+          "message": "Failed: existing immutable ActorTemplate differs from the compiled revision; no session can start.",
           "reason": "ActorTemplateConflict",
           "severity": "critical"
         }
       ],
       "reads": true,
       "state": "failed",
-      "summary": "Failed: existing immutable ActorTemplate differs from the compiled revision",
+      "summary": "Failed: existing immutable ActorTemplate differs from the compiled revision; no session can start",
       "text": "Failed",
       "tone": "unhealthy"
     }
@@ -2986,6 +2986,177 @@
       "summary": "kagent doesn't report status for this kind",
       "text": "No status",
       "tone": "neutral"
+    }
+  },
+  {
+    "name": "agent incompatible after an edit, with a prior revision",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "no default image configured",
+            "observedGeneration": 2,
+            "reason": "UnsupportedConfiguration",
+            "status": "False",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by Compatible",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "latestSuccessfulRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "action": "Change the agent, its template or its Harness to a configuration the Harness supports.",
+          "message": "Failed: no default image configured; new sessions still start on revision a1b2c3d4e5f6.",
+          "reason": "UnsupportedConfiguration",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Failed: no default image configured; new sessions still start on revision a1b2c3d4e5f6",
+      "text": "Failed",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "agent runtime preparation failed with a prior revision",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Runtime preparation failed (Unavailable); check controller logs for details",
+            "observedGeneration": 2,
+            "reason": "RuntimePreparationFailed",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "0f9e8d7c6b5a1111111111111111111111111111111111111111111111111111",
+        "latestSuccessfulRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "action": "kagent retries on its own; its controller logs name the cause.",
+          "message": "Failed: Runtime preparation failed (Unavailable); check controller logs for details; new sessions still start on revision a1b2c3d4e5f6.",
+          "reason": "RuntimePreparationFailed",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Failed: Runtime preparation failed (Unavailable); check controller logs for details; new sessions still start on revision a1b2c3d4e5f6",
+      "text": "Failed",
+      "tone": "alert"
     }
   }
 ]

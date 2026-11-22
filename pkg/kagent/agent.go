@@ -90,7 +90,7 @@ func agentSessions(rev AgentRevisions, otherwise string) string {
 	if rev.LatestSuccessful != "" {
 		return "; new sessions still start on revision " + ShortRevision(rev.LatestSuccessful)
 	}
-	return "; no session can start " + otherwise
+	return strings.TrimSpace("; no session can start " + otherwise)
 }
 
 func agentBlocked(refs condition, rev AgentRevisions) Reading {
@@ -110,16 +110,21 @@ func agentBlocked(refs condition, rev AgentRevisions) Reading {
 	return r
 }
 
+// agentFailed reads a revision kagent can't prepare. Like a blocked one, it
+// leaves new sessions on the last prepared revision (and kagent retries
+// RuntimePreparationFailed), so it is critical only when there is none.
 func agentFailed(condType string, c condition, rev AgentRevisions, step func(string) string) Reading {
 	summary := "Failed"
 	if c.message != "" {
 		summary += ": " + c.message
 	}
-	if rev.LatestSuccessful != "" {
-		summary += agentSessions(rev, "")
-	}
+	summary += agentSessions(rev, "")
 	r := Reading{State: StateFailed, Tone: ToneUnhealthy, Text: "Failed", Summary: summary, Condition: condType, Reason: c.reason, Message: c.message, Since: c.since, SinceKnown: c.sinceKnown}
-	r.finding = &Finding{Severity: SeverityCritical, Reason: reasonOr(c.reason, condType+"=False"), Since: c.since, SinceKnown: c.sinceKnown,
+	severity := SeverityCritical
+	if rev.LatestSuccessful != "" {
+		severity, r.Tone = SeverityWarning, ToneAlert
+	}
+	r.finding = &Finding{Severity: severity, Reason: reasonOr(c.reason, condType+"=False"), Since: c.since, SinceKnown: c.sinceKnown,
 		Message: sentence(summary), Action: step(c.reason)}
 	return r
 }
