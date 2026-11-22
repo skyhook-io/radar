@@ -595,15 +595,17 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 				resp.Middlewares = append(resp.Middlewares, u)
 			}
 		}
-		// "Used by" asks about the whole cluster: a caller who sees only
-		// some namespaces can't be told that nothing else uses it.
+	default:
+		resp.Routes, resp.Middlewares = rows, uses
+	}
+	// Both drawers count middleware use across the whole cluster: a caller
+	// who sees only some namespaces gets a lower bound, not the count.
+	if routeName != "" || middleware != "" {
 		if cov := resp.Coverage["ingressroutes"]; cov.State == integration.KindCoverageFull {
 			if visible := s.getUserNamespaces(r, nil); visible != nil {
 				resp.Coverage["ingressroutes"] = integration.KindCoverage{State: integration.KindCoveragePartial, AllowedNamespaces: visible}
 			}
 		}
-	default:
-		resp.Routes, resp.Middlewares = rows, uses
 	}
 	if resp.Routes == nil {
 		resp.Routes = []traefikRouteRow{}

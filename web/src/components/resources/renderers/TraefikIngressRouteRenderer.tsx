@@ -12,7 +12,7 @@ export function routeFactsProps(query: { data?: TraefikRoutesResponse; isError: 
   if (!query.data) return { routeFacts: undefined, middlewareUse: undefined }
   const middlewareUse: Record<string, number> = {}
   for (const m of query.data.middlewares) middlewareUse[`${m.namespace}/${m.name}`] = m.usedBy
-  return { routeFacts: query.data.routes, middlewareUse }
+  return { routeFacts: query.data.routes, middlewareUse, middlewareUsePartial: query.data.coverage?.ingressroutes?.state !== 'full' }
 }
 
 /** Host wrapper: adds each rule's request path to the IngressRoute drawer. */

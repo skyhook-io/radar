@@ -250,6 +250,16 @@ func TestTraefikRoutesMiddlewareModePartialForLimitedCaller(t *testing.T) {
 	}
 }
 
+// A middleware's usedBy in the route drawer counts only routes the caller
+// can see, so it is a lower bound for a caller limited to some namespaces.
+func TestTraefikRoutesSingleRouteModePartialForLimitedCaller(t *testing.T) {
+	seedTraefikFixture(t)
+	got, _ := decodeTraefik(t, aliceTraefik(t, false).authGet(t, "/api/traefik/routes?namespace=shop&name=ui", "alice", ""))
+	if got.Coverage["ingressroutes"].State != "partial" {
+		t.Errorf("coverage = %+v", got.Coverage["ingressroutes"])
+	}
+}
+
 var traefikLegacyKinds = []k8s.APIResource{
 	{Group: "traefik.containo.us", Version: "v1alpha1", Name: "ingressroutes", Kind: "IngressRoute", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
 	{Group: "traefik.containo.us", Version: "v1alpha1", Name: "middlewares", Kind: "Middleware", Namespaced: true, Verbs: []string{"get", "list", "watch"}},

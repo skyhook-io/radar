@@ -59,7 +59,7 @@ export function tlsLine(tls: TraefikTLSFact, now = Date.now()): { text: string; 
   }
 }
 
-export function TraefikRequestPath({ facts, middlewareUse, onNavigate }: { facts: TraefikRouteFacts[]; middlewareUse?: Record<string, number>; onNavigate?: (ref: ResourceRef) => void }) {
+export function TraefikRequestPath({ facts, middlewareUse, middlewareUsePartial, onNavigate }: { facts: TraefikRouteFacts[]; middlewareUse?: Record<string, number>; middlewareUsePartial?: boolean; onNavigate?: (ref: ResourceRef) => void }) {
   const group = facts[0]?.ref.group || 'traefik.io'
   const tls = facts[0] ? tlsLine(facts[0].tls) : null
   return (
@@ -84,7 +84,11 @@ export function TraefikRequestPath({ facts, middlewareUse, onNavigate }: { facts
                   <Arrow />
                   <RefLink refTo={{ kind: 'middlewares', group, namespace: m.namespace, name: m.name }} onNavigate={onNavigate}>{m.name}</RefLink>
                   <Presence exists={m.exists} />
-                  {shared && shared > 1 && <span className="text-theme-text-tertiary">used by {shared} routes</span>}
+                  {shared && shared > 1 && (
+                    <span className="inline-flex items-center gap-1 text-theme-text-tertiary">
+                      used by {middlewareUsePartial && <CertaintyGlyph certainty="lower_bound" title="At least this many; other routes may be in namespaces you can't see" />}{shared} routes
+                    </span>
+                  )}
                 </span>
               )
             })}

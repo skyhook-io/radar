@@ -29,6 +29,12 @@ describe('TraefikIngressRouteRenderer request path', () => {
     expect(html).toContain('used by 212 routes')
     expect(html).not.toContain('0 of 0')
   })
+  it('reads a middleware count as a lower bound when the caller sees only some routes', () => {
+    const html = renderToString(<TraefikIngressRouteRenderer data={data} routeFacts={[facts()]} middlewareUse={{ 'shop/redirect': 3 }} middlewareUsePartial />).replace(/<!-- -->/g, '')
+    expect(html).toContain('≥')
+    expect(html).toContain('At least this many')
+    expect(render([facts()], { 'shop/redirect': 3 })).not.toContain('≥')
+  })
   it('draws several services as alternatives Traefik load-balances across, not a chain', () => {
     const svc = (name: string) => ({ namespace: 'shop', name, port: '80', kind: 'Service' as const, exists: true, readyPods: 1, totalPods: 1 })
     const html = render([facts({ middlewares: [], services: [svc('blue'), svc('green')] })])

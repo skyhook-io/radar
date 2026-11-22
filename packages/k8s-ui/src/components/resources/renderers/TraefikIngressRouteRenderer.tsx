@@ -11,9 +11,11 @@ interface TraefikIngressRouteRendererProps {
   routeFacts?: TraefikRouteFacts[] | null
   /** How many routes use each Middleware ("ns/name"). */
   middlewareUse?: Record<string, number>
+  /** The counts cover only the routes the caller can see. */
+  middlewareUsePartial?: boolean
 }
 
-export function TraefikIngressRouteRenderer({ data, onNavigate, routeFacts, middlewareUse }: TraefikIngressRouteRendererProps) {
+export function TraefikIngressRouteRenderer({ data, onNavigate, routeFacts, middlewareUse, middlewareUsePartial }: TraefikIngressRouteRendererProps) {
   const spec = data.spec || {}
   const routes = spec.routes || []
   const entryPoints = spec.entryPoints || []
@@ -56,7 +58,7 @@ export function TraefikIngressRouteRenderer({ data, onNavigate, routeFacts, midd
           <AlertBanner variant="warning" title="Route facts could not be loaded" className="mb-0" />
         </Section>
       )}
-      {routeFacts && routeFacts.length > 0 && <TraefikRequestPath facts={routeFacts} middlewareUse={middlewareUse} onNavigate={onNavigate} />}
+      {routeFacts && routeFacts.length > 0 && <TraefikRequestPath facts={routeFacts} middlewareUse={middlewareUse} middlewareUsePartial={middlewareUsePartial} onNavigate={onNavigate} />}
       {hasNoRoutes && (
         <AlertBanner
           variant="warning"
