@@ -754,6 +754,7 @@ function FleetCheckRow({
 }) {
   const clusterCount = fc.clusters.length
   const single = clusterCount <= 1
+  const namespaceHint = namespaceIgnoreChecks && fc.clusters.some((c) => c.findings.some((f) => f.resource.namespace))
 
   const menuItems: { label: string; onClick: () => void }[] = []
   if (onHideCheck) menuItems.push({ label: `Hide "${fc.title}" check`, onClick: () => onHideCheck(fc.checkID, fc.title) })
@@ -784,10 +785,10 @@ function FleetCheckRow({
       <CheckRemediationBlock description={meta?.description} remediation={meta?.remediation} references={meta?.references} />
 
       {ignoreChecksAnnotation && (
-        <CardSection icon={EyeOff} label={namespaceIgnoreChecks ? 'Skip for a resource or namespace' : 'Skip for one resource'}>
+        <CardSection icon={EyeOff} label={namespaceHint ? 'Skip for a resource or namespace' : 'Skip for one resource'}>
           <CardBody>
             Add this annotation to a resource listed below. Its findings for this check are then hidden.
-            {namespaceIgnoreChecks && ' Put it on the Namespace to skip the check for the whole namespace.'}
+            {namespaceHint && ' Put it on the Namespace to skip the check for the whole namespace.'}
           </CardBody>
           <CopyableCommand command={`${ignoreChecksAnnotation}: ${fc.checkID}`} />
         </CardSection>

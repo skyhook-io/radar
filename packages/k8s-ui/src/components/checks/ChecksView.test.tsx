@@ -72,4 +72,14 @@ describe('ignore-checks hint', () => {
     expect(html).toContain(namespaceSentence)
     expect(html).toContain('Skip for a resource or namespace')
   })
+
+  it('does not mention the Namespace for a check on cluster-scoped resources', () => {
+    const clusterScoped = check([deadline])
+    for (const f of clusterScoped.findings) f.resource = { ...f.resource, kind: 'PersistentVolume', namespace: '' }
+    const html = renderToStaticMarkup(
+      <ChecksView checks={[clusterScoped]} catalog={{}} anyData ignoreChecksAnnotation="radarhq.io/ignore-checks" namespaceIgnoreChecks />,
+    )
+    expect(html).toContain('Skip for one resource')
+    expect(html).not.toContain(namespaceSentence)
+  })
 })
