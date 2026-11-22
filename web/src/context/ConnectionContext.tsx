@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tansta
 import { automaticRequestHeaders, getApiBase } from '../api/config'
 import { readErrorBody } from '../api/httpErrors'
 import { apiFetch, type SyncStatusSnapshot, type NodeDrainActivity } from '../api/client'
+import { followSwitch, switchInProgress, type ContextSwitchOperation } from '../api/contextSwitch'
+import { showApiNotice } from '../components/ui/Toast'
 import { ClusterConnectedContext } from './clusterConnected'
 
 export type ConnectionStateType = 'connected' | 'disconnected' | 'connecting'
@@ -26,6 +28,7 @@ export interface ConnectionState {
 interface ConnectionStatusResponse extends ConnectionState {
   // Server-side auth recovery owns the episode: suppress browser auto-retry
   // even when errorType has flipped to a non-auth value.
+  contextSwitch?: ContextSwitchOperation
   authRecoveryOwed?: boolean
 }
 
@@ -35,6 +38,7 @@ interface PolledConnectionStatus extends ConnectionStatusResponse {
 
 interface ConnectionContextValue {
   connection: ConnectionState
+  contextSwitch?: ContextSwitchOperation
   retry: () => void
   isRetrying: boolean
   updateFromSSE: (status: ConnectionState) => void
@@ -43,7 +47,7 @@ interface ConnectionContextValue {
 class ConnectionRetryError extends Error {
   errorType?: string
 
-  constructor(message: string, errorType?: string) {
+  constructor(message: string, readonly status: number, errorType?: string, readonly code?: string) {
     super(message)
     this.name = 'ConnectionRetryError'
     this.errorType = errorType
@@ -67,6 +71,9 @@ const CONNECTION_STATUS_FALLBACK_POLL_MS = 30000
 export function refreshQueriesAfterReconnect(queryClient: QueryClient, previousContext: string, nextContext: string) {
   queryClient.removeQueries({
     predicate: query => {
+      // A context_changed frame can arrive before the operation's terminal poll.
+      // Connection status is process-wide and keeps that poll alive.
+      if (query.queryKey[0] === 'connection-status') return false
       if (query.queryKey[0] !== 'node-drain-activity') return true
       const activity = queryClient.getQueryData<NodeDrainActivity | null>(query.queryKey)
       return activity?.contextName ? activity.contextName !== nextContext : previousContext !== nextContext
@@ -80,7 +87,7 @@ export function shouldAutoRetryConnection(errorType?: string): boolean {
   // reconnect loop for those, and each browser retry would invoke the exec
   // credential plugin again. Manual "Retry Connection" stays available for
   // an immediate check. A settings error can't clear until Radar restarts.
-  return errorType !== 'config' && errorType !== 'settings' && errorType !== 'rbac' && !errorType?.startsWith('auth')
+  return errorType !== 'switch-stopped' && errorType !== 'config' && errorType !== 'settings' && errorType !== 'rbac' && !errorType?.startsWith('auth')
 }
 
 export function shouldApplyPolledConnection(
@@ -88,9 +95,10 @@ export function shouldApplyPolledConnection(
   polledState: ConnectionStateType,
   pollSSEGeneration: number,
   currentSSEGeneration: number,
+  switchingToAnotherContext = false,
 ): boolean {
   return pollSSEGeneration === currentSSEGeneration
-    && (currentState !== 'connected' || polledState !== 'connecting')
+    && (switchingToAnotherContext || currentState !== 'connected' || polledState !== 'connecting')
 }
 
 async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<PolledConnectionStatus> {
@@ -116,8 +124,8 @@ async function retryConnection(automatic = false): Promise<ConnectionState> {
     headers: automatic ? automaticRequestHeaders() : undefined,
   })
   if (!response.ok) {
-    const error = await readErrorBody(response) as { error?: string; errorType?: string }
-    throw new ConnectionRetryError(error.error || `HTTP ${response.status}`, error.errorType)
+    const error = await readErrorBody(response) as { error?: string; errorType?: string; error_code?: string }
+    throw new ConnectionRetryError(error.error || `HTTP ${response.status}`, response.status, error.errorType, error.error_code)
   }
   return response.json()
 }
@@ -216,7 +224,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     queryKey: ['connection-status'],
     queryFn: () => fetchConnectionStatus(sseGenerationRef.current),
     staleTime: 500, // Allow frequent refetches while connecting
-    refetchInterval: connection.state === 'connecting' ? 500 : CONNECTION_STATUS_FALLBACK_POLL_MS,
+    refetchInterval: query => switchInProgress(query.state.data?.contextSwitch) ? 1000
+      : connection.state === 'connecting' ? 500 : CONNECTION_STATUS_FALLBACK_POLL_MS,
     refetchIntervalInBackground: true,
     refetchOnWindowFocus: true,
   })
@@ -264,6 +273,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       data.state,
       data.sseGenerationAtStart,
       sseGenerationRef.current,
+      Boolean(data.context && current.context && data.context !== current.context),
     )) {
       // SSE owns the state fields, but connection_state frames don't carry
       // per-kind sync progress — merge it from the poll so the progressive
@@ -272,6 +282,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         setConnection(prev => prev.state === 'connecting' ? { ...prev, syncStatus: data.syncStatus } : prev)
       }
       return
+    }
+    // A background tab can miss both the SSE event and the whole operation
+    // between polls. Apply the same cache and URL transition as the initiating tab.
+    if (current.state === 'connected' && current.context && current.context !== data.context &&
+        data.state === 'connected' && data.contextSwitch?.phase === 'succeeded' && data.contextSwitch.target === data.context) {
+      followSwitch(data.contextSwitch.id)
     }
     const becameConnected = current.state !== 'connected' && data.state === 'connected'
     setConnection({
@@ -293,20 +309,23 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const retryMutation = useMutation({
     mutationFn: () => retryConnection(),
     onMutate: () => {
+      const previousConnection = connectionRef.current
       manualRetryPendingRef.current = true
       // Until SSE re-delivers state, a failed retry may report its own error
       // rather than deferring to a stale "connected"
       sseActiveRef.current = false
       // Set connecting state while retrying
-      setConnection(prev => ({
-        ...prev,
+      const pendingConnection: ConnectionState = {
+        ...previousConnection,
         state: 'connecting',
         error: undefined,
         progressMessage: 'Connecting to cluster...',
         // A retry is a fresh attempt — per-kind progress from the previous
         // attempt would mislabel readiness until the next poll.
         syncStatus: undefined,
-      }))
+      }
+      setConnection(prev => prev === previousConnection ? pendingConnection : prev)
+      return { previousConnection, pendingConnection }
     },
     onSuccess: (result) => {
       const previousContext = connectionRef.current.context
@@ -319,8 +338,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       }
       refreshQueriesAfterReconnect(queryClient, previousContext, result.context)
     },
-    onError: (error: Error) => {
+    onError: (error: Error, _variables, attempt) => {
       const retryError = error as ConnectionRetryError
+      if (retryError.status === 409) {
+        if (attempt) setConnection(prev => prev === attempt.pendingConnection ? attempt.previousConnection : prev)
+        if (retryError.code !== 'reconnect_superseded') showApiNotice('Cluster retry unavailable', error.message, 'info')
+        return
+      }
       setConnection(prev => {
         if (sseActiveRef.current && prev.state === 'connected') return prev
         return {
@@ -405,6 +429,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         .catch((error: Error) => {
           if (stopped) return
           const retryError = error as ConnectionRetryError
+          if (retryError.status === 409) return
           setConnection(prev => {
             if (sseActiveRef.current && prev.state === 'connected') return prev
             return {
@@ -489,7 +514,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       // syncing. Hiding the main content here causes a flash — keep the 'connected'
       // state and wait for either 'connected' (sync done) or 'disconnected' (failure).
       // (shouldApplyPolledConnection encodes the same suppression for the poll path.)
-      if (prev.state === 'connected' && status.state === 'connecting') {
+      if (prev.state === 'connected' && status.state === 'connecting' && (!status.context || status.context === prev.context)) {
         return prev
       }
       // connection_state frames don't carry per-kind sync progress — keep the
@@ -506,8 +531,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshCachesOnConnect])
 
+  // Connection state may come from a newer SSE frame or still be applying this
+  // poll. Consume the terminal switch result alongside the matching connection.
+  const polledSwitch = data?.contextSwitch
+  const switchMatchesConnection = data?.state === connection.state && data?.context === connection.context
   const value: ConnectionContextValue = {
     connection,
+    contextSwitch: switchInProgress(polledSwitch) || switchMatchesConnection ? polledSwitch : undefined,
     retry,
     isRetrying: retryMutation.isPending || isAutoRetrying,
     updateFromSSE,

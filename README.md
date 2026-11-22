@@ -501,6 +501,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **[RabbitMQ](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | Node-reported disk and memory alarms - **local collection** |
 | **[NATS](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | JetStream consumer backlog, acknowledgment-pending and redelivery counters - **local collection** |
 | **Velero** | Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation |
+| **Longhorn** | [Volume](docs/integrations.md#longhorn): replica health from its Engine, rebuild progress, faulted and degraded Issues |
 | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore |
 | **CSI Volume Snapshots** | [VolumeSnapshot, VolumeSnapshotContent and VolumeSnapshotClass](docs/integrations.md#csi-volume-snapshots): readiness, errors, restore size, source, binding and deletion policy |
 | **Secrets Store CSI Driver** | [SecretProviderClass and Pod mounts](docs/integrations.md#secrets-store-csi-driver): mount state, object versions and synced Secrets in the Pod drawer |
@@ -508,9 +509,10 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler, Database, Publication, Subscription, ImageCatalog, ClusterImageCatalog, ObjectStore — plus [dedicated views](docs/cnpg.md) for fleet, protection and declaration triage |
 | **Crossplane** | Managed Resources (any provider), Composite Resources, Claims, Provider, ProviderConfig, Function, Configuration, Composition, CompositionRevision, XRD |
 | **Kyverno** | Policy, ClusterPolicy, PolicyReport, ClusterPolicyReport |
-| **Sealed Secrets** | SealedSecret |
+| **Sealed Secrets** | SealedSecret, controller and sealing keys |
 | **Dynamic Resource Allocation** | ResourceClaim, ResourceClaimTemplate, DeviceClass, ResourceSlice (resource.k8s.io, K8s 1.32+) |
 | **NVIDIA GPU Operator** | ClusterPolicy, NVIDIADriver |
+| **MetalLB** | [IPAddressPool, L2Advertisement, BGPAdvertisement, BGPPeer and ConfigurationState](docs/integrations.md#metallb): address counters and exhaustion, advertised pools, peers and Issues for rejected configuration |
 | **Calico** | NetworkPolicy, GlobalNetworkPolicy, StagedNetworkPolicy, StagedGlobalNetworkPolicy, StagedKubernetesNetworkPolicy, IPPool, HostEndpoint, Tier |
 | **Kueue** | ClusterQueue, LocalQueue, Workload, ResourceFlavor, AdmissionCheck (+ Cluster Autoscaler ProvisioningRequest) — basic |
 | **KubeRay** | RayCluster, RayJob, RayService, RayCronJob — basic |

@@ -1,3 +1,4 @@
+import { followSwitch, switchInProgress, type ContextSwitchOperation } from './contextSwitch'
 import { createListRefetchInterval, normalizeResourceList, type ResourceListBody, type ResourceListResult } from './resourceLists'
 import type { CascadeDetail } from '@skyhook-io/k8s-ui/components/ui/ForceDeleteConfirmDialog'
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
@@ -26,6 +27,7 @@ import type {
   CapacityOverviewResponse,
   CapacityPoolDetailResponse,
   CapacityPoolListResponse,
+  NamespaceCollection,
   SetWorkloadImagesResult,
   WorkloadImageInventory,
   WorkloadImageUpdate,
@@ -7680,9 +7682,6 @@ export async function fetchSessionCounts(): Promise<SessionCounts> {
   return fetchJSON("/sessions");
 }
 
-// Context switch timeout in milliseconds (should be longer than backend timeout)
-const CONTEXT_SWITCH_TIMEOUT = 45000; // 45 seconds
-
 // Switch to a different context
 // A refused context switch. errorType is set when the server checked the new
 // cluster before leaving the current one and it didn't answer; older Radar
@@ -7700,50 +7699,49 @@ export class SwitchContextError extends Error {
 export function useSwitchContext() {
   const queryClient = useQueryClient();
 
-  return useMutation<ClusterInfo, Error, { name: string }>({
+  return useMutation<ContextSwitchOperation | null, Error, { name: string }>({
     mutationFn: async ({ name }) => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(
-        () => controller.abort(),
-        CONTEXT_SWITCH_TIMEOUT,
-      );
-
+      const base = getApiBase();
+      const path = apiUrl(`/contexts/${encodeURIComponent(name)}?track=1`, base);
+      const previous = queryClient.getQueryData<{ contextSwitch?: ContextSwitchOperation }>(["connection-status"]);
       try {
-        const response = await apiFetch(
-          `${getApiBase()}/contexts/${encodeURIComponent(name)}`,
-          {
-            method: "POST",
-            signal: controller.signal,
-          },
-        );
-        clearTimeout(timeoutId);
-
+        // This deadline bounds the acknowledgement, not the accepted operation.
+        const response = await apiFetch(path, { method: "POST", signal: AbortSignal.timeout(45_000) });
         if (!response.ok) {
           const error = await readErrorBody(response);
-          throw new SwitchContextError(
-            error.error || `HTTP ${response.status}`,
-            typeof error.errorType === "string" ? error.errorType : undefined,
-          );
+          throw new SwitchContextError(error.error || `HTTP ${response.status}`, typeof error.errorType === "string" ? error.errorType : undefined);
         }
-        return response.json();
+        // Cloud-managed and older servers finish the switch before returning 200.
+        return response.status === 202 ? await response.json() as ContextSwitchOperation : null;
       } catch (error) {
-        clearTimeout(timeoutId);
-        if (error instanceof Error && error.name === "AbortError") {
-          throw new Error(
-            "Context switch timed out. The cluster may be unreachable.",
-            {
-              cause: error,
-            },
-          );
+        if (error instanceof SwitchContextError) throw error;
+        // Either the headers or the body can be lost after the server starts.
+        const status = await apiFetch(apiUrl("/connection?contexts=0", base), { signal: AbortSignal.timeout(10_000) }).catch(() => undefined);
+        if (status?.ok) {
+          const { contextSwitch } = await status.json() as { contextSwitch?: ContextSwitchOperation };
+          if (contextSwitch?.target === name && (switchInProgress(contextSwitch) || (previous && contextSwitch.id !== previous.contextSwitch?.id))) {
+            return contextSwitch;
+          }
+        }
+        if (error instanceof Error && error.name === "TimeoutError") {
+          throw new Error("Radar did not acknowledge the switch. Check the connection status before trying again.", { cause: error });
         }
         throw error;
       }
     },
-    onSuccess: () => {
-      // Clear all query cache to ensure fresh data from new context
-      // Using removeQueries + invalidateQueries ensures no stale data is served
-      queryClient.removeQueries();
-      queryClient.invalidateQueries();
+    onSuccess: async (operation) => {
+      if (operation) {
+        followSwitch(operation.id);
+        await queryClient.cancelQueries({ queryKey: ["connection-status"] });
+        if (switchInProgress(operation)) {
+          queryClient.setQueryData(["connection-status"], (existing: { contextSwitch?: ContextSwitchOperation } | undefined) =>
+            existing ? { ...existing, contextSwitch: operation } : existing);
+        }
+        void queryClient.invalidateQueries({ queryKey: ["connection-status"] });
+      } else {
+        queryClient.removeQueries();
+        void queryClient.invalidateQueries();
+      }
     },
     onError: () => {
       // Invalidate contexts so the dropdown checkmark reflects the backend's
@@ -7797,6 +7795,8 @@ export interface NamespaceScope {
    * its short fallback list. Absent from older servers.
    */
   listFailed?: boolean;
+  /** Where Radar collects the kinds it keeps in only some namespaces; absent when none, or from an older Radar. */
+  collection?: NamespaceCollection;
 }
 
 /**
@@ -8474,6 +8474,7 @@ export interface DiagnosticsSnapshot {
     clusterName?: string;
     error?: string;
     errorType?: string;
+    progressMessage?: string;
   };
   kubeconfig?: {
     mode: "" | "in-cluster" | "single" | "multi-env" | "multi-dir" | "multi-source";
@@ -8483,11 +8484,12 @@ export interface DiagnosticsSnapshot {
     enrichedFromShell: boolean;
     kubeconfigEnvIgnored: boolean;
     kubeconfigEnvIgnoredReason: string;
-    currentContextUsesExec: boolean;
+    currentContextUsesExec?: boolean;
     execPluginsPresent?: string[];
     execPluginsMissing?: string[];
   };
   cluster?: {
+    observedAt?: string;
     platform: string;
     kubernetesVersion: string;
     nodeCount: number;
@@ -8525,7 +8527,7 @@ export interface DiagnosticsSnapshot {
   };
   informers?: {
     typedCount: number;
-    dynamicCount: number;
+    dynamicCount?: number;
     watchedCRDs: string[];
     syncStatus?: DiagCacheSyncStatus;
   };
@@ -8597,7 +8599,30 @@ export interface DiagnosticsSnapshot {
 export function useDiagnostics(enabled: boolean) {
   return useQuery<DiagnosticsSnapshot>({
     queryKey: ["diagnostics"],
-    queryFn: enabled ? () => fetchJSON("/diagnostics") : skipToken,
+    queryFn: enabled
+      ? async ({ signal }) => {
+          const request = new AbortController();
+          const cancel = () => request.abort();
+          signal.addEventListener("abort", cancel, { once: true });
+          if (signal.aborted) cancel();
+          const timeout = setTimeout(cancel, 15000);
+          try {
+            return await fetchJSON<DiagnosticsSnapshot>("/diagnostics", request.signal);
+          } catch (error) {
+            if (request.signal.aborted && !signal.aborted) {
+              throw new Error("Radar did not return diagnostics within 15 seconds.", { cause: error });
+            }
+            if (signal.aborted) throw error;
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(`Could not load diagnostics. ${message}`, { cause: error });
+          } finally {
+            clearTimeout(timeout);
+            signal.removeEventListener("abort", cancel);
+          }
+        }
+      : skipToken,
+    retry: false,
+    networkMode: "always",
     staleTime: 0,
     gcTime: 0,
   });

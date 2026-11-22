@@ -37,8 +37,10 @@ import { HTTPRouteRenderer } from '../components/resources/renderers/HTTPRouteRe
 import { RolloutRenderer } from '../components/resources/renderers/RolloutRenderer'
 import { KyvernoPolicyCoverage } from '../components/resources/renderers/KyvernoPolicyCoverage'
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
+import { LonghornVolumeRenderer } from '../components/resources/renderers/LonghornVolumeRenderer'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
+import { SealedSecretRenderer } from '../components/resources/renderers/SealedSecretRenderer'
 import { UpgradePlanRenderer } from '../components/resources/renderers/UpgradePlanRenderer'
 import {
   ValidatingAdmissionPolicyBindingRenderer,
@@ -49,6 +51,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
   { id: 'gateway-api', renderers: { HTTPRouteRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
+  { id: 'sealed-secrets', renderers: { SealedSecretRenderer } },
   { id: 'system-upgrade', renderers: { UpgradePlanRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
   {
@@ -66,6 +69,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'rollouts', renderers: { RolloutRenderer } },
   { id: 'kyverno', renderers: { KyvernoPolicyCoverage, KyvernoPolicyQueued } },
   veleroResourceHost,
+  { id: 'longhorn', renderers: { LonghornVolumeRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
   { id: 'admission-policy', renderers: { ValidatingAdmissionPolicyRenderer, ValidatingAdmissionPolicyBindingRenderer } },

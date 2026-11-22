@@ -380,7 +380,7 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 	}
 
 	// Register for context switch completion
-	k8s.OnContextSwitch(func(newContext string) {
+	k8s.OnContextSwitchComplete(func(newContext, switchID string) {
 		log.Printf("SSE broadcaster: context switched to %q, invalidating topology builds", newContext)
 		resetCacheView()
 
@@ -390,12 +390,11 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 		b.mu.RUnlock()
 		log.Printf("SSE broadcaster: broadcasting context_changed to %d clients", clientCount)
 
-		b.Broadcast(SSEEvent{
-			Event: "context_changed",
-			Data: map[string]any{
-				"context": newContext,
-			},
-		})
+		data := map[string]any{"context": newContext}
+		if switchID != "" {
+			data["switchId"] = switchID
+		}
+		b.Broadcast(SSEEvent{Event: "context_changed", Data: data})
 
 		// Broadcast the new topology so clients can complete the switch.
 		// Handed to the worker so the context switch isn't blocked on a build.

@@ -334,6 +334,12 @@ func SetTestContextName(name string) string {
 	return prev
 }
 
+// HoldTestClientWriteLock simulates kubeconfig file I/O under the writer lock.
+func HoldTestClientWriteLock() func() {
+	clientMu.Lock()
+	return clientMu.Unlock
+}
+
 // SetTestResourceDiscovery installs discovery backed by client and returns a
 // restore func.
 func SetTestResourceDiscovery(client discovery.DiscoveryInterface) (func(), error) {

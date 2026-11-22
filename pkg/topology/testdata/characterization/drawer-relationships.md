@@ -1,6 +1,6 @@
 # Accepted drawer relationship differences
 
-The family-based drawer answer changes 40 fields from the broadcast graph baseline. Ownership coverage, owner/owners/children/deployment and revision splitting are unchanged. These are the intended difference classes:
+The family-based drawer answer changes 42 fields from the broadcast graph baseline. Ownership coverage, owner/owners/children/deployment and revision splitting are unchanged. These are the intended difference classes:
 
 | Class | Example and reason |
 |---|---|
@@ -13,4 +13,5 @@ The family-based drawer answer changes 40 fields from the broadcast graph baseli
 | Gateway composition | `Service shop/web` and `Deployment shop/web` gain Gateway `shop/public`, following Gateway → HTTPRoute → Service → workload. These edges were present in the old graph but its flat query did not compose them. |
 | Implementation selection is not management | Gateway `shop/public` loses GatewayClass `/envoy` from `managedBy`: a class selects an implementation; it is neither an owner nor a spec generator. |
 | SealedSecret declaration join | `StatefulSet team/db` and `Pod team/db-0` gain SealedSecret `team/db-creds` in `configRefs`, and that SealedSecret gains both consumers. The join uses declared Secret coordinates without requiring the Secret to exist or be readable. |
+| Longhorn CSI handle | `longhorn.io:Volume longhorn-system/vol-lh-0` gains PersistentVolume `/pv-lh-0` in `consumers`, and the PV gains the Volume in `storageRefs`. The PV's CSI handle names the Volume; the link is a direct read with no display edge, so the graph records show neither. It holds only while exactly one Volume has that name. |
 | Hand-made Crossplane fixture without a backlink | XR `demo.example.io:XDatabase /orders-db-xr` loses claim `DatabaseClaim shop/orders-db` from `managers` and `managedBy`. Only the claim's `spec.resourceRef` points at the XR; the XR records neither `spec.claimRef` nor an owner reference to the claim. Crossplane writes `spec.claimRef` on every bound composite, and Crossplane v2 has no claims. This fixture-only shape is accepted; no reverse scan of arbitrary claim kinds is added. |

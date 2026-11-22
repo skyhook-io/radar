@@ -10,6 +10,7 @@ import (
 // must use this so test order doesn't leak state between cases.
 func withDeadlinesRestored(t *testing.T, body func()) {
 	t.Helper()
+	previousProbeOverride := localProbeTimeoutOverride
 	snap := DeadlineOptions{
 		ContextSwitchTimeout: ContextSwitchTimeout,
 		FirstPaintBackstop:   FirstPaintBackstop,
@@ -18,6 +19,7 @@ func withDeadlinesRestored(t *testing.T, body func()) {
 	}
 	t.Cleanup(func() {
 		ContextSwitchTimeout = snap.ContextSwitchTimeout
+		localProbeTimeoutOverride = previousProbeOverride
 		FirstPaintBackstop = snap.FirstPaintBackstop
 		NamespaceListTimeout = snap.NamespaceListTimeout
 		MaxScopeCandidates = snap.MaxScopeCandidates
@@ -109,6 +111,20 @@ func TestConfigureDeadlines_NegativeRejected(t *testing.T) {
 		}
 		if MaxScopeCandidates != 20 {
 			t.Errorf("negative MaxScopeCandidates was applied: %d", MaxScopeCandidates)
+		}
+	})
+}
+
+func TestLocalProbeTimeoutUsesTargetAuthAndExplicitOverride(t *testing.T) {
+	withDeadlinesRestored(t, func() {
+		if plain, exec := localProbeTimeout(false), localProbeTimeout(true); plain != 5*time.Second || exec != 11*time.Second {
+			t.Fatalf("default probe limits: plain %v, exec %v", plain, exec)
+		}
+		for _, override := range []time.Duration{time.Second, 30 * time.Second, 2 * time.Minute} {
+			ConfigureDeadlines(DeadlineOptions{ContextSwitchTimeout: override})
+			if plain, exec := localProbeTimeout(false), localProbeTimeout(true); plain != override || exec != override {
+				t.Fatalf("override %v: plain %v, exec %v", override, plain, exec)
+			}
 		}
 	})
 }

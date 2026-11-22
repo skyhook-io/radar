@@ -671,11 +671,11 @@ func InitializeCluster() {
 
 	// Cancel any in-flight API calls from previous attempts (e.g., browser
 	// polling /api/capabilities with RBAC checks through a broken exec plugin).
-	k8s.CancelOngoingOperations()
+	operation, _ := k8s.CancelOngoingOperations()
 
 	clusterStart := time.Now()
 
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 		State:       k8s.StateConnecting,
 		Context:     k8s.GetContextName(),
 		ProgressMsg: "Testing cluster connectivity...",
@@ -687,7 +687,7 @@ func InitializeCluster() {
 	// If /version fails, we cancel subsystem init via context.
 	// Derived from the operation context so a context switch or retry
 	// cancels our goroutines immediately.
-	ctx, cancel := context.WithCancel(k8s.OperationContext())
+	ctx, cancel := context.WithCancel(operation)
 	defer cancel()
 
 	// Gate: subsystem progress messages only update the UI after /version
@@ -715,7 +715,7 @@ func InitializeCluster() {
 	go func() {
 		subsystemErr <- k8s.InitAllSubsystems(ctx, func(msg string) {
 			if connected.Load() {
-				k8s.SetConnectionStatus(k8s.ConnectionStatus{
+				k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 					State:       k8s.StateConnecting,
 					Context:     k8s.GetContextName(),
 					ProgressMsg: msg,
@@ -732,7 +732,7 @@ func InitializeCluster() {
 		// Don't wait for subsystem drain — exec credential plugins serialize
 		// API calls, so draining 20+ RBAC checks can take 30+ seconds.
 		errorType := k8s.ClassifyError(err)
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
+		k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   k8s.GetContextName(),
 			Error:     err.Error(),
@@ -751,7 +751,7 @@ func InitializeCluster() {
 	k8s.LogTiming(" Cluster access check: %v", time.Since(clusterStart))
 
 	// Connectivity confirmed — kick off progress updates for remaining init
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 		State:       k8s.StateConnecting,
 		Context:     k8s.GetContextName(),
 		ProgressMsg: "Loading workloads...",
@@ -759,7 +759,7 @@ func InitializeCluster() {
 
 	// Connectivity confirmed — wait for subsystem init to finish
 	if err := <-subsystemErr; err != nil {
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
+		k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   k8s.GetContextName(),
 			Error:     err.Error(),
@@ -770,11 +770,13 @@ func InitializeCluster() {
 	}
 	k8s.LogTiming(" Total cluster init: %v", time.Since(clusterStart))
 
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+	if !k8s.SetConnectionStatusIfCurrent(operation, k8s.ConnectionStatus{
 		State:       k8s.StateConnected,
 		Context:     k8s.GetContextName(),
 		ClusterName: k8s.GetClusterName(),
-	})
+	}) {
+		return
+	}
 
 	prometheuspkg.Prewarm()
 }
@@ -883,7 +885,7 @@ func CheckClusterAccess(ctx context.Context) error {
 			default:
 			}
 			log.Printf("Retrying cluster connectivity check...")
-			k8s.SetConnectionStatus(k8s.ConnectionStatus{
+			k8s.SetConnectionStatusIfCurrent(ctx, k8s.ConnectionStatus{
 				State:       k8s.StateConnecting,
 				Context:     k8s.GetContextName(),
 				ProgressMsg: "Retrying cluster connectivity...",

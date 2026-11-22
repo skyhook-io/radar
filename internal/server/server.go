@@ -85,6 +85,7 @@ import (
 
 // Server is the Explorer HTTP server
 type Server struct {
+	contextSwitch           k8s.ContextSwitchTracker
 	router                  *chi.Mux
 	broadcaster             *SSEBroadcaster
 	vitalsMetrics           vitalsMetricsMemo
@@ -581,6 +582,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// AI investigation event stream via SSE — long-lived; lives outside the
 		// 60s timeout group. The run keeps going server-side after disconnect.
 		r.Get("/diagnose/runs/{id}/stream", s.handleDiagnoseRunStream)
+		r.Get("/vulnerabilities/java4shell/stream", s.handleJava4ShellStream)
 
 		// Node drain — outside the 60s timeout group: it may wait minutes for PDB backoff
 		// and, by default, for the evicted pods to finish terminating.
@@ -718,6 +720,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/resources/{kind}/{namespace}/{name}/cascade-preview", s.handleCascadeDeletePreview)
 			r.Delete("/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
+			r.Get("/sealedsecrets/controller", s.handleSealedSecretsController)
 			r.Get("/certificates", s.handleCertificates)
 
 			// Cluster audit
@@ -1436,6 +1439,7 @@ func (s *Server) Handler() http.Handler {
 
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
+	s.contextSwitch.Stop()
 	prometheuspkg.RightsizingScans().Invalidate()
 	StopAllLocalTermSessions()
 	if runs := s.aiRunManager(); runs != nil {
@@ -1529,6 +1533,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
 		ApplicationEvidence:         true,
 		DatadogAgentPresence:        true,
+		SealedSecretsController:     true,
 		ResourceReadCoverage:        true,
 		SearchCoverage:              true,
 		SearchEventContent:          true,
@@ -1569,6 +1574,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		PodFileUpload:               true,
 		Vulnerabilities:             true,
 		RuntimeAdvisoryChecks:       true,
+		RuntimeAdvisoryProgress:     true,
 	}
 }
 
@@ -5134,6 +5140,14 @@ func (s *Server) handleListContexts(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, contexts)
 }
 
+func (s *Server) beginUntrackedSwitch(w http.ResponseWriter) func() {
+	release := s.contextSwitch.BeginUntracked()
+	if release == nil {
+		s.writeError(w, http.StatusConflict, "Another cluster switch is already in progress.")
+	}
+	return release
+}
+
 func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConfigEditable(w, r) {
 		return
@@ -5158,6 +5172,44 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	query := r.URL.Query()
+	if (query.Has("cancelSwitch") || query.Has("stopSwitch")) && s.configManagement() != "local" {
+		s.writeError(w, http.StatusForbidden, "Tracked context switches are available on local Radar.")
+		return
+	}
+	if id := query.Get("stopSwitch"); query.Has("stopSwitch") {
+		if !s.contextSwitch.StopSwitch(id, name) {
+			s.writeError(w, http.StatusConflict, "This switch can no longer be stopped.")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if id := query.Get("cancelSwitch"); query.Has("cancelSwitch") {
+		if !s.contextSwitch.Cancel(id, name) {
+			s.writeError(w, http.StatusConflict, "This switch can no longer be cancelled.")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if query.Get("track") == "1" && s.configManagement() == "local" {
+		op, ok := s.contextSwitch.Start(name, countRefusedSwitch)
+		if !ok {
+			s.writeError(w, http.StatusConflict, "Another cluster switch is already in progress.")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		s.writeJSON(w, op)
+		return
+	}
+
+	release := s.beginUntrackedSwitch(w)
+	if release == nil {
+		return
+	}
+	defer release()
 	if err := k8s.PerformCheckedContextSwitch(r.Context(), name); err != nil {
 		// A preflight rejection fails before any teardown — the current cluster is
 		// still connected, so don't poison the global connection status.
@@ -5172,12 +5224,7 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
-			State:     k8s.StateDisconnected,
-			Context:   name,
-			Error:     err.Error(),
-			ErrorType: k8s.ClassifyError(err),
-		})
+
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -5188,15 +5235,22 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	// the context-operation lock; publishing again here would race a queued
 	// operation's teardown.
 
-	// Return the new cluster info
-	info, err := k8s.GetClusterInfo(r.Context())
-	if err != nil {
-		// Context switched successfully but couldn't get info - still return success
-		s.writeJSON(w, map[string]string{"status": "ok", "context": name})
-		return
+	// The optional info read can outlive the switch, especially if an exec
+	// plugin blocks. Release admission first and discard any mixed-cluster read.
+	var operation context.Context
+	k8s.CaptureClusterReads(func() {
+		if k8s.GetContextName() == name {
+			operation = k8s.OperationContext()
+		}
+	})
+	release()
+	if operation != nil && operation.Err() == nil {
+		if info, err := k8s.GetClusterInfo(r.Context()); err == nil && info.Context == name && operation.Err() == nil {
+			s.writeJSON(w, info)
+			return
+		}
 	}
-
-	s.writeJSON(w, info)
+	s.writeJSON(w, map[string]string{"status": "ok", "context": name})
 }
 
 // Connection status handlers (for graceful startup)
@@ -5215,6 +5269,12 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		// Lets the browser stand down its auto-retry for the whole auth-loss
 		// episode, even when the live errorType flips to non-auth values.
 		"authRecoveryOwed": k8s.RuntimeAuthRecoveryOwed(),
+	}
+	if op := s.contextSwitch.Snapshot(); op != nil {
+		if op.Phase == "switching" && op.Target == status.Context && status.State == k8s.StateConnecting && status.ProgressMsg != "" {
+			op.Progress = status.ProgressMsg
+		}
+		response["contextSwitch"] = op
 	}
 	// Context enumeration re-reads kubeconfig files (under the client write
 	// lock in multi-file mode) — too expensive for the UI's perpetual
@@ -5243,28 +5303,33 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
-	ctx := k8s.GetContextName()
-	if ctx == "" {
+	retryCtx, release := s.contextSwitch.BeginRetry()
+	if release == nil {
+		s.writeError(w, http.StatusConflict, "Another cluster switch is already in progress.")
+		return
+	}
+	defer release()
+	if k8s.GetContextName() == "" {
 		s.writeError(w, http.StatusBadRequest, "no context configured")
 		return
 	}
-
-	if err := k8s.RetryCurrentConnection(); err != nil {
+	var err error
+	if s.configManagement() == "local" && !k8s.IsInCluster() {
+		err = k8s.RetryLocalConnection(retryCtx)
+	} else {
+		err = k8s.RetryCurrentConnection()
+	}
+	if err != nil {
 		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		if errors.Is(err, k8s.ErrReconnectSuperseded) {
-			s.writeError(w, http.StatusConflict, err.Error())
+			s.writeErrorCode(w, http.StatusConflict, "reconnect_superseded", err.Error())
 			return
 		}
 		errorType := k8s.ClassifyError(err)
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
-			State:     k8s.StateDisconnected,
-			Context:   ctx,
-			Error:     err.Error(),
-			ErrorType: errorType,
-		})
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		if encodeErr := json.NewEncoder(w).Encode(map[string]string{"error": err.Error(), "errorType": errorType}); encodeErr != nil {
@@ -5335,6 +5400,11 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	if !s.requireConfigEditable(w, r) {
 		return
 	}
+	release := s.beginUntrackedSwitch(w)
+	if release == nil {
+		return
+	}
+	defer release()
 	if !s.requireConnected(w) {
 		return
 	}
@@ -5425,16 +5495,7 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 			s.writeError(w, http.StatusBadRequest, "failed to switch context: "+err.Error())
 			return
 		}
-		statusContext := qualifiedName
-		if discarded {
-			statusContext = k8s.GetContextName()
-		}
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
-			State:     k8s.StateDisconnected,
-			Context:   statusContext,
-			Error:     err.Error(),
-			ErrorType: k8s.ClassifyError(err),
-		})
+
 		s.writeError(w, http.StatusInternalServerError, "failed to switch context: "+err.Error())
 		return
 	}
