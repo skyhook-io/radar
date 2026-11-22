@@ -5,16 +5,12 @@ import { useAPIResources } from '../../api/apiResources'
 import { useVeleroWorkspace } from '../../api/velero'
 import { useNamespaces, useRadarFeature } from '../../api/client'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
-import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
-import { useSubstrateSidebarWorkspace } from '../substrate/useSubstrateSidebarWorkspace'
+import { useIntegrationSidebars } from '../../integrations/sidebarWorkspaces'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
-import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
-import { useKagentSidebarWorkspace } from '../kagent/useKagentSidebarWorkspace'
-import { useAgentSandboxSidebarWorkspace } from '../agentsandbox/useAgentSandboxSidebarWorkspace'
 import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
 import { VeleroScreenGate, useVeleroInstallation } from './shared'
 import { VeleroOverview } from './VeleroOverview'
-import { useVeleroSidebarWorkspace, veleroDiscovered } from './useVeleroSidebarWorkspace'
+import { veleroDiscovered } from './useVeleroSidebarWorkspace'
 import { VELERO_DETAIL_KINDS, VELERO_GROUP, parseVeleroRoute } from './routes'
 import { VeleroDetailPage } from './VeleroDetailPage'
 
@@ -37,14 +33,9 @@ export function VeleroView({ namespaces, selectedResource, onOpenResource, onClo
   const discovered = veleroDiscovered(apiResources) || discoveryFailed
   const query = useVeleroWorkspace({ enabled: discovered })
   // An object's page highlights its kind's row; the Overview row only the Overview.
-  const veleroSidebar = useVeleroSidebarWorkspace({ apiResources, active: !detail })
+  const sidebarWorkspace = useIntegrationSidebars({ apiResources, namespaces, velero: { active: !detail } })
   const plural = detail?.plural
   const selectedKind = useMemo(() => (plural ? { name: plural, kind: VELERO_DETAIL_KINDS[plural].kind, group: VELERO_GROUP } : null), [plural])
-  const cnpgSidebar = useCNPGSidebarWorkspace({ apiResources, namespaces })
-  const substrateSidebar = useSubstrateSidebarWorkspace({ apiResources })
-  const sandboxSidebar = useAgentSandboxSidebarWorkspace({ apiResources, namespaces })
-  const kagentSidebar = useKagentSidebarWorkspace({ apiResources })
-  const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar, substrateSidebar, sandboxSidebar, kagentSidebar)
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
 
   const [installation, setInstallation] = useVeleroInstallation(query.data?.installations)
