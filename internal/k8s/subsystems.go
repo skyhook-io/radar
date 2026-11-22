@@ -116,17 +116,15 @@ func initAllSubsystems(ctx context.Context, progress func(string), discoveryWait
 			cache.apiDiscoveryPending.Store(true)
 			go func() {
 				defer cache.apiDiscoveryPending.Store(false)
-				select {
-				case <-discoveryDone:
-				case <-lifecycleCtx.Done():
-					return
-				}
+				<-discoveryDone
 				// Teardown and replacement hold contextOpMu. Only install the
-				// late cache while its original connection still owns the clients.
+				// late cache while this typed cache still serves. An operation
+				// can be cancelled without replacing it (a rescope whose
+				// connectivity check failed), so use the current one.
 				contextOpMu.RLock()
 				defer contextOpMu.RUnlock()
-				if lifecycleCtx.Err() == nil && GetResourceCache() == cache {
-					startDynamicResourceCache(lifecycleCtx, cache)
+				if GetResourceCache() == cache {
+					startDynamicResourceCache(OperationContext(), cache)
 				}
 			}()
 		} else {

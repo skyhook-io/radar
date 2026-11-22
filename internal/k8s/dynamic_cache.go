@@ -131,7 +131,12 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			return
 		}
 
+		crdCompleteMu.Lock()
+		for _, callback := range crdCompleteCallbacks {
+			core.OnCRDDiscoveryComplete(callback)
+		}
 		dynamicResourceCache.Store(&DynamicResourceCache{DynamicResourceCache: core})
+		crdCompleteMu.Unlock()
 	})
 	return initErr
 }
@@ -161,9 +166,18 @@ func ResetDynamicResourceCache() {
 	dynamicCacheOnce = new(sync.Once)
 }
 
-// OnCRDDiscoveryComplete registers a callback to be called when CRD discovery completes.
-// This is a package-level function for backward compatibility.
+var (
+	crdCompleteMu        sync.Mutex
+	crdCompleteCallbacks []func()
+)
+
+// OnCRDDiscoveryComplete registers a callback for when CRD discovery completes,
+// on the current dynamic cache and on every one created later (after a switch,
+// or when API discovery finishes late).
 func OnCRDDiscoveryComplete(callback func()) {
+	crdCompleteMu.Lock()
+	defer crdCompleteMu.Unlock()
+	crdCompleteCallbacks = append(crdCompleteCallbacks, callback)
 	if dc := GetDynamicResourceCache(); dc != nil && dc.DynamicResourceCache != nil {
 		dc.OnCRDDiscoveryComplete(callback)
 	}

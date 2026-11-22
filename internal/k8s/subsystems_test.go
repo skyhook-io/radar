@@ -39,7 +39,7 @@ func TestInitAllSubsystemsPropagatesTimelineInitFailure(t *testing.T) {
 }
 
 func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
-	for _, state := range []string{"current", "replaced"} {
+	for _, state := range []string{"current", "replaced", "operation cancelled"} {
 		t.Run(state, func(t *testing.T) {
 			withCleanDiscoveryGlobals(t)
 			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "serving", Namespace: "default"}}
@@ -83,6 +83,16 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 			})
 			t.Cleanup(ResetMetricsHistory)
 
+			// Registered before the late dynamic cache exists, as the SSE
+			// broadcaster's topology refresh is.
+			crdComplete := make(chan struct{}, 1)
+			OnCRDDiscoveryComplete(func() {
+				select {
+				case crdComplete <- struct{}{}:
+				default:
+				}
+			})
+
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			const budget = 100 * time.Millisecond
@@ -117,12 +127,17 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 			if GetDynamicResourceCache() != nil {
 				t.Fatal("dynamic cache initialized before API discovery finished")
 			}
-			if state == "replaced" {
+			switch state {
+			case "replaced":
 				ResetResourceDiscovery()
 				ResetResourceCache()
 				if err := InitTestResourceCache(fake.NewSimpleClientset()); err != nil {
 					t.Fatal(err)
 				}
+			case "operation cancelled":
+				// A rescope whose connectivity check fails cancels the operation
+				// but leaves this cache serving.
+				CancelOngoingOperations()
 			}
 			unblock()
 			for deadline := time.Now().Add(3 * time.Second); cache.apiDiscoveryPending.Load(); {
@@ -146,6 +161,11 @@ func TestTrackedSwitchDiscoveryWaitHasOwnBudget(t *testing.T) {
 					t.Fatal("late CRD warmup did not finish")
 				}
 				time.Sleep(time.Millisecond)
+			}
+			select {
+			case <-crdComplete:
+			case <-time.After(3 * time.Second):
+				t.Fatal("CRD discovery completion callback did not fire on the late dynamic cache")
 			}
 		})
 	}
