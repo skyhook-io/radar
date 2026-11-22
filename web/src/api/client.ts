@@ -79,6 +79,7 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
+import { CONNECTION_HEADER, connectionHeaderValue } from './connectionBinding'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   RadarFeatureUnsupportedError,
@@ -163,6 +164,10 @@ export function apiFetch(
   for (const [k, v] of Object.entries(getAuthHeaders())) {
     if (!headers.has(k)) headers.set(k, v);
   }
+  // Name the connection this tab is on, so the server can refuse a write
+  // meant for a cluster it no longer serves (see connectionBinding.ts).
+  const connection = connectionHeaderValue();
+  if (connection && !headers.has(CONNECTION_HEADER)) headers.set(CONNECTION_HEADER, connection);
   return fetch(input, {
     credentials: getCredentialsMode(),
     ...init,
@@ -6756,12 +6761,9 @@ function streamHelmProgress(
   onProgress: (event: InstallProgressEvent) => void,
   failureLabel: string,
 ): Promise<InstallProgressEvent> {
-  const headers = new Headers(options.headers);
-  for (const [k, v] of Object.entries(getAuthHeaders())) {
-    if (!headers.has(k)) headers.set(k, v);
-  }
   return new Promise((resolve, reject) => {
-    fetch(url, { credentials: getCredentialsMode(), ...options, headers })
+    // apiFetch adds the auth headers and the tab's connection.
+    apiFetch(url, options)
       .then(async (response) => {
         if (!response.ok) {
           const error = await readErrorBody(response);

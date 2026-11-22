@@ -23,7 +23,27 @@ import (
 // Used by code paths that don't have access to *http.Request (e.g. MCP
 // tools, which only receive ctx). REST handlers should prefer
 // Server.getClientForRequest for consistency.
+//
+// A request admitted against a connection (WithBoundConnection) gets that
+// connection's client, never a newer connection's.
 func ClientFromContext(ctx context.Context) kubernetes.Interface {
+	if b, ok := BoundConnectionFrom(ctx); ok {
+		if user := pkgauth.UserFromContext(ctx); user != nil {
+			if b.Config == nil {
+				return nil
+			}
+			client, err := kubernetes.NewForConfig(UserRESTConfig(b.Config, user))
+			if err != nil {
+				log.Printf("[auth] Impersonation failed for %s: %v", SanitizeForLog(user.Username), err)
+				return nil
+			}
+			return client
+		}
+		if b.Client != nil {
+			return b.Client
+		}
+		return nil
+	}
 	if user := pkgauth.UserFromContext(ctx); user != nil {
 		client, err := UserClient(user)
 		if err != nil {
@@ -45,6 +65,20 @@ func ClientFromContext(ctx context.Context) kubernetes.Interface {
 // DynamicClientFromContext is the dynamic-client analog of ClientFromContext.
 // Same nil-on-impersonation-failure contract.
 func DynamicClientFromContext(ctx context.Context) dynamic.Interface {
+	if b, ok := BoundConnectionFrom(ctx); ok {
+		if user := pkgauth.UserFromContext(ctx); user != nil {
+			if b.Config == nil {
+				return nil
+			}
+			client, err := dynamic.NewForConfig(UserRESTConfig(b.Config, user))
+			if err != nil {
+				log.Printf("[auth] Impersonation failed for %s: %v", SanitizeForLog(user.Username), err)
+				return nil
+			}
+			return client
+		}
+		return b.Dynamic
+	}
 	if user := pkgauth.UserFromContext(ctx); user != nil {
 		client, err := UserDynamicClient(user)
 		if err != nil {

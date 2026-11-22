@@ -114,6 +114,35 @@ type Handlers struct {
 	// a namespace missing from the result as denied, so it needs to know. Nil
 	// falls back to resolveNamespaces with every check answered.
 	ResolveStorageNamespaces func(r *http.Request) (namespaces []string, ok bool, checked bool, skipped []string)
+	// BindWrite wraps the routes that change the cluster, so they run only on
+	// the connection the caller names. Injected by the server; nil leaves
+	// them unwrapped.
+	BindWrite func(http.HandlerFunc) http.HandlerFunc
+	// AdmitWrite is BindWrite's check for a handler that learns from the body
+	// whether it writes to the cluster; it answers the refusal itself. The
+	// returned func reports whether the admitted connection is still serving.
+	AdmitWrite func(http.ResponseWriter, *http.Request) (stillAdmitted func() bool, ok bool)
+}
+
+// stillAdmitted is checked right before a bound write calls Helm: Helm builds
+// its clients from the serving connection when the action starts, so a switch
+// since admission is refused here instead of landing on the new cluster.
+func stillAdmitted(w http.ResponseWriter, r *http.Request) bool {
+	if k8s.StillBound(r.Context()) {
+		return true
+	}
+	writeErrorPayload(w, http.StatusConflict, map[string]string{
+		"error":      "Nothing was changed: the cluster changed while this request was being prepared. Check the current cluster and try again.",
+		"error_code": "context_changed",
+	})
+	return false
+}
+
+func (h *Handlers) bind(next http.HandlerFunc) http.HandlerFunc {
+	if h.BindWrite == nil {
+		return next
+	}
+	return h.BindWrite(next)
 }
 
 // ReleaseReadDeniedCode tags a 403 that is Kubernetes refusing the caller's own
@@ -151,8 +180,8 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Get("/releases", h.handleListReleases)
 		r.Get("/inventory", h.handleInventory)
 		r.Get("/inventory/{namespace}/{name}", h.handleObservedRelease)
-		r.Post("/releases", h.handleInstall)
-		r.Post("/releases/install-stream", h.handleInstallStream)
+		r.Post("/releases", h.bind(h.handleInstall))
+		r.Post("/releases/install-stream", h.bind(h.handleInstallStream))
 		r.Get("/releases/{namespace}/{name}", h.handleGetRelease)
 		r.Get("/releases/{namespace}/{name}/manifest", h.handleGetManifest)
 		r.Get("/releases/{namespace}/{name}/values/diff", h.handleGetValuesDiff)
@@ -167,17 +196,17 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Get("/releases/{namespace}/{name}/source/versions", h.handleSourceVersions)
 		r.Get("/upgrade-check", h.handleBatchUpgradeCheck)
 		// Actions (write operations)
-		r.Post("/releases/{namespace}/{name}/rollback", h.handleRollback)
-		r.Post("/releases/{namespace}/{name}/rollback-stream", h.handleRollbackStream)
-		r.Post("/releases/{namespace}/{name}/upgrade", h.handleUpgrade)
-		r.Post("/releases/{namespace}/{name}/upgrade-stream", h.handleUpgradeStream)
-		r.Post("/releases/{namespace}/{name}/source/upgrade", h.handleUpgrade)
-		r.Post("/releases/{namespace}/{name}/source/upgrade-stream", h.handleUpgradeStream)
+		r.Post("/releases/{namespace}/{name}/rollback", h.bind(h.handleRollback))
+		r.Post("/releases/{namespace}/{name}/rollback-stream", h.bind(h.handleRollbackStream))
+		r.Post("/releases/{namespace}/{name}/upgrade", h.bind(h.handleUpgrade))
+		r.Post("/releases/{namespace}/{name}/upgrade-stream", h.bind(h.handleUpgradeStream))
+		r.Post("/releases/{namespace}/{name}/source/upgrade", h.bind(h.handleUpgrade))
+		r.Post("/releases/{namespace}/{name}/source/upgrade-stream", h.bind(h.handleUpgradeStream))
 		r.Post("/releases/{namespace}/{name}/source/preview", h.handlePreviewValues)
 		r.Post("/releases/{namespace}/{name}/values/preview", h.handlePreviewValues)
-		r.Put("/releases/{namespace}/{name}/values", h.handleApplyValues)
-		r.Put("/releases/{namespace}/{name}/source", h.handleSetSource)
-		r.Delete("/releases/{namespace}/{name}", h.handleUninstall)
+		r.Put("/releases/{namespace}/{name}/values", h.bind(h.handleApplyValues))
+		r.Put("/releases/{namespace}/{name}/source", h.bind(h.handleSetSource))
+		r.Delete("/releases/{namespace}/{name}", h.bind(h.handleUninstall))
 
 		// Chart browser (local repositories)
 		r.Get("/repositories", h.handleListRepositories)
@@ -237,6 +266,9 @@ func (h *Handlers) handleSetSource(w http.ResponseWriter, r *http.Request) {
 	}
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	selected := ChartSourceCandidate{Type: req.Type, Reference: req.Reference, URL: req.URL}
+	if !stillAdmitted(w, r) {
+		return
+	}
 	var err error
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		err = client.SetSourceAsUser(namespace, name, selected, user)
@@ -706,6 +738,9 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, namespace, name)
 	var rollbackErr error
 	if user := auth.UserFromContext(r.Context()); user != nil {
@@ -764,6 +799,9 @@ func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, namespace, name)
 	user := auth.UserFromContext(r.Context())
 	streamRollback(w, r, flusher, func(progressCh chan<- InstallProgress) error {
@@ -840,6 +878,9 @@ func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, namespace, name)
 	var uninstallErr error
 	if user := auth.UserFromContext(r.Context()); user != nil {
@@ -887,6 +928,9 @@ func (h *Handlers) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validSourceUpgradeRoute(w, r, req) {
+		return
+	}
+	if !stillAdmitted(w, r) {
 		return
 	}
 	auth.AuditLog(r, namespace, name)
@@ -949,6 +993,9 @@ func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
 	progressCh := make(chan InstallProgress, 10)
 	// An upgrade may finish after the client disconnects; the receiver must not close the producer's channel.
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, namespace, name)
 	resultCh := make(chan error, 1)
 	go func() {
@@ -1068,6 +1115,9 @@ func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, namespace, name)
 	var applyErr error
 	if user := auth.UserFromContext(r.Context()); user != nil {
@@ -1126,6 +1176,15 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 	if !requireHelmWrite(w, r, req.Namespace) {
 		return
 	}
+	// Associating a release writes its storage Secret on the cluster.
+	associationAdmitted := func() bool { return true }
+	if req.Namespace != "" && h.AdmitWrite != nil {
+		still, ok := h.AdmitWrite(w, r)
+		if !ok {
+			return
+		}
+		associationAdmitted = still
+	}
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -1142,6 +1201,15 @@ func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Namespace != "" {
+		// The repository download can take a while: link the release only if
+		// the cluster it was admitted against is still the one serving.
+		if !associationAdmitted() {
+			writeErrorPayload(w, http.StatusConflict, map[string]string{
+				"error":      "The repository was added, but the cluster changed before it could be linked to the release; nothing was changed on the cluster. Check the current cluster and try again.",
+				"error_code": "context_changed",
+			})
+			return
+		}
 		selected := ChartSourceCandidate{Type: "repository", Reference: name, URL: canonicalURL}
 		if user := auth.UserFromContext(r.Context()); user != nil {
 			err = client.SetSourceAsUser(req.Namespace, req.ReleaseName, selected, user)
@@ -1366,6 +1434,9 @@ func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, req.Namespace, req.ReleaseName)
 	var release *HelmRelease
 	var installErr error
@@ -1436,6 +1507,9 @@ func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
 	// The action can outlive a disconnected client; the receiver must not close the producer's channel.
 
 	// Start install in goroutine
+	if !stillAdmitted(w, r) {
+		return
+	}
 	auth.AuditLog(r, req.Namespace, req.ReleaseName)
 	user := auth.UserFromContext(r.Context())
 	resultCh := make(chan installResult, 1)
