@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { AreaChart, MetricsSummary, type TimeSeries } from '@skyhook-io/k8s-ui/components/charts'
-import { fetchJSON, type PrometheusTimeRange } from '../../api/client'
+import { fetchJSON, usePrometheusStatus, useRadarFeature, type PrometheusTimeRange } from '../../api/client'
 import { getApiBase } from '../../api/config'
 import { TIME_RANGES, WORKLOAD_CATEGORIES } from './PrometheusCharts'
 import { RestartEventLane } from './RestartChart'
@@ -24,7 +24,7 @@ export function useDatadogWorkloadCharts({ kind, namespace, name }: Workload, ra
     enabled,
     staleTime: 60_000,
     retry: false,
-    queryFn: ({ signal }) => fetchJSON<{ configured: boolean }>('/metrics/datadog/status', signal),
+    queryFn: ({ signal }) => fetchJSON<{ configured: boolean; setup?: 'owner' | 'member' }>('/metrics/datadog/status', signal),
   })
   const mapped = enabled && status.data?.configured === true
   const path = [kind, namespace, name].map(encodeURIComponent).join('/')
@@ -35,7 +35,25 @@ export function useDatadogWorkloadCharts({ kind, namespace, name }: Workload, ra
     retry: false,
     queryFn: ({ signal }) => fetchJSON<WorkloadCharts>(`/metrics/datadog/workloads/${path}?range=${range}`, signal),
   })
-  return { charts, checking: status.isLoading, configured: mapped && charts.data?.configured !== false }
+  return { charts, setup: enabled && !status.isError ? status.data?.setup : undefined, checking: status.isLoading, configured: mapped && charts.data?.configured !== false }
+}
+
+export function DatadogSetupHint({ owner }: { owner: boolean }) {
+  const { data: prom, isError } = usePrometheusStatus()
+  const { support } = useRadarFeature('datadogAgentPresence')
+  const empty = !isError && prom?.connected === false && !prom.discovering && !prom.address
+  const presence = useQuery({
+    queryKey: ['datadog-agent-presence', getApiBase()],
+    enabled: empty && support === 'supported',
+    queryFn: ({ signal }) => fetchJSON<{detected: boolean}>('/metrics/datadog/agent', signal),
+    staleTime: 60_000, retry: false,
+  })
+  if (!empty || support !== 'supported' || presence.isError || !presence.data?.detected) return null
+  return <div className="p-4 text-center text-sm">
+    <p className="font-medium text-theme-text-primary">Datadog Agent detected</p>
+    <p className="mt-1 text-theme-text-secondary">{owner ? 'Connect Datadog once for CPU and memory charts across your matched clusters.' : 'An organization owner can connect Datadog for CPU and memory charts.'}</p>
+    {owner && <a href="/settings/organization/integrations#datadog-metrics" className="mt-2 inline-block text-accent underline">Connect Datadog</a>}
+  </div>
 }
 
 export function DatadogWorkloadCharts({

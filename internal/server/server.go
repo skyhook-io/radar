@@ -876,6 +876,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
 			r.Delete("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
 			prometheuspkg.RegisterRoutes(r)
+			r.Get("/metrics/datadog/agent", s.handleDatadogAgentPresence)
 			r.Get("/agent/metrics-cluster-identity", s.handleMetricsClusterIdentity)
 			r.Get("/agent/workload-metrics-scope/{kind}/{namespace}/{name}", s.handleWorkloadMetricsScope)
 
@@ -1527,6 +1528,7 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 func advertisedFeatures() k8s.FeatureCapabilities {
 	return k8s.FeatureCapabilities{
 		ApplicationEvidence:         true,
+		DatadogAgentPresence:        true,
 		ResourceReadCoverage:        true,
 		SearchCoverage:              true,
 		SearchEventContent:          true,

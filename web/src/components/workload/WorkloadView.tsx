@@ -101,7 +101,7 @@ import {
 } from '../../api/client'
 import { TIME_RANGES, PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
-import { DatadogWorkloadCharts, useDatadogWorkloadCharts } from '../resource/DatadogWorkloadCharts'
+import { DatadogSetupHint, DatadogWorkloadCharts, useDatadogWorkloadCharts } from '../resource/DatadogWorkloadCharts'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RestartEventLane } from '../resource/RestartChart'
 import { RightsizingPanel } from '../resource/RightsizingStrip'
@@ -2277,7 +2277,7 @@ function MetricsTabContent({
   const range = TIME_RANGES.find((option) => option.value === params.get('metricsRange'))?.value ?? '1h'
   const workload = { kind, namespace, name }
   const { embedded = false } = useNavCustomization()
-  const { charts, checking, configured } = useDatadogWorkloadCharts(workload, range, embedded)
+  const { charts, checking, configured, setup } = useDatadogWorkloadCharts(workload, range, embedded)
   if (configured) {
     return <DatadogWorkloadCharts workload={workload} charts={charts.data?.configured ? charts.data.charts : undefined}
       range={range} fill={fill} loading={charts.isLoading} error={charts.error} onRetry={() => void charts.refetch()}
@@ -2289,10 +2289,12 @@ function MetricsTabContent({
   }
   if (checking) return <p role="status" className="p-4 text-sm text-theme-text-secondary">Loading workload metrics…</p>
 
+  const setupHint = setup && <DatadogSetupHint owner={setup === 'owner'} />
   if (expanded) {
     if (!fill) return <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} fill={false} />
     return (
       <div className="flex flex-col h-full">
+        {setupHint}
         <div className="flex-1 min-h-0">
           <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} />
         </div>
@@ -2302,7 +2304,7 @@ function MetricsTabContent({
 
   // Drawer fallback: single chart with tabs + restart lane below. The chart's
   // time-range selector is mirrored to the restart lane so they stay aligned.
-  return <DrawerMetricsContent kind={kind} namespace={namespace} name={name} resource={resource} />
+  return <>{setupHint}<DrawerMetricsContent kind={kind} namespace={namespace} name={name} resource={resource} /></>
 }
 
 function DrawerMetricsContent({
