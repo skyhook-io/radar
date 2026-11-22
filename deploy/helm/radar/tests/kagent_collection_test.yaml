@@ -1,0 +1,57 @@
+suite: kagent collection reads credential-bearing kinds only with the Secrets grant
+templates:
+  - clusterrole.yaml
+tests:
+  - it: grants read access to the kagent kinds without inline credentials by default
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["api.kagent.dev"]
+            resources: ["agents", "agenttemplates", "harnesses", "modelproviderconfigs", "sandboxtemplates", "egresspolicies"]
+            verbs: ["get", "list", "watch"]
+  - it: does not read RemoteMCPServers or ModelConfigs, which can hold request headers inline, without the Secrets grant
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["api.kagent.dev"]
+            resources: ["remotemcpservers", "modelconfigs"]
+            verbs: ["get", "list", "watch"]
+  - it: reads RemoteMCPServers and ModelConfigs when the chart grants Secrets
+    set:
+      rbac.secrets: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["api.kagent.dev"]
+            resources: ["remotemcpservers", "modelconfigs"]
+            verbs: ["get", "list", "watch"]
+  - it: reads RemoteMCPServers and ModelConfigs with authentication enabled
+    set:
+      auth.mode: proxy
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["api.kagent.dev"]
+            resources: ["remotemcpservers", "modelconfigs"]
+            verbs: ["get", "list", "watch"]
+  - it: removes every kagent grant when disabled
+    set:
+      rbac.crdGroups.kagent: false
+      rbac.secrets: true
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["api.kagent.dev"]
+            resources: ["agents", "agenttemplates", "harnesses", "modelproviderconfigs", "sandboxtemplates", "egresspolicies"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["api.kagent.dev"]
+            resources: ["remotemcpservers", "modelconfigs"]
+            verbs: ["get", "list", "watch"]

@@ -747,6 +747,7 @@ retain their finite grants.
 | `gcpMonitoring` | `monitoring.googleapis.com` |
 | `grafana` | `monitoring.grafana.com`, `tempo.grafana.com`, `loki.grafana.com`, `grafana.integreatly.org` |
 | `istio` | `networking.istio.io`, `security.istio.io` |
+| `kagent` | `api.kagent.dev` (`agents`, `agenttemplates`, `harnesses`, `modelproviderconfigs`, `sandboxtemplates`, `egresspolicies`; `remotemcpservers` and `modelconfigs` only when Secrets are granted, see below). On by default like the other agent runtimes; kagent 0.x's `kagent.dev` is not granted |
 | `karpenter` | `karpenter.sh`, `karpenter.k8s.aws`, `karpenter.azure.com`, `karpenter.k8s.gcp`, `eks.amazonaws.com` |
 | `keda` | `keda.sh` |
 | `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `networking.internal.knative.dev`, and `jobsinks` in `sinks.knative.dev` |
@@ -791,6 +792,15 @@ permissions are additive, and these exclusions are not deny rules.
 **MetalLB BGPPeers** (`bgppeers` in `metallb.io`) follow the same rule when
 `rbac.crdGroups.metallb` is on: `spec.password` can hold the BGP session
 password inline, so Radar reads BGPPeers only when the chart grants Secrets.
+
+**kagent RemoteMCPServers and ModelConfigs** (`remotemcpservers`, `modelconfigs`
+in `api.kagent.dev`) follow the same rule when `rbac.crdGroups.kagent` is on:
+`spec.headersFrom[].value` and `spec.defaultHeaders` can hold request headers,
+tokens included, inline, so Radar reads them only when the chart grants Secrets.
+Without that grant an Agent's drawer still names the ModelConfig and MCP servers
+it declares, but can't open them, and their Issues are not raised. A Harness's
+or SandboxTemplate's `spec.env` values are literal too, like a Pod template's,
+and are read with the rest of the group.
 
 **Disable groups:** `--set rbac.crdGroups.calico=false`
 

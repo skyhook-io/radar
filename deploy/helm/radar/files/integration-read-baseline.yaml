@@ -990,6 +990,27 @@ entries:
     decision: withhold
     reason: "SandboxTemplates carry Pod templates and SandboxClaims inject inline environment values; both can contain credentials. Native visibility adds no caller grants."
     source: "https://github.com/kubernetes-sigs/agent-sandbox/tree/v1.0.11/extensions/api/v1beta1"
+  - group: "api.kagent.dev"
+    resources: ["agents", "agenttemplates", "egresspolicies", "modelproviderconfigs"]
+    scope: Namespaced
+    collection: "kagent"
+    decision: grant
+    reason: "Agent references, revisions and conditions; portable prompts and tool bindings; egress origins with Secret references; provider endpoints with Secret references. No literal credential fields."
+    source: "https://github.com/kagent-dev/kagent/tree/v1.0.1/go/api/v1alpha3"
+  - group: "api.kagent.dev"
+    resources: ["remotemcpservers", "modelconfigs"]
+    scope: Namespaced
+    collection: "kagent"
+    decision: withhold
+    reason: "RemoteMCPServer spec.headersFrom[].value and ModelConfig spec.defaultHeaders (and 1.0.x spec.azureOpenAI.azureAdToken) hold request headers, tokens included, inline. Radar checks these kinds exactly. Native visibility adds no caller grants."
+    source: "https://github.com/kagent-dev/kagent/blob/v1.0.1/go/api/v1alpha3/common_types.go"
+  - group: "api.kagent.dev"
+    resources: ["harnesses", "sandboxtemplates"]
+    scope: Namespaced
+    collection: "kagent"
+    decision: withhold
+    reason: "spec.env[].value is a literal runtime environment value, which kagent offers no Secret reference for, so it can hold a credential. Native visibility adds no caller grants."
+    source: "https://github.com/kagent-dev/kagent/blob/v1.0.1/go/api/v1alpha3/runtime_types.go"
   - group: "ate.dev"
     resources: ["workerpools"]
     scope: Namespaced

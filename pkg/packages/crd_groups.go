@@ -192,10 +192,12 @@ var crdGroupToChart = map[string]string{
 	"llm-d.ai":                 "llm-d",
 
 	// AI agent runtimes. Agent Sandbox ships the agent-sandbox chart; Agent
-	// Substrate installs from manifests, with no chart.
+	// Substrate installs from manifests, with no chart. kagent's CRDs come
+	// from its kagent-crds chart, installed beside the kagent release.
 	"agents.x-k8s.io":            "agent-sandbox",
 	"extensions.agents.x-k8s.io": "agent-sandbox",
 	"ate.dev":                    "agent-substrate",
+	"api.kagent.dev":             "kagent",
 }
 
 // chartlessIntegrations name APIs that no Helm chart installs. Usage stats
