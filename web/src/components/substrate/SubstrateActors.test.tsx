@@ -847,7 +847,7 @@ describe('kagent session on the actor page', () => {
     expect(html).toContain('session 01a1faa2')
     expect(html).toContain('kagent/k8s-helper')
     expect(html).toContain('Conversation outcome: not visible to Radar')
-    expect(html).toContain('This actor is a session of kagent Agent kagent/k8s-helper. Recover it with Recover')
+    expect(html).toContain('This actor is a session of kagent Agent kagent/k8s-helper. Recover it through kagent (its RevertSession API')
   })
 
   it('says in words why a session is tied to no Agent', () => {
