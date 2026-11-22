@@ -769,9 +769,16 @@ func TestBeylaRateQuery_NamespaceFilterReachesEveryBranch(t *testing.T) {
 }
 
 func beylaNodeProbeFake(probe func() (*prom.QueryResult, error)) promQueryFunc {
+	return beylaNodeProbeFakeWithAgents(2, probe)
+}
+
+func beylaNodeProbeFakeWithAgents(agents float64, probe func() (*prom.QueryResult, error)) promQueryFunc {
 	return func(_ context.Context, query string) (*prom.QueryResult, error) {
 		if strings.Contains(query, `direction="unknown"`) {
 			return emptyResult(), nil
+		}
+		if strings.Contains(query, "count by (instance)") {
+			return promResult("vector", promSeries(map[string]string{}, agents)), nil
 		}
 		if strings.HasPrefix(query, "count(") && strings.Contains(query, `k8s_src_node_name!=""`) {
 			return probe()
@@ -803,6 +810,20 @@ func TestBeylaSource_GetFlows_WarnsWhenNodeLabelsAreAbsent(t *testing.T) {
 		}
 	}
 	assertEq(t, "warningKind", resp.WarningKind, WarningPartial)
+}
+
+func TestBeylaSource_GetFlows_NoNodeLabelWarningWithOneAgent(t *testing.T) {
+	// One agent sees every flow exactly once, so nothing is counted twice.
+	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+	src.queryFn = beylaNodeProbeFakeWithAgents(1, func() (*prom.QueryResult, error) { return emptyResult(), nil })
+
+	resp, err := src.GetFlows(context.Background(), FlowOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Warning != "" {
+		t.Errorf("expected no warning with a single Beyla agent, got: %q", resp.Warning)
+	}
 }
 
 func TestBeylaSource_GetFlows_NoNodeLabelWarningWhenPresent(t *testing.T) {
