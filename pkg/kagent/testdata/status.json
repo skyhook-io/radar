@@ -1,0 +1,2478 @@
+[
+  {
+    "name": "agent ready",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "ActorTemplate golden snapshot is ready",
+            "observedGeneration": 2,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "latestSuccessfulRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2,
+        "workloadImage": "ghcr.io/kagent-dev/kagent/app@sha256:abababababababababababababababababababababababababababababababab"
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "ready",
+      "summary": "Ready to start sessions",
+      "text": "Ready",
+      "tone": "healthy"
+    }
+  },
+  {
+    "name": "agent ready with an egress policy not found",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "agents/github: egresspolicies.api.kagent.dev \"github\" not found",
+            "observedGeneration": 2,
+            "reason": "EgressPolicyNotFound",
+            "status": "False",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "ActorTemplate golden snapshot is ready",
+            "observedGeneration": 2,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "latestSuccessfulRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "egress": "Egress not applied: agents/github: egresspolicies.api.kagent.dev \"github\" not found",
+      "findings": [
+        {
+          "fingerprint": "egress",
+          "message": "Egress not applied: agents/github: egresspolicies.api.kagent.dev \"github\" not found. Create the EgressPolicy or remove it from egressPolicyRefs.",
+          "reason": "EgressPolicyNotFound",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "ready",
+      "summary": "Ready to start sessions",
+      "text": "Egress not applied",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "agent egress grant conflict",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "new grants are held until the conflict is resolved; first conflict: https://api.github.com is granted twice with different credentials",
+            "observedGeneration": 2,
+            "reason": "EgressGrantConflict",
+            "status": "False",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "ActorTemplate golden snapshot is ready",
+            "observedGeneration": 2,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "latestSuccessfulRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "egress": "Egress not applied: new grants are held until the conflict is resolved; first conflict: https://api.github.com is granted twice with different credentials",
+      "findings": [
+        {
+          "fingerprint": "egress",
+          "message": "Egress not applied: new grants are held until the conflict is resolved; first conflict: https://api.github.com is granted twice with different credentials. Resolve the conflicting grant; kagent holds new grants until then.",
+          "reason": "EgressGrantConflict",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "ready",
+      "summary": "Ready to start sessions",
+      "text": "Egress not applied",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "agent preparing its first revision",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T11:55:00Z",
+            "message": "waiting for the ActorTemplate golden snapshot",
+            "observedGeneration": 2,
+            "reason": "ActorTemplatePending",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "preparing",
+      "summary": "Preparing revision a1b2c3d4e5f6; no session can start until it is ready",
+      "text": "Preparing",
+      "tone": "degraded"
+    }
+  },
+  {
+    "name": "agent preparing a new revision past the grace period",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "waiting for the ActorTemplate golden snapshot",
+            "observedGeneration": 2,
+            "reason": "ActorTemplatePending",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "0f9e8d7c6b5a1111111111111111111111111111111111111111111111111111",
+        "latestSuccessfulRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "kagent has been preparing revision 0f9e8d7c6b5a for 2h: waiting for the ActorTemplate golden snapshot. Check kagent's controller logs and the Agent's ActorTemplate in Substrate.",
+          "reason": "ActorTemplatePending",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "preparing",
+      "summary": "Preparing revision 0f9e8d7c6b5a; new sessions still start on revision a1b2c3d4e5f6",
+      "text": "Preparing",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "agent retrying a failed golden build",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T11:55:00Z",
+            "message": "ImagePullFailed: pulling ghcr.io/acme/tools: not found",
+            "observedGeneration": 2,
+            "reason": "ActorTemplateRetrying",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "preparing",
+      "summary": "Retrying a failed build of revision a1b2c3d4e5f6; no session can start until it is ready",
+      "text": "Preparing",
+      "tone": "degraded"
+    }
+  },
+  {
+    "name": "agent blocked by a missing ModelConfig with a prior revision",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "resolve ModelConfig \"agents/gpt-4o\": not found",
+            "observedGeneration": 2,
+            "reason": "ReferenceResolutionFailed",
+            "status": "False",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "latestSuccessfulRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Latest change blocked: resolve ModelConfig \"agents/gpt-4o\": not found; new sessions still start on revision a1b2c3d4e5f6. Create ModelConfig agents/gpt-4o or point the agent at an existing one.",
+          "reason": "ReferenceResolutionFailed",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "blocked",
+      "summary": "Latest change blocked: resolve ModelConfig \"agents/gpt-4o\": not found; new sessions still start on revision a1b2c3d4e5f6",
+      "text": "Blocked",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "agent blocked by a missing Harness with no prior revision",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "resolve Harness \"agents/default\": not found",
+            "observedGeneration": 2,
+            "reason": "ReferenceResolutionFailed",
+            "status": "False",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Latest change blocked: resolve Harness \"agents/default\": not found; no session can start. Create Harness agents/default or point the agent at an existing one.",
+          "reason": "ReferenceResolutionFailed",
+          "severity": "critical"
+        }
+      ],
+      "reads": true,
+      "state": "blocked",
+      "summary": "Latest change blocked: resolve Harness \"agents/default\": not found; no session can start",
+      "text": "Blocked",
+      "tone": "unhealthy"
+    }
+  },
+  {
+    "name": "agent blocked by a missing WorkerPool",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "WorkerPool \"agents/pool\" not found",
+            "observedGeneration": 2,
+            "reason": "WorkerPoolNotFound",
+            "status": "False",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Latest change blocked: WorkerPool \"agents/pool\" not found; no session can start. Create WorkerPool agents/pool or point the agent at an existing one.",
+          "reason": "WorkerPoolNotFound",
+          "severity": "critical"
+        }
+      ],
+      "reads": true,
+      "state": "blocked",
+      "summary": "Latest change blocked: WorkerPool \"agents/pool\" not found; no session can start",
+      "text": "Blocked",
+      "tone": "unhealthy"
+    }
+  },
+  {
+    "name": "agent blocked by a reference another namespace may not use",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "resolve ModelConfig \"shared/gpt-4o\": reference from namespace \"agents\" denied by allowedNamespaces",
+            "observedGeneration": 2,
+            "reason": "ReferenceResolutionFailed",
+            "status": "False",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "latestSuccessfulRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Latest change blocked: resolve ModelConfig \"shared/gpt-4o\": reference from namespace \"agents\" denied by allowedNamespaces; new sessions still start on revision a1b2c3d4e5f6. Allow namespace agents in ModelConfig shared/gpt-4o's allowedNamespaces, or point the agent at one it may use.",
+          "reason": "ReferenceResolutionFailed",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "blocked",
+      "summary": "Latest change blocked: resolve ModelConfig \"shared/gpt-4o\": reference from namespace \"agents\" denied by allowedNamespaces; new sessions still start on revision a1b2c3d4e5f6",
+      "text": "Blocked",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "agent incompatible with its harness",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "no default image configured",
+            "observedGeneration": 2,
+            "reason": "UnsupportedConfiguration",
+            "status": "False",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by Compatible",
+            "observedGeneration": 2,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Failed: no default image configured. Change the agent, its template or its Harness to a configuration the Harness supports.",
+          "reason": "UnsupportedConfiguration",
+          "severity": "critical"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Failed: no default image configured",
+      "text": "Failed",
+      "tone": "unhealthy"
+    }
+  },
+  {
+    "name": "agent rejected by Substrate with a prior revision",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Substrate rejected the compiled ActorTemplate (InvalidArgument); verify the Agent configuration against Substrate's validation requirements",
+            "observedGeneration": 2,
+            "reason": "ActorTemplateRejected",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "0f9e8d7c6b5a1111111111111111111111111111111111111111111111111111",
+        "latestSuccessfulRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Failed: Substrate rejected the compiled ActorTemplate (InvalidArgument); verify the Agent configuration against Substrate's validation requirements; new sessions still start on revision a1b2c3d4e5f6.",
+          "reason": "ActorTemplateRejected",
+          "severity": "critical"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Failed: Substrate rejected the compiled ActorTemplate (InvalidArgument); verify the Agent configuration against Substrate's validation requirements; new sessions still start on revision a1b2c3d4e5f6",
+      "text": "Failed",
+      "tone": "unhealthy"
+    }
+  },
+  {
+    "name": "agent runtime preparation failed",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Runtime preparation failed (Unavailable); check controller logs for details",
+            "observedGeneration": 2,
+            "reason": "RuntimePreparationFailed",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Failed: Runtime preparation failed (Unavailable); check controller logs for details.",
+          "reason": "RuntimePreparationFailed",
+          "severity": "critical"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Failed: Runtime preparation failed (Unavailable); check controller logs for details",
+      "text": "Failed",
+      "tone": "unhealthy"
+    }
+  },
+  {
+    "name": "agent ActorTemplate conflict",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "existing immutable ActorTemplate differs from the compiled revision",
+            "observedGeneration": 2,
+            "reason": "ActorTemplateConflict",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Failed: existing immutable ActorTemplate differs from the compiled revision. Check Substrate for another ActorTemplate with this revision's name; kagent won't replace it.",
+          "reason": "ActorTemplateConflict",
+          "severity": "critical"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Failed: existing immutable ActorTemplate differs from the compiled revision",
+      "text": "Failed",
+      "tone": "unhealthy"
+    }
+  },
+  {
+    "name": "agent status written for an earlier generation",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 1,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 1,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 1,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 1,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "ActorTemplate golden snapshot is ready",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "latestSuccessfulRevision": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "stale",
+      "summary": "Status not yet updated for the latest change",
+      "text": "Updating",
+      "tone": "unknown"
+    }
+  },
+  {
+    "name": "agent stale failure stays a qualified warning",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 3,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 1,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 1,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "resolve Harness \"agents/default\": not found",
+            "observedGeneration": 1,
+            "reason": "ReferenceResolutionFailed",
+            "status": "False",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 1,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 1,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Reported for generation 1; the Agent is now at generation 3. Latest change blocked: resolve Harness \"agents/default\": not found; no session can start. Create Harness agents/default or point the agent at an existing one.",
+          "reason": "ReferenceResolutionFailed",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "stale",
+      "summary": "Status not yet updated for the latest change",
+      "text": "Updating",
+      "tone": "unknown"
+    }
+  },
+  {
+    "name": "agent deleting",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "deletionTimestamp": "2026-11-20T11:59:00Z",
+        "finalizers": [
+          "kagent.dev/runtime"
+        ],
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "existing immutable ActorTemplate differs from the compiled revision",
+            "observedGeneration": 2,
+            "reason": "ActorTemplateConflict",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "deleting",
+      "summary": "Deleting",
+      "text": "Deleting",
+      "tone": "degraded"
+    }
+  },
+  {
+    "name": "agent just created, not reported yet",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-20T11:58:00Z",
+        "generation": 1,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {}
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "notReported",
+      "summary": "kagent hasn't reported status yet",
+      "text": "Not reported",
+      "tone": "unknown"
+    }
+  },
+  {
+    "name": "agent never reported",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {}
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "kagent hasn't reported on this Agent in the 1d since it was created. Check that kagent's controller is running and watches this namespace.",
+          "reason": "NotReported",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "notReported",
+      "summary": "kagent hasn't reported status yet",
+      "text": "Not reported",
+      "tone": "unknown"
+    }
+  },
+  {
+    "name": "agent Ready Unknown",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 2,
+        "name": "triage",
+        "namespace": "agents"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 2,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 2,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 2,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 2,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "",
+            "observedGeneration": 2,
+            "reason": "",
+            "status": "Unknown",
+            "type": "Ready"
+          }
+        ],
+        "observedGeneration": 2
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "unknown",
+      "summary": "kagent can't tell whether the agent is ready",
+      "text": "Unknown",
+      "tone": "unknown"
+    }
+  },
+  {
+    "name": "sandbox template prepared",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "SandboxTemplate",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "python",
+        "namespace": "agents"
+      },
+      "spec": {
+        "substrate": {
+          "snapshotPolicy": {
+            "location": "gs://snapshots"
+          },
+          "workerPoolRef": {
+            "name": "pool"
+          }
+        },
+        "workload": {
+          "image": "ghcr.io/kagent-dev/kagent/app@sha256:abababababababababababababababababababababababababababababababab"
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Sandbox runtime is prepared",
+            "observedGeneration": 1,
+            "reason": "Prepared",
+            "status": "True",
+            "type": "Ready"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 1,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "ready",
+      "summary": "Ready to start sandboxes",
+      "text": "Ready",
+      "tone": "healthy"
+    }
+  },
+  {
+    "name": "sandbox template preparing",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "SandboxTemplate",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "python",
+        "namespace": "agents"
+      },
+      "spec": {
+        "substrate": {
+          "snapshotPolicy": {
+            "location": "gs://snapshots"
+          },
+          "workerPoolRef": {
+            "name": "pool"
+          }
+        },
+        "workload": {
+          "image": "ghcr.io/kagent-dev/kagent/app@sha256:abababababababababababababababababababababababababababababababab"
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T11:55:00Z",
+            "message": "Waiting for the prepared sandbox snapshot",
+            "observedGeneration": 1,
+            "reason": "Preparing",
+            "status": "False",
+            "type": "Ready"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 1,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "preparing",
+      "summary": "Preparing the sandbox runtime",
+      "text": "Preparing",
+      "tone": "degraded"
+    }
+  },
+  {
+    "name": "sandbox template preparing past the grace period",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "SandboxTemplate",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "python",
+        "namespace": "agents"
+      },
+      "spec": {
+        "substrate": {
+          "snapshotPolicy": {
+            "location": "gs://snapshots"
+          },
+          "workerPoolRef": {
+            "name": "pool"
+          }
+        },
+        "workload": {
+          "image": "ghcr.io/kagent-dev/kagent/app@sha256:abababababababababababababababababababababababababababababababab"
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "rebuilding after golden failure, retry 2; Waiting for the prepared sandbox snapshot",
+            "observedGeneration": 1,
+            "reason": "Preparing",
+            "status": "False",
+            "type": "Ready"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 1,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "kagent has been preparing the sandbox runtime for 2h: rebuilding after golden failure, retry 2; Waiting for the prepared sandbox snapshot. Check kagent's controller logs and the SandboxTemplate's ActorTemplate in Substrate.",
+          "reason": "Preparing",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "preparing",
+      "summary": "Preparing the sandbox runtime",
+      "text": "Preparing",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "sandbox template retrying",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "SandboxTemplate",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "python",
+        "namespace": "agents"
+      },
+      "spec": {
+        "substrate": {
+          "snapshotPolicy": {
+            "location": "gs://snapshots"
+          },
+          "workerPoolRef": {
+            "name": "pool"
+          }
+        },
+        "workload": {
+          "image": "ghcr.io/kagent-dev/kagent/app@sha256:abababababababababababababababababababababababababababababababab"
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T11:55:00Z",
+            "message": "ImagePullFailed: not found",
+            "observedGeneration": 1,
+            "reason": "ActorTemplateRetrying",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "preparing",
+      "summary": "Retrying a failed build of the sandbox runtime",
+      "text": "Preparing",
+      "tone": "degraded"
+    }
+  },
+  {
+    "name": "sandbox template WorkerPool not found",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "SandboxTemplate",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "python",
+        "namespace": "agents"
+      },
+      "spec": {
+        "substrate": {
+          "snapshotPolicy": {
+            "location": "gs://snapshots"
+          },
+          "workerPoolRef": {
+            "name": "pool"
+          }
+        },
+        "workload": {
+          "image": "ghcr.io/kagent-dev/kagent/app@sha256:abababababababababababababababababababababababababababababababab"
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "The referenced sandbox WorkerPool does not exist",
+            "observedGeneration": 1,
+            "reason": "WorkerPoolNotFound",
+            "status": "False",
+            "type": "Ready"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 1,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Blocked: WorkerPool agents/pool not found. Create WorkerPool agents/pool or point spec.substrate.workerPoolRef at an existing one.",
+          "reason": "WorkerPoolNotFound",
+          "severity": "critical"
+        }
+      ],
+      "reads": true,
+      "state": "blocked",
+      "summary": "Blocked: WorkerPool agents/pool not found",
+      "text": "Blocked",
+      "tone": "unhealthy"
+    }
+  },
+  {
+    "name": "sandbox template preparation failed with invalid egress",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "SandboxTemplate",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "python",
+        "namespace": "agents"
+      },
+      "spec": {
+        "substrate": {
+          "snapshotPolicy": {
+            "location": "gs://snapshots"
+          },
+          "workerPoolRef": {
+            "name": "pool"
+          }
+        },
+        "workload": {
+          "image": "ghcr.io/kagent-dev/kagent/app@sha256:abababababababababababababababababababababababababababababababab"
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Sandbox preparation failed; inspect controller logs and template configuration",
+            "observedGeneration": 1,
+            "reason": "PreparationFailed",
+            "status": "False",
+            "type": "Ready"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "agents/github: requires 1 to 64 destinations",
+            "observedGeneration": 1,
+            "reason": "InvalidEgressPolicy",
+            "status": "False",
+            "type": "EgressPoliciesApplied"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "egress": "Egress not applied: agents/github: requires 1 to 64 destinations",
+      "findings": [
+        {
+          "message": "Failed: Sandbox preparation failed; inspect controller logs and template configuration.",
+          "reason": "PreparationFailed",
+          "severity": "critical"
+        },
+        {
+          "fingerprint": "egress",
+          "message": "Egress not applied: agents/github: requires 1 to 64 destinations. Fix the EgressPolicy kagent names; the other policies' grants still apply.",
+          "reason": "InvalidEgressPolicy",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Failed: Sandbox preparation failed; inspect controller logs and template configuration",
+      "text": "Failed",
+      "tone": "unhealthy"
+    }
+  },
+  {
+    "name": "model config accepted",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "ModelConfig",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "gpt-4o",
+        "namespace": "agents"
+      },
+      "spec": {
+        "apiKeySecret": "openai",
+        "apiKeySecretKey": "key",
+        "model": "gpt-4o",
+        "provider": "OpenAI"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "ModelConfig configuration accepted",
+            "observedGeneration": 1,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All referenced secrets and config maps resolved",
+            "observedGeneration": 1,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "ready",
+      "summary": "Accepted; its Secrets and ConfigMaps resolve",
+      "text": "Accepted",
+      "tone": "healthy"
+    }
+  },
+  {
+    "name": "model config API key Secret missing",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "ModelConfig",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "gpt-4o",
+        "namespace": "agents"
+      },
+      "spec": {
+        "apiKeySecret": "openai",
+        "apiKeySecretKey": "key",
+        "model": "gpt-4o",
+        "provider": "OpenAI"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "ModelConfig configuration accepted",
+            "observedGeneration": 1,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "secret \"openai\" not found",
+            "observedGeneration": 1,
+            "reason": "APIKeySecretNotFound",
+            "status": "False",
+            "type": "ResolvedRefs"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "References not resolved: secret \"openai\" not found. Create Secret agents/openai or point apiKeySecret at an existing one.",
+          "reason": "APIKeySecretNotFound",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "blocked",
+      "summary": "References not resolved: secret \"openai\" not found",
+      "text": "Blocked",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "model config not accepted",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "ModelConfig",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "gpt-4o",
+        "namespace": "agents"
+      },
+      "spec": {
+        "apiKeySecret": "openai",
+        "apiKeySecretKey": "key",
+        "model": "gpt-4o",
+        "provider": "OpenAI"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "model config is required",
+            "observedGeneration": 1,
+            "reason": "ModelConfigMissing",
+            "status": "False",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All referenced secrets and config maps resolved",
+            "observedGeneration": 1,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Not accepted: model config is required. Fix the ModelConfig's spec; agents using it stay blocked until kagent accepts it.",
+          "reason": "ModelConfigMissing",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Not accepted: model config is required",
+      "text": "Rejected",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "model config never reported",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "ModelConfig",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "gpt-4o",
+        "namespace": "agents"
+      },
+      "spec": {
+        "apiKeySecret": "openai",
+        "apiKeySecretKey": "key",
+        "model": "gpt-4o",
+        "provider": "OpenAI"
+      },
+      "status": {}
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "kagent hasn't reported on this ModelConfig in the 1d since it was created. Check that kagent's controller is running and watches this namespace.",
+          "reason": "NotReported",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "notReported",
+      "summary": "kagent hasn't reported status yet",
+      "text": "Not reported",
+      "tone": "unknown"
+    }
+  },
+  {
+    "name": "model provider config without status",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "ModelProviderConfig",
+      "metadata": {
+        "creationTimestamp": "2026-11-01T00:00:00Z",
+        "generation": 1,
+        "name": "openai",
+        "namespace": "agents"
+      },
+      "spec": {
+        "type": "OpenAI"
+      },
+      "status": {
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "notReported",
+      "summary": "kagent doesn't report readiness for this ModelProviderConfig",
+      "text": "Not reported",
+      "tone": "unknown"
+    }
+  },
+  {
+    "name": "model provider config ready",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "ModelProviderConfig",
+      "metadata": {
+        "creationTimestamp": "2026-11-01T00:00:00Z",
+        "generation": 1,
+        "name": "openai",
+        "namespace": "agents"
+      },
+      "spec": {
+        "type": "OpenAI"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Ready"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "ready",
+      "summary": "Ready for model discovery",
+      "text": "Ready",
+      "tone": "healthy"
+    }
+  },
+  {
+    "name": "model provider config not ready",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "ModelProviderConfig",
+      "metadata": {
+        "creationTimestamp": "2026-11-01T00:00:00Z",
+        "generation": 1,
+        "name": "openai",
+        "namespace": "agents"
+      },
+      "spec": {
+        "type": "OpenAI"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "401 Unauthorized",
+            "observedGeneration": 1,
+            "reason": "DiscoveryFailed",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Not ready: 401 Unauthorized. Check the provider endpoint and the discovery Secret it names.",
+          "reason": "DiscoveryFailed",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "notReady",
+      "summary": "Not ready: 401 Unauthorized",
+      "text": "DiscoveryFailed",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "remote MCP server discovered tools",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "RemoteMCPServer",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "github",
+        "namespace": "agents"
+      },
+      "spec": {
+        "description": "GitHub",
+        "headersFrom": [
+          {
+            "name": "Authorization",
+            "value": "Bearer ghp_literal"
+          }
+        ],
+        "url": "https://api.githubcopilot.com/mcp/"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Discovered 3 MCP tools",
+            "observedGeneration": 1,
+            "reason": "DiscoverySucceeded",
+            "status": "True",
+            "type": "Accepted"
+          }
+        ],
+        "discoveredTools": [
+          {
+            "description": "list_issues",
+            "name": "list_issues"
+          },
+          {
+            "description": "get_issue",
+            "name": "get_issue"
+          },
+          {
+            "description": "create_issue",
+            "name": "create_issue"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "ready",
+      "summary": "Discovered 3 tools",
+      "text": "Ready",
+      "tone": "healthy"
+    }
+  },
+  {
+    "name": "remote MCP server discovery disabled",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "RemoteMCPServer",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "labels": {
+          "kagent.dev/discovery": "disabled"
+        },
+        "name": "github",
+        "namespace": "agents"
+      },
+      "spec": {
+        "description": "GitHub",
+        "headersFrom": [
+          {
+            "name": "Authorization",
+            "value": "Bearer ghp_literal"
+          }
+        ],
+        "url": "https://api.githubcopilot.com/mcp/"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Global tool discovery is disabled by the kagent.dev/discovery label; agents resolve the tool list at run time",
+            "observedGeneration": 1,
+            "reason": "DiscoveryDisabled",
+            "status": "True",
+            "type": "Accepted"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "discoveryOff",
+      "summary": "Global tool discovery is disabled by the kagent.dev/discovery label; agents resolve the tool list at run time",
+      "text": "Discovery off",
+      "tone": "neutral"
+    }
+  },
+  {
+    "name": "remote MCP server discovery failed",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "RemoteMCPServer",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "github",
+        "namespace": "agents"
+      },
+      "spec": {
+        "description": "GitHub",
+        "headersFrom": [
+          {
+            "name": "Authorization",
+            "value": "Bearer ghp_literal"
+          }
+        ],
+        "url": "https://api.githubcopilot.com/mcp/"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "failed to connect: 401 Unauthorized",
+            "observedGeneration": 1,
+            "reason": "DiscoveryFailed",
+            "status": "False",
+            "type": "Accepted"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Tool discovery failed: failed to connect: 401 Unauthorized. Check the server's URL and credentials, and that kagent's controller can reach it.",
+          "reason": "DiscoveryFailed",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Tool discovery failed: failed to connect: 401 Unauthorized",
+      "text": "Discovery failed",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "remote MCP server invalid discovery",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "RemoteMCPServer",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "github",
+        "namespace": "agents"
+      },
+      "spec": {
+        "description": "GitHub",
+        "headersFrom": [
+          {
+            "name": "Authorization",
+            "value": "Bearer ghp_literal"
+          }
+        ],
+        "url": "https://api.githubcopilot.com/mcp/"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "duplicate tool name \"search\"",
+            "observedGeneration": 1,
+            "reason": "InvalidDiscovery",
+            "status": "False",
+            "type": "Accepted"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Tool discovery failed: duplicate tool name \"search\". Check the tool list the server returns; kagent rejected it and publishes no tools.",
+          "reason": "InvalidDiscovery",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Tool discovery failed: duplicate tool name \"search\"",
+      "text": "Discovery failed",
+      "tone": "alert"
+    }
+  },
+  {
+    "name": "elastic agent is not kagent's",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "agent.k8s.elastic.co/v1alpha1",
+      "kind": "Agent",
+      "metadata": {
+        "name": "fleet",
+        "namespace": "elastic"
+      },
+      "spec": {},
+      "status": {
+        "health": "green"
+      }
+    },
+    "want": {
+      "reads": false
+    }
+  },
+  {
+    "name": "agent sandbox SandboxTemplate is not kagent's",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+      "kind": "SandboxTemplate",
+      "metadata": {
+        "name": "python",
+        "namespace": "agents"
+      },
+      "spec": {}
+    },
+    "want": {
+      "reads": false
+    }
+  },
+  {
+    "name": "harness is spec-only",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Harness",
+      "metadata": {
+        "name": "default",
+        "namespace": "agents"
+      },
+      "spec": {
+        "kagent": {}
+      }
+    },
+    "want": {
+      "reads": false
+    }
+  }
+]

@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/csr"
+	"github.com/skyhook-io/radar/pkg/kagent"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -121,6 +122,8 @@ func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecon
 		return summarizeMetalLBBGPPeer(obj)
 	case group == metalLBGroup && kind == "ConfigurationState":
 		return summarizeMetalLBConfigurationState(obj)
+	case group == kagentGroup && kagent.ReportsStatus(kind):
+		return summarizeKagent(obj)
 	}
 
 	// Generic fallback
