@@ -3,6 +3,13 @@
 # All grant rows mean get/list/watch on full objects, not redacted projections.
 # Existing grants are preserved; withhold does not revoke rights from other roles.
 entries:
+  - group: "longhorn.io"
+    resources: ["volumes","engines","replicas"]
+    scope: Namespaced
+    collection: "longhorn"
+    decision: grant
+    reason: "Volume, engine and replica state: sizes, nodes, replica modes, rebuild progress and backup times. No credentials (spec.fromBackup is a backup URL, not a secret). They live in the Longhorn namespace, so a namespace-scoped caller usually can't read them."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
   - group: ""
     resources: ["podtemplates"]
     scope: Namespaced
@@ -73,6 +80,27 @@ entries:
     decision: grant
     reason: "Driver, deletion policy, storage handles and bound snapshot reference, like the PersistentVolumes and StorageClasses cluster read already grants. Class parameters name CSI credential Secrets but do not hold their values."
     source: "https://github.com/kubernetes-csi/external-snapshotter/blob/v8.6.0/client/apis/volumesnapshot/v1/types.go"
+  - group: "metallb.io"
+    resources: ["ipaddresspools", "l2advertisements", "bgpadvertisements"]
+    scope: Namespaced
+    collection: "metallb"
+    decision: grant
+    reason: "Address ranges, allocation and advertisement selectors, pool names, interfaces, BGP communities and the controller's address counters, like the Service and Node addresses the cluster read already grants. No credentials."
+    source: "https://github.com/metallb/metallb/tree/v0.16.2/api/v1beta1"
+  - group: "metallb.io"
+    resources: ["configurationstates"]
+    scope: Namespaced
+    collection: "metallb"
+    decision: grant
+    reason: "Status only: whether each MetalLB component accepted the configuration, its per-reconciler conditions and the parse errors. Labels name the component and node."
+    source: "https://github.com/metallb/metallb/blob/v0.16.2/api/v1beta1/configurationstate_types.go"
+  - group: "metallb.io"
+    resources: ["bgppeers"]
+    scope: Namespaced
+    collection: "metallb"
+    decision: withhold
+    reason: "spec.password holds the BGP session's TCP MD5 password inline. Native visibility adds no caller grants."
+    source: "https://github.com/metallb/metallb/blob/v0.16.2/api/v1beta2/bgppeer_types.go"
   - group: "core.strimzi.io"
     resources: ["strimzipodsets"]
     scope: Namespaced

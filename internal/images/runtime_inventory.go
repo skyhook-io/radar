@@ -20,39 +20,46 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
+	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 )
 
 // Image statuses. Anything but StatusOK means the image's runtimes are
 // unknown, never that it has none.
 const (
-	StatusOK            = "ok"
-	StatusAuthRequired  = "auth_required"
-	StatusNotFound      = "not_found"
-	StatusRateLimited   = "rate_limited"
-	StatusBlocked       = "blocked"
-	StatusError         = "error"
-	StatusNotChecked    = "not_checked"
-	StatusNoDeclaration = "no_declaration"
+	StatusOK                 = "ok"
+	StatusAuthRequired       = "auth_required"
+	StatusNotFound           = "not_found"
+	StatusRateLimited        = "rate_limited"
+	StatusBlocked            = "blocked"
+	StatusError              = "error"
+	StatusNotChecked         = "not_checked"
+	StatusNoDeclaration      = "no_declaration"
+	java4ShellDockerHubLimit = "docker_hub_limit"
 )
 
 const (
-	defaultInventoryLimit = 50
-	maxInventoryLimit     = 200
-	maxWorkloadsPerImage  = 20
-	maxLookupsPerCall     = 200
-	maxAttemptsPerImage   = 4
-	maxConfigBytes        = 1 << 20
-	inventoryCallBudget   = 40 * time.Second
-	configFetchTimeout    = 15 * time.Second
-	registryFetchSlots    = 4
-	configCacheEntries    = 4096
-	tagResultTTL          = 10 * time.Minute
-	credentialResultTTL   = time.Hour
-	maxOutstandingLookups = 16
-	failureTTL            = 10 * time.Minute
-	transientFailureTTL   = 30 * time.Second
-	rateLimitBackoff      = 5 * time.Minute
+	defaultInventoryLimit      = 50
+	maxInventoryLimit          = 200
+	maxWorkloadsPerImage       = 20
+	maxLookupsPerCall          = 200
+	java4ShellDockerHubLookups = 24
+	maxAttemptsPerImage        = 4
+	maxConfigBytes             = 1 << 20
+	inventoryCallBudget        = 40 * time.Second
+	java4ShellScanBudget       = 5 * time.Minute
+	java4ShellAttemptRate      = 8
+	java4ShellAttemptBurst     = 4
+	java4ShellCLIFetchSlots    = 8
+	configFetchTimeout         = 15 * time.Second
+	registryFetchSlots         = 4
+	configCacheEntries         = 4096
+	tagResultTTL               = 10 * time.Minute
+	credentialResultTTL        = time.Hour
+	maxOutstandingLookups      = 16
+	failureTTL                 = 10 * time.Minute
+	transientFailureTTL        = 30 * time.Second
+	rateLimitBackoff           = 5 * time.Minute
 )
 
 // InventoryOptions narrows an inventory.
@@ -145,6 +152,8 @@ type credential struct {
 	namespace string
 	secret    string
 	radar     bool
+	advisory  bool
+	snapshot  *corev1.Secret
 	// identity pins a pull secret to its exact contents (UID and
 	// resourceVersion): a rotated or recreated Secret, or a same-named one in
 	// another cluster, is a different credential.
@@ -171,15 +180,18 @@ type keychainSource func(c credential, ref name.Reference) (kc authn.Keychain, i
 // backoff are shared by every caller, so concurrent requests can't multiply
 // registry traffic.
 type RuntimeInventory struct {
-	lookup       configLookup
-	keychain     keychainSource
-	now          func() time.Time
-	slots        chan struct{}
-	fetchTimeout time.Duration
+	lookup        configLookup
+	keychain      keychainSource
+	now           func() time.Time
+	slots         chan struct{}
+	cli           bool
+	dockerHubAuth authn.Authenticator
+	fetchTimeout  time.Duration
 	// outstanding counts lookups still running, including ones that timed
 	// out: a credential helper can hang without honoring cancellation, and
 	// timed-out lookups must not pile up behind it.
-	outstanding atomic.Int32
+	outstanding      atomic.Int32
+	java4ShellActive atomic.Bool
 
 	mu      sync.Mutex
 	cache   map[string]*list.Element
@@ -194,11 +206,12 @@ type cachedConfig struct {
 }
 
 type configResult struct {
-	status   string
-	err      string
-	digest   string
-	declared []DeclaredRuntime
-	base     string
+	status           string
+	err              string
+	digest           string
+	declared         []DeclaredRuntime
+	base             string
+	javaHomeDeclared bool
 }
 
 var (
@@ -209,17 +222,63 @@ var (
 // DefaultRuntimeInventory returns the process-wide inventory.
 func DefaultRuntimeInventory(inCluster bool) *RuntimeInventory {
 	defaultInventoryOnce.Do(func() {
-		defaultInventory = newRuntimeInventory(registryConfigLookup(newGuardedTransport(inCluster)), clusterKeychain)
+		defaultInventory = newRuntimeInventory(registryConfigLookup(newGuardedTransport(inCluster)), clusterKeychain, registryFetchSlots)
 	})
 	return defaultInventory
 }
 
-func newRuntimeInventory(lookup configLookup, keychain keychainSource) *RuntimeInventory {
+// NewCLIJava4ShellInventory gives a standalone check its own registry slots.
+func NewCLIJava4ShellInventory() *RuntimeInventory {
+	r := newRuntimeInventory(registryConfigLookup(newGuardedTransport(false)), clusterKeychain, java4ShellCLIFetchSlots)
+	r.cli = true
+	return r
+}
+
+// UseDockerHubLogin configures a standalone scan before it starts. Resolve the
+// Docker credential helper once, under a deadline, before lifting the cap.
+func (r *RuntimeInventory) UseDockerHubLogin(ctx context.Context) error {
+	registry, err := name.NewRegistry(name.DefaultRegistry)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, r.fetchTimeout)
+	defer cancel()
+	type login struct {
+		auth authn.Authenticator
+		err  error
+	}
+	done := make(chan login, 1)
+	go func() {
+		auth, err := authn.Resolve(ctx, authn.DefaultKeychain, registry)
+		done <- login{auth: auth, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("read Docker Hub login: %w", ctx.Err())
+	case result := <-done:
+		if result.err != nil {
+			return errors.New("could not read the Docker Hub login; check your Docker credential store or run docker login")
+		}
+		if result.auth == authn.Anonymous {
+			return errors.New("Docker Hub login not found; run docker login, then retry with --docker-hub-auth")
+		}
+		r.dockerHubAuth = result.auth
+		return nil
+	}
+}
+
+type dockerHubLogin struct{ authn.Authenticator }
+
+func (login dockerHubLogin) Resolve(authn.Resource) (authn.Authenticator, error) {
+	return login.Authenticator, nil
+}
+
+func newRuntimeInventory(lookup configLookup, keychain keychainSource, slots int) *RuntimeInventory {
 	return &RuntimeInventory{
 		lookup:       lookup,
 		keychain:     keychain,
 		now:          time.Now,
-		slots:        make(chan struct{}, registryFetchSlots),
+		slots:        make(chan struct{}, slots),
 		fetchTimeout: configFetchTimeout,
 		cache:        make(map[string]*list.Element),
 		order:        list.New(),
@@ -232,9 +291,21 @@ func newRuntimeInventory(lookup configLookup, keychain keychainSource) *RuntimeI
 func clusterKeychain(c credential, ref name.Reference) (authn.Keychain, string, bool) {
 	switch {
 	case c.radar:
-		return GetAuthenticatedKeychain(ref.String(), "", nil), "", true
+		keychain := GetAuthenticatedKeychain(ref.String(), "", nil)
+		if c.advisory {
+			ecr := runtimeECRKeychain()
+			if ecr.registries[ref.Context().RegistryStr()] != nil {
+				keychain = &ecrFallbackKeychain{ecr: ecr, fallback: keychain}
+			}
+		}
+		return keychain, "", true
 	case c.secret == "":
 		return authn.NewMultiKeychain(), "", true
+	}
+	if c.snapshot != nil {
+		kc := &pullSecretKeychain{auths: pullSecretAuths(c.snapshot)}
+		auth, err := kc.Resolve(ref.Context())
+		return kc, c.identity, err == nil && auth != authn.Anonymous
 	}
 	identity, ok := pullSecretIdentity(c.namespace, c.secret)
 	if !ok {
@@ -251,6 +322,8 @@ func clusterKeychain(c credential, ref name.Reference) (authn.Keychain, string, 
 	return kc, identity, true
 }
 
+type strictRegistryLookupKey struct{}
+
 // registryConfigLookup reads a manifest and its config blob, never layers.
 // Retries are off: a rate-limited registry must not be asked again, and the
 // caller's budget is better spent on other images.
@@ -258,7 +331,10 @@ func registryConfigLookup(guard *guardedTransport) configLookup {
 	return func(ctx context.Context, ref name.Reference, platform v1.Platform, keychain authn.Keychain) (*v1.ConfigFile, string, error) {
 		rt := guard.forLookup()
 		defer rt.closeIdle()
-		auth, err := keychain.Resolve(ref.Context())
+		if ctx.Value(strictRegistryLookupKey{}) == true {
+			rt.inCluster = true
+		}
+		auth, err := authn.Resolve(ctx, keychain, ref.Context())
 		if err != nil {
 			return nil, "", err
 		}
@@ -296,68 +372,189 @@ func registryConfigLookup(guard *guardedTransport) configLookup {
 // work is one image on one platform, with every workload running it and the
 // pull secrets those Pods would use.
 type work struct {
-	key             string
-	display         string
-	ref             name.Reference
-	resolvedFrom    string
-	platform        v1.Platform
-	platformAssumed bool
-	secrets         []credential
-	workloads       map[string]*WorkloadUse
-	pods            map[string]map[string]bool // workload key -> Pod names
+	key              string
+	display          string
+	ref              name.Reference
+	resolvedFrom     string
+	platform         v1.Platform
+	platformAssumed  bool
+	secrets          []credential
+	radarCredentials bool
+	advisory         bool
+	workloads        map[string]*WorkloadUse
+	pods             map[string]map[string]bool // workload key -> Pod names
 }
 
 // Inventory reads the declared runtimes of every image the given Pods run.
 func (r *RuntimeInventory) Inventory(ctx context.Context, src PodSource, opts InventoryOptions) Inventory {
-	ctx, cancel := context.WithTimeout(ctx, inventoryCallBudget)
-	defer cancel()
-
 	items := collectWork(src)
-	results := make([]configResult, len(items))
-	budget := new(atomic.Int32)
-	budget.Store(maxLookupsPerCall)
-	var wg sync.WaitGroup
-	for i, w := range items {
-		creds := r.credentials(w, opts.RadarCredentials)
-		res, hit, untried := r.fromCache(w, creds)
-		if hit {
-			results[i] = res
-			continue
-		}
-		wg.Add(1)
-		go func(i int, w *work, untried []credential) {
-			defer wg.Done()
-			results[i] = r.fetch(ctx, w, untried, budget)
-		}(i, w, untried)
-	}
-	wg.Wait()
-
-	return shapeInventory(items, results, opts)
+	return shapeInventory(items, r.lookupConfigs(ctx, items, opts.RadarCredentials, nil), opts)
 }
 
-// credentials lists what a lookup may try, in the kubelet's order: each pull
-// secret that has an entry for the image's registry, then no credentials,
-// then (local mode only) Radar's own.
+func (r *RuntimeInventory) lookupConfigs(ctx context.Context, items []*work, radarCredentials bool, progress func(done, total int)) []configResult {
+	duration := inventoryCallBudget
+	var budget *atomic.Int32
+	var limiter *rate.Limiter
+	if progress == nil {
+		budget = new(atomic.Int32)
+		budget.Store(maxLookupsPerCall)
+	} else {
+		duration = java4ShellScanBudget
+		limiter = rate.NewLimiter(java4ShellAttemptRate, java4ShellAttemptBurst)
+		if slices.ContainsFunc(items, func(w *work) bool { return w.advisory && (radarCredentials || w.radarCredentials) }) {
+			runtimeECRKeychain()
+		}
+		progress(0, len(items))
+	}
+	ctx, cancel := context.WithTimeout(ctx, duration)
+	defer cancel()
+
+	results := make([]configResult, len(items))
+	var wg sync.WaitGroup
+	var progressMu sync.Mutex
+	completed := 0
+	complete := func(i int, result configResult) {
+		results[i] = result
+		if progress != nil {
+			progressMu.Lock()
+			completed++
+			progress(completed, len(items))
+			progressMu.Unlock()
+		}
+	}
+	workers := make(chan struct{}, cap(r.slots))
+	acquire := func(slots chan struct{}, i int) bool {
+		select {
+		case slots <- struct{}{}:
+			return true
+		case <-ctx.Done():
+			complete(i, configResult{status: StatusNotChecked, err: "time budget for this call ran out"})
+			return false
+		}
+	}
+	pacePublicECR := func(w *work) bool {
+		return limiter != nil && w.advisory && w.ref.Context().RegistryStr() == PublicECRRegistry
+	}
+	if slices.ContainsFunc(items, pacePublicECR) {
+		// A single queue keeps paced requests from occupying multiple workers.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			publicECRCtx := context.WithValue(ctx, publicECRManifestPacerKey{}, &publicECRManifestPacer{})
+			for i, w := range items {
+				if !pacePublicECR(w) {
+					continue
+				}
+				if ctx.Err() != nil {
+					complete(i, configResult{status: StatusNotChecked, err: "time budget for this call ran out"})
+					continue
+				}
+				creds := r.credentials(w, radarCredentials || w.radarCredentials)
+				res, hit, untried := r.fromCache(w, creds)
+				if !hit {
+					res = r.fetch(publicECRCtx, w, untried, nil, limiter)
+				}
+				complete(i, res)
+			}
+		}()
+	}
+	dispatch := func(dockerHubOnly bool, hostSlots chan struct{}) {
+		advisoryLookups, dockerHubLookups := 0, 0
+		for i, w := range items {
+			onDockerHub := w.advisory && registryBudgetHost(w.ref) == name.DefaultRegistry
+			if pacePublicECR(w) || (r.cli && onDockerHub != dockerHubOnly) {
+				continue
+			}
+			dockerHubLimit := onDockerHub && r.dockerHubAuth == nil && dockerHubLookups >= java4ShellDockerHubLookups
+			if dockerHubLimit || (progress == nil && w.advisory && advisoryLookups >= maxLookupsPerCall) {
+				// Public results can answer after the limit without new registry reads.
+				cached, hit, _ := r.fromCache(w, []credential{{}})
+				if hit && cached.status == StatusOK {
+					complete(i, cached)
+				} else if dockerHubLimit {
+					complete(i, configResult{status: java4ShellDockerHubLimit})
+				} else {
+					complete(i, configResult{status: StatusNotChecked, err: "per-call image lookup limit reached; narrow by namespace"})
+				}
+				continue
+			}
+			creds := r.credentials(w, radarCredentials || w.radarCredentials)
+			res, hit, untried := r.fromCache(w, creds)
+			if hit {
+				complete(i, res)
+				continue
+			}
+			if w.advisory {
+				advisoryLookups++
+				if onDockerHub {
+					dockerHubLookups++
+				}
+			}
+			if hostSlots != nil && !acquire(hostSlots, i) {
+				continue
+			}
+			if !acquire(workers, i) {
+				if hostSlots != nil {
+					<-hostSlots
+				}
+				continue
+			}
+			wg.Go(func() {
+				defer func() { <-workers }()
+				if hostSlots != nil {
+					defer func() { <-hostSlots }()
+				}
+				complete(i, r.fetch(ctx, w, untried, budget, limiter))
+			})
+		}
+	}
+	if r.cli {
+		wg.Go(func() { dispatch(true, make(chan struct{}, registryFetchSlots)) })
+	}
+	dispatch(false, nil)
+	wg.Wait()
+
+	return results
+}
+
+// Advisory checks try public access first, unless this scan has explicit
+// registry credentials to prefer.
 func (r *RuntimeInventory) credentials(w *work, radar bool) []credential {
 	secretSlots := maxAttemptsPerImage - 1
-	if radar {
+	useDockerLogin := r.usesDockerHubLogin(w)
+	if radar && !useDockerLogin {
 		secretSlots--
 	}
 	var out []credential
+	useECR := w.advisory && radar && runtimeECRKeychain().registries[w.ref.Context().RegistryStr()] != nil
+	switch {
+	case useDockerLogin:
+		out = append(out, credential{radar: true, advisory: true})
+	case w.advisory && !useECR:
+		out = append(out, credential{})
+	}
+	secretCount := 0
 	for _, c := range w.secrets {
-		if len(out) == secretSlots {
+		if secretCount == secretSlots {
 			break
 		}
 		if _, identity, ok := r.keychain(c, w.ref); ok {
 			c.identity = identity
 			out = append(out, c)
+			secretCount++
 		}
 	}
-	out = append(out, credential{})
-	if radar {
-		out = append(out, credential{radar: true})
+	if !w.advisory {
+		out = append(out, credential{})
+	}
+	if radar && !useDockerLogin {
+		out = append(out, credential{radar: true, advisory: w.advisory})
 	}
 	return out
+}
+
+func (r *RuntimeInventory) usesDockerHubLogin(w *work) bool {
+	return r.dockerHubAuth != nil && w.advisory && registryBudgetHost(w.ref) == name.DefaultRegistry
 }
 
 // resultKey: an anonymous success describes a public image and answers every
@@ -378,6 +575,10 @@ func (r *RuntimeInventory) fromCache(w *work, creds []credential) (res configRes
 	defer r.mu.Unlock()
 	var failure configResult
 	for _, c := range creds {
+		if w.advisory && c.id() != "anonymous" {
+			untried = append(untried, c)
+			continue
+		}
 		if cached, found := r.getLocked(resultKey(w, c)); found {
 			if cached.status == StatusOK {
 				return cached, true, nil
@@ -441,6 +642,14 @@ func (r *RuntimeInventory) backOff(registry string) {
 	r.backoff[registry] = r.now().Add(rateLimitBackoff)
 }
 
+func registryBudgetHost(ref name.Reference) string {
+	host := ref.Context().RegistryStr()
+	if host == "registry-1.docker.io" || host == "registry.hub.docker.com" {
+		return name.DefaultRegistry
+	}
+	return host
+}
+
 var (
 	errLookupTimeout       = errors.New("registry did not answer in time")
 	errRateLimitedRecently = errors.New("registry rate limited recently")
@@ -449,25 +658,36 @@ var (
 
 // fetch tries the remaining credentials until one reads the config. Every
 // attempt spends the call's lookup budget.
-func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credential, budget *atomic.Int32) configResult {
-	registry := w.ref.Context().RegistryStr()
+func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credential, budget *atomic.Int32, limiter *rate.Limiter) configResult {
+	registry := registryBudgetHost(w.ref)
 	res := configResult{status: StatusNotChecked, err: "per-call lookup limit reached; narrow by namespace"}
 	for _, c := range creds {
-		if budget.Add(-1) < 0 {
+		if budget != nil && budget.Add(-1) < 0 {
 			return configResult{status: StatusNotChecked, err: "per-call lookup limit reached before all available credentials were tried"}
 		}
 		keychain, identity, ok := r.keychain(c, w.ref)
+		if c.radar && r.usesDockerHubLogin(w) {
+			keychain, identity, ok = dockerHubLogin{r.dockerHubAuth}, "", true
+		}
 		if !ok {
 			continue
 		}
 		c.identity = identity
+		if limiter != nil && !r.rateLimited(registry) {
+			if err := limiter.Wait(ctx); err != nil {
+				return configResult{status: StatusNotChecked, err: "time budget for this call ran out"}
+			}
+		}
 		cfg, digest, err := r.attempt(ctx, registry, w, keychain)
 		if errors.Is(err, errRateLimitedRecently) {
 			return configResult{status: StatusRateLimited, err: "registry rate limit hit recently; retry later"}
 		}
 		if err == nil {
 			declared, base := DeclaredRuntimes(cfg)
-			res = configResult{status: StatusOK, digest: digest, declared: declared, base: base}
+			res = configResult{
+				status: StatusOK, digest: digest, declared: declared, base: base,
+				javaHomeDeclared: w.advisory && declaresJavaHome(cfg),
+			}
 			ttl := time.Duration(0)
 			switch {
 			case w.resolvedFrom == "tag":
@@ -477,7 +697,11 @@ func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credentia
 				// identity changing (registry-side permissions).
 				ttl = credentialResultTTL
 			}
-			r.store(resultKey(w, c), res, ttl)
+			// Image inspection revalidates private registry access on each
+			// request. Advisory checks follow the same rule.
+			if !w.advisory || c.id() == "anonymous" {
+				r.store(resultKey(w, c), res, ttl)
+			}
 			return res
 		}
 		if ctx.Err() != nil {
@@ -491,7 +715,9 @@ func (r *RuntimeInventory) fetch(ctx context.Context, w *work, creds []credentia
 		if res.status == StatusError {
 			ttl = transientFailureTTL
 		}
-		r.store(resultKey(w, c), res, ttl)
+		if !w.advisory || c.id() == "anonymous" {
+			r.store(resultKey(w, c), res, ttl)
+		}
 		// Registries that hide repositories from unauthorized callers answer
 		// 404, so a not-found is worth trying with the next credential.
 		if res.status != StatusAuthRequired && res.status != StatusNotFound {
@@ -545,6 +771,9 @@ func (r *RuntimeInventory) attempt(ctx context.Context, registry string, w *work
 }
 
 func classifyFetchError(err error) configResult {
+	if errors.Is(err, errECRCredentials) {
+		return configResult{status: StatusAuthRequired, err: errECRCredentials.Error()}
+	}
 	if isBlocked(err) {
 		return configResult{status: StatusBlocked, err: "registry address is not allowed from Radar"}
 	}
@@ -622,7 +851,7 @@ func collectWork(src PodSource) []*work {
 			}
 			// Name() is fully qualified, so php@sha256:x and
 			// docker.io/library/php@sha256:x are one image.
-			key := ref.Name() + "|" + platform.OS + "/" + platform.Architecture
+			key := imageWorkKey(ref, platform)
 			w := byKey[key]
 			if w == nil {
 				w = &work{key: key, display: c.Image, ref: ref, resolvedFrom: resolvedFrom, platform: platform, platformAssumed: assumed, workloads: map[string]*WorkloadUse{}, pods: map[string]map[string]bool{}}
@@ -670,6 +899,10 @@ func collectWork(src PodSource) []*work {
 	return out
 }
 
+func imageWorkKey(ref name.Reference, platform v1.Platform) string {
+	return ref.Name() + "|" + platform.OS + "/" + platform.Architecture
+}
+
 // runningContainers are the containers that can run alongside the workload:
 // regular containers, restartable (sidecar) init containers and running
 // ephemeral debug containers. One-shot init containers have finished.
@@ -688,7 +921,7 @@ func runningContainers(pod *corev1.Pod) []corev1.Container {
 	}
 	for _, c := range pod.Spec.EphemeralContainers {
 		if running[c.Name] {
-			out = append(out, corev1.Container{Name: c.Name, Image: c.Image})
+			out = append(out, corev1.Container{Name: c.Name, Image: c.Image, Command: c.Command, Args: c.Args, Env: c.Env})
 		}
 	}
 	return out

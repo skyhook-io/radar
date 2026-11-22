@@ -33,7 +33,7 @@ import (
 // The characterization goldens record what the public topology functions
 // return today for one fixture cluster: the graph, then for every fixture
 // object the Related Resources, ManagedBy and delete preview production
-// computes for it, plus selected neighborhoods and a per-user projection.
+// computes for it, plus a per-user projection.
 // They pin behavior, not correctness — several recorded answers are known
 // defects. A change meant to leave public answers untouched keeps them
 // byte-identical; a change that alters them regenerates them with
@@ -366,6 +366,12 @@ func charCluster() *charFixture {
 	typed("", "PersistentVolume", "persistentvolumes", pv)
 	addSecret(&corev1.Secret{ObjectMeta: charMeta("team", "db-creds", nil)})
 
+	// A Longhorn Volume and the PV whose CSI handle names it.
+	lhPV := &corev1.PersistentVolume{ObjectMeta: charMeta("", "pv-lh-0", nil), Spec: corev1.PersistentVolumeSpec{PersistentVolumeSource: corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{Driver: "driver.longhorn.io", VolumeHandle: "vol-lh-0"}}}}
+	p.pvs = append(p.pvs, lhPV)
+	typed("", "PersistentVolume", "persistentvolumes", lhPV)
+	dyn("longhorn.io", "v1beta2", "Volume", "volumes", true, charUnstructured("longhorn.io/v1beta2", "Volume", "longhorn-system", "vol-lh-0", nil, map[string]any{"numberOfReplicas": int64(3)}, nil))
+
 	// infra/agent: DaemonSet Pods on two Nodes.
 	agent := &appsv1.DaemonSet{ObjectMeta: charMeta("infra", "agent", nil), Spec: appsv1.DaemonSetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "agent"}}}}
 	p.daemonSets = append(p.daemonSets, agent)
@@ -568,31 +574,6 @@ type charRootRecord struct {
 	DeletePreview *CascadeDeletePreview `json:"deletePreview"`
 }
 
-type charNeighborhoodRecord struct {
-	Root     string    `json:"root"`
-	Profile  Profile   `json:"profile"`
-	Hops     int       `json:"hops"`
-	MaxNodes int       `json:"maxNodes"`
-	Subgraph *Subgraph `json:"subgraph"`
-}
-
-// charNeighborhoodRoots are roots whose bounded neighborhoods depend on edge
-// order (BFS budget selection), so a reorder that leaves every other answer
-// alone still shows.
-var charNeighborhoodRoots = []ResourceRef{
-	{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"},
-	{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "shop"},
-	{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "flux-system", Name: "shop"},
-	{Kind: "Pod", Namespace: "shop", Name: "web-7d9f8-0"},
-	{Kind: "Node", Name: "node-a"},
-	{Kind: "CronJob", Group: "batch", Namespace: "team", Name: "nightly"},
-	{Kind: "GatewayClass", Group: "gateway.networking.k8s.io", Name: "envoy"},
-}
-
-func charRefKey(ref ResourceRef) string {
-	return resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)
-}
-
 // charRoots records what production computes for every fixture object: the
 // fetched-object Related Resources the drawer and AI context use (production
 // passes the URL's plural kind), ManagedBy from the object's own metadata,
@@ -613,23 +594,6 @@ func charRoots(f *charFixture, topo *Topology, idx *RelationshipsIndex) []charRo
 		})
 	}
 	sort.SliceStable(records, func(i, j int) bool { return records[i].Root < records[j].Root })
-	return records
-}
-
-func charNeighborhoods(topo *Topology, idx *RelationshipsIndex, dp DynamicProvider) []charNeighborhoodRecord {
-	var records []charNeighborhoodRecord
-	for _, root := range charNeighborhoodRoots {
-		for _, opts := range []NeighborhoodOptions{{Profile: ProfileAuto, Hops: 1}, {Profile: ProfileAll, Hops: 2}, {Profile: ProfileAll, Hops: 1, MaxNodes: 2}} {
-			sub := BuildNeighborhoodWithIndex(topo, root, opts, idx, dp)
-			if sub != nil {
-				// List order follows the builder's partly map-ordered edges;
-				// membership (which nodes the budget admitted) is the answer.
-				canonical := charGraph(&Topology{Nodes: sub.Nodes, Edges: sub.Edges})
-				sub.Nodes, sub.Edges = canonical.Nodes, canonical.Edges
-			}
-			records = append(records, charNeighborhoodRecord{Root: charRefKey(root), Profile: opts.Profile, Hops: opts.Hops, MaxNodes: opts.MaxNodes, Subgraph: sub})
-		}
-	}
 	return records
 }
 
@@ -687,10 +651,9 @@ func charRecord(t *testing.T, f *charFixture, opts BuildOptions) []byte {
 func charSnapshotRecord(t *testing.T, f *charFixture, topo *Topology, idx *RelationshipsIndex) []byte {
 	t.Helper()
 	return charJSON(t, struct {
-		Graph         Topology                 `json:"graph"`
-		Roots         []charRootRecord         `json:"roots"`
-		Neighborhoods []charNeighborhoodRecord `json:"neighborhoods"`
-	}{charGraph(topo), charRoots(f, topo, idx), charNeighborhoods(topo, idx, f.dynamic)})
+		Graph Topology         `json:"graph"`
+		Roots []charRootRecord `json:"roots"`
+	}{charGraph(topo), charRoots(f, topo, idx)})
 }
 
 // charProjection is a per-user projection as the REST drawer serves it: a

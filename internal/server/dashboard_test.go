@@ -154,29 +154,34 @@ func TestDashboardCalicoCoverageUsesNamespaceAwareReadsAndCalicoFallback(t *test
 	t.Cleanup(k8s.ResetTestDynamicState)
 
 	dynamicCache := k8s.GetDynamicResourceCache()
-	for gvr := range map[schema.GroupVersionResource]bool{
-		projectNetworkPolicy:                 true,
-		projectStagedNetworkPolicy:           true,
-		projectStagedKubernetesNetworkPolicy: true,
-		legacyNetworkPolicy:                  true,
-	} {
+	namespacedKinds := []schema.GroupVersionResource{
+		projectNetworkPolicy,
+		projectStagedNetworkPolicy,
+		projectStagedKubernetesNetworkPolicy,
+		legacyNetworkPolicy,
+	}
+	for _, gvr := range namespacedKinds {
 		for _, namespace := range []string{"ns-a", "ns-b", "ns-c"} {
 			if _, err := dynamicCache.List(gvr, namespace); err != nil {
 				t.Fatalf("List(%v, %q): %v", gvr, namespace, err)
-			}
-			if !dynamicCache.WaitForSync(gvr, 2*time.Second) {
-				t.Fatalf("%v informer did not sync for namespace %q", gvr, namespace)
 			}
 		}
 	}
 	if _, err := dynamicCache.List(projectGlobalNetworkPolicy, ""); err != nil {
 		t.Fatalf("List(%v): %v", projectGlobalNetworkPolicy, err)
 	}
-	if !dynamicCache.WaitForSync(projectGlobalNetworkPolicy, 2*time.Second) {
-		t.Fatalf("%v informer did not sync", projectGlobalNetworkPolicy)
-	}
 	if _, err := dynamicCache.List(projectStagedGlobalNetworkPolicy, ""); err != nil {
 		t.Fatalf("List(%v): %v", projectStagedGlobalNetworkPolicy, err)
+	}
+	for _, gvr := range namespacedKinds {
+		for _, namespace := range []string{"ns-a", "ns-b", "ns-c"} {
+			if !dynamicCache.WaitForSync(gvr, 2*time.Second) {
+				t.Fatalf("%v informer did not sync for namespace %q", gvr, namespace)
+			}
+		}
+	}
+	if !dynamicCache.WaitForSync(projectGlobalNetworkPolicy, 2*time.Second) {
+		t.Fatalf("%v informer did not sync", projectGlobalNetworkPolicy)
 	}
 	if !dynamicCache.WaitForSync(projectStagedGlobalNetworkPolicy, 2*time.Second) {
 		t.Fatalf("%v informer did not sync", projectStagedGlobalNetworkPolicy)

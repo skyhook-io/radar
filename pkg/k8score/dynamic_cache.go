@@ -2312,6 +2312,17 @@ func (d *DynamicResourceCache) ListBlocking(gvr schema.GroupVersionResource, nam
 // watch holds so far; callers that need a complete read check
 // IsNamespaceSynced afterwards.
 func (d *DynamicResourceCache) ListBlockingContext(ctx context.Context, gvr schema.GroupVersionResource, namespace string, timeout time.Duration) ([]*unstructured.Unstructured, error) {
+	return d.listBlocking(ctx, gvr, namespace, timeout, true)
+}
+
+// ListBlockingReadOnlyContext is ListBlockingContext without the per-object
+// copy, under ListReadOnly's rules: callers must not mutate the returned
+// objects or retain them beyond the synchronous computation.
+func (d *DynamicResourceCache) ListBlockingReadOnlyContext(ctx context.Context, gvr schema.GroupVersionResource, namespace string, timeout time.Duration) ([]*unstructured.Unstructured, error) {
+	return d.listBlocking(ctx, gvr, namespace, timeout, false)
+}
+
+func (d *DynamicResourceCache) listBlocking(ctx context.Context, gvr schema.GroupVersionResource, namespace string, timeout time.Duration, copyItems bool) ([]*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
 	}
@@ -2345,7 +2356,10 @@ func (d *DynamicResourceCache) ListBlockingContext(ctx context.Context, gvr sche
 	result := make([]*unstructured.Unstructured, 0, len(items))
 	for _, item := range items {
 		if u, ok := item.(*unstructured.Unstructured); ok {
-			result = append(result, StripUnstructuredFields(u))
+			if copyItems {
+				u = StripUnstructuredFields(u)
+			}
+			result = append(result, u)
 		}
 	}
 
@@ -2354,7 +2368,12 @@ func (d *DynamicResourceCache) ListBlockingContext(ctx context.Context, gvr sche
 
 // ObjectReadSyncWait is how long a read of one object waits for an informer
 // that hasn't finished its first list before answering from what has loaded.
-const ObjectReadSyncWait = 2 * time.Second
+func (d *DynamicResourceCache) ObjectReadSyncWait() time.Duration {
+	if d.config.ObjectReadSyncWait > 0 {
+		return d.config.ObjectReadSyncWait
+	}
+	return 2 * time.Second
+}
 
 // Get returns a single resource by namespace and name.
 func (d *DynamicResourceCache) Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
@@ -2394,7 +2413,7 @@ func (d *DynamicResourceCache) get(gvr schema.GroupVersionResource, namespace, n
 	}
 
 	if !found && !entriesSynced(entries) {
-		ctx, cancel := context.WithTimeout(context.Background(), ObjectReadSyncWait)
+		ctx, cancel := context.WithTimeout(context.Background(), d.ObjectReadSyncWait())
 		for _, e := range entries {
 			cache.WaitForCacheSync(ctx.Done(), e.informer.HasSynced)
 		}

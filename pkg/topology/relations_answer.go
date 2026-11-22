@@ -402,6 +402,7 @@ func relationsAnswer(session relations.Session, access, traverse ownership.Acces
 	if rel == nil {
 		rel = &Relationships{}
 	}
+	n.longhornStorage(session, subject, obj, rel)
 	n.networkEntrypoints(session, access, traverse, subject, obj, istioDomain, rel)
 	n.listUnreadable(rel)
 	n.nameSpecDeclared(obj, rel)
@@ -428,7 +429,7 @@ func relationsAnswer(session relations.Session, access, traverse ownership.Acces
 		rel.Pods = uniqueResourceRefs(rel.Pods)
 	}
 	if m, err := apimeta.Accessor(obj); err == nil {
-		if meta := ManagedByFromMeta(m); meta != nil {
+		if meta := ManagedByFromMetaIn(m, ov, subject, n.allowed); meta != nil {
 			// Named by the subject's own labels and annotations, which the
 			// caller reads: a declared name, like a spec reference, shown
 			// whether or not the caller may read the manager itself.

@@ -6,9 +6,8 @@ import { Section } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 import { useAPIResources } from '../../api/apiResources'
 import { useRadarFeature } from '../../api/client'
-import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
-import { hasVulnerabilityReports, isKindUnknown, useVulnerabilities, workloadParam } from '../../api/vulnerabilities'
-import { ClearedCount, FixVersion, ImageName, SeverityCounts, gapSentence } from './parts'
+import { hasVulnerabilityReports, useVulnerabilities, workloadParam } from '../../api/vulnerabilities'
+import { ClearedCount, FixVersion, ImageName, SeverityCounts } from './parts'
 
 interface Props {
   kind: string
@@ -16,11 +15,6 @@ interface Props {
   name: string
 }
 
-/**
- * A workload's vulnerabilities, for its drawer: per container image, what
- * the current scan found, and the upgrades that clear the most. Absent where the
- * cluster has no scanner reports or the Radar predates the endpoint.
- */
 export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props) {
   const navigate = useNavigate()
   const [params] = useSearchParams()
@@ -28,32 +22,13 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
   const { support } = useRadarFeature('vulnerabilities')
   const available = hasVulnerabilityReports(resources) && support !== 'unsupported'
   const workload = { kind, namespace, name }
-  const { data, isLoading, error } = useVulnerabilities({ view: 'image', workload }, available && !!namespace && !!name)
-  // The upgrades it needs, as By fix works them out, once it has findings.
-  const { data: fixData } = useVulnerabilities({ view: 'fix', workload }, available && !!namespace && !!name && (data?.images ?? []).length > 0)
-  if (!available) return null
-  // An older Radar, or a report kind removed since the page loaded, has
-  // nothing to show here; anything else is a failure worth saying.
-  if (error && (isRadarFeatureUnsupported(error) || isKindUnknown(error))) return null
-  if (error) {
-    return (
-      <Section title="Vulnerabilities" icon={Shield}>
-        <p className="text-xs text-warning-text">Couldn't read vulnerability reports: {error instanceof Error ? error.message : 'request failed'}.</p>
-      </Section>
-    )
-  }
-
+  const { data } = useVulnerabilities({ view: 'image', workload }, available && !!namespace && !!name)
   const images = data?.images ?? []
-  // The tab folds clean images away; a workload's drawer shows every container.
-  const clean = data?.clean ?? []
-  const unscanned = data?.unscanned ?? []
+  const { data: fixData } = useVulnerabilities({ view: 'fix', workload }, available && !!namespace && !!name && images.length > 0)
+  if (!available || images.length === 0) return null
+
   const critical = images.reduce((n, img) => n + (img.findingsUnread ? 0 : img.counts.critical), 0)
   const upgrades = fixData?.fixes ?? []
-  // The read spans the caller's scope; a gap names this namespace, or might.
-  const relevantGaps = (data?.coverage.gaps ?? []).filter((g) => {
-    const ns = g.namespaces
-    return !ns || ns.extent !== undefined || (ns.names ?? []).length < ns.count || (ns.names ?? []).includes(namespace)
-  })
   const isThis = (w: { kind: string; namespace: string; name: string }) => w.kind === kind && w.namespace === namespace && w.name === name
   // The link keeps the page's namespace view, as every page link does: the
   // picker follows the URL, so a narrower one would change it.
@@ -80,72 +55,50 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
 
   return (
     <Section title={critical > 0 ? `Vulnerabilities · ${critical} critical` : 'Vulnerabilities'} icon={Shield}>
-      {isLoading ? (
-        <p className="text-sm text-theme-text-tertiary">Reading vulnerability reports…</p>
-      ) : (
-        <div className="flex flex-col gap-3 text-sm">
-          {images.map((img) => card(img.id, (
-            <>
-              <span className="flex flex-wrap items-baseline gap-x-2">
-                {containerName(img.workloads)}
-                <ImageName image={img.image} className="text-xs text-theme-text-tertiary" />
-              </span>
-              <span className="flex flex-wrap items-center gap-x-3">
-                {img.findingsUnread ? <span className="text-xs text-warning-text">Findings not read</span> : <SeverityCounts counts={img.counts} />}
-                <span className="text-xs text-theme-text-secondary">{img.findingsUnread ? '' : `${img.fixable.critical + img.fixable.high + img.fixable.medium + img.fixable.low + img.fixable.unknown} with a fix · `}scanned {formatRelativeAgeTime(img.scannedAt)}</span>
-              </span>
-              <SharedWith others={[...new Set(img.workloads.filter((w) => !isThis(w)).map((w) => `${w.namespace}/${w.name}`))]} partial={img.workloads.length < img.workloadsTotal} />
-            </>
-          )))}
-          {unscanned.map((u) => card(u.image, (
-            <>
-              <span className="flex flex-wrap items-baseline gap-x-2">
-                {containerName(u.workloads)}
-                <ImageName image={u.image} className="text-xs text-theme-text-tertiary" />
-              </span>
-              <span className="text-xs text-warning-text">Not scanned</span>
-            </>
-          )))}
-          {clean.map((img) => card(img.id, (
-            <>
-              <span className="flex flex-wrap items-baseline gap-x-2">
-                {containerName(img.workloads)}
-                <ImageName image={img.image} className="text-xs text-theme-text-tertiary" />
-              </span>
-              <span className="text-xs text-theme-text-secondary">No CVEs reported · scanned {formatRelativeAgeTime(img.scannedAt)}</span>
-            </>
-          )))}
-          {images.length === 0 && clean.length === 0 && unscanned.length === 0 && (
-            <p className="text-xs text-theme-text-tertiary">
-              {gapSentence(relevantGaps, { counts: false }) ?? 'No running containers in this workload.'}
-            </p>
-          )}
-          {upgrades.length > 0 && (
-            // One grid so packages, targets and counts line up; Critical and
-            // High are what decide which upgrade comes first.
-            <div className="grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)_2rem_2.5rem] items-baseline gap-x-3 gap-y-1 text-xs">
-              <span className="col-span-2 font-medium text-theme-text-secondary">Upgrade first</span>
-              <span className="text-right text-theme-text-tertiary">C</span>
-              <span className="text-right text-theme-text-tertiary">H</span>
-              {upgrades.slice(0, UPGRADES_SHOWN).map((f) => (
-                <Fragment key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.fixedVersions ?? []).join('|')}`}>
-                  <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
-                  {f.to
-                    ? <span className="flex min-w-0 items-baseline gap-1 font-mono"><span className="text-theme-text-tertiary">→</span><FixVersion installed={f.from.join(', ')} target={f.to} showInstalled={false} /></span>
-                    : <span className="truncate font-mono text-theme-text-tertiary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
-                  <ClearedCount count={f.counts.critical} severity="critical" />
-                  <ClearedCount count={f.counts.high} severity="high" />
-                </Fragment>
-              ))}
-              {upgrades.length > UPGRADES_SHOWN && (
-                <button type="button" onClick={() => open({ by: 'fix' })} className="col-span-4 justify-self-start text-accent-text hover:underline">
-                  {upgrades.length - UPGRADES_SHOWN} more {upgrades.length - UPGRADES_SHOWN === 1 ? 'upgrade' : 'upgrades'} →
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+      <div className="flex flex-col gap-3 text-sm">
+        {images.map((img) => card(img.id, (
+          <>
+            <span className="flex flex-wrap items-baseline gap-x-2">
+              {containerName(img.workloads)}
+              <ImageName image={img.image} className="text-xs text-theme-text-tertiary" />
+            </span>
+            <span className="flex flex-wrap items-center gap-x-3">
+              {img.findingsUnread ? <span className="text-xs text-warning-text">Findings not read</span> : <SeverityCounts counts={img.counts} />}
+              <span className="text-xs text-theme-text-secondary">{img.findingsUnread ? '' : `${img.fixable.critical + img.fixable.high + img.fixable.medium + img.fixable.low + img.fixable.unknown} with a fix · `}scanned {formatRelativeAgeTime(img.scannedAt)}</span>
+            </span>
+            <SharedWith others={[...new Set(img.workloads.filter((w) => !isThis(w)).map((w) => `${w.namespace}/${w.name}`))]} partial={img.workloads.length < img.workloadsTotal} />
+          </>
+        )))}
+        {Boolean(data?.unscanned?.length) && (
+          <button type="button" onClick={() => open()} className="self-start text-xs text-accent-text hover:underline">
+            View unscanned images in this workload →
+          </button>
+        )}
+        {upgrades.length > 0 && (
+          // One grid so packages, targets and counts line up; Critical and
+          // High are what decide which upgrade comes first.
+          <div className="grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)_2rem_2.5rem] items-baseline gap-x-3 gap-y-1 text-xs">
+            <span className="col-span-2 font-medium text-theme-text-secondary">Upgrade first</span>
+            <span className="text-right text-theme-text-tertiary">C</span>
+            <span className="text-right text-theme-text-tertiary">H</span>
+            {upgrades.slice(0, UPGRADES_SHOWN).map((f) => (
+              <Fragment key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.fixedVersions ?? []).join('|')}`}>
+                <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
+                {f.to
+                  ? <span className="flex min-w-0 items-baseline gap-1 font-mono"><span className="text-theme-text-tertiary">→</span><FixVersion installed={f.from.join(', ')} target={f.to} showInstalled={false} /></span>
+                  : <span className="truncate font-mono text-theme-text-tertiary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
+                <ClearedCount count={f.counts.critical} severity="critical" />
+                <ClearedCount count={f.counts.high} severity="high" />
+              </Fragment>
+            ))}
+            {upgrades.length > UPGRADES_SHOWN && (
+              <button type="button" onClick={() => open({ by: 'fix' })} className="col-span-4 justify-self-start text-accent-text hover:underline">
+                {upgrades.length - UPGRADES_SHOWN} more {upgrades.length - UPGRADES_SHOWN === 1 ? 'upgrade' : 'upgrades'} →
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </Section>
   )
 }

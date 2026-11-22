@@ -118,11 +118,11 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 		return opts.CanReadSubject == nil || opts.CanReadSubject(Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name})
 	}
 	forEvidence := func(i Issue) (Issue, bool) {
-		shown, ok := ForEvidence(i, opts.CanReadEvidence, opts.AllowUnfilteredEvidence)
-		if !ok && opts.OnEvidenceWithheld != nil {
+		shown, view := forEvidence(i, opts.CanReadEvidence, opts.AllowUnfilteredEvidence)
+		if view == EvidenceWithheld && opts.OnEvidenceWithheld != nil {
 			opts.OnEvidenceWithheld(i)
 		}
-		return shown, ok
+		return shown, view == EvidenceFull || view == EvidenceDegraded
 	}
 	canReadEvidence := func(i Issue) bool {
 		_, ok := forEvidence(i)
@@ -260,7 +260,9 @@ func foldGroup(members []Issue) Issue {
 		Degraded:          rep.Degraded,
 	}
 	reads := map[EvidenceRead]bool{}
+	g.ExpectedWhenVerified = true
 	for _, member := range members {
+		g.ExpectedWhenVerified = g.ExpectedWhenVerified && member.ExpectedWhenVerified
 		for _, read := range member.RequiredReads {
 			if !reads[read] {
 				reads[read] = true

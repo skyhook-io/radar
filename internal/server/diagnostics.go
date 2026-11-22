@@ -36,7 +36,7 @@ type DiagConfig struct {
 	MCPReadOnly          bool   `json:"mcpReadOnly"`
 	MCPEnabled           bool   `json:"mcpEnabled"`
 	Pprof                bool   `json:"pprof"`
-	OpenCostCurrency     string `json:"opencostCurrency"`
+	OpenCostCurrency     string `json:"opencostCurrency,omitempty"`
 	HasPrometheusURL     bool   `json:"hasPrometheusURL"`
 	HasPrometheusHeaders bool   `json:"hasPrometheusHeaders"`
 }
@@ -51,35 +51,41 @@ type DiagnosticsSnapshot struct {
 	Uptime       string `json:"uptime"`
 	UptimeSec    int64  `json:"uptimeSec"`
 
-	Connection          *DiagConnection              `json:"connection,omitempty"`
-	Kubeconfig          *DiagKubeconfig              `json:"kubeconfig,omitempty"`
-	Cluster             *DiagCluster                 `json:"cluster,omitempty"`
-	Cache               *DiagCache                   `json:"cache,omitempty"`
-	Metrics             *k8s.MetricsCollectionHealth `json:"metrics,omitempty"`
-	Timeline            *DiagTimeline                `json:"timeline,omitempty"`
-	EventPipeline       *DiagEventPipeline           `json:"eventPipeline,omitempty"`
-	Informers           *DiagInformers               `json:"informers,omitempty"`
-	Prometheus          *DiagPrometheus              `json:"prometheus,omitempty"`
-	Traffic             *DiagTraffic                 `json:"traffic,omitempty"`
-	Permissions         *DiagPermissions             `json:"permissions,omitempty"`
-	APIDiscovery        *DiagAPIDiscovery            `json:"apiDiscovery,omitempty"`
-	SSE                 *DiagSSE                     `json:"sse,omitempty"`
-	Perf                *perfstats.Snapshot          `json:"perf,omitempty"`
-	Desktop             *desktopenv.Snapshot         `json:"desktop,omitempty"`
-	Runtime             *DiagRuntime                 `json:"runtime,omitempty"`
-	Config              *DiagConfig                  `json:"config,omitempty"`
-	RecentErrors        []errorlog.ErrorEntry        `json:"recentErrors,omitempty"`
-	TotalErrorsRecorded int64                        `json:"totalErrorsRecorded,omitempty"`
-	Errors              []string                     `json:"errors,omitempty"`
+	Connection *DiagConnection `json:"connection,omitempty"`
+	Kubeconfig *DiagKubeconfig `json:"kubeconfig,omitempty"`
+	diagClusterSections
+	SSE                 *DiagSSE              `json:"sse,omitempty"`
+	Perf                *perfstats.Snapshot   `json:"perf,omitempty"`
+	Desktop             *desktopenv.Snapshot  `json:"desktop,omitempty"`
+	Runtime             *DiagRuntime          `json:"runtime,omitempty"`
+	Config              *DiagConfig           `json:"config,omitempty"`
+	RecentErrors        []errorlog.ErrorEntry `json:"recentErrors,omitempty"`
+	TotalErrorsRecorded int64                 `json:"totalErrorsRecorded,omitempty"`
+	Errors              []string              `json:"errors,omitempty"`
+}
+
+// diagClusterSections are published together only if the connection stays current.
+type diagClusterSections struct {
+	Cluster       *DiagCluster                 `json:"cluster,omitempty"`
+	Cache         *DiagCache                   `json:"cache,omitempty"`
+	Metrics       *k8s.MetricsCollectionHealth `json:"metrics,omitempty"`
+	Timeline      *DiagTimeline                `json:"timeline,omitempty"`
+	EventPipeline *DiagEventPipeline           `json:"eventPipeline,omitempty"`
+	Informers     *DiagInformers               `json:"informers,omitempty"`
+	Prometheus    *DiagPrometheus              `json:"prometheus,omitempty"`
+	Traffic       *DiagTraffic                 `json:"traffic,omitempty"`
+	Permissions   *DiagPermissions             `json:"permissions,omitempty"`
+	APIDiscovery  *DiagAPIDiscovery            `json:"apiDiscovery,omitempty"`
 }
 
 // DiagConnection holds connection state info.
 type DiagConnection struct {
-	State       string `json:"state"`
-	Context     string `json:"context"`
-	ClusterName string `json:"clusterName,omitempty"`
-	Error       string `json:"error,omitempty"`
-	ErrorType   string `json:"errorType,omitempty"`
+	State           string `json:"state"`
+	Context         string `json:"context"`
+	ClusterName     string `json:"clusterName,omitempty"`
+	Error           string `json:"error,omitempty"`
+	ErrorType       string `json:"errorType,omitempty"`
+	ProgressMessage string `json:"progressMessage,omitempty"`
 }
 
 // DiagKubeconfig holds non-sensitive kubeconfig loading state. It never
@@ -91,20 +97,21 @@ type DiagConnection struct {
 // collisions, shell env enrichment, or an exec auth plugin missing from
 // the desktop app's PATH.
 type DiagKubeconfig struct {
-	Mode                       string   `json:"mode"`                         // in-cluster, single, multi-env, multi-dir, multi-source, or "" if not initialized
-	FileCount                  int      `json:"fileCount"`                    // Number of kubeconfig files loaded
-	DirectoryFileCount         int      `json:"directoryFileCount"`           // Loaded files discovered from configured directories
-	ContextCount               int      `json:"contextCount"`                 // Contexts exposed after source resolution
-	EnrichedFromShell          bool     `json:"enrichedFromShell"`            // Desktop app captured KUBECONFIG from login shell
-	KubeconfigEnvIgnored       bool     `json:"kubeconfigEnvIgnored"`         // KUBECONFIG suppressed by configured sources
-	KubeconfigEnvIgnoredReason string   `json:"kubeconfigEnvIgnoredReason"`   // Non-sensitive reason KUBECONFIG was suppressed
-	CurrentContextUsesExec     bool     `json:"currentContextUsesExec"`       // Current context's AuthInfo uses an exec credential plugin
-	ExecPluginsPresent         []string `json:"execPluginsPresent,omitempty"` // Exec plugin command basenames resolvable on $PATH
-	ExecPluginsMissing         []string `json:"execPluginsMissing,omitempty"` // Exec plugin command basenames NOT resolvable on $PATH (smoking gun for desktop-app multi-cluster failures)
+	Mode                       string   `json:"mode"`                             // in-cluster, single, multi-env, multi-dir, multi-source, or "" if not initialized
+	FileCount                  int      `json:"fileCount"`                        // Number of kubeconfig files loaded
+	DirectoryFileCount         int      `json:"directoryFileCount"`               // Loaded files discovered from configured directories
+	ContextCount               int      `json:"contextCount"`                     // Contexts exposed after source resolution
+	EnrichedFromShell          bool     `json:"enrichedFromShell"`                // Desktop app captured KUBECONFIG from login shell
+	KubeconfigEnvIgnored       bool     `json:"kubeconfigEnvIgnored"`             // KUBECONFIG suppressed by configured sources
+	KubeconfigEnvIgnoredReason string   `json:"kubeconfigEnvIgnoredReason"`       // Non-sensitive reason KUBECONFIG was suppressed
+	CurrentContextUsesExec     *bool    `json:"currentContextUsesExec,omitempty"` // Current context's AuthInfo uses an exec credential plugin
+	ExecPluginsPresent         []string `json:"execPluginsPresent,omitempty"`     // Exec plugin command basenames resolvable on $PATH
+	ExecPluginsMissing         []string `json:"execPluginsMissing,omitempty"`     // Exec plugin command basenames NOT resolvable on $PATH (smoking gun for desktop-app multi-cluster failures)
 }
 
 // DiagCluster holds cluster detection info.
 type DiagCluster struct {
+	ObservedAt        string `json:"observedAt"`
 	Platform          string `json:"platform"`
 	KubernetesVersion string `json:"kubernetesVersion"`
 	NodeCount         int    `json:"nodeCount"`
@@ -154,7 +161,7 @@ type DiagEventPipeline struct {
 // DiagInformers holds informer counts and sync status.
 type DiagInformers struct {
 	TypedCount   int                      `json:"typedCount"`
-	DynamicCount int                      `json:"dynamicCount"`
+	DynamicCount *int                     `json:"dynamicCount,omitempty"`
 	WatchedCRDs  []string                 `json:"watchedCRDs"`
 	SyncStatus   *k8score.CacheSyncStatus `json:"syncStatus,omitempty"`
 }
@@ -233,26 +240,37 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var errs []string
-
-	// Connection — always available, no cluster needed
-	collectSafe("connection", &errs, func() {
-		status := k8s.GetConnectionStatus()
-		connectionError := status.Error
-		if status.ErrorType == "config" && connectionError != "" {
-			connectionError = "Kubeconfig initialization failed; see local Radar logs for details"
-		}
-		snap.Connection = &DiagConnection{
-			State:       string(status.State),
-			Context:     status.Context,
-			ClusterName: status.ClusterName,
-			Error:       connectionError,
-			ErrorType:   status.ErrorType,
+	var operation context.Context
+	var metricsStore *k8s.MetricsHistoryStore
+	var cache *k8s.ResourceCache
+	var dynCache *k8s.DynamicResourceCache
+	var trafficManager *traffic.Manager
+	var status k8s.ConnectionStatus
+	stable := k8s.CaptureClusterReads(func() {
+		operation = k8s.OperationContext()
+		metricsStore = k8s.GetMetricsHistory()
+		cache = k8s.GetResourceCache()
+		status = k8s.GetConnectionStatus()
+		if status.State == k8s.StateConnected {
+			dynCache = k8s.GetDynamicResourceCache()
+			trafficManager = traffic.GetManager()
 		}
 	})
 
-	// Kubeconfig loading state — non-sensitive, always safe to include
+	var clusterErrors []string
+	collectClusterSection := func(name string, fn func()) {
+		if stable && operation.Err() == nil {
+			collectSafe(name, &clusterErrors, fn)
+		}
+	}
+
+	var dropContext string
 	collectSafe("kubeconfig", &errs, func() {
-		summary := k8s.GetKubeconfigSummary()
+		summary, name, ok := k8s.TryKubeconfigSummary()
+		if !ok {
+			errs = append(errs, "Kubeconfig details are temporarily busy.")
+			return
+		}
 		snap.Kubeconfig = &DiagKubeconfig{
 			Mode:                       summary.Mode,
 			FileCount:                  summary.FileCount,
@@ -261,31 +279,17 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 			EnrichedFromShell:          summary.EnrichedFromShell,
 			KubeconfigEnvIgnored:       summary.KubeconfigEnvIgnored,
 			KubeconfigEnvIgnoredReason: summary.KubeconfigEnvIgnoredReason,
-			CurrentContextUsesExec:     summary.CurrentContextUsesExec,
 			ExecPluginsPresent:         summary.ExecPluginsPresent,
 			ExecPluginsMissing:         summary.ExecPluginsMissing,
 		}
-	})
-
-	// Cluster info — requires connection, but errors are captured
-	collectSafe("cluster", &errs, func() {
-		info, err := k8s.GetClusterInfo(r.Context())
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("cluster: %v", err))
-			return
-		}
-		snap.Cluster = &DiagCluster{
-			Platform:          info.Platform,
-			KubernetesVersion: info.KubernetesVersion,
-			NodeCount:         info.NodeCount,
-			NamespaceCount:    info.NamespaceCount,
-			InCluster:         info.InCluster,
+		if stable && status.Context == name && (name != "" || summary.Mode == "in-cluster") {
+			dropContext = k8s.TimelineClusterContext(name)
+			snap.Kubeconfig.CurrentContextUsesExec = &summary.CurrentContextUsesExec
 		}
 	})
 
 	// Cache
-	collectSafe("cache", &errs, func() {
-		cache := k8s.GetResourceCache()
+	collectClusterSection("cache", func() {
 		if cache == nil {
 			return
 		}
@@ -304,17 +308,16 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Metrics health
-	collectSafe("metrics", &errs, func() {
-		store := k8s.GetMetricsHistory()
-		if store == nil {
+	collectClusterSection("metrics", func() {
+		if metricsStore == nil {
 			return
 		}
-		h := store.CollectionHealth()
+		h := metricsStore.CollectionHealth()
 		snap.Metrics = &h
 	})
 
 	// Timeline
-	collectSafe("timeline", &errs, func() {
+	collectClusterSection("timeline", func() {
 		store := timeline.GetStore()
 		if store == nil {
 			// A missing timeline with no explanation is the hardest kind of
@@ -384,7 +387,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Event pipeline
-	collectSafe("eventPipeline", &errs, func() {
+	collectClusterSection("eventPipeline", func() {
 		metrics := timeline.GetMetrics()
 		if metrics == nil {
 			return
@@ -394,34 +397,37 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 			Received: snapshot.Counters.Received,
 			Dropped:  snapshot.Counters.Dropped,
 			Recorded: snapshot.Counters.Recorded,
-			// Compose cluster-scope + per-user RBAC on the drop records (see handleDebugEvents).
-			RecentDrops: s.filterDropsByRBAC(r, timeline.DropsForCluster(snapshot.RecentDrops, k8s.ActiveClusterContext())),
-			Uptime:      snapshot.Uptime,
+			Uptime:   snapshot.Uptime,
+		}
+		if dropContext != "" {
+			snap.EventPipeline.RecentDrops = s.filterDropsByRBAC(r, timeline.DropsForCluster(snapshot.RecentDrops, dropContext))
+		} else if len(snapshot.RecentDrops) > 0 {
+			clusterErrors = append(clusterErrors, "Recent drop details are unavailable until the cluster identity can be read.")
 		}
 	})
 
 	// Informers
-	collectSafe("informers", &errs, func() {
+	collectClusterSection("informers", func() {
+		if cache == nil {
+			return
+		}
 		diag := &DiagInformers{}
 
 		// Get typed informer count and sync status from cache
-		cache := k8s.GetResourceCache()
-		if cache != nil {
-			enabled := cache.GetEnabledResources()
-			count := 0
-			for _, ok := range enabled {
-				if ok {
-					count++
-				}
+		enabled := cache.GetEnabledResources()
+		count := 0
+		for _, ok := range enabled {
+			if ok {
+				count++
 			}
-			diag.TypedCount = count
-			syncStatus := cache.GetSyncStatus()
-			diag.SyncStatus = &syncStatus
 		}
+		diag.TypedCount = count
+		syncStatus := cache.GetSyncStatus()
+		diag.SyncStatus = &syncStatus
 
-		dynCache := k8s.GetDynamicResourceCache()
 		if dynCache != nil {
-			diag.DynamicCount = dynCache.GetInformerCount()
+			count := dynCache.GetInformerCount()
+			diag.DynamicCount = &count
 			watched := dynCache.GetWatchedResources()
 			crds := make([]string, 0, len(watched))
 			for _, gvr := range watched {
@@ -434,7 +440,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Prometheus
-	collectSafe("prometheus", &errs, func() {
+	collectClusterSection("prometheus", func() {
 		client := prometheuspkg.GetClient()
 		if client == nil {
 			return
@@ -452,18 +458,22 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Traffic — only read cached state, never trigger network I/O
-	collectSafe("traffic", &errs, func() {
-		manager := traffic.GetManager()
-		if manager == nil {
+	collectClusterSection("traffic", func() {
+		if trafficManager == nil {
+			return
+		}
+		name, ok := trafficManager.ActiveSourceNameIfIdle()
+		if !ok {
+			clusterErrors = append(clusterErrors, "Traffic source details are temporarily busy.")
 			return
 		}
 		snap.Traffic = &DiagTraffic{
-			ActiveSource: manager.GetActiveSourceName(),
+			ActiveSource: name,
 		}
 	})
 
 	// Permissions — read-only from cache, no RBAC checks
-	collectSafe("permissions", &errs, func() {
+	collectClusterSection("permissions", func() {
 		caps := k8s.GetCachedCapabilities()
 		permResult := k8s.GetCachedPermissionResult()
 		if caps == nil && permResult == nil {
@@ -516,8 +526,12 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// API Discovery — read-only stats, no refresh
-	collectSafe("apiDiscovery", &errs, func() {
-		discovery := k8s.GetResourceDiscovery()
+	collectClusterSection("apiDiscovery", func() {
+		discovery, ok := k8s.ResourceDiscoveryIfIdle()
+		if !ok {
+			clusterErrors = append(clusterErrors, "API discovery details are temporarily busy.")
+			return
+		}
 		if discovery == nil {
 			return
 		}
@@ -573,7 +587,8 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	collectSafe("config", &errs, func() {
 		if s.diagConfig != nil {
 			current := *s.diagConfig
-			current.OpenCostCurrency = s.resolvedOpenCostCurrency()
+			current.OpenCostCurrency = ""
+			collectClusterSection("OpenCost currency", func() { current.OpenCostCurrency = s.resolvedOpenCostCurrency() })
 			current.Pprof = s.pprofEnabled()
 			snap.Config = &current
 		}
@@ -587,6 +602,82 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		}
 		if total := errorlog.TotalRecorded(); total > 0 {
 			snap.TotalErrorsRecorded = total
+		}
+	})
+
+	// Collection can outlast a switch. Keep its API and storage reads outside
+	// the operation lock, then publish them together for the original session.
+	current := false
+	if stable {
+		k8s.CaptureClusterReads(func() {
+			latest := k8s.GetConnectionStatus()
+			current = operation.Err() == nil && cache == k8s.GetResourceCache() && status.Context == latest.Context
+			status = latest
+		})
+	}
+	if current {
+		// Cluster info — the last completed read for this cache, whatever the
+		// connection state now: during an outage it is the evidence a report
+		// needs, and observedAt says how old it is.
+		collectClusterSection("cluster", func() {
+			if cache == nil {
+				clusterErrors = append(clusterErrors, "Cluster details are unavailable while the cache is offline.")
+				return
+			}
+			info, observed := cache.LastClusterInfo()
+			if observed.IsZero() {
+				clusterErrors = append(clusterErrors, "Cluster details have not been collected for the current connection.")
+				return
+			}
+			// A status published late by a check that started before a switch
+			// can name the previous context while this cache serves the new one.
+			if info.Context != status.Context {
+				clusterErrors = append(clusterErrors, "Cluster details are unavailable until the connection status settles.")
+				return
+			}
+			snap.Cluster = &DiagCluster{
+				ObservedAt:        observed.UTC().Format(time.RFC3339),
+				Platform:          info.Platform,
+				KubernetesVersion: info.KubernetesVersion,
+				NodeCount:         info.NodeCount,
+				NamespaceCount:    info.NamespaceCount,
+				InCluster:         info.InCluster,
+			}
+		})
+
+		if status.State != k8s.StateConnected {
+			snap.Traffic = nil
+			if snap.Informers != nil {
+				snap.Informers.DynamicCount = nil
+				snap.Informers.WatchedCRDs = nil
+			}
+		}
+		errs = append(errs, clusterErrors...)
+	} else {
+		snap.diagClusterSections = diagClusterSections{}
+		if snap.Kubeconfig != nil {
+			snap.Kubeconfig.CurrentContextUsesExec = nil
+		}
+		if snap.Config != nil {
+			snap.Config.OpenCostCurrency = ""
+		}
+		errs = append(errs, "Cluster details are unavailable during a connection change. Retry after the connection settles.")
+		status = k8s.GetConnectionStatus()
+	}
+
+	// Connection — always available, no cluster needed
+	collectSafe("connection", &errs, func() {
+		connectionError := status.Error
+		if status.ErrorType == "config" && connectionError != "" {
+			connectionError = "Kubeconfig initialization failed; see local Radar logs for details"
+		}
+		snap.Connection = &DiagConnection{
+			State:           string(status.State),
+			Context:         status.Context,
+			ClusterName:     status.ClusterName,
+			Error:           connectionError,
+			ErrorType:       status.ErrorType,
+			ProgressMessage: status.ProgressMsg,
 		}
 	})
 

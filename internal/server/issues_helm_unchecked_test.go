@@ -39,7 +39,7 @@ func useHelmStorageAnswering(t *testing.T, status int, body string) {
 		}
 	}))
 	t.Cleanup(server.Close)
-	config := &rest.Config{Host: server.URL}
+	config := &rest.Config{Host: server.URL, QPS: -1}
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func useHelmStorageFailingIn(t *testing.T, failing ...string) {
 		}
 	}))
 	t.Cleanup(server.Close)
-	config := &rest.Config{Host: server.URL}
+	config := &rest.Config{Host: server.URL, QPS: -1}
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		t.Fatal(err)

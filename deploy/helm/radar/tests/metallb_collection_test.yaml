@@ -1,0 +1,57 @@
+suite: MetalLB collection reads only the curated kinds and ConfigurationStates
+templates:
+  - clusterrole.yaml
+tests:
+  - it: grants read access to pools, advertisements and configuration states by default
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["metallb.io"]
+            resources: ["ipaddresspools", "l2advertisements", "bgpadvertisements", "configurationstates"]
+            verbs: ["get", "list", "watch"]
+  - it: does not read BGPPeers, which can hold an inline password, without the Secrets grant
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["metallb.io"]
+            resources: ["bgppeers"]
+            verbs: ["get", "list", "watch"]
+  - it: reads BGPPeers when the chart grants Secrets
+    set:
+      rbac.secrets: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["metallb.io"]
+            resources: ["bgppeers"]
+            verbs: ["get", "list", "watch"]
+  - it: reads BGPPeers with authentication enabled
+    set:
+      auth.mode: proxy
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["metallb.io"]
+            resources: ["bgppeers"]
+            verbs: ["get", "list", "watch"]
+  - it: removes every MetalLB grant when disabled
+    set:
+      rbac.crdGroups.metallb: false
+      rbac.secrets: true
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["metallb.io"]
+            resources: ["ipaddresspools", "l2advertisements", "bgpadvertisements", "configurationstates"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["metallb.io"]
+            resources: ["bgppeers"]
+            verbs: ["get", "list", "watch"]
