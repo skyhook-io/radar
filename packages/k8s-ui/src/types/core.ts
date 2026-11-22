@@ -185,6 +185,8 @@ export interface FeatureCapabilities {
   substrateHealthMetrics?: boolean
   /** GET /api/substrate/* and PUT /api/substrate/connection. */
   substrateWorkspace?: boolean
+  /** kagent Agent attribution on Substrate's actors, the actors list's agent and kagent filters, and the per-Agent sessions summary. */
+  kagentAttribution?: boolean
   resourceIssues?: boolean
   resourceIssueCoverage?: boolean
   podEnvironment?: boolean
