@@ -25,10 +25,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-var (
-	deploymentsGVR = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
-	servicesGVR    = schema.GroupVersionResource{Version: "v1", Resource: "services"}
-)
+var servicesGVR = schema.GroupVersionResource{Version: "v1", Resource: "services"}
 
 func labelledDeployment(name string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
