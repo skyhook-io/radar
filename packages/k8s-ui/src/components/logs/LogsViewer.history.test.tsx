@@ -63,6 +63,13 @@ it('says why History may be empty', async () => {
   await render({ fetchHistory: async () => result({ containers: [], logs: {} }), initialMode: 'history', historyEmptyHint: <span>See Log shipping</span> })
   expect(element.textContent).toContain("Loki returned no lines for this pod in this window, matched by its namespace and pod name labels. Logs not shipped to Loki, or shipped under other labels, don't show here.")
   expect(element.textContent).toContain('See Log shipping')
+  expect(element.textContent).toContain('With a container chosen, only lines labelled with it, or with no container label, show.')
+})
+
+it('keeps the unlabelled lines of a pod whose streams are only partly labelled', async () => {
+  await render({ fetchHistory: async () => result({ containers: ['(all containers)', 'web'], logs: { web: '2026-11-13T09:00:01Z web line\n', '(all containers)': '2026-11-13T09:00:00Z bare line\n' } }), initialMode: 'history' })
+  expect(element.textContent).toContain('OTHER 2')
+  expect(element.textContent).toContain('with lines that carry no container label')
 })
 
 it('takes the containers of a gone pod from the History result', async () => {

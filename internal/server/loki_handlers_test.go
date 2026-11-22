@@ -535,3 +535,55 @@ func TestLokiPodLogsCancelledReadFreesItsSlot(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+// Another shipper's "container" label in Loki doesn't decide this pod's read:
+// its streams carry container_name, so the chosen container is matched by
+// that label, and each line names its container.
+func TestLokiPodLogsContainerAliasFromThePodsStreams(t *testing.T) {
+	rec := newLokiRecorderWithLabels(t, `["namespace","pod","container","container_name"]`, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"app-1","container_name":"web"},"values":[["1763035200000000001","hello"]]}]}}`)
+	resp, raw := lokiPodLogs(t, "?container=web")
+	var got lokiPodLogsResponse
+	_ = json.Unmarshal([]byte(raw), &got)
+	if resp.StatusCode != 200 || !strings.HasSuffix(strings.TrimSpace(got.Logs["web"]), " hello") {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod="app-1", container_name="web"}` {
+		t.Fatalf("query = %s", q)
+	}
+}
+
+// A pod whose streams carry no container label is read whole: a container
+// matcher would match nothing and read as an empty pod.
+func TestLokiPodLogsContainerWithoutLabelReadsWholePod(t *testing.T) {
+	rec := newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"app-1"},"values":[["1763035200000000001","hello"]]}]}}`)
+	resp, raw := lokiPodLogs(t, "?container=web")
+	var got lokiPodLogsResponse
+	_ = json.Unmarshal([]byte(raw), &got)
+	if resp.StatusCode != 200 || !strings.HasSuffix(strings.TrimSpace(got.Logs[noContainerLabel]), " hello") {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod="app-1"}` {
+		t.Fatalf("query = %s", q)
+	}
+}
+
+// When only some of the pod's streams carry a container label, the pod is
+// read whole and keeps the chosen container's lines and the unlabelled ones,
+// never another labelled container's.
+func TestLokiPodLogsMixedStreamsKeepChosenAndUnlabelled(t *testing.T) {
+	rec := newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"app-1","container":"web"},"values":[["1763035200000000003","web-line"]]},
+ {"stream":{"namespace":"team","pod":"app-1","container":"sidecar"},"values":[["1763035200000000002","side-line"]]},
+ {"stream":{"namespace":"team","pod":"app-1"},"values":[["1763035200000000001","bare-line"]]}]}}`)
+	resp, raw := lokiPodLogs(t, "?container=web")
+	var got lokiPodLogsResponse
+	_ = json.Unmarshal([]byte(raw), &got)
+	if resp.StatusCode != 200 || !slices.Equal(got.Containers, []string{noContainerLabel, "web"}) || strings.Contains(raw, "side-line") {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod="app-1"}` {
+		t.Fatalf("query = %s", q)
+	}
+}

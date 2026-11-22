@@ -100,6 +100,7 @@ describe('Local saved connections', () => {
     expect(html).toContain('Add header')
     expect(html).not.toContain('Copy settings from')
     expect(html).toContain('Cluster settings identity')
+    expect(html).toContain('aria-label="Metrics URL help"')
   })
   it('names common compatible backends without claiming an exhaustive list', () => {
     const html = render({ headerKeys: ['Authorization', 'X-Scope-OrgID'] })
@@ -195,5 +196,6 @@ describe('Logs (Loki) connection', () => {
     const html = render({ state: 'saved', url: 'http://loki-gateway.loki', headerKeys: ['X-Scope-OrgID'], secretSet: true }, 'loki')
     expect(html).toContain('Logs (Loki)')
     expect(html).not.toContain('Prometheus')
+    expect(html).toContain('aria-label="Loki URL help"')
   })
 })

@@ -75,7 +75,8 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, initC
       setResult({ ...r, wholePod })
       // A wider window can show containers an earlier read didn't.
       if (!wholePod) setKnownContainers(known => [...new Set([...known, ...r.containers])])
-      const keys = wholePod ? [ALL_CONTAINERS] : container ? [container] : Object.keys(r.logs)
+      // A partly labelled pod is read whole: its unlabelled lines may be this container's.
+      const keys = wholePod ? [ALL_CONTAINERS] : container ? [...new Set([container, ALL_CONTAINERS])] : Object.keys(r.logs)
       const lines = keys.flatMap(c => (r.logs[c] ?? '').split('\n').filter(Boolean).map(line => ({ ...parseLogLine(line), container: c })))
       lines.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
       set(lines)
@@ -109,6 +110,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, initC
         <div className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-1.5 text-xs text-theme-text-secondary">
           From Loki, {windowLabel}, matched by pod name (lines from an earlier pod with the same name are included)
           {result.wholePod && ', all containers (Loki has no container label)'}
+          {!result.wholePod && !!container && result.logs[ALL_CONTAINERS] !== undefined && ', with lines that carry no container label'}
           {result.truncated && `, the newest ${result.limit.toLocaleString()} lines (the limit; older lines in this window may be missing)`}.
         </div>
       )}
@@ -130,7 +132,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, initC
           onClear={clear}
           emptyMessage={
             <div className="space-y-1">
-              <div>Loki returned no lines for this pod in this window, matched by its namespace and pod name labels. Logs not shipped to Loki, or shipped under other labels, don&apos;t show here.</div>
+              <div>Loki returned no lines for this pod in this window, matched by its namespace and pod name labels. Logs not shipped to Loki, or shipped under other labels, don&apos;t show here.{container && ' With a container chosen, only lines labelled with it, or with no container label, show.'}</div>
               {historyEmptyHint}
             </div>
           }
