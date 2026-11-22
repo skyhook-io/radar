@@ -31,9 +31,9 @@ function subscribe(listener: () => void) {
 export function followingSwitch() {
   return tab.get('radar:context-switch:' + getApiBase())
 }
-// The last operation this tab presented a result for. A late acknowledgement
-// of it (its POST outlived the poll that showed the outcome) must not replay it.
-const finished = new Map<string, string>()
+// Operations this tab presented a result for. A late acknowledgement of one
+// (its POST outlived the poll that showed the outcome) must not replay it.
+const finished = new Map<string, Set<string>>()
 
 export function followSwitch(id: string) {
   if (switchFinished(id)) return
@@ -43,11 +43,12 @@ export function followSwitch(id: string) {
 
 /** Whether this tab already presented the result of this operation. */
 export function switchFinished(id: string) {
-  return Boolean(id) && finished.get(getApiBase()) === id
+  return Boolean(id) && Boolean(finished.get(getApiBase())?.has(id))
 }
 
 export function finishSwitch(id: string) {
-  finished.set(getApiBase(), id)
+  const base = getApiBase()
+  finished.set(base, (finished.get(base) ?? new Set()).add(id))
   followSwitch('')
 }
 
