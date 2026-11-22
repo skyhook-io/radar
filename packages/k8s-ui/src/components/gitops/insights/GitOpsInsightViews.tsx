@@ -170,6 +170,7 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
 function FluxRevisionChain({ summary, renderRevisionMeta }: { summary: GitOpsInsightSummary; renderRevisionMeta?: (revision: string) => ReactNode }) {
   const applied = summary.appliedRevision || ''
   const nextRun = fluxNextRunMinutes(summary)
+  const suspended = summary.autoSyncMode === 'Suspended'
   return (
     <span className="inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
       {summary.sourceRevision && (
@@ -186,7 +187,7 @@ function FluxRevisionChain({ summary, renderRevisionMeta }: { summary: GitOpsIns
           {summary.sourceRevision && <span aria-hidden>→</span>}
           <span className="shrink-0">Applied</span>
           <Tooltip content={applied} delay={400}>
-            <span className={clsx('font-mono font-medium', summary.pending ? SEVERITY_TEXT.warning : 'text-theme-text-primary')}>{appliedLabel(summary)}</span>
+            <span className={clsx('font-mono font-medium', summary.pending && !suspended ? SEVERITY_TEXT.warning : 'text-theme-text-primary')}>{appliedLabel(summary)}</span>
           </Tooltip>
           {renderRevisionMeta?.(applied)}
           {nextRun !== null && <span>· next run in ~{nextRun}m</span>}
@@ -198,7 +199,9 @@ function FluxRevisionChain({ summary, renderRevisionMeta }: { summary: GitOpsIns
           <span>{summary.objects} objects</span>
         </>
       ) : null}
-      {summary.pending && <Badge severity="warning" size="sm">Pending: source is ahead of the last successful apply</Badge>}
+      {summary.pending && (suspended
+        ? <Badge severity="neutral" size="sm">Source is ahead (suspended)</Badge>
+        : <Badge severity="warning" size="sm">Pending: source is ahead of the last successful apply</Badge>)}
     </span>
   )
 }

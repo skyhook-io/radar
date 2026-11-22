@@ -71,6 +71,13 @@ describe('Flux revision chain', () => {
     expect(html).not.toContain('Revision:')
   })
 
+  it('reads a suspended pending source as expected, not a warning', () => {
+    const html = render({ autoSyncMode: 'Suspended', sourceRevision: 'main@sha1:bbbbbbb1234567890', appliedRevision: 'main@sha1:aaaaaaa1234567890', pending: true })
+    expect(html).toContain('Source is ahead (suspended)')
+    expect(html).not.toContain('Pending: source is ahead')
+    expect(html).not.toContain('amber')
+  })
+
   it('shortens sha256 digests', () => {
     const html = render({ kind: 'HelmRelease', sourceRevision: 'latest@sha256:53884aebf2e5aa', appliedRevision: 'sha256:53884aebf2e5aa', pending: false })
     expect(html).toContain('53884ae')
