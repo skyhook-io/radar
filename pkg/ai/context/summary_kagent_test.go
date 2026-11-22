@@ -54,6 +54,44 @@ func TestKagentLiteralValuesNeverReachAIContext(t *testing.T) {
 	}
 }
 
+// The audit's other carriers: URL user info and queries, artifact sources,
+// credential flags, a discovery error quoting a URL, and ModelConfig's
+// secretHash, which confirms a guessed key.
+func TestKagentURLsArgsAndSecretHashNeverReachAIContext(t *testing.T) {
+	cred := "https://user:" + kagentSentinel + "@host.example.com/v1?api_key=" + kagentSentinel
+	objects := []*unstructured.Unstructured{
+		kagentObj("ModelConfig", map[string]any{
+			"openAI": map[string]any{"baseUrl": cred}, "ollama": map[string]any{"host": "u:" + kagentSentinel + "@ollama:11434"},
+			"azureOpenAI": map[string]any{"azureEndpoint": cred}, "sapAICore": map[string]any{"authUrl": cred}, "foundry": map[string]any{"endpoint": cred},
+		}, map[string]any{"secretHash": kagentSentinel}),
+		kagentObj("ModelProviderConfig", map[string]any{"endpoint": cred}, nil),
+		kagentObj("RemoteMCPServer", map[string]any{"url": cred}, map[string]any{"conditions": []any{
+			map[string]any{"type": "Accepted", "status": "False", "reason": "DiscoveryFailed", "message": "Get \"" + cred + "\": 401"},
+		}}),
+		kagentObj("Harness", map[string]any{
+			"workload":  map[string]any{"args": []any{"--api-key=" + kagentSentinel, "--token", kagentSentinel}},
+			"substrate": map[string]any{"snapshotPolicy": map[string]any{"location": "s3://AKID:" + kagentSentinel + "@bucket/snap"}},
+		}, nil),
+		kagentObj("AgentTemplate", map[string]any{"skills": []any{map[string]any{"name": "s", "source": map[string]any{"git": map[string]any{"url": "https://" + kagentSentinel + "@git.example.com/x.git", "commit": "abc"}}}}}, nil),
+		kagentObj("Agent", map[string]any{"template": map[string]any{"inline": map[string]any{"plugins": []any{map[string]any{"source": map[string]any{"bucket": map[string]any{"s3": map[string]any{"endpoint": cred}}}}}}}}, nil),
+	}
+	annotated := objects[0].DeepCopy()
+	annotated.SetAnnotations(map[string]string{"kubectl.kubernetes.io/last-applied-configuration": `{"spec":{"defaultHeaders":{"k":"` + kagentSentinel + `"}}}`})
+	objects = append(objects, annotated)
+	for _, obj := range objects {
+		for _, level := range []VerbosityLevel{LevelSummary, LevelDetail, LevelCompact} {
+			raw, _ := json.Marshal(MinifyUnstructured(obj.DeepCopy(), level))
+			if strings.Contains(string(raw), kagentSentinel) {
+				t.Errorf("%s level %d leaks: %s", obj.GetKind(), level, raw)
+			}
+		}
+	}
+	raw, _ := json.Marshal(MinifyUnstructured(objects[2].DeepCopy(), LevelDetail))
+	if !strings.Contains(string(raw), "host.example.com/v1") {
+		t.Errorf("a URL keeps its host and path: %s", raw)
+	}
+}
+
 func TestKagentAgentSummaryUsesKagentReading(t *testing.T) {
 	agent := kagentObj("Agent", map[string]any{"harnessRef": map[string]any{"name": "default"}}, map[string]any{
 		"observedGeneration": int64(1), "latestSuccessfulRevision": "a1b2c3d4e5f6a1b2c3d4e5f6",

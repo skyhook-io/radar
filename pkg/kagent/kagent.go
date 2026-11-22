@@ -172,7 +172,9 @@ func findCondition(u *unstructured.Unstructured, condType string) condition {
 		out.status, _ = c["status"].(string)
 		out.reason, _ = c["reason"].(string)
 		out.message, _ = c["message"].(string)
-		out.message = strings.TrimSpace(out.message)
+		// kagent quotes raw errors, a discovery error's URL with it, into
+		// messages that reach Issues and AI summaries.
+		out.message = RedactURLsInText(strings.TrimSpace(out.message))
 		out.observedGeneration, _, _ = unstructured.NestedInt64(c, "observedGeneration")
 		if ts, _ := c["lastTransitionTime"].(string); ts != "" {
 			if t, err := time.Parse(time.RFC3339, ts); err == nil {

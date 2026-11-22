@@ -74,7 +74,8 @@ function findCondition(resource: any, type: string): Condition & { since?: numbe
   return {
     status: str(c.status) || undefined,
     reason: str(c.reason),
-    message: str(c.message).trim(),
+    // Mirrors pkg/kagent findCondition: kagent quotes raw errors, URLs included.
+    message: redactKagentURLsInText(str(c.message).trim()),
     observedGeneration: num(c.observedGeneration),
     since: Number.isFinite(since) ? since : undefined,
     found: true,
@@ -403,42 +404,148 @@ export function getKagentAgentEgressPolicies(agent: any): string[] {
 /** Shown in place of a literal value that may be a credential. */
 export const KAGENT_LITERAL_HIDDEN = 'Set inline (not shown)'
 
+const REDACTED = '[REDACTED]'
+
+/** Mirrors pkg/kagent StripURLCredentials: blanks a URL's user info, query and fragment; testdata/redaction.json pins both. */
+export function stripKagentURLCredentials(raw: string): string {
+  const s = raw.trim()
+  if (!s) return raw
+  let scheme = ''
+  let rest = s
+  const sep = s.indexOf('://')
+  if (sep > 0) { scheme = s.slice(0, sep + 3); rest = s.slice(sep + 3) }
+  const end = rest.search(/[/?#]/)
+  let authority = end >= 0 ? rest.slice(0, end) : rest
+  let tail = end >= 0 ? rest.slice(end) : ''
+  const at = authority.lastIndexOf('@')
+  if (at >= 0) authority = `${REDACTED}@${authority.slice(at + 1)}`
+  const q = tail.search(/[?#]/)
+  if (q >= 0) tail = tail.slice(0, q + 1) + REDACTED
+  return scheme + authority + tail
+}
+
+const URL_IN_TEXT = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi
+const SENSITIVE_QUERY = /(?:^|[?&#;])[^=&#]*(?:key|token|sig|secret|passw|auth|credential|session)[^=&#]*=/i
+const SENSITIVE_FLAG = /^(--?[a-z0-9_.-]*(?:token|key|secret|passw|credential|auth)[a-z0-9_.-]*)(=.*)?$/i
+const SENSITIVE_ASSIGN = /^([a-z_][a-z0-9_]*(?:token|key|secret|passw|credential|auth)[a-z0-9_]*)=.+$/i
+
+/** Mirrors pkg/kagent RedactURLsInText: user info of every URL in text, and a query that names a credential. */
+export function redactKagentURLsInText(text: string): string {
+  if (!text.includes('://')) return text
+  return text.replace(URL_IN_TEXT, (match) => {
+    const u = match.replace(/[.,;:!?)\]}]+$/, '')
+    const trailing = match.slice(u.length)
+    let stripped = stripKagentURLCredentials(u)
+    const q = u.search(/[?#]/)
+    if (q >= 0 && !SENSITIVE_QUERY.test(u.slice(q))) {
+      const sq = stripped.search(/[?#]/)
+      if (sq >= 0) stripped = stripped.slice(0, sq) + u.slice(q)
+    }
+    return stripped + trailing
+  })
+}
+
+/** Mirrors pkg/kagent RedactArgs: values passed to a credential-named flag or variable. */
+export function redactKagentArgs(args: string[]): string[] {
+  let blankNext = false
+  return args.map((a) => {
+    if (blankNext && !a.startsWith('-')) { blankNext = false; return REDACTED }
+    const flag = SENSITIVE_FLAG.exec(a)
+    if (flag) {
+      if (flag[2]) { blankNext = false; return `${flag[1]}=${REDACTED}` }
+      blankNext = true
+      return a
+    }
+    blankNext = false
+    if (SENSITIVE_ASSIGN.test(a)) return a.slice(0, a.indexOf('=') + 1) + REDACTED
+    return redactKagentURLsInText(a)
+  })
+}
+
+const URL_FIELDS: Record<string, string[][]> = {
+  ModelConfig: [['openAI', 'baseUrl'], ['anthropic', 'baseUrl'], ['mistral', 'baseUrl'], ['gemini', 'baseUrl'], ['azureOpenAI', 'azureEndpoint'], ['ollama', 'host'], ['sapAICore', 'baseUrl'], ['sapAICore', 'authUrl'], ['foundry', 'endpoint']],
+  ModelProviderConfig: [['endpoint']],
+  RemoteMCPServer: [['url']],
+  Harness: [['substrate', 'snapshotPolicy', 'location']],
+  SandboxTemplate: [['substrate', 'snapshotPolicy', 'location']],
+}
+
+function urlsInNode(node: any): any {
+  if (typeof node === 'string') return redactKagentURLsInText(node)
+  if (Array.isArray(node)) return node.map(urlsInNode)
+  if (node && typeof node === 'object') return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, urlsInNode(v)]))
+  return node
+}
+
+function stripAt(node: any, path: string[]) {
+  for (const key of path.slice(0, -1)) {
+    node = node?.[key]
+    if (!node || typeof node !== 'object') return
+  }
+  const last = path[path.length - 1]
+  if (typeof node[last] === 'string' && node[last]) node[last] = stripKagentURLCredentials(node[last])
+}
+
+function stripArtifactURLs(templateSpec: any) {
+  for (const field of ['skills', 'plugins']) {
+    for (const item of Array.isArray(templateSpec?.[field]) ? templateSpec[field] : []) {
+      stripAt(item?.source, ['git', 'url'])
+      stripAt(item?.source, ['bucket', 's3', 'endpoint'])
+    }
+  }
+}
+
+function blankValues(list: unknown) {
+  for (const e of Array.isArray(list) ? list : []) {
+    if (e && typeof e === 'object' && typeof (e as any).value === 'string' && (e as any).value) (e as any).value = KAGENT_LITERAL_HIDDEN
+  }
+}
+
 /**
- * A copy with the literal values a credential can be put in blanked: a
- * RemoteMCPServer's spec.headersFrom[].value, a ModelConfig's
- * spec.defaultHeaders values and spec.azureOpenAI.azureAdToken, and a
- * Harness's or SandboxTemplate's spec.env[].value. Mirrors pkg/ai/context
- * redactKagentLiterals; presentation only, the read policy decides who sees
- * the object.
+ * A copy without what can carry a credential under any name: literal header
+ * and environment values, URL user info and queries, values after a
+ * credential-named flag in a Harness's command and args, and a ModelConfig's
+ * status.secretHash. Mirrors pkg/ai/context redactKagentLiterals;
+ * presentation only, the read policy decides who sees the object.
  */
 export function redactKagentLiterals<T>(resource: T): T {
   const r: any = resource
-  if (!isKagentResource(r) || !r.spec || typeof r.spec !== 'object') return resource
-  const spec: any = { ...r.spec }
-  const blankValues = (field: string) => {
-    if (!Array.isArray(spec[field])) return
-    spec[field] = spec[field].map((e: any) => (e && typeof e === 'object' && typeof e.value === 'string' && e.value ? { ...e, value: KAGENT_LITERAL_HIDDEN } : e))
+  if (!isKagentResource(r)) return resource
+  const out: any = { ...r }
+  if (r.metadata?.annotations?.['kubectl.kubernetes.io/last-applied-configuration'] !== undefined) {
+    const annotations = { ...r.metadata.annotations }
+    delete annotations['kubectl.kubernetes.io/last-applied-configuration']
+    out.metadata = { ...r.metadata, annotations }
   }
-  switch (r.kind) {
-    case 'RemoteMCPServer':
-      blankValues('headersFrom')
-      break
-    case 'ModelConfig':
-      if (spec.defaultHeaders && typeof spec.defaultHeaders === 'object') {
-        spec.defaultHeaders = Object.fromEntries(Object.entries(spec.defaultHeaders).map(([k, v]) => [k, typeof v === 'string' && v ? KAGENT_LITERAL_HIDDEN : v]))
-      }
-      if (spec.azureOpenAI && typeof spec.azureOpenAI === 'object' && typeof spec.azureOpenAI.azureAdToken === 'string' && spec.azureOpenAI.azureAdToken) {
-        spec.azureOpenAI = { ...spec.azureOpenAI, azureAdToken: KAGENT_LITERAL_HIDDEN }
-      }
-      break
-    case 'Harness':
-    case 'SandboxTemplate':
-      blankValues('env')
-      break
-    default:
-      return resource
+  const spec: any = r.spec && typeof r.spec === 'object' ? urlsInNode(r.spec) : r.spec
+  if (r.status && typeof r.status === 'object') {
+    out.status = urlsInNode(r.status)
+    if (r.kind === 'ModelConfig') delete out.status.secretHash
   }
-  return { ...r, spec }
+  if (spec && typeof spec === 'object') {
+    for (const path of URL_FIELDS[r.kind] ?? []) stripAt(spec, path)
+    switch (r.kind) {
+      case 'RemoteMCPServer': blankValues(spec.headersFrom); break
+      case 'ModelConfig':
+        if (spec.defaultHeaders && typeof spec.defaultHeaders === 'object') {
+          for (const [k, v] of Object.entries(spec.defaultHeaders)) if (typeof v === 'string' && v) spec.defaultHeaders[k] = KAGENT_LITERAL_HIDDEN
+        }
+        if (typeof spec.azureOpenAI?.azureAdToken === 'string' && spec.azureOpenAI.azureAdToken) spec.azureOpenAI.azureAdToken = KAGENT_LITERAL_HIDDEN
+        break
+      case 'Harness':
+        blankValues(spec.env)
+        for (const field of ['command', 'args']) {
+          const list = spec.workload?.[field]
+          if (Array.isArray(list) && list.every((a: unknown) => typeof a === 'string')) spec.workload[field] = redactKagentArgs(list)
+        }
+        break
+      case 'SandboxTemplate': blankValues(spec.env); break
+      case 'AgentTemplate': stripArtifactURLs(spec); break
+      case 'Agent': stripArtifactURLs(spec.template?.inline); break
+    }
+    out.spec = spec
+  }
+  return out
 }
 
 // ============================================================================

@@ -2474,5 +2474,218 @@
     "want": {
       "reads": false
     }
+  },
+  {
+    "name": "live: agent referencing a missing ModelConfig",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "broken-model",
+        "namespace": "kagent"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 1,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 1,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "resolve ModelConfig \"kagent/no-such-model\": not found",
+            "observedGeneration": 1,
+            "reason": "ReferenceResolutionFailed",
+            "status": "False",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 1,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "blocked by ResolvedRefs",
+            "observedGeneration": 1,
+            "reason": "Blocked",
+            "status": "False",
+            "type": "Ready"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Latest change blocked: resolve ModelConfig \"kagent/no-such-model\": not found; no session can start. Create ModelConfig kagent/no-such-model or point the agent at an existing one.",
+          "reason": "ReferenceResolutionFailed",
+          "severity": "critical"
+        }
+      ],
+      "reads": true,
+      "state": "blocked",
+      "summary": "Latest change blocked: resolve ModelConfig \"kagent/no-such-model\": not found; no session can start",
+      "text": "Blocked",
+      "tone": "unhealthy"
+    }
+  },
+  {
+    "name": "live: healthy agent",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "Agent",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "k8s-helper",
+        "namespace": "kagent"
+      },
+      "spec": {
+        "harnessRef": {
+          "name": "default"
+        },
+        "template": {
+          "ref": {
+            "name": "triage"
+          }
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Agent explicitly selects its template and harness",
+            "observedGeneration": 1,
+            "reason": "Accepted",
+            "status": "True",
+            "type": "Accepted"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All requested egress grants are admitted",
+            "observedGeneration": 1,
+            "reason": "Applied",
+            "status": "True",
+            "type": "EgressPoliciesApplied"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "All runtime references resolved",
+            "observedGeneration": 1,
+            "reason": "Resolved",
+            "status": "True",
+            "type": "ResolvedRefs"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Resolved configuration is compatible with the Harness",
+            "observedGeneration": 1,
+            "reason": "Compatible",
+            "status": "True",
+            "type": "Compatible"
+          },
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "ActorTemplate golden snapshot is ready",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Ready"
+          }
+        ],
+        "desiredRevision": "aa5e9426eb2ead1c0f65f5c97cf535a9f41038ecd7f8f2b9a7ecc6d925987f40",
+        "latestSuccessfulRevision": "aa5e9426eb2ead1c0f65f5c97cf535a9f41038ecd7f8f2b9a7ecc6d925987f40",
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [],
+      "reads": true,
+      "state": "ready",
+      "summary": "Ready to start sessions",
+      "text": "Ready",
+      "tone": "healthy"
+    }
+  },
+  {
+    "name": "remote MCP server discovery error quoting a credential URL",
+    "now": "2026-11-20T12:00:00Z",
+    "object": {
+      "apiVersion": "api.kagent.dev/v1alpha3",
+      "kind": "RemoteMCPServer",
+      "metadata": {
+        "creationTimestamp": "2026-11-19T00:00:00Z",
+        "generation": 1,
+        "name": "github",
+        "namespace": "agents"
+      },
+      "spec": {
+        "description": "GitHub",
+        "headersFrom": [
+          {
+            "name": "Authorization",
+            "value": "Bearer ghp_literal"
+          }
+        ],
+        "url": "https://api.githubcopilot.com/mcp/"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-20T10:00:00Z",
+            "message": "Get \"https://user:tok@mcp.example.com/mcp?api_key=abc\": 401 Unauthorized",
+            "observedGeneration": 1,
+            "reason": "DiscoveryFailed",
+            "status": "False",
+            "type": "Accepted"
+          }
+        ],
+        "observedGeneration": 1
+      }
+    },
+    "want": {
+      "findings": [
+        {
+          "message": "Tool discovery failed: Get \"https://[REDACTED]@mcp.example.com/mcp?[REDACTED]\": 401 Unauthorized. Check the server's URL and credentials, and that kagent's controller can reach it.",
+          "reason": "DiscoveryFailed",
+          "severity": "warning"
+        }
+      ],
+      "reads": true,
+      "state": "failed",
+      "summary": "Tool discovery failed: Get \"https://[REDACTED]@mcp.example.com/mcp?[REDACTED]\": 401 Unauthorized",
+      "text": "Discovery failed",
+      "tone": "alert"
+    }
   }
 ]

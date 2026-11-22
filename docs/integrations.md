@@ -2526,20 +2526,22 @@ The generic Ready-condition walk leaves these five kinds to these rules, so one 
 
 **Agents list and sidebar.** When the cluster serves `api.kagent.dev` Agents, the sidebar's **Agents** row has a **kagent** heading with an **Agents** destination: the Agent list with Radar's status column, template, harness, model (an inline template's), the latest successful revision and age. It has no count: Radar has no kagent summary endpoint, and the statuses are in the list. kagent's other kinds stay under the row's Other kinds, with Radar's status column on the five that report status. The namespace filter applies.
 
-**Credentials.** Audit of the eight kinds' Go types (kagent v1.0.1 and main):
+**Credentials.** Audit of the eight kinds' Go types (kagent v1.0.1 and main; full field list with file:line in the PR):
 
-| Kind | Literal values a credential can be put in | Read policy |
+| Kind | Where a credential can sit as a literal | Read policy |
 |---|---|---|
-| RemoteMCPServer | `spec.headersFrom[].value` (request headers; `valueFrom` names a Secret or ConfigMap instead) | Exact kind access |
-| ModelConfig | `spec.defaultHeaders` values; `spec.azureOpenAI.azureAdToken` (v1.0.1 only). API keys are Secret references (`apiKeySecret`) | Exact kind access |
-| Harness | `spec.env[].value`: literal runtime environment, which kagent has no Secret reference for yet | Namespace visibility, like Pod templates |
-| SandboxTemplate | `spec.env[].value`, as Harness | Namespace visibility |
-| ModelProviderConfig | None: discovery and invocation credentials are Secret references | Namespace visibility |
-| EgressPolicy | None: `authentication.secretKeyRef` names a Secret; `prefix` is a literal prefix such as `Bearer ` | Namespace visibility |
-| AgentTemplate (and an Agent's inline template) | None by field; `systemPrompt` and Git/S3 artifact URLs are free text | Namespace visibility |
-| Agent | None | Namespace visibility |
+| RemoteMCPServer | `spec.headersFrom[].value` (request headers; `valueFrom` names a Secret or ConfigMap instead); `spec.url` (no pattern: user info or a query token); discovery errors quoted in `status.conditions[].message` | Exact kind access |
+| ModelConfig | `spec.defaultHeaders` values; `spec.azureOpenAI.azureAdToken` (v1.0.1 only); the provider URLs `spec.{openAI,anthropic,mistral,gemini}.baseUrl`, `azureOpenAI.azureEndpoint`, `ollama.host` (may be scheme-less), `sapAICore.{baseUrl,authUrl}`, `foundry.endpoint`. API keys are Secret references (`apiKeySecret`). `status.secretHash` is an unsalted SHA-256 of the referenced Secrets' bytes, which confirms a guessed key | Exact kind access |
+| Harness | `spec.env[].value`: literal runtime environment, which kagent has no Secret reference for yet; `spec.workload.{command,args}`; `spec.substrate.snapshotPolicy.location` | Namespace visibility, like Pod templates |
+| SandboxTemplate | `spec.env[].value`, as Harness; `spec.substrate.snapshotPolicy.location` | Namespace visibility |
+| AgentTemplate (and an Agent's inline template) | Skill and plugin sources' `git.url` and `bucket.s3.endpoint` (user info, a presigned query); free text in `systemPrompt` and descriptions | Namespace visibility |
+| ModelProviderConfig | None by field: credentials are Secret references and `spec.endpoint`'s pattern forbids user info and a query | Namespace visibility |
+| EgressPolicy | None by field: `authentication.secretKeyRef` names a Secret; `prefix` is meant for `Bearer ` | Namespace visibility |
+| Agent | None beyond its inline template | Namespace visibility |
 
-RemoteMCPServers and ModelConfigs join the exact-kind read policy (`internal/k8s/kagent_credentials.go`, beside MetalLB BGPPeers): with authentication on, lists, details, counts, search, AI context, MCP and their Issues need the caller's own `list`/`get` on that kind in the namespace, and they are never drawn in topology, whose frames are authorized per namespace. AI context also blanks `headersFrom[].value`, `defaultHeaders` values, `azureAdToken` and Harness/SandboxTemplate `env[].value` structurally, keeping names and Secret references, and the generic drawer shows them as "Set inline (not shown)". That is presentation only: the YAML tab shows the object to whoever may read it.
+RemoteMCPServers and ModelConfigs join the exact-kind read policy (`internal/k8s/kagent_credentials.go`, beside MetalLB BGPPeers): with authentication on, lists, details, counts, search, AI context, MCP and their Issues need the caller's own `list`/`get` on that kind in the namespace, and they are never drawn in topology, whose frames are authorized per namespace. Harnesses and SandboxTemplates keep namespace visibility, as Pod templates do; their environment values are the most likely place for a pasted credential, which is an open decision, not an oversight.
+
+Redaction is structural, not by key name, and runs before the generic pass in AI context (`pkg/ai/context/redact_kagent.go`) and in the generic drawer (`redactKagentLiterals` in k8s-ui): literal header, token and environment values are blanked ("Set inline (not shown)" in the drawer); the URL fields above lose their user info, query and fragment; any other URL in spec or status text, condition messages included, loses its user info and a query naming a credential (`?api_key=`, `&sig=`); a Harness's command and args lose the value after a credential-named flag (`--api-key=…`, `--token …`, `API_TOKEN=…`); `status.secretHash` and the last-applied annotation are dropped. Names, Secret references and digests stay. The URL and argument rules live in `pkg/kagent/redact.go`, mirrored in k8s-ui, and `pkg/kagent/testdata/redaction.json` pins both. Issues and AI summaries quote condition messages with the same URL rule. This is presentation: the YAML tab shows the object to whoever may read it.
 
 **The four ways Radar runs.** Locally (auth off) every read is the kubeconfig user's own. In-cluster with authentication, the shared cache holds the kinds and each read is checked as above; the Agent drawer reads the template and Harness through the ordinary GET, as the caller. Radar Hub's newest UI reads status from the object itself, so it works against any Radar; the exact-kind gate is the server's, so an older Radar serves RemoteMCPServers and ModelConfigs by namespace visibility, while the UI still blanks their literal values. Shared without authentication (the chart's default), the chart collects RemoteMCPServers and ModelConfigs only when it grants Secrets, so by default they are not read at all; when it does, anyone who reaches Radar can read them, as with Secrets. No route or capability is added.
 

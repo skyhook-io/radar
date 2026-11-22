@@ -40,9 +40,9 @@ func summarizeKagent(obj *unstructured.Unstructured) *ResourceSummary {
 	case kagent.KindModelConfig:
 		s.Type, s.Target = str("spec", "provider"), str("spec", "model")
 	case kagent.KindModelProviderConfig:
-		s.Type, s.Target = str("spec", "type"), RedactSecrets(str("spec", "endpoint"))
+		s.Type, s.Target = str("spec", "type"), kagent.StripURLCredentials(str("spec", "endpoint"))
 	case kagent.KindRemoteMCPServer:
-		s.Type, s.Target = str("spec", "protocol"), RedactSecrets(str("spec", "url"))
+		s.Type, s.Target = str("spec", "protocol"), kagent.StripURLCredentials(str("spec", "url"))
 	}
 	return s
 }

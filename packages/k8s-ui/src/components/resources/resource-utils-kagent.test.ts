@@ -7,7 +7,10 @@ import {
   getKagentTemplateDeclarations,
   kagentReference,
   readKagent,
+  redactKagentArgs,
   redactKagentLiterals,
+  redactKagentURLsInText,
+  stripKagentURLCredentials,
 } from './resource-utils-kagent'
 
 // Shared with pkg/kagent's status_test.go, which also checks the Issues each
@@ -103,5 +106,31 @@ describe('getKagentAgentColumnValue', () => {
     expect(getKagentAgentColumnValue(agent, 'kagentModel')).toBe('gpt')
     expect(getKagentAgentColumnValue(agent, 'kagentRevision')).toBe('a1b2c3d4e5f6')
     expect(getKagentAgentColumnValue({ ...agent, apiVersion: 'agent.k8s.elastic.co/v1alpha1' }, 'kagentHarness')).toBeUndefined()
+  })
+})
+
+// Shared with pkg/kagent's redact_test.go.
+const redaction = JSON.parse(readFileSync(new URL('../../../../../pkg/kagent/testdata/redaction.json', import.meta.url), 'utf8'))
+
+describe('kagent URL and argument redaction match pkg/kagent', () => {
+  for (const c of redaction) {
+    it(`${c.fn} ${JSON.stringify(c.in)}`, () => {
+      const got = c.fn === 'url' ? stripKagentURLCredentials(c.in) : c.fn === 'text' ? redactKagentURLsInText(c.in) : redactKagentArgs(c.in)
+      expect(got).toEqual(c.want)
+    })
+  }
+})
+
+describe('redactKagentLiterals beyond literal values', () => {
+  it('strips URL fields and artifact sources, credential args and secretHash, without touching the original', () => {
+    const model = { apiVersion: 'api.kagent.dev/v1alpha3', kind: 'ModelConfig', spec: { openAI: { baseUrl: 'https://u:s3cret@llm.example.com/v1' } }, status: { secretHash: 's3cret' } }
+    const out = redactKagentLiterals(model)
+    expect(JSON.stringify(out)).not.toContain('s3cret')
+    expect(out.spec.openAI.baseUrl).toBe('https://[REDACTED]@llm.example.com/v1')
+    expect(model.spec.openAI.baseUrl).toContain('s3cret')
+    const harness = redactKagentLiterals({ apiVersion: 'api.kagent.dev/v1alpha3', kind: 'Harness', spec: { workload: { args: ['--token', 's3cret'] }, substrate: { snapshotPolicy: { location: 's3://k:s3cret@b/x' } } } })
+    expect(JSON.stringify(harness)).not.toContain('s3cret')
+    const template = redactKagentLiterals({ apiVersion: 'api.kagent.dev/v1alpha3', kind: 'AgentTemplate', spec: { skills: [{ name: 's', source: { git: { url: 'https://s3cret@git.example.com/x.git' } } }] } })
+    expect(JSON.stringify(template)).not.toContain('s3cret')
   })
 })
