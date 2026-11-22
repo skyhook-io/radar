@@ -52,6 +52,7 @@ export function ExternalArtifactRenderer({ data, onNavigate }: Props) {
     <>
       <FluxStatus data={data} />
       <Section title="Artifact" icon={FileArchive}>
+        {!data.status?.artifact && <span className="text-sm text-theme-text-tertiary">No artifact recorded in status yet</span>}
         <PropertyList>
           {artifact.revision && (
             <Property label="Revision" value={<Tooltip content={artifact.revision}><span className="font-mono">{shortArtifactRevision(artifact.revision)}</span></Tooltip>} />

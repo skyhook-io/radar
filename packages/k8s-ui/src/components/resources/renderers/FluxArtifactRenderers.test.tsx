@@ -17,6 +17,15 @@ describe('ExternalArtifactRenderer', () => {
     expect(html).toContain('>gen<')
     expect(html).toContain('latest@53884aebf2e5')
     expect(html).toContain('2 KB')
+    expect(html).not.toContain('No artifact recorded')
+  })
+
+  it('says when status records no artifact yet', () => {
+    const html = text(renderToString(<ExternalArtifactRenderer data={{
+      apiVersion: 'source.toolkit.fluxcd.io/v1', kind: 'ExternalArtifact', metadata: { name: 'app', namespace: 'flux-system' },
+      spec: {}, status: {},
+    }} />))
+    expect(html).toContain('No artifact recorded in status yet')
   })
 })
 
