@@ -280,7 +280,7 @@ export function memoryRebuildStep(crashed: number): string {
 }
 
 /** The recovery step for a kagent session's actor, which kagent recovers itself (pkg/substrate kagentActorStep). */
-export const KAGENT_RECOVER_STEP = 'This actor is a kagent session. Recover it with Recover on the session’s chat in kagent, not with kubectl ate: kagent treats a session whose actor was moved to another template as lost.'
+export const KAGENT_RECOVER_STEP = 'This actor is a kagent session. Recover it through kagent (its RevertSession API, or Recover on the chat where offered) or delete the chat there. Moved to another template with kubectl ate, it can’t be recovered.'
 
 /** `kubectl ate revert actor`, which returns a crashed actor to suspended at its newest stored snapshot. */
 export function revertCommand(ref: SubstrateRef): string {
