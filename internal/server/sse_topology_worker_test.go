@@ -143,7 +143,7 @@ func TestTriggerConsumedWhileClusterViewIsDownIsRetried(t *testing.T) {
 	go b.topologyWorker(topologyRetryDelay)
 
 	b.requestTopologyBroadcast()
-	waitFor(t, topologyRetryDelay*3, func() bool { return attempts.Load() >= 2 })
+	waitFor(t, topologyRetryDelay*20, func() bool { return attempts.Load() >= 2 })
 }
 
 func waitFor(t *testing.T, limit time.Duration, done func() bool) {

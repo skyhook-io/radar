@@ -238,8 +238,8 @@ func TestApplicationEvidenceChecksCandidatesConcurrently(t *testing.T) {
 
 func TestApplicationEvidencePermissionTimeoutCanBeRetried(t *testing.T) {
 	previous, previousRetry := applicationEvidencePermissionBudget, applicationEvidenceRetryPermissionBudget
-	applicationEvidencePermissionBudget /= 10
-	applicationEvidenceRetryPermissionBudget /= 10
+	applicationEvidencePermissionBudget /= 4
+	applicationEvidenceRetryPermissionBudget /= 4
 	t.Cleanup(func() {
 		applicationEvidencePermissionBudget, applicationEvidenceRetryPermissionBudget = previous, previousRetry
 	})

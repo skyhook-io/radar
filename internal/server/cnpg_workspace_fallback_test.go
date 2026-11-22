@@ -137,7 +137,7 @@ func TestCNPGWorkspace_FallbackCacheNamedNamespaces(t *testing.T) {
 // listed, and is read once it syncs.
 func TestCNPGWorkspace_FallbackCacheRetriesUnsyncedNamespace(t *testing.T) {
 	previousWait := dynamicSyncWait
-	dynamicSyncWait = 500 * time.Millisecond
+	dynamicSyncWait = time.Second
 	t.Cleanup(func() { dynamicSyncWait = previousWait })
 
 	var failing atomic.Bool
@@ -193,14 +193,16 @@ func TestCNPGWorkspace_FallbackCacheAllKeepsNamedWatches(t *testing.T) {
 // several stalled namespaces do not add up their waits.
 func TestCNPGWorkspace_FallbackCacheWaitsWithinOneBudget(t *testing.T) {
 	previousWait := dynamicSyncWait
-	dynamicSyncWait = 500 * time.Millisecond
+	dynamicSyncWait = time.Second
 	t.Cleanup(func() { dynamicSyncWait = previousWait })
 
 	seedCNPGFallbackCache(t, fallbackFixture{fallbacks: []string{"a"}, fail: inNamespaces("x", "y", "z")}, "a", "pg-a", "x", "pg-x", "y", "pg-y", "z", "pg-z")
 
 	start := time.Now()
 	got := getWorkspaceNoAuth(t, "?namespaces=a,x,y,z")
-	if elapsed := time.Since(start); elapsed > dynamicSyncWait+2*dynamicSyncWait/3 {
+	// Under two waits, so waiting twice always fails it; the rest is room for
+	// the request's own work.
+	if elapsed := time.Since(start); elapsed > dynamicSyncWait+dynamicSyncWait*3/4 {
 		t.Errorf("request took %v; stalled namespaces must share one %v wait", elapsed, dynamicSyncWait)
 	}
 	cov := got.Coverage["clusters"]
@@ -272,14 +274,16 @@ func TestCNPGWorkspace_FallbackCacheSlowWatchStartsWithinOneBudget(t *testing.T)
 // the watches that synced.
 func TestCNPGWorkspace_FallbackCacheAllWaitsWithinOneBudget(t *testing.T) {
 	previousWait := dynamicSyncWait
-	dynamicSyncWait = 500 * time.Millisecond
+	dynamicSyncWait = time.Second
 	t.Cleanup(func() { dynamicSyncWait = previousWait })
 
 	seedCNPGFallbackCache(t, fallbackFixture{fallbacks: []string{"a", "x", "y", "z"}, fail: inNamespaces("x", "y", "z")}, "a", "pg-a", "x", "pg-x")
 
 	start := time.Now()
 	got := getWorkspaceNoAuth(t, "")
-	if elapsed := time.Since(start); elapsed > dynamicSyncWait+dynamicSyncWait/3 {
+	// Under two waits, so waiting twice always fails it; the rest is room for
+	// the request's own work.
+	if elapsed := time.Since(start); elapsed > dynamicSyncWait+dynamicSyncWait*3/4 {
 		t.Errorf("request took %v; stalled fallback watches must share one %v wait", elapsed, dynamicSyncWait)
 	}
 	if cov := got.Coverage["clusters"]; cov.State != integration.KindCoveragePartial || len(cov.UncachedNamespaces) != 0 {

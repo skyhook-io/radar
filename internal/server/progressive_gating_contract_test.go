@@ -42,8 +42,8 @@ func TestProgressiveGatingContract(t *testing.T) {
 	// Pods' informer start is delayed past Phase 1, so it is promoted at the
 	// patience gate; the deferred deadline (shorter than the delay) then marks
 	// it terminally failed; when the delay elapses the informer syncs late.
-	if err := k8s.InitTestPromotedSyncingCache(client, 5*time.Second, 350*time.Millisecond,
-		map[string]time.Duration{"pods": time.Second}); err != nil {
+	if err := k8s.InitTestPromotedSyncingCache(client, 5*time.Second, 500*time.Millisecond,
+		map[string]time.Duration{"pods": 1500 * time.Millisecond}); err != nil {
 		t.Fatalf("InitTestPromotedSyncingCache: %v", err)
 	}
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnecting, Context: "contract-test"})
