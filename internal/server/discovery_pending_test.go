@@ -2,10 +2,18 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/discovery"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -58,5 +66,58 @@ func TestReadsWhileCustomResourcesPending(t *testing.T) {
 				t.Errorf("status = %d, code = %q, decode error = %v", resp.StatusCode, body.Code, err)
 			}
 		})
+	}
+}
+
+// failingThenAnsweringDiscovery fails every discovery until answer is set.
+type failingThenAnsweringDiscovery struct {
+	discovery.DiscoveryInterface
+	answer atomic.Bool
+}
+
+func (d *failingThenAnsweringDiscovery) ServerGroupsAndResources() ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
+	if !d.answer.Load() {
+		return nil, nil, errors.New("Get \"https://cluster/api\": context deadline exceeded")
+	}
+	return nil, []*metav1.APIResourceList{{GroupVersion: "v1", APIResources: []metav1.APIResource{
+		{Name: "pods", Kind: "Pod", Namespaced: true, Verbs: []string{"list", "watch"}},
+	}}}, nil
+}
+
+// A discovery that failed outright leaves no catalog. Every cluster serves
+// built-in kinds, so the catalog says discovery is pending (which the UI
+// retries) and asks for a refresh, rather than answering an empty list.
+func TestAPIResourcesAfterFailedDiscovery(t *testing.T) {
+	useTestResourceCache(t, testFakeClient)
+	disc := &failingThenAnsweringDiscovery{}
+	restore, err := k8s.SetTestResourceDiscovery(disc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	disc.answer.Store(true) // the cluster answers from now on
+
+	get := func() (int, []byte) {
+		resp, err := http.Get(testServer.URL + "/api/api-resources")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, body
+	}
+	if code, body := get(); code != http.StatusServiceUnavailable || !strings.Contains(string(body), string(readreason.KindSyncPending)) {
+		t.Fatalf("empty catalog after a failed discovery: %d %s", code, body)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		code, body := get()
+		if code == http.StatusOK && strings.Contains(string(body), `"pods"`) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("catalog never recovered: %d %s", code, body)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

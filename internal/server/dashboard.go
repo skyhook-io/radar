@@ -1710,6 +1710,11 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 				} else if len(readableNamespaces) > 0 {
 					cnps, err = dynamicCache.ListNamespaces(cnpGVR, readableNamespaces)
 				}
+				// An informer that hasn't synced lists nothing; that is unknown
+				// coverage, not "no policies".
+				if (clusterWide || len(readableNamespaces) > 0) && err == nil && !dynamicCache.IsSynced(cnpGVR) {
+					return nil
+				}
 				if err == nil {
 					for _, cnp := range cnps {
 						ns := cnp.GetNamespace()
@@ -1743,20 +1748,27 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 					}
 					var policies []*unstructured.Unstructured
 					var err error
+					read := false
 					if definition.Namespaced {
 						clusterWide, readableNamespaces := s.dashboardPolicyReadScope(r, namespaces, group, gvr.Resource)
 						if clusterWide {
+							read = true
 							policies, err = dynamicCache.List(gvr, "")
 						} else if len(readableNamespaces) > 0 {
+							read = true
 							policies, err = dynamicCache.ListNamespaces(gvr, readableNamespaces)
 						}
 					} else {
 						if s.canRead(r, group, gvr.Resource, "", "list") {
+							read = true
 							policies, err = dynamicCache.List(gvr, "")
 						}
 					}
 					if err != nil {
 						continue
+					}
+					if read && !dynamicCache.IsSynced(gvr) {
+						return nil
 					}
 					for _, policy := range policies {
 						identity := definition.Kind + "\x00" + policy.GetNamespace() + "\x00" + policy.GetName()
