@@ -118,7 +118,7 @@ export function GitOpsOutsideChangesView({
                         <Tooltip key={path} content={value !== undefined ? `${path} = ${value}` : path} delay={400} wrapperClassName="block max-w-full">
                           <div className="flex min-w-0">
                             <span className="truncate">{path}</span>
-                            {value !== undefined && <span className="shrink-0 whitespace-pre text-theme-text-secondary"> = {value}</span>}
+                            {value !== undefined && <span className="min-w-0 whitespace-pre-wrap break-all text-theme-text-secondary"> = {value}</span>}
                           </div>
                         </Tooltip>
                       )

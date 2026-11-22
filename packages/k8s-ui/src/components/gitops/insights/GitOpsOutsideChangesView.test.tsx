@@ -25,7 +25,7 @@ describe('GitOpsOutsideChangesView', () => {
     expect(html).toContain('spec.replicas')
     expect(html).toContain('kubectl patch')
     // A long path truncates; the value stays visible beside it.
-    expect(html).toMatch(/<span class="truncate">spec\.replicas<\/span><span class="shrink-0[^"]*">\s*=\s*3<\/span>/)
+    expect(html).toMatch(/<span class="truncate">spec\.replicas<\/span><span class="min-w-0[^"]*">\s*=\s*3<\/span>/)
     expect(html).toContain('+2 more')
     expect(html).toContain('Flux reports this drift and leaves it')
     expect(html).toContain('kubectl rollout restart')
