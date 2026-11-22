@@ -1,4 +1,4 @@
-.PHONY: build install clean dev frontend backend test test-changed test-e2e test-chart lint help restart restart-fe kill watch-backend watch-frontend loadtest bench-relationships
+.PHONY: build install clean dev frontend backend test test-changed test-e2e test-prom-engine test-chart lint help restart restart-fe kill watch-backend watch-frontend loadtest bench-relationships
 .PHONY: calico-demo calico-demo-down calico-demo-status
 .PHONY: kueue-demo kueue-demo-down kueue-demo-status kueue-demo-verify
 .PHONY: cilium-demo cilium-demo-down cilium-demo-status
@@ -155,8 +155,8 @@ clean:
 
 # Run tests
 test:
-	go test -v ./...
-	cd pkg && go test -v ./...
+	go test -v -ldflags=-w ./...
+	cd pkg && go test -v -ldflags=-w ./...
 
 # Fast dev loop: vet/test only the changed Go packages, tsc, and `vitest related`
 # for changed frontend files. BASE defaults to origin/main. Not a completion check.
@@ -166,6 +166,10 @@ test-changed:
 # Run e2e tests against the current kubeconfig cluster (on-demand, not in CI)
 test-e2e:
 	go test -tags e2e -v -timeout 5m ./internal/k8s/
+
+# Run the cluster scope checks against a real Prometheus in Docker (on-demand, not in CI)
+test-prom-engine:
+	RADAR_PROMENGINE=1 go test -tags promengine ./internal/prometheus/ -run Engine -count=1 -v
 
 # Smoke-test the Helm chart's template rendering (requires `helm` on PATH)
 test-chart:

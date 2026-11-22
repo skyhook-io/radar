@@ -2368,7 +2368,12 @@ func (d *DynamicResourceCache) listBlocking(ctx context.Context, gvr schema.Grou
 
 // ObjectReadSyncWait is how long a read of one object waits for an informer
 // that hasn't finished its first list before answering from what has loaded.
-const ObjectReadSyncWait = 2 * time.Second
+func (d *DynamicResourceCache) ObjectReadSyncWait() time.Duration {
+	if d.config.ObjectReadSyncWait > 0 {
+		return d.config.ObjectReadSyncWait
+	}
+	return 2 * time.Second
+}
 
 // Get returns a single resource by namespace and name.
 func (d *DynamicResourceCache) Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
@@ -2408,7 +2413,7 @@ func (d *DynamicResourceCache) get(gvr schema.GroupVersionResource, namespace, n
 	}
 
 	if !found && !entriesSynced(entries) {
-		ctx, cancel := context.WithTimeout(context.Background(), ObjectReadSyncWait)
+		ctx, cancel := context.WithTimeout(context.Background(), d.ObjectReadSyncWait())
 		for _, e := range entries {
 			cache.WaitForCacheSync(ctx.Done(), e.informer.HasSynced)
 		}

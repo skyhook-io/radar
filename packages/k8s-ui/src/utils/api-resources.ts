@@ -241,6 +241,7 @@ export function formatGroupName(group: string): string {
     'sparkoperator.k8s.io': 'Spark',
     'kubeflow.org': 'Kubeflow',
     'snapshot.storage.k8s.io': 'Snapshots',
+    'metallb.io': 'MetalLB',
     'karpenter.sh': 'Karpenter',
     'karpenter.k8s.aws': 'Karpenter',
     'karpenter.azure.com': 'Karpenter',

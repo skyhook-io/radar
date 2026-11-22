@@ -46,6 +46,12 @@ func (c *Client) QueryAt(ctx context.Context, promQL string, at time.Time) (*Que
 	return c.issueQuery(ctx, "GET", "/api/v1/query", url.Values{"query": {promQL}, "time": {strconv.FormatInt(at.Unix(), 10)}})
 }
 
+// QueryAtPost is QueryAt with the query sent in a POST form body, for a
+// query that may be too long for a proxy's URL limit. Its result is QueryAt's.
+func (c *Client) QueryAtPost(ctx context.Context, promQL string, at time.Time) (*QueryResult, error) {
+	return c.issueQuery(ctx, "POST", "/api/v1/query", url.Values{"query": {promQL}, "time": {strconv.FormatInt(at.Unix(), 10)}})
+}
+
 // QueryEvidence rejects partial answers rather than inferring identity from them.
 func (c *Client) QueryEvidence(ctx context.Context, promQL string) (*QueryResult, error) {
 	if len(promQL) > MaxWorkloadQueryBytes {

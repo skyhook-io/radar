@@ -26,9 +26,10 @@ var (
 	dynamicResourceCache *DynamicResourceCache
 	dynamicCacheOnce     = new(sync.Once)
 	dynamicCacheMu       sync.Mutex
-	// dynamicSyncStallAfter overrides k8score's stall threshold in tests;
-	// zero keeps the default.
-	dynamicSyncStallAfter time.Duration
+	// dynamicSyncStallAfter and dynamicObjectReadSyncWait override k8score's
+	// thresholds in tests; zero keeps the defaults.
+	dynamicSyncStallAfter     time.Duration
+	dynamicObjectReadSyncWait time.Duration
 )
 
 // InitDynamicResourceCache initializes the dynamic resource cache.
@@ -93,6 +94,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			NamespaceScoped:             nsScoped,
 			Namespace:                   nsTarget,
 			SyncStallAfter:              dynamicSyncStallAfter,
+			ObjectReadSyncWait:          dynamicObjectReadSyncWait,
 			DebugEvents:                 DebugEvents,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)
@@ -207,6 +209,11 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshots", Kind: "VolumeSnapshot", Namespaced: true},
 	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshotcontents", Kind: "VolumeSnapshotContent", Namespaced: false},
 	{Group: "snapshot.storage.k8s.io", Versions: []string{"v1"}, Resource: "volumesnapshotclasses", Kind: "VolumeSnapshotClass", Namespaced: false},
+	{Group: "metallb.io", Versions: []string{"v1beta1"}, Resource: "ipaddresspools", Kind: "IPAddressPool", Namespaced: true},
+	{Group: "metallb.io", Versions: []string{"v1beta1"}, Resource: "l2advertisements", Kind: "L2Advertisement", Namespaced: true},
+	{Group: "metallb.io", Versions: []string{"v1beta1"}, Resource: "bgpadvertisements", Kind: "BGPAdvertisement", Namespaced: true},
+	{Group: "metallb.io", Versions: []string{"v1beta2", "v1beta1"}, Resource: "bgppeers", Kind: "BGPPeer", Namespaced: true},
+	{Group: "metallb.io", Versions: []string{"v1beta1"}, Resource: "configurationstates", Kind: "ConfigurationState", Namespaced: true},
 	{Group: "core.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "strimzipodsets", Kind: "StrimziPodSet", Namespaced: true},
 	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkas", Kind: "Kafka", Namespaced: true},
 	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkanodepools", Kind: "KafkaNodePool", Namespaced: true},
@@ -369,6 +376,9 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	// The issue adapter reads all six: a failed Backup is only visible if its
 	// informer is running, and BackupRepository/BSL are the backup targets whose
 	// health explains why the runs fail.
+	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "volumes", Kind: "Volume", Namespaced: true},
+	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "engines", Kind: "Engine", Namespaced: true},
+	{Group: "longhorn.io", Versions: []string{"v1beta2"}, Resource: "replicas", Kind: "Replica", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "backups", Kind: "Backup", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "restores", Kind: "Restore", Namespaced: true},
 	{Group: "velero.io", Versions: []string{"v1"}, Resource: "schedules", Kind: "Schedule", Namespaced: true},
