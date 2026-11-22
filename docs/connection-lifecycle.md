@@ -48,7 +48,7 @@ sequenceDiagram
     Radar->>Radar: 4. retire K7QXM2RDTA-1 · writes get 503
     Radar->>A: 4. tear down: cost source, Prometheus, traffic, Helm,<br/>metrics history, PolicyReport index, DynamicResourceCache,<br/>ResourceDiscovery, ResourceCache, timeline
     Note over Radar: 5. install B's clients · restore the namespace scope ·<br/>drop capability, permission, server-version and platform caches
-    Radar->>B: 6. build: timeline, ResourceCache + ResourceDiscovery,<br/>DynamicResourceCache; then metrics history, Helm,<br/>traffic, Prometheus in the background
+    Radar->>B: 6. build: timeline, ResourceCache + ResourceDiscovery,<br/>DynamicResourceCache, then metrics history, Helm,<br/>traffic, Prometheus in the background
     alt build fails
       Radar-->>Tab: disconnected · no ID · "Back to A"
     else build succeeds
