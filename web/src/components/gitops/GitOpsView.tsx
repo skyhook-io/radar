@@ -57,6 +57,7 @@ import {
   type GitOpsTreeRef,
   type GitOpsTreePreset,
   type SelectedResource,
+  outsideChangesCounts,
 } from '@skyhook-io/k8s-ui'
 import { useToast } from '../ui/Toast'
 import { useContextSwitchFlow } from '../useContextSwitchFlow'
@@ -833,7 +834,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       isFluxWorkload={isFluxWorkload}
       argo={argoHandlers}
       flux={fluxHandlers}
-      outsideChanges={outsideAvailable ? { count: outsideQ.data?.count } : undefined}
+      outsideChanges={outsideAvailable ? outsideChangesCounts(outsideQ.data) : undefined}
       activeTab={appView}
       onTabChange={(tab) => setAppView(tab)}
       fullscreen={graphFullscreen}

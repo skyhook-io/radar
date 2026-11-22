@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import type { GitOpsOutsideChanges } from '../../../types/gitops-outside'
-import { GitOpsOutsideChangesView } from './GitOpsOutsideChangesView'
+import type { GitOpsOutsideChange, GitOpsOutsideChanges } from '../../../types/gitops-outside'
+import { GitOpsOutsideChangesView, outsideChangesCounts } from './GitOpsOutsideChangesView'
 
 const base: GitOpsOutsideChanges = {
   root: { group: 'helm.toolkit.fluxcd.io', kind: 'HelmRelease', namespace: 'prod', name: 'api' },
@@ -87,5 +87,28 @@ describe('GitOpsOutsideChangesView', () => {
     expect(render({ coverage: { listed: 0, remote: true } })).toContain('applies to another cluster')
     expect(render({ coverage: { listed: 0, noInventory: true } })).toContain('Radar can&#x27;t read an inventory in this Kustomization&#x27;s status')
     expect(render({ coverage: { listed: 0, labelScan: true } })).toContain('Radar can&#x27;t read an inventory in this release&#x27;s status')
+  })
+})
+
+describe('outsideChangesCounts', () => {
+  const edit = (outcome: GitOpsOutsideChange['outcome'], name: string) => ({ ref: { group: 'apps', kind: 'Deployment', namespace: 'prod', name }, changes: [
+    { manager: 'kubectl-edit', tool: 'kubectl edit', operation: 'Update', paths: ['spec.replicas'], morePaths: 0, outcome, harmless: false },
+  ] })
+  const objects = [edit('reported', 'a'), edit('ignored', 'b'), edit('opted-out', 'c'), edit('suspended', 'd')]
+
+  it('has no count for a root it never scanned', () => {
+    expect(outsideChangesCounts({ ...base, coverage: { listed: 0, remote: true } })).toEqual({})
+    expect(outsideChangesCounts({ ...base, coverage: { listed: 0, noInventory: true } })).toEqual({})
+    expect(outsideChangesCounts(undefined)).toEqual({})
+  })
+
+  it('leaves intentional changes out of the attention count', () => {
+    expect(outsideChangesCounts({ ...base, count: 4, objects })).toEqual({ count: 4, attention: 1, lowerBound: false })
+  })
+
+  it('reads a partial scan as a lower bound', () => {
+    for (const coverage of [{ truncated: true }, { denied: [{ resource: 'services', namespace: 'prod' }] }, { failed: [{ resource: 'services', namespace: 'prod' }] }, { unlisted: [base.root] }]) {
+      expect(outsideChangesCounts({ ...base, count: 4, objects, coverage: { listed: 4, ...coverage } }).lowerBound).toBe(true)
+    }
   })
 })

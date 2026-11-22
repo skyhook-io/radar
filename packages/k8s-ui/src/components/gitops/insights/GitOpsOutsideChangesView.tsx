@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { AlertTriangle, Hand } from 'lucide-react'
-import type { GitOpsOutsideChanges, GitOpsOutsideOutcome, GitOpsOutsideRef } from '../../../types/gitops-outside'
+import type { GitOpsOutsideChange, GitOpsOutsideChanges, GitOpsOutsideOutcome, GitOpsOutsideRef } from '../../../types/gitops-outside'
 import { formatRelativeAgeTime } from '../../../utils/format'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { PaneLoader } from '../../ui/PaneLoader'
@@ -29,6 +29,30 @@ export function outsideOutcomeText(code: GitOpsOutsideOutcome): string {
       return 'Flux is suspended; nothing changes until it resumes'
   }
   return "Radar couldn't read this object's Flux policy."
+}
+
+// The root's policy leaves these fields to the person, so they aren't a warning.
+const INTENTIONAL_OUTCOMES = new Set<GitOpsOutsideOutcome>(['ignored', 'opted-out', 'suspended'])
+
+export function outsideChangeNeedsAttention(change: GitOpsOutsideChange): boolean {
+  return !change.harmless && !INTENTIONAL_OUTCOMES.has(change.outcome)
+}
+
+export interface OutsideChangesCounts {
+  count?: number
+  attention?: number
+  lowerBound?: boolean
+}
+
+// A root Radar never scanned has no count; a partial scan's counts are lower bounds.
+export function outsideChangesCounts(data?: GitOpsOutsideChanges): OutsideChangesCounts {
+  if (!data || data.coverage.remote || data.coverage.noInventory) return {}
+  const c = data.coverage
+  return {
+    count: data.count,
+    attention: data.objects.filter((o) => o.changes.some(outsideChangeNeedsAttention)).length,
+    lowerBound: !!(c.truncated || c.denied?.length || c.failed?.length || c.unlisted?.length || c.unlistedMore || c.labelScan),
+  }
 }
 
 export function GitOpsOutsideChangesView({
