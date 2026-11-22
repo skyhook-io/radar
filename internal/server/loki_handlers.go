@@ -152,13 +152,11 @@ func (s *Server) handleLokiPodLogs(w http.ResponseWriter, r *http.Request) {
 		s.writeLokiError(w, err)
 		return
 	}
-	container := q.Get("container")
-	selector, err := loki.PodSelector(labels, namespace, podName, container)
-	if err != nil {
-		s.writeError(w, http.StatusServiceUnavailable, err.Error())
+	if reason := labels.HistoryReason(); reason != "" {
+		s.writeError(w, http.StatusServiceUnavailable, reason)
 		return
 	}
-	lines, err := loki.QueryRange(r.Context(), labels, selector, window, limit)
+	lines, err := loki.ReadPod(r.Context(), labels, namespace, podName, q.Get("container"), window, limit)
 	if err != nil {
 		s.writeLokiError(w, err)
 		return

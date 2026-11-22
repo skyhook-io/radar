@@ -485,6 +485,17 @@ type Lines struct {
 // else reaches the query. labels map the streams back to
 // pods and containers.
 func QueryRange(ctx context.Context, labels StreamLabels, selector string, w Window, limit int) (Lines, error) {
+	release, err := acquireRead(readerKey(ctx))
+	if err != nil {
+		return Lines{}, err
+	}
+	defer release()
+	return queryRange(ctx, labels, func(stream map[string]string) string { return stream[labels.Container] }, selector, w, limit)
+}
+
+// queryRange is QueryRange for a caller that already holds a read;
+// containerOf names a stream's container.
+func queryRange(ctx context.Context, labels StreamLabels, containerOf func(map[string]string) string, selector string, w Window, limit int) (Lines, error) {
 	params := url.Values{
 		"query":     {selector},
 		"start":     {strconv.FormatInt(w.Start.UnixNano(), 10)},
@@ -492,11 +503,6 @@ func QueryRange(ctx context.Context, labels StreamLabels, selector string, w Win
 		"limit":     {strconv.Itoa(limit)},
 		"direction": {"backward"},
 	}
-	release, err := acquireRead(readerKey(ctx))
-	if err != nil {
-		return Lines{}, err
-	}
-	defer release()
 	body, err := Get(ctx, "/loki/api/v1/query_range", params)
 	if err != nil {
 		return Lines{}, err
@@ -524,7 +530,7 @@ func QueryRange(ctx context.Context, labels StreamLabels, selector string, w Win
 			if err != nil {
 				continue
 			}
-			out.Items = append(out.Items, Line{Time: time.Unix(0, ns).UTC(), Pod: stream.Stream[labels.Pod], Container: stream.Stream[labels.Container], Text: v[1]})
+			out.Items = append(out.Items, Line{Time: time.Unix(0, ns).UTC(), Pod: stream.Stream[labels.Pod], Container: containerOf(stream.Stream), Text: v[1]})
 		}
 	}
 	sort.SliceStable(out.Items, func(i, j int) bool { return out.Items[i].Time.Before(out.Items[j].Time) })

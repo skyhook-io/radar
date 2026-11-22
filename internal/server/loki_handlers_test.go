@@ -142,24 +142,64 @@ type lokiRecorder struct {
 	status  int
 	body    string
 	hold    chan struct{} // when set, the next query_range waits for it to close
+	// labelNames is what /labels answers.
+	labelNames string
+	// series is what /series answers (a JSON array of label sets); when
+	// empty, the label sets of body's streams.
+	series      string
+	seriesCalls []url.Values
+	// byQuery, when set, answers query_range by its LogQL instead of body.
+	byQuery func(query string) string
+}
+
+func streamLabelSets(body string) string {
+	var resp struct {
+		Data struct {
+			Result []struct {
+				Stream map[string]string `json:"stream"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(body), &resp)
+	sets := []map[string]string{}
+	for _, r := range resp.Data.Result {
+		sets = append(sets, r.Stream)
+	}
+	raw, _ := json.Marshal(sets)
+	return string(raw)
 }
 
 func newLokiRecorder(t *testing.T, streams string) *lokiRecorder {
 	t.Helper()
-	return newLokiRecorderWithLabels(t, `"namespace","pod","container"`, streams)
+	return newLokiRecorderWithLabels(t, `["namespace","pod","container"]`, streams)
 }
 
 func newLokiRecorderWithLabels(t *testing.T, labelNames, streams string) *lokiRecorder {
 	t.Helper()
-	rec := &lokiRecorder{status: 200, body: streams}
+	rec := &lokiRecorder{status: 200, body: streams, labelNames: labelNames}
 	rec.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/loki/api/v1/labels":
-			_, _ = w.Write([]byte(`{"status":"success","data":[` + labelNames + `]}`))
+			rec.mu.Lock()
+			names := rec.labelNames
+			rec.mu.Unlock()
+			_, _ = w.Write([]byte(`{"status":"success","data":` + names + `}`))
+		case "/loki/api/v1/series":
+			rec.mu.Lock()
+			rec.seriesCalls = append(rec.seriesCalls, r.URL.Query())
+			series := rec.series
+			if series == "" {
+				series = streamLabelSets(rec.body)
+			}
+			rec.mu.Unlock()
+			_, _ = w.Write([]byte(`{"status":"success","data":` + series + `}`))
 		case "/loki/api/v1/query_range":
 			rec.mu.Lock()
 			rec.queries = append(rec.queries, r.URL.Query())
 			status, body, hold := rec.status, rec.body, rec.hold
+			if rec.byQuery != nil {
+				body = rec.byQuery(r.URL.Query().Get("query"))
+			}
 			rec.hold = nil
 			rec.mu.Unlock()
 			if hold != nil {
@@ -388,7 +428,7 @@ func TestLokiPodLogsMultiLineEntry(t *testing.T) {
 // A Loki shared by several clusters: History matches this cluster's value,
 // and with authentication refuses to read while no value is set.
 func TestLokiPodLogsMatchesThisCluster(t *testing.T) {
-	rec := newLokiRecorderWithLabels(t, `"namespace","pod","container","cluster"`, twoContainers)
+	rec := newLokiRecorderWithLabels(t, `["namespace","pod","container","cluster"]`, twoContainers)
 	t.Cleanup(func() { loki.SetCluster("", "", false) })
 	loki.SetCluster("", "prod", true)
 	if resp, raw := lokiPodLogs(t, ""); resp.StatusCode != 200 || rec.queries[0].Get("query") != `{namespace="team", pod="app-1", cluster="prod"}` {
@@ -493,5 +533,57 @@ func TestLokiPodLogsCancelledReadFreesItsSlot(t *testing.T) {
 			t.Fatalf("after cancelling the first read: %d %s", resp.StatusCode, raw)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Another shipper's "container" label in Loki doesn't decide this pod's read:
+// its streams carry container_name, so the chosen container is matched by
+// that label, and each line names its container.
+func TestLokiPodLogsContainerAliasFromThePodsStreams(t *testing.T) {
+	rec := newLokiRecorderWithLabels(t, `["namespace","pod","container","container_name"]`, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"app-1","container_name":"web"},"values":[["1763035200000000001","hello"]]}]}}`)
+	resp, raw := lokiPodLogs(t, "?container=web")
+	var got lokiPodLogsResponse
+	_ = json.Unmarshal([]byte(raw), &got)
+	if resp.StatusCode != 200 || !strings.HasSuffix(strings.TrimSpace(got.Logs["web"]), " hello") {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod="app-1", container_name="web"}` {
+		t.Fatalf("query = %s", q)
+	}
+}
+
+// A pod whose streams carry no container label is read whole: a container
+// matcher would match nothing and read as an empty pod.
+func TestLokiPodLogsContainerWithoutLabelReadsWholePod(t *testing.T) {
+	rec := newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"app-1"},"values":[["1763035200000000001","hello"]]}]}}`)
+	resp, raw := lokiPodLogs(t, "?container=web")
+	var got lokiPodLogsResponse
+	_ = json.Unmarshal([]byte(raw), &got)
+	if resp.StatusCode != 200 || !strings.HasSuffix(strings.TrimSpace(got.Logs[noContainerLabel]), " hello") {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod="app-1"}` {
+		t.Fatalf("query = %s", q)
+	}
+}
+
+// When only some of the pod's streams carry a container label, the pod is
+// read whole and keeps the chosen container's lines and the unlabelled ones,
+// never another labelled container's.
+func TestLokiPodLogsMixedStreamsKeepChosenAndUnlabelled(t *testing.T) {
+	rec := newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"app-1","container":"web"},"values":[["1763035200000000003","web-line"]]},
+ {"stream":{"namespace":"team","pod":"app-1","container":"sidecar"},"values":[["1763035200000000002","side-line"]]},
+ {"stream":{"namespace":"team","pod":"app-1"},"values":[["1763035200000000001","bare-line"]]}]}}`)
+	resp, raw := lokiPodLogs(t, "?container=web")
+	var got lokiPodLogsResponse
+	_ = json.Unmarshal([]byte(raw), &got)
+	if resp.StatusCode != 200 || !slices.Equal(got.Containers, []string{noContainerLabel, "web"}) || strings.Contains(raw, "side-line") {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod="app-1"}` {
+		t.Fatalf("query = %s", q)
 	}
 }
